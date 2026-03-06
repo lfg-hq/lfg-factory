@@ -5,7 +5,7 @@ import { html } from "hono/html";
  * Uses Better Auth client-side API for form submission (no Django CSRF needed).
  * Auth endpoints: POST /api/auth/sign-up/email, POST /api/auth/sign-in/email
  */
-export const AuthPage = () => html`
+export const AuthPage = ({ turnstileSiteKey = "" }: { turnstileSiteKey?: string }) => html`
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -18,7 +18,7 @@ export const AuthPage = () => html`
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700;800&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
     <script>
         // Turnstile state — must be defined before the Turnstile script loads
-        var TURNSTILE_SITE_KEY = '1x00000000000000000000AA';
+        var TURNSTILE_SITE_KEY = '${turnstileSiteKey}';
         var loginTurnstileToken = '';
         var registerTurnstileToken = '';
         var loginWidgetId = null;

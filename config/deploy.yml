@@ -11,11 +11,11 @@ servers:
       - 5.161.59.97
     labels:
       traefik.enable: true
-      traefik.http.routers.lfg-node.rule: Host(`node.lfg.run`)
+      traefik.http.routers.lfg-node.rule: Host(`lfg.run`)
       traefik.http.routers.lfg-node.entrypoints: websecure
       traefik.http.routers.lfg-node.tls.certresolver: dashboardresolver
       traefik.http.services.lfg-node.loadbalancer.server.port: 8000
-      traefik.http.routers.lfg-node-http.rule: Host(`node.lfg.run`)
+      traefik.http.routers.lfg-node-http.rule: Host(`lfg.run`)
       traefik.http.routers.lfg-node-http.entrypoints: web
       traefik.http.routers.lfg-node-http.middlewares: redirect-to-https@docker
     options:

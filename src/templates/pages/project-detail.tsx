@@ -236,7 +236,7 @@ export function ProjectDetailPage({
       </div>
 
       <!-- Tab content -->
-      <div style="padding:2rem;max-width:900px;margin:0 auto;">
+      <div style="padding:2rem;max-width:1200px;margin:0 auto;">
         ${activeTab === "conversations" ? html`
           <div>
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem;">

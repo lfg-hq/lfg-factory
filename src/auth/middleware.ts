@@ -21,6 +21,14 @@ export const requireAuth = createMiddleware<{
     return await next();
   }
 
+  // Public landing page APIs — no auth required
+  if (c.req.path.startsWith("/api/free-prd/") ||
+      c.req.path.startsWith("/api/blog/") ||
+      c.req.path.startsWith("/api/services/") ||
+      c.req.path.startsWith("/api/portfolio/")) {
+    return await next();
+  }
+
   const session = await auth.api.getSession({
     headers: c.req.raw.headers,
   });

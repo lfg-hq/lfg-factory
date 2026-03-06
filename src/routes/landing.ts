@@ -8,6 +8,28 @@ import { BlogPostPage } from "../templates/pages/blog-post.tsx";
 import { loadBlogPosts, getBlogPostBySlug } from "../utils/blog.ts";
 import { sendEmail } from "../utils/email.ts";
 
+// In-memory store for free PRD verification codes (short-lived, no DB needed)
+interface FreePrdRequest {
+  id: string;
+  email: string;
+  projectIdea: string;
+  code: string;
+  expiresAt: number;
+  used: boolean;
+}
+const freePrdStore = new Map<string, FreePrdRequest>();
+
+function generateCode() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+function cleanExpiredFreePrd() {
+  const now = Date.now();
+  for (const [id, req] of freePrdStore) {
+    if (req.expiresAt < now) freePrdStore.delete(id);
+  }
+}
+
 const landing = new Hono();
 
 landing.get("/", (c) => {
@@ -103,6 +125,105 @@ landing.post("/api/services/inquiry", async (c) => {
     return c.json({ success: true });
   } catch {
     return c.json({ error: "Invalid request." }, 400);
+  }
+});
+
+// Free PRD — request verification code
+landing.post("/api/free-prd/request-code", async (c) => {
+  try {
+    const body = await c.req.json();
+    const email = (body.email ?? "").trim().toLowerCase();
+    const projectIdea = (body.project_idea ?? "").trim();
+    if (!email || !projectIdea) {
+      return c.json({ error: "Email and project idea are required." }, 400);
+    }
+
+    cleanExpiredFreePrd();
+    const id = crypto.randomUUID();
+    const code = generateCode();
+    freePrdStore.set(id, { id, email, projectIdea, code, expiresAt: Date.now() + 30 * 60 * 1000, used: false });
+
+    await sendEmail({
+      to: email,
+      subject: "Your LFG free PRD verification code",
+      text: `Your verification code is: ${code}\n\nThis code expires in 30 minutes.`,
+      html: `<div style="font-family:sans-serif;max-width:480px">
+        <h2 style="color:#0f172a">Your verification code</h2>
+        <p style="font-size:2rem;font-weight:700;letter-spacing:0.2em;color:#4f46e5">${code}</p>
+        <p style="color:#64748b">This code expires in 30 minutes.</p>
+      </div>`,
+    });
+
+    return c.json({ success: true, request_id: id });
+  } catch {
+    return c.json({ error: "Unable to send verification code right now." }, 500);
+  }
+});
+
+// Free PRD — verify code
+landing.post("/api/free-prd/verify-code", async (c) => {
+  try {
+    const body = await c.req.json();
+    const requestId = (body.request_id ?? "").trim();
+    const code = String(body.code ?? "").trim();
+
+    if (!requestId || !code) return c.json({ error: "Request ID and code are required." }, 400);
+
+    const record = freePrdStore.get(requestId);
+    if (!record) return c.json({ error: "Request not found." }, 404);
+    if (record.used) return c.json({ success: true, already_verified: true });
+    if (Date.now() > record.expiresAt) return c.json({ error: "Code has expired." }, 400);
+    if (record.code !== code) return c.json({ error: "Invalid code." }, 400);
+
+    record.used = true;
+
+    // Notify the team
+    await sendEmail({
+      to: "hello@lfg.run",
+      subject: `Free PRD request from ${record.email}`,
+      text: `From: ${record.email}\n\nProject idea:\n${record.projectIdea}`,
+      html: `<div style="font-family:sans-serif;max-width:600px">
+        <h2 style="color:#0f172a">New Free PRD request</h2>
+        <p style="color:#475569"><strong>Email:</strong> ${record.email}</p>
+        <h3 style="color:#0f172a">Project idea</h3>
+        <p style="color:#475569;white-space:pre-wrap">${record.projectIdea}</p>
+      </div>`,
+    });
+
+    return c.json({ success: true });
+  } catch {
+    return c.json({ error: "Verification failed." }, 500);
+  }
+});
+
+// Free PRD — resend code
+landing.post("/api/free-prd/resend-code", async (c) => {
+  try {
+    const body = await c.req.json();
+    const requestId = (body.request_id ?? "").trim();
+    if (!requestId) return c.json({ error: "Request ID is required." }, 400);
+
+    const record = freePrdStore.get(requestId);
+    if (!record) return c.json({ error: "Request not found." }, 404);
+    if (record.used) return c.json({ success: true, already_verified: true });
+
+    record.code = generateCode();
+    record.expiresAt = Date.now() + 30 * 60 * 1000;
+
+    await sendEmail({
+      to: record.email,
+      subject: "Your new LFG free PRD verification code",
+      text: `Your new verification code is: ${record.code}\n\nThis code expires in 30 minutes.`,
+      html: `<div style="font-family:sans-serif;max-width:480px">
+        <h2 style="color:#0f172a">Your new verification code</h2>
+        <p style="font-size:2rem;font-weight:700;letter-spacing:0.2em;color:#4f46e5">${record.code}</p>
+        <p style="color:#64748b">This code expires in 30 minutes.</p>
+      </div>`,
+    });
+
+    return c.json({ success: true });
+  } catch {
+    return c.json({ error: "Unable to resend code right now." }, 500);
   }
 });
 

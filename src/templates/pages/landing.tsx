@@ -126,7 +126,7 @@ export const LandingPage = () => html`
             <a href="https://github.com/lfg-hq/lfg" target="_blank" rel="noopener noreferrer" class="text-slate-500 hover:text-slate-900 transition-colors">
               <i data-lucide="github" class="w-5 h-5"></i>
             </a>
-            <a href="#hero-form" class="bg-slate-900 hover:bg-brand-700 text-white px-5 py-2 rounded-full text-sm font-semibold transition-all shadow-lg">
+            <a href="/auth/register" class="bg-slate-900 hover:bg-brand-700 text-white px-5 py-2 rounded-full text-sm font-semibold transition-all shadow-lg">
               Access Agent
             </a>
           </div>
@@ -145,7 +145,7 @@ export const LandingPage = () => html`
         <a href="/portfolio/" class="text-base font-medium text-slate-700 py-2 mobile-link">Portfolio</a>
         <a href="/services/" class="text-base font-medium text-slate-700 py-2 mobile-link">Services</a>
         <a href="/blog/" class="text-base font-medium text-slate-700 py-2 mobile-link">Blog</a>
-        <a href="#hero-form" class="bg-brand-600 text-white w-full py-3 rounded-lg font-semibold text-center block mobile-link">Access Agent</a>
+        <a href="/auth/register" class="bg-brand-600 text-white w-full py-3 rounded-lg font-semibold text-center block mobile-link">Access Agent</a>
       </div>
     </nav>
 
