@@ -10,18 +10,18 @@ export const LandingPage = () => html`
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LFG | AI First Engineering That Ships in Days</title>
-    <meta name="description" content="From brief to working product in days. LFG runs an AI-first engineering pipeline with transparent tickets, sandboxed code sessions, and senior review.">
+    <title>LFG | AI-First Software Services and Product Factory</title>
+    <meta name="description" content="AI-first software services and product factory. We build real products fast — PRDs, tickets, and code, all driven by LFG Agent.">
 
-    <meta property="og:title" content="LFG | AI First Engineering That Ships in Days">
-    <meta property="og:description" content="From brief to working product in days. LFG runs an AI-first engineering pipeline with transparent tickets, sandboxed code sessions, and senior review.">
+    <meta property="og:title" content="LFG | AI-First Software Services and Product Factory">
+    <meta property="og:description" content="AI-first software services and product factory. We build real products fast — PRDs, tickets, and code, all driven by LFG Agent.">
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://lfg.run/">
     <meta property="og:image" content="https://lfg.run/static/images/logo_lfg.png">
 
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="LFG | AI First Engineering That Ships in Days">
-    <meta name="twitter:description" content="From brief to working product in days. AI-first engineering pipeline with transparent tickets, sandboxed code sessions, and senior review.">
+    <meta name="twitter:title" content="LFG | AI-First Software Services and Product Factory">
+    <meta name="twitter:description" content="AI-first software services and product factory. We build real products fast — PRDs, tickets, and code, all driven by LFG Agent.">
     <meta name="twitter:image" content="https://lfg.run/static/images/logo_lfg.png">
 
     <link rel="icon" type="image/x-icon" href="/public/images/favicon.ico">
