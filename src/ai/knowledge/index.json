@@ -1,0 +1,154 @@
+[
+  {
+    "id": "payments",
+    "path": "implementation/payments.md",
+    "category": "implementation",
+    "title": "Payments & Billing (Stripe)",
+    "summary": "Stripe checkout sessions, subscriptions, webhooks, invoices, refunds, cancel flows",
+    "keywords": ["stripe", "payment", "payments", "checkout", "subscription", "subscriptions", "billing", "invoice", "refund", "cancel", "webhook", "price", "pricing", "plan", "plans", "credit card", "charge", "customer", "portal"]
+  },
+  {
+    "id": "authentication",
+    "path": "implementation/authentication.md",
+    "category": "implementation",
+    "title": "Authentication & Authorization",
+    "summary": "Login, signup, forgot password, OAuth, JWT, session, email verification, protected routes",
+    "keywords": ["auth", "authentication", "login", "signup", "register", "password", "forgot password", "reset password", "oauth", "jwt", "token", "session", "cookie", "protected", "middleware", "verify", "email verification", "2fa", "mfa", "social login", "google auth", "github auth"]
+  },
+  {
+    "id": "ai-integration",
+    "path": "implementation/ai-integration.md",
+    "category": "implementation",
+    "title": "AI Integration",
+    "summary": "OpenAI, Claude, image generation, streaming responses, chat completions, embeddings",
+    "keywords": ["ai", "openai", "claude", "anthropic", "gpt", "llm", "chat", "completion", "streaming", "stream", "image generation", "dall-e", "dalle", "embedding", "embeddings", "vector", "prompt", "chatbot", "assistant", "artificial intelligence", "machine learning"]
+  },
+  {
+    "id": "database-patterns",
+    "path": "implementation/database-patterns.md",
+    "category": "implementation",
+    "title": "Database Patterns",
+    "summary": "Schema design, Prisma, Drizzle, migrations, relationships, seeding, indexes",
+    "keywords": ["database", "db", "schema", "prisma", "drizzle", "migration", "migrations", "model", "models", "relation", "relationship", "foreign key", "index", "seed", "seeding", "sql", "postgres", "postgresql", "sqlite", "mysql", "orm", "query"]
+  },
+  {
+    "id": "api-design",
+    "path": "implementation/api-design.md",
+    "category": "implementation",
+    "title": "API Design",
+    "summary": "REST conventions, error handling, validation, pagination, middleware, CORS",
+    "keywords": ["api", "rest", "endpoint", "route", "routes", "crud", "validation", "error handling", "pagination", "middleware", "cors", "rate limit", "rate limiting", "express", "fastify", "hono", "next api"]
+  },
+  {
+    "id": "file-uploads",
+    "path": "implementation/file-uploads.md",
+    "category": "implementation",
+    "title": "File Uploads",
+    "summary": "S3, local upload, image resize, drag-and-drop, presigned URLs, multer",
+    "keywords": ["upload", "file upload", "image upload", "s3", "aws", "storage", "multer", "presigned", "drag and drop", "dropzone", "resize", "image resize", "thumbnail", "blob", "formdata"]
+  },
+  {
+    "id": "email",
+    "path": "implementation/email.md",
+    "category": "implementation",
+    "title": "Email",
+    "summary": "Resend, SendGrid, email templates, verification emails, password reset emails",
+    "keywords": ["email", "mail", "resend", "sendgrid", "nodemailer", "smtp", "template", "verification email", "reset email", "newsletter", "transactional"]
+  },
+  {
+    "id": "realtime",
+    "path": "implementation/realtime.md",
+    "category": "implementation",
+    "title": "Realtime Communication",
+    "summary": "WebSocket, SSE, Socket.io, chat, notifications, live updates",
+    "keywords": ["websocket", "ws", "socket", "socket.io", "sse", "server sent events", "realtime", "real-time", "live", "chat", "notifications", "push", "pubsub"]
+  },
+  {
+    "id": "search",
+    "path": "implementation/search.md",
+    "category": "implementation",
+    "title": "Search & Filtering",
+    "summary": "Full-text search, filter UI, debounced input, faceted search",
+    "keywords": ["search", "filter", "filtering", "sort", "sorting", "debounce", "autocomplete", "typeahead", "full text", "fuzzy", "faceted"]
+  },
+  {
+    "id": "testing",
+    "path": "implementation/testing.md",
+    "category": "implementation",
+    "title": "Testing",
+    "summary": "Vitest, Jest, API testing, mocking, test utilities, component testing",
+    "keywords": ["test", "testing", "vitest", "jest", "mock", "mocking", "unit test", "integration test", "e2e", "playwright", "cypress", "coverage", "assert", "expect"]
+  },
+  {
+    "id": "landing-pages",
+    "path": "design/landing-pages.md",
+    "category": "design",
+    "title": "Landing Pages",
+    "summary": "Hero sections, CTA, pricing tables, testimonials, footer, conversion-optimized layouts",
+    "keywords": ["landing page", "landing", "hero", "cta", "call to action", "pricing", "pricing table", "testimonial", "testimonials", "footer", "marketing", "conversion", "above the fold", "feature section"]
+  },
+  {
+    "id": "dashboards",
+    "path": "design/dashboards.md",
+    "category": "design",
+    "title": "Dashboards",
+    "summary": "Sidebar+header layout, stat cards, charts, activity feeds, admin panels",
+    "keywords": ["dashboard", "admin", "panel", "sidebar", "stat card", "stats", "chart", "charts", "graph", "analytics", "activity feed", "overview", "metrics", "kpi"]
+  },
+  {
+    "id": "forms",
+    "path": "design/forms.md",
+    "category": "design",
+    "title": "Forms",
+    "summary": "Validation with Zod, multi-step wizard, inline errors, form libraries",
+    "keywords": ["form", "forms", "input", "validation", "zod", "react hook form", "wizard", "multi-step", "inline error", "select", "checkbox", "radio", "textarea", "submit"]
+  },
+  {
+    "id": "data-tables",
+    "path": "design/data-tables.md",
+    "category": "design",
+    "title": "Data Tables",
+    "summary": "Sortable columns, pagination, search/filter, row actions, bulk select",
+    "keywords": ["table", "data table", "grid", "sortable", "pagination", "row", "column", "bulk", "select all", "tanstack table", "react table"]
+  },
+  {
+    "id": "navigation",
+    "path": "design/navigation.md",
+    "category": "design",
+    "title": "Navigation",
+    "summary": "Navbar, sidebar collapse, breadcrumbs, mobile drawer, tabs",
+    "keywords": ["navigation", "navbar", "nav", "sidebar", "breadcrumb", "breadcrumbs", "mobile menu", "hamburger", "drawer", "tabs", "tab"]
+  },
+  {
+    "id": "games",
+    "path": "design/games.md",
+    "category": "design",
+    "title": "Games & Interactive",
+    "summary": "Canvas, game loop, collision detection, keyboard input, score tracking",
+    "keywords": ["game", "games", "canvas", "game loop", "collision", "keyboard", "sprite", "score", "animation", "interactive", "pixel", "2d", "arcade"]
+  },
+  {
+    "id": "color-and-typography",
+    "path": "design/color-and-typography.md",
+    "category": "design",
+    "title": "Color & Typography",
+    "summary": "CSS variables theming, Tailwind colors, font pairing, dark mode",
+    "keywords": ["color", "colors", "theme", "theming", "dark mode", "light mode", "typography", "font", "fonts", "tailwind", "css variables", "palette", "contrast"]
+  },
+  {
+    "id": "responsive",
+    "path": "design/responsive.md",
+    "category": "design",
+    "title": "Responsive Design",
+    "summary": "Mobile-first breakpoints, fluid typography, image srcset, container queries",
+    "keywords": ["responsive", "mobile", "mobile-first", "breakpoint", "breakpoints", "fluid", "srcset", "container query", "media query", "adaptive"]
+  },
+  {
+    "id": "animations",
+    "path": "design/animations.md",
+    "category": "design",
+    "title": "Animations & Transitions",
+    "summary": "CSS transitions, Framer Motion, scroll effects, skeleton loaders, micro-interactions",
+    "keywords": ["animation", "animations", "transition", "transitions", "framer motion", "scroll", "parallax", "skeleton", "loader", "loading", "fade", "slide", "micro-interaction", "hover"]
+  }
+]

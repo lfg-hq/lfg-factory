@@ -1,0 +1,99 @@
+import {
+  pgTable,
+  text,
+  integer,
+  boolean,
+  timestamp,
+  jsonb,
+  index,
+} from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { users } from "./users.ts";
+
+export const agentRoles = pgTable("agent_role", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => crypto.randomUUID()),
+  userId: text("user_id")
+    .notNull()
+    .unique()
+    .references(() => users.id, { onDelete: "cascade" }),
+  name: text("name").notNull().default("product_analyst"),
+  turboMode: boolean("turbo_mode").notNull().default(false),
+  createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at", { mode: "date" }).notNull().default(sql`now()`),
+});
+
+export const conversations = pgTable(
+  "conversation",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    userId: text("user_id").references(() => users.id, { onDelete: "cascade" }),
+    title: text("title"),
+    projectId: text("project_id"),
+    designCanvasId: text("design_canvas_id"),
+    createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),
+    updatedAt: timestamp("updated_at", { mode: "date" }).notNull().default(sql`now()`),
+  },
+  (t) => [
+    index("conv_user_idx").on(t.userId),
+    index("conv_project_idx").on(t.projectId),
+  ]
+);
+
+export const messages = pgTable(
+  "message",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    conversationId: text("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    role: text("role").notNull(),
+    content: text("content").notNull(),
+    contentIfFile: jsonb("content_if_file").default([]),
+    userRole: text("user_role").default("default"),
+    isPartial: boolean("is_partial").notNull().default(false),
+    createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),
+    lastUpdated: timestamp("last_updated", { mode: "date" }).notNull().default(sql`now()`),
+  },
+  (t) => [
+    index("msg_conv_created_idx").on(t.conversationId, t.createdAt),
+    index("msg_conv_partial_idx").on(t.conversationId, t.isPartial),
+  ]
+);
+
+export const chatFiles = pgTable(
+  "chat_file",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    conversationId: text("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    messageId: text("message_id").references(() => messages.id, { onDelete: "cascade" }),
+    filePath: text("file_path").notNull(),
+    originalFilename: text("original_filename").notNull(),
+    fileType: text("file_type").default(""),
+    fileSize: integer("file_size").notNull().default(0),
+    uploadedAt: timestamp("uploaded_at", { mode: "date" }).notNull().default(sql`now()`),
+  },
+  (t) => [index("chatfile_conv_idx").on(t.conversationId)]
+);
+
+export const modelSelections = pgTable("model_selection", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => crypto.randomUUID()),
+  userId: text("user_id")
+    .notNull()
+    .unique()
+    .references(() => users.id, { onDelete: "cascade" }),
+  selectedModel: text("selected_model").notNull().default("gpt-5-mini"),
+  createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at", { mode: "date" }).notNull().default(sql`now()`),
+});
