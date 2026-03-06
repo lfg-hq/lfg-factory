@@ -412,26 +412,50 @@ export const LandingPage = () => html`
         <section id="portfolio" class="py-20 bg-slate-50 border-t border-slate-100">
             <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                 <div class="text-center max-w-3xl mx-auto mb-14">
-                    <p class="text-xs font-bold uppercase tracking-wider text-brand-700 mb-2">Portfolio</p>
-                    <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">Products built with the LFG model</h2>
-                    <p class="text-slate-600 text-lg mt-4">Recent platforms where AI first engineering and fast delivery matter.</p>
+                    <p class="text-xs font-bold uppercase tracking-wider text-brand-700 mb-2">Built with LFG Agent</p>
+                    <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">Real products we've shipped</h2>
+                    <p class="text-slate-600 text-lg mt-4">LFG Agent doesn't just plan — it builds. These are live products running in production.</p>
                 </div>
                 <div class="grid md:grid-cols-3 gap-6">
-                    <article class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                        <h3 class="font-display text-xl font-bold text-slate-900 mb-2">Magpiecloud.com</h3>
-                        <p class="text-sm text-slate-600 mb-5">Cloud infrastructure and operations workflows delivered with transparent ticket execution.</p>
-                        <a href="https://magpiecloud.com" target="_blank" rel="noopener noreferrer" class="text-sm font-semibold text-brand-700 inline-flex items-center gap-2">Visit site <i data-lucide="arrow-up-right" class="w-4 h-4"></i></a>
+                    <!-- Logo: drop a 40x40 (or larger) image at /public/images/logos/easylogs.png -->
+                    <article class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm hover:shadow-md hover:border-brand-200 transition-all">
+                        <div class="w-10 h-10 rounded-lg bg-slate-100 flex items-center justify-center mb-4 overflow-hidden">
+                            <img src="/public/images/logos/easylogs.png" alt="easylogs.co" class="w-full h-full object-contain"
+                                onerror="this.style.display='none'; this.parentElement.innerHTML+='<i data-lucide=\'monitor\' class=\'w-5 h-5 text-slate-400\'></i>'">
+                        </div>
+                        <h3 class="font-display text-xl font-bold text-slate-900 mb-1">easylogs.co</h3>
+                        <p class="text-xs font-semibold text-brand-600 mb-2">Simplify Your Log Management</p>
+                        <p class="text-sm text-slate-600 mb-5">Structured logging and observability for teams that want clarity without the ops overhead.</p>
+                        <a href="https://easylogs.co" target="_blank" rel="noopener noreferrer" class="text-sm font-semibold text-brand-700 inline-flex items-center gap-2 hover:gap-3 transition-all">Visit site <i data-lucide="arrow-up-right" class="w-4 h-4"></i></a>
                     </article>
-                    <article class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                        <h3 class="font-display text-xl font-bold text-slate-900 mb-2">mags.run</h3>
+                    <!-- Logo: drop a 40x40 (or larger) image at /public/images/logos/mags.png -->
+                    <article class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm hover:shadow-md hover:border-brand-200 transition-all">
+                        <div class="w-10 h-10 rounded-lg bg-slate-100 flex items-center justify-center mb-4 overflow-hidden">
+                            <img src="/public/images/logos/mags.png" alt="mags.run" class="w-full h-full object-contain"
+                                onerror="this.style.display='none'; this.parentElement.innerHTML+='<i data-lucide=\'terminal\' class=\'w-5 h-5 text-slate-400\'></i>'">
+                        </div>
+                        <h3 class="font-display text-xl font-bold text-slate-900 mb-1">mags.run</h3>
+                        <p class="text-xs font-semibold text-brand-600 mb-2">Cloud VMs for AI Workloads</p>
                         <p class="text-sm text-slate-600 mb-5">Execution infrastructure for sandboxed build sessions and production automation.</p>
-                        <a href="https://mags.run" target="_blank" rel="noopener noreferrer" class="text-sm font-semibold text-brand-700 inline-flex items-center gap-2">Visit site <i data-lucide="arrow-up-right" class="w-4 h-4"></i></a>
+                        <a href="https://mags.run" target="_blank" rel="noopener noreferrer" class="text-sm font-semibold text-brand-700 inline-flex items-center gap-2 hover:gap-3 transition-all">Visit site <i data-lucide="arrow-up-right" class="w-4 h-4"></i></a>
                     </article>
-                    <article class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                        <h3 class="font-display text-xl font-bold text-slate-900 mb-2">kitereach.com</h3>
+                    <!-- Logo: drop a 40x40 (or larger) image at /public/images/logos/kitereach.png -->
+                    <article class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm hover:shadow-md hover:border-brand-200 transition-all">
+                        <div class="w-10 h-10 rounded-lg bg-slate-100 flex items-center justify-center mb-4 overflow-hidden">
+                            <img src="/public/images/logos/kitereach.png" alt="kitereach.com" class="w-full h-full object-contain"
+                                onerror="this.style.display='none'; this.parentElement.innerHTML+='<i data-lucide=\'send\' class=\'w-5 h-5 text-slate-400\'></i>'">
+                        </div>
+                        <h3 class="font-display text-xl font-bold text-slate-900 mb-1">kitereach.com</h3>
+                        <p class="text-xs font-semibold text-brand-600 mb-2">AI-Powered Outreach</p>
                         <p class="text-sm text-slate-600 mb-5">Go-to-market product stack built for rapid iteration, measurable progress, and speed.</p>
-                        <a href="https://kitereach.com" target="_blank" rel="noopener noreferrer" class="text-sm font-semibold text-brand-700 inline-flex items-center gap-2">Visit site <i data-lucide="arrow-up-right" class="w-4 h-4"></i></a>
+                        <a href="https://kitereach.com" target="_blank" rel="noopener noreferrer" class="text-sm font-semibold text-brand-700 inline-flex items-center gap-2 hover:gap-3 transition-all">Visit site <i data-lucide="arrow-up-right" class="w-4 h-4"></i></a>
                     </article>
+                </div>
+                <!-- View full portfolio CTA -->
+                <div class="mt-10 text-center">
+                    <a href="/portfolio/" class="inline-flex items-center gap-2 px-6 py-3 rounded-full border border-slate-200 bg-white text-slate-700 font-semibold hover:border-brand-300 hover:text-brand-700 transition-colors shadow-sm">
+                        See the full portfolio <i data-lucide="arrow-right" class="w-4 h-4"></i>
+                    </a>
                 </div>
             </div>
         </section>
