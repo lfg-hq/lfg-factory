@@ -16,6 +16,9 @@ COPY . .
 # Final runtime image
 FROM base AS runner
 
+# Install curl for health checks
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+
 # Create non-root user
 RUN addgroup --system --gid 1001 bunjs && \
     adduser --system --uid 1001 bunjs
