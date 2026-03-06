@@ -4,7 +4,8 @@ WORKDIR /app
 # Install dependencies (separate layer for caching)
 FROM base AS deps
 COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile --production
+# --ignore-scripts skips better-sqlite3's native build (not needed in production — we use PostgreSQL)
+RUN bun install --frozen-lockfile --production --ignore-scripts
 
 # Build stage — install all deps (including dev) for type checking
 FROM base AS builder
