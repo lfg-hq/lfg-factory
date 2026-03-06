@@ -160,7 +160,7 @@ export function ProjectDetailPage({
               <i class="fas fa-cog"></i><span>Settings</span>
             </a>
             <div class="dropdown-divider"></div>
-            <form method="POST" action="/api/auth/sign-out" style="margin:0;">
+            <form method="POST" action="/auth/logout" style="margin:0;">
               <button type="submit" class="dropdown-item" style="width:100%;text-align:left;background:none;border:none;cursor:pointer;">
                 <i class="fas fa-sign-out-alt"></i><span>Logout</span>
               </button>
