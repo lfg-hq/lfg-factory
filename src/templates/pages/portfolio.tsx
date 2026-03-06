@@ -229,7 +229,7 @@ export const PortfolioPage = () => html`
                 </div>
                 <a href="https://mags.run" target="_blank" rel="noopener noreferrer" class="block">
                   <img
-                    src="https://image.thum.io/get/width/1200/crop/675/https://mags.run"
+                    src="/public/images/screenshots/mags.png"
                     alt="mags.run — Cloud VM platform for AI workloads"
                     class="w-full object-cover object-top"
                     loading="lazy"
@@ -336,7 +336,7 @@ export const PortfolioPage = () => html`
                 </div>
                 <a href="https://kitereach.com" target="_blank" rel="noopener noreferrer" class="block">
                   <img
-                    src="https://image.thum.io/get/width/1200/crop/675/https://kitereach.com"
+                    src="/public/images/screenshots/kitereach.png"
                     alt="kitereach.com — AI outreach platform"
                     class="w-full object-cover object-top"
                     loading="lazy"
@@ -369,7 +369,7 @@ export const PortfolioPage = () => html`
                 </div>
                 <a href="https://easylogs.co" target="_blank" rel="noopener noreferrer" class="block">
                   <img
-                    src="https://image.thum.io/get/width/1200/crop/675/https://easylogs.co"
+                    src="/public/images/screenshots/easylogs.png"
                     alt="easylogs.co — Simple logging for developers"
                     class="w-full object-cover object-top"
                     loading="lazy"
