@@ -2085,45 +2085,212 @@ input:checked + .turbo-slider + .turbo-label,
     line-height: 1.3;
 }
 
-/* askUser option buttons */
-.ask-user-options {
+/* ── askUser Modal ───────────────────────────────────────────────── */
+.ask-user-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 2100;
     display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-    margin-top: 0.75rem;
-    padding-top: 0.75rem;
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    align-items: center;
+    justify-content: center;
+    animation: askUserFadeIn 0.2s ease-out;
 }
-.ask-user-opt-btn {
-    padding: 0.45rem 1.1rem;
+
+@keyframes askUserFadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+.ask-user-modal {
+    background: var(--card-bg, #1e1e1e);
+    border: 1px solid var(--border-color, #3a3a3a);
+    border-radius: 16px;
+    padding: 0;
+    max-width: 520px;
+    width: 92%;
+    max-height: 80vh;
+    overflow-y: auto;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+    animation: askUserSlideUp 0.25s ease-out;
+}
+
+@keyframes askUserSlideUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+.ask-user-modal-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 20px 24px 16px;
+}
+
+.ask-user-modal-header h3 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-color, #e2e8f0);
+    line-height: 1.4;
+    flex: 1;
+    padding-right: 12px;
+}
+
+.ask-user-modal-close {
+    background: none;
+    border: none;
+    color: var(--text-light, #94a3b8);
+    font-size: 20px;
+    cursor: pointer;
+    padding: 0 2px;
+    line-height: 1;
+    transition: color 0.2s;
+    flex-shrink: 0;
+}
+
+.ask-user-modal-close:hover {
+    color: var(--text-color, #e2e8f0);
+}
+
+.ask-user-modal-context {
+    padding: 0 24px 12px;
+    font-size: 0.8125rem;
+    color: var(--text-light, #94a3b8);
+    line-height: 1.5;
+}
+
+.ask-user-options-list {
+    padding: 0;
+    margin: 0;
+    list-style: none;
+}
+
+.ask-user-option-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 24px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    cursor: pointer;
+    transition: background 0.15s;
+    user-select: none;
+}
+
+.ask-user-option-row:hover {
+    background: rgba(139, 92, 246, 0.08);
+}
+
+.ask-user-option-row.checked {
+    background: rgba(139, 92, 246, 0.12);
+}
+
+.ask-user-option-checkbox {
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    border: 2px solid rgba(255, 255, 255, 0.25);
+    background: transparent;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: border-color 0.15s, background 0.15s;
+    font-size: 11px;
+    color: white;
+}
+
+.ask-user-option-row.checked .ask-user-option-checkbox {
+    border-color: #8b5cf6;
+    background: #8b5cf6;
+}
+
+.ask-user-option-label {
+    font-size: 0.875rem;
+    color: var(--text-color, #e2e8f0);
+    line-height: 1.4;
+    flex: 1;
+}
+
+.ask-user-custom-input {
+    width: calc(100% - 48px);
+    margin: 8px 0 0 30px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-color, #e2e8f0);
+    font-size: 0.8125rem;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s;
+}
+
+.ask-user-custom-input:focus {
+    border-color: #8b5cf6;
+}
+
+.ask-user-custom-input::placeholder {
+    color: rgba(255, 255, 255, 0.3);
+}
+
+.ask-user-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 24px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.ask-user-count {
+    font-size: 0.8125rem;
+    color: var(--text-light, #94a3b8);
+}
+
+.ask-user-footer-buttons {
+    display: flex;
+    gap: 8px;
+}
+
+.ask-user-skip-btn {
+    padding: 8px 16px;
     font-size: 0.8125rem;
     font-weight: 500;
-    border-radius: 999px;
-    border: 1px solid rgba(139, 92, 246, 0.4);
-    background: rgba(139, 92, 246, 0.08);
-    color: #a78bfa;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: transparent;
+    color: var(--text-light, #94a3b8);
     cursor: pointer;
-    transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+    transition: background 0.15s, color 0.15s;
 }
-.ask-user-opt-btn:hover {
-    background: rgba(139, 92, 246, 0.2);
-    border-color: #a78bfa;
+
+.ask-user-skip-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text-color, #e2e8f0);
 }
-.ask-user-opt-btn:disabled {
+
+.ask-user-submit-btn {
+    padding: 8px 20px;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    border-radius: 8px;
+    border: none;
+    background: #8b5cf6;
+    color: white;
+    cursor: pointer;
+    transition: background 0.15s, opacity 0.15s;
+}
+
+.ask-user-submit-btn:hover {
+    background: #7c3aed;
+}
+
+.ask-user-submit-btn:disabled {
+    opacity: 0.4;
     cursor: default;
+}
+
+.ask-user-modal-dismissed {
+    opacity: 0.4;
     pointer-events: none;
-}
-.ask-user-opt-selected {
-    opacity: 0.35;
-}
-.ask-user-opt-chosen {
-    opacity: 1;
-    background: rgba(139, 92, 246, 0.25);
-    border-color: #a78bfa;
-}
-.ask-user-hint {
-    width: 100%;
-    margin-top: 0.25rem;
-    font-size: 0.75rem;
-    color: rgba(255, 255, 255, 0.35);
 }

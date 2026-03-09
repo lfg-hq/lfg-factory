@@ -16,6 +16,7 @@ export const ServicesPage = () => html`
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
+      darkMode: 'class',
       theme: {
         extend: {
           fontFamily: {
@@ -46,6 +47,11 @@ export const ServicesPage = () => html`
     .step-line { position: relative; }
     .step-line::after { content: ''; position: absolute; top: 20px; left: calc(50% + 20px); width: calc(100% - 40px); height: 1px; background: linear-gradient(90deg, #c7d2fe, transparent); }
     .step-line:last-child::after { display: none; }
+    /* Dark mode overrides for this page */
+    html.dark body { background: radial-gradient(circle at 15% 0%, #1a1040 0%, #0d1117 45%, #0d1117 100%) !important; }
+    html.dark .mesh { background-image: radial-gradient(circle at 10% 20%, rgba(99,102,241,0.18), transparent 45%), radial-gradient(circle at 80% 0%, rgba(139,92,246,0.14), transparent 40%) !important; }
+    html.dark .glass { background: rgba(22,27,34,0.85) !important; border-color: rgba(99,102,241,0.15) !important; }
+    html.dark .blur-3xl { opacity: 0.15 !important; }
   </style>
 </head>
 <body class="text-slate-900 font-sans selection:bg-indigo-600 selection:text-white">

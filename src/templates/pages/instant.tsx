@@ -383,6 +383,41 @@ export function InstantPage({
   <script src="/public/js/custom-dropdown.js"></script>
   <script src="/public/js/instant.js?v=${Date.now()}"></script>
   <script>requestAnimationFrame(()=>requestAnimationFrame(()=>document.documentElement.classList.remove('sidebar-minimized-preload')));</script>
+  <script>
+    // Auto-fill prompt saved from /build landing page
+    (function() {
+      var savedPrompt = localStorage.getItem('lfg-instant-prompt');
+      if (!savedPrompt) return;
+      localStorage.removeItem('lfg-instant-prompt');
+
+      // Only auto-send if we're on a fresh (no existing app) instant page
+      if (window.INSTANT_CONFIG && window.INSTANT_CONFIG.currentAppId) return;
+
+      // Wait for the chat input and sendMessage to be ready
+      var attempts = 0;
+      var interval = setInterval(function() {
+        attempts++;
+        var input = document.getElementById('chat-input');
+        if (input && typeof window.sendMessage === 'function') {
+          clearInterval(interval);
+          input.value = savedPrompt;
+          input.dispatchEvent(new Event('input'));
+          // Small delay so the page settles before sending
+          setTimeout(function() {
+            window.sendMessage(savedPrompt);
+          }, 400);
+        } else if (attempts > 50) {
+          // Fallback: just fill the input
+          clearInterval(interval);
+          if (input) {
+            input.value = savedPrompt;
+            input.dispatchEvent(new Event('input'));
+            input.focus();
+          }
+        }
+      }, 100);
+    })();
+  </script>
 </body>
 </html>`;
 }

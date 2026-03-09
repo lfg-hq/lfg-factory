@@ -16,6 +16,7 @@ export const AgentPage = () => html`
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
+        darkMode: 'class',
         theme: {
           extend: {
             fontFamily: {
@@ -139,7 +140,7 @@ export const AgentPage = () => html`
                                     <span class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
                                     <span class="ml-2 text-xs text-slate-400">LFG Agent — PRD &amp; Analysis</span>
                                 </div>
-                                <img src="/static/images/screenshots/agent-prd-chat.png" alt="LFG Agent generating a PRD" class="w-full" />
+                                <img src="/public/images/screenshots/agent-prd-chat.png" alt="LFG Agent generating a PRD" class="w-full" />
                             </div>
                         </div>
                     </div>
@@ -153,7 +154,7 @@ export const AgentPage = () => html`
                                     <span class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
                                     <span class="ml-2 text-xs text-slate-400">LFG Agent — Ticket Board</span>
                                 </div>
-                                <img src="/static/images/screenshots/agent-ticket-board.png" alt="LFG ticket board" class="w-full" />
+                                <img src="/public/images/screenshots/agent-ticket-board.png" alt="LFG ticket board" class="w-full" />
                             </div>
                         </div>
                         <div>
@@ -193,7 +194,7 @@ export const AgentPage = () => html`
                                     <span class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
                                     <span class="ml-2 text-xs text-slate-400">LFG Agent — Ticket Execution</span>
                                 </div>
-                                <img src="/static/images/screenshots/agent-ticket-execution.png" alt="LFG ticket execution" class="w-full" />
+                                <img src="/public/images/screenshots/agent-ticket-execution.png" alt="LFG ticket execution" class="w-full" />
                             </div>
                         </div>
                     </div>

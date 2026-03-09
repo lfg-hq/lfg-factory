@@ -186,8 +186,11 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
       ? toolsTurbo
       : toolsProduct;
 
-  // Merge user's MCP tools (external integrations)
-  const mcpTools = await getMcpTools(userId);
+  // Merge user's MCP tools — cap at 5s so a dead MCP server can't hang the stream
+  const mcpTools = await Promise.race([
+    getMcpTools(userId),
+    new Promise<Record<string, never>>((resolve) => setTimeout(() => resolve({}), 5_000)),
+  ]);
   if (Object.keys(mcpTools).length > 0) {
     tools = { ...tools, ...mcpTools };
   }

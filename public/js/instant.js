@@ -191,7 +191,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 setPreviewState('building', message);
                 setStatus(status, 'Building');
             }
-            appendBuildNotice(message, status);
+            appendBuildNotice(message, status, data.error_type);
         }
 
         if (ntype === 'env_var_request') {
@@ -298,7 +298,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    function appendBuildNotice(message, status) {
+    function appendBuildNotice(message, status, errorType) {
         // When a terminal status arrives, resolve all prior spinning notices
         if (status === 'running' || status === 'error') {
             messageContainer.querySelectorAll('.instant-build-notice.notice-building').forEach(prev => {
@@ -319,7 +319,14 @@ document.addEventListener('DOMContentLoaded', () => {
         const icon = status === 'error' ? '<i class="fas fa-times-circle" style="font-size:10px"></i>'
                    : status === 'running' ? '<i class="fas fa-check-circle" style="font-size:10px"></i>'
                    : '<i class="fas fa-circle" style="font-size:5px;opacity:0.4;margin:0 2px"></i>';
-        el.innerHTML = `${icon}<span>${escapeHtml(message)}</span>`;
+
+        let content;
+        if (status === 'error' && errorType === 'no_credentials') {
+            content = `${escapeHtml(message)} <a href="/settings/integrations" style="color:inherit;text-decoration:underline;font-weight:600;">Go to Settings →</a>`;
+        } else {
+            content = escapeHtml(message);
+        }
+        el.innerHTML = `${icon}<span>${content}</span>`;
         messageContainer.appendChild(el);
         scrollToBottom();
     }
@@ -418,6 +425,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ---- Send message ----
 
+    window.sendMessage = sendMessage;
     function sendMessage(text) {
         if (!text.trim() && !window.instantAttachedFile) return;
         if (!socket || socket.readyState !== WebSocket.OPEN) return;

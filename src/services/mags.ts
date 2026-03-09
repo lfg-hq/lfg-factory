@@ -78,15 +78,18 @@ export async function execOnWorkspace(
     } catch (err) {
       lastError = err as Error;
       const msg = (lastError.message ?? "").toLowerCase();
-      // Treat connection/SSH errors as transient
+      // Treat connection/SSH errors and timeouts as transient (VM may not have SSH ready yet)
       if (
         msg.includes("no running") ||
         msg.includes("no vm") ||
         msg.includes("connection refused") ||
         msg.includes("ssh") ||
         msg.includes("not running") ||
-        msg.includes("no job found")
+        msg.includes("no job found") ||
+        msg.includes("timed out") ||
+        msg.includes("timeout")
       ) {
+        console.log(`[mags] exec attempt ${attempt + 1} failed (${msg.slice(0, 80)}), retrying...`);
         continue;
       }
       throw err;

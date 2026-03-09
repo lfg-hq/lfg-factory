@@ -9,6 +9,79 @@ interface NavOptions {
 }
 
 export const Nav = ({ activePage, ctaLabel = "Access Agent", ctaHref = "/auth/register" }: NavOptions) => html`
+<!-- FOUC prevention: runs before paint -->
+<script>
+  (function() {
+    var s = localStorage.getItem('lfg-theme');
+    var d = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    if (s === 'dark' || (!s && d)) document.documentElement.classList.add('dark');
+  })();
+</script>
+
+<!-- Shared dark mode styles for all pages using Nav -->
+<style>
+  #navbar.nav-scrolled {
+    background: rgba(255,255,255,0.93);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid rgba(0,0,0,0.06);
+  }
+  /* ── Dark mode ── */
+  html.dark body {
+    background: #0d1117 !important;
+    color: #c9d1d9;
+  }
+  html.dark #navbar.nav-scrolled {
+    background: rgba(13,17,23,0.97) !important;
+    border-color: rgba(255,255,255,0.05) !important;
+    box-shadow: none !important;
+  }
+  html.dark .blur-3xl { opacity: 0.08 !important; }
+  html.dark [class*="bg-white"]  { background-color: #161b22 !important; }
+  html.dark .bg-slate-50         { background-color: #0d1117 !important; }
+  html.dark .bg-slate-100        { background-color: #161b22 !important; }
+  html.dark .bg-slate-200        { background-color: #21262d !important; }
+  html.dark .bg-indigo-50,
+  html.dark .bg-brand-50         { background-color: #161b22 !important; }
+  html.dark .bg-brand-100        { background-color: #1c2128 !important; }
+  html.dark .text-slate-900      { color: #e6edf3 !important; }
+  html.dark .text-slate-800      { color: #c9d1d9 !important; }
+  html.dark .text-slate-700      { color: #b0bac6 !important; }
+  html.dark .text-slate-600      { color: #8b949e !important; }
+  html.dark .text-slate-500      { color: #6e7681 !important; }
+  html.dark .text-slate-400      { color: #4d5562 !important; }
+  html.dark .text-brand-900,
+  html.dark .text-brand-800,
+  html.dark .text-brand-700,
+  html.dark .text-brand-600      { color: #818cf8 !important; }
+  html.dark [class*="border-slate-2"],
+  html.dark [class*="border-slate-1"] { border-color: rgba(255,255,255,0.06) !important; }
+  html.dark [class*="border-brand-2"] { border-color: rgba(99,102,241,0.2) !important; }
+  html.dark .border-dashed        { border-color: rgba(255,255,255,0.08) !important; }
+  html.dark [class*="border-t"]   { border-color: rgba(255,255,255,0.05) !important; }
+  html.dark *                     { box-shadow: none !important; }
+  html.dark .glass {
+    background: rgba(22,27,34,0.85) !important;
+    border-color: rgba(255,255,255,0.07) !important;
+  }
+  html.dark .mesh {
+    background-image:
+      radial-gradient(circle at 10% 20%, rgba(99,102,241,0.12), transparent 40%),
+      radial-gradient(circle at 80% 0%,  rgba(139,92,246,0.08),  transparent 35%) !important;
+  }
+  html.dark #mobile-menu {
+    background-color: #161b22 !important;
+    border-color: rgba(255,255,255,0.06) !important;
+  }
+  html.dark input:not([type=submit]):not([type=button]),
+  html.dark textarea {
+    background-color: #1c2128 !important;
+    border-color: rgba(255,255,255,0.18) !important;
+    color: #e6edf3 !important;
+  }
+  html.dark input::placeholder,
+  html.dark textarea::placeholder { color: #6e7681 !important; }
+</style>
+
 <nav id="navbar" class="fixed top-0 left-0 right-0 z-50 transition-all duration-300 bg-transparent py-5">
   <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center">
     <a href="/" class="flex items-center gap-2 group">
@@ -27,12 +100,18 @@ export const Nav = ({ activePage, ctaLabel = "Access Agent", ctaHref = "/auth/re
         <a href="https://github.com/lfg-hq/lfg" target="_blank" rel="noopener noreferrer" class="text-slate-500 hover:text-slate-900 transition-colors">
           <i data-lucide="github" class="w-5 h-5"></i>
         </a>
+        <button id="theme-toggle" onclick="window.toggleTheme && window.toggleTheme()" class="text-slate-500 hover:text-slate-900 transition-colors" title="Toggle dark mode" aria-label="Toggle dark mode">
+          <i data-lucide="moon" class="w-5 h-5"></i>
+        </button>
         <a href="${ctaHref}" class="bg-slate-900 hover:bg-brand-700 text-white px-5 py-2 rounded-full text-sm font-semibold transition-all shadow-lg">
           ${ctaLabel}
         </a>
       </div>
     </div>
-    <div class="md:hidden">
+    <div class="md:hidden flex items-center gap-3">
+      <button id="theme-toggle-mobile" onclick="window.toggleTheme && window.toggleTheme()" class="text-slate-500 hover:text-slate-900 transition-colors" aria-label="Toggle dark mode">
+        <i data-lucide="moon" class="w-5 h-5"></i>
+      </button>
       <button id="mobile-menu-btn" class="text-slate-600"><i data-lucide="menu" class="w-6 h-6"></i></button>
     </div>
   </div>
@@ -47,21 +126,56 @@ export const Nav = ({ activePage, ctaLabel = "Access Agent", ctaHref = "/auth/re
 </nav>
 <script>
   (function() {
+    // Scroll: use CSS class so dark mode can override
     var navbar = document.getElementById('navbar');
     window.addEventListener('scroll', function() {
       if (window.scrollY > 20) {
-        navbar.classList.add('bg-white/95', 'backdrop-blur-sm', 'shadow-sm', 'py-3');
+        navbar.classList.add('nav-scrolled', 'py-3');
         navbar.classList.remove('bg-transparent', 'py-5');
       } else {
-        navbar.classList.remove('bg-white/95', 'backdrop-blur-sm', 'shadow-sm', 'py-3');
+        navbar.classList.remove('nav-scrolled', 'py-3');
         navbar.classList.add('bg-transparent', 'py-5');
       }
     });
+
+    // Mobile menu
     var btn = document.getElementById('mobile-menu-btn');
     var menu = document.getElementById('mobile-menu');
     btn.addEventListener('click', function() { menu.classList.toggle('hidden'); });
     menu.querySelectorAll('.mobile-link').forEach(function(l) {
       l.addEventListener('click', function() { menu.classList.add('hidden'); });
+    });
+
+    // Theme toggle
+    function updateIcons(isDark) {
+      ['theme-toggle','theme-toggle-mobile'].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        var icon = el.querySelector('[data-lucide]');
+        if (icon) {
+          icon.setAttribute('data-lucide', isDark ? 'sun' : 'moon');
+          if (window.lucide) lucide.createIcons({ nodes: [icon] });
+        }
+      });
+    }
+
+    window.toggleTheme = function() {
+      var isDark = document.documentElement.classList.toggle('dark');
+      localStorage.setItem('lfg-theme', isDark ? 'dark' : 'light');
+      updateIcons(isDark);
+    };
+
+    // Sync icon on load (after lucide renders)
+    setTimeout(function() {
+      updateIcons(document.documentElement.classList.contains('dark'));
+    }, 100);
+
+    // Follow OS changes when no manual preference
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function(e) {
+      if (!localStorage.getItem('lfg-theme')) {
+        document.documentElement.classList.toggle('dark', e.matches);
+        updateIcons(e.matches);
+      }
     });
   })();
 </script>

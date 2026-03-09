@@ -1,16 +1,27 @@
 import { html } from "hono/html";
+import type { BlogPost } from "../utils/blog.ts";
 
 /**
  * Landing page rendered as raw HTML to preserve the original Tailwind + inline JS
  * without needing JSX conversion of 1500+ lines of interactive markup.
  */
-export const LandingPage = () => html`
+export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
 <!DOCTYPE html>
 <html lang="en" class="scroll-smooth">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LFG | AI-First Software Services and Product Factory</title>
+    <!-- Theme: runs before paint to prevent flash -->
+    <script>
+      (function() {
+        var stored = localStorage.getItem('lfg-theme');
+        var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        if (stored === 'dark' || (!stored && prefersDark)) {
+          document.documentElement.classList.add('dark');
+        }
+      })();
+    </script>
     <meta name="description" content="AI-first software services and product factory. We build real products fast — PRDs, tickets, and code, all driven by LFG Agent.">
 
     <meta property="og:title" content="LFG | AI-First Software Services and Product Factory">
@@ -33,6 +44,7 @@ export const LandingPage = () => html`
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
+        darkMode: 'class',
         theme: {
           extend: {
             fontFamily: {
@@ -84,6 +96,7 @@ export const LandingPage = () => html`
       body {
         background: radial-gradient(circle at 20% 0%, #eef2ff 0%, #f8fafc 38%, #ffffff 100%);
         overflow-x: hidden;
+        transition: background 0.3s ease, color 0.2s ease;
       }
       .mesh {
         background-image:
@@ -95,13 +108,97 @@ export const LandingPage = () => html`
         border: 1px solid rgba(148, 163, 184, 0.24);
         backdrop-filter: blur(10px);
       }
-      .no-scrollbar::-webkit-scrollbar {
-        display: none;
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+      /* Navbar scrolled state — CSS class so dark mode can override */
+      #navbar.nav-scrolled {
+        background: rgba(255, 255, 255, 0.93);
+        backdrop-filter: blur(12px);
+        border-bottom: 1px solid rgb(226, 232, 240);
+        box-shadow: 0 1px 3px rgba(0,0,0,0.07);
       }
-      .no-scrollbar {
-        -ms-overflow-style: none;
-        scrollbar-width: none;
+
+      /* ── Dark mode ───────────────────────────────────────────────── */
+      html.dark body {
+        background: #0d1117;
+        color: #c9d1d9;
       }
+      html.dark .mesh {
+        background-image:
+          radial-gradient(circle at 10% 20%, rgba(99,102,241,0.12), transparent 40%),
+          radial-gradient(circle at 80% 0%, rgba(139,92,246,0.08), transparent 35%);
+      }
+      /* Dim the decorative blobs completely */
+      html.dark .blur-3xl { opacity: 0.08 !important; }
+
+      html.dark .glass {
+        background: rgba(22, 27, 34, 0.9);
+        border-color: rgba(255,255,255,0.06);
+      }
+      /* Scrolled navbar */
+      html.dark #navbar.nav-scrolled {
+        background: rgba(13, 17, 23, 0.97);
+        border-color: rgba(255,255,255,0.05);
+        box-shadow: none;
+      }
+      /* All bg-white variants (bg-white, bg-white/80, bg-white/90...) */
+      html.dark [class*="bg-white"] { background-color: #161b22 !important; }
+      /* Sections */
+      html.dark .bg-slate-50  { background-color: #0d1117 !important; }
+      html.dark .bg-slate-100 { background-color: #161b22 !important; }
+      html.dark .bg-slate-200 { background-color: #1c2128 !important; }
+      html.dark .bg-indigo-50,
+      html.dark .bg-brand-50  { background-color: #161b22 !important; }
+      html.dark .bg-brand-100 { background-color: #1c2128 !important; }
+      /* Text */
+      html.dark .text-slate-900 { color: #e6edf3 !important; }
+      html.dark .text-slate-800 { color: #c9d1d9 !important; }
+      html.dark .text-slate-700 { color: #b0bac6 !important; }
+      html.dark .text-slate-600 { color: #8b949e !important; }
+      html.dark .text-slate-500 { color: #6e7681 !important; }
+      /* Brand labels — lighter in dark so they're readable */
+      html.dark .text-brand-700 { color: #818cf8 !important; }
+      html.dark .text-brand-600 { color: #818cf8 !important; }
+      /* All border-slate variants including opacity modifiers */
+      html.dark [class*="border-slate-2"],
+      html.dark [class*="border-slate-1"] { border-color: rgba(255,255,255,0.06) !important; }
+      html.dark [class*="border-brand-2"] { border-color: rgba(99,102,241,0.2) !important; }
+      html.dark .border-dashed             { border-color: rgba(255,255,255,0.08) !important; }
+      /* Kill all box shadows */
+      html.dark * { box-shadow: none !important; }
+      /* CTA gradient border — tone it down */
+      html.dark [class*="from-rose-5"] { background: rgba(255,255,255,0.04) !important; }
+      /* Mobile menu */
+      html.dark #mobile-menu { background-color: #161b22; border-color: rgba(255,255,255,0.06); }
+      /* Inputs + textareas — visible but not harsh */
+      html.dark input:not([type=submit]):not([type=button]),
+      html.dark textarea {
+        background-color: #1c2128 !important;
+        border-color: rgba(255,255,255,0.18) !important;
+        color: #e6edf3 !important;
+      }
+      html.dark input::placeholder,
+      html.dark textarea::placeholder { color: #6e7681 !important; }
+      /* Suggestion pills */
+      html.dark button[class*="bg-slate-100"] {
+        background-color: #21262d !important;
+        color: #8b949e !important;
+        border: 1px solid rgba(255,255,255,0.1);
+      }
+      /* CTA section — "Access Agent" white-bg button → indigo */
+      html.dark #book-demo [class*="bg-white"] {
+        background-color: #4f46e5 !important;
+        color: #ffffff !important;
+      }
+      html.dark #book-demo [class*="bg-white"]:hover {
+        background-color: #4338ca !important;
+      }
+      /* Modals */
+      html.dark #onboarding-modal [class*="bg-white"],
+      html.dark #free-prd-modal [class*="bg-white"] { background-color: #161b22 !important; }
+      /* Section borders */
+      html.dark [class*="border-t"] { border-color: rgba(255,255,255,0.05) !important; }
     </style>
 </head>
 <body class="text-slate-900 font-sans selection:bg-indigo-600 selection:text-white">
@@ -126,6 +223,9 @@ export const LandingPage = () => html`
             <a href="https://github.com/lfg-hq/lfg" target="_blank" rel="noopener noreferrer" class="text-slate-500 hover:text-slate-900 transition-colors">
               <i data-lucide="github" class="w-5 h-5"></i>
             </a>
+            <button id="theme-toggle" onclick="toggleTheme()" class="text-slate-500 hover:text-slate-900 transition-colors" title="Toggle theme" aria-label="Toggle dark mode">
+              <i data-lucide="moon" class="w-5 h-5"></i>
+            </button>
             <a href="/auth/register" class="bg-slate-900 hover:bg-brand-700 text-white px-5 py-2 rounded-full text-sm font-semibold transition-all shadow-lg">
               Access Agent
             </a>
@@ -474,10 +574,26 @@ export const LandingPage = () => html`
                     </a>
                 </div>
                 <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    <article class="rounded-2xl border border-dashed border-slate-300 bg-white p-6 md:col-span-2 lg:col-span-3">
-                        <h3 class="font-display text-xl font-bold text-slate-900 mb-2">Posts coming soon</h3>
-                        <p class="text-slate-600 text-sm">We are publishing build notes shortly.</p>
-                    </article>
+                    ${posts.length === 0
+                      ? html`<article class="rounded-2xl border border-dashed border-slate-300 bg-white p-6 md:col-span-2 lg:col-span-3">
+                            <h3 class="font-display text-xl font-bold text-slate-900 mb-2">Posts coming soon</h3>
+                            <p class="text-slate-600 text-sm">We are publishing build notes shortly.</p>
+                        </article>`
+                      : posts.map((post) => html`
+                        <a href="/blog/${post.slug}/" class="group rounded-2xl border border-slate-200 bg-white p-6 hover:border-brand-300 hover:shadow-md transition-all block">
+                            <div class="flex items-center gap-2 text-xs text-slate-500 mb-3">
+                                <i data-lucide="calendar" class="w-3.5 h-3.5"></i>
+                                <span>${post.dateDisplay}</span>
+                                <span class="text-slate-300">&bull;</span>
+                                <span>${post.readingMinutes} min read</span>
+                            </div>
+                            <h3 class="font-display font-bold text-lg text-slate-900 leading-snug mb-2 group-hover:text-brand-700 transition-colors">${post.title}</h3>
+                            <p class="text-slate-600 text-sm leading-relaxed line-clamp-3">${post.excerpt}</p>
+                            <div class="mt-4 text-sm font-semibold text-brand-700 inline-flex items-center gap-1.5 group-hover:gap-2.5 transition-all">
+                                Read post <i data-lucide="arrow-right" class="w-3.5 h-3.5"></i>
+                            </div>
+                        </a>`)
+                    }
                 </div>
             </div>
         </section>
@@ -491,7 +607,7 @@ export const LandingPage = () => html`
                             <div>
                                 <h2 class="font-display text-4xl md:text-5xl font-bold text-white tracking-tight">Let's Get Started</h2>
                                 <div class="mt-6 flex flex-wrap items-center gap-4">
-                                    <a href="#hero-form" class="inline-flex items-center gap-2 rounded-2xl bg-white text-indigo-700 px-6 py-3 text-lg font-semibold hover:bg-slate-100 transition-colors">
+                                    <a href="/auth/register" class="inline-flex items-center gap-2 rounded-2xl bg-white text-indigo-700 px-6 py-3 text-lg font-semibold hover:bg-slate-100 transition-colors">
                                         Access Agent
                                     </a>
                                     <a href="/services/" class="inline-flex items-center gap-2 rounded-2xl border border-white/30 text-white px-6 py-3 text-lg font-semibold hover:bg-white/10 transition-colors">
@@ -813,11 +929,36 @@ export const LandingPage = () => html`
         window.addEventListener('scroll', () => {
             const nav = document.getElementById('navbar');
             if (window.scrollY > 20) {
-                nav.classList.add('bg-white/90', 'backdrop-blur-md', 'border-b', 'border-slate-200', 'shadow-sm', 'py-3');
+                nav.classList.add('nav-scrolled', 'py-3');
                 nav.classList.remove('bg-transparent', 'py-5');
             } else {
-                nav.classList.remove('bg-white/90', 'backdrop-blur-md', 'border-b', 'border-slate-200', 'shadow-sm', 'py-3');
+                nav.classList.remove('nav-scrolled', 'py-3');
                 nav.classList.add('bg-transparent', 'py-5');
+            }
+        });
+
+        // Theme toggle
+        function updateThemeToggle(isDark) {
+            const btn = document.getElementById('theme-toggle');
+            if (!btn) return;
+            const icon = btn.querySelector('[data-lucide]');
+            if (icon) {
+                icon.setAttribute('data-lucide', isDark ? 'sun' : 'moon');
+                lucide.createIcons({ nodes: [icon] });
+            }
+        }
+        function toggleTheme() {
+            const isDark = document.documentElement.classList.toggle('dark');
+            localStorage.setItem('lfg-theme', isDark ? 'dark' : 'light');
+            updateThemeToggle(isDark);
+        }
+        // Sync icon with current state
+        updateThemeToggle(document.documentElement.classList.contains('dark'));
+        // Follow system changes when user hasn't manually set a preference
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+            if (!localStorage.getItem('lfg-theme')) {
+                document.documentElement.classList.toggle('dark', e.matches);
+                updateThemeToggle(e.matches);
             }
         });
 

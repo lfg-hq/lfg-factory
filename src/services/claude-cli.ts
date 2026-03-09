@@ -362,8 +362,11 @@ echo "CLAUDE_STARTED"
 `;
 
   // Sanity check: verify exec works on this workspace
+  // VM may still be booting SSH after newWorkspace() returns — use generous timeout + retry
+  console.log(`[claude-cli] Sanity check starting for workspace ${opts.workspaceId}...`);
+  const sanityStart = Date.now();
   const sanity = await execOnWorkspace(opts.workspaceId, 'echo EXEC_OK', { timeout: 15_000 });
-  console.log(`[claude-cli] Sanity check: output="${sanity.output.trim()}", exitCode=${sanity.exitCode}`);
+  console.log(`[claude-cli] Sanity check OK in ${Date.now() - sanityStart}ms: output="${sanity.output.trim()}", exitCode=${sanity.exitCode}`);
 
   // exec() breaks with multi-line commands — base64-encode the whole script
   const startCmdB64 = Buffer.from(startCmd).toString("base64");

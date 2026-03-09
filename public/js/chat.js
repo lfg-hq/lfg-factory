@@ -1561,50 +1561,183 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.log('==================================================');
             }
             
-            // Handle ask_user notification — render option buttons in chat
+            // Handle ask_user notification — render modal with checkboxes
             if (data.notification_type === 'ask_user' && data.suggestions) {
                 console.log('ask_user notification:', data.question, data.suggestions);
 
                 // Remove any function call indicators
                 removeFunctionCallIndicator();
 
-                // Build the question message with option buttons
-                let questionText = data.question || '';
-                if (data.context) questionText += '\n\n*' + data.context + '*';
+                // Track selected options
+                const selected = new Set();
+                const multiSelect = data.multiSelect !== false; // default true
 
-                // Create assistant message with the question
-                addMessageToChat('assistant', questionText);
+                // Build overlay
+                const overlay = document.createElement('div');
+                overlay.className = 'ask-user-modal-overlay';
 
-                // Append option buttons to the last assistant message
-                const lastMsg = document.querySelector('.message.assistant:last-child');
-                if (lastMsg) {
-                    const optionsDiv = document.createElement('div');
-                    optionsDiv.className = 'ask-user-options';
-                    data.suggestions.forEach(function(opt) {
-                        const btn = document.createElement('button');
-                        btn.className = 'ask-user-opt-btn';
-                        btn.textContent = opt;
-                        btn.onclick = function() {
-                            // Set chat input and send
-                            chatInput.value = opt;
-                            chatForm.dispatchEvent(new Event('submit'));
-                            // Disable all buttons
-                            optionsDiv.querySelectorAll('.ask-user-opt-btn').forEach(function(b) {
-                                b.disabled = true;
-                                b.classList.add('ask-user-opt-selected');
-                            });
-                            btn.classList.remove('ask-user-opt-selected');
-                            btn.classList.add('ask-user-opt-chosen');
-                        };
-                        optionsDiv.appendChild(btn);
-                    });
-                    const hintDiv = document.createElement('div');
-                    hintDiv.className = 'ask-user-hint';
-                    hintDiv.textContent = 'or type your own answer below';
-                    optionsDiv.appendChild(hintDiv);
-                    lastMsg.appendChild(optionsDiv);
+                const modal = document.createElement('div');
+                modal.className = 'ask-user-modal';
+
+                // Header
+                const header = document.createElement('div');
+                header.className = 'ask-user-modal-header';
+                const h3 = document.createElement('h3');
+                h3.textContent = data.question || 'Choose an option';
+                const closeBtn = document.createElement('button');
+                closeBtn.className = 'ask-user-modal-close';
+                closeBtn.innerHTML = '&times;';
+                header.appendChild(h3);
+                header.appendChild(closeBtn);
+                modal.appendChild(header);
+
+                // Context
+                if (data.context) {
+                    const ctx = document.createElement('div');
+                    ctx.className = 'ask-user-modal-context';
+                    ctx.textContent = data.context;
+                    modal.appendChild(ctx);
                 }
 
+                // Options list
+                const list = document.createElement('ul');
+                list.className = 'ask-user-options-list';
+
+                // Count display + submit button refs (declared early)
+                const countSpan = document.createElement('span');
+                countSpan.className = 'ask-user-count';
+                const submitBtn = document.createElement('button');
+                submitBtn.className = 'ask-user-submit-btn';
+                submitBtn.textContent = 'Submit';
+                submitBtn.disabled = true;
+
+                function updateCount() {
+                    const n = selected.size;
+                    countSpan.textContent = n + ' selected';
+                    submitBtn.disabled = n === 0;
+                }
+                updateCount();
+
+                // Custom input element (created once, shown/hidden)
+                const customInput = document.createElement('input');
+                customInput.type = 'text';
+                customInput.className = 'ask-user-custom-input';
+                customInput.placeholder = 'Type your answer...';
+                customInput.style.display = 'none';
+
+                const allSuggestions = data.suggestions.concat(['Something else']);
+
+                allSuggestions.forEach(function(opt, idx) {
+                    const isSomethingElse = idx === allSuggestions.length - 1;
+                    const row = document.createElement('li');
+                    row.className = 'ask-user-option-row';
+
+                    const checkbox = document.createElement('span');
+                    checkbox.className = 'ask-user-option-checkbox';
+
+                    const label = document.createElement('span');
+                    label.className = 'ask-user-option-label';
+                    label.textContent = opt;
+
+                    row.appendChild(checkbox);
+                    row.appendChild(label);
+                    list.appendChild(row);
+
+                    // Append custom input after the "Something else" row
+                    if (isSomethingElse) {
+                        list.appendChild(customInput);
+                    }
+
+                    row.addEventListener('click', function() {
+                        if (!multiSelect) {
+                            // Single-select: clear others
+                            selected.clear();
+                            list.querySelectorAll('.ask-user-option-row').forEach(function(r) {
+                                r.classList.remove('checked');
+                                r.querySelector('.ask-user-option-checkbox').textContent = '';
+                            });
+                            customInput.style.display = 'none';
+                        }
+
+                        const isChecked = row.classList.toggle('checked');
+                        checkbox.textContent = isChecked ? '✓' : '';
+
+                        if (isChecked) {
+                            selected.add(opt);
+                        } else {
+                            selected.delete(opt);
+                        }
+
+                        // Show/hide custom input
+                        if (isSomethingElse) {
+                            customInput.style.display = isChecked ? 'block' : 'none';
+                            if (isChecked) customInput.focus();
+                        }
+
+                        updateCount();
+                    });
+                });
+
+                modal.appendChild(list);
+
+                // Footer
+                const footer = document.createElement('div');
+                footer.className = 'ask-user-footer';
+
+                const footerBtns = document.createElement('div');
+                footerBtns.className = 'ask-user-footer-buttons';
+
+                const skipBtn = document.createElement('button');
+                skipBtn.className = 'ask-user-skip-btn';
+                skipBtn.textContent = 'Skip';
+
+                footerBtns.appendChild(skipBtn);
+                footerBtns.appendChild(submitBtn);
+                footer.appendChild(countSpan);
+                footer.appendChild(footerBtns);
+                modal.appendChild(footer);
+                overlay.appendChild(modal);
+
+                // Dismiss helper
+                function dismissModal(message) {
+                    chatInput.value = message;
+                    chatForm.dispatchEvent(new Event('submit'));
+                    overlay.remove();
+                }
+
+                // Submit
+                submitBtn.addEventListener('click', function() {
+                    const choices = [];
+                    selected.forEach(function(s) {
+                        if (s === 'Something else') {
+                            const custom = customInput.value.trim();
+                            if (custom) choices.push(custom);
+                        } else {
+                            choices.push(s);
+                        }
+                    });
+                    if (choices.length === 0) return;
+                    dismissModal(choices.join(' | '));
+                });
+
+                // Skip
+                skipBtn.addEventListener('click', function() {
+                    dismissModal('Skip — proceed with your best judgment');
+                });
+
+                // Close button
+                closeBtn.addEventListener('click', function() {
+                    dismissModal('Skip — proceed with your best judgment');
+                });
+
+                // Click outside modal to skip
+                overlay.addEventListener('click', function(e) {
+                    if (e.target === overlay) {
+                        dismissModal('Skip — proceed with your best judgment');
+                    }
+                });
+
+                document.body.appendChild(overlay);
                 scrollToBottom();
                 return;
             }

@@ -30,15 +30,20 @@ export const askUser = tool({
       suggestions: z
         .array(z.string())
         .min(2)
-        .max(5)
-        .describe("2-5 suggested options for the user to choose from"),
+        .max(8)
+        .describe("2-8 suggested options for the user to choose from"),
+      multiSelect: z
+        .boolean()
+        .optional()
+        .default(true)
+        .describe("Allow selecting multiple options (default true). Set false for single-choice questions."),
       context: z
         .string()
         .optional()
         .describe("Optional context explaining why this decision matters"),
     })
   ),
-  execute: async ({ userId, question, suggestions, context }) => {
+  execute: async ({ userId, question, suggestions, multiSelect, context }) => {
     if (_wsBroadcast) {
       _wsBroadcast(userId, {
         type: "ai_chunk",
@@ -46,6 +51,7 @@ export const askUser = tool({
         notification_type: "ask_user",
         question,
         suggestions,
+        multiSelect: multiSelect ?? true,
         context: context ?? "",
       });
     }

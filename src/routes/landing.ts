@@ -5,6 +5,7 @@ import { ServicesPage } from "../templates/pages/services.tsx";
 import { PortfolioPage } from "../templates/pages/portfolio.tsx";
 import { BlogPage } from "../templates/pages/blog.tsx";
 import { BlogPostPage } from "../templates/pages/blog-post.tsx";
+import { BuildLandingPage } from "../templates/pages/build-landing.tsx";
 import { loadBlogPosts, getBlogPostBySlug } from "../utils/blog.ts";
 import { sendEmail } from "../utils/email.ts";
 
@@ -33,7 +34,8 @@ function cleanExpiredFreePrd() {
 const landing = new Hono();
 
 landing.get("/", (c) => {
-  return c.html(LandingPage());
+  const posts = loadBlogPosts().slice(0, 3);
+  return c.html(LandingPage({ posts }));
 });
 
 landing.get("/agent", (c) => c.redirect("/agent/"));
@@ -70,6 +72,8 @@ landing.post("/api/portfolio/connect", async (c) => {
     return c.json({ error: "Invalid request." }, 400);
   }
 });
+
+landing.get("/build", (c) => c.html(BuildLandingPage()));
 
 landing.get("/blog", (c) => c.redirect("/blog/"));
 landing.get("/blog/", (c) => {

@@ -5,7 +5,7 @@ import { messages } from "../db/schema/chat.ts";
 import { sandboxes } from "../db/schema/sandbox.ts";
 import { githubTokens } from "../db/schema/users.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
-import { enableHttpAccess, execOnWorkspace, newWorkspace, stopWorkspace } from "./mags.ts";
+import { enableHttpAccess, execOnWorkspace, findJob, newWorkspace, stopWorkspace } from "./mags.ts";
 import { createGitHubRepo, initAndPushRepo, commitAndPush } from "./git.ts";
 import {
   extractExitCode,
@@ -17,6 +17,7 @@ import {
   startClaudeCli,
   type ClaudeJsonEvent,
   saveCredentialsFromVm,
+  markClaudeDisconnected,
 } from "./claude-cli.ts";
 
 const PROJECT_DIR = "project";
@@ -71,8 +72,9 @@ async function broadcastInstantStatus(params: {
   message: string;
   previewUrl?: string;
   appName?: string;
+  errorType?: string;
 }) {
-  const { userId, conversationId, appId, status, message, previewUrl, appName } = params;
+  const { userId, conversationId, appId, status, message, previewUrl, appName, errorType } = params;
 
   const isRunning = status === "running";
   broadcastToUser(userId, {
@@ -87,6 +89,7 @@ async function broadcastInstantStatus(params: {
     message,
     preview_url: previewUrl ?? "",
     app_name: appName ?? "",
+    ...(errorType ? { error_type: errorType } : {}),
   });
 
   if (conversationId) {
@@ -163,9 +166,6 @@ async function ensureSandboxForApp(appId: string) {
     .limit(1);
 
   if (!row) return null;
-  if (row.sandbox?.magsWorkspaceId) {
-    return { app: row.app, sandbox: row.sandbox };
-  }
 
   // Look up user's claude_auth workspace to use as base (has Node, Bun, Claude CLI configured)
   const [authSandbox] = await db
@@ -175,6 +175,16 @@ async function ensureSandboxForApp(appId: string) {
     .limit(1);
 
   const baseWorkspaceId = authSandbox?.magsWorkspaceId ?? undefined;
+
+  // If a sandbox+VM already exists, verify it's still alive before reusing it
+  if (row.sandbox?.magsWorkspaceId) {
+    const job = await findJob(row.sandbox.magsWorkspaceId).catch(() => null);
+    if (job && (job.status === "running" || job.status === "sleeping")) {
+      return { app: row.app, sandbox: row.sandbox };
+    }
+    // VM is gone — fall through to create a fresh one
+    console.log(`[instant] VM '${row.sandbox.magsWorkspaceId}' is no longer alive (status: ${job?.status ?? "not found"}), creating fresh VM`);
+  }
 
   const workspaceName = `instant-${row.app.appId.slice(0, 8)}-${crypto.randomUUID().slice(0, 8)}`;
   const { jobId, workspaceId } = await newWorkspace(workspaceName, { baseWorkspaceId });
@@ -270,9 +280,13 @@ async function runInstantBuild(appId: string, feedback?: string) {
 
   let buildWorkspaceId: string | null = null;
   let buildUserId: string | null = null;
+  const buildStart = Date.now();
 
   try {
+    console.log(`[instant] [${appId}] runInstantBuild START`);
+    const t0 = Date.now();
     const initial = await ensureSandboxForApp(appId);
+    console.log(`[instant] [${appId}] ensureSandboxForApp done in ${Date.now() - t0}ms`);
     if (!initial) return;
 
     let app = initial.app;
@@ -281,6 +295,7 @@ async function runInstantBuild(appId: string, feedback?: string) {
     const appName = app.name;
     buildWorkspaceId = workspaceId;
     buildUserId = app.userId;
+    console.log(`[instant] [${appId}] workspaceId=${workspaceId} appName=${appName}`);
 
     await db
       .update(instantApps)
@@ -361,6 +376,8 @@ ${app.requirements ?? ""}
         : `Claude Code is building ${appName}...`,
     });
 
+    const t1 = Date.now();
+    console.log(`[instant] [${appId}] calling startClaudeCli...`);
     const cli = await startClaudeCli({
       workspaceId,
       prompt,
@@ -370,17 +387,28 @@ ${app.requirements ?? ""}
       userId: app.userId,
       envVars: (app.envVars as Record<string, string> | null) ?? {},
     });
+    console.log(`[instant] [${appId}] startClaudeCli done in ${Date.now() - t1}ms, outputFile=${cli.outputFile}, pid=${cli.backgroundPid}`);
 
     let offset = 0;
     let allOutput = "";
     let sessionId = sandbox.cliSessionId ?? undefined;
     let completed = false;
     let lastProgressAt = 0;
+    let consecutivePollErrors = 0;
     const deadline = Date.now() + BUILD_TIMEOUT_MS;
 
     while (Date.now() < deadline && !completed) {
       await sleep(POLL_INTERVAL_MS);
-      const poll = await pollOutput(workspaceId, cli.outputFile, offset, cli.backgroundPid);
+      let poll: Awaited<ReturnType<typeof pollOutput>>;
+      try {
+        poll = await pollOutput(workspaceId, cli.outputFile, offset, cli.backgroundPid);
+        consecutivePollErrors = 0;
+      } catch (pollErr) {
+        consecutivePollErrors++;
+        console.warn(`[instant] Poll error (${consecutivePollErrors}/5):`, (pollErr as Error).message?.slice(0, 120));
+        if (consecutivePollErrors >= 5) throw pollErr; // give up after 5 consecutive failures
+        continue; // transient error — retry next interval
+      }
       offset = poll.newOffset;
       if (!poll.data) {
         if (!poll.alive && allOutput.includes("___CLAUDE_EXIT_CODE")) {
@@ -489,9 +517,18 @@ Then wait 3 seconds and verify with: curl -s http://localhost:8080/ || true`;
         let fixCompleted = false;
         const fixDeadline = Date.now() + 10 * 60 * 1000; // 10 min for fix
 
+        let fixPollErrors = 0;
         while (Date.now() < fixDeadline && !fixCompleted) {
           await sleep(POLL_INTERVAL_MS);
-          const poll = await pollOutput(workspaceId, fixCli.outputFile, fixOffset, fixCli.backgroundPid);
+          let poll: Awaited<ReturnType<typeof pollOutput>>;
+          try {
+            poll = await pollOutput(workspaceId, fixCli.outputFile, fixOffset, fixCli.backgroundPid);
+            fixPollErrors = 0;
+          } catch (pollErr) {
+            fixPollErrors++;
+            if (fixPollErrors >= 5) break;
+            continue;
+          }
           fixOffset = poll.newOffset;
           if (!poll.data) {
             if (!poll.alive && fixOutput.includes("___CLAUDE_EXIT_CODE")) break;
@@ -656,8 +693,23 @@ Then wait 3 seconds and verify with: curl -s http://localhost:8080/ || true`;
       console.warn(`[instant] Auto-sync to GitHub failed for ${appName}:`, syncErr);
     }
   } catch (error) {
+    console.error(`[instant] [${appId}] BUILD FAILED after ${Date.now() - buildStart}ms — ${String(error)}`);
     const [app] = await db.select().from(instantApps).where(eq(instantApps.id, appId)).limit(1);
     if (app) {
+      // Detect credential errors — tell user to reconnect Claude Code
+      const errMsg = String(error).toLowerCase();
+      const isCredError =
+        errMsg.includes("no credentials") ||
+        errMsg.includes("credentials.json") ||
+        errMsg.includes("please reconnect") ||
+        errMsg.includes("not logged in") ||
+        errMsg.includes("authentication_error") ||
+        errMsg.includes("oauth token");
+
+      if (isCredError) {
+        await markClaudeDisconnected(app.userId).catch(() => {});
+      }
+
       await db
         .update(instantApps)
         .set({
@@ -676,7 +728,10 @@ Then wait 3 seconds and verify with: curl -s http://localhost:8080/ || true`;
         appId: app.appId,
         appName: app.name,
         status: "error",
-        message: `Error building ${app.name}: ${String(error)}`,
+        message: isCredError
+          ? "Claude Code is not connected. Please connect it in Settings to build apps."
+          : `Error building ${app.name}: ${String(error)}`,
+        errorType: isCredError ? "no_credentials" : undefined,
       });
     }
   } finally {
@@ -783,6 +838,20 @@ export async function getInstantAppStatus(params: {
       status,
       previewUrl: "",
       message: `${app.name} status: ${status}`,
+    };
+  }
+
+  // Check VM liveness before attempting any exec — a dead VM would cause
+  // execOnWorkspace to retry for minutes and block the whole WS stream.
+  const vmJob = await findJob(sandbox.magsWorkspaceId).catch(() => null);
+  const vmAlive = vmJob && (vmJob.status === "running" || vmJob.status === "sleeping");
+  if (!vmAlive) {
+    return {
+      appId: app.appId,
+      appName: app.name,
+      status,
+      previewUrl: "",
+      message: `${app.name} status: ${status}. VM is not running — build needs to be retried.`,
     };
   }
 
@@ -902,6 +971,12 @@ export async function askInstantSandboxQuestion(params: {
 
   if (!row?.sandbox?.magsWorkspaceId) {
     return { answer: "No sandbox is available yet for this app." };
+  }
+
+  // Guard: don't exec on a dead VM — would hang for minutes
+  const vmJob = await findJob(row.sandbox.magsWorkspaceId).catch(() => null);
+  if (!vmJob || (vmJob.status !== "running" && vmJob.status !== "sleeping")) {
+    return { answer: "Sandbox VM is not currently running. The app needs to be rebuilt before sandbox inspection is available." };
   }
 
   // Lightweight sandbox introspection fallback.

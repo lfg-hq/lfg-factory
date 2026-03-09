@@ -348,7 +348,7 @@ export const AuthPage = ({ turnstileSiteKey = "" }: { turnstileSiteKey?: string 
                     credentials: 'include',
                 });
                 if (res.ok) {
-                    window.location.href = '/projects';
+                    window.location.href = getNextUrl();
                 } else {
                     const data = await res.json().catch(() => ({}));
                     showError(data.message || 'Invalid email or password. Please try again.');
@@ -391,7 +391,7 @@ export const AuthPage = ({ turnstileSiteKey = "" }: { turnstileSiteKey?: string 
                     credentials: 'include',
                 });
                 if (res.ok) {
-                    window.location.href = '/projects';
+                    window.location.href = getNextUrl();
                 } else {
                     const data = await res.json().catch(() => ({}));
                     showError(data.message || 'Registration failed. The email may already be in use.');
@@ -450,7 +450,7 @@ export const AuthPage = ({ turnstileSiteKey = "" }: { turnstileSiteKey?: string 
                 const res = await fetch('/api/auth/sign-in/social', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ provider: 'google', callbackURL: '/projects' }),
+                    body: JSON.stringify({ provider: 'google', callbackURL: getNextUrl() }),
                     credentials: 'include',
                 });
                 const text = await res.text();
@@ -467,9 +467,16 @@ export const AuthPage = ({ turnstileSiteKey = "" }: { turnstileSiteKey?: string 
             }
         }
 
-        // Check URL for tab param
+        // Check URL for tab + next params
         const params = new URLSearchParams(window.location.search);
-        if (params.get('tab') === 'register') switchTab('register');
+        if (params.get('tab') === 'register' || window.location.pathname === '/auth/register') switchTab('register');
+
+        // Helper: get safe redirect destination
+        function getNextUrl() {
+          const next = params.get('next');
+          if (next && next.startsWith('/') && !next.startsWith('//')) return next;
+          return '/projects';
+        }
     </script>
 </body>
 </html>
