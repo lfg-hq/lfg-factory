@@ -10,10 +10,11 @@ export interface BlogPost {
   dateDisplay: string;
   readingMinutes: number;
   contentHtml: string;
+  coverImage?: string;
 }
 
-// marketing/content/blog is three levels up from Node/src/utils
-const BLOG_DIR = join(import.meta.dir, "..", "..", "..", "marketing", "content", "blog");
+// Blog content lives in Node/content/blog
+const BLOG_DIR = join(import.meta.dir, "..", "..", "content", "blog");
 
 const FRONT_MATTER_RE = /^---\s*\n([\s\S]*?)\n---\s*\n?([\s\S]*)$/;
 
@@ -92,6 +93,7 @@ export function loadBlogPosts(): BlogPost[] {
       dateDisplay: formatDate(date),
       readingMinutes,
       contentHtml,
+      coverImage: metadata.cover_image || undefined,
     });
   }
 

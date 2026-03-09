@@ -47,12 +47,14 @@ function FeaturedCard(post: BlogPost) {
   return html`
     <a href="/blog/${post.slug}/" class="group block rounded-2xl border border-slate-200 bg-white shadow-sm hover:shadow-lg transition-all duration-200 overflow-hidden">
         <div class="flex flex-col sm:flex-row">
-            <div class="sm:w-2/5 bg-gradient-to-br from-indigo-500 via-indigo-600 to-violet-600 p-8 sm:p-10 flex flex-col justify-between min-h-[200px]">
-                <span class="inline-flex items-center gap-1.5 bg-white/20 text-white text-xs font-semibold px-3 py-1 rounded-full w-fit">
+            <div class="sm:w-2/5 bg-gradient-to-br from-indigo-500 via-indigo-600 to-violet-600 p-8 sm:p-10 flex flex-col justify-between min-h-[200px] relative overflow-hidden">
+                ${post.coverImage ? html`<img src="${post.coverImage}" alt="" class="absolute inset-0 w-full h-full object-cover" />
+                <div class="absolute inset-0 bg-black/40"></div>` : ""}
+                <span class="relative inline-flex items-center gap-1.5 bg-white/20 text-white text-xs font-semibold px-3 py-1 rounded-full w-fit">
                     <i data-lucide="star" class="w-3 h-3"></i> Latest
                 </span>
-                <div class="mt-6">
-                    <p class="text-indigo-200 text-xs font-semibold uppercase tracking-wider">${post.dateDisplay}</p>
+                <div class="relative mt-6">
+                    <p class="${post.coverImage ? "text-white/80" : "text-indigo-200"} text-xs font-semibold uppercase tracking-wider">${post.dateDisplay}</p>
                     <p class="text-white/70 text-xs mt-1">${post.readingMinutes} min read</p>
                 </div>
             </div>

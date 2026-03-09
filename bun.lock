@@ -9,7 +9,7 @@
         "@ai-sdk/mcp": "^1.0.21",
         "@ai-sdk/openai": "^3.0.30",
         "@aws-sdk/client-s3": "^3.995.0",
-        "@magpiecloud/mags": "^1.8.11",
+        "@magpiecloud/mags": "^1.8.15",
         "ai": "^6.0.97",
         "better-auth": "^1.4.18",
         "better-sqlite3": "^12.6.2",
@@ -24,7 +24,6 @@
         "@types/bun": "latest",
         "@types/node": "^25.3.0",
         "@types/pg": "^8.16.0",
-        "drizzle-kit": "^0.31.9",
       },
       "peerDependencies": {
         "typescript": "^5",
@@ -194,7 +193,7 @@
 
     "@esbuild/win32-x64": ["@esbuild/win32-x64@0.25.12", "", { "os": "win32", "cpu": "x64" }, "sha512-alJC0uCZpTFrSL0CCDjcgleBXPnCrEAhTBILpeAp7M/OFgoqtAetfBzX0xM00MUsVVPpVjlPuMbREqnZCXaTnA=="],
 
-    "@magpiecloud/mags": ["@magpiecloud/mags@1.8.11", "", { "bin": { "mags": "bin/mags.js" } }, "sha512-4DaYqBURR1HiaBM1s7/fny1wemAFbKgnuaiwnf5d7/LzCcaXoC3Ydkk9yCBWTjZ9/iSBV88sG9opWHYFSiN0zA=="],
+    "@magpiecloud/mags": ["@magpiecloud/mags@1.8.15", "", { "dependencies": { "ws": "^8.18.0" }, "bin": { "mags": "bin/mags.js" } }, "sha512-bfdV7CkU2oQsDlGBD79/BeQeMKgPn1pI5agm7lC9y67vPDjCt8fC4zS/zd3Cvk+o5tn+nTt5xnKaQt6goHq3fw=="],
 
     "@noble/ciphers": ["@noble/ciphers@2.1.1", "", {}, "sha512-bysYuiVfhxNJuldNXlFEitTVdNnYUc+XNJZd7Qm2a5j1vZHgY+fazadNFWFaMK/2vye0JVlxV3gHmC0WDfAOQw=="],
 
@@ -483,6 +482,8 @@
     "util-deprecate": ["util-deprecate@1.0.2", "", {}, "sha512-EPD5q1uXyFxJpCrLnCc1nHnq3gOa6DZBocAIiI2TaSCA7VCJ1UJDMagCzIkXNsUYfD1daK//LTEQ8xiIbrHtcw=="],
 
     "wrappy": ["wrappy@1.0.2", "", {}, "sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ=="],
+
+    "ws": ["ws@8.19.0", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-blAT2mjOEIi0ZzruJfIhb3nps74PRWTCz1IjglWEEpQl5XS/UNama6u2/rjFkDDouqr4L67ry+1aGIALViWjDg=="],
 
     "xtend": ["xtend@4.0.2", "", {}, "sha512-LKYU1iAXJXUgAXn9URjiu+MWhyUXHsvfp7mcuYm9dSUKK0/CjtrUwFAxD82/mCWbtLsGjFIad0wIsod4zrTAEQ=="],
 
