@@ -31,6 +31,7 @@ import { startTicketWorker } from "./workers/ticket-executor.ts";
 import { startAgentScheduler } from "./services/agent-scheduler.ts";
 import { startAgentTimeoutSweeper } from "./services/agent-timeout-sweeper.ts";
 import { registerAgentNotifier } from "./services/agent-notifier.ts";
+import { registerAgentReflector } from "./services/agent-reflector.ts";
 import { registerEventHandlers } from "./events/handlers.ts";
 import { db } from "./config/db.ts";
 import { agentRoles, modelSelections } from "./db/schema/chat.ts";
@@ -184,6 +185,7 @@ async function handleFetch(req: Request, server: import("bun").Server<WsData>): 
 // ── Start background workers ─────────────────────────────────────────
 registerEventHandlers();
 registerAgentNotifier();
+registerAgentReflector();
 startTicketWorker();
 startAgentScheduler();
 startAgentTimeoutSweeper();

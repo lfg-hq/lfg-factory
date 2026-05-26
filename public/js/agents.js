@@ -31,12 +31,12 @@
         renderConnectorRequired(data.toolkit, data.redirect_url);
       }
     } else if (data.type === "connector_connected") {
-      // Either the user connected via the inline button (matching agent_id)
-      // or via the connectors modal (no agent_id). In both cases, if we're
-      // sitting in an agent chat, auto-resend the last user message so the
-      // agent can fulfill the original request.
       if (!agentId || data.agent_id === agentId || data.agent_id == null) {
         resubmitLastUserMessage(data.toolkit);
+      }
+    } else if (data.type === "secret_required") {
+      if (!agentId || data.agent_id === agentId) {
+        renderSecretRequired(data.key, data.description, data.service);
       }
     }
   };
@@ -68,6 +68,57 @@
     const left = (window.screen.width - w) / 2;
     const top = (window.screen.height - h) / 2;
     window.open(url, "composio-oauth-" + toolkit, "width=" + w + ",height=" + h + ",left=" + left + ",top=" + top);
+  };
+
+  function renderSecretRequired(key, description, service) {
+    const messagesEl = document.getElementById("chat-messages");
+    if (!messagesEl) return;
+    const wrap = document.createElement("div");
+    wrap.className = "message assistant secret-cta";
+    wrap.setAttribute("data-secret-cta", key);
+    wrap.innerHTML =
+      '<div class="message-content">' +
+        '<div style="display:flex;flex-direction:column;gap:0.5rem;padding:0.5rem 0;">' +
+          '<div style="display:flex;align-items:center;gap:0.5rem;">' +
+            '<i class="fas fa-key" style="color:var(--primary-color);"></i>' +
+            '<strong>' + key + '</strong>' +
+            (service ? '<span style="font-size:0.75rem;color:var(--text-secondary);">(' + service + ')</span>' : '') +
+          '</div>' +
+          '<div style="font-size:0.8125rem;color:var(--text-secondary);">' + escapeHtml(description || "") + '</div>' +
+          '<div style="display:flex;gap:0.5rem;align-items:center;">' +
+            '<input type="password" id="secret-input-' + key + '" class="input" style="flex:1;font-family:monospace;font-size:0.8125rem;" placeholder="Paste value, then Save" />' +
+            '<button class="btn btn-primary btn-sm" onclick="submitInlineSecret(\'' + key + '\', ' + JSON.stringify(service || "") + ')">' +
+              '<i class="fas fa-save"></i> Save' +
+            '</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    messagesEl.appendChild(wrap);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+    setTimeout(() => document.getElementById("secret-input-" + key)?.focus(), 50);
+  }
+
+  window.submitInlineSecret = async function (key, service) {
+    const input = document.getElementById("secret-input-" + key);
+    if (!input || !input.value.trim()) return;
+    const value = input.value;
+    try {
+      const res = await fetch("/api/agents/" + agentId + "/secrets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key, value, service: service || undefined }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert(err.error || "Failed to save secret");
+        return;
+      }
+      // Remove the bubble + auto-resubmit the prior user message
+      document.querySelectorAll('[data-secret-cta="' + key + '"]').forEach((el) => el.remove());
+      resubmitLastUserMessage(key);
+    } catch (err) {
+      alert("Error: " + err.message);
+    }
   };
 
   function resubmitLastUserMessage(toolkit) {

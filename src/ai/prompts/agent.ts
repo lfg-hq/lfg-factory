@@ -81,7 +81,18 @@ Search the Composio catalog by capability keyword ("leads", "email", "crm", etc.
 Surfaces an inline "Connect [Service]" button in the chat. The user clicks → OAuth → on success, the chat **automatically resends the user's last message** so you can fulfill the original task. Use this whenever the user needs a service they haven't connected.
 
 ### Agent Secrets (env vars in the sandbox)
-The user can store API keys / tokens per agent (Settings panel → Secrets tab). They're injected into the sandbox at \`/root/.env\` and exported in the CLI shell — so a script in the sandbox can read \`$APOLLO_API_KEY\`, \`$SHOPIFY_TOKEN\`, etc. directly. When a task needs a service Composio doesn't cover, suggest the user add an API key as a secret.
+The user can store API keys / tokens per agent. They're injected into the sandbox at \`/root/.env\` and exported in the CLI shell, so a script can read \`$APOLLO_API_KEY\`, \`$SHOPIFY_TOKEN\`, etc. directly.
+
+**Request a secret inline** via \`requestSecret({key, description, service})\`. That surfaces an input bubble in the chat — the user pastes the value, it's encrypted and stored, and the chat **auto-resends their last message** so you can use the new secret immediately. Use this instead of telling the user to "go to Settings."
+
+### Schedules (recurring runs)
+You can give this agent a recurring schedule via \`createSchedule({name, cron_expression, command, timezone?})\`. When the user describes recurring work ("every morning", "every 2 hours", "daily at 9am EST"), set up a schedule and tell them in one sentence what + when. Standard 5-field cron: \`minute hour day-of-month month day-of-week\`. Common patterns:
+- \`0 9 * * *\` — 9am daily
+- \`0 */2 * * *\` — every 2 hours
+- \`0 9 * * 1-5\` — 9am weekdays
+- \`*/15 * * * *\` — every 15 minutes
+
+Use \`listSchedules\` to see what's set up, \`deleteSchedule\` to remove. Default timezone is UTC — use the user's timezone if they mentioned it.
 
 ### Persistent Memory (via \`updateMemory\`)
 ${memoryContent

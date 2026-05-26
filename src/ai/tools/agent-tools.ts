@@ -10,10 +10,11 @@
 import { tool, zodSchema } from "ai";
 import { z } from "zod";
 import { db } from "../../config/db.ts";
-import { agents } from "../../db/schema/agents.ts";
+import { agents, agentSchedules } from "../../db/schema/agents.ts";
 import { eq } from "drizzle-orm";
 import { sendCommand, startAgent } from "../../services/agent-manager.ts";
 import { listConnectors, connectToolkit } from "../../services/composio-manager.ts";
+import { addSchedule, removeSchedule } from "../../services/agent-scheduler.ts";
 import { broadcastToUser } from "../../ws/connection-manager.ts";
 import { env } from "../../config/env.ts";
 
@@ -251,5 +252,104 @@ export function createAgentTools(params: {
     },
   });
 
-  return { runInSandbox, updateMemory, proposeAgentConfig, lookupComposioToolkits, requestConnectorAuth };
+  const createSchedule = tool({
+    description:
+      "Set up a recurring schedule for this agent to run a task automatically. Use when the user describes " +
+      "recurring work: 'every 2 hours', 'every morning at 9', 'every Monday'. Cron expression uses standard " +
+      "5-field format: minute hour day-of-month month day-of-week. Examples: '0 9 * * *' = 9am daily, " +
+      "'0 */2 * * *' = every 2 hours, '0 9 * * 1-5' = 9am weekdays. After creating, tell the user one short " +
+      "sentence confirming what + when.",
+    inputSchema: zodSchema(
+      z.object({
+        name: z.string().max(80).describe("Short label for this schedule. E.g. 'Morning email summary', 'Hourly lead check'."),
+        cron_expression: z.string().describe("5-field cron expression. Examples: '0 9 * * *', '0 */2 * * *', '30 8 * * 1-5'."),
+        command: z.string().describe("The task prompt that will be sent to the agent each time the schedule fires. Be specific — this is the standing instruction for the recurring run."),
+        timezone: z.string().optional().describe("IANA timezone (e.g. 'America/Los_Angeles', 'Asia/Kolkata'). Defaults to UTC. Use the user's timezone if they've mentioned it."),
+      })
+    ),
+    execute: async ({ name, cron_expression, command, timezone }) => {
+      try {
+        const row = await addSchedule(agentId, {
+          name,
+          cronExpression: cron_expression,
+          command,
+          timezone,
+        });
+        return `Scheduled "${name}" — runs on "${cron_expression}"${timezone ? ` (${timezone})` : ""}. Next run: ${row.nextRunAt?.toISOString() ?? "(unknown)"}.`;
+      } catch (err) {
+        return `Failed to create schedule: ${(err as Error).message}. Common cause: invalid cron expression.`;
+      }
+    },
+  });
+
+  const listSchedules = tool({
+    description: "List all schedules currently set up for this agent. Use when the user asks 'what schedules do I have', or before modifying/removing one so you know its ID.",
+    inputSchema: zodSchema(z.object({})),
+    execute: async () => {
+      const [agentRow] = await db.select({ id: agents.id }).from(agents).where(eq(agents.agentId, agentId)).limit(1);
+      if (!agentRow) return "Agent not found.";
+      const rows = await db.select().from(agentSchedules).where(eq(agentSchedules.agentId, agentRow.id));
+      if (!rows.length) return "No schedules set up. Use createSchedule to add one.";
+      return rows
+        .map((r) => `- ${r.id}: "${r.name}" — cron "${r.cronExpression}" (${r.timezone}) — ${r.enabled ? "enabled" : "PAUSED"} — next: ${r.nextRunAt?.toISOString() ?? "?"}`)
+        .join("\n");
+    },
+  });
+
+  const deleteSchedule = tool({
+    description: "Remove a schedule by its ID. Use listSchedules first if you don't know the ID.",
+    inputSchema: zodSchema(z.object({ schedule_id: z.string().describe("The schedule's ID, from listSchedules.") })),
+    execute: async ({ schedule_id }) => {
+      try {
+        await removeSchedule(schedule_id);
+        return `Removed schedule ${schedule_id}.`;
+      } catch (err) {
+        return `Failed to remove: ${(err as Error).message}`;
+      }
+    },
+  });
+
+  const requestSecret = tool({
+    description:
+      "Surface an inline 'Set [KEY]' input bubble in the chat to collect a secret (API key, token) from the user. " +
+      "After the user enters a value, the secret is encrypted, stored, and injected into the sandbox at /root/.env. " +
+      "The chat then AUTOMATICALLY resends the user's last message so you can fulfill the original task using the new secret. " +
+      "Use this when you need an API key Composio doesn't cover (e.g. APOLLO_API_KEY, SHOPIFY_TOKEN, GCP_SA_KEY).",
+    inputSchema: zodSchema(
+      z.object({
+        key: z.string().describe("Environment variable name in UPPER_SNAKE_CASE. E.g. 'APOLLO_API_KEY', 'SHOPIFY_TOKEN'."),
+        description: z.string().describe("Short user-facing label explaining what this secret unlocks. E.g. 'Apollo API key for B2B lead lookup'."),
+        service: z.string().optional().describe("Optional service name. E.g. 'apollo', 'shopify', 'stripe'."),
+      })
+    ),
+    execute: async ({ key, description, service }) => {
+      if (!/^[A-Z][A-Z0-9_]*$/.test(key)) {
+        return `Invalid key "${key}". Must be UPPER_SNAKE_CASE — letters, digits, underscores; starts with a letter.`;
+      }
+      broadcastToUser(userId, {
+        type: "secret_required",
+        agent_id: agentId,
+        key,
+        description,
+        service: service ?? null,
+      });
+      return (
+        `Surfaced a 'Set ${key}' input in the chat. ` +
+        `Tell the user briefly: "I need ${key} for that — enter it above and I'll continue automatically." ` +
+        `Then STOP — do not retry yet; the chat will auto-resend the user's message once they save the secret.`
+      );
+    },
+  });
+
+  return {
+    runInSandbox,
+    updateMemory,
+    proposeAgentConfig,
+    lookupComposioToolkits,
+    requestConnectorAuth,
+    createSchedule,
+    listSchedules,
+    deleteSchedule,
+    requestSecret,
+  };
 }
