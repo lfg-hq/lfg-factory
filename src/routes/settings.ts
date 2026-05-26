@@ -3,8 +3,10 @@ import { requireAuth } from "../auth/middleware.ts";
 import { db } from "../config/db.ts";
 import { llmApiKeys, profiles, githubTokens } from "../db/schema/users.ts";
 import { telegramBots } from "../db/schema/telegram.ts";
+import { composioToolkits } from "../db/schema/composio.ts";
 import { eq } from "drizzle-orm";
 import { isBotActive } from "../services/telegram.ts";
+import { isComposioConfigured } from "../services/composio-manager.ts";
 import { SettingsPage } from "../templates/pages/settings.tsx";
 import { env } from "../config/env.ts";
 import type { auth } from "../auth/index.ts";
@@ -61,6 +63,7 @@ settingsRouter.get("/settings", async (c) => {
         anthropic: !!keys.anthropicApiKey,
         google: !!keys.googleApiKey,
         xai: !!keys.xaiApiKey,
+        kimi: !!keys.kimiApiKey,
         usePersonalKeys: keys.usePersonalLlmKeys,
       },
       claudeCode: {
@@ -91,6 +94,7 @@ settingsRouter.post("/settings/save-key", async (c) => {
     anthropic: "anthropicApiKey",
     google: "googleApiKey",
     xai: "xaiApiKey",
+    kimi: "kimiApiKey",
   };
   const field = fieldMap[provider];
   if (!field) return c.redirect("/settings?error=Unknown+provider");
@@ -117,6 +121,7 @@ settingsRouter.post("/settings/remove-key", async (c) => {
     anthropic: { anthropicApiKey: null },
     google: { googleApiKey: null },
     xai: { xaiApiKey: null },
+    kimi: { kimiApiKey: null },
   };
   const updateFields = fieldMap[provider];
   if (!updateFields) return c.redirect("/settings?error=Unknown+provider");
@@ -170,14 +175,15 @@ settingsRouter.post("/settings/claude-code/disconnect", async (c) => {
   return c.redirect("/settings/integrations?success=Claude+Code+disconnected");
 });
 
-// GET /settings/integrations — Integrations section (Claude Code + GitHub + Telegram)
+// GET /settings/integrations — Integrations section (Claude Code + GitHub + Telegram + Composio)
 settingsRouter.get("/settings/integrations", async (c) => {
   const user = c.get("user");
-  const [keys, profile, ghToken, tgBot] = await Promise.all([
+  const [keys, profile, ghToken, tgBot, userToolkits] = await Promise.all([
     getOrCreateApiKeys(user.id),
     getProfile(user.id),
     getGithubToken(user.id),
     getTelegramBot(user.id),
+    db.select().from(composioToolkits).where(eq(composioToolkits.userId, user.id)),
   ]);
   const url = new URL(c.req.url);
   const error = url.searchParams.get("error") ?? undefined;
@@ -190,6 +196,7 @@ settingsRouter.get("/settings/integrations", async (c) => {
         anthropic: !!keys.anthropicApiKey,
         google: !!keys.googleApiKey,
         xai: !!keys.xaiApiKey,
+        kimi: !!keys.kimiApiKey,
         usePersonalKeys: keys.usePersonalLlmKeys,
       },
       claudeCode: {
@@ -207,6 +214,14 @@ settingsRouter.get("/settings/integrations", async (c) => {
         botUsername: tgBot?.botUsername ?? null,
         enabled: tgBot?.enabled ?? false,
         active: isBotActive(user.id),
+      },
+      composio: {
+        configured: isComposioConfigured(),
+        toolkits: userToolkits.map((t) => ({
+          id: t.id,
+          toolkit: t.toolkit,
+          enabled: t.enabled,
+        })),
       },
       activeSection: "integrations",
       error,
@@ -230,9 +245,8 @@ settingsRouter.get("/accounts/github-connect", async (c) => {
     `github_oauth_state=${state}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`
   );
 
-  // Build the redirect URI — same path as Django so we can share the GitHub OAuth app
   const baseUrl = env.BETTER_AUTH_URL; // e.g. http://localhost:8000
-  const redirectUri = `${baseUrl}/accounts/github-callback/`;
+  const redirectUri = `${baseUrl}/accounts/github-callback`;
 
   const params = new URLSearchParams({
     client_id: clientId,
@@ -244,8 +258,8 @@ settingsRouter.get("/accounts/github-connect", async (c) => {
   return c.redirect(`https://github.com/login/oauth/authorize?${params.toString()}`);
 });
 
-// GET /accounts/github-callback/ — OAuth callback (same URL as Django)
-settingsRouter.get("/accounts/github-callback/", async (c) => {
+// GET /accounts/github-callback — OAuth callback
+settingsRouter.get("/accounts/github-callback", async (c) => {
   const user = c.get("user");
   const code = c.req.query("code");
   const state = c.req.query("state");
@@ -273,7 +287,7 @@ settingsRouter.get("/accounts/github-callback/", async (c) => {
   }
 
   const baseUrl = env.BETTER_AUTH_URL;
-  const redirectUri = `${baseUrl}/accounts/github-callback/`;
+  const redirectUri = `${baseUrl}/accounts/github-callback`;
 
   try {
     // Exchange code for access token

@@ -11,6 +11,7 @@ import { conversations } from "../db/schema/chat.ts";
 import { ticketStages, projectTickets } from "../db/schema/tickets.ts";
 import { applicationState } from "../db/schema/users.ts";
 import { instantApps } from "../db/schema/instant.ts";
+import { agents } from "../db/schema/agents.ts";
 import { eq, and, desc, asc, notExists, or } from "drizzle-orm";
 import { listModels } from "../ai/provider.ts";
 import { saveContent, getContent, deleteContent } from "../services/s3.ts";
@@ -88,10 +89,26 @@ projectsRouter.get("/projects", async (c) => {
     .where(eq(instantApps.userId, user.id))
     .orderBy(desc(instantApps.createdAt));
 
+  // Fetch agents for the user
+  const agentRows = await db
+    .select()
+    .from(agents)
+    .where(eq(agents.userId, user.id))
+    .orderBy(desc(agents.createdAt));
+
   return c.html(ProjectListPage({
     user: { id: user.id, name: user.name, email: user.email },
     projects: rows,
     instantApps: appRows,
+    agents: agentRows.map((a) => ({
+      agentId: a.agentId,
+      name: a.name,
+      status: a.status,
+      personality: a.personality,
+      sandboxUrl: a.sandboxUrl,
+      createdAt: a.createdAt,
+      updatedAt: a.updatedAt,
+    })),
     activeTab: tab,
   }));
 });

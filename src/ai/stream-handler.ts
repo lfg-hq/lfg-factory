@@ -3,16 +3,21 @@ import { db } from "../config/db.ts";
 import { messages, conversations, modelSelections, agentRoles } from "../db/schema/chat.ts";
 import { llmApiKeys } from "../db/schema/users.ts";
 import { projects } from "../db/schema/projects.ts";
+import { projectFiles } from "../db/schema/documents.ts";
+import { projectTickets } from "../db/schema/tickets.ts";
 import { eq, desc } from "drizzle-orm";
-import { getModel, getModelWithSearch, DEFAULT_MODEL_KEY } from "./provider.ts";
+import { getModel, getModelWithSearch, getProviderName, DEFAULT_MODEL_KEY } from "./provider.ts";
 import { toolsProduct, toolsTurbo } from "./tools/index.ts";
 import { createInstantTools } from "./tools/instant-tools.ts";
 import { setDocumentWsBroadcast, setTicketWsBroadcast } from "./tools/index.ts";
 import { setMiscWsBroadcast } from "./tools/index.ts";
 import { getProductSystemPrompt } from "./prompts/product.ts";
 import { getInstantSystemPrompt } from "./prompts/instant.ts";
+import { getAgentSystemPrompt } from "./prompts/agent.ts";
+import { getAgentByConversation } from "../services/agent-manager.ts";
+import { createAgentTools } from "./tools/agent-tools.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
-import { getMcpTools, closeMcpClients } from "../services/mcp-manager.ts";
+import { getComposioTools, listConnectors } from "../services/composio-manager.ts";
 import type { ServerWebSocket } from "bun";
 import type { WsData } from "../ws/types.ts";
 
@@ -31,6 +36,26 @@ const WEB_SEARCH_TOOLS = new Set([
   "google_search",        // Google
   "web_search_20250305",  // Anthropic alternate name
 ]);
+
+// ── Strip web-search citation artifacts from AI responses ────────────────────
+// OpenAI web search injects various citation markers:
+//   【cite†turn0search0】  (unicode brackets)
+//   ≡cite≡turn0search0≡   (triple-bar variant)
+//   citeturn0search0       (bare, no delimiters)
+//   (domain.com)(domain.com) trailing URL noise
+const CITATION_PATTERNS = [
+  /\u3010cite\u2020[^\u3011]*\u3011/g,          // 【cite†...】
+  /\u2261cite\u2261[^\u2261]*\u2261/g,           // ≡cite≡...≡
+  /\bcite(?:turn\d+search\d+)+\b/g,              // bare citeturn0search0...
+  /\(https?:\/\/[^)]*\?utm_source=openai\)/g,    // (url?utm_source=openai)
+];
+function stripCitations(text: string): string {
+  let cleaned = text;
+  for (const re of CITATION_PATTERNS) {
+    cleaned = cleaned.replace(re, "");
+  }
+  return cleaned;
+}
 
 function toolFileType(_toolName: string, accumulated: string): string {
   // streamDocumentContent carries fileType in args
@@ -99,6 +124,14 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
 
   // ── 1. Resolve or create conversation ───────────────────────────────────────
   let convId = req.conversationId;
+  if (convId) {
+    // Verify the conversation actually exists — stale URLs can reference deleted conversations
+    const [existing] = await db.select({ id: conversations.id }).from(conversations).where(eq(conversations.id, convId)).limit(1);
+    if (!existing) {
+      console.log(`[stream] Conversation ${convId} not found in DB, creating new one`);
+      convId = undefined;
+    }
+  }
   if (!convId) {
     const [conv] = await db
       .insert(conversations)
@@ -108,6 +141,9 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
     // Notify client of new conversation
     ws.send(JSON.stringify({ type: "conversation_created", conversationId: convId }));
   }
+
+  // ── 1b. Detect agent conversation ────────────────────────────────────────────
+  const agentRecord = convId ? await getAgentByConversation(convId) : null;
 
   // ── 2. Save user message ─────────────────────────────────────────────────────
   await db.insert(messages).values({
@@ -141,17 +177,40 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
 
   const modelKey = modelSel?.selectedModel ?? DEFAULT_MODEL_KEY;
   const userApiKeys = apiKeys
-    ? { anthropic: apiKeys.anthropicApiKey ?? undefined, openai: apiKeys.openaiApiKey ?? undefined, google: apiKeys.googleApiKey ?? undefined }
+    ? { anthropic: apiKeys.anthropicApiKey ?? undefined, openai: apiKeys.openaiApiKey ?? undefined, google: apiKeys.googleApiKey ?? undefined, kimi: apiKeys.kimiApiKey ?? undefined }
     : undefined;
+
+  // ── Check user has a key for the selected provider (unless instant mode) ────
+  if (!instantMode) {
+    const providerName = getProviderName(modelKey);
+    const keyMap: Record<string, string | undefined> = {
+      openai: userApiKeys?.openai,
+      anthropic: userApiKeys?.anthropic,
+      google: userApiKeys?.google,
+      kimi: userApiKeys?.kimi,
+    };
+    if (providerName && !keyMap[providerName]) {
+      const errMsg = `⚠️ No ${providerName.charAt(0).toUpperCase() + providerName.slice(1)} API key found. Please add your API key in **Settings → LLM Keys** to use this model.`;
+      console.log(`[stream] Blocking: no user key for provider=${providerName} model=${modelKey}`);
+      ws.send(JSON.stringify({ type: "ai_chunk", chunk: errMsg, is_final: true }));
+      return { conversationId: convId };
+    }
+  }
 
   let model;
   let searchTools: Record<string, unknown> = {};
   try {
-    const result = getModelWithSearch(modelKey, userApiKeys);
+    const result = getModelWithSearch(modelKey, userApiKeys, { allowEnvFallback: !!instantMode });
     model = result.model;
     searchTools = result.searchTools;
-  } catch {
-    const result = getModelWithSearch(DEFAULT_MODEL_KEY);
+  } catch (err) {
+    if (!instantMode) {
+      const errMsg = err instanceof Error ? err.message : "Failed to initialize model";
+      ws.send(JSON.stringify({ type: "ai_chunk", chunk: errMsg, is_final: true }));
+      return { conversationId: convId };
+    }
+    // Instant mode: fall back to default model with server keys
+    const result = getModelWithSearch(DEFAULT_MODEL_KEY, undefined, { allowEnvFallback: true });
     model = result.model;
     searchTools = result.searchTools;
   }
@@ -176,7 +235,8 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
     if (proj) internalProjectId = proj.id;
   }
 
-  let tools = instantMode
+  // Polymorphic tool bag: composition varies by mode (agent / instant / product).
+  let tools: Record<string, any> = instantMode
     ? createInstantTools({
         userId,
         conversationId: convId,
@@ -186,13 +246,15 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
       ? toolsTurbo
       : toolsProduct;
 
-  // Merge user's MCP tools — cap at 5s so a dead MCP server can't hang the stream
-  const mcpTools = await Promise.race([
-    getMcpTools(userId),
-    new Promise<Record<string, never>>((resolve) => setTimeout(() => resolve({}), 5_000)),
+  // Merge Composio tools — always load the user's full set of connected
+  // toolkits via the toolrouter. The LLM uses composio_search_tools to
+  // dynamically pick relevant tools per query, so no per-agent gating.
+  const composioTools = await Promise.race([
+    getComposioTools(userId),
+    new Promise<Record<string, never>>((resolve) => setTimeout(() => resolve({}), 10_000)),
   ]);
-  if (Object.keys(mcpTools).length > 0) {
-    tools = { ...tools, ...mcpTools };
+  if (Object.keys(composioTools).length > 0) {
+    tools = { ...tools, ...composioTools };
   }
 
   // Add web search tools based on the active provider
@@ -200,9 +262,57 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
     tools = { ...tools, ...searchTools };
   }
 
-  const systemPrompt = instantMode
-    ? getInstantSystemPrompt()
-    : getProductSystemPrompt({ userId, projectId: internalProjectId });
+  // Add agent-specific tools (sandbox, memory, self-config).
+  if (agentRecord) {
+    const agentTools = createAgentTools({ agentId: agentRecord.agentId, userId });
+    tools = { ...tools, ...agentTools };
+  }
+
+  // ── Query project context flags (for product prompt) ──────────────────────
+  let projectFlags: {
+    hasTickets: boolean;
+    hasDocs: boolean;
+    hasGithub: boolean;
+    hasTechAnalysis: boolean;
+    hasDesignLanguage: boolean;
+  } | undefined;
+
+  if (!instantMode && internalProjectId) {
+    const [proj, files, tickets] = await Promise.all([
+      db.select({ repoUrl: projects.repoUrl }).from(projects).where(eq(projects.id, internalProjectId)).then(r => r[0]),
+      db.select({ fileType: projectFiles.fileType }).from(projectFiles).where(eq(projectFiles.projectId, internalProjectId)),
+      db.select({ id: projectTickets.id }).from(projectTickets).where(eq(projectTickets.projectId, internalProjectId)).limit(1),
+    ]);
+    const fileTypes = new Set(files.map(f => f.fileType));
+    projectFlags = {
+      hasTickets: tickets.length > 0,
+      hasDocs: files.length > 0,
+      hasGithub: !!proj?.repoUrl,
+      hasTechAnalysis: fileTypes.has("tech_analysis"),
+      hasDesignLanguage: fileTypes.has("design_language"),
+    };
+  }
+
+  let systemPrompt: string;
+  if (agentRecord) {
+    // Source of truth for connected toolkits is Composio itself (not our local
+    // table — OAuth connections aren't always mirrored locally).
+    const connectorList = await Promise.race([
+      listConnectors(userId, { filter: "connected", limit: 50 }),
+      new Promise<{ items: [] }>((resolve) => setTimeout(() => resolve({ items: [] }), 5_000)),
+    ]);
+    systemPrompt = getAgentSystemPrompt({
+      name: agentRecord.name,
+      personality: agentRecord.personality,
+      instructions: agentRecord.instructions,
+      memoryContent: agentRecord.memoryContent,
+      connectedToolkits: connectorList.items.map((t: any) => t.slug),
+    });
+  } else if (instantMode) {
+    systemPrompt = getInstantSystemPrompt();
+  } else {
+    systemPrompt = getProductSystemPrompt({ userId, projectId: internalProjectId, projectFlags });
+  }
 
   // ── 6. Stream with AI SDK ────────────────────────────────────────────────────
   let fullResponse = "";
@@ -212,7 +322,7 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
 
   const flush = () => {
     if (!chunkBuffer) return;
-    ws.send(JSON.stringify({ type: "ai_chunk", chunk: chunkBuffer, is_final: false }));
+    ws.send(JSON.stringify({ type: "ai_chunk", chunk: stripCitations(chunkBuffer), is_final: false }));
     chunkBuffer = "";
     lastFlush = Date.now();
   };
@@ -232,6 +342,7 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
           // Skip tools that handle their own WS notifications — a generic
           // notification here would cause duplicates.
           if (DOCUMENT_STREAM_TOOLS.has(tc.toolName)) continue;
+          // askUser is handled in the tool-call fullStream event
           if (tc.toolName === "askUser") continue;
           ws.send(JSON.stringify({
             type: "ai_chunk",
@@ -249,12 +360,22 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
     //    document content character-by-character as the model generates it.
     const docStreams = new Map<string, DocStreamState>();
 
+    // Accumulate askUser tool args from deltas (event.args/result may be empty)
+    const askUserArgs = new Map<string, string>();
+    let askUserCardSent = false;
+
     for await (const event of result.fullStream) {
       if (abortController.signal.aborted) break;
 
       switch (event.type) {
 
         case "text-delta": {
+          // After askUser card is sent, suppress text entirely — both display
+          // and DB persistence.  The post-card text just references the
+          // transient card UI which isn't persisted, so saving it confuses
+          // the AI on subsequent turns.
+          if (askUserCardSent) break;
+
           fullResponse += event.text;
           chunkBuffer += event.text;
           const now = Date.now();
@@ -271,6 +392,10 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
               lastSentPos: 0,
               panelOpened: false,
             });
+          }
+          // Track askUser args accumulation
+          if (event.toolName === "askUser") {
+            askUserArgs.set(event.id, "");
           }
           // Notify client immediately when ANY tool starts (shows indicator)
           // Skip askUser — it sends its own notification with question data
@@ -290,6 +415,11 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
         }
 
         case "tool-input-delta": {
+          // Accumulate askUser args
+          if (askUserArgs.has(event.id)) {
+            askUserArgs.set(event.id, askUserArgs.get(event.id)! + event.delta);
+          }
+
           const st = docStreams.get(event.id);
           if (!st) break;
 
@@ -351,7 +481,68 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
         }
 
         // tool-call fires once args are fully generated; execute() has NOT run yet.
-        // Nothing extra needed here — execute() handles DB save + final notify.
+        case "tool-call": {
+          if (event.toolName === "askUser") {
+            // Try parsed input first (already available on the event), fall back to accumulated raw
+            const raw = askUserArgs.get(event.toolCallId) ?? "";
+            askUserArgs.delete(event.toolCallId);
+            let questions: unknown[] = [];
+
+            // Prefer the already-parsed input from the AI SDK
+            const input = (event as Record<string, unknown>).input ?? (event as Record<string, unknown>).args;
+            if (input && typeof input === "object" && Array.isArray((input as Record<string, unknown>).questions)) {
+              questions = (input as Record<string, unknown>).questions as unknown[];
+            } else if (raw) {
+              // Fallback: parse from accumulated tool-input-delta
+              try {
+                const parsed = JSON.parse(raw);
+                questions = Array.isArray(parsed.questions) ? parsed.questions : [];
+              } catch {
+                console.warn("[stream] Failed to parse askUser args:", raw.slice(0, 200));
+              }
+            }
+
+            if (questions.length > 0) {
+              flush();
+              askUserCardSent = true;
+              ws.send(JSON.stringify({
+                type: "ai_chunk",
+                chunk: "",
+                is_final: false,
+                is_notification: true,
+                notification_type: "ask_user",
+                questions,
+              }));
+            } else {
+              console.warn("[stream] askUser called with empty questions. Parsed input:", JSON.stringify(input).slice(0, 300), "Raw args:", raw.slice(0, 300));
+            }
+          }
+
+          break;
+        }
+
+        case "tool-result": {
+          // Fallback: if askUser card wasn't sent via tool-call, try from tool-result
+          if (event.toolName === "askUser" && !askUserCardSent) {
+            const resultObj = (event as Record<string, unknown>).result;
+            if (resultObj && typeof resultObj === "object") {
+              const qList = (resultObj as Record<string, unknown>).questions;
+              if (Array.isArray(qList) && qList.length > 0) {
+                flush();
+                askUserCardSent = true;
+                ws.send(JSON.stringify({
+                  type: "ai_chunk",
+                  chunk: "",
+                  is_final: false,
+                  is_notification: true,
+                  notification_type: "ask_user",
+                  questions: qList,
+                }));
+              }
+            }
+          }
+          break;
+        }
 
         default:
           break;
@@ -365,14 +556,14 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
       streamError = err;
     }
   } finally {
-    // Close MCP clients to prevent connection leaks
-    closeMcpClients(userId).catch(() => {});
+    // Composio tools are stateless — no client cleanup needed
   }
 
   // ── 7. Save assistant response ───────────────────────────────────────────────
+  const cleanedResponse = stripCitations(fullResponse);
   const finalContent = streamError
-    ? `${fullResponse}\n\n*Error: ${streamError.message}*`
-    : fullResponse || "*Generation stopped*";
+    ? `${cleanedResponse}\n\n*Error: ${streamError.message}*`
+    : cleanedResponse || "*Generation stopped*";
 
   if (finalContent) {
     await db.insert(messages).values({

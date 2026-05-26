@@ -23,18 +23,31 @@ interface InstantApp {
   projectName: string | null;
 }
 
+interface AgentSummary {
+  agentId: string;
+  name: string;
+  status: string;
+  personality: string | null;
+  sandboxUrl: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 interface ProjectListPageProps {
   user: { id: string; name: string; email?: string };
   projects: Project[];
   instantApps?: InstantApp[];
+  agents?: AgentSummary[];
   activeTab?: string;
   error?: string;
   success?: string;
 }
 
-export function ProjectListPage({ user, projects, instantApps = [], activeTab = "projects", error, success }: ProjectListPageProps) {
+export function ProjectListPage({ user, projects, instantApps = [], agents = [], activeTab = "projects", error, success }: ProjectListPageProps) {
   const avatarLetter = (user.name?.[0] ?? user.email?.[0] ?? "?").toUpperCase();
   const isAppsTab = activeTab === "instant_apps";
+  const isAgentsTab = activeTab === "agents";
+  const isProjectsTab = !isAppsTab && !isAgentsTab;
 
   return html`<!DOCTYPE html>
 <html lang="en" data-theme="dark">
@@ -46,6 +59,7 @@ export function ProjectListPage({ user, projects, instantApps = [], activeTab = 
   <link rel="stylesheet" href="/public/css/common.css" />
   <link rel="stylesheet" href="/public/css/sidebar.css" />
   <link rel="stylesheet" href="/public/css/projects.css" />
+  <link rel="stylesheet" href="/public/css/agents.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
@@ -78,6 +92,10 @@ export function ProjectListPage({ user, projects, instantApps = [], activeTab = 
           <a href="/instant/" class="nav-link">
             <i class="fas fa-bolt"></i>
             <span class="nav-text">Instant Apps</span>
+          </a>
+          <a href="/projects?tab=agents" class="nav-link">
+            <i class="fas fa-robot"></i>
+            <span class="nav-text">Agents</span>
           </a>
         </div>
       </div>
@@ -124,6 +142,10 @@ export function ProjectListPage({ user, projects, instantApps = [], activeTab = 
             <a href="/instant/" class="btn btn-primary" style="display:flex;align-items:center;gap:0.5rem;text-decoration:none;">
               <i class="fas fa-plus"></i> New Instant App
             </a>
+          ` : isAgentsTab ? html`
+            <button onclick="createNewAgent()" class="btn btn-primary" style="display:flex;align-items:center;gap:0.5rem;">
+              <i class="fas fa-plus"></i> New Agent
+            </button>
           ` : html`
             <button
               onclick="document.getElementById('create-modal').classList.add('active')"
@@ -138,7 +160,7 @@ export function ProjectListPage({ user, projects, instantApps = [], activeTab = 
         <!-- Tabs -->
         <div style="display:flex;gap:0;border-bottom:1px solid var(--border-color);margin-bottom:1.5rem;">
           <a href="/projects?tab=projects"
-            style="padding:0.75rem 1.25rem;font-size:0.875rem;font-weight:500;text-decoration:none;border-bottom:2px solid ${!isAppsTab ? "var(--primary-color)" : "transparent"};color:${!isAppsTab ? "var(--primary-color)" : "var(--text-secondary)"};margin-bottom:-1px;">
+            style="padding:0.75rem 1.25rem;font-size:0.875rem;font-weight:500;text-decoration:none;border-bottom:2px solid ${isProjectsTab ? "var(--primary-color)" : "transparent"};color:${isProjectsTab ? "var(--primary-color)" : "var(--text-secondary)"};margin-bottom:-1px;">
             <i class="fas fa-folder" style="margin-right:0.5rem;"></i>Projects
             <span style="margin-left:0.5rem;font-size:0.75rem;background:var(--bg-tertiary);padding:0.125rem 0.5rem;border-radius:999px;">${projects.length}</span>
           </a>
@@ -147,10 +169,85 @@ export function ProjectListPage({ user, projects, instantApps = [], activeTab = 
             <i class="fas fa-bolt" style="margin-right:0.5rem;"></i>Instant Apps
             <span style="margin-left:0.5rem;font-size:0.75rem;background:var(--bg-tertiary);padding:0.125rem 0.5rem;border-radius:999px;">${instantApps.length}</span>
           </a>
+          <a href="/projects?tab=agents"
+            style="padding:0.75rem 1.25rem;font-size:0.875rem;font-weight:500;text-decoration:none;border-bottom:2px solid ${isAgentsTab ? "var(--primary-color)" : "transparent"};color:${isAgentsTab ? "var(--primary-color)" : "var(--text-secondary)"};margin-bottom:-1px;">
+            <i class="fas fa-robot" style="margin-right:0.5rem;"></i>Agents
+            <span style="margin-left:0.5rem;font-size:0.75rem;background:var(--bg-tertiary);padding:0.125rem 0.5rem;border-radius:999px;">${agents.length}</span>
+          </a>
         </div>
 
         <!-- Tab content -->
-        ${isAppsTab ? html`
+        ${isAgentsTab ? html`
+          <!-- Agents list -->
+          ${agents.length === 0 ? html`
+            <div style="text-align:center;padding:4rem 2rem;color:var(--text-secondary);">
+              <i class="fas fa-robot" style="font-size:3rem;margin-bottom:1rem;opacity:0.3;display:block;"></i>
+              <p style="margin:0 0 1rem;">No agents yet.</p>
+              <button onclick="createNewAgent()" class="btn btn-primary">Create your first agent</button>
+            </div>
+          ` : html`
+            <div class="project-list">
+              ${agents.map((agent) => {
+                const statusColors: Record<string, string> = {
+                  idle: "#6b7280",
+                  starting: "#f59e0b",
+                  running: "#22c55e",
+                  paused: "#3b82f6",
+                  error: "#ef4444",
+                  stopped: "#6b7280",
+                };
+                const statusColor = statusColors[agent.status] ?? "#6b7280";
+                const dateStr = agent.updatedAt
+                  ? new Date(agent.updatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+                  : "";
+                return html`
+                  <div class="project-list-item">
+                    <a href="/agents/${agent.agentId}" class="project-list-link" style="text-decoration:none;">
+                      <div class="project-list-main">
+                        <div class="project-list-header">
+                          <span class="project-icon" style="font-size:1.25rem;">
+                            <i class="fas fa-robot" style="color:var(--primary-color);"></i>
+                          </span>
+                          <h3 class="project-name">${agent.name}</h3>
+                          <span style="display:inline-flex;align-items:center;gap:0.375rem;font-size:0.75rem;font-weight:500;color:${statusColor};background:${statusColor}15;padding:0.2rem 0.625rem;border-radius:999px;margin-left:0.5rem;">
+                            ${agent.status === "running" ? html`<span style="width:6px;height:6px;border-radius:50%;background:${statusColor};display:inline-block;"></span>` : ""}
+                            ${agent.status.charAt(0).toUpperCase() + agent.status.slice(1)}
+                          </span>
+                        </div>
+                        <div class="project-stats">
+                          ${agent.personality ? html`
+                            <div class="stat-item">
+                              <i class="fas fa-comment-dots"></i>
+                              <span class="stat-label">${(agent.personality ?? "").slice(0, 60)}${(agent.personality ?? "").length > 60 ? "..." : ""}</span>
+                            </div>
+                          ` : ""}
+                          <div class="stat-item">
+                            <i class="fas fa-calendar"></i>
+                            <span class="stat-label">${dateStr}</span>
+                          </div>
+                          ${agent.sandboxUrl ? html`
+                            <div class="stat-item">
+                              <i class="fas fa-globe" style="color:#22c55e;"></i>
+                              <span class="stat-label" style="color:#22c55e;">Live</span>
+                            </div>
+                          ` : ""}
+                        </div>
+                      </div>
+                    </a>
+                    <div class="project-list-actions">
+                      <a href="/agents/${agent.agentId}" class="project-action-button">
+                        <i class="fas fa-eye"></i> View
+                      </a>
+                      <a href="/agents/central" class="project-action-button">
+                        <i class="fas fa-comments"></i> Central
+                      </a>
+                    </div>
+                  </div>
+                `;
+              })}
+            </div>
+          `}
+        ` : isAppsTab ? html`
           <!-- Instant Apps list -->
           ${instantApps.length === 0 ? html`
             <div style="text-align:center;padding:4rem 2rem;color:var(--text-secondary);">
@@ -330,6 +427,7 @@ export function ProjectListPage({ user, projects, instantApps = [], activeTab = 
 
   <script src="/public/js/sidebar.js"></script>
   <script src="/public/js/projects.js"></script>
+  <script src="/public/js/agents.js"></script>
   <script>
     // Modal open/close
     const modal = document.getElementById('create-modal');

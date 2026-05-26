@@ -16,14 +16,21 @@ import conversationsApi from "./routes/api/conversations.ts";
 import instantApi from "./routes/api/instant.ts";
 import { cliRouter } from "./routes/api/cli.ts";
 import claudeAuthApi from "./routes/api/claude-auth.ts";
-import mcpApi from "./routes/api/mcp.ts";
+import composioApi from "./routes/api/composio.ts";
 import invitationsApi from "./routes/api/invitations.ts";
 import sharingApi from "./routes/api/sharing.ts";
 import commentsApi from "./routes/api/comments.ts";
+import agentsRoutes from "./routes/agents.ts";
+import agentsApi from "./routes/api/agents.ts";
+import { agentCliRouter } from "./routes/api/agent-cli.ts";
+import { agentWebhookRouter } from "./routes/api/agent-webhook.ts";
 import invitationRoutes from "./routes/invitations.ts";
 import shareRoutes from "./routes/share.ts";
 import { auth } from "./auth/index.ts";
 import { startTicketWorker } from "./workers/ticket-executor.ts";
+import { startAgentScheduler } from "./services/agent-scheduler.ts";
+import { startAgentTimeoutSweeper } from "./services/agent-timeout-sweeper.ts";
+import { registerAgentNotifier } from "./services/agent-notifier.ts";
 import { registerEventHandlers } from "./events/handlers.ts";
 import { db } from "./config/db.ts";
 import { agentRoles, modelSelections } from "./db/schema/chat.ts";
@@ -61,6 +68,7 @@ app.route("/", chatRoutes);
 app.route("/", instantRoutes);
 app.route("/", projectsRoutes);
 app.route("/", settingsRoutes);
+app.route("/", agentsRoutes);
 app.route("/", invitationRoutes);
 app.route("/", shareRoutes);
 app.route("/api/files", filesApi);
@@ -69,8 +77,11 @@ app.route("/api/projects", ticketsApi);
 app.route("/api/conversations", conversationsApi);
 app.route("/api/instant", instantApi);
 app.route("/api/v1/cli", cliRouter);
+app.route("/api/v1/cli", agentCliRouter);
+app.route("/api/agents", agentsApi);
+app.route("/api/agents", agentWebhookRouter);
 app.route("/api/v1/claude-auth", claudeAuthApi);
-app.route("/api/mcp", mcpApi);
+app.route("/api/composio", composioApi);
 app.route("/api/projects", invitationsApi);
 app.route("/api/projects", sharingApi);
 app.route("/api/projects", commentsApi);
@@ -172,7 +183,10 @@ async function handleFetch(req: Request, server: import("bun").Server<WsData>): 
 
 // ── Start background workers ─────────────────────────────────────────
 registerEventHandlers();
+registerAgentNotifier();
 startTicketWorker();
+startAgentScheduler();
+startAgentTimeoutSweeper();
 
 // ── Public Telegram bot (instant app builder) ────────────────────────
 import("./services/public-instant/transports/telegram.ts")

@@ -48,6 +48,9 @@ const envSchema = z.object({
   POSTGRES_PROVISIONING_USER: z.string().optional().default("lfg_admin"),
   POSTGRES_PROVISIONING_PASSWORD: z.string().optional().default(""),
 
+  // Composio (integration platform — composio.dev)
+  COMPOSIO_API_KEY: z.string().optional().default(""),
+
   // Cloudflare Turnstile
   TURNSTILE_SITE_KEY: z.string().optional().default(""),
   TURNSTILE_SECRET_KEY: z.string().optional().default(""),
