@@ -15,11 +15,11 @@ import {
   startAgent,
   stopAgent,
   sendCommand,
-  runCommand,
   syncMemory,
   deleteAgent,
   getAgentStatus,
 } from "../../services/agent-manager.ts";
+import { runAgentTask } from "../../services/agent-runner.ts";
 import { addSchedule, removeSchedule, updateSchedule, runScheduleNow } from "../../services/agent-scheduler.ts";
 import { syncDataRoom } from "../../services/agent-sandbox.ts";
 import { listSecrets, upsertSecret, deleteSecret } from "../../services/agent-secrets.ts";
@@ -564,13 +564,14 @@ agentsApi.post("/:agentId/run", async (c) => {
   if (!body.prompt?.trim()) return c.json({ error: "Prompt is required" }, 400);
 
   try {
-    const result = await runCommand(agentId, user.id, {
+    const result = await runAgentTask({
+      agentId,
+      userId: user.id,
       prompt: body.prompt.trim(),
       triggerType: "manual",
       payload: body.payload ?? null,
-      autoStart: body.auto_start ?? true,
     });
-    return c.json({ status: "ok", run_id: result.runId });
+    return c.json({ status: result.status, run_id: result.runId, output: result.output });
   } catch (err) {
     return c.json({ error: (err as Error).message }, 400);
   }

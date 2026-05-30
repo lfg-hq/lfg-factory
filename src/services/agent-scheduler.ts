@@ -17,7 +17,8 @@
 import { eq } from "drizzle-orm";
 import { db } from "../config/db.ts";
 import { agents, agentSchedules } from "../db/schema/agents.ts";
-import { runCommand, getAgentByRunId } from "./agent-manager.ts";
+import { getAgentByRunId } from "./agent-manager.ts";
+import { runAgentTask } from "./agent-runner.ts";
 import { agentBus } from "../events/agent-bus.ts";
 import { getActiveRunForAgent } from "./agent-runs.ts";
 import { isAgentCircuitBroken } from "./agent-notifier.ts";
@@ -182,14 +183,21 @@ async function fireSchedule(
 
   while (attempt <= maxRetries) {
     try {
-      const result = await runCommand(agent.agentId, agent.userId, {
+      // Route through the chat-side LLM pipeline (Composio + web search +
+      // runInSandbox-as-tool). The sandbox only spins up if the LLM decides
+      // it actually needs compute (via runInSandbox). Most scheduled tasks
+      // are Composio + LLM compositions and never hit a VM.
+      const result = await runAgentTask({
+        agentId: agent.agentId,
+        userId: agent.userId,
         prompt: schedule.command,
         triggerType: "cron",
         scheduleId: schedule.id,
-        autoStart: true,
-        retryCount: attempt,
-        parentRunId,
       });
+
+      if (result.status === "error") {
+        throw new Error(result.errorMessage ?? "Unknown error");
+      }
 
       await db
         .update(agentSchedules)

@@ -12,7 +12,8 @@
  */
 
 import { Hono } from "hono";
-import { getAgentByWebhookToken, runCommand } from "../../services/agent-manager.ts";
+import { getAgentByWebhookToken } from "../../services/agent-manager.ts";
+import { runAgentTask } from "../../services/agent-runner.ts";
 
 export const agentWebhookRouter = new Hono();
 
@@ -51,13 +52,14 @@ agentWebhookRouter.post("/webhook/:token", async (c) => {
     "A webhook event was received. Inspect the trigger payload, decide what to do, and act.";
 
   try {
-    const result = await runCommand(agent.agentId, agent.userId, {
+    const result = await runAgentTask({
+      agentId: agent.agentId,
+      userId: agent.userId,
       prompt,
       triggerType: "webhook",
       payload: { ...payload, __headers: headers },
-      autoStart: true,
     });
-    return c.json({ status: "ok", run_id: result.runId });
+    return c.json({ status: result.status, run_id: result.runId, output: result.output });
   } catch (err) {
     return c.json({ error: (err as Error).message }, 400);
   }
