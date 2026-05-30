@@ -560,6 +560,57 @@
   }
 }
 
+/* ── Scheduled / webhook / manual trigger messages ─────────────────── */
+/* Distinct styling for chat messages that came from a non-chat trigger
+   (cron schedule, webhook, manual run). Applies to both user-role
+   (the trigger prompt) and assistant-role messages in the same run. */
+
+.message.scheduled-run .message-content {
+  border-left: 3px dashed var(--primary-color);
+  background: linear-gradient(90deg, rgba(139, 92, 246, 0.08), transparent 40%);
+  position: relative;
+}
+
+.message.scheduled-run.user .message-content {
+  border-left-color: rgba(139, 92, 246, 0.5);
+  background: linear-gradient(90deg, rgba(139, 92, 246, 0.18), rgba(139, 92, 246, 0.06));
+}
+
+.scheduled-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--primary-color);
+  background: rgba(139, 92, 246, 0.12);
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  margin-bottom: 0.5rem;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+  animation: scheduledBadgeIn 0.4s ease;
+}
+
+.scheduled-badge i {
+  font-size: 0.625rem;
+}
+
+@keyframes scheduledBadgeIn {
+  from { opacity: 0; transform: translateY(-3px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Subtle pulse on a newly arrived scheduled message (real-time fire) */
+.message.scheduled-run.just-arrived {
+  animation: scheduledPulse 1.2s ease;
+}
+
+@keyframes scheduledPulse {
+  0%   { box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.35); }
+  100% { box-shadow: 0 0 0 12px rgba(139, 92, 246, 0); }
+}
+
 /* ── Capability row on agent cards ─────────────────────────────────── */
 .agent-capability-row {
   margin: 0.5rem 0;

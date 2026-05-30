@@ -685,6 +685,52 @@
   if (toggleBtn) toggleBtn.addEventListener("click", toggleSettingsPanel);
   if (settingsBtn) settingsBtn.addEventListener("click", toggleSettingsPanel);
 
+  // ── Right panel resize (drag the left edge) ────────────────────────
+  var resizeHandle = document.getElementById("resize-handle");
+  if (resizeHandle && panel) {
+    var MIN_WIDTH = 320;
+    var MAX_WIDTH_FRAC = 0.7; // 70% of viewport
+    var storedWidth = parseInt(localStorage.getItem("agent_panel_width") || "0", 10);
+    if (storedWidth >= MIN_WIDTH) panel.style.width = storedWidth + "px";
+
+    var isResizing = false;
+    var startX = 0;
+    var startWidth = 0;
+
+    function onMouseMove(e) {
+      if (!isResizing) return;
+      var dx = startX - e.clientX; // dragging left increases width
+      var maxW = Math.floor(window.innerWidth * MAX_WIDTH_FRAC);
+      var newWidth = Math.max(MIN_WIDTH, Math.min(maxW, startWidth + dx));
+      panel.style.width = newWidth + "px";
+    }
+
+    function onMouseUp() {
+      if (!isResizing) return;
+      isResizing = false;
+      resizeHandle.classList.remove("active");
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+      var w = parseInt(getComputedStyle(panel).width, 10);
+      if (w >= MIN_WIDTH) localStorage.setItem("agent_panel_width", w);
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+    }
+
+    resizeHandle.addEventListener("mousedown", function (e) {
+      if (!panel.classList.contains("expanded")) return; // only when open
+      isResizing = true;
+      startX = e.clientX;
+      startWidth = parseInt(getComputedStyle(panel).width, 10);
+      resizeHandle.classList.add("active");
+      document.body.style.userSelect = "none";
+      document.body.style.cursor = "ew-resize";
+      document.addEventListener("mousemove", onMouseMove);
+      document.addEventListener("mouseup", onMouseUp);
+      e.preventDefault();
+    });
+  }
+
   // ── Pause button — show only when the agent has schedules ─────────
   // Otherwise there's nothing to pause: chat-driven runs are already
   // "paused" by virtue of the user not sending messages.

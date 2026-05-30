@@ -269,6 +269,25 @@ export function createAgentTools(params: {
     ),
     execute: async ({ name, cron_expression, command, timezone }) => {
       try {
+        // Duplicate guard — if a schedule with the same cron + command (first
+        // 100 chars match) already exists for this agent, refuse instead of
+        // silently doubling fires. Prevents the LLM from creating duplicates
+        // when it misreads a scheduled-run trigger as a setup request.
+        const [agentRow] = await db.select({ id: agents.id }).from(agents).where(eq(agents.agentId, agentId)).limit(1);
+        if (agentRow) {
+          const existing = await db
+            .select({ id: agentSchedules.id, name: agentSchedules.name, command: agentSchedules.command, cronExpression: agentSchedules.cronExpression })
+            .from(agentSchedules)
+            .where(eq(agentSchedules.agentId, agentRow.id));
+          const cmdKey = command.trim().slice(0, 100).toLowerCase();
+          const dup = existing.find(
+            (s) => s.cronExpression === cron_expression && s.command.trim().slice(0, 100).toLowerCase() === cmdKey
+          );
+          if (dup) {
+            return `A near-identical schedule already exists ("${dup.name}", id=${dup.id}). Not creating a duplicate. If the user wants a different cadence or task, modify the existing one or remove it first.`;
+          }
+        }
+
         const row = await addSchedule(agentId, {
           name,
           cronExpression: cron_expression,

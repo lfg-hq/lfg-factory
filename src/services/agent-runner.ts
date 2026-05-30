@@ -78,9 +78,17 @@ export async function runAgentTask(input: RunAgentTaskInput): Promise<RunAgentTa
   }
 
   // ── 1. Create run row ──────────────────────────────────────────────────────
-  const cliPrompt = payload && Object.keys(payload).length
+  // Prefix non-chat triggers with a marker so the LLM recognizes this as an
+  // execution trigger (not a fresh user request) and doesn't, e.g., re-create
+  // a schedule on every cron fire. The agent prompt knows to act on this
+  // prefix without spawning meta-tools.
+  const triggerPrefix = triggerType === "chat"
+    ? ""
+    : `[Scheduled run · ${triggerType} · ${new Date().toISOString()}] `;
+  const basePrompt = payload && Object.keys(payload).length
     ? `Trigger payload: ${JSON.stringify(payload)}\n\n${prompt}`
     : prompt;
+  const cliPrompt = `${triggerPrefix}${basePrompt}`;
 
   const run = await createRun({
     agentRowId: agent.id,
