@@ -561,48 +561,60 @@
 }
 
 /* ── Toolkit slide switches (Settings → Composio Integrations) ──────── */
-.toolkit-switch-row {
-  display: flex;
+/* Bumped specificity + !important on display so no upstream label rule
+   can override and stack the name above the toggle. */
+.artifacts-container .toolkit-switch-row {
+  display: flex !important;
+  flex-direction: row !important;
   align-items: center;
   justify-content: space-between;
   width: 100%;
   box-sizing: border-box;
-  padding: 0.625rem 0.875rem;
-  background: var(--bg-secondary, #1f2937);
-  border: 1px solid var(--border-color, #334155);
-  border-radius: 10px;
+  padding: 0.625rem 0;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 0;
   cursor: pointer;
   font-size: 0.875rem;
-  transition: border-color 0.15s, background 0.15s;
+  margin: 0;
 }
 
-.toolkit-switch-row:hover {
-  border-color: rgba(139, 92, 246, 0.4);
-  background: var(--bg-tertiary, #2a3441);
+.artifacts-container .toolkit-switch-row:last-child {
+  border-bottom: none;
 }
 
-.toolkit-switch-name {
+.artifacts-container .toolkit-switch-row:hover .toolkit-switch-name {
+  color: var(--primary-color, #8b5cf6);
+}
+
+.artifacts-container .toolkit-switch-name {
   color: var(--text-color);
   font-weight: 500;
   text-transform: capitalize;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 0.5rem;
   min-width: 0;
   flex: 1;
+  font-size: 0.875rem;
+  letter-spacing: 0;
+  margin: 0;
+  transition: color 0.15s;
 }
 
-.toolkit-switch-name::before {
+.artifacts-container .toolkit-switch-name::before {
   content: "";
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: var(--primary-color, #8b5cf6);
   flex-shrink: 0;
-  opacity: 0.5;
+  opacity: 0.35;
+  transition: opacity 0.15s, box-shadow 0.15s;
 }
 
-.toolkit-switch-row:has(input:checked) .toolkit-switch-name::before {
+.artifacts-container .toolkit-switch-row:has(input:checked) .toolkit-switch-name::before {
   opacity: 1;
   box-shadow: 0 0 6px rgba(139, 92, 246, 0.6);
 }
