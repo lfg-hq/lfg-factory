@@ -192,8 +192,9 @@ export async function runAgentTask(input: RunAgentTaskInput): Promise<RunAgentTa
   // ── 6. System prompt (identical to chat-side agent) ───────────────────────
   // filter='connected' on session-scoped endpoint returns 0 for manageConnections
   // sessions — use filter='all' and post-filter by isConnected instead.
+  // limit hard-capped at 50 by Composio.
   const connectorList = await Promise.race([
-    listConnectors(userId, { filter: "all", limit: 200 }),
+    listConnectors(userId, { filter: "all", limit: 50 }),
     new Promise<{ items: [] }>((resolve) => setTimeout(() => resolve({ items: [] }), 5_000)),
   ]);
   const systemPrompt = getAgentSystemPrompt({

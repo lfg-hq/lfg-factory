@@ -138,7 +138,10 @@ agentsRoutes.get("/agents/:agentId", async (c) => {
   // the global catalog with each item's per-user isConnected flag set.
   // Falls back to local cache if Composio is unreachable.
   const [composioList, localToolkits, modelSel] = await Promise.all([
-    listConnectors(user.id, { filter: "all", limit: 200 }).catch((err) => {
+    // limit is hard-capped at 50 by Composio's session.toolkits endpoint
+    // (HTTP 400 otherwise). 50 is more than enough — a user typically has
+    // a handful of connected toolkits.
+    listConnectors(user.id, { filter: "all", limit: 50 }).catch((err) => {
       console.error("[agent-detail] listConnectors threw:", (err as Error).message);
       return { items: [] as any[] };
     }),

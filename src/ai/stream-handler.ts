@@ -299,8 +299,9 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
     // table — OAuth connections aren't always mirrored locally). Use filter='all'
     // and post-filter by isConnected; session-scoped filter='connected' returns
     // only session-enabled toolkits (empty for manageConnections sessions).
+    // limit hard-capped at 50 by Composio's session.toolkits endpoint
     const connectorList = await Promise.race([
-      listConnectors(userId, { filter: "all", limit: 200 }),
+      listConnectors(userId, { filter: "all", limit: 50 }),
       new Promise<{ items: [] }>((resolve) => setTimeout(() => resolve({ items: [] }), 5_000)),
     ]);
     systemPrompt = getAgentSystemPrompt({
