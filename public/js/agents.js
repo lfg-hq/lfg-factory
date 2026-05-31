@@ -29,6 +29,12 @@
     } else if (data.type === "connector_required") {
       if (!agentId || data.agent_id === agentId) {
         renderConnectorRequired(data.toolkit, data.redirect_url);
+        // Also open the Connectors modal pre-filtered to this toolkit so the
+        // user sees the full integration card (logo, description, Connect
+        // button) without having to click the inline chat button first.
+        if (typeof window.openConnectorsModal === "function") {
+          window.openConnectorsModal(data.toolkit);
+        }
       }
     } else if (data.type === "connector_connected") {
       if (!agentId || data.agent_id === agentId || data.agent_id == null) {

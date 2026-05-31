@@ -9,6 +9,7 @@ import { db } from "../config/db.ts";
 import { agents, agentMessages } from "../db/schema/agents.ts";
 import { modelSelections, agentRoles } from "../db/schema/chat.ts";
 import { composioToolkits } from "../db/schema/composio.ts";
+import { listConnectors } from "../services/composio-manager.ts";
 import { listModels, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
 import { AgentsListPage } from "../templates/pages/agents-list.tsx";
 import { AgentDetailPage } from "../templates/pages/agent-detail.tsx";
@@ -130,10 +131,31 @@ agentsRoutes.get("/agents/:agentId", async (c) => {
 
   if (!agent) return c.text("Agent not found", 404);
 
-  const [userToolkits, modelSel] = await Promise.all([
+  // Source of truth for connected toolkits is Composio (their connected_account
+  // flag). Our local composio_toolkit table is just a cache and may be missing
+  // rows for connections established before the OAuth-callback-saves-locally
+  // fix shipped (commit aa263f9). Falls back to local rows on Composio outage.
+  const [composioList, localToolkits, modelSel] = await Promise.all([
+    listConnectors(user.id, { filter: "connected", limit: 100 }).catch(() => ({ items: [] })),
     db.select().from(composioToolkits).where(eq(composioToolkits.userId, user.id)),
     db.select().from(modelSelections).where(eq(modelSelections.userId, user.id)).then((r) => r[0]),
   ]);
+
+  // Merge: prefer Composio's view, fall back to local rows it didn't return.
+  const seenSlugs = new Set<string>();
+  const mergedToolkits: { slug: string; name: string }[] = [];
+  for (const t of composioList.items) {
+    const slug = (t.slug || "").toUpperCase();
+    if (!slug || seenSlugs.has(slug)) continue;
+    seenSlugs.add(slug);
+    mergedToolkits.push({ slug, name: t.name || slug });
+  }
+  for (const t of localToolkits.filter((t) => t.enabled)) {
+    const slug = (t.toolkit || "").toUpperCase();
+    if (!slug || seenSlugs.has(slug)) continue;
+    seenSlugs.add(slug);
+    mergedToolkits.push({ slug, name: t.toolkit });
+  }
 
   const models = listModels().map((m) => ({
     key: m.key,
@@ -160,12 +182,7 @@ agentsRoutes.get("/agents/:agentId", async (c) => {
         autoStopAfterIdleMs: agent.autoStopAfterIdleMs,
         runTimeoutMs: agent.runTimeoutMs,
       },
-      composioToolkits: userToolkits
-        .filter((t) => t.enabled)
-        .map((t) => ({
-          slug: t.toolkit,
-          name: t.toolkit,
-        })),
+      composioToolkits: mergedToolkits,
       modelKey: modelSel?.selectedModel ?? DEFAULT_MODEL_KEY,
       models,
     })

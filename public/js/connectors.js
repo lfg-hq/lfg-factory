@@ -20,6 +20,21 @@ document.addEventListener('DOMContentLoaded', function () {
     loadConnectors();
   }
   function close() { overlay.classList.remove('open'); }
+
+  // Public entrypoint: open the modal pre-filtered to a specific toolkit slug.
+  // Used by agents.js when the agent's requestConnectorAuth tool fires —
+  // surfaces the right service to connect without the user having to search.
+  window.openConnectorsModal = function (prefilterSlug) {
+    if (prefilterSlug) {
+      currentFilter = 'all';
+      document.querySelectorAll('.connectors-tab').forEach(function (t) {
+        t.classList.toggle('active', t.dataset.filter === 'all');
+      });
+      currentCursor = null;
+      searchInput.value = prefilterSlug;
+    }
+    open();
+  };
   function openDetail(item) {
     document.getElementById('connector-detail-logo').src = item.logo || '';
     document.getElementById('connector-detail-name').textContent = item.name;
