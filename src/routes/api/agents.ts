@@ -552,6 +552,50 @@ agentsApi.post("/:agentId/schedules/:scheduleId/run-now", async (c) => {
 
 // ── Run Now (manual) — Phase 2 T1 ────────────────────────────────────
 
+// ── Pause / Resume all schedules ──────────────────────────────────────
+// "Pausing" an agent today means disabling all of its schedules so cron
+// stops firing. Chat messages still work. Resume re-enables everything.
+agentsApi.post("/:agentId/pause", async (c) => {
+  const user = c.get("user");
+  const { agentId } = c.req.param();
+
+  const [agent] = await db
+    .select()
+    .from(agents)
+    .where(and(eq(agents.agentId, agentId), eq(agents.userId, user.id)))
+    .limit(1);
+  if (!agent) return c.json({ error: "Agent not found" }, 404);
+
+  await db
+    .update(agentSchedules)
+    .set({ enabled: false, updatedAt: new Date() })
+    .where(eq(agentSchedules.agentId, agent.id));
+
+  return c.json({ status: "paused" });
+});
+
+agentsApi.post("/:agentId/resume", async (c) => {
+  const user = c.get("user");
+  const { agentId } = c.req.param();
+
+  const [agent] = await db
+    .select()
+    .from(agents)
+    .where(and(eq(agents.agentId, agentId), eq(agents.userId, user.id)))
+    .limit(1);
+  if (!agent) return c.json({ error: "Agent not found" }, 404);
+
+  // Re-enable all schedules. The scheduler's normal cron tick will pick
+  // them up on the next matching minute; no nextRunAt recompute needed
+  // (catchUpMissedRuns handles edges).
+  await db
+    .update(agentSchedules)
+    .set({ enabled: true, updatedAt: new Date() })
+    .where(eq(agentSchedules.agentId, agent.id));
+
+  return c.json({ status: "active" });
+});
+
 agentsApi.post("/:agentId/run", async (c) => {
   const user = c.get("user");
   const { agentId } = c.req.param();

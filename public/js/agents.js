@@ -184,9 +184,29 @@
   }
 
   window.togglePauseAgent = async function (id) {
-    // Reserved: hook this to a /pause endpoint once schedule-level pause exists.
-    // For now, no-op with a hint.
-    console.log("[agents] Pause toggle not yet wired", id);
+    var btn = document.getElementById("agent-pause-btn");
+    var paused = btn && btn.dataset.paused === "true";
+    var endpoint = paused ? "/resume" : "/pause";
+    try {
+      var res = await fetch("/api/agents/" + id + endpoint, { method: "POST" });
+      if (!res.ok) {
+        var err = await res.json().catch(function () { return {}; });
+        alert(err.error || "Failed to toggle pause");
+        return;
+      }
+      // Flip button state + label
+      if (btn) {
+        var nowPaused = !paused;
+        btn.dataset.paused = nowPaused ? "true" : "false";
+        btn.innerHTML = nowPaused
+          ? '<i class="fas fa-play"></i> Resume'
+          : '<i class="fas fa-pause"></i> Pause';
+        btn.title = nowPaused ? "All schedules paused — click to resume" : "Pause all scheduled runs";
+      }
+      showToast(paused ? "Schedules resumed" : "All schedules paused");
+    } catch (err) {
+      alert("Error: " + err.message);
+    }
   };
 
   // ── Agent CRUD ──────────────────────────────────────────────────────
@@ -753,8 +773,9 @@
   }
 
   // ── Pause button — show only when the agent has schedules ─────────
-  // Otherwise there's nothing to pause: chat-driven runs are already
-  // "paused" by virtue of the user not sending messages.
+  // Show when at least one schedule exists. Derive the paused state from
+  // "are all schedules disabled?" so the label/icon flips correctly on
+  // page load too.
   (async function syncPauseButtonVisibility() {
     if (!agentId) return;
     var btn = document.getElementById("agent-pause-btn");
@@ -763,7 +784,15 @@
       var res = await fetch("/api/agents/" + agentId + "/schedules");
       if (!res.ok) return;
       var data = await res.json();
-      if ((data.schedules || []).length > 0) btn.style.display = "inline-flex";
+      var schedules = data.schedules || [];
+      if (schedules.length === 0) return;
+      btn.style.display = "inline-flex";
+      var allDisabled = schedules.every(function (s) { return !s.enabled; });
+      btn.dataset.paused = allDisabled ? "true" : "false";
+      btn.innerHTML = allDisabled
+        ? '<i class="fas fa-play"></i> Resume'
+        : '<i class="fas fa-pause"></i> Pause';
+      btn.title = allDisabled ? "All schedules paused — click to resume" : "Pause all scheduled runs";
     } catch { /* ignore */ }
   })();
 

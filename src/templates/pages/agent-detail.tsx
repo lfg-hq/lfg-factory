@@ -248,20 +248,33 @@ export function AgentDetailPage({
                 <label>Instructions</label>
                 <textarea name="instructions" rows="4" class="input" style="resize:vertical;">${agent.instructions ?? ""}</textarea>
               </div>
-              ${composioToolkits.length > 0 ? html`
-                <div class="form-group">
-                  <label>Composio Integrations</label>
-                  <div style="display:flex;flex-direction:column;gap:0.5rem;">
+              <div class="form-group">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
+                  <label style="margin:0;">Composio Integrations</label>
+                  <button type="button" id="connectors-btn" class="btn btn-secondary btn-sm" style="font-size:0.75rem;">
+                    <i class="fas fa-plus"></i> Manage
+                  </button>
+                </div>
+                ${composioToolkits.length > 0 ? html`
+                  <div style="display:flex;flex-direction:column;gap:0.625rem;">
                     ${composioToolkits.map((t) => html`
-                      <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.875rem;cursor:pointer;">
-                        <input type="checkbox" name="composio_toolkits" value="${t.slug}"
-                          ${agent.composioToolkits.includes(t.slug) ? "checked" : ""} />
-                        <span>${t.name}</span>
+                      <label class="toolkit-switch-row">
+                        <span class="toolkit-switch-name">${t.name}</span>
+                        <span class="toolkit-switch">
+                          <input type="checkbox" name="composio_toolkits" value="${t.slug}"
+                            ${agent.composioToolkits.includes(t.slug) ? "checked" : ""} />
+                          <span class="toolkit-switch-track"><span class="toolkit-switch-thumb"></span></span>
+                        </span>
                       </label>
                     `)}
                   </div>
-                </div>
-              ` : ""}
+                ` : html`
+                  <p style="font-size:0.8125rem;color:var(--text-secondary);margin:0;">No integrations connected yet. Click <strong>Manage</strong> to connect Gmail, Slack, GitHub, etc.</p>
+                `}
+              </div>
+              <div class="form-group" style="margin-top:-0.5rem;">
+                <small style="color:var(--text-secondary);font-size:0.75rem;">Toggles scope which Composio toolkits the sandbox CLI can access. Chat-side LLM always has access to all your connected integrations.</small>
+              </div>
               <div class="form-group">
                 <label>Run timeout (minutes)</label>
                 <input type="number" name="run_timeout_minutes" min="1" max="1440"

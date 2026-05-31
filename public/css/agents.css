@@ -560,6 +560,77 @@
   }
 }
 
+/* ── Toolkit slide switches (Settings → Composio Integrations) ──────── */
+.toolkit-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-secondary, #1f2937);
+  border: 1px solid var(--border-color, #334155);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.toolkit-switch-row:hover {
+  border-color: rgba(139, 92, 246, 0.4);
+}
+
+.toolkit-switch-name {
+  color: var(--text-color);
+  font-weight: 500;
+}
+
+.toolkit-switch {
+  position: relative;
+  display: inline-block;
+  width: 38px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+.toolkit-switch input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toolkit-switch-track {
+  position: absolute;
+  inset: 0;
+  background: #4b5563;
+  border-radius: 999px;
+  transition: background 0.2s ease;
+  cursor: pointer;
+}
+
+.toolkit-switch-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.2s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+.toolkit-switch input:checked + .toolkit-switch-track {
+  background: var(--primary-color, #8b5cf6);
+}
+
+.toolkit-switch input:checked + .toolkit-switch-track .toolkit-switch-thumb {
+  transform: translateX(16px);
+}
+
+.toolkit-switch input:focus-visible + .toolkit-switch-track {
+  box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.4);
+}
+
 /* ── Settings panel width sync ─────────────────────────────────────────
    artifacts.css hardcodes panel + chat container at 350px. When the user
    drags the resize handle wider (managed by agents.js), the chat container
