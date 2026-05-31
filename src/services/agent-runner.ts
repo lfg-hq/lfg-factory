@@ -190,8 +190,10 @@ export async function runAgentTask(input: RunAgentTaskInput): Promise<RunAgentTa
   tools = { ...tools, ...agentTools };
 
   // ── 6. System prompt (identical to chat-side agent) ───────────────────────
+  // filter='connected' on session-scoped endpoint returns 0 for manageConnections
+  // sessions — use filter='all' and post-filter by isConnected instead.
   const connectorList = await Promise.race([
-    listConnectors(userId, { filter: "connected", limit: 50 }),
+    listConnectors(userId, { filter: "all", limit: 200 }),
     new Promise<{ items: [] }>((resolve) => setTimeout(() => resolve({ items: [] }), 5_000)),
   ]);
   const systemPrompt = getAgentSystemPrompt({
@@ -199,7 +201,7 @@ export async function runAgentTask(input: RunAgentTaskInput): Promise<RunAgentTa
     personality: agent.personality,
     instructions: agent.instructions,
     memoryContent: agent.memoryContent,
-    connectedToolkits: connectorList.items.map((t: any) => t.slug),
+    connectedToolkits: connectorList.items.filter((t: any) => t.isConnected).map((t: any) => t.slug),
   });
 
   // ── 7. Run the LLM (non-streaming — we want the final text only) ──────────

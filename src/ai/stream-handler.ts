@@ -296,9 +296,11 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
   let systemPrompt: string;
   if (agentRecord) {
     // Source of truth for connected toolkits is Composio itself (not our local
-    // table — OAuth connections aren't always mirrored locally).
+    // table — OAuth connections aren't always mirrored locally). Use filter='all'
+    // and post-filter by isConnected; session-scoped filter='connected' returns
+    // only session-enabled toolkits (empty for manageConnections sessions).
     const connectorList = await Promise.race([
-      listConnectors(userId, { filter: "connected", limit: 50 }),
+      listConnectors(userId, { filter: "all", limit: 200 }),
       new Promise<{ items: [] }>((resolve) => setTimeout(() => resolve({ items: [] }), 5_000)),
     ]);
     systemPrompt = getAgentSystemPrompt({
@@ -306,7 +308,7 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
       personality: agentRecord.personality,
       instructions: agentRecord.instructions,
       memoryContent: agentRecord.memoryContent,
-      connectedToolkits: connectorList.items.map((t: any) => t.slug),
+      connectedToolkits: connectorList.items.filter((t: any) => t.isConnected).map((t: any) => t.slug),
     });
   } else if (instantMode) {
     systemPrompt = getInstantSystemPrompt();

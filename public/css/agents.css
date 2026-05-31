@@ -560,6 +560,19 @@
   }
 }
 
+/* ── Settings panel width sync ─────────────────────────────────────────
+   artifacts.css hardcodes panel + chat container at 350px. When the user
+   drags the resize handle wider (managed by agents.js), the chat container
+   needs to match so the header buttons (Pause, gear) stay visible. Drive
+   both off a single CSS var that agents.js updates on resize + toggle. */
+.artifacts-container {
+  width: var(--agent-panel-width, 350px) !important;
+}
+.app-container.artifacts-expanded .chat-container {
+  width: calc(100% - var(--agent-panel-width, 350px)) !important;
+  margin-right: var(--agent-panel-width, 350px) !important;
+}
+
 /* ── Scheduled / webhook / manual trigger messages ─────────────────── */
 /* Distinct styling for chat messages that came from a non-chat trigger
    (cron schedule, webhook, manual run). Applies to both user-role

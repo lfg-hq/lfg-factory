@@ -131,25 +131,29 @@ agentsRoutes.get("/agents/:agentId", async (c) => {
 
   if (!agent) return c.text("Agent not found", 404);
 
-  // Source of truth for connected toolkits is Composio (their connected_account
-  // flag). Our local composio_toolkit table is just a cache and may be missing
-  // rows for connections established before the OAuth-callback-saves-locally
-  // fix shipped (commit aa263f9). Falls back to local rows on Composio outage.
+  // Source of truth: Composio's per-toolkit isConnected flag. Note we use
+  // filter='all' (not 'connected') and post-filter locally — Composio's
+  // session-scoped is_connected=true returns ONLY session-enabled toolkits,
+  // which is empty for our manageConnections-only session. Filter=all returns
+  // the global catalog with each item's per-user isConnected flag set.
+  // Falls back to local cache if Composio is unreachable.
   const [composioList, localToolkits, modelSel] = await Promise.all([
-    listConnectors(user.id, { filter: "connected", limit: 100 }).catch(() => ({ items: [] })),
+    listConnectors(user.id, { filter: "all", limit: 200 }).catch(() => ({ items: [] })),
     db.select().from(composioToolkits).where(eq(composioToolkits.userId, user.id)),
     db.select().from(modelSelections).where(eq(modelSelections.userId, user.id)).then((r) => r[0]),
   ]);
 
-  // Merge: prefer Composio's view, fall back to local rows it didn't return.
   const seenSlugs = new Set<string>();
   const mergedToolkits: { slug: string; name: string }[] = [];
   for (const t of composioList.items) {
+    if (!t.isConnected) continue;
     const slug = (t.slug || "").toUpperCase();
     if (!slug || seenSlugs.has(slug)) continue;
     seenSlugs.add(slug);
     mergedToolkits.push({ slug, name: t.name || slug });
   }
+  // Fallback: include local rows for anything Composio didn't surface
+  // (only relevant if the Composio call failed entirely)
   for (const t of localToolkits.filter((t) => t.enabled)) {
     const slug = (t.toolkit || "").toUpperCase();
     if (!slug || seenSlugs.has(slug)) continue;

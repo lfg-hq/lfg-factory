@@ -696,8 +696,16 @@
   if (resizeHandle && panel) {
     var MIN_WIDTH = 320;
     var MAX_WIDTH_FRAC = 0.7; // 70% of viewport
+    // CSS var that both .artifacts-container and .chat-container read.
+    // Keeping these in sync prevents the chat header (Pause, gear) from
+    // getting covered when the panel is wider than the default 350px.
+    function syncPanelWidth(w) {
+      document.documentElement.style.setProperty("--agent-panel-width", w + "px");
+    }
+
     var storedWidth = parseInt(localStorage.getItem("agent_panel_width") || "0", 10);
-    if (storedWidth >= MIN_WIDTH) panel.style.width = storedWidth + "px";
+    var initialWidth = storedWidth >= MIN_WIDTH ? storedWidth : 350;
+    syncPanelWidth(initialWidth);
 
     var isResizing = false;
     var startX = 0;
@@ -708,7 +716,7 @@
       var dx = startX - e.clientX; // dragging left increases width
       var maxW = Math.floor(window.innerWidth * MAX_WIDTH_FRAC);
       var newWidth = Math.max(MIN_WIDTH, Math.min(maxW, startWidth + dx));
-      panel.style.width = newWidth + "px";
+      syncPanelWidth(newWidth);
     }
 
     function onMouseUp() {
@@ -734,6 +742,13 @@
       document.addEventListener("mousemove", onMouseMove);
       document.addEventListener("mouseup", onMouseUp);
       e.preventDefault();
+    });
+
+    // Re-clamp on viewport resize so the panel never exceeds 70% of new width.
+    window.addEventListener("resize", function () {
+      var maxW = Math.floor(window.innerWidth * MAX_WIDTH_FRAC);
+      var current = parseInt(getComputedStyle(panel).width, 10);
+      if (current > maxW) syncPanelWidth(maxW);
     });
   }
 
