@@ -690,8 +690,10 @@
   margin-bottom: 1rem;
 }
 
-/* Form labels: clearer hierarchy */
-.artifacts-container .form-group > label {
+/* Form labels: clearer hierarchy.
+   :not(.toolkit-switch-row) so the rule doesn't accidentally override
+   the flex layout on toggle-row labels and stack name above toggle. */
+.artifacts-container .form-group > label:not(.toolkit-switch-row) {
   display: block;
   font-size: 0.75rem;
   font-weight: 600;
