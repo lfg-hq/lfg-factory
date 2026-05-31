@@ -577,23 +577,42 @@
 }
 
 .scheduled-badge {
-  display: inline-flex;
+  /* Block element on its own line above the message text so the body
+     doesn't wrap around it. width:fit-content keeps the pill compact. */
+  display: flex;
   align-items: center;
   gap: 0.375rem;
+  width: fit-content;
   font-size: 0.6875rem;
-  font-weight: 500;
-  color: var(--primary-color);
-  background: rgba(139, 92, 246, 0.12);
-  padding: 0.2rem 0.55rem;
+  font-weight: 600;
+  color: #fff;
+  background: var(--primary-color);
+  padding: 0.25rem 0.625rem;
   border-radius: 999px;
-  margin-bottom: 0.5rem;
-  letter-spacing: 0.01em;
+  margin: 0 0 0.625rem;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
   animation: scheduledBadgeIn 0.4s ease;
 }
 
 .scheduled-badge i {
-  font-size: 0.625rem;
+  font-size: 0.6875rem;
+  opacity: 0.9;
+}
+
+/* Inside the user bubble (purple bg) the badge needs a darker fill so
+   it doesn't blend with the bubble color. */
+.message.user.scheduled-run .scheduled-badge {
+  background: #5b21b6;
+  color: #fff;
+}
+
+/* Inside assistant/system bubbles (dark bg) the brand-purple pill reads fine. */
+.message.assistant.scheduled-run .scheduled-badge,
+.message.system.scheduled-run .scheduled-badge {
+  background: var(--primary-color);
+  color: #fff;
 }
 
 @keyframes scheduledBadgeIn {
