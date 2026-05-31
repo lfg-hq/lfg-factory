@@ -138,10 +138,20 @@ agentsRoutes.get("/agents/:agentId", async (c) => {
   // the global catalog with each item's per-user isConnected flag set.
   // Falls back to local cache if Composio is unreachable.
   const [composioList, localToolkits, modelSel] = await Promise.all([
-    listConnectors(user.id, { filter: "all", limit: 200 }).catch(() => ({ items: [] })),
+    listConnectors(user.id, { filter: "all", limit: 200 }).catch((err) => {
+      console.error("[agent-detail] listConnectors threw:", (err as Error).message);
+      return { items: [] as any[] };
+    }),
     db.select().from(composioToolkits).where(eq(composioToolkits.userId, user.id)),
     db.select().from(modelSelections).where(eq(modelSelections.userId, user.id)).then((r) => r[0]),
   ]);
+
+  const connectedFromComposio = composioList.items.filter((t: any) => t.isConnected);
+  console.log(
+    `[agent-detail] user=${user.id} composio_items=${composioList.items.length} connected=${connectedFromComposio.length} ` +
+    `connected_slugs=${connectedFromComposio.map((t: any) => t.slug).join(",")} ` +
+    `local_enabled_slugs=${localToolkits.filter((t) => t.enabled).map((t) => t.toolkit).join(",")}`
+  );
 
   const seenSlugs = new Set<string>();
   const mergedToolkits: { slug: string; name: string }[] = [];

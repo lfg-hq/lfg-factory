@@ -573,6 +573,40 @@
   margin-right: var(--agent-panel-width, 350px) !important;
 }
 
+/* ── Inline gear button in agent chat header ─────────────────────────
+   artifacts.css makes #artifacts-button a floating purple circle at
+   position:fixed; right:20px — meant for project chat. On the agent
+   page it overlaps the Pause button and sits behind the settings
+   panel when open. Override to a normal inline header button. */
+.artifacts-button {
+  position: relative !important;
+  top: auto !important;
+  right: auto !important;
+  width: 36px !important;
+  height: 36px !important;
+  border-radius: 8px !important;
+  background: var(--bg-secondary, #1f2937) !important;
+  color: var(--text-color, #e2e8f0) !important;
+  border: 1px solid var(--border-color, #334155) !important;
+  box-shadow: none !important;
+  font-size: 14px !important;
+  flex-shrink: 0;
+}
+.artifacts-button:hover {
+  background: var(--bg-tertiary, #2a3441) !important;
+  color: var(--primary-color, #8b5cf6) !important;
+  transform: none !important;
+  box-shadow: none !important;
+}
+.artifacts-button.active {
+  background: rgba(139, 92, 246, 0.15) !important;
+  color: var(--primary-color, #8b5cf6) !important;
+  border-color: var(--primary-color, #8b5cf6) !important;
+}
+.artifacts-button.active i {
+  transform: none !important; /* artifacts.css rotates by 45° on .active */
+}
+
 /* ── Scheduled / webhook / manual trigger messages ─────────────────── */
 /* Distinct styling for chat messages that came from a non-chat trigger
    (cron schedule, webhook, manual run). Applies to both user-role
