@@ -313,6 +313,14 @@ agentsApi.get("/:agentId/data/:fileId", async (c) => {
 
   if (!file) return c.json({ error: "File not found" }, 404);
 
+  // Default to inline disposition so an <iframe src="..."> can render the
+  // file (Plotly HTML charts especially). User-initiated downloads pass
+  // ?disposition=attachment to force the download dialog.
+  const wantAttachment = c.req.query("disposition") === "attachment";
+  const disposition = wantAttachment
+    ? `attachment; filename="${file.fileName}"`
+    : `inline; filename="${file.fileName}"`;
+
   // S3-backed first; legacy local FS fallback for rows from before the migration.
   if (file.s3Key) {
     try {
@@ -320,7 +328,7 @@ agentsApi.get("/:agentId/data/:fileId", async (c) => {
       return new Response(body, {
         headers: {
           "Content-Type": contentType ?? guessContentType(file.fileName),
-          "Content-Disposition": `attachment; filename="${file.fileName}"`,
+          "Content-Disposition": disposition,
         },
       });
     } catch (err) {
@@ -337,7 +345,7 @@ agentsApi.get("/:agentId/data/:fileId", async (c) => {
       return new Response(fileData, {
         headers: {
           "Content-Type": guessContentType(file.fileName),
-          "Content-Disposition": `attachment; filename="${file.fileName}"`,
+          "Content-Disposition": disposition,
         },
       });
     } catch {

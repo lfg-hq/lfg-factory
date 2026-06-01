@@ -51,13 +51,40 @@
     }
   };
 
+  // Queue for artifacts whose WS event arrived before the assistant bubble
+  // existed (sync fires the moment runInSandbox returns, but the LLM might
+  // still be streaming its text response). Flushed by a MutationObserver
+  // when a new .message.assistant appears.
+  const pendingArtifacts = [];
+  let artifactObserver = null;
+
+  function ensureArtifactObserver() {
+    if (artifactObserver) return;
+    const messagesEl = document.getElementById("chat-messages");
+    if (!messagesEl) return;
+    artifactObserver = new MutationObserver(function () {
+      if (!pendingArtifacts.length) return;
+      const assistantBubbles = messagesEl.querySelectorAll(".message.assistant");
+      const lastBubble = assistantBubbles[assistantBubbles.length - 1];
+      if (lastBubble) {
+        const queue = pendingArtifacts.splice(0);
+        console.log("[agent-artifact] flushing", queue.length, "queued artifacts under assistant bubble");
+        queue.forEach(function (d) { renderDataFileInline(d, lastBubble); });
+      }
+    });
+    artifactObserver.observe(messagesEl, { childList: true, subtree: true });
+  }
+
   // Renders a new Data Room file as an inline preview attached AFTER the
   // most recent assistant message bubble. Important: insert as a SIBLING of
   // the bubble, not inside .message-content — chat.js's streaming render
   // does contentDiv.innerHTML = marked.parse(...) on every chunk, which
   // would wipe any artifact appended INSIDE the content div. Siblings
   // survive the re-render.
-  function renderDataFileInline(data) {
+  //
+  // If no assistant bubble exists yet (sync arrived before LLM finished
+  // streaming), queue the artifact and flush when a bubble appears.
+  function renderDataFileInline(data, explicitBubble) {
     console.log("[agent-artifact] render", data.file_name, "type=", data.file_type, "agent=", data.agent_id);
     const messagesEl = document.getElementById("chat-messages");
     if (!messagesEl) {
@@ -67,9 +94,12 @@
 
     // Find the latest assistant bubble (the one the LLM just sent / is sending)
     const assistantBubbles = messagesEl.querySelectorAll(".message.assistant");
-    const lastBubble = assistantBubbles[assistantBubbles.length - 1];
+    const lastBubble = explicitBubble || assistantBubbles[assistantBubbles.length - 1];
     if (!lastBubble) {
-      console.warn("[agent-artifact] no .message.assistant bubble to attach under");
+      console.log("[agent-artifact] queuing", data.file_name, "until assistant bubble appears");
+      pendingArtifacts.push(data);
+      ensureArtifactObserver();
+      return;
     }
 
     const ext = (data.file_type || "").toLowerCase();
@@ -91,19 +121,20 @@
           '</div>' +
         '</div>';
     } else if (isHtml) {
-      // Inline iframe for interactive charts (Plotly etc.) — embeds the
-      // chart right in the message instead of hiding it behind a modal.
-      // sandbox=allow-scripts allow-same-origin so Plotly's JS can run.
+      // Inline iframe for interactive charts (Plotly etc.). The download
+      // endpoint now serves Content-Disposition: inline by default so the
+      // browser renders the HTML instead of trying to download it.
+      // Download link explicitly asks for attachment via ?disposition=.
       wrap.innerHTML =
         '<div class="agent-artifact-html-inline">' +
           '<div class="agent-artifact-caption">' +
             '<i class="fas fa-chart-line"></i> ' + escapeHtml(data.file_name) +
             ' <span class="muted">' + formatFileSize(data.file_size) + '</span>' +
             ' · <a href="' + data.download_url + '" target="_blank" rel="noopener">open full-screen</a>' +
-            ' · <a href="' + data.download_url + '" download>download</a>' +
+            ' · <a href="' + data.download_url + '?disposition=attachment" download>download</a>' +
           '</div>' +
           '<iframe class="agent-artifact-html-iframe" src="' + data.download_url + '" ' +
-                  'sandbox="allow-scripts allow-same-origin allow-popups" loading="lazy"></iframe>' +
+                  'sandbox="allow-scripts allow-same-origin" loading="lazy"></iframe>' +
         '</div>';
     } else {
       wrap.innerHTML =
