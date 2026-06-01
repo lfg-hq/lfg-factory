@@ -2834,22 +2834,10 @@ document.addEventListener('DOMContentLoaded', () => {
                         // Now actually add the user message to chat with file data
                         addMessageToChat('user', message, fileData, userRole);
 
-                        // Agent-mode: append the sandbox path so the LLM knows
-                        // exactly where to read the file from. The user's UI
-                        // bubble keeps the original `message`; only the wire
-                        // payload sent to the LLM carries the context note.
-                        let outgoingMessage = message;
-                        if (window.__AGENT_MODE__ && fileResponse.file_name) {
-                            const note =
-                                `[Attached file: ${fileResponse.file_name}` +
-                                ` — available in the sandbox at /root/data/${fileResponse.file_name}` +
-                                ` and downloadable from the Data Room.` +
-                                ` Read it directly with pandas / openpyxl / etc.]`;
-                            outgoingMessage = (message || "").trim() + (message ? "\n\n" : "") + note;
-                        }
-
-                        // Proceed with sending the message with the file_id
-                        sendMessageToServer(outgoingMessage, fileData);
+                        // sendMessageToServer handles the agent-mode file-context
+                        // append (works for both upload-on-attach and
+                        // upload-on-send paths). Just pass message through.
+                        sendMessageToServer(message, fileData);
                     })
                     .catch(error => {
                         console.error('Error uploading file before message:', error);
@@ -2921,10 +2909,28 @@ document.addEventListener('DOMContentLoaded', () => {
         const turboModeToggle = document.getElementById('turbo-mode-toggle');
         const turboMode = turboModeToggle ? turboModeToggle.checked : false;
         
+        // Agent-mode: when a file is attached, append a wire-only context
+        // note so the LLM knows where the file lives in the sandbox. The user
+        // bubble already shows the file chip (rendered from fileData) — this
+        // note ONLY goes into the WS payload, not the on-screen text.
+        // Catches BOTH upload paths (upload-on-attach and upload-on-send) by
+        // hooking here right before the WS send instead of inside an upload
+        // .then() that only the upload-on-send path takes.
+        let outgoingMessage = message;
+        if (window.__AGENT_MODE__ && fileData && fileData.name) {
+            const note =
+                `[Attached file: ${fileData.name}` +
+                ` — available in the sandbox at /root/data/${fileData.name}` +
+                ` and downloadable from the Data Room.` +
+                ` Read it directly with pandas / openpyxl / etc.]`;
+            outgoingMessage = (message || "").trim() + (message ? "\n\n" : "") + note;
+            console.log('[agent-mode] appended file-context note to WS payload for', fileData.name);
+        }
+
         // Prepare message data
         const messageData = {
             type: 'message',
-            message: message,
+            message: outgoingMessage,
             conversation_id: currentConversationId,
             provider: currentProvider,
             project_id: currentProjectId,
