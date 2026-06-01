@@ -9,7 +9,8 @@
 import { eq } from "drizzle-orm";
 import * as fs from "node:fs/promises";
 import { db } from "../config/db.ts";
-import { agentDataFiles } from "../db/schema/agents.ts";
+import { agentDataFiles, agents } from "../db/schema/agents.ts";
+import { broadcastToUser } from "../ws/connection-manager.ts";
 import { execOnWorkspace } from "./mags.ts";
 import { getComposioMcpConfig } from "./composio-manager.ts";
 import { loadDecryptedSecretsByRowId, type DecryptedSecret } from "./agent-secrets.ts";
@@ -305,14 +306,37 @@ export async function syncDataRoom(
           console.log(`${tag} ↓ local ${fileName} (${size}B) path=${localPath}`);
         }
 
-        await db.insert(agentDataFiles).values({
+        const fileType = fileName.split(".").pop() ?? "unknown";
+        const inserted = await db.insert(agentDataFiles).values({
           agentId,
           fileName,
-          fileType: fileName.split(".").pop() ?? "unknown",
+          fileType,
           filePath: localPath,
           s3Key,
           fileSize: size,
-        });
+        }).returning();
+
+        // Broadcast so the chat UI can render new charts / artifacts inline
+        // without waiting for the user to open the Data Room tab.
+        const row = inserted[0];
+        if (row) {
+          const [agentMeta] = await db
+            .select({ userId: agents.userId, agentId: agents.agentId })
+            .from(agents)
+            .where(eq(agents.id, agentId))
+            .limit(1);
+          if (agentMeta) {
+            broadcastToUser(agentMeta.userId, {
+              type: "agent_data_file_created",
+              agent_id: agentMeta.agentId,
+              file_id: row.id,
+              file_name: row.fileName,
+              file_type: fileType,
+              file_size: size,
+              download_url: `/api/agents/${agentMeta.agentId}/data/${row.id}`,
+            });
+          }
+        }
       } catch (err) {
         console.error(`${tag} failed to sync file ${fileName}:`, (err as Error).message);
       }

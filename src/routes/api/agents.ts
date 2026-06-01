@@ -22,6 +22,7 @@ import {
 import { runAgentTask } from "../../services/agent-runner.ts";
 import { addSchedule, removeSchedule, updateSchedule, runScheduleNow } from "../../services/agent-scheduler.ts";
 import { syncDataRoom } from "../../services/agent-sandbox.ts";
+import { TEMPLATES, getTemplate } from "../../services/agent-templates.ts";
 import {
   isS3Enabled,
   uploadBinary,
@@ -45,6 +46,18 @@ type AuthEnv = {
 const agentsApi = new Hono<AuthEnv>();
 agentsApi.use("*", requireAuth);
 
+// ── Templates (read-only) ─────────────────────────────────────────────
+agentsApi.get("/templates", (c) => {
+  return c.json({
+    templates: TEMPLATES.map((t) => ({
+      id: t.id,
+      name: t.name,
+      icon: t.icon,
+      summary: t.summary,
+    })),
+  });
+});
+
 // ── CRUD ──────────────────────────────────────────────────────────────
 
 agentsApi.post("/", async (c) => {
@@ -55,14 +68,19 @@ agentsApi.post("/", async (c) => {
       personality?: string;
       instructions?: string;
       composio_toolkits?: string[];
+      template_id?: string;
     }>()
     .catch(() => ({} as Record<string, never>));
 
+  // Optional template overlay — caller-supplied fields still win so the user
+  // can tweak before creation.
+  const tpl = body.template_id ? getTemplate(body.template_id) : null;
+
   const agent = await createAgent({
     userId: user.id,
-    name: body.name?.trim() || "New Agent",
-    personality: body.personality,
-    instructions: body.instructions,
+    name: body.name?.trim() || tpl?.name || "New Agent",
+    personality: body.personality ?? tpl?.personality,
+    instructions: body.instructions ?? tpl?.instructions,
     composioToolkits: body.composio_toolkits,
   });
 
@@ -319,6 +337,98 @@ agentsApi.get("/:agentId/data/:fileId", async (c) => {
 
   return c.json({ error: "File data missing" }, 404);
 });
+
+// CSV preview — returns first N rows parsed for the Data Room expand view.
+// Lightweight parser (handles quoted commas, escaped quotes); not RFC-strict.
+agentsApi.get("/:agentId/data/:fileId/preview", async (c) => {
+  const user = c.get("user");
+  const { agentId, fileId } = c.req.param();
+  const maxRows = Math.min(parseInt(c.req.query("rows") ?? "10", 10), 100);
+
+  const [agent] = await db
+    .select()
+    .from(agents)
+    .where(and(eq(agents.agentId, agentId), eq(agents.userId, user.id)))
+    .limit(1);
+  if (!agent) return c.json({ error: "Agent not found" }, 404);
+
+  const [file] = await db
+    .select()
+    .from(agentDataFiles)
+    .where(and(eq(agentDataFiles.id, fileId), eq(agentDataFiles.agentId, agent.id)))
+    .limit(1);
+  if (!file) return c.json({ error: "File not found" }, 404);
+
+  const ext = (file.fileType || file.fileName.split(".").pop() || "").toLowerCase();
+  if (!["csv", "tsv", "txt"].includes(ext)) {
+    return c.json({ error: "Preview only available for CSV / TSV / TXT", file_type: ext }, 415);
+  }
+
+  // Fetch content as text (try S3 first, fall back to local)
+  let text = "";
+  if (file.s3Key) {
+    try {
+      const { body } = await downloadBinary(file.s3Key);
+      text = body.toString("utf-8");
+    } catch (err) {
+      console.error("[data-preview] S3 fetch failed:", (err as Error).message);
+    }
+  }
+  if (!text && file.filePath) {
+    const fs = await import("node:fs/promises");
+    try { text = (await fs.readFile(file.filePath)).toString("utf-8"); } catch { /* ignore */ }
+  }
+  if (!text) return c.json({ error: "File data missing" }, 404);
+
+  const delimiter = ext === "tsv" ? "\t" : ",";
+  const rows = parseDelimited(text, delimiter, maxRows + 1); // +1 for header
+  const headers = rows[0] ?? [];
+  const dataRows = rows.slice(1, maxRows + 1);
+  // Estimate total row count by counting newlines (cheap, approximate)
+  const totalRows = Math.max(0, (text.match(/\n/g)?.length ?? 0)); // -1 header is approx
+
+  return c.json({
+    file_name: file.fileName,
+    headers,
+    rows: dataRows,
+    rows_returned: dataRows.length,
+    total_rows_approx: totalRows,
+  });
+});
+
+// Tiny CSV parser — handles quoted fields with commas + escaped quotes.
+// Stops early after `maxRows` to avoid parsing huge files.
+function parseDelimited(text: string, delim: string, maxRows: number): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else { inQuotes = false; }
+      } else {
+        field += ch;
+      }
+    } else {
+      if (ch === '"') inQuotes = true;
+      else if (ch === delim) { row.push(field); field = ""; }
+      else if (ch === "\n") {
+        row.push(field);
+        rows.push(row);
+        field = "";
+        row = [];
+        if (rows.length >= maxRows) break;
+      } else if (ch !== "\r") {
+        field += ch;
+      }
+    }
+  }
+  if (field.length > 0 || row.length > 0) { row.push(field); rows.push(row); }
+  return rows;
+}
 
 agentsApi.delete("/:agentId/data/:fileId", async (c) => {
   const user = c.get("user");

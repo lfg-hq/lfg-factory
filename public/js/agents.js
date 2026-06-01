@@ -44,7 +44,86 @@
       if (!agentId || data.agent_id === agentId) {
         renderSecretRequired(data.key, data.description, data.service);
       }
+    } else if (data.type === "agent_data_file_created") {
+      if (!agentId || data.agent_id === agentId) {
+        renderDataFileInline(data);
+      }
     }
+  };
+
+  // Renders a new Data Room file as an inline preview attached to the most
+  // recent assistant message bubble. Images render as <img>; HTML files get
+  // an "Open interactive view" button that opens the file in an iframe modal;
+  // everything else gets a download card.
+  function renderDataFileInline(data) {
+    const messagesEl = document.getElementById("chat-messages");
+    if (!messagesEl) return;
+
+    // Attach to the latest assistant bubble (the one the LLM just sent)
+    const assistantBubbles = messagesEl.querySelectorAll(".message.assistant .message-content");
+    const lastBubble = assistantBubbles[assistantBubbles.length - 1];
+    const container = lastBubble || messagesEl;
+
+    const ext = (data.file_type || "").toLowerCase();
+    const isImage = ["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext);
+    const isHtml = ["html", "htm"].includes(ext);
+
+    const wrap = document.createElement("div");
+    wrap.className = "agent-artifact";
+    wrap.setAttribute("data-file-id", data.file_id);
+
+    if (isImage) {
+      wrap.innerHTML =
+        '<div class="agent-artifact-image">' +
+          '<img src="' + data.download_url + '" alt="' + escapeHtml(data.file_name) + '" />' +
+          '<div class="agent-artifact-caption">' +
+            '<i class="fas fa-image"></i> ' + escapeHtml(data.file_name) +
+            ' <span class="muted">' + formatFileSize(data.file_size) + '</span>' +
+            ' · <a href="' + data.download_url + '" download>download</a>' +
+          '</div>' +
+        '</div>';
+    } else if (isHtml) {
+      wrap.innerHTML =
+        '<div class="agent-artifact-html">' +
+          '<i class="fas fa-chart-line"></i> ' +
+          '<strong>' + escapeHtml(data.file_name) + '</strong> ' +
+          '<span class="muted">' + formatFileSize(data.file_size) + '</span> · ' +
+          '<button class="agent-artifact-open" onclick="openHtmlArtifact(\'' + data.download_url + '\', \'' + escapeHtml(data.file_name) + '\')">' +
+            '<i class="fas fa-external-link-alt"></i> Open interactive view' +
+          '</button>' +
+          ' · <a href="' + data.download_url + '" download>download</a>' +
+        '</div>';
+    } else {
+      wrap.innerHTML =
+        '<div class="agent-artifact-file">' +
+          '<i class="fas fa-file"></i> ' +
+          '<strong>' + escapeHtml(data.file_name) + '</strong> ' +
+          '<span class="muted">' + formatFileSize(data.file_size) + ' · ' + (data.file_type || "file") + '</span> · ' +
+          '<a href="' + data.download_url + '" download>download</a>' +
+        '</div>';
+    }
+
+    container.appendChild(wrap);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  window.openHtmlArtifact = function (url, name) {
+    const overlay = document.createElement("div");
+    overlay.className = "artifact-modal-overlay";
+    overlay.innerHTML =
+      '<div class="artifact-modal">' +
+        '<div class="artifact-modal-header">' +
+          '<span><i class="fas fa-chart-line"></i> ' + escapeHtml(name) + '</span>' +
+          '<button class="artifact-modal-close" aria-label="Close">×</button>' +
+        '</div>' +
+        '<iframe class="artifact-modal-iframe" src="' + url + '" sandbox="allow-scripts allow-same-origin allow-popups"></iframe>' +
+      '</div>';
+    overlay.addEventListener("click", function (e) {
+      if (e.target === overlay || e.target.classList.contains("artifact-modal-close")) {
+        overlay.remove();
+      }
+    });
+    document.body.appendChild(overlay);
   };
 
   function renderConnectorRequired(toolkit, redirectUrl) {
@@ -211,15 +290,25 @@
 
   // ── Agent CRUD ──────────────────────────────────────────────────────
 
-  // Create a fresh agent and redirect into its chat. The agent is live
-  // from message 1 — the LLM picks up a name + instructions from the
-  // conversation and saves them via proposeAgentConfig.
+  // Open the template picker. User selects a template (or Custom) → that
+  // gets passed to POST /api/agents which overlays template defaults.
   window.createNewAgent = async function () {
+    try {
+      var res = await fetch("/api/agents/templates");
+      var data = await res.json();
+      openTemplatePicker(data.templates || []);
+    } catch (err) {
+      // Fallback: blank agent
+      _createAgentFromTemplate(null);
+    }
+  };
+
+  async function _createAgentFromTemplate(templateId) {
     try {
       var res = await fetch("/api/agents", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify(templateId ? { template_id: templateId } : {}),
       });
       if (res.ok) {
         var result = await res.json();
@@ -231,7 +320,52 @@
     } catch (err) {
       alert("Network error: " + err.message);
     }
-  };
+  }
+
+  function openTemplatePicker(templates) {
+    // Build a lightweight modal — no React, no framework, just innerHTML.
+    var existing = document.getElementById("agent-template-modal");
+    if (existing) existing.remove();
+
+    var overlay = document.createElement("div");
+    overlay.id = "agent-template-modal";
+    overlay.className = "template-modal-overlay";
+    var cards = templates.map(function (t) {
+      return (
+        '<button class="template-card" data-template-id="' + t.id + '">' +
+          '<div class="template-card-icon"><i class="fas ' + (t.icon || "fa-robot") + '"></i></div>' +
+          '<div class="template-card-body">' +
+            '<div class="template-card-name">' + escapeHtml(t.name) + '</div>' +
+            '<div class="template-card-summary">' + escapeHtml(t.summary) + '</div>' +
+          '</div>' +
+        '</button>'
+      );
+    }).join("");
+
+    overlay.innerHTML =
+      '<div class="template-modal">' +
+        '<div class="template-modal-header">' +
+          '<span><i class="fas fa-sparkles"></i> Pick a starting point</span>' +
+          '<button class="template-modal-close" aria-label="Close">×</button>' +
+        '</div>' +
+        '<div class="template-modal-body">' + cards + '</div>' +
+      '</div>';
+
+    overlay.addEventListener("click", function (e) {
+      if (e.target === overlay || e.target.classList.contains("template-modal-close")) {
+        overlay.remove();
+      }
+    });
+    overlay.querySelectorAll(".template-card").forEach(function (card) {
+      card.addEventListener("click", function () {
+        var id = card.getAttribute("data-template-id");
+        overlay.remove();
+        _createAgentFromTemplate(id === "custom" ? null : id);
+      });
+    });
+
+    document.body.appendChild(overlay);
+  }
 
   window.deleteAgent = async function (id, name) {
     if (!confirm('Delete agent "' + name + '"? This cannot be undone.')) return;
@@ -324,12 +458,19 @@
       }
       el.innerHTML = data.files.map(function (f) {
         var size = f.file_size ? formatFileSize(f.file_size) : "";
-        return '<div class="data-file-item">' +
+        var ext = (f.file_type || "").toLowerCase();
+        var isPreviewable = ["csv", "tsv", "txt"].includes(ext);
+        return '<div class="data-file-item" data-file-id="' + f.id + '">' +
           '<i class="fas fa-file data-file-icon"></i>' +
           '<div class="data-file-info">' +
             '<div class="data-file-name">' + escapeHtml(f.file_name) + '</div>' +
             '<div class="data-file-meta">' + size + ' · ' + (f.file_type || "unknown") + '</div>' +
           '</div>' +
+          (isPreviewable
+            ? '<button class="btn btn-sm btn-secondary" onclick="toggleDataFilePreview(\'' + f.id + '\')" title="Preview">' +
+                '<i class="fas fa-eye"></i>' +
+              '</button>'
+            : '') +
           '<a href="/api/agents/' + agentId + '/data/' + f.id + '" class="btn btn-sm btn-secondary" download>' +
             '<i class="fas fa-download"></i>' +
           '</a>' +
@@ -342,6 +483,44 @@
       el.innerHTML = '<p style="color:var(--danger-color);">Failed to load files.</p>';
     }
   }
+
+  window.toggleDataFilePreview = async function (fileId) {
+    if (!agentId) return;
+    var row = document.querySelector('.data-file-item[data-file-id="' + fileId + '"]');
+    if (!row) return;
+    var existing = row.nextElementSibling;
+    if (existing && existing.classList.contains("data-file-preview")) {
+      existing.remove();
+      return;
+    }
+    var preview = document.createElement("div");
+    preview.className = "data-file-preview";
+    preview.innerHTML = '<div class="data-file-preview-loading">Loading preview...</div>';
+    row.insertAdjacentElement("afterend", preview);
+    try {
+      var res = await fetch("/api/agents/" + agentId + "/data/" + fileId + "/preview");
+      if (!res.ok) {
+        preview.innerHTML = '<div class="data-file-preview-err">Preview unavailable.</div>';
+        return;
+      }
+      var data = await res.json();
+      var headerRow = (data.headers || []).map(function (h) {
+        return '<th>' + escapeHtml(h) + '</th>';
+      }).join("");
+      var bodyRows = (data.rows || []).map(function (r) {
+        return '<tr>' + r.map(function (c) { return '<td>' + escapeHtml(c) + '</td>'; }).join("") + '</tr>';
+      }).join("");
+      preview.innerHTML =
+        '<div class="data-file-preview-meta">First ' + data.rows_returned +
+          ' of ~' + data.total_rows_approx + ' rows</div>' +
+        '<div class="data-file-preview-scroll"><table class="data-file-preview-table">' +
+          '<thead><tr>' + headerRow + '</tr></thead>' +
+          '<tbody>' + bodyRows + '</tbody>' +
+        '</table></div>';
+    } catch (err) {
+      preview.innerHTML = '<div class="data-file-preview-err">Preview error: ' + escapeHtml(err.message) + '</div>';
+    }
+  };
 
   window.handleFileUpload = async function (e) {
     var file = e.target.files[0];

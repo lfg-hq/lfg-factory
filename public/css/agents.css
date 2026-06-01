@@ -560,6 +560,307 @@
   }
 }
 
+/* ── Data Room CSV preview ─────────────────────────────────────────── */
+.data-file-preview {
+  margin: 0.25rem 0 0.625rem;
+  background: var(--bg-secondary, #0f1419);
+  border: 1px solid var(--border-color, #334155);
+  border-radius: 8px;
+  overflow: hidden;
+  animation: artifactFadeIn 0.15s ease;
+}
+.data-file-preview-meta {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.6875rem;
+  color: var(--text-secondary, #94a3b8);
+  border-bottom: 1px solid var(--border-color, #334155);
+}
+.data-file-preview-loading,
+.data-file-preview-err {
+  padding: 0.625rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary, #94a3b8);
+}
+.data-file-preview-err { color: var(--danger-color, #ef4444); }
+.data-file-preview-scroll {
+  max-height: 280px;
+  overflow: auto;
+}
+.data-file-preview-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.75rem;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+.data-file-preview-table th,
+.data-file-preview-table td {
+  padding: 0.3rem 0.55rem;
+  text-align: left;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  white-space: nowrap;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.data-file-preview-table th {
+  background: var(--bg-tertiary, #2a3441);
+  color: var(--text-color);
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+}
+.data-file-preview-table td {
+  color: var(--text-secondary);
+}
+.data-file-preview-table tr:hover td {
+  background: rgba(139, 92, 246, 0.05);
+  color: var(--text-color);
+}
+
+/* ── Agent template picker modal ───────────────────────────────────── */
+.template-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  animation: artifactFadeIn 0.15s ease;
+}
+.template-modal {
+  background: var(--bg-color, #0d1117);
+  border: 1px solid var(--border-color, #334155);
+  border-radius: 12px;
+  width: min(720px, 100%);
+  max-height: min(640px, 100%);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.template-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.875rem 1.125rem;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  font-size: 0.9375rem;
+  font-weight: 500;
+}
+.template-modal-header i {
+  color: var(--primary-color);
+  margin-right: 0.5rem;
+}
+.template-modal-close {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.5rem;
+}
+.template-modal-close:hover {
+  color: var(--text-color);
+}
+.template-modal-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  padding: 1.125rem;
+  overflow-y: auto;
+}
+.template-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.875rem;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text-color);
+  transition: border-color 0.15s, background 0.15s, transform 0.15s;
+  font-family: inherit;
+}
+.template-card:hover {
+  border-color: var(--primary-color);
+  background: var(--bg-tertiary);
+  transform: translateY(-1px);
+}
+.template-card-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: rgba(139, 92, 246, 0.12);
+  color: var(--primary-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 1rem;
+}
+.template-card-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.template-card-name {
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+.template-card-summary {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+@media (max-width: 640px) {
+  .template-modal-body { grid-template-columns: 1fr; }
+}
+
+/* ── Inline artifacts (charts, images, files from sandbox) ─────────── */
+.agent-artifact {
+  margin-top: 0.75rem;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.agent-artifact-image {
+  background: var(--bg-secondary, #0f1419);
+  border: 1px solid var(--border-color, #334155);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.agent-artifact-image img {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  background: #fff;
+}
+.agent-artifact-caption {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary, #94a3b8);
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex-wrap: wrap;
+}
+.agent-artifact-caption .muted {
+  opacity: 0.7;
+}
+.agent-artifact-caption a {
+  color: var(--primary-color, #8b5cf6);
+  text-decoration: none;
+}
+
+.agent-artifact-html,
+.agent-artifact-file {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.625rem 0.875rem;
+  background: var(--bg-secondary, #0f1419);
+  border: 1px solid var(--border-color, #334155);
+  border-radius: 10px;
+  font-size: 0.8125rem;
+  color: var(--text-color);
+  flex-wrap: wrap;
+}
+.agent-artifact-html i,
+.agent-artifact-file i {
+  color: var(--primary-color, #8b5cf6);
+}
+.agent-artifact-html .muted,
+.agent-artifact-file .muted {
+  color: var(--text-secondary, #94a3b8);
+  font-weight: 400;
+}
+.agent-artifact-html a,
+.agent-artifact-file a {
+  color: var(--primary-color, #8b5cf6);
+  text-decoration: none;
+}
+.agent-artifact-open {
+  background: var(--primary-color, #8b5cf6);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 0.25rem 0.625rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+.agent-artifact-open:hover {
+  filter: brightness(1.1);
+}
+
+/* Iframe modal for interactive (HTML) artifacts */
+.artifact-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  animation: artifactFadeIn 0.15s ease;
+}
+@keyframes artifactFadeIn {
+  from { opacity: 0; } to { opacity: 1; }
+}
+.artifact-modal {
+  background: var(--bg-color, #0d1117);
+  border: 1px solid var(--border-color, #334155);
+  border-radius: 12px;
+  width: min(1100px, 100%);
+  height: min(800px, 100%);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.artifact-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+.artifact-modal-header i {
+  color: var(--primary-color);
+  margin-right: 0.375rem;
+}
+.artifact-modal-close {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.5rem;
+}
+.artifact-modal-close:hover {
+  color: var(--text-color);
+}
+.artifact-modal-iframe {
+  flex: 1;
+  width: 100%;
+  border: none;
+  background: #fff;
+}
+
 /* ── Toolkit slide switches (Settings → Composio Integrations) ──────── */
 /* Bumped specificity + !important on display so no upstream label rule
    can override and stack the name above the toggle. */
