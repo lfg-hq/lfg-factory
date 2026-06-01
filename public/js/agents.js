@@ -91,15 +91,19 @@
           '</div>' +
         '</div>';
     } else if (isHtml) {
+      // Inline iframe for interactive charts (Plotly etc.) — embeds the
+      // chart right in the message instead of hiding it behind a modal.
+      // sandbox=allow-scripts allow-same-origin so Plotly's JS can run.
       wrap.innerHTML =
-        '<div class="agent-artifact-html">' +
-          '<i class="fas fa-chart-line"></i> ' +
-          '<strong>' + escapeHtml(data.file_name) + '</strong> ' +
-          '<span class="muted">' + formatFileSize(data.file_size) + '</span> · ' +
-          '<button class="agent-artifact-open" onclick="openHtmlArtifact(\'' + data.download_url + '\', \'' + escapeHtml(data.file_name) + '\')">' +
-            '<i class="fas fa-external-link-alt"></i> Open interactive view' +
-          '</button>' +
-          ' · <a href="' + data.download_url + '" download>download</a>' +
+        '<div class="agent-artifact-html-inline">' +
+          '<div class="agent-artifact-caption">' +
+            '<i class="fas fa-chart-line"></i> ' + escapeHtml(data.file_name) +
+            ' <span class="muted">' + formatFileSize(data.file_size) + '</span>' +
+            ' · <a href="' + data.download_url + '" target="_blank" rel="noopener">open full-screen</a>' +
+            ' · <a href="' + data.download_url + '" download>download</a>' +
+          '</div>' +
+          '<iframe class="agent-artifact-html-iframe" src="' + data.download_url + '" ' +
+                  'sandbox="allow-scripts allow-same-origin allow-popups" loading="lazy"></iframe>' +
         '</div>';
     } else {
       wrap.innerHTML =
@@ -119,6 +123,62 @@
       messagesEl.appendChild(wrap);
     }
     messagesEl.scrollTop = messagesEl.scrollHeight;
+
+    // Catch the "artifact appeared then vanished" bug — MutationObserver
+    // tells us exactly what removed our node. Disconnects itself after the
+    // first detection so it doesn't leak.
+    const watch = new MutationObserver(function (muts) {
+      for (var i = 0; i < muts.length; i++) {
+        var removed = muts[i].removedNodes;
+        for (var j = 0; j < removed.length; j++) {
+          if (removed[j] === wrap || (removed[j].contains && removed[j].contains(wrap))) {
+            console.warn("[agent-artifact] vanished:", data.file_name, "removed by mutation in", muts[i].target);
+            watch.disconnect();
+            return;
+          }
+        }
+      }
+    });
+    watch.observe(messagesEl, { childList: true, subtree: true });
+    setTimeout(function () { watch.disconnect(); }, 30000);
+  }
+
+  // After chat.js loads conversation history, the artifacts that previously
+  // rendered live (via WS) are no longer in the DOM — they were ephemeral.
+  // Fetch the agent's data files once history is rendered and re-inline them
+  // so charts survive a refresh. Polled because chat.js doesn't fire an event
+  // we can hook directly; checks for the message-container being populated.
+  if (agentId) {
+    let triedHistoryReload = false;
+    const historyPoll = setInterval(function () {
+      const messagesEl = document.getElementById("chat-messages");
+      if (!messagesEl) return;
+      const bubbles = messagesEl.querySelectorAll(".message");
+      if (bubbles.length === 0) return;
+      if (triedHistoryReload) { clearInterval(historyPoll); return; }
+      triedHistoryReload = true;
+      clearInterval(historyPoll);
+
+      fetch("/api/agents/" + agentId + "/data")
+        .then(function (r) { return r.ok ? r.json() : { files: [] }; })
+        .then(function (data) {
+          var files = (data.files || []);
+          if (!files.length) return;
+          console.log("[agent-artifact] hydrating", files.length, "files from history");
+          // Render in order so they cluster under the last assistant message.
+          files.reverse().forEach(function (f) {
+            renderDataFileInline({
+              agent_id: agentId,
+              file_id: f.id,
+              file_name: f.file_name,
+              file_type: f.file_type,
+              file_size: f.file_size,
+              download_url: "/api/agents/" + agentId + "/data/" + f.id,
+            });
+          });
+        });
+    }, 300);
+    setTimeout(function () { clearInterval(historyPoll); }, 10000);
   }
 
   window.openHtmlArtifact = function (url, name) {
