@@ -2827,23 +2827,37 @@ document.addEventListener('DOMContentLoaded', () => {
                 uploadFileToServer(attachedFile.file, conversationId)
                     .then(fileResponse => {
                         console.log('File uploaded successfully before message, file_id:', fileResponse.id);
-                        
+
                         // Now add the file_id to the file data
                         fileData.id = fileResponse.id;
-                        
+
                         // Now actually add the user message to chat with file data
                         addMessageToChat('user', message, fileData, userRole);
-                        
+
+                        // Agent-mode: append the sandbox path so the LLM knows
+                        // exactly where to read the file from. The user's UI
+                        // bubble keeps the original `message`; only the wire
+                        // payload sent to the LLM carries the context note.
+                        let outgoingMessage = message;
+                        if (window.__AGENT_MODE__ && fileResponse.file_name) {
+                            const note =
+                                `[Attached file: ${fileResponse.file_name}` +
+                                ` — available in the sandbox at /root/data/${fileResponse.file_name}` +
+                                ` and downloadable from the Data Room.` +
+                                ` Read it directly with pandas / openpyxl / etc.]`;
+                            outgoingMessage = (message || "").trim() + (message ? "\n\n" : "") + note;
+                        }
+
                         // Proceed with sending the message with the file_id
-                        sendMessageToServer(message, fileData);
+                        sendMessageToServer(outgoingMessage, fileData);
                     })
                     .catch(error => {
                         console.error('Error uploading file before message:', error);
-                        
+
                         // If file upload failed, still send the message without file_id
                         addMessageToChat('user', message, fileData, userRole);
                         sendMessageToServer(message, fileData);
-                        
+
                         // Re-enable input
                         chatInput.disabled = false;
                     });
