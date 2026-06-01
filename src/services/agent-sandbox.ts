@@ -176,14 +176,18 @@ export async function injectDataFiles(
         try {
           const t0 = Date.now();
           const url = await getPresignedGetUrl(file.s3Key, 600);
-          // Single-quote-escape the URL: replace ' with '\'' to make it safe
-          // inside a single-quoted shell arg.
-          const escapedUrl = url.replace(/'/g, "'\\''");
-          const result = await execOnWorkspace(
-            workspaceId,
-            `curl -fsSL --retry 2 --max-time 120 '${escapedUrl}' -o '/root/data/${safeName}'`,
-            { timeout: 150_000 }
-          );
+          // Base64-encode the URL itself so no shell-special chars (& = ? %)
+          // can break tokenization across the SSH/exec layer. The sandbox
+          // decodes inline via `$(echo <b64> | base64 -d)`. base64 alphabet
+          // (A-Z a-z 0-9 + / =) is shell-safe in any context.
+          const urlB64 = Buffer.from(url).toString("base64");
+          // safeName is already restricted to /^a-zA-Z0-9._\- /; double-
+          // quote anyway so spaces survive.
+          const cmd =
+            `curl -fsSL --retry 2 --max-time 120 ` +
+            `"$(echo ${urlB64} | base64 -d)" ` +
+            `-o "/root/data/${safeName}"`;
+          const result = await execOnWorkspace(workspaceId, cmd, { timeout: 150_000 });
           if (result.exitCode === 0) {
             console.log(
               `[agent-sandbox] inject ${file.fileName} via presigned curl ok in ${Date.now() - t0}ms`
