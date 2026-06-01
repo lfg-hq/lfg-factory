@@ -183,11 +183,21 @@ agentsApi.get("/:agentId/data", async (c) => {
 
   if (!agent) return c.json({ error: "Agent not found" }, 404);
 
-  // Sync data room if agent is running
+  // Kick off a sandbox sync in the BACKGROUND so any files written during
+  // the active session land in the DB shortly — but DO NOT await it. If
+  // the workspace is parked/sleeping, Mags exec retries for ~15s and was
+  // blocking this GET. The current DB rows already reflect everything
+  // synced after the last runPython / runInSandbox call (those sync
+  // synchronously before returning), so the page-load read can return
+  // immediately and any newer files will appear on the next refresh (or
+  // via the agent_data_file_created WS event if a sync fires shortly).
   if (agent.status === "running" && agent.sandboxId) {
     const sandbox = await db.select().from(sandboxes).where(eq(sandboxes.id, agent.sandboxId)).then((r) => r[0]);
     if (sandbox?.magsWorkspaceId) {
-      await syncDataRoom(sandbox.magsWorkspaceId, agent.id).catch(() => {});
+      const wsId = sandbox.magsWorkspaceId;
+      syncDataRoom(wsId, agent.id).catch((err) =>
+        console.warn(`[data-list] background sync failed for ${agent.id}:`, (err as Error).message)
+      );
     }
   }
 
