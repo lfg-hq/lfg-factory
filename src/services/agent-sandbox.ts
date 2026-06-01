@@ -238,12 +238,36 @@ export async function syncDataRoom(
       if (existingNames.has(fileName)) continue;
 
       try {
-        const catResult = await execOnWorkspace(
-          workspaceId,
-          `cat /root/data/${fileName} | base64 | tr -d '\\n'`,
-          { timeout: 30_000 }
+        // Use `base64 -w 0` (GNU) to suppress line wrapping inline — no need
+        // to post-process with `tr -d '\n'` which made the prior version
+        // fragile against the SSH exec channel's quirks. Pipe stderr through
+        // so we can see what failed instead of silently producing empty
+        // output.
+        const catCmd = `base64 -w 0 < /root/data/${fileName}`;
+        const catResult = await execOnWorkspace(workspaceId, catCmd, { timeout: 60_000 });
+
+        console.log(
+          `${tag} cat ${fileName}: exitCode=${catResult.exitCode} ` +
+          `outLen=${(catResult.output || "").length} ` +
+          `errLen=${(catResult.stderr || "").length}` +
+          (catResult.stderr ? ` stderr="${catResult.stderr.slice(0, 200)}"` : "")
         );
-        const content = Buffer.from(catResult.output.trim(), "base64");
+
+        if (catResult.exitCode !== 0) {
+          console.error(`${tag} cat failed for ${fileName} — skipping`);
+          continue;
+        }
+
+        const b64 = (catResult.output || "").trim();
+        if (!b64) {
+          console.error(`${tag} cat returned empty output for ${fileName} — skipping (file may be too large for SSH channel)`);
+          continue;
+        }
+
+        const content = Buffer.from(b64, "base64");
+        console.log(
+          `${tag} decoded ${fileName}: b64Len=${b64.length} decodedBytes=${content.length}`
+        );
 
         const sizeResult = await execOnWorkspace(
           workspaceId,
@@ -251,6 +275,11 @@ export async function syncDataRoom(
           { timeout: 10_000 }
         );
         const size = parseInt(sizeResult.output.trim(), 10) || content.length;
+
+        if (size > 0 && content.length === 0) {
+          console.error(`${tag} sandbox file is ${size}B but decoded to 0 bytes — base64 transfer failed for ${fileName}`);
+          continue;
+        }
 
         let s3Key: string | null = null;
         let localPath: string | null = null;
