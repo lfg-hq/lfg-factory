@@ -2769,6 +2769,23 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        // Optimistically render the user bubble RIGHT NOW so they see their
+        // message immediately, even if we're about to wait for an in-flight
+        // upload. Without this the bubble vanishes between click and upload-
+        // settle, which feels like the message got lost. Mark the
+        // attachedFile so the downstream send-paths know NOT to re-render.
+        let alreadyRenderedBubble = false;
+        if (window.attachedFile && window.attachedFile.uploading) {
+            const optimisticFileData = {
+                name: window.attachedFile.name,
+                type: window.attachedFile.type,
+                size: window.attachedFile.size,
+            };
+            addMessageToChat('user', message, optimisticFileData);
+            window.attachedFile.bubbleRendered = true;
+            alreadyRenderedBubble = true;
+        }
+
         // If there's an attached file whose upload is still in flight, wait
         // for it. Otherwise the WS payload goes out before we know the file's
         // id / sandbox path, and the LLM sees the message with no file context.
@@ -2874,8 +2891,10 @@ document.addEventListener('DOMContentLoaded', () => {
                         // Now add the file_id to the file data
                         fileData.id = fileResponse.id;
 
-                        // Now actually add the user message to chat with file data
-                        addMessageToChat('user', message, fileData, userRole);
+                        // Skip re-render if we already rendered optimistically above
+                        if (!alreadyRenderedBubble) {
+                            addMessageToChat('user', message, fileData, userRole);
+                        }
 
                         // sendMessageToServer handles the agent-mode file-context
                         // append (works for both upload-on-attach and
@@ -2886,7 +2905,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         console.error('Error uploading file before message:', error);
 
                         // If file upload failed, still send the message without file_id
-                        addMessageToChat('user', message, fileData, userRole);
+                        if (!alreadyRenderedBubble) {
+                            addMessageToChat('user', message, fileData, userRole);
+                        }
                         sendMessageToServer(message, fileData);
 
                         // Re-enable input
@@ -2895,14 +2916,15 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 // If we still don't have a conversation ID, just send the message with file data
                 console.log('No conversation ID found. Sending message with file data.');
-                
-                // Add user message to chat with file data
-                addMessageToChat('user', message, fileData, userRole);
-                
+
+                if (!alreadyRenderedBubble) {
+                    addMessageToChat('user', message, fileData, userRole);
+                }
+
                 // For simplicity, we'll just send message without file_id
                 // The server will need to handle creating both conversation and file
                 sendMessageToServer(message, fileData);
-                
+
                 // Remove typing indicator for file upload
                 const typingIndicator = document.querySelector('.typing-indicator');
                 if (typingIndicator) {
@@ -2911,9 +2933,11 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         } else {
             // Either no file is attached, or the file was already uploaded and has a file_id
-            
+
             // Add user message to chat with file data (including file_id if available)
-            addMessageToChat('user', message, fileData, userRole);
+            if (!alreadyRenderedBubble) {
+                addMessageToChat('user', message, fileData, userRole);
+            }
             
             // Proceed with standard message sending
             sendMessageToServer(message, fileData);
@@ -3285,6 +3309,14 @@ document.addEventListener('DOMContentLoaded', () => {
             scheduledMeta = { trigger: scheduledMatch[1], timestamp: scheduledMatch[2] };
             content = scheduledMatch[3];
         }
+
+        // Strip the agent-mode file-context suffix we append in sendMessageToServer.
+        // It's wire-only context for the LLM; the user's bubble shouldn't show it
+        // on first render OR on history reload. Format:
+        //   "...user text...\n\n[Attached file: NAME — available in the sandbox
+        //    at /root/data/NAME and downloadable from the Data Room. Read it
+        //    directly with pandas / openpyxl / etc.]"
+        content = content.replace(/\s*\[Attached file: [^\]]+\]\s*$/s, "").trimEnd();
 
         // Create message element
         const messageDiv = document.createElement('div');

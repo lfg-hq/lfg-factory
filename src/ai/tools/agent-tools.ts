@@ -71,9 +71,16 @@ export function createAgentTools(params: {
         const ensureMs = Date.now() - t0;
         console.log(`${tag} workspace=${workspaceId} ensured in ${ensureMs}ms`);
 
+        // Base64-wrap the LLM's command so heredocs, nested quotes, multi-line
+        // Python, and any shell-special char survive the SSH exec layer intact.
+        // The wrapper itself contains nothing fancy that the SSH wrapping can
+        // mangle — just `echo <b64> | base64 -d | bash`.
+        const cmdB64 = Buffer.from(command).toString("base64");
+        const wrapped = `echo ${cmdB64} | base64 -d | bash`;
+
         const timeoutMs = (timeout_seconds ?? 300) * 1000;
         const tExec = Date.now();
-        const result = await execOnWorkspace(workspaceId, command, { timeout: timeoutMs });
+        const result = await execOnWorkspace(workspaceId, wrapped, { timeout: timeoutMs });
         const execMs = Date.now() - tExec;
 
         const stdoutLen = (result.output || "").length;

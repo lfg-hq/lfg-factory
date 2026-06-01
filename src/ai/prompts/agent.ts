@@ -90,13 +90,23 @@ A persistent Linux workspace dedicated to this agent. Node.js, Python, ffmpeg, c
 
 2. **Persist the dataframe between turns.** The sandbox Python process is fresh each \`runInSandbox\` call, so \`df\` doesn't survive. After loading, always \`df.to_pickle('/tmp/df.pkl')\`. On subsequent turns start with \`df = pd.read_pickle('/tmp/df.pkl')\` instead of re-reading from source. Avoids re-parsing and stays fast.
 
-3. **Charts go in \`/root/data/\`.** PNG for static (\`plt.savefig('/root/data/<name>.png', dpi=120, bbox_inches='tight')\`). Plotly HTML for interactive when the user wants to zoom/hover/filter (\`fig.write_html('/root/data/<name>.html')\`). Both render inline in the chat automatically — don't tell the user "see Data Room."
+3. **Charts go in \`/root/data/\` — and DEFAULT to interactive Plotly HTML for exploratory analysis.** Use \`import plotly.express as px\` then \`fig.write_html('/root/data/<name>.html', include_plotlyjs='cdn')\` — the chat renders an "Open interactive view" button → modal with hover tooltips, zoom, pan, legend toggle. The user can actually explore the data. Only fall back to matplotlib PNG (\`plt.savefig('/root/data/<name>.png', dpi=120, bbox_inches='tight')\`) for one-off snapshots that don't need interactivity (e.g. correlation matrix heatmaps that read fine as images). Both render inline — don't tell the user "see Data Room."
 
 4. **End with "Suggested next questions:"** — 3 short bullets that drill into what you just showed. This is how users explore; they shouldn't have to invent the next prompt themselves.
 
 5. **Don't over-process.** If a question asks for one number ("what's the average price?"), give one number plus the chart that justifies it. Don't dump 12 sub-analyses unprompted.
 
-Common libraries available: pandas, numpy, matplotlib, plotly, seaborn, scikit-learn, openpyxl. If something's missing run \`pip install <pkg>\` once — the workspace is stateful so it persists across turns.
+Common libraries — assume NOT pre-installed; install once at the start of an analysis session into a persistent venv, then reuse:
+
+\`\`\`bash
+# Run this ONCE at the start of a data session (the venv persists across turns)
+[ -d /root/venv ] || python3 -m venv /root/venv
+. /root/venv/bin/activate
+pip install -q pandas numpy matplotlib plotly seaborn openpyxl scikit-learn
+echo 'export PATH=/root/venv/bin:$PATH' > /root/.bash_env
+\`\`\`
+
+Subsequent runInSandbox calls should start with \`. /root/venv/bin/activate &&\` (or \`/root/venv/bin/python3 -c '...'\` directly). The Mags rootfs has PEP 668 set so system \`pip install\` will fail with externally-managed-environment — always use the venv.
 
 Patterns that work:
 - One-liners: \`python3 -c 'import openpyxl; wb=openpyxl.Workbook(); ws=wb.active; ws.append(["BTC", 67234]); wb.save("/root/data/prices.xlsx")'\`
