@@ -2959,32 +2959,57 @@ document.addEventListener('DOMContentLoaded', () => {
     // Function to upload file to server via REST API
     async function uploadFileToServer(file, conversationId = null, messageId = null) {
         try {
+            // Agent-mode short-circuit: the legacy /api/files/upload/ endpoint
+            // (Django-era) doesn't exist in the Node app. For agents, route the
+            // chat-input paperclip to the agent's Data Room upload endpoint so
+            // the file is stored in S3 + visible in the Data Room tab.
+            if (window.__AGENT_MODE__ && document.body.dataset.agentId) {
+                const agentId = document.body.dataset.agentId;
+                showFileNotification(`Uploading ${file.name} to Data Room...`, 'uploading');
+                const fd = new FormData();
+                fd.append('file', file);
+                const res = await fetch(`/api/agents/${agentId}/data`, {
+                    method: 'POST',
+                    body: fd,
+                    credentials: 'same-origin',
+                });
+                if (!res.ok) {
+                    const errText = await res.text().catch(() => '');
+                    throw new Error(`Upload failed (${res.status}): ${errText.slice(0, 140)}`);
+                }
+                const data = await res.json();
+                const fileId = data.file?.id;
+                showFileNotification(`${file.name} uploaded to Data Room`, 'success');
+                // Return a shape chat.js callers expect (id, name)
+                return { id: fileId, file_name: data.file?.file_name ?? file.name };
+            }
+
             console.log('%c FILE UPLOAD - Starting file upload process', 'background: #3a9; color: white; font-weight: bold;');
             console.log('File to upload:', file);
             console.log('Conversation ID:', conversationId);
             console.log('Message ID:', messageId);
-            
+
             // Validate that we have a conversation ID if required
             if (!conversationId) {
                 console.warn('No conversation ID provided for file upload');
                 showFileNotification(`File upload requires a conversation ID`, 'error');
                 throw new Error('Conversation ID is required');
             }
-            
+
             // Show uploading notification
             const notification = showFileNotification(`Uploading ${file.name}...`, 'uploading');
-            
+
             const formData = new FormData();
             formData.append('file', file);
             formData.append('conversation_id', conversationId);
             if (messageId) {
                 formData.append('message_id', messageId);
             }
-            
+
             // Get CSRF token
             const csrfToken = getCsrfToken();
             console.log('CSRF Token obtained:', csrfToken ? 'Token exists' : 'No token found');
-            
+
             // Log request details
             console.log('%c API REQUEST - About to send file upload request', 'background: #f50; color: white; font-weight: bold;');
             console.log('Endpoint:', '/api/files/upload/');
@@ -2994,7 +3019,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 conversation_id: conversationId,
                 message_id: messageId || 'Not provided'
             });
-            
+
             // Add a timestamp to force cache busting
             const timestamp = new Date().getTime();
             const apiUrl = `/api/files/upload/?_=${timestamp}`;
@@ -3017,32 +3042,25 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log('Response status:', response.status);
             console.log('Response OK:', response.ok);
             
+            // Read the body ONCE as text; then try to parse as JSON. Avoids
+            // the "body stream already read" error when an error response
+            // isn't valid JSON and the fallback tries to .text() after .json().
+            const rawBody = await response.text();
+            let parsed = null;
+            try { parsed = rawBody ? JSON.parse(rawBody) : null; } catch { /* leave null */ }
+
             if (!response.ok) {
-                console.error('Upload failed with status:', response.status);
-                let errorData;
-                try {
-                    errorData = await response.json();
-                    console.error('Error details:', errorData);
-                } catch (e) {
-                    const textError = await response.text();
-                    console.error('Error response (text):', textError);
-                    errorData = { error: 'Failed to upload file' };
-                }
-                throw new Error(errorData.error || `Failed to upload file: ${response.status}`);
+                console.error('Upload failed with status:', response.status, 'body:', rawBody.slice(0, 300));
+                throw new Error(parsed?.error || `Failed to upload file: ${response.status}`);
             }
-            
-            // Parse response data
-            let data;
-            try {
-                data = await response.json();
-                console.log('%c SUCCESS - File uploaded successfully', 'background: #0c0; color: white; font-weight: bold;');
-                console.log('Server response:', data);
-            } catch (e) {
-                console.error('Failed to parse JSON response:', e);
-                const textResponse = await response.text();
-                console.log('Raw response text:', textResponse);
+
+            if (!parsed) {
+                console.error('Failed to parse JSON response. Raw body:', rawBody.slice(0, 300));
                 throw new Error('Invalid response format from server');
             }
+            const data = parsed;
+            console.log('%c SUCCESS - File uploaded successfully', 'background: #0c0; color: white; font-weight: bold;');
+            console.log('Server response:', data);
             
             // Check for file_id in response
             if (!data.id) {
