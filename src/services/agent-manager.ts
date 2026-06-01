@@ -330,7 +330,160 @@ export async function ensureWorkspace(
     console.warn(`${tag} injectDataFiles failed:`, (err as Error).message);
   }
 
+  // Bootstrap the persistent Python kernel server if not already running.
+  // Idempotent — fast no-op on a warm workspace where the process is already
+  // alive, ~30-60s cold (pip install). Subsequent runPython calls hit the
+  // server's persistent namespace so df survives across turns.
+  try {
+    const t0 = Date.now();
+    await ensurePythonKernel(workspaceId);
+    console.log(`${tag} ensurePythonKernel ok in ${Date.now() - t0}ms`);
+  } catch (err) {
+    console.warn(`${tag} ensurePythonKernel failed:`, (err as Error).message);
+  }
+
   return { workspaceId };
+}
+
+// ── Persistent Python kernel inside the sandbox ──────────────────────
+// A tiny Flask server holding a single Python interpreter namespace. The
+// sandbox CLI doesn't run on every turn; instead the host POSTs code to
+// http://127.0.0.1:8765/exec via SSH+curl. df, imports, plot figures all
+// survive between turns because the process is long-lived.
+//
+// The Mags VM idle-reaper checks for "user processes other than system
+// daemons" — our Flask server counts, so the VM stays awake as long as it
+// runs. If the VM does get parked (no SSH in 10min), the kernel dies; the
+// next ensurePythonKernel call restarts it (data in /root/data persists
+// via S3 sync; data in the kernel's RAM does not — that's expected).
+
+const KERNEL_SERVER_SCRIPT = `\
+import io, sys, traceback, contextlib, json
+from flask import Flask, request, jsonify
+
+app = Flask(__name__)
+NS = {"__name__": "__main__"}
+
+@app.route("/health")
+def health():
+    return "ok"
+
+@app.route("/exec", methods=["POST"])
+def execute():
+    code = request.get_data(as_text=True)
+    stdout_buf = io.StringIO()
+    stderr_buf = io.StringIO()
+    err_str = None
+    try:
+        with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
+            try:
+                # Try as expression first so single-expr cells echo their value
+                result = eval(compile(code, "<cell>", "eval"), NS)
+                if result is not None:
+                    print(repr(result))
+            except SyntaxError:
+                exec(compile(code, "<cell>", "exec"), NS)
+    except BaseException:
+        err_str = traceback.format_exc()
+    return jsonify({
+        "stdout": stdout_buf.getvalue(),
+        "stderr": stderr_buf.getvalue() + (err_str or ""),
+        "ok": err_str is None,
+    })
+
+if __name__ == "__main__":
+    # 127.0.0.1 only — host reaches it via SSH-tunneled curl, never publicly
+    app.run(host="127.0.0.1", port=8765, debug=False, use_reloader=False)
+`;
+
+const KERNEL_PORT = 8765;
+
+export async function ensurePythonKernel(workspaceId: string): Promise<void> {
+  // Fast path: server already running?
+  const health = await execOnWorkspace(
+    workspaceId,
+    `curl -sf -m 2 http://127.0.0.1:${KERNEL_PORT}/health || echo __NOPE__`,
+    { timeout: 8_000 }
+  );
+  if (health.output.includes("ok") && !health.output.includes("__NOPE__")) {
+    return; // already up
+  }
+
+  // Cold-path bootstrap. Idempotent.
+  const scriptB64 = Buffer.from(KERNEL_SERVER_SCRIPT).toString("base64");
+  const bootstrap = `\
+set -e
+# Write the kernel server (overwrite each time so updates land)
+echo ${scriptB64} | base64 -d > /root/kernel_server.py
+
+# Create venv once
+if [ ! -x /root/venv/bin/python3 ]; then
+  python3 -m venv /root/venv
+fi
+
+# Install required packages (fast no-op if already installed)
+/root/venv/bin/pip install -q --disable-pip-version-check \
+  flask pandas numpy matplotlib plotly seaborn openpyxl scikit-learn
+
+# Kill any stale instance
+pkill -f kernel_server.py 2>/dev/null || true
+sleep 0.2
+
+# Start in background, fully detached so SSH session closing doesn't kill it
+nohup /root/venv/bin/python3 /root/kernel_server.py > /tmp/kernel.log 2>&1 &
+disown
+
+echo BOOTSTRAP_DONE
+`;
+  const bootstrapB64 = Buffer.from(bootstrap).toString("base64");
+  await execOnWorkspace(
+    workspaceId,
+    `echo ${bootstrapB64} | base64 -d | bash`,
+    { timeout: 180_000 } // pip install can take ~60s on cold workspace
+  );
+
+  // Wait for /health to come up (up to ~10s)
+  for (let i = 0; i < 20; i++) {
+    const h = await execOnWorkspace(
+      workspaceId,
+      `curl -sf -m 2 http://127.0.0.1:${KERNEL_PORT}/health || echo __NOPE__`,
+      { timeout: 5_000 }
+    );
+    if (h.output.includes("ok") && !h.output.includes("__NOPE__")) return;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new Error("Python kernel server failed to start within 10s");
+}
+
+/**
+ * POST a chunk of Python code to the in-sandbox kernel server.
+ * Returns { ok, stdout, stderr } — code runs in the persistent namespace
+ * so variables / imports / DataFrames survive between calls.
+ */
+export async function runPythonInKernel(
+  workspaceId: string,
+  code: string,
+  opts: { timeout?: number } = {}
+): Promise<{ ok: boolean; stdout: string; stderr: string }> {
+  const codeB64 = Buffer.from(code).toString("base64");
+  // Pipe the base64'd code through curl as a raw POST body.
+  // --data-binary @- reads stdin as the body verbatim.
+  const cmd = `echo ${codeB64} | base64 -d | curl -s -X POST --data-binary @- -H 'Content-Type: text/plain' http://127.0.0.1:${KERNEL_PORT}/exec`;
+  const result = await execOnWorkspace(workspaceId, cmd, { timeout: opts.timeout ?? 300_000 });
+  try {
+    const parsed = JSON.parse(result.output);
+    return {
+      ok: !!parsed.ok,
+      stdout: parsed.stdout ?? "",
+      stderr: parsed.stderr ?? "",
+    };
+  } catch {
+    return {
+      ok: false,
+      stdout: "",
+      stderr: `Kernel server returned non-JSON response: ${result.output.slice(0, 500)}\n(SSH stderr: ${result.stderr.slice(0, 200)})`,
+    };
+  }
 }
 
 /**

@@ -722,6 +722,27 @@
   flex-wrap: wrap;
 }
 
+/* Inline chart slot — replaces a [CHART: filename] marker in the
+   assistant's narrative with the actual artifact, in-place. */
+.agent-chart-slot {
+  margin: 0.75rem 0;
+}
+
+.agent-chart-placeholder {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1rem;
+  background: var(--bg-secondary, #0f1419);
+  border: 1px dashed var(--border-color, #334155);
+  border-radius: 10px;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+.agent-chart-placeholder i {
+  color: var(--primary-color);
+}
+
 /* Inline iframe for Plotly / interactive HTML charts — embeds the chart
    directly in the message instead of behind a modal button. */
 .agent-artifact-html-inline {

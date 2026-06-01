@@ -12,7 +12,7 @@ import { z } from "zod";
 import { db } from "../../config/db.ts";
 import { agents, agentSchedules } from "../../db/schema/agents.ts";
 import { eq } from "drizzle-orm";
-import { ensureWorkspace } from "../../services/agent-manager.ts";
+import { ensureWorkspace, runPythonInKernel } from "../../services/agent-manager.ts";
 import { execOnWorkspace } from "../../services/mags.ts";
 import { syncDataRoom } from "../../services/agent-sandbox.ts";
 import { listConnectors, connectToolkit } from "../../services/composio-manager.ts";
@@ -406,8 +406,75 @@ export function createAgentTools(params: {
     },
   });
 
+  const runPython = tool({
+    description:
+      "Execute Python code in a persistent Python interpreter inside the agent's sandbox. " +
+      "Unlike runInSandbox (fresh shell every call), this hits a long-lived Python process — " +
+      "variables, imports, loaded DataFrames, trained models all survive BETWEEN calls. " +
+      "Use this for any data analysis: load the file once, then ask follow-up questions / " +
+      "generate more charts without re-loading.\n\n" +
+      "Pre-installed in the kernel's venv: pandas, numpy, matplotlib, plotly, seaborn, " +
+      "scikit-learn, openpyxl. To add more: `import subprocess; subprocess.run(['/root/venv/bin/pip', 'install', '-q', 'PKG'])` then `import PKG`.\n\n" +
+      "Charts: write to /root/data/<name>.html (Plotly interactive, DEFAULT) or .png " +
+      "(matplotlib static fallback). They auto-sync to the Data Room AND render inline in " +
+      "chat. Mention each chart in your response as [CHART: <name>.html] and the renderer " +
+      "will embed it at that exact spot in your narrative (Julius-style interleaving).\n\n" +
+      "Returns {ok, stdout, stderr}. Single expressions auto-print their repr " +
+      "(`df.head()` shows the table). Use `print(...)` for side-effects in multi-statement cells.",
+    inputSchema: zodSchema(
+      z.object({
+        code: z
+          .string()
+          .describe(
+            "Python code to execute in the persistent kernel. Can be a single expression " +
+              "(value gets repr'd to stdout) or multi-statement. Send the whole cell, not " +
+              "just a one-liner."
+          ),
+      })
+    ),
+    execute: async ({ code }) => {
+      const tag = `[runPython ${agentId.slice(0, 8)}]`;
+      const preview = code.length > 200 ? code.slice(0, 200) + "..." : code;
+      console.log(`${tag} code (${code.length}ch): ${preview}`);
+      try {
+        const t0 = Date.now();
+        const { workspaceId } = await ensureWorkspace(agentId, userId);
+        console.log(`${tag} workspace=${workspaceId} ensured in ${Date.now() - t0}ms`);
+
+        const tExec = Date.now();
+        const result = await runPythonInKernel(workspaceId, code);
+        console.log(
+          `${tag} exec done in ${Date.now() - tExec}ms — ok=${result.ok} ` +
+          `stdoutLen=${result.stdout.length} stderrLen=${result.stderr.length}`
+        );
+
+        const [agentRow] = await db.select({ id: agents.id }).from(agents).where(eq(agents.agentId, agentId)).limit(1);
+        if (agentRow) {
+          syncDataRoom(workspaceId, agentRow.id)
+            .then(() => console.log(`${tag} syncDataRoom completed`))
+            .catch((err) => console.error(`${tag} syncDataRoom failed:`, (err as Error).message));
+        }
+
+        const CAP = 8_000;
+        const stdout = result.stdout.slice(0, CAP);
+        const stderr = result.stderr.slice(0, CAP);
+        const truncated = result.stdout.length > CAP || result.stderr.length > CAP;
+        return [
+          `ok: ${result.ok}`,
+          stdout ? `stdout:\n${stdout}` : null,
+          stderr ? `stderr:\n${stderr}` : null,
+          truncated ? "(output truncated to 8KB)" : null,
+        ].filter(Boolean).join("\n\n");
+      } catch (err) {
+        console.error(`${tag} threw:`, (err as Error).message);
+        return `Python kernel call failed: ${(err as Error).message}`;
+      }
+    },
+  });
+
   return {
     runInSandbox,
+    runPython,
     updateMemory,
     proposeAgentConfig,
     lookupComposioToolkits,

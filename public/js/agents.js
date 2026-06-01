@@ -46,10 +46,155 @@
       }
     } else if (data.type === "agent_data_file_created") {
       if (!agentId || data.agent_id === agentId) {
-        renderDataFileInline(data);
+        // Register so future [CHART: name] markers can find this artifact
+        artifactsByName.set(data.file_name, data);
+        // Fill any placeholder slots the LLM already wrote with this name
+        fillPlaceholderSlots(data);
+        // Also keep the "cluster under the bubble" rendering for files the
+        // LLM forgot to reference inline — but only if no slot exists for it
+        const hasSlot = document.querySelector('.agent-chart-slot[data-chart-filename="' + data.file_name.replace(/"/g, '\\"') + '"]');
+        if (!hasSlot) renderDataFileInline(data);
       }
     }
   };
+
+  // ── Julius-style chart interleaving ────────────────────────────────
+  // The LLM weaves [CHART: filename.html] markers into its narrative.
+  // We swap each marker with an inline iframe for that artifact, right
+  // where the LLM placed it. Tracked here so the swap survives chat.js's
+  // streaming innerHTML re-renders (which wipe our DOM changes on every
+  // chunk — we just re-apply via MutationObserver).
+  const artifactsByName = new Map();
+
+  function buildArtifactInnerHTML(d) {
+    const ext = (d.file_type || "").toLowerCase();
+    const isImage = ["png","jpg","jpeg","gif","webp","svg"].includes(ext);
+    const isHtml = ["html","htm"].includes(ext);
+    if (isImage) {
+      return (
+        '<div class="agent-artifact-image">' +
+          '<img src="' + d.download_url + '" alt="' + escapeHtml(d.file_name) + '" />' +
+          '<div class="agent-artifact-caption">' +
+            '<i class="fas fa-image"></i> ' + escapeHtml(d.file_name) +
+            ' <span class="muted">' + formatFileSize(d.file_size) + '</span>' +
+            ' · <a href="' + d.download_url + '?disposition=attachment" download>download</a>' +
+          '</div>' +
+        '</div>'
+      );
+    }
+    if (isHtml) {
+      return (
+        '<div class="agent-artifact-html-inline">' +
+          '<div class="agent-artifact-caption">' +
+            '<i class="fas fa-chart-line"></i> ' + escapeHtml(d.file_name) +
+            ' <span class="muted">' + formatFileSize(d.file_size) + '</span>' +
+            ' · <a href="' + d.download_url + '" target="_blank" rel="noopener">open full-screen</a>' +
+            ' · <a href="' + d.download_url + '?disposition=attachment" download>download</a>' +
+          '</div>' +
+          '<iframe class="agent-artifact-html-iframe" src="' + d.download_url + '" sandbox="allow-scripts allow-same-origin" loading="lazy"></iframe>' +
+        '</div>'
+      );
+    }
+    return (
+      '<div class="agent-artifact-file">' +
+        '<i class="fas fa-file"></i> ' +
+        '<strong>' + escapeHtml(d.file_name) + '</strong> ' +
+        '<span class="muted">' + formatFileSize(d.file_size) + ' · ' + (d.file_type || "file") + '</span> · ' +
+        '<a href="' + d.download_url + '?disposition=attachment" download>download</a>' +
+      '</div>'
+    );
+  }
+
+  // Replace [CHART: filename] markers in a text node with inline artifact
+  // elements. Idempotent — already-replaced markers don't appear as text
+  // nodes anymore so they won't be re-processed.
+  function substituteMarkersInTextNode(textNode) {
+    const text = textNode.nodeValue || "";
+    const re = /\[CHART:\s*([^\]\s][^\]]*?)\s*\]/g;
+    if (!re.test(text)) return;
+    re.lastIndex = 0;
+    const frag = document.createDocumentFragment();
+    let lastIdx = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > lastIdx) frag.appendChild(document.createTextNode(text.slice(lastIdx, m.index)));
+      const fileName = m[1].trim();
+      const slot = document.createElement("div");
+      slot.className = "agent-chart-slot";
+      slot.setAttribute("data-chart-filename", fileName);
+      const known = artifactsByName.get(fileName);
+      slot.innerHTML = known
+        ? buildArtifactInnerHTML(known)
+        : '<div class="agent-chart-placeholder"><i class="fas fa-spinner fa-spin"></i> Rendering ' + escapeHtml(fileName) + '…</div>';
+      frag.appendChild(slot);
+      lastIdx = re.lastIndex;
+    }
+    if (lastIdx < text.length) frag.appendChild(document.createTextNode(text.slice(lastIdx)));
+    textNode.parentNode.replaceChild(frag, textNode);
+  }
+
+  function scanAndReplaceMarkers(root) {
+    if (!root || !root.querySelectorAll) return;
+    const contents = root.matches && root.matches(".message-content")
+      ? [root]
+      : root.querySelectorAll(".message.assistant .message-content");
+    contents.forEach(function (content) {
+      const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT, {
+        acceptNode: function (n) {
+          // Skip inside <code>/<pre> — markers there are intentional code
+          let p = n.parentNode;
+          while (p && p !== content) {
+            const tag = (p.tagName || "").toUpperCase();
+            if (tag === "CODE" || tag === "PRE") return NodeFilter.FILTER_REJECT;
+            p = p.parentNode;
+          }
+          return /\[CHART:/.test(n.nodeValue || "") ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+        },
+      });
+      const targets = [];
+      let n;
+      while ((n = walker.nextNode())) targets.push(n);
+      targets.forEach(substituteMarkersInTextNode);
+    });
+  }
+
+  // Fill any already-rendered placeholder slots when a new artifact arrives.
+  function fillPlaceholderSlots(d) {
+    document.querySelectorAll('.agent-chart-slot[data-chart-filename="' + d.file_name.replace(/"/g, '\\"') + '"]').forEach(function (slot) {
+      slot.innerHTML = buildArtifactInnerHTML(d);
+    });
+  }
+
+  // Single global observer for marker substitution — runs after every
+  // streaming innerHTML re-render so swapped markers re-appear instantly.
+  function startMarkerObserver() {
+    const messagesEl = document.getElementById("chat-messages");
+    if (!messagesEl) return;
+    if (messagesEl._markerObserver) return;
+    const obs = new MutationObserver(function (mutations) {
+      for (let i = 0; i < mutations.length; i++) {
+        const m = mutations[i];
+        if (m.type === "childList") {
+          m.addedNodes.forEach(function (n) {
+            if (n.nodeType === 1) scanAndReplaceMarkers(n);
+          });
+        } else if (m.type === "characterData") {
+          if (m.target.parentNode) substituteMarkersInTextNode(m.target);
+        }
+      }
+    });
+    obs.observe(messagesEl, { childList: true, subtree: true, characterData: true });
+    messagesEl._markerObserver = obs;
+    // Initial scan for already-rendered content (history load)
+    scanAndReplaceMarkers(messagesEl);
+  }
+
+  // Run once DOM is interactive
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", startMarkerObserver);
+  } else {
+    startMarkerObserver();
+  }
 
   // Queue for artifacts whose WS event arrived before the assistant bubble
   // existed (sync fires the moment runInSandbox returns, but the LLM might
@@ -196,8 +341,25 @@
           var files = (data.files || []);
           if (!files.length) return;
           console.log("[agent-artifact] hydrating", files.length, "files from history");
-          // Render in order so they cluster under the last assistant message.
+          // Populate the registry FIRST so marker scan can find them.
+          files.forEach(function (f) {
+            artifactsByName.set(f.file_name, {
+              agent_id: agentId,
+              file_id: f.id,
+              file_name: f.file_name,
+              file_type: f.file_type,
+              file_size: f.file_size,
+              download_url: "/api/agents/" + agentId + "/data/" + f.id,
+            });
+          });
+          // Re-scan rendered content — markers in old assistant messages
+          // (from history) will now find their artifacts and inline-render.
+          scanAndReplaceMarkers(messagesEl);
+          // For any file that wasn't referenced by an inline marker, fall
+          // back to the "append under last bubble" cluster behaviour.
           files.reverse().forEach(function (f) {
+            const hasSlot = document.querySelector('.agent-chart-slot[data-chart-filename="' + f.file_name.replace(/"/g, '\\"') + '"]');
+            if (hasSlot) return;
             renderDataFileInline({
               agent_id: agentId,
               file_id: f.id,
