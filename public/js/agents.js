@@ -51,18 +51,26 @@
     }
   };
 
-  // Renders a new Data Room file as an inline preview attached to the most
-  // recent assistant message bubble. Images render as <img>; HTML files get
-  // an "Open interactive view" button that opens the file in an iframe modal;
-  // everything else gets a download card.
+  // Renders a new Data Room file as an inline preview attached AFTER the
+  // most recent assistant message bubble. Important: insert as a SIBLING of
+  // the bubble, not inside .message-content — chat.js's streaming render
+  // does contentDiv.innerHTML = marked.parse(...) on every chunk, which
+  // would wipe any artifact appended INSIDE the content div. Siblings
+  // survive the re-render.
   function renderDataFileInline(data) {
+    console.log("[agent-artifact] render", data.file_name, "type=", data.file_type, "agent=", data.agent_id);
     const messagesEl = document.getElementById("chat-messages");
-    if (!messagesEl) return;
+    if (!messagesEl) {
+      console.warn("[agent-artifact] no #chat-messages element");
+      return;
+    }
 
-    // Attach to the latest assistant bubble (the one the LLM just sent)
-    const assistantBubbles = messagesEl.querySelectorAll(".message.assistant .message-content");
+    // Find the latest assistant bubble (the one the LLM just sent / is sending)
+    const assistantBubbles = messagesEl.querySelectorAll(".message.assistant");
     const lastBubble = assistantBubbles[assistantBubbles.length - 1];
-    const container = lastBubble || messagesEl;
+    if (!lastBubble) {
+      console.warn("[agent-artifact] no .message.assistant bubble to attach under");
+    }
 
     const ext = (data.file_type || "").toLowerCase();
     const isImage = ["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext);
@@ -103,7 +111,13 @@
         '</div>';
     }
 
-    container.appendChild(wrap);
+    // Insert AFTER the bubble (as a sibling) so streaming innerHTML updates
+    // on the bubble's .message-content can't wipe our artifact.
+    if (lastBubble && lastBubble.parentNode) {
+      lastBubble.parentNode.insertBefore(wrap, lastBubble.nextSibling);
+    } else {
+      messagesEl.appendChild(wrap);
+    }
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 

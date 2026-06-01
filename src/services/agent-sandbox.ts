@@ -254,21 +254,18 @@ export async function syncDataRoom(
       return;
     }
 
-    const existingFiles = await db
-      .select({ fileName: agentDataFiles.fileName })
+    const existingRows = await db
+      .select()
       .from(agentDataFiles)
       .where(eq(agentDataFiles.agentId, agentId));
 
-    const existingNames = new Set(existingFiles.map((f) => f.fileName));
+    const existingByName = new Map(existingRows.map((r) => [r.fileName, r] as const));
     const sandboxFiles = result.output.trim().split("\n").filter(Boolean);
-    const newFiles = sandboxFiles.filter((n) => !existingNames.has(n));
     console.log(
-      `${tag} sandbox=[${sandboxFiles.join(", ")}] existing=${existingNames.size} new=${newFiles.length}`
+      `${tag} sandbox=[${sandboxFiles.join(", ")}] existing=${existingByName.size}`
     );
 
     for (const fileName of sandboxFiles) {
-      if (existingNames.has(fileName)) continue;
-
       try {
         // Use `base64 -w 0` (GNU) to suppress line wrapping inline — no need
         // to post-process with `tr -d '\n'` which made the prior version
@@ -335,6 +332,20 @@ export async function syncDataRoom(
           localPath = `${localDir}/${fileName}`;
           await fs.writeFile(localPath, content);
           console.log(`${tag} ↓ local ${fileName} (${size}B) path=${localPath}`);
+        }
+
+        // Replace-on-same-name: if a row with this filename exists,
+        // drop it (S3 key was the same path so the bytes were overwritten
+        // by uploadBinary above) and insert fresh. This makes re-runs of
+        // the same chart command re-trigger the WS broadcast so the new
+        // version renders inline in chat instead of being silently
+        // skipped as 'existing'.
+        const prior = existingByName.get(fileName);
+        if (prior) {
+          await db.delete(agentDataFiles).where(eq(agentDataFiles.id, prior.id));
+          if (prior.filePath && prior.filePath !== localPath) {
+            await fs.unlink(prior.filePath).catch(() => { /* missing ok */ });
+          }
         }
 
         const fileType = fileName.split(".").pop() ?? "unknown";
