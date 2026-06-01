@@ -61,19 +61,40 @@ export function createAgentTools(params: {
       })
     ),
     execute: async ({ command, timeout_seconds }) => {
+      const tag = `[runInSandbox ${agentId.slice(0, 8)}]`;
+      const cmdPreview = command.length > 200 ? command.slice(0, 200) + "..." : command;
+      console.log(`${tag} command (${command.length}ch): ${cmdPreview}`);
+
       try {
+        const t0 = Date.now();
         const { workspaceId } = await ensureWorkspace(agentId, userId);
+        const ensureMs = Date.now() - t0;
+        console.log(`${tag} workspace=${workspaceId} ensured in ${ensureMs}ms`);
 
         const timeoutMs = (timeout_seconds ?? 300) * 1000;
+        const tExec = Date.now();
         const result = await execOnWorkspace(workspaceId, command, { timeout: timeoutMs });
+        const execMs = Date.now() - tExec;
+
+        const stdoutLen = (result.output || "").length;
+        const stderrLen = (result.stderr || "").length;
+        console.log(
+          `${tag} exec done in ${execMs}ms — exitCode=${result.exitCode} stdoutLen=${stdoutLen} stderrLen=${stderrLen}`
+        );
+        if (stdoutLen > 0) {
+          console.log(`${tag} stdout: ${(result.output || "").slice(0, 500)}${stdoutLen > 500 ? "..." : ""}`);
+        }
+        if (stderrLen > 0) {
+          console.log(`${tag} stderr: ${(result.stderr || "").slice(0, 500)}${stderrLen > 500 ? "..." : ""}`);
+        }
 
         // After the command finishes, sweep /root/data/ for new files and
         // sync them to S3 / Data Room. No-op if no files were written.
         const [agentRow] = await db.select({ id: agents.id }).from(agents).where(eq(agents.agentId, agentId)).limit(1);
         if (agentRow) {
-          syncDataRoom(workspaceId, agentRow.id).catch((err) => {
-            console.error(`[runInSandbox] syncDataRoom failed:`, (err as Error).message);
-          });
+          syncDataRoom(workspaceId, agentRow.id)
+            .then(() => console.log(`${tag} syncDataRoom completed`))
+            .catch((err) => console.error(`${tag} syncDataRoom failed:`, (err as Error).message));
         }
 
         // Cap output size so we don't blow the LLM's context with a runaway log.
@@ -92,6 +113,7 @@ export function createAgentTools(params: {
 
         return sections.join("\n\n");
       } catch (err) {
+        console.error(`${tag} threw:`, (err as Error).message);
         return `Sandbox exec failed: ${(err as Error).message}`;
       }
     },

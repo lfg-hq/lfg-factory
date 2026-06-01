@@ -209,6 +209,7 @@ export async function syncDataRoom(
   workspaceId: string,
   agentId: string
 ): Promise<void> {
+  const tag = `[syncDataRoom ${agentId.slice(0, 8)}]`;
   try {
     const result = await execOnWorkspace(
       workspaceId,
@@ -216,7 +217,10 @@ export async function syncDataRoom(
       { timeout: 15_000 }
     );
 
-    if (result.output.includes("__EMPTY__")) return;
+    if (result.output.includes("__EMPTY__")) {
+      console.log(`${tag} /root/data empty — nothing to sync`);
+      return;
+    }
 
     const existingFiles = await db
       .select({ fileName: agentDataFiles.fileName })
@@ -225,6 +229,10 @@ export async function syncDataRoom(
 
     const existingNames = new Set(existingFiles.map((f) => f.fileName));
     const sandboxFiles = result.output.trim().split("\n").filter(Boolean);
+    const newFiles = sandboxFiles.filter((n) => !existingNames.has(n));
+    console.log(
+      `${tag} sandbox=[${sandboxFiles.join(", ")}] existing=${existingNames.size} new=${newFiles.length}`
+    );
 
     for (const fileName of sandboxFiles) {
       if (existingNames.has(fileName)) continue;
@@ -250,9 +258,11 @@ export async function syncDataRoom(
         if (isS3Enabled) {
           s3Key = buildAgentDataRoomKey(agentId, fileName);
           try {
+            const t0 = Date.now();
             await uploadBinary(s3Key, content, guessContentType(fileName));
+            console.log(`${tag} ↑ S3 ${fileName} (${size}B) key=${s3Key} in ${Date.now() - t0}ms`);
           } catch (err) {
-            console.error(`[agent-sandbox] S3 upload failed for ${fileName}, falling back to local:`, (err as Error).message);
+            console.error(`${tag} S3 upload failed for ${fileName}, falling back to local:`, (err as Error).message);
             s3Key = null;
           }
         }
@@ -263,6 +273,7 @@ export async function syncDataRoom(
           await fs.mkdir(localDir, { recursive: true });
           localPath = `${localDir}/${fileName}`;
           await fs.writeFile(localPath, content);
+          console.log(`${tag} ↓ local ${fileName} (${size}B) path=${localPath}`);
         }
 
         await db.insert(agentDataFiles).values({
@@ -274,11 +285,11 @@ export async function syncDataRoom(
           fileSize: size,
         });
       } catch (err) {
-        console.error(`[agent-sandbox] Failed to sync file ${fileName}:`, (err as Error).message);
+        console.error(`${tag} failed to sync file ${fileName}:`, (err as Error).message);
       }
     }
   } catch (err) {
-    console.error("[agent-sandbox] syncDataRoom error:", (err as Error).message);
+    console.error(`${tag} syncDataRoom error:`, (err as Error).message);
   }
 }
 

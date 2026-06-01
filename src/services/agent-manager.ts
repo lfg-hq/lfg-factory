@@ -260,6 +260,7 @@ export async function ensureWorkspace(
   agentId: string,
   userId: string
 ): Promise<{ workspaceId: string }> {
+  const tag = `[ensureWorkspace ${agentId.slice(0, 8)}]`;
   const [agent] = await db
     .select()
     .from(agents)
@@ -278,17 +279,24 @@ export async function ensureWorkspace(
     const existing = await findJob(sandboxRecord.magsWorkspaceId);
     if (existing && (existing.status === "running" || existing.status === "sleeping")) {
       workspaceId = sandboxRecord.magsWorkspaceId;
+      console.log(`${tag} reusing workspace=${workspaceId} (mags status=${existing.status})`);
     } else {
+      console.log(`${tag} prior workspace gone (status=${existing?.status ?? "none"}), creating new "${workspaceName}"`);
+      const t0 = Date.now();
       const ws = await newWorkspace(workspaceName);
       workspaceId = ws.workspaceId;
+      console.log(`${tag} created workspace=${workspaceId} in ${Date.now() - t0}ms`);
       await db
         .update(sandboxes)
         .set({ magsWorkspaceId: workspaceId, magsJobId: ws.jobId, status: "ready", updatedAt: new Date() })
         .where(eq(sandboxes.id, sandboxRecord.id));
     }
   } else {
+    console.log(`${tag} no sandbox record, creating fresh workspace "${workspaceName}"`);
+    const t0 = Date.now();
     const ws = await newWorkspace(workspaceName);
     workspaceId = ws.workspaceId;
+    console.log(`${tag} created workspace=${workspaceId} in ${Date.now() - t0}ms`);
     const sbRows = await db
       .insert(sandboxes)
       .values({
@@ -308,14 +316,18 @@ export async function ensureWorkspace(
   // Always inject secrets + restore data files. Cheap on a warm workspace,
   // required on a cold one. injectSecrets is idempotent.
   try {
+    const t0 = Date.now();
     await injectSecrets(workspaceId, agent.id);
+    console.log(`${tag} injectSecrets ok in ${Date.now() - t0}ms`);
   } catch (err) {
-    console.warn(`[agent-manager] injectSecrets failed for ${agentId}:`, (err as Error).message);
+    console.warn(`${tag} injectSecrets failed:`, (err as Error).message);
   }
   try {
+    const t0 = Date.now();
     await injectDataFiles(workspaceId, agent.id);
+    console.log(`${tag} injectDataFiles ok in ${Date.now() - t0}ms`);
   } catch (err) {
-    console.warn(`[agent-manager] injectDataFiles failed for ${agentId}:`, (err as Error).message);
+    console.warn(`${tag} injectDataFiles failed:`, (err as Error).message);
   }
 
   return { workspaceId };
