@@ -110,7 +110,13 @@ export const agentDataFiles = sqliteTable(
       .references(() => agents.id, { onDelete: "cascade" }),
     fileName: text("file_name").notNull(),
     fileType: text("file_type"),
-    filePath: text("file_path").notNull(),
+    // filePath = legacy local path (uploads/agents/{id}/file). Nullable so
+    // S3-backed rows can omit it. Reader checks s3Key first, falls back to
+    // filePath for files written before the S3 migration.
+    filePath: text("file_path"),
+    // s3Key = canonical storage location when FILE_STORAGE_TYPE=s3.
+    // Pattern: agents/{agentRowId}/data/{fileName}.
+    s3Key: text("s3_key"),
     fileSize: integer("file_size"),
     description: text("description"),
     metadata: text("metadata", { mode: "json" })

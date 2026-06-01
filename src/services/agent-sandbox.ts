@@ -13,6 +13,13 @@ import { agentDataFiles } from "../db/schema/agents.ts";
 import { execOnWorkspace } from "./mags.ts";
 import { getComposioMcpConfig } from "./composio-manager.ts";
 import { loadDecryptedSecretsByRowId, type DecryptedSecret } from "./agent-secrets.ts";
+import {
+  isS3Enabled,
+  uploadBinary,
+  downloadBinary,
+  buildAgentDataRoomKey,
+  guessContentType,
+} from "./s3.ts";
 
 // ── Utility: run a shell script on the workspace via base64 ──────────
 
@@ -136,7 +143,9 @@ echo "memory_injected"
 }
 
 /**
- * Upload data room files from local storage to /root/data/ in the sandbox.
+ * Upload data room files from durable storage to /root/data/ in the sandbox.
+ * Reads from S3 (s3Key) when present, falls back to legacy local filePath
+ * for rows created before the S3 migration.
  */
 export async function injectDataFiles(
   workspaceId: string,
@@ -156,16 +165,35 @@ export async function injectDataFiles(
 
   for (const file of files) {
     try {
-      const exists = await fs.access(file.filePath).then(() => true).catch(() => false);
-      if (exists) {
-        const content = await fs.readFile(file.filePath);
-        const b64 = Buffer.from(content).toString("base64");
-        await execOnWorkspace(
-          workspaceId,
-          `echo '${b64}' | base64 -d > /root/data/${file.fileName}`,
-          { timeout: 30_000 }
-        );
+      let content: Buffer | null = null;
+
+      // Prefer S3 if the row has an s3Key
+      if (file.s3Key && isS3Enabled) {
+        try {
+          const { body } = await downloadBinary(file.s3Key);
+          content = body;
+        } catch (err) {
+          console.error(`[agent-sandbox] S3 download failed for ${file.fileName}:`, (err as Error).message);
+        }
       }
+
+      // Legacy fallback: local filesystem
+      if (!content && file.filePath) {
+        const exists = await fs.access(file.filePath).then(() => true).catch(() => false);
+        if (exists) content = await fs.readFile(file.filePath);
+      }
+
+      if (!content) {
+        console.warn(`[agent-sandbox] Skipping ${file.fileName} — no readable source`);
+        continue;
+      }
+
+      const b64 = content.toString("base64");
+      await execOnWorkspace(
+        workspaceId,
+        `echo '${b64}' | base64 -d > /root/data/${file.fileName}`,
+        { timeout: 30_000 }
+      );
     } catch (err) {
       console.error(`[agent-sandbox] Failed to inject file ${file.fileName}:`, (err as Error).message);
     }
@@ -173,7 +201,9 @@ export async function injectDataFiles(
 }
 
 /**
- * Sync new files from sandbox /root/data/ back to the DB.
+ * Sync new files from sandbox /root/data/ back to durable storage.
+ * Writes to S3 when FILE_STORAGE_TYPE=s3, else falls back to local
+ * uploads/agents/{id}/ for backwards compat.
  */
 export async function syncDataRoom(
   workspaceId: string,
@@ -199,32 +229,49 @@ export async function syncDataRoom(
     for (const fileName of sandboxFiles) {
       if (existingNames.has(fileName)) continue;
 
-      // Download new file from sandbox
       try {
         const catResult = await execOnWorkspace(
           workspaceId,
           `cat /root/data/${fileName} | base64 | tr -d '\\n'`,
           { timeout: 30_000 }
         );
-
-        const localDir = `uploads/agents/${agentId}`;
-        await fs.mkdir(localDir, { recursive: true });
-        const localPath = `${localDir}/${fileName}`;
         const content = Buffer.from(catResult.output.trim(), "base64");
-        await fs.writeFile(localPath, content);
 
         const sizeResult = await execOnWorkspace(
           workspaceId,
           `wc -c < /root/data/${fileName}`,
           { timeout: 10_000 }
         );
+        const size = parseInt(sizeResult.output.trim(), 10) || content.length;
+
+        let s3Key: string | null = null;
+        let localPath: string | null = null;
+
+        if (isS3Enabled) {
+          s3Key = buildAgentDataRoomKey(agentId, fileName);
+          try {
+            await uploadBinary(s3Key, content, guessContentType(fileName));
+          } catch (err) {
+            console.error(`[agent-sandbox] S3 upload failed for ${fileName}, falling back to local:`, (err as Error).message);
+            s3Key = null;
+          }
+        }
+
+        if (!s3Key) {
+          // Legacy / fallback: local FS
+          const localDir = `uploads/agents/${agentId}`;
+          await fs.mkdir(localDir, { recursive: true });
+          localPath = `${localDir}/${fileName}`;
+          await fs.writeFile(localPath, content);
+        }
 
         await db.insert(agentDataFiles).values({
           agentId,
           fileName,
           fileType: fileName.split(".").pop() ?? "unknown",
           filePath: localPath,
-          fileSize: parseInt(sizeResult.output.trim(), 10) || content.length,
+          s3Key,
+          fileSize: size,
         });
       } catch (err) {
         console.error(`[agent-sandbox] Failed to sync file ${fileName}:`, (err as Error).message);

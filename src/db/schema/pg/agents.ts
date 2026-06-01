@@ -113,7 +113,11 @@ export const agentDataFiles = pgTable(
       .references(() => agents.id, { onDelete: "cascade" }),
     fileName: text("file_name").notNull(),
     fileType: text("file_type"),
-    filePath: text("file_path").notNull(),
+    // filePath = legacy local path. Nullable so S3 rows can omit it.
+    filePath: text("file_path"),
+    // s3Key = canonical storage when FILE_STORAGE_TYPE=s3. Pattern:
+    // agents/{agentRowId}/data/{fileName}.
+    s3Key: text("s3_key"),
     fileSize: integer("file_size"),
     description: text("description"),
     metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),

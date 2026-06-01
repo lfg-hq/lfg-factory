@@ -59,6 +59,25 @@ export async function uploadFile(key: string, content: string): Promise<void> {
   );
 }
 
+/**
+ * Binary upload — for non-text Data Room files (xlsx, png, pdf, mp4, ...).
+ * Caller supplies the ContentType so downloads serve with the right mime.
+ */
+export async function uploadBinary(
+  key: string,
+  body: Buffer | Uint8Array,
+  contentType: string
+): Promise<void> {
+  await getClient().send(
+    new PutObjectCommand({
+      Bucket: env.AWS_S3_BUCKET_NAME,
+      Key: key,
+      Body: body,
+      ContentType: contentType,
+    })
+  );
+}
+
 // ── Download ──────────────────────────────────────────────────────────
 
 export async function downloadFile(key: string): Promise<string> {
@@ -75,6 +94,62 @@ export async function downloadFile(key: string): Promise<string> {
     chunks.push(chunk);
   }
   return Buffer.concat(chunks).toString("utf-8");
+}
+
+/**
+ * Binary download — returns the raw bytes + contentType so the route can
+ * stream them back with the right headers.
+ */
+export async function downloadBinary(
+  key: string
+): Promise<{ body: Buffer; contentType: string | null }> {
+  const res = await getClient().send(
+    new GetObjectCommand({
+      Bucket: env.AWS_S3_BUCKET_NAME,
+      Key: key,
+    })
+  );
+  if (!res.Body) return { body: Buffer.alloc(0), contentType: res.ContentType ?? null };
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of res.Body as AsyncIterable<Uint8Array>) {
+    chunks.push(chunk);
+  }
+  return { body: Buffer.concat(chunks), contentType: res.ContentType ?? null };
+}
+
+// ── Data Room key builder ─────────────────────────────────────────────
+// Separate namespace from project_files/ so we don't collide.
+export function buildAgentDataRoomKey(agentRowId: string, fileName: string): string {
+  const safeName = fileName.replace(/[^a-zA-Z0-9._\- ]/g, "_");
+  return `agents/${agentRowId}/data/${safeName}`;
+}
+
+// ── Best-effort MIME guesser for Data Room uploads ────────────────────
+const EXT_TO_MIME: Record<string, string> = {
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  xls: "application/vnd.ms-excel",
+  csv: "text/csv; charset=utf-8",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  doc: "application/msword",
+  pdf: "application/pdf",
+  json: "application/json; charset=utf-8",
+  txt: "text/plain; charset=utf-8",
+  md: "text/markdown; charset=utf-8",
+  html: "text/html; charset=utf-8",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  svg: "image/svg+xml",
+  webp: "image/webp",
+  mp4: "video/mp4",
+  mp3: "audio/mpeg",
+  zip: "application/zip",
+};
+
+export function guessContentType(fileName: string): string {
+  const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
+  return EXT_TO_MIME[ext] ?? "application/octet-stream";
 }
 
 // ── Delete ────────────────────────────────────────────────────────────

@@ -22,6 +22,14 @@ import {
 import { runAgentTask } from "../../services/agent-runner.ts";
 import { addSchedule, removeSchedule, updateSchedule, runScheduleNow } from "../../services/agent-scheduler.ts";
 import { syncDataRoom } from "../../services/agent-sandbox.ts";
+import {
+  isS3Enabled,
+  uploadBinary,
+  downloadBinary,
+  deleteFile,
+  buildAgentDataRoomKey,
+  guessContentType,
+} from "../../services/s3.ts";
 import { listSecrets, upsertSecret, deleteSecret } from "../../services/agent-secrets.ts";
 import { listRunsForAgent } from "../../services/agent-runs.ts";
 import { sandboxes } from "../../db/schema/sandbox.ts";
@@ -217,11 +225,29 @@ agentsApi.post("/:agentId/data", async (c) => {
   const file = formData.get("file") as File | null;
   if (!file) return c.json({ error: "No file uploaded" }, 400);
 
-  const localDir = `uploads/agents/${agent.id}`;
-  const localPath = `${localDir}/${file.name}`;
-  const fs = await import("node:fs/promises");
-  await fs.mkdir(localDir, { recursive: true });
-  await fs.writeFile(localPath, Buffer.from(await file.arrayBuffer()));
+  const content = Buffer.from(await file.arrayBuffer());
+
+  // Prefer S3 when configured; fall back to local filesystem otherwise.
+  let s3Key: string | null = null;
+  let localPath: string | null = null;
+
+  if (isS3Enabled) {
+    s3Key = buildAgentDataRoomKey(agent.id, file.name);
+    try {
+      await uploadBinary(s3Key, content, file.type || guessContentType(file.name));
+    } catch (err) {
+      console.error("[data-upload] S3 failed, falling back to local:", (err as Error).message);
+      s3Key = null;
+    }
+  }
+
+  if (!s3Key) {
+    const fs = await import("node:fs/promises");
+    const localDir = `uploads/agents/${agent.id}`;
+    await fs.mkdir(localDir, { recursive: true });
+    localPath = `${localDir}/${file.name}`;
+    await fs.writeFile(localPath, content);
+  }
 
   const rows = await db
     .insert(agentDataFiles)
@@ -230,6 +256,7 @@ agentsApi.post("/:agentId/data", async (c) => {
       fileName: file.name,
       fileType: file.name.split(".").pop() ?? "unknown",
       filePath: localPath,
+      s3Key,
       fileSize: file.size,
     })
     .returning();
@@ -258,20 +285,39 @@ agentsApi.get("/:agentId/data/:fileId", async (c) => {
 
   if (!file) return c.json({ error: "File not found" }, 404);
 
-  const fs = await import("node:fs/promises");
-  try {
-    await fs.access(file.filePath);
-  } catch {
-    return c.json({ error: "File data missing" }, 404);
+  // S3-backed first; legacy local FS fallback for rows from before the migration.
+  if (file.s3Key) {
+    try {
+      const { body, contentType } = await downloadBinary(file.s3Key);
+      return new Response(body, {
+        headers: {
+          "Content-Type": contentType ?? guessContentType(file.fileName),
+          "Content-Disposition": `attachment; filename="${file.fileName}"`,
+        },
+      });
+    } catch (err) {
+      console.error("[data-download] S3 fetch failed:", (err as Error).message);
+      // fall through to local fallback if present
+    }
   }
 
-  const fileData = await fs.readFile(file.filePath);
-  return new Response(fileData, {
-    headers: {
-      "Content-Type": "application/octet-stream",
-      "Content-Disposition": `attachment; filename="${file.fileName}"`,
-    },
-  });
+  if (file.filePath) {
+    const fs = await import("node:fs/promises");
+    try {
+      await fs.access(file.filePath);
+      const fileData = await fs.readFile(file.filePath);
+      return new Response(fileData, {
+        headers: {
+          "Content-Type": guessContentType(file.fileName),
+          "Content-Disposition": `attachment; filename="${file.fileName}"`,
+        },
+      });
+    } catch {
+      // fall through
+    }
+  }
+
+  return c.json({ error: "File data missing" }, 404);
 });
 
 agentsApi.delete("/:agentId/data/:fileId", async (c) => {
@@ -285,6 +331,23 @@ agentsApi.delete("/:agentId/data/:fileId", async (c) => {
     .limit(1);
 
   if (!agent) return c.json({ error: "Agent not found" }, 404);
+
+  // Read the row first so we can clean up S3 / local FS before dropping it.
+  const [doomed] = await db
+    .select()
+    .from(agentDataFiles)
+    .where(and(eq(agentDataFiles.id, fileId), eq(agentDataFiles.agentId, agent.id)))
+    .limit(1);
+
+  if (doomed?.s3Key) {
+    await deleteFile(doomed.s3Key).catch((err) =>
+      console.error("[data-delete] S3 delete failed:", (err as Error).message)
+    );
+  }
+  if (doomed?.filePath) {
+    const fs = await import("node:fs/promises");
+    await fs.unlink(doomed.filePath).catch(() => {/* missing file ok */});
+  }
 
   await db
     .delete(agentDataFiles)
