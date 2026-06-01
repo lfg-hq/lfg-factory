@@ -20,6 +20,7 @@ import {
   downloadBinary,
   buildAgentDataRoomKey,
   guessContentType,
+  getPresignedGetUrl,
 } from "./s3.ts";
 
 // ── Utility: run a shell script on the workspace via base64 ──────────
@@ -144,9 +145,14 @@ echo "memory_injected"
 }
 
 /**
- * Upload data room files from durable storage to /root/data/ in the sandbox.
- * Reads from S3 (s3Key) when present, falls back to legacy local filePath
- * for rows created before the S3 migration.
+ * Inject Data Room files into the sandbox's /root/data/ directory.
+ *
+ * For S3-backed files: generate a short-lived presigned GET URL and have
+ * the sandbox curl it directly. Streams the file inside the VM — no host
+ * memory, no SSH base64 bottleneck. Works for any size up to S3's PUT limit.
+ *
+ * For legacy local-FS rows (pre-S3 migration): falls back to base64-over-exec.
+ * That path stays size-limited but is rarely used now.
  */
 export async function injectDataFiles(
   workspaceId: string,
@@ -157,44 +163,65 @@ export async function injectDataFiles(
     .from(agentDataFiles)
     .where(eq(agentDataFiles.agentId, agentId));
 
-  if (!files.length) {
-    await execOnWorkspace(workspaceId, "mkdir -p /root/data");
-    return;
-  }
-
   await execOnWorkspace(workspaceId, "mkdir -p /root/data");
+  if (!files.length) return;
 
   for (const file of files) {
-    try {
-      let content: Buffer | null = null;
+    // Shell-safe filename for the curl/echo target
+    const safeName = file.fileName.replace(/[^a-zA-Z0-9._\- ]/g, "_");
 
-      // Prefer S3 if the row has an s3Key
+    try {
+      // PATH 1 — S3 presigned URL + curl (no size limit)
       if (file.s3Key && isS3Enabled) {
         try {
-          const { body } = await downloadBinary(file.s3Key);
-          content = body;
+          const t0 = Date.now();
+          const url = await getPresignedGetUrl(file.s3Key, 600);
+          // Single-quote-escape the URL: replace ' with '\'' to make it safe
+          // inside a single-quoted shell arg.
+          const escapedUrl = url.replace(/'/g, "'\\''");
+          const result = await execOnWorkspace(
+            workspaceId,
+            `curl -fsSL --retry 2 --max-time 120 '${escapedUrl}' -o '/root/data/${safeName}'`,
+            { timeout: 150_000 }
+          );
+          if (result.exitCode === 0) {
+            console.log(
+              `[agent-sandbox] inject ${file.fileName} via presigned curl ok in ${Date.now() - t0}ms`
+            );
+            continue;
+          }
+          console.error(
+            `[agent-sandbox] curl failed for ${file.fileName} exitCode=${result.exitCode} stderr=${(result.stderr || "").slice(0, 200)} — falling back to base64`
+          );
         } catch (err) {
-          console.error(`[agent-sandbox] S3 download failed for ${file.fileName}:`, (err as Error).message);
+          console.error(`[agent-sandbox] presigned-URL inject failed for ${file.fileName}:`, (err as Error).message);
         }
       }
 
-      // Legacy fallback: local filesystem
+      // PATH 2 — base64 over exec (legacy local rows; size-limited)
+      let content: Buffer | null = null;
+      if (file.s3Key && isS3Enabled) {
+        // Fallback if presigned curl failed
+        try {
+          const { body } = await downloadBinary(file.s3Key);
+          content = body;
+        } catch { /* will try local next */ }
+      }
       if (!content && file.filePath) {
         const exists = await fs.access(file.filePath).then(() => true).catch(() => false);
         if (exists) content = await fs.readFile(file.filePath);
       }
-
       if (!content) {
         console.warn(`[agent-sandbox] Skipping ${file.fileName} — no readable source`);
         continue;
       }
-
       const b64 = content.toString("base64");
       await execOnWorkspace(
         workspaceId,
-        `echo '${b64}' | base64 -d > /root/data/${file.fileName}`,
+        `echo '${b64}' | base64 -d > '/root/data/${safeName}'`,
         { timeout: 30_000 }
       );
+      console.log(`[agent-sandbox] inject ${file.fileName} via base64 ok (${content.length}B)`);
     } catch (err) {
       console.error(`[agent-sandbox] Failed to inject file ${file.fileName}:`, (err as Error).message);
     }

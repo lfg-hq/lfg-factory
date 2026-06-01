@@ -13,6 +13,7 @@ import {
   GetObjectCommand,
   DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { env } from "../config/env.ts";
 
 // ── Client (lazy-initialised so non-S3 deployments pay no cost) ───────
@@ -150,6 +151,24 @@ const EXT_TO_MIME: Record<string, string> = {
 export function guessContentType(fileName: string): string {
   const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
   return EXT_TO_MIME[ext] ?? "application/octet-stream";
+}
+
+// ── Presigned URLs ────────────────────────────────────────────────────
+// Short-lived signed URL for GET. The sandbox can curl this directly,
+// bypassing the host's base64-over-SSH bottleneck for any size of file.
+
+export async function getPresignedGetUrl(
+  key: string,
+  expiresInSec = 600
+): Promise<string> {
+  // Cast: s3-request-presigner bundles its own @smithy/types; the duplicate
+  // makes TS think the S3Client/Command types are incompatible at the
+  // structural level. They're runtime-compatible.
+  return getSignedUrl(
+    getClient() as any,
+    new GetObjectCommand({ Bucket: env.AWS_S3_BUCKET_NAME, Key: key }) as any,
+    { expiresIn: expiresInSec }
+  );
 }
 
 // ── Delete ────────────────────────────────────────────────────────────
