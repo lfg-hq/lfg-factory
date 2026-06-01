@@ -606,8 +606,32 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 };
                 
-                // Call the upload function immediately
-                uploadFile();
+                // Track the file + the in-flight upload promise on
+                // window.attachedFile BEFORE it resolves. This way sendMessage
+                // can detect that an upload is in progress and await it
+                // instead of sending the message without the file context.
+                window.attachedFile = {
+                    file: file,
+                    name: file.name,
+                    type: file.type,
+                    size: file.size,
+                    id: null,
+                    uploading: true,
+                };
+                const uploadPromise = uploadFile().finally(() => {
+                    if (window.attachedFile && window.attachedFile.file === file) {
+                        window.attachedFile.uploading = false;
+                    }
+                    // Re-enable send button once upload settles
+                    const sendBtn = document.querySelector('.send-message-btn, .send-button, [type="submit"]');
+                    if (sendBtn) sendBtn.disabled = false;
+                });
+                window.attachedFile.uploadPromise = uploadPromise;
+
+                // Disable send button while upload is in flight so a fast
+                // user can't fire the message before the file lands.
+                const sendBtnNow = document.querySelector('.send-message-btn, .send-button, [type="submit"]');
+                if (sendBtnNow) sendBtnNow.disabled = true;
                 
                 // Focus on the input so the user can type their message
                 chatInput.focus();
@@ -2736,13 +2760,32 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     // Function to send message using WebSocket
-    function sendMessage(message) {
+    async function sendMessage(message) {
         console.log('sendMessage: Starting to send message:', message);
-        
+
         // Check if we have a message or an attached file
         if (!message && !window.attachedFile) {
             console.log('No message or file to send');
             return;
+        }
+
+        // If there's an attached file whose upload is still in flight, wait
+        // for it. Otherwise the WS payload goes out before we know the file's
+        // id / sandbox path, and the LLM sees the message with no file context.
+        if (window.attachedFile && window.attachedFile.uploading && window.attachedFile.uploadPromise) {
+            console.log('[sendMessage] file upload in progress — waiting for it to finish before sending');
+            const indicator = document.querySelector('.input-file-attachment');
+            if (indicator) {
+                const span = indicator.querySelector('span');
+                if (span) span.textContent = `Waiting for ${window.attachedFile.name} to finish uploading…`;
+            }
+            try {
+                await window.attachedFile.uploadPromise;
+                console.log('[sendMessage] upload settled — proceeding with send');
+            } catch (err) {
+                console.error('[sendMessage] upload failed:', err);
+                // Continue anyway — the message will be sent without file_id
+            }
         }
 
         // Reset stop requested flag
