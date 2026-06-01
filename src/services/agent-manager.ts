@@ -245,6 +245,83 @@ async function provisionAndInject(
 }
 
 /**
+ * Lightweight workspace provisioner for the new "mags run" model.
+ *
+ * Unlike provisionAndInject which boots a persistent Claude CLI session +
+ * registers callback URLs + injects CLAUDE.md, this just ensures a Mags
+ * workspace exists for the agent. Each compute task is then dispatched
+ * synchronously via execOnWorkspace. No long-lived process, no callbacks.
+ *
+ * Injects the bare minimum the LLM-written commands might need:
+ *   - /root/.env with the agent's secrets (so commands can `source .env`)
+ *   - /root/data/ restored from S3 (so files persist across runs)
+ */
+export async function ensureWorkspace(
+  agentId: string,
+  userId: string
+): Promise<{ workspaceId: string }> {
+  const [agent] = await db
+    .select()
+    .from(agents)
+    .where(and(eq(agents.agentId, agentId), eq(agents.userId, userId)))
+    .limit(1);
+  if (!agent) throw new Error("Agent not found");
+
+  const workspaceName = `agent-${sanitizeAgentName(agent.name)}-${agent.agentId.slice(0, 8)}`;
+  let sandboxRecord = agent.sandboxId
+    ? await db.select().from(sandboxes).where(eq(sandboxes.id, agent.sandboxId)).then((r) => r[0])
+    : null;
+
+  let workspaceId: string;
+
+  if (sandboxRecord?.magsWorkspaceId) {
+    const existing = await findJob(sandboxRecord.magsWorkspaceId);
+    if (existing && (existing.status === "running" || existing.status === "sleeping")) {
+      workspaceId = sandboxRecord.magsWorkspaceId;
+    } else {
+      const ws = await newWorkspace(workspaceName);
+      workspaceId = ws.workspaceId;
+      await db
+        .update(sandboxes)
+        .set({ magsWorkspaceId: workspaceId, magsJobId: ws.jobId, status: "ready", updatedAt: new Date() })
+        .where(eq(sandboxes.id, sandboxRecord.id));
+    }
+  } else {
+    const ws = await newWorkspace(workspaceName);
+    workspaceId = ws.workspaceId;
+    const sbRows = await db
+      .insert(sandboxes)
+      .values({
+        userId,
+        magsWorkspaceId: workspaceId,
+        magsJobId: ws.jobId,
+        workspaceType: "agent",
+        status: "ready",
+      })
+      .returning();
+    await db
+      .update(agents)
+      .set({ sandboxId: sbRows[0]!.id, status: "running", updatedAt: new Date() })
+      .where(eq(agents.id, agent.id));
+  }
+
+  // Always inject secrets + restore data files. Cheap on a warm workspace,
+  // required on a cold one. injectSecrets is idempotent.
+  try {
+    await injectSecrets(workspaceId, agent.id);
+  } catch (err) {
+    console.warn(`[agent-manager] injectSecrets failed for ${agentId}:`, (err as Error).message);
+  }
+  try {
+    await injectDataFiles(workspaceId, agent.id);
+  } catch (err) {
+    console.warn(`[agent-manager] injectDataFiles failed for ${agentId}:`, (err as Error).message);
+  }
+
+  return { workspaceId };
+}
+
+/**
  * Start an agent: provision sandbox, inject config, run initial instructions
  * as the first agentRun.
  */

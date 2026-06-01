@@ -12,7 +12,9 @@ import { z } from "zod";
 import { db } from "../../config/db.ts";
 import { agents, agentSchedules } from "../../db/schema/agents.ts";
 import { eq } from "drizzle-orm";
-import { sendCommand, startAgent } from "../../services/agent-manager.ts";
+import { ensureWorkspace } from "../../services/agent-manager.ts";
+import { execOnWorkspace } from "../../services/mags.ts";
+import { syncDataRoom } from "../../services/agent-sandbox.ts";
 import { listConnectors, connectToolkit } from "../../services/composio-manager.ts";
 import { addSchedule, removeSchedule } from "../../services/agent-scheduler.ts";
 import { broadcastToUser } from "../../ws/connection-manager.ts";
@@ -26,56 +28,71 @@ export function createAgentTools(params: {
 
   const runInSandbox = tool({
     description:
-      "Dispatch a compute task to your dedicated sandbox VM (Alpine Linux with Node.js, Python, Claude CLI). " +
-      "Use this for: running code, building web apps or interactive charts, scraping/processing data, " +
-      "installing packages, executing multi-step CLI workflows. The sandbox can build interactive web apps " +
-      "on port 8080 (visible via the Sandbox URL). Results/files are saved to /root/data/ and appear in the " +
-      "Data Room. Tasks run asynchronously — you'll see sandbox messages arrive as the work progresses. " +
-      "The sandbox starts on demand the first time you call this; the user does not need to start anything.",
+      "Run a shell command (bash, or any single-line invocation including python -c '...', node -e '...', " +
+      "ffmpeg, curl, etc.) in a persistent Linux sandbox dedicated to this agent. Synchronous — returns " +
+      "stdout, stderr, and exit code when the command finishes.\n\n" +
+      "You write the command — there is no AI inside the sandbox. The sandbox is just bash.\n\n" +
+      "Persistent state across calls:\n" +
+      "  - /root/.env contains the agent's secrets (source it: `source /root/.env`)\n" +
+      "  - /root/data/ is the Data Room — any file written here auto-syncs to S3 after the command and\n" +
+      "    becomes downloadable from the user's Data Room tab\n" +
+      "  - Other paths persist across runs (it's a stateful workspace, not stateless)\n\n" +
+      "Cold start ~1-3s on first call per session. After that, exec is ~SSH-fast.\n" +
+      "Use this for: generating files (xlsx, pdf, video), running scrapers, ffmpeg jobs, installing/running " +
+      "packages, building static sites — anything that needs real Linux. Don't use it for things a single " +
+      "Composio API call can do.",
     inputSchema: zodSchema(
       z.object({
-        task: z
+        command: z
           .string()
           .describe(
-            "Detailed task description for the sandbox agent. Include: what to build/run/analyze, " +
-              "what data to use, expected outputs (files, ports, visualizations), and any context from " +
-              "the conversation. Be specific — the sandbox agent only knows what you tell it."
+            "The exact shell command to run. Multi-line scripts: wrap in bash -c '...' or write a script " +
+              "to /tmp/x.sh and execute. To generate a Data Room file, write to /root/data/<filename> — " +
+              "it will be synced to S3 and become downloadable. Example: " +
+              "`python3 -c 'import openpyxl; ...; wb.save(\"/root/data/prices.xlsx\")'`"
           ),
+        timeout_seconds: z
+          .number()
+          .int()
+          .min(5)
+          .max(600)
+          .optional()
+          .describe("Wall-clock timeout in seconds. Default 300 (5 min). Max 600."),
       })
     ),
-    execute: async ({ task }) => {
-      const [agentRow] = await db
-        .select({ status: agents.status })
-        .from(agents)
-        .where(eq(agents.agentId, agentId))
-        .limit(1);
-
-      if (!agentRow) return "Error: Agent record not found.";
-
-      if (agentRow.status !== "running" && agentRow.status !== "starting") {
-        startAgent(agentId, userId).catch((err) => {
-          console.error(`[agent-tools] lazy-start failed:`, (err as Error).message);
-        });
-        return (
-          `The sandbox is starting up now. Tell the user one short sentence that you're spinning up the sandbox, ` +
-          `then re-call \`runInSandbox\` after a brief pause to dispatch this task: "${task.slice(0, 120)}${task.length > 120 ? "..." : ""}"`
-        );
-      }
-
-      if (agentRow.status === "starting") {
-        return (
-          "The sandbox is still starting. Wait a few seconds and call `runInSandbox` again with the same task."
-        );
-      }
-
+    execute: async ({ command, timeout_seconds }) => {
       try {
-        await sendCommand(agentId, task, userId);
-        return (
-          `Task dispatched to sandbox: "${task.slice(0, 120)}${task.length > 120 ? "..." : ""}". ` +
-          `The sandbox is now executing. Watch for sandbox messages below — results and files will appear in the Data Room when complete.`
-        );
+        const { workspaceId } = await ensureWorkspace(agentId, userId);
+
+        const timeoutMs = (timeout_seconds ?? 300) * 1000;
+        const result = await execOnWorkspace(workspaceId, command, { timeout: timeoutMs });
+
+        // After the command finishes, sweep /root/data/ for new files and
+        // sync them to S3 / Data Room. No-op if no files were written.
+        const [agentRow] = await db.select({ id: agents.id }).from(agents).where(eq(agents.agentId, agentId)).limit(1);
+        if (agentRow) {
+          syncDataRoom(workspaceId, agentRow.id).catch((err) => {
+            console.error(`[runInSandbox] syncDataRoom failed:`, (err as Error).message);
+          });
+        }
+
+        // Cap output size so we don't blow the LLM's context with a runaway log.
+        const CAP = 8_000;
+        const stdout = (result.output || "").slice(0, CAP);
+        const stderr = (result.stderr || "").slice(0, CAP);
+        const truncated =
+          (result.output || "").length > CAP || (result.stderr || "").length > CAP;
+
+        const sections = [
+          `exit code: ${result.exitCode}`,
+          stdout ? `stdout:\n${stdout}` : null,
+          stderr ? `stderr:\n${stderr}` : null,
+          truncated ? "(output truncated to 8KB)" : null,
+        ].filter(Boolean);
+
+        return sections.join("\n\n");
       } catch (err) {
-        return `Failed to dispatch to sandbox: ${(err as Error).message}`;
+        return `Sandbox exec failed: ${(err as Error).message}`;
       }
     },
   });

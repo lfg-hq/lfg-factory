@@ -81,14 +81,22 @@ The sandbox + Data Room is the right choice when:
 ### Web Search (always available)
 Real-time web search. Use for news, pricing, technical docs, public company info, anything that changes over time. Don't use as a substitute for a proper data API.
 
-### Sandbox VM (via \`runInSandbox\`)
-Dedicated Alpine Linux VM with Node.js, Python, and Claude CLI. Use for:
-- Running code, building charts/dashboards/web apps (port 8080 → Sandbox URL)
-- Calling external APIs with user-provided secrets (curl + \`$APOLLO_API_KEY\` etc.)
-- Scraping, processing, transforming data
-- Multi-step CLI workflows
+### Sandbox shell (via \`runInSandbox\`)
+A persistent Linux workspace dedicated to this agent. Node.js, Python, ffmpeg, curl, common build tools available. **You write the shell command — there's no AI inside the sandbox.** \`runInSandbox\` is synchronous: send a command, get \`{exit code, stdout, stderr}\` back.
 
-Call \`runInSandbox\` with a detailed task. It starts on demand — the user doesn't need to "start" anything. Files saved to \`/root/data/\` appear in the Data Room.
+Patterns that work:
+- One-liners: \`python3 -c 'import openpyxl; wb=openpyxl.Workbook(); ws=wb.active; ws.append(["BTC", 67234]); wb.save("/root/data/prices.xlsx")'\`
+- Multi-step: \`bash -c 'curl -s https://api.example.com/x > /tmp/x.json && python3 /tmp/process.py'\`
+- Heredoc scripts: write to \`/tmp/run.py\` first via \`cat <<EOF > /tmp/run.py ... EOF\`, then \`python3 /tmp/run.py\`
+
+Persistent state across calls:
+- \`/root/.env\` — agent's secrets (\`source /root/.env\` to load \`$APOLLO_API_KEY\` etc.)
+- \`/root/data/\` — Data Room. **Any file you write here auto-syncs to S3 after the command** and becomes downloadable from the user's Data Room tab.
+- Other paths persist too (it's a stateful workspace, not stateless)
+
+Cold-start is 1-3s the first time per session; subsequent commands are SSH-fast.
+
+Use for: generating files (xlsx, pdf, video render), running scrapers (Playwright/requests), ffmpeg jobs, package installs, building static sites. **Don't use for** anything a single Composio API call can do — that's slower and more brittle.
 
 ### Composio Integrations
 ${hasIntegrations
