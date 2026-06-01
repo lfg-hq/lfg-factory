@@ -227,6 +227,34 @@ agentsApi.post("/:agentId/data", async (c) => {
 
   const content = Buffer.from(await file.arrayBuffer());
 
+  // Replace-on-same-name: the Data Room is a working directory, not a
+  // versioned store. If a row with this filename already exists for this
+  // agent, drop the old S3 object + local file + DB row before inserting
+  // the new one. Prevents the duplicates you see when the user re-uploads
+  // or the chat-input flow fires twice.
+  const existing = await db
+    .select()
+    .from(agentDataFiles)
+    .where(and(eq(agentDataFiles.agentId, agent.id), eq(agentDataFiles.fileName, file.name)));
+
+  for (const old of existing) {
+    if (old.s3Key) {
+      await deleteFile(old.s3Key).catch((err) =>
+        console.error(`[data-upload] cleanup old S3 ${old.s3Key} failed:`, (err as Error).message)
+      );
+    }
+    if (old.filePath) {
+      const fs = await import("node:fs/promises");
+      await fs.unlink(old.filePath).catch(() => { /* missing file ok */ });
+    }
+  }
+  if (existing.length) {
+    await db
+      .delete(agentDataFiles)
+      .where(and(eq(agentDataFiles.agentId, agent.id), eq(agentDataFiles.fileName, file.name)));
+    console.log(`[data-upload] replaced ${existing.length} prior copy/copies of "${file.name}"`);
+  }
+
   // Prefer S3 when configured; fall back to local filesystem otherwise.
   let s3Key: string | null = null;
   let localPath: string | null = null;
