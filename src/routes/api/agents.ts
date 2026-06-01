@@ -22,7 +22,6 @@ import {
 import { runAgentTask } from "../../services/agent-runner.ts";
 import { addSchedule, removeSchedule, updateSchedule, runScheduleNow } from "../../services/agent-scheduler.ts";
 import { syncDataRoom } from "../../services/agent-sandbox.ts";
-import { TEMPLATES, getTemplate } from "../../services/agent-templates.ts";
 import {
   isS3Enabled,
   uploadBinary,
@@ -46,18 +45,6 @@ type AuthEnv = {
 const agentsApi = new Hono<AuthEnv>();
 agentsApi.use("*", requireAuth);
 
-// ── Templates (read-only) ─────────────────────────────────────────────
-agentsApi.get("/templates", (c) => {
-  return c.json({
-    templates: TEMPLATES.map((t) => ({
-      id: t.id,
-      name: t.name,
-      icon: t.icon,
-      summary: t.summary,
-    })),
-  });
-});
-
 // ── CRUD ──────────────────────────────────────────────────────────────
 
 agentsApi.post("/", async (c) => {
@@ -68,19 +55,14 @@ agentsApi.post("/", async (c) => {
       personality?: string;
       instructions?: string;
       composio_toolkits?: string[];
-      template_id?: string;
     }>()
     .catch(() => ({} as Record<string, never>));
 
-  // Optional template overlay — caller-supplied fields still win so the user
-  // can tweak before creation.
-  const tpl = body.template_id ? getTemplate(body.template_id) : null;
-
   const agent = await createAgent({
     userId: user.id,
-    name: body.name?.trim() || tpl?.name || "New Agent",
-    personality: body.personality ?? tpl?.personality,
-    instructions: body.instructions ?? tpl?.instructions,
+    name: body.name?.trim() || "New Agent",
+    personality: body.personality,
+    instructions: body.instructions,
     composioToolkits: body.composio_toolkits,
   });
 

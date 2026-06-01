@@ -189,7 +189,39 @@ export function AgentDetailPage({
           ` : html`
             <div class="welcome-message">
               <h2>${agent.name === "New Agent" ? "What do you want this agent to do?" : agent.name}</h2>
-              <p>${agent.name === "New Agent" ? `Describe a task or a recurring job — e.g. "find me B2B SaaS leads", "summarize my team's commits each morning", "watch competitor pricing changes".` : "Send a task, or set a schedule in the side panel."}</p>
+              <p>${agent.name === "New Agent" ? "Describe a task in plain English. The agent figures out the right tools (Composio, sandbox, web search) — you don't need to pick." : "Send a task, or set a schedule in the side panel."}</p>
+              ${agent.name === "New Agent" ? html`
+                <div class="example-prompts">
+                  <button class="example-prompt-card" data-prompt="Analyze a CSV I'll upload — show me schema, summary stats, and an interactive Plotly chart of the most interesting columns.">
+                    <i class="fas fa-chart-line"></i>
+                    <div>
+                      <div class="example-prompt-title">Analyze data</div>
+                      <div class="example-prompt-sub">Upload a CSV / Excel → charts &amp; insights</div>
+                    </div>
+                  </button>
+                  <button class="example-prompt-card" data-prompt="Check my Gmail inbox for new emails in the last hour and give me a 3-bullet summary, highlighting anything that needs a reply.">
+                    <i class="fas fa-envelope"></i>
+                    <div>
+                      <div class="example-prompt-title">Triage inbox</div>
+                      <div class="example-prompt-sub">Gmail / Outlook summary on demand or on a schedule</div>
+                    </div>
+                  </button>
+                  <button class="example-prompt-card" data-prompt="Find me 25 B2B SaaS founders in the US who'd be good prospects for a developer-tools product. Include name, company, email, LinkedIn.">
+                    <i class="fas fa-bullseye"></i>
+                    <div>
+                      <div class="example-prompt-title">Find leads</div>
+                      <div class="example-prompt-sub">Apollo / Hunter / web search + enrichment</div>
+                    </div>
+                  </button>
+                  <button class="example-prompt-card" data-prompt="Run a recurring check every weekday at 9am EST — pull yesterday's signups from my database and post a summary to Slack.">
+                    <i class="fas fa-clock"></i>
+                    <div>
+                      <div class="example-prompt-title">Set up a recurring job</div>
+                      <div class="example-prompt-sub">Cron-driven runs — DB query, scrape, summary, etc.</div>
+                    </div>
+                  </button>
+                </div>
+              ` : ""}
             </div>
           `}
         </div>

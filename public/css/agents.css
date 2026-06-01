@@ -617,110 +617,58 @@
   color: var(--text-color);
 }
 
-/* ── Agent template picker modal ───────────────────────────────────── */
-.template-modal-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.7);
-  z-index: 9999;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 2rem;
-  animation: artifactFadeIn 0.15s ease;
-}
-.template-modal {
-  background: var(--bg-color, #0d1117);
-  border: 1px solid var(--border-color, #334155);
-  border-radius: 12px;
-  width: min(720px, 100%);
-  max-height: min(640px, 100%);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-.template-modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.875rem 1.125rem;
-  border-bottom: 1px solid var(--border-color);
-  background: var(--bg-secondary);
-  font-size: 0.9375rem;
-  font-weight: 500;
-}
-.template-modal-header i {
-  color: var(--primary-color);
-  margin-right: 0.5rem;
-}
-.template-modal-close {
-  background: none;
-  border: none;
-  color: var(--text-secondary);
-  font-size: 1.5rem;
-  line-height: 1;
-  cursor: pointer;
-  padding: 0 0.5rem;
-}
-.template-modal-close:hover {
-  color: var(--text-color);
-}
-.template-modal-body {
+/* ── Empty-state example prompts on a fresh agent chat ─────────────── */
+.example-prompts {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.75rem;
-  padding: 1.125rem;
-  overflow-y: auto;
+  margin-top: 1.5rem;
+  max-width: 720px;
+  width: 100%;
 }
-.template-card {
+
+.example-prompt-card {
   display: flex;
   align-items: flex-start;
   gap: 0.75rem;
-  padding: 0.875rem;
+  padding: 0.875rem 1rem;
   background: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: 10px;
   cursor: pointer;
   text-align: left;
   color: var(--text-color);
-  transition: border-color 0.15s, background 0.15s, transform 0.15s;
   font-family: inherit;
+  transition: border-color 0.15s, background 0.15s, transform 0.15s;
 }
-.template-card:hover {
+
+.example-prompt-card:hover {
   border-color: var(--primary-color);
   background: var(--bg-tertiary);
   transform: translateY(-1px);
 }
-.template-card-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-  background: rgba(139, 92, 246, 0.12);
+
+.example-prompt-card i {
   color: var(--primary-color);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
   font-size: 1rem;
+  margin-top: 0.125rem;
+  flex-shrink: 0;
 }
-.template-card-body {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-.template-card-name {
+
+.example-prompt-title {
   font-weight: 600;
   font-size: 0.875rem;
+  margin-bottom: 0.125rem;
 }
-.template-card-summary {
+
+.example-prompt-sub {
   font-size: 0.75rem;
   color: var(--text-secondary);
   line-height: 1.4;
 }
 
 @media (max-width: 640px) {
-  .template-modal-body { grid-template-columns: 1fr; }
+  .example-prompts { grid-template-columns: 1fr; }
 }
 
 /* ── Inline artifacts (charts, images, files from sandbox) ─────────── */

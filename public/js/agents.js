@@ -290,25 +290,28 @@
 
   // ── Agent CRUD ──────────────────────────────────────────────────────
 
-  // Open the template picker. User selects a template (or Custom) → that
-  // gets passed to POST /api/agents which overlays template defaults.
-  window.createNewAgent = async function () {
-    try {
-      var res = await fetch("/api/agents/templates");
-      var data = await res.json();
-      openTemplatePicker(data.templates || []);
-    } catch (err) {
-      // Fallback: blank agent
-      _createAgentFromTemplate(null);
-    }
-  };
+  // ── Example-prompt cards on empty agent chat ───────────────────────
+  // Each card has data-prompt="..."; click fills the chat input.
+  document.querySelectorAll(".example-prompt-card").forEach(function (card) {
+    card.addEventListener("click", function () {
+      var prompt = card.getAttribute("data-prompt") || "";
+      var input = document.getElementById("chat-input");
+      if (!input) return;
+      input.value = prompt;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.focus();
+    });
+  });
 
-  async function _createAgentFromTemplate(templateId) {
+  // Create a fresh blank agent and redirect into its chat. The agent's
+  // persona + instructions are filled in by the chat-side LLM through
+  // proposeAgentConfig once the user describes what they want.
+  window.createNewAgent = async function () {
     try {
       var res = await fetch("/api/agents", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(templateId ? { template_id: templateId } : {}),
+        body: JSON.stringify({}),
       });
       if (res.ok) {
         var result = await res.json();
@@ -320,52 +323,7 @@
     } catch (err) {
       alert("Network error: " + err.message);
     }
-  }
-
-  function openTemplatePicker(templates) {
-    // Build a lightweight modal — no React, no framework, just innerHTML.
-    var existing = document.getElementById("agent-template-modal");
-    if (existing) existing.remove();
-
-    var overlay = document.createElement("div");
-    overlay.id = "agent-template-modal";
-    overlay.className = "template-modal-overlay";
-    var cards = templates.map(function (t) {
-      return (
-        '<button class="template-card" data-template-id="' + t.id + '">' +
-          '<div class="template-card-icon"><i class="fas ' + (t.icon || "fa-robot") + '"></i></div>' +
-          '<div class="template-card-body">' +
-            '<div class="template-card-name">' + escapeHtml(t.name) + '</div>' +
-            '<div class="template-card-summary">' + escapeHtml(t.summary) + '</div>' +
-          '</div>' +
-        '</button>'
-      );
-    }).join("");
-
-    overlay.innerHTML =
-      '<div class="template-modal">' +
-        '<div class="template-modal-header">' +
-          '<span><i class="fas fa-sparkles"></i> Pick a starting point</span>' +
-          '<button class="template-modal-close" aria-label="Close">×</button>' +
-        '</div>' +
-        '<div class="template-modal-body">' + cards + '</div>' +
-      '</div>';
-
-    overlay.addEventListener("click", function (e) {
-      if (e.target === overlay || e.target.classList.contains("template-modal-close")) {
-        overlay.remove();
-      }
-    });
-    overlay.querySelectorAll(".template-card").forEach(function (card) {
-      card.addEventListener("click", function () {
-        var id = card.getAttribute("data-template-id");
-        overlay.remove();
-        _createAgentFromTemplate(id === "custom" ? null : id);
-      });
-    });
-
-    document.body.appendChild(overlay);
-  }
+  };
 
   window.deleteAgent = async function (id, name) {
     if (!confirm('Delete agent "' + name + '"? This cannot be undone.')) return;
