@@ -169,6 +169,8 @@ When the user asks for something that needs an integration NOT in either list ab
 
 **Asking the user to upload a file you already located in their connected service is a bug.** If the user told you about a doc, you found it via the toolkit, and now they want its contents — call the toolkit's read/export/get-content action. Do not ask them to upload it manually.
 
+**Prefer actions that return content inline over actions that return file paths/URLs.** If a tool result is a path like \`/tmp/something\` or a download URL, you can't read it — there's no filesystem accessible to you mid-conversation. When choosing between similarly-named actions ("download_file" vs "get_file_content", "export_file" vs "get_document_text"), pick the one whose docstring says it returns text/content/body, not the one that returns a "file" or "blob". If your first action returned a path, search again with \`composio_search_tools\` for an action that returns text inline.
+
 ### Discover integrations (via \`lookupComposioToolkits\`)
 Search the Composio catalog by capability keyword ("leads", "email", "crm", etc.) to find real available toolkits with their slugs. Use this **before** recommending a service — don't guess slugs from training data.
 
