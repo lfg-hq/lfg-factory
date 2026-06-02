@@ -212,12 +212,26 @@ export async function getComposioTools(
   // Strict per-agent gating: agent has explicitly opted in to nothing.
   if (enabledToolkits && enabledToolkits.length === 0) return {};
 
+  // Composio's slug convention is lowercase (matches session.authorize).
+  // Our DB stores uppercase ("GOOGLEDRIVE"), so normalize here — otherwise
+  // toolkits.enable silently fails to match and returns zero tools, which
+  // makes the LLM think the toolkit isn't really enabled and loop on
+  // requestConnectorAuth.
+  const normalized = enabledToolkits?.length
+    ? enabledToolkits.map((s) => s.toLowerCase())
+    : undefined;
+
   try {
     const session = await composio.create(userId, {
       manageConnections: true,
-      ...(enabledToolkits?.length ? { toolkits: { enable: enabledToolkits } } : {}),
+      ...(normalized?.length ? { toolkits: { enable: normalized } } : {}),
     });
     const tools = await session.tools();
+    const toolCount = Object.keys(tools ?? {}).length;
+    console.log(
+      `[connectors] getComposioTools user=${userId.slice(0, 8)} ` +
+      `enabled=${normalized ? normalized.join(",") : "ALL"} → ${toolCount} tools`
+    );
     return tools ?? {};
   } catch (err) {
     console.error("[connectors] Failed to fetch tools:", err);
