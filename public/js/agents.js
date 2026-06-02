@@ -50,14 +50,20 @@
       }
     } else if (data.type === "agent_data_file_created") {
       if (!agentId || data.agent_id === agentId) {
-        // Register so future [CHART: name] markers can find this artifact
+        // Always register so future [CHART: name] markers can find this
+        // artifact and any pre-existing placeholder slots can be filled.
         artifactsByName.set(data.file_name, data);
-        // Fill any placeholder slots the LLM already wrote with this name
         fillPlaceholderSlots(data);
-        // Also keep the "cluster under the bubble" rendering for files the
-        // LLM forgot to reference inline — but only if no slot exists for it
-        const hasSlot = document.querySelector('.agent-chart-slot[data-chart-filename="' + data.file_name.replace(/"/g, '\\"') + '"]');
-        if (!hasSlot) renderDataFileInline(data);
+        // Only inline-render *visual* outputs (charts, images). Data files
+        // (csv, xlsx, json, txt, pdf, etc.) live in the Data Room tab —
+        // they shouldn't clutter the chat. User uploads also fall through
+        // syncDataRoom and would otherwise show up redundantly here.
+        const ext = (data.file_type || "").toLowerCase();
+        const visualExts = ["html","htm","png","jpg","jpeg","gif","webp","svg"];
+        if (visualExts.includes(ext)) {
+          const hasSlot = document.querySelector('.agent-chart-slot[data-chart-filename="' + data.file_name.replace(/"/g, '\\"') + '"]');
+          if (!hasSlot) renderDataFileInline(data);
+        }
       }
     }
   };
@@ -359,9 +365,14 @@
           // Re-scan rendered content — markers in old assistant messages
           // (from history) will now find their artifacts and inline-render.
           scanAndReplaceMarkers(messagesEl);
-          // For any file that wasn't referenced by an inline marker, fall
-          // back to the "append under last bubble" cluster behaviour.
+          // For any *visual* file (chart/image) that wasn't referenced by
+          // an inline marker, fall back to the "append under last bubble"
+          // cluster behaviour. Data files (csv/xlsx/json/…) stay in the
+          // Data Room tab only.
+          const visualExts = ["html","htm","png","jpg","jpeg","gif","webp","svg"];
           files.reverse().forEach(function (f) {
+            const ext = (f.file_type || "").toLowerCase();
+            if (!visualExts.includes(ext)) return;
             const hasSlot = document.querySelector('.agent-chart-slot[data-chart-filename="' + f.file_name.replace(/"/g, '\\"') + '"]');
             if (hasSlot) return;
             renderDataFileInline({
