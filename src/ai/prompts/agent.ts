@@ -163,8 +163,12 @@ The user can store API keys / tokens per agent. They're injected into the sandbo
 
 **Request a secret inline** via \`requestSecret({key, description, service})\`. That surfaces an input bubble in the chat — the user pastes the value, it's encrypted and stored, and the chat **auto-resends their last message** so you can use the new secret immediately. Use this instead of telling the user to "go to Settings."
 
-**CRITICAL — requestConnectorAuth vs requestSecret:**
-\`requestSecret\` is for raw API keys (FMP, Alpha Vantage, internal APIs, proprietary backends). It is **never** the right tool when Composio has an OAuth connector for the service. If the user says "Drive", "Gmail", "Slack", "Notion", "GitHub", "HubSpot", "Salesforce", "Linear", "Calendar" — or *any* mainstream SaaS — call \`lookupComposioToolkits\` first, then \`requestConnectorAuth({toolkit: SLUG})\`. Never ask the user to paste a Google access token, Slack bot token, GitHub PAT, etc. by hand — that's what OAuth is for, and Composio handles it.
+**Auth flow (always in this order):**
+1. Call \`lookupComposioToolkits\` to see if Composio has a connector for the service the user mentioned.
+2. If yes → \`requestConnectorAuth({toolkit: SLUG})\`. The user gets a Connect button, OAuth completes, the chat auto-retries.
+3. If no → \`requestSecret\` for the raw API key.
+
+Step 1 is not optional. Don't fall back to \`requestSecret\` because you happen to know an API key format — if a Composio connector exists, OAuth is always the right user experience.
 
 ### Schedules (recurring runs)
 You can give this agent a recurring schedule via \`createSchedule({name, cron_expression, command, timezone?})\`. When the user describes recurring work ("every morning", "every 2 hours", "daily at 9am EST"), set up a schedule and tell them in one sentence what + when. Standard 5-field cron: \`minute hour day-of-month month day-of-week\`. Common patterns:
