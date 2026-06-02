@@ -145,9 +145,28 @@
 
   function scanAndReplaceMarkers(root) {
     if (!root || !root.querySelectorAll) return;
-    const contents = root.matches && root.matches(".message-content")
-      ? [root]
-      : root.querySelectorAll(".message.assistant .message-content");
+    // Build the list of candidate subtrees to scan:
+    //   1. If root is itself a .message-content, scan it directly.
+    //   2. If root contains any .message-content (e.g. a freshly added
+    //      .message assistant), scan each one.
+    //   3. Otherwise — root is some inner element like a <p> that streaming
+    //      just inserted INSIDE a .message-content — scan it directly so
+    //      markers inside don't get missed.
+    let contents;
+    if (root.matches && root.matches(".message-content")) {
+      contents = [root];
+    } else {
+      const nested = root.querySelectorAll(".message.assistant .message-content");
+      if (nested.length > 0) {
+        contents = nested;
+      } else {
+        // Walk up to find a containing .message-content so we know it's
+        // assistant-side text (skip user bubbles and notifications).
+        let p = root.parentNode;
+        while (p && p.classList && !p.classList.contains("message-content")) p = p.parentNode;
+        contents = p ? [root] : [];
+      }
+    }
     contents.forEach(function (content) {
       const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT, {
         acceptNode: function (n) {
@@ -431,8 +450,10 @@
     }
     chip.setAttribute("data-stage", stage || "");
     chip.innerHTML =
-      '<i class="fas fa-circle-notch fa-spin"></i>' +
-      '<span class="agent-progress-msg">' + escapeHtml(message || "Working…") + '</span>';
+      '<div class="agent-progress-chip-inner">' +
+        '<i class="fas fa-circle-notch fa-spin"></i>' +
+        '<span class="agent-progress-msg">' + escapeHtml(message || "Working…") + '</span>' +
+      '</div>';
     messagesEl.scrollTop = messagesEl.scrollHeight;
 
     // Reset the safety timeout.

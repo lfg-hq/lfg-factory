@@ -3052,23 +3052,33 @@ document.addEventListener('DOMContentLoaded', () => {
             // the file is stored in S3 + visible in the Data Room tab.
             if (window.__AGENT_MODE__ && document.body.dataset.agentId) {
                 const agentId = document.body.dataset.agentId;
-                showFileNotification(`Uploading ${file.name} to Data Room...`, 'uploading');
-                const fd = new FormData();
-                fd.append('file', file);
-                const res = await fetch(`/api/agents/${agentId}/data`, {
-                    method: 'POST',
-                    body: fd,
-                    credentials: 'same-origin',
-                });
-                if (!res.ok) {
-                    const errText = await res.text().catch(() => '');
-                    throw new Error(`Upload failed (${res.status}): ${errText.slice(0, 140)}`);
+                const uploadingToast = showFileNotification(`Uploading ${file.name} to Data Room...`, 'uploading');
+                const dismissUploading = () => {
+                    if (!uploadingToast) return;
+                    uploadingToast.classList.remove('show');
+                    setTimeout(() => uploadingToast.remove(), 300);
+                };
+                try {
+                    const fd = new FormData();
+                    fd.append('file', file);
+                    const res = await fetch(`/api/agents/${agentId}/data`, {
+                        method: 'POST',
+                        body: fd,
+                        credentials: 'same-origin',
+                    });
+                    if (!res.ok) {
+                        const errText = await res.text().catch(() => '');
+                        throw new Error(`Upload failed (${res.status}): ${errText.slice(0, 140)}`);
+                    }
+                    const data = await res.json();
+                    const fileId = data.file?.id;
+                    dismissUploading();
+                    showFileNotification(`${file.name} uploaded to Data Room`, 'success');
+                    return { id: fileId, file_name: data.file?.file_name ?? file.name };
+                } catch (err) {
+                    dismissUploading();
+                    throw err;
                 }
-                const data = await res.json();
-                const fileId = data.file?.id;
-                showFileNotification(`${file.name} uploaded to Data Room`, 'success');
-                // Return a shape chat.js callers expect (id, name)
-                return { id: fileId, file_name: data.file?.file_name ?? file.name };
             }
 
             console.log('%c FILE UPLOAD - Starting file upload process', 'background: #3a9; color: white; font-weight: bold;');

@@ -86,15 +86,19 @@ export function createAgentTools(params: {
     execute: async ({ command, timeout_seconds }) => {
       const tag = `[runInSandbox ${agentId.slice(0, 8)}]`;
       const cmdPreview = command.length > 200 ? command.slice(0, 200) + "..." : command;
-      console.log(`${tag} command (${command.length}ch): ${cmdPreview}`);
+      const tStart = Date.now();
+      console.log(`${tag} ━━━━━━━━━ [START] command (${command.length}ch) ━━━━━━━━━`);
+      console.log(`${tag} preview: ${cmdPreview}`);
 
       const progress = makeProgress(agentId, userId);
       try {
         const t0 = Date.now();
+        console.log(`${tag} [phase 1/3] ensureWorkspace…`);
         const { workspaceId } = await ensureWorkspace(agentId, userId, progress);
         const ensureMs = Date.now() - t0;
-        console.log(`${tag} workspace=${workspaceId} ensured in ${ensureMs}ms`);
+        console.log(`${tag} [phase 1/3] ensureWorkspace done in ${ensureMs}ms — workspace=${workspaceId}`);
         progress("running_command", "Running command in sandbox…");
+        console.log(`${tag} [phase 2/3] exec…`);
 
         // Base64-wrap the LLM's command so heredocs, nested quotes, multi-line
         // Python, and any shell-special char survive the SSH exec layer intact.
@@ -111,7 +115,7 @@ export function createAgentTools(params: {
         const stdoutLen = (result.output || "").length;
         const stderrLen = (result.stderr || "").length;
         console.log(
-          `${tag} exec done in ${execMs}ms — exitCode=${result.exitCode} stdoutLen=${stdoutLen} stderrLen=${stderrLen}`
+          `${tag} [phase 2/3] exec done in ${execMs}ms — exitCode=${result.exitCode} stdoutLen=${stdoutLen} stderrLen=${stderrLen}`
         );
         if (stdoutLen > 0) {
           console.log(`${tag} stdout: ${(result.output || "").slice(0, 500)}${stdoutLen > 500 ? "..." : ""}`);
@@ -122,12 +126,14 @@ export function createAgentTools(params: {
 
         // After the command finishes, sweep /root/data/ for new files and
         // sync them to S3 / Data Room. No-op if no files were written.
+        console.log(`${tag} [phase 3/3] syncDataRoom (background)…`);
         const [agentRow] = await db.select({ id: agents.id }).from(agents).where(eq(agents.agentId, agentId)).limit(1);
         if (agentRow) {
           syncDataRoom(workspaceId, agentRow.id)
-            .then(() => console.log(`${tag} syncDataRoom completed`))
-            .catch((err) => console.error(`${tag} syncDataRoom failed:`, (err as Error).message));
+            .then(() => console.log(`${tag} [phase 3/3] syncDataRoom completed`))
+            .catch((err) => console.error(`${tag} [phase 3/3] syncDataRoom failed:`, (err as Error).message));
         }
+        console.log(`${tag} ━━━━━━━━━ [END] total ${Date.now() - tStart}ms ━━━━━━━━━`);
 
         // Cap output size so we don't blow the LLM's context with a runaway log.
         const CAP = 8_000;
@@ -460,27 +466,36 @@ export function createAgentTools(params: {
     execute: async ({ code }) => {
       const tag = `[runPython ${agentId.slice(0, 8)}]`;
       const preview = code.length > 200 ? code.slice(0, 200) + "..." : code;
-      console.log(`${tag} code (${code.length}ch): ${preview}`);
+      const tStart = Date.now();
+      console.log(`${tag} ━━━━━━━━━ [START] code (${code.length}ch) ━━━━━━━━━`);
+      console.log(`${tag} preview: ${preview}`);
       const progress = makeProgress(agentId, userId);
       try {
         const t0 = Date.now();
+        console.log(`${tag} [phase 1/3] ensureWorkspace…`);
         const { workspaceId } = await ensureWorkspace(agentId, userId, progress);
-        console.log(`${tag} workspace=${workspaceId} ensured in ${Date.now() - t0}ms`);
+        console.log(`${tag} [phase 1/3] ensureWorkspace done in ${Date.now() - t0}ms — workspace=${workspaceId}`);
 
         progress("running_python", "Running analysis in Python kernel…");
+        console.log(`${tag} [phase 2/3] POST to kernel…`);
         const tExec = Date.now();
         const result = await runPythonInKernel(workspaceId, code);
         console.log(
-          `${tag} exec done in ${Date.now() - tExec}ms — ok=${result.ok} ` +
+          `${tag} [phase 2/3] kernel done in ${Date.now() - tExec}ms — ok=${result.ok} ` +
           `stdoutLen=${result.stdout.length} stderrLen=${result.stderr.length}`
         );
+        if (!result.ok && result.stderr) {
+          console.log(`${tag} kernel stderr: ${result.stderr.slice(0, 500)}`);
+        }
 
+        console.log(`${tag} [phase 3/3] syncDataRoom (background)…`);
         const [agentRow] = await db.select({ id: agents.id }).from(agents).where(eq(agents.agentId, agentId)).limit(1);
         if (agentRow) {
           syncDataRoom(workspaceId, agentRow.id)
-            .then(() => console.log(`${tag} syncDataRoom completed`))
-            .catch((err) => console.error(`${tag} syncDataRoom failed:`, (err as Error).message));
+            .then(() => console.log(`${tag} [phase 3/3] syncDataRoom completed`))
+            .catch((err) => console.error(`${tag} [phase 3/3] syncDataRoom failed:`, (err as Error).message));
         }
+        console.log(`${tag} ━━━━━━━━━ [END] total ${Date.now() - tStart}ms ━━━━━━━━━`);
 
         const CAP = 8_000;
         const stdout = result.stdout.slice(0, CAP);

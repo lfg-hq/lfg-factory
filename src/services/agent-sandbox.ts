@@ -166,9 +166,36 @@ export async function injectDataFiles(
   await execOnWorkspace(workspaceId, "mkdir -p /root/data");
   if (!files.length) return;
 
+  // Snapshot what's already on disk so we can skip files that are already
+  // there at the expected size. Without this, re-injecting a 15 MB CSV on
+  // every ensureWorkspace burns ~5-15s of presigned curl per turn.
+  let existingOnDisk = new Map<string, number>();
+  try {
+    const ls = await execOnWorkspace(
+      workspaceId,
+      `cd /root/data && ls -1A 2>/dev/null | while read -r f; do printf '%s\\t%s\\n' "$f" "$(stat -c %s "$f" 2>/dev/null || stat -f %z "$f" 2>/dev/null)"; done`,
+      { timeout: 8_000 }
+    );
+    for (const line of (ls.output || "").split("\n")) {
+      const [name, size] = line.split("\t");
+      if (name && size) existingOnDisk.set(name, parseInt(size, 10) || 0);
+    }
+  } catch {
+    /* listing failed — fall back to always-inject */
+  }
+
   for (const file of files) {
     // Shell-safe filename for the curl/echo target
     const safeName = file.fileName.replace(/[^a-zA-Z0-9._\- ]/g, "_");
+
+    // Skip if already on disk at the same size — nothing to do.
+    const onDiskSize = existingOnDisk.get(safeName);
+    if (file.fileSize && onDiskSize === file.fileSize) {
+      console.log(
+        `[agent-sandbox] inject ${file.fileName} skipped — already on disk (${file.fileSize}B)`
+      );
+      continue;
+    }
 
     try {
       // PATH 1 — S3 presigned URL + curl (no size limit)
@@ -243,15 +270,26 @@ export async function syncDataRoom(
 ): Promise<void> {
   const tag = `[syncDataRoom ${agentId.slice(0, 8)}]`;
   try {
-    const result = await execOnWorkspace(
+    // List with sizes in one call so we can skip files we already have at
+    // the right size. Mags exec has a 4 MB gRPC response cap — base64-cat'ing
+    // a 15 MB CSV here will hard-fail. Existing files (esp. user uploads)
+    // don't need re-syncing.
+    const listResult = await execOnWorkspace(
       workspaceId,
-      `ls -1 /root/data/ 2>/dev/null || echo "__EMPTY__"`,
+      `cd /root/data 2>/dev/null && ls -1A 2>/dev/null | while read -r f; do printf '%s\\t%s\\n' "$f" "$(stat -c %s "$f" 2>/dev/null || stat -f %z "$f" 2>/dev/null)"; done || echo "__EMPTY__"`,
       { timeout: 15_000 }
     );
 
-    if (result.output.includes("__EMPTY__")) {
+    if (listResult.output.includes("__EMPTY__") || !listResult.output.trim()) {
       console.log(`${tag} /root/data empty — nothing to sync`);
       return;
+    }
+
+    const sandboxFiles: Array<{ name: string; size: number }> = [];
+    for (const line of listResult.output.split("\n")) {
+      const [name, sizeStr] = line.split("\t");
+      if (!name) continue;
+      sandboxFiles.push({ name, size: parseInt(sizeStr ?? "0", 10) || 0 });
     }
 
     const existingRows = await db
@@ -260,12 +298,28 @@ export async function syncDataRoom(
       .where(eq(agentDataFiles.agentId, agentId));
 
     const existingByName = new Map(existingRows.map((r) => [r.fileName, r] as const));
-    const sandboxFiles = result.output.trim().split("\n").filter(Boolean);
     console.log(
-      `${tag} sandbox=[${sandboxFiles.join(", ")}] existing=${existingByName.size}`
+      `${tag} sandbox=[${sandboxFiles.map((f) => `${f.name}(${f.size}B)`).join(", ")}] existing=${existingByName.size}`
     );
 
-    for (const fileName of sandboxFiles) {
+    // Hard cap on what we'll try to pull back through Mags exec — gRPC
+    // message cap is ~4 MB, base64 inflates ~4/3, so anything over ~2.5 MB
+    // is unsafe to cat. User-uploaded large files were already injected
+    // from our S3 → no need to round-trip them.
+    const MAX_SYNC_BYTES = 2_500_000;
+
+    for (const { name: fileName, size: onDiskSize } of sandboxFiles) {
+      const prior = existingByName.get(fileName);
+      if (prior && prior.fileSize === onDiskSize) {
+        console.log(`${tag} ${fileName} unchanged (${onDiskSize}B) — skip`);
+        continue;
+      }
+      if (onDiskSize > MAX_SYNC_BYTES) {
+        console.warn(
+          `${tag} ${fileName} too large for exec channel (${onDiskSize}B > ${MAX_SYNC_BYTES}B) — skip`
+        );
+        continue;
+      }
       try {
         // Use `base64 -w 0` (GNU) to suppress line wrapping inline — no need
         // to post-process with `tr -d '\n'` which made the prior version
@@ -294,16 +348,10 @@ export async function syncDataRoom(
         }
 
         const content = Buffer.from(b64, "base64");
+        const size = onDiskSize || content.length;
         console.log(
-          `${tag} decoded ${fileName}: b64Len=${b64.length} decodedBytes=${content.length}`
+          `${tag} decoded ${fileName}: b64Len=${b64.length} decodedBytes=${content.length} expected=${onDiskSize}`
         );
-
-        const sizeResult = await execOnWorkspace(
-          workspaceId,
-          `wc -c < /root/data/${fileName}`,
-          { timeout: 10_000 }
-        );
-        const size = parseInt(sizeResult.output.trim(), 10) || content.length;
 
         if (size > 0 && content.length === 0) {
           console.error(`${tag} sandbox file is ${size}B but decoded to 0 bytes — base64 transfer failed for ${fileName}`);

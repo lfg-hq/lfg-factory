@@ -418,64 +418,106 @@ export async function ensurePythonKernel(
   workspaceId: string,
   progress?: ProgressFn
 ): Promise<void> {
+  const tag = `[ensurePythonKernel ${workspaceId.slice(0, 8)}]`;
   // Fast path: server already running?
+  const tHealth = Date.now();
   const health = await execOnWorkspace(
     workspaceId,
     `curl -sf -m 2 http://127.0.0.1:${KERNEL_PORT}/health || echo __NOPE__`,
     { timeout: 8_000 }
   );
+  console.log(`${tag} initial health check ${Date.now() - tHealth}ms → "${health.output.trim().slice(0, 40)}"`);
   if (health.output.includes("ok") && !health.output.includes("__NOPE__")) {
     return; // already up
   }
 
   progress?.("installing_python", "Installing data libs (pandas, plotly, matplotlib, scikit-learn)…");
+  console.log(`${tag} [START] cold bootstrap (venv + pip + kernel server)`);
 
   // Cold-path bootstrap. Idempotent.
+  // - setsid + </dev/null + full fd redirection so the python process is
+  //   fully detached from the SSH session that spawned it. `nohup &; disown`
+  //   alone is not always enough on mags' exec channel — the child can get
+  //   SIGHUP'd when the exec stream closes.
+  // - Use `python3 -u` so stdout/stderr are line-buffered into the log.
   const scriptB64 = Buffer.from(KERNEL_SERVER_SCRIPT).toString("base64");
   const bootstrap = `\
 set -e
-# Write the kernel server (overwrite each time so updates land)
+echo "[bootstrap] writing kernel_server.py"
 echo ${scriptB64} | base64 -d > /root/kernel_server.py
 
-# Create venv once
 if [ ! -x /root/venv/bin/python3 ]; then
+  echo "[bootstrap] creating venv"
   python3 -m venv /root/venv
+else
+  echo "[bootstrap] venv already exists"
 fi
 
-# Install required packages (fast no-op if already installed)
-/root/venv/bin/pip install -q --disable-pip-version-check \
+echo "[bootstrap] pip install (idempotent)"
+/root/venv/bin/pip install -q --disable-pip-version-check \\
   flask pandas numpy matplotlib plotly seaborn openpyxl scikit-learn
 
-# Kill any stale instance
+echo "[bootstrap] killing any stale kernel"
 pkill -f kernel_server.py 2>/dev/null || true
-sleep 0.2
+sleep 0.3
 
-# Start in background, fully detached so SSH session closing doesn't kill it
-nohup /root/venv/bin/python3 /root/kernel_server.py > /tmp/kernel.log 2>&1 &
-disown
-
+echo "[bootstrap] launching kernel (setsid, fully detached)"
+: > /tmp/kernel.log
+setsid /root/venv/bin/python3 -u /root/kernel_server.py </dev/null >/tmp/kernel.log 2>&1 &
+KPID=$!
+disown 2>/dev/null || true
+echo "[bootstrap] kernel pid=$KPID"
+sleep 0.5
+if kill -0 $KPID 2>/dev/null; then
+  echo "[bootstrap] kernel process alive"
+else
+  echo "[bootstrap] kernel process DIED immediately — log follows"
+  cat /tmp/kernel.log || true
+fi
 echo BOOTSTRAP_DONE
 `;
   const bootstrapB64 = Buffer.from(bootstrap).toString("base64");
-  await execOnWorkspace(
+  const tBoot = Date.now();
+  const bootRes = await execOnWorkspace(
     workspaceId,
     `echo ${bootstrapB64} | base64 -d | bash`,
     { timeout: 180_000 } // pip install can take ~60s on cold workspace
   );
+  console.log(
+    `${tag} bootstrap exec done in ${Date.now() - tBoot}ms — exit=${bootRes.exitCode} stdout:\n${(bootRes.output || "").slice(0, 600)}${(bootRes.stderr || "").trim() ? `\nstderr:\n${bootRes.stderr.slice(0, 300)}` : ""}`
+  );
 
   progress?.("starting_kernel", "Starting Python kernel…");
 
-  // Wait for /health to come up (up to ~10s)
-  for (let i = 0; i < 20; i++) {
+  // Wait for /health to come up. Flask binds in ~200ms but on a freshly
+  // installed venv first-import latency (pandas + plotly + flask) can be
+  // 3-5s. Be patient — 30s window.
+  const HEALTH_TRIES = 60; // 60 * 500ms = 30s
+  for (let i = 0; i < HEALTH_TRIES; i++) {
     const h = await execOnWorkspace(
       workspaceId,
       `curl -sf -m 2 http://127.0.0.1:${KERNEL_PORT}/health || echo __NOPE__`,
       { timeout: 5_000 }
     );
-    if (h.output.includes("ok") && !h.output.includes("__NOPE__")) return;
+    if (h.output.includes("ok") && !h.output.includes("__NOPE__")) {
+      console.log(`${tag} kernel up after ${(i + 1) * 500}ms`);
+      return;
+    }
     await new Promise((r) => setTimeout(r, 500));
   }
-  throw new Error("Python kernel server failed to start within 10s");
+
+  // Health never came up — dump the kernel log so we can see WHY.
+  try {
+    const log = await execOnWorkspace(
+      workspaceId,
+      `(cat /tmp/kernel.log 2>/dev/null || echo "<no kernel.log>"); echo "---"; pgrep -af kernel_server.py || echo "<no kernel process>"`,
+      { timeout: 5_000 }
+    );
+    console.error(`${tag} kernel never came up — diagnostics:\n${log.output}`);
+  } catch (err) {
+    console.error(`${tag} failed to read kernel log:`, (err as Error).message);
+  }
+  throw new Error("Python kernel server failed to start within 30s — see server logs for /tmp/kernel.log dump");
 }
 
 /**
