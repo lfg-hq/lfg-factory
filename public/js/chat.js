@@ -1522,11 +1522,27 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 isStreaming = false;
+                window.__isAgentStreaming__ = false;
                 currentStreamingEl = null;
 
                 // Clean up orchestrator streaming marker
                 const streamingBubble = document.querySelector('.orchestrator-streaming');
                 if (streamingBubble) streamingBubble.classList.remove('orchestrator-streaming');
+
+                // If a connector_connected event arrived mid-stream and got
+                // queued (silent enable case), flush it now — the original
+                // stream is done so the server-side guard won't drop the
+                // resend, and the WS-only resubmit won't duplicate the user
+                // bubble.
+                if (window.__pendingResubmit__ && typeof window.__handleAgentWsMessage__ === 'function') {
+                    const toolkit = window.__pendingResubmit__;
+                    window.__pendingResubmit__ = null;
+                    console.log('[chat] flushing queued resubmit for toolkit:', toolkit);
+                    // Tiny delay so the server marks isStreaming=false before our resend arrives
+                    setTimeout(function () {
+                        window.__handleAgentWsMessage__({ type: 'connector_connected', toolkit: toolkit, agent_id: null });
+                    }, 100);
+                }
 
                 // Remove typing indicator if still present
                 const typingIndicator = document.querySelector('.typing-indicator');
@@ -2620,6 +2636,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         isStreaming = true;
+        window.__isAgentStreaming__ = true;
         currentButtonState = ButtonState.STOP;
         
         // Set a timeout to prevent stuck states
@@ -2666,6 +2683,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         isStreaming = false;
+        window.__isAgentStreaming__ = false;
         currentButtonState = ButtonState.SEND;
     }
     
@@ -2675,6 +2693,7 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Reset flags
         isStreaming = false;
+        window.__isAgentStreaming__ = false;
         stopRequested = false;
         
         // Clear button transition timeout
@@ -3045,14 +3064,49 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             console.log('WebSocket not connected, queueing message');
             messageQueue.push(messageData);
-            
+
             // Try to reconnect
             if (!isSocketConnected) {
                 connectWebSocket();
             }
         }
     }
-    
+
+    // Exposed for agents.js' silent auto-resend after a connector enables
+    // mid-conversation. Bypasses addMessageToChat (don't render a new user
+    // bubble — the original is already there) and bypasses the form path
+    // (don't touch the input value). Pure WS send + typing indicator.
+    window.__sendChatMessageSilent__ = function (message) {
+        if (!message || typeof message !== 'string') return;
+        // Show typing indicator so the user knows something's happening
+        if (!document.querySelector('.typing-indicator')) {
+            const ti = document.createElement('div');
+            ti.className = 'typing-indicator';
+            ti.innerHTML =
+                '<span class="typing-indicator-label">Thinking</span>' +
+                '<span class="typing-indicator-dot"></span>' +
+                '<span class="typing-indicator-dot"></span>' +
+                '<span class="typing-indicator-dot"></span>';
+            messageContainer.appendChild(ti);
+            scrollToBottom(true);
+        }
+        showStopButton();
+        chatInput.disabled = true;
+        const payload = {
+            type: 'message',
+            message: message,
+            conversation_id: currentConversationId,
+            provider: currentProvider,
+            project_id: currentProjectId,
+        };
+        if (isSocketConnected && socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify(payload));
+        } else {
+            messageQueue.push(payload);
+            if (!isSocketConnected) connectWebSocket();
+        }
+    };
+
     // Function to upload file to server via REST API
     async function uploadFileToServer(file, conversationId = null, messageId = null) {
         try {

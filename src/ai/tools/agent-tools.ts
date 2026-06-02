@@ -324,17 +324,23 @@ export function createAgentTools(params: {
                 .where(eq(agents.id, agentRow.id));
             }
           }
-          // NOTE: deliberately NOT broadcasting connector_connected here.
-          // That would trigger the frontend's resubmitLastUserMessage,
-          // which races with the still-streaming LLM — leading to a
-          // duplicate user bubble + double tool calls. The user's tools
-          // will be loaded on their next message naturally. Tell the LLM
-          // to wrap up this turn with a brief prompt-to-retry.
+          // Broadcast so the frontend can auto-resend the user's last
+          // message — but the frontend queues the resend until THIS
+          // stream finishes (see agents.js resubmit-after-stream logic)
+          // to avoid the duplicate-bubble race, and resends via WS only
+          // (no new user bubble rendered).
+          broadcastToUser(userId, {
+            type: "connector_connected",
+            agent_id: agentId,
+            toolkit: slug,
+            silent_enable: true, // hint that resubmit should happen automatically
+          });
           return (
             `Enabled ${slug} for this agent (no OAuth needed — user had it connected at account level). ` +
-            `The toolkit's tools will be loaded on the user's NEXT message. ` +
-            `IMPORTANT: finish this turn with a one-sentence prompt like: "Done — ask me again and I'll pull from ${slug}." ` +
-            `Do NOT try to use the toolkit on this turn (its tools aren't loaded yet). Do NOT call more tools.`
+            `IMPORTANT: write a single short sentence like "Connecting ${slug} and retrying…" then STOP. ` +
+            `Do NOT call more tools. Do NOT try to use the toolkit on this turn (its tools aren't loaded ` +
+            `until the user's message is re-processed). The chat will auto-rerun the user's request after ` +
+            `you finish.`
           );
         }
 

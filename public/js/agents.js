@@ -38,7 +38,17 @@
       }
     } else if (data.type === "connector_connected") {
       if (!agentId || data.agent_id === agentId || data.agent_id == null) {
-        resubmitLastUserMessage(data.toolkit);
+        // If the broadcast arrives mid-stream (silent enable case), queue
+        // the resend until the current stream finishes — otherwise we'd
+        // race the in-flight LLM and the server would silently drop the
+        // duplicate WS message. After-stream resubmit is wired via
+        // chat.js's ai_chunk is_final handling (see below).
+        if (window.__isAgentStreaming__) {
+          window.__pendingResubmit__ = data.toolkit;
+          console.log("[agents] queued resubmit after stream — toolkit:", data.toolkit);
+        } else {
+          resubmitLastUserMessage(data.toolkit);
+        }
       }
     } else if (data.type === "secret_required") {
       if (!agentId || data.agent_id === agentId) {
@@ -579,7 +589,7 @@
     // Remove any pending connector CTA bubbles for this toolkit
     document.querySelectorAll('[data-connector-cta="' + toolkit + '"]').forEach((el) => el.remove());
 
-    // Find the most recent user message and re-send it
+    // Find the most recent user message
     const userMsgs = document.querySelectorAll(".message.user .message-content, .message-user .message-content");
     const last = userMsgs[userMsgs.length - 1];
     if (!last) {
@@ -589,8 +599,18 @@
     const text = (last.textContent || "").trim();
     if (!text) return;
 
-    // Programmatically populate the chat input and submit. chat.js owns the
-    // actual send pipeline (WS, state mgmt, file uploads); we just trigger it.
+    // Resend via the WS pipeline ONLY — do NOT re-render a user bubble
+    // (it's already there from the original send) and do NOT route through
+    // the form submit path (which would render a duplicate bubble + clear
+    // the input). chat.js exposes a low-level send for exactly this case.
+    if (typeof window.__sendChatMessageSilent__ === "function") {
+      console.log("[agents] silently resubmitting via WS:", text.slice(0, 80));
+      window.__sendChatMessageSilent__(text);
+      return;
+    }
+
+    // Fallback for environments where chat.js hasn't exposed the silent
+    // send — use the form path (will duplicate bubble, but still works).
     const input = document.getElementById("chat-input") || document.querySelector("textarea[name='message']");
     const form = document.getElementById("chat-form");
     if (!input || !form) {
@@ -599,7 +619,6 @@
     }
     input.value = text;
     input.dispatchEvent(new Event("input", { bubbles: true }));
-    // Small delay so the toast/render settles, then submit
     setTimeout(() => form.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true })), 200);
   }
 
