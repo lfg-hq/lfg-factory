@@ -315,25 +315,40 @@ export function createAgentTools(params: {
             .from(agents)
             .where(eq(agents.agentId, agentId))
             .limit(1);
-          if (agentRow) {
-            const current = agentRow.composioToolkits ?? [];
-            if (!current.includes(slug)) {
-              await db
-                .update(agents)
-                .set({ composioToolkits: [...current, slug], updatedAt: new Date() })
-                .where(eq(agents.id, agentRow.id));
-            }
+          const current = agentRow?.composioToolkits ?? [];
+          const wasAlreadyEnabledForAgent = current.includes(slug);
+
+          if (agentRow && !wasAlreadyEnabledForAgent) {
+            await db
+              .update(agents)
+              .set({ composioToolkits: [...current, slug], updatedAt: new Date() })
+              .where(eq(agents.id, agentRow.id));
           }
-          // Broadcast so the frontend can auto-resend the user's last
-          // message — but the frontend queues the resend until THIS
-          // stream finishes (see agents.js resubmit-after-stream logic)
-          // to avoid the duplicate-bubble race, and resends via WS only
-          // (no new user bubble rendered).
+
+          // Loop guard: if this toolkit was ALREADY enabled for this agent
+          // (we're being called on a retry-after-resend), do NOT broadcast
+          // or trigger another resubmit. The LLM clearly can't find the
+          // tool by name in its loaded list — tell it to use
+          // composio_search_tools to discover the right action instead of
+          // looping on requestConnectorAuth.
+          if (wasAlreadyEnabledForAgent) {
+            return (
+              `${slug} is ALREADY enabled for this agent — its tools should be in your loaded tool list. ` +
+              `Do NOT call requestConnectorAuth again for ${slug}. ` +
+              `If you can't find an obvious tool by name, call \`composio_search_tools\` with a plain-English ` +
+              `description of what you want to do (e.g. "list files", "download file contents", "search drive") ` +
+              `and it will return the exact action name to invoke. Then call that action directly.`
+            );
+          }
+
+          // First-time silent enable for this agent: broadcast so the
+          // frontend can auto-resend the user's last message after this
+          // stream ends (queued via window.__pendingResubmit__).
           broadcastToUser(userId, {
             type: "connector_connected",
             agent_id: agentId,
             toolkit: slug,
-            silent_enable: true, // hint that resubmit should happen automatically
+            silent_enable: true,
           });
           return (
             `Enabled ${slug} for this agent (no OAuth needed — user had it connected at account level). ` +
