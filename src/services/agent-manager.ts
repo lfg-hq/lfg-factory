@@ -293,7 +293,7 @@ export async function ensureWorkspace(
       }
     } else {
       console.log(`${tag} prior workspace gone (status=${existing?.status ?? "none"}), creating new "${workspaceName}"`);
-      progress?.("provisioning_sandbox", "Provisioning a fresh sandbox VM (~15s)…");
+      progress?.("provisioning_sandbox", "Spinning up sandbox VM…");
       wasColdStart = true;
       const t0 = Date.now();
       const ws = await newWorkspace(workspaceName);
@@ -306,7 +306,7 @@ export async function ensureWorkspace(
     }
   } else {
     console.log(`${tag} no sandbox record, creating fresh workspace "${workspaceName}"`);
-    progress?.("provisioning_sandbox", "Provisioning a fresh sandbox VM (~15s)…");
+    progress?.("provisioning_sandbox", "Spinning up sandbox VM…");
     wasColdStart = true;
     const t0 = Date.now();
     const ws = await newWorkspace(workspaceName);
@@ -428,7 +428,7 @@ export async function ensurePythonKernel(
     return; // already up
   }
 
-  progress?.("installing_python", "Installing pandas, plotly, matplotlib, scikit-learn (~30-60s, one-time per VM)…");
+  progress?.("installing_python", "Installing data libs (pandas, plotly, matplotlib, scikit-learn)…");
 
   // Cold-path bootstrap. Idempotent.
   const scriptB64 = Buffer.from(KERNEL_SERVER_SCRIPT).toString("base64");
