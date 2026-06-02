@@ -453,9 +453,13 @@ else
   echo "[bootstrap] venv already exists"
 fi
 
-echo "[bootstrap] pip install (idempotent)"
-/root/venv/bin/pip install -q --disable-pip-version-check \\
-  flask pandas numpy matplotlib plotly seaborn openpyxl scikit-learn
+echo "[bootstrap] pip install (idempotent, wheels only)"
+# --only-binary=:all: keeps us off the C/Fortran toolchain. scikit-learn
+# and seaborn pulled in from-source builds that fail on the Mags rootfs
+# (no meson / no manylinux wheel for musl). If the LLM needs them, it
+# can install on demand via runInSandbox.
+/root/venv/bin/pip install -q --disable-pip-version-check --only-binary=:all: \\
+  flask pandas numpy matplotlib plotly openpyxl
 
 echo "[bootstrap] killing any stale kernel"
 pkill -f kernel_server.py 2>/dev/null || true
@@ -533,7 +537,12 @@ export async function runPythonInKernel(
   const codeB64 = Buffer.from(code).toString("base64");
   // Pipe the base64'd code through curl as a raw POST body.
   // --data-binary @- reads stdin as the body verbatim.
-  const cmd = `echo ${codeB64} | base64 -d | curl -s -X POST --data-binary @- -H 'Content-Type: text/plain' http://127.0.0.1:${KERNEL_PORT}/exec`;
+  // Note: no single quotes around the Content-Type header — the whole
+  // command may be re-wrapped by the exec layer (`ash -lc '...'`) and
+  // nested single quotes break tokenization with "ash: syntax error:
+  // unterminated quoted string". The header value has no shell-special
+  // chars so unquoted is safe.
+  const cmd = `echo ${codeB64} | base64 -d | curl -s -X POST --data-binary @- -H Content-Type:text/plain http://127.0.0.1:${KERNEL_PORT}/exec`;
   const result = await execOnWorkspace(workspaceId, cmd, { timeout: opts.timeout ?? 300_000 });
   try {
     const parsed = JSON.parse(result.output);
