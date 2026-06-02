@@ -282,28 +282,35 @@ export function AgentDetailPage({
               </div>
               <div class="form-group">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem;">
-                  <label style="margin:0;">Composio Integrations</label>
+                  <label style="margin:0;">Integrations enabled for this agent</label>
                   <button type="button" id="connectors-btn" class="btn btn-secondary btn-sm" style="font-size:0.75rem;padding:0.3rem 0.625rem;">
-                    <i class="fas fa-plus" style="font-size:0.625rem;"></i> Manage
+                    <i class="fas fa-plus" style="font-size:0.625rem;"></i> Add
                   </button>
                 </div>
-                ${composioToolkits.length > 0 ? html`
-                  <div style="display:flex;flex-direction:column;gap:0.5rem;">
-                    ${composioToolkits.map((t) => html`
-                      <label class="toolkit-switch-row">
-                        <span class="toolkit-switch-name">${t.name.toLowerCase()}</span>
-                        <span class="toolkit-switch">
-                          <input type="checkbox" name="composio_toolkits" value="${t.slug}"
-                            ${agent.composioToolkits.includes(t.slug) ? "checked" : ""} />
-                          <span class="toolkit-switch-track"><span class="toolkit-switch-thumb"></span></span>
-                        </span>
-                      </label>
-                    `)}
-                  </div>
-                ` : html`
-                  <p style="font-size:0.8125rem;color:var(--text-secondary);margin:0;">No integrations connected yet. Click <strong>Manage</strong> to connect Gmail, Slack, GitHub, etc.</p>
-                `}
-                <small style="color:var(--text-secondary);font-size:0.7rem;margin-top:0.625rem;line-height:1.45;display:block;">Only the integrations toggled on here are exposed to this agent. New agents start with everything off — flip what you want it to use.</small>
+                ${(() => {
+                  // Only show toolkits actually enabled FOR THIS AGENT (not
+                  // every user-level connection). The list grows when the
+                  // agent calls requestConnectorAuth or when the user adds
+                  // one explicitly via the "Add" button.
+                  const enabledSet = new Set(agent.composioToolkits ?? []);
+                  const enabledToolkits = composioToolkits.filter((t) => enabledSet.has(t.slug));
+                  return enabledToolkits.length > 0 ? html`
+                    <div style="display:flex;flex-direction:column;gap:0.5rem;">
+                      ${enabledToolkits.map((t) => html`
+                        <label class="toolkit-switch-row">
+                          <span class="toolkit-switch-name">${t.name.toLowerCase()}</span>
+                          <span class="toolkit-switch">
+                            <input type="checkbox" name="composio_toolkits" value="${t.slug}" checked />
+                            <span class="toolkit-switch-track"><span class="toolkit-switch-thumb"></span></span>
+                          </span>
+                        </label>
+                      `)}
+                    </div>
+                  ` : html`
+                    <p style="font-size:0.8125rem;color:var(--text-secondary);margin:0;">None yet. Click <strong>Add</strong> to enable an integration for this agent, or just ask in chat — the agent will request what it needs.</p>
+                  `;
+                })()}
+                <small style="color:var(--text-secondary);font-size:0.7rem;margin-top:0.625rem;line-height:1.45;display:block;">Each agent has its own list. Toggle off to remove access without disconnecting at the account level.</small>
               </div>
               <div class="form-group">
                 <label>Run timeout (minutes)</label>

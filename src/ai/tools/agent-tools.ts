@@ -283,19 +283,62 @@ export function createAgentTools(params: {
 
   const requestConnectorAuth = tool({
     description:
-      "Surface an inline 'Connect [Service]' button in the chat for an integration the user hasn't connected yet. " +
-      "After the user clicks and completes OAuth, the chat AUTOMATICALLY resends their last message so you can " +
-      "fulfill the original task — you don't need to ask them to retry. Call this instead of telling the user to " +
-      "'go to Settings and come back.' Verify the slug exists first via lookupComposioToolkits.",
+      "Enable a Composio toolkit for THIS agent. If the user has already connected the toolkit at account level " +
+      "(see lookupComposioToolkits — [CONNECTED] flag), this enables it silently for this agent — no user " +
+      "interaction needed — and you can immediately use its tools on the NEXT turn. If the user hasn't connected " +
+      "it yet, this surfaces an inline 'Connect [Service]' button; after they finish OAuth the chat auto-resends " +
+      "their last message. Verify the slug exists first via lookupComposioToolkits.",
     inputSchema: zodSchema(
       z.object({
         toolkit: z
           .string()
-          .describe("Composio toolkit slug to connect — e.g. 'GMAIL', 'SLACK', 'GITHUB', 'APOLLO'. Use the exact slug from lookupComposioToolkits."),
+          .describe("Composio toolkit slug — e.g. 'GMAIL', 'SLACK', 'GITHUB', 'APOLLO'. Use the exact slug from lookupComposioToolkits."),
       })
     ),
     execute: async ({ toolkit }) => {
       try {
+        const slug = toolkit.toUpperCase();
+
+        // Fast path: if the user already has this toolkit connected at the
+        // account level, skip OAuth entirely and just opt this agent in.
+        // No popup, no user friction — the LLM can use the toolkit's tools
+        // on the very next turn. (Per-agent gating still applies: tools are
+        // loaded per agent based on agent.composioToolkits.)
+        const userConns = await listConnectors(userId, { filter: "all", limit: 50 });
+        const alreadyConnected = userConns.items.some(
+          (t: any) => (t.slug || "").toUpperCase() === slug && t.isConnected
+        );
+
+        if (alreadyConnected) {
+          const [agentRow] = await db
+            .select({ id: agents.id, composioToolkits: agents.composioToolkits })
+            .from(agents)
+            .where(eq(agents.agentId, agentId))
+            .limit(1);
+          if (agentRow) {
+            const current = agentRow.composioToolkits ?? [];
+            if (!current.includes(slug)) {
+              await db
+                .update(agents)
+                .set({ composioToolkits: [...current, slug], updatedAt: new Date() })
+                .where(eq(agents.id, agentRow.id));
+            }
+          }
+          // Tell the chat that this agent now has the toolkit so the UI
+          // refreshes (settings panel + auto-resend last user message).
+          broadcastToUser(userId, {
+            type: "connector_connected",
+            agent_id: agentId,
+            toolkit: slug,
+          });
+          return (
+            `Enabled ${slug} for this agent (user had already connected at account level, no OAuth needed). ` +
+            `The user's last message will be auto-retried; on that retry the toolkit's tools will be available — ` +
+            `use them to fulfill the original task.`
+          );
+        }
+
+        // Slow path: user hasn't connected at account level — kick off OAuth.
         const callbackUrl =
           `${env.BETTER_AUTH_URL}/api/composio/callback` +
           `?popup=1&toolkit=${encodeURIComponent(toolkit)}&agent_id=${encodeURIComponent(agentId)}`;
@@ -305,27 +348,41 @@ export function createAgentTools(params: {
           return `Failed to initiate connection: ${result.error}. Confirm the slug is correct (use lookupComposioToolkits) or ask the user to connect manually.`;
         }
 
-        // No-auth toolkit — already saved
+        // No-auth toolkit — already saved at user level, also opt this agent in.
         if (!result.redirectUrl) {
+          const [agentRow] = await db
+            .select({ id: agents.id, composioToolkits: agents.composioToolkits })
+            .from(agents)
+            .where(eq(agents.agentId, agentId))
+            .limit(1);
+          if (agentRow) {
+            const current = agentRow.composioToolkits ?? [];
+            if (!current.includes(slug)) {
+              await db
+                .update(agents)
+                .set({ composioToolkits: [...current, slug], updatedAt: new Date() })
+                .where(eq(agents.id, agentRow.id));
+            }
+          }
           broadcastToUser(userId, {
             type: "connector_connected",
             agent_id: agentId,
-            toolkit,
+            toolkit: slug,
           });
-          return `Connected ${toolkit} (no-auth). The user's last message will be auto-retried — proceed with the task.`;
+          return `Connected ${slug} (no-auth). The user's last message will be auto-retried — proceed with the task.`;
         }
 
         // Broadcast inline Connect CTA — frontend renders a button that opens redirectUrl
         broadcastToUser(userId, {
           type: "connector_required",
           agent_id: agentId,
-          toolkit,
+          toolkit: slug,
           redirect_url: result.redirectUrl,
         });
 
         return (
-          `Surfaced a 'Connect ${toolkit}' button in the chat. ` +
-          `Tell the user briefly: "I need ${toolkit} to do that — click the Connect button above. " ` +
+          `Surfaced a 'Connect ${slug}' button in the chat. ` +
+          `Tell the user briefly: "I need ${slug} to do that — click the Connect button above. " ` +
           `"I'll pick up where we left off automatically." Then STOP — do not retry yet; the chat will auto-resend their message after they connect.`
         );
       } catch (err) {

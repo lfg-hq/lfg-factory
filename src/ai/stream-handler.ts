@@ -312,6 +312,7 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
       instructions: agentRecord.instructions,
       memoryContent: agentRecord.memoryContent,
       connectedToolkits: connectorList.items.filter((t: any) => t.isConnected).map((t: any) => t.slug),
+      enabledToolkits: agentRecord.composioToolkits ?? [],
     });
   } else if (instantMode) {
     systemPrompt = getInstantSystemPrompt();

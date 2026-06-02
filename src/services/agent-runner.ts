@@ -205,6 +205,7 @@ export async function runAgentTask(input: RunAgentTaskInput): Promise<RunAgentTa
     instructions: agent.instructions,
     memoryContent: agent.memoryContent,
     connectedToolkits: connectorList.items.filter((t: any) => t.isConnected).map((t: any) => t.slug),
+    enabledToolkits: agent.composioToolkits ?? [],
   });
 
   // ── 7. Run the LLM (non-streaming — we want the final text only) ──────────

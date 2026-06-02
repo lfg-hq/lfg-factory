@@ -12,14 +12,16 @@ export interface AgentPromptParams {
   personality: string | null;
   instructions: string | null;
   memoryContent: string | null;
-  connectedToolkits: string[]; // toolkits the user has connected via Composio
+  connectedToolkits: string[]; // toolkits the user has connected at account level
+  enabledToolkits: string[];   // toolkits enabled FOR THIS AGENT (per-agent gating)
 }
 
 export function getAgentSystemPrompt(params: AgentPromptParams): string {
-  const { name, personality, instructions, memoryContent, connectedToolkits } = params;
+  const { name, personality, instructions, memoryContent, connectedToolkits, enabledToolkits } = params;
   const currentDate = new Date().toISOString().split("T")[0];
 
-  const hasIntegrations = connectedToolkits.length > 0;
+  const hasEnabled = enabledToolkits.length > 0;
+  const userConnectedNotEnabled = connectedToolkits.filter((t) => !enabledToolkits.includes(t));
   const isFresh = (!instructions || !instructions.trim()) && (!name || name === "New Agent");
 
   return `You are ${isFresh ? "a new AI agent that hasn't been configured yet" : name} — an autonomous AI agent. Today is ${currentDate}.
@@ -150,9 +152,14 @@ Cold-start is 1-3s the first time per session; subsequent commands are SSH-fast.
 Use for: generating files (xlsx, pdf, video render), running scrapers (Playwright/requests), ffmpeg jobs, package installs, building static sites. **Don't use for** anything a single Composio API call can do — that's slower and more brittle.
 
 ### Composio Integrations
-${hasIntegrations
-    ? `The user has these toolkits connected at the account level: **${connectedToolkits.join(", ")}**. You have access to **all of them** — no per-agent gating. Use \`composio_search_tools\` to find the specific action you need (e.g. "get latest emails", "create issue"), then call it.`
-    : `The user hasn't connected any Composio integrations yet. When they ask for something that maps to a service (Gmail, Slack, GitHub, etc.), call \`requestConnectorAuth({toolkit: "SLUG"})\` to surface a Connect button in the chat.`}
+${hasEnabled
+    ? `**Enabled for THIS agent (you can call these directly):** ${enabledToolkits.join(", ")}. Use \`composio_search_tools\` to find the specific action you need, then call it.`
+    : `**Nothing is enabled for this agent yet.** You can't call any Composio tool directly until one is enabled.`}
+${userConnectedNotEnabled.length > 0
+    ? `\n**User-connected at account level but NOT yet enabled for this agent:** ${userConnectedNotEnabled.join(", ")}. To use any of these, call \`requestConnectorAuth({toolkit: SLUG})\` — it will enable silently (no OAuth popup) since the user has already authorized at account level. After it returns, the chat auto-retries the user's last message and the toolkit's tools become available on that turn.`
+    : ""}
+
+When the user asks for something that needs an integration NOT in either list above, call \`lookupComposioToolkits({query: …})\` to discover the right slug, then \`requestConnectorAuth\` (which will show the Connect button since the user hasn't authorized yet).
 
 ### Discover integrations (via \`lookupComposioToolkits\`)
 Search the Composio catalog by capability keyword ("leads", "email", "crm", etc.) to find real available toolkits with their slugs. Use this **before** recommending a service — don't guess slugs from training data.
