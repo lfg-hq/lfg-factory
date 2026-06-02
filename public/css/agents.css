@@ -754,10 +754,77 @@
   text-overflow: ellipsis;
 }
 
+/* Centered inline card for "I need this secret" prompts. Sits in the
+   chat flow like an assistant message but visually distinct, with a
+   dismiss button so the user can decline. */
+.agent-secret-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0.75rem auto;
+  padding: 0.85rem 1rem;
+  width: max-content;
+  max-width: 540px;
+  background: var(--bg-secondary, #0f1419);
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  border-radius: 12px;
+  color: var(--text-primary, #e2e8f0);
+}
+.agent-secret-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+}
+.agent-secret-card-header i {
+  color: var(--primary-color, #818cf8);
+}
+.agent-secret-card-service {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+.agent-secret-card-desc {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+.agent-secret-card-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+.agent-secret-card-input {
+  flex: 1;
+  min-width: 220px;
+  font-family: monospace;
+  font-size: 0.8125rem;
+}
+.agent-card-dismiss {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.5rem;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0.25rem 0.4rem;
+  font-size: 0.75rem;
+  opacity: 0.6;
+  transition: opacity 0.15s;
+}
+.agent-card-dismiss:hover { opacity: 1; }
+
 /* Inline chart slot — replaces a [CHART: filename] marker in the
    assistant's narrative with the actual artifact, in-place. */
 .agent-chart-slot {
-  margin: 0.75rem 0;
+  margin: 0.75rem 0 1.25rem;
+}
+/* Extra breathing room if the chart is the last thing in a bubble — keeps
+   it from kissing the next message. */
+.message-content > .agent-chart-slot:last-child,
+.message-content > *:last-child .agent-chart-slot:last-child {
+  margin-bottom: 1.5rem;
 }
 
 .agent-chart-placeholder {

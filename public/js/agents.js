@@ -537,24 +537,26 @@
     const messagesEl = document.getElementById("chat-messages");
     if (!messagesEl) return;
     const wrap = document.createElement("div");
-    wrap.className = "message assistant secret-cta";
+    wrap.className = "agent-secret-card";
     wrap.setAttribute("data-secret-cta", key);
     wrap.innerHTML =
-      '<div class="message-content">' +
-        '<div style="display:flex;flex-direction:column;gap:0.5rem;padding:0.5rem 0;">' +
-          '<div style="display:flex;align-items:center;gap:0.5rem;">' +
-            '<i class="fas fa-key" style="color:var(--primary-color);"></i>' +
-            '<strong>' + key + '</strong>' +
-            (service ? '<span style="font-size:0.75rem;color:var(--text-secondary);">(' + service + ')</span>' : '') +
-          '</div>' +
-          '<div style="font-size:0.8125rem;color:var(--text-secondary);">' + escapeHtml(description || "") + '</div>' +
-          '<div style="display:flex;gap:0.5rem;align-items:center;">' +
-            '<input type="password" id="secret-input-' + key + '" class="input" style="flex:1;font-family:monospace;font-size:0.8125rem;" placeholder="Paste value, then Save" />' +
-            '<button class="btn btn-primary btn-sm" onclick="submitInlineSecret(\'' + key + '\', ' + JSON.stringify(service || "") + ')">' +
-              '<i class="fas fa-save"></i> Save' +
-            '</button>' +
-          '</div>' +
-        '</div>' +
+      '<button class="agent-card-dismiss" aria-label="Dismiss" ' +
+        'onclick="this.closest(\'.agent-secret-card\').remove()">' +
+        '<i class="fas fa-times"></i>' +
+      '</button>' +
+      '<div class="agent-secret-card-header">' +
+        '<i class="fas fa-key"></i>' +
+        '<strong>' + escapeHtml(key) + '</strong>' +
+        (service ? '<span class="agent-secret-card-service">(' + escapeHtml(service) + ')</span>' : '') +
+      '</div>' +
+      (description
+        ? '<div class="agent-secret-card-desc">' + escapeHtml(description) + '</div>'
+        : '') +
+      '<div class="agent-secret-card-row">' +
+        '<input type="password" id="secret-input-' + key + '" class="input agent-secret-card-input" placeholder="Paste value, then Save" />' +
+        '<button class="btn btn-primary btn-sm" onclick="submitInlineSecret(\'' + key + '\', ' + JSON.stringify(service || "") + ')">' +
+          '<i class="fas fa-save"></i> Save' +
+        '</button>' +
       '</div>';
     messagesEl.appendChild(wrap);
     messagesEl.scrollTop = messagesEl.scrollHeight;
