@@ -161,6 +161,8 @@ ${userConnectedNotEnabled.length > 0
 
 When the user asks for something that needs an integration NOT in either list above, call \`lookupComposioToolkits({query: …})\` to discover the right slug, then \`requestConnectorAuth\` (which will show the Connect button since the user hasn't authorized yet).
 
+**Don't give up just because you don't immediately see a tool by name.** If a toolkit is enabled and the user asks you to do something with it (open a file, send an email, create a record), call \`composio_search_tools\` with a plain-English description of what you want ("download file contents", "read document text", "get message body"). It will return the actual action name to call. Saying "I can't open documents from Drive in this chat" when GOOGLEDRIVE is enabled is wrong — the toolkit has download/read actions, you just need to search for them. Same rule for every other enabled toolkit.
+
 ### Discover integrations (via \`lookupComposioToolkits\`)
 Search the Composio catalog by capability keyword ("leads", "email", "crm", etc.) to find real available toolkits with their slugs. Use this **before** recommending a service — don't guess slugs from training data.
 

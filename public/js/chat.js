@@ -2293,7 +2293,11 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!typingIndicator) {
                 const indicator = document.createElement('div');
                 indicator.className = 'typing-indicator';
-                indicator.innerHTML = '<span></span><span></span><span></span>';
+                indicator.innerHTML =
+                    '<span class="typing-indicator-label">Thinking</span>' +
+                    '<span class="typing-indicator-dot"></span>' +
+                    '<span class="typing-indicator-dot"></span>' +
+                    '<span class="typing-indicator-dot"></span>';
                 messageContainer.appendChild(indicator);
                 scrollToBottom();
             }
@@ -2950,7 +2954,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!document.querySelector('.typing-indicator')) {
             const typingIndicator = document.createElement('div');
             typingIndicator.className = 'typing-indicator';
-            typingIndicator.innerHTML = '<span></span><span></span><span></span>';
+            // Label + 3-dot pulse — pure dots were too subtle and users
+            // assumed nothing was happening between send and first stream.
+            typingIndicator.innerHTML =
+                '<span class="typing-indicator-label">Thinking</span>' +
+                '<span class="typing-indicator-dot"></span>' +
+                '<span class="typing-indicator-dot"></span>' +
+                '<span class="typing-indicator-dot"></span>';
             messageContainer.appendChild(typingIndicator);
             console.log('sendMessageToServer: Added typing indicator');
         }

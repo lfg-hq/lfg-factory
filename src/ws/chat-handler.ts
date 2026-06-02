@@ -84,8 +84,8 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
   if (msg.type === "sync_state") {
     send(ws, {
       type: "sync_state_response",
-      isStreaming: conn.isStreaming,
-      conversationId: conn.conversationId,
+      is_streaming: conn.isStreaming,
+      conversation_id: conn.conversationId,
     });
     return;
   }
@@ -112,7 +112,12 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
     }
 
     if (conn.isStreaming) {
-      send(ws, { type: "error", message: "A response is already being generated" });
+      // Silently drop a duplicate send while we're already streaming.
+      // Showing a "response is already being generated" toast is more
+      // annoying than helpful — the user can see the assistant is mid-
+      // reply, and a stray duplicate (e.g. from auto-resend or a fast
+      // double-click) just gets ignored.
+      console.log("[chat-handler] ignoring send while already streaming");
       return;
     }
 
