@@ -196,15 +196,27 @@ export async function disconnectToolkit(userId: string, toolkit: string): Promis
  *     `composio_execute_tool`) instead of statically loading every tool, so
  *     a user with 100+ connected services doesn't bloat the LLM's context
  *
- * No per-agent filtering — chat-side agents see everything the user has
- * connected. Sandbox-side MCP scoping is separate (see agent-sandbox.ts).
+ * Per-agent gating: pass `enabledToolkits`. The semantics are:
+ *   - undefined  → load all the user's connected toolkits (non-agent chat)
+ *   - []         → return no Composio tools at all (agent with nothing
+ *                  enabled — strict opt-in)
+ *   - [slug,…]   → scope the toolrouter session to just those toolkits
  */
-export async function getComposioTools(userId: string): Promise<Record<string, any>> {
+export async function getComposioTools(
+  userId: string,
+  enabledToolkits?: string[]
+): Promise<Record<string, any>> {
   const composio = getComposio();
   if (!composio) return {};
 
+  // Strict per-agent gating: agent has explicitly opted in to nothing.
+  if (enabledToolkits && enabledToolkits.length === 0) return {};
+
   try {
-    const session = await composio.create(userId, { manageConnections: true });
+    const session = await composio.create(userId, {
+      manageConnections: true,
+      ...(enabledToolkits?.length ? { toolkits: { enable: enabledToolkits } } : {}),
+    });
     const tools = await session.tools();
     return tools ?? {};
   } catch (err) {

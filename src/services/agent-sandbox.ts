@@ -32,6 +32,29 @@ async function runScript(workspaceId: string, script: string): Promise<string> {
 }
 
 /**
+ * Build a shell command that lists files in `dir` with name+size, one
+ * record per line as `<name>\t<size>`. Returns empty stdout if the dir
+ * is empty or missing.
+ *
+ * The script is base64-wrapped so the inner `printf "%s\t%s\n"` quoting
+ * survives being re-wrapped by the exec layer's `ash -lc '<cmd>'`. Inline
+ * single quotes break ash tokenization → empty output → silent failure
+ * upstream.
+ *
+ * Uses POSIX-portable tools (find, wc, basename) so it works on the musl
+ * busybox rootfs that Mags uses without relying on GNU stat extensions.
+ */
+function listDirCmd(dir: string): string {
+  const script =
+    `find ${dir} -maxdepth 1 -type f 2>/dev/null | while read -r f; do ` +
+    `size=$(wc -c < "$f" 2>/dev/null | tr -d ' '); ` +
+    `printf "%s\\t%s\\n" "$(basename "$f")" "$size"; ` +
+    `done`;
+  const b64 = Buffer.from(script).toString("base64");
+  return `echo ${b64} | base64 -d | sh`;
+}
+
+/**
  * Load Composio MCP endpoint and write Claude Code settings.json
  * into the sandbox so Claude CLI has native integration access.
  */
@@ -169,11 +192,16 @@ export async function injectDataFiles(
   // Snapshot what's already on disk so we can skip files that are already
   // there at the expected size. Without this, re-injecting a 15 MB CSV on
   // every ensureWorkspace burns ~5-15s of presigned curl per turn.
+  //
+  // NOTE: base64-wrap the script. Inline single quotes inside this pipeline
+  // (printf '%s\t…\n') get mangled when the exec layer re-wraps with
+  // `ash -lc '<cmd>'`, producing empty output and making us think /root/data
+  // is empty when it isn't. Pattern matches what we do for kernel POST.
   let existingOnDisk = new Map<string, number>();
   try {
     const ls = await execOnWorkspace(
       workspaceId,
-      `cd /root/data && ls -1A 2>/dev/null | while read -r f; do printf '%s\\t%s\\n' "$f" "$(stat -c %s "$f" 2>/dev/null || stat -f %z "$f" 2>/dev/null)"; done`,
+      listDirCmd("/root/data"),
       { timeout: 8_000 }
     );
     for (const line of (ls.output || "").split("\n")) {
@@ -273,14 +301,15 @@ export async function syncDataRoom(
     // List with sizes in one call so we can skip files we already have at
     // the right size. Mags exec has a 4 MB gRPC response cap — base64-cat'ing
     // a 15 MB CSV here will hard-fail. Existing files (esp. user uploads)
-    // don't need re-syncing.
+    // don't need re-syncing. base64-wrapped to survive nested-quote
+    // mangling under `ash -lc '<cmd>'`.
     const listResult = await execOnWorkspace(
       workspaceId,
-      `cd /root/data 2>/dev/null && ls -1A 2>/dev/null | while read -r f; do printf '%s\\t%s\\n' "$f" "$(stat -c %s "$f" 2>/dev/null || stat -f %z "$f" 2>/dev/null)"; done || echo "__EMPTY__"`,
+      listDirCmd("/root/data"),
       { timeout: 15_000 }
     );
 
-    if (listResult.output.includes("__EMPTY__") || !listResult.output.trim()) {
+    if (!listResult.output.trim()) {
       console.log(`${tag} /root/data empty — nothing to sync`);
       return;
     }

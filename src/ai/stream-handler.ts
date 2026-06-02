@@ -246,11 +246,13 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
       ? toolsTurbo
       : toolsProduct;
 
-  // Merge Composio tools — always load the user's full set of connected
-  // toolkits via the toolrouter. The LLM uses composio_search_tools to
-  // dynamically pick relevant tools per query, so no per-agent gating.
+  // Merge Composio tools. For agent chats, scope strictly to the toolkits
+  // the user has explicitly enabled on that agent (agent.composioToolkits).
+  // A new agent with nothing toggled on gets no Composio tools at all.
+  // For non-agent chat (no agentRecord), load the full connected set.
+  const enabledToolkits = agentRecord ? (agentRecord.composioToolkits ?? []) : undefined;
   const composioTools = await Promise.race([
-    getComposioTools(userId),
+    getComposioTools(userId, enabledToolkits),
     new Promise<Record<string, never>>((resolve) => setTimeout(() => resolve({}), 10_000)),
   ]);
   if (Object.keys(composioTools).length > 0) {

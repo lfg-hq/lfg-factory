@@ -178,8 +178,10 @@ export async function runAgentTask(input: RunAgentTaskInput): Promise<RunAgentTa
   // ── 5. Tools: same shape as chat-side agent ───────────────────────────────
   let tools: Record<string, any> = {};
 
+  // Per-agent toolkit gating — same rules as stream-handler.ts. Empty
+  // composioToolkits means no Composio tools at all (strict opt-in).
   const composioTools = await Promise.race([
-    getComposioTools(userId),
+    getComposioTools(userId, agent.composioToolkits ?? []),
     new Promise<Record<string, never>>((resolve) => setTimeout(() => resolve({}), 10_000)),
   ]);
   if (Object.keys(composioTools).length > 0) tools = { ...tools, ...composioTools };

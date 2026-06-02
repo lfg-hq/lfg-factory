@@ -303,7 +303,7 @@ export function AgentDetailPage({
                 ` : html`
                   <p style="font-size:0.8125rem;color:var(--text-secondary);margin:0;">No integrations connected yet. Click <strong>Manage</strong> to connect Gmail, Slack, GitHub, etc.</p>
                 `}
-                <small style="color:var(--text-secondary);font-size:0.7rem;margin-top:0.625rem;line-height:1.45;display:block;">Toggles scope sandbox-CLI access. The chat-side LLM always has access to all your connected integrations.</small>
+                <small style="color:var(--text-secondary);font-size:0.7rem;margin-top:0.625rem;line-height:1.45;display:block;">Only the integrations toggled on here are exposed to this agent. New agents start with everything off — flip what you want it to use.</small>
               </div>
               <div class="form-group">
                 <label>Run timeout (minutes)</label>
