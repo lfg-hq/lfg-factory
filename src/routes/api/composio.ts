@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { requireAuth } from "../../auth/middleware.ts";
 import { db } from "../../config/db.ts";
 import { composioToolkits } from "../../db/schema/composio.ts";
+import { agents } from "../../db/schema/agents.ts";
 import { eq, and } from "drizzle-orm";
 import {
   isComposioConfigured,
@@ -89,6 +90,35 @@ composio.get("/callback", async (c) => {
     } catch (err) {
       console.error("[composio-callback] saveConnectedToolkit failed:", (err as Error).message);
     }
+
+    // If this OAuth flow was started from a specific agent's chat (via
+    // requestConnectorAuth), automatically opt that agent into the
+    // toolkit. Without this, per-agent gating means the LLM still gets
+    // no tools loaded on the next turn even though the user just
+    // connected — they'd see "I can't access X" right after connecting.
+    if (agentId) {
+      try {
+        const slug = toolkit.toUpperCase();
+        const [agentRow] = await db
+          .select({ id: agents.id, composioToolkits: agents.composioToolkits })
+          .from(agents)
+          .where(and(eq(agents.agentId, agentId), eq(agents.userId, user.id)))
+          .limit(1);
+        if (agentRow) {
+          const current = agentRow.composioToolkits ?? [];
+          if (!current.includes(slug)) {
+            await db
+              .update(agents)
+              .set({ composioToolkits: [...current, slug], updatedAt: new Date() })
+              .where(eq(agents.id, agentRow.id));
+            console.log(`[composio-callback] auto-enabled ${slug} for agent ${agentId}`);
+          }
+        }
+      } catch (err) {
+        console.error("[composio-callback] agent toolkit enable failed:", (err as Error).message);
+      }
+    }
+
     broadcastToUser(user.id, {
       type: "connector_connected",
       toolkit: toolkit.toUpperCase(),
