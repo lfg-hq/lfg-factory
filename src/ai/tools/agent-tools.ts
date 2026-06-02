@@ -324,17 +324,17 @@ export function createAgentTools(params: {
                 .where(eq(agents.id, agentRow.id));
             }
           }
-          // Tell the chat that this agent now has the toolkit so the UI
-          // refreshes (settings panel + auto-resend last user message).
-          broadcastToUser(userId, {
-            type: "connector_connected",
-            agent_id: agentId,
-            toolkit: slug,
-          });
+          // NOTE: deliberately NOT broadcasting connector_connected here.
+          // That would trigger the frontend's resubmitLastUserMessage,
+          // which races with the still-streaming LLM — leading to a
+          // duplicate user bubble + double tool calls. The user's tools
+          // will be loaded on their next message naturally. Tell the LLM
+          // to wrap up this turn with a brief prompt-to-retry.
           return (
-            `Enabled ${slug} for this agent (user had already connected at account level, no OAuth needed). ` +
-            `The user's last message will be auto-retried; on that retry the toolkit's tools will be available — ` +
-            `use them to fulfill the original task.`
+            `Enabled ${slug} for this agent (no OAuth needed — user had it connected at account level). ` +
+            `The toolkit's tools will be loaded on the user's NEXT message. ` +
+            `IMPORTANT: finish this turn with a one-sentence prompt like: "Done — ask me again and I'll pull from ${slug}." ` +
+            `Do NOT try to use the toolkit on this turn (its tools aren't loaded yet). Do NOT call more tools.`
           );
         }
 

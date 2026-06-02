@@ -156,7 +156,7 @@ ${hasEnabled
     ? `**Enabled for THIS agent (you can call these directly):** ${enabledToolkits.join(", ")}. Use \`composio_search_tools\` to find the specific action you need, then call it.`
     : `**Nothing is enabled for this agent yet.** You can't call any Composio tool directly until one is enabled.`}
 ${userConnectedNotEnabled.length > 0
-    ? `\n**User-connected at account level but NOT yet enabled for this agent:** ${userConnectedNotEnabled.join(", ")}. To use any of these, call \`requestConnectorAuth({toolkit: SLUG})\` — it will enable silently (no OAuth popup) since the user has already authorized at account level. After it returns, the chat auto-retries the user's last message and the toolkit's tools become available on that turn.`
+    ? `\n**User-connected at account level but NOT yet enabled for this agent:** ${userConnectedNotEnabled.join(", ")}. If the user asks for something that maps to any of these, **just call \`requestConnectorAuth({toolkit: SLUG})\` immediately** — it enables silently with no OAuth popup. Do NOT ask the user "do you want me to connect X?" or say "I don't have access to X here" — the connection already exists at account level. After the tool returns, write a brief one-sentence "Done — ask me again and I'll pull from X" prompt. The tools become available on the user's next message.`
     : ""}
 
 When the user asks for something that needs an integration NOT in either list above, call \`lookupComposioToolkits({query: …})\` to discover the right slug, then \`requestConnectorAuth\` (which will show the Connect button since the user hasn't authorized yet).
