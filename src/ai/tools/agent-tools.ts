@@ -124,14 +124,19 @@ export function createAgentTools(params: {
           console.log(`${tag} stderr: ${(result.stderr || "").slice(0, 500)}${stderrLen > 500 ? "..." : ""}`);
         }
 
-        // After the command finishes, sweep /root/data/ for new files and
-        // sync them to S3 / Data Room. No-op if no files were written.
-        console.log(`${tag} [phase 3/3] syncDataRoom (background)…`);
+        // Sync new files BEFORE returning to the LLM (same rationale as
+        // runPython: avoid the "Rendering…" placeholder race).
+        progress("syncing_outputs", "Saving outputs to Data Room…");
+        console.log(`${tag} [phase 3/3] syncDataRoom (awaiting)…`);
+        const tSync = Date.now();
         const [agentRow] = await db.select({ id: agents.id }).from(agents).where(eq(agents.agentId, agentId)).limit(1);
         if (agentRow) {
-          syncDataRoom(workspaceId, agentRow.id)
-            .then(() => console.log(`${tag} [phase 3/3] syncDataRoom completed`))
-            .catch((err) => console.error(`${tag} [phase 3/3] syncDataRoom failed:`, (err as Error).message));
+          try {
+            await syncDataRoom(workspaceId, agentRow.id);
+            console.log(`${tag} [phase 3/3] syncDataRoom completed in ${Date.now() - tSync}ms`);
+          } catch (err) {
+            console.error(`${tag} [phase 3/3] syncDataRoom failed:`, (err as Error).message);
+          }
         }
         console.log(`${tag} ━━━━━━━━━ [END] total ${Date.now() - tStart}ms ━━━━━━━━━`);
 
@@ -488,12 +493,23 @@ export function createAgentTools(params: {
           console.log(`${tag} kernel stderr: ${result.stderr.slice(0, 500)}`);
         }
 
-        console.log(`${tag} [phase 3/3] syncDataRoom (background)…`);
+        // Sync charts BEFORE returning to the LLM. If we let it run in the
+        // background, the LLM streams `[CHART: foo.html]` while the file is
+        // still mid-upload and the user stares at a "Rendering…" placeholder
+        // for the full sync duration (+ forever if the WS event misses).
+        // Awaiting here adds 1-3s of pre-narrative time but charts are ready
+        // the instant they're referenced — no placeholder phase.
+        progress("syncing_outputs", "Saving outputs to Data Room…");
+        console.log(`${tag} [phase 3/3] syncDataRoom (awaiting)…`);
+        const tSync = Date.now();
         const [agentRow] = await db.select({ id: agents.id }).from(agents).where(eq(agents.agentId, agentId)).limit(1);
         if (agentRow) {
-          syncDataRoom(workspaceId, agentRow.id)
-            .then(() => console.log(`${tag} [phase 3/3] syncDataRoom completed`))
-            .catch((err) => console.error(`${tag} [phase 3/3] syncDataRoom failed:`, (err as Error).message));
+          try {
+            await syncDataRoom(workspaceId, agentRow.id);
+            console.log(`${tag} [phase 3/3] syncDataRoom completed in ${Date.now() - tSync}ms`);
+          } catch (err) {
+            console.error(`${tag} [phase 3/3] syncDataRoom failed:`, (err as Error).message);
+          }
         }
         console.log(`${tag} ━━━━━━━━━ [END] total ${Date.now() - tStart}ms ━━━━━━━━━`);
 

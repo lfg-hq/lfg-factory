@@ -133,9 +133,27 @@
       slot.className = "agent-chart-slot";
       slot.setAttribute("data-chart-filename", fileName);
       const known = artifactsByName.get(fileName);
-      slot.innerHTML = known
-        ? buildArtifactInnerHTML(known)
-        : '<div class="agent-chart-placeholder"><i class="fas fa-spinner fa-spin"></i> Rendering ' + escapeHtml(fileName) + '…</div>';
+      if (known) {
+        slot.innerHTML = buildArtifactInnerHTML(known);
+      } else {
+        slot.innerHTML = '<div class="agent-chart-placeholder"><i class="fas fa-spinner fa-spin"></i> Rendering ' + escapeHtml(fileName) + '…</div>';
+        // Escalating fallback so a stuck placeholder doesn't look frozen.
+        // If the artifact never arrives, switch wording at 8s and 30s.
+        setTimeout(function () {
+          if (slot.querySelector('.agent-chart-placeholder') && !artifactsByName.get(fileName)) {
+            slot.innerHTML = '<div class="agent-chart-placeholder"><i class="fas fa-spinner fa-spin"></i> Still uploading ' + escapeHtml(fileName) + '…</div>';
+          }
+        }, 8000);
+        setTimeout(function () {
+          if (slot.querySelector('.agent-chart-placeholder') && !artifactsByName.get(fileName)) {
+            slot.innerHTML =
+              '<div class="agent-chart-placeholder">' +
+                '<i class="fas fa-exclamation-circle"></i> ' +
+                escapeHtml(fileName) + ' isn\'t available. Check the Data Room tab — it may have failed to upload.' +
+              '</div>';
+          }
+        }, 30000);
+      }
       frag.appendChild(slot);
       lastIdx = re.lastIndex;
     }
