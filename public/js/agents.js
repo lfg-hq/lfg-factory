@@ -397,13 +397,19 @@
               download_url: "/api/agents/" + agentId + "/data/" + f.id,
             });
           });
-          // Re-scan rendered content — markers in old assistant messages
-          // (from history) will now find their artifacts and inline-render.
-          // No orphan fallback: if a historical message didn't reference a
-          // chart with [CHART: name], the chart stays in the Data Room
-          // tab. Appending orphans to the bottom looked confusing — chart
-          // detached from any narrative.
+          // Two passes — both are necessary:
+          // 1. scanAndReplaceMarkers: turns [CHART: foo] text nodes that
+          //    are still raw text (loaded from message history, never
+          //    processed) into slot divs and fills them from the registry.
+          // 2. fillPlaceholderSlots per file: fills any slots that ALREADY
+          //    exist as DOM divs (created during streaming when registry
+          //    was empty, so they're sitting as "Rendering…" placeholders).
+          //    These are invisible to scanAndReplaceMarkers because it
+          //    only walks text nodes — the marker is gone, it's a div now.
           scanAndReplaceMarkers(messagesEl);
+          files.forEach(function (f) {
+            fillPlaceholderSlots(artifactsByName.get(f.file_name));
+          });
         });
     }, 300);
     setTimeout(function () { clearInterval(historyPoll); }, 10000);
