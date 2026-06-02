@@ -50,20 +50,18 @@
       }
     } else if (data.type === "agent_data_file_created") {
       if (!agentId || data.agent_id === agentId) {
-        // Always register so future [CHART: name] markers can find this
-        // artifact and any pre-existing placeholder slots can be filled.
+        // Register the artifact and fill any placeholder slots that are
+        // already waiting for it. NOTHING else — pure marker-based
+        // rendering. If the LLM references this file with [CHART: name],
+        // a slot gets created and filled from the registry. If it never
+        // references it, the file lives in the Data Room tab only.
+        // (Previously we appended orphan charts to the bottom of the chat
+        // as a fallback, but with await-syncDataRoom the broadcast now
+        // arrives BEFORE the LLM streams the marker, so every chart got
+        // dumped at the bottom of the chat instead of inline. Drop that
+        // fallback; trust markers.)
         artifactsByName.set(data.file_name, data);
         fillPlaceholderSlots(data);
-        // Only inline-render *visual* outputs (charts, images). Data files
-        // (csv, xlsx, json, txt, pdf, etc.) live in the Data Room tab —
-        // they shouldn't clutter the chat. User uploads also fall through
-        // syncDataRoom and would otherwise show up redundantly here.
-        const ext = (data.file_type || "").toLowerCase();
-        const visualExts = ["html","htm","png","jpg","jpeg","gif","webp","svg"];
-        if (visualExts.includes(ext)) {
-          const hasSlot = document.querySelector('.agent-chart-slot[data-chart-filename="' + data.file_name.replace(/"/g, '\\"') + '"]');
-          if (!hasSlot) renderDataFileInline(data);
-        }
       }
     }
   };
@@ -401,26 +399,11 @@
           });
           // Re-scan rendered content — markers in old assistant messages
           // (from history) will now find their artifacts and inline-render.
+          // No orphan fallback: if a historical message didn't reference a
+          // chart with [CHART: name], the chart stays in the Data Room
+          // tab. Appending orphans to the bottom looked confusing — chart
+          // detached from any narrative.
           scanAndReplaceMarkers(messagesEl);
-          // For any *visual* file (chart/image) that wasn't referenced by
-          // an inline marker, fall back to the "append under last bubble"
-          // cluster behaviour. Data files (csv/xlsx/json/…) stay in the
-          // Data Room tab only.
-          const visualExts = ["html","htm","png","jpg","jpeg","gif","webp","svg"];
-          files.reverse().forEach(function (f) {
-            const ext = (f.file_type || "").toLowerCase();
-            if (!visualExts.includes(ext)) return;
-            const hasSlot = document.querySelector('.agent-chart-slot[data-chart-filename="' + f.file_name.replace(/"/g, '\\"') + '"]');
-            if (hasSlot) return;
-            renderDataFileInline({
-              agent_id: agentId,
-              file_id: f.id,
-              file_name: f.file_name,
-              file_type: f.file_type,
-              file_size: f.file_size,
-              download_url: "/api/agents/" + agentId + "/data/" + f.id,
-            });
-          });
         });
     }, 300);
     setTimeout(function () { clearInterval(historyPoll); }, 10000);

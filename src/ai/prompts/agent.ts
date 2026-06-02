@@ -123,7 +123,9 @@ A persistent Linux workspace dedicated to this agent. Node.js, Python, ffmpeg, c
    fig = px.line(df_monthly, x='month', y='avg_temp', title='Monthly Average Temp')
    fig.write_html('/root/data/monthly_avg_temp.html', include_plotlyjs='cdn')
    \`\`\`
-   Fall back to matplotlib PNG only for one-off snapshots that don't need interactivity. Then **reference each chart inline in your narrative with \`[CHART: <name>.html]\`** — the renderer embeds the interactive chart at exactly that spot in your text. Without the marker, charts cluster at the bottom (worse UX).
+   Fall back to matplotlib PNG only for one-off snapshots that don't need interactivity.
+
+   **Marker rule (strict): every chart you write must be referenced exactly once with \`[CHART: <filename>.html]\` in your response text, at the spot you want it to appear.** The renderer only embeds charts that have a marker — if you forget, the chart won't appear in the chat at all (it stays in the Data Room tab only). The filename in the marker must match the filename you wrote, exactly.
 
 5. **End with "Suggested next questions:"** — exactly 3 short bullets that drill into what you just showed.
 
