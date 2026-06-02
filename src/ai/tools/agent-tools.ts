@@ -20,6 +20,29 @@ import { addSchedule, removeSchedule } from "../../services/agent-scheduler.ts";
 import { broadcastToUser } from "../../ws/connection-manager.ts";
 import { env } from "../../config/env.ts";
 
+/**
+ * Build a progress callback that broadcasts in-flight status updates over
+ * the user's WS so the chat UI can show "Provisioning sandbox…",
+ * "Installing libs…", etc. while a tool call is mid-flight.
+ *
+ * Stages are free-form strings; the message is what the user sees.
+ */
+function makeProgress(agentId: string, userId: string) {
+  return (stage: string, message: string) => {
+    try {
+      broadcastToUser(userId, {
+        type: "agent_progress",
+        agent_id: agentId,
+        stage,
+        message,
+        ts: Date.now(),
+      });
+    } catch (err) {
+      console.warn(`[agent-progress] broadcast failed:`, (err as Error).message);
+    }
+  };
+}
+
 export function createAgentTools(params: {
   agentId: string;
   userId: string;
@@ -65,11 +88,13 @@ export function createAgentTools(params: {
       const cmdPreview = command.length > 200 ? command.slice(0, 200) + "..." : command;
       console.log(`${tag} command (${command.length}ch): ${cmdPreview}`);
 
+      const progress = makeProgress(agentId, userId);
       try {
         const t0 = Date.now();
-        const { workspaceId } = await ensureWorkspace(agentId, userId);
+        const { workspaceId } = await ensureWorkspace(agentId, userId, progress);
         const ensureMs = Date.now() - t0;
         console.log(`${tag} workspace=${workspaceId} ensured in ${ensureMs}ms`);
+        progress("running_command", "Running command in sandbox…");
 
         // Base64-wrap the LLM's command so heredocs, nested quotes, multi-line
         // Python, and any shell-special char survive the SSH exec layer intact.
@@ -436,11 +461,13 @@ export function createAgentTools(params: {
       const tag = `[runPython ${agentId.slice(0, 8)}]`;
       const preview = code.length > 200 ? code.slice(0, 200) + "..." : code;
       console.log(`${tag} code (${code.length}ch): ${preview}`);
+      const progress = makeProgress(agentId, userId);
       try {
         const t0 = Date.now();
-        const { workspaceId } = await ensureWorkspace(agentId, userId);
+        const { workspaceId } = await ensureWorkspace(agentId, userId, progress);
         console.log(`${tag} workspace=${workspaceId} ensured in ${Date.now() - t0}ms`);
 
+        progress("running_python", "Running analysis in Python kernel…");
         const tExec = Date.now();
         const result = await runPythonInKernel(workspaceId, code);
         console.log(

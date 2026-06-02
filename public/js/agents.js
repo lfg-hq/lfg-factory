@@ -44,6 +44,10 @@
       if (!agentId || data.agent_id === agentId) {
         renderSecretRequired(data.key, data.description, data.service);
       }
+    } else if (data.type === "agent_progress") {
+      if (!agentId || data.agent_id === agentId) {
+        renderProgress(data.stage, data.message);
+      }
     } else if (data.type === "agent_data_file_created") {
       if (!agentId || data.agent_id === agentId) {
         // Register so future [CHART: name] markers can find this artifact
@@ -392,6 +396,63 @@
     });
     document.body.appendChild(overlay);
   };
+
+  // ── Live progress chip ─────────────────────────────────────────────
+  // A single pinned status row at the bottom of the chat showing the
+  // current sandbox/kernel stage. Auto-replaces on every progress event,
+  // auto-clears when the next assistant text bubble arrives, with a 120s
+  // safety timeout in case the model dies between tool end and stream start.
+  let progressClearTimer = null;
+  let progressObserver = null;
+
+  function renderProgress(stage, message) {
+    const messagesEl = document.getElementById("chat-messages");
+    if (!messagesEl) return;
+    let chip = document.getElementById("agent-progress-chip");
+    if (!chip) {
+      chip = document.createElement("div");
+      chip.id = "agent-progress-chip";
+      chip.className = "agent-progress-chip";
+      messagesEl.appendChild(chip);
+    } else {
+      // Move to end so it stays pinned to the bottom of the conversation.
+      messagesEl.appendChild(chip);
+    }
+    chip.setAttribute("data-stage", stage || "");
+    chip.innerHTML =
+      '<i class="fas fa-circle-notch fa-spin"></i>' +
+      '<span class="agent-progress-msg">' + escapeHtml(message || "Working…") + '</span>';
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+
+    // Reset the safety timeout.
+    if (progressClearTimer) clearTimeout(progressClearTimer);
+    progressClearTimer = setTimeout(clearProgress, 120000);
+
+    // Install an observer (once) that clears the chip as soon as an
+    // assistant bubble with actual text shows up — that's the user's cue
+    // that streaming has started and the sandbox plumbing is done.
+    if (!progressObserver) {
+      progressObserver = new MutationObserver(function () {
+        const chip = document.getElementById("agent-progress-chip");
+        if (!chip) return;
+        const bubbles = messagesEl.querySelectorAll(".message.assistant .message-content");
+        for (let i = bubbles.length - 1; i >= 0; i--) {
+          const txt = (bubbles[i].textContent || "").trim();
+          if (txt.length > 0) {
+            clearProgress();
+            return;
+          }
+        }
+      });
+      progressObserver.observe(messagesEl, { childList: true, subtree: true, characterData: true });
+    }
+  }
+
+  function clearProgress() {
+    const chip = document.getElementById("agent-progress-chip");
+    if (chip) chip.remove();
+    if (progressClearTimer) { clearTimeout(progressClearTimer); progressClearTimer = null; }
+  }
 
   function renderConnectorRequired(toolkit, redirectUrl) {
     const messagesEl = document.getElementById("chat-messages");

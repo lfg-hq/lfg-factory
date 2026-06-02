@@ -256,9 +256,16 @@ async function provisionAndInject(
  *   - /root/.env with the agent's secrets (so commands can `source .env`)
  *   - /root/data/ restored from S3 (so files persist across runs)
  */
+/**
+ * Lightweight callback type for streaming progress messages from
+ * long-running provisioning back to the chat UI.
+ */
+export type ProgressFn = (stage: string, message: string) => void;
+
 export async function ensureWorkspace(
   agentId: string,
-  userId: string
+  userId: string,
+  progress?: ProgressFn
 ): Promise<{ workspaceId: string }> {
   const tag = `[ensureWorkspace ${agentId.slice(0, 8)}]`;
   const [agent] = await db
@@ -274,14 +281,20 @@ export async function ensureWorkspace(
     : null;
 
   let workspaceId: string;
+  let wasColdStart = false;
 
   if (sandboxRecord?.magsWorkspaceId) {
     const existing = await findJob(sandboxRecord.magsWorkspaceId);
     if (existing && (existing.status === "running" || existing.status === "sleeping")) {
       workspaceId = sandboxRecord.magsWorkspaceId;
       console.log(`${tag} reusing workspace=${workspaceId} (mags status=${existing.status})`);
+      if (existing.status === "sleeping") {
+        progress?.("waking_sandbox", "Waking up sandbox…");
+      }
     } else {
       console.log(`${tag} prior workspace gone (status=${existing?.status ?? "none"}), creating new "${workspaceName}"`);
+      progress?.("provisioning_sandbox", "Provisioning a fresh sandbox VM (~15s)…");
+      wasColdStart = true;
       const t0 = Date.now();
       const ws = await newWorkspace(workspaceName);
       workspaceId = ws.workspaceId;
@@ -293,6 +306,8 @@ export async function ensureWorkspace(
     }
   } else {
     console.log(`${tag} no sandbox record, creating fresh workspace "${workspaceName}"`);
+    progress?.("provisioning_sandbox", "Provisioning a fresh sandbox VM (~15s)…");
+    wasColdStart = true;
     const t0 = Date.now();
     const ws = await newWorkspace(workspaceName);
     workspaceId = ws.workspaceId;
@@ -323,6 +338,7 @@ export async function ensureWorkspace(
     console.warn(`${tag} injectSecrets failed:`, (err as Error).message);
   }
   try {
+    if (wasColdStart) progress?.("loading_files", "Loading your files into the sandbox…");
     const t0 = Date.now();
     await injectDataFiles(workspaceId, agent.id);
     console.log(`${tag} injectDataFiles ok in ${Date.now() - t0}ms`);
@@ -336,7 +352,7 @@ export async function ensureWorkspace(
   // server's persistent namespace so df survives across turns.
   try {
     const t0 = Date.now();
-    await ensurePythonKernel(workspaceId);
+    await ensurePythonKernel(workspaceId, progress);
     console.log(`${tag} ensurePythonKernel ok in ${Date.now() - t0}ms`);
   } catch (err) {
     console.warn(`${tag} ensurePythonKernel failed:`, (err as Error).message);
@@ -398,7 +414,10 @@ if __name__ == "__main__":
 
 const KERNEL_PORT = 8765;
 
-export async function ensurePythonKernel(workspaceId: string): Promise<void> {
+export async function ensurePythonKernel(
+  workspaceId: string,
+  progress?: ProgressFn
+): Promise<void> {
   // Fast path: server already running?
   const health = await execOnWorkspace(
     workspaceId,
@@ -408,6 +427,8 @@ export async function ensurePythonKernel(workspaceId: string): Promise<void> {
   if (health.output.includes("ok") && !health.output.includes("__NOPE__")) {
     return; // already up
   }
+
+  progress?.("installing_python", "Installing pandas, plotly, matplotlib, scikit-learn (~30-60s, one-time per VM)…");
 
   // Cold-path bootstrap. Idempotent.
   const scriptB64 = Buffer.from(KERNEL_SERVER_SCRIPT).toString("base64");
@@ -441,6 +462,8 @@ echo BOOTSTRAP_DONE
     `echo ${bootstrapB64} | base64 -d | bash`,
     { timeout: 180_000 } // pip install can take ~60s on cold workspace
   );
+
+  progress?.("starting_kernel", "Starting Python kernel…");
 
   // Wait for /health to come up (up to ~10s)
   for (let i = 0; i < 20; i++) {

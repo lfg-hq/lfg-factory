@@ -722,6 +722,34 @@
   flex-wrap: wrap;
 }
 
+/* Live progress chip — pinned to the bottom of #chat-messages while a
+   sandbox/kernel operation is in flight. Auto-removes when the assistant
+   starts streaming text. */
+.agent-progress-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.5rem auto;
+  padding: 0.55rem 0.9rem;
+  background: rgba(99, 102, 241, 0.08);
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  border-radius: 999px;
+  color: var(--text-primary, #e2e8f0);
+  font-size: 0.8125rem;
+  width: max-content;
+  max-width: 90%;
+  align-self: center;
+}
+.agent-progress-chip i {
+  color: var(--primary-color, #818cf8);
+  font-size: 0.875rem;
+}
+.agent-progress-chip .agent-progress-msg {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Inline chart slot — replaces a [CHART: filename] marker in the
    assistant's narrative with the actual artifact, in-place. */
 .agent-chart-slot {
