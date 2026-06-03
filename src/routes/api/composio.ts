@@ -10,6 +10,7 @@ import {
   connectToolkit,
   disconnectToolkit,
   saveConnectedToolkit,
+  invalidateComposioToolsCache,
 } from "../../services/composio-manager.ts";
 import { broadcastToUser } from "../../ws/connection-manager.ts";
 import { env } from "../../config/env.ts";
@@ -111,6 +112,7 @@ composio.get("/callback", async (c) => {
               .update(agents)
               .set({ composioToolkits: [...current, slug], updatedAt: new Date() })
               .where(eq(agents.id, agentRow.id));
+            invalidateComposioToolsCache(user.id);
             console.log(`[composio-callback] auto-enabled ${slug} for agent ${agentId}`);
           }
         }

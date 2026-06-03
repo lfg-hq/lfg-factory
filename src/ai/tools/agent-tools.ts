@@ -15,7 +15,7 @@ import { eq } from "drizzle-orm";
 import { ensureWorkspace, runPythonInKernel } from "../../services/agent-manager.ts";
 import { execOnWorkspace } from "../../services/mags.ts";
 import { syncDataRoom } from "../../services/agent-sandbox.ts";
-import { listConnectors, connectToolkit } from "../../services/composio-manager.ts";
+import { listConnectors, connectToolkit, invalidateComposioToolsCache } from "../../services/composio-manager.ts";
 import { addSchedule, removeSchedule } from "../../services/agent-scheduler.ts";
 import { broadcastToUser } from "../../ws/connection-manager.ts";
 import { env } from "../../config/env.ts";
@@ -323,6 +323,7 @@ export function createAgentTools(params: {
               .update(agents)
               .set({ composioToolkits: [...current, slug], updatedAt: new Date() })
               .where(eq(agents.id, agentRow.id));
+            invalidateComposioToolsCache(userId);
           }
 
           // Loop guard: if this toolkit was ALREADY enabled for this agent
@@ -383,6 +384,7 @@ export function createAgentTools(params: {
                 .update(agents)
                 .set({ composioToolkits: [...current, slug], updatedAt: new Date() })
                 .where(eq(agents.id, agentRow.id));
+              invalidateComposioToolsCache(userId);
             }
           }
           broadcastToUser(userId, {

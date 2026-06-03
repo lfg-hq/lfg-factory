@@ -20,6 +20,7 @@ import {
   getAgentStatus,
 } from "../../services/agent-manager.ts";
 import { runAgentTask } from "../../services/agent-runner.ts";
+import { invalidateComposioToolsCache } from "../../services/composio-manager.ts";
 import { addSchedule, removeSchedule, updateSchedule, runScheduleNow } from "../../services/agent-scheduler.ts";
 import { syncDataRoom } from "../../services/agent-sandbox.ts";
 import {
@@ -108,6 +109,12 @@ agentsApi.put("/:agentId", async (c) => {
   if (body.run_timeout_ms !== undefined) updates.runTimeoutMs = body.run_timeout_ms;
 
   await db.update(agents).set(updates).where(eq(agents.id, agent.id));
+
+  // If the per-agent enabled toolkit list changed, blow the cache so the
+  // next chat turn loads tools matching the new set.
+  if (body.composio_toolkits !== undefined) {
+    invalidateComposioToolsCache(user.id);
+  }
 
   return c.json({ status: "ok" });
 });

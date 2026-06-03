@@ -172,6 +172,7 @@ export async function saveConnectedToolkit(userId: string, toolkit: string): Pro
       enabled: true,
     });
   }
+  invalidateComposioToolsCache(userId);
 }
 
 /**
@@ -182,9 +183,44 @@ export async function disconnectToolkit(userId: string, toolkit: string): Promis
   await db
     .delete(composioToolkits)
     .where(and(eq(composioToolkits.userId, userId), eq(composioToolkits.toolkit, slug)));
+  invalidateComposioToolsCache(userId);
 }
 
 // ── Tools for AI (streamText) ────────────────────────────────────────
+
+/**
+ * Process-wide TTL cache for getComposioTools results.
+ *
+ * Why: every LLM step in a single chat turn re-invokes streamText, which
+ * re-calls getComposioTools(userId, enabledToolkits). For a multi-step
+ * agent turn (lookup → connect → search → execute) that's 4+ Composio
+ * session.create() + session.tools() round-trips of ~150ms each. The
+ * returned tool list is the same across the whole turn (the agent's
+ * enabledToolkits doesn't change mid-turn), so it's pure waste.
+ *
+ * 30s TTL covers the duration of any reasonable single user turn and
+ * still picks up changes from requestConnectorAuth (which broadcasts +
+ * triggers a fresh resend; the new turn will be past the TTL).
+ *
+ * Keyed on `userId|sortedSlugs` so different agents/users don't collide.
+ */
+const TOOLS_CACHE_TTL_MS = 30_000;
+const toolsCache = new Map<string, { tools: Record<string, any>; expiresAt: number }>();
+
+function toolsCacheKey(userId: string, enabledToolkits?: string[]): string {
+  const slugs = enabledToolkits?.length ? [...enabledToolkits].sort().join(",") : "__ALL__";
+  return `${userId}|${slugs}`;
+}
+
+/**
+ * Invalidate the cache for a user. Call after enabling/disabling a
+ * toolkit so the next getComposioTools picks up the change.
+ */
+export function invalidateComposioToolsCache(userId: string): void {
+  for (const key of toolsCache.keys()) {
+    if (key.startsWith(`${userId}|`)) toolsCache.delete(key);
+  }
+}
 
 /**
  * Fetch tools for the user's Composio connections.
@@ -201,6 +237,8 @@ export async function disconnectToolkit(userId: string, toolkit: string): Promis
  *   - []         → return no Composio tools at all (agent with nothing
  *                  enabled — strict opt-in)
  *   - [slug,…]   → scope the toolrouter session to just those toolkits
+ *
+ * Cached for TOOLS_CACHE_TTL_MS to absorb the 4+ calls per chat turn.
  */
 export async function getComposioTools(
   userId: string,
@@ -211,6 +249,16 @@ export async function getComposioTools(
 
   // Strict per-agent gating: agent has explicitly opted in to nothing.
   if (enabledToolkits && enabledToolkits.length === 0) return {};
+
+  const cacheKey = toolsCacheKey(userId, enabledToolkits);
+  const cached = toolsCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    console.log(
+      `[connectors] getComposioTools user=${userId.slice(0, 8)} ` +
+      `enabled=${enabledToolkits?.join(",") ?? "ALL"} → ${Object.keys(cached.tools).length} tools (cached)`
+    );
+    return cached.tools;
+  }
 
   // Composio's slug convention is lowercase (matches session.authorize).
   // Our DB stores uppercase ("GOOGLEDRIVE"), so normalize here — otherwise
@@ -232,6 +280,10 @@ export async function getComposioTools(
       `[connectors] getComposioTools user=${userId.slice(0, 8)} ` +
       `enabled=${normalized ? normalized.join(",") : "ALL"} → ${toolCount} tools`
     );
+    toolsCache.set(cacheKey, {
+      tools: tools ?? {},
+      expiresAt: Date.now() + TOOLS_CACHE_TTL_MS,
+    });
     return tools ?? {};
   } catch (err) {
     console.error("[connectors] Failed to fetch tools:", err);
