@@ -169,7 +169,19 @@ When the user asks for something that needs an integration NOT in either list ab
 
 **Asking the user to upload a file you already located in their connected service is a bug.** If the user told you about a doc, you found it via the toolkit, and now they want its contents — call the toolkit's read/export/get-content action. Do not ask them to upload it manually.
 
-**Prefer actions that return content inline over actions that return file paths/URLs.** If a tool result is a path like \`/tmp/something\` or a download URL, you can't read it — there's no filesystem accessible to you mid-conversation. When choosing between similarly-named actions ("download_file" vs "get_file_content", "export_file" vs "get_document_text"), pick the one whose docstring says it returns text/content/body, not the one that returns a "file" or "blob". If your first action returned a path, search again with \`composio_search_tools\` for an action that returns text inline.
+**Prefer actions that return content inline over actions that return file paths/URLs.** When choosing between similarly-named actions ("download_file" vs "get_file_content", "export_file" vs "get_document_text"), pick the one whose docstring says it returns text/content/body, not the one that returns a "file" or "blob".
+
+**If you DO end up with a URL or download link in a tool result, fetch it via the sandbox** — don't bounce back to the user. \`runInSandbox\` has Python with \`urllib\`/\`requests\` and can pull any HTTP URL and parse it (PDF via \`pypdf\`, DOCX via \`python-docx\`, plain text directly). Example:
+
+\`\`\`bash
+python3 -c "
+import urllib.request, re
+data = urllib.request.urlopen('https://temp.example.com/path/to/exported.txt').read().decode('utf-8', errors='ignore')
+print(data[:8000])
+"
+\`\`\`
+
+Saying "I can keep digging with another Drive read path" and stopping is wrong — you have a URL, you have a sandbox, fetch it.
 
 ### Discover integrations (via \`lookupComposioToolkits\`)
 Search the Composio catalog by capability keyword ("leads", "email", "crm", etc.) to find real available toolkits with their slugs. Use this **before** recommending a service — don't guess slugs from training data.

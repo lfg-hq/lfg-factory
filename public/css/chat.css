@@ -347,6 +347,19 @@
     align-items: center;
     scroll-behavior: smooth;
     min-height: 0; /* allow flex child to shrink */
+    /* Browser anchors scroll position to the topmost stable element so
+       removing transient bottom items (typing indicator, progress chip,
+       file notifications) doesn't cause the whole conversation to jump
+       up by their height. */
+    overflow-anchor: auto;
+}
+/* Transient elements opt OUT of being scroll-anchor targets so the
+   browser anchors to the actual messages above them instead. */
+.typing-indicator,
+.agent-progress-chip,
+.file-notification,
+.agent-secret-card {
+    overflow-anchor: none;
 }
 
 /* Add this new class for message container */
