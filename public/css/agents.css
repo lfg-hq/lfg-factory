@@ -754,6 +754,16 @@
   text-overflow: ellipsis;
 }
 
+/* While a progress chip is visible (e.g. "Spinning up sandbox VM…"),
+   hide the generic tool-call pill ("Run in sandbox …") rendered by
+   chat.js — they describe the same in-flight operation, and the
+   progress chip carries strictly more info (current phase). When the
+   progress chip clears, the pill is usually already gone too. */
+#chat-messages:has(.agent-progress-chip) .function-call-indicator,
+#chat-messages:has(.agent-progress-chip) .function-call-success {
+  display: none;
+}
+
 /* Centered inline card for "I need this secret" prompts. Sits in the
    chat flow like an assistant message but visually distinct, with a
    dismiss button so the user can decline. */
