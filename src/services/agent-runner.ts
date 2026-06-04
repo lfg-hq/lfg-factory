@@ -147,7 +147,7 @@ export async function runAgentTask(input: RunAgentTaskInput): Promise<RunAgentTa
   };
   if (providerName && !keyMap[providerName]) {
     const errMsg = `No ${providerName} API key — scheduled run cannot execute. Add a key in Settings → LLM Keys.`;
-    await persistAndFinish(agent, agentId, userId, run.id, errMsg, "error");
+    await persistAndFinish(agent, agentId, userId, run.id, errMsg, "error", null);
     return { runId: run.id, output: errMsg, status: "error", errorMessage: errMsg };
   }
 
@@ -159,7 +159,7 @@ export async function runAgentTask(input: RunAgentTaskInput): Promise<RunAgentTa
     searchTools = result.searchTools;
   } catch (err) {
     const errMsg = `Failed to initialize model "${modelKey}": ${(err as Error).message}`;
-    await persistAndFinish(agent, agentId, userId, run.id, errMsg, "error");
+    await persistAndFinish(agent, agentId, userId, run.id, errMsg, "error", null);
     return { runId: run.id, output: errMsg, status: "error", errorMessage: errMsg };
   }
 
@@ -171,9 +171,21 @@ export async function runAgentTask(input: RunAgentTaskInput): Promise<RunAgentTa
     .orderBy(desc(messages.createdAt))
     .limit(HISTORY_LIMIT);
 
-  const contextMessages = history
-    .reverse()
-    .map((m) => ({ role: m.role as "user" | "assistant" | "system", content: m.content }));
+  // Expand assistant rows that have stored tool_steps into the full AI SDK
+  // message sequence so the next turn replays the LLM's prior tool context
+  // (same fix as the chat-side stream-handler).
+  const contextMessages: any[] = [];
+  for (const m of history.reverse()) {
+    const steps = (m as any).toolSteps as any[] | null | undefined;
+    if (m.role === "assistant" && Array.isArray(steps) && steps.length > 0) {
+      for (const step of steps) contextMessages.push(step);
+    } else {
+      contextMessages.push({
+        role: m.role as "user" | "assistant" | "system",
+        content: m.content,
+      });
+    }
+  }
 
   // ── 5. Tools: same shape as chat-side agent ───────────────────────────────
   let tools: Record<string, any> = {};
@@ -210,6 +222,7 @@ export async function runAgentTask(input: RunAgentTaskInput): Promise<RunAgentTa
 
   // ── 7. Run the LLM (non-streaming — we want the final text only) ──────────
   let output = "";
+  let savedSteps: any[] | null = null;
   try {
     const result = await generateText({
       model,
@@ -229,14 +242,24 @@ export async function runAgentTask(input: RunAgentTaskInput): Promise<RunAgentTa
         ? `(no text response — tools called: ${Array.from(new Set(toolNames)).join(", ")})`
         : "(no response generated)";
     }
+    // Capture the full AI SDK response sequence (tool-call + tool-result
+    // pairs) so the next turn can replay the LLM's prior context.
+    try {
+      const rawMessages: any[] = (result.response as any)?.messages ?? [];
+      const serialized = JSON.stringify(rawMessages);
+      if (serialized.length <= 200_000) savedSteps = rawMessages;
+      else console.warn(`[agent-runner] toolSteps too large (${serialized.length}B), dropping`);
+    } catch (err) {
+      console.warn("[agent-runner] failed to capture response.messages:", (err as Error).message);
+    }
   } catch (err) {
     const errMsg = `LLM call failed: ${(err as Error).message}`;
-    await persistAndFinish(agent, agentId, userId, run.id, errMsg, "error");
+    await persistAndFinish(agent, agentId, userId, run.id, errMsg, "error", null);
     return { runId: run.id, output: errMsg, status: "error", errorMessage: errMsg };
   }
 
   // ── 8. Persist assistant message + broadcast + finish run ─────────────────
-  await persistAndFinish(agent, agentId, userId, run.id, output, "success");
+  await persistAndFinish(agent, agentId, userId, run.id, output, "success", savedSteps);
 
   return { runId: run.id, output, status: "success" };
 }
@@ -247,13 +270,15 @@ async function persistAndFinish(
   userId: string,
   runId: string,
   output: string,
-  status: "success" | "error"
+  status: "success" | "error",
+  toolSteps: any[] | null
 ): Promise<void> {
   if (agent.conversationId) {
     await db.insert(messages).values({
       conversationId: agent.conversationId,
       role: "assistant",
       content: output,
+      toolSteps,
     });
   }
 

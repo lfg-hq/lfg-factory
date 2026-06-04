@@ -160,9 +160,27 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
     .orderBy(desc(messages.createdAt))
     .limit(MAX_HISTORY);
 
-  const contextMessages = history
-    .reverse()
-    .map((m) => ({ role: m.role as "user" | "assistant" | "system", content: m.content }));
+  // Expand assistant rows that have stored tool_steps into the full AI SDK
+  // message sequence (tool-call / tool-result pairs) so the next turn has
+  // the same context the LLM had on its previous turn. Without this, the
+  // LLM only sees its own polished text reply and "forgets" what tools it
+  // ran and what they returned — leading to "I need that doc" right after
+  // it just fetched it.
+  const contextMessages: any[] = [];
+  for (const m of history.reverse()) {
+    const steps = (m as any).toolSteps as any[] | null | undefined;
+    if (m.role === "assistant" && Array.isArray(steps) && steps.length > 0) {
+      // Replay the captured AI SDK response.messages sequence verbatim.
+      // These rows include intermediate assistant tool-call + tool result
+      // messages plus the final assistant text.
+      for (const step of steps) contextMessages.push(step);
+    } else {
+      contextMessages.push({
+        role: m.role as "user" | "assistant" | "system",
+        content: m.content,
+      });
+    }
+  }
 
   // ── 4. Resolve model & API keys ──────────────────────────────────────────────
   const [modelSel] = await db
@@ -325,6 +343,9 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
   let chunkBuffer = "";
   let lastFlush = Date.now();
   let streamError: Error | null = null;
+  // Hoisted so we can read .response after the stream completes (for
+  // tool-step persistence).
+  let streamTextResult: ReturnType<typeof streamText> | null = null;
 
   const flush = () => {
     if (!chunkBuffer) return;
@@ -361,6 +382,7 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
         }
       },
     });
+    streamTextResult = result;
 
     // ── Use fullStream so we can intercept tool-input-delta events and forward
     //    document content character-by-character as the model generates it.
@@ -571,11 +593,38 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
     ? `${cleanedResponse}\n\n*Error: ${streamError.message}*`
     : cleanedResponse || "*Generation stopped*";
 
+  // Capture the full AI SDK response sequence (intermediate assistant
+  // text + tool-call + tool-result steps) so the next turn replays the
+  // exact context the LLM had. Without this, the LLM only sees its own
+  // final text and "forgets" what tools it ran (causes "I need that
+  // doc" right after it just fetched the doc).
+  let savedSteps: any[] | null = null;
+  try {
+    if (streamTextResult) {
+      const resp = await streamTextResult.response;
+      const rawMessages: any[] = (resp as any)?.messages ?? [];
+      // Hard cap to avoid storing megabytes of tool output. Per-result
+      // tool-result content is already capped at 8KB upstream; cap whole
+      // turn at ~200KB to keep history loads cheap.
+      const serialized = JSON.stringify(rawMessages);
+      if (serialized.length <= 200_000) {
+        savedSteps = rawMessages;
+      } else {
+        console.warn(
+          `[stream-handler] toolSteps too large (${serialized.length}B), dropping for conv ${convId}`
+        );
+      }
+    }
+  } catch (err) {
+    console.warn("[stream-handler] failed to capture response.messages:", (err as Error).message);
+  }
+
   if (finalContent) {
     await db.insert(messages).values({
       conversationId: convId,
       role: "assistant",
       content: finalContent,
+      toolSteps: savedSteps,
     });
   }
 

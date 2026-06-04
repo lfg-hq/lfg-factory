@@ -57,6 +57,11 @@ export const messages = pgTable(
     contentIfFile: jsonb("content_if_file").default([]),
     userRole: text("user_role").default("default"),
     isPartial: boolean("is_partial").notNull().default(false),
+    // Full AI SDK response.messages sequence for this assistant turn —
+    // includes intermediate tool-calls + tool-results so the next turn
+    // can replay context the LLM had (not just its final text).
+    // Null on user rows and on legacy assistant rows.
+    toolSteps: jsonb("tool_steps").$type<any[] | null>(),
     createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),
     lastUpdated: timestamp("last_updated", { mode: "date" }).notNull().default(sql`now()`),
   },

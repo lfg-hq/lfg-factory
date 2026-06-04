@@ -62,6 +62,11 @@ export const messages = sqliteTable(
     contentIfFile: text("content_if_file", { mode: "json" }).default([]),
     userRole: text("user_role").default("default"),
     isPartial: integer("is_partial", { mode: "boolean" }).notNull().default(false),
+    // Full AI SDK response.messages sequence for this assistant turn —
+    // includes intermediate tool-calls + tool-results so the next turn
+    // can replay context the LLM had (not just its final text).
+    // Null on user rows and on legacy assistant rows.
+    toolSteps: text("tool_steps", { mode: "json" }).$type<any[] | null>(),
     createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
     lastUpdated: integer("last_updated", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
   },
