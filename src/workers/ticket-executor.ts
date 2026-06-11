@@ -1319,6 +1319,8 @@ git branch --show-current
     anthropic: userKeys?.anthropicApiKey ?? undefined,
     openai: userKeys?.openaiApiKey ?? undefined,
     google: userKeys?.googleApiKey ?? undefined,
+    kimi: userKeys?.kimiApiKey ?? undefined,
+    deepseek: userKeys?.deepseekApiKey ?? undefined,
   });
 
   console.log(`[ticket-executor-api] Using model: ${modelKey}`);

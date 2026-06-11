@@ -3,18 +3,18 @@
   "providers": {
     "anthropic": {
       "label": "Claude",
-      "default_model": "claude_4.5_sonnet",
+      "default_model": "claude_4.6_sonnet",
       "models": [
         {
-          "key": "claude_4.5_opus",
-          "label": "Opus 4.5",
-          "provider_model": "claude-opus-4-5-20251101",
+          "key": "claude_4.6_opus",
+          "label": "Opus 4.6",
+          "provider_model": "claude-opus-4-6",
           "requires_pro": true
         },
         {
-          "key": "claude_4.5_sonnet",
-          "label": "Sonnet 4.5",
-          "provider_model": "claude-sonnet-4-5-20250929",
+          "key": "claude_4.6_sonnet",
+          "label": "Sonnet 4.6",
+          "provider_model": "claude-sonnet-4-6",
           "requires_pro": true
         },
         {
@@ -30,9 +30,9 @@
       "default_model": "gpt-5-mini",
       "models": [
         {
-          "key": "gpt-5.2",
-          "label": "GPT-5.2",
-          "provider_model": "gpt-5.2",
+          "key": "gpt-5.4",
+          "label": "GPT-5.4",
+          "provider_model": "gpt-5.4",
           "requires_pro": true
         },
         {
@@ -45,12 +45,12 @@
     },
     "google": {
       "label": "Google",
-      "default_model": "gemini_3_pro",
+      "default_model": "gemini_3.1_pro",
       "models": [
         {
-          "key": "gemini_3_pro",
-          "label": "Gemini 3 Pro",
-          "provider_model": "models/gemini-3-pro-preview",
+          "key": "gemini_3.1_pro",
+          "label": "Gemini 3.1 Pro",
+          "provider_model": "models/gemini-3.1-pro-preview",
           "requires_pro": true
         },
         {
@@ -62,7 +62,37 @@
         {
           "key": "gemini_2.5_flash_lite",
           "label": "Gemini 2.5 Flash Lite",
-          "provider_model": "models/gemini-2.5-flash-lite",
+          "provider_model": "models/gemini-3.1-flash-lite-preview",
+          "requires_pro": true
+        }
+      ]
+    },
+    "kimi": {
+      "label": "Kimi",
+      "default_model": "kimi_k2.5",
+      "models": [
+        {
+          "key": "kimi_k2.5",
+          "label": "Kimi K2.5",
+          "provider_model": "kimi-k2.5",
+          "requires_pro": true
+        }
+      ]
+    },
+    "deepseek": {
+      "label": "DeepSeek",
+      "default_model": "deepseek_v4_pro",
+      "models": [
+        {
+          "key": "deepseek_v4_pro",
+          "label": "DeepSeek V4 Pro",
+          "provider_model": "deepseek-v4-pro",
+          "requires_pro": true
+        },
+        {
+          "key": "deepseek_v4_flash",
+          "label": "DeepSeek V4 Flash",
+          "provider_model": "deepseek-v4-flash",
           "requires_pro": true
         }
       ]

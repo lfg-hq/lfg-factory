@@ -7,6 +7,8 @@ interface SettingsPageProps {
     anthropic: boolean;
     google: boolean;
     xai: boolean;
+    kimi: boolean;
+    deepseek: boolean;
     usePersonalKeys: boolean;
   };
   claudeCode?: {
@@ -25,12 +27,16 @@ interface SettingsPageProps {
     enabled: boolean;
     active: boolean;
   };
+  composio?: {
+    configured: boolean;
+    toolkits: Array<{ id: string; toolkit: string; enabled: boolean }>;
+  };
   activeSection?: "llm-keys" | "integrations";
   error?: string;
   success?: string;
 }
 
-export function SettingsPage({ user, apiKeys, claudeCode, github, telegram, activeSection = "llm-keys", error, success }: SettingsPageProps) {
+export function SettingsPage({ user, apiKeys, claudeCode, github, telegram, composio, activeSection = "llm-keys", error, success }: SettingsPageProps) {
   const avatarLetter = (user.name?.[0] ?? user.email?.[0] ?? "?").toUpperCase();
 
   return html`<!DOCTYPE html>
@@ -788,6 +794,103 @@ export function SettingsPage({ user, apiKeys, claudeCode, github, telegram, acti
           }
         </script>
 
+        <!-- Composio Connectors Card -->
+        <div class="llm-keys-table" style="margin-bottom:1.5rem;">
+          <div class="llm-keys-row" style="border-bottom:1px solid rgba(255,255,255,0.07);padding:1rem 1.375rem;justify-content:space-between;">
+            <h3 style="margin:0;font-size:0.9375rem;font-weight:700;color:var(--text-color,#f0f0f0);display:flex;align-items:center;gap:.5rem;">
+              <i class="fas fa-puzzle-piece" style="color:#7c3aed;"></i>
+              Composio Connectors
+            </h3>
+            ${composio?.configured ? html`
+              <span style="font-size:.75rem;padding:.25rem .625rem;background:rgba(124,58,237,.1);color:#a78bfa;border:1px solid rgba(124,58,237,.25);border-radius:20px;">
+                <i class="fas fa-check-circle"></i>&nbsp; Configured
+              </span>
+            ` : html`
+              <span style="font-size:.75rem;padding:.25rem .625rem;background:rgba(245,158,11,.1);color:#fbbf24;border:1px solid rgba(245,158,11,.25);border-radius:20px;">
+                <i class="fas fa-exclamation-triangle"></i>&nbsp; API Key Required
+              </span>
+            `}
+          </div>
+
+          <div class="llm-keys-row" style="flex-direction:column;align-items:stretch;gap:0.75rem;">
+            <p style="margin:0;font-size:.8125rem;color:rgba(255,255,255,.55);line-height:1.5;">
+              Connect 1000+ apps (GitHub, Gmail, Slack, Linear, Notion, etc.) via
+              <a href="https://composio.dev/tools" target="_blank" rel="noopener" style="color:#a78bfa;">Composio</a>.
+              These tools become available to the AI in chat and agent conversations.
+              ${!composio?.configured ? html`<br/><br/>Set <code style="background:rgba(255,255,255,.08);padding:.1rem .3rem;border-radius:3px;">COMPOSIO_API_KEY</code> in your environment. Get one at <a href="https://platform.composio.dev" target="_blank" rel="noopener" style="color:#a78bfa;">platform.composio.dev</a>.` : ""}
+            </p>
+
+            ${composio?.configured ? html`
+              <!-- Connected toolkits -->
+              <div id="composio-toolkit-list" style="display:flex;flex-direction:column;gap:0.5rem;">
+                ${(composio?.toolkits ?? []).length > 0 ? (composio?.toolkits ?? []).map((t) => html`
+                  <div style="display:flex;align-items:center;justify-content:space-between;padding:0.5rem 0.75rem;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:8px;">
+                    <div style="display:flex;align-items:center;gap:0.625rem;">
+                      <i class="fas fa-plug" style="color:#a78bfa;font-size:0.75rem;"></i>
+                      <span style="font-size:.8125rem;font-weight:600;color:var(--text-color);">${t.toolkit}</span>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:0.5rem;">
+                      <label class="toggle-switch" style="margin:0;">
+                        <input type="checkbox" ${t.enabled ? "checked" : ""} onchange="window.__composioToggle('${t.id}', this.checked)" />
+                        <span class="toggle-slider"></span>
+                      </label>
+                      <button type="button" onclick="window.__composioRemove('${t.id}')" style="background:none;border:none;color:rgba(255,255,255,.3);cursor:pointer;padding:0.25rem;font-size:0.75rem;" title="Remove">
+                        <i class="fas fa-trash"></i>
+                      </button>
+                    </div>
+                  </div>
+                `) : html`<p style="margin:0;font-size:.8125rem;color:rgba(255,255,255,.35);font-style:italic;">No connectors added yet.</p>`}
+              </div>
+
+              <!-- Add toolkit form -->
+              <form id="composio-add-form" style="display:flex;gap:0.5rem;align-items:center;margin-top:0.25rem;" onsubmit="return window.__composioAdd(event)">
+                <input type="text" id="composio-toolkit-input" placeholder="e.g. GITHUB, GMAIL, SLACK, LINEAR, NOTION"
+                  style="flex:1;padding:0.5rem 0.75rem;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:var(--text-color);font-size:.8125rem;outline:none;" />
+                <button type="submit" style="padding:0.5rem 1rem;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:.8125rem;font-weight:600;cursor:pointer;white-space:nowrap;">
+                  <i class="fas fa-plus"></i>&nbsp; Add
+                </button>
+              </form>
+              <p style="margin:0;font-size:.7rem;color:rgba(255,255,255,.3);">
+                Browse available toolkits at <a href="https://composio.dev/tools" target="_blank" rel="noopener" style="color:#a78bfa;">composio.dev/tools</a>
+              </p>
+            ` : ""}
+          </div>
+        </div>
+
+        <script>
+          window.__composioToggle = async function(id, enabled) {
+            await fetch('/api/composio/toolkits/' + id, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              credentials: 'include',
+              body: JSON.stringify({ enabled: enabled }),
+            });
+            location.reload();
+          };
+          window.__composioRemove = async function(id) {
+            if (!confirm('Remove this connector?')) return;
+            await fetch('/api/composio/toolkits/' + id, {
+              method: 'DELETE',
+              credentials: 'include',
+            });
+            location.reload();
+          };
+          window.__composioAdd = async function(e) {
+            e.preventDefault();
+            var input = document.getElementById('composio-toolkit-input');
+            var toolkit = (input.value || '').trim().toUpperCase();
+            if (!toolkit) return false;
+            await fetch('/api/composio/toolkits', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              credentials: 'include',
+              body: JSON.stringify({ toolkit: toolkit }),
+            });
+            location.reload();
+            return false;
+          };
+        </script>
+
       ` : html`
 
         <!-- One large card containing heading + BYOK + all providers -->
@@ -802,7 +905,7 @@ export function SettingsPage({ user, apiKeys, claudeCode, github, telegram, acti
           <div class="llm-keys-row" style="background:rgba(255,255,255,0.02);">
             <div style="flex:1;">
               <div class="byok-label">Bring Your Own Keys</div>
-              <div class="byok-desc">Your OpenAI, Anthropic, and Google keys will be used where available.</div>
+              <div class="byok-desc">Your OpenAI, Anthropic, Google, Kimi, and DeepSeek keys will be used where available.</div>
             </div>
             <form method="POST" action="/settings/toggle-byok">
               <label class="toggle-switch">
@@ -890,6 +993,62 @@ export function SettingsPage({ user, apiKeys, claudeCode, github, telegram, acti
                 <form method="POST" action="/settings/save-key" class="llm-input-group">
                   <input type="hidden" name="provider" value="google" />
                   <input type="password" name="key" placeholder="AIza..." autocomplete="off" />
+                  <button type="submit" class="llm-btn-save">Save</button>
+                </form>
+              `}
+            </div>
+          </div>
+
+          <!-- Kimi -->
+          <div class="llm-keys-row">
+            <div class="llm-row-label">
+              <div class="llm-logo-wrap kimi" style="background:linear-gradient(135deg,#1a1a2e,#16213e);color:#4fc3f7;">
+                <span style="font-weight:700;font-size:0.8rem;">K</span>
+              </div>
+              <div>
+                <div class="llm-row-name">Kimi <a href="https://platform.moonshot.cn/console/api-keys" target="_blank" class="help-circle">?</a></div>
+                <div class="llm-row-sub">Bring your Kimi (Moonshot) API key</div>
+              </div>
+            </div>
+            <div class="llm-row-right">
+              ${apiKeys.kimi ? html`
+                <form method="POST" action="/settings/remove-key" class="llm-input-group">
+                  <input type="hidden" name="provider" value="kimi" />
+                  <input type="password" value="••••••••••••" disabled />
+                  <button type="submit" class="llm-btn-remove"><i class="fas fa-times"></i></button>
+                </form>
+              ` : html`
+                <form method="POST" action="/settings/save-key" class="llm-input-group">
+                  <input type="hidden" name="provider" value="kimi" />
+                  <input type="password" name="key" placeholder="sk-..." autocomplete="off" />
+                  <button type="submit" class="llm-btn-save">Save</button>
+                </form>
+              `}
+            </div>
+          </div>
+
+          <!-- DeepSeek -->
+          <div class="llm-keys-row">
+            <div class="llm-row-label">
+              <div class="llm-logo-wrap deepseek" style="background:linear-gradient(135deg,#1a1a2e,#0b3d91);color:#4d6bfe;">
+                <span style="font-weight:700;font-size:0.8rem;">DS</span>
+              </div>
+              <div>
+                <div class="llm-row-name">DeepSeek <a href="https://platform.deepseek.com/api_keys" target="_blank" class="help-circle">?</a></div>
+                <div class="llm-row-sub">Bring your DeepSeek API key</div>
+              </div>
+            </div>
+            <div class="llm-row-right">
+              ${apiKeys.deepseek ? html`
+                <form method="POST" action="/settings/remove-key" class="llm-input-group">
+                  <input type="hidden" name="provider" value="deepseek" />
+                  <input type="password" value="••••••••••••" disabled />
+                  <button type="submit" class="llm-btn-remove"><i class="fas fa-times"></i></button>
+                </form>
+              ` : html`
+                <form method="POST" action="/settings/save-key" class="llm-input-group">
+                  <input type="hidden" name="provider" value="deepseek" />
+                  <input type="password" name="key" placeholder="sk-..." autocomplete="off" />
                   <button type="submit" class="llm-btn-save">Save</button>
                 </form>
               `}

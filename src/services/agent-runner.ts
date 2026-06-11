@@ -135,6 +135,7 @@ export async function runAgentTask(input: RunAgentTaskInput): Promise<RunAgentTa
         openai: apiKeys.openaiApiKey ?? undefined,
         google: apiKeys.googleApiKey ?? undefined,
         kimi: apiKeys.kimiApiKey ?? undefined,
+        deepseek: apiKeys.deepseekApiKey ?? undefined,
       }
     : undefined;
 
@@ -144,6 +145,7 @@ export async function runAgentTask(input: RunAgentTaskInput): Promise<RunAgentTa
     anthropic: userApiKeys?.anthropic,
     google: userApiKeys?.google,
     kimi: userApiKeys?.kimi,
+    deepseek: userApiKeys?.deepseek,
   };
   if (providerName && !keyMap[providerName]) {
     const errMsg = `No ${providerName} API key — scheduled run cannot execute. Add a key in Settings → LLM Keys.`;

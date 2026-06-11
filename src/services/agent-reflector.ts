@@ -76,6 +76,7 @@ async function reflectOnLatestRun(agentId: string, userId: string): Promise<void
         openai: apiKeys.openaiApiKey ?? undefined,
         google: apiKeys.googleApiKey ?? undefined,
         kimi: apiKeys.kimiApiKey ?? undefined,
+        deepseek: apiKeys.deepseekApiKey ?? undefined,
       }
     : undefined;
 

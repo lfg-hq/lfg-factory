@@ -195,7 +195,7 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
 
   const modelKey = modelSel?.selectedModel ?? DEFAULT_MODEL_KEY;
   const userApiKeys = apiKeys
-    ? { anthropic: apiKeys.anthropicApiKey ?? undefined, openai: apiKeys.openaiApiKey ?? undefined, google: apiKeys.googleApiKey ?? undefined, kimi: apiKeys.kimiApiKey ?? undefined }
+    ? { anthropic: apiKeys.anthropicApiKey ?? undefined, openai: apiKeys.openaiApiKey ?? undefined, google: apiKeys.googleApiKey ?? undefined, kimi: apiKeys.kimiApiKey ?? undefined, deepseek: apiKeys.deepseekApiKey ?? undefined }
     : undefined;
 
   // ── Check user has a key for the selected provider (unless instant mode) ────
@@ -206,6 +206,7 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
       anthropic: userApiKeys?.anthropic,
       google: userApiKeys?.google,
       kimi: userApiKeys?.kimi,
+      deepseek: userApiKeys?.deepseek,
     };
     if (providerName && !keyMap[providerName]) {
       const errMsg = `⚠️ No ${providerName.charAt(0).toUpperCase() + providerName.slice(1)} API key found. Please add your API key in **Settings → LLM Keys** to use this model.`;
