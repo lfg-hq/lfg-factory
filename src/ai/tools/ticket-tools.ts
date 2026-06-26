@@ -30,8 +30,13 @@ export const createTickets = tool({
     userId: z.string().describe("User ID for real-time ticket streaming"),
     tickets: z.array(z.object({
       name: z.string().describe("Ticket title"),
-      description: z.string(),
-      acceptanceCriteria: z.array(z.string()).describe("2-3 clear acceptance criteria"),
+      description: z.string().describe(
+        "Formatted Markdown (NOT a plain paragraph). Use headings and bullet lists: " +
+        "## Overview, ## Implementation Notes (stack, data model, API routes, edge cases), " +
+        "## UI / UX (screens, states, design references), ## Out of Scope. " +
+        "Use `inline code` for identifiers, endpoints, and hex values."
+      ),
+      acceptanceCriteria: z.array(z.string()).min(2).describe("2-4 specific, testable acceptance criteria — never empty"),
       priority: z.enum(["High", "Medium", "Low"]).default("Medium"),
       complexity: z.enum(["simple", "medium", "complex"]).default("medium"),
       stageId: z.string().optional(),
