@@ -73,6 +73,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
   <script src="/public/js/theme-switcher.js"></script>
+  <script src="/public/js/marked.min.js"></script>
   <style>
     /* Layout overrides — not in tickets.css */
     .tickets-page { height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
@@ -443,7 +444,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
         </div>
         <div class="detail-section">
           <h4>Description</h4>
-          <p id="drawer-description"></p>
+          <div id="drawer-description" class="markdown-content"></div>
         </div>
         <div class="detail-section" id="drawer-linked-docs" style="display:none;">
           <h4>Linked Documents</h4>
@@ -632,7 +633,12 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     pb.textContent = t.priority;
     pb.className = 'detail-label priority-label priority-' + t.priority.toLowerCase();
 
-    document.getElementById('drawer-description').textContent = t.description || 'No description provided.';
+    var _descEl = document.getElementById('drawer-description');
+    if (t.description && typeof marked !== 'undefined') {
+      _descEl.innerHTML = marked.parse(t.description);
+    } else {
+      _descEl.textContent = t.description || 'No description provided.';
+    }
     document.getElementById('drawer-created').textContent = t.createdAt;
     document.getElementById('drawer-updated').textContent = t.updatedAt;
 
@@ -867,7 +873,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       var optionsHtml = '';
       if (row.options && row.options.length) {
         var btns = row.options.map(function(opt) {
-          return '<button class="question-opt-btn" onclick="window._selectOption(this, \'' + escHtml(opt).replace(/'/g, "\\'") + '\')">' + escHtml(opt) + '</button>';
+          return '<button class="question-opt-btn" data-opt="' + escHtml(opt) + '" onclick="window._selectOption(this, this.dataset.opt)">' + escHtml(opt) + '</button>';
         }).join('');
         optionsHtml =
           '<div class="question-options">' + btns + '</div>' +
