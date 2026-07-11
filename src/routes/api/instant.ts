@@ -11,7 +11,9 @@ import {
   exportInstantAppToGitHub,
   getInstantAppArchive,
   provisionInstantAppDatabase,
+  retryInstantBuild,
 } from "../../services/instant-app.ts";
+import { testInstantApp } from "../../services/instant-tester.ts";
 import type { auth } from "../../auth/index.ts";
 
 type AuthEnv = {
@@ -50,8 +52,8 @@ async function getAppForUser(userId: string, appId: string, internalProjectId?: 
 async function fetchWorkspaceLogs(workspaceId: string, offset: number) {
   const cmd =
     offset > 0
-      ? `tail -c +${offset + 1} /home/claudeuser/project/dev.log 2>/dev/null || echo ''`
-      : "tail -n 200 /home/claudeuser/project/dev.log 2>/dev/null || echo ''";
+      ? `tail -c +${offset + 1} /data/project/dev.log 2>/dev/null || echo ''`
+      : "tail -n 200 /data/project/dev.log 2>/dev/null || echo ''";
   const result = await execOnWorkspace(workspaceId, cmd, { timeout: 15_000 });
   const logs = result.output ?? "";
   return {
@@ -62,7 +64,7 @@ async function fetchWorkspaceLogs(workspaceId: string, offset: number) {
 
 async function rebuildWorkspace(workspaceId: string) {
   const cmd =
-    "cd /home/claudeuser/project && (pkill -f 'next start' 2>/dev/null || true) && npm run build && nohup npm start -p 8080 -H 0.0.0.0 > dev.log 2>&1 &";
+    "cd /data/project && (pkill -f 'next start' 2>/dev/null || true) && npm run build && nohup npm start -p 8080 -H 0.0.0.0 > dev.log 2>&1 &";
   await execOnWorkspace(workspaceId, cmd, { timeout: 180_000 });
 }
 
@@ -109,10 +111,45 @@ instantApi.post("/apps/:appId/rebuild", async (c) => {
   const { appId } = c.req.param();
   const row = await getAppForUser(user.id, appId);
   if (!row) return c.json({ error: "Not found" }, 404);
-  if (!row.sandbox?.magsWorkspaceId) return c.json({ error: "No sandbox available" }, 400);
+  if (!row.sandbox?.magsWorkspaceId) return c.json({ error: "No workspace available" }, 400);
 
   await rebuildWorkspace(row.sandbox.magsWorkspaceId);
   return c.json({ status: "ok", message: "Rebuild started" });
+});
+
+// QA: run the cloud-browser smoke test over every screen. Fire-and-forget —
+// results stream back over WS (notification_type: "instant_app_test").
+instantApi.post("/apps/:appId/qa", async (c) => {
+  const user = c.get("user");
+  const { appId } = c.req.param();
+  const row = await getAppForUser(user.id, appId);
+  if (!row) return c.json({ error: "Not found" }, 404);
+  if (!row.sandbox?.magsWorkspaceId) return c.json({ error: "No workspace available — build the app first." }, 400);
+  if (!row.app.previewUrl) return c.json({ error: "App has no preview URL — build it first." }, 400);
+
+  void testInstantApp({
+    appId: row.app.appId,
+    appDbId: row.app.id,
+    userId: user.id,
+    conversationId: row.app.conversationId,
+    appName: row.app.name,
+    previewUrl: row.app.previewUrl,
+    buildWorkspaceId: row.sandbox.magsWorkspaceId,
+  });
+  return c.json({ status: "started" });
+});
+
+// Restore/resume: deterministically bring the app back. Provisions a fresh VM and
+// clones from GitHub if the sandbox was reaped (or reuses a live VM). No LLM involved.
+instantApi.post("/apps/:appId/restore", async (c) => {
+  const user = c.get("user");
+  const { appId } = c.req.param();
+  const row = await getAppForUser(user.id, appId);
+  if (!row) return c.json({ error: "Not found" }, 404);
+  if (!row.app.conversationId) return c.json({ error: "App has no conversation to restore" }, 400);
+  const result = await retryInstantBuild({ userId: user.id, conversationId: row.app.conversationId });
+  if (!result.started) return c.json({ error: result.reason ?? "Could not restore" }, 400);
+  return c.json({ status: "ok", message: "Restore started" });
 });
 
 // ── Delete app (stop VM + remove records) ─────────────────────────
@@ -253,6 +290,19 @@ instantApi.post("/:projectId/apps/:appId/rebuild", async (c) => {
 
   await rebuildWorkspace(row.sandbox.magsWorkspaceId);
   return c.json({ status: "ok", message: "Rebuild started" });
+});
+
+instantApi.post("/:projectId/apps/:appId/restore", async (c) => {
+  const user = c.get("user");
+  const { projectId, appId } = c.req.param();
+  const project = await resolveProjectForUser(user.id, projectId);
+  if (!project) return c.json({ error: "Project not found" }, 404);
+  const row = await getAppForUser(user.id, appId, project.id);
+  if (!row) return c.json({ error: "Not found" }, 404);
+  if (!row.app.conversationId) return c.json({ error: "App has no conversation to restore" }, 400);
+  const result = await retryInstantBuild({ userId: user.id, conversationId: row.app.conversationId });
+  if (!result.started) return c.json({ error: result.reason ?? "Could not restore" }, 400);
+  return c.json({ status: "ok", message: "Restore started" });
 });
 
 // ── Project-scoped: Delete ────────────────────────────────────────

@@ -68,6 +68,11 @@ export function ChatInput({
               accept="image/*,.pdf,.csv,.txt,.md,.docx,.xlsx,.mp3,.mp4,.m4a,.wav,.webm,.json,.js,.ts,.py,.html,.css"
             />
 
+            <button type="button" id="connectors-btn" class="action-btn" title="Connectors">
+              <i class="fas fa-plug"></i>
+              <span class="connector-badge" id="connector-badge" style="display:none">0</span>
+            </button>
+
             <button type="button" id="settings-btn" class="action-btn settings-btn-styled" title="Settings">
               <i class="fas fa-sliders-h"></i>
             </button>
@@ -126,10 +131,6 @@ export function ChatInput({
                   </div>
                 </div>
 
-                <div class="menu-item" id="mcp-servers-btn">
-                  <i class="fas fa-plug"></i><span>Integrations</span>
-                  <span class="mcp-count-badge" id="mcp-count-badge" style="display:none">0</span>
-                </div>
               </div>
             </div>
           </div>

@@ -170,7 +170,7 @@ export function ChatPage({
         selectedModelKey: modelKey,
         selectedRoleKey: roleKey,
         roleOptions: [{ key: "product_analyst", label: "Analyst" }],
-        showTurboToggle: true,
+        showTurboToggle: false,
         turboEnabled: false,
         showMic: true,
       })}
@@ -260,33 +260,44 @@ export function ChatPage({
     </div>
   </div>
 
-  <!-- MCP Integrations Modal -->
-  <div class="mcp-modal-overlay" id="mcp-modal-overlay">
-    <div class="mcp-modal">
-      <div class="mcp-modal-header">
-        <h3>Integrations</h3>
-        <button class="mcp-modal-close" id="mcp-modal-close">&#215;</button>
-      </div>
-
-      <div id="mcp-server-list" class="mcp-server-list">
-        <div class="mcp-empty-state">No integrations configured yet.</div>
-      </div>
-
-      <div class="mcp-divider"></div>
-
-      <form id="mcp-add-form" class="mcp-add-form">
-        <h4>Add Server</h4>
-        <div class="mcp-form-row">
-          <input type="text" name="name" placeholder="Server name" required />
-          <select name="transportType">
-            <option value="sse">SSE</option>
-            <option value="http">HTTP</option>
-          </select>
+  <!-- Connectors Modal -->
+  <div class="connectors-overlay" id="connectors-overlay">
+    <div class="connectors-modal">
+      <div class="connectors-header">
+        <h3>Connectors</h3>
+        <div class="connectors-search-wrap">
+          <i class="fas fa-search"></i>
+          <input type="text" id="connectors-search" placeholder="Search connectors..." />
         </div>
-        <input type="text" name="url" placeholder="Server URL" required />
-        <textarea name="headers" placeholder="Optional headers JSON"  rows="2"></textarea>
-        <button type="submit" class="mcp-add-btn">Add Server</button>
-      </form>
+        <button class="connectors-close" id="connectors-close">&#215;</button>
+      </div>
+      <p class="connectors-subtitle">Connect your apps and services so the AI can access and act on your data.</p>
+      <div class="connectors-tabs">
+        <button class="connectors-tab active" data-filter="all">All</button>
+        <button class="connectors-tab" data-filter="connected">Connected</button>
+        <button class="connectors-tab" data-filter="available">Available</button>
+      </div>
+      <div id="connectors-grid" class="connectors-grid">
+        <div class="connectors-loading">Loading connectors...</div>
+      </div>
+      <div id="connectors-load-more" style="display:none;text-align:center;padding:1rem;">
+        <button class="connectors-load-more-btn">Load more</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Connector Detail Modal -->
+  <div class="connector-detail-overlay" id="connector-detail-overlay">
+    <div class="connector-detail-modal">
+      <button class="connectors-close" id="connector-detail-close">&#215;</button>
+      <div class="connector-detail-header">
+        <img id="connector-detail-logo" src="" alt="" class="connector-detail-logo" />
+        <div>
+          <h3 id="connector-detail-name"></h3>
+          <p id="connector-detail-desc"></p>
+        </div>
+        <button id="connector-detail-action" class="connector-detail-action-btn">Add connector</button>
+      </div>
     </div>
   </div>
 
@@ -335,7 +346,7 @@ export function ChatPage({
     requestAnimationFrame(()=>requestAnimationFrame(()=>document.documentElement.classList.remove('sidebar-minimized-preload')));
   </script>
 
-  <script src="/public/js/mcp-integrations.js"></script>
+  <script src="/public/js/connectors.js"></script>
 </body>
 </html>`;
 }

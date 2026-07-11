@@ -129,7 +129,7 @@ export const AgentPage = () => html`
                             <ul class="space-y-2 text-sm text-slate-600">
                                 <li class="flex gap-2"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i> Full PRD with features, priorities, and acceptance criteria</li>
                                 <li class="flex gap-2"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i> Technical analysis with stack and architecture decisions</li>
-                                <li class="flex gap-2"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i> Document versioning — iterate and refine with the agent</li>
+                                <li class="flex gap-2"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i> Document versioning, iterate and refine with the agent</li>
                             </ul>
                         </div>
                         <div class="order-1 lg:order-2">
@@ -138,7 +138,7 @@ export const AgentPage = () => html`
                                     <span class="w-2.5 h-2.5 rounded-full bg-red-400"></span>
                                     <span class="w-2.5 h-2.5 rounded-full bg-amber-400"></span>
                                     <span class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
-                                    <span class="ml-2 text-xs text-slate-400">LFG Agent — PRD &amp; Analysis</span>
+                                    <span class="ml-2 text-xs text-slate-400">LFG Agent, PRD &amp; Analysis</span>
                                 </div>
                                 <img src="/public/images/screenshots/agent-prd-chat.png" alt="LFG Agent generating a PRD" class="w-full" />
                             </div>
@@ -152,7 +152,7 @@ export const AgentPage = () => html`
                                     <span class="w-2.5 h-2.5 rounded-full bg-red-400"></span>
                                     <span class="w-2.5 h-2.5 rounded-full bg-amber-400"></span>
                                     <span class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
-                                    <span class="ml-2 text-xs text-slate-400">LFG Agent — Ticket Board</span>
+                                    <span class="ml-2 text-xs text-slate-400">LFG Agent, Ticket Board</span>
                                 </div>
                                 <img src="/public/images/screenshots/agent-ticket-board.png" alt="LFG ticket board" class="w-full" />
                             </div>
@@ -163,7 +163,7 @@ export const AgentPage = () => html`
                                 <span class="text-xs font-bold text-brand-700 uppercase tracking-wider">Ticket management</span>
                             </div>
                             <h3 class="font-display font-bold text-2xl text-slate-900 mb-3">Create and prioritize tickets automatically.</h3>
-                            <p class="text-slate-600 leading-relaxed mb-4">Once the PRD is approved, LFG Agent breaks it into user stories and implementation tickets — scoped, prioritized, and ready for execution. All within the app. No external tools needed.</p>
+                            <p class="text-slate-600 leading-relaxed mb-4">Once the PRD is approved, LFG Agent breaks it into user stories and implementation tickets, scoped, prioritized, and ready for execution. All within the app. No external tools needed.</p>
                             <ul class="space-y-2 text-sm text-slate-600">
                                 <li class="flex gap-2"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i> User stories with acceptance criteria auto-generated</li>
                                 <li class="flex gap-2"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i> Kanban board with Open, In Progress, Review, Done</li>
@@ -192,7 +192,7 @@ export const AgentPage = () => html`
                                     <span class="w-2.5 h-2.5 rounded-full bg-red-400"></span>
                                     <span class="w-2.5 h-2.5 rounded-full bg-amber-400"></span>
                                     <span class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
-                                    <span class="ml-2 text-xs text-slate-400">LFG Agent — Ticket Execution</span>
+                                    <span class="ml-2 text-xs text-slate-400">LFG Agent, Ticket Execution</span>
                                 </div>
                                 <img src="/public/images/screenshots/agent-ticket-execution.png" alt="LFG ticket execution" class="w-full" />
                             </div>
@@ -208,7 +208,7 @@ export const AgentPage = () => html`
                 <div class="text-center max-w-3xl mx-auto mb-16">
                     <p class="text-sm font-bold text-brand-600 uppercase tracking-wider mb-2">What LFG Agent does</p>
                     <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">Your AI product manager, end to end</h2>
-                    <p class="text-slate-600 text-lg mt-4">LFG Agent handles the entire product lifecycle — from understanding what needs to be built to making sure it gets built right.</p>
+                    <p class="text-slate-600 text-lg mt-4">LFG Agent handles the entire product lifecycle, from understanding what needs to be built to making sure it gets built right.</p>
                 </div>
                 <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
                     <div class="step-card rounded-2xl border border-slate-200 bg-white p-6">
@@ -216,7 +216,7 @@ export const AgentPage = () => html`
                             <div class="w-10 h-10 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center"><i data-lucide="brain" class="w-5 h-5"></i></div>
                             <h3 class="font-display font-bold text-lg">Requirements Analysis</h3>
                         </div>
-                        <p class="text-sm text-slate-600 leading-relaxed">Reads through your context-heavy data — briefs, docs, conversations — and distills it into clear, structured requirements. Asks the right questions so nothing gets missed.</p>
+                        <p class="text-sm text-slate-600 leading-relaxed">Reads through your context-heavy data, briefs, docs, conversations, and distills it into clear, structured requirements. Asks the right questions so nothing gets missed.</p>
                     </div>
                     <div class="step-card rounded-2xl border border-slate-200 bg-white p-6">
                         <div class="flex items-center gap-3 mb-4">
@@ -237,7 +237,7 @@ export const AgentPage = () => html`
                             <div class="w-10 h-10 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center"><i data-lucide="list-todo" class="w-5 h-5"></i></div>
                             <h3 class="font-display font-bold text-lg">Ticket Creation</h3>
                         </div>
-                        <p class="text-sm text-slate-600 leading-relaxed">Breaks the plan into scoped, dependency-aware tickets with user stories and acceptance criteria. All created within the app — no external project management tool needed.</p>
+                        <p class="text-sm text-slate-600 leading-relaxed">Breaks the plan into scoped, dependency-aware tickets with user stories and acceptance criteria. All created within the app, no external project management tool needed.</p>
                     </div>
                     <div class="step-card rounded-2xl border border-slate-200 bg-white p-6">
                         <div class="flex items-center gap-3 mb-4">
@@ -251,7 +251,7 @@ export const AgentPage = () => html`
                             <div class="w-10 h-10 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center"><i data-lucide="history" class="w-5 h-5"></i></div>
                             <h3 class="font-display font-bold text-lg">Versioning &amp; Iteration</h3>
                         </div>
-                        <p class="text-sm text-slate-600 leading-relaxed">PRDs and technical documents are versioned as you iterate. Refine scope, adjust priorities, and re-plan — the agent keeps full context across every revision.</p>
+                        <p class="text-sm text-slate-600 leading-relaxed">PRDs and technical documents are versioned as you iterate. Refine scope, adjust priorities, and re-plan, the agent keeps full context across every revision.</p>
                     </div>
                 </div>
             </div>
@@ -269,7 +269,7 @@ export const AgentPage = () => html`
                     <div class="pipeline-step relative flex flex-col" style="animation-delay: 0s">
                         <article class="step-card bg-white rounded-xl p-6 border border-slate-200 shadow-sm flex-1">
                             <div class="w-10 h-10 rounded-lg bg-brand-100 text-brand-700 flex items-center justify-center mb-4"><i data-lucide="message-square-text" class="w-5 h-5"></i></div>
-                            <p class="text-xs uppercase font-bold tracking-wider text-brand-600 mb-2">01 — You</p>
+                            <p class="text-xs uppercase font-bold tracking-wider text-brand-600 mb-2">01: You</p>
                             <h3 class="font-display font-bold text-lg mb-2">Describe your idea</h3>
                             <p class="text-sm text-slate-600">Share what you need in plain English. A product concept, a feature set, a whole system.</p>
                         </article>
@@ -278,7 +278,7 @@ export const AgentPage = () => html`
                     <div class="pipeline-step relative flex flex-col" style="animation-delay: 0.1s">
                         <article class="step-card bg-white rounded-xl p-6 border border-slate-200 shadow-sm flex-1">
                             <div class="w-10 h-10 rounded-lg bg-brand-100 text-brand-700 flex items-center justify-center mb-4"><i data-lucide="file-text" class="w-5 h-5"></i></div>
-                            <p class="text-xs uppercase font-bold tracking-wider text-brand-600 mb-2">02 — Agent</p>
+                            <p class="text-xs uppercase font-bold tracking-wider text-brand-600 mb-2">02: Agent</p>
                             <h3 class="font-display font-bold text-lg mb-2">PRD &amp; plan</h3>
                             <p class="text-sm text-slate-600">Agent generates a full PRD, technical architecture, and implementation plan you can review and iterate on.</p>
                         </article>
@@ -287,7 +287,7 @@ export const AgentPage = () => html`
                     <div class="pipeline-step relative flex flex-col" style="animation-delay: 0.2s">
                         <article class="step-card bg-white rounded-xl p-6 border border-slate-200 shadow-sm flex-1">
                             <div class="w-10 h-10 rounded-lg bg-brand-100 text-brand-700 flex items-center justify-center mb-4"><i data-lucide="list-checks" class="w-5 h-5"></i></div>
-                            <p class="text-xs uppercase font-bold tracking-wider text-brand-600 mb-2">03 — Agent</p>
+                            <p class="text-xs uppercase font-bold tracking-wider text-brand-600 mb-2">03: Agent</p>
                             <h3 class="font-display font-bold text-lg mb-2">Tickets created</h3>
                             <p class="text-sm text-slate-600">The plan is broken into prioritized tickets with user stories. Each is scoped and queued for execution.</p>
                         </article>
@@ -296,7 +296,7 @@ export const AgentPage = () => html`
                     <div class="pipeline-step relative flex flex-col" style="animation-delay: 0.3s">
                         <article class="step-card bg-white rounded-xl p-6 border border-slate-200 shadow-sm flex-1">
                             <div class="w-10 h-10 rounded-lg bg-brand-100 text-brand-700 flex items-center justify-center mb-4"><i data-lucide="terminal" class="w-5 h-5"></i></div>
-                            <p class="text-xs uppercase font-bold tracking-wider text-brand-600 mb-2">04 — Agent</p>
+                            <p class="text-xs uppercase font-bold tracking-wider text-brand-600 mb-2">04: Agent</p>
                             <h3 class="font-display font-bold text-lg mb-2">Code &amp; test</h3>
                             <p class="text-sm text-slate-600">Claude Code executes each ticket in a sandbox. You can watch, course-correct, or let it run autonomously.</p>
                         </article>
@@ -305,7 +305,7 @@ export const AgentPage = () => html`
                     <div class="pipeline-step relative flex flex-col" style="animation-delay: 0.4s">
                         <article class="step-card bg-white rounded-xl p-6 border border-brand-200 shadow-sm bg-brand-50 flex-1">
                             <div class="w-10 h-10 rounded-lg bg-brand-600 text-white flex items-center justify-center mb-4"><i data-lucide="check-circle-2" class="w-5 h-5"></i></div>
-                            <p class="text-xs uppercase font-bold tracking-wider text-brand-700 mb-2">05 — You</p>
+                            <p class="text-xs uppercase font-bold tracking-wider text-brand-700 mb-2">05: You</p>
                             <h3 class="font-display font-bold text-lg mb-2">Review &amp; ship</h3>
                             <p class="text-sm text-slate-700">Review the working product. Approve and merge, or leave feedback. The agent iterates instantly.</p>
                         </article>
@@ -357,7 +357,7 @@ export const AgentPage = () => html`
                         <div class="w-3 h-3 rounded-full bg-[#ff5f56]"></div>
                         <div class="w-3 h-3 rounded-full bg-[#ffbd2e]"></div>
                         <div class="w-3 h-3 rounded-full bg-[#27c93f]"></div>
-                        <span class="ml-2 text-xs text-slate-400">bash — lfg</span>
+                        <span class="ml-2 text-xs text-slate-400">bash, lfg</span>
                     </div>
                     <div class="p-6 text-slate-300 overflow-x-auto">
 <pre id="command-block">

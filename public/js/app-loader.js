@@ -88,7 +88,7 @@
                     // Check if port mappings exist and not empty
                     if (!data.port_mappings || data.port_mappings.length === 0) {
                         console.warn('[AppLoader] No port mappings found in API response');
-                        showEmptyState("No port mappings available. Make sure your app is running on port 8000 in the sandbox.");
+                        showEmptyState("No port mappings available. Make sure your app is running on port 8000 in the workspace.");
                         return;
                     }
                     
@@ -98,7 +98,7 @@
                     if (!port) {
                         // Show empty state if no port is available
                         console.warn('[AppLoader] Port value is missing or invalid in API response');
-                        showEmptyState("No running app available. Make sure your app is running on port 8000 in the sandbox.");
+                        showEmptyState("No running app available. Make sure your app is running on port 8000 in the workspace.");
                         return;
                     }
                     

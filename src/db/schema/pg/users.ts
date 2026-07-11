@@ -97,6 +97,7 @@ export const llmApiKeys = pgTable("llm_api_key", {
   googleApiKey: text("google_api_key"),
   kimiApiKey: text("kimi_api_key"),
   deepseekApiKey: text("deepseek_api_key"),
+  glmApiKey: text("glm_api_key"),
   freeTrial: boolean("free_trial").notNull().default(true),
   usePersonalLlmKeys: boolean("use_personal_llm_keys").notNull().default(false),
 });

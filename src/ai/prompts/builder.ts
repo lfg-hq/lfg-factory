@@ -141,7 +141,7 @@ ${envVars?.length ? envVars.map(v => `- ${v.key}: ${v.description || "(no descri
 
 ## INSTRUCTIONS
 
-1. Navigate to the project directory: cd /home/claudeuser/project
+1. Navigate to the project directory: cd /data/project
 2. Understand the existing codebase structure
 3. Create tasks to track your implementation progress (using TodoWrite or the API)
 4. Implement the required changes for this ticket

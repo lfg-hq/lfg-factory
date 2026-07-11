@@ -12,6 +12,7 @@ import { createInstantTools } from "./tools/instant-tools.ts";
 import { setDocumentWsBroadcast, setTicketWsBroadcast } from "./tools/index.ts";
 import { setMiscWsBroadcast } from "./tools/index.ts";
 import { getProductSystemPrompt } from "./prompts/product.ts";
+import { normalizeAskUserQuestions } from "./tools/misc-tools.ts";
 import { getInstantSystemPrompt } from "./prompts/instant.ts";
 import { getAgentSystemPrompt } from "./prompts/agent.ts";
 import { getAgentByConversation } from "../services/agent-manager.ts";
@@ -28,6 +29,16 @@ const FLUSH_MS = 80;
 // ── Tool names whose arguments should be streamed to the right panel ──────────
 const DOCUMENT_STREAM_TOOLS = new Set([
   "streamDocumentContent",
+]);
+
+// ── Instant-mode "card" tools that OWN the rest of the turn ──────────────────
+// The card UI is the final output; any assistant text emitted AFTER one of these
+// renders below the card, out of order (DeepSeek often ignores the "no text after
+// the tool call" rule). Suppress trailing text once one fires — display + DB.
+const TURN_CLOSING_TOOLS = new Set([
+  "propose_plan",
+  "propose_design",
+  "create_instant_app",
 ]);
 
 // ── Web search tool names (provider-specific) — notify user immediately ──────
@@ -195,7 +206,7 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
 
   const modelKey = modelSel?.selectedModel ?? DEFAULT_MODEL_KEY;
   const userApiKeys = apiKeys
-    ? { anthropic: apiKeys.anthropicApiKey ?? undefined, openai: apiKeys.openaiApiKey ?? undefined, google: apiKeys.googleApiKey ?? undefined, kimi: apiKeys.kimiApiKey ?? undefined, deepseek: apiKeys.deepseekApiKey ?? undefined }
+    ? { anthropic: apiKeys.anthropicApiKey ?? undefined, openai: apiKeys.openaiApiKey ?? undefined, google: apiKeys.googleApiKey ?? undefined, kimi: apiKeys.kimiApiKey ?? undefined, deepseek: apiKeys.deepseekApiKey ?? undefined, glm: apiKeys.glmApiKey ?? undefined }
     : undefined;
 
   // ── Check user has a key for the selected provider (unless instant mode) ────
@@ -207,6 +218,7 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
       google: userApiKeys?.google,
       kimi: userApiKeys?.kimi,
       deepseek: userApiKeys?.deepseek,
+      glm: userApiKeys?.glm,
     };
     if (providerName && !keyMap[providerName]) {
       const errMsg = `⚠️ No ${providerName.charAt(0).toUpperCase() + providerName.slice(1)} API key found. Please add your API key in **Settings → LLM Keys** to use this model.`;
@@ -260,6 +272,7 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
         userId,
         conversationId: convId,
         projectId: internalProjectId ?? undefined,
+        modelKey,
       })
     : isTurbo
       ? toolsTurbo
@@ -370,8 +383,8 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
           // Skip tools that handle their own WS notifications — a generic
           // notification here would cause duplicates.
           if (DOCUMENT_STREAM_TOOLS.has(tc.toolName)) continue;
-          // askUser is handled in the tool-call fullStream event
-          if (tc.toolName === "askUser") continue;
+          // askUser / confirmAction are handled in the tool-call fullStream event
+          if (tc.toolName === "askUser" || tc.toolName === "confirmAction") continue;
           ws.send(JSON.stringify({
             type: "ai_chunk",
             chunk: "",
@@ -392,6 +405,9 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
     // Accumulate askUser tool args from deltas (event.args/result may be empty)
     const askUserArgs = new Map<string, string>();
     let askUserCardSent = false;
+    const confirmArgs = new Map<string, string>();
+    let confirmCardSent = false;
+    let turnClosedByCard = false; // a propose_*/create_instant_app card fired — drop trailing text
 
     for await (const event of result.fullStream) {
       if (abortController.signal.aborted) break;
@@ -403,7 +419,7 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
           // and DB persistence.  The post-card text just references the
           // transient card UI which isn't persisted, so saving it confuses
           // the AI on subsequent turns.
-          if (askUserCardSent) break;
+          if (askUserCardSent || confirmCardSent || turnClosedByCard) break;
 
           fullResponse += event.text;
           chunkBuffer += event.text;
@@ -413,6 +429,8 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
         }
 
         case "tool-input-start": {
+          // A card tool owns the turn — suppress any assistant text that follows.
+          if (TURN_CLOSING_TOOLS.has(event.toolName)) turnClosedByCard = true;
           if (DOCUMENT_STREAM_TOOLS.has(event.toolName)) {
             docStreams.set(event.id, {
               toolName: event.toolName,
@@ -426,9 +444,13 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
           if (event.toolName === "askUser") {
             askUserArgs.set(event.id, "");
           }
+          // Track confirmAction args accumulation — it owns the turn like a card
+          if (event.toolName === "confirmAction") {
+            confirmArgs.set(event.id, "");
+          }
           // Notify client immediately when ANY tool starts (shows indicator)
-          // Skip askUser — it sends its own notification with question data
-          if (event.toolName !== "askUser") {
+          // Skip askUser / confirmAction — they send their own card notification
+          if (event.toolName !== "askUser" && event.toolName !== "confirmAction") {
             flush();
             ws.send(JSON.stringify({
               type: "ai_chunk",
@@ -447,6 +469,10 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
           // Accumulate askUser args
           if (askUserArgs.has(event.id)) {
             askUserArgs.set(event.id, askUserArgs.get(event.id)! + event.delta);
+          }
+          // Accumulate confirmAction args
+          if (confirmArgs.has(event.id)) {
+            confirmArgs.set(event.id, confirmArgs.get(event.id)! + event.delta);
           }
 
           const st = docStreams.get(event.id);
@@ -515,21 +541,25 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
             // Try parsed input first (already available on the event), fall back to accumulated raw
             const raw = askUserArgs.get(event.toolCallId) ?? "";
             askUserArgs.delete(event.toolCallId);
-            let questions: unknown[] = [];
+            let rawQuestions: unknown[] = [];
 
             // Prefer the already-parsed input from the AI SDK
             const input = (event as Record<string, unknown>).input ?? (event as Record<string, unknown>).args;
             if (input && typeof input === "object" && Array.isArray((input as Record<string, unknown>).questions)) {
-              questions = (input as Record<string, unknown>).questions as unknown[];
+              rawQuestions = (input as Record<string, unknown>).questions as unknown[];
             } else if (raw) {
               // Fallback: parse from accumulated tool-input-delta
               try {
                 const parsed = JSON.parse(raw);
-                questions = Array.isArray(parsed.questions) ? parsed.questions : [];
+                rawQuestions = Array.isArray(parsed.questions) ? parsed.questions : [];
               } catch {
                 console.warn("[stream] Failed to parse askUser args:", raw.slice(0, 200));
               }
             }
+
+            // Normalize title/options aliases → question/suggestions and drop
+            // malformed items, so the card renders regardless of field naming.
+            const questions = normalizeAskUserQuestions(rawQuestions);
 
             if (questions.length > 0) {
               flush();
@@ -547,6 +577,37 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
             }
           }
 
+          if (event.toolName === "confirmAction") {
+            const raw = confirmArgs.get(event.toolCallId) ?? "";
+            confirmArgs.delete(event.toolCallId);
+
+            // Prefer the already-parsed input; fall back to accumulated raw.
+            let input = (event as Record<string, unknown>).input ?? (event as Record<string, unknown>).args;
+            if ((!input || typeof input !== "object") && raw) {
+              try { input = JSON.parse(raw); } catch { input = undefined; }
+            }
+            const obj = (input ?? {}) as Record<string, unknown>;
+            const title = typeof obj.title === "string" ? obj.title : "";
+
+            if (title) {
+              flush();
+              confirmCardSent = true;
+              ws.send(JSON.stringify({
+                type: "ai_chunk",
+                chunk: "",
+                is_final: false,
+                is_notification: true,
+                notification_type: "confirm_action",
+                title,
+                summary: typeof obj.summary === "string" ? obj.summary : "",
+                confirmLabel: typeof obj.confirmLabel === "string" ? obj.confirmLabel : "Yes, go ahead",
+                cancelLabel: typeof obj.cancelLabel === "string" ? obj.cancelLabel : "No, let me adjust",
+              }));
+            } else {
+              console.warn("[stream] confirmAction called with empty title. Raw args:", raw.slice(0, 300));
+            }
+          }
+
           break;
         }
 
@@ -555,8 +616,10 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
           if (event.toolName === "askUser" && !askUserCardSent) {
             const resultObj = (event as Record<string, unknown>).result;
             if (resultObj && typeof resultObj === "object") {
-              const qList = (resultObj as Record<string, unknown>).questions;
-              if (Array.isArray(qList) && qList.length > 0) {
+              const qList = normalizeAskUserQuestions(
+                (resultObj as Record<string, unknown>).questions
+              );
+              if (qList.length > 0) {
                 flush();
                 askUserCardSent = true;
                 ws.send(JSON.stringify({

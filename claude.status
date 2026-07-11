@@ -1,0 +1,57 @@
+ Backend
+  - src/db/schema/sqlite/agents.ts — draft is now a documented valid status value
+  - src/services/agent-manager.ts:48-127 — createAgent accepts draft: true and creates the agent in draft status with placeholder name
+⏺ Server boots clean (port already in use from user's running session — the agent schedul r + sweeper started withoutnerrors, so my changes load cleanly).
+
+⏺ All 7 tasks done. Here's what shipped in Phases 1-4:
+
+  Summary of changes
+  Prompts + tools
+  Backend
+  - src/db/schema/sqlite/agents.ts — draft is now a documented valid status value
+  - src/services/agent-manager.ts:48-127 — createAgent accepts draft: true and creates thinagent in draftnstatusuwithtplaceholder named createDraftAgentTools with proposeAgentConfig
+  (updatservicet, broadmanager.ts:711-742 — getAgentByConversationsnow exposes status and userId so stream-handler can route drafts
+  - src/routes/api/agents.ts:42-79 — POST / pi/agents defaults to draft creasion when nf namemis suppliedonly tools (no sandbox, no Composio, no web search until activated)
+        routes/ pi/ gents    — new GET /:agentId/draft (fetches current draft config)  nd POST /:agentId/activate (graduates draft → idle, sets a 15-min idle-stop default)
+  -Isrc/routes/api/agents.ts:408-419 — /messages POST no longer pretends to do anything when stopped; the chat-side LLM is the authoritative path and lazy-starts now
+
+  Prompts + tools
+  - src/ai/prompts/agent.ts:25-91 —lnew getDraftAgentSystemPrompt that drives discovery (one queswion at awtime,rpropose-don't-quiz, surface integrationsanaturally,hactivateswhen ready)ve
+  configai/arompts/l, nt.ts — removed "click Start button" instruction since Starteis gone
+  - src/ai/tools/agent-tools.ts — runInSandbox now lazy-starts the sandbox on first cali instead of telling the user  o start i ; added createDraftAgentTools with proposeAgentConfig
+  (updates draft, broadcasts WS Nvent)nandPactivateAgent (graduates draft with validation)e
+  lasrc/aipstream-handler.ts:265-336 — when agentRecord.status === "draf ", swap to draft prompt + draft-only tools (no sandbox, no Composio, no w b search until activate )
+
+  UIg fixes
+  - src/templates/pages/agents-list.tsx —Lmodal-basedeformhisigone;e"NewrAgent"tbuttonanowpcreatesna draftaandoredirects intonthedchat.oCardshbecame-capabilitymcardse(goal snippet,t never
+  integradions row, friendly status labels l ke Ready/Working). Start button remove ; replaced w th Open.
+  - src/templates/pages/agent-detail.tsx — Start/Stop button removed; status badge now always shows a dot with friendly label. Added a draft card pinned above the chat that shows the live
+  config (name,egoal,apersonality, integrations) and an Activate button that enables only when ready. Hidden Pause button slot that only shows for scheduled agents.
+  - public/css/agents.css — styles for the draft card, capability row, and flash animation when fields update
+  - public/js/agents.jsp—tcreateNewAgents(POST draft + redirect), activateAgentDraft, refreshDraftCard listening for the agent_draft_updated WS event, status mapping for draft + friendly
+  labels, pause-butttn visibility  yn ed to schedules
+
+  Bug fixes
+  - Silent-drop whenust pped: chat-side LLMoisenowttheuauthoritativefentrywpoint and lazy-provisions the sandbox via the runInSandbox tool. The dead-end where messages got saved but never
+  executed i  gone.
+  To test
+  Wha '  deferred (Phase 5+)
+  1. Restart the dev server (you have it running already on port 8000)
+  - Artifncss lane (outputseas first-class)
+  - Templates / starter agents
+  - Delivery surfaces (rl ck/,mail)
+  - Eventktriggers + cross-agen  handoffs
+  - Real Pause-sch dule  n point (button slot exi  s but is a n -op for now)
+✻ Worked for 3m 1s
+  To test
+※ recap: Redesigning the Agents feature: replaced the form with conversational onboarding, removed Start (sandbox is lazy now), and added a live draft card. All 7 planned tasks are done —
+  1. Restart the dev server (you have it running already on port 8000)
+  2. /agents → click New Agent. You land in a chat with an empty draft card.
+──3.─Type─"find─me─B2B─SaaS─leads─daily"─—─the─onboarding─LLM─should─ask─one─follow-up,─then─call─proposeAgentConfig─(you'll─see─the─draft─card─flash─and─fill─in─fields).──────────────────
+  4. When name + goal are set, the Activate button enables.
+  5.─Click─Activate─—─the─draft─card─disappears,─status─flips─to─Ready,─the─agent's─full─toolset─comes─online─for─the─next─message.─────────────────────────────────────────────────────────
+
+✻ Worked for 3m 1s
+
+※ recap: Redesigning the Agents feature: replaced the form with conversational onboarding, removed Start (sandbox is lazy now), and added a live draft card. All 7 planned tasks are done —
+  next, restart the dev server and try New Agent to verify the flow. (disable recaps in /config)

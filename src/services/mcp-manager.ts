@@ -1,7 +1,7 @@
 import { createMCPClient } from "@ai-sdk/mcp";
 import { db } from "../config/db.ts";
 import { mcpServers } from "../db/schema/mcp.ts";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 
 type MCPClient = Awaited<ReturnType<typeof createMCPClient>>;
 
@@ -21,11 +21,15 @@ function isExpired(entry: CachedEntry): boolean {
  * Fetch all enabled MCP servers for a user, connect to each, and return
  * a merged tools object ready to spread into streamText().
  */
-export async function getMcpTools(userId: string): Promise<Record<string, any>> {
-  const servers = await db
+export async function getMcpTools(userId: string, filterServerIds?: string[]): Promise<Record<string, any>> {
+  let query = db
     .select()
     .from(mcpServers)
     .where(and(eq(mcpServers.userId, userId), eq(mcpServers.enabled, true)));
+
+  const servers = filterServerIds?.length
+    ? (await query).filter((s) => filterServerIds.includes(s.id))
+    : await query;
 
   if (!servers.length) return {};
 

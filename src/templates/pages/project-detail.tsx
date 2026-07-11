@@ -461,7 +461,7 @@ export function ProjectDetailPage({
               <i class="fas fa-info-circle"></i> What happens next
             </div>
             <ul style="margin:0;padding-left:1.25rem;font-size:0.8125rem;color:var(--text-secondary);line-height:1.6;">
-              <li>Your repository will be cloned into each ticket's sandbox</li>
+              <li>Your repository will be cloned into each ticket's workspace</li>
               <li>AI agents will work directly on your codebase</li>
               <li>Changes are pushed to feature branches for review</li>
             </ul>

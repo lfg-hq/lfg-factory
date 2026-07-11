@@ -26,7 +26,8 @@ export interface MagsExecResult {
 function getClient() {
   const token = process.env.MAGS_API_TOKEN;
   if (!token) throw new Error("MAGS_API_TOKEN not set");
-  return new MagsClient({ apiToken: token });
+  // timeout here is the HTTP socket timeout — must be > any exec command we run
+  return new MagsClient({ apiToken: token, timeout: 120_000 });
 }
 
 /**
@@ -36,18 +37,87 @@ function getClient() {
  */
 export async function newWorkspace(name: string, opts?: {
   baseWorkspaceId?: string;
+  rootfsType?: string;
+  startupCommand?: string;
+  /** Skip JuiceFS/S3 sync: omit workspace_id, keep only a friendly name. No storage cost. */
+  noSync?: boolean;
+  /** Idle reaper window in minutes (env __MAGS_IDLE_MIN) — matches CLI `-e <minutes>`. */
+  idleMinutes?: number;
+  /** Disk size in GB. Mags defaults to 2GB — too small for a full Next.js install. */
+  diskGb?: number;
+  /** RAM in GB (env __MAGS_MEM_GB). Mags defaults to ~2GB — too small for Pi + a
+   *  concurrent Next build, which OOM-kills Pi mid-run. 4GB is the floor. */
+  memGb?: number;
 }): Promise<{
   jobId: string;
   workspaceId: string;
 }> {
   const client = getClient();
-  const result = await client.new(name, {
-    timeout: 120_000,
-    pollInterval: 2000,
+  // VMs materialize a vm_id in ~5s; fail fast (10s) rather than hanging if the
+  // orchestrator never attaches a microVM.
+  const timeout = 10_000;
+  const pollInterval = 1_000;
+  const rootfsType = opts?.rootfsType ?? "claude";
+
+  // client.new() doesn't forward rootfsType, so call run() directly (same logic as client.new())
+  console.log(`[mags] newWorkspace '${name}': calling client.run (rootfs=${rootfsType})...`);
+  const runStart = Date.now();
+  // Persistent VM: materializes an exec-able microVM (status returns vm_id in ~5s).
+  // `persistent: true` is REQUIRED for exec — non-persistent jobs never get a vm_id.
+  //
+  // noSync (cost saver): OMIT workspace_id → no JuiceFS/S3 sync, zero storage cost.
+  // Only the friendly `name` is sent, so exec/findJob/stop still resolve the VM.
+  // The filesystem is local-only and lost when the VM is reaped (acceptable — the
+  // build is pushed to GitHub and re-scaffolds on a fresh VM).
+  // idleMinutes plumbs the per-VM idle reaper (env __MAGS_IDLE_MIN ≈ CLI `-e <minutes>`).
+  // When a memory size is requested we must select the rootfs via the ENVIRONMENT
+  // passthrough (__MAGS_ROOTFS_TYPE) rather than the top-level `rootfsType` option.
+  // The top-level option builds a per-(rootfs,mem) golden-snapshot tag like `pi:4g`,
+  // which Mags hasn't provisioned ("golden snapshot not ready"). The env passthrough
+  // boots the good base rootfs (node 22 + Pi preinstalled) and sets RAM at runtime —
+  // verified live to yield a clean 4GB VM. Non-mem callers keep the legacy top-level
+  // option (proven for the claude/agent rootfs).
+  const useEnvRootfs = !!opts?.memGb;
+  const runOpts: Record<string, unknown> = {
+    persistent: true,
+    ...(useEnvRootfs ? {} : { rootfsType }),
+    ...(opts?.diskGb ? { diskGb: opts.diskGb } : {}),
     ...(opts?.baseWorkspaceId ? { baseWorkspaceId: opts.baseWorkspaceId } : {}),
-  });
-  // workspace_id == name (passed as workspaceId to the underlying run() call)
-  return { jobId: result.request_id as string, workspaceId: name };
+    ...(opts?.startupCommand ? { startupCommand: opts.startupCommand } : {}),
+  };
+  if (opts?.noSync) {
+    runOpts.name = name; // no workspace_id → no S3 sync
+  } else {
+    runOpts.workspaceId = name; // workspace_id → JuiceFS/S3 sync (persisted)
+  }
+  // Memory, rootfs (when sizing memory), and the idle reaper all ride the `environment`
+  // map (what the Mags API sends under the hood: __MAGS_ROOTFS_TYPE / __MAGS_MEM_GB / __MAGS_IDLE_MIN).
+  const environment: Record<string, string> = {};
+  if (useEnvRootfs) environment.__MAGS_ROOTFS_TYPE = rootfsType;
+  if (opts?.idleMinutes) environment.__MAGS_IDLE_MIN = String(opts.idleMinutes);
+  if (opts?.memGb) environment.__MAGS_MEM_GB = String(opts.memGb);
+  if (Object.keys(environment).length) runOpts.environment = environment;
+  const result = await client.run("sleep infinity", runOpts);
+  const requestId = result.request_id as string;
+  console.log(`[mags] newWorkspace '${name}': run accepted in ${Date.now() - runStart}ms (request_id=${requestId}), polling for running...`);
+
+  // Poll until VM is running (mirrors client.new() polling)
+  const deadline = Date.now() + timeout;
+  let polls = 0;
+  while (Date.now() < deadline) {
+    const st = await client.status(requestId);
+    polls++;
+    console.log(`[mags] newWorkspace '${name}': poll #${polls} status=${st.status}${st.vm_id ? ` vm_id=${st.vm_id}` : ""} (${Date.now() - runStart}ms elapsed)`);
+    if (st.status === "running" && st.vm_id) {
+      return { jobId: requestId, workspaceId: name };
+    }
+    if (st.status === "completed" || st.status === "error") {
+      throw new Error(`VM '${name}' ended unexpectedly with status: ${st.status}`);
+    }
+    await sleep(pollInterval);
+  }
+
+  throw new Error(`VM '${name}' did not start within ${timeout}ms (last poll count: ${polls})`);
 }
 
 /**
@@ -122,15 +192,44 @@ export async function findJob(nameOrId: string): Promise<{
  * Enable HTTP access for a VM and return the public proxy URL.
  * Uses client.url() which calls enableAccess + constructs the URL.
  */
+/**
+ * Normalize a Mags public URL to the live domain. The SDK/API still builds URLs on
+ * the legacy `apps.magpiecloud.com` domain, which is dead — the live domain is
+ * `apps.mags.run` (overridable via MAGS_APP_DOMAIN). The subdomain is correct, so we
+ * only swap the suffix. Safe to call on already-correct or empty URLs.
+ */
+export function normalizeMagsAppUrl(url: string | null | undefined): string {
+  const appDomain = process.env.MAGS_APP_DOMAIN || "apps.mags.run";
+  return (url ?? "").replace(/\.apps\.magpiecloud\.com/i, `.${appDomain}`);
+}
+
 export async function enableHttpAccess(
   nameOrId: string,
   port = 8080
 ): Promise<string> {
   const client = getClient();
   const result = await client.url(nameOrId, port);
-  const url = (result.url ?? result.proxy_url ?? "") as string;
+  const url = normalizeMagsAppUrl((result.url ?? result.proxy_url ?? "") as string);
   if (!url) throw new Error(`No URL returned for VM '${nameOrId}'`);
   return url;
+}
+
+/**
+ * Point a STABLE subdomain alias at a workspace so the app's public URL stays the
+ * same across VM reaps/restores (each VM otherwise gets a fresh random subdomain).
+ * Re-points on every call (delete + recreate) since the target workspace changes
+ * when a fresh VM is provisioned. Returns the stable https URL.
+ * Requires HTTP access already enabled on the port (enableHttpAccess).
+ */
+export async function setStableUrl(
+  subdomain: string,
+  workspaceId: string,
+): Promise<string> {
+  const client = getClient();
+  const appDomain = process.env.MAGS_APP_DOMAIN || "apps.mags.run";
+  await client.urlAliasDelete(subdomain).catch(() => {}); // clear any stale mapping
+  await client.urlAliasCreate(subdomain, workspaceId, appDomain);
+  return `https://${subdomain}.${appDomain}`;
 }
 
 /**
@@ -139,6 +238,48 @@ export async function enableHttpAccess(
 export async function stopWorkspace(nameOrId: string): Promise<void> {
   const client = getClient();
   await client.stop(nameOrId);
+}
+
+/**
+ * Start an ephemeral Chromium browser session and return its CDP WebSocket
+ * endpoint. Drive `wsEndpoint` with Playwright's `chromium.connectOverCDP()`.
+ * Stop it with `stopWorkspace(requestId)` when done.
+ *
+ * IMPORTANT: connect with `wsEndpoint`, NOT the http/CDP URL. Chromium's
+ * /json/version reports its socket as ws://localhost/... (DevTools rejects
+ * non-localhost Host headers), so connectOverCDP(httpUrl) connects to the
+ * CLIENT's localhost → ECONNREFUSED. wsEndpoint keeps the public host with only
+ * the /devtools/browser/<id> path. (SDK ≥1.13.1 resolves this for us.)
+ */
+export async function startBrowserSession(opts?: {
+  name?: string;
+  timeout?: number;
+}): Promise<{ requestId: string; wsEndpoint: string; cdpHttpUrl: string }> {
+  const client = getClient();
+  const r = await client.browser(opts ?? {});
+  // SDK ≥1.13.1 returns wsEndpoint directly. Fallback (older 1.13.x): re-derive
+  // it from /json/version, keeping the public host + the /devtools path.
+  let wsEndpoint: string | undefined = r.wsEndpoint;
+  if (!wsEndpoint && r.cdpHttpUrl && r.cdpUrl) {
+    const ver = (await fetch(`${r.cdpHttpUrl.replace(/\/+$/, "")}/json/version`).then((x) => x.json())) as {
+      webSocketDebuggerUrl?: string;
+    };
+    if (ver.webSocketDebuggerUrl) {
+      wsEndpoint = r.cdpUrl.replace(/\/+$/, "") + new URL(ver.webSocketDebuggerUrl).pathname;
+    }
+  }
+  if (!wsEndpoint) throw new Error("Mags browser session did not return a usable wsEndpoint");
+  return { requestId: r.requestId, wsEndpoint, cdpHttpUrl: r.cdpHttpUrl };
+}
+
+/**
+ * Delete a persistent workspace's stored data (frees S3/JuiceFS storage cost).
+ * `stop` only kills the VM; the workspace data lingers until deleted. Call this
+ * when an instant app is removed so storage doesn't accumulate.
+ */
+export async function deleteWorkspace(name: string): Promise<void> {
+  const client = getClient();
+  await client.deleteWorkspace(name);
 }
 
 /**

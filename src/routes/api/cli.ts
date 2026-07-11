@@ -17,10 +17,13 @@ import { projectTickets, projectTodoLists, ticketLogs } from "../../db/schema/ti
 import { sandboxes } from "../../db/schema/sandbox.ts";
 import { projects } from "../../db/schema/projects.ts";
 import { profiles } from "../../db/schema/users.ts";
+import { instantApps } from "../../db/schema/instant.ts";
 import { eq, and } from "drizzle-orm";
 import { emit } from "../../events/bus.ts";
 import { parseJsonlEvents, extractSessionId, isStreamComplete } from "../../services/claude-cli.ts";
 import { addLog, formatToolUse } from "../../services/ticket-logs.ts";
+import { describePiTool } from "../../services/pi-cli.ts";
+import { broadcastInstantStatus } from "../../services/instant-app.ts";
 
 export const cliRouter = new Hono();
 
@@ -461,5 +464,54 @@ cliRouter.post("/output", async (c) => {
     });
   }
 
+  return c.json({ ok: true });
+});
+
+// ── POST /api/v1/cli/instant-progress ─────────────────────────────────
+// Live build-activity stream from the in-VM Pi forwarder. The forwarder parses Pi's
+// --mode json output and POSTs compact tool-call ops here in real time; we turn each
+// into a human label and broadcast it to the user's Instant build log.
+// Body: { app_id, ops: [{ n: toolName, p: path|null, c: command|null }] }
+cliRouter.post("/instant-progress", async (c) => {
+  // The auth middleware already verified the X-CLI-API-Key; resolve the owning user.
+  const apiKey = c.req.header("X-CLI-API-Key")!;
+  const [profile] = await db
+    .select({ userId: profiles.userId })
+    .from(profiles)
+    .where(eq(profiles.cliApiKey, apiKey))
+    .limit(1);
+  if (!profile) return c.json({ error: "Invalid API key" }, 401);
+
+  const body = (await c.req.json().catch(() => ({}))) as {
+    app_id?: string;
+    ops?: Array<{ n?: string; p?: string | null; c?: string | null }>;
+  };
+  const appId = body.app_id;
+  const ops = Array.isArray(body.ops) ? body.ops : [];
+  if (!appId || ops.length === 0) return c.json({ ok: true });
+
+  const [app] = await db
+    .select({
+      appId: instantApps.appId,
+      name: instantApps.name,
+      conversationId: instantApps.conversationId,
+      userId: instantApps.userId,
+    })
+    .from(instantApps)
+    .where(eq(instantApps.appId, appId))
+    .limit(1);
+  if (!app || app.userId !== profile.userId) return c.json({ error: "app not found" }, 404);
+
+  for (const op of ops) {
+    const message = describePiTool(String(op.n ?? ""), { path: op.p ?? undefined, command: op.c ?? undefined });
+    void broadcastInstantStatus({
+      userId: app.userId,
+      conversationId: app.conversationId,
+      appId: app.appId,
+      appName: app.name,
+      status: "building",
+      message,
+    });
+  }
   return c.json({ ok: true });
 });

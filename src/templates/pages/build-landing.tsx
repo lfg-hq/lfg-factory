@@ -6,8 +6,8 @@ export const BuildLandingPage = () => html`
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LFG Build — Turn your idea into a working app</title>
-  <meta name="description" content="Describe what you want to build. LFG turns your idea into a working web app in minutes — no code required.">
+  <title>LFG Build, Turn your idea into a working app</title>
+  <meta name="description" content="Describe what you want to build. LFG turns your idea into a working web app in minutes, no code required.">
   <link rel="icon" type="image/x-icon" href="/public/images/favicon.ico">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -153,7 +153,7 @@ export const BuildLandingPage = () => html`
     </h1>
 
     <p class="animate-fade-up text-lg text-white/50 text-center max-w-xl mb-10 leading-relaxed" style="animation-delay:0.15s">
-      Turn any idea into a working internal tool in minutes. No code, no setup — just describe what you need.
+      Turn any idea into a working internal tool in minutes. No code, no setup, just describe what you need.
     </p>
 
     <!-- Prompt box -->

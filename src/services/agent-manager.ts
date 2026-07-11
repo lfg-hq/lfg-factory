@@ -142,52 +142,105 @@ interface ProvisionedSandbox {
   secretsAsEnv: Record<string, string>;
 }
 
+/**
+ * Upsert the sandbox DB row for an agent + link it (agent.sandboxId), so the DB cache
+ * reflects the resolved/created Mags workspace.
+ */
+async function upsertSandboxRecord(
+  agent: typeof agents.$inferSelect,
+  userId: string,
+  existing: typeof sandboxes.$inferSelect | null,
+  workspaceId: string,
+  jobId: string
+): Promise<void> {
+  if (existing) {
+    await db
+      .update(sandboxes)
+      .set({ magsWorkspaceId: workspaceId, magsJobId: jobId, status: "ready", updatedAt: new Date() })
+      .where(eq(sandboxes.id, existing.id));
+    if (agent.sandboxId !== existing.id) {
+      await db.update(agents).set({ sandboxId: existing.id, updatedAt: new Date() }).where(eq(agents.id, agent.id));
+    }
+  } else {
+    const sbRows = await db
+      .insert(sandboxes)
+      .values({ userId, magsWorkspaceId: workspaceId, magsJobId: jobId, workspaceType: "agent", status: "ready" })
+      .returning();
+    await db
+      .update(agents)
+      .set({ sandboxId: sbRows[0]!.id, status: "running", updatedAt: new Date() })
+      .where(eq(agents.id, agent.id));
+  }
+}
+
+/**
+ * Resolve the agent's Mags workspace. Treats Mags (by the DETERMINISTIC workspace name)
+ * as the source of truth — the DB sandbox row is only a cache. Order:
+ *   1. DB-recorded VM, if alive → reuse.
+ *   2. Else look up the deterministically-named VM on Mags directly; if alive, ADOPT it
+ *      (re-link the DB) instead of trying to recreate it.
+ *   3. Only when Mags truly has no VM for this name → create one (with an "already exists"
+ *      adopt-backstop for create races / residual desync).
+ * Fixes the "no sandbox record → newWorkspace → 'already exists' → throw" loop, where an
+ * orphaned persistent VM lived on Mags but not in the DB and every command failed.
+ */
+async function resolveAgentWorkspace(
+  agent: typeof agents.$inferSelect,
+  userId: string,
+  progress?: ProgressFn
+): Promise<{ workspaceId: string; wasColdStart: boolean }> {
+  const workspaceName = `agent-${sanitizeAgentName(agent.name)}-${agent.agentId.slice(0, 8)}`;
+  const tag = `[resolveWorkspace ${agent.agentId.slice(0, 8)}]`;
+
+  const sandboxRecord = agent.sandboxId
+    ? (await db.select().from(sandboxes).where(eq(sandboxes.id, agent.sandboxId)).then((r) => r[0])) ?? null
+    : null;
+
+  // 1) Fast path: the DB-recorded VM is still alive.
+  if (sandboxRecord?.magsWorkspaceId) {
+    const job = await findJob(sandboxRecord.magsWorkspaceId).catch(() => null);
+    if (job && (job.status === "running" || job.status === "sleeping")) {
+      if (job.status === "sleeping") progress?.("waking_sandbox", "Waking up sandbox…");
+      console.log(`${tag} reusing DB workspace=${sandboxRecord.magsWorkspaceId} (status=${job.status})`);
+      return { workspaceId: sandboxRecord.magsWorkspaceId, wasColdStart: false };
+    }
+  }
+
+  // 2) Reconcile: is the deterministically-named VM already up on Mags? Adopt it.
+  const orphan = await findJob(workspaceName).catch(() => null);
+  if (orphan && (orphan.status === "running" || orphan.status === "sleeping")) {
+    console.log(`${tag} adopting existing Mags VM "${workspaceName}" (status=${orphan.status}) — DB record missing/stale`);
+    if (orphan.status === "sleeping") progress?.("waking_sandbox", "Waking up sandbox…");
+    await upsertSandboxRecord(agent, userId, sandboxRecord, workspaceName, orphan.jobId);
+    return { workspaceId: workspaceName, wasColdStart: false };
+  }
+
+  // 3) Genuinely no VM → create. Backstop a create/race collision by adopting.
+  progress?.("provisioning_sandbox", "Spinning up sandbox VM…");
+  const t0 = Date.now();
+  try {
+    const ws = await newWorkspace(workspaceName);
+    console.log(`${tag} created workspace=${ws.workspaceId} in ${Date.now() - t0}ms`);
+    await upsertSandboxRecord(agent, userId, sandboxRecord, ws.workspaceId, ws.jobId);
+    return { workspaceId: ws.workspaceId, wasColdStart: true };
+  } catch (err) {
+    if (/already exists/i.test((err as Error).message)) {
+      const j = await findJob(workspaceName).catch(() => null);
+      if (j && (j.status === "running" || j.status === "sleeping")) {
+        console.log(`${tag} create collided — adopting existing VM "${workspaceName}"`);
+        await upsertSandboxRecord(agent, userId, sandboxRecord, workspaceName, j.jobId);
+        return { workspaceId: workspaceName, wasColdStart: false };
+      }
+    }
+    throw err;
+  }
+}
+
 async function provisionAndInject(
   agent: typeof agents.$inferSelect,
   userId: string
 ): Promise<ProvisionedSandbox> {
-  const workspaceName = `agent-${sanitizeAgentName(agent.name)}-${agent.agentId.slice(0, 8)}`;
-  let sandboxRecord = agent.sandboxId
-    ? await db.select().from(sandboxes).where(eq(sandboxes.id, agent.sandboxId)).then((r) => r[0])
-    : null;
-
-  let workspaceId: string;
-
-  if (sandboxRecord?.magsWorkspaceId) {
-    const existing = await findJob(sandboxRecord.magsWorkspaceId);
-    if (existing && (existing.status === "running" || existing.status === "sleeping")) {
-      workspaceId = sandboxRecord.magsWorkspaceId;
-      console.log(`[agent-manager] Reusing existing workspace ${workspaceId}`);
-    } else {
-      const ws = await newWorkspace(workspaceName);
-      workspaceId = ws.workspaceId;
-      await db
-        .update(sandboxes)
-        .set({ magsWorkspaceId: workspaceId, magsJobId: ws.jobId, status: "ready", updatedAt: new Date() })
-        .where(eq(sandboxes.id, sandboxRecord.id));
-    }
-  } else {
-    const ws = await newWorkspace(workspaceName);
-    workspaceId = ws.workspaceId;
-
-    const sbRows = await db
-      .insert(sandboxes)
-      .values({
-        userId,
-        magsWorkspaceId: workspaceId,
-        magsJobId: ws.jobId,
-        workspaceType: "agent",
-        status: "ready",
-      })
-      .returning();
-    const sb = sbRows[0]!;
-
-    sandboxRecord = sb;
-    await db
-      .update(agents)
-      .set({ sandboxId: sb.id, updatedAt: new Date() })
-      .where(eq(agents.id, agent.id));
-  }
+  const { workspaceId } = await resolveAgentWorkspace(agent, userId);
 
   // Inject credentials (Claude OAuth)
   await injectCredentials(workspaceId, userId);
@@ -275,58 +328,10 @@ export async function ensureWorkspace(
     .limit(1);
   if (!agent) throw new Error("Agent not found");
 
-  const workspaceName = `agent-${sanitizeAgentName(agent.name)}-${agent.agentId.slice(0, 8)}`;
-  let sandboxRecord = agent.sandboxId
-    ? await db.select().from(sandboxes).where(eq(sandboxes.id, agent.sandboxId)).then((r) => r[0])
-    : null;
-
-  let workspaceId: string;
-  let wasColdStart = false;
-
-  if (sandboxRecord?.magsWorkspaceId) {
-    const existing = await findJob(sandboxRecord.magsWorkspaceId);
-    if (existing && (existing.status === "running" || existing.status === "sleeping")) {
-      workspaceId = sandboxRecord.magsWorkspaceId;
-      console.log(`${tag} reusing workspace=${workspaceId} (mags status=${existing.status})`);
-      if (existing.status === "sleeping") {
-        progress?.("waking_sandbox", "Waking up sandbox…");
-      }
-    } else {
-      console.log(`${tag} prior workspace gone (status=${existing?.status ?? "none"}), creating new "${workspaceName}"`);
-      progress?.("provisioning_sandbox", "Spinning up sandbox VM…");
-      wasColdStart = true;
-      const t0 = Date.now();
-      const ws = await newWorkspace(workspaceName);
-      workspaceId = ws.workspaceId;
-      console.log(`${tag} created workspace=${workspaceId} in ${Date.now() - t0}ms`);
-      await db
-        .update(sandboxes)
-        .set({ magsWorkspaceId: workspaceId, magsJobId: ws.jobId, status: "ready", updatedAt: new Date() })
-        .where(eq(sandboxes.id, sandboxRecord.id));
-    }
-  } else {
-    console.log(`${tag} no sandbox record, creating fresh workspace "${workspaceName}"`);
-    progress?.("provisioning_sandbox", "Spinning up sandbox VM…");
-    wasColdStart = true;
-    const t0 = Date.now();
-    const ws = await newWorkspace(workspaceName);
-    workspaceId = ws.workspaceId;
-    console.log(`${tag} created workspace=${workspaceId} in ${Date.now() - t0}ms`);
-    const sbRows = await db
-      .insert(sandboxes)
-      .values({
-        userId,
-        magsWorkspaceId: workspaceId,
-        magsJobId: ws.jobId,
-        workspaceType: "agent",
-        status: "ready",
-      })
-      .returning();
-    await db
-      .update(agents)
-      .set({ sandboxId: sbRows[0]!.id, status: "running", updatedAt: new Date() })
-      .where(eq(agents.id, agent.id));
-  }
+  // Resolve (reuse / adopt-by-name / create) the agent's Mags workspace. Treats Mags as
+  // the source of truth so a stale/missing DB record can't trigger a "create → already
+  // exists" collision against an orphaned but still-running persistent VM.
+  const { workspaceId, wasColdStart } = await resolveAgentWorkspace(agent, userId, progress);
 
   // Always inject secrets + restore data files. Cheap on a warm workspace,
   // required on a cold one. injectSecrets is idempotent.
@@ -585,7 +590,7 @@ export async function startAgent(agentId: string, userId: string): Promise<void>
     type: "agent_status",
     agent_id: agentId,
     status: "starting",
-    message: "Provisioning sandbox...",
+    message: "Provisioning workspace...",
   });
 
   try {
@@ -1080,7 +1085,7 @@ export async function getAgentStatus(
           .update(agents)
           .set({ status: "stopped", updatedAt: new Date() })
           .where(eq(agents.id, agent.id));
-        return { status: "stopped", sandboxUrl: agent.sandboxUrl, message: "Sandbox is no longer running" };
+        return { status: "stopped", sandboxUrl: agent.sandboxUrl, message: "Workspace is no longer running" };
       }
     }
   }

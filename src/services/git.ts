@@ -123,7 +123,27 @@ export async function commitAndPush(opts: GitCommitOptions): Promise<GitCommitRe
 
   const script = `
 set -e
+# Capture stderr in the returned output so failures are never silent (exit 128
+# with empty output used to leave us blind to the real git error).
+exec 2>&1
 cd "${projectDir}"
+
+# Some VMs restore /data/project owned by a different uid than the pusher; without
+# this git aborts with "detected dubious ownership" (exit 128, message on stderr).
+git config --global --add safe.directory "${projectDir}" 2>/dev/null || true
+
+# Self-heal: a restored / freshly-built VM may have no .git at all (exit 128 on the
+# first git command). Re-initialize and line up on the existing remote so push works.
+if [ ! -d .git ]; then
+  echo "NO_GIT_REPO: initializing and reconciling with origin"
+  git init -q
+  git remote add origin "${authUrl}" 2>/dev/null || git remote set-url origin "${authUrl}"
+  if git fetch --depth 1 origin "${featureBranch}" 2>/dev/null; then
+    # Sit our pending commit on top of the remote tip (keeps the working tree).
+    git reset --soft FETCH_HEAD 2>/dev/null || true
+  fi
+  git checkout -B "${featureBranch}" 2>/dev/null || true
+fi
 
 # Configure author
 git config user.email "${authorEmail}"
@@ -188,13 +208,17 @@ echo "COMMIT_SHA:$SHA"
 
   // exec() breaks with multi-line commands — base64-encode
   const scriptB64 = Buffer.from(script).toString("base64");
+  console.log(`[git] commitAndPush: running on workspace ${workspaceId}, projectDir=${projectDir}, branch=${featureBranch}`);
   const result = await execOnWorkspace(workspaceId, `echo ${scriptB64} | base64 -d | sh`, {
     timeout: 120_000,
   });
+  console.log(`[git] commitAndPush output (${result.output.length} chars): ${result.output.slice(0, 500)}`);
+  console.log(`[git] commitAndPush exitCode: ${result.exitCode}`);
 
   const shaMatch = result.output.match(/COMMIT_SHA:([a-f0-9]{40})/);
   if (!shaMatch) {
     if (result.output.includes("NO_CHANGES")) {
+      console.log(`[git] commitAndPush: no changes to commit`);
       // Nothing to commit — get HEAD SHA
       const headResult = await execOnWorkspace(
         workspaceId,
@@ -206,6 +230,7 @@ echo "COMMIT_SHA:$SHA"
     throw new Error(`Commit/push failed:\n${result.output}`);
   }
 
+  console.log(`[git] commitAndPush: committed and pushed sha=${shaMatch[1]} to ${featureBranch}`);
   return { sha: shaMatch[1]!, branch: featureBranch };
 }
 
@@ -462,8 +487,8 @@ git remote add origin "${authUrl}" 2>/dev/null || git remote set-url origin "${a
 # Ensure .lfg/ logs are excluded
 echo ".lfg/" >> .gitignore 2>/dev/null || true
 
-# Create initial commit so we have a branch to work with
-echo "# Project created by LFG" > README.md
+# Only add a placeholder README if the agent didn't write one (don't clobber it).
+[ -f README.md ] || echo "# Project created by LFG" > README.md
 git add -A
 git commit -m "Initial commit" --allow-empty
 
@@ -478,13 +503,54 @@ echo "INIT_PUSH_OK"
 `;
 
   const scriptB64 = Buffer.from(script).toString("base64");
+  console.log(`[git] initAndPushRepo: running on workspace ${workspaceId}, projectDir=${projectDir}, branch=${branch}`);
   const result = await execOnWorkspace(workspaceId, `echo ${scriptB64} | base64 -d | sh`, {
     timeout: 60_000,
   });
+  console.log(`[git] initAndPushRepo output (${result.output.length} chars): ${result.output.slice(0, 500)}`);
+  console.log(`[git] initAndPushRepo exitCode: ${result.exitCode}`);
 
   if (!result.output.includes("INIT_PUSH_OK")) {
     throw new Error(`Init+push failed:\n${result.output}`);
   }
+}
+
+/**
+ * Clone an existing repo into the project dir + restore deps. Used to RESUME a
+ * reaped sandbox from GitHub instead of regenerating from scratch — restores the
+ * exact last-committed code. Returns true on success.
+ */
+export async function cloneRepo(opts: {
+  workspaceId: string;
+  projectDir: string;
+  repoUrl: string;
+  githubToken: string;
+}): Promise<boolean> {
+  const { workspaceId, projectDir, repoUrl, githubToken } = opts;
+  const authUrl = repoUrl.replace("https://", `https://x-access-token:${githubToken}@`);
+
+  const script = `
+export PATH=/root/node/current/bin:/root/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:$PATH
+# npm cache on /data (big disk) — the 1.9GB root fills up during install (ENOSPC).
+export npm_config_cache=/data/.npm-cache
+export npm_config_legacy_peer_deps=true
+export NODE_OPTIONS="--max-old-space-size=1536"
+mkdir -p /data/.npm-cache
+rm -rf "${projectDir}"
+git clone --depth 1 "${authUrl}" "${projectDir}" 2>&1 || { echo CLONE_FAILED; exit 1; }
+cd "${projectDir}"
+git remote set-url origin "${authUrl}"
+git config user.email "ai@lfg.dev"; git config user.name "LFG AI"
+npm install 2>&1 || { echo CLONE_NPM_FAILED; exit 1; }
+npm cache clean --force 2>/dev/null; rm -rf /data/.npm-cache/* 2>/dev/null; true
+echo CLONE_OK
+`;
+  const scriptB64 = Buffer.from(script).toString("base64");
+  console.log(`[git] cloneRepo: cloning ${repoUrl} into ${projectDir} on ${workspaceId}`);
+  const result = await execOnWorkspace(workspaceId, `echo ${scriptB64} | base64 -d | bash`, { timeout: 240_000 });
+  const ok = result.output.includes("CLONE_OK");
+  console.log(`[git] cloneRepo ${ok ? "OK" : "FAILED"} (exit=${result.exitCode}); tail: ${result.output.slice(-300)}`);
+  return ok;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────

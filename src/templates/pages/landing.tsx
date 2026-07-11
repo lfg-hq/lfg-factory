@@ -22,17 +22,17 @@ export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
         }
       })();
     </script>
-    <meta name="description" content="AI-first software services and product factory. We build real products fast — PRDs, tickets, and code, all driven by LFG Agent.">
+    <meta name="description" content="AI-first software services and product factory. We build real products fast, PRDs, tickets, and code, all driven by LFG Agent.">
 
     <meta property="og:title" content="LFG | AI-First Software Services and Product Factory">
-    <meta property="og:description" content="AI-first software services and product factory. We build real products fast — PRDs, tickets, and code, all driven by LFG Agent.">
+    <meta property="og:description" content="AI-first software services and product factory. We build real products fast, PRDs, tickets, and code, all driven by LFG Agent.">
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://lfg.run/">
     <meta property="og:image" content="https://lfg.run/static/images/logo_lfg.png">
 
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="LFG | AI-First Software Services and Product Factory">
-    <meta name="twitter:description" content="AI-first software services and product factory. We build real products fast — PRDs, tickets, and code, all driven by LFG Agent.">
+    <meta name="twitter:description" content="AI-first software services and product factory. We build real products fast, PRDs, tickets, and code, all driven by LFG Agent.">
     <meta name="twitter:image" content="https://lfg.run/static/images/logo_lfg.png">
 
     <link rel="icon" type="image/x-icon" href="/public/images/favicon.ico">
@@ -111,7 +111,7 @@ export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
       .no-scrollbar::-webkit-scrollbar { display: none; }
       .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 
-      /* Navbar scrolled state — CSS class so dark mode can override */
+      /* Navbar scrolled state, CSS class so dark mode can override */
       #navbar.nav-scrolled {
         background: rgba(255, 255, 255, 0.93);
         backdrop-filter: blur(12px);
@@ -157,7 +157,7 @@ export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
       html.dark .text-slate-700 { color: #b0bac6 !important; }
       html.dark .text-slate-600 { color: #8b949e !important; }
       html.dark .text-slate-500 { color: #6e7681 !important; }
-      /* Brand labels — lighter in dark so they're readable */
+      /* Brand labels, lighter in dark so they're readable */
       html.dark .text-brand-700 { color: #818cf8 !important; }
       html.dark .text-brand-600 { color: #818cf8 !important; }
       /* All border-slate variants including opacity modifiers */
@@ -167,11 +167,11 @@ export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
       html.dark .border-dashed             { border-color: rgba(255,255,255,0.08) !important; }
       /* Kill all box shadows */
       html.dark * { box-shadow: none !important; }
-      /* CTA gradient border — tone it down */
+      /* CTA gradient border, tone it down */
       html.dark [class*="from-rose-5"] { background: rgba(255,255,255,0.04) !important; }
       /* Mobile menu */
       html.dark #mobile-menu { background-color: #161b22; border-color: rgba(255,255,255,0.06); }
-      /* Inputs + textareas — visible but not harsh */
+      /* Inputs + textareas, visible but not harsh */
       html.dark input:not([type=submit]):not([type=button]),
       html.dark textarea {
         background-color: #1c2128 !important;
@@ -186,7 +186,7 @@ export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
         color: #8b949e !important;
         border: 1px solid rgba(255,255,255,0.1);
       }
-      /* CTA section — "Access Agent" white-bg button → indigo */
+      /* CTA section, "Access Agent" white-bg button → indigo */
       html.dark #book-demo [class*="bg-white"] {
         background-color: #4f46e5 !important;
         color: #ffffff !important;
@@ -215,6 +215,7 @@ export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
         <div class="hidden md:flex items-center gap-6">
           <a href="/" class="text-sm font-medium text-brand-600 font-semibold">Home</a>
           <a href="/agent/" class="text-sm font-medium text-slate-600 hover:text-brand-600 transition-colors">Agent</a>
+          <a href="/factory/" class="text-sm font-medium text-slate-600 hover:text-brand-600 transition-colors">Factory</a>
           <a href="/portfolio/" class="text-sm font-medium text-slate-600 hover:text-brand-600 transition-colors">Portfolio</a>
           <a href="/services/" class="text-sm font-medium text-slate-600 hover:text-brand-600 transition-colors">Services</a>
           <a href="/blog/" class="text-sm font-medium text-slate-600 hover:text-brand-600 transition-colors">Blog</a>
@@ -242,6 +243,7 @@ export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
       <div id="mobile-menu" class="hidden md:hidden absolute top-full left-0 w-full bg-white border-b border-slate-200 p-4 flex-col gap-3 shadow-xl">
         <a href="/" class="text-base font-medium text-slate-700 py-2 mobile-link">Home</a>
         <a href="/agent/" class="text-base font-medium text-slate-700 py-2 mobile-link">Agent</a>
+        <a href="/factory/" class="text-base font-medium text-slate-700 py-2 mobile-link">Factory</a>
         <a href="/portfolio/" class="text-base font-medium text-slate-700 py-2 mobile-link">Portfolio</a>
         <a href="/services/" class="text-base font-medium text-slate-700 py-2 mobile-link">Services</a>
         <a href="/blog/" class="text-base font-medium text-slate-700 py-2 mobile-link">Blog</a>
@@ -267,7 +269,7 @@ export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
                             <span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-pink-500">in days, not months.</span>
                         </h1>
                         <p class="text-base sm:text-lg text-slate-600 mt-6 max-w-2xl leading-relaxed animate-fade-up">
-                            LFG is an AI-first software agency. We use our custom built AI agent to research, plan, build, and ship production software — with engineers as quality control. Faster delivery, lower cost, real products.
+                            LFG is an AI-native software factory. We use our custom built AI agent to research, plan, build, and ship production software, with engineers as quality control. Faster delivery, lower cost, real products.
                         </p>
 
                         <div class="mt-8 animate-fade-up">
@@ -290,12 +292,16 @@ export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
                                 <p class="text-slate-600 text-xs mt-1">before each release</p>
                             </div>
                         </div>
+
+                        <p class="mt-8 text-sm text-slate-500 animate-fade-up">
+                            IT services firm? <a href="/factory/" class="font-semibold text-slate-600 hover:text-brand-600 transition-colors inline-flex items-center gap-1">See the Factory <i data-lucide="arrow-right" class="w-3.5 h-3.5"></i></a>
+                        </p>
                     </div>
 
                     <div class="glass rounded-2xl p-5 sm:p-6 shadow-2xl border border-slate-200/70">
                         <div class="mb-4">
                             <h2 class="font-display text-xl font-bold text-slate-900">Tell us what to build</h2>
-                            <p class="text-sm text-slate-500 mt-1">Describe your development needs. We'll send you a PRD + plan — and we might build it for free.</p>
+                            <p class="text-sm text-slate-500 mt-1">Describe your development needs. We'll send you a PRD + plan, and we might build it for free.</p>
                         </div>
 
                         <form id="hero-form" class="space-y-3">
@@ -340,8 +346,8 @@ export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
             <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                 <div class="text-center max-w-3xl mx-auto mb-14">
                     <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">Why LFG</p>
-                    <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">An AI-first software agency</h2>
-                    <p class="text-slate-600 text-lg mt-4">LFG Labs uses AI to build products fast and at scale. At the heart of it is the <strong>LFG Agent</strong> — an AI product manager that coordinates a swarm of AI agents to take your idea from brief to working product.</p>
+                    <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">An AI-first software factory</h2>
+                    <p class="text-slate-600 text-lg mt-4">LFG runs an agentic software factory: we use it to build our own products, ship client work, and license it to delivery teams. At the heart of it is the <strong>LFG Agent</strong>, an AI product manager that coordinates a swarm of AI agents to take your idea from brief to working product.</p>
                 </div>
 
                 <div class="grid md:grid-cols-3 gap-6">
@@ -350,7 +356,7 @@ export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
                             <i data-lucide="bot" class="w-5 h-5"></i>
                         </div>
                         <h3 class="font-display font-bold text-lg mb-2">AI product manager</h3>
-                        <p class="text-sm text-slate-600 leading-relaxed">LFG Agent analyzes your requirements, generates PRDs, creates technical architecture, and breaks work into prioritized tickets — like a senior PM, but instant.</p>
+                        <p class="text-sm text-slate-600 leading-relaxed">LFG Agent analyzes your requirements, generates PRDs, creates technical architecture, and breaks work into prioritized tickets, like a senior PM, but instant.</p>
                     </div>
 
                     <div class="rounded-2xl border border-slate-200 bg-slate-50 p-6 hover:border-brand-300 transition-colors">
@@ -358,7 +364,7 @@ export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
                             <i data-lucide="cpu" class="w-5 h-5"></i>
                         </div>
                         <h3 class="font-display font-bold text-lg mb-2">Swarm of AI agents</h3>
-                        <p class="text-sm text-slate-600 leading-relaxed">Each ticket is executed by Claude Code in isolated sandboxes. Multiple agents work in parallel — building, testing, and iterating autonomously.</p>
+                        <p class="text-sm text-slate-600 leading-relaxed">Each ticket is executed by Claude Code in isolated sandboxes. Multiple agents work in parallel, building, testing, and iterating autonomously.</p>
                     </div>
 
                     <div class="rounded-2xl border border-slate-200 bg-slate-50 p-6 hover:border-brand-300 transition-colors">
@@ -514,7 +520,7 @@ export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
                 <div class="text-center max-w-3xl mx-auto mb-14">
                     <p class="text-xs font-bold uppercase tracking-wider text-brand-700 mb-2">Built with LFG Agent</p>
                     <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">Real products we've shipped</h2>
-                    <p class="text-slate-600 text-lg mt-4">LFG Agent doesn't just plan — it builds. These are live products running in production.</p>
+                    <p class="text-slate-600 text-lg mt-4">LFG Agent doesn't just plan, it builds. These are live products running in production.</p>
                 </div>
                 <div class="grid md:grid-cols-3 gap-6">
                     <!-- Logo: drop a 40x40 (or larger) image at /public/images/logos/easylogs.png -->
@@ -555,6 +561,22 @@ export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
                 <div class="mt-10 text-center">
                     <a href="/portfolio/" class="inline-flex items-center gap-2 px-6 py-3 rounded-full border border-slate-200 bg-white text-slate-700 font-semibold hover:border-brand-300 hover:text-brand-700 transition-colors shadow-sm">
                         See the full portfolio <i data-lucide="arrow-right" class="w-4 h-4"></i>
+                    </a>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================== FACTORY ROUTING BAND ==================== -->
+        <section class="bg-slate-900">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+                <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-5">
+                    <div class="max-w-3xl">
+                        <p class="text-xs font-bold uppercase tracking-wider text-brand-400 mb-2">For IT services firms</p>
+                        <h2 class="font-display font-bold text-2xl text-white">Run a services firm? License the factory itself.</h2>
+                        <p class="text-slate-400 mt-2">The same pipeline that ships our products can run inside your delivery org. Self-hosted, senior-review gated, built for fixed-price economics.</p>
+                    </div>
+                    <a href="/factory/" class="shrink-0 inline-flex items-center gap-2 px-6 py-3 rounded-full bg-white text-slate-900 font-semibold hover:bg-brand-600 hover:text-white transition-colors">
+                        Explore LFG Factory <i data-lucide="arrow-right" class="w-4 h-4"></i>
                     </a>
                 </div>
             </div>
@@ -635,7 +657,7 @@ export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
                         <span>LFG</span>
                     </div>
                     <p class="text-slate-400 max-w-sm leading-relaxed">
-                        AI first engineering with autonomous delivery and human oversight.
+                        The AI software factory. We build with it, ship with it, and license it.
                     </p>
                 </div>
 
@@ -646,8 +668,8 @@ export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
                         <li><a href="/services/" class="hover:text-brand-400 transition-colors">Services</a></li>
                         <li><a href="/blog/" class="hover:text-brand-400 transition-colors">Blog</a></li>
                         <li><a href="/portfolio/" class="hover:text-brand-400 transition-colors">Portfolio</a></li>
+                        <li><a href="/factory/" class="hover:text-brand-400 transition-colors">Factory</a></li>
                         <li><a href="/#book-demo" class="hover:text-brand-400 transition-colors">Book demo</a></li>
-                        <li><a href="/venture-studio/" class="hover:text-brand-400 transition-colors">Venture studio</a></li>
                     </ul>
                 </div>
 
@@ -661,7 +683,7 @@ export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
             </div>
 
             <div class="border-t border-slate-800 pt-8 text-center text-sm text-slate-500">
-                &copy; 2026 LFG Inc. Open Source Apache 2.0.
+                &copy; ${new Date().getFullYear()} LFG Inc. Open source under Apache 2.0.
             </div>
         </div>
     </footer>

@@ -65,6 +65,7 @@ settingsRouter.get("/settings", async (c) => {
         xai: !!keys.xaiApiKey,
         kimi: !!keys.kimiApiKey,
         deepseek: !!keys.deepseekApiKey,
+        glm: !!keys.glmApiKey,
         usePersonalKeys: keys.usePersonalLlmKeys,
       },
       claudeCode: {
@@ -97,6 +98,7 @@ settingsRouter.post("/settings/save-key", async (c) => {
     xai: "xaiApiKey",
     kimi: "kimiApiKey",
     deepseek: "deepseekApiKey",
+    glm: "glmApiKey",
   };
   const field = fieldMap[provider];
   if (!field) return c.redirect("/settings?error=Unknown+provider");
@@ -125,6 +127,7 @@ settingsRouter.post("/settings/remove-key", async (c) => {
     xai: { xaiApiKey: null },
     kimi: { kimiApiKey: null },
     deepseek: { deepseekApiKey: null },
+    glm: { glmApiKey: null },
   };
   const updateFields = fieldMap[provider];
   if (!updateFields) return c.redirect("/settings?error=Unknown+provider");
@@ -201,6 +204,7 @@ settingsRouter.get("/settings/integrations", async (c) => {
         xai: !!keys.xaiApiKey,
         kimi: !!keys.kimiApiKey,
         deepseek: !!keys.deepseekApiKey,
+        glm: !!keys.glmApiKey,
         usePersonalKeys: keys.usePersonalLlmKeys,
       },
       claudeCode: {

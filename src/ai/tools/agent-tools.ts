@@ -21,6 +21,22 @@ import { broadcastToUser } from "../../ws/connection-manager.ts";
 import { env } from "../../config/env.ts";
 
 /**
+ * Strip NUL + non-whitespace C0 control bytes from text. Web pages/PDFs (esp. via Exa)
+ * sometimes return binary/gzip bytes in snippets, including NUL (0x00) — which makes
+ * Postgres reject the whole tool-result JSON on persist (error 22P05). Keeps tab/newline/CR.
+ */
+function cleanText(s: string): string {
+  if (!s) return "";
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c < 0x20 && c !== 9 && c !== 10 && c !== 13) continue; // drop C0 controls
+    out += s[i];
+  }
+  return out;
+}
+
+/**
  * Build a progress callback that broadcasts in-flight status updates over
  * the user's WS so the chat UI can show "Provisioning sandbox…",
  * "Installing libs…", etc. while a tool call is mid-flight.
@@ -610,7 +626,90 @@ export function createAgentTools(params: {
     },
   });
 
+  // ── Web research (Exa) — provider-agnostic, available on EVERY model ──────────
+  // The provider-native web search (getModelWithSearch) is empty for DeepSeek/Kimi/GLM,
+  // so without these the agent has NO real search and falls back to curl-in-sandbox.
+  const EXA_BASE = "https://api.exa.ai";
+
+  const webSearch = tool({
+    description:
+      "Search the web (Exa neural + keyword search). This is your PRIMARY research tool — use it for finding " +
+      "companies, people, news, public info, docs, market data: anything needing current web information. " +
+      "Returns ranked results with title, URL, date, and a relevant snippet/highlights. PREFER this over running " +
+      "curl or scripts in the sandbox for research. Follow up with `readUrl` to read a specific result in full.",
+    inputSchema: zodSchema(
+      z.object({
+        query: z.string().describe("Natural-language question or keywords to search for."),
+        num_results: z.number().optional().describe("How many results to return (default 6, max 20)."),
+        category: z
+          .enum(["company", "news", "research paper", "pdf", "github", "tweet", "personal site", "financial report", "linkedin profile"])
+          .optional()
+          .describe("Optional: bias results toward a content category (e.g. 'company' for B2B research)."),
+      })
+    ),
+    execute: async ({ query, num_results, category }) => {
+      if (!env.EXA_API_KEY) return { error: "Web search is not configured (EXA_API_KEY missing in env)." };
+      try {
+        const res = await fetch(`${EXA_BASE}/search`, {
+          method: "POST",
+          headers: { "x-api-key": env.EXA_API_KEY, "content-type": "application/json" },
+          body: JSON.stringify({
+            query,
+            numResults: Math.min(num_results ?? 6, 20),
+            type: "auto",
+            ...(category ? { category } : {}),
+            contents: { text: { maxCharacters: 1200 }, highlights: { numSentences: 3, highlightsPerUrl: 2 } },
+          }),
+        });
+        if (!res.ok) return { error: `Exa search failed (${res.status}): ${(await res.text()).slice(0, 300)}` };
+        const data = (await res.json()) as { results?: any[] };
+        const results = (data.results ?? []).map((r: any) => ({
+          title: cleanText(r.title ?? r.url),
+          url: r.url,
+          published: r.publishedDate ?? null,
+          snippet: cleanText((Array.isArray(r.highlights) ? r.highlights.join(" … ") : r.text ?? "").slice(0, 800)),
+        }));
+        return { query, count: results.length, results };
+      } catch (err) {
+        return { error: `Web search error: ${(err as Error).message}` };
+      }
+    },
+  });
+
+  const readUrl = tool({
+    description:
+      "Fetch and read the full clean text of a web page or document URL (Exa contents). Use after `webSearch` to " +
+      "read a promising result in depth, or whenever you have a URL whose contents you need. Handles HTML and PDFs. " +
+      "PREFER this over curl-in-sandbox for reading pages.",
+    inputSchema: zodSchema(
+      z.object({
+        url: z.string().describe("The URL to read."),
+        max_chars: z.number().optional().describe("Max characters of text to return (default 8000, max 30000)."),
+      })
+    ),
+    execute: async ({ url, max_chars }) => {
+      if (!env.EXA_API_KEY) return { error: "Web reading is not configured (EXA_API_KEY missing in env)." };
+      const limit = Math.min(max_chars ?? 8000, 30000);
+      try {
+        const res = await fetch(`${EXA_BASE}/contents`, {
+          method: "POST",
+          headers: { "x-api-key": env.EXA_API_KEY, "content-type": "application/json" },
+          body: JSON.stringify({ urls: [url], text: { maxCharacters: limit } }),
+        });
+        if (!res.ok) return { error: `Exa read failed (${res.status}): ${(await res.text()).slice(0, 300)}` };
+        const data = (await res.json()) as { results?: any[] };
+        const r = (data.results ?? [])[0];
+        if (!r) return { error: "No content returned for that URL." };
+        return { url: r.url, title: r.title ? cleanText(r.title) : null, published: r.publishedDate ?? null, text: cleanText((r.text ?? "").slice(0, limit)) };
+      } catch (err) {
+        return { error: `Web read error: ${(err as Error).message}` };
+      }
+    },
+  });
+
   return {
+    webSearch,
+    readUrl,
     runInSandbox,
     runPython,
     updateMemory,

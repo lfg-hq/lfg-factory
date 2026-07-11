@@ -113,6 +113,7 @@ export const llmApiKeys = sqliteTable("llm_api_key", {
   googleApiKey: text("google_api_key"),
   kimiApiKey: text("kimi_api_key"),
   deepseekApiKey: text("deepseek_api_key"),
+  glmApiKey: text("glm_api_key"),
   freeTrial: integer("free_trial", { mode: "boolean" }).notNull().default(true),
   usePersonalLlmKeys: integer("use_personal_llm_keys", { mode: "boolean" })
     .notNull()

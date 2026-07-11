@@ -3,9 +3,12 @@ import { LandingPage } from "../templates/pages/landing.tsx";
 import { AgentPage } from "../templates/pages/agent.tsx";
 import { ServicesPage } from "../templates/pages/services.tsx";
 import { PortfolioPage } from "../templates/pages/portfolio.tsx";
+import { FactoryPage } from "../templates/pages/factory.tsx";
 import { BlogPage } from "../templates/pages/blog.tsx";
 import { BlogPostPage } from "../templates/pages/blog-post.tsx";
 import { BuildLandingPage } from "../templates/pages/build-landing.tsx";
+import { ShipLandingPage } from "../templates/pages/ship.tsx";
+import { ShipV2LandingPage } from "../templates/pages/ship-v2.tsx";
 import { loadBlogPosts, getBlogPostBySlug } from "../utils/blog.ts";
 import { sendEmail } from "../utils/email.ts";
 
@@ -47,6 +50,9 @@ landing.get("/services/", (c) => c.html(ServicesPage()));
 landing.get("/portfolio", (c) => c.redirect("/portfolio/"));
 landing.get("/portfolio/", (c) => c.html(PortfolioPage()));
 
+landing.get("/factory", (c) => c.redirect("/factory/"));
+landing.get("/factory/", (c) => c.html(FactoryPage()));
+
 landing.post("/api/portfolio/connect", async (c) => {
   try {
     const body = await c.req.json();
@@ -74,6 +80,56 @@ landing.post("/api/portfolio/connect", async (c) => {
 });
 
 landing.get("/build", (c) => c.html(BuildLandingPage()));
+
+// LFG Labs $999 campaign landing pages (ad-only, noindex'd in head)
+landing.get("/ship", (c) => c.html(ShipLandingPage()));
+landing.get("/ship/", (c) => c.redirect("/ship"));
+landing.get("/ship-v2", (c) => c.html(ShipV2LandingPage()));
+landing.get("/ship-v2/", (c) => c.redirect("/ship-v2"));
+
+// LFG Labs inquiry form (used by both /ship variants)
+landing.post("/api/labs/inquiry", async (c) => {
+  try {
+    const body = await c.req.json();
+    const name = (body.name ?? "").trim();
+    const email = (body.email ?? "").trim();
+    const requirements = (body.requirements ?? "").trim();
+    if (!name || !email || !requirements) {
+      return c.json({ error: "Name, email, and what to build are required." }, 400);
+    }
+
+    const tier = (body.tier ?? "").trim() || "—";
+    const variant = (body.variant ?? "").trim() || "—";
+
+    const fields: Array<[string, string]> = [
+      ["Name", name],
+      ["Email", email],
+      ["Tier", tier],
+      ["Variant", variant],
+    ];
+    const rows = fields
+      .map(([k, v]) => `<tr><td style="padding:6px 12px;font-weight:600;color:#334155;white-space:nowrap">${k}</td><td style="padding:6px 12px;color:#475569">${v}</td></tr>`)
+      .join("");
+
+    await sendEmail({
+      to: "hello@lfg.run",
+      subject: `LFG Labs lead — ${name} (${variant})`,
+      text:
+        fields.map(([k, v]) => `${k}: ${v}`).join("\n") +
+        `\n\nWhat they want to build:\n${requirements}`,
+      html: `<div style="font-family:sans-serif;max-width:600px">
+        <h2 style="color:#0f172a">New LFG Labs lead</h2>
+        <table style="border-collapse:collapse;width:100%">${rows}</table>
+        <h3 style="color:#0f172a;margin-top:20px">What they want to build</h3>
+        <p style="color:#475569;white-space:pre-wrap">${requirements}</p>
+      </div>`,
+    });
+
+    return c.json({ success: true });
+  } catch {
+    return c.json({ error: "Invalid request." }, 400);
+  }
+});
 
 landing.get("/blog", (c) => c.redirect("/blog/"));
 landing.get("/blog/", (c) => {
@@ -123,6 +179,56 @@ landing.post("/api/services/inquiry", async (c) => {
         <table style="border-collapse:collapse;width:100%">${rows}</table>
         <h3 style="color:#0f172a;margin-top:20px">Requirements</h3>
         <p style="color:#475569;white-space:pre-wrap">${requirements}</p>
+      </div>`,
+    });
+
+    return c.json({ success: true });
+  } catch {
+    return c.json({ error: "Invalid request." }, 400);
+  }
+});
+
+// Factory pilot request (IT services firms)
+landing.post("/api/factory/pilot", async (c) => {
+  try {
+    const body = await c.req.json();
+    const name = (body.name ?? "").trim();
+    const email = (body.email ?? "").trim();
+    const project = (body.project ?? "").trim();
+    if (!name || !email || !project) {
+      return c.json({ error: "Name, work email, and the project description are required." }, 400);
+    }
+
+    // Keep the pilot pipeline clean: require a business email
+    const FREE_EMAIL_DOMAINS = new Set([
+      "gmail.com", "googlemail.com", "yahoo.com", "yahoo.co.in", "hotmail.com",
+      "outlook.com", "live.com", "aol.com", "icloud.com", "me.com", "proton.me",
+      "protonmail.com", "mail.com", "gmx.com", "yandex.com", "rediffmail.com",
+    ]);
+    const domain = email.split("@")[1]?.toLowerCase().trim();
+    if (!domain || FREE_EMAIL_DOMAINS.has(domain)) {
+      return c.json({ error: "Please use your work email address, not a personal one." }, 400);
+    }
+
+    const fields = [
+      ["Name", name],
+      ["Work email", email],
+      ["Firm", body.firm || "—"],
+      ["Headcount", body.headcount || "—"],
+      ["Role", body.role || "—"],
+    ];
+
+    const rows = fields.map(([k, v]) => `<tr><td style="padding:6px 12px;font-weight:600;color:#334155;white-space:nowrap">${k}</td><td style="padding:6px 12px;color:#475569">${v}</td></tr>`).join("");
+
+    await sendEmail({
+      to: "hello@lfg.run",
+      subject: `[FACTORY PILOT] ${name}${body.firm ? ` — ${body.firm}` : ""}`,
+      text: fields.map(([k, v]) => `${k}: ${v}`).join("\n") + `\n\nProject to test:\n${project}`,
+      html: `<div style="font-family:sans-serif;max-width:600px">
+        <h2 style="color:#0f172a">New factory pilot request</h2>
+        <table style="border-collapse:collapse;width:100%">${rows}</table>
+        <h3 style="color:#0f172a;margin-top:20px">Project to test</h3>
+        <p style="color:#475569;white-space:pre-wrap">${project}</p>
       </div>`,
     });
 

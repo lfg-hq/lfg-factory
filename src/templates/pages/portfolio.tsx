@@ -8,17 +8,17 @@ export const PortfolioPage = () => html`
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Portfolio | Built with LFG Agent</title>
-    <meta name="description" content="Real products shipped using LFG Agent — from idea to working software in days. See what AI-first engineering looks like in production.">
+    <meta name="description" content="Real products shipped using LFG Agent, from idea to working software in days. See what AI-first engineering looks like in production.">
 
     <meta property="og:title" content="Portfolio | Built with LFG Agent">
-    <meta property="og:description" content="Real products shipped using LFG Agent — from idea to working software in days.">
+    <meta property="og:description" content="Real products shipped using LFG Agent, from idea to working software in days.">
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://lfg.run/portfolio/">
     <meta property="og:image" content="https://lfg.run/static/images/logo_lfg.png">
 
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Portfolio | Built with LFG Agent">
-    <meta name="twitter:description" content="Real products shipped using LFG Agent — from idea to working software in days.">
+    <meta name="twitter:description" content="Real products shipped using LFG Agent, from idea to working software in days.">
     <meta name="twitter:image" content="https://lfg.run/static/images/logo_lfg.png">
 
     <link rel="icon" type="image/x-icon" href="/public/images/favicon.ico">
@@ -90,7 +90,7 @@ export const PortfolioPage = () => html`
               We build real products.<br><span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-pink-500">Here's the proof.</span>
             </h1>
             <p class="text-lg sm:text-xl text-slate-600 mt-7 max-w-2xl mx-auto leading-relaxed animate-fade-up" style="animation-delay:0.2s">
-              Every product below is live, solves a real problem we had, and runs on the same LFG Agent pipeline we sell. Not demos. Not side projects. Tools we depend on every day — and we keep building more.
+              Every product below is live, solves a real problem we had, and runs on the same LFG Agent pipeline we sell. Not demos. Not side projects. Tools we depend on every day, and we keep building more.
             </p>
             <div class="mt-8 flex flex-wrap items-center justify-center gap-4 animate-fade-up" style="animation-delay:0.3s">
               <a href="/agent/" class="px-7 py-3.5 rounded-full bg-brand-600 text-white font-semibold hover:bg-brand-700 transition-all inline-flex items-center gap-2 shadow-lg shadow-brand-600/25">
@@ -156,7 +156,7 @@ export const PortfolioPage = () => html`
                   <i data-lucide="rocket" class="w-5 h-5"></i>
                 </div>
                 <h3 class="font-display font-bold text-base text-slate-900 mb-2">LFG Agent</h3>
-                <p class="text-xs text-slate-500 leading-relaxed">Builds all three products. Every ticket executed, every feature shipped — done by the same agent we sell.</p>
+                <p class="text-xs text-slate-500 leading-relaxed">Builds all three products. Every ticket executed, every feature shipped, done by the same agent we sell.</p>
                 <div class="mt-3 pt-3 border-t border-slate-100">
                   <p class="text-xs font-semibold text-brand-600">Gives → all three</p>
                 </div>
@@ -189,7 +189,7 @@ export const PortfolioPage = () => html`
                   <i data-lucide="activity" class="w-5 h-5"></i>
                 </div>
                 <h3 class="font-display font-bold text-base text-slate-900 mb-2">easylogs.co</h3>
-                <p class="text-xs text-slate-500 leading-relaxed">Monitors all of it — LFG's infra, Mags workspaces, and Kitereach sequences. When something breaks, we know first.</p>
+                <p class="text-xs text-slate-500 leading-relaxed">Monitors all of it, LFG's infra, Mags workspaces, and Kitereach sequences. When something breaks, we know first.</p>
                 <div class="mt-3 pt-3 border-t border-slate-100">
                   <p class="text-xs font-semibold text-emerald-600">Gives → full observability</p>
                 </div>
@@ -231,7 +231,7 @@ export const PortfolioPage = () => html`
                 <a href="https://mags.run" target="_blank" rel="noopener noreferrer" class="block">
                   <img
                     src="/public/images/screenshots/mags.png"
-                    alt="mags.run — Cloud VM platform for AI workloads"
+                    alt="mags.run, Cloud VM platform for AI workloads"
                     class="w-full object-cover object-top"
                     loading="lazy"
                     onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"
@@ -298,7 +298,7 @@ export const PortfolioPage = () => html`
                   <a href="https://kitereach.com" target="_blank" rel="noopener noreferrer" class="hover:text-brand-600 transition-colors">kitereach.com</a>
                 </h2>
                 <p class="text-slate-600 leading-relaxed mb-6">
-                  An AI-powered outreach platform built to help sales teams find, qualify, and engage leads at scale. Combines AI-written personalization with multi-channel sequencing — email, LinkedIn, and beyond — so your team spends time closing, not cold-messaging.
+                  An AI-powered outreach platform built to help sales teams find, qualify, and engage leads at scale. Combines AI-written personalization with multi-channel sequencing, email, LinkedIn, and beyond, so your team spends time closing, not cold-messaging.
                 </p>
                 <div class="space-y-2 mb-6">
                   <div class="flex items-center gap-2 text-sm text-slate-600">
@@ -338,7 +338,7 @@ export const PortfolioPage = () => html`
                 <a href="https://kitereach.com" target="_blank" rel="noopener noreferrer" class="block">
                   <img
                     src="/public/images/screenshots/kitereach.png"
-                    alt="kitereach.com — AI outreach platform"
+                    alt="kitereach.com, AI outreach platform"
                     class="w-full object-cover object-top"
                     loading="lazy"
                     onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"
@@ -371,7 +371,7 @@ export const PortfolioPage = () => html`
                 <a href="https://easylogs.co" target="_blank" rel="noopener noreferrer" class="block">
                   <img
                     src="/public/images/screenshots/easylogs.png"
-                    alt="easylogs.co — Simple logging for developers"
+                    alt="easylogs.co, Simple logging for developers"
                     class="w-full object-cover object-top"
                     loading="lazy"
                     onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"
@@ -395,7 +395,7 @@ export const PortfolioPage = () => html`
                   <a href="https://easylogs.co" target="_blank" rel="noopener noreferrer" class="hover:text-brand-600 transition-colors">easylogs.co</a>
                 </h2>
                 <p class="text-slate-600 leading-relaxed mb-6">
-                  A lightweight logging platform for developers who want application visibility without the complexity. Drop in the SDK, stream your logs in real-time, set alerts, and search everything — no Elasticsearch clusters to manage, no per-seat pricing bloat.
+                  A lightweight logging platform for developers who want application visibility without the complexity. Drop in the SDK, stream your logs in real-time, set alerts, and search everything, no Elasticsearch clusters to manage, no per-seat pricing bloat.
                 </p>
                 <div class="space-y-2 mb-6">
                   <div class="flex items-center gap-2 text-sm text-slate-600">
@@ -408,7 +408,7 @@ export const PortfolioPage = () => html`
                   </div>
                   <div class="flex items-center gap-2 text-sm text-slate-600">
                     <i data-lucide="check" class="w-4 h-4 text-brand-600 shrink-0"></i>
-                    Simple SDK — one line to integrate
+                    Simple SDK, one line to integrate
                   </div>
                 </div>
                 <div class="flex items-center gap-3">
@@ -433,7 +433,7 @@ export const PortfolioPage = () => html`
           <div class="text-center mb-14">
             <p class="text-sm font-bold text-brand-600 uppercase tracking-wider mb-2">The process</p>
             <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">How each of these was built</h2>
-            <p class="text-slate-600 text-lg mt-4 max-w-2xl mx-auto">Every product above followed the same AI-first pipeline — no months of planning, no large eng team.</p>
+            <p class="text-slate-600 text-lg mt-4 max-w-2xl mx-auto">Every product above followed the same AI-first pipeline, no months of planning, no large eng team.</p>
           </div>
           <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
             <div class="bg-white rounded-xl border border-slate-200 p-6 text-center">
@@ -483,7 +483,7 @@ export const PortfolioPage = () => html`
               </div>
               <h2 class="font-display font-bold text-2xl md:text-3xl text-slate-900 mb-4">This portfolio keeps growing</h2>
               <p class="text-slate-600 leading-relaxed mb-4">
-                We're not a studio that ships on contract and moves on. Every product we build becomes part of the stack we run. We keep using, improving, and expanding each one — and LFG Agent keeps getting better with every project.
+                We're not a studio that ships on contract and moves on. Every product we build becomes part of the stack we run. We keep using, improving, and expanding each one, and LFG Agent keeps getting better with every project.
               </p>
               <p class="text-slate-600 leading-relaxed">
                 More products are in the pipeline. Some solve problems in our own workflow. Some are standalone ideas. All of them are built with the same agent you can use today.
@@ -544,7 +544,7 @@ export const PortfolioPage = () => html`
               </div>
               <h2 class="font-display font-bold text-2xl md:text-3xl text-white mb-4">Want to be part of what we're building?</h2>
               <p class="text-slate-400 leading-relaxed mb-6">
-                Whether you want to use one of our products, collaborate on something new, invest, or just follow the journey — we'd love to hear from you. We're a small team building fast, and the right conversations open the right doors.
+                Whether you want to use one of our products, collaborate on something new, invest, or just follow the journey, we'd love to hear from you. We're a small team building fast, and the right conversations open the right doors.
               </p>
               <div class="space-y-3">
                 <div class="flex items-center gap-3 text-sm text-slate-400">
@@ -603,7 +603,7 @@ export const PortfolioPage = () => html`
                   <span id="connect-btn-text">Send message</span>
                 </button>
                 <div id="connect-success" class="hidden text-center py-3 text-sm text-emerald-400 font-medium">
-                  <i data-lucide="check-circle" class="w-4 h-4 inline mr-1.5"></i>Got it — we'll be in touch.
+                  <i data-lucide="check-circle" class="w-4 h-4 inline mr-1.5"></i>Got it, we'll be in touch.
                 </div>
                 <div id="connect-error" class="hidden text-center py-3 text-sm text-red-400">
                   Something went wrong. Email us directly at <a href="mailto:hello@lfg.run" class="underline">hello@lfg.run</a>

@@ -96,6 +96,18 @@
           "requires_pro": true
         }
       ]
+    },
+    "glm": {
+      "label": "GLM (Z.ai)",
+      "default_model": "glm_5.2",
+      "models": [
+        {
+          "key": "glm_5.2",
+          "label": "GLM 5.2",
+          "provider_model": "glm-5.2",
+          "requires_pro": true
+        }
+      ]
     }
   }
 }

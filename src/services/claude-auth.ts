@@ -30,46 +30,6 @@ import { db } from "../config/db.ts";
 import { profiles } from "../db/schema/users.ts";
 import { eq } from "drizzle-orm";
 
-const NODE_VERSION = "20.18.0";
-const NODE_DISTRO = "linux-x64";
-
-/**
- * Shell script that provisions a fresh VM with Node + Claude CLI + expect.
- * NOTE: Run via execOnWorkspace() on a VM already created by client.new().
- * The VM stays alive via client.new() — no infinite loop needed here.
- * This script should complete and exit cleanly.
- */
-export const CLAUDE_AUTH_SETUP_SCRIPT = `#!/bin/sh
-set -eux
-
-# Install system packages
-apk update && apk add --no-cache curl xz git expect bash openssh-client
-
-# Ensure PTYs are available (needed by expect for Claude CLI auth)
-mkdir -p /dev/pts 2>/dev/null || true
-mount -t devpts devpts /dev/pts 2>/dev/null || true
-
-# Install Node.js ${NODE_VERSION}
-cd /root && mkdir -p node && cd node
-if [ ! -d node-v${NODE_VERSION}-${NODE_DISTRO} ]; then
-    curl -fsSL https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-${NODE_DISTRO}.tar.xz -o node.tar.xz
-    tar -xf node.tar.xz && rm node.tar.xz
-    ln -sfn node-v${NODE_VERSION}-${NODE_DISTRO} current
-fi
-export PATH=/root/node/current/bin:\$PATH
-mkdir -p /root/.npm-global /root/.npm-cache
-npm config set prefix /root/.npm-global
-npm config set cache /root/.npm-cache
-
-# Install Claude CLI
-npm install -g @anthropic-ai/claude-code
-
-# Create non-root user for Claude --dangerously-skip-permissions
-adduser -D -h /home/claudeuser -s /bin/bash claudeuser 2>/dev/null || true
-
-echo "CLAUDE_AUTH_SETUP_COMPLETE"
-`;
-
 // ── Auth status check ─────────────────────────────────────────────────────
 
 export interface AuthStatusResult {
@@ -93,7 +53,7 @@ export async function checkAuthStatus(workspaceName: string): Promise<AuthStatus
     );
     quickOut = r.output;
   } catch {
-    return { authenticated: false, message: "Sandbox unresponsive", sandboxTimeout: true };
+    return { authenticated: false, message: "Workspace unresponsive", sandboxTimeout: true };
   }
 
   if (quickOut.includes("NO_CREDS")) {
@@ -120,7 +80,7 @@ export async function checkAuthStatus(workspaceName: string): Promise<AuthStatus
     if (out.includes("not logged in") || out.includes("authenticate") ||
         out.includes("oauth") || out.includes("expired") || out.includes("please run /login") ||
         out.includes("401") || out.includes("authentication_error")) {
-      await execOnWorkspace(workspaceName, "rm -f ~/.claude/.credentials.json /home/claudeuser/.claude/.credentials.json", { timeout: 10_000 }).catch(() => {});
+      await execOnWorkspace(workspaceName, "rm -f /root/.claude/.credentials.json", { timeout: 10_000 }).catch(() => {});
       return { authenticated: false, message: "Token expired — please reconnect", tokenExpired: true };
     }
 
@@ -147,11 +107,11 @@ export interface StartAuthResult {
 
 /**
  * Start the Claude OAuth flow on an existing VM.
- * Sets up expect script, runs it in background, polls for the OAuth URL.
+ * Spawns the full `claude` interactive TUI via expect, navigates onboarding
+ * prompts automatically, captures the OAuth URL, and waits for the user to
+ * paste the auth code back.
  */
 export async function startClaudeAuth(workspaceName: string, opts?: { skipCredCheck?: boolean }): Promise<StartAuthResult> {
-  // Quick check: if credentials file exists with a token, test it strictly
-  // Skip if the caller already cleared stale creds (saves ~40s)
   if (!opts?.skipCredCheck) {
     try {
       const quickCheck = await execOnWorkspace(workspaceName,
@@ -159,7 +119,6 @@ export async function startClaudeAuth(workspaceName: string, opts?: { skipCredCh
         { timeout: 10_000 }
       );
       if (quickCheck.output.includes("HAS_CREDS")) {
-        // Test if it actually works
         const test = await execOnWorkspace(workspaceName,
           `export HOME=/root; export PATH=/root/node/current/bin:/root/.npm-global/bin:$PATH; claude -p "return hello" --max-turns 1 2>&1 | head -20`,
           { timeout: 10_000 }
@@ -168,14 +127,14 @@ export async function startClaudeAuth(workspaceName: string, opts?: { skipCredCh
         if (test.exitCode === 0 && testOut.includes("hello") && !testOut.includes("error") && !testOut.includes("expired")) {
           return { status: "already_authenticated", message: "Claude Code is already authenticated" };
         }
-        // Not working — clear stale creds
+        // Stale — clear
         await execOnWorkspace(workspaceName,
-          "rm -f /root/.claude/.credentials.json /home/claudeuser/.claude/.credentials.json 2>/dev/null; echo CLEARED",
+          "rm -f /root/.claude/.credentials.json 2>/dev/null; echo CLEARED",
           { timeout: 10_000 }
         ).catch(() => {});
       }
     } catch {
-      // VM unresponsive — proceed with auth flow anyway
+      // VM unresponsive — proceed anyway
     }
   }
 
@@ -183,21 +142,32 @@ export async function startClaudeAuth(workspaceName: string, opts?: { skipCredCh
   const log = (msg: string) => console.log(`[startClaudeAuth +${Date.now() - t0}ms] ${msg}`);
   log(`workspace=${workspaceName}, skipCredCheck=${!!opts?.skipCredCheck}`);
 
-  // Pre-compute base64 of wrapper + expect scripts.
-  // Using template literals: $var without {} is just literal text in JS — safe for Tcl variables.
-  // This avoids heredoc syntax which breaks over SSH exec.
+  // Wrapper script: sources profile + sets PATH + forces dumb terminal, then execs claude
+  // NO_COLOR=1 + TERM=dumb prevents @clack/prompts from using ANSI escape codes / full-screen TUI
+  // $PATH, $@ are shell variables — safe in TS template (no {} = no interpolation)
   const wrapperScript = `#!/bin/sh
 [ -f /etc/profile ] && . /etc/profile
 [ -f ~/.profile ] && . ~/.profile
 [ -f ~/.bashrc ] && . ~/.bashrc
-export PATH=/root/node/current/bin:/root/.npm-global/bin:$PATH
-export COLUMNS=2000
+export PATH=/usr/local/bin:/root/node/current/bin:/root/.npm-global/bin:$PATH
 export TERM=dumb
-exec claude "$@"
+export NO_COLOR=1
+export FORCE_COLOR=0
+export COLORTERM=""
+# Try known claude locations in order
+CLAUDE_BIN=""
+for p in /usr/local/bin/claude /root/.npm-global/bin/claude /root/node/current/bin/claude; do
+  [ -x "$p" ] && CLAUDE_BIN="$p" && break
+done
+[ -z "$CLAUDE_BIN" ] && CLAUDE_BIN=$(command -v claude 2>/dev/null)
+[ -z "$CLAUDE_BIN" ] && echo "ERROR: claude not found" && exit 1
+exec "$CLAUDE_BIN" "$@"
 `;
 
-  // Note: $CR, $i, $url, $f, $code, $expect_out are Tcl variables — they're literal in JS template literals
-  // because JS only interpolates ${...} (with braces), not $name.
+  // Expect script — handles both old (text) and new (ANSI TUI) Claude CLI.
+  // With NO_COLOR=1 + TERM=dumb the new TUI falls back to plain text prompts.
+  // All Tcl variables ($CR, $url, $f, $code, $i) are safe in TS template literals
+  // because JS only interpolates ${...} (with braces), not bare $name.
   const expectScript = `log_user 1
 set timeout 300
 set CR [format %c 13]
@@ -208,18 +178,18 @@ expect {
     -re {\\.\\.\\.} {
         exp_continue
     }
-    -re {trust the files|Yes, proceed|trust.*folder} {
-        after 500
+    -re {trust the files|Yes, proceed|trust.*folder|Allow} {
+        after 300
         send $CR
         exp_continue
     }
-    -re {looks best|text style|style preference|output format|terminal} {
-        after 500
+    -re {theme|dark|light|color scheme|appearance} {
+        after 300
         send $CR
         exp_continue
     }
-    -re {Select an account|authenticate|login method|choose.*account|sign in} {
-        after 500
+    -re {How would you like|log in|login method|choose.*account|sign in|Select.*account|authenticate|subscription|API key} {
+        after 300
         send $CR
         exp_continue
     }
@@ -230,7 +200,7 @@ expect {
         close $f
         exp_continue
     }
-    -re {[Pp]aste.*code|[Ee]nter.*code|authorization code|[Cc]ode:} {
+    -re {[Pp]aste.*code|[Ee]nter.*code|authorization code|[Cc]ode:|code here} {
         puts "WAITING_FOR_CODE"
         for {set i 0} {$i < 300} {incr i} {
             if {[file exists "/tmp/claude_code.txt"]} {
@@ -247,7 +217,7 @@ expect {
         }
         exp_continue
     }
-    -re {Login successful|Logged in as|successfully authenticated} {
+    -re {Login successful|Logged in as|successfully authenticated|logged in} {
         set f [open "/tmp/claude_status.txt" w]
         puts $f "SUCCESS"
         close $f
@@ -255,7 +225,7 @@ expect {
         send $CR
         exp_continue
     }
-    -re {What can I help|help you with|How can I|Tips:} {
+    -re {What can I help|help you with|How can I|Tips:|Human:} {
         if {![file exists "/tmp/claude_status.txt"]} {
             set f [open "/tmp/claude_status.txt" w]
             puts $f "ALREADY_AUTH"
@@ -284,13 +254,22 @@ expect eof
   const wrapperB64 = Buffer.from(wrapperScript).toString("base64");
   const expectB64 = Buffer.from(expectScript).toString("base64");
 
-  // Setup: install expect, write wrapper + expect scripts via base64 (no heredocs over SSH)
+  // Pre-write Claude settings.json to skip onboarding prompts (theme, trust, etc.)
+  const claudeSettings = JSON.stringify({
+    theme: "dark",
+    hasCompletedOnboarding: true,
+    onboardingComplete: true,
+    autoUpdates: false,
+  });
+  const settingsB64 = Buffer.from(claudeSettings).toString("base64");
+
   log("running setup (expect + wrapper scripts)...");
   const setup = await execOnWorkspace(workspaceName,
     `[ -f /etc/profile ] && . /etc/profile; [ -f ~/.profile ] && . ~/.profile; [ -f ~/.bashrc ] && . ~/.bashrc; ` +
     `rm -f /tmp/claude_url.txt /tmp/claude_code.txt /tmp/claude_status.txt /tmp/claude_auth.exp; ` +
     `mkdir -p /dev/pts 2>/dev/null || true; ` +
     `mount -t devpts devpts /dev/pts 2>/dev/null || true; ` +
+    `mkdir -p /root/.claude; echo ${settingsB64} | base64 -d > /root/.claude/settings.json; ` +
     `if ! command -v expect >/dev/null 2>&1; then apk add --no-cache expect >/dev/null 2>&1 || echo EXPECT_INSTALL_FAILED; fi; ` +
     `echo ${wrapperB64} | base64 -d > /tmp/claude_wrapper.sh && chmod +x /tmp/claude_wrapper.sh; ` +
     `echo ${expectB64} | base64 -d > /tmp/claude_auth.exp; ` +
@@ -306,7 +285,6 @@ expect eof
     return { status: "error", error: `Setup failed: ${setup.output.slice(0, 200)}` };
   }
 
-  // Start expect in background (single-line to avoid SSH exec newline issues)
   log("starting expect in background...");
   const bg = await execOnWorkspace(workspaceName,
     `[ -f /etc/profile ] && . /etc/profile; [ -f ~/.profile ] && . ~/.profile; export PATH=/root/node/current/bin:/root/.npm-global/bin:$PATH; nohup expect /tmp/claude_auth.exp > /tmp/claude_auth.log 2>&1 & echo "BG_PID=$!"`,
@@ -318,10 +296,10 @@ expect eof
     return { status: "error", error: "Failed to start auth process" };
   }
 
-  // Poll for URL (up to 90s, restart expect up to 3 times)
+  // Poll for URL (up to 45s), restart expect up to 3 times if it dies
   let expectRestarts = 0;
-  log("polling for OAuth URL (up to 90s)...");
-  for (let i = 0; i < 90; i++) {
+  log("polling for OAuth URL (up to 45s)...");
+  for (let i = 0; i < 45; i++) {
     await sleep(1000);
 
     const checkScript = `
@@ -341,7 +319,7 @@ if [ -f /tmp/claude_status.txt ]; then
     exit 0
 fi
 if [ -f /tmp/claude_auth.log ]; then
-    URL=$(cat /tmp/claude_auth.log | tr -d '\n\r' | grep -oE 'https://claude[.]ai/oauth[A-Za-z0-9_.~:/?#@!$&()*+,;=%=-]+' | head -1)
+    URL=$(cat /tmp/claude_auth.log | tr -d '\\n\\r' | grep -oE 'https://claude[.]ai/oauth[A-Za-z0-9_.~:/?#@!$&()*+,;=%=-]+' | head -1)
     if [ -n "$URL" ] && [ \${#URL} -gt 100 ]; then
         echo "$URL" > /tmp/claude_url.txt
         echo URL_FOUND
@@ -375,7 +353,6 @@ pgrep -x expect >/dev/null 2>&1 || echo NO_EXPECT_RUNNING
       if (check.output.includes("ALREADY_AUTH") || check.output.includes("SUCCESS")) {
         return { status: "already_authenticated", message: "Already authenticated" };
       }
-      // Dump the auth log to understand what happened
       const authLog = await execOnWorkspace(workspaceName,
         "cat /tmp/claude_auth.log 2>/dev/null | tail -50",
         { timeout: 5_000 }
@@ -384,7 +361,7 @@ pgrep -x expect >/dev/null 2>&1 || echo NO_EXPECT_RUNNING
       return { status: "error", error: "Authentication error" };
     }
 
-    // Restart expect if it died
+    // Restart expect if it died before we got the URL
     if (check.output.includes("NO_EXPECT_RUNNING") && expectRestarts < 3) {
       expectRestarts++;
       log(`expect died, restarting (attempt ${expectRestarts}/3)...`);
@@ -396,8 +373,13 @@ pgrep -x expect >/dev/null 2>&1 || echo NO_EXPECT_RUNNING
     }
   }
 
-  log("TIMEOUT: gave up waiting for OAuth URL after 90 polls");
-  return { status: "error", error: "Timeout waiting for OAuth URL" };
+  // Dump auth log to help diagnose what went wrong
+  const authLog = await execOnWorkspace(workspaceName,
+    "cat /tmp/claude_auth.log 2>/dev/null | tail -30",
+    { timeout: 5_000 }
+  ).catch(() => ({ output: "(unreadable)", exitCode: -1, stderr: "" }));
+  log(`TIMEOUT: auth log tail:\n${authLog.output.slice(0, 800)}`);
+  return { status: "error", error: `Timeout waiting for OAuth URL. Auth log: ${authLog.output.slice(0, 300)}` };
 }
 
 // ── Submit code ───────────────────────────────────────────────────────────
@@ -419,9 +401,9 @@ export async function submitAuthCode(
   const t0 = Date.now();
   const log = (msg: string) => console.log(`[submitAuthCode +${Date.now() - t0}ms] ${msg}`);
 
-  // Base64-encode the auth code to avoid shell quoting issues with special chars (#, =, _, etc.)
   const codeB64 = Buffer.from(authCode).toString("base64");
   log(`writing code to VM (${authCode.length} chars)...`);
+  // Also pre-create an enter-signal file so the expect loop sends Enter after success
   const write = await execOnWorkspace(workspaceName,
     `echo ${codeB64} | base64 -d > /tmp/claude_code.txt && echo CODE_WRITTEN`,
     { timeout: 30_000 }
@@ -432,20 +414,26 @@ export async function submitAuthCode(
     return { status: "error", error: "Failed to write auth code" };
   }
 
-  // Poll for completion
-  for (let i = 0; i < 120; i++) {
+  // Poll for completion (60s max — browser times out around 90s)
+  for (let i = 0; i < 60; i++) {
     await sleep(1000);
 
     const pollScript = `
 if [ -f /tmp/claude_status.txt ]; then
     echo "STATUS_FOUND"
     cat /tmp/claude_status.txt
+elif [ -f /root/.claude/.credentials.json ] && grep -q "accessToken" /root/.claude/.credentials.json 2>/dev/null; then
+    echo "STATUS_FOUND"
+    echo "SUCCESS"
+elif grep -qi "login.*success\\|logged in\\|authenticated\\|credentials saved" /tmp/claude_auth.log 2>/dev/null; then
+    echo "STATUS_FOUND"
+    echo "SUCCESS"
 else
     echo "WAITING"
     pgrep -x expect >/dev/null 2>&1 && echo "EXPECT_RUNNING" || echo "EXPECT_DEAD"
     if [ -f /tmp/claude_auth.log ]; then
         echo "LOG_TAIL:"
-        tail -5 /tmp/claude_auth.log 2>/dev/null
+        tail -3 /tmp/claude_auth.log 2>/dev/null
     fi
 fi
 `;
@@ -463,7 +451,6 @@ fi
         return { status: "success", message: "Authenticated successfully" };
       }
       if (check.output.includes("ERROR")) {
-        // Dump auth log for debugging
         const authLog = await execOnWorkspace(workspaceName,
           "tail -30 /tmp/claude_auth.log 2>/dev/null",
           { timeout: 5_000 }
@@ -510,7 +497,6 @@ export async function saveCredentialsToDB(
       return false;
     }
 
-    // Validate JSON
     const parsed = JSON.parse(creds);
     console.log(`[claude-auth] saveCredentialsToDB: saving credentials for user ${userId}, len=${creds.length}, hasAccessToken=${!!parsed.accessToken}`);
 

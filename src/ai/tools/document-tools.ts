@@ -27,7 +27,7 @@ export const streamDocumentContent = tool({
       name: z.string().describe("Human-readable document name, e.g. 'Main PRD' or 'Technical Implementation Plan'"),
       fileType: z
         .string()
-        .describe("Document type: prd | implementation | spec | roadmap | design | research | other"),
+        .describe("Document type: prd | implementation | tech_analysis | design_language | spec | roadmap | design | research | other"),
       content: z.string().describe("Full document content in Markdown — written once, streamed live to the user"),
     })
   ),

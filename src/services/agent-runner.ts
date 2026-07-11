@@ -136,6 +136,7 @@ export async function runAgentTask(input: RunAgentTaskInput): Promise<RunAgentTa
         google: apiKeys.googleApiKey ?? undefined,
         kimi: apiKeys.kimiApiKey ?? undefined,
         deepseek: apiKeys.deepseekApiKey ?? undefined,
+        glm: apiKeys.glmApiKey ?? undefined,
       }
     : undefined;
 
@@ -146,6 +147,7 @@ export async function runAgentTask(input: RunAgentTaskInput): Promise<RunAgentTa
     google: userApiKeys?.google,
     kimi: userApiKeys?.kimi,
     deepseek: userApiKeys?.deepseek,
+    glm: userApiKeys?.glm,
   };
   if (providerName && !keyMap[providerName]) {
     const errMsg = `No ${providerName} API key — scheduled run cannot execute. Add a key in Settings → LLM Keys.`;
@@ -200,7 +202,11 @@ export async function runAgentTask(input: RunAgentTaskInput): Promise<RunAgentTa
   ]);
   if (Object.keys(composioTools).length > 0) tools = { ...tools, ...composioTools };
 
-  if (Object.keys(searchTools).length > 0) tools = { ...tools, ...searchTools };
+  // Web search is now the provider-agnostic Exa `webSearch`/`readUrl` tools (in
+  // createAgentTools), available on EVERY model. We intentionally do NOT add the
+  // provider-native search here — it only exists for Anthropic/OpenAI/Google and would
+  // be a confusing duplicate, while leaving DeepSeek/Kimi/GLM with no search at all.
+  void searchTools;
 
   const agentTools = createAgentTools({ agentId, userId });
   tools = { ...tools, ...agentTools };
@@ -233,7 +239,14 @@ export async function runAgentTask(input: RunAgentTaskInput): Promise<RunAgentTa
       tools: tools as Record<string, any>,
       stopWhen: stepCountIs(TOOL_STEP_CAP),
     });
-    output = (result.text || "").trim();
+    // result.text concatenates each step's text with NO separator, so a preamble
+    // ("…investing in AI.") runs straight into the next step's ("Let me dig deeper…").
+    // Rebuild from per-step text joined by blank lines so each renders as its own
+    // paragraph instead of one run-on blob.
+    const stepTexts = (result.steps ?? [])
+      .map((s: any) => (s.text || "").trim())
+      .filter(Boolean);
+    output = (stepTexts.length ? stepTexts.join("\n\n") : (result.text || "")).trim();
     if (!output) {
       // Some tool-loop runs end without a text response (just tool calls).
       // Surface something useful instead of an empty bubble.
@@ -266,6 +279,20 @@ export async function runAgentTask(input: RunAgentTaskInput): Promise<RunAgentTa
   return { runId: run.id, output, status: "success" };
 }
 
+// Postgres rejects JSON/text containing a NUL byte (\u0000) with error 22P05. Any tool
+// result (e.g. a binary/gzip web-search snippet) can carry one and break the whole insert.
+// Scrub NUL from the assistant content + the entire toolSteps tree before persisting.
+function deepStripNul<T>(v: T): T {
+  if (typeof v === "string") return v.replace(/\u0000/g, "") as unknown as T;
+  if (Array.isArray(v)) return v.map((x) => deepStripNul(x)) as unknown as T;
+  if (v && typeof v === "object") {
+    const out: Record<string, unknown> = {};
+    for (const k of Object.keys(v as Record<string, unknown>)) out[k] = deepStripNul((v as Record<string, unknown>)[k]);
+    return out as unknown as T;
+  }
+  return v;
+}
+
 async function persistAndFinish(
   agent: typeof agents.$inferSelect,
   agentId: string,
@@ -279,8 +306,8 @@ async function persistAndFinish(
     await db.insert(messages).values({
       conversationId: agent.conversationId,
       role: "assistant",
-      content: output,
-      toolSteps,
+      content: output.replace(/\u0000/g, ""),
+      toolSteps: toolSteps ? deepStripNul(toolSteps) : toolSteps,
     });
   }
 

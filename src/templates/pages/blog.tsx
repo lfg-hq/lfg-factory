@@ -31,12 +31,12 @@ const MOBILE_JS = html`
         if (!res.ok) throw new Error();
         const ok = document.createElement('p');
         ok.className = 'text-sm text-emerald-400 font-medium flex items-center gap-2';
-        ok.innerHTML = '<svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg> Got it \u2014 we will be in touch at <strong class="ml-1">' + email + '</strong>';
+        ok.innerHTML = '<svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg> Got it, we will be in touch at <strong class="ml-1">' + email + '</strong>';
         ctaForm.replaceChildren(ok);
       } catch {
         btn.disabled = false;
         btn.innerHTML = 'Get in touch <svg class="w-3.5 h-3.5 inline-block ml-1" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17 8l4 4m0 0l-4 4m4-4H3"/></svg>';
-        status.textContent = 'Something went wrong \u2014 please try again.';
+        status.textContent = 'Something went wrong, please try again.';
         status.className = 'text-xs text-red-400';
       }
     });
@@ -98,7 +98,7 @@ function AutomateCTA() {
 
             <div class="flex-1 min-w-0">
                 <h2 class="font-display font-bold text-xl text-white leading-snug">Automate your engineering workflows</h2>
-                <p class="text-slate-400 text-sm mt-1.5">Drop your email — we'll reach out with ideas for your stack.</p>
+                <p class="text-slate-400 text-sm mt-1.5">Drop your email, we'll reach out with ideas for your stack.</p>
             </div>
 
             <form id="cta-form" class="flex-1 min-w-0 flex flex-col gap-3">
@@ -119,7 +119,7 @@ function AutomateCTA() {
                     </button>
                 </div>
 
-                <!-- Native details/summary toggle — always clickable, no JS needed -->
+                <!-- Native details/summary toggle, always clickable, no JS needed -->
                 <details class="group">
                     <summary class="list-none cursor-pointer text-xs text-slate-500 hover:text-slate-300 transition-colors flex items-center gap-1.5 select-none w-fit">
                         <svg class="w-3.5 h-3.5 transition-transform duration-200 group-open:rotate-180" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/></svg>
@@ -147,7 +147,7 @@ function EmptyState() {
             <i data-lucide="pen-line" class="w-7 h-7 text-indigo-500"></i>
         </div>
         <h2 class="font-display text-xl font-bold text-slate-900 mb-2">Posts coming soon</h2>
-        <p class="text-slate-500 text-sm max-w-md mx-auto">We're writing up what we've learned building LFG — shipping AI-powered products, orchestrating Claude Code sessions, and running fast build cycles.</p>
+        <p class="text-slate-500 text-sm max-w-md mx-auto">We're writing up what we've learned building LFG, shipping AI-powered products, orchestrating Claude Code sessions, and running fast build cycles.</p>
         <a href="https://github.com/lfg-hq/lfg" target="_blank" rel="noopener noreferrer" class="mt-6 inline-flex items-center gap-2 text-sm font-semibold text-slate-600 hover:text-indigo-600 transition-colors">
             <i data-lucide="github" class="w-4 h-4"></i> Follow on GitHub
         </a>

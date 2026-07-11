@@ -31,6 +31,7 @@ export { getProjectEnvVars, registerRequiredEnvVars, setEnvVar, provisionPostgre
 export {
   broadcastToUser,
   askUser,
+  confirmAction,
   lookupTechnologySpecs,
   setWsBroadcast as setMiscWsBroadcast,
 } from "./misc-tools.ts";
@@ -52,7 +53,7 @@ import {
   getNextTicket, scheduleTickets, retryTicket, sendTicketMessage, queueTicketExecution,
 } from "./ticket-tools.ts";
 import { getProjectEnvVars, registerRequiredEnvVars, setEnvVar, provisionPostgresDb } from "./env-tools.ts";
-import { broadcastToUser, askUser, lookupTechnologySpecs } from "./misc-tools.ts";
+import { broadcastToUser, askUser, confirmAction, lookupTechnologySpecs } from "./misc-tools.ts";
 import { queryCodebase } from "./codebase-tools.ts";
 import { getRecentActivities } from "./activity-tools.ts";
 
@@ -83,6 +84,7 @@ export const toolsProduct = {
   lookupTechnologySpecs,
   broadcastToUser,
   askUser,
+  confirmAction,
   queryCodebase,
   getRecentActivities,
 };

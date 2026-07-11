@@ -189,7 +189,7 @@ export function AgentDetailPage({
           ` : html`
             <div class="welcome-message">
               <h2>${agent.name === "New Agent" ? "What do you want this agent to do?" : agent.name}</h2>
-              <p>${agent.name === "New Agent" ? "Describe a task in plain English. The agent figures out the right tools (Composio, sandbox, web search) — you don't need to pick." : "Send a task, or set a schedule in the side panel."}</p>
+              <p>${agent.name === "New Agent" ? "Describe a task in plain English. The agent figures out the right tools (Composio, workspace, web search) — you don't need to pick." : "Send a task, or set a schedule in the side panel."}</p>
               ${agent.name === "New Agent" ? html`
                 <div class="example-prompts">
                   <button class="example-prompt-card" data-prompt="Analyze a CSV I'll upload — show me schema, summary stats, and an interactive Plotly chart of the most interesting columns.">
@@ -322,7 +322,7 @@ export function AgentDetailPage({
                 <label>Auto-stop after idle (minutes, 0 = never)</label>
                 <input type="number" name="auto_stop_minutes" min="0" max="10080"
                   value="${agent.autoStopAfterIdleMs ? Math.round(agent.autoStopAfterIdleMs / 60_000) : 0}" class="input" />
-                <small style="color:var(--text-secondary);">Stops the sandbox when idle for this long. Weekly cron jobs can leave this at 0 and use schedule auto-start instead.</small>
+                <small style="color:var(--text-secondary);">Stops the workspace when idle for this long. Weekly cron jobs can leave this at 0 and use schedule auto-start instead.</small>
               </div>
               ${agent.webhookToken ? html`
                 <div class="form-group">
@@ -353,7 +353,7 @@ export function AgentDetailPage({
               </button>
             </div>
             <p style="color:var(--text-secondary);font-size:0.75rem;margin-bottom:1rem;">
-              Injected into the sandbox as environment variables at <code>/root/.env</code>. The agent can use these to call any API without a Composio toolkit — e.g. <code>SHOPIFY_TOKEN</code>, <code>GCP_SA_KEY</code>, <code>STRIPE_SECRET</code>.
+              Injected into the workspace as environment variables at <code>/root/.env</code>. The agent can use these to call any API without a Composio toolkit — e.g. <code>SHOPIFY_TOKEN</code>, <code>GCP_SA_KEY</code>, <code>STRIPE_SECRET</code>.
             </p>
             <div id="add-secret-form" style="display:none;margin-bottom:1rem;padding:1rem;background:var(--bg-secondary);border-radius:var(--radius);border:1px solid var(--border-color);">
               <div class="form-group">

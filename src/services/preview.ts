@@ -69,8 +69,8 @@ export async function startDevServer(sandboxId: string): Promise<StartDevServerR
     .join("\n");
 
   // Start new dev server in background
-  // Project lives at /home/claudeuser/project (symlinked from /root/project)
-  const CLAUDE_HOME = "/home/claudeuser";
+  // Project lives at /data/project
+  const CLAUDE_HOME = "/root";
   // Build a launcher script that will be written to the VM via heredoc.
   // Using single-quoted heredoc delimiter ('LAUNCHER_EOF') means NO shell
   // expansion — the text is written verbatim. Shell variables like $(pwd)
@@ -85,14 +85,14 @@ export async function startDevServer(sandboxId: string): Promise<StartDevServerR
 
   const launcherScript = [
     `#!/bin/bash`,
-    `cd /home/claudeuser/project 2>/dev/null || cd /root/project 2>/dev/null || true`,
+    `cd /data/project`,
     `export PATH="$(pwd)/node_modules/.bin:$PATH"`,
     envExportLines,
     `exec ${startCmd}`,
   ].filter(Boolean).join("\n");
 
   const startScript = `
-cd ${CLAUDE_HOME}/project 2>/dev/null || cd /root/project 2>/dev/null || true
+cd ${CLAUDE_HOME}/project 2>/dev/null || cd /data/project 2>/dev/null || true
 
 cat > /tmp/devserver_run.sh << 'LAUNCHER_EOF'
 ${launcherScript}

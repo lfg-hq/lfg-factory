@@ -9,6 +9,7 @@ interface SettingsPageProps {
     xai: boolean;
     kimi: boolean;
     deepseek: boolean;
+    glm: boolean;
     usePersonalKeys: boolean;
   };
   claudeCode?: {
@@ -905,7 +906,7 @@ export function SettingsPage({ user, apiKeys, claudeCode, github, telegram, comp
           <div class="llm-keys-row" style="background:rgba(255,255,255,0.02);">
             <div style="flex:1;">
               <div class="byok-label">Bring Your Own Keys</div>
-              <div class="byok-desc">Your OpenAI, Anthropic, Google, Kimi, and DeepSeek keys will be used where available.</div>
+              <div class="byok-desc">Your OpenAI, Anthropic, Google, Kimi, DeepSeek, and GLM (Z.ai) keys will be used where available.</div>
             </div>
             <form method="POST" action="/settings/toggle-byok">
               <label class="toggle-switch">
@@ -1049,6 +1050,34 @@ export function SettingsPage({ user, apiKeys, claudeCode, github, telegram, comp
                 <form method="POST" action="/settings/save-key" class="llm-input-group">
                   <input type="hidden" name="provider" value="deepseek" />
                   <input type="password" name="key" placeholder="sk-..." autocomplete="off" />
+                  <button type="submit" class="llm-btn-save">Save</button>
+                </form>
+              `}
+            </div>
+          </div>
+
+          <!-- GLM (Z.ai) -->
+          <div class="llm-keys-row">
+            <div class="llm-row-label">
+              <div class="llm-logo-wrap glm" style="background:linear-gradient(135deg,#1a1a2e,#3b1f7a);color:#a78bfa;">
+                <span style="font-weight:700;font-size:0.8rem;">GLM</span>
+              </div>
+              <div>
+                <div class="llm-row-name">GLM (Z.ai) <a href="https://docs.z.ai/guides/llm/glm-5.2" target="_blank" class="help-circle">?</a></div>
+                <div class="llm-row-sub">Bring your Z.ai API key (GLM 5.2)</div>
+              </div>
+            </div>
+            <div class="llm-row-right">
+              ${apiKeys.glm ? html`
+                <form method="POST" action="/settings/remove-key" class="llm-input-group">
+                  <input type="hidden" name="provider" value="glm" />
+                  <input type="password" value="••••••••••••" disabled />
+                  <button type="submit" class="llm-btn-remove"><i class="fas fa-times"></i></button>
+                </form>
+              ` : html`
+                <form method="POST" action="/settings/save-key" class="llm-input-group">
+                  <input type="hidden" name="provider" value="glm" />
+                  <input type="password" name="key" placeholder="Your Z.ai API key" autocomplete="off" />
                   <button type="submit" class="llm-btn-save">Save</button>
                 </form>
               `}

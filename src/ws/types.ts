@@ -21,7 +21,7 @@ export type WSOutgoing =
   | { type: "chat_history"; messages: ChatHistoryMessage[] }
   | { type: "heartbeat" }
   | { type: "stop_confirmed" }
-  | { type: "sync_state_response"; isStreaming: boolean; conversationId?: string }
+  | { type: "sync_state_response"; is_streaming: boolean; conversation_id?: string }
   | { type: "error"; message: string }
   | { type: "token_usage_updated" }
   | { type: "document_stream"; documentType: string; name?: string; content: string; isFinal: boolean }

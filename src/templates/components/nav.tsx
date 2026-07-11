@@ -1,6 +1,6 @@
 import { html } from "hono/html";
 
-type NavPage = "home" | "agent" | "portfolio" | "services" | "blog";
+type NavPage = "home" | "agent" | "factory" | "portfolio" | "services" | "blog";
 
 interface NavOptions {
   activePage: NavPage;
@@ -93,6 +93,7 @@ export const Nav = ({ activePage, ctaLabel = "Access Agent", ctaHref = "/auth/re
     <div class="hidden md:flex items-center gap-6">
       <a href="/" class="text-sm font-medium ${activePage === "home" ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600"} transition-colors">Home</a>
       <a href="/agent/" class="text-sm font-medium ${activePage === "agent" ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600"} transition-colors">Agent</a>
+      <a href="/factory/" class="text-sm font-medium ${activePage === "factory" ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600"} transition-colors">Factory</a>
       <a href="/portfolio/" class="text-sm font-medium ${activePage === "portfolio" ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600"} transition-colors">Portfolio</a>
       <a href="/services/" class="text-sm font-medium ${activePage === "services" ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600"} transition-colors">Services</a>
       <a href="/blog/" class="text-sm font-medium ${activePage === "blog" ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600"} transition-colors">Blog</a>
@@ -118,6 +119,7 @@ export const Nav = ({ activePage, ctaLabel = "Access Agent", ctaHref = "/auth/re
   <div id="mobile-menu" class="hidden md:hidden absolute top-full left-0 w-full bg-white border-b border-slate-200 p-4 flex-col gap-3 shadow-xl">
     <a href="/" class="text-base font-medium ${activePage === "home" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">Home</a>
     <a href="/agent/" class="text-base font-medium ${activePage === "agent" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">Agent</a>
+    <a href="/factory/" class="text-base font-medium ${activePage === "factory" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">Factory</a>
     <a href="/portfolio/" class="text-base font-medium ${activePage === "portfolio" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">Portfolio</a>
     <a href="/services/" class="text-base font-medium ${activePage === "services" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">Services</a>
     <a href="/blog/" class="text-base font-medium ${activePage === "blog" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">Blog</a>
@@ -194,12 +196,13 @@ export const Footer = () => html`
       <div class="flex flex-wrap items-center justify-center gap-6 text-sm">
         <a href="/" class="hover:text-white transition-colors">Home</a>
         <a href="/agent/" class="hover:text-white transition-colors">Agent</a>
+        <a href="/factory/" class="hover:text-white transition-colors">Factory</a>
         <a href="/portfolio/" class="hover:text-white transition-colors">Portfolio</a>
         <a href="/services/" class="hover:text-white transition-colors">Services</a>
         <a href="/blog/" class="hover:text-white transition-colors">Blog</a>
         <a href="https://github.com/lfg-hq/lfg" target="_blank" rel="noopener noreferrer" class="hover:text-white transition-colors">GitHub</a>
       </div>
-      <p class="text-xs">&copy; ${new Date().getFullYear()} LFG. All rights reserved.</p>
+      <p class="text-xs">&copy; ${new Date().getFullYear()} LFG Inc. Open source under Apache 2.0.</p>
     </div>
   </div>
 </footer>

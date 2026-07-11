@@ -12,7 +12,7 @@
         "@aws-sdk/s3-request-presigner": "^3.1057.0",
         "@composio/core": "^0.6.5",
         "@composio/vercel": "^0.6.5",
-        "@magpiecloud/mags": "^1.8.16",
+        "@magpiecloud/mags": "1.13.1",
         "ai": "^6.0.97",
         "better-auth": "^1.4.18",
         "better-sqlite3": "^12.6.2",
@@ -20,6 +20,7 @@
         "hono": "^4.12.1",
         "marked": "^17.0.3",
         "pg": "^8.18.0",
+        "playwright-core": "^1.61.1",
         "zod": "^4.3.6",
       },
       "devDependencies": {
@@ -206,7 +207,7 @@
 
     "@esbuild/win32-x64": ["@esbuild/win32-x64@0.25.12", "", { "os": "win32", "cpu": "x64" }, "sha512-alJC0uCZpTFrSL0CCDjcgleBXPnCrEAhTBILpeAp7M/OFgoqtAetfBzX0xM00MUsVVPpVjlPuMbREqnZCXaTnA=="],
 
-    "@magpiecloud/mags": ["@magpiecloud/mags@1.8.17", "", { "dependencies": { "ws": "^8.18.0" }, "bin": { "mags": "bin/mags.js" } }, "sha512-ecTUp8sOq8wYleCML4+EFqSiCL4rtaBpouuqj+GisS/2Dpss6V0lPyZ6kazoP6+1xl0q3xT2yyQD2iqc7Az0/A=="],
+    "@magpiecloud/mags": ["@magpiecloud/mags@1.13.1", "", { "dependencies": { "ws": "^8.18.0" }, "bin": { "mags": "bin/mags.js" } }, "sha512-dXHyfd7vQXBNziAB48705ClQmupr25KEv7PMKrdAl8vqWEqkNomjBB5GLJvAXlmwJStf0hvHDEFhY1KlpTtArA=="],
 
     "@noble/ciphers": ["@noble/ciphers@2.1.1", "", {}, "sha512-bysYuiVfhxNJuldNXlFEitTVdNnYUc+XNJZd7Qm2a5j1vZHgY+fazadNFWFaMK/2vye0JVlxV3gHmC0WDfAOQw=="],
 
@@ -455,6 +456,8 @@
     "pgpass": ["pgpass@1.0.5", "", { "dependencies": { "split2": "^4.1.0" } }, "sha512-FdW9r/jQZhSeohs1Z3sI1yxFQNFvMcnmfuj4WBMUTxOrAyLMaTcE1aAMBiTlbMNaXvBCQuVi0R7hd8udDSP7ug=="],
 
     "pkce-challenge": ["pkce-challenge@5.0.1", "", {}, "sha512-wQ0b/W4Fr01qtpHlqSqspcj3EhBvimsdh0KlHhH8HRZnMsEa0ea2fTULOXOS9ccQr3om+GcGRk4e+isrZWV8qQ=="],
+
+    "playwright-core": ["playwright-core@1.61.1", "", { "bin": { "playwright-core": "cli.js" } }, "sha512-h7Qlt6m4REp25qvIdvbDtVmD4LqVXfpRxhORv9L0jzETM05p4fuPJ3dKyuSXQxDSbXnmS79HAgi9589lGSpLkg=="],
 
     "postgres": ["postgres@3.4.8", "", {}, "sha512-d+JFcLM17njZaOLkv6SCev7uoLaBtfK86vMUXhW1Z4glPWh4jozno9APvW/XKFJ3CCxVoC7OL38BqRydtu5nGg=="],
 

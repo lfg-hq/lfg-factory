@@ -43,6 +43,7 @@ async function handleChatPage(c: import("hono").Context, conversationId?: string
 
   const models = listModels().map((m) => ({
     key: m.key,
+    label: m.label,
     providerLabel: m.providerLabel,
     requiresPro: m.requiresPro,
   }));

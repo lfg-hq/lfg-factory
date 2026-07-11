@@ -84,6 +84,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 setStatus('running', (result.appName || 'App') + ' is live');
             }
             scrollToBottom();
+            maybeRenderPersistedQa();
             return;
         }
 
@@ -115,6 +116,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function handleNotification(data) {
         const ntype = data.notification_type;
+
+        // Ignore notifications from other conversations (e.g. another app tab)
+        if (data.conversation_id && conversationId && data.conversation_id !== conversationId) {
+            return;
+        }
 
         if (ntype === 'instant_app_building' || ntype === 'instant_app_status') {
             const status = data.instant_app_status || 'building';
@@ -197,11 +203,243 @@ document.addEventListener('DOMContentLoaded', () => {
         if (ntype === 'env_var_request') {
             const envData = data.data || {};
             appendEnvVarRequest(envData.key, envData.description, envData.required !== false, envData.app_id);
+            // Also add to the Env tab as a placeholder so the key is visible there
+            if (envData.key) {
+                const existing = document.querySelector(`.env-row .env-key-input[value="${CSS.escape(envData.key)}"]`);
+                if (!existing) addEnvRow(envData.key, '', true);
+            }
             return;
         }
 
         if (ntype === 'web_search' || ntype === 'google_search') {
             appendSearchNotice();
+            return;
+        }
+
+        if (ntype === 'instant_app_test') {
+            handleQaNotification(data);
+            return;
+        }
+
+        if (ntype === 'plan_proposal' || ntype === 'design_proposal') {
+            const proposal = data.data || data;
+            // Adopt the draft app's URL so a refresh reloads the conversation (and
+            // re-renders this proposal from history). Without this, the proposal is
+            // created on the bare /instant page and vanishes on reload.
+            const proposalAppId = proposal.app_id || data.instant_app_id;
+            if (proposalAppId && !config.currentAppId) {
+                config.currentAppId = proposalAppId;
+                const appUrl = (standaloneMode || !projectId)
+                    ? `/instant/app/${proposalAppId}`
+                    : `/instant/project/${projectId}/app/${proposalAppId}`;
+                history.replaceState(null, '', appUrl);
+                showActionsIfReady();
+            }
+            if (ntype === 'plan_proposal') renderPlanProposal(proposal);
+            else renderDesignProposal(proposal);
+            return;
+        }
+
+        if (ntype === 'ask_user') {
+            console.log('ask_user raw payload:', JSON.stringify(data).slice(0, 800));
+
+            // Normalize: support both questions[] array and legacy single-question format
+            var sections;
+            if (data.questions && Array.isArray(data.questions) && data.questions.length > 0) {
+                sections = data.questions;
+            } else if (data.questions && !Array.isArray(data.questions)) {
+                sections = [data.questions];
+            } else if (data.suggestions && Array.isArray(data.suggestions) && data.suggestions.length > 0) {
+                sections = [{ question: data.question || 'Choose an option', suggestions: data.suggestions, context: data.context || '' }];
+            } else {
+                console.warn('ask_user notification has no questions/suggestions, skipping');
+                return;
+            }
+
+            // Remove streaming message if active
+            if (isStreaming) finishStreaming();
+            removeTypingIndicator();
+
+            var totalSections = sections.length;
+            var currentIdx = 0;
+            var sectionState = sections.map(function() { return { selected: new Set(), customText: '' }; });
+
+            var card = document.createElement('div');
+            card.className = 'ask-user-card';
+
+            var sectionEls = [];
+            sections.forEach(function(sec, sIdx) {
+                var sectionDiv = document.createElement('div');
+                sectionDiv.className = 'ask-user-section' + (sIdx === 0 ? ' active' : '');
+
+                var hdr = document.createElement('div');
+                hdr.className = 'ask-user-section-header';
+                var h4 = document.createElement('h4');
+                h4.textContent = sec.question;
+                hdr.appendChild(h4);
+                if (totalSections > 1) {
+                    var badge = document.createElement('span');
+                    badge.className = 'ask-user-section-badge';
+                    badge.textContent = (sIdx + 1) + ' / ' + totalSections;
+                    hdr.appendChild(badge);
+                }
+                sectionDiv.appendChild(hdr);
+
+                if (sec.context) {
+                    var ctx = document.createElement('div');
+                    ctx.className = 'ask-user-section-context';
+                    ctx.textContent = sec.context;
+                    sectionDiv.appendChild(ctx);
+                }
+                var hint = document.createElement('div');
+                hint.className = 'ask-user-section-hint';
+                hint.textContent = 'Select all that apply';
+                sectionDiv.appendChild(hint);
+
+                var list = document.createElement('ul');
+                list.className = 'ask-user-options-list';
+
+                var customInput = document.createElement('input');
+                customInput.type = 'text';
+                customInput.className = 'ask-user-custom-input';
+                customInput.placeholder = 'Type your answer...';
+                customInput.style.display = 'none';
+                customInput.addEventListener('input', function() { sectionState[sIdx].customText = customInput.value; });
+
+                var allOpts = (sec.suggestions || []).concat(['Something else']);
+                allOpts.forEach(function(opt, oIdx) {
+                    var isSomethingElse = oIdx === allOpts.length - 1;
+                    var row = document.createElement('li');
+                    row.className = 'ask-user-option-row';
+                    var checkbox = document.createElement('span');
+                    checkbox.className = 'ask-user-option-checkbox';
+                    var label = document.createElement('span');
+                    label.className = 'ask-user-option-label';
+                    label.textContent = opt;
+                    row.appendChild(checkbox);
+                    row.appendChild(label);
+                    list.appendChild(row);
+                    if (isSomethingElse) list.appendChild(customInput);
+
+                    row.addEventListener('click', function() {
+                        var state = sectionState[sIdx];
+                        var isChecked = row.classList.toggle('checked');
+                        checkbox.textContent = isChecked ? '✓' : '';
+                        if (isChecked) state.selected.add(opt); else state.selected.delete(opt);
+                        if (isSomethingElse) {
+                            customInput.style.display = isChecked ? 'block' : 'none';
+                            if (isChecked) customInput.focus();
+                        }
+                        updateFooter();
+                    });
+                });
+
+                sectionDiv.appendChild(list);
+                sectionEls.push(sectionDiv);
+                card.appendChild(sectionDiv);
+            });
+
+            // Footer
+            var footer = document.createElement('div');
+            footer.className = 'ask-user-footer';
+            var countSpan = document.createElement('span');
+            countSpan.className = 'ask-user-count';
+            var footerBtns = document.createElement('div');
+            footerBtns.className = 'ask-user-footer-buttons';
+            var skipBtn = document.createElement('button');
+            skipBtn.className = 'ask-user-skip-btn';
+            skipBtn.textContent = 'Skip';
+            var nextBtn = document.createElement('button');
+            nextBtn.className = 'ask-user-next-btn';
+            nextBtn.textContent = 'Next';
+            var submitBtn = document.createElement('button');
+            submitBtn.className = 'ask-user-submit-btn';
+            submitBtn.textContent = 'Submit';
+
+            footerBtns.appendChild(skipBtn);
+            if (totalSections > 1) footerBtns.appendChild(nextBtn);
+            footerBtns.appendChild(submitBtn);
+            footer.appendChild(countSpan);
+            footer.appendChild(footerBtns);
+            card.appendChild(footer);
+
+            function showSection(idx) {
+                currentIdx = idx;
+                sectionEls.forEach(function(el, i) { el.classList.toggle('active', i === idx); });
+                updateFooter();
+            }
+
+            function updateFooter() {
+                if (!sectionState[currentIdx]) return;
+                var n = sectionState[currentIdx].selected.size;
+                countSpan.textContent = n + ' selected';
+                var isLast = currentIdx === totalSections - 1;
+                if (totalSections > 1) {
+                    nextBtn.style.display = isLast ? 'none' : '';
+                    nextBtn.disabled = n === 0;
+                }
+                submitBtn.style.display = isLast ? '' : 'none';
+                submitBtn.disabled = n === 0;
+            }
+            updateFooter();
+
+            function dismissCard(message) {
+                card.classList.add('dismissed');
+                // If the AI is still streaming, stop it first and queue
+                // the answer to send once the stream finishes.
+                if (isStreaming && socket && socket.readyState === WebSocket.OPEN) {
+                    socket.send(JSON.stringify({ type: 'stop_generation' }));
+                    var waitForIdle = setInterval(function() {
+                        if (!isStreaming) {
+                            clearInterval(waitForIdle);
+                            sendMessage(message);
+                        }
+                    }, 150);
+                    // Safety timeout — send anyway after 5s
+                    setTimeout(function() { clearInterval(waitForIdle); sendMessage(message); }, 5000);
+                } else {
+                    sendMessage(message);
+                }
+            }
+
+            nextBtn.addEventListener('click', function() {
+                if (currentIdx < totalSections - 1) showSection(currentIdx + 1);
+                scrollToBottom();
+            });
+
+            submitBtn.addEventListener('click', function() {
+                var parts = [];
+                sectionState.forEach(function(state, sIdx) {
+                    var choices = [];
+                    state.selected.forEach(function(s) {
+                        if (s === 'Something else') {
+                            var custom = state.customText.trim();
+                            if (custom) choices.push(custom);
+                        } else {
+                            choices.push(s);
+                        }
+                    });
+                    if (choices.length > 0) {
+                        if (totalSections > 1) {
+                            var answerText = choices.length === 1
+                                ? choices[0]
+                                : choices.map(function(c) { return '- ' + c; }).join('\n   ');
+                            parts.push('Q: ' + sections[sIdx].question + '\nA: ' + answerText);
+                        } else {
+                            parts.push(choices.join(', '));
+                        }
+                    }
+                });
+                if (parts.length === 0) return;
+                dismissCard(parts.join('\n\n'));
+            });
+
+            skipBtn.addEventListener('click', function() {
+                dismissCard('Skip — proceed with your best judgment');
+            });
+
+            messageContainer.appendChild(card);
+            scrollToBottom();
             return;
         }
 
@@ -298,7 +536,24 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    let lastBuildNoticeMsg = '';
+    let pendingTextBreak = false;
     function appendBuildNotice(message, status, errorType) {
+        // Capture the GitHub repo URL from the auto-sync notice so the GitHub button
+        // updates to "open repo" without needing a page refresh.
+        const ghMatch = /synced to GitHub:\s*(https?:\/\/\S+)/i.exec(message || '');
+        if (ghMatch) { config.githubRepoUrl = ghMatch[1]; if (typeof updateGithubBtn === 'function') updateGithubBtn(); }
+
+        // Dedupe consecutive identical transient notices — the orchestrator polls
+        // get_instant_app_status repeatedly, each re-emitting "<app> status: building".
+        if (status !== 'running' && status !== 'error' && message === lastBuildNoticeMsg) return;
+        lastBuildNoticeMsg = message;
+
+        // If the assistant is mid-stream, a tool/status notice means it paused to call
+        // a tool — break the next text into a new paragraph so sentences don't run
+        // together (e.g. "...check again.The sandbox seems hung...").
+        if (isStreaming) pendingTextBreak = true;
+
         // When a terminal status arrives, resolve all prior spinning notices
         if (status === 'running' || status === 'error') {
             messageContainer.querySelectorAll('.instant-build-notice.notice-building').forEach(prev => {
@@ -343,12 +598,15 @@ document.addEventListener('DOMContentLoaded', () => {
         scrollToBottom();
     }
 
+
+
     function startStreaming() {
         isStreaming = true;
+        pendingTextBreak = false;
         currentRawContent = '';
         clearWelcome();
         removeTypingIndicator();
-        // Remove search notice once the model starts responding
+        // Remove search/research notices once the model starts responding
         const searchNotice = messageContainer.querySelector('.instant-search-notice');
         if (searchNotice) searchNotice.remove();
 
@@ -367,6 +625,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function appendChunk(text) {
         if (!currentAssistantEl) startStreaming();
+        // Insert a paragraph break if a tool call interrupted the stream before this text.
+        if (pendingTextBreak) {
+            pendingTextBreak = false;
+            if (currentRawContent && !/\n\s*$/.test(currentRawContent)) currentRawContent += '\n\n';
+        }
         currentRawContent += text;
 
         const contentDiv = currentAssistantEl.querySelector('.message-content');
@@ -413,7 +676,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const indicator = document.createElement('div');
         indicator.className = 'typing-indicator';
         indicator.id = 'typing-indicator';
-        indicator.innerHTML = '<span></span><span></span><span></span>';
+        indicator.innerHTML =
+            '<span class="typing-indicator-label">Thinking</span>' +
+            '<span class="typing-indicator-dot"></span>' +
+            '<span class="typing-indicator-dot"></span>' +
+            '<span class="typing-indicator-dot"></span>';
         messageContainer.appendChild(indicator);
         scrollToBottom();
     }
@@ -421,6 +688,266 @@ document.addEventListener('DOMContentLoaded', () => {
     function removeTypingIndicator() {
         const indicator = document.getElementById('typing-indicator');
         if (indicator) indicator.remove();
+    }
+
+    // Send an approval message, stopping any in-flight stream first.
+    function sendApproval(msg) {
+        if (isStreaming && socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: 'stop_generation' }));
+            const wait = setInterval(function () { if (!isStreaming) { clearInterval(wait); sendMessage(msg); } }, 150);
+            setTimeout(function () { clearInterval(wait); sendMessage(msg); }, 5000);
+        } else {
+            sendMessage(msg);
+        }
+    }
+
+    // STEP 1 card — PLAN & architecture only (no design). Approve → moves to design.
+    function resetQaBtn() {
+        var b = document.getElementById('qa-run-btn');
+        if (b) { b.disabled = false; b.innerHTML = '<i class="fas fa-play"></i> Run QA tests'; }
+    }
+
+    function runQa() {
+        var appId = config.currentAppId;
+        if (!appId) return;
+        var b = document.getElementById('qa-run-btn');
+        var results = document.getElementById('qa-results');
+        var summary = document.getElementById('qa-summary');
+        if (b) { b.disabled = true; b.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Running…'; }
+        if (summary) summary.textContent = '';
+        if (results) results.innerHTML = '<div class="qa-empty-state" style="text-align:center;opacity:0.6;padding:2rem;">Booting cloud browser…</div>';
+        fetch('/api/instant/apps/' + appId + '/qa', { method: 'POST', credentials: 'same-origin' })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+                if (d && d.error) {
+                    if (results) results.innerHTML = '<div class="qa-empty-state" style="text-align:center;color:#f87171;padding:2rem;">' + escapeHtml(d.error) + '</div>';
+                    resetQaBtn();
+                }
+            })
+            .catch(function () {
+                if (results) results.innerHTML = '<div class="qa-empty-state" style="text-align:center;color:#f87171;padding:2rem;">Failed to start QA.</div>';
+                resetQaBtn();
+            });
+    }
+
+    function renderQaScreen(s) {
+        s = s || {};
+        var ok = !!s.ok;
+        var color = ok ? '#34d399' : '#f87171';
+        return '<div style="border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:10px;margin-bottom:10px;background:rgba(255,255,255,0.02);">'
+            + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:0.85rem;">'
+            + '<code style="color:#cbd5e1;">' + escapeHtml(s.route || '/') + '</code>'
+            + '<span style="font-weight:700;color:' + color + ';">' + (ok ? 'PASS' : 'FAIL') + '</span>'
+            + (s.httpStatus ? '<span style="opacity:.45;margin-left:auto;">HTTP ' + s.httpStatus + '</span>' : '')
+            + '</div>'
+            + (s.explainer ? '<div style="font-size:0.82rem;color:rgba(255,255,255,0.85);margin-bottom:4px;line-height:1.45;">' + escapeHtml(s.explainer) + '</div>' : '')
+            + (s.observation ? '<div style="font-size:0.73rem;color:rgba(255,255,255,0.45);margin-bottom:6px;line-height:1.4;">' + escapeHtml(s.observation) + '</div>' : '')
+            + (s.screenshotUrl
+                ? '<a href="' + escapeHtml(s.screenshotUrl) + '" target="_blank" rel="noopener"><img src="' + escapeHtml(s.screenshotUrl) + '" loading="lazy" style="width:100%;border-radius:6px;border:1px solid rgba(255,255,255,0.08);display:block;"></a>'
+                : '<div style="opacity:.5;font-size:0.8rem;">No screenshot captured</div>')
+            + '</div>';
+    }
+
+    function handleQaNotification(data) {
+        var results = document.getElementById('qa-results');
+        var summary = document.getElementById('qa-summary');
+        if (summary && data.message) summary.textContent = data.message;
+        if (Array.isArray(data.results)) {
+            // Final event: fill the QA panel + finalize the live chat card.
+            if (results) results.innerHTML = data.results.map(renderQaScreen).join('') || '<div class="qa-empty-state" style="text-align:center;opacity:0.6;padding:2rem;">No screens tested.</div>';
+            resetQaBtn();
+            qaCardFinish(data);
+        } else if (data.screen) {
+            if (results) {
+                var empty = results.querySelector('.qa-empty-state');
+                if (empty) empty.remove();
+                results.insertAdjacentHTML('beforeend', renderQaScreen(data.screen));
+                results.scrollTop = results.scrollHeight;
+            }
+            qaCardRow(data.screen); // stream the screen into the chat card
+        } else {
+            // Initial "Testing N screens…" — show a live card in the chat immediately.
+            qaCardStart(data.message);
+        }
+    }
+
+    // ── Live QA card in the chat: appears on start, streams each screen, finalizes ──
+    var _qaCard = null, _qaRows = null;
+
+    function renderQaChatRow(s) {
+        var color = s.ok ? '#34d399' : '#f87171';
+        var img = s.screenshotUrl
+            ? '<a href="' + escapeHtml(s.screenshotUrl) + '" target="_blank" rel="noopener"><img src="' + escapeHtml(s.screenshotUrl) + '" loading="lazy" style="width:120px;height:80px;object-fit:cover;object-position:top;border-radius:6px;border:1px solid rgba(255,255,255,0.08);display:block;flex-shrink:0;"></a>'
+            : '<div style="width:120px;height:80px;border-radius:6px;background:rgba(255,255,255,0.04);display:flex;align-items:center;justify-content:center;opacity:.4;font-size:0.7rem;flex-shrink:0;">no shot</div>';
+        return '<div style="display:flex;gap:10px;padding:10px 0;border-top:1px solid rgba(255,255,255,0.06);">'
+            + img
+            + '<div style="min-width:0;flex:1;">'
+            + '<div style="display:flex;align-items:center;gap:8px;font-size:0.82rem;">'
+            + '<code style="color:#cbd5e1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(s.route || '/') + '</code>'
+            + '<span style="font-weight:700;color:' + color + ';margin-left:auto;">' + (s.ok ? 'PASS' : 'FAIL') + '</span>'
+            + '</div>'
+            + (s.explainer ? '<div style="font-size:0.8rem;color:rgba(255,255,255,0.85);margin-top:4px;line-height:1.45;">' + escapeHtml(s.explainer) + '</div>' : '')
+            + (s.observation ? '<div style="font-size:0.71rem;color:rgba(255,255,255,0.42);margin-top:3px;line-height:1.4;">' + escapeHtml(s.observation) + '</div>' : '')
+            + '</div></div>';
+    }
+
+    function qaCardStart(message) {
+        var card = document.createElement('div');
+        card.className = 'qa-chat-card';
+        card.style.cssText = 'border:1px solid rgba(255,255,255,0.12);border-radius:12px;padding:14px;margin:10px 0;background:rgba(255,255,255,0.02);';
+        card.innerHTML =
+            '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">'
+            + '<i class="fas fa-vial" style="color:#a78bfa;"></i><span style="font-weight:700;">QA results</span>'
+            + '<span class="qa-card-status" style="margin-left:auto;font-size:0.82rem;color:rgba(255,255,255,0.6);"><i class="fas fa-spinner fa-spin"></i> ' + escapeHtml(message || 'running…') + '</span>'
+            + '</div><div class="qa-card-rows"></div>';
+        messageContainer.appendChild(card);
+        _qaCard = card;
+        _qaRows = card.querySelector('.qa-card-rows');
+        scrollToBottom();
+    }
+
+    function qaCardRow(s) {
+        if (!_qaRows) qaCardStart('running…');
+        _qaRows.insertAdjacentHTML('beforeend', renderQaChatRow(s));
+        scrollToBottom();
+    }
+
+    function qaCardFinish(data) {
+        var screens = Array.isArray(data.results) ? data.results : [];
+        if (!_qaCard) qaCardStart(data.message || 'done');
+        var statusEl = _qaCard.querySelector('.qa-card-status');
+        if (screens.length) {
+            var passed = data.passed != null ? data.passed : screens.filter(function (s) { return s.ok; }).length;
+            var headColor = (screens.length - passed) === 0 ? '#34d399' : '#f87171';
+            // Re-render rows now that they carry the AI explainers.
+            if (_qaRows) _qaRows.innerHTML = screens.map(renderQaChatRow).join('');
+            if (statusEl) { statusEl.style.color = headColor; statusEl.innerHTML = passed + '/' + screens.length + ' passed'; }
+            // Overall AI summary above the rows.
+            if (data.overall && _qaRows && !_qaCard.querySelector('.qa-card-overall')) {
+                var ov = document.createElement('div');
+                ov.className = 'qa-card-overall';
+                ov.style.cssText = 'font-size:0.82rem;color:rgba(255,255,255,0.8);margin:2px 0 8px;line-height:1.5;';
+                ov.textContent = data.overall;
+                _qaRows.parentNode.insertBefore(ov, _qaRows);
+            }
+        } else if (statusEl) {
+            statusEl.style.color = '#f87171';
+            statusEl.textContent = data.message || 'No screens tested.';
+        }
+        _qaCard = null;
+        _qaRows = null;
+        scrollToBottom();
+    }
+
+    // Re-render the last saved QA report after the conversation history loads, so a
+    // page refresh keeps the QA card (it's a transient WS card otherwise).
+    var _persistedQaRendered = false;
+    function maybeRenderPersistedQa() {
+        if (_persistedQaRendered) return;
+        var rep = config.testReport;
+        if (!rep || !Array.isArray(rep.screens) || !rep.screens.length) return;
+        _persistedQaRendered = true;
+        qaCardFinish({ results: rep.screens, passed: rep.passed, failed: rep.failed, overall: rep.overall });
+    }
+
+    function renderPlanProposal(d) {
+        d = d || {};
+        if (isStreaming) finishStreaming();
+        removeTypingIndicator();
+
+        const sections = Array.isArray(d.sections) ? d.sections : [];
+        const summary = d.summary || '';
+        const appName = d.app_name || 'Your app';
+        const projectType = d.project_type || 'webapp';
+        const stack = d.stack || '';
+        const changes = Array.isArray(d.change_log) ? d.change_log : [];
+
+        const sectionsHtml = sections.map(function (s) {
+            return '<li><strong>' + escapeHtml(s.title || '') + '</strong>'
+                + (s.description ? ' — ' + escapeHtml(s.description) : '') + '</li>';
+        }).join('');
+        const changesHtml = changes.map(function (c) { return '<li>' + escapeHtml(c) + '</li>'; }).join('');
+
+        const card = document.createElement('div');
+        card.className = 'design-proposal-card';
+        card.innerHTML =
+            '<div class="design-proposal-header">'
+            + '<span class="design-proposal-title">Plan &amp; Architecture</span>'
+            + '<span class="design-proposal-badge">' + escapeHtml(projectType) + '</span>'
+            + '</div>'
+            + '<div class="design-proposal-appname">' + escapeHtml(appName) + '</div>'
+            + (summary ? '<div class="design-proposal-summary">' + escapeHtml(summary) + '</div>' : '')
+            + (stack ? '<div class="design-proposal-meta"><span><b>Stack:</b> ' + escapeHtml(stack) + '</span></div>' : '')
+            + (sectionsHtml ? '<div class="design-proposal-section-title">Sections &amp; features</div><ul class="design-proposal-sections">' + sectionsHtml + '</ul>' : '')
+            + (changesHtml ? '<div class="design-proposal-section-title">Change log</div><ul class="design-proposal-sections">' + changesHtml + '</ul>' : '')
+            + '<div class="design-proposal-footer">'
+            + '<button class="design-proposal-tweak">Request changes</button>'
+            + '<button class="design-proposal-approve">Approve plan</button>'
+            + '</div>';
+
+        const approveBtn = card.querySelector('.design-proposal-approve');
+        const tweakBtn = card.querySelector('.design-proposal-tweak');
+        approveBtn.addEventListener('click', function () {
+            card.classList.add('dismissed');
+            approveBtn.disabled = true; tweakBtn.disabled = true;
+            sendApproval('Approved the plan — now show me the design.');
+        });
+        tweakBtn.addEventListener('click', function () {
+            if (chatInput) { chatInput.focus(); chatInput.placeholder = 'What should change in the plan? (sections, features, flow...)'; }
+        });
+        messageContainer.appendChild(card);
+        scrollToBottom();
+    }
+
+    // STEP 2 card — DESIGN only (palette/fonts/style). Approve → build.
+    function renderDesignProposal(d) {
+        d = d || {};
+        if (isStreaming) finishStreaming();
+        removeTypingIndicator();
+
+        const palette = d.palette || {};
+        const colors = palette.colors || {};
+        const fonts = d.fonts || {};
+        const appName = d.app_name || 'Your app';
+        const style = d.style || '';
+
+        const swatchOrder = ['primary', 'secondary', 'accent', 'background', 'text', 'border'];
+        const swatchesHtml = swatchOrder.filter(function (k) { return colors[k]; }).map(function (k) {
+            return '<div class="design-swatch" title="' + k + ': ' + colors[k] + '">'
+                + '<span class="design-swatch-chip" style="background:' + colors[k] + '"></span>'
+                + '<span class="design-swatch-label">' + k + '</span></div>';
+        }).join('');
+
+        const card = document.createElement('div');
+        card.className = 'design-proposal-card';
+        card.innerHTML =
+            '<div class="design-proposal-header">'
+            + '<span class="design-proposal-title">Design</span>'
+            + '</div>'
+            + '<div class="design-proposal-appname">' + escapeHtml(appName) + '</div>'
+            + '<div class="design-swatches">' + swatchesHtml + '</div>'
+            + '<div class="design-proposal-meta">'
+            + '<span><b>Palette:</b> ' + escapeHtml(palette.name || '') + '</span>'
+            + '<span><b>Fonts:</b> ' + escapeHtml((fonts.heading || '') + (fonts.body && fonts.body !== fonts.heading ? ' / ' + fonts.body : '')) + '</span>'
+            + '<span><b>Style:</b> ' + escapeHtml(style) + '</span>'
+            + '</div>'
+            + '<div class="design-proposal-footer">'
+            + '<button class="design-proposal-tweak">Request changes</button>'
+            + '<button class="design-proposal-approve">Approve &amp; build</button>'
+            + '</div>';
+
+        const approveBtn = card.querySelector('.design-proposal-approve');
+        const tweakBtn = card.querySelector('.design-proposal-tweak');
+        approveBtn.addEventListener('click', function () {
+            card.classList.add('dismissed');
+            approveBtn.disabled = true; tweakBtn.disabled = true;
+            sendApproval('Approved the design — build it now.');
+        });
+        tweakBtn.addEventListener('click', function () {
+            if (chatInput) { chatInput.focus(); chatInput.placeholder = 'What would you like to change? (colors, fonts, style...)'; }
+        });
+        messageContainer.appendChild(card);
+        scrollToBottom();
     }
 
     // ---- Send message ----
@@ -708,6 +1235,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Snake game state — hoisted here because setPreviewState calls stopSnakeGame
     let snakeInterval = null;
     let snakeState = null;
+    let snakePaused = false;
 
     function setPreviewState(state, message) {
         previewPlaceholder.style.display = state === 'placeholder' ? '' : 'none';
@@ -725,13 +1253,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function loadPreview(url) {
+        // Older apps have the dead apps.magpiecloud.com domain stored; the live
+        // domain is apps.mags.run. Rewrite so stale URLs still render.
+        url = (url || '').replace(/\.apps\.magpiecloud\.com/i, '.apps.mags.run');
         previewIframe.src = url;
         setPreviewState('running');
-        previewUrlBar.style.display = '';
-        previewUrlText.textContent = url.replace(/^https?:\/\//, '');
-        previewUrlText.title = url;
-        previewUrlText.onclick = () => window.open(url, '_blank');
-        previewOpenBtn.href = url;
+        // Compact "Open" link instead of the full URL bar (declutters the toolbar).
+        if (previewUrlText) previewUrlText.textContent = url.replace(/^https?:\/\//, '');
+        if (previewOpenBtn) { previewOpenBtn.href = url; previewOpenBtn.style.display = ''; previewOpenBtn.title = url; }
         showActionsIfReady();
     }
 
@@ -847,16 +1376,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 try {
                     const parsed = JSON.parse(content);
                     if (parsed.type === 'env_var_request') {
-                        const el = document.createElement('div');
-                        el.className = 'notice-env-request notice-done';
-                        el.innerHTML = `
-                            <div class="env-request-header">
-                                <i class="fas fa-key"></i>
-                                <span>Set: <strong>${escapeHtml(parsed.key || '')}</strong></span>
-                            </div>
-                            <div class="env-request-desc">${escapeHtml(parsed.description || '')}</div>
-                        `;
-                        messageContainer.appendChild(el);
+                        // Re-render as a live request card (user can still enter the key)
+                        appendEnvVarRequest(parsed.key || '', parsed.description || '', parsed.required !== false, parsed.app_id || '');
                         return;
                     }
                     if (parsed.type === 'instant_build_notice') {
@@ -866,6 +1387,22 @@ document.addEventListener('DOMContentLoaded', () => {
                             lastPreviewUrl = parsed.preview_url;
                             lastAppName = parsed.app_name;
                         }
+                        return;
+                    }
+                    if (parsed.type === 'instant_qa_issues') {
+                        const findings = Array.isArray(parsed.findings) ? parsed.findings.join('\n') : '';
+                        const head = `QA found ${parsed.failed} issue${parsed.failed === 1 ? '' : 's'}` +
+                            (parsed.overall ? `: ${parsed.overall}` : '');
+                        appendBuildNotice(head + (findings ? '\n' + findings : ''), 'error');
+                        return;
+                    }
+                    if (parsed.type === 'plan_proposal') {
+                        renderPlanProposal(parsed);
+                        return;
+                    }
+                    if (parsed.type === 'design_proposal') {
+                        // Re-render the design proposal card so it survives a refresh.
+                        renderDesignProposal(parsed);
                         return;
                     }
                 } catch (_) { /* not JSON — render as normal text */ }
@@ -906,6 +1443,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     setStatus('running', (result.appName || 'App') + ' is live');
                 }
                 scrollToBottom();
+                maybeRenderPersistedQa();
             })
             .catch(err => {
                 console.warn('[Instant] HTTP history load error:', err);
@@ -957,6 +1495,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const previewContent = document.getElementById('preview-content');
     const logsContent = document.getElementById('logs-content');
     const envContent = document.getElementById('env-content');
+    const designContent = document.getElementById('design-content');
+    const qaContent = document.getElementById('qa-content');
     const logsOutput = document.getElementById('logs-output');
     const logsRefreshBtn = document.getElementById('logs-refresh-btn');
     const logsClearBtn = document.getElementById('logs-clear-btn');
@@ -976,6 +1516,8 @@ document.addEventListener('DOMContentLoaded', () => {
             previewContent.style.display = activeTab === 'preview' ? '' : 'none';
             logsContent.style.display = activeTab === 'logs' ? 'flex' : 'none';
             if (envContent) envContent.style.display = activeTab === 'env' ? 'flex' : 'none';
+            if (designContent) designContent.style.display = activeTab === 'design' ? '' : 'none';
+            if (qaContent) qaContent.style.display = activeTab === 'qa' ? 'flex' : 'none';
 
             if (viewportToggle) viewportToggle.style.display = (activeTab === 'preview') ? '' : 'none';
             if (previewRefreshBtn) previewRefreshBtn.style.display = (activeTab === 'preview' && config.currentAppId) ? '' : 'none';
@@ -992,10 +1534,13 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
+    var qaRunBtn = document.getElementById('qa-run-btn');
+    if (qaRunBtn) qaRunBtn.addEventListener('click', runQa);
+
     function fetchLogs(reset) {
         const appId = config.currentAppId;
         if (!appId) return;
-        if (reset) logsOffset = 0;
+        if (reset) { logsOffset = 0; recentNoisyLines = []; }
         const url = (standaloneMode || !projectId)
             ? `/api/instant/apps/${appId}/logs/?offset=${logsOffset}`
             : `/api/instant/${projectId}/apps/${appId}/logs/?offset=${logsOffset}`;
@@ -1031,16 +1576,27 @@ document.addEventListener('DOMContentLoaded', () => {
             });
     }
 
+    // Dev-server restart banners (Next.js prints these on every `npm start`, and the
+    // build restarts the server many times) flood the log. Suppress repeats of these
+    // specific noisy lines while keeping ALL real output. Tracks recently-seen noisy
+    // lines across chunks so duplicates from restarts collapse to the first occurrence.
+    const NOISY_LOG_RE = /^\s*(▲\s*Next\.js|- Local:|- Network:|✓\s*Ready in|✓\s*Compiled|- Environments?:|▲\s*Next)/i;
+    let recentNoisyLines = [];
     function colorizeLogs(text) {
-        return escapeHtml(text)
-            .split('\n')
-            .map(line => {
-                if (/error|ERR!|Error/i.test(line)) return `<span class="log-error">${line}</span>`;
-                if (/warn|WARN/i.test(line)) return `<span class="log-warn">${line}</span>`;
-                if (/ready|compiled|listening|started/i.test(line)) return `<span class="log-info">${line}</span>`;
-                return line;
-            })
-            .join('\n');
+        const out = [];
+        for (const raw of escapeHtml(text).split('\n')) {
+            const trimmed = raw.trim();
+            if (trimmed && NOISY_LOG_RE.test(raw)) {
+                if (recentNoisyLines.includes(trimmed)) continue; // already shown — skip the repeat
+                recentNoisyLines.push(trimmed);
+                if (recentNoisyLines.length > 12) recentNoisyLines.shift();
+            }
+            if (/error|ERR!|Error/i.test(raw)) out.push(`<span class="log-error">${raw}</span>`);
+            else if (/warn|WARN/i.test(raw)) out.push(`<span class="log-warn">${raw}</span>`);
+            else if (/ready|compiled|listening|started/i.test(raw)) out.push(`<span class="log-info">${raw}</span>`);
+            else out.push(raw);
+        }
+        return out.join('\n');
     }
 
     function startLogsPolling() {
@@ -1063,6 +1619,7 @@ document.addEventListener('DOMContentLoaded', () => {
         logsClearBtn.addEventListener('click', () => {
             logsOutput.innerHTML = '<span class="logs-placeholder">Logs cleared.</span>';
             logsOffset = 0;
+            recentNoisyLines = [];
         });
     }
 
@@ -1307,15 +1864,72 @@ document.addEventListener('DOMContentLoaded', () => {
     // ---- Action Buttons (Export, Download, Delete, Provision DB) ----
 
     const previewActions = document.getElementById('preview-actions');
+    const previewMenuBtn = document.getElementById('preview-menu-btn');
+    const previewMenu = document.getElementById('preview-menu');
+    const restoreBtn = document.getElementById('preview-restore-btn');
     const downloadBtn = document.getElementById('preview-download-btn');
     const exportGithubBtn = document.getElementById('preview-export-github-btn');
     const provisionDbBtn = document.getElementById('preview-provision-db-btn');
     const deleteAppBtn = document.getElementById('preview-delete-btn');
 
+    // Swap ONLY the leading <i> icon for a loading state — preserves the menu-item label.
+    function setItemLoading(btn, loading, iconClass) {
+        if (!btn) return;
+        btn.disabled = loading;
+        const i = btn.querySelector('i');
+        if (i) i.className = loading ? 'fas fa-spinner fa-spin' : iconClass;
+    }
+
+    // ── Unified "More actions" dropdown menu ──
+    function closePreviewMenu() {
+        if (previewMenu) previewMenu.classList.remove('open');
+        if (previewMenuBtn) previewMenuBtn.setAttribute('aria-expanded', 'false');
+    }
+    if (previewMenuBtn && previewMenu) {
+        previewMenuBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const open = previewMenu.classList.toggle('open');
+            previewMenuBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        });
+        // Close on outside click or Escape.
+        document.addEventListener('click', (e) => {
+            if (!previewMenu.contains(e.target) && e.target !== previewMenuBtn) closePreviewMenu();
+        });
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePreviewMenu(); });
+    }
+
+    // Shared restore logic — invoked from BOTH the toolbar button and the ⋮ menu item.
+    async function doRestore(triggerEl) {
+        const base = getAppApiBase();
+        if (!base) return;
+        closePreviewMenu();
+        if (triggerEl) setItemLoading(triggerEl, true);
+        setPreviewState('building', 'Restoring app...');
+        setStatus('building', 'Restoring');
+        try {
+            const resp = await fetch(`${base}/restore`, { method: 'POST', credentials: 'same-origin' });
+            const data = await resp.json();
+            if (data.error) {
+                alert('Restore failed: ' + data.error);
+                setStatus('error', 'Error');
+            }
+            // On success, build progress streams in over WS like a normal build.
+        } catch (err) {
+            alert('Restore failed: ' + err.message);
+        } finally {
+            if (triggerEl) setItemLoading(triggerEl, false, 'fas fa-power-off');
+        }
+    }
+
+    if (restoreBtn) restoreBtn.addEventListener('click', () => doRestore(restoreBtn));
+    const restoreTopBtn = document.getElementById('preview-restore-top-btn');
+    if (restoreTopBtn) restoreTopBtn.addEventListener('click', () => doRestore(restoreTopBtn));
+
     function showActionsIfReady() {
         if (config.currentAppId) {
-            // Always show the rebuild button when we have an app
+            // Always show the rebuild + restore buttons when we have an app
             if (previewRefreshBtn) previewRefreshBtn.style.display = '';
+            if (restoreTopBtn) restoreTopBtn.style.display = '';
             // Show the rest of the action buttons
             if (previewActions) previewActions.style.display = '';
         }
@@ -1337,27 +1951,48 @@ document.addEventListener('DOMContentLoaded', () => {
         downloadBtn.addEventListener('click', () => {
             const base = getAppApiBase();
             if (!base) return;
-            downloadBtn.disabled = true;
-            downloadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+            closePreviewMenu();
+            setItemLoading(downloadBtn, true);
             // Trigger download via a hidden link
             window.location.href = `${base}/download`;
-            setTimeout(() => {
-                downloadBtn.disabled = false;
-                downloadBtn.innerHTML = '<i class="fas fa-download"></i>';
-            }, 3000);
+            setTimeout(() => setItemLoading(downloadBtn, false, 'fas fa-download'), 3000);
         });
     }
 
+    // Reflect sync state on the GitHub button: if already synced, it opens the repo;
+    // otherwise it exports. updateGithubBtn() is called on load + after a sync.
+    function updateGithubBtn() {
+        if (!exportGithubBtn) return;
+        const label = exportGithubBtn.querySelector('span');
+        if (config.githubRepoUrl) {
+            exportGithubBtn.title = config.githubRepoUrl;
+            exportGithubBtn.classList.add('synced');
+            if (label) label.textContent = 'Open GitHub repo';
+        } else {
+            exportGithubBtn.title = 'Export to GitHub';
+            exportGithubBtn.classList.remove('synced');
+            if (label) label.textContent = 'Export to GitHub';
+        }
+    }
+    updateGithubBtn();
+
     if (exportGithubBtn) {
-        exportGithubBtn.addEventListener('click', async () => {
+        exportGithubBtn.addEventListener('click', async (event) => {
             const base = getAppApiBase();
             if (!base) return;
+
+            // Already synced → just open the repo (don't re-export). Alt/Shift-click to re-export.
+            if (config.githubRepoUrl && !(event && (event.altKey || event.shiftKey))) {
+                closePreviewMenu();
+                window.open(config.githubRepoUrl, '_blank');
+                return;
+            }
 
             const repoName = prompt('GitHub repository name (leave empty for auto):', '');
             if (repoName === null) return; // Cancelled
 
-            exportGithubBtn.disabled = true;
-            exportGithubBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+            closePreviewMenu();
+            setItemLoading(exportGithubBtn, true);
 
             try {
                 const resp = await fetch(`${base}/export-github`, {
@@ -1373,14 +2008,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (data.error) {
                     alert('Export failed: ' + data.error);
                 } else {
+                    config.githubRepoUrl = data.repo_url;  // remember so future clicks just open it
+                    updateGithubBtn();
                     const openRepo = confirm(`Code exported to GitHub!\n\n${data.repo_url}\n\nOpen in browser?`);
                     if (openRepo) window.open(data.repo_url, '_blank');
                 }
             } catch (err) {
                 alert('Export failed: ' + err.message);
             } finally {
-                exportGithubBtn.disabled = false;
-                exportGithubBtn.innerHTML = '<i class="fab fa-github"></i>';
+                setItemLoading(exportGithubBtn, false, 'fab fa-github');
             }
         });
     }
@@ -1392,8 +2028,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (!confirm('Provision a PostgreSQL database for this app?\nDATABASE_URL will be added to env vars automatically.')) return;
 
-            provisionDbBtn.disabled = true;
-            provisionDbBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+            closePreviewMenu();
+            setItemLoading(provisionDbBtn, true);
 
             try {
                 const resp = await fetch(`${base}/provision-db`, {
@@ -1413,8 +2049,7 @@ document.addEventListener('DOMContentLoaded', () => {
             } catch (err) {
                 alert('DB provisioning failed: ' + err.message);
             } finally {
-                provisionDbBtn.disabled = false;
-                provisionDbBtn.innerHTML = '<i class="fas fa-database"></i>';
+                setItemLoading(provisionDbBtn, false, 'fas fa-database');
             }
         });
     }
@@ -1424,10 +2059,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const base = getAppApiBase();
             if (!base) return;
 
-            if (!confirm('Delete this app? This will stop the sandbox VM and remove all data. This cannot be undone.')) return;
+            if (!confirm('Delete this app? This will stop the workspace VM and remove all data. This cannot be undone.')) return;
 
-            deleteAppBtn.disabled = true;
-            deleteAppBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+            closePreviewMenu();
+            setItemLoading(deleteAppBtn, true);
 
             try {
                 const resp = await fetch(base, {
@@ -1437,8 +2072,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const data = await resp.json();
                 if (data.error) {
                     alert('Delete failed: ' + data.error);
-                    deleteAppBtn.disabled = false;
-                    deleteAppBtn.innerHTML = '<i class="fas fa-trash-alt"></i>';
+                    setItemLoading(deleteAppBtn, false, 'fas fa-trash-alt');
                 } else {
                     // Redirect to instant mode home
                     const homeUrl = (standaloneMode || !projectId) ? '/instant/' : `/instant/project/${projectId}/`;
@@ -1446,8 +2080,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             } catch (err) {
                 alert('Delete failed: ' + err.message);
-                deleteAppBtn.disabled = false;
-                deleteAppBtn.innerHTML = '<i class="fas fa-trash-alt"></i>';
+                setItemLoading(deleteAppBtn, false, 'fas fa-trash-alt');
             }
         });
     }
@@ -1455,6 +2088,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // ---- Snake Game (plays while building) ----
     const snakeCanvas = document.getElementById('snake-game');
     const snakeCtx = snakeCanvas ? snakeCanvas.getContext('2d') : null;
+    const snakePauseBtn = document.getElementById('snake-pause');
 
     const CELL = 16;                       // px per grid cell
     const COLS = 20, ROWS = 20;            // 320x320 canvas
@@ -1605,6 +2239,8 @@ document.addEventListener('DOMContentLoaded', () => {
     function startSnakeGame() {
         if (snakeInterval) return;
         if (!snakeCanvas) return;
+        snakePaused = false;
+        if (snakePauseBtn) snakePauseBtn.textContent = '⏸ Pause';
         snakeState = initSnakeState();
         drawSnake();
         snakeInterval = setInterval(tickSnake, TICK_MS);
@@ -1616,16 +2252,33 @@ document.addEventListener('DOMContentLoaded', () => {
             snakeInterval = null;
         }
         snakeState = null;
+        snakePaused = false;
     }
 
-    // Keyboard controls — arrow keys or WASD
+    function setSnakePaused(paused) {
+        snakePaused = paused;
+        if (snakePauseBtn) snakePauseBtn.textContent = paused ? '▶ Resume' : '⏸ Pause';
+        if (paused) {
+            if (snakeInterval) { clearInterval(snakeInterval); snakeInterval = null; }
+        } else if (snakeState && !snakeInterval) {
+            snakeInterval = setInterval(tickSnake, TICK_MS);
+        }
+    }
+
+    if (snakePauseBtn) {
+        snakePauseBtn.addEventListener('click', () => setSnakePaused(!snakePaused));
+    }
+
+    // Keyboard controls — ARROW KEYS ONLY, and ONLY when the game board is focused
+    // (click the board to play). This keeps typing in the chat from driving the snake.
     document.addEventListener('keydown', (e) => {
-        if (!snakeState) return;
+        if (!snakeState || snakePaused) return;
+        // Game must be the focused element — clicking the board (tabindex=0) focuses it,
+        // clicking the chat/input moves focus away and disables these controls.
+        if (!snakeCanvas || document.activeElement !== snakeCanvas) return;
         const keyMap = {
             ArrowUp: {x: 0, y: -1}, ArrowDown: {x: 0, y: 1},
             ArrowLeft: {x: -1, y: 0}, ArrowRight: {x: 1, y: 0},
-            w: {x: 0, y: -1}, s: {x: 0, y: 1},
-            a: {x: -1, y: 0}, d: {x: 1, y: 0},
         };
         const nd = keyMap[e.key];
         if (!nd) return;

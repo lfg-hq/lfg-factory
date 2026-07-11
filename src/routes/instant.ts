@@ -7,6 +7,7 @@ import { modelSelections, agentRoles } from "../db/schema/chat.ts";
 import { instantApps } from "../db/schema/instant.ts";
 import { listModels, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
 import { InstantPage } from "../templates/pages/instant.tsx";
+import { normalizeMagsAppUrl } from "../services/mags.ts";
 import type { auth } from "../auth/index.ts";
 
 type AuthEnv = {
@@ -51,12 +52,41 @@ async function getProjectForUser(userId: string, publicProjectId: string) {
 }
 
 function toPageApp(app: InstantAppRow) {
+  const meta = (app.metadata as Record<string, any> | null) ?? {};
+  // Prefer the APPLIED (built) design; fall back to the proposal preview tokens for
+  // apps that have been proposed but not yet built. (proposalTokens never overwrites
+  // the running app's design — that's why they're separate keys.)
+  const t = meta.designTokens ?? meta.proposalTokens;
+  const spec = meta.spec ?? {};
+  const proposal = meta.proposal ?? {};
+  const design = t
+    ? {
+        palette: t.meta?.paletteName ?? meta.paletteId ?? "",
+        style: t.meta?.styleProfileName ?? meta.styleProfileId ?? "",
+        headingFont: t.typography?.headingFont ?? "",
+        bodyFont: t.typography?.bodyFont ?? "",
+        colors: {
+          primary: t.colors?.primary,
+          secondary: t.colors?.secondary,
+          accent: t.colors?.accent,
+          background: t.colors?.background,
+          text: t.colors?.text,
+          border: t.colors?.border,
+        },
+        summary: spec.summary ?? proposal.summary ?? "",
+        sections: (spec.sections ?? proposal.sections ?? []) as Array<{ title: string; description: string }>,
+        projectType: (meta.projectType ?? proposal.projectType ?? spec.projectType) as string | undefined,
+      }
+    : null;
   return {
     appId: app.appId,
     name: app.name,
     status: app.status,
-    previewUrl: app.previewUrl,
+    previewUrl: normalizeMagsAppUrl(app.previewUrl),
     conversationId: app.conversationId,
+    design,
+    githubRepoUrl: (meta.githubRepoUrl as string | undefined) ?? null,
+    testReport: (meta.testReport as Record<string, unknown> | undefined) ?? null,
   };
 }
 
@@ -77,6 +107,7 @@ instant.get("/instant", async (c) => {
       roleKey: settings.roleKey,
       models: listModels().map((model) => ({
         key: model.key,
+        label: model.label,
         providerLabel: model.providerLabel,
         requiresPro: model.requiresPro,
       })),
@@ -117,6 +148,7 @@ instant.get("/instant/app/:appId", async (c) => {
       roleKey: settings.roleKey,
       models: listModels().map((model) => ({
         key: model.key,
+        label: model.label,
         providerLabel: model.providerLabel,
         requiresPro: model.requiresPro,
       })),
@@ -149,6 +181,7 @@ instant.get("/instant/project/:projectId", async (c) => {
       roleKey: settings.roleKey,
       models: listModels().map((model) => ({
         key: model.key,
+        label: model.label,
         providerLabel: model.providerLabel,
         requiresPro: model.requiresPro,
       })),
@@ -191,6 +224,7 @@ instant.get("/instant/project/:projectId/app/:appId", async (c) => {
       roleKey: settings.roleKey,
       models: listModels().map((model) => ({
         key: model.key,
+        label: model.label,
         providerLabel: model.providerLabel,
         requiresPro: model.requiresPro,
       })),

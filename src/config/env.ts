@@ -29,6 +29,7 @@ const envSchema = z.object({
   ANTHROPIC_API_KEY: z.string().optional().default(""),
   OPENAI_API_KEY: z.string().optional().default(""),
   GOOGLE_AI_API_KEY: z.string().optional().default(""),
+  EXA_API_KEY: z.string().optional().default(""),
 
   SENDGRID_API_KEY: z.string().optional().default(""),
   EMAIL_FROM: z.string().optional().default("noreply@lfg.run"),

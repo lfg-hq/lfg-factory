@@ -987,7 +987,7 @@
       if (editor && data.memory) {
         editor.value = data.memory;
       }
-      showToast("Memory synced from sandbox");
+      showToast("Memory synced from workspace");
     } catch (err) {
       alert("Sync failed: " + err.message);
     }

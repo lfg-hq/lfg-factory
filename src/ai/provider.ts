@@ -5,7 +5,7 @@ import { env } from "../config/env.ts";
 import modelsConfig from "../config/llm-models.json" with { type: "json" };
 import type { LanguageModel } from "ai";
 
-export type ProviderName = "anthropic" | "openai" | "google" | "kimi" | "deepseek";
+export type ProviderName = "anthropic" | "openai" | "google" | "kimi" | "deepseek" | "glm";
 
 /**
  * Custom fetch wrapper for Kimi K2.5.
@@ -88,7 +88,7 @@ export const DEFAULT_MODEL_KEY = modelsConfig.default_model;
  */
 export function getModel(
   modelKey: string,
-  userApiKeys?: { anthropic?: string; openai?: string; google?: string; kimi?: string; deepseek?: string },
+  userApiKeys?: { anthropic?: string; openai?: string; google?: string; kimi?: string; deepseek?: string; glm?: string },
   { allowEnvFallback = false }: { allowEnvFallback?: boolean } = {}
 ): LanguageModel {
   const entry = modelIndex.get(modelKey);
@@ -137,6 +137,15 @@ export function getModel(
       });
       return deepseek.chat(model);
     }
+    case "glm": {
+      const apiKey = userApiKeys?.glm;
+      if (!apiKey) throw new Error(`No GLM (Z.ai) API key configured. ${noKeyMsg}`);
+      const glm = createOpenAI({
+        apiKey,
+        baseURL: "https://api.z.ai/api/paas/v4",
+      });
+      return glm.chat(model);
+    }
     default:
       throw new Error(`Unknown provider: ${provider}`);
   }
@@ -147,13 +156,18 @@ export function getProviderName(modelKey: string): ProviderName | null {
   return modelIndex.get(modelKey)?.provider ?? null;
 }
 
+/** Get the provider-native model id (e.g. "deepseek-v4-pro") for a model key. */
+export function getProviderModel(modelKey: string): string | null {
+  return modelIndex.get(modelKey)?.model ?? null;
+}
+
 /**
  * Get a model + provider-specific web search tools.
  * Returns the search tools as a Record that can be spread into the tools object.
  */
 export function getModelWithSearch(
   modelKey: string,
-  userApiKeys?: { anthropic?: string; openai?: string; google?: string; kimi?: string; deepseek?: string },
+  userApiKeys?: { anthropic?: string; openai?: string; google?: string; kimi?: string; deepseek?: string; glm?: string },
   { allowEnvFallback = false }: { allowEnvFallback?: boolean } = {}
 ): { model: LanguageModel; searchTools: Record<string, unknown> } {
   const entry = modelIndex.get(modelKey);
@@ -212,6 +226,18 @@ export function getModelWithSearch(
       });
       return {
         model: deepseek.chat(modelId),
+        searchTools: {},
+      };
+    }
+    case "glm": {
+      const apiKey = userApiKeys?.glm;
+      if (!apiKey) throw new Error(`No GLM (Z.ai) API key configured. ${noKeyMsg}`);
+      const glm = createOpenAI({
+        apiKey,
+        baseURL: "https://api.z.ai/api/paas/v4",
+      });
+      return {
+        model: glm.chat(modelId),
         searchTools: {},
       };
     }

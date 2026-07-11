@@ -31,7 +31,7 @@
     "@aws-sdk/s3-request-presigner": "^3.1057.0",
     "@composio/core": "^0.6.5",
     "@composio/vercel": "^0.6.5",
-    "@magpiecloud/mags": "^1.8.16",
+    "@magpiecloud/mags": "1.13.1",
     "ai": "^6.0.97",
     "better-auth": "^1.4.18",
     "better-sqlite3": "^12.6.2",
@@ -39,6 +39,7 @@
     "hono": "^4.12.1",
     "marked": "^17.0.3",
     "pg": "^8.18.0",
+    "playwright-core": "^1.61.1",
     "zod": "^4.3.6"
   }
 }

@@ -71,7 +71,8 @@ async function moveTicketToStage(ticketId: string, projectId: string, stageName:
 const CALLBACK_BASE_URL = process.env.APP_URL ?? "http://localhost:3000";
 const MAX_WAIT_DURATION_MS = 45 * 60 * 1000; // 45 minutes
 const CHAT_MAX_WAIT_DURATION_MS = 10 * 60 * 1000; // 10 minutes
-const WORKING_DIR = "/root";
+// Projects live on the big /data volume (7.8GB), not /root (1.9GB) — avoids ENOSPC.
+const WORKING_DIR = "/data";
 
 // Concurrency guard: only one ticket per project at a time
 const executingProjects = new Set<string>();
@@ -238,7 +239,7 @@ async function executeTicket(ticketId: string): Promise<void> {
 
   if (isReuse && workspaceId) {
     // Probe existing workspace
-    await addLog(ticketId, "Reconnecting to existing sandbox...", "command", ownerId);
+    await addLog(ticketId, "Reconnecting to existing workspace...", "command", ownerId);
     console.log(`[ticket-executor] Probing existing workspace: ${workspaceId}`);
     try {
       const probe = await execOnWorkspace(workspaceId, 'echo "WORKSPACE_READY"', { timeout: 60_000 });
@@ -268,7 +269,7 @@ async function executeTicket(ticketId: string): Promise<void> {
     await addLog(ticketId, "Creating VM workspace...", "command", ownerId);
     console.log(`[ticket-executor] Creating new workspace: ${workspaceName}`);
 
-    const { jobId, workspaceId: wsId } = await newWorkspace(workspaceName);
+    const { jobId, workspaceId: wsId } = await newWorkspace(workspaceName, { diskGb: parseInt(process.env.INSTANT_DISK_GB || "8", 10) });
     workspaceId = wsId;
 
     // Wait for VM to boot
@@ -490,7 +491,7 @@ echo "BRANCH_CREATED"
     actorType: "system",
     activityType: ACTIVITY_TYPES.CREDENTIALS_INJECTED,
     title: "Claude credentials injected",
-    description: `Loaded credentials from DB and injected into sandbox for ticket execution.`,
+    description: `Loaded credentials from DB and injected into workspace for ticket execution.`,
     metadata: { workspaceId },
   });
 
@@ -837,7 +838,7 @@ async function executeTicketChat(
 
   const sandbox = await findExistingSandbox(ticketId);
   if (!sandbox?.magsWorkspaceId) {
-    await addLog(ticketId, "No active sandbox for this ticket. Please build the ticket first.", "command", ownerId);
+    await addLog(ticketId, "No active workspace for this ticket. Please build the ticket first.", "command", ownerId);
     return;
   }
 
@@ -854,7 +855,7 @@ async function executeTicketChat(
     actorType: "system",
     activityType: ACTIVITY_TYPES.CREDENTIALS_INJECTED,
     title: "Claude credentials injected",
-    description: `Loaded credentials from DB and injected into sandbox for chat session.`,
+    description: `Loaded credentials from DB and injected into workspace for chat session.`,
     metadata: { workspaceId },
   });
 
@@ -1107,7 +1108,7 @@ async function executeTicketApi(ticketId: string): Promise<void> {
   let workspaceId = sandboxRow?.magsWorkspaceId ?? null;
 
   if (workspaceId) {
-    await addLog(ticketId, "Reconnecting to existing sandbox...", "command", ownerId);
+    await addLog(ticketId, "Reconnecting to existing workspace...", "command", ownerId);
     try {
       const probe = await execOnWorkspace(workspaceId, 'echo "WORKSPACE_READY"', { timeout: 60_000 });
       if (!probe.output.includes("WORKSPACE_READY")) {
@@ -1125,7 +1126,7 @@ async function executeTicketApi(ticketId: string): Promise<void> {
   if (!workspaceId) {
     const workspaceName = `${ticketId.slice(0, 8)}-${crypto.randomUUID().slice(0, 8)}`;
     await addLog(ticketId, "Creating VM workspace...", "command", ownerId);
-    const { jobId, workspaceId: wsId } = await newWorkspace(workspaceName);
+    const { jobId, workspaceId: wsId } = await newWorkspace(workspaceName, { diskGb: parseInt(process.env.INSTANT_DISK_GB || "8", 10) });
     workspaceId = wsId;
     await sleep(8_000);
 
@@ -1321,6 +1322,7 @@ git branch --show-current
     google: userKeys?.googleApiKey ?? undefined,
     kimi: userKeys?.kimiApiKey ?? undefined,
     deepseek: userKeys?.deepseekApiKey ?? undefined,
+    glm: userKeys?.glmApiKey ?? undefined,
   });
 
   console.log(`[ticket-executor-api] Using model: ${modelKey}`);

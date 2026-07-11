@@ -7,13 +7,14 @@
  * Flow:
  *  1. Load credentials from DB
  *  2. Write prompt file, env file, runner script to VM via base64
- *  3. Inject credentials to /root/.claude/ + /home/claudeuser/.claude/
- *  4. Launch CLI as claudeuser via su (Claude refuses --dangerously-skip-permissions as root)
+ *  3. Inject credentials to /root/.claude/
+ *  4. Launch CLI as root
  *  5. Poll output file with byte offset + alive check
  */
 
 import { db } from "../config/db.ts";
-import { profiles } from "../db/schema/users.ts";
+import { profiles, llmApiKeys } from "../db/schema/users.ts";
+import { env } from "../config/env.ts";
 import { execOnWorkspace } from "./mags.ts";
 import { eq } from "drizzle-orm";
 
@@ -26,6 +27,8 @@ export interface ClaudeRunOptions {
   outputFile?: string;
   userId: string;
   envVars?: Record<string, string>; // LFG env vars to inject
+  agentMode?: boolean;         // use agent output endpoint instead of ticket endpoint
+  anthropicApiKey?: string;    // when set, authenticate the CLI via ANTHROPIC_API_KEY instead of OAuth credentials
 }
 
 export interface ClaudeRunResult {
@@ -41,7 +44,9 @@ export interface PollResult {
 }
 
 const CLAUDE_BIN = "/usr/local/bin/claude";
-const WORKING_DIR = "/root";
+// Projects live on the big /data volume (7.8GB), not /root (1.9GB) — avoids ENOSPC.
+// Credentials still live under /root/.claude (HOME); only the project tree moves.
+const WORKING_DIR = "/data";
 const DEFAULT_MAX_TURNS = 80;
 
 // ── Credentials ───────────────────────────────────────────────────────
@@ -77,6 +82,35 @@ export async function saveCredentials(
     .where(eq(profiles.userId, userId));
 }
 
+export type ClaudeAuth =
+  | { mode: "oauth"; credentials: string }
+  | { mode: "apiKey"; apiKey: string };
+
+/**
+ * Resolve how to authenticate Claude Code for a build, in priority order:
+ *  1. The user's Claude Code OAuth credentials (subscription login) — preferred.
+ *  2. The user's Anthropic API key from Settings → LLM Keys.
+ *  3. The server's ANTHROPIC_API_KEY env var (fallback).
+ *
+ * Returns null when none are available — the caller should tell the user to
+ * connect Claude Code or add an Anthropic API key.
+ */
+export async function resolveClaudeAuth(userId: string): Promise<ClaudeAuth | null> {
+  const credentials = await loadCredentials(userId);
+  if (credentials) return { mode: "oauth", credentials };
+
+  const [keys] = await db
+    .select({ anthropic: llmApiKeys.anthropicApiKey })
+    .from(llmApiKeys)
+    .where(eq(llmApiKeys.userId, userId))
+    .limit(1);
+
+  const apiKey = keys?.anthropic || env.ANTHROPIC_API_KEY || "";
+  if (apiKey) return { mode: "apiKey", apiKey };
+
+  return null;
+}
+
 // ── VM Auth Setup ─────────────────────────────────────────────────────
 
 /**
@@ -106,12 +140,7 @@ export async function injectCredentials(
 mkdir -p /root/.claude
 echo '${b64}' | base64 -d > /root/.claude/.credentials.json
 chmod 600 /root/.claude/.credentials.json
-# Also copy to claudeuser for CLI execution (Claude refuses --dangerously-skip-permissions as root)
-id claudeuser >/dev/null 2>&1 || (adduser -D -s /bin/bash claudeuser 2>/dev/null || useradd -m -s /bin/bash claudeuser 2>/dev/null || true)
-mkdir -p /home/claudeuser/.claude
-cp /root/.claude/.credentials.json /home/claudeuser/.claude/.credentials.json
-chown -R claudeuser:claudeuser /home/claudeuser/.claude
-ls -la /root/.claude/.credentials.json /home/claudeuser/.claude/.credentials.json 2>&1
+ls -la /root/.claude/.credentials.json 2>&1
 echo "credentials_injected"
 `.trim();
 
@@ -177,22 +206,23 @@ export async function startClaudeCli(
   const claudeArgsStr = claudeArgs.join(" ");
 
   // Relative project dir name (e.g. "project")
-  const projectDirName = opts.projectDir.replace(/^\/root\//, "").replace(/^\//, "");
+  const projectDirName = opts.projectDir.replace(/^\/(root|data)\//, "").replace(/^\//, "");
 
   // Build env exports
   const envExports = Object.entries(opts.envVars ?? {})
     .map(([k, v]) => `export ${k}="${v}"`)
     .join("\n");
 
-  // Runner script content — runs as claudeuser (Claude CLI refuses --dangerously-skip-permissions as root)
+  // Runner script content — runs as root
   // The forwarder loop reads new bytes from the output file every 2s and POSTs them
   // to the server callback API, replacing server-side SSH polling.
   // NOTE: Logs written to project dir (JFS-persistent), NOT /tmp (overlay — wiped on sleep).
   const runnerContent = `#!/bin/bash
-export HOME=/home/claudeuser
+export HOME=/root
 export PATH=/root/node/current/bin:/root/.npm-global/bin:\$PATH
 export npm_config_cache=/tmp/npm-cache
 export NPM_CONFIG_CACHE=/tmp/npm-cache
+${opts.anthropicApiKey ? `export ANTHROPIC_API_KEY="${opts.anthropicApiKey}"` : "# (using Claude Code OAuth credentials)"}
 source ${envFile}
 cd ${WORKING_DIR}/${projectDirName}
 
@@ -207,7 +237,7 @@ echo "LFG_TICKET_ID=\${LFG_TICKET_ID}" >> \$LOGDIR/forwarder_debug.log
 echo "LFG_API_KEY_LEN=\$(echo -n \\"\${LFG_API_KEY}\\" | wc -c)" >> \$LOGDIR/forwarder_debug.log
 
 # Run CLI in background, still writes to local file for debugging
-${CLAUDE_BIN} -p "$(cat ${promptFile})" ${claudeArgsStr} > ${outputFile} 2>&1 &
+IS_SANDBOX=1 ${CLAUDE_BIN} -p "$(cat ${promptFile})" ${claudeArgsStr} > ${outputFile} 2>&1 &
 CLI_PID=\$!
 
 # Forwarder loop: read new bytes from output file, POST to server
@@ -277,23 +307,33 @@ echo "___CLAUDE_EXIT_CODE=\$CLAUDE_EXIT" >> ${outputFile}
   const envB64 = Buffer.from(envExports).toString("base64");
   const runnerB64 = Buffer.from(runnerContent).toString("base64");
 
-  // Also inject credentials inline (avoids overlay reset losing them)
+  // Also inject credentials inline (avoids overlay reset losing them).
+  // Skipped entirely in API-key mode — the CLI authenticates via ANTHROPIC_API_KEY.
   let dbCredsInject = "";
-  const creds = await loadCredentials(opts.userId);
-  if (creds) {
-    const credsB64 = Buffer.from(creds).toString("base64");
-    dbCredsInject = `
-# Inject credentials from DB — root copy + claudeuser copy
+  if (!opts.anthropicApiKey) {
+    const creds = await loadCredentials(opts.userId);
+    if (creds) {
+      const credsB64 = Buffer.from(creds).toString("base64");
+      dbCredsInject = `
+# Inject credentials from DB
 mkdir -p /root/.claude
 echo '${credsB64}' | base64 -d > /root/.claude/.credentials.json
-id claudeuser >/dev/null 2>&1 || (adduser -D -s /bin/bash claudeuser 2>/dev/null || useradd -m -s /bin/bash claudeuser 2>/dev/null || true)
-mkdir -p /home/claudeuser/.claude
-cp /root/.claude/.credentials.json /home/claudeuser/.claude/.credentials.json
-chown -R claudeuser:claudeuser /home/claudeuser/.claude
+chmod 600 /root/.claude/.credentials.json
 `;
+    }
   }
 
-  // Single combined command: write all files + launch CLI as claudeuser
+  // In OAuth mode we require a credentials file; in API-key mode it isn't needed.
+  const credCheck = opts.anthropicApiKey
+    ? "# API-key mode — no OAuth credentials file required"
+    : `# Verify credentials exist
+if [ ! -f /root/.claude/.credentials.json ]; then
+    echo "ERROR: No credentials found"
+    ls -la /root/.claude/ 2>&1 || echo "No .claude directory"
+    exit 1
+fi`;
+
+  // Single combined command: write all files + launch CLI as root
   const startCmd = `export HOME=/root
 export PATH=/root/node/current/bin:/root/.npm-global/bin:\$PATH
 
@@ -301,12 +341,7 @@ export PATH=/root/node/current/bin:/root/.npm-global/bin:\$PATH
 echo '${promptB64}' | base64 -d > ${promptFile}
 echo '${envB64}' | base64 -d > ${envFile}
 ${dbCredsInject}
-# Verify credentials exist
-if [ ! -f /home/claudeuser/.claude/.credentials.json ]; then
-    echo "ERROR: No credentials found for claudeuser"
-    ls -la /home/claudeuser/.claude/ 2>&1 || echo "No .claude directory"
-    exit 1
-fi
+${credCheck}
 
 # Verify claude binary exists
 CLAUDE_BIN_PATH="${CLAUDE_BIN}"
@@ -318,45 +353,29 @@ if [ ! -x "\$CLAUDE_BIN_PATH" ]; then
     fi
 fi
 
-# Fix npm config: remove any root .npmrc that overrides cache/prefix,
-# create writable cache dir, and set everything via profile so Claude
-# doesn't waste turns debugging npm permission errors.
+# Fix npm config
 rm -f /root/.npmrc 2>/dev/null || true
 mkdir -p /tmp/npm-cache
 chmod 777 /tmp/npm-cache
 
-# Set up claudeuser's profile so Claude CLI's Bash tool can find node/npm
-cat > /home/claudeuser/.profile <<'PROF'
-export PATH=/root/node/current/bin:/root/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:$PATH
-export HOME=/home/claudeuser
-export npm_config_cache=/tmp/npm-cache
-PROF
-cp /home/claudeuser/.profile /home/claudeuser/.bashrc
-chown claudeuser:claudeuser /home/claudeuser/.profile /home/claudeuser/.bashrc
-
-# Also set PATH in /etc/profile.d/ for any shell
+# Set PATH in /etc/profile.d/ for any shell
 cat > /etc/profile.d/node_path.sh <<'PATHCONF'
-export PATH=/root/node/current/bin:/root/.npm-global/bin:$PATH
+export PATH=/root/node/current/bin:/root/.npm-global/bin:\$PATH
 export npm_config_cache=/tmp/npm-cache
 PATHCONF
 
-# Ensure project dir exists and claudeuser can write to it
+# Ensure project dir exists
 PROJ_DIR="${WORKING_DIR}/${projectDirName}"
 mkdir -p "\$PROJ_DIR"
-chown -R claudeuser:claudeuser "\$PROJ_DIR"
 git config --global --add safe.directory "\$PROJ_DIR" 2>/dev/null || true
 
 # Create output file + write runner script
 touch ${outputFile}
-chmod 666 ${outputFile}
 echo '${runnerB64}' | base64 -d > ${runnerScript}
 chmod 755 ${runnerScript}
 
-# Make prompt/env files readable by claudeuser
-chmod 644 ${promptFile} ${envFile}
-
-# Start Claude CLI in background as claudeuser
-nohup su -s /bin/bash claudeuser -c "bash ${runnerScript}" > /dev/null 2>&1 &
+# Start Claude CLI in background as root
+nohup bash ${runnerScript} > /dev/null 2>&1 &
 echo "___CLAUDE_BG_PID=\$!"
 echo "CLAUDE_STARTED"
 `;
@@ -480,15 +499,20 @@ export async function startClaudeCliChat(
     claudeArgs.push(`--resume "${opts.sessionId}"`);
   }
   const claudeArgsStr = claudeArgs.join(" ");
-  const projectDirName = opts.projectDir.replace(/^\/root\//, "").replace(/^\//, "");
+  const projectDirName = opts.projectDir.replace(/^\/(root|data)\//, "").replace(/^\//, "");
 
   const envExports = Object.entries(opts.envVars ?? {})
     .map(([k, v]) => `export ${k}="${v}"`)
     .join("\n");
 
   // Runner script with push-based forwarder (same pattern as startClaudeCli)
+  // Agent mode uses /api/v1/cli/agent-output with agent_id; ticket mode uses /api/v1/cli/output with ticket_id
+  const callbackEndpoint = opts.agentMode ? "/api/v1/cli/agent-output" : "/api/v1/cli/output";
+  const idField = opts.agentMode ? "agent_id" : "ticket_id";
+  const idEnvVar = opts.agentMode ? "LFG_AGENT_ID" : "LFG_TICKET_ID";
+
   const runnerContent = `#!/bin/bash
-export HOME=/home/claudeuser
+export HOME=/root
 export PATH=/root/node/current/bin:/root/.npm-global/bin:\$PATH
 export npm_config_cache=/tmp/npm-cache
 export NPM_CONFIG_CACHE=/tmp/npm-cache
@@ -496,7 +520,7 @@ source ${envFile}
 cd ${WORKING_DIR}/${projectDirName}
 
 # Run CLI in background, still writes to local file for debugging
-${CLAUDE_BIN} -p "$(cat ${promptFile})" ${claudeArgsStr} > ${outputFile} 2>&1 &
+IS_SANDBOX=1 ${CLAUDE_BIN} -p "$(cat ${promptFile})" ${claudeArgsStr} > ${outputFile} 2>&1 &
 CLI_PID=\$!
 
 # Forwarder loop: read new bytes from output file, POST to server
@@ -507,11 +531,11 @@ while kill -0 \$CLI_PID 2>/dev/null; do
   if [ "\$CURSIZE" -gt "\$OFFSET" ]; then
     CHUNK=\$(tail -c +\$((\$OFFSET+1)) ${outputFile} | head -c \$((\$CURSIZE-\$OFFSET)) | base64 | tr -d '\\n')
     OFFSET=\$CURSIZE
-    curl -s -X POST "\${LFG_API_URL}/api/v1/cli/output" \\
+    curl -s -X POST "\${LFG_API_URL}${callbackEndpoint}" \\
       -H "X-CLI-API-Key: \${LFG_API_KEY}" \\
       -H "Content-Type: application/json" \\
       -H "ngrok-skip-browser-warning: true" \\
-      -d "{\\"ticket_id\\":\\"\${LFG_TICKET_ID}\\",\\"data\\":\\"\$CHUNK\\"}" || true
+      -d "{\\"${idField}\\":\\"\${${idEnvVar}}\\",\\"data\\":\\"\$CHUNK\\"}" || true
   fi
 done
 
@@ -522,17 +546,17 @@ CLAUDE_EXIT=\$?
 CURSIZE=\$(wc -c < ${outputFile} 2>/dev/null || echo 0)
 if [ "\$CURSIZE" -gt "\$OFFSET" ]; then
   CHUNK=\$(tail -c +\$((\$OFFSET+1)) ${outputFile} | head -c \$((\$CURSIZE-\$OFFSET)) | base64 | tr -d '\\n')
-  curl -s -X POST "\${LFG_API_URL}/api/v1/cli/output" \\
+  curl -s -X POST "\${LFG_API_URL}${callbackEndpoint}" \\
     -H "X-CLI-API-Key: \${LFG_API_KEY}" \\
     -H "Content-Type: application/json" \\
     -H "ngrok-skip-browser-warning: true" \\
-    -d "{\\"ticket_id\\":\\"\${LFG_TICKET_ID}\\",\\"data\\":\\"\$CHUNK\\",\\"done\\":true,\\"exit_code\\":\$CLAUDE_EXIT}" || true
+    -d "{\\"${idField}\\":\\"\${${idEnvVar}}\\",\\"data\\":\\"\$CHUNK\\",\\"done\\":true,\\"exit_code\\":\$CLAUDE_EXIT}" || true
 else
-  curl -s -X POST "\${LFG_API_URL}/api/v1/cli/output" \\
+  curl -s -X POST "\${LFG_API_URL}${callbackEndpoint}" \\
     -H "X-CLI-API-Key: \${LFG_API_KEY}" \\
     -H "Content-Type: application/json" \\
     -H "ngrok-skip-browser-warning: true" \\
-    -d "{\\"ticket_id\\":\\"\${LFG_TICKET_ID}\\",\\"data\\":\\"\\",\\"done\\":true,\\"exit_code\\":\$CLAUDE_EXIT}" || true
+    -d "{\\"${idField}\\":\\"\${${idEnvVar}}\\",\\"data\\":\\"\\",\\"done\\":true,\\"exit_code\\":\$CLAUDE_EXIT}" || true
 fi
 
 echo "" >> ${outputFile}
@@ -549,13 +573,10 @@ echo "___CLAUDE_EXIT_CODE=\$CLAUDE_EXIT" >> ${outputFile}
   if (creds) {
     const credsB64 = Buffer.from(creds).toString("base64");
     dbCredsInject = `
-# Inject credentials from DB — root copy + claudeuser copy
+# Inject credentials from DB
 mkdir -p /root/.claude
 echo '${credsB64}' | base64 -d > /root/.claude/.credentials.json
-id claudeuser >/dev/null 2>&1 || (adduser -D -s /bin/bash claudeuser 2>/dev/null || useradd -m -s /bin/bash claudeuser 2>/dev/null || true)
-mkdir -p /home/claudeuser/.claude
-cp /root/.claude/.credentials.json /home/claudeuser/.claude/.credentials.json
-chown -R claudeuser:claudeuser /home/claudeuser/.claude
+chmod 600 /root/.claude/.credentials.json
 `;
   }
 
@@ -567,11 +588,9 @@ echo '${runnerB64}' | base64 -d > ${runnerScript}
 chmod 755 ${runnerScript}
 ${dbCredsInject}
 touch ${outputFile}
-chmod 666 ${outputFile}
-chmod 644 ${promptFile} ${envFile}
-# Ensure project dir writable by claudeuser
-chown -R claudeuser:claudeuser ${WORKING_DIR}/${projectDirName} 2>/dev/null || true
-nohup su -s /bin/bash claudeuser -c "bash ${runnerScript}" > /dev/null 2>&1 &
+mkdir -p ${WORKING_DIR}/${projectDirName}
+# Start Claude CLI in background as root
+nohup bash ${runnerScript} > /dev/null 2>&1 &
 echo "___CLAUDE_BG_PID=\$!"
 echo "CLAUDE_STARTED"
 `;
@@ -605,8 +624,7 @@ echo "CLAUDE_STARTED"
 
 /**
  * Save credentials back to DB from VM after a successful run.
- * Checks claudeuser's home first (CLI runs as claudeuser and may refresh tokens there),
- * then falls back to /root/.claude/.credentials.json.
+ * Save credentials back from VM (CLI runs as root, credentials at /root/.claude/).
  */
 export async function saveCredentialsFromVm(
   workspaceId: string,
@@ -615,7 +633,7 @@ export async function saveCredentialsFromVm(
   try {
     const result = await execOnWorkspace(
       workspaceId,
-      `cat /home/claudeuser/.claude/.credentials.json 2>/dev/null || cat /root/.claude/.credentials.json 2>/dev/null || echo "__NO_CREDS__"`,
+      `cat /root/.claude/.credentials.json 2>/dev/null || echo "__NO_CREDS__"`,
       { timeout: 15_000 }
     );
     const output = result.output.trim();
@@ -781,13 +799,32 @@ export function extractExitCode(allOutput: string): number | null {
 /**
  * Check raw output for auth errors.
  */
-export function hasAuthError(output: string): boolean {
-  const markers = [
-    "oauth token has expired",
-    "authentication_error",
-    "please run /login",
-    "not logged in",
-  ];
-  const lower = output.toLowerCase();
-  return markers.some((m) => lower.includes(m));
+/**
+ * Check if Claude auth is valid by running `claude auth status` on the VM.
+ * Returns true if there IS an auth error (i.e. not logged in).
+ */
+export async function hasAuthError(workspaceId: string): Promise<boolean> {
+  try {
+    const result = await execOnWorkspace(
+      workspaceId,
+      `export HOME=/root; export PATH=/root/node/current/bin:/root/.npm-global/bin:$PATH; claude auth status 2>&1`,
+      { timeout: 15_000 }
+    );
+    const output = result.output.trim();
+    console.log(`[claude-cli] auth status check: ${output.slice(0, 200)}`);
+
+    // Parse the JSON output from `claude auth status`
+    try {
+      const status = JSON.parse(output);
+      if (status.loggedIn === true) return false; // no error
+    } catch {
+      // Not valid JSON — probably an error message
+    }
+
+    // If we get here, either not logged in or couldn't parse
+    return true;
+  } catch {
+    // exec failed — treat as auth error
+    return true;
+  }
 }

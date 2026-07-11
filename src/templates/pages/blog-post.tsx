@@ -66,6 +66,8 @@ export function BlogPostPage({
             <div class="hidden md:flex items-center gap-6">
                 <a href="/" class="text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors">Home</a>
                 <a href="/agent/" class="text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors">Agent</a>
+                <a href="/factory/" class="text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors">Factory</a>
+                <a href="/portfolio/" class="text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors">Portfolio</a>
                 <a href="/services/" class="text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors">Services</a>
                 <a href="/blog/" class="text-sm font-medium text-indigo-600 font-semibold">Blog</a>
                 <div class="flex items-center gap-4 ml-2">
@@ -84,6 +86,8 @@ export function BlogPostPage({
         <div id="mobile-menu" class="hidden md:hidden absolute top-full left-0 w-full bg-white border-b border-slate-200 p-4 flex-col gap-3 shadow-xl z-50">
             <a href="/" class="text-base font-medium text-slate-700 py-2 mobile-link">Home</a>
             <a href="/agent/" class="text-base font-medium text-slate-700 py-2 mobile-link">Agent</a>
+            <a href="/factory/" class="text-base font-medium text-slate-700 py-2 mobile-link">Factory</a>
+            <a href="/portfolio/" class="text-base font-medium text-slate-700 py-2 mobile-link">Portfolio</a>
             <a href="/services/" class="text-base font-medium text-slate-700 py-2 mobile-link">Services</a>
             <a href="/blog/" class="text-base font-medium text-slate-700 py-2 mobile-link">Blog</a>
             <a href="/auth/register" class="bg-indigo-600 text-white w-full py-3 rounded-lg font-semibold text-center block mobile-link">Get Started</a>
@@ -135,10 +139,13 @@ export function BlogPostPage({
             <div class="flex items-center gap-6 text-sm text-slate-400">
                 <a href="/" class="hover:text-indigo-400 transition-colors">Home</a>
                 <a href="/agent/" class="hover:text-indigo-400 transition-colors">Agent</a>
+                <a href="/factory/" class="hover:text-indigo-400 transition-colors">Factory</a>
+                <a href="/portfolio/" class="hover:text-indigo-400 transition-colors">Portfolio</a>
                 <a href="/services/" class="hover:text-indigo-400 transition-colors">Services</a>
+                <a href="/blog/" class="hover:text-indigo-400 transition-colors">Blog</a>
                 <a href="https://github.com/lfg-hq/lfg" target="_blank" rel="noopener noreferrer" class="hover:text-indigo-400 transition-colors">GitHub</a>
             </div>
-            <p class="text-xs text-slate-500">&copy; 2026 LFG Inc.</p>
+            <p class="text-xs text-slate-500">&copy; ${new Date().getFullYear()} LFG Inc. Open source under Apache 2.0.</p>
         </div>
     </footer>
 

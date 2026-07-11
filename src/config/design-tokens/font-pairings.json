@@ -1,0 +1,90 @@
+[
+  {
+    "id": "inter-system",
+    "name": "Inter + System",
+    "mood": ["clean", "modern", "professional", "minimal"],
+    "headingFont": "Inter",
+    "bodyFont": "Inter",
+    "monoFont": "JetBrains Mono",
+    "headingWeight": 700,
+    "bodyWeight": 400,
+    "scaleRatio": 1.25
+  },
+  {
+    "id": "space-grotesk-inter",
+    "name": "Space Grotesk + Inter",
+    "mood": ["tech", "futuristic", "bold", "modern"],
+    "headingFont": "Space Grotesk",
+    "bodyFont": "Inter",
+    "monoFont": "Fira Code",
+    "headingWeight": 700,
+    "bodyWeight": 400,
+    "scaleRatio": 1.333
+  },
+  {
+    "id": "playfair-lato",
+    "name": "Playfair Display + Lato",
+    "mood": ["elegant", "luxury", "editorial", "classic"],
+    "headingFont": "Playfair Display",
+    "bodyFont": "Lato",
+    "monoFont": "JetBrains Mono",
+    "headingWeight": 700,
+    "bodyWeight": 400,
+    "scaleRatio": 1.333
+  },
+  {
+    "id": "dm-sans-mono",
+    "name": "DM Sans + DM Mono",
+    "mood": ["clean", "friendly", "approachable", "modern"],
+    "headingFont": "DM Sans",
+    "bodyFont": "DM Sans",
+    "monoFont": "DM Mono",
+    "headingWeight": 700,
+    "bodyWeight": 400,
+    "scaleRatio": 1.25
+  },
+  {
+    "id": "sora-outfit",
+    "name": "Sora + Outfit",
+    "mood": ["modern", "playful", "creative", "vibrant"],
+    "headingFont": "Sora",
+    "bodyFont": "Outfit",
+    "monoFont": "Fira Code",
+    "headingWeight": 700,
+    "bodyWeight": 400,
+    "scaleRatio": 1.25
+  },
+  {
+    "id": "cabinet-general",
+    "name": "Cabinet Grotesk + General Sans",
+    "mood": ["bold", "creative", "startup", "energetic"],
+    "headingFont": "Plus Jakarta Sans",
+    "bodyFont": "General Sans",
+    "monoFont": "JetBrains Mono",
+    "headingWeight": 800,
+    "bodyWeight": 400,
+    "scaleRatio": 1.333
+  },
+  {
+    "id": "merriweather-source",
+    "name": "Merriweather + Source Sans 3",
+    "mood": ["editorial", "trustworthy", "warm", "readable"],
+    "headingFont": "Merriweather",
+    "bodyFont": "Source Sans 3",
+    "monoFont": "Source Code Pro",
+    "headingWeight": 700,
+    "bodyWeight": 400,
+    "scaleRatio": 1.25
+  },
+  {
+    "id": "geist-mono",
+    "name": "Geist + Geist Mono",
+    "mood": ["tech", "minimal", "developer", "clean"],
+    "headingFont": "Geist",
+    "bodyFont": "Geist",
+    "monoFont": "Geist Mono",
+    "headingWeight": 600,
+    "bodyWeight": 400,
+    "scaleRatio": 1.2
+  }
+]

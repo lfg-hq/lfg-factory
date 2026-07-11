@@ -829,7 +829,7 @@ ticketsApi.post("/:projectId/tickets/:ticketId/git/push", async (c) => {
   try {
     const { sha } = await commitAndPush({
       workspaceId: sandbox.magsWorkspaceId,
-      projectDir: "/root/project",
+      projectDir: "/data/project",
       commitMessage: `update: ${ticket.name}`,
       featureBranch,
       repoUrl: `https://github.com/${repoOwner}/${repoName}.git`,
@@ -851,7 +851,7 @@ ticketsApi.post("/:projectId/tickets/:ticketId/git/push", async (c) => {
       const { mergeToLfgAgent } = await import("../../services/git.ts");
       const { sha: mergeSha } = await mergeToLfgAgent({
         workspaceId: sandbox.magsWorkspaceId,
-        projectDir: "/root/project",
+        projectDir: "/data/project",
         featureBranch,
         repoUrl: `https://github.com/${repoOwner}/${repoName}.git`,
         githubToken: ghToken.accessToken,

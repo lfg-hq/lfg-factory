@@ -78,7 +78,7 @@ export const ServicesPage = () => html`
               <span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-pink-500">You ship in days.</span>
             </h1>
             <p class="text-lg text-slate-600 leading-relaxed mb-8">
-              LFG runs an AI-first engineering pipeline for clients who need to move fast. From brief to deployed product in days, not months — with full visibility at every step.
+              LFG runs an AI-first engineering pipeline for clients who need to move fast. From brief to deployed product in days, not months, with full visibility at every step.
             </p>
 
             <!-- Process pills -->
@@ -174,7 +174,7 @@ export const ServicesPage = () => html`
                 <span class="btn-text">Submit request</span>
               </button>
               <div id="form-success" class="hidden text-center py-2 text-sm font-semibold text-emerald-600">
-                <i data-lucide="check-circle" class="w-4 h-4 inline mr-1"></i>Got it — we'll reply within 24 hours.
+                <i data-lucide="check-circle" class="w-4 h-4 inline mr-1"></i>Got it, we'll reply within 24 hours.
               </div>
               <div id="form-error" class="hidden text-center py-2 text-sm text-red-500"></div>
             </form>
@@ -190,7 +190,7 @@ export const ServicesPage = () => html`
         <div class="text-center mb-12">
           <p class="text-sm font-bold text-brand-600 uppercase tracking-wider mb-2">What we build</p>
           <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">Full-stack delivery, any type of product</h2>
-          <p class="text-slate-500 text-lg mt-3 max-w-2xl mx-auto">We handle the whole build — not just code. Design, architecture, deployment, docs, and CI/CD included.</p>
+          <p class="text-slate-500 text-lg mt-3 max-w-2xl mx-auto">We handle the whole build, not just code. Design, architecture, deployment, docs, and CI/CD included.</p>
         </div>
         <div class="grid md:grid-cols-3 gap-6">
           <div class="rounded-2xl border border-slate-200 bg-slate-50 p-6 hover:border-brand-300 hover:shadow-lg transition-all">
@@ -246,15 +246,15 @@ export const ServicesPage = () => html`
             <div class="w-10 h-10 rounded-xl bg-brand-100 text-brand-700 flex items-center justify-center mb-4">
               <i data-lucide="message-square-text" class="w-5 h-5"></i>
             </div>
-            <span class="text-xs font-bold text-brand-600 uppercase tracking-wider">01 — You</span>
+            <span class="text-xs font-bold text-brand-600 uppercase tracking-wider">01: You</span>
             <h3 class="font-display font-bold text-lg mt-2 mb-2">Brief us</h3>
-            <p class="text-sm text-slate-600">Tell us what you need. Goals, scope, constraints. We ask the right follow-up questions — no bloated discovery calls.</p>
+            <p class="text-sm text-slate-600">Tell us what you need. Goals, scope, constraints. We ask the right follow-up questions, no bloated discovery calls.</p>
           </div>
           <div class="bg-white rounded-2xl border border-brand-200 bg-brand-50/30 p-6 relative">
             <div class="w-10 h-10 rounded-xl bg-brand-200 text-brand-700 flex items-center justify-center mb-4">
               <i data-lucide="file-text" class="w-5 h-5"></i>
             </div>
-            <span class="text-xs font-bold text-brand-600 uppercase tracking-wider">02 — Us</span>
+            <span class="text-xs font-bold text-brand-600 uppercase tracking-wider">02: Us</span>
             <h3 class="font-display font-bold text-lg mt-2 mb-2">Plan + PRD</h3>
             <p class="text-sm text-slate-600">LFG Agent generates a full product requirements document, technical architecture, and delivery tickets. You approve before we write a line of code.</p>
           </div>
@@ -262,15 +262,15 @@ export const ServicesPage = () => html`
             <div class="w-10 h-10 rounded-xl bg-brand-200 text-brand-700 flex items-center justify-center mb-4">
               <i data-lucide="terminal" class="w-5 h-5"></i>
             </div>
-            <span class="text-xs font-bold text-brand-600 uppercase tracking-wider">03 — Us</span>
+            <span class="text-xs font-bold text-brand-600 uppercase tracking-wider">03: Us</span>
             <h3 class="font-display font-bold text-lg mt-2 mb-2">Build + test</h3>
-            <p class="text-sm text-slate-600">Agents execute tickets in sandboxed environments. Senior engineers review every diff. You see daily progress — real working software, not status updates.</p>
+            <p class="text-sm text-slate-600">Agents execute tickets in sandboxed environments. Senior engineers review every diff. You see daily progress, real working software, not status updates.</p>
           </div>
           <div class="bg-white rounded-2xl border border-slate-200 p-6 relative">
             <div class="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center mb-4">
               <i data-lucide="check-circle-2" class="w-5 h-5"></i>
             </div>
-            <span class="text-xs font-bold text-emerald-600 uppercase tracking-wider">04 — You</span>
+            <span class="text-xs font-bold text-emerald-600 uppercase tracking-wider">04: You</span>
             <h3 class="font-display font-bold text-lg mt-2 mb-2">Review + ship</h3>
             <p class="text-sm text-slate-600">You review the working product. Approve and we deploy. Request changes and we iterate immediately. Full source code and docs handed over.</p>
           </div>
@@ -295,7 +295,7 @@ export const ServicesPage = () => html`
               <span class="font-display font-bold text-4xl text-slate-900">$999</span>
               <span class="text-slate-500 text-sm mb-1">one-time</span>
             </div>
-            <p class="text-sm text-slate-600 mb-6">A focused build delivered in under a week. Scoped, planned, built, and deployed with full handover. Limited features — ideal for MVPs and proof-of-concepts.</p>
+            <p class="text-sm text-slate-600 mb-6">A focused build delivered in under a week. Scoped, planned, built, and deployed with full handover. Limited features, ideal for MVPs and proof-of-concepts.</p>
             <ul class="space-y-2.5 mb-8">
               <li class="flex items-center gap-2.5 text-sm text-slate-700"><i data-lucide="check" class="w-4 h-4 text-brand-600 shrink-0"></i> PRD + technical plan included</li>
               <li class="flex items-center gap-2.5 text-sm text-slate-700"><i data-lucide="check" class="w-4 h-4 text-brand-600 shrink-0"></i> Up to 5 core features</li>

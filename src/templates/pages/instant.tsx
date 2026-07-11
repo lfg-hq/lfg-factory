@@ -7,6 +7,67 @@ interface InstantAppSummary {
   status: string;
   previewUrl?: string | null;
   conversationId?: string | null;
+  design?: {
+    palette: string;
+    style: string;
+    headingFont: string;
+    bodyFont: string;
+    colors: Record<string, string | undefined>;
+    summary: string;
+    sections: Array<{ title: string; description: string }>;
+    projectType?: string;
+  } | null;
+  githubRepoUrl?: string | null;
+  testReport?: Record<string, unknown> | null;
+}
+
+function escHtml(s: unknown): string {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/** Render the Design tab panel (palette swatches + fonts + style + section outline). */
+function renderDesignPanel(d: NonNullable<InstantAppSummary["design"]>): string {
+  const swatchKeys = ["primary", "secondary", "accent", "background", "text", "border"];
+  const swatches = swatchKeys
+    .filter((k) => d.colors[k])
+    .map(
+      (k) =>
+        `<div class="design-swatch" title="${k}: ${escHtml(d.colors[k])}"><span class="design-swatch-chip" style="background:${escHtml(d.colors[k])}"></span><span class="design-swatch-label">${k}</span></div>`
+    )
+    .join("");
+  const sections = (d.sections ?? [])
+    .map((s) => `<li><strong>${escHtml(s.title)}</strong>${s.description ? " — " + escHtml(s.description) : ""}</li>`)
+    .join("");
+  const fonts = escHtml(d.headingFont) + (d.bodyFont && d.bodyFont !== d.headingFont ? " / " + escHtml(d.bodyFont) : "");
+  const stackLabel: Record<string, string> = {
+    webapp: "Next.js + shadcn/ui + SQLite",
+    landing: "Next.js + framer-motion",
+    game: "Vite + three.js",
+  };
+  const stack = d.projectType ? stackLabel[d.projectType] ?? d.projectType : "";
+  // A dropdown switches between the Plan and Design views (kept on separate screens).
+  // Self-contained inline toggle so no extra JS wiring is needed.
+  const toggle = `(function(s){var p=s.closest('.design-panel');p.querySelectorAll('[data-dp-view]').forEach(function(el){el.style.display=(el.getAttribute('data-dp-view')===s.value)?'':'none';});})(this)`;
+  return `<div class="design-panel">
+    <select class="design-panel-view-select" onchange="${toggle}">
+      <option value="plan">Plan &amp; Architecture</option>
+      <option value="design">Design</option>
+    </select>
+
+    <div data-dp-view="plan">
+      ${stack ? `<div class="design-panel-meta"><span><b>Stack:</b> ${escHtml(stack)}</span></div>` : ""}
+      ${d.summary ? `<p class="design-panel-summary">${escHtml(d.summary)}</p>` : ""}
+      ${sections ? `<div class="design-panel-label">Sections &amp; features</div><ul class="design-proposal-sections">${sections}</ul>` : ""}
+      ${!d.summary && !sections ? `<p class="design-panel-summary" style="opacity:0.5;">No plan details yet.</p>` : ""}
+    </div>
+
+    <div data-dp-view="design" style="display:none">
+      <div class="design-panel-label">Palette: ${escHtml(d.palette)}</div>
+      <div class="design-swatches">${swatches}</div>
+      <div class="design-panel-meta"><span><b>Fonts:</b> ${fonts}</span><span><b>Style:</b> ${escHtml(d.style)}</span></div>
+    </div>
+  </div>`;
 }
 
 interface InstantPageProps {
@@ -123,9 +184,9 @@ export function InstantPage({
                 </a>
               `
             : ""}
-          <a href="${standaloneMode ? "/instant/" : `/instant/project/${projectId}`}" class="nav-link active">
-            <i class="fas fa-bolt"></i>
-            <span class="nav-text">Instant</span>
+          <a href="${standaloneMode ? "/projects?tab=instant_apps" : `/projects/${projectId}?tab=instant`}" class="nav-link">
+            <i class="fas fa-history"></i>
+            <span class="nav-text">My apps</span>
           </a>
         </div>
 
@@ -278,33 +339,50 @@ export function InstantPage({
               <button class="preview-tab-btn" data-tab="env" title="Environment Variables">
                 <i class="fas fa-key"></i> Env
               </button>
+              <button class="preview-tab-btn" data-tab="design" title="Design schema">
+                <i class="fas fa-palette"></i> Design
+              </button>
+              <button class="preview-tab-btn" data-tab="qa" title="QA — test every screen in a real browser">
+                <i class="fas fa-vial"></i> QA
+              </button>
             </div>
             <div class="viewport-toggle" id="viewport-toggle">
               <button class="viewport-btn active" data-viewport="desktop" title="Desktop"><i class="fas fa-desktop"></i></button>
               <button class="viewport-btn" data-viewport="tablet" title="Tablet"><i class="fas fa-tablet-alt"></i></button>
               <button class="viewport-btn" data-viewport="mobile" title="Mobile"><i class="fas fa-mobile-alt"></i></button>
             </div>
-            <div class="preview-url-bar" id="preview-url-bar" style="display:none;">
-              <i class="fas fa-globe"></i>
-              <span id="preview-url-text"></span>
-              <a href="#" id="preview-open-btn" target="_blank" title="Open in new tab"><i class="fas fa-external-link-alt"></i></a>
-            </div>
+            <a href="#" id="preview-open-btn" class="preview-open-link" target="_blank" title="Open app in new tab" style="display:none;">
+              <i class="fas fa-globe"></i> <span>Open</span> <i class="fas fa-external-link-alt" style="font-size:0.7rem;"></i>
+            </a>
+            <span id="preview-url-bar" style="display:none;"><span id="preview-url-text"></span></span>
             <button id="preview-refresh-btn" class="preview-action-btn" title="Rebuild & Refresh" style="display:none">
               <i class="fas fa-sync-alt"></i>
             </button>
+            <button id="preview-restore-top-btn" class="preview-action-btn" title="Restore / resume this app" style="display:none">
+              <i class="fas fa-power-off"></i>
+            </button>
             <div class="preview-action-group" id="preview-actions" style="display:none">
-              <button id="preview-download-btn" class="preview-action-btn" title="Download Code">
-                <i class="fas fa-download"></i>
+              <button id="preview-menu-btn" class="preview-action-btn" title="More actions" aria-haspopup="true" aria-expanded="false">
+                <i class="fas fa-ellipsis-vertical"></i>
               </button>
-              <button id="preview-export-github-btn" class="preview-action-btn" title="Export to GitHub">
-                <i class="fab fa-github"></i>
-              </button>
-              <button id="preview-provision-db-btn" class="preview-action-btn" title="Provision PostgreSQL Database">
-                <i class="fas fa-database"></i>
-              </button>
-              <button id="preview-delete-btn" class="preview-action-btn danger" title="Delete App">
-                <i class="fas fa-trash-alt"></i>
-              </button>
+              <div class="preview-menu" id="preview-menu">
+                <button id="preview-restore-btn" class="preview-menu-item" type="button">
+                  <i class="fas fa-power-off"></i> <span>Restore / resume</span>
+                </button>
+                <button id="preview-download-btn" class="preview-menu-item" type="button">
+                  <i class="fas fa-download"></i> <span>Download code</span>
+                </button>
+                <button id="preview-export-github-btn" class="preview-menu-item" type="button">
+                  <i class="fab fa-github"></i> <span>GitHub repo</span>
+                </button>
+                <button id="preview-provision-db-btn" class="preview-menu-item" type="button">
+                  <i class="fas fa-database"></i> <span>Provision PostgreSQL</span>
+                </button>
+                <div class="preview-menu-divider"></div>
+                <button id="preview-delete-btn" class="preview-menu-item danger" type="button">
+                  <i class="fas fa-trash-alt"></i> <span>Delete app</span>
+                </button>
+              </div>
             </div>
           </div>
           <div class="preview-status" id="preview-status">
@@ -321,8 +399,12 @@ export function InstantPage({
           </div>
 
           <div class="instant-preview-building" id="preview-building" style="display:none;">
-            <canvas id="snake-game" width="320" height="320"></canvas>
-            <p id="building-message" class="building-command-text">Provisioning sandbox...</p>
+            <div class="snake-game-wrap">
+              <canvas id="snake-game" width="320" height="320" tabindex="0"></canvas>
+              <button id="snake-pause" class="snake-pause-btn" type="button" aria-label="Pause game">⏸ Pause</button>
+            </div>
+            <p id="building-message" class="building-command-text">Provisioning workspace...</p>
+            <p class="snake-hint">Click the board to play with arrow keys</p>
           </div>
 
           <iframe
@@ -361,6 +443,30 @@ export function InstantPage({
             </div>
           </div>
         </div>
+
+        <div class="instant-design-content" id="design-content" style="display:none;">
+          ${currentApp?.design
+            ? raw(renderDesignPanel(currentApp.design))
+            : raw(
+                `<div class="design-empty-state"><i class="fas fa-palette" style="font-size:1.5rem;opacity:0.3;margin-bottom:0.5rem;"></i><p>No design schema yet.</p><p style="font-size:0.75rem;opacity:0.5;">It appears once the plan is set or a build runs.</p></div>`
+              )}
+        </div>
+
+        <div class="instant-qa-content" id="qa-content" style="display:none;flex-direction:column;min-height:0;flex:1;">
+          <div class="qa-toolbar" style="display:flex;align-items:center;gap:0.75rem;padding:0.6rem 0.75rem;border-bottom:1px solid rgba(255,255,255,0.08);">
+            <button class="qa-run-btn" id="qa-run-btn" style="display:inline-flex;align-items:center;gap:6px;padding:0.4rem 0.8rem;border-radius:7px;border:none;background:linear-gradient(135deg,#8B5CF6,#A855F7);color:#fff;font-weight:600;cursor:pointer;font-size:0.85rem;">
+              <i class="fas fa-play"></i> Run QA tests
+            </button>
+            <span class="qa-summary" id="qa-summary" style="font-size:0.82rem;color:rgba(255,255,255,0.6);"></span>
+          </div>
+          <div class="qa-results" id="qa-results" style="flex:1;overflow:auto;padding:0.75rem;">
+            <div class="qa-empty-state" id="qa-empty-state" style="text-align:center;opacity:0.5;padding:2rem 1rem;">
+              <i class="fas fa-vial" style="font-size:1.5rem;opacity:0.4;margin-bottom:0.5rem;"></i>
+              <p>Run QA to test every screen in a real cloud browser.</p>
+              <p style="font-size:0.75rem;opacity:0.7;">Visits each page, screenshots it, and flags HTTP / JS / console errors.</p>
+            </div>
+          </div>
+        </div>
       </div>
     </main>
   </div>
@@ -374,6 +480,8 @@ export function InstantPage({
       currentAppStatus: currentApp?.status || "gathering",
       previewUrl: currentApp?.previewUrl || "",
       conversationId: currentApp?.conversationId || null,
+      githubRepoUrl: currentApp?.githubRepoUrl || "",
+      testReport: currentApp?.testReport || null,
     }))};
     window.__WS_PATH__ = '/ws/chat';
   </script>

@@ -1833,6 +1833,77 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
+            // Handle confirm_action notification — blocking Yes/No permission popup
+            if (data.notification_type === 'confirm_action') {
+                removeFunctionCallIndicator();
+
+                const title = data.title || 'Proceed?';
+                const summary = data.summary || '';
+                const confirmLabel = data.confirmLabel || 'Yes, go ahead';
+                const cancelLabel = data.cancelLabel || 'No, let me adjust';
+
+                const card = document.createElement('div');
+                card.className = 'confirm-action-card';
+
+                const body = document.createElement('div');
+                body.className = 'confirm-action-body';
+
+                const h4 = document.createElement('h4');
+                h4.className = 'confirm-action-title';
+                h4.textContent = title;
+                body.appendChild(h4);
+
+                if (summary) {
+                    const p = document.createElement('div');
+                    p.className = 'confirm-action-summary';
+                    p.textContent = summary;
+                    body.appendChild(p);
+                }
+                card.appendChild(body);
+
+                const footer = document.createElement('div');
+                footer.className = 'confirm-action-footer';
+
+                const noBtn = document.createElement('button');
+                noBtn.className = 'confirm-action-no-btn';
+                noBtn.textContent = cancelLabel;
+
+                const yesBtn = document.createElement('button');
+                yesBtn.className = 'confirm-action-yes-btn';
+                yesBtn.textContent = confirmLabel;
+
+                footer.appendChild(noBtn);
+                footer.appendChild(yesBtn);
+                card.appendChild(footer);
+
+                let answered = false;
+                function lockCard() {
+                    answered = true;
+                    card.classList.add('dismissed');
+                }
+
+                yesBtn.addEventListener('click', function() {
+                    if (answered) return;
+                    lockCard();
+                    chatInput.value = 'Yes, go ahead.';
+                    chatForm.dispatchEvent(new Event('submit'));
+                });
+
+                noBtn.addEventListener('click', function() {
+                    if (answered) return;
+                    lockCard();
+                    // Don't auto-send — let the user say what to change.
+                    if (chatInput) {
+                        chatInput.focus();
+                        chatInput.placeholder = 'What would you like to change?';
+                    }
+                });
+
+                messageContainer.appendChild(card);
+                scrollToBottom();
+                return;
+            }
+
             // Handle open_app notification
             if (data.notification_type === 'open_app' && data.app_url) {
 
@@ -3016,7 +3087,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (window.__AGENT_MODE__ && fileData && fileData.name) {
             const note =
                 `[Attached file: ${fileData.name}` +
-                ` — available in the sandbox at /root/data/${fileData.name}` +
+                ` — available in the workspace at /root/data/${fileData.name}` +
                 ` and downloadable from the Data Room.` +
                 ` Read it directly with pandas / openpyxl / etc.]`;
             outgoingMessage = (message || "").trim() + (message ? "\n\n" : "") + note;
