@@ -237,7 +237,7 @@ export function ProjectDetailPage({
         <a href="/projects/${project.projectId}?tab=documents" class="tab-item${activeTab === "documents" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "documents" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "documents" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
           <i class="fas fa-file-lines"></i> Documents
         </a>
-        <a href="/projects/${project.projectId}/tickets" class="tab-item" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:var(--text-secondary);border-bottom:2px solid transparent;margin-bottom:-1px;transition:color 0.15s;">
+        <a href="/projects/${project.projectId}?tab=tickets" class="tab-item${activeTab === "tickets" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "tickets" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "tickets" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
           <i class="fas fa-tasks"></i> Tickets
         </a>
         <a href="/projects/${project.projectId}?tab=instant" class="tab-item${activeTab === "instant" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "instant" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "instant" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
@@ -374,6 +374,123 @@ export function ProjectDetailPage({
               if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start);
               else start();
             })();
+          </script>
+        ` : ""}
+
+        ${activeTab === "tickets" ? html`
+          <div>
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;margin-bottom:1.25rem;flex-wrap:wrap;">
+              <h2 style="font-size:1.1rem;font-weight:600;color:var(--text-color);margin:0;">Tickets</h2>
+              <button class="btn btn-primary" onclick="openCreateTicket()" style="font-size:0.875rem;"><i class="fas fa-plus"></i> New Ticket</button>
+            </div>
+            <div style="display:flex;gap:0.5rem;margin-bottom:1rem;flex-wrap:wrap;">
+              <input id="tk-search" class="input" placeholder="Search tickets..." style="flex:1;min-width:180px;box-sizing:border-box;" oninput="renderDashTickets()" />
+              <select id="tk-status" class="input" style="width:auto;" onchange="renderDashTickets()">
+                <option value="">All statuses</option>
+                <option value="open">Open</option>
+                <option value="in_progress">In Progress</option>
+                <option value="review">In Review</option>
+                <option value="done">Done</option>
+                <option value="failed">Failed</option>
+              </select>
+              <select id="tk-priority" class="input" style="width:auto;" onchange="renderDashTickets()">
+                <option value="">All priorities</option>
+                <option value="High">High</option><option value="Medium">Medium</option><option value="Low">Low</option>
+              </select>
+              <select id="tk-assignee" class="input" style="width:auto;" onchange="renderDashTickets()">
+                <option value="">Anyone</option>
+              </select>
+            </div>
+            <div id="dash-tickets-list"><div style="color:var(--text-secondary);padding:1rem 0;">Loading tickets…</div></div>
+          </div>
+
+          <div class="modal-overlay" id="createTicketModal" style="position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.7);align-items:center;justify-content:center;">
+            <div style="background:var(--card-bg);border:1px solid var(--border-color);border-radius:var(--radius-lg);width:100%;max-width:520px;">
+              <div style="display:flex;align-items:center;justify-content:space-between;padding:1.25rem 1.5rem;border-bottom:1px solid var(--border-color);">
+                <h3 style="margin:0;font-size:1.1rem;font-weight:600;color:var(--text-color);">New Ticket</h3>
+                <button type="button" onclick="closeCreateTicket()" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:1.25rem;line-height:1;">&times;</button>
+              </div>
+              <div style="padding:1.5rem;">
+                <div style="margin-bottom:1rem;"><label style="display:block;font-size:0.875rem;font-weight:500;color:var(--text-color);margin-bottom:0.4rem;">Title</label><input id="ct-name" class="input" style="width:100%;box-sizing:border-box;" /></div>
+                <div style="margin-bottom:1rem;"><label style="display:block;font-size:0.875rem;font-weight:500;color:var(--text-color);margin-bottom:0.4rem;">Description</label><textarea id="ct-desc" rows="4" class="input" style="width:100%;box-sizing:border-box;resize:vertical;"></textarea></div>
+                <div style="display:flex;gap:0.75rem;margin-bottom:1.25rem;">
+                  <div style="flex:1;"><label style="display:block;font-size:0.875rem;font-weight:500;color:var(--text-color);margin-bottom:0.4rem;">Priority</label><select id="ct-priority" class="input" style="width:100%;"><option>High</option><option selected>Medium</option><option>Low</option></select></div>
+                  <div style="flex:1;"><label style="display:block;font-size:0.875rem;font-weight:500;color:var(--text-color);margin-bottom:0.4rem;">Assignee</label><select id="ct-assignee" class="input" style="width:100%;"><option value="">Unassigned (AI)</option></select></div>
+                </div>
+                <div id="ct-error" style="display:none;color:#ef4444;font-size:0.8125rem;margin-bottom:0.75rem;"></div>
+                <div style="display:flex;gap:0.75rem;justify-content:flex-end;">
+                  <button type="button" class="btn btn-secondary" onclick="closeCreateTicket()">Cancel</button>
+                  <button type="button" class="btn btn-primary" onclick="submitCreateTicket()">Create Ticket</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <script>
+            var TK_PID = '${project.projectId}';
+            var tkTickets = [], tkMembers = [];
+            function tkEsc(s){ return (s||'').replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+            function tkMemberName(id){ if(!id) return 'Unassigned'; var x = tkMembers.find(function(m){ return m.id===id; }); return x ? (x.name||x.email) : 'Someone'; }
+            function tkPrettyStatus(s){ return ({open:'Open',in_progress:'In Progress',review:'In Review',done:'Done',failed:'Failed',blocked:'Blocked'})[s] || s || 'Open'; }
+            function loadDashTickets(){
+              Promise.all([
+                fetch('/api/projects/'+TK_PID+'/tickets').then(function(r){return r.json();}),
+                fetch('/api/projects/'+TK_PID+'/members').then(function(r){return r.json();})
+              ]).then(function(res){
+                tkTickets = res[0].tickets || [];
+                var m = res[1] || {}; tkMembers = [];
+                if (m.owner) tkMembers.push({ id:m.owner.id, name:m.owner.name, email:m.owner.email });
+                (m.members||[]).forEach(function(x){ tkMembers.push({ id:x.userId, name:x.userName, email:x.userEmail }); });
+                var opts = tkMembers.map(function(m){ return '<option value="'+m.id+'">'+tkEsc(m.name||m.email)+'</option>'; }).join('');
+                var filt = document.getElementById('tk-assignee'); if (filt) filt.innerHTML = '<option value="">Anyone</option><option value="__none">Unassigned</option>'+opts;
+                var ct = document.getElementById('ct-assignee'); if (ct) ct.innerHTML = '<option value="">Unassigned (AI)</option>'+opts;
+                renderDashTickets();
+              });
+            }
+            function renderDashTickets(){
+              var q = ((document.getElementById('tk-search')||{}).value||'').toLowerCase();
+              var st = (document.getElementById('tk-status')||{}).value||'';
+              var pr = (document.getElementById('tk-priority')||{}).value||'';
+              var asg = (document.getElementById('tk-assignee')||{}).value||'';
+              var list = tkTickets.filter(function(t){
+                if (q && (t.name||'').toLowerCase().indexOf(q)<0) return false;
+                if (st && t.status !== st) return false;
+                if (pr && t.priority !== pr) return false;
+                if (asg === '__none' && t.assigneeId) return false;
+                if (asg && asg !== '__none' && t.assigneeId !== asg) return false;
+                return true;
+              });
+              var el = document.getElementById('dash-tickets-list');
+              if (!list.length){ el.innerHTML = '<div style="color:var(--text-secondary);padding:1rem 0;text-align:center;">No tickets match.</div>'; return; }
+              el.innerHTML = list.map(function(t){
+                var pc = t.priority==='High'?'#ef4444':(t.priority==='Low'?'#6b7280':'#f59e0b');
+                return '<div class="dash-ticket-row" data-id="'+t.id+'" style="display:flex;align-items:center;gap:1rem;padding:0.75rem 1rem;border:1px solid var(--border-color);border-radius:var(--radius);background:var(--card-bg);margin-bottom:0.5rem;cursor:pointer;">'
+                  + '<span style="font-size:0.7rem;color:var(--text-secondary);font-family:monospace;min-width:52px;">'+tkEsc(t.ticketKey||'')+'</span>'
+                  + '<span style="flex:1;font-size:0.9rem;color:var(--text-color);">'+tkEsc(t.name||'')+'</span>'
+                  + '<span style="font-size:0.7rem;color:'+pc+';font-weight:600;min-width:52px;">'+tkEsc(t.priority||'')+'</span>'
+                  + '<span style="font-size:0.7rem;padding:0.15rem 0.5rem;border-radius:9999px;background:rgba(139,92,246,0.12);color:var(--text-secondary);">'+tkPrettyStatus(t.status)+'</span>'
+                  + '<span style="font-size:0.75rem;color:var(--text-secondary);min-width:110px;text-align:right;">'+(t.assigneeId?('&#128100; '+tkEsc(tkMemberName(t.assigneeId))):'Unassigned')+'</span>'
+                  + '</div>';
+              }).join('');
+              el.querySelectorAll('.dash-ticket-row').forEach(function(row){
+                row.addEventListener('click', function(){ window.location.href = '/projects/'+TK_PID+'/tickets'; });
+              });
+            }
+            function openCreateTicket(){ document.getElementById('createTicketModal').classList.add('active'); }
+            function closeCreateTicket(){ document.getElementById('createTicketModal').classList.remove('active'); }
+            function submitCreateTicket(){
+              var name = document.getElementById('ct-name').value.trim();
+              var desc = document.getElementById('ct-desc').value.trim();
+              var priority = document.getElementById('ct-priority').value;
+              var assigneeId = document.getElementById('ct-assignee').value || null;
+              var err = document.getElementById('ct-error');
+              if (!name || !desc){ err.style.display='block'; err.textContent='Title and description are required.'; return; }
+              err.style.display='none';
+              fetch('/api/projects/'+TK_PID+'/tickets', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name:name, description:desc, priority:priority, assigneeId:assigneeId }) })
+                .then(function(r){ return r.json().then(function(d){ return { ok:r.ok, data:d }; }); })
+                .then(function(res){ if(!res.ok){ err.style.display='block'; err.textContent=(res.data&&res.data.error)||'Failed to create ticket'; return; } document.getElementById('ct-name').value=''; document.getElementById('ct-desc').value=''; closeCreateTicket(); loadDashTickets(); });
+            }
+            if ('${activeTab}' === 'tickets') { loadDashTickets(); }
           </script>
         ` : ""}
 

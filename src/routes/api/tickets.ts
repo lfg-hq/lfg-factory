@@ -10,6 +10,7 @@ import { instantApps } from "../../db/schema/instant.ts";
 import { eq, and, asc, desc, max, notExists } from "drizzle-orm";
 import { getProjectAccess, requirePermission } from "../../auth/project-access.ts";
 import { nextTicketKey } from "../../utils/ticket-keys.ts";
+import { notify } from "../../services/notify.ts";
 import type { auth } from "../../auth/index.ts";
 
 type AuthEnv = {
@@ -55,6 +56,7 @@ ticketsApi.post("/:projectId/tickets", async (c) => {
     priority?: string;
     stageId?: string;
     complexity?: string;
+    assigneeId?: string | null;
   }>();
 
   if (!body.name || !body.description) {
@@ -84,8 +86,23 @@ ticketsApi.post("/:projectId/tickets", async (c) => {
       priority: body.priority ?? "Medium",
       stageId,
       complexity: body.complexity ?? "medium",
+      assigneeId: body.assigneeId || null,
     })
     .returning();
+
+  // Notify the assignee (if someone other than the creator).
+  if (ticket && body.assigneeId) {
+    await notify({
+      userId: body.assigneeId,
+      actorId: user.id,
+      projectId: project.projectId,
+      type: "assigned",
+      targetType: "ticket",
+      targetId: ticket.id,
+      message: `${user.name || "Someone"} assigned you a ticket: "${ticket.name}"`,
+      link: `/projects/${project.projectId}/tickets`,
+    });
+  }
 
   return c.json({ ticket }, 201);
 });
@@ -141,6 +158,7 @@ ticketsApi.patch("/:projectId/tickets/:ticketId", async (c) => {
     complexity: string;
     queueStatus: string;
     notes: string;
+    assigneeId: string | null;
   }>>();
 
   const updateData: Record<string, unknown> = { updatedAt: new Date() };
@@ -152,12 +170,27 @@ ticketsApi.patch("/:projectId/tickets/:ticketId", async (c) => {
   if (body.complexity !== undefined) updateData.complexity = body.complexity;
   if (body.queueStatus !== undefined) updateData.queueStatus = body.queueStatus;
   if (body.notes !== undefined) updateData.notes = body.notes;
+  if ("assigneeId" in body) updateData.assigneeId = body.assigneeId || null;
 
   const [updated] = await db
     .update(projectTickets)
     .set(updateData)
     .where(eq(projectTickets.id, existing.id))
     .returning();
+
+  // Notify on (re)assignment to a different person.
+  if ("assigneeId" in body && body.assigneeId) {
+    await notify({
+      userId: body.assigneeId,
+      actorId: user.id,
+      projectId: project.projectId,
+      type: "assigned",
+      targetType: "ticket",
+      targetId: existing.id,
+      message: `${user.name || "Someone"} assigned you a ticket: "${updated?.name ?? ""}"`,
+      link: `/projects/${project.projectId}/tickets`,
+    });
+  }
 
   return c.json({ ticket: updated });
 });
