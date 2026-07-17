@@ -55,6 +55,7 @@ export const projectTickets = sqliteTable(
     description: text("description").notNull(),
     priority: text("priority").notNull().default("Medium"), // High | Medium | Low
     role: text("role").notNull().default("user"), // agent | user
+    assigneeId: text("assignee_id"), // user who owns this ticket (null = unassigned/agent)
 
     // Enhanced details
     details: text("details", { mode: "json" }).default({}),

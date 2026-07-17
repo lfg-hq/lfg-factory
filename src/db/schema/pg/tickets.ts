@@ -52,6 +52,7 @@ export const projectTickets = pgTable(
     description: text("description").notNull(),
     priority: text("priority").notNull().default("Medium"),
     role: text("role").notNull().default("user"),
+    assigneeId: text("assignee_id"), // user who owns this ticket (null = unassigned/agent)
     details: jsonb("details").default({}),
     uiRequirements: jsonb("ui_requirements").default({}),
     componentSpecs: jsonb("component_specs").default({}),
