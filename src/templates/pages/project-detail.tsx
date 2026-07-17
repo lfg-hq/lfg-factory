@@ -453,9 +453,10 @@ export function ProjectDetailPage({
                     + (refsBlock ? '<div style="font-size:0.75rem;color:var(--text-secondary);margin-bottom:0.4rem;font-weight:500;">Referenced</div>'+refsBlock : '')
                     + '<div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;">'
                     +   '<span style="font-size:0.8rem;color:var(--text-secondary);">'+(n.readAt?'Seen':'Sent')+' · '+when+'</span>'
-                    +   (canDelete ? '<button onclick="deleteMessage(\''+n.id+'\')" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:0.8rem;"><i class="fas fa-trash"></i> Delete</button>' : '')
+                    +   (canDelete ? '<button onclick="deleteCurrentMessage()" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:0.8rem;"><i class="fas fa-trash"></i> Delete</button>' : '')
                     + '</div>';
                 }
+                IB_DELETE_ID = canDelete ? n.id : null;
                 if (n.refs && n.refs.length) {
                   render(n.refs); // structured refs — already clickable
                 } else if (parsed.refs.length) {
@@ -466,9 +467,11 @@ export function ProjectDetailPage({
                 }
                 document.getElementById('sentDetailModal').classList.add('active');
               }
+              var IB_DELETE_ID = null;
               window.showSentDetail = function(i){ var n = IB_SENT[i]; if (n) openDetail(atHandle(n.toName, n.toEmail), n.type==='mentioned'?'Tagged':'To', n, true); };
-              window.deleteMessage = function(id){
-                if (!confirm('Delete this message? It will be removed from the recipient\\'s inbox too.')) return;
+              window.deleteCurrentMessage = function(){
+                var id = IB_DELETE_ID; if (!id) return;
+                if (!confirm('Delete this message? It will be removed from the recipient inbox too.')) return;
                 fetch('/api/projects/'+IB_PID+'/requests/'+id, { method:'DELETE' })
                   .then(function(r){ return r.json().then(function(d){return {ok:r.ok,data:d};}); })
                   .then(function(res){
