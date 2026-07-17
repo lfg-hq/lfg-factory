@@ -6352,96 +6352,15 @@ document.addEventListener('DOMContentLoaded', function() {
                             })
                             .catch(() => {});
 
-                        // Auto-open file if specified
-                        if (options.openFileId && options.openFileName) {
-                            // Directly call the API to load the file content
+                        // Auto-open file if specified — route through viewFileContent
+                        // so it shows the loading spinner and shares all viewer logic
+                        // (title edit, actions, inline comments, error/retry state).
+                        if (options.openFileId) {
                             setTimeout(() => {
-                                
-                                // Call the file content API directly
-                                fetch(`/projects/${projectId}/api/files/${options.openFileId}/content/`, {
-                                    method: 'GET',
-                                    headers: {
-                                        'Content-Type': 'application/json',
-                                        'X-CSRFToken': getCsrfToken(),
-                                    }
-                                })
-                                .then(response => response.json())
-                                .then(data => {
-                                    // Switch to viewer mode
-                                    fileBrowserMain.style.display = 'none';
-                                    fileBrowserViewer.style.display = 'flex';
-                                    
-                                    // Set title
-                                    const viewerTitle = document.getElementById('viewer-title');
-                                    if (viewerTitle) {
-                                        viewerTitle.innerHTML = `
-                                            <span id="viewer-title-text">${data.name || options.openFileName}</span>
-                                            <button id="viewer-title-edit" style="background: none; border: none; color: #9ca3af; cursor: pointer; margin-left: 8px; padding: 4px; opacity: 0.7;" title="Edit name">
-                                                <i class="fas fa-pencil" style="font-size: 12px;"></i>
-                                            </button>
-                                        `;
-                                    }
-                                    
-                                    // Store current file data
-                                    window.currentFileData = {
-                                        fileId: options.openFileId,
-                                        fileName: data.name || options.openFileName,
-                                        fileType: data.type,
-                                        content: data.content
-                                    };
-                                    
-                                    // Render the content
-                                    const viewerMarkdown = document.getElementById('viewer-markdown');
-                                    if (viewerMarkdown) {
-                                        // Configure marked if not already configured
-                                        if (typeof marked !== 'undefined' && !window.markedConfigured) {
-                                            marked.setOptions({
-                                                gfm: true,          // Enable GitHub Flavored Markdown
-                                                breaks: true,       // Add <br> on line breaks
-                                                headerIds: true,    // Add IDs to headers
-                                                mangle: false,      // Don't mangle header IDs
-                                                tables: true,       // Enable table support
-                                                smartLists: true,   // Improve behavior of lists
-                                                xhtml: false        // Don't use XHTML compatible tags
-                                            });
-                                            window.markedConfigured = true;
-                                        }
-                                        
-                                        // Check if content appears to be markdown by looking for common markdown patterns
-                                        const isMarkdownContent = (content) => {
-                                            if (!content) return false;
-                                            // Check for headers, lists, code blocks, tables, links, or emphasis
-                                            return /^#{1,6}\s|^\*\s|^\-\s|^\d+\.\s|```|^\|.*\|$|\[.*\]\(.*\)|\*\*.*\*\*|\*.*\*/m.test(content);
-                                        };
-                                        
-                                        // Always render as markdown if it contains markdown patterns or is a known markdown type
-                                        const knownMarkdownTypes = ['prd', 'implementation', 'design', 'analysis', 'documentation', 'readme'];
-                                        if (knownMarkdownTypes.includes(data.type) || isMarkdownContent(data.content)) {
-                                            // Strip <lfg-file> wrapper tags and render as markdown
-                                            const cleanContent = (data.content || '').replace(/<lfg-file[^>]*>\n?/g, '').replace(/<\/lfg-file>\s*$/g, '');
-                                            viewerMarkdown.innerHTML = marked.parse(cleanContent);
-                                        } else {
-                                            // Render as plain text
-                                            viewerMarkdown.innerHTML = (data.content || '').replace(/\n/g, '<br>').replace(/\t/g, '&nbsp;&nbsp;&nbsp;&nbsp;');
-                                        }
-                                    }
-                                    
-                                    // Set metadata
-                                    const viewerMeta = document.getElementById('viewer-meta');
-                                    if (viewerMeta) {
-                                        viewerMeta.innerHTML = `
-                                            <span><i class="fas fa-user"></i> ${data.owner || 'Unknown'}</span>
-                                            <span><i class="fas fa-calendar"></i> ${data.created_at ? new Date(data.created_at).toLocaleDateString() : 'Unknown'}</span>
-                                            <span><i class="fas fa-tag"></i> ${data.type_display || data.type || 'Document'}</span>
-                                        `;
-                                    }
-                                    
-                                })
-                                .catch(error => {
-                                    console.error('[ArtifactsLoader] Error loading file content:', error);
-                                    showToast('Failed to load file content', 'error');
-                                });
-                            }, 100); // Small delay to ensure DOM is ready
+                                if (typeof window.viewFileContent === 'function') {
+                                    window.viewFileContent(options.openFileId, options.openFileName || 'Document');
+                                }
+                            }, 50); // let the DOM settle first
                         }
                         
                     } else {
