@@ -231,6 +231,10 @@ export function ProjectDetailPage({
           <i class="fas fa-comments"></i> Conversations
           ${conversations.length > 0 ? html`<span style="font-size:0.7rem;background:rgba(139,92,246,0.2);color:#a78bfa;padding:0.1rem 0.4rem;border-radius:9999px;">${conversations.length}</span>` : ""}
         </a>
+        <a href="/projects/${project.projectId}?tab=inbox" class="tab-item${activeTab === "inbox" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "inbox" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "inbox" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
+          <i class="fas fa-inbox"></i> Inbox
+          <span id="inbox-tab-badge" style="display:none;font-size:0.7rem;background:var(--primary-color);color:#fff;padding:0.1rem 0.4rem;border-radius:9999px;"></span>
+        </a>
         <a href="/projects/${project.projectId}?tab=documents" class="tab-item${activeTab === "documents" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "documents" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "documents" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
           <i class="fas fa-file-lines"></i> Documents
         </a>
@@ -251,32 +255,53 @@ export function ProjectDetailPage({
           <i class="fas fa-cog"></i> Settings
         </a>
       </div>
+      <script>
+        (function(){
+          // Populate the Inbox tab's unread badge on every page (any tab).
+          fetch('/api/projects/${project.projectId}/notifications').then(function(r){return r.json();}).then(function(d){
+            var unread = (d.notifications||[]).filter(function(n){ return !n.readAt; }).length;
+            var b = document.getElementById('inbox-tab-badge');
+            if (b && unread){ b.textContent = unread; b.style.display = ''; }
+          }).catch(function(){});
+        })();
+      </script>
 
       <!-- Tab content -->
       <div style="padding:2rem;max-width:1200px;margin:0 auto;">
-        ${activeTab === "conversations" ? html`
-          <!-- Your inbox: tickets assigned to you / comments tagging you in this project -->
+        ${activeTab === "inbox" ? html`
+          <!-- Your inbox: tickets assigned to you / comments tagging you / messages -->
           <div id="inbox-section" style="margin-bottom:2rem;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
-              <div style="display:flex;gap:0.75rem;align-items:center;">
+              <div style="display:flex;gap:1rem;align-items:center;">
                 <h2 style="font-size:1.1rem;font-weight:600;color:var(--text-color);margin:0;"><i class="fas fa-inbox" style="margin-right:0.4rem;color:var(--primary-color);"></i>Your Inbox</h2>
-                <div style="display:inline-flex;border:1px solid var(--border-color);border-radius:var(--radius);overflow:hidden;">
-                  <button id="inbox-tab-received" onclick="switchInboxTab('received')" style="font-size:0.75rem;padding:0.35rem 0.75rem;border:none;background:var(--primary-color);color:#fff;cursor:pointer;">Received</button>
-                  <button id="inbox-tab-sent" onclick="switchInboxTab('sent')" style="font-size:0.75rem;padding:0.35rem 0.75rem;border:none;background:transparent;color:var(--text-secondary);cursor:pointer;">Sent</button>
+                <div style="display:inline-flex;gap:1rem;">
+                  <button id="inbox-tab-received" onclick="switchInboxTab('received')" style="font-size:0.85rem;padding:0.15rem 0;border:none;background:none;color:var(--text-color);font-weight:600;border-bottom:2px solid var(--primary-color);cursor:pointer;">Received</button>
+                  <button id="inbox-tab-sent" onclick="switchInboxTab('sent')" style="font-size:0.85rem;padding:0.15rem 0;border:none;background:none;color:var(--text-secondary);font-weight:500;border-bottom:2px solid transparent;cursor:pointer;">Sent</button>
                 </div>
               </div>
               <div style="display:flex;gap:0.5rem;align-items:center;">
                 <button id="inbox-markread" onclick="markAllInboxRead()" class="btn btn-secondary" style="font-size:0.75rem;display:none;">Mark all read</button>
-                <button onclick="openRequestModal()" class="btn btn-primary" style="font-size:0.75rem;"><i class="fas fa-paper-plane"></i> New request</button>
+                <button onclick="openRequestModal()" class="btn btn-primary" style="font-size:0.75rem;"><i class="fas fa-paper-plane"></i> New message</button>
               </div>
             </div>
-            <div id="inbox-list"><div style="color:var(--text-secondary);font-size:0.875rem;padding:1rem;border:1px dashed var(--border-color);border-radius:var(--radius);text-align:center;">No items yet — assign a ticket, tag someone in a comment, or send a request to get started.</div></div>
+            <div id="inbox-list"><div style="color:var(--text-secondary);font-size:0.875rem;padding:1rem;border:1px dashed var(--border-color);border-radius:var(--radius);text-align:center;">No items yet — assigned tickets, mentions and messages sent to you show up here.</div></div>
+          </div>
+
+          <!-- Sent-message detail modal -->
+          <div class="modal-overlay" id="sentDetailModal" style="position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.7);align-items:center;justify-content:center;">
+            <div style="background:var(--card-bg);border:1px solid var(--border-color);border-radius:var(--radius-lg);width:100%;max-width:480px;">
+              <div style="display:flex;align-items:center;justify-content:space-between;padding:1.25rem 1.5rem;border-bottom:1px solid var(--border-color);">
+                <h3 style="margin:0;font-size:1.1rem;font-weight:600;color:var(--text-color);">Message</h3>
+                <button type="button" onclick="document.getElementById('sentDetailModal').classList.remove('active')" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:1.25rem;line-height:1;">&times;</button>
+              </div>
+              <div id="sent-detail-body" style="padding:1.5rem;font-size:0.9rem;color:var(--text-color);"></div>
+            </div>
           </div>
 
           <div class="modal-overlay" id="requestModal" style="position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.7);align-items:center;justify-content:center;">
             <div style="background:var(--card-bg);border:1px solid var(--border-color);border-radius:var(--radius-lg);width:100%;max-width:480px;">
               <div style="display:flex;align-items:center;justify-content:space-between;padding:1.25rem 1.5rem;border-bottom:1px solid var(--border-color);">
-                <h3 style="margin:0;font-size:1.1rem;font-weight:600;color:var(--text-color);">Send a request</h3>
+                <h3 style="margin:0;font-size:1.1rem;font-weight:600;color:var(--text-color);">Send a message</h3>
                 <button type="button" onclick="closeRequestModal()" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:1.25rem;line-height:1;">&times;</button>
               </div>
               <div style="padding:1.5rem;">
@@ -353,16 +378,28 @@ export function ProjectDetailPage({
               function relTime(ts){ if(!ts) return ''; var d=new Date(ts); var s=Math.floor((Date.now()-d.getTime())/1000); if(s<60)return 'just now'; if(s<3600)return Math.floor(s/60)+'m ago'; if(s<86400)return Math.floor(s/3600)+'h ago'; return d.toLocaleDateString(); }
               function iconFor(t){ return t==='assigned'?'fa-user-check':(t==='mentioned'?'fa-at':(t==='review_requested'?'fa-paper-plane':'fa-comment')); }
               function ibEmpty(msg){ return '<div style="color:var(--text-secondary);font-size:0.875rem;padding:1rem;border:1px dashed var(--border-color);border-radius:var(--radius);text-align:center;">'+msg+'</div>'; }
+              var IB_SENT = [];
               window.switchInboxTab = function(tab){
                 IB_TAB = tab;
                 var r = document.getElementById('inbox-tab-received'), s = document.getElementById('inbox-tab-sent');
-                var on = 'background:var(--primary-color);color:#fff;', off = 'background:transparent;color:var(--text-secondary);';
-                r.style.cssText = 'font-size:0.75rem;padding:0.35rem 0.75rem;border:none;cursor:pointer;'+(tab==='received'?on:off);
-                s.style.cssText = 'font-size:0.75rem;padding:0.35rem 0.75rem;border:none;cursor:pointer;'+(tab==='sent'?on:off);
+                var on = 'font-size:0.85rem;padding:0.15rem 0;border:none;background:none;cursor:pointer;color:var(--text-color);font-weight:600;border-bottom:2px solid var(--primary-color);';
+                var off = 'font-size:0.85rem;padding:0.15rem 0;border:none;background:none;cursor:pointer;color:var(--text-secondary);font-weight:500;border-bottom:2px solid transparent;';
+                r.style.cssText = (tab==='received'?on:off);
+                s.style.cssText = (tab==='sent'?on:off);
                 document.getElementById('inbox-markread').style.display = 'none';
                 if (tab==='sent') loadSent(); else loadInbox();
               };
               window.reloadInbox = function(){ if (IB_TAB==='sent') loadSent(); else loadInbox(); };
+              window.showSentDetail = function(i){
+                var n = IB_SENT[i]; if (!n) return;
+                var when = new Date(n.createdAt).toLocaleString();
+                document.getElementById('sent-detail-body').innerHTML =
+                  '<div style="margin-bottom:0.75rem;"><span style="color:var(--text-secondary);">To:</span> '+ibEsc(n.toName||n.toEmail||'someone')+(n.toEmail&&n.toName?' <span style="color:var(--text-secondary);">('+ibEsc(n.toEmail)+')</span>':'')+'</div>'
+                  + '<div style="margin-bottom:0.75rem;padding:0.75rem;border:1px solid var(--border-color);border-radius:var(--radius);background:var(--body-bg);">'+ibEsc(n.message)+'</div>'
+                  + '<div style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:1rem;">'+(n.readAt?'Seen':'Sent')+' · '+when+'</div>'
+                  + (n.link?'<a href="'+n.link+'" class="btn btn-primary" style="font-size:0.8rem;"><i class="fas fa-external-link-alt"></i> Open referenced item</a>':'');
+                document.getElementById('sentDetailModal').classList.add('active');
+              };
               function loadInbox(){
                 fetch('/api/projects/'+IB_PID+'/notifications').then(function(r){return r.json();}).then(function(data){
                   var items = data.notifications || [];
@@ -386,21 +423,24 @@ export function ProjectDetailPage({
               }
               function loadSent(){
                 fetch('/api/projects/'+IB_PID+'/requests/sent').then(function(r){return r.json();}).then(function(data){
-                  var items = data.requests || [];
+                  IB_SENT = data.requests || [];
                   var list = document.getElementById('inbox-list');
-                  if (!items.length){ list.innerHTML = ibEmpty('You haven\\'t sent any requests yet. Use “New request” to ask a teammate to review docs or tickets.'); return; }
-                  list.innerHTML = items.map(function(n){
-                    return '<a href="'+ (n.link||'#') +'" style="display:flex;align-items:center;gap:0.75rem;padding:0.75rem 1rem;border:1px solid var(--border-color);border-radius:var(--radius);background:var(--card-bg);margin-bottom:0.5rem;text-decoration:none;color:var(--text-color);">'
+                  if (!IB_SENT.length){ list.innerHTML = ibEmpty('You haven\\'t sent any messages yet. Use “New message” to ask a teammate to review docs, tickets, or anything else.'); return; }
+                  list.innerHTML = IB_SENT.map(function(n, i){
+                    return '<div onclick="showSentDetail('+i+')" style="display:flex;align-items:center;gap:0.75rem;padding:0.75rem 1rem;border:1px solid var(--border-color);border-radius:var(--radius);background:var(--card-bg);margin-bottom:0.5rem;color:var(--text-color);cursor:pointer;">'
                       + '<i class="fas fa-paper-plane" style="color:var(--primary-color);width:1rem;"></i>'
                       + '<span style="flex:1;font-size:0.875rem;"><span style="color:var(--text-secondary);">To '+ibEsc(n.toName||n.toEmail||'someone')+':</span> '+ibEsc(n.message)+'</span>'
                       + '<span style="font-size:0.7rem;color:'+(n.readAt?'#22c55e':'var(--text-secondary)')+';min-width:70px;text-align:right;">'+(n.readAt?'seen':'sent')+' · '+relTime(n.createdAt)+'</span>'
-                      + '</a>';
+                      + '</div>';
                   }).join('');
                 });
               }
-              if ('${activeTab}' === 'conversations') loadInbox();
+              if ('${activeTab}' === 'inbox') loadInbox();
             })();
           </script>
+        ` : ""}
+
+        ${activeTab === "conversations" ? html`
           <div>
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem;">
               <h2 style="font-size:1.1rem;font-weight:600;color:var(--text-color);margin:0;">Conversations</h2>

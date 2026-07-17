@@ -141,9 +141,9 @@ notificationsApi.post("/:projectId/requests", async (c) => {
     const refsHtml = refs.length ? `<ul>${refs.map((r) => `<li>${escapeHtmlText(r)}</li>`).join("")}</ul>` : "";
     sendEmail({
       to: recipient.email,
-      subject: `${user.name || "Someone"} sent you a request in ${access.project.name}`,
-      html: `<p><strong>${escapeHtmlText(user.name || "Someone")}</strong> sent you a request:</p><blockquote>${escapeHtmlText(body.message.trim())}</blockquote>${refsHtml}<p><a href="${url}">Open in LFG →</a></p>`,
-      text: `${user.name || "Someone"} sent you a request: ${body.message.trim()}${refSuffix}\n\n${url}`,
+      subject: `${user.name || "Someone"} sent you a message in ${access.project.name}`,
+      html: `<p><strong>${escapeHtmlText(user.name || "Someone")}</strong> sent you a message:</p><blockquote>${escapeHtmlText(body.message.trim())}</blockquote>${refsHtml}<p><a href="${url}">Open in LFG →</a></p>`,
+      text: `${user.name || "Someone"} sent you a message: ${body.message.trim()}${refSuffix}\n\n${url}`,
     }).catch(() => {});
   }
 
@@ -173,7 +173,7 @@ notificationsApi.get("/:projectId/requests/sent", async (c) => {
       and(
         eq(notifications.actorId, user.id),
         eq(notifications.projectId, projectId!),
-        eq(notifications.type, "review_requested")
+        inArray(notifications.type, ["review_requested", "mentioned", "assigned"])
       )
     )
     .orderBy(desc(notifications.createdAt))
