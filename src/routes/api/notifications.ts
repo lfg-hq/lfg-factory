@@ -201,4 +201,21 @@ notificationsApi.get("/:projectId/requests/sent", async (c) => {
   return c.json({ requests: rows.map((r) => ({ ...r, refs: parseRefs(r.refs) })) });
 });
 
+// DELETE /api/projects/:projectId/requests/:id — sender unsends a message
+notificationsApi.delete("/:projectId/requests/:id", async (c) => {
+  const user = c.get("user");
+  const { projectId, id } = c.req.param();
+  const access = await getProjectAccess(projectId!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+
+  const [existing] = await db.select().from(notifications).where(eq(notifications.id, id!));
+  if (!existing) return c.json({ error: "Message not found" }, 404);
+  if (existing.actorId !== user.id) {
+    return c.json({ error: "Only the sender can delete this message" }, 403);
+  }
+
+  await db.delete(notifications).where(eq(notifications.id, id!));
+  return c.json({ ok: true });
+});
+
 export default notificationsApi;

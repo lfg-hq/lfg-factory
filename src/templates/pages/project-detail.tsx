@@ -442,7 +442,7 @@ export function ProjectDetailPage({
                 if (tab==='sent') loadSent(); else loadInbox();
               };
               window.reloadInbox = function(){ if (IB_TAB==='sent') loadSent(); else loadInbox(); };
-              function openDetail(who, whoLabel, n){
+              function openDetail(who, whoLabel, n, canDelete){
                 var parsed = splitRefs(n.message);
                 var when = new Date(n.createdAt).toLocaleString();
                 function render(refsArr){
@@ -451,7 +451,10 @@ export function ProjectDetailPage({
                     '<div style="margin-bottom:0.75rem;"><span style="color:var(--text-secondary);">'+whoLabel+':</span> '+ibEsc(who)+'</div>'
                     + '<div style="margin-bottom:1rem;padding:0.85rem;border:1px solid var(--border-color);border-radius:var(--radius);background:var(--body-bg);font-size:0.9rem;line-height:1.5;">'+ibEsc(parsed.body)+'</div>'
                     + (refsBlock ? '<div style="font-size:0.75rem;color:var(--text-secondary);margin-bottom:0.4rem;font-weight:500;">Referenced</div>'+refsBlock : '')
-                    + '<div style="font-size:0.8rem;color:var(--text-secondary);">'+(n.readAt?'Seen':'Sent')+' · '+when+'</div>';
+                    + '<div style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;">'
+                    +   '<span style="font-size:0.8rem;color:var(--text-secondary);">'+(n.readAt?'Seen':'Sent')+' · '+when+'</span>'
+                    +   (canDelete ? '<button onclick="deleteMessage(\''+n.id+'\')" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:0.8rem;"><i class="fas fa-trash"></i> Delete</button>' : '')
+                    + '</div>';
                 }
                 if (n.refs && n.refs.length) {
                   render(n.refs); // structured refs — already clickable
@@ -463,10 +466,20 @@ export function ProjectDetailPage({
                 }
                 document.getElementById('sentDetailModal').classList.add('active');
               }
-              window.showSentDetail = function(i){ var n = IB_SENT[i]; if (n) openDetail(atHandle(n.toName, n.toEmail), n.type==='mentioned'?'Tagged':'To', n); };
+              window.showSentDetail = function(i){ var n = IB_SENT[i]; if (n) openDetail(atHandle(n.toName, n.toEmail), n.type==='mentioned'?'Tagged':'To', n, true); };
+              window.deleteMessage = function(id){
+                if (!confirm('Delete this message? It will be removed from the recipient\\'s inbox too.')) return;
+                fetch('/api/projects/'+IB_PID+'/requests/'+id, { method:'DELETE' })
+                  .then(function(r){ return r.json().then(function(d){return {ok:r.ok,data:d};}); })
+                  .then(function(res){
+                    if (!res.ok){ alert((res.data&&res.data.error)||'Failed to delete'); return; }
+                    document.getElementById('sentDetailModal').classList.remove('active');
+                    if (window.reloadInbox) window.reloadInbox();
+                  });
+              };
               window.showRecvDetail = function(i){
                 var n = IB_RECV[i]; if (!n) return;
-                openDetail(n.actorName||'Someone', 'From', n);
+                openDetail(n.actorName||'Someone', 'From', n, false);
                 if (!n.readAt){ // mark this one read
                   fetch('/api/projects/'+IB_PID+'/notifications/read', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ id:n.id }) })
                     .then(function(){ n.readAt = new Date().toISOString(); loadInbox(); });
