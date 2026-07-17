@@ -227,13 +227,13 @@ export function ProjectDetailPage({
 
       <!-- Horizontal Tab Nav -->
       <div class="project-tabs" style="display:flex;gap:0;border-bottom:1px solid var(--border-color);padding:0 2rem;background:var(--body-bg);">
-        <a href="/projects/${project.projectId}" class="tab-item${activeTab === "conversations" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "conversations" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "conversations" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
-          <i class="fas fa-comments"></i> Conversations
-          ${conversations.length > 0 ? html`<span style="font-size:0.7rem;background:rgba(139,92,246,0.2);color:#a78bfa;padding:0.1rem 0.4rem;border-radius:9999px;">${conversations.length}</span>` : ""}
-        </a>
-        <a href="/projects/${project.projectId}?tab=inbox" class="tab-item${activeTab === "inbox" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "inbox" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "inbox" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
+        <a href="/projects/${project.projectId}" class="tab-item${activeTab === "inbox" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "inbox" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "inbox" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
           <i class="fas fa-inbox"></i> Inbox
           <span id="inbox-tab-badge" style="display:none;font-size:0.7rem;background:var(--primary-color);color:#fff;padding:0.1rem 0.4rem;border-radius:9999px;"></span>
+        </a>
+        <a href="/projects/${project.projectId}?tab=conversations" class="tab-item${activeTab === "conversations" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "conversations" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "conversations" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
+          <i class="fas fa-comments"></i> Conversations
+          ${conversations.length > 0 ? html`<span style="font-size:0.7rem;background:rgba(139,92,246,0.2);color:#a78bfa;padding:0.1rem 0.4rem;border-radius:9999px;">${conversations.length}</span>` : ""}
         </a>
         <a href="/projects/${project.projectId}?tab=documents" class="tab-item${activeTab === "documents" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "documents" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "documents" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
           <i class="fas fa-file-lines"></i> Documents
@@ -255,6 +255,13 @@ export function ProjectDetailPage({
           <i class="fas fa-cog"></i> Settings
         </a>
       </div>
+      <style>
+        /* Clean, blended list — one bordered container with subtle row dividers. */
+        .lfg-list { border:1px solid var(--border-color); border-radius:var(--radius); overflow:hidden; background:var(--card-bg); }
+        .lfg-row { display:flex; align-items:center; gap:0.875rem; padding:0.875rem 1rem; border-bottom:1px solid var(--border-color); text-decoration:none; color:var(--text-color); cursor:pointer; transition:background 0.12s; }
+        .lfg-row:last-child { border-bottom:none; }
+        .lfg-row:hover { background:rgba(139,92,246,0.06); }
+      </style>
       <script>
         (function(){
           // Populate the Inbox tab's unread badge on every page (any tab).
@@ -378,7 +385,21 @@ export function ProjectDetailPage({
               function relTime(ts){ if(!ts) return ''; var d=new Date(ts); var s=Math.floor((Date.now()-d.getTime())/1000); if(s<60)return 'just now'; if(s<3600)return Math.floor(s/60)+'m ago'; if(s<86400)return Math.floor(s/3600)+'h ago'; return d.toLocaleDateString(); }
               function iconFor(t){ return t==='assigned'?'fa-user-check':(t==='mentioned'?'fa-at':(t==='review_requested'?'fa-paper-plane':'fa-comment')); }
               function ibEmpty(msg){ return '<div style="color:var(--text-secondary);font-size:0.875rem;padding:1rem;border:1px dashed var(--border-color);border-radius:var(--radius);text-align:center;">'+msg+'</div>'; }
-              var IB_SENT = [];
+              var IB_SENT = [], IB_RECV = [];
+              // Split "message — re: 📄 A, 🎫 B" into a clean body + referenced-item list.
+              function splitRefs(msg){
+                var idx = (msg||'').indexOf(' — re: ');
+                if (idx < 0) return { body: msg||'', refs: [] };
+                var body = msg.slice(0, idx);
+                var refs = msg.slice(idx + 7).split(/,\s+(?=📄|🎫)/).map(function(s){ return s.trim(); }).filter(Boolean);
+                return { body: body, refs: refs };
+              }
+              function refsHtml(refs){
+                if (!refs.length) return '';
+                return '<div style="margin-bottom:1rem;">'+refs.map(function(r){
+                  return '<div style="display:flex;align-items:center;gap:0.5rem;padding:0.5rem 0.75rem;border:1px solid var(--border-color);border-radius:var(--radius);margin-bottom:0.4rem;font-size:0.85rem;">'+ibEsc(r)+'</div>';
+                }).join('')+'</div>';
+              }
               window.switchInboxTab = function(tab){
                 IB_TAB = tab;
                 var r = document.getElementById('inbox-tab-received'), s = document.getElementById('inbox-tab-sent');
@@ -390,34 +411,44 @@ export function ProjectDetailPage({
                 if (tab==='sent') loadSent(); else loadInbox();
               };
               window.reloadInbox = function(){ if (IB_TAB==='sent') loadSent(); else loadInbox(); };
-              window.showSentDetail = function(i){
-                var n = IB_SENT[i]; if (!n) return;
+              function openDetail(who, whoLabel, n){
+                var parsed = splitRefs(n.message);
                 var when = new Date(n.createdAt).toLocaleString();
                 document.getElementById('sent-detail-body').innerHTML =
-                  '<div style="margin-bottom:0.75rem;"><span style="color:var(--text-secondary);">To:</span> '+ibEsc(n.toName||n.toEmail||'someone')+(n.toEmail&&n.toName?' <span style="color:var(--text-secondary);">('+ibEsc(n.toEmail)+')</span>':'')+'</div>'
-                  + '<div style="margin-bottom:0.75rem;padding:0.75rem;border:1px solid var(--border-color);border-radius:var(--radius);background:var(--body-bg);">'+ibEsc(n.message)+'</div>'
+                  '<div style="margin-bottom:0.75rem;"><span style="color:var(--text-secondary);">'+whoLabel+':</span> '+ibEsc(who)+'</div>'
+                  + '<div style="margin-bottom:1rem;padding:0.85rem;border:1px solid var(--border-color);border-radius:var(--radius);background:var(--body-bg);font-size:0.9rem;line-height:1.5;">'+ibEsc(parsed.body)+'</div>'
+                  + (parsed.refs.length ? '<div style="font-size:0.75rem;color:var(--text-secondary);margin-bottom:0.4rem;font-weight:500;">Referenced</div>'+refsHtml(parsed.refs) : '')
                   + '<div style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:1rem;">'+(n.readAt?'Seen':'Sent')+' · '+when+'</div>'
                   + (n.link?'<a href="'+n.link+'" class="btn btn-primary" style="font-size:0.8rem;"><i class="fas fa-external-link-alt"></i> Open referenced item</a>':'');
                 document.getElementById('sentDetailModal').classList.add('active');
+              }
+              window.showSentDetail = function(i){ var n = IB_SENT[i]; if (n) openDetail(n.toName||n.toEmail||'someone', 'To', n); };
+              window.showRecvDetail = function(i){
+                var n = IB_RECV[i]; if (!n) return;
+                openDetail(n.actorName||'Someone', 'From', n);
+                if (!n.readAt){ // mark this one read
+                  fetch('/api/projects/'+IB_PID+'/notifications/read', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ id:n.id }) })
+                    .then(function(){ n.readAt = new Date().toISOString(); loadInbox(); });
+                }
               };
+              function row(n, i, dim){
+                var parsed = splitRefs(n.message);
+                return '<div onclick="showRecvDetail('+i+')" class="lfg-row" style="'+(dim?'opacity:0.55;':'')+'">'
+                  + '<i class="fas '+iconFor(n.type)+'" style="color:var(--primary-color);width:1rem;"></i>'
+                  + '<span style="flex:1;font-size:0.875rem;">'+ibEsc(parsed.body)+(parsed.refs.length?' <span style="color:var(--text-secondary);font-size:0.8rem;">· '+parsed.refs.length+' item'+(parsed.refs.length>1?'s':'')+'</span>':'')+'</span>'
+                  + (dim?'':'<span style="width:8px;height:8px;border-radius:50%;background:var(--primary-color);flex:none;"></span>')
+                  + '<span style="font-size:0.7rem;color:var(--text-secondary);min-width:64px;text-align:right;">'+relTime(n.createdAt)+'</span>'
+                  + '</div>';
+              }
               function loadInbox(){
                 fetch('/api/projects/'+IB_PID+'/notifications').then(function(r){return r.json();}).then(function(data){
-                  var items = data.notifications || [];
+                  IB_RECV = data.notifications || [];
                   var list = document.getElementById('inbox-list');
-                  if (!items.length){ list.innerHTML = ibEmpty('No items yet — assigned tickets, mentions and requests sent to you show up here.'); return; }
-                  var pending = items.filter(function(n){ return !n.readAt; });
-                  var done = items.filter(function(n){ return n.readAt; });
-                  document.getElementById('inbox-markread').style.display = pending.length ? '' : 'none';
-                  function row(n, dim){
-                    return '<a href="'+ (n.link||'#') +'" style="display:flex;align-items:center;gap:0.75rem;padding:0.75rem 1rem;border:1px solid var(--border-color);border-radius:var(--radius);background:var(--card-bg);margin-bottom:0.5rem;text-decoration:none;color:var(--text-color);'+(dim?'opacity:0.6;':'')+'">'
-                      + '<i class="fas '+iconFor(n.type)+'" style="color:var(--primary-color);width:1rem;"></i>'
-                      + '<span style="flex:1;font-size:0.875rem;">'+ibEsc(n.message)+'</span>'
-                      + (dim?'':'<span style="width:8px;height:8px;border-radius:50%;background:var(--primary-color);"></span>')
-                      + '<span style="font-size:0.7rem;color:var(--text-secondary);min-width:70px;text-align:right;">'+relTime(n.createdAt)+'</span>'
-                      + '</a>';
-                  }
-                  var html = pending.map(function(n){ return row(n,false); }).join('');
-                  if (done.length){ html += '<div style="font-size:0.75rem;color:var(--text-secondary);margin:0.75rem 0 0.5rem;">Earlier</div>' + done.slice(0,10).map(function(n){ return row(n,true); }).join(''); }
+                  if (!IB_RECV.length){ list.innerHTML = ibEmpty('No items yet — assigned tickets, mentions and messages sent to you show up here.'); return; }
+                  document.getElementById('inbox-markread').style.display = IB_RECV.some(function(n){return !n.readAt;}) ? '' : 'none';
+                  var html = '<div class="lfg-list">';
+                  IB_RECV.forEach(function(n,i){ html += row(n, i, !!n.readAt); });
+                  html += '</div>';
                   list.innerHTML = html;
                 });
               }
@@ -426,13 +457,17 @@ export function ProjectDetailPage({
                   IB_SENT = data.requests || [];
                   var list = document.getElementById('inbox-list');
                   if (!IB_SENT.length){ list.innerHTML = ibEmpty('You haven\\'t sent any messages yet. Use “New message” to ask a teammate to review docs, tickets, or anything else.'); return; }
-                  list.innerHTML = IB_SENT.map(function(n, i){
-                    return '<div onclick="showSentDetail('+i+')" style="display:flex;align-items:center;gap:0.75rem;padding:0.75rem 1rem;border:1px solid var(--border-color);border-radius:var(--radius);background:var(--card-bg);margin-bottom:0.5rem;color:var(--text-color);cursor:pointer;">'
+                  var html = '<div class="lfg-list">';
+                  IB_SENT.forEach(function(n, i){
+                    var parsed = splitRefs(n.message);
+                    html += '<div onclick="showSentDetail('+i+')" class="lfg-row">'
                       + '<i class="fas fa-paper-plane" style="color:var(--primary-color);width:1rem;"></i>'
-                      + '<span style="flex:1;font-size:0.875rem;"><span style="color:var(--text-secondary);">To '+ibEsc(n.toName||n.toEmail||'someone')+':</span> '+ibEsc(n.message)+'</span>'
-                      + '<span style="font-size:0.7rem;color:'+(n.readAt?'#22c55e':'var(--text-secondary)')+';min-width:70px;text-align:right;">'+(n.readAt?'seen':'sent')+' · '+relTime(n.createdAt)+'</span>'
+                      + '<span style="flex:1;font-size:0.875rem;"><span style="color:var(--text-secondary);">To '+ibEsc(n.toName||n.toEmail||'someone')+':</span> '+ibEsc(parsed.body)+(parsed.refs.length?' <span style="color:var(--text-secondary);font-size:0.8rem;">· '+parsed.refs.length+' item'+(parsed.refs.length>1?'s':'')+'</span>':'')+'</span>'
+                      + '<span style="font-size:0.7rem;color:'+(n.readAt?'#22c55e':'var(--text-secondary)')+';min-width:64px;text-align:right;">'+(n.readAt?'seen':'sent')+' · '+relTime(n.createdAt)+'</span>'
                       + '</div>';
-                  }).join('');
+                  });
+                  html += '</div>';
+                  list.innerHTML = html;
                 });
               }
               if ('${activeTab}' === 'inbox') loadInbox();
@@ -455,10 +490,9 @@ export function ProjectDetailPage({
                 <a href="/chat/project/${project.projectId}" class="btn btn-primary">Start a conversation</a>
               </div>
             ` : html`
-              <div style="display:flex;flex-direction:column;gap:0.5rem;">
+              <div class="lfg-list">
                 ${conversations.map((c) => html`
-                  <a href="/chat/project/${project.projectId}/conversation/${c.id}"
-                    style="display:flex;align-items:center;gap:1rem;padding:0.875rem 1rem;border:1px solid var(--border-color);border-radius:var(--radius);background:var(--card-bg);text-decoration:none;color:var(--text-color);transition:border-color 0.15s;">
+                  <a href="/chat/project/${project.projectId}/conversation/${c.id}" class="lfg-row">
                     <i class="fas fa-comment-dots" style="color:var(--text-secondary);width:1rem;"></i>
                     <span style="flex:1;font-size:0.9375rem;">${c.title ?? "Untitled conversation"}</span>
                     <span style="font-size:0.75rem;color:var(--text-secondary);">${new Date(c.updatedAt).toLocaleDateString()}</span>
