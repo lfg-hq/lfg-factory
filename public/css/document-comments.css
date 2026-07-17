@@ -111,3 +111,22 @@ mark.comment-highlight.resolved {
   border-color: var(--primary-color);
   outline: none;
 }
+
+/* ── @mention autocomplete ──────────────────────────────────────────── */
+.mention-dropdown {
+  position: fixed;
+  z-index: 10001;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  max-height: 200px;
+  overflow-y: auto;
+}
+.mention-item {
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  font-size: 0.8125rem;
+  color: var(--text-color);
+}
+.mention-item:hover { background: rgba(124, 58, 237, 0.12); }

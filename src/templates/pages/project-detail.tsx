@@ -89,6 +89,7 @@ export function ProjectDetailPage({
   <link rel="stylesheet" href="/public/css/projects.css" />
   <link rel="stylesheet" href="/public/css/project_detail.css" />
   <link rel="stylesheet" href="/public/css/artifacts.css" />
+  <link rel="stylesheet" href="/public/css/document-comments.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
@@ -259,12 +260,12 @@ export function ProjectDetailPage({
       <div style="padding:2rem;max-width:1200px;margin:0 auto;">
         ${activeTab === "conversations" ? html`
           <!-- Your inbox: tickets assigned to you / comments tagging you in this project -->
-          <div id="inbox-section" style="margin-bottom:2rem;display:none;">
+          <div id="inbox-section" style="margin-bottom:2rem;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
-              <h2 style="font-size:1.1rem;font-weight:600;color:var(--text-color);margin:0;">Your Inbox</h2>
+              <h2 style="font-size:1.1rem;font-weight:600;color:var(--text-color);margin:0;"><i class="fas fa-inbox" style="margin-right:0.4rem;color:var(--primary-color);"></i>Your Inbox</h2>
               <button id="inbox-markread" onclick="markAllInboxRead()" class="btn btn-secondary" style="font-size:0.75rem;display:none;">Mark all read</button>
             </div>
-            <div id="inbox-list"></div>
+            <div id="inbox-list"><div style="color:var(--text-secondary);font-size:0.875rem;padding:1rem;border:1px dashed var(--border-color);border-radius:var(--radius);text-align:center;">No items yet — tickets assigned to you and comments that tag you will show up here.</div></div>
           </div>
           <script>
             (function(){
@@ -278,9 +279,8 @@ export function ProjectDetailPage({
               function loadInbox(){
                 fetch('/api/projects/'+IB_PID+'/notifications').then(function(r){return r.json();}).then(function(data){
                   var items = data.notifications || [];
-                  var sec = document.getElementById('inbox-section'); var list = document.getElementById('inbox-list');
-                  if (!items.length){ sec.style.display='none'; return; }
-                  sec.style.display='block';
+                  var list = document.getElementById('inbox-list');
+                  if (!items.length){ return; } // keep the empty-state placeholder
                   var pending = items.filter(function(n){ return !n.readAt; });
                   var done = items.filter(function(n){ return n.readAt; });
                   document.getElementById('inbox-markread').style.display = pending.length ? '' : 'none';
@@ -352,6 +352,16 @@ export function ProjectDetailPage({
             #filebrowser-viewer { position: static !important; inset: auto !important; min-height: 65vh; }
             #filebrowser-viewer .viewer-content { min-height: 55vh; }
             #viewer-markdown { color: var(--text-color) !important; }
+            /* Viewer header buttons (back / title / edit / copy / more) are styled
+               for the dark chat panel (#e2e8f0) — invisible on the light dashboard. */
+            #filebrowser-viewer .viewer-back,
+            #filebrowser-viewer #viewer-title,
+            #filebrowser-viewer #viewer-title-text,
+            #filebrowser-viewer .viewer-actions button,
+            #filebrowser-viewer .viewer-actions button i { color: var(--text-color) !important; }
+            #filebrowser-viewer .viewer-header { border-bottom-color: var(--border-color) !important; }
+            [data-theme="light"] #filebrowser-viewer .viewer-back:hover,
+            [data-theme="light"] #filebrowser-viewer .viewer-actions button:hover { background: rgba(0,0,0,0.06) !important; }
           </style>
           <div id="filebrowser" class="filebrowser-container" style="position:relative;display:flex;flex-direction:column;">
             <div id="filebrowser-main" style="display:flex;flex-direction:column;">

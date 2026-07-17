@@ -20,10 +20,60 @@
     state.fileId = fileId;
     state.projectId = projectId;
     state.canComment = opts && opts.canComment;
+    state.members = [];
+
+    // Load members for @mention autocomplete.
+    fetch("/api/projects/" + projectId + "/members")
+      .then(function (r) { return r.json(); })
+      .then(function (m) {
+        var list = [];
+        if (m.owner) list.push({ name: m.owner.name, email: m.owner.email });
+        (m.members || []).forEach(function (x) { list.push({ name: x.userName, email: x.userEmail }); });
+        state.members = list;
+      })
+      .catch(function () {});
 
     loadComments();
     if (state.canComment) setupSelectionListener();
   };
+
+  // @mention autocomplete inside a comment textarea.
+  function attachMentionAutocomplete(textarea) {
+    var dd = null;
+    function close() { if (dd) { dd.remove(); dd = null; } }
+    textarea.addEventListener("input", function () {
+      var val = textarea.value, pos = textarea.selectionStart;
+      var upto = val.slice(0, pos);
+      var m = upto.match(/@([a-zA-Z0-9._-]*)$/);
+      if (!m) { close(); return; }
+      var q = m[1].toLowerCase();
+      var matches = (state.members || []).filter(function (p) {
+        var n = (p.name || "").toLowerCase(), e = (p.email || "").toLowerCase();
+        return !q || n.indexOf(q) >= 0 || e.indexOf(q) >= 0;
+      }).slice(0, 6);
+      if (!matches.length) { close(); return; }
+      if (!dd) { dd = document.createElement("div"); dd.className = "mention-dropdown"; document.body.appendChild(dd); }
+      var rect = textarea.getBoundingClientRect();
+      dd.style.left = rect.left + "px";
+      dd.style.top = rect.bottom + 4 + "px";
+      dd.style.width = rect.width + "px";
+      dd.innerHTML = matches.map(function (p) {
+        var handle = (p.name || p.email || "").split(/\s+/)[0];
+        return '<div class="mention-item" data-handle="' + escapeHtml(handle) + '">@' + escapeHtml(handle) +
+          ' <span style="color:var(--text-secondary);font-size:0.7rem;">' + escapeHtml(p.name || "") + "</span></div>";
+      }).join("");
+      dd.querySelectorAll(".mention-item").forEach(function (it) {
+        it.addEventListener("mousedown", function (e) {
+          e.preventDefault();
+          var handle = it.dataset.handle;
+          textarea.value = upto.replace(/@[a-zA-Z0-9._-]*$/, "@" + handle + " ") + val.slice(pos);
+          textarea.focus();
+          close();
+        });
+      });
+    });
+    textarea.addEventListener("blur", function () { setTimeout(close, 150); });
+  }
 
   function apiBase() {
     return "/api/projects/" + state.projectId + "/files/" + state.fileId + "/comments";
@@ -114,6 +164,7 @@
 
     var textarea = document.getElementById("comment-input-text");
     textarea.focus();
+    attachMentionAutocomplete(textarea);
 
     document.getElementById("comment-submit-btn").addEventListener("click", function () {
       var content = textarea.value.trim();
