@@ -42,7 +42,7 @@
   // ── Text selection → floating "Comment" button ─────────────────────
 
   function setupSelectionListener() {
-    var contentArea = document.querySelector(".shared-content, .file-content, .artifact-content, #content");
+    var contentArea = document.querySelector(".shared-content, .file-content, .artifact-content, #content, #viewer-markdown");
     if (!contentArea) return;
 
     contentArea.addEventListener("mouseup", function (e) {
@@ -159,7 +159,7 @@
       el.outerHTML = el.innerHTML;
     });
 
-    var contentArea = document.querySelector(".shared-content, .file-content, .artifact-content, #content");
+    var contentArea = document.querySelector(".shared-content, .file-content, .artifact-content, #content, #viewer-markdown");
     if (!contentArea) return;
 
     state.comments.forEach(function (comment) {

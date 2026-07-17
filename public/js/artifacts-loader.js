@@ -7176,6 +7176,13 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                     
                     // File info is now stored in window.currentFileData and used by action buttons
+
+                    // Wire document comments (select text → comment, reply, resolve).
+                    if (window.initDocumentComments) {
+                        try {
+                            window.initDocumentComments(fileId, getCurrentProjectId(), { canComment: true });
+                        } catch (e) { /* comments are optional */ }
+                    }
                 })
                 .catch(error => {
                     console.error('[ArtifactsLoader] Error loading file content:', error);

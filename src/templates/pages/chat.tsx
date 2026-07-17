@@ -313,6 +313,7 @@ export function ChatPage({
   <script src="/public/js/marked.min.js"></script>
   <script src="/public/js/markdown-config.js"></script>
   <script src="/public/js/artifacts-loader.js"></script>
+  <script src="/public/js/document-comments.js"></script>
   <script src="/public/js/artifacts.js"></script>
   <script src="/public/js/sidebar.js"></script>
   <script src="/public/js/custom-dropdown.js"></script>

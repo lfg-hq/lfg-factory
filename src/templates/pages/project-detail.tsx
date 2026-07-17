@@ -258,6 +258,48 @@ export function ProjectDetailPage({
       <!-- Tab content -->
       <div style="padding:2rem;max-width:1200px;margin:0 auto;">
         ${activeTab === "conversations" ? html`
+          <!-- Your inbox: tickets assigned to you / comments tagging you in this project -->
+          <div id="inbox-section" style="margin-bottom:2rem;display:none;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
+              <h2 style="font-size:1.1rem;font-weight:600;color:var(--text-color);margin:0;">Your Inbox</h2>
+              <button id="inbox-markread" onclick="markAllInboxRead()" class="btn btn-secondary" style="font-size:0.75rem;display:none;">Mark all read</button>
+            </div>
+            <div id="inbox-list"></div>
+          </div>
+          <script>
+            (function(){
+              var IB_PID = '${project.projectId}';
+              window.markAllInboxRead = function(){
+                fetch('/api/projects/'+IB_PID+'/notifications/read', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' }).then(loadInbox);
+              };
+              function ibEsc(s){ return (s||'').replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+              function relTime(ts){ if(!ts) return ''; var d=new Date(ts); var s=Math.floor((Date.now()-d.getTime())/1000); if(s<60)return 'just now'; if(s<3600)return Math.floor(s/60)+'m ago'; if(s<86400)return Math.floor(s/3600)+'h ago'; return d.toLocaleDateString(); }
+              function iconFor(t){ return t==='assigned'?'fa-user-check':(t==='mentioned'?'fa-at':'fa-comment'); }
+              function loadInbox(){
+                fetch('/api/projects/'+IB_PID+'/notifications').then(function(r){return r.json();}).then(function(data){
+                  var items = data.notifications || [];
+                  var sec = document.getElementById('inbox-section'); var list = document.getElementById('inbox-list');
+                  if (!items.length){ sec.style.display='none'; return; }
+                  sec.style.display='block';
+                  var pending = items.filter(function(n){ return !n.readAt; });
+                  var done = items.filter(function(n){ return n.readAt; });
+                  document.getElementById('inbox-markread').style.display = pending.length ? '' : 'none';
+                  function row(n, dim){
+                    return '<a href="'+ (n.link||'#') +'" style="display:flex;align-items:center;gap:0.75rem;padding:0.75rem 1rem;border:1px solid var(--border-color);border-radius:var(--radius);background:var(--card-bg);margin-bottom:0.5rem;text-decoration:none;color:var(--text-color);'+(dim?'opacity:0.6;':'')+'">'
+                      + '<i class="fas '+iconFor(n.type)+'" style="color:var(--primary-color);width:1rem;"></i>'
+                      + '<span style="flex:1;font-size:0.875rem;">'+ibEsc(n.message)+'</span>'
+                      + (dim?'':'<span style="width:8px;height:8px;border-radius:50%;background:var(--primary-color);"></span>')
+                      + '<span style="font-size:0.7rem;color:var(--text-secondary);min-width:70px;text-align:right;">'+relTime(n.createdAt)+'</span>'
+                      + '</a>';
+                  }
+                  var html = pending.map(function(n){ return row(n,false); }).join('');
+                  if (done.length){ html += '<div style="font-size:0.75rem;color:var(--text-secondary);margin:0.75rem 0 0.5rem;">Earlier</div>' + done.slice(0,10).map(function(n){ return row(n,true); }).join(''); }
+                  list.innerHTML = html;
+                });
+              }
+              if ('${activeTab}' === 'conversations') loadInbox();
+            })();
+          </script>
           <div>
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem;">
               <h2 style="font-size:1.1rem;font-weight:600;color:var(--text-color);margin:0;">Conversations</h2>
@@ -360,6 +402,7 @@ export function ProjectDetailPage({
           <script src="/public/js/marked.min.js"></script>
           <script src="/public/js/markdown-config.js"></script>
           <script src="/public/js/artifacts-loader.js"></script>
+          <script src="/public/js/document-comments.js"></script>
           <script>
             // Reuse the SAME docs module as the chat Docs panel (window.ArtifactsLoader),
             // so reads/edits/renders stay in sync across the dashboard and chat.

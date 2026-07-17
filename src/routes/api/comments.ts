@@ -3,9 +3,63 @@ import { requireAuth } from "../../auth/middleware.ts";
 import { db } from "../../config/db.ts";
 import { documentComments } from "../../db/schema/comments.ts";
 import { users } from "../../db/schema/users.ts";
+import { projectMembers } from "../../db/schema/projects.ts";
+import { projectFiles } from "../../db/schema/documents.ts";
 import { eq, and, asc, isNull } from "drizzle-orm";
 import { getProjectAccess, requirePermission } from "../../auth/project-access.ts";
+import { notify } from "../../services/notify.ts";
 import type { auth } from "../../auth/index.ts";
+
+/** Parse @mentions from a comment and notify matched project members. */
+async function notifyMentions(opts: {
+  content: string;
+  fileId: string;
+  actorId: string;
+  actorName: string;
+  project: { id: string; projectId: string; ownerId: string };
+}) {
+  const tokens = [...opts.content.matchAll(/@([a-zA-Z0-9._-]{2,})/g)].map((m) => m[1]!.toLowerCase());
+  if (!tokens.length) return;
+
+  const memberRows = await db
+    .select({ id: users.id, name: users.name, email: users.email })
+    .from(projectMembers)
+    .innerJoin(users, eq(projectMembers.userId, users.id))
+    .where(and(eq(projectMembers.projectId, opts.project.id), eq(projectMembers.status, "active")));
+  const [owner] = await db
+    .select({ id: users.id, name: users.name, email: users.email })
+    .from(users)
+    .where(eq(users.id, opts.project.ownerId));
+  const people = [...memberRows, ...(owner ? [owner] : [])];
+
+  const [file] = await db
+    .select({ name: projectFiles.name })
+    .from(projectFiles)
+    .where(eq(projectFiles.id, opts.fileId));
+  const docName = file?.name ?? "a document";
+
+  const matched = new Set<string>();
+  for (const p of people) {
+    const nameKey = (p.name ?? "").toLowerCase().replace(/\s+/g, "");
+    const first = (p.name ?? "").toLowerCase().split(/\s+/)[0] ?? "";
+    const emailPrefix = (p.email ?? "").toLowerCase().split("@")[0] ?? "";
+    if (tokens.some((t) => (nameKey && nameKey.startsWith(t)) || t === first || t === emailPrefix)) {
+      matched.add(p.id);
+    }
+  }
+  for (const uid of matched) {
+    await notify({
+      userId: uid,
+      actorId: opts.actorId,
+      projectId: opts.project.projectId,
+      type: "mentioned",
+      targetType: "document",
+      targetId: opts.fileId,
+      message: `${opts.actorName || "Someone"} tagged you in a comment on "${docName}"`,
+      link: `/projects/${opts.project.projectId}?tab=documents`,
+    });
+  }
+}
 
 type AuthEnv = {
   Variables: {
@@ -119,6 +173,14 @@ commentsApi.post("/:projectId/files/:fileId/comments", async (c) => {
     })
     .returning();
 
+  await notifyMentions({
+    content: body.content,
+    fileId: fileId!,
+    actorId: user.id,
+    actorName: user.name,
+    project: access.project,
+  });
+
   return c.json({ comment }, 201);
 });
 
@@ -202,6 +264,19 @@ commentsApi.post("/:projectId/files/:fileId/comments/:id/reply", async (c) => {
       parentId: id!,
     })
     .returning();
+
+  // Notify the original commenter that someone replied.
+  await notify({
+    userId: parent.userId,
+    actorId: user.id,
+    projectId: access.project.projectId,
+    type: "comment_reply",
+    targetType: "document",
+    targetId: fileId!,
+    message: `${user.name || "Someone"} replied to your comment`,
+    link: `/projects/${access.project.projectId}?tab=documents`,
+  });
+  await notifyMentions({ content: body.content, fileId: fileId!, actorId: user.id, actorName: user.name, project: access.project });
 
   return c.json({ comment: reply }, 201);
 });
