@@ -398,25 +398,38 @@ export function ProjectDetailPage({
                 var refs = msg.slice(idx + 7).split(/,\s+(?=📄|🎫)/).map(function(s){ return s.trim(); }).filter(Boolean);
                 return { body: body, refs: refs };
               }
-              // Plain text refs (legacy notifications without structured refs).
-              function refsHtml(refs){
-                if (!refs.length) return '';
-                return '<div style="margin-bottom:1rem;">'+refs.map(function(r){
-                  return '<div style="display:flex;align-items:center;gap:0.5rem;padding:0.5rem 0.75rem;border:1px solid var(--border-color);border-radius:var(--radius);margin-bottom:0.4rem;font-size:0.85rem;">'+ibEsc(r)+'</div>';
-                }).join('')+'</div>';
-              }
-              // Structured refs → clickable links, one per row, each opens the doc/ticket.
+              // Structured refs → rows (one per line). Clickable when we have an id.
               function refsLinkHtml(refs){
                 if (!refs.length) return '';
                 return '<div style="margin-bottom:1rem;">'+refs.map(function(r){
+                  var icon = r.type==='ticket' ? '🎫' : '📄';
+                  var inner = icon+' <span style="flex:1;">'+ibEsc(r.name||'Untitled')+'</span>';
+                  if (!r.id){
+                    return '<div style="display:flex;align-items:center;gap:0.5rem;padding:0.6rem 0.75rem;border:1px solid var(--border-color);border-radius:var(--radius);margin-bottom:0.4rem;font-size:0.85rem;">'+inner+'</div>';
+                  }
                   var href = r.type==='ticket'
                     ? ('/projects/'+IB_PID+'?tab=tickets')
                     : ('/projects/'+IB_PID+'?tab=documents&doc='+encodeURIComponent(r.id)+'&docName='+encodeURIComponent(r.name||''));
-                  var icon = r.type==='ticket' ? '🎫' : '📄';
                   return '<a href="'+href+'" style="display:flex;align-items:center;gap:0.5rem;padding:0.6rem 0.75rem;border:1px solid var(--border-color);border-radius:var(--radius);margin-bottom:0.4rem;font-size:0.85rem;text-decoration:none;color:var(--text-color);">'
-                    + icon+' <span style="flex:1;">'+ibEsc(r.name||'Untitled')+'</span>'
-                    + '<i class="fas fa-arrow-right" style="font-size:0.7rem;color:var(--text-secondary);"></i></a>';
+                    + inner+'<i class="fas fa-arrow-right" style="font-size:0.7rem;color:var(--text-secondary);"></i></a>';
                 }).join('')+'</div>';
+              }
+              // Resolve legacy text refs ("📄 Name") to {type,id,name} by matching the
+              // project's docs by name — so old messages become clickable too.
+              var IB_DOCS = null;
+              function ensureDocs(cb){
+                if (IB_DOCS) return cb(IB_DOCS);
+                fetch('/projects/'+IB_PID+'/api/files/browser/?per_page=200').then(function(r){return r.json();})
+                  .then(function(d){ IB_DOCS = (d && d.files) || []; cb(IB_DOCS); })
+                  .catch(function(){ IB_DOCS = []; cb(IB_DOCS); });
+              }
+              function textRefsToStruct(textRefs, docs){
+                return textRefs.map(function(t){
+                  var isTicket = /^\s*🎫/.test(t);
+                  var name = t.replace(/^\s*(📄|🎫)\s*/, '').trim();
+                  var doc = !isTicket && docs ? docs.find(function(d){ return (d.name||'') === name; }) : null;
+                  return { type: isTicket ? 'ticket' : 'document', id: doc ? doc.id : null, name: name };
+                });
               }
               window.switchInboxTab = function(tab){
                 IB_TAB = tab;
@@ -432,15 +445,22 @@ export function ProjectDetailPage({
               function openDetail(who, whoLabel, n){
                 var parsed = splitRefs(n.message);
                 var when = new Date(n.createdAt).toLocaleString();
-                // Prefer structured refs (clickable, open the exact doc/ticket).
-                var struct = (n.refs && n.refs.length) ? n.refs : null;
-                var refsBlock = struct ? refsLinkHtml(struct) : (parsed.refs.length ? refsHtml(parsed.refs) : '');
-                document.getElementById('sent-detail-body').innerHTML =
-                  '<div style="margin-bottom:0.75rem;"><span style="color:var(--text-secondary);">'+whoLabel+':</span> '+ibEsc(who)+'</div>'
-                  + '<div style="margin-bottom:1rem;padding:0.85rem;border:1px solid var(--border-color);border-radius:var(--radius);background:var(--body-bg);font-size:0.9rem;line-height:1.5;">'+ibEsc(parsed.body)+'</div>'
-                  + (refsBlock ? '<div style="font-size:0.75rem;color:var(--text-secondary);margin-bottom:0.4rem;font-weight:500;">Referenced</div>'+refsBlock : '')
-                  + '<div style="font-size:0.8rem;color:var(--text-secondary);">'+(n.readAt?'Seen':'Sent')+' · '+when+'</div>'
-                  + (!struct && n.link?'<div style="margin-top:1rem;"><a href="'+n.link+'" class="btn btn-primary" style="font-size:0.8rem;"><i class="fas fa-external-link-alt"></i> Open referenced item</a></div>':'');
+                function render(refsArr){
+                  var refsBlock = (refsArr && refsArr.length) ? refsLinkHtml(refsArr) : '';
+                  document.getElementById('sent-detail-body').innerHTML =
+                    '<div style="margin-bottom:0.75rem;"><span style="color:var(--text-secondary);">'+whoLabel+':</span> '+ibEsc(who)+'</div>'
+                    + '<div style="margin-bottom:1rem;padding:0.85rem;border:1px solid var(--border-color);border-radius:var(--radius);background:var(--body-bg);font-size:0.9rem;line-height:1.5;">'+ibEsc(parsed.body)+'</div>'
+                    + (refsBlock ? '<div style="font-size:0.75rem;color:var(--text-secondary);margin-bottom:0.4rem;font-weight:500;">Referenced</div>'+refsBlock : '')
+                    + '<div style="font-size:0.8rem;color:var(--text-secondary);">'+(n.readAt?'Seen':'Sent')+' · '+when+'</div>';
+                }
+                if (n.refs && n.refs.length) {
+                  render(n.refs); // structured refs — already clickable
+                } else if (parsed.refs.length) {
+                  render(textRefsToStruct(parsed.refs, IB_DOCS)); // instant (clickable if docs cached)
+                  if (!IB_DOCS) ensureDocs(function(docs){ render(textRefsToStruct(parsed.refs, docs)); });
+                } else {
+                  render(null);
+                }
                 document.getElementById('sentDetailModal').classList.add('active');
               }
               window.showSentDetail = function(i){ var n = IB_SENT[i]; if (n) openDetail(atHandle(n.toName, n.toEmail), n.type==='mentioned'?'Tagged':'To', n); };
