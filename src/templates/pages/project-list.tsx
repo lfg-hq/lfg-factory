@@ -367,7 +367,7 @@ export function ProjectListPage({ user, projects, instantApps = [], agents = [],
             <div class="project-list">
               ${projects.map((p) => html`
                 <div class="project-list-item">
-                  <a href="/chat/project/${p.projectId}" class="project-list-link">
+                  <a href="/projects/${p.projectId}" class="project-list-link">
                     <div class="project-list-main">
                       <div class="project-list-header">
                         <span class="project-icon">${p.icon}</span>
