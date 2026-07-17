@@ -231,7 +231,7 @@ export function ProjectDetailPage({
           <span id="inbox-tab-badge" style="display:none;font-size:0.7rem;background:var(--primary-color);color:#fff;padding:0.1rem 0.4rem;border-radius:9999px;"></span>
         </a>
         <a href="/projects/${project.projectId}?tab=conversations" class="tab-item${activeTab === "conversations" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "conversations" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "conversations" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
-          <i class="fas fa-comments"></i> Conversations
+          <i class="fas fa-comments"></i> Chats
           ${conversations.length > 0 ? html`<span style="font-size:0.7rem;background:rgba(139,92,246,0.2);color:#a78bfa;padding:0.1rem 0.4rem;border-radius:9999px;">${conversations.length}</span>` : ""}
         </a>
         <a href="/projects/${project.projectId}?tab=documents" class="tab-item${activeTab === "documents" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "documents" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "documents" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
@@ -481,16 +481,16 @@ export function ProjectDetailPage({
         ${activeTab === "conversations" ? html`
           <div>
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem;">
-              <h2 style="font-size:1.1rem;font-weight:600;color:var(--text-color);margin:0;">Conversations</h2>
+              <h2 style="font-size:1.1rem;font-weight:600;color:var(--text-color);margin:0;">Chats</h2>
               <a href="/chat/project/${project.projectId}" class="btn btn-primary" style="font-size:0.875rem;">
-                <i class="fas fa-plus"></i> New Conversation
+                <i class="fas fa-plus"></i> New Chat
               </a>
             </div>
             ${conversations.length === 0 ? html`
               <div style="text-align:center;padding:3rem;color:var(--text-secondary);border:1px dashed var(--border-color);border-radius:var(--radius-lg);">
                 <i class="fas fa-comments" style="font-size:2rem;opacity:0.3;display:block;margin-bottom:0.75rem;"></i>
-                <p style="margin:0 0 1rem;">No conversations yet.</p>
-                <a href="/chat/project/${project.projectId}" class="btn btn-primary">Start a conversation</a>
+                <p style="margin:0 0 1rem;">No chats yet.</p>
+                <a href="/chat/project/${project.projectId}" class="btn btn-primary">Start a chat</a>
               </div>
             ` : html`
               <div class="lfg-list">
