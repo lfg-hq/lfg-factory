@@ -21,6 +21,7 @@ export const notifications = pgTable(
     targetId: text("target_id").notNull(),
     message: text("message").notNull(),
     link: text("link"),
+    refs: text("refs"), // JSON: [{type:'document'|'ticket', id, name}] for clickable references
     readAt: timestamp("read_at", { mode: "date" }),
     createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),
   },

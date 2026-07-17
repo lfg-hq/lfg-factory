@@ -279,7 +279,7 @@ export function ProjectDetailPage({
           <div id="inbox-section" style="margin-bottom:2rem;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
               <div style="display:flex;gap:1rem;align-items:center;">
-                <h2 style="font-size:1.1rem;font-weight:600;color:var(--text-color);margin:0;"><i class="fas fa-inbox" style="margin-right:0.4rem;color:var(--primary-color);"></i>Your Inbox</h2>
+                <h2 style="font-size:1.1rem;font-weight:600;color:var(--text-color);margin:0;">Inbox</h2>
                 <div style="display:inline-flex;gap:1rem;">
                   <button id="inbox-tab-received" onclick="switchInboxTab('received')" style="font-size:0.85rem;padding:0.15rem 0;border:none;background:none;color:var(--text-color);font-weight:600;border-bottom:2px solid var(--primary-color);cursor:pointer;">Received</button>
                   <button id="inbox-tab-sent" onclick="switchInboxTab('sent')" style="font-size:0.85rem;padding:0.15rem 0;border:none;background:none;color:var(--text-secondary);font-weight:500;border-bottom:2px solid transparent;cursor:pointer;">Sent</button>
@@ -398,10 +398,24 @@ export function ProjectDetailPage({
                 var refs = msg.slice(idx + 7).split(/,\s+(?=📄|🎫)/).map(function(s){ return s.trim(); }).filter(Boolean);
                 return { body: body, refs: refs };
               }
+              // Plain text refs (legacy notifications without structured refs).
               function refsHtml(refs){
                 if (!refs.length) return '';
                 return '<div style="margin-bottom:1rem;">'+refs.map(function(r){
                   return '<div style="display:flex;align-items:center;gap:0.5rem;padding:0.5rem 0.75rem;border:1px solid var(--border-color);border-radius:var(--radius);margin-bottom:0.4rem;font-size:0.85rem;">'+ibEsc(r)+'</div>';
+                }).join('')+'</div>';
+              }
+              // Structured refs → clickable links, one per row, each opens the doc/ticket.
+              function refsLinkHtml(refs){
+                if (!refs.length) return '';
+                return '<div style="margin-bottom:1rem;">'+refs.map(function(r){
+                  var href = r.type==='ticket'
+                    ? ('/projects/'+IB_PID+'?tab=tickets')
+                    : ('/projects/'+IB_PID+'?tab=documents&doc='+encodeURIComponent(r.id)+'&docName='+encodeURIComponent(r.name||''));
+                  var icon = r.type==='ticket' ? '🎫' : '📄';
+                  return '<a href="'+href+'" style="display:flex;align-items:center;gap:0.5rem;padding:0.6rem 0.75rem;border:1px solid var(--border-color);border-radius:var(--radius);margin-bottom:0.4rem;font-size:0.85rem;text-decoration:none;color:var(--text-color);">'
+                    + icon+' <span style="flex:1;">'+ibEsc(r.name||'Untitled')+'</span>'
+                    + '<i class="fas fa-arrow-right" style="font-size:0.7rem;color:var(--text-secondary);"></i></a>';
                 }).join('')+'</div>';
               }
               window.switchInboxTab = function(tab){
@@ -418,12 +432,15 @@ export function ProjectDetailPage({
               function openDetail(who, whoLabel, n){
                 var parsed = splitRefs(n.message);
                 var when = new Date(n.createdAt).toLocaleString();
+                // Prefer structured refs (clickable, open the exact doc/ticket).
+                var struct = (n.refs && n.refs.length) ? n.refs : null;
+                var refsBlock = struct ? refsLinkHtml(struct) : (parsed.refs.length ? refsHtml(parsed.refs) : '');
                 document.getElementById('sent-detail-body').innerHTML =
                   '<div style="margin-bottom:0.75rem;"><span style="color:var(--text-secondary);">'+whoLabel+':</span> '+ibEsc(who)+'</div>'
                   + '<div style="margin-bottom:1rem;padding:0.85rem;border:1px solid var(--border-color);border-radius:var(--radius);background:var(--body-bg);font-size:0.9rem;line-height:1.5;">'+ibEsc(parsed.body)+'</div>'
-                  + (parsed.refs.length ? '<div style="font-size:0.75rem;color:var(--text-secondary);margin-bottom:0.4rem;font-weight:500;">Referenced</div>'+refsHtml(parsed.refs) : '')
-                  + '<div style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:1rem;">'+(n.readAt?'Seen':'Sent')+' · '+when+'</div>'
-                  + (n.link?'<a href="'+n.link+'" class="btn btn-primary" style="font-size:0.8rem;"><i class="fas fa-external-link-alt"></i> Open referenced item</a>':'');
+                  + (refsBlock ? '<div style="font-size:0.75rem;color:var(--text-secondary);margin-bottom:0.4rem;font-weight:500;">Referenced</div>'+refsBlock : '')
+                  + '<div style="font-size:0.8rem;color:var(--text-secondary);">'+(n.readAt?'Seen':'Sent')+' · '+when+'</div>'
+                  + (!struct && n.link?'<div style="margin-top:1rem;"><a href="'+n.link+'" class="btn btn-primary" style="font-size:0.8rem;"><i class="fas fa-external-link-alt"></i> Open referenced item</a></div>':'');
                 document.getElementById('sentDetailModal').classList.add('active');
               }
               window.showSentDetail = function(i){ var n = IB_SENT[i]; if (n) openDetail(atHandle(n.toName, n.toEmail), n.type==='mentioned'?'Tagged':'To', n); };
@@ -596,7 +613,10 @@ export function ProjectDetailPage({
             (function () {
               function start() {
                 if (window.ArtifactsLoader && typeof window.ArtifactsLoader.loadFileBrowser === "function") {
-                  window.ArtifactsLoader.loadFileBrowser("${project.projectId}");
+                  var p = new URLSearchParams(window.location.search);
+                  var openId = p.get("doc");
+                  var opts = openId ? { openFileId: openId, openFileName: p.get("docName") || "Document" } : {};
+                  window.ArtifactsLoader.loadFileBrowser("${project.projectId}", opts);
                 } else {
                   setTimeout(start, 100);
                 }

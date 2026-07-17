@@ -6,6 +6,12 @@ import { db } from "../config/db.ts";
 import { notifications } from "../db/schema/notifications.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 
+export interface NotifyRef {
+  type: "document" | "ticket";
+  id: string;
+  name: string;
+}
+
 export interface NotifyParams {
   userId: string; // recipient
   actorId?: string | null; // who triggered it
@@ -15,6 +21,7 @@ export interface NotifyParams {
   targetId: string;
   message: string;
   link?: string | null;
+  refs?: NotifyRef[] | null; // clickable referenced docs/tickets
 }
 
 export async function notify(p: NotifyParams) {
@@ -31,6 +38,7 @@ export async function notify(p: NotifyParams) {
       targetId: p.targetId,
       message: p.message,
       link: p.link ?? null,
+      refs: p.refs && p.refs.length ? JSON.stringify(p.refs) : null,
     })
     .returning();
   try {

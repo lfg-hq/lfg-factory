@@ -21,6 +21,7 @@ export const notifications = sqliteTable(
     targetId: text("target_id").notNull(),
     message: text("message").notNull(),
     link: text("link"), // where to navigate on click
+    refs: text("refs"), // JSON: [{type:'document'|'ticket', id, name}] for clickable references
     readAt: integer("read_at", { mode: "timestamp" }),
     createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
   },

@@ -20,6 +20,16 @@ function escapeHtmlText(s: string): string {
   return s.replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch] || ch));
 }
 
+function parseRefs(raw: string | null): { type: string; id: string; name: string }[] {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
+
 type Env = { Variables: { user: typeof auth.$Infer.Session.user } };
 const notificationsApi = new Hono<Env>();
 notificationsApi.use("*", requireAuth as any);
@@ -37,6 +47,7 @@ notificationsApi.get("/:projectId/notifications", async (c) => {
       targetId: notifications.targetId,
       message: notifications.message,
       link: notifications.link,
+      refs: notifications.refs,
       readAt: notifications.readAt,
       createdAt: notifications.createdAt,
       actorName: users.name,
@@ -47,7 +58,7 @@ notificationsApi.get("/:projectId/notifications", async (c) => {
     .orderBy(desc(notifications.createdAt))
     .limit(100);
 
-  return c.json({ notifications: rows });
+  return c.json({ notifications: rows.map((r) => ({ ...r, refs: parseRefs(r.refs) })) });
 });
 
 // POST /api/projects/:projectId/notifications/read — mark one or all read
@@ -122,6 +133,11 @@ notificationsApi.post("/:projectId/requests", async (c) => {
   ];
   const refSuffix = refs.length ? ` — re: ${refs.join(", ")}` : "";
 
+  const structRefs = [
+    ...docRows.map((d) => ({ type: "document" as const, id: d.id, name: d.name })),
+    ...ticketRows.map((t) => ({ type: "ticket" as const, id: t.id, name: t.name })),
+  ];
+
   const row = await notify({
     userId: body.toUserId,
     actorId: user.id,
@@ -131,6 +147,7 @@ notificationsApi.post("/:projectId/requests", async (c) => {
     targetId: docRows[0]?.id ?? ticketRows[0]?.id ?? projectId!,
     message: `${user.name || "Someone"}: ${body.message.trim()}${refSuffix}`,
     link,
+    refs: structRefs,
   });
 
   // Email the recipient (best-effort).
@@ -163,6 +180,7 @@ notificationsApi.get("/:projectId/requests/sent", async (c) => {
       type: notifications.type,
       message: notifications.message,
       link: notifications.link,
+      refs: notifications.refs,
       createdAt: notifications.createdAt,
       readAt: notifications.readAt,
       toName: users.name,
@@ -180,7 +198,7 @@ notificationsApi.get("/:projectId/requests/sent", async (c) => {
     .orderBy(desc(notifications.createdAt))
     .limit(100);
 
-  return c.json({ requests: rows });
+  return c.json({ requests: rows.map((r) => ({ ...r, refs: parseRefs(r.refs) })) });
 });
 
 export default notificationsApi;
