@@ -200,7 +200,6 @@ export function ProjectDetailPage({
                 ${project.status}
               </span>
               ${!isOwner ? html`<span title="You were invited to this project" style="font-size:0.75rem;padding:0.2rem 0.5rem;border-radius:9999px;background:rgba(139,92,246,0.12);color:var(--primary-color);display:inline-flex;align-items:center;gap:0.3rem;"><i class="fas fa-user-group"></i> Shared · ${roleLabel}</span>` : ""}
-              ${project.stack ? html`<span style="font-size:0.75rem;color:var(--text-secondary);">${project.stack}</span>` : ""}
               ${project.repoUrl ? html`
                 <a href="${project.repoUrl}" target="_blank" style="font-size:0.75rem;color:var(--text-secondary);text-decoration:none;display:flex;align-items:center;gap:0.3rem;">
                   <i class="fab ${project.repoProvider === "gitlab" ? "fa-gitlab" : "fa-github"}"></i> ${project.repoOwner}/${project.repoName}
