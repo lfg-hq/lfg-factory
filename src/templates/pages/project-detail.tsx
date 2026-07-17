@@ -258,12 +258,14 @@ export function ProjectDetailPage({
           <!-- Your inbox: tickets assigned to you / comments tagging you in this project -->
           <div id="inbox-section" style="margin-bottom:2rem;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
-              <h2 style="font-size:1.1rem;font-weight:600;color:var(--text-color);margin:0;"><i class="fas fa-inbox" style="margin-right:0.4rem;color:var(--primary-color);"></i>Your Inbox</h2>
-              <div style="display:flex;gap:0.5rem;align-items:center;">
+              <div style="display:flex;gap:0.75rem;align-items:center;">
+                <h2 style="font-size:1.1rem;font-weight:600;color:var(--text-color);margin:0;"><i class="fas fa-inbox" style="margin-right:0.4rem;color:var(--primary-color);"></i>Your Inbox</h2>
                 <div style="display:inline-flex;border:1px solid var(--border-color);border-radius:var(--radius);overflow:hidden;">
                   <button id="inbox-tab-received" onclick="switchInboxTab('received')" style="font-size:0.75rem;padding:0.35rem 0.75rem;border:none;background:var(--primary-color);color:#fff;cursor:pointer;">Received</button>
                   <button id="inbox-tab-sent" onclick="switchInboxTab('sent')" style="font-size:0.75rem;padding:0.35rem 0.75rem;border:none;background:transparent;color:var(--text-secondary);cursor:pointer;">Sent</button>
                 </div>
+              </div>
+              <div style="display:flex;gap:0.5rem;align-items:center;">
                 <button id="inbox-markread" onclick="markAllInboxRead()" class="btn btn-secondary" style="font-size:0.75rem;display:none;">Mark all read</button>
                 <button onclick="openRequestModal()" class="btn btn-primary" style="font-size:0.75rem;"><i class="fas fa-paper-plane"></i> New request</button>
               </div>
@@ -293,6 +295,7 @@ export function ProjectDetailPage({
           <script>
             (function(){
               var RQ_PID = '${project.projectId}';
+              var RQ_ME = '${user.id}';
               function rqEsc(s){ return (s||'').replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
               function rqCheckboxList(el, items, cls){
                 if (!items.length){ el.innerHTML = '<span style="color:var(--text-secondary);">None available</span>'; return; }
@@ -311,11 +314,15 @@ export function ProjectDetailPage({
                   fetch('/projects/'+RQ_PID+'/api/files/browser/?per_page=100').then(function(r){return r.json();}).catch(function(){return {files:[]};}),
                   fetch('/api/projects/'+RQ_PID+'/tickets').then(function(r){return r.json();}).catch(function(){return {tickets:[]};})
                 ]).then(function(res){
-                  var m = res[0]||{}; var people = [];
-                  if (m.owner) people.push({ id:m.owner.id, name:m.owner.name||m.owner.email });
-                  (m.members||[]).forEach(function(x){ people.push({ id:x.userId, name:x.userName||x.userEmail }); });
+                  var m = res[0]||{}; var raw = [];
+                  if (m.owner) raw.push({ id:m.owner.id, name:m.owner.name, email:m.owner.email });
+                  (m.members||[]).forEach(function(x){ raw.push({ id:x.userId, name:x.userName, email:x.userEmail }); });
+                  // Exclude my own account and dedupe by id.
+                  var seen = {}, people = [];
+                  raw.forEach(function(p){ if (!p.id || p.id===RQ_ME || seen[p.id]) return; seen[p.id]=1; people.push(p); });
                   var uSel = document.getElementById('rq-user');
-                  uSel.innerHTML = people.map(function(p){ return '<option value="'+p.id+'">'+rqEsc(p.name)+'</option>'; }).join('');
+                  if (!people.length){ uSel.innerHTML = '<option value="">No teammates yet — invite someone first</option>'; }
+                  else { uSel.innerHTML = people.map(function(p){ var lbl = (p.name||p.email||'Unknown'); if (p.email && p.name) lbl += ' ('+p.email+')'; return '<option value="'+p.id+'">'+rqEsc(lbl)+'</option>'; }).join(''); }
                   rqCheckboxList(document.getElementById('rq-docs'), (res[1]&&res[1].files)||[], 'rq-doc-cb');
                   rqCheckboxList(document.getElementById('rq-tickets'), (res[2]&&res[2].tickets)||[], 'rq-tkt-cb');
                 });
