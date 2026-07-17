@@ -386,6 +386,11 @@ export function ProjectDetailPage({
               function iconFor(t){ return t==='assigned'?'fa-user-check':(t==='mentioned'?'fa-at':(t==='review_requested'?'fa-paper-plane':'fa-comment')); }
               function ibEmpty(msg){ return '<div style="color:var(--text-secondary);font-size:0.875rem;padding:1rem;border:1px dashed var(--border-color);border-radius:var(--radius);text-align:center;">'+msg+'</div>'; }
               var IB_SENT = [], IB_RECV = [];
+              // "Jitin Pillai" / "jitin@x.com" -> "@jitin" for a compact tagged handle.
+              function atHandle(name, email){
+                var h = ((name||'').trim().split(/\s+/)[0]) || ((email||'').split('@')[0]) || 'user';
+                return '@' + h.toLowerCase();
+              }
               // Split "message — re: 📄 A, 🎫 B" into a clean body + referenced-item list.
               function splitRefs(msg){
                 var idx = (msg||'').indexOf(' — re: ');
@@ -422,7 +427,7 @@ export function ProjectDetailPage({
                   + (n.link?'<a href="'+n.link+'" class="btn btn-primary" style="font-size:0.8rem;"><i class="fas fa-external-link-alt"></i> Open referenced item</a>':'');
                 document.getElementById('sentDetailModal').classList.add('active');
               }
-              window.showSentDetail = function(i){ var n = IB_SENT[i]; if (n) openDetail(n.toName||n.toEmail||'someone', 'To', n); };
+              window.showSentDetail = function(i){ var n = IB_SENT[i]; if (n) openDetail(atHandle(n.toName, n.toEmail), n.type==='mentioned'?'Tagged':'To', n); };
               window.showRecvDetail = function(i){
                 var n = IB_RECV[i]; if (!n) return;
                 openDetail(n.actorName||'Someone', 'From', n);
@@ -434,7 +439,6 @@ export function ProjectDetailPage({
               function row(n, i, dim){
                 var parsed = splitRefs(n.message);
                 return '<div onclick="showRecvDetail('+i+')" class="lfg-row" style="'+(dim?'opacity:0.55;':'')+'">'
-                  + '<i class="fas '+iconFor(n.type)+'" style="color:var(--primary-color);width:1rem;"></i>'
                   + '<span style="flex:1;font-size:0.875rem;">'+ibEsc(parsed.body)+(parsed.refs.length?' <span style="color:var(--text-secondary);font-size:0.8rem;">· '+parsed.refs.length+' item'+(parsed.refs.length>1?'s':'')+'</span>':'')+'</span>'
                   + (dim?'':'<span style="width:8px;height:8px;border-radius:50%;background:var(--primary-color);flex:none;"></span>')
                   + '<span style="font-size:0.7rem;color:var(--text-secondary);min-width:64px;text-align:right;">'+relTime(n.createdAt)+'</span>'
@@ -460,9 +464,9 @@ export function ProjectDetailPage({
                   var html = '<div class="lfg-list">';
                   IB_SENT.forEach(function(n, i){
                     var parsed = splitRefs(n.message);
+                    var lbl = n.type==='mentioned' ? 'Tagged' : 'To';
                     html += '<div onclick="showSentDetail('+i+')" class="lfg-row">'
-                      + '<i class="fas fa-paper-plane" style="color:var(--primary-color);width:1rem;"></i>'
-                      + '<span style="flex:1;font-size:0.875rem;"><span style="color:var(--text-secondary);">To '+ibEsc(n.toName||n.toEmail||'someone')+':</span> '+ibEsc(parsed.body)+(parsed.refs.length?' <span style="color:var(--text-secondary);font-size:0.8rem;">· '+parsed.refs.length+' item'+(parsed.refs.length>1?'s':'')+'</span>':'')+'</span>'
+                      + '<span style="flex:1;font-size:0.875rem;"><span style="color:var(--text-secondary);">'+lbl+' </span><span style="color:var(--primary-color);font-weight:500;">'+ibEsc(atHandle(n.toName,n.toEmail))+'</span><span style="color:var(--text-secondary);">:</span> '+ibEsc(parsed.body)+(parsed.refs.length?' <span style="color:var(--text-secondary);font-size:0.8rem;">· '+parsed.refs.length+' item'+(parsed.refs.length>1?'s':'')+'</span>':'')+'</span>'
                       + '<span style="font-size:0.7rem;color:'+(n.readAt?'#22c55e':'var(--text-secondary)')+';min-width:64px;text-align:right;">'+(n.readAt?'seen':'sent')+' · '+relTime(n.createdAt)+'</span>'
                       + '</div>';
                   });
@@ -493,7 +497,6 @@ export function ProjectDetailPage({
               <div class="lfg-list">
                 ${conversations.map((c) => html`
                   <a href="/chat/project/${project.projectId}/conversation/${c.id}" class="lfg-row">
-                    <i class="fas fa-comment-dots" style="color:var(--text-secondary);width:1rem;"></i>
                     <span style="flex:1;font-size:0.9375rem;">${c.title ?? "Untitled conversation"}</span>
                     <span style="font-size:0.75rem;color:var(--text-secondary);">${new Date(c.updatedAt).toLocaleDateString()}</span>
                   </a>

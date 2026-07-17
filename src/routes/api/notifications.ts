@@ -160,6 +160,7 @@ notificationsApi.get("/:projectId/requests/sent", async (c) => {
   const rows = await db
     .select({
       id: notifications.id,
+      type: notifications.type,
       message: notifications.message,
       link: notifications.link,
       createdAt: notifications.createdAt,
