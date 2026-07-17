@@ -130,3 +130,33 @@ mark.comment-highlight.resolved {
   color: var(--text-color);
 }
 .mention-item:hover { background: rgba(124, 58, 237, 0.12); }
+
+/* ── Floating toggle to (re)open the comments panel ─────────────────── */
+.comments-toggle-fab {
+  position: fixed;
+  bottom: 1.5rem;
+  right: 1.5rem;
+  z-index: 1150;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.6rem 1rem;
+  border-radius: 999px;
+  border: none;
+  background: #7c3aed;
+  color: #fff !important;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 6px 20px rgba(124, 58, 237, 0.4);
+}
+.comments-toggle-fab:hover { background: #6d28d9; }
+.comments-toggle-fab .badge {
+  background: #fff;
+  color: #7c3aed;
+  border-radius: 999px;
+  padding: 0 0.4rem;
+  font-size: 0.7rem;
+  min-width: 1.1rem;
+  text-align: center;
+}

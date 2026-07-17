@@ -246,6 +246,22 @@
 
   // ── Comment Panel ──────────────────────────────────────────────────
 
+  // Persistent floating button to (re)open the comments panel — always present
+  // when a doc has comments, so closing the panel never loses access to it.
+  function ensureCommentsFab() {
+    var unresolvedCount = state.comments.filter(function (c) { return !c.isResolved; }).length;
+    var fab = document.getElementById("comments-toggle-fab");
+    if (state.comments.length === 0) { if (fab) fab.remove(); return; }
+    if (!fab) {
+      fab = document.createElement("button");
+      fab.id = "comments-toggle-fab";
+      fab.className = "comments-toggle-fab";
+      fab.onclick = function () { var p = document.getElementById("comments-panel"); if (p) p.style.display = "block"; };
+      document.body.appendChild(fab);
+    }
+    fab.innerHTML = '<i class="fas fa-comments"></i> Comments' + (unresolvedCount ? ' <span class="badge">' + unresolvedCount + "</span>" : "");
+  }
+
   function renderCommentPanel() {
     var panel = document.getElementById("comments-panel");
     if (!panel) {
@@ -254,6 +270,8 @@
       panel.className = "comments-panel";
       document.body.appendChild(panel);
     }
+
+    ensureCommentsFab();
 
     if (state.comments.length === 0) {
       panel.style.display = "none";

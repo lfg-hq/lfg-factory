@@ -3171,7 +3171,7 @@ body.ticket-modal-open {
     gap: 8px;
     background: transparent;
     border: none;
-    color: #e2e8f0;
+    color: var(--text-color);
     cursor: pointer;
     padding: 6px 12px;
     border-radius: 6px;
@@ -3200,7 +3200,7 @@ body.ticket-modal-open {
     white-space: nowrap;
     font-size: 16px;
     font-weight: 500;
-    color: #a4a8ad;
+    color: var(--text-secondary);
     max-width: fit-content;
 }
 

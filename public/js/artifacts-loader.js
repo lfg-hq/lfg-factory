@@ -6270,7 +6270,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                 `;
                                 deleteOption.innerHTML = '<i class="fas fa-trash"></i> Delete';
                                 deleteOption.onmouseover = function() { this.style.background = 'rgba(239, 68, 68, 0.1)'; this.style.color = '#ef4444'; };
-                                deleteOption.onmouseout = function() { this.style.background = 'transparent'; this.style.color = '#e2e8f0'; };
+                                deleteOption.onmouseout = function() { this.style.background = 'transparent'; this.style.color = 'var(--text-color)'; };
                                 deleteOption.addEventListener('click', () => {
                                     contextMenu.remove();
                                     if (confirm(`Are you sure you want to delete "${file.name}"? This action cannot be undone.`)) {
@@ -6815,7 +6815,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         const buttonStyle = `
                             background: transparent;
                             border: none;
-                            color: #9ca3af;
+                            color: var(--text-secondary);
                             cursor: pointer;
                             padding: 6px;
                             font-size: 14px;
@@ -6832,8 +6832,8 @@ document.addEventListener('DOMContentLoaded', function() {
                         editButton.style.cssText = buttonStyle + 'padding: 6px; gap: 6px;';
                         editButton.innerHTML = '<i class="fas fa-edit"></i>';
                         editButton.title = 'Edit full text';
-                        editButton.onmouseover = function() { this.style.color = '#e2e8f0'; };
-                        editButton.onmouseout = function() { this.style.color = '#9ca3af'; };
+                        editButton.onmouseover = function() { this.style.color = 'var(--text-color)'; };
+                        editButton.onmouseout = function() { this.style.color = 'var(--text-secondary)'; };
                         editButton.addEventListener('click', () => enableEditMode());
                         
                         // Copy button
@@ -6842,8 +6842,8 @@ document.addEventListener('DOMContentLoaded', function() {
                         copyButton.style.cssText = buttonStyle;
                         copyButton.innerHTML = '<i class="fas fa-copy"></i>';
                         copyButton.title = 'Copy';
-                        copyButton.onmouseover = function() { this.style.color = '#e2e8f0'; };
-                        copyButton.onmouseout = function() { this.style.color = '#9ca3af'; };
+                        copyButton.onmouseover = function() { this.style.color = 'var(--text-color)'; };
+                        copyButton.onmouseout = function() { this.style.color = 'var(--text-secondary)'; };
                         copyButton.addEventListener('click', () => {
                             if (window.currentFileData && window.currentFileData.content) {
                                 ArtifactsLoader.copyToClipboard(window.currentFileData.content, 'Markdown content');
@@ -6856,8 +6856,8 @@ document.addEventListener('DOMContentLoaded', function() {
                         optionsButton.style.cssText = buttonStyle + 'position: relative;';
                         optionsButton.innerHTML = '<i class="fas fa-ellipsis-v"></i>';
                         optionsButton.title = 'More options';
-                        optionsButton.onmouseover = function() { this.style.color = '#e2e8f0'; };
-                        optionsButton.onmouseout = function() { this.style.color = '#9ca3af'; };
+                        optionsButton.onmouseover = function() { this.style.color = 'var(--text-color)'; };
+                        optionsButton.onmouseout = function() { this.style.color = 'var(--text-secondary)'; };
                         
                         // Create dropdown menu
                         const dropdownMenu = document.createElement('div');

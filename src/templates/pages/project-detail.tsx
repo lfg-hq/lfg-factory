@@ -144,10 +144,6 @@ export function ProjectDetailPage({
             <i class="fas fa-tasks"></i>
             <span class="nav-text">Tickets</span>
           </a>
-          <a href="/projects/${project.projectId}?tab=documents" class="nav-link${activeTab === "documents" ? " active" : ""}">
-            <i class="fas fa-file-lines"></i>
-            <span class="nav-text">Documents</span>
-          </a>
           <a href="/instant/project/${project.projectId}" class="nav-link${activeTab === "instant" ? " active" : ""}">
             <i class="fas fa-bolt"></i>
             <span class="nav-text">Instant</span>
