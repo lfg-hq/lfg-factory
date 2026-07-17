@@ -186,16 +186,16 @@ export function ProjectDetailPage({
     <!-- Main content -->
     <div class="main-content-with-sidebar">
       <!-- Project Header -->
-      <div class="page-header" style="padding:1.25rem 2rem;border-bottom:1px solid var(--border-color);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:0.75rem;">
-        <div style="display:flex;align-items:center;gap:0.75rem;">
-          <a href="/projects" style="color:var(--text-secondary);text-decoration:none;font-size:0.875rem;display:flex;align-items:center;gap:0.4rem;">
+      <div class="page-header" style="padding:1.25rem 2rem;border-bottom:1px solid var(--border-color);display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:nowrap;gap:1rem;">
+        <div style="display:flex;align-items:center;gap:0.75rem;flex:1 1 auto;min-width:0;">
+          <a href="/projects" style="color:var(--text-secondary);text-decoration:none;font-size:0.875rem;display:flex;align-items:center;gap:0.4rem;white-space:nowrap;">
             <i class="fas fa-arrow-left"></i> Projects
           </a>
           <span style="color:var(--text-secondary);">/</span>
           <span style="font-size:1.5rem;">${project.icon}</span>
-          <div>
+          <div style="min-width:0;">
             <h1 style="font-size:1.25rem;font-weight:700;color:var(--text-color);margin:0;">${project.name}</h1>
-            <div style="display:flex;gap:0.5rem;align-items:center;margin-top:0.2rem;">
+            <div style="display:flex;gap:0.5rem;align-items:center;margin-top:0.2rem;flex-wrap:wrap;">
               <span style="font-size:0.75rem;padding:0.2rem 0.5rem;border-radius:9999px;background:${project.status === "active" ? "rgba(34,197,94,0.1)" : "rgba(156,163,175,0.1)"};color:${project.status === "active" ? "#22c55e" : "var(--text-secondary)"};">
                 ${project.status}
               </span>
@@ -209,17 +209,17 @@ export function ProjectDetailPage({
             </div>
           </div>
         </div>
-        <div style="display:flex;align-items:center;gap:0.75rem;">
+        <div style="display:flex;align-items:center;gap:0.75rem;flex:0 0 auto;">
           ${!project.repoUrl ? html`
-            <button onclick="showCodebaseModal()" class="btn btn-secondary" style="display:flex;align-items:center;gap:0.5rem;font-size:0.8125rem;">
+            <button onclick="showCodebaseModal()" class="btn btn-secondary" style="display:flex;align-items:center;gap:0.5rem;font-size:0.8125rem;white-space:nowrap;">
               <i class="fas fa-link"></i> Link Repository
             </button>
           ` : html`
-            <button onclick="showCodebaseModal()" class="btn btn-secondary" style="display:flex;align-items:center;gap:0.5rem;font-size:0.8125rem;">
+            <button onclick="showCodebaseModal()" class="btn btn-secondary" style="display:flex;align-items:center;gap:0.5rem;font-size:0.8125rem;white-space:nowrap;">
               <i class="fab ${project.repoProvider === "gitlab" ? "fa-gitlab" : "fa-github"}"></i> Change Repo
             </button>
           `}
-          <a href="/chat/project/${project.projectId}" class="btn btn-primary" style="display:flex;align-items:center;gap:0.5rem;">
+          <a href="/chat/project/${project.projectId}" class="btn btn-primary" style="display:flex;align-items:center;gap:0.5rem;white-space:nowrap;">
             <i class="fas fa-arrow-left"></i> Back to Workspace
           </a>
         </div>
