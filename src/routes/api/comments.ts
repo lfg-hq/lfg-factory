@@ -5,9 +5,11 @@ import { documentComments } from "../../db/schema/comments.ts";
 import { users } from "../../db/schema/users.ts";
 import { projectMembers } from "../../db/schema/projects.ts";
 import { projectFiles } from "../../db/schema/documents.ts";
-import { eq, and, asc, isNull } from "drizzle-orm";
+import { eq, and, asc, isNull, inArray, sql } from "drizzle-orm";
 import { getProjectAccess, requirePermission } from "../../auth/project-access.ts";
 import { notify } from "../../services/notify.ts";
+import { sendEmail } from "../../utils/email.ts";
+import { env } from "../../config/env.ts";
 import type { auth } from "../../auth/index.ts";
 
 /** Parse @mentions from a comment and notify matched project members. */
@@ -38,16 +40,20 @@ async function notifyMentions(opts: {
     .where(eq(projectFiles.id, opts.fileId));
   const docName = file?.name ?? "a document";
 
-  const matched = new Set<string>();
+  const matched = new Map<string, { email: string | null }>();
   for (const p of people) {
+    if (p.id === opts.actorId) continue; // don't notify yourself
     const nameKey = (p.name ?? "").toLowerCase().replace(/\s+/g, "");
     const first = (p.name ?? "").toLowerCase().split(/\s+/)[0] ?? "";
     const emailPrefix = (p.email ?? "").toLowerCase().split("@")[0] ?? "";
     if (tokens.some((t) => (nameKey && nameKey.startsWith(t)) || t === first || t === emailPrefix)) {
-      matched.add(p.id);
+      matched.set(p.id, { email: p.email ?? null });
     }
   }
-  for (const uid of matched) {
+
+  const base = env.APP_URL || env.BETTER_AUTH_URL || "";
+  const relLink = `/projects/${opts.project.projectId}?tab=documents`;
+  for (const [uid, info] of matched) {
     await notify({
       userId: uid,
       actorId: opts.actorId,
@@ -56,9 +62,22 @@ async function notifyMentions(opts: {
       targetType: "document",
       targetId: opts.fileId,
       message: `${opts.actorName || "Someone"} tagged you in a comment on "${docName}"`,
-      link: `/projects/${opts.project.projectId}?tab=documents`,
+      link: relLink,
     });
+    if (info.email) {
+      const url = base ? base.replace(/\/$/, "") + relLink : relLink;
+      sendEmail({
+        to: info.email,
+        subject: `${opts.actorName || "Someone"} tagged you in "${docName}"`,
+        html: `<p><strong>${escapeHtmlText(opts.actorName || "Someone")}</strong> mentioned you in a comment on <strong>${escapeHtmlText(docName)}</strong>.</p><p>“${escapeHtmlText(opts.content.slice(0, 300))}”</p><p><a href="${url}">Open the document →</a></p>`,
+        text: `${opts.actorName || "Someone"} mentioned you in a comment on "${docName}": ${opts.content.slice(0, 300)}\n\n${url}`,
+      }).catch(() => {});
+    }
   }
+}
+
+function escapeHtmlText(s: string): string {
+  return s.replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch] || ch));
 }
 
 type AuthEnv = {
@@ -70,6 +89,38 @@ type AuthEnv = {
 
 const commentsApi = new Hono<AuthEnv>();
 commentsApi.use("*", requireAuth);
+
+// ── GET /api/projects/:projectId/comment-counts ──────────────────────
+// Unresolved top-level comment count per file, for badges in the docs list.
+commentsApi.get("/:projectId/comment-counts", async (c) => {
+  const user = c.get("user");
+  const { projectId } = c.req.param();
+  const access = await getProjectAccess(projectId!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+
+  const files = await db
+    .select({ id: projectFiles.id })
+    .from(projectFiles)
+    .where(eq(projectFiles.projectId, access.project.id));
+  const fileIds = files.map((f) => f.id);
+  if (!fileIds.length) return c.json({ counts: {} });
+
+  const rows = await db
+    .select({ fileId: documentComments.fileId, n: sql<number>`count(*)` })
+    .from(documentComments)
+    .where(
+      and(
+        inArray(documentComments.fileId, fileIds),
+        isNull(documentComments.parentId),
+        eq(documentComments.isResolved, false)
+      )
+    )
+    .groupBy(documentComments.fileId);
+
+  const counts: Record<string, number> = {};
+  for (const r of rows) counts[r.fileId] = Number(r.n);
+  return c.json({ counts });
+});
 
 // ── GET /api/projects/:projectId/files/:fileId/comments ──────────────
 commentsApi.get("/:projectId/files/:fileId/comments", async (c) => {

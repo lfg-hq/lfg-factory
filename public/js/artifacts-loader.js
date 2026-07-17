@@ -6330,7 +6330,28 @@ document.addEventListener('DOMContentLoaded', function() {
                         
                         // Attach event listeners to file items
                         attachFileItemListeners();
-                        
+
+                        // Decorate rows with unresolved comment counts (best-effort).
+                        fetch(`/api/projects/${projectId}/comment-counts`)
+                            .then(r => r.ok ? r.json() : { counts: {} })
+                            .then(cc => {
+                                const counts = (cc && cc.counts) || {};
+                                Object.keys(counts).forEach(fid => {
+                                    const n = counts[fid];
+                                    if (!n) return;
+                                    const row = fileBrowserList.querySelector(`[data-file-id="${fid}"] .file-name`);
+                                    if (row && !row.querySelector('.file-comment-badge')) {
+                                        const badge = document.createElement('span');
+                                        badge.className = 'file-comment-badge';
+                                        badge.title = n + ' open comment' + (n > 1 ? 's' : '');
+                                        badge.style.cssText = 'display:inline-flex;align-items:center;gap:3px;margin-left:8px;padding:1px 7px;border-radius:10px;background:var(--primary-color);color:#fff;font-size:0.7rem;font-weight:600;vertical-align:middle;';
+                                        badge.innerHTML = '<i class="fas fa-comment" style="font-size:0.62rem;"></i>' + n;
+                                        row.appendChild(badge);
+                                    }
+                                });
+                            })
+                            .catch(() => {});
+
                         // Auto-open file if specified
                         if (options.openFileId && options.openFileName) {
                             // Directly call the API to load the file content
@@ -6675,7 +6696,29 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (existingDrawer && existingDrawer.dataset.fileId !== String(fileId)) {
                     window.closeVersionDrawer();
                 }
-                
+
+                // Show the viewer immediately with a loading state so the click feels
+                // responsive even when the content fetch is slow.
+                fileBrowserMain.style.display = 'none';
+                fileBrowserViewer.style.display = 'flex';
+                if (viewerTitle) {
+                    viewerTitle.innerHTML = `<span id="viewer-title-text">${escapeHtml(fileName || 'Loading…')}</span>`;
+                }
+                const loadingMarkdown = document.getElementById('viewer-markdown');
+                if (loadingMarkdown) {
+                    loadingMarkdown.innerHTML = `
+                        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0.75rem;padding:4rem 1rem;color:var(--text-secondary);">
+                            <div class="spinner" style="width:28px;height:28px;border:3px solid var(--border-color);border-top-color:var(--primary-color);border-radius:50%;animation:af-spin 0.7s linear infinite;"></div>
+                            <div style="font-size:0.85rem;">Loading document…</div>
+                        </div>`;
+                    if (!document.getElementById('af-spin-style')) {
+                        const s = document.createElement('style');
+                        s.id = 'af-spin-style';
+                        s.textContent = '@keyframes af-spin{to{transform:rotate(360deg)}}';
+                        document.head.appendChild(s);
+                    }
+                }
+
                 fetch(`/projects/${projectId}/api/files/${fileId}/content/`, {
                     method: 'GET',
                     headers: {
@@ -6685,7 +6728,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 })
                 .then(response => response.json())
                 .then(data => {
-                    // Switch to viewer mode
+                    // Viewer already visible from the loading state above.
                     fileBrowserMain.style.display = 'none';
                     fileBrowserViewer.style.display = 'flex';
                     
@@ -7187,6 +7230,15 @@ document.addEventListener('DOMContentLoaded', function() {
                 .catch(error => {
                     console.error('[ArtifactsLoader] Error loading file content:', error);
                     showToast('Failed to load file content', 'error');
+                    const errMarkdown = document.getElementById('viewer-markdown');
+                    if (errMarkdown) {
+                        errMarkdown.innerHTML = `
+                            <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:0.75rem;padding:4rem 1rem;color:var(--text-secondary);">
+                                <i class="fas fa-triangle-exclamation" style="font-size:1.5rem;opacity:0.6;"></i>
+                                <div style="font-size:0.85rem;">Couldn't load this document. Please try again.</div>
+                                <button class="btn btn-secondary" style="font-size:0.8rem;" onclick="window.viewFileContent('${fileId}', ${JSON.stringify(fileName || '')})">Retry</button>
+                            </div>`;
+                    }
                 });
             };
             window.viewFileContent = viewFileContent;

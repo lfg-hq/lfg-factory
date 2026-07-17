@@ -14,9 +14,12 @@
     canComment: false,
     comments: [],
     rawContent: "",
+    panelOpen: false, // panel is a manual sidebar — only shows when the user opens it
   };
 
   window.initDocumentComments = function (fileId, projectId, opts) {
+    // Re-init for a different doc resets the panel state so it doesn't "pop up".
+    if (state.fileId !== fileId) state.panelOpen = false;
     state.fileId = fileId;
     state.projectId = projectId;
     state.canComment = opts && opts.canComment;
@@ -187,14 +190,16 @@
         .then(function (r) { return r.json(); })
         .then(function () {
           popover.remove();
+          state.panelOpen = true; // reveal the panel so the new comment is visible
           loadComments();
         });
     });
 
-    // Close on outside click
+    // Close on outside click — but NOT when clicking the @mention dropdown
+    // (it lives on document.body, outside the popover, so ignore it here).
     setTimeout(function () {
       document.addEventListener("mousedown", function handler(e) {
-        if (!popover.contains(e.target)) {
+        if (!popover.contains(e.target) && !(e.target.closest && e.target.closest(".mention-dropdown"))) {
           popover.remove();
           document.removeEventListener("mousedown", handler);
         }
@@ -246,20 +251,27 @@
 
   // ── Comment Panel ──────────────────────────────────────────────────
 
-  // Persistent floating button to (re)open the comments panel — always present
-  // when a doc has comments, so closing the panel never loses access to it.
+  // Persistent floating button to open the comments panel — always present in the
+  // viewer (even with 0 comments) so there's a clear, discoverable entry point.
   function ensureCommentsFab() {
     var unresolvedCount = state.comments.filter(function (c) { return !c.isResolved; }).length;
     var fab = document.getElementById("comments-toggle-fab");
-    if (state.comments.length === 0) { if (fab) fab.remove(); return; }
+    // Show the FAB whenever commenting is allowed or comments already exist.
+    if (!state.canComment && state.comments.length === 0) { if (fab) fab.remove(); return; }
     if (!fab) {
       fab = document.createElement("button");
       fab.id = "comments-toggle-fab";
       fab.className = "comments-toggle-fab";
-      fab.onclick = function () { var p = document.getElementById("comments-panel"); if (p) p.style.display = "block"; };
+      fab.onclick = openCommentsPanel;
       document.body.appendChild(fab);
     }
+    fab.style.display = state.panelOpen ? "none" : "";
     fab.innerHTML = '<i class="fas fa-comments"></i> Comments' + (unresolvedCount ? ' <span class="badge">' + unresolvedCount + "</span>" : "");
+  }
+
+  function openCommentsPanel() {
+    state.panelOpen = true;
+    renderCommentPanel();
   }
 
   function renderCommentPanel() {
@@ -271,10 +283,10 @@
       document.body.appendChild(panel);
     }
 
-    ensureCommentsFab();
-
-    if (state.comments.length === 0) {
+    // Panel visibility is user-controlled — never force it open on data refresh.
+    if (!state.panelOpen) {
       panel.style.display = "none";
+      ensureCommentsFab();
       return;
     }
 
@@ -287,6 +299,13 @@
     '</div>';
 
     html += '<div class="comments-panel-body">';
+
+    if (state.comments.length === 0) {
+      html += '<div style="padding:1.5rem 1rem;text-align:center;color:var(--text-secondary);font-size:0.8125rem;line-height:1.5;">' +
+        '<i class="fas fa-highlighter" style="font-size:1.25rem;opacity:0.5;display:block;margin-bottom:0.5rem;"></i>' +
+        'No comments yet.<br>Select any text in the document to add one.' +
+      '</div>';
+    }
 
     unresolved.forEach(function (c) {
       html += renderCommentCard(c, false);
@@ -302,6 +321,7 @@
     html += '</div>';
     panel.innerHTML = html;
     panel.style.display = "block";
+    ensureCommentsFab();
   }
 
   function renderCommentCard(comment, isResolved) {
@@ -341,15 +361,15 @@
   }
 
   function showCommentThread(commentId) {
-    var panel = document.getElementById("comments-panel");
-    if (panel) panel.style.display = "block";
+    state.panelOpen = true;
+    renderCommentPanel();
     var card = document.querySelector('.comment-card[data-comment-id="' + commentId + '"]');
     if (card) card.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 
   window.toggleCommentsPanel = function () {
-    var panel = document.getElementById("comments-panel");
-    if (panel) panel.style.display = panel.style.display === "none" ? "block" : "none";
+    state.panelOpen = !state.panelOpen;
+    renderCommentPanel();
   };
 
   window.resolveComment = function (commentId) {

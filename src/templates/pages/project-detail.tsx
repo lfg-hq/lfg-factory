@@ -259,7 +259,11 @@ export function ProjectDetailPage({
           <div id="inbox-section" style="margin-bottom:2rem;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
               <h2 style="font-size:1.1rem;font-weight:600;color:var(--text-color);margin:0;"><i class="fas fa-inbox" style="margin-right:0.4rem;color:var(--primary-color);"></i>Your Inbox</h2>
-              <div style="display:flex;gap:0.5rem;">
+              <div style="display:flex;gap:0.5rem;align-items:center;">
+                <div style="display:inline-flex;border:1px solid var(--border-color);border-radius:var(--radius);overflow:hidden;">
+                  <button id="inbox-tab-received" onclick="switchInboxTab('received')" style="font-size:0.75rem;padding:0.35rem 0.75rem;border:none;background:var(--primary-color);color:#fff;cursor:pointer;">Received</button>
+                  <button id="inbox-tab-sent" onclick="switchInboxTab('sent')" style="font-size:0.75rem;padding:0.35rem 0.75rem;border:none;background:transparent;color:var(--text-secondary);cursor:pointer;">Sent</button>
+                </div>
                 <button id="inbox-markread" onclick="markAllInboxRead()" class="btn btn-secondary" style="font-size:0.75rem;display:none;">Mark all read</button>
                 <button onclick="openRequestModal()" class="btn btn-primary" style="font-size:0.75rem;"><i class="fas fa-paper-plane"></i> New request</button>
               </div>
@@ -275,7 +279,8 @@ export function ProjectDetailPage({
               </div>
               <div style="padding:1.5rem;">
                 <div style="margin-bottom:1rem;"><label style="display:block;font-size:0.875rem;font-weight:500;color:var(--text-color);margin-bottom:0.4rem;">To</label><select id="rq-user" class="input" style="width:100%;"></select></div>
-                <div style="margin-bottom:1rem;"><label style="display:block;font-size:0.875rem;font-weight:500;color:var(--text-color);margin-bottom:0.4rem;">About (optional)</label><select id="rq-doc" class="input" style="width:100%;"><option value="">— No specific document —</option></select></div>
+                <div style="margin-bottom:1rem;"><label style="display:block;font-size:0.875rem;font-weight:500;color:var(--text-color);margin-bottom:0.4rem;">Documents <span style="font-weight:400;color:var(--text-secondary);">(select any)</span></label><div id="rq-docs" style="max-height:120px;overflow-y:auto;border:1px solid var(--border-color);border-radius:var(--radius);padding:0.5rem;font-size:0.8125rem;color:var(--text-secondary);">Loading…</div></div>
+                <div style="margin-bottom:1rem;"><label style="display:block;font-size:0.875rem;font-weight:500;color:var(--text-color);margin-bottom:0.4rem;">Tickets <span style="font-weight:400;color:var(--text-secondary);">(select any)</span></label><div id="rq-tickets" style="max-height:120px;overflow-y:auto;border:1px solid var(--border-color);border-radius:var(--radius);padding:0.5rem;font-size:0.8125rem;color:var(--text-secondary);">Loading…</div></div>
                 <div style="margin-bottom:1.25rem;"><label style="display:block;font-size:0.875rem;font-weight:500;color:var(--text-color);margin-bottom:0.4rem;">Message</label><textarea id="rq-msg" rows="3" class="input" style="width:100%;box-sizing:border-box;resize:vertical;" placeholder="e.g. Please review the Frontend Remediation Plan"></textarea></div>
                 <div id="rq-error" style="display:none;color:#ef4444;font-size:0.8125rem;margin-bottom:0.75rem;"></div>
                 <div style="display:flex;gap:0.75rem;justify-content:flex-end;">
@@ -288,50 +293,74 @@ export function ProjectDetailPage({
           <script>
             (function(){
               var RQ_PID = '${project.projectId}';
+              function rqEsc(s){ return (s||'').replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+              function rqCheckboxList(el, items, cls){
+                if (!items.length){ el.innerHTML = '<span style="color:var(--text-secondary);">None available</span>'; return; }
+                el.innerHTML = items.map(function(it){
+                  return '<label style="display:flex;align-items:center;gap:0.5rem;padding:0.2rem 0;cursor:pointer;color:var(--text-color);">'
+                    + '<input type="checkbox" class="'+cls+'" value="'+it.id+'" style="margin:0;"> '
+                    + '<span>'+rqEsc(it.name||'Untitled')+'</span></label>';
+                }).join('');
+              }
               window.openRequestModal = function(){
                 document.getElementById('requestModal').classList.add('active');
+                document.getElementById('rq-docs').innerHTML = 'Loading…';
+                document.getElementById('rq-tickets').innerHTML = 'Loading…';
                 Promise.all([
                   fetch('/api/projects/'+RQ_PID+'/members').then(function(r){return r.json();}),
-                  fetch('/projects/'+RQ_PID+'/api/files/browser/?per_page=100').then(function(r){return r.json();}).catch(function(){return {files:[]};})
+                  fetch('/projects/'+RQ_PID+'/api/files/browser/?per_page=100').then(function(r){return r.json();}).catch(function(){return {files:[]};}),
+                  fetch('/api/projects/'+RQ_PID+'/tickets').then(function(r){return r.json();}).catch(function(){return {tickets:[]};})
                 ]).then(function(res){
                   var m = res[0]||{}; var people = [];
                   if (m.owner) people.push({ id:m.owner.id, name:m.owner.name||m.owner.email });
                   (m.members||[]).forEach(function(x){ people.push({ id:x.userId, name:x.userName||x.userEmail }); });
                   var uSel = document.getElementById('rq-user');
-                  uSel.innerHTML = people.map(function(p){ return '<option value="'+p.id+'">'+(p.name||'').replace(/[<>&]/g,'')+'</option>'; }).join('');
-                  var docs = (res[1]&&res[1].files)||[];
-                  var dSel = document.getElementById('rq-doc');
-                  dSel.innerHTML = '<option value="">— No specific document —</option>' + docs.map(function(d){ return '<option value="'+d.id+'">'+(d.name||'').replace(/[<>&]/g,'')+'</option>'; }).join('');
+                  uSel.innerHTML = people.map(function(p){ return '<option value="'+p.id+'">'+rqEsc(p.name)+'</option>'; }).join('');
+                  rqCheckboxList(document.getElementById('rq-docs'), (res[1]&&res[1].files)||[], 'rq-doc-cb');
+                  rqCheckboxList(document.getElementById('rq-tickets'), (res[2]&&res[2].tickets)||[], 'rq-tkt-cb');
                 });
               };
               window.closeRequestModal = function(){ document.getElementById('requestModal').classList.remove('active'); };
               window.submitRequest = function(){
                 var toUserId = document.getElementById('rq-user').value;
-                var docId = document.getElementById('rq-doc').value || undefined;
+                var docIds = Array.prototype.slice.call(document.querySelectorAll('.rq-doc-cb:checked')).map(function(c){return c.value;});
+                var ticketIds = Array.prototype.slice.call(document.querySelectorAll('.rq-tkt-cb:checked')).map(function(c){return c.value;});
                 var message = document.getElementById('rq-msg').value.trim();
                 var err = document.getElementById('rq-error');
                 if (!toUserId || !message){ err.style.display='block'; err.textContent='Pick a person and write a message.'; return; }
                 err.style.display='none';
-                fetch('/api/projects/'+RQ_PID+'/requests', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ toUserId:toUserId, message:message, docId:docId }) })
+                fetch('/api/projects/'+RQ_PID+'/requests', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ toUserId:toUserId, message:message, docIds:docIds, ticketIds:ticketIds }) })
                   .then(function(r){ return r.json().then(function(d){return{ok:r.ok,data:d};}); })
-                  .then(function(res){ if(!res.ok){ err.style.display='block'; err.textContent=(res.data&&res.data.error)||'Failed to send'; return; } document.getElementById('rq-msg').value=''; closeRequestModal(); });
+                  .then(function(res){ if(!res.ok){ err.style.display='block'; err.textContent=(res.data&&res.data.error)||'Failed to send'; return; } document.getElementById('rq-msg').value=''; closeRequestModal(); if (window.reloadInbox) window.reloadInbox(); });
               };
             })();
           </script>
           <script>
             (function(){
               var IB_PID = '${project.projectId}';
+              var IB_TAB = 'received';
               window.markAllInboxRead = function(){
                 fetch('/api/projects/'+IB_PID+'/notifications/read', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' }).then(loadInbox);
               };
               function ibEsc(s){ return (s||'').replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
               function relTime(ts){ if(!ts) return ''; var d=new Date(ts); var s=Math.floor((Date.now()-d.getTime())/1000); if(s<60)return 'just now'; if(s<3600)return Math.floor(s/60)+'m ago'; if(s<86400)return Math.floor(s/3600)+'h ago'; return d.toLocaleDateString(); }
-              function iconFor(t){ return t==='assigned'?'fa-user-check':(t==='mentioned'?'fa-at':'fa-comment'); }
+              function iconFor(t){ return t==='assigned'?'fa-user-check':(t==='mentioned'?'fa-at':(t==='review_requested'?'fa-paper-plane':'fa-comment')); }
+              function ibEmpty(msg){ return '<div style="color:var(--text-secondary);font-size:0.875rem;padding:1rem;border:1px dashed var(--border-color);border-radius:var(--radius);text-align:center;">'+msg+'</div>'; }
+              window.switchInboxTab = function(tab){
+                IB_TAB = tab;
+                var r = document.getElementById('inbox-tab-received'), s = document.getElementById('inbox-tab-sent');
+                var on = 'background:var(--primary-color);color:#fff;', off = 'background:transparent;color:var(--text-secondary);';
+                r.style.cssText = 'font-size:0.75rem;padding:0.35rem 0.75rem;border:none;cursor:pointer;'+(tab==='received'?on:off);
+                s.style.cssText = 'font-size:0.75rem;padding:0.35rem 0.75rem;border:none;cursor:pointer;'+(tab==='sent'?on:off);
+                document.getElementById('inbox-markread').style.display = 'none';
+                if (tab==='sent') loadSent(); else loadInbox();
+              };
+              window.reloadInbox = function(){ if (IB_TAB==='sent') loadSent(); else loadInbox(); };
               function loadInbox(){
                 fetch('/api/projects/'+IB_PID+'/notifications').then(function(r){return r.json();}).then(function(data){
                   var items = data.notifications || [];
                   var list = document.getElementById('inbox-list');
-                  if (!items.length){ return; } // keep the empty-state placeholder
+                  if (!items.length){ list.innerHTML = ibEmpty('No items yet — assigned tickets, mentions and requests sent to you show up here.'); return; }
                   var pending = items.filter(function(n){ return !n.readAt; });
                   var done = items.filter(function(n){ return n.readAt; });
                   document.getElementById('inbox-markread').style.display = pending.length ? '' : 'none';
@@ -346,6 +375,20 @@ export function ProjectDetailPage({
                   var html = pending.map(function(n){ return row(n,false); }).join('');
                   if (done.length){ html += '<div style="font-size:0.75rem;color:var(--text-secondary);margin:0.75rem 0 0.5rem;">Earlier</div>' + done.slice(0,10).map(function(n){ return row(n,true); }).join(''); }
                   list.innerHTML = html;
+                });
+              }
+              function loadSent(){
+                fetch('/api/projects/'+IB_PID+'/requests/sent').then(function(r){return r.json();}).then(function(data){
+                  var items = data.requests || [];
+                  var list = document.getElementById('inbox-list');
+                  if (!items.length){ list.innerHTML = ibEmpty('You haven\\'t sent any requests yet. Use “New request” to ask a teammate to review docs or tickets.'); return; }
+                  list.innerHTML = items.map(function(n){
+                    return '<a href="'+ (n.link||'#') +'" style="display:flex;align-items:center;gap:0.75rem;padding:0.75rem 1rem;border:1px solid var(--border-color);border-radius:var(--radius);background:var(--card-bg);margin-bottom:0.5rem;text-decoration:none;color:var(--text-color);">'
+                      + '<i class="fas fa-paper-plane" style="color:var(--primary-color);width:1rem;"></i>'
+                      + '<span style="flex:1;font-size:0.875rem;"><span style="color:var(--text-secondary);">To '+ibEsc(n.toName||n.toEmail||'someone')+':</span> '+ibEsc(n.message)+'</span>'
+                      + '<span style="font-size:0.7rem;color:'+(n.readAt?'#22c55e':'var(--text-secondary)')+';min-width:70px;text-align:right;">'+(n.readAt?'seen':'sent')+' · '+relTime(n.createdAt)+'</span>'
+                      + '</a>';
+                  }).join('');
                 });
               }
               if ('${activeTab}' === 'conversations') loadInbox();

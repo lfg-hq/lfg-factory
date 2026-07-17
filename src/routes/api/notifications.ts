@@ -7,10 +7,18 @@ import { requireAuth } from "../../auth/middleware.ts";
 import { db } from "../../config/db.ts";
 import { notifications } from "../../db/schema/notifications.ts";
 import { users } from "../../db/schema/users.ts";
-import { and, eq, desc, isNull } from "drizzle-orm";
+import { and, eq, desc, isNull, inArray } from "drizzle-orm";
 import { getProjectAccess } from "../../auth/project-access.ts";
 import { notify } from "../../services/notify.ts";
+import { sendEmail } from "../../utils/email.ts";
+import { env } from "../../config/env.ts";
+import { projectFiles } from "../../db/schema/documents.ts";
+import { projectTickets } from "../../db/schema/tickets.ts";
 import type { auth } from "../../auth/index.ts";
+
+function escapeHtmlText(s: string): string {
+  return s.replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch] || ch));
+}
 
 type Env = { Variables: { user: typeof auth.$Infer.Session.user } };
 const notificationsApi = new Hono<Env>();
@@ -71,32 +79,107 @@ notificationsApi.post("/:projectId/notifications/read", async (c) => {
 });
 
 // POST /api/projects/:projectId/requests — send a request/review to a teammate
-// (e.g. "please review this doc"). Lands in their inbox.
+// (e.g. "please review these docs/tickets"). Lands in their inbox + emails them.
 notificationsApi.post("/:projectId/requests", async (c) => {
   const user = c.get("user");
   const { projectId } = c.req.param();
   const access = await getProjectAccess(projectId!, user.id);
   if (!access) return c.json({ error: "Project not found" }, 404);
 
-  const body = await c.req.json<{ toUserId: string; message: string; docId?: string }>().catch(() => null);
+  const body = await c.req
+    .json<{ toUserId: string; message: string; docIds?: string[]; ticketIds?: string[]; docId?: string }>()
+    .catch(() => null);
   if (!body?.toUserId || !body.message?.trim()) {
     return c.json({ error: "toUserId and message are required" }, 400);
   }
 
-  const link = body.docId
-    ? `/projects/${projectId}/?tab=documents`
-    : `/projects/${projectId}`;
+  const docIds = [...new Set([...(body.docIds ?? []), ...(body.docId ? [body.docId] : [])])].filter(Boolean);
+  const ticketIds = [...new Set(body.ticketIds ?? [])].filter(Boolean);
+
+  // Resolve names for the referenced docs/tickets (scoped to this project).
+  const docRows = docIds.length
+    ? await db
+        .select({ id: projectFiles.id, name: projectFiles.name })
+        .from(projectFiles)
+        .where(and(eq(projectFiles.projectId, access.project.id), inArray(projectFiles.id, docIds)))
+    : [];
+  const ticketRows = ticketIds.length
+    ? await db
+        .select({ id: projectTickets.id, name: projectTickets.name })
+        .from(projectTickets)
+        .where(and(eq(projectTickets.projectId, access.project.id), inArray(projectTickets.id, ticketIds)))
+    : [];
+
+  const link = ticketRows.length && !docRows.length
+    ? `/projects/${projectId}/?tab=tickets`
+    : docRows.length
+      ? `/projects/${projectId}/?tab=documents`
+      : `/projects/${projectId}`;
+
+  const refs = [
+    ...docRows.map((d) => `📄 ${d.name}`),
+    ...ticketRows.map((t) => `🎫 ${t.name}`),
+  ];
+  const refSuffix = refs.length ? ` — re: ${refs.join(", ")}` : "";
+
   const row = await notify({
     userId: body.toUserId,
     actorId: user.id,
     projectId: projectId!,
     type: "review_requested",
-    targetType: body.docId ? "document" : "project",
-    targetId: body.docId ?? projectId!,
-    message: `${user.name || "Someone"}: ${body.message.trim()}`,
+    targetType: docRows.length ? "document" : ticketRows.length ? "ticket" : "project",
+    targetId: docRows[0]?.id ?? ticketRows[0]?.id ?? projectId!,
+    message: `${user.name || "Someone"}: ${body.message.trim()}${refSuffix}`,
     link,
   });
+
+  // Email the recipient (best-effort).
+  const [recipient] = await db.select({ email: users.email, name: users.name }).from(users).where(eq(users.id, body.toUserId));
+  if (recipient?.email) {
+    const base = env.APP_URL || env.BETTER_AUTH_URL || "";
+    const url = base ? base.replace(/\/$/, "") + link : link;
+    const refsHtml = refs.length ? `<ul>${refs.map((r) => `<li>${escapeHtmlText(r)}</li>`).join("")}</ul>` : "";
+    sendEmail({
+      to: recipient.email,
+      subject: `${user.name || "Someone"} sent you a request in ${access.project.name}`,
+      html: `<p><strong>${escapeHtmlText(user.name || "Someone")}</strong> sent you a request:</p><blockquote>${escapeHtmlText(body.message.trim())}</blockquote>${refsHtml}<p><a href="${url}">Open in LFG →</a></p>`,
+      text: `${user.name || "Someone"} sent you a request: ${body.message.trim()}${refSuffix}\n\n${url}`,
+    }).catch(() => {});
+  }
+
   return c.json({ ok: true, notification: row }, 201);
+});
+
+// GET /api/projects/:projectId/requests/sent — requests the current user has sent
+notificationsApi.get("/:projectId/requests/sent", async (c) => {
+  const user = c.get("user");
+  const { projectId } = c.req.param();
+  const access = await getProjectAccess(projectId!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+
+  const rows = await db
+    .select({
+      id: notifications.id,
+      message: notifications.message,
+      link: notifications.link,
+      createdAt: notifications.createdAt,
+      readAt: notifications.readAt,
+      toName: users.name,
+      toEmail: users.email,
+    })
+    .from(notifications)
+    .leftJoin(users, eq(notifications.userId, users.id))
+    .where(
+      and(
+        eq(notifications.actorId, user.id),
+        eq(notifications.projectId, projectId!),
+        eq(notifications.type, "review_requested")
+      )
+    )
+    .orderBy(desc(notifications.createdAt))
+    .limit(100);
+
+  return c.json({ requests: rows });
 });
 
 export default notificationsApi;
