@@ -7,6 +7,27 @@ import type { LanguageModel } from "ai";
 
 export type ProviderName = "anthropic" | "openai" | "google" | "kimi" | "deepseek" | "glm";
 
+/** Per-user API keys, keyed by provider. */
+export type UserApiKeys = {
+  anthropic?: string;
+  openai?: string;
+  google?: string;
+  kimi?: string;
+  deepseek?: string;
+  glm?: string;
+};
+
+/**
+ * LLM requests — especially reasoning models — routinely run longer than Bun's
+ * default `fetch` timeout, which aborts the request mid-flight and surfaces as
+ * `DOMException code 23 TimeoutError`. Disable Bun's default timeout for all
+ * provider calls; callers bound long-running requests with their own
+ * `abortSignal` instead of relying on a hidden platform timeout.
+ */
+const llmFetch = ((url: string | URL | Request, init?: RequestInit): Promise<Response> =>
+  globalThis.fetch(url, { ...(init ?? {}), timeout: false } as RequestInit)
+) as unknown as typeof fetch;
+
 /**
  * Custom fetch wrapper for Kimi K2.5.
  * Kimi auto-enables thinking mode and requires `reasoning_content` on every
@@ -49,36 +70,88 @@ async function kimiFetch(url: string | URL | Request, init?: RequestInit): Promi
       console.warn(`[kimi] Body is not a string, type: ${typeof init.body}, constructor: ${init.body?.constructor?.name}`);
     }
   }
-  return globalThis.fetch(url, init);
+  return globalThis.fetch(url, { ...(init ?? {}), timeout: false } as RequestInit);
 }
+
+/**
+ * How a provider handles prompt caching:
+ *  - "explicit": we must mark cache breakpoints (Anthropic cache_control).
+ *  - "auto": provider caches a stable prefix automatically (OpenAI, DeepSeek,
+ *    Kimi, GLM, Gemini 2.5) — we just keep the prefix stable.
+ *  - "none": no caching support.
+ */
+export type CachingMode = "explicit" | "auto" | "none";
+
+/** Cost tier — "lite" is the cheap model used for mechanical subtasks. */
+export type ModelTier = "lite" | "pro";
 
 interface ModelEntry {
   key: string;
   label: string;
   provider_model: string;
   requires_pro: boolean;
+  tier?: ModelTier;
+  /** Per-model override of the provider-level caching mode. */
+  caching?: CachingMode;
 }
 
 interface ProviderConfig {
   label: string;
   default_model: string;
+  /** Model key routed to for cheap subtasks (titles, summaries, codebase reads). */
+  lite_model?: string;
+  /** Default caching mode for every model under this provider. */
+  caching?: CachingMode;
   models: ModelEntry[];
 }
 
-// Flat map: modelKey → { providerName, providerModel }
-const modelIndex = new Map<string, { provider: ProviderName; model: string }>();
+// Flat map: modelKey → resolved metadata
+const modelIndex = new Map<
+  string,
+  { provider: ProviderName; model: string; caching: CachingMode; tier: ModelTier }
+>();
+// Per-provider config lookup (lite_model, caching default)
+const providerIndex = new Map<ProviderName, ProviderConfig>();
 for (const [providerName, cfg] of Object.entries(
   modelsConfig.providers as Record<string, ProviderConfig>
 )) {
+  providerIndex.set(providerName as ProviderName, cfg);
   for (const m of cfg.models) {
     modelIndex.set(m.key, {
       provider: providerName as ProviderName,
       model: m.provider_model,
+      caching: m.caching ?? cfg.caching ?? "none",
+      tier: m.tier ?? "pro",
     });
   }
 }
 
 export const DEFAULT_MODEL_KEY = modelsConfig.default_model;
+
+/** Resolve the caching mode for a model key (defaults to "none" if unknown). */
+export function getModelCaching(modelKey: string): CachingMode {
+  return modelIndex.get(modelKey)?.caching ?? "none";
+}
+
+/** The cheap model key for a provider, or null if none is configured. */
+export function getLiteModelKeyFor(providerName: ProviderName): string | null {
+  return providerIndex.get(providerName)?.lite_model ?? null;
+}
+
+/**
+ * Build a LanguageModel for the cheap tier of the SAME provider as `modelKey`.
+ * Staying in-provider means we reuse the user's existing API key. Falls back to
+ * the original model key when the provider has no distinct lite model.
+ */
+export function getLiteModel(
+  modelKey: string,
+  userApiKeys?: Parameters<typeof getModel>[1],
+  opts?: Parameters<typeof getModel>[2]
+): { model: LanguageModel; modelKey: string } {
+  const provider = getProviderName(modelKey);
+  const liteKey = (provider && getLiteModelKeyFor(provider)) || modelKey;
+  return { model: getModel(liteKey, userApiKeys, opts), modelKey: liteKey };
+}
 
 /**
  * Get a LanguageModelV1 instance from a model key (e.g. "claude_4.5_sonnet").
@@ -103,19 +176,19 @@ export function getModel(
     case "anthropic": {
       const apiKey = userApiKeys?.anthropic || (allowEnvFallback ? env.ANTHROPIC_API_KEY : "");
       if (!apiKey) throw new Error(`No Anthropic API key configured. ${noKeyMsg}`);
-      const anthropic = createAnthropic({ apiKey });
+      const anthropic = createAnthropic({ apiKey, fetch: llmFetch });
       return anthropic(model);
     }
     case "openai": {
       const apiKey = userApiKeys?.openai || (allowEnvFallback ? env.OPENAI_API_KEY : "");
       if (!apiKey) throw new Error(`No OpenAI API key configured. ${noKeyMsg}`);
-      const openai = createOpenAI({ apiKey });
+      const openai = createOpenAI({ apiKey, fetch: llmFetch });
       return openai(model);
     }
     case "google": {
       const apiKey = userApiKeys?.google || (allowEnvFallback ? env.GOOGLE_AI_API_KEY : "");
       if (!apiKey) throw new Error(`No Google AI API key configured. ${noKeyMsg}`);
-      const google = createGoogleGenerativeAI({ apiKey });
+      const google = createGoogleGenerativeAI({ apiKey, fetch: llmFetch });
       return google(model);
     }
     case "kimi": {
@@ -124,7 +197,7 @@ export function getModel(
       const kimi = createOpenAI({
         apiKey,
         baseURL: "https://api.moonshot.ai/v1",
-        fetch: kimiFetch,
+        fetch: kimiFetch as unknown as typeof fetch,
       });
       return kimi.chat(model);
     }
@@ -134,6 +207,7 @@ export function getModel(
       const deepseek = createOpenAI({
         apiKey,
         baseURL: "https://api.deepseek.com/v1",
+        fetch: llmFetch,
       });
       return deepseek.chat(model);
     }
@@ -143,6 +217,7 @@ export function getModel(
       const glm = createOpenAI({
         apiKey,
         baseURL: "https://api.z.ai/api/paas/v4",
+        fetch: llmFetch,
       });
       return glm.chat(model);
     }
@@ -180,7 +255,7 @@ export function getModelWithSearch(
     case "openai": {
       const apiKey = userApiKeys?.openai || (allowEnvFallback ? env.OPENAI_API_KEY : "");
       if (!apiKey) throw new Error(`No OpenAI API key configured. ${noKeyMsg}`);
-      const openai = createOpenAI({ apiKey });
+      const openai = createOpenAI({ apiKey, fetch: llmFetch });
       return {
         model: openai(modelId),
         searchTools: { web_search: openai.tools.webSearch({ searchContextSize: "medium" }) },
@@ -189,7 +264,7 @@ export function getModelWithSearch(
     case "anthropic": {
       const apiKey = userApiKeys?.anthropic || (allowEnvFallback ? env.ANTHROPIC_API_KEY : "");
       if (!apiKey) throw new Error(`No Anthropic API key configured. ${noKeyMsg}`);
-      const anthropic = createAnthropic({ apiKey });
+      const anthropic = createAnthropic({ apiKey, fetch: llmFetch });
       return {
         model: anthropic(modelId),
         searchTools: { web_search: anthropic.tools.webSearch_20250305({ maxUses: 5 }) },
@@ -198,7 +273,7 @@ export function getModelWithSearch(
     case "google": {
       const apiKey = userApiKeys?.google || (allowEnvFallback ? env.GOOGLE_AI_API_KEY : "");
       if (!apiKey) throw new Error(`No Google AI API key configured. ${noKeyMsg}`);
-      const google = createGoogleGenerativeAI({ apiKey });
+      const google = createGoogleGenerativeAI({ apiKey, fetch: llmFetch });
       return {
         model: google(modelId),
         searchTools: { google_search: google.tools.googleSearch({}) },
@@ -210,7 +285,7 @@ export function getModelWithSearch(
       const kimi = createOpenAI({
         apiKey,
         baseURL: "https://api.moonshot.ai/v1",
-        fetch: kimiFetch,
+        fetch: kimiFetch as unknown as typeof fetch,
       });
       return {
         model: kimi.chat(modelId),
@@ -223,6 +298,7 @@ export function getModelWithSearch(
       const deepseek = createOpenAI({
         apiKey,
         baseURL: "https://api.deepseek.com/v1",
+        fetch: llmFetch,
       });
       return {
         model: deepseek.chat(modelId),
@@ -235,6 +311,7 @@ export function getModelWithSearch(
       const glm = createOpenAI({
         apiKey,
         baseURL: "https://api.z.ai/api/paas/v4",
+        fetch: llmFetch,
       });
       return {
         model: glm.chat(modelId),
@@ -255,6 +332,7 @@ export function listModels() {
     providerModel: string;
     requiresPro: boolean;
     providerLabel: string;
+    tier: ModelTier;
   }> = [];
 
   for (const [providerName, cfg] of Object.entries(
@@ -268,6 +346,7 @@ export function listModels() {
         providerModel: m.provider_model,
         requiresPro: m.requires_pro,
         providerLabel: cfg.label,
+        tier: m.tier ?? "pro",
       });
     }
   }

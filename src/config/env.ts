@@ -25,11 +25,19 @@ const envSchema = z.object({
   GOOGLE_CLIENT_SECRET: z.string().optional().default(""),
   GITHUB_CLIENT_ID: z.string().optional().default(""),
   GITHUB_CLIENT_SECRET: z.string().optional().default(""),
+  GITLAB_CLIENT_ID: z.string().optional().default(""),
+  GITLAB_CLIENT_SECRET: z.string().optional().default(""),
+  // GitLab base URL — gitlab.com by default, override for self-hosted GitLab.
+  GITLAB_BASE_URL: z.string().optional().default("https://gitlab.com"),
 
   ANTHROPIC_API_KEY: z.string().optional().default(""),
   OPENAI_API_KEY: z.string().optional().default(""),
   GOOGLE_AI_API_KEY: z.string().optional().default(""),
+  DEEPSEEK_API_KEY: z.string().optional().default(""),
   EXA_API_KEY: z.string().optional().default(""),
+
+  // Public base URL used to build links in emails (falls back to BETTER_AUTH_URL)
+  APP_URL: z.string().optional().default(""),
 
   SENDGRID_API_KEY: z.string().optional().default(""),
   EMAIL_FROM: z.string().optional().default("noreply@lfg.run"),

@@ -615,6 +615,15 @@
     box-shadow: 0 0 10px rgba(187, 134, 252, 0.3);
 }
 
+/* Busy state: while the agent is generating/building, the send button becomes a stop button */
+#send-btn.busy {
+    background-color: rgba(239, 83, 80, 0.2);
+    color: #ef5350;
+}
+#send-btn.busy:hover {
+    box-shadow: 0 0 10px rgba(239, 83, 80, 0.3);
+}
+
 /* Stop button styling */
 #stop-btn {
     background-color: rgba(239, 83, 80, 0.2); /* Red color for stop with transparency */

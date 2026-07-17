@@ -1,11 +1,11 @@
 import { html } from "hono/html";
-import type { BlogPost } from "../utils/blog.ts";
+import type { BlogPost } from "../../utils/blog.ts";
 
 /**
  * Landing page rendered as raw HTML to preserve the original Tailwind + inline JS
  * without needing JSX conversion of 1500+ lines of interactive markup.
  */
-export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
+export const LandingPage = ({ posts = [], turnstileSiteKey = "" }: { posts?: BlogPost[]; turnstileSiteKey?: string }) => html`
 <!DOCTYPE html>
 <html lang="en" class="scroll-smooth">
 <head>
@@ -676,7 +676,7 @@ export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
                 <div>
                     <h4 class="font-bold text-white mb-4 uppercase text-xs tracking-wider">Community</h4>
                     <ul class="space-y-3 text-sm text-slate-400">
-                        <li><a href="https://github.com/lfg-hq/lfg" target="_blank" rel="noopener noreferrer" class="hover:text-brand-400 transition-colors flex items-center gap-2"><i data-lucide="github" class="w-4 h-4"></i> GitHub</a></li>
+                        <li><a href="https://github.com/lfg-hq/lfg" target="_blank" rel="noopener noreferrer" class="hover:text-brand-400 transition-colors flex items-center gap-2"><svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0 1 12 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.02 10.02 0 0 0 22 12.017C22 6.484 17.522 2 12 2Z"></path></svg> GitHub</a></li>
                         <li><a href="/auth/login" class="hover:text-brand-400 transition-colors flex items-center gap-2"><i data-lucide="rocket" class="w-4 h-4"></i> Platform</a></li>
                     </ul>
                 </div>
@@ -718,6 +718,7 @@ export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
                     <p class="text-slate-500 text-sm mb-4">We will send a verification code before we generate your free PRD.</p>
                     <form id="free-prd-email-form" class="space-y-4">
                         <input id="free-prd-email" type="email" class="w-full p-3 rounded-lg border border-slate-200 focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none" placeholder="you@company.com" required />
+                        <div id="free-prd-turnstile"></div>
                         <div class="free-prd-error text-sm text-red-500 hidden"></div>
                         <div class="flex items-center justify-between">
                             <button type="button" onclick="setFreePrdStep(1)" class="text-sm font-semibold text-slate-500 hover:text-slate-700">Back</button>
@@ -743,11 +744,12 @@ export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
                     <div class="w-16 h-16 bg-emerald-50 text-emerald-700 rounded-full flex items-center justify-center mx-auto mb-4">
                         <i data-lucide="check-check" class="w-7 h-7"></i>
                     </div>
-                    <h2 class="text-2xl font-bold text-slate-900 mb-2">Thank you</h2>
-                    <p class="text-slate-600">Your request is saved. We will send your free PRD to your verified email.</p>
-                    <button type="button" onclick="closeFreePrdModal()" class="mt-6 bg-slate-900 text-white px-6 py-2.5 rounded-lg font-semibold hover:bg-slate-800 transition-colors">
-                        Close
-                    </button>
+                    <h2 class="text-2xl font-bold text-slate-900 mb-2">You're all set!</h2>
+                    <p class="text-slate-600 mb-6">We're preparing your free PRD and will email the link to <span id="free-prd-confirm-email" class="font-semibold text-slate-800"></span>. View it now — you may be asked a couple of quick questions — or keep browsing.</p>
+                    <div class="flex flex-col sm:flex-row gap-3 justify-center">
+                        <a id="free-prd-view-btn" href="#" class="bg-brand-600 text-white px-6 py-2.5 rounded-lg font-semibold hover:bg-brand-700 transition-colors">View my PRD →</a>
+                        <button type="button" onclick="closeFreePrdModal()" class="bg-slate-100 text-slate-700 px-6 py-2.5 rounded-lg font-semibold hover:bg-slate-200 transition-colors">Continue browsing</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -897,6 +899,33 @@ export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
     <script>
         lucide.createIcons();
 
+        // ── Cloudflare Turnstile (Free PRD bot check) ──────────────────
+        var TURNSTILE_SITE_KEY = '${turnstileSiteKey}';
+        var freePrdTurnstileToken = '';
+        var freePrdTurnstileWidgetId = null;
+        var freePrdTurnstileReady = false;
+        function onFreePrdTurnstileLoad() { freePrdTurnstileReady = true; renderFreePrdTurnstile(); }
+        function renderFreePrdTurnstile() {
+            if (!freePrdTurnstileReady || !TURNSTILE_SITE_KEY || typeof turnstile === 'undefined') return;
+            var el = document.getElementById('free-prd-turnstile');
+            if (!el || freePrdTurnstileWidgetId !== null) return;
+            try {
+                freePrdTurnstileWidgetId = turnstile.render(el, {
+                    sitekey: TURNSTILE_SITE_KEY,
+                    theme: 'light',
+                    callback: function (t) { freePrdTurnstileToken = t; },
+                    'expired-callback': function () { freePrdTurnstileToken = ''; },
+                    'error-callback': function () { freePrdTurnstileToken = ''; }
+                });
+            } catch (e) { console.error('Turnstile render error:', e); }
+        }
+        function resetFreePrdTurnstile() {
+            freePrdTurnstileToken = '';
+            if (typeof turnstile !== 'undefined' && freePrdTurnstileWidgetId !== null) {
+                try { turnstile.reset(freePrdTurnstileWidgetId); } catch (e) {}
+            }
+        }
+
         function updateHeroPlaceholder() {
             const heroInput = document.getElementById('hero-input');
             if (heroInput) {
@@ -1031,6 +1060,10 @@ export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
                 e.preventDefault();
                 const idea = freePrdIdeaInput.value.trim();
                 if (!idea) return;
+                if (idea.length < 12) {
+                    showFreePrdError('Please describe what you want to build in a bit more detail.');
+                    return;
+                }
                 freePrdIdeaValue = idea;
                 clearFreePrdErrors();
                 setFreePrdStep(2);
@@ -1047,6 +1080,10 @@ export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
                     showFreePrdError('Please enter both project idea and email.');
                     return;
                 }
+                if (TURNSTILE_SITE_KEY && !freePrdTurnstileToken) {
+                    showFreePrdError('Please complete the bot check below.');
+                    return;
+                }
                 const sendBtn = document.getElementById('free-prd-send-btn');
                 sendBtn.disabled = true;
                 sendBtn.textContent = 'Sending...';
@@ -1054,12 +1091,13 @@ export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
                     const response = await fetch('/api/free-prd/request-code', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ project_idea: freePrdIdeaValue, email }),
+                        body: JSON.stringify({ project_idea: freePrdIdeaValue, email, turnstile_token: freePrdTurnstileToken }),
                         credentials: 'include'
                     });
                     const data = await response.json();
                     if (!response.ok || !data.success) {
                         showFreePrdError(data.error || 'Unable to send code. Please try again.');
+                        resetFreePrdTurnstile();
                         return;
                     }
                     freePrdRequestId = data.request_id;
@@ -1070,6 +1108,7 @@ export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
                 } catch (error) {
                     console.error('Free PRD send code error:', error);
                     showFreePrdError('Unable to send code. Please try again.');
+                    resetFreePrdTurnstile();
                 } finally {
                     sendBtn.disabled = false;
                     sendBtn.textContent = 'Send Code';
@@ -1102,7 +1141,22 @@ export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
                         showFreePrdError(data.error || 'Invalid code. Please try again.');
                         return;
                     }
+                    // Verified — the PRD is being generated in the background and the
+                    // link is emailed. Give the user the choice: view it now (the PRD
+                    // page shows progress / questions / the finished PRD) or keep browsing.
+                    const viewBtn = document.getElementById('free-prd-view-btn');
+                    if (viewBtn) viewBtn.href = data.prd_url || ('/prd/' + freePrdRequestId);
+                    const confirmEmail = document.getElementById('free-prd-confirm-email');
+                    if (confirmEmail) confirmEmail.textContent = freePrdEmailValue || '';
                     setFreePrdStep(4);
+                    // Clear the hero form / cached idea so nothing stale is left behind
+                    if (heroInput) heroInput.value = '';
+                    const heroEmail = document.getElementById('hero-email');
+                    if (heroEmail) heroEmail.value = '';
+                    if (freePrdIdeaInput) freePrdIdeaInput.value = '';
+                    if (freePrdCodeInput) freePrdCodeInput.value = '';
+                    userRequirements = '';
+                    sessionStorage.removeItem('pendingRequirements');
                 } catch (error) {
                     console.error('Free PRD verify code error:', error);
                     showFreePrdError('Unable to verify code. Please try again.');
@@ -1148,11 +1202,17 @@ export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
             heroInput.focus();
         }
 
-        heroForm.addEventListener('submit', async (e) => {
+        heroForm.addEventListener('submit', (e) => {
             e.preventDefault();
             const idea = heroInput.value.trim();
             const email = document.getElementById('hero-email').value.trim();
             if (!idea || !email) return;
+            if (idea.length < 12) {
+                heroInput.setCustomValidity('Please describe what you want to build in a bit more detail.');
+                heroInput.reportValidity();
+                setTimeout(() => heroInput.setCustomValidity(''), 100);
+                return;
+            }
 
             userRequirements = idea;
             sessionStorage.setItem('pendingRequirements', idea);
@@ -1165,37 +1225,10 @@ export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
             freePrdRequestId = null;
             clearFreePrdErrors();
 
+            // Prefill the email and jump to the verify step, where the bot check
+            // renders. The user completes Turnstile then clicks "Send Code".
             if (freePrdEmailInput) freePrdEmailInput.value = email;
             setFreePrdStep(2);
-
-            const sendBtn = document.getElementById('free-prd-send-btn');
-            const heroBtnText = document.getElementById('hero-btn-text');
-            if (heroBtnText) heroBtnText.textContent = 'Sending...';
-            if (sendBtn) { sendBtn.disabled = true; sendBtn.textContent = 'Sending...'; }
-            try {
-                const response = await fetch('/api/free-prd/request-code', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ project_idea: idea, email }),
-                    credentials: 'include'
-                });
-                const data = await response.json();
-                if (!response.ok || !data.success) {
-                    showFreePrdError(data.error || 'Unable to send code. Please try again.');
-                    return;
-                }
-                freePrdRequestId = data.request_id;
-                freePrdEmailValue = email;
-                const emailDisplay = document.getElementById('free-prd-email-display');
-                if (emailDisplay) emailDisplay.textContent = email;
-                setFreePrdStep(3);
-            } catch (error) {
-                console.error('Free PRD send code error:', error);
-                showFreePrdError('Unable to send code. Please try again.');
-            } finally {
-                if (sendBtn) { sendBtn.disabled = false; sendBtn.textContent = 'Send Code'; }
-                if (heroBtnText) heroBtnText.textContent = 'Get Your Free Plan';
-            }
         });
 
         function openModal(prompt) {
@@ -1232,12 +1265,17 @@ export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
             if (!freePrdModal) return;
             freePrdModal.classList.add('hidden');
             document.body.style.overflow = 'auto';
+            // Reset so the next open starts clean instead of re-showing "Thank you" / a stale code
+            if (freePrdCodeInput) freePrdCodeInput.value = '';
+            clearFreePrdErrors();
+            setFreePrdStep(1);
         }
 
         function setFreePrdStep(step) {
             document.querySelectorAll('.free-prd-step').forEach((el) => el.classList.add('hidden'));
             const stepEl = document.getElementById('free-prd-step-' + step);
             if (stepEl) stepEl.classList.remove('hidden');
+            if (step === 2) renderFreePrdTurnstile();
             lucide.createIcons();
         }
 
@@ -1467,6 +1505,7 @@ export const LandingPage = ({ posts = [] }: { posts?: BlogPost[] }) => html`
             }
         }
     </script>
+    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=onFreePrdTurnstileLoad" async defer></script>
 </body>
 </html>
 `;

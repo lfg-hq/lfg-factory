@@ -1,320 +1,240 @@
-import { html } from "hono/html";
+import { html, raw } from "hono/html";
 
-export const BuildLandingPage = () => html`
+interface BuildLandingPageProps {
+  turnstileSiteKey?: string;
+}
+
+const buildExamples = [
+  ["users", "Client onboarding portal", "Collect documents, track progress, assign tasks and keep customers updated."],
+  ["git-pull-request-arrow", "Approval workflow", "Route requests, capture decisions and preserve a clear activity history."],
+  ["layout-dashboard", "Operations dashboard", "Bring spreadsheets, forms and APIs into one useful operational view."],
+  ["files", "Document-processing tool", "Extract structured information from files and route the results for review."],
+  ["blocks", "Internal business application", "Replace repetitive manual work with software shaped around your process."],
+  ["sparkles", "AI-assisted workflow", "Add practical summarization, classification, drafting or data extraction."],
+  ["panel-top", "Customer portal", "Let customers submit information, see status and access documents in one place."],
+  ["rocket", "MVP or product prototype", "Launch a focused first release to test demand with real customers."],
+] as const;
+
+const faqs = [
+  ["What can you build for CAD $999?", "A tightly scoped first release of a web application, such as an internal workflow, dashboard, client portal or lightweight business tool."],
+  ["Is every application CAD $999?", "No. CAD $999 is the starting price for projects that fit the Build Sprint constraints. Larger projects receive a fixed-price proposal before development begins."],
+  ["Will I receive the source code?", "Yes. You receive the source code for the paid project, subject to the project agreement."],
+  ["Can you finish something I started in an AI app builder?", "Yes. LFG can review projects from Replit, Lovable and similar tools, determine what is usable and turn the prototype into a reliable production application."],
+  ["Why not build it myself with an AI app builder?", "Use an app builder when you want to direct the agent, make product decisions, test the application and manage deployment yourself. LFG is for customers who want an accountable team to own the agreed result."],
+  ["Who reviews AI-generated code?", "LFG engineers review architecture, implementation, security risks and release readiness before anything ships."],
+  ["What happens after the first release?", "Take over the code, engage LFG for another fixed-price release, or retain the team for ongoing maintenance and development."],
+  ["Is the Build Blueprint really free?", "Yes. The initial Build Blueprint is free and does not require you to purchase development. You can also take it to another developer."],
+  ["How quickly will I receive the blueprint?", "The automated system begins after email verification and usually prepares the first version within minutes. If more context is needed, it will ask a few focused questions first."],
+  ["Do you guarantee delivery in 10 business days?", "The delivery target applies only to accepted Build Sprint projects after scope approval and receipt of the required customer information."],
+] as const;
+
+export const BuildLandingPage = ({ turnstileSiteKey = "" }: BuildLandingPageProps = {}) => html`
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="en" class="scroll-smooth">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LFG Build, Turn your idea into a working app</title>
-  <meta name="description" content="Describe what you want to build. LFG turns your idea into a working web app in minutes, no code required.">
+  <title>LFG Build Sprint — Custom software in 10 business days</title>
+  <meta name="description" content="Turn one business workflow into working software. Fixed-price LFG Build Sprints start at CAD $999, with a free Build Blueprint before you commit.">
+  <meta property="og:title" content="LFG Build Sprint — One workflow. Working software.">
+  <meta property="og:description" content="Accepted Build Sprint projects receive a working first release within 10 business days. Starting at CAD $999.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://lfg.run/build-sprint">
+  <meta property="og:image" content="https://lfg.run/public/images/social/build-sprint-og.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="LFG Build Sprint">
+  <meta name="twitter:description" content="One workflow. Working software. 10 business days. Starting at CAD $999.">
+  <meta name="twitter:image" content="https://lfg.run/public/images/social/build-sprint-og.png">
+  <link rel="canonical" href="https://lfg.run/build-sprint">
   <link rel="icon" type="image/x-icon" href="/public/images/favicon.ico">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      darkMode: 'class',
-      theme: {
-        extend: {
-          fontFamily: {
-            sans: ['Manrope', 'sans-serif'],
-            display: ['Sora', 'sans-serif'],
-            mono: ['JetBrains Mono', 'monospace'],
-          },
-          colors: {
-            brand: { 50:'#eef2ff',100:'#e0e7ff',200:'#c7d2fe',300:'#a5b4fc',400:'#818cf8',500:'#6366f1',600:'#4f46e5',700:'#4338ca',800:'#3730a3',900:'#312e81' },
-          },
-          animation: {
-            'fade-up': 'fadeUp 0.7s ease-out both',
-            'fade-in': 'fadeIn 0.5s ease-out both',
-            'pulse-slow': 'pulse 3s ease-in-out infinite',
-            'float': 'float 6s ease-in-out infinite',
-          },
-          keyframes: {
-            fadeUp: { '0%': { opacity: '0', transform: 'translateY(24px)' }, '100%': { opacity: '1', transform: 'translateY(0)' } },
-            fadeIn: { '0%': { opacity: '0' }, '100%': { opacity: '1' } },
-            float: { '0%,100%': { transform: 'translateY(0px)' }, '50%': { transform: 'translateY(-8px)' } },
-          }
-        }
-      }
-    }
-  </script>
-  <style>
-    * { box-sizing: border-box; }
-    html, body { height: 100%; margin: 0; }
-    body {
-      background: #080b11;
-      overflow-x: hidden;
-    }
-    .grid-bg {
-      background-image:
-        linear-gradient(rgba(99,102,241,0.06) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(99,102,241,0.06) 1px, transparent 1px);
-      background-size: 48px 48px;
-    }
-    .glow-purple {
-      background: radial-gradient(circle, rgba(99,102,241,0.22) 0%, transparent 70%);
-    }
-    .glow-violet {
-      background: radial-gradient(circle, rgba(139,92,246,0.18) 0%, transparent 65%);
-    }
-    .prompt-box {
-      background: rgba(255,255,255,0.04);
-      border: 1.5px solid rgba(255,255,255,0.09);
-      transition: border-color 0.2s, box-shadow 0.2s;
-    }
-    .prompt-box:focus-within {
-      border-color: rgba(99,102,241,0.6);
-      box-shadow: 0 0 0 4px rgba(99,102,241,0.12), 0 0 40px rgba(99,102,241,0.08);
-    }
-    .prompt-box textarea {
-      background: transparent;
-      color: #e6edf3;
-      resize: none;
-      outline: none;
-      caret-color: #818cf8;
-    }
-    .prompt-box textarea::placeholder { color: rgba(255,255,255,0.3); }
-    .example-chip {
-      background: rgba(255,255,255,0.04);
-      border: 1px solid rgba(255,255,255,0.08);
-      color: rgba(255,255,255,0.55);
-      transition: all 0.15s;
-      cursor: pointer;
-    }
-    .example-chip:hover {
-      background: rgba(99,102,241,0.12);
-      border-color: rgba(99,102,241,0.3);
-      color: #a5b4fc;
-    }
-    .build-btn {
-      background: linear-gradient(135deg, #4f46e5, #7c3aed);
-      transition: opacity 0.2s, transform 0.15s;
-    }
-    .build-btn:hover { opacity: 0.9; transform: translateY(-1px); }
-    .build-btn:active { transform: translateY(0); }
-    .build-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
-    .stat-card {
-      background: rgba(255,255,255,0.03);
-      border: 1px solid rgba(255,255,255,0.07);
-    }
-    .feature-card {
-      background: rgba(255,255,255,0.025);
-      border: 1px solid rgba(255,255,255,0.07);
-      transition: border-color 0.2s, background 0.2s;
-    }
-    .feature-card:hover {
-      background: rgba(99,102,241,0.07);
-      border-color: rgba(99,102,241,0.2);
-    }
-    @keyframes typing-blink {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0; }
-    }
-    .typing-cursor { animation: typing-blink 1s infinite; }
-  </style>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/public/css/build-sprint.css?v=1">
+  <script src="https://unpkg.com/lucide@latest" defer></script>
+  ${turnstileSiteKey ? html`<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>` : ""}
 </head>
-<body class="font-sans text-white">
-
-  <!-- Background layers -->
-  <div class="fixed inset-0 grid-bg pointer-events-none"></div>
-  <div class="fixed top-0 left-1/4 w-[600px] h-[500px] glow-purple pointer-events-none -translate-y-1/4"></div>
-  <div class="fixed bottom-0 right-1/4 w-[500px] h-[400px] glow-violet pointer-events-none translate-y-1/3"></div>
-
-  <!-- Nav -->
-  <nav class="relative z-50 flex items-center justify-between px-6 py-5 max-w-6xl mx-auto">
-    <a href="/" class="flex items-center gap-2.5">
-      <div class="w-8 h-8 bg-brand-600 rounded-lg flex items-center justify-center">
-        <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-      </div>
-      <span class="font-display font-bold text-lg tracking-tight">LFG</span>
-    </a>
-    <div class="flex items-center gap-3">
-      <a href="/auth/login" class="text-sm text-white/60 hover:text-white transition-colors px-3 py-2">Sign in</a>
-      <a href="/auth/register" class="text-sm font-semibold bg-white/10 hover:bg-white/15 border border-white/10 rounded-lg px-4 py-2 transition-all">Get started free</a>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header" id="top">
+    <div class="container nav-wrap">
+      <a class="brand" href="/" aria-label="LFG home"><span class="brand-mark">L</span><span>LFG</span></a>
+      <nav class="desktop-nav" aria-label="Primary navigation">
+        <a href="#how-it-works">How it works</a><a href="#what-we-build">What we build</a><a href="#examples">Examples</a><a href="#faq">FAQ</a>
+      </nav>
+      <a class="button button-small" href="#blueprint" data-track="nav_blueprint">Get free blueprint <i data-lucide="arrow-up-right"></i></a>
+      <button class="menu-button" type="button" aria-label="Open navigation" aria-expanded="false"><i data-lucide="menu"></i></button>
     </div>
-  </nav>
+    <nav class="mobile-nav" aria-label="Mobile navigation">
+      <a href="#how-it-works">How it works</a><a href="#what-we-build">What we build</a><a href="#examples">Examples</a><a href="#faq">FAQ</a><a href="#blueprint">Get free blueprint</a>
+    </nav>
+  </header>
 
-  <!-- Hero -->
-  <main class="relative z-10 flex flex-col items-center px-4 pt-12 pb-24 sm:pt-20">
-
-    <!-- Badge -->
-    <div class="animate-fade-up inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-brand-600/15 border border-brand-500/25 mb-8" style="animation-delay:0s">
-      <span class="w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse-slow"></span>
-      <span class="text-xs font-bold text-brand-300 uppercase tracking-wider">AI-Powered App Builder</span>
-    </div>
-
-    <!-- Headline -->
-    <h1 class="animate-fade-up font-display font-bold text-4xl sm:text-5xl md:text-6xl text-center leading-[1.1] tracking-tight mb-5 max-w-3xl" style="animation-delay:0.08s">
-      Describe it.<br>
-      <span style="background: linear-gradient(135deg, #818cf8 0%, #a78bfa 40%, #c084fc 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;">We build it.</span>
-    </h1>
-
-    <p class="animate-fade-up text-lg text-white/50 text-center max-w-xl mb-10 leading-relaxed" style="animation-delay:0.15s">
-      Turn any idea into a working internal tool in minutes. No code, no setup, just describe what you need.
-    </p>
-
-    <!-- Prompt box -->
-    <div class="animate-fade-up w-full max-w-2xl" style="animation-delay:0.22s">
-      <div class="prompt-box rounded-2xl p-4">
-        <textarea
-          id="prompt-input"
-          rows="4"
-          class="w-full text-base font-sans leading-relaxed"
-          placeholder="Describe the app you want to build...
-
-e.g. A CRM dashboard where my sales team can track leads, add notes, and see a pipeline view of deals"
-        ></textarea>
-        <div class="flex items-center justify-between mt-3 pt-3 border-t border-white/[0.06]">
-          <span class="text-xs text-white/30 font-mono" id="char-count">0 / 2000</span>
-          <button id="build-btn" class="build-btn text-white font-semibold text-sm px-6 py-2.5 rounded-xl inline-flex items-center gap-2">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-            Start building
-          </button>
+  <main id="main">
+    <section class="hero section-dark">
+      <div class="hero-orb orb-one"></div><div class="hero-orb orb-two"></div>
+      <div class="container hero-grid">
+        <div class="hero-copy reveal">
+          <p class="eyebrow"><span></span> AI-native software delivery</p>
+          <h1>Turn one business workflow into <em>working software</em> in 10 business days.</h1>
+          <p class="hero-lede">Describe the problem in plain language. LFG scopes, builds, tests and deploys the solution using AI agents—with senior engineers responsible for the final release.</p>
+          <div class="price-callout"><span>Fixed-price Build Sprints</span><strong>start at CAD $999</strong></div>
+          <div class="button-row">
+            <a class="button button-primary" href="#blueprint" data-track="hero_blueprint">Get my free Build Blueprint <i data-lucide="arrow-right"></i></a>
+            <a class="button button-ghost" href="#blueprint" data-track="hero_apply">Apply for a Build Sprint</a>
+          </div>
+          <ul class="trust-list" aria-label="Build Sprint assurances">
+            <li><i data-lucide="check"></i>No technical specification required</li><li><i data-lucide="check"></i>Know the scope before paying</li><li><i data-lucide="check"></i>Keep the source code</li><li><i data-lucide="check"></i>Senior engineer reviewed</li>
+          </ul>
+        </div>
+        <div class="delivery-board reveal" aria-label="Example LFG delivery board">
+          <div class="board-top"><span class="window-dots"><b></b><b></b><b></b></span><span>client-onboarding-v1</span><span class="live-pill"><i data-lucide="radio"></i> Live progress</span></div>
+          <div class="board-summary"><div><span>Release</span><strong>First working version</strong></div><span class="on-track">On track</span></div>
+          <div class="board-progress"><span style="width:78%"></span></div>
+          <div class="board-list">
+            <div class="board-row done"><i data-lucide="circle-check-big"></i><div><strong>PRD approved</strong><span>Scope locked · acceptance criteria set</span></div><small>Done</small></div>
+            <div class="board-row active"><i data-lucide="loader-circle"></i><div><strong>Dashboard implementation</strong><span>2 agents working in isolated environments</span></div><small>Building</small></div>
+            <div class="board-row done"><i data-lucide="shield-check"></i><div><strong>Integration tests</strong><span>18 of 18 acceptance checks passed</span></div><small>Passed</small></div>
+            <div class="board-row"><i data-lucide="user-check"></i><div><strong>Senior review</strong><span>Architecture and release readiness</span></div><small>Scheduled</small></div>
+            <div class="board-row muted"><i data-lucide="rocket"></i><div><strong>Release ready</strong><span>Deploy and hand over source code</span></div><small>Next</small></div>
+          </div>
+          <div class="board-footer"><span><i data-lucide="calendar-days"></i> Day 7 of 10</span><span><i data-lucide="git-branch"></i> 12 tickets complete</span></div>
         </div>
       </div>
+      <div class="container workflow-strip" aria-label="LFG delivery workflow">
+        ${["Business idea", "Build Blueprint", "Approved scope", "AI agents build", "Senior review", "Working software"].map((item, i) => html`<div class="flow-item"><span>${String(i + 1).padStart(2, "0")}</span><strong>${item}</strong></div>${i < 5 ? html`<i data-lucide="arrow-right" aria-hidden="true"></i>` : ""}`)}
+      </div>
+    </section>
 
-      <!-- Example prompts -->
-      <div class="mt-4 flex flex-wrap gap-2" id="examples">
-        <span class="example-chip text-xs px-3 py-1.5 rounded-full">📋 Lead tracking CRM</span>
-        <span class="example-chip text-xs px-3 py-1.5 rounded-full">📦 Inventory management system</span>
-        <span class="example-chip text-xs px-3 py-1.5 rounded-full">🎫 Customer support ticket board</span>
-        <span class="example-chip text-xs px-3 py-1.5 rounded-full">📊 Analytics dashboard</span>
-        <span class="example-chip text-xs px-3 py-1.5 rounded-full">📅 Team scheduling tool</span>
-        <span class="example-chip text-xs px-3 py-1.5 rounded-full">🔗 API request builder</span>
+    <section class="problem section-light">
+      <div class="container split-heading reveal">
+        <div><p class="eyebrow dark"><span></span> The problem</p><h2>Your business should not depend on spreadsheets, inboxes and copy-pasting.</h2></div>
+        <div class="body-copy"><p>Important workflows rarely fit off-the-shelf software. Traditional agencies can be slow and expensive. AI app builders are fast, but still make you define the product, guide the agent, verify the code and finish the implementation.</p><p><strong>LFG combines AI development speed with the accountability of an experienced product and engineering team.</strong></p></div>
       </div>
-    </div>
+      <div class="container problem-grid reveal">
+        <article><span>01</span><i data-lucide="sheet"></i><h3>Spreadsheet operations</h3><p>Your team runs critical processes through increasingly complicated spreadsheets.</p></article>
+        <article><span>02</span><i data-lucide="repeat-2"></i><h3>Manual data movement</h3><p>Employees copy information between email, forms, CRMs and internal systems.</p></article>
+        <article><span>03</span><i data-lucide="construction"></i><h3>Unfinished AI prototypes</h3><p>Your prototype works in a demo, but it is not ready for customers or operations.</p></article>
+        <article><span>04</span><i data-lucide="lightbulb"></i><h3>Software idea, no team</h3><p>You know what should be built without wanting to hire and manage a whole team.</p></article>
+      </div>
+    </section>
 
-    <!-- Stats -->
-    <div class="animate-fade-up flex flex-wrap justify-center gap-4 mt-14" style="animation-delay:0.3s">
-      <div class="stat-card rounded-xl px-6 py-4 text-center">
-        <div class="font-display font-bold text-2xl text-white">~2 min</div>
-        <div class="text-xs text-white/40 mt-1">to first working app</div>
+    <section class="offer-section section-ink" id="offer">
+      <div class="container offer-grid">
+        <div class="offer-copy reveal"><p class="eyebrow"><span></span> The focused offer</p><h2>One clearly defined project. One fixed price. One working release.</h2><p>We review the project before you pay. If it fits the sprint, the accepted scope is fixed and measured against written acceptance criteria.</p><div class="not-fit"><strong>Larger than the sprint?</strong><span>You will receive a separate fixed-price proposal—never a surprise invoice.</span></div></div>
+        <article class="offer-card reveal">
+          <div class="offer-card-top"><div><span>LFG</span><h3>Build Sprint</h3></div><div class="price"><small>Starting at</small><strong>CAD $999</strong></div></div>
+          <p class="delivery-note"><i data-lucide="timer"></i> First release within 10 business days for accepted sprint projects</p>
+          <div class="included-grid">
+            ${["Free Build Blueprint", "Scope + acceptance criteria", "Up to three primary screens", "One user role", "Basic authentication", "Database setup", "One straightforward integration", "Responsive web application", "Live deployment", "Source-code handoff", "Acceptance testing", "One revision cycle", "Senior engineer review"].map(item => html`<span><i data-lucide="check"></i>${item}</span>`)}
+          </div>
+          <a class="button button-primary button-full" href="#blueprint" data-track="offer_qualify">Check whether my project qualifies <i data-lucide="arrow-right"></i></a>
+          <p class="fine-print">No payment is taken until LFG confirms the project fits the sprint.</p>
+        </article>
       </div>
-      <div class="stat-card rounded-xl px-6 py-4 text-center">
-        <div class="font-display font-bold text-2xl text-white">0</div>
-        <div class="text-xs text-white/40 mt-1">lines of code needed</div>
-      </div>
-      <div class="stat-card rounded-xl px-6 py-4 text-center">
-        <div class="font-display font-bold text-2xl text-white">Full stack</div>
-        <div class="text-xs text-white/40 mt-1">UI + backend + DB</div>
-      </div>
-    </div>
+    </section>
 
-    <!-- Feature cards -->
-    <div class="animate-fade-up grid sm:grid-cols-3 gap-4 mt-16 w-full max-w-3xl" style="animation-delay:0.36s">
-      <div class="feature-card rounded-xl p-5">
-        <div class="w-8 h-8 rounded-lg bg-brand-600/20 flex items-center justify-center mb-3">
-          <svg class="w-4 h-4 text-brand-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+    <section class="build-types section-light" id="what-we-build">
+      <div class="container centered-heading reveal"><p class="eyebrow dark"><span></span> What we build</p><h2>Built for real business workflows</h2><p>Focused web applications that replace friction with a clear, reliable path from input to outcome.</p></div>
+      <div class="container build-grid reveal">
+        ${buildExamples.map(([icon, title, copy], index) => html`<article><div class="card-head"><span>${String(index + 1).padStart(2, "0")}</span><i data-lucide="${icon}"></i></div><h3>${title}</h3><p>${copy}</p></article>`)}
+      </div>
+    </section>
+
+    <section class="process section-paper" id="how-it-works">
+      <div class="container process-layout">
+        <div class="process-intro reveal"><p class="eyebrow dark"><span></span> How it works</p><h2>From business problem to working product</h2><p>Every decision is visible. Every build is measured against the scope you approved.</p><a href="#blueprint" class="text-link" data-track="process_blueprint">Start with a free blueprint <i data-lucide="arrow-right"></i></a></div>
+        <ol class="process-list reveal">
+          ${[
+            ["Describe the workflow", "Explain what happens today, who is involved and what outcome you want."],
+            ["Receive the Build Blueprint", "Get a recommended workflow, feature scope, screen list, assumptions and delivery estimate."],
+            ["Approve the fixed scope", "We confirm sprint fit or provide a separate fixed-price proposal."],
+            ["Watch it get built", "See the requirements, tickets, progress, tests and review status."],
+            ["Review the working release", "Test the agreed workflow against its acceptance criteria."],
+            ["Launch and take ownership", "We deploy the product and hand over the source code."],
+          ].map(([title, copy], i) => html`<li><span>${String(i + 1).padStart(2, "0")}</span><div><h3>${title}</h3><p>${copy}</p></div><i data-lucide="${i === 5 ? "flag" : "arrow-down"}"></i></li>`)}
+        </ol>
+      </div>
+    </section>
+
+    <section class="comparison section-light">
+      <div class="container comparison-heading reveal"><div><p class="eyebrow dark"><span></span> The difference</p><h2>Not another do-it-yourself AI app builder</h2></div><p>Tools such as Replit, Lovable and Emergent can be useful for prototypes. LFG is for customers who want the business result without becoming the product manager, prompt engineer, QA tester and deployment engineer.</p></div>
+      <div class="container table-wrap reveal" role="region" aria-label="AI app builder and LFG comparison" tabindex="0">
+        <table><thead><tr><th>Capability</th><th>Instant AI builder</th><th>LFG Build Sprint</th></tr></thead><tbody>
+          ${[
+            ["Requirements discovery", "Customer-led", "LFG-led"], ["Product scope", "Customer-defined", "Included"], ["Application generation", "Included", "Included"], ["Code review", "Customer responsibility", "Included"], ["Testing against requirements", "Customer responsibility", "Included"], ["Deployment", "Usually self-service", "Included"], ["Source-code handoff", "Varies", "Included"], ["Delivery accountability", "No", "Yes"], ["Fixed project price", "Usually subscription / usage", "Yes"], ["Human engineering oversight", "Limited or optional", "Included"],
+          ].map(([capability, instant, lfg]) => html`<tr><th>${capability}</th><td><i data-lucide="minus"></i>${instant}</td><td><i data-lucide="circle-check"></i>${lfg}</td></tr>`)}
+        </tbody></table>
+      </div>
+      <div class="container comparison-statement reveal"><strong>They give you an AI builder.</strong><em>We give you a finished build.</em><p>Use an AI builder when you want to build it yourself. Use LFG when you need someone accountable for delivering it.</p></div>
+    </section>
+
+    <section class="factory section-dark">
+      <div class="container centered-heading light reveal"><p class="eyebrow"><span></span> The production system</p><h2>AI speed. Engineering accountability.</h2><p>AI agents accelerate execution. Humans remain responsible for product decisions, code quality and delivery.</p></div>
+      <div class="container factory-grid reveal">
+        <article><div class="factory-number">01</div><i data-lucide="scan-search"></i><h3>Define</h3><ul><li>Business requirements</li><li>Workflow analysis</li><li>Build Blueprint</li><li>Acceptance criteria</li><li>Technical planning</li></ul></article>
+        <article><div class="factory-number">02</div><i data-lucide="bot"></i><h3>Build</h3><ul><li>Prioritized ticket graph</li><li>Parallel coding agents</li><li>Isolated environments</li><li>Automated testing</li><li>Visible progress</li></ul></article>
+        <article><div class="factory-number">03</div><i data-lucide="badge-check"></i><h3>Ship</h3><ul><li>Senior engineer review</li><li>Product acceptance review</li><li>Deployment</li><li>Documentation</li><li>Source-code handoff</li></ul></article>
+      </div>
+    </section>
+
+    <section class="proof section-light" id="examples">
+      <div class="container split-heading reveal"><div><p class="eyebrow dark"><span></span> Real product proof</p><h2>Built using the same factory</h2></div><p class="body-copy">These are live LFG products—not concept art, fabricated testimonials or vanity metrics. Each moved through the same requirements, ticketing, agent execution and review pipeline.</p></div>
+      <div class="container proof-grid reveal">
+        <a href="https://mags.run" target="_blank" rel="noopener noreferrer"><div class="proof-image"><img src="/public/images/screenshots/mags.png" alt="mags.run cloud infrastructure product interface" loading="lazy"></div><div class="proof-copy"><span>Internal product · Live</span><h3>mags.run <i data-lucide="arrow-up-right"></i></h3><p><strong>Problem:</strong> AI workloads need fast access to isolated cloud machines.</p><p><strong>Built:</strong> A service for launching and managing on-demand cloud VMs.</p></div></a>
+        <a href="https://easylogs.co" target="_blank" rel="noopener noreferrer"><div class="proof-image"><img src="/public/images/screenshots/easylogs.png" alt="Easylogs hosted logging interface" loading="lazy"></div><div class="proof-copy"><span>Internal product · Live</span><h3>Easylogs <i data-lucide="arrow-up-right"></i></h3><p><strong>Problem:</strong> Small teams needed simpler application logging without a complex observability stack.</p><p><strong>Built:</strong> A hosted logging, live-tail and search product.</p></div></a>
+        <a href="https://kitereach.com" target="_blank" rel="noopener noreferrer"><div class="proof-image"><img src="/public/images/screenshots/kitereach.png" alt="KiteReach outreach workflow interface" loading="lazy"></div><div class="proof-copy"><span>Internal product · Live</span><h3>KiteReach <i data-lucide="arrow-up-right"></i></h3><p><strong>Problem:</strong> Sales teams juggle repetitive research and outreach across channels.</p><p><strong>Built:</strong> A focused AI-assisted outreach workflow.</p></div></a>
+      </div>
+    </section>
+
+    <section class="blueprint-section section-paper" id="blueprint">
+      <div class="container blueprint-layout">
+        <div class="blueprint-copy reveal"><p class="eyebrow dark"><span></span> Free Build Blueprint</p><h2>Tell us what you want to improve or build</h2><p class="lead">No technical documentation is required. Explain the workflow in plain language.</p>
+          <div class="blueprint-preview"><div class="preview-top"><span>LFG / BUILD BLUEPRINT</span><span class="free-label">FREE</span></div><h3>Your plan will include</h3><ul><li><i data-lucide="check"></i>Problem and target-user summary</li><li><i data-lucide="check"></i>Proposed workflow and core features</li><li><i data-lucide="check"></i>Suggested screens and integrations</li><li><i data-lucide="check"></i>First-release scope and exclusions</li><li><i data-lucide="check"></i>Delivery range and preliminary price band</li><li><i data-lucide="check"></i>Build Sprint qualification and next step</li></ul><p><i data-lucide="lock-keyhole"></i> Full implementation architecture is created only after a paid project begins.</p></div>
         </div>
-        <h3 class="font-display font-semibold text-sm text-white mb-1">AI understands context</h3>
-        <p class="text-xs text-white/40 leading-relaxed">Describe in plain English. The AI figures out the data model, UI, and logic.</p>
+        <form class="blueprint-form reveal" id="blueprint-form" novalidate>
+          <div class="form-progress"><span>Project details</span><small>About 3 minutes</small></div>
+          <div class="field field-full"><label for="project-idea">What would you like to build or improve? <b>*</b></label><textarea id="project-idea" name="project_idea" rows="6" minlength="30" required placeholder="Today, customers email us documents. Our staff enters the information into a spreadsheet and sends status updates. We want a portal that collects the documents and shows the customer their progress."></textarea><small>Describe what happens today and what a better outcome looks like.</small></div>
+          <div class="form-grid">
+            <div class="field"><label for="audience">Who will use it? <b>*</b></label><select id="audience" name="audience" required><option value="">Choose one</option><option>Internal employees</option><option>Existing customers</option><option>New customers</option><option>Vendors or partners</option><option>General public</option><option>Multiple groups</option></select></div>
+            <div class="field"><label for="current-workflow">How do you handle this today? <b>*</b></label><select id="current-workflow" name="current_workflow" required><option value="">Choose one</option><option>Spreadsheet</option><option>Email</option><option>Forms</option><option>Existing software</option><option>Manual process</option><option>We have not started yet</option><option>Other</option></select></div>
+            <div class="field field-full"><label for="integration">Does it need to connect to another system?</label><input id="integration" name="integration" placeholder="HubSpot, QuickBooks, Google Drive, Stripe, internal API, etc."></div>
+            <div class="field"><label for="timeline">How soon would you like to begin? <b>*</b></label><select id="timeline" name="timeline" required><option value="">Choose one</option><option>Immediately</option><option>Within 30 days</option><option>Within three months</option><option>Researching for later</option></select></div>
+            <div class="field"><label for="budget">Budget range <b>*</b></label><select id="budget" name="budget" required><option value="">Choose one</option><option>CAD $999–$2,500</option><option>CAD $2,500–$5,000</option><option>CAD $5,000–$15,000</option><option>CAD $15,000+</option><option>Not sure yet</option></select></div>
+            <div class="field"><label for="lead-name">Name <b>*</b></label><input id="lead-name" name="name" autocomplete="name" required placeholder="Jane Founder"></div>
+            <div class="field"><label for="work-email">Work email <b>*</b></label><input id="work-email" name="email" type="email" autocomplete="email" required placeholder="jane@company.com"></div>
+            <div class="field"><label for="company">Company name <b>*</b></label><input id="company" name="company" autocomplete="organization" required placeholder="Acme Inc."></div>
+            <div class="field"><label for="website">Website</label><input id="website" name="website" type="url" autocomplete="url" placeholder="https://company.com"></div>
+          </div>
+          <input type="hidden" name="utm_source"><input type="hidden" name="utm_medium"><input type="hidden" name="utm_campaign"><input type="hidden" name="utm_content"><input type="hidden" name="utm_term"><input type="hidden" name="referrer"><input type="hidden" name="landing_variant" value="build-sprint-a">
+          <div id="blueprint-turnstile"></div>
+          <p class="form-error" id="form-error" role="alert"></p>
+          <button class="button button-primary button-full" type="submit" id="blueprint-submit">Generate my free Blueprint <i data-lucide="arrow-right"></i></button>
+          <p class="consent">By submitting, you agree that LFG may contact you about your project. See our <a href="/privacy/">privacy policy</a> and <a href="/terms/">terms</a>.</p>
+        </form>
       </div>
-      <div class="feature-card rounded-xl p-5">
-        <div class="w-8 h-8 rounded-lg bg-violet-600/20 flex items-center justify-center mb-3">
-          <svg class="w-4 h-4 text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
-        </div>
-        <h3 class="font-display font-semibold text-sm text-white mb-1">Live preview instantly</h3>
-        <p class="text-xs text-white/40 leading-relaxed">See your app running in real time as it's built. Iterate with follow-up instructions.</p>
-      </div>
-      <div class="feature-card rounded-xl p-5">
-        <div class="w-8 h-8 rounded-lg bg-emerald-600/20 flex items-center justify-center mb-3">
-          <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-        </div>
-        <h3 class="font-display font-semibold text-sm text-white mb-1">Export or keep building</h3>
-        <p class="text-xs text-white/40 leading-relaxed">Download the full source code or keep refining with the agent. Your app, your code.</p>
-      </div>
-    </div>
+    </section>
 
+    <section class="faq section-light" id="faq">
+      <div class="container faq-layout"><div class="faq-intro reveal"><p class="eyebrow dark"><span></span> Common questions</p><h2>Clear answers before you commit</h2><p>Still unsure? The free blueprint is the easiest way to find out whether your project fits.</p><a href="#blueprint" class="text-link" data-track="faq_blueprint">Scope my project <i data-lucide="arrow-right"></i></a></div>
+        <div class="faq-list reveal">${faqs.map(([question, answer], i) => html`<details ${i === 0 ? raw("open") : ""}><summary>${question}<i data-lucide="plus"></i></summary><p>${answer}</p></details>`)}</div>
+      </div>
+    </section>
+
+    <section class="final-cta section-ink"><div class="container reveal"><p class="eyebrow"><span></span> Your next release starts here</p><h2>Bring us one workflow.<br><em>We’ll bring back working software.</em></h2><p>See the proposed scope, delivery range and likely cost before you commit.</p><a class="button button-primary" href="#blueprint" data-track="final_blueprint">Get my free Build Blueprint <i data-lucide="arrow-right"></i></a></div></section>
   </main>
 
-  <!-- Footer -->
-  <footer class="relative z-10 border-t border-white/[0.05] py-8 px-6">
-    <div class="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
-      <div class="flex items-center gap-2">
-        <div class="w-6 h-6 bg-brand-600 rounded flex items-center justify-center">
-          <svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-        </div>
-        <span class="font-display font-bold text-sm text-white/60">LFG</span>
-      </div>
-      <div class="flex gap-6 text-xs text-white/30">
-        <a href="/" class="hover:text-white/60 transition-colors">Home</a>
-        <a href="/agent/" class="hover:text-white/60 transition-colors">Agent</a>
-        <a href="/services/" class="hover:text-white/60 transition-colors">Services</a>
-        <a href="https://github.com/lfg-hq/lfg" class="hover:text-white/60 transition-colors">GitHub</a>
-      </div>
-      <p class="text-xs text-white/20">&copy; ${new Date().getFullYear()} LFG. All rights reserved.</p>
+  <footer><div class="container footer-grid"><a class="brand" href="/"><span class="brand-mark">L</span><span>LFG</span></a><p>AI handles execution. Senior engineers own the outcome.</p><div><a href="#how-it-works">How it works</a><a href="#what-we-build">What we build</a><a href="#faq">FAQ</a><a href="/privacy/">Privacy</a><a href="/terms/">Terms</a></div><small>© ${new Date().getFullYear()} LFG. All rights reserved.</small></div></footer>
+
+  <div class="verify-modal" id="verify-modal" hidden role="dialog" aria-modal="true" aria-labelledby="verify-title">
+    <div class="verify-card"><button class="modal-close" type="button" aria-label="Close verification"><i data-lucide="x"></i></button>
+      <div class="verify-icon"><i data-lucide="mail-check"></i></div><p class="eyebrow dark"><span></span> One quick check</p><h2 id="verify-title">Verify your work email</h2><p>We sent a 6-digit code to <strong id="verify-email"></strong>. Your blueprint starts generating after verification.</p>
+      <form id="verify-form"><label for="verify-code">Verification code</label><input id="verify-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" placeholder="000000" required><p class="form-error" id="verify-error" role="alert"></p><button class="button button-primary button-full" type="submit" id="verify-submit">Verify and create Blueprint <i data-lucide="arrow-right"></i></button></form>
+      <button class="resend-button" type="button" id="resend-code">Didn’t receive it? Resend code</button>
     </div>
-  </footer>
+  </div>
 
-  <script>
-    const textarea = document.getElementById('prompt-input');
-    const charCount = document.getElementById('char-count');
-    const buildBtn = document.getElementById('build-btn');
-    const MAX = 2000;
-
-    // Char counter
-    textarea.addEventListener('input', function() {
-      const len = this.value.length;
-      charCount.textContent = len + ' / ' + MAX;
-      if (len > MAX) this.value = this.value.slice(0, MAX);
-    });
-
-    // Ctrl/Cmd + Enter to submit
-    textarea.addEventListener('keydown', function(e) {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-        e.preventDefault();
-        handleBuild();
-      }
-    });
-
-    // Example chips
-    document.getElementById('examples').querySelectorAll('.example-chip').forEach(function(chip) {
-      chip.addEventListener('click', function() {
-        const text = this.textContent.replace(/^[^\w]+/, '').trim();
-        textarea.value = 'Build me ' + text.toLowerCase();
-        textarea.focus();
-        const len = textarea.value.length;
-        charCount.textContent = len + ' / ' + MAX;
-      });
-    });
-
-    // Build button
-    buildBtn.addEventListener('click', handleBuild);
-
-    function handleBuild() {
-      const prompt = textarea.value.trim();
-      if (!prompt) {
-        textarea.focus();
-        textarea.classList.add('ring-red-500');
-        setTimeout(function() { textarea.classList.remove('ring-red-500'); }, 1500);
-        return;
-      }
-
-      // Save prompt to localStorage for pickup after auth
-      localStorage.setItem('lfg-instant-prompt', prompt);
-
-      buildBtn.disabled = true;
-      buildBtn.innerHTML = '<svg class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Setting up...';
-
-      // Check if already logged in
-      fetch('/api/auth/get-session', { credentials: 'include' })
-        .then(function(res) { return res.json(); })
-        .then(function(data) {
-          if (data && data.user) {
-            window.location.href = '/instant';
-          } else {
-            window.location.href = '/auth/register?next=/instant';
-          }
-        })
-        .catch(function() {
-          window.location.href = '/auth/register?next=/instant';
-        });
-    }
-  </script>
-
+  <script>window.LFG_BUILD_SPRINT = ${raw(JSON.stringify({ turnstileSiteKey }).replace(/</g, "\\u003c"))};</script>
+  <script src="/public/js/build-sprint.js?v=1" defer></script>
 </body>
-</html>
-`;
+</html>`;

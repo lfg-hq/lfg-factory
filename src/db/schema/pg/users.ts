@@ -125,7 +125,7 @@ export const applicationState = pgTable("application_state", {
     .unique()
     .references(() => users.id, { onDelete: "cascade" }),
   sidebarMinimized: boolean("sidebar_minimized").notNull().default(false),
-  lastSelectedModel: text("last_selected_model").notNull().default("gpt-5-mini"),
+  lastSelectedModel: text("last_selected_model").notNull().default("gpt-5.6-luna"),
   lastSelectedRole: text("last_selected_role").notNull().default("product_analyst"),
   turboModeEnabled: boolean("turbo_mode_enabled").notNull().default(false),
   claudeCodeEnabled: boolean("claude_code_enabled").notNull().default(false),
@@ -146,6 +146,27 @@ export const githubTokens = pgTable("github_token", {
   githubUserId: text("github_user_id"),
   githubUsername: text("github_username"),
   githubAvatarUrl: text("github_avatar_url"),
+  scope: text("scope"),
+  createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),
+  updatedAt: timestamp("updated_at", { mode: "date" }).notNull().default(sql`now()`),
+});
+
+// GitLab OAuth tokens (mirror of github_token). GitLab tokens expire and issue
+// a refresh token, so we store both plus the expiry.
+export const gitlabTokens = pgTable("gitlab_token", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => crypto.randomUUID()),
+  userId: text("user_id")
+    .notNull()
+    .unique()
+    .references(() => users.id, { onDelete: "cascade" }),
+  accessToken: text("access_token").notNull(),
+  refreshToken: text("refresh_token"),
+  tokenExpiresAt: timestamp("token_expires_at", { mode: "date" }),
+  gitlabUserId: text("gitlab_user_id"),
+  gitlabUsername: text("gitlab_username"),
+  gitlabAvatarUrl: text("gitlab_avatar_url"),
   scope: text("scope"),
   createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at", { mode: "date" }).notNull().default(sql`now()`),

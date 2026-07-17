@@ -1,4 +1,4 @@
-import { html } from "hono/html";
+import { html, raw } from "hono/html";
 
 interface SharedFilePageProps {
   file: {
@@ -64,7 +64,7 @@ export function SharedFilePage({ file, project }: SharedFilePageProps) {
     </div>
   </div>
   <script>
-    var raw = ${JSON.stringify(file.content)};
+    var raw = ${raw(JSON.stringify(file.content).replace(/</g, "\\u003c"))};
     if (typeof marked !== 'undefined') {
       document.getElementById('content').innerHTML = marked.parse(raw);
     } else {

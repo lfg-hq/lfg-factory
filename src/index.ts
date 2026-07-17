@@ -116,14 +116,18 @@ async function handleFetch(req: Request, server: import("bun").Server<WsData>): 
   if (url.pathname.startsWith("/api/auth/")) {
     console.log(`[auth] ${req.method} ${url.pathname}`);
 
-    // Turnstile verification for sign-in and sign-up
+    // Turnstile verification for password sign-in/up and the OTP *send* step
+    // (not the OTP verify step — the user already passed the captcha to get the code).
+    const p = url.pathname;
     const isAuthAction =
       req.method === "POST" &&
-      (url.pathname.includes("/sign-in/email") || url.pathname.includes("/sign-up/email"));
+      (p.endsWith("/sign-in/email") ||
+        p.endsWith("/sign-up/email") ||
+        p.endsWith("/email-otp/send-verification-otp"));
 
     if (isAuthAction && env.TURNSTILE_SECRET_KEY) {
       try {
-        const body = await req.clone().json();
+        const body = (await req.clone().json()) as { turnstileToken?: string };
         const token = body?.turnstileToken;
         if (!token) {
           return Response.json({ message: "Please complete the captcha verification." }, { status: 400 });

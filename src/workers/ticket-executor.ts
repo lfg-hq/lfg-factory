@@ -46,7 +46,9 @@ import {
 } from "../ai/prompts/builder.ts";
 import { buildApiBuilderPrompt } from "../ai/prompts/builder-api.ts";
 import { createBuilderTools } from "../ai/tools/builder-tools.ts";
-import { getModel } from "../ai/provider.ts";
+import { getModel, getProviderName, getProviderModel, type ProviderName } from "../ai/provider.ts";
+import { startPiCli, streamPiToCompletion, isPiSupportedProvider } from "../services/pi-cli.ts";
+import { getBuildProfile, detectProjectType } from "../services/instant-profiles.ts";
 import { generateText, stepCountIs } from "ai";
 import { addLog } from "../services/ticket-logs.ts";
 import { matchKnowledgeForPrompt } from "../ai/knowledge/matcher.ts";
@@ -69,6 +71,128 @@ async function moveTicketToStage(ticketId: string, projectId: string, stageName:
 }
 
 const CALLBACK_BASE_URL = process.env.APP_URL ?? "http://localhost:3000";
+
+// API-mode ticket builds run the Pi in-sandbox coding agent (model-agnostic,
+// same as instant mode) by default. Set TICKET_BUILDER=agent to force the
+// legacy in-process generateText loop instead.
+const USE_PI_TICKET_BUILDER = (process.env.TICKET_BUILDER ?? "pi") !== "agent";
+
+/** Focused, self-contained prompt for the Pi coding agent building a ticket. */
+function buildPiTicketPrompt(args: {
+  ticket: { name: string; description: string | null; notes?: string | null; acceptanceCriteria?: string[] | null };
+  techStack?: { language?: string; framework?: string; packageManager?: string; port?: number } | null;
+  projectDir: string;
+  /** True when the project is already scaffolded (boilerplate or server-side scaffold). */
+  prescaffolded?: boolean;
+}): string {
+  const t = args.ticket;
+  const ac = (t.acceptanceCriteria ?? []).map((c, i) => `${i + 1}. ${c}`).join("\n") || "Not specified.";
+  const port = args.techStack?.port ?? 8080;
+  // Scaffolding is done deterministically server-side (or by the boilerplate
+  // rootfs). Never ask the agent to run create-next-app — that's what makes
+  // weak agents loop.
+  const setup = args.prescaffolded
+    ? `The app is ALREADY scaffolded at ${args.projectDir} (Next.js + TypeScript + Tailwind + shadcn/ui, dependencies installed). DO NOT run create-next-app, npm init, or shadcn init — just implement the ticket in the existing tree.`
+    : `Work directly in the existing repository at ${args.projectDir}; reuse its existing stack and files. Do NOT scaffold a new project.`;
+  const stack = args.techStack
+    ? `Language: ${args.techStack.language ?? "?"}, Framework: ${args.techStack.framework ?? "?"}, Package manager: ${args.techStack.packageManager ?? "?"}, Dev port: ${port}`
+    : "Use the stack already present in the project.";
+  return `You are a senior software engineer implementing a ticket.
+
+## Project setup
+${setup}
+
+## Ticket
+${t.name}
+
+## Description
+${t.description ?? ""}
+${t.notes ? `\n## Notes\n${t.notes}` : ""}
+
+## Acceptance Criteria
+${ac}
+
+## Tech stack
+${stack}
+
+## Instructions
+- Explore the project first; reuse existing patterns, dependencies, and files.
+- Implement the ticket end to end so every acceptance criterion is met.
+- Make the app runnable: bind the dev server to 0.0.0.0 on port ${port}.
+- Do NOT run 'git commit', 'git push', or switch git branches — commit/push/merge is handled automatically after you finish.
+- Before finishing, make sure the project builds/compiles.`;
+}
+
+/**
+ * Ensure TLS certs + git are present in the VM before any HTTPS git op.
+ * Minimal rootfs images can ship without ca-certificates → git clone fails TLS
+ * verification and the agent flails against an empty dir. Idempotent + best-effort.
+ */
+async function ensureVmCerts(workspaceId: string): Promise<void> {
+  const script =
+    `apk add --no-cache ca-certificates git openssh-client >/dev/null 2>&1 || ` +
+    `(apt-get update >/dev/null 2>&1 && apt-get install -y ca-certificates git >/dev/null 2>&1) || true; ` +
+    `update-ca-certificates >/dev/null 2>&1 || true; echo CERTS_DONE`;
+  try {
+    await execOnWorkspace(workspaceId, script, { timeout: 90_000 });
+  } catch (err) {
+    console.warn(`[ticket-executor] cert-ensure step failed (continuing):`, (err as Error).message?.slice(0, 120));
+  }
+}
+
+/**
+ * Ensure an empty project is scaffolded BEFORE the agent runs — the same
+ * deterministic, non-interactive scaffold instant uses (server-side, not
+ * agent-driven, which is why instant never loops on create-next-app). Verifies
+ * an existing scaffold first (boilerplate fast path); otherwise runs the
+ * profile's scaffoldSteps via execOnWorkspace. Returns true when scaffolded.
+ */
+async function ensureProjectScaffold(
+  workspaceId: string,
+  projectDirAbs: string,
+  ticketId: string,
+  ownerId: string
+): Promise<boolean> {
+  // Already scaffolded? (boilerplate rootfs, or a prior run)
+  try {
+    const check = await execOnWorkspace(
+      workspaceId,
+      `test -f ${projectDirAbs}/package.json && test -d ${projectDirAbs}/node_modules && echo SCAFFOLD_OK || echo SCAFFOLD_MISSING`,
+      { timeout: 30_000 }
+    );
+    if (check.output.includes("SCAFFOLD_OK")) {
+      console.log(`[ticket-executor] scaffold already present at ${projectDirAbs}`);
+      return true;
+    }
+  } catch { /* fall through to scaffold */ }
+
+  // Run the deterministic scaffold steps server-side (webapp = default app-stack).
+  const profile = getBuildProfile(detectProjectType("", "webapp"));
+  await addLog(ticketId, "Scaffolding app-stack (Next.js + shadcn)...", "command", ownerId);
+  for (const step of profile.scaffoldSteps) {
+    try {
+      const b64 = Buffer.from(step.script).toString("base64");
+      const res = await execOnWorkspace(workspaceId, `echo '${b64}' | base64 -d | sh`, { timeout: 300_000 });
+      console.log(`[ticket-executor] scaffold step "${step.message}" exit=${res.exitCode}`);
+      if (res.exitCode !== 0) {
+        console.warn(`[ticket-executor] scaffold step failed (exit=${res.exitCode}):\n${(res.output ?? "").slice(-800)}`);
+      }
+    } catch (err) {
+      console.warn(`[ticket-executor] scaffold step "${step.message}" errored:`, (err as Error).message?.slice(0, 120));
+    }
+  }
+  // Verify it worked.
+  try {
+    const verify = await execOnWorkspace(
+      workspaceId,
+      `test -f ${projectDirAbs}/package.json && echo SCAFFOLD_OK || echo SCAFFOLD_MISSING`,
+      { timeout: 20_000 }
+    );
+    return verify.output.includes("SCAFFOLD_OK");
+  } catch {
+    return false;
+  }
+}
 const MAX_WAIT_DURATION_MS = 45 * 60 * 1000; // 45 minutes
 const CHAT_MAX_WAIT_DURATION_MS = 10 * 60 * 1000; // 10 minutes
 // Projects live on the big /data volume (7.8GB), not /root (1.9GB) — avoids ENOSPC.
@@ -76,6 +200,12 @@ const WORKING_DIR = "/data";
 
 // Concurrency guard: only one ticket per project at a time
 const executingProjects = new Set<string>();
+// Per-ticket in-flight guard. Prevents the same ticket from executing twice
+// concurrently — from double-clicks, a retried queue after a UI error, the
+// startup re-queue racing a live run, or duplicate bus listeners after a
+// `bun --hot` reload. Added synchronously at the top of the handler (before any
+// await) so it's race-safe on the single-threaded event loop.
+const executingTickets = new Set<string>();
 
 // ── Subscriber Setup ──────────────────────────────────────────────────
 
@@ -107,14 +237,24 @@ export async function startTicketWorker() {
 
   bus.on("ticket.queued", async (event) => {
     const { ticketId } = event.payload;
+
+    // Idempotency: ignore duplicate queue events for a ticket already running.
+    if (executingTickets.has(ticketId)) {
+      console.log(`[ticket-executor] Ticket ${ticketId} already executing — ignoring duplicate queue event`);
+      return;
+    }
+    executingTickets.add(ticketId);
+
+    try {
     const projectId = event.payload.projectId ?? await resolveProjectIdForTicket(ticketId);
 
     // Determine execution mode from user's applicationState
     const useApiMode = await isApiMode(projectId);
 
     if (useApiMode) {
-      // API mode: no per-project concurrency guard — parallel execution allowed
-      console.log(`[ticket-executor] API mode — executing ticket ${ticketId} (parallel OK)`);
+      // API mode: parallel across DIFFERENT tickets is fine; the executingTickets
+      // guard above prevents the SAME ticket from running twice.
+      console.log(`[ticket-executor] API mode — executing ticket ${ticketId}`);
       try {
         await executeTicketApi(ticketId);
       } catch (err) {
@@ -122,25 +262,41 @@ export async function startTicketWorker() {
         await markTicketFailed(ticketId, String(err));
       }
     } else {
-      // CLI mode: only one ticket per project at a time
-      if (projectId && executingProjects.has(projectId)) {
-        console.log(`[ticket-executor] Project ${projectId} already executing — deferring ticket ${ticketId}`);
-        await db
-          .update(projectTickets)
-          .set({ queueStatus: "none", updatedAt: new Date() })
-          .where(eq(projectTickets.id, ticketId));
-        return;
+      // CLI mode. Claude Code CLI only works with Claude models — route any
+      // non-Anthropic builder model to the Pi in-sandbox agent instead
+      // (executeTicketApi runs Pi). Mirrors the instant-mode routing.
+      const builderProvider = await getBuilderProvider(projectId);
+      if (builderProvider && builderProvider !== "anthropic") {
+        console.log(`[ticket-executor] CLI mode + ${builderProvider} — using Pi (Claude Code is Claude-only)`);
+        try {
+          await executeTicketApi(ticketId);
+        } catch (err) {
+          console.error(`[ticket-executor] Pi (CLI-routed) failed for ticket ${ticketId}:`, err);
+          await markTicketFailed(ticketId, String(err));
+        }
+      } else {
+        // CLI mode + Claude → Claude Code CLI. One ticket per project at a time.
+        if (projectId && executingProjects.has(projectId)) {
+          console.log(`[ticket-executor] Project ${projectId} already executing — deferring ticket ${ticketId}`);
+          await db
+            .update(projectTickets)
+            .set({ queueStatus: "none", updatedAt: new Date() })
+            .where(eq(projectTickets.id, ticketId));
+        } else {
+          if (projectId) executingProjects.add(projectId);
+          try {
+            await executeTicket(ticketId);
+          } catch (err) {
+            console.error(`[ticket-executor] Failed for ticket ${ticketId}:`, err);
+            await markTicketFailed(ticketId, String(err));
+          } finally {
+            if (projectId) executingProjects.delete(projectId);
+          }
+        }
       }
-
-      if (projectId) executingProjects.add(projectId);
-      try {
-        await executeTicket(ticketId);
-      } catch (err) {
-        console.error(`[ticket-executor] Failed for ticket ${ticketId}:`, err);
-        await markTicketFailed(ticketId, String(err));
-      } finally {
-        if (projectId) executingProjects.delete(projectId);
-      }
+    }
+    } finally {
+      executingTickets.delete(ticketId);
     }
   });
 
@@ -296,6 +452,9 @@ async function executeTicket(ticketId: string): Promise<void> {
 
   emit({ type: "ticket.execution_started", ticketId, sandboxId: sandbox.id, projectId: project.id });
 
+  // Ensure TLS certs + git before any HTTPS git op (clone or push).
+  await ensureVmCerts(workspaceId);
+
   // ── Step 3: Setup git repo ──────────────────────────────────────────
   console.log(`[ticket-executor] Step 3: Setting up git`);
   let gitSetupError: string | null = null;
@@ -368,7 +527,9 @@ fi
 git config user.email "ai@lfg.dev"
 git config user.name "LFG AI"
 
-echo "GIT_SETUP_COMPLETE"
+# Verify we actually have a repo — a failed clone (TLS/network) leaves no .git,
+# and without this the script would report success against an empty dir.
+if [ -d ".git" ]; then echo "GIT_SETUP_COMPLETE"; else echo "GIT_SETUP_FAILED_NO_GIT"; fi
 pwd
 git branch --show-current
 `.trim();
@@ -1068,6 +1229,16 @@ async function isApiMode(projectId: string | null): Promise<boolean> {
   return appState ? !appState.claudeCodeEnabled : true;
 }
 
+/** Provider of the owner's selected builder model (used to route CLI mode:
+ *  Claude → Claude Code CLI; anything else → Pi). */
+async function getBuilderProvider(projectId: string | null): Promise<ProviderName | null> {
+  if (!projectId) return null;
+  const [project] = await db.select({ ownerId: projects.ownerId }).from(projects).where(eq(projects.id, projectId)).limit(1);
+  if (!project) return null;
+  const [appState] = await db.select({ builderModelKey: applicationState.builderModelKey }).from(applicationState).where(eq(applicationState.userId, project.ownerId)).limit(1);
+  return getProviderName(appState?.builderModelKey ?? "claude_4.5_sonnet");
+}
+
 /**
  * Execute a ticket using direct AI API calls (generateText with tools).
  * No Claude CLI credentials needed — calls the AI provider directly.
@@ -1102,6 +1273,22 @@ async function executeTicketApi(ticketId: string): Promise<void> {
   const projectDirName = "project";
   const featureBranch = `feature/ticket-${ticketId}`;
 
+  // ── Resolve builder model early (needed to choose the VM rootfs) ─────
+  const [appState] = await db.select().from(applicationState).where(eq(applicationState.userId, ownerId)).limit(1);
+  const modelKey = appState?.builderModelKey ?? "claude_4.5_sonnet";
+  const [userKeys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, ownerId)).limit(1);
+  const provider = getProviderName(modelKey);
+
+  // "Default app-stack": for a brand-new project (no linked repo) built by a
+  // non-Anthropic (Pi) model, boot the pre-scaffolded boilerplate rootfs so the
+  // Next.js app is already present and the agent implements the ticket instead
+  // of running create-next-app from scratch (which weak agents loop on). Existing
+  // repos clone on the plain rootfs; Anthropic builds keep the claude rootfs.
+  const BOILERPLATE_ROOTFS = process.env.INSTANT_BOILERPLATE_ROOTFS || "lfg-instant-boiler";
+  const isEmptyProject = !project.repoOwner && !project.repoName && !extractRepoUrl(project.stack ?? "");
+  const useBoilerplate = isEmptyProject && !!githubToken && !!provider && provider !== "anthropic";
+  let prescaffolded = false;
+
   // ── Setup workspace (shared logic) ──────────────────────────────────
   console.log(`[ticket-executor-api] Setting up workspace`);
   let sandboxRow = await findExistingSandbox(ticketId);
@@ -1125,8 +1312,14 @@ async function executeTicketApi(ticketId: string): Promise<void> {
 
   if (!workspaceId) {
     const workspaceName = `${ticketId.slice(0, 8)}-${crypto.randomUUID().slice(0, 8)}`;
-    await addLog(ticketId, "Creating VM workspace...", "command", ownerId);
-    const { jobId, workspaceId: wsId } = await newWorkspace(workspaceName, { diskGb: parseInt(process.env.INSTANT_DISK_GB || "8", 10) });
+    await addLog(ticketId, useBoilerplate ? "Creating VM workspace (app-stack)..." : "Creating VM workspace...", "command", ownerId);
+    // Pi builds need memGb set both to avoid OOM-killing Pi + Next, AND because
+    // mags only routes a custom rootfs (the boilerplate) via env when memGb is set.
+    const { jobId, workspaceId: wsId } = await newWorkspace(workspaceName, {
+      diskGb: parseInt(process.env.INSTANT_DISK_GB || "8", 10),
+      memGb: parseInt(process.env.INSTANT_MEM_GB || "4", 10),
+      ...(useBoilerplate ? { rootfsType: BOILERPLATE_ROOTFS } : {}),
+    });
     workspaceId = wsId;
     await sleep(8_000);
 
@@ -1145,6 +1338,21 @@ async function executeTicketApi(ticketId: string): Promise<void> {
   if (!sandboxRow || !workspaceId) throw new Error("Failed to create or find sandbox");
 
   emit({ type: "ticket.execution_started", ticketId, sandboxId: sandboxRow.id, projectId: project.id });
+
+  // Ensure TLS certs + git before any HTTPS git op (clone or push).
+  await ensureVmCerts(workspaceId);
+
+  // For a brand-new/empty project, scaffold the app-stack DETERMINISTICALLY
+  // (server-side) before Pi runs — exactly like instant. The agent is then told
+  // the scaffold is done, so it never runs create-next-app (the loop source).
+  if (isEmptyProject) {
+    prescaffolded = await ensureProjectScaffold(
+      workspaceId,
+      `${WORKING_DIR}/${projectDirName}`,
+      ticketId,
+      ownerId
+    );
+  }
 
   // ── Git setup (same as CLI mode) ────────────────────────────────────
   console.log(`[ticket-executor-api] Setting up git`);
@@ -1212,7 +1420,9 @@ fi
 git config user.email "ai@lfg.dev"
 git config user.name "LFG AI"
 
-echo "GIT_SETUP_COMPLETE"
+# Verify we actually have a repo — a failed clone (TLS/network) leaves no .git,
+# and without this the script would report success against an empty dir.
+if [ -d ".git" ]; then echo "GIT_SETUP_COMPLETE"; else echo "GIT_SETUP_FAILED_NO_GIT"; fi
 pwd
 git branch --show-current
 `.trim();
@@ -1225,9 +1435,19 @@ git branch --show-current
         if (!ticket.githubBranch) {
           await db.update(projectTickets).set({ githubBranch: featureBranch, githubMergeStatus: "pending", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
         }
+      } else {
+        // Clone/setup failed — do NOT run the agent against an empty dir (that's
+        // the "round and round" flailing). Fail the ticket with a clear reason.
+        throw new Error(
+          gitResult.output.includes("GIT_SETUP_FAILED_NO_GIT")
+            ? `repository clone failed (network/TLS) — no code in the build VM for ${githubOwner}/${githubRepo}`
+            : `git setup did not complete: ${gitResult.output.slice(0, 200)}`
+        );
       }
     } catch (err) {
       console.error(`[ticket-executor-api] Git setup failed:`, err);
+      await markTicketFailed(ticketId, `Git setup failed — ${(err as Error).message}`, ownerId, { emitEvent: false });
+      return;
     }
   } else if (githubToken) {
     // Auto-create repo
@@ -1311,11 +1531,7 @@ git branch --show-current
     projectDir,
   });
 
-  // ── Get model from user's settings ──────────────────────────────────
-  const [appState] = await db.select().from(applicationState).where(eq(applicationState.userId, ownerId)).limit(1);
-  const modelKey = appState?.builderModelKey ?? "claude_4.5_sonnet";
-
-  const [userKeys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, ownerId)).limit(1);
+  // ── Model resolved early (appState/modelKey/userKeys/provider up top) ──
   const model = getModel(modelKey, {
     anthropic: userKeys?.anthropicApiKey ?? undefined,
     openai: userKeys?.openaiApiKey ?? undefined,
@@ -1326,13 +1542,83 @@ git branch --show-current
   });
 
   console.log(`[ticket-executor-api] Using model: ${modelKey}`);
-  await addLog(ticketId, `Starting AI execution (${modelKey})...`, "command", ownerId);
-
-  // ── Run generateText with tools ─────────────────────────────────────
-  const abortController = new AbortController();
-  const abortTimeout = setTimeout(() => abortController.abort(), 30 * 60 * 1000); // 30 min
 
   let implementationStatus = "failed" as "complete" | "failed";
+
+  // Provider/native model id for the Pi in-sandbox coding agent (provider up top).
+  const piModelId = getProviderModel(modelKey) ?? modelKey;
+  const providerApiKey = provider
+    ? ({
+        anthropic: userKeys?.anthropicApiKey,
+        openai: userKeys?.openaiApiKey,
+        google: userKeys?.googleApiKey,
+        kimi: userKeys?.kimiApiKey,
+        deepseek: userKeys?.deepseekApiKey,
+        glm: userKeys?.glmApiKey,
+      } as Record<string, string | null | undefined>)[provider]
+    : undefined;
+  const usePi = USE_PI_TICKET_BUILDER && !!provider && isPiSupportedProvider(provider) && !!providerApiKey;
+
+  if (usePi && provider && providerApiKey) {
+    // ── Pi coding agent inside the VM (model-agnostic, robust) ──────────
+    await addLog(ticketId, `Starting Pi build (${provider}/${piModelId})...`, "command", ownerId);
+    console.log(`[ticket-executor-api] Using Pi in-sandbox agent: ${provider}/${piModelId}`);
+    const piEnvVars: Record<string, string> = {};
+    for (const r of projectEnvRows) piEnvVars[r.key] = decrypt(r.encryptedValue);
+    const piPrompt = buildPiTicketPrompt({
+      ticket: {
+        name: ticket.name,
+        description: ticket.description,
+        notes: ticket.notes,
+        acceptanceCriteria: (ticket.acceptanceCriteria as string[] | null) ?? [],
+      },
+      techStack: savedTechStack,
+      projectDir,
+      prescaffolded,
+    });
+    try {
+      const pi = await startPiCli({
+        workspaceId,
+        prompt: piPrompt,
+        projectDir: projectDirName,
+        provider,
+        modelId: piModelId,
+        apiKey: providerApiKey,
+        envVars: piEnvVars,
+      });
+      let lastPiLog = 0;
+      const piResult = await streamPiToCompletion({
+        workspaceId,
+        outputFile: pi.outputFile,
+        backgroundPid: pi.backgroundPid,
+        timeoutMs: 30 * 60 * 1000,
+        onProgress: (msg) => {
+          const now = Date.now();
+          if (now - lastPiLog < 4_000) return;
+          lastPiLog = now;
+          void addLog(ticketId, msg, "command", ownerId).catch(() => {});
+        },
+      });
+      const piOk = (piResult.exitCode === null || piResult.exitCode === 0) && !piResult.fatalError && piResult.didWork;
+      if (piOk) {
+        implementationStatus = "complete";
+      } else {
+        const reason = piResult.fatalError
+          ?? (piResult.exitCode ? `exit code ${piResult.exitCode}` : (!piResult.didWork ? "no changes were made" : "unknown error"));
+        await addLog(ticketId, `Pi build failed: ${reason}`, "command", ownerId);
+        console.error(`[ticket-executor-api] Pi failed (${reason}). Output tail:\n${piResult.tail.slice(-2000)}`);
+      }
+    } catch (err) {
+      await addLog(ticketId, `Pi build error: ${(err as Error).message}`, "command", ownerId);
+      console.error(`[ticket-executor-api] Pi error:`, err);
+    }
+
+  } else {
+  await addLog(ticketId, `Starting AI execution (${modelKey})...`, "command", ownerId);
+
+  // ── Run generateText with tools (fallback / TICKET_BUILDER=agent) ────
+  const abortController = new AbortController();
+  const abortTimeout = setTimeout(() => abortController.abort(), 30 * 60 * 1000); // 30 min
 
   try {
     const result = await generateText({
@@ -1390,6 +1676,7 @@ git branch --show-current
     await addLog(ticketId, msg, "command", ownerId);
   } finally {
     clearTimeout(abortTimeout);
+  }
   }
 
   // ── Finalize: commit, push, merge ───────────────────────────────────
@@ -1643,6 +1930,32 @@ async function recoverUnpushedTickets() {
       const featureBranch = ticket.githubBranch ?? `feature/ticket-${ticket.id}`;
       const projectDirName = "project";
 
+      // The build VM is ephemeral — after a server restart / VM sleep it may be
+      // gone. Its changes lived only inside that VM and were never pushed, so if
+      // the workspace is dead there is nothing to recover. Probe liveness first;
+      // on a dead workspace, clean up (delete the stale sandbox row so we don't
+      // retry this on every restart) and mark the ticket failed — instead of
+      // throwing an opaque "Commit/push failed" (exit 2, empty output) each boot.
+      let workspaceAlive = false;
+      try {
+        const probe = await execOnWorkspace(workspaceId, "echo WORKSPACE_ALIVE", { timeout: 15_000 });
+        workspaceAlive = probe.output.includes("WORKSPACE_ALIVE");
+      } catch {
+        workspaceAlive = false;
+      }
+
+      if (!workspaceAlive) {
+        console.log(`[ticket-executor] Recovery: workspace ${workspaceId} for ticket ${ticket.id} is gone — unpushed changes can't be recovered; clearing stale sandbox.`);
+        await db.delete(sandboxes).where(eq(sandboxes.ticketId, ticket.id));
+        await markTicketFailed(
+          ticket.id,
+          "Build VM was lost before changes were pushed — re-run the ticket to rebuild.",
+          project.ownerId,
+          { emitEvent: false }
+        );
+        continue;
+      }
+
       try {
         const { sha } = await commitAndPush({
           workspaceId,
@@ -1716,8 +2029,20 @@ async function recoverUnpushedTickets() {
 
         console.log(`[ticket-executor] Recovery: successfully pushed and merged ticket ${ticket.id}`);
       } catch (err) {
-        console.warn(`[ticket-executor] Recovery git push failed for ${ticket.id}:`, err);
-        await addLog(ticket.id, `Recovery: git push failed — ${err}`, "command", project.ownerId);
+        const firstLine = (err as Error).message?.split("\n")[0] ?? String(err);
+        console.warn(`[ticket-executor] Recovery git push failed for ${ticket.id}: ${firstLine}`);
+        await addLog(ticket.id, `Recovery: git push failed — ${firstLine}`, "command", project.ownerId);
+        // The recovery push failed (the VM's working tree is gone/broken even if
+        // the VM answers a probe). It won't succeed on the next restart either, so
+        // stop re-selecting this ticket every boot: drop the stale sandbox and mark
+        // it failed. Re-run the ticket to rebuild.
+        await db.delete(sandboxes).where(eq(sandboxes.ticketId, ticket.id));
+        await markTicketFailed(
+          ticket.id,
+          "Unpushed changes could not be recovered — re-run the ticket to rebuild.",
+          project.ownerId,
+          { emitEvent: false }
+        );
       }
     }
   } catch (err) {

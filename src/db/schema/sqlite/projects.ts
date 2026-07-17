@@ -31,8 +31,9 @@ export const projects = sqliteTable(
 
     // Repository
     repoUrl: text("repo_url"),          // e.g. https://github.com/user/repo
-    repoOwner: text("repo_owner"),      // GitHub owner (user or org)
-    repoName: text("repo_name"),        // GitHub repo name
+    repoOwner: text("repo_owner"),      // owner/namespace (user or org/group)
+    repoName: text("repo_name"),        // repo/project name
+    repoProvider: text("repo_provider").notNull().default("github"), // "github" | "gitlab"
 
     // Stack
     stack: text("stack").default(""),

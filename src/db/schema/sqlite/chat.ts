@@ -111,7 +111,7 @@ export const modelSelections = sqliteTable("model_selection", {
     .references(() => users.id, { onDelete: "cascade" }),
   selectedModel: text("selected_model")
     .notNull()
-    .default("gpt-5-mini"),
+    .default("gpt-5.6-luna"),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
 });

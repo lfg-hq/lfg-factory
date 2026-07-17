@@ -248,8 +248,24 @@ export function createBuilderTools(ctx: BuilderToolContext) {
         })
       ),
       execute: async ({ tasks }) => {
+        // Idempotent: on a re-run/reassign the agent calls createTasks again.
+        // Reuse existing tasks with the same description (keeping their current
+        // status, so completed work stays completed) instead of creating a
+        // duplicate set. Only genuinely new descriptions get inserted.
+        const existing = await db
+          .select({ id: projectTodoLists.id, description: projectTodoLists.description })
+          .from(projectTodoLists)
+          .where(eq(projectTodoLists.ticketId, ctx.ticketId));
+        const norm = (s: string) => s.trim().toLowerCase();
+        const byDesc = new Map(existing.map((t) => [norm(t.description), t]));
+
         const created: Array<{ id: string; description: string }> = [];
         for (const task of tasks) {
+          const match = byDesc.get(norm(task.description));
+          if (match) {
+            created.push({ id: match.id, description: match.description });
+            continue;
+          }
           const [row] = await db
             .insert(projectTodoLists)
             .values({
@@ -261,7 +277,10 @@ export function createBuilderTools(ctx: BuilderToolContext) {
               id: projectTodoLists.id,
               description: projectTodoLists.description,
             });
-          if (row) created.push(row);
+          if (row) {
+            created.push(row);
+            byDesc.set(norm(row.description), row);
+          }
         }
         emit({
           type: "ticket.tasks_updated",

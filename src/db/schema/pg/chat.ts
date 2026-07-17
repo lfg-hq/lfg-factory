@@ -98,7 +98,7 @@ export const modelSelections = pgTable("model_selection", {
     .notNull()
     .unique()
     .references(() => users.id, { onDelete: "cascade" }),
-  selectedModel: text("selected_model").notNull().default("gpt-5-mini"),
+  selectedModel: text("selected_model").notNull().default("gpt-5.6-luna"),
   createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at", { mode: "date" }).notNull().default(sql`now()`),
 });

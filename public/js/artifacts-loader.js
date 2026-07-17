@@ -278,15 +278,21 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Helper function to get current project ID from URL path only
     function getCurrentProjectId() {
-        // Use the same logic as extractProjectIdFromPath in chat.js
         const pathParts = window.location.pathname.split('/').filter(part => part);
+        // Chat page: /chat/project/{id}/...
         if (pathParts.length >= 3 && pathParts[0] === 'chat' && pathParts[1] === 'project') {
-            const projectId = pathParts[2];
-            return projectId;
+            return pathParts[2];
         }
-        
-        console.error('[ArtifactsLoader] No project ID found in path. Expected format: /chat/project/{id}/');
-        throw new Error('No project ID found in path. Expected format: /chat/project/{id}/');
+        // Dashboard page: /projects/{id}?tab=documents
+        if (pathParts.length >= 2 && pathParts[0] === 'projects') {
+            return pathParts[1];
+        }
+        // Fallback to the id the file browser was loaded with.
+        if (window.currentFileBrowserProjectId) {
+            return window.currentFileBrowserProjectId;
+        }
+        console.error('[ArtifactsLoader] No project ID found in path.');
+        throw new Error('No project ID found in path.');
     }
 
     // Helper function to get CSRF token
@@ -4842,8 +4848,8 @@ document.addEventListener('DOMContentLoaded', function() {
             // Get conversation ID if available
             const conversationId = window.conversationId || null;
 
-            // Queue the ticket for execution via API
-            fetch(`/api/v1/project-tickets/${ticketId}/queue-execution/`, {
+            // Queue the ticket for execution via API (Node endpoint returns { ok: true })
+            fetch(`/api/projects/${projectId}/tickets/${ticketId}/queue`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -4856,7 +4862,7 @@ document.addEventListener('DOMContentLoaded', function() {
             })
             .then(response => response.json())
             .then(data => {
-                if (data.status === 'queued') {
+                if (data.ok) {
 
                     // Show success feedback
                     if (executeBtn) {

@@ -86,7 +86,7 @@ If the user wants to change the theme after building:
 - **Test / QA**: When the user asks to test, QA, check, or verify the app, call \`test_app\`. It runs a real-browser pass over every screen and streams a results card (screenshots + PASS/FAIL + observations) into the chat on its own. Reply with ONE short line (e.g. "Running QA — results will appear below.") and do NOT list results yourself.
 - **URL / preview issues**: Call \`get_instant_app_status\`. Use \`restart_server=true\` if the server crashed.
 - **GitHub export**: Call \`export_to_github\` with the app_id.
-- **Database**: Call \`provision_database\` for PostgreSQL instead of SQLite.
+- **Database**: When the app needs to store data, use SQLite (better-sqlite3 + drizzle) — it's already installed and persists on the app's disk. Do NOT use PostgreSQL or any external/hosted database; SQLite is the only database for instant apps.
 
 ## API Keys & External Services
 When the app requires external API keys (e.g. OpenWeather, Stripe, Twilio):

@@ -31,6 +31,7 @@ export const projects = pgTable(
     repoUrl: text("repo_url"),
     repoOwner: text("repo_owner"),
     repoName: text("repo_name"),
+    repoProvider: text("repo_provider").notNull().default("github"), // "github" | "gitlab"
     stack: text("stack").default(""),
     customProjectDir: text("custom_project_dir"),
     customInstallCmd: text("custom_install_cmd"),

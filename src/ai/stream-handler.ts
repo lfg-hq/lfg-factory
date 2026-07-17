@@ -6,7 +6,8 @@ import { projects } from "../db/schema/projects.ts";
 import { projectFiles } from "../db/schema/documents.ts";
 import { projectTickets } from "../db/schema/tickets.ts";
 import { eq, desc } from "drizzle-orm";
-import { getModel, getModelWithSearch, getProviderName, DEFAULT_MODEL_KEY } from "./provider.ts";
+import { getModel, getModelWithSearch, getProviderName, getLiteModel, DEFAULT_MODEL_KEY } from "./provider.ts";
+import { withCaching } from "./prompt-cache.ts";
 import { toolsProduct, toolsTurbo } from "./tools/index.ts";
 import { createInstantTools } from "./tools/instant-tools.ts";
 import { setDocumentWsBroadcast, setTicketWsBroadcast } from "./tools/index.ts";
@@ -368,11 +369,18 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
     lastFlush = Date.now();
   };
 
+  // Apply provider-appropriate prompt caching. For Anthropic this attaches
+  // explicit cache_control breakpoints on the system prompt (caches system +
+  // tools) and the last message (caches the growing history prefix). For every
+  // other provider caching is automatic given our stable [system][tools][history]
+  // ordering, so this is a no-op that returns the inputs unchanged.
+  const cached = withCaching(modelKey, { system: systemPrompt, messages: contextMessages });
+
   try {
     const result = streamText({
       model,
-      system: systemPrompt,
-      messages: contextMessages,
+      system: cached.system,
+      messages: cached.messages as any,
       tools,
       stopWhen: stepCountIs(80),
       abortSignal: abortController.signal,
@@ -704,7 +712,17 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
   // ── 9. Auto-generate title for new conversations ─────────────────────────────
   const isNewConv = !req.conversationId;
   if (isNewConv && fullResponse && !abortController.signal.aborted) {
-    generateTitle(convId, userMessage, fullResponse, model).catch(() => {});
+    // Titling is a cheap, mechanical subtask — route it to the provider's lite
+    // model (staying in-provider reuses the user's existing key). Fall back to
+    // the full model if the provider has no distinct lite tier / key resolution
+    // fails.
+    let titleModel = model;
+    try {
+      titleModel = getLiteModel(modelKey, userApiKeys, { allowEnvFallback: !!instantMode }).model;
+    } catch {
+      // keep the full model
+    }
+    generateTitle(convId, userMessage, fullResponse, titleModel).catch(() => {});
   }
 
   return { conversationId: convId };

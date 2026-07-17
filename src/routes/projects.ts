@@ -9,8 +9,9 @@ import {
 import { projectFiles, projectFileVersions } from "../db/schema/documents.ts";
 import { conversations } from "../db/schema/chat.ts";
 import { ticketStages, projectTickets } from "../db/schema/tickets.ts";
-import { applicationState } from "../db/schema/users.ts";
+import { applicationState, githubTokens, gitlabTokens } from "../db/schema/users.ts";
 import { instantApps } from "../db/schema/instant.ts";
+import { env } from "../config/env.ts";
 import { agents } from "../db/schema/agents.ts";
 import { eq, and, desc, asc, notExists, or } from "drizzle-orm";
 import { listModels } from "../ai/provider.ts";
@@ -21,6 +22,35 @@ import { ProjectDetailPage } from "../templates/pages/project-detail.tsx";
 import { TicketsListPage } from "../templates/pages/tickets-list.tsx";
 import { getProjectAccess, requirePermission, PermissionError } from "../auth/project-access.ts";
 import type { auth } from "../auth/index.ts";
+
+// Parse a GitHub or GitLab repo URL into { provider, owner, name }.
+// GitLab namespaces can be nested (group/subgroup/project), so owner is the
+// full namespace path and name is the final project segment.
+function parseRepoUrl(
+  raw: string
+): { provider: "github" | "gitlab"; owner: string; name: string } | null {
+  const url = raw.trim().replace(/\.git$/, "").replace(/\/+$/, "");
+
+  const gh = url.match(/github\.com[/:]([^/]+)\/([^/]+)/);
+  if (gh) return { provider: "github", owner: gh[1]!, name: gh[2]! };
+
+  let gitlabHost = "gitlab.com";
+  try {
+    gitlabHost = new URL(env.GITLAB_BASE_URL || "https://gitlab.com").host;
+  } catch {
+    /* keep default */
+  }
+  const escaped = gitlabHost.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const gl = url.match(new RegExp(`(?:${escaped}|gitlab\\.com)[/:](.+)$`));
+  if (gl) {
+    const segs = gl[1]!.replace(/^\/+/, "").split("/").filter(Boolean);
+    if (segs.length >= 2) {
+      const name = segs.pop()!;
+      return { provider: "gitlab", owner: segs.join("/"), name };
+    }
+  }
+  return null;
+}
 
 type AuthEnv = {
   Variables: {
@@ -159,7 +189,9 @@ projectsRouter.get("/projects/:projectId", async (c) => {
     db.select().from(conversations)
       .where(
         and(
-          eq(conversations.projectId, project.id),
+          // conversations.projectId stores the PUBLIC projectId (URL id), not the
+          // internal primary key — match how every other query reads it.
+          eq(conversations.projectId, project.projectId),
           notExists(
             db.select({ id: instantApps.id }).from(instantApps)
               .where(eq(instantApps.conversationId, conversations.id))
@@ -190,6 +222,21 @@ projectsRouter.get("/projects/:projectId", async (c) => {
     if (row.stageId) ticketCounts[row.stageId] = (ticketCounts[row.stageId] ?? 0) + 1;
   }
 
+  // Has the user connected GitHub / GitLab? Used to gate the Link Repository flow —
+  // without a token, linking a URL would silently fail later at clone/query time.
+  const [ghTok] = await db
+    .select({ userId: githubTokens.userId })
+    .from(githubTokens)
+    .where(eq(githubTokens.userId, user.id))
+    .limit(1);
+  const githubConnected = !!ghTok;
+  const [glTok] = await db
+    .select({ userId: gitlabTokens.userId })
+    .from(gitlabTokens)
+    .where(eq(gitlabTokens.userId, user.id))
+    .limit(1);
+  const gitlabConnected = !!glTok;
+
   return c.html(
     ProjectDetailPage({
       user: { id: user.id, name: user.name, email: user.email },
@@ -204,7 +251,12 @@ projectsRouter.get("/projects/:projectId", async (c) => {
         repoUrl: project.repoUrl ?? null,
         repoOwner: project.repoOwner ?? null,
         repoName: project.repoName ?? null,
+        repoProvider: (project.repoProvider as string) ?? "github",
       },
+      githubConnected,
+      gitlabConnected,
+      role: access.role,
+      isOwner: access.role === "owner",
       conversations: convRows,
       stages: stageRows,
       ticketCounts,
@@ -270,20 +322,20 @@ projectsRouter.post("/projects/:projectId/connect-repo", async (c) => {
   if (!repoUrl) {
     // Disconnect
     await db.update(projects).set({
-      repoUrl: null, repoOwner: null, repoName: null, updatedAt: new Date(),
+      repoUrl: null, repoOwner: null, repoName: null, repoProvider: "github", updatedAt: new Date(),
     }).where(eq(projects.id, project.id));
     return c.redirect(`/projects/${projectId}`);
   }
 
-  // Parse GitHub URL: https://github.com/owner/repo(.git)
-  const match = repoUrl.match(/github\.com[/:]([^/]+)\/([^/.]+)/);
-  if (!match) return c.redirect(`/projects/${projectId}?error=Invalid+GitHub+URL`);
-
-  const repoOwner = match[1]!;
-  const repoName = match[2]!;
+  const parsed = parseRepoUrl(repoUrl);
+  if (!parsed) return c.redirect(`/projects/${projectId}?error=Invalid+GitHub+or+GitLab+URL`);
 
   await db.update(projects).set({
-    repoUrl, repoOwner, repoName, updatedAt: new Date(),
+    repoUrl,
+    repoOwner: parsed.owner,
+    repoName: parsed.name,
+    repoProvider: parsed.provider,
+    updatedAt: new Date(),
   }).where(eq(projects.id, project.id));
 
   return c.redirect(`/projects/${projectId}`);

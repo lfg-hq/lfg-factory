@@ -17,3 +17,4 @@ export * from "./comments.ts";
 export * from "./public-instant.ts";
 export * from "./agents.ts";
 export * from "./composio.ts";
+export * from "./free-prd.ts";

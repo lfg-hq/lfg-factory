@@ -10,7 +10,6 @@ import {
   deleteInstantApp,
   exportInstantAppToGitHub,
   getInstantAppArchive,
-  provisionInstantAppDatabase,
   retryInstantBuild,
 } from "../../services/instant-app.ts";
 import { testInstantApp } from "../../services/instant-tester.ts";
@@ -192,20 +191,6 @@ instantApi.get("/apps/:appId/download", async (c) => {
   });
 });
 
-// ── Provision Postgres DB ────────────────────────────────────────
-instantApi.post("/apps/:appId/provision-db", async (c) => {
-  const user = c.get("user");
-  const { appId } = c.req.param();
-  const result = await provisionInstantAppDatabase({ userId: user.id, appId });
-  if (!result.success) return c.json({ error: result.message }, 400);
-  return c.json({
-    status: "ok",
-    db_name: result.dbName,
-    connection_string: result.connectionString,
-    message: result.message,
-  });
-});
-
 // Project scoped
 instantApi.get("/:projectId/apps", async (c) => {
   const user = c.get("user");
@@ -351,23 +336,6 @@ instantApi.get("/:projectId/apps/:appId/download", async (c) => {
       "Content-Disposition": `attachment; filename="${result.filename}"`,
       "Content-Length": String(result.data.length),
     },
-  });
-});
-
-// ── Project-scoped: Provision Postgres DB ────────────────────────
-instantApi.post("/:projectId/apps/:appId/provision-db", async (c) => {
-  const user = c.get("user");
-  const { projectId, appId } = c.req.param();
-  const project = await resolveProjectForUser(user.id, projectId);
-  if (!project) return c.json({ error: "Project not found" }, 404);
-
-  const result = await provisionInstantAppDatabase({ userId: user.id, appId });
-  if (!result.success) return c.json({ error: result.message }, 400);
-  return c.json({
-    status: "ok",
-    db_name: result.dbName,
-    connection_string: result.connectionString,
-    message: result.message,
   });
 });
 

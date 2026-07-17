@@ -31,6 +31,25 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentRawContent = '';
     let historyLoaded = false;
 
+    // Agent-busy state drives the send↔stop button. `streamBusy` spans a whole
+    // turn (send → is_final), independent of intermediate finishStreaming() calls
+    // that just close text bubbles. `buildBusy` spans an app build.
+    let streamBusy = false;
+    let buildBusy = false;
+    function updateSendBtn() {
+        const busy = streamBusy || buildBusy;
+        sendBtn.classList.toggle('busy', busy);
+        sendBtn.disabled = false; // stay clickable so the user can stop
+        sendBtn.title = busy ? 'Stop' : 'Send';
+        const icon = sendBtn.querySelector('i');
+        if (icon) icon.className = busy ? 'fas fa-stop' : 'fas fa-paper-plane';
+    }
+    function stopGeneration() {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: 'stop_generation' }));
+        }
+    }
+
     // ---- WebSocket ----
 
     function connectWebSocket() {
@@ -57,6 +76,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         socket.onclose = () => {
             console.log('[Instant] WS closed, reconnecting in 3s...');
+            // Don't leave the button stuck as "Stop" if the connection drops mid-turn.
+            streamBusy = false;
+            buildBusy = false;
+            updateSendBtn();
             setTimeout(connectWebSocket, 3000);
         };
 
@@ -96,11 +119,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
-            // Final signal
+            // Final signal — the agent's turn is over
             if (data.is_final) {
                 if (data.conversation_id && !conversationId) {
                     conversationId = data.conversation_id;
                 }
+                streamBusy = false;
                 finishStreaming();
                 return;
             }
@@ -192,10 +216,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 setStatus('error', 'Error');
                 if (buildingMessage) buildingMessage.style.color = 'var(--danger, #e74c3c)';
                 showActionsIfReady();
+                buildBusy = false;
+                updateSendBtn();
             } else {
                 if (buildingMessage) buildingMessage.style.color = '';
                 setPreviewState('building', message);
                 setStatus(status, 'Building');
+                buildBusy = status !== 'running';
+                updateSendBtn();
             }
             appendBuildNotice(message, status, data.error_type);
         }
@@ -446,6 +474,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (ntype === 'instant_app_ready') {
             const url = data.preview_url;
             const appName = data.app_name || 'App';
+            buildBusy = false;
+            updateSendBtn();
             if (url) {
                 loadPreview(url);
                 setStatus('running', appName + ' is live');
@@ -620,7 +650,8 @@ document.addEventListener('DOMContentLoaded', () => {
         currentAssistantEl.appendChild(contentDiv);
 
         messageContainer.appendChild(currentAssistantEl);
-        sendBtn.disabled = true;
+        streamBusy = true;
+        updateSendBtn();
     }
 
     function appendChunk(text) {
@@ -661,7 +692,9 @@ document.addEventListener('DOMContentLoaded', () => {
         isStreaming = false;
         currentAssistantEl = null;
         currentRawContent = '';
-        sendBtn.disabled = false;
+        // Reflect the real turn state (streamBusy is only cleared on is_final),
+        // so intermediate bubble-closing doesn't flip the button back to Send early.
+        updateSendBtn();
         chatInput.focus();
     }
 
@@ -960,6 +993,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const displayText = text || `Attached file: ${window.instantAttachedFile?.name || ''}`;
         addMessageToChat('user', displayText);
         showTypingIndicator();
+        streamBusy = true;
+        updateSendBtn();
 
         const payload = {
             type: 'message',
@@ -984,6 +1019,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     chatForm.addEventListener('submit', (e) => {
         e.preventDefault();
+        // While the agent is working, the button is a Stop button.
+        if (streamBusy || buildBusy) { stopGeneration(); return; }
         const text = chatInput.value.trim();
         if (!text && !window.instantAttachedFile) return;
         chatInput.value = '';
@@ -1869,7 +1906,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const restoreBtn = document.getElementById('preview-restore-btn');
     const downloadBtn = document.getElementById('preview-download-btn');
     const exportGithubBtn = document.getElementById('preview-export-github-btn');
-    const provisionDbBtn = document.getElementById('preview-provision-db-btn');
     const deleteAppBtn = document.getElementById('preview-delete-btn');
 
     // Swap ONLY the leading <i> icon for a loading state — preserves the menu-item label.
@@ -2017,39 +2053,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 alert('Export failed: ' + err.message);
             } finally {
                 setItemLoading(exportGithubBtn, false, 'fab fa-github');
-            }
-        });
-    }
-
-    if (provisionDbBtn) {
-        provisionDbBtn.addEventListener('click', async () => {
-            const base = getAppApiBase();
-            if (!base) return;
-
-            if (!confirm('Provision a PostgreSQL database for this app?\nDATABASE_URL will be added to env vars automatically.')) return;
-
-            closePreviewMenu();
-            setItemLoading(provisionDbBtn, true);
-
-            try {
-                const resp = await fetch(`${base}/provision-db`, {
-                    method: 'POST',
-                    credentials: 'same-origin',
-                    headers: { 'Content-Type': 'application/json' },
-                });
-                const data = await resp.json();
-                if (data.error) {
-                    alert('DB provisioning failed: ' + data.error);
-                } else {
-                    alert(`Database provisioned!\n\nName: ${data.db_name}\nConnection: ${data.connection_string}\n\nDATABASE_URL has been added to your env vars. Rebuild to apply.`);
-                    // Refresh env tab
-                    envLoaded = false;
-                    if (activeTab === 'env') loadEnvVars();
-                }
-            } catch (err) {
-                alert('DB provisioning failed: ' + err.message);
-            } finally {
-                setItemLoading(provisionDbBtn, false, 'fas fa-database');
             }
         });
     }

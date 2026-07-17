@@ -471,9 +471,10 @@ export const AuthPage = ({ turnstileSiteKey = "" }: { turnstileSiteKey?: string 
         const params = new URLSearchParams(window.location.search);
         if (params.get('tab') === 'register' || window.location.pathname === '/auth/register') switchTab('register');
 
-        // Helper: get safe redirect destination
+        // Helper: get safe redirect destination. Accept both 'next' and
+        // 'redirect' (the invitation flow uses ?redirect=/invitations/accept/...).
         function getNextUrl() {
-          const next = params.get('next');
+          const next = params.get('next') || params.get('redirect');
           if (next && next.startsWith('/') && !next.startsWith('//')) return next;
           return '/projects';
         }

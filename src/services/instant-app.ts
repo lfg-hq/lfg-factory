@@ -487,7 +487,7 @@ If no external API keys are needed, return an empty apiKeys array.`,
   for (const key of missingKeys) {
     await broadcastEnvVarRequest({
       userId: app.userId,
-      conversationId: app.conversationId,
+      conversationId: app.conversationId || appId,
       key: key.key,
       description: `${key.service}: ${key.description}`,
       required: key.required,
@@ -2586,80 +2586,6 @@ export async function getInstantAppArchive(params: {
   }
 }
 
-// ── Provision Postgres DB for Instant App ────────────────────────────
-
-export async function provisionInstantAppDatabase(params: {
-  userId: string;
-  appId: string;
-}): Promise<{ success: boolean; dbName?: string; connectionString?: string; message: string }> {
-  const host = process.env.POSTGRES_PROVISIONING_HOST || "135.181.37.208";
-  const port = parseInt(process.env.POSTGRES_PROVISIONING_PORT || "5433", 10);
-  const user = process.env.POSTGRES_PROVISIONING_USER || "lfg_admin";
-  const password = process.env.POSTGRES_PROVISIONING_PASSWORD;
-
-  if (!password) {
-    return { success: false, message: "Postgres provisioning not configured on the server." };
-  }
-
-  const [row] = await db
-    .select()
-    .from(instantApps)
-    .where(and(eq(instantApps.userId, params.userId), eq(instantApps.appId, params.appId)))
-    .limit(1);
-
-  if (!row) return { success: false, message: "App not found." };
-
-  // Generate DB name from app name
-  const slug = (row.name || "app")
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_|_$/g, "")
-    .slice(0, 40);
-  const shortId = crypto.randomUUID().replace(/-/g, "").slice(0, 6);
-  const dbName = `lfg_instant_${slug}_${shortId}`;
-
-  // Dynamic import to avoid top-level dep if not used
-  const pg = await import("pg");
-  const client = new pg.default.Client({ host, port, user, password, database: "postgres" });
-
-  try {
-    await client.connect();
-    const { rows } = await client.query("SELECT 1 FROM pg_database WHERE datname = $1", [dbName]);
-    if (rows.length === 0) {
-      await client.query(`CREATE DATABASE "${dbName}"`);
-    }
-  } catch (err) {
-    return { success: false, message: `DB provisioning failed: ${(err as Error).message}` };
-  } finally {
-    await client.end().catch(() => {});
-  }
-
-  const connectionString = `postgresql://${user}:${password}@${host}:${port}/${dbName}`;
-
-  // Store DATABASE_URL in the app's env vars
-  const currentEnv = (row.envVars as Record<string, string> | null) ?? {};
-  currentEnv["DATABASE_URL"] = connectionString;
-
-  await db
-    .update(instantApps)
-    .set({
-      envVars: currentEnv,
-      metadata: {
-        ...((row.metadata as Record<string, unknown> | null) ?? {}),
-        provisionedDb: dbName,
-        provisionedDbAt: new Date().toISOString(),
-      },
-      updatedAt: new Date(),
-    })
-    .where(eq(instantApps.id, row.id));
-
-  const maskedUrl = `postgresql://${user}:****@${host}:${port}/${dbName}`;
-
-  return {
-    success: true,
-    dbName,
-    connectionString: maskedUrl,
-    message: `Database '${dbName}' provisioned. DATABASE_URL added to env vars.`,
-  };
-}
+// Instant apps use SQLite (better-sqlite3 + drizzle) on the app's own disk —
+// no external database is provisioned. The previous Postgres provisioner was
+// removed so instant apps only ever use SQLite.

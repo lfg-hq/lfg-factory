@@ -548,6 +548,15 @@ export async function streamPiToCompletion(params: {
   let lastProgressAt = 0;
   let polls = 0;
   let loggedVersions = false;
+  // Stall guard: if the SAME progress line persists this many polls with nothing
+  // new, the agent is stuck (e.g. re-running a failing command in a loop). The
+  // threshold is deliberately high (~7.5 min at 5s polls) so a legitimately slow
+  // single step never trips it — it only catches a genuine stall, well before the
+  // full timeout. Defense-in-depth; the deterministic scaffold is the real fix.
+  const STALL_LIMIT = 90;
+  let lastStallSig: string | null = null;
+  let stallCount = 0;
+  let stalled = false;
   const startedAt = Date.now();
   const deadline = startedAt + timeoutMs;
 
@@ -591,12 +600,25 @@ printf 'TL=%s\\n' "$TL"`;
       console.log(`[pi-cli] still building — ${Math.round((Date.now() - startedAt) / 1000)}s elapsed, alive=${alive}, done=${done}`);
     }
 
-    if (tail && onProgress && Date.now() - lastProgressAt > 5_000) {
-      const progress = extractPiProgress(tail);
-      if (progress) {
-        lastProgressAt = Date.now();
-        onProgress(progress);
+    const progress = tail ? extractPiProgress(tail) : null;
+
+    // Stall detection: the same progress line repeating with nothing new.
+    if (progress) {
+      if (progress === lastStallSig) {
+        if (++stallCount >= STALL_LIMIT) {
+          stalled = true;
+          console.warn(`[pi-cli] agent stalled — "${progress.slice(0, 80)}" repeated ${stallCount}× (~${Math.round((stallCount * POLL_INTERVAL_MS) / 60000)}min) with no progress; aborting.`);
+          break;
+        }
+      } else {
+        lastStallSig = progress;
+        stallCount = 0;
       }
+    }
+
+    if (progress && onProgress && Date.now() - lastProgressAt > 5_000) {
+      lastProgressAt = Date.now();
+      onProgress(progress);
     }
 
     // Done marker present (runner writes it as its last action) → finished.
@@ -676,6 +698,12 @@ printf 'TL=%s\\n' "$TL"`;
     didWork = toolCalls > 0 || hadSuccess;
   } catch (err) {
     console.warn(`[pi-cli] final analysis failed:`, (err as Error).message?.slice(0, 120));
+  }
+
+  // A detected stall is a failure even if Pi did some work earlier — the build
+  // never converged. Surface it so the caller marks the ticket failed.
+  if (stalled && !fatalError) {
+    fatalError = "agent stalled — repeated the same action for several minutes without progress";
   }
 
   return { exitCode, fatalError, didWork, toolCalls, tail };

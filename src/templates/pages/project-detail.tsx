@@ -43,7 +43,12 @@ interface ProjectDetailPageProps {
     repoUrl: string | null;
     repoOwner: string | null;
     repoName: string | null;
+    repoProvider?: string;
   };
+  githubConnected: boolean;
+  gitlabConnected?: boolean;
+  role?: string;
+  isOwner?: boolean;
   conversations: Conversation[];
   stages: TicketStage[];
   ticketCounts: Record<string, number>;
@@ -55,6 +60,10 @@ interface ProjectDetailPageProps {
 export function ProjectDetailPage({
   user,
   project,
+  githubConnected,
+  gitlabConnected = false,
+  role = "owner",
+  isOwner = true,
   conversations,
   stages,
   ticketCounts,
@@ -64,6 +73,8 @@ export function ProjectDetailPage({
 }: ProjectDetailPageProps) {
   const totalTickets = Object.values(ticketCounts).reduce((a, b) => a + b, 0);
   const avatarLetter = (user.name?.[0] ?? user.email?.[0] ?? "?").toUpperCase();
+  // Human labels: an invited "member" is shown as a Collaborator.
+  const roleLabel = ({ owner: "Owner", admin: "Admin", member: "Collaborator", viewer: "Viewer", guest: "Guest" }[role] ?? role);
 
   return html`<!DOCTYPE html>
 <html lang="en" data-theme="dark">
@@ -77,6 +88,7 @@ export function ProjectDetailPage({
   <link rel="stylesheet" href="/public/css/sidebar.css" />
   <link rel="stylesheet" href="/public/css/projects.css" />
   <link rel="stylesheet" href="/public/css/project_detail.css" />
+  <link rel="stylesheet" href="/public/css/artifacts.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
@@ -130,6 +142,10 @@ export function ProjectDetailPage({
           <a href="/projects/${project.projectId}/tickets" class="nav-link">
             <i class="fas fa-tasks"></i>
             <span class="nav-text">Tickets</span>
+          </a>
+          <a href="/projects/${project.projectId}?tab=documents" class="nav-link${activeTab === "documents" ? " active" : ""}">
+            <i class="fas fa-file-lines"></i>
+            <span class="nav-text">Documents</span>
           </a>
           <a href="/instant/project/${project.projectId}" class="nav-link${activeTab === "instant" ? " active" : ""}">
             <i class="fas fa-bolt"></i>
@@ -186,10 +202,11 @@ export function ProjectDetailPage({
               <span style="font-size:0.75rem;padding:0.2rem 0.5rem;border-radius:9999px;background:${project.status === "active" ? "rgba(34,197,94,0.1)" : "rgba(156,163,175,0.1)"};color:${project.status === "active" ? "#22c55e" : "var(--text-secondary)"};">
                 ${project.status}
               </span>
+              ${!isOwner ? html`<span title="You were invited to this project" style="font-size:0.75rem;padding:0.2rem 0.5rem;border-radius:9999px;background:rgba(139,92,246,0.12);color:var(--primary-color);display:inline-flex;align-items:center;gap:0.3rem;"><i class="fas fa-user-group"></i> Shared · ${roleLabel}</span>` : ""}
               ${project.stack ? html`<span style="font-size:0.75rem;color:var(--text-secondary);">${project.stack}</span>` : ""}
               ${project.repoUrl ? html`
                 <a href="${project.repoUrl}" target="_blank" style="font-size:0.75rem;color:var(--text-secondary);text-decoration:none;display:flex;align-items:center;gap:0.3rem;">
-                  <i class="fab fa-github"></i> ${project.repoOwner}/${project.repoName}
+                  <i class="fab ${project.repoProvider === "gitlab" ? "fa-gitlab" : "fa-github"}"></i> ${project.repoOwner}/${project.repoName}
                 </a>
               ` : ""}
             </div>
@@ -198,11 +215,11 @@ export function ProjectDetailPage({
         <div style="display:flex;align-items:center;gap:0.75rem;">
           ${!project.repoUrl ? html`
             <button onclick="showCodebaseModal()" class="btn btn-secondary" style="display:flex;align-items:center;gap:0.5rem;font-size:0.8125rem;">
-              <i class="fab fa-github"></i> Link Repository
+              <i class="fas fa-link"></i> Link Repository
             </button>
           ` : html`
             <button onclick="showCodebaseModal()" class="btn btn-secondary" style="display:flex;align-items:center;gap:0.5rem;font-size:0.8125rem;">
-              <i class="fab fa-github"></i> Change Repo
+              <i class="fab ${project.repoProvider === "gitlab" ? "fa-gitlab" : "fa-github"}"></i> Change Repo
             </button>
           `}
           <a href="/chat/project/${project.projectId}" class="btn btn-primary" style="display:flex;align-items:center;gap:0.5rem;">
@@ -216,6 +233,9 @@ export function ProjectDetailPage({
         <a href="/projects/${project.projectId}" class="tab-item${activeTab === "conversations" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "conversations" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "conversations" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
           <i class="fas fa-comments"></i> Conversations
           ${conversations.length > 0 ? html`<span style="font-size:0.7rem;background:rgba(139,92,246,0.2);color:#a78bfa;padding:0.1rem 0.4rem;border-radius:9999px;">${conversations.length}</span>` : ""}
+        </a>
+        <a href="/projects/${project.projectId}?tab=documents" class="tab-item${activeTab === "documents" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "documents" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "documents" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
+          <i class="fas fa-file-lines"></i> Documents
         </a>
         <a href="/projects/${project.projectId}/tickets" class="tab-item" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:var(--text-secondary);border-bottom:2px solid transparent;margin-bottom:-1px;transition:color 0.15s;">
           <i class="fas fa-tasks"></i> Tickets
@@ -280,6 +300,81 @@ export function ProjectDetailPage({
           </div>
           <link rel="stylesheet" href="/public/css/events-timeline.css" />
           <script src="/public/js/events-timeline.js"></script>
+        ` : ""}
+
+        ${activeTab === "documents" ? html`
+          <!-- The doc viewer is absolute-positioned for the chat panel; on the
+               dashboard it must flow within the tab content, not escape to the
+               viewport (which clips it behind the sidebar/header). -->
+          <style>
+            #filebrowser-viewer { position: static !important; inset: auto !important; min-height: 65vh; }
+            #filebrowser-viewer .viewer-content { min-height: 55vh; }
+            #viewer-markdown { color: var(--text-color) !important; }
+          </style>
+          <div id="filebrowser" class="filebrowser-container" style="position:relative;display:flex;flex-direction:column;">
+            <div id="filebrowser-main" style="display:flex;flex-direction:column;">
+              <div class="filebrowser-header" style="padding-bottom:1rem;border-bottom:1px solid var(--border-color);margin-bottom:1rem;">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:0.5rem;">
+                  <h2 style="color:var(--text-color);margin:0;font-size:1.1rem;font-weight:600;">Documents</h2>
+                  <div style="display:flex;gap:0.5rem;align-items:center;">
+                    <select id="file-type-filter" class="input" style="padding:0.4rem 0.6rem;font-size:0.8125rem;">
+                      <option value="">All Types</option>
+                    </select>
+                    <button id="refresh-filebrowser" class="btn btn-secondary" style="font-size:0.8125rem;display:flex;align-items:center;gap:0.4rem;">
+                      <i class="fas fa-sync-alt"></i> Refresh
+                    </button>
+                  </div>
+                </div>
+                <div style="position:relative;">
+                  <input type="text" id="file-search" placeholder="Search documents..." class="input" style="width:100%;box-sizing:border-box;padding-left:2.25rem;" />
+                  <i class="fas fa-search" style="position:absolute;left:0.85rem;top:50%;transform:translateY(-50%);color:var(--text-secondary);font-size:0.85rem;"></i>
+                </div>
+              </div>
+              <div class="filebrowser-content" style="flex:1;overflow-y:auto;">
+                <div id="file-table-header" style="display:none;"></div>
+                <div class="loading-state" id="filebrowser-loading" style="text-align:center;padding:3rem;display:none;">
+                  <i class="fas fa-spinner fa-spin" style="opacity:0.5;font-size:1.25rem;"></i>
+                  <div style="margin-top:0.5rem;color:var(--text-secondary);">Loading documents...</div>
+                </div>
+                <div class="empty-state" id="filebrowser-empty" style="text-align:center;padding:3rem;color:var(--text-secondary);border:1px dashed var(--border-color);border-radius:var(--radius-lg);">
+                  <div class="empty-state-icon"><i class="fas fa-folder-open" style="font-size:2rem;opacity:0.3;"></i></div>
+                  <div class="empty-state-text" style="margin-top:0.75rem;">No documents found in this project.</div>
+                </div>
+                <div id="filebrowser-list"></div>
+                <div id="filebrowser-pagination" style="display:none;"></div>
+              </div>
+            </div>
+            <div id="filebrowser-viewer" style="display:none;flex-direction:column;">
+              <div class="viewer-header">
+                <div class="viewer-title-container">
+                  <button id="viewer-back" class="viewer-back"><i class="fas fa-arrow-left"></i></button>
+                  <h3 id="viewer-title"></h3>
+                </div>
+                <div id="viewer-actions" class="viewer-actions"></div>
+              </div>
+              <div class="viewer-content" style="flex:1;overflow-y:auto;">
+                <div id="viewer-markdown" class="prd-content markdown-content" style="padding:1rem 0;color:var(--text-color);"></div>
+              </div>
+            </div>
+          </div>
+          <script src="/public/js/marked.min.js"></script>
+          <script src="/public/js/markdown-config.js"></script>
+          <script src="/public/js/artifacts-loader.js"></script>
+          <script>
+            // Reuse the SAME docs module as the chat Docs panel (window.ArtifactsLoader),
+            // so reads/edits/renders stay in sync across the dashboard and chat.
+            (function () {
+              function start() {
+                if (window.ArtifactsLoader && typeof window.ArtifactsLoader.loadFileBrowser === "function") {
+                  window.ArtifactsLoader.loadFileBrowser("${project.projectId}");
+                } else {
+                  setTimeout(start, 100);
+                }
+              }
+              if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start);
+              else start();
+            })();
+          </script>
         ` : ""}
 
         ${activeTab === "environment" ? html`
@@ -366,6 +461,7 @@ export function ProjectDetailPage({
         ${activeTab === "settings" ? html`
           <div>
             <h2 style="font-size:1.1rem;font-weight:600;color:var(--text-color);margin:0 0 1.5rem;">Project Settings</h2>
+            ${isOwner ? html`
             <form method="POST" action="/projects/${project.projectId}/update">
               <div style="margin-bottom:1rem;">
                 <label style="display:block;font-size:0.875rem;font-weight:500;color:var(--text-color);margin-bottom:0.5rem;">Project Name</label>
@@ -383,35 +479,47 @@ export function ProjectDetailPage({
                 <button type="submit" class="btn btn-primary">Save Changes</button>
               </div>
             </form>
+            ` : html`
+            <div style="font-size:0.8125rem;color:var(--text-secondary);background:var(--card-bg);border:1px solid var(--border-color);border-radius:var(--radius);padding:0.875rem 1rem;margin-bottom:1.5rem;">
+              <i class="fas fa-lock" style="margin-right:0.4rem;"></i> You have <strong>${roleLabel}</strong> access. Only the project owner can change project settings, manage the team, or delete the project.
+            </div>
+            <div style="margin-bottom:1rem;"><div style="font-size:0.8125rem;color:var(--text-secondary);">Project Name</div><div style="color:var(--text-color);">${project.name}</div></div>
+            ${project.description ? html`<div style="margin-bottom:1rem;"><div style="font-size:0.8125rem;color:var(--text-secondary);">Description</div><div style="color:var(--text-color);white-space:pre-wrap;">${project.description}</div></div>` : ""}
+            ${project.stack ? html`<div style="margin-bottom:1rem;"><div style="font-size:0.8125rem;color:var(--text-secondary);">Tech Stack</div><div style="color:var(--text-color);">${project.stack}</div></div>` : ""}
+            `}
 
             <!-- Team & Guests -->
             <div style="margin-top:2.5rem;padding-top:2rem;border-top:1px solid var(--border-color);">
-              <h3 style="font-size:1rem;font-weight:600;color:var(--text-color);margin:0 0 0.5rem;">Team & Guests</h3>
+              <h3 style="font-size:1rem;font-weight:600;color:var(--text-color);margin:0 0 0.5rem;">${isOwner ? "Team & Guests" : "Team"}</h3>
+              ${isOwner ? html`
               <p style="font-size:0.8125rem;color:var(--text-secondary);margin:0 0 1.25rem;">Invite people to collaborate on this project.</p>
 
               <!-- Invite Form -->
               <div style="display:flex;gap:0.5rem;margin-bottom:1.5rem;" id="invite-form">
                 <input type="email" id="invite-email" placeholder="Email address" class="input" style="flex:1;box-sizing:border-box;" />
-                <select id="invite-role" class="input" style="width:auto;min-width:100px;">
-                  <option value="viewer">Viewer</option>
-                  <option value="member">Member</option>
-                  <option value="guest">Guest</option>
+                <select id="invite-role" class="input" style="width:auto;min-width:130px;">
+                  <option value="member">Collaborator</option>
+                  <option value="viewer">Viewer (read-only)</option>
                 </select>
                 <button type="button" class="btn btn-primary" onclick="sendInvitation()" style="white-space:nowrap;">
                   <i class="fas fa-paper-plane"></i> Invite
                 </button>
               </div>
               <div id="invite-message" style="display:none;font-size:0.8125rem;margin-bottom:1rem;padding:0.5rem 0.75rem;border-radius:var(--radius);"></div>
+              ` : html`
+              <p style="font-size:0.8125rem;color:var(--text-secondary);margin:0 0 1.25rem;">People with access to this project.</p>
+              `}
 
               <!-- Members List -->
               <div id="members-list" style="margin-bottom:1rem;">
                 <div style="font-size:0.8125rem;color:var(--text-secondary);padding:0.5rem 0;">Loading members...</div>
               </div>
 
-              <!-- Pending Invitations -->
-              <div id="invitations-list" style="margin-bottom:1rem;"></div>
+              <!-- Pending Invitations (owner only) -->
+              ${isOwner ? html`<div id="invitations-list" style="margin-bottom:1rem;"></div>` : ""}
             </div>
 
+            ${isOwner ? html`
             <div style="margin-top:2.5rem;padding-top:2rem;border-top:1px solid var(--border-color);">
               <h3 style="font-size:1rem;font-weight:600;color:var(--danger-color);margin:0 0 0.75rem;">Danger Zone</h3>
               <form method="POST" action="/projects/${project.projectId}/delete"
@@ -421,6 +529,7 @@ export function ProjectDetailPage({
                 </button>
               </form>
             </div>
+            ` : ""}
           </div>
         ` : ""}
       </div>
@@ -428,12 +537,12 @@ export function ProjectDetailPage({
   </div>
 
   <!-- Link GitHub Repository Modal -->
-  <div class="modal-overlay" id="codebaseModal" style="display:none;position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.7);align-items:center;justify-content:center;">
+  <div class="modal-overlay" id="codebaseModal" style="position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.7);align-items:center;justify-content:center;">
     <div style="background:var(--card-bg);border:1px solid var(--border-color);border-radius:var(--radius-lg);width:100%;max-width:520px;position:relative;transform:scale(0.95);transition:transform 0.2s ease;">
       <!-- Header -->
       <div style="display:flex;align-items:center;justify-content:space-between;padding:1.25rem 1.5rem;border-bottom:1px solid var(--border-color);">
         <h3 style="margin:0;font-size:1.1rem;font-weight:600;color:var(--text-color);display:flex;align-items:center;gap:0.5rem;">
-          <i class="fab fa-github"></i> Link GitHub Repository
+          <i class="fas fa-code-branch"></i> Link Repository
         </h3>
         <button type="button" onclick="closeCodebaseModal()" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:1.1rem;padding:0.25rem;">
           <i class="fas fa-times"></i>
@@ -441,14 +550,41 @@ export function ProjectDetailPage({
       </div>
       <!-- Body -->
       <div style="padding:1.5rem;">
+        ${!githubConnected && !gitlabConnected ? html`
+          <!-- Neither connected: direct the user to connect a provider first -->
+          <div style="text-align:center;padding:0.5rem 0 0.25rem;">
+            <div style="width:3rem;height:3rem;margin:0 auto 1rem;border-radius:9999px;background:rgba(139,92,246,0.12);display:flex;align-items:center;justify-content:center;">
+              <i class="fas fa-code-branch" style="font-size:1.4rem;color:var(--text-color);"></i>
+            </div>
+            <h4 style="margin:0 0 0.5rem;font-size:1rem;font-weight:600;color:var(--text-color);">Connect a Git provider first</h4>
+            <p style="font-size:0.8125rem;color:var(--text-secondary);margin:0 0 1.25rem;line-height:1.5;">
+              To link a repository, LFG needs access to your GitHub or GitLab account. You'll be able to link a repo right after connecting.
+            </p>
+            <div style="display:flex;gap:0.5rem;justify-content:center;flex-wrap:wrap;">
+              <a href="/accounts/github-connect?returnTo=${encodeURIComponent(`/projects/${project.projectId}?showConnect=true`)}" class="btn btn-primary" style="display:inline-flex;align-items:center;gap:0.5rem;">
+                <i class="fab fa-github"></i> Connect GitHub
+              </a>
+              <a href="/accounts/gitlab-connect?returnTo=${encodeURIComponent(`/projects/${project.projectId}?showConnect=true`)}" class="btn btn-secondary" style="display:inline-flex;align-items:center;gap:0.5rem;">
+                <i class="fab fa-gitlab"></i> Connect GitLab
+              </a>
+            </div>
+            <p style="font-size:0.7rem;color:var(--text-secondary);margin:1rem 0 0;">
+              Manage connections anytime in <a href="/settings/integrations" style="color:var(--primary-color);text-decoration:none;">Settings → Integrations</a>.
+            </p>
+          </div>
+        ` : html`
         <form id="codebaseForm" method="POST" action="/projects/${project.projectId}/connect-repo">
           <div style="margin-bottom:1.25rem;">
-            <label style="display:block;font-size:0.875rem;font-weight:500;color:var(--text-color);margin-bottom:0.5rem;">GitHub Repository URL</label>
+            <label style="display:block;font-size:0.875rem;font-weight:500;color:var(--text-color);margin-bottom:0.5rem;">Repository URL</label>
             <input type="url" name="repo_url" id="githubUrl" required
-              placeholder="https://github.com/username/repository"
+              placeholder="https://github.com/... or https://gitlab.com/..."
               value="${project.repoUrl ?? ""}"
               class="input" style="width:100%;box-sizing:border-box;" />
-            <p style="font-size:0.75rem;color:var(--text-secondary);margin:0.4rem 0 0;">Make sure you have access to this repository.</p>
+            <p style="font-size:0.75rem;color:var(--text-secondary);margin:0.4rem 0 0;">
+              Paste a GitHub or GitLab repository URL you have access to.
+              ${!githubConnected ? html` <a href="/accounts/github-connect?returnTo=${encodeURIComponent(`/projects/${project.projectId}?showConnect=true`)}" style="color:var(--primary-color);text-decoration:none;">Connect GitHub</a>` : ""}
+              ${!gitlabConnected ? html` <a href="/accounts/gitlab-connect?returnTo=${encodeURIComponent(`/projects/${project.projectId}?showConnect=true`)}" style="color:var(--primary-color);text-decoration:none;">Connect GitLab</a>` : ""}
+            </p>
           </div>
           <div style="margin-bottom:1.25rem;">
             <label style="display:block;font-size:0.875rem;font-weight:500;color:var(--text-color);margin-bottom:0.5rem;">Branch</label>
@@ -484,6 +620,7 @@ export function ProjectDetailPage({
             </form>
           </div>
         ` : ""}
+        `}
       </div>
     </div>
   </div>
@@ -491,16 +628,18 @@ export function ProjectDetailPage({
   <script src="/public/js/sidebar.js"></script>
   <script>requestAnimationFrame(()=>requestAnimationFrame(()=>document.documentElement.classList.remove('sidebar-minimized-preload')));</script>
   <script>
-    // Codebase modal open/close
+    // Codebase modal open/close. The shared .modal-overlay class hides via
+    // visibility/opacity and reveals with the .active class — toggling display
+    // alone leaves it invisible.
     function showCodebaseModal() {
       var modal = document.getElementById('codebaseModal');
-      modal.style.display = 'flex';
+      modal.classList.add('active');
       setTimeout(function() { modal.querySelector('div > div').style.transform = 'scale(1)'; }, 10);
     }
     function closeCodebaseModal() {
       var modal = document.getElementById('codebaseModal');
       modal.querySelector('div > div').style.transform = 'scale(0.95)';
-      setTimeout(function() { modal.style.display = 'none'; }, 150);
+      setTimeout(function() { modal.classList.remove('active'); }, 150);
     }
     // Close on overlay click
     document.getElementById('codebaseModal').addEventListener('click', function(e) {
@@ -515,6 +654,11 @@ export function ProjectDetailPage({
   <script>
     // Team & Guests management
     var projectId = '${project.projectId}';
+    var canManageTeam = ${isOwner ? "true" : "false"};
+    // Map stored role → human label (an invited "member" is a Collaborator).
+    function roleLabelFor(r) {
+      return ({ owner: 'Owner', admin: 'Admin', member: 'Collaborator', viewer: 'Viewer', guest: 'Guest' })[r] || r;
+    }
 
     function loadMembers() {
       fetch('/api/projects/' + projectId + '/members')
@@ -542,8 +686,8 @@ export function ProjectDetailPage({
               + '<div><div style="font-size:0.875rem;font-weight:500;color:var(--text-color);">' + m.userName + '</div>'
               + '<div style="font-size:0.75rem;color:var(--text-secondary);">' + (m.userEmail || '') + '</div></div></div>'
               + '<div style="display:flex;align-items:center;gap:0.5rem;">'
-              + '<span style="font-size:0.7rem;padding:0.15rem 0.5rem;border-radius:10px;background:rgba(' + (m.role === 'admin' ? '59,130,246' : m.role === 'member' ? '34,197,94' : '107,114,128') + ',0.1);color:' + roleColor + ';font-weight:600;text-transform:uppercase;">' + m.role + '</span>'
-              + '<button onclick="removeMember(\\'' + m.id + '\\')" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:0.8rem;padding:0.25rem;" title="Remove"><i class="fas fa-times"></i></button>'
+              + '<span style="font-size:0.7rem;padding:0.15rem 0.5rem;border-radius:10px;background:rgba(' + (m.role === 'admin' ? '59,130,246' : m.role === 'member' ? '34,197,94' : '107,114,128') + ',0.1);color:' + roleColor + ';font-weight:600;text-transform:uppercase;">' + roleLabelFor(m.role) + '</span>'
+              + (canManageTeam ? '<button onclick="removeMember(\\'' + m.id + '\\')" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:0.8rem;padding:0.25rem;" title="Remove"><i class="fas fa-times"></i></button>' : '')
               + '</div></div>';
           });
           el.innerHTML = items || '<div style="font-size:0.8125rem;color:var(--text-secondary);padding:0.5rem 0;">No team members yet.</div>';
@@ -559,7 +703,7 @@ export function ProjectDetailPage({
           var items = '<div style="font-size:0.8125rem;font-weight:500;color:var(--text-secondary);margin-bottom:0.5rem;">Pending Invitations</div>';
           data.invitations.forEach(function(inv) {
             items += '<div style="display:flex;align-items:center;justify-content:space-between;padding:0.5rem 0;border-bottom:1px solid var(--border-color);">'
-              + '<div style="font-size:0.8125rem;color:var(--text-color);">' + inv.email + ' <span style="color:var(--text-secondary);">(' + inv.role + ')</span></div>'
+              + '<div style="font-size:0.8125rem;color:var(--text-color);">' + inv.email + ' <span style="color:var(--text-secondary);">(' + roleLabelFor(inv.role) + ')</span></div>'
               + '<button onclick="revokeInvitation(\\'' + inv.id + '\\')" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:0.75rem;">Revoke</button>'
               + '</div>';
           });
@@ -582,9 +726,43 @@ export function ProjectDetailPage({
           if (res.ok) {
             msg.style.background = 'rgba(34,197,94,0.1)';
             msg.style.color = '#22c55e';
-            msg.textContent = 'Invitation sent to ' + email;
             document.getElementById('invite-email').value = '';
             loadInvitations();
+            var link = res.data.acceptUrl;
+            if (link) {
+              // Clean card: status line + the link in a read-only field + Copy.
+              // Built with DOM APIs (no inline onclick) to stay XSS-safe.
+              msg.textContent = '';
+              msg.style.padding = '0.75rem 0.875rem';
+              var head = document.createElement('div');
+              head.style.cssText = 'font-weight:600;margin-bottom:0.5rem;';
+              head.textContent = res.data.emailSent
+                ? '✅ Invitation emailed to ' + email
+                : '📋 Invited ' + email + ' — email not delivered, share this link:';
+              if (!res.data.emailSent) { msg.style.background = 'rgba(234,179,8,0.1)'; msg.style.color = '#b45309'; }
+              var row = document.createElement('div');
+              row.style.cssText = 'display:flex;gap:0.5rem;align-items:center;';
+              var input = document.createElement('input');
+              input.type = 'text'; input.readOnly = true; input.value = link;
+              input.className = 'input';
+              input.style.cssText = 'flex:1;font-size:0.75rem;padding:0.35rem 0.5rem;box-sizing:border-box;';
+              input.addEventListener('focus', function () { input.select(); });
+              var copyBtn = document.createElement('button');
+              copyBtn.type = 'button'; copyBtn.className = 'btn btn-secondary';
+              copyBtn.textContent = 'Copy';
+              copyBtn.style.cssText = 'font-size:0.75rem;padding:0.35rem 0.75rem;white-space:nowrap;';
+              copyBtn.addEventListener('click', function () {
+                navigator.clipboard.writeText(link);
+                copyBtn.textContent = 'Copied ✓';
+                setTimeout(function () { copyBtn.textContent = 'Copy'; }, 2000);
+              });
+              row.appendChild(input); row.appendChild(copyBtn);
+              msg.appendChild(head); msg.appendChild(row);
+              return; // keep it visible (no auto-hide) so they can copy
+            }
+            msg.textContent = res.data.emailSent
+              ? 'Invitation emailed to ' + email
+              : 'Invited ' + email + ' (email not delivered).';
           } else {
             msg.style.background = 'rgba(239,68,68,0.1)';
             msg.style.color = '#ef4444';
@@ -608,7 +786,7 @@ export function ProjectDetailPage({
     // Load on settings tab
     if ('${activeTab}' === 'settings') {
       loadMembers();
-      loadInvitations();
+      if (canManageTeam) loadInvitations();
     }
   </script>
 

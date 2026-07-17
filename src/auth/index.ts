@@ -1,5 +1,6 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { emailOTP } from "better-auth/plugins";
 import { db } from "../config/db.ts";
 import { env } from "../config/env.ts";
 import {
@@ -99,6 +100,27 @@ export const auth = betterAuth({
     expiresIn: 60 * 60 * 24 * 7, // 7 days
     updateAge: 60 * 60 * 24, // refresh every day
   },
+
+  // Passwordless 6-digit email login (used by the /apps instant-app flow).
+  // sign-in with an OTP auto-creates the account if it doesn't exist.
+  plugins: [
+    emailOTP({
+      otpLength: 6,
+      expiresIn: 60 * 10, // 10 minutes
+      sendVerificationOTP: async ({ email, otp }) => {
+        await sendEmail({
+          to: email,
+          subject: "Your LFG verification code",
+          text: `Your verification code is: ${otp}\n\nThis code expires in 10 minutes.`,
+          html: `<div style="font-family:sans-serif;max-width:480px">
+            <h2 style="color:#0f172a">Your verification code</h2>
+            <p style="font-size:2rem;font-weight:700;letter-spacing:0.2em;color:#4f46e5">${otp}</p>
+            <p style="color:#64748b">This code expires in 10 minutes.</p>
+          </div>`,
+        });
+      },
+    }),
+  ],
 
   // Auto-create profile + llmApiKeys + applicationState on signup
   databaseHooks: {

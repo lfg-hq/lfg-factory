@@ -82,7 +82,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       align-items: center;
       gap: 0.75rem;
       padding: 0.625rem 1.25rem;
-      border-bottom: 1px solid rgba(255,255,255,0.06);
+      border-bottom: 1px solid var(--border-color);
       background: var(--background-color, #121212);
       flex-shrink: 0;
     }
@@ -98,7 +98,9 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       border-radius: 999px;
       border: none;
       background: linear-gradient(135deg, #7c3aed, #8b5cf6);
-      color: white;
+      /* !important: beats the global [data-theme="light"] a { color:#7c3aed }
+         which otherwise makes this purple-on-purple / invisible in light mode. */
+      color: #fff !important;
       cursor: pointer;
       text-decoration: none;
       white-space: nowrap;
@@ -113,8 +115,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       align-items: center;
       gap: 0;
       border-radius: 999px;
-      border: 1px solid rgba(255,255,255,0.08);
-      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border-color);
+      background: var(--input-bg);
       overflow: hidden;
     }
     .exec-mode-btn {
@@ -126,7 +128,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       font-weight: 500;
       border: none;
       background: transparent;
-      color: var(--text-secondary, #999);
+      color: var(--text-secondary);
       cursor: pointer;
       transition: all 0.2s ease;
       white-space: nowrap;
@@ -136,15 +138,15 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       color: white;
       box-shadow: 0 2px 8px rgba(124,58,237,0.3);
     }
-    .exec-mode-btn:hover:not(.active) { background: rgba(255,255,255,0.06); }
+    .exec-mode-btn:hover:not(.active) { background: var(--card-bg-hover); }
 
     .builder-model-select {
       padding: 0.3rem 0.5rem;
       font-size: 0.75rem;
       border-radius: 6px;
-      border: 1px solid rgba(255,255,255,0.08);
-      background: rgba(255,255,255,0.03);
-      color: var(--text-primary, #eee);
+      border: 1px solid var(--border-color);
+      background: var(--input-bg);
+      color: var(--text-color);
       cursor: pointer;
       max-width: 160px;
     }
@@ -316,7 +318,6 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
           </button>
         </div>
         <select class="builder-model-select" id="builder-model-select"
-          style="${isApiMode ? "" : "display:none;"}"
           onchange="setBuilderModel(this.value)">
           ${executionMode.models.map(m => html`
             <option value="${m.key}" ${m.key === executionMode.builderModelKey ? "selected" : ""}>${m.label}</option>
@@ -563,15 +564,14 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       if (!r.ok) return;
       var apiBtn = document.getElementById('exec-mode-api');
       var cliBtn = document.getElementById('exec-mode-cli');
-      var modelSel = document.getElementById('builder-model-select');
+      // Model selector is shown in BOTH modes: it drives the builder model.
+      // Claude models run via Claude Code CLI; all others run via Pi.
       if (cliEnabled) {
         cliBtn.classList.add('active');
         apiBtn.classList.remove('active');
-        if (modelSel) modelSel.style.display = 'none';
       } else {
         apiBtn.classList.add('active');
         cliBtn.classList.remove('active');
-        if (modelSel) modelSel.style.display = '';
       }
     });
   }

@@ -1,4 +1,4 @@
-import { html } from "hono/html";
+import { html, raw } from "hono/html";
 
 interface SharedTicketPageProps {
   ticket: {
@@ -100,7 +100,7 @@ export function SharedTicketPage({ ticket, tasks, project }: SharedTicketPagePro
   </div>
   ${ticket.description ? html`
     <script>
-      var desc = ${JSON.stringify(ticket.description)};
+      var desc = ${raw(JSON.stringify(ticket.description).replace(/</g, "\\u003c"))};
       var el = document.getElementById('ticket-desc');
       if (el && typeof marked !== 'undefined') {
         el.innerHTML = marked.parse(desc);

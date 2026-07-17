@@ -375,9 +375,6 @@ export function InstantPage({
                 <button id="preview-export-github-btn" class="preview-menu-item" type="button">
                   <i class="fab fa-github"></i> <span>GitHub repo</span>
                 </button>
-                <button id="preview-provision-db-btn" class="preview-menu-item" type="button">
-                  <i class="fas fa-database"></i> <span>Provision PostgreSQL</span>
-                </button>
                 <div class="preview-menu-divider"></div>
                 <button id="preview-delete-btn" class="preview-menu-item danger" type="button">
                   <i class="fas fa-trash-alt"></i> <span>Delete app</span>

@@ -8,7 +8,6 @@ import {
   retryInstantBuild,
   exportInstantAppToGitHub,
   getInstantAppStatus,
-  provisionInstantAppDatabase,
   requestInstantEnvVariable,
   swapInstantAppTheme,
   runInstantAppQA,
@@ -330,28 +329,6 @@ export function createInstantTools(ctx: InstantToolContext) {
             fonts: result.tokens?.meta.fontPairingName,
             style: result.tokens?.meta.styleProfileName,
           },
-        };
-      },
-    }),
-
-    provision_database: tool({
-      description:
-        "Provision a PostgreSQL database for the instant app and automatically add DATABASE_URL to the app's environment variables. Use when the user needs a real database instead of SQLite.",
-      inputSchema: zodSchema(
-        z.object({
-          app_id: z.string().describe("The public app_id of the instant app"),
-        })
-      ),
-      execute: async ({ app_id }) => {
-        const result = await provisionInstantAppDatabase({
-          userId: ctx.userId,
-          appId: app_id,
-        });
-        return {
-          message_to_agent: result.message,
-          data: result.success
-            ? { db_name: result.dbName, connection_string: result.connectionString }
-            : undefined,
         };
       },
     }),

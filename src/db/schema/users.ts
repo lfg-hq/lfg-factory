@@ -13,5 +13,6 @@ export const llmApiKeys = m.llmApiKeys;
 export const externalServicesApiKeys = m.externalServicesApiKeys;
 export const applicationState = m.applicationState;
 export const githubTokens = m.githubTokens;
+export const gitlabTokens = m.gitlabTokens;
 export const emailVerificationTokens = m.emailVerificationTokens;
 export const emailVerificationCodes = m.emailVerificationCodes;

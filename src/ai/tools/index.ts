@@ -52,7 +52,7 @@ import {
   updateTicket, updateTicketDetails, updateAllTickets,
   getNextTicket, scheduleTickets, retryTicket, sendTicketMessage, queueTicketExecution,
 } from "./ticket-tools.ts";
-import { getProjectEnvVars, registerRequiredEnvVars, setEnvVar, provisionPostgresDb } from "./env-tools.ts";
+import { getProjectEnvVars, registerRequiredEnvVars, setEnvVar } from "./env-tools.ts";
 import { broadcastToUser, askUser, confirmAction, lookupTechnologySpecs } from "./misc-tools.ts";
 import { queryCodebase } from "./codebase-tools.ts";
 import { getRecentActivities } from "./activity-tools.ts";
@@ -80,7 +80,9 @@ export const toolsProduct = {
   getProjectEnvVars,
   registerRequiredEnvVars,
   setEnvVar,
-  provisionPostgresDb,
+  // provisionPostgresDb — DISABLED: the shared provisioning server is unreachable
+  // (ECONNREFUSED). Keeping the tool defined but unregistered so the product agent
+  // can't call it during ticket creation. Re-add here to re-enable.
   lookupTechnologySpecs,
   broadcastToUser,
   askUser,

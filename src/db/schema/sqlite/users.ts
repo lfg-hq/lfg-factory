@@ -149,7 +149,7 @@ export const applicationState = sqliteTable("application_state", {
   sidebarMinimized: integer("sidebar_minimized", { mode: "boolean" }).notNull().default(false),
   lastSelectedModel: text("last_selected_model")
     .notNull()
-    .default("gpt-5-mini"),
+    .default("gpt-5.6-luna"),
   lastSelectedRole: text("last_selected_role")
     .notNull()
     .default("product_analyst"),
@@ -174,6 +174,26 @@ export const githubTokens = sqliteTable("github_token", {
   githubUserId: text("github_user_id"),
   githubUsername: text("github_username"),
   githubAvatarUrl: text("github_avatar_url"),
+  scope: text("scope"),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
+});
+
+// GitLab OAuth tokens (mirror of github_token, with refresh token + expiry).
+export const gitlabTokens = sqliteTable("gitlab_token", {
+  id: text("id")
+    .primaryKey()
+    .$defaultFn(() => crypto.randomUUID()),
+  userId: text("user_id")
+    .notNull()
+    .unique()
+    .references(() => users.id, { onDelete: "cascade" }),
+  accessToken: text("access_token").notNull(),
+  refreshToken: text("refresh_token"),
+  tokenExpiresAt: integer("token_expires_at", { mode: "timestamp" }),
+  gitlabUserId: text("gitlab_user_id"),
+  gitlabUsername: text("gitlab_username"),
+  gitlabAvatarUrl: text("gitlab_avatar_url"),
   scope: text("scope"),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),

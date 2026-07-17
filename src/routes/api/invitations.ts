@@ -4,7 +4,7 @@ import { db } from "../../config/db.ts";
 import { projects, projectMembers, projectInvitations } from "../../db/schema/projects.ts";
 import { users } from "../../db/schema/users.ts";
 import { eq, and, desc } from "drizzle-orm";
-import { getProjectAccess, requirePermission } from "../../auth/project-access.ts";
+import { getProjectAccess } from "../../auth/project-access.ts";
 import { sendEmail } from "../../utils/email.ts";
 import { env } from "../../config/env.ts";
 import type { auth } from "../../auth/index.ts";
@@ -26,8 +26,9 @@ invitationsApi.post("/:projectId/invitations", async (c) => {
 
   const access = await getProjectAccess(projectId!, user.id);
   if (!access) return c.json({ error: "Project not found" }, 404);
+  // Inviting is strictly owner/admin only — collaborators/viewers cannot add users.
   if (access.role !== "owner" && access.role !== "admin") {
-    try { requirePermission(access, "canInviteMembers"); } catch { return c.json({ error: "Forbidden" }, 403); }
+    return c.json({ error: "Only the project owner can invite people." }, 403);
   }
 
   const body = await c.req.json<{ email: string; role?: string }>();
@@ -75,6 +76,10 @@ invitationsApi.post("/:projectId/invitations", async (c) => {
   const token = crypto.randomUUID() + "-" + crypto.randomUUID();
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
 
+  // Upsert: the unique constraint is on (projectId, email) regardless of status,
+  // so a previously revoked/expired invite for this email still occupies the row.
+  // Re-issue it (new token, role, expiry, back to pending) instead of crashing on
+  // a duplicate-key insert.
   const [invitation] = await db
     .insert(projectInvitations)
     .values({
@@ -85,15 +90,28 @@ invitationsApi.post("/:projectId/invitations", async (c) => {
       token,
       expiresAt,
     })
+    .onConflictDoUpdate({
+      target: [projectInvitations.projectId, projectInvitations.email],
+      set: {
+        inviterId: user.id,
+        role,
+        token,
+        expiresAt,
+        status: "pending",
+        respondedAt: null,
+      },
+    })
     .returning();
 
-  // Send invitation email
-  const acceptUrl = `${env.BETTER_AUTH_URL}/invitations/accept/${token}`;
+  // Send invitation email. Use the PUBLIC base URL so the accept link is
+  // reachable by an external guest — BETTER_AUTH_URL is localhost in dev.
+  const publicBase = (env.APP_URL || env.BETTER_AUTH_URL).replace(/\/$/, "");
+  const acceptUrl = `${publicBase}/invitations/accept/${token}`;
   const projectName = access.project.name;
   const inviterName = user.name || user.email || "A team member";
-  const roleLabel = role.charAt(0).toUpperCase() + role.slice(1);
+  const roleLabel = ({ member: "Collaborator", viewer: "Viewer", guest: "Guest" } as Record<string, string>)[role] ?? (role.charAt(0).toUpperCase() + role.slice(1));
 
-  sendEmail({
+  const emailSent = await sendEmail({
     to: email,
     subject: `You're invited to join "${projectName}" on LFG`,
     text: `${inviterName} has invited you to join "${projectName}" as a ${roleLabel}.\n\nAccept the invitation: ${acceptUrl}\n\nThis invitation expires in 7 days.`,
@@ -125,12 +143,13 @@ invitationsApi.post("/:projectId/invitations", async (c) => {
         </p>
       </div>
     `,
-  }).then((sent) => {
-    if (!sent) console.error(`[invitations] Failed to send invite email to ${email}`);
-    else console.log(`[invitations] Sent invite email to ${email} for project "${projectName}"`);
   });
+  if (!emailSent) console.error(`[invitations] Failed to send invite email to ${email} (check [Email] SendGrid error above)`);
+  else console.log(`[invitations] Sent invite email to ${email} for project "${projectName}"`);
 
-  return c.json({ invitation }, 201);
+  // Return the accept link + whether the email actually sent, so the UI can be
+  // honest and the owner can share the link directly if delivery failed.
+  return c.json({ invitation, acceptUrl, emailSent }, 201);
 });
 
 // ── GET /api/projects/:projectId/invitations — list pending ──────────

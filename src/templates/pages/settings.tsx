@@ -22,6 +22,11 @@ interface SettingsPageProps {
     username: string | null;
     avatarUrl: string | null;
   };
+  gitlab?: {
+    connected: boolean;
+    username: string | null;
+    avatarUrl: string | null;
+  };
   telegram?: {
     connected: boolean;
     botUsername: string | null;
@@ -37,7 +42,7 @@ interface SettingsPageProps {
   success?: string;
 }
 
-export function SettingsPage({ user, apiKeys, claudeCode, github, telegram, composio, activeSection = "llm-keys", error, success }: SettingsPageProps) {
+export function SettingsPage({ user, apiKeys, claudeCode, github, gitlab, telegram, composio, activeSection = "llm-keys", error, success }: SettingsPageProps) {
   const avatarLetter = (user.name?.[0] ?? user.email?.[0] ?? "?").toUpperCase();
 
   return html`<!DOCTYPE html>
@@ -620,17 +625,20 @@ export function SettingsPage({ user, apiKeys, claudeCode, github, telegram, comp
           }
         </script>
 
-        <!-- GitHub Card -->
+        <!-- Source Control (GitHub + GitLab) -->
         <div class="llm-keys-table">
           <div class="llm-keys-row" style="border-bottom:1px solid rgba(255,255,255,0.07);padding:1rem 1.375rem;">
-            <h3 style="margin:0;font-size:0.9375rem;font-weight:700;color:var(--text-color,#f0f0f0);">GitHub</h3>
+            <h3 style="margin:0;font-size:0.9375rem;font-weight:700;color:var(--text-color,#f0f0f0);">Source Control</h3>
           </div>
-          <div class="llm-keys-row">
+
+          <!-- GitHub row -->
+          <div class="llm-keys-row" style="border-bottom:1px solid rgba(255,255,255,0.07);">
             <div style="flex:1;display:flex;align-items:center;gap:.875rem;">
-              ${github?.avatarUrl ? html`<img src="${github.avatarUrl}" style="width:36px;height:36px;border-radius:50%;" />` : html`<div style="width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.08);display:flex;align-items:center;justify-content:center;"><i class="fab fa-github" style="font-size:1.25rem;color:rgba(255,255,255,.4);"></i></div>`}
+              ${github?.avatarUrl ? html`<img src="${github.avatarUrl}" style="width:36px;height:36px;border-radius:50%;" />` : html`<div style="width:36px;height:36px;border-radius:50%;background:rgba(148,163,184,.14);display:flex;align-items:center;justify-content:center;"><i class="fab fa-github" style="font-size:1.25rem;color:var(--text-secondary);"></i></div>`}
               <div>
-                <div class="byok-label" style="margin-bottom:.15rem;">
-                  ${github?.connected ? `Connected as @${github.username}` : "Not connected"}
+                <div class="byok-label" style="margin-bottom:.15rem;display:flex;align-items:center;gap:.4rem;">
+                  <span>GitHub</span>
+                  ${github?.connected ? html`<span style="font-weight:400;color:var(--text-secondary);font-size:.8125rem;">@${github.username}</span>` : ""}
                 </div>
                 <div class="byok-desc">Used for creating branches and pull requests during ticket execution.</div>
               </div>
@@ -638,18 +646,50 @@ export function SettingsPage({ user, apiKeys, claudeCode, github, telegram, comp
             <div>
               ${github?.connected ? html`
                 <div style="display:flex;align-items:center;gap:.5rem;">
-                  <span style="padding:.4rem .875rem;background:rgba(16,185,129,.1);color:#34d399;border:1px solid rgba(16,185,129,.25);border-radius:7px;font-size:.8125rem;">
+                  <span style="padding:.4rem .875rem;background:rgba(16,185,129,.1);color:#34d399;border:1px solid rgba(16,185,129,.25);border-radius:7px;font-size:.8125rem;line-height:1.2;display:inline-flex;align-items:center;gap:.35rem;">
                     <i class="fas fa-check"></i> Connected
                   </span>
                   <form method="POST" action="/settings/github/disconnect" style="margin:0;">
-                    <button type="submit" style="padding:.4rem .75rem;background:rgba(239,68,68,.08);color:#f87171;border:1px solid rgba(239,68,68,.2);border-radius:7px;font-size:.75rem;cursor:pointer;">
+                    <button type="submit" style="padding:.4rem .875rem;background:rgba(239,68,68,.08);color:#f87171;border:1px solid rgba(239,68,68,.2);border-radius:7px;font-size:.8125rem;line-height:1.2;cursor:pointer;">
                       Disconnect
                     </button>
                   </form>
                 </div>
               ` : html`
-                <a href="/accounts/github-connect" style="padding:.4rem .875rem;background:rgba(255,255,255,.07);color:rgba(255,255,255,.75);border:1px solid rgba(255,255,255,.12);border-radius:7px;font-size:.8125rem;text-decoration:none;display:inline-flex;align-items:center;gap:.4rem;">
+                <a href="/accounts/github-connect" class="llm-btn-save" style="color:#fff;border-radius:7px;padding:.45rem .875rem;font-size:.8125rem;text-decoration:none;display:inline-flex;align-items:center;gap:.4rem;">
                   <i class="fab fa-github"></i> Connect GitHub
+                </a>
+              `}
+            </div>
+          </div>
+
+          <!-- GitLab row -->
+          <div class="llm-keys-row">
+            <div style="flex:1;display:flex;align-items:center;gap:.875rem;">
+              ${gitlab?.avatarUrl ? html`<img src="${gitlab.avatarUrl}" style="width:36px;height:36px;border-radius:50%;" />` : html`<div style="width:36px;height:36px;border-radius:50%;background:rgba(252,109,38,.12);display:flex;align-items:center;justify-content:center;"><i class="fab fa-gitlab" style="font-size:1.25rem;color:#fc6d26;"></i></div>`}
+              <div>
+                <div class="byok-label" style="margin-bottom:.15rem;display:flex;align-items:center;gap:.4rem;">
+                  <span>GitLab</span>
+                  ${gitlab?.connected ? html`<span style="font-weight:400;color:var(--text-secondary);font-size:.8125rem;">@${gitlab.username}</span>` : ""}
+                </div>
+                <div class="byok-desc">Used for creating branches and merge requests during ticket execution.</div>
+              </div>
+            </div>
+            <div>
+              ${gitlab?.connected ? html`
+                <div style="display:flex;align-items:center;gap:.5rem;">
+                  <span style="padding:.4rem .875rem;background:rgba(16,185,129,.1);color:#34d399;border:1px solid rgba(16,185,129,.25);border-radius:7px;font-size:.8125rem;line-height:1.2;display:inline-flex;align-items:center;gap:.35rem;">
+                    <i class="fas fa-check"></i> Connected
+                  </span>
+                  <form method="POST" action="/settings/gitlab/disconnect" style="margin:0;">
+                    <button type="submit" style="padding:.4rem .875rem;background:rgba(239,68,68,.08);color:#f87171;border:1px solid rgba(239,68,68,.2);border-radius:7px;font-size:.8125rem;line-height:1.2;cursor:pointer;">
+                      Disconnect
+                    </button>
+                  </form>
+                </div>
+              ` : html`
+                <a href="/accounts/gitlab-connect" class="llm-btn-save" style="color:#fff;border-radius:7px;padding:.45rem .875rem;font-size:.8125rem;text-decoration:none;display:inline-flex;align-items:center;gap:.4rem;">
+                  <i class="fab fa-gitlab"></i> Connect GitLab
                 </a>
               `}
             </div>
@@ -796,7 +836,7 @@ export function SettingsPage({ user, apiKeys, claudeCode, github, telegram, comp
         </script>
 
         <!-- Composio Connectors Card -->
-        <div class="llm-keys-table" style="margin-bottom:1.5rem;">
+        <div class="llm-keys-table" style="margin-top:1.5rem;margin-bottom:1.5rem;">
           <div class="llm-keys-row" style="border-bottom:1px solid rgba(255,255,255,0.07);padding:1rem 1.375rem;justify-content:space-between;">
             <h3 style="margin:0;font-size:0.9375rem;font-weight:700;color:var(--text-color,#f0f0f0);display:flex;align-items:center;gap:.5rem;">
               <i class="fas fa-puzzle-piece" style="color:#7c3aed;"></i>

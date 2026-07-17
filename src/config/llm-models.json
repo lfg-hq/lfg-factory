@@ -1,111 +1,135 @@
 {
-  "default_model": "gpt-5-mini",
+  "default_model": "gpt-5.6-luna",
   "providers": {
     "anthropic": {
       "label": "Claude",
       "default_model": "claude_4.6_sonnet",
+      "lite_model": "claude_4.5_haiku",
+      "caching": "explicit",
       "models": [
         {
           "key": "claude_4.6_opus",
           "label": "Opus 4.6",
           "provider_model": "claude-opus-4-6",
-          "requires_pro": true
+          "requires_pro": true,
+          "tier": "pro"
         },
         {
           "key": "claude_4.6_sonnet",
           "label": "Sonnet 4.6",
           "provider_model": "claude-sonnet-4-6",
-          "requires_pro": true
+          "requires_pro": true,
+          "tier": "pro"
         },
         {
           "key": "claude_4.5_haiku",
           "label": "Haiku 4.5",
           "provider_model": "claude-haiku-4-5",
-          "requires_pro": true
+          "requires_pro": true,
+          "tier": "lite"
         }
       ]
     },
     "openai": {
       "label": "OpenAI",
-      "default_model": "gpt-5-mini",
+      "default_model": "gpt-5.6-luna",
+      "lite_model": "gpt-5.6-luna",
+      "caching": "auto",
       "models": [
         {
-          "key": "gpt-5.4",
-          "label": "GPT-5.4",
-          "provider_model": "gpt-5.4",
-          "requires_pro": true
+          "key": "gpt-5.6-terra",
+          "label": "GPT-5.6 Terra",
+          "provider_model": "gpt-5.6-terra",
+          "requires_pro": true,
+          "tier": "pro"
         },
         {
-          "key": "gpt-5-mini",
-          "label": "GPT-5 mini",
-          "provider_model": "gpt-5-mini",
-          "requires_pro": false
+          "key": "gpt-5.6-luna",
+          "label": "GPT-5.6 Luna",
+          "provider_model": "gpt-5.6-luna",
+          "requires_pro": false,
+          "tier": "lite"
         }
       ]
     },
     "google": {
       "label": "Google",
       "default_model": "gemini_3.1_pro",
+      "lite_model": "gemini_2.5_flash_lite",
+      "caching": "auto",
       "models": [
         {
           "key": "gemini_3.1_pro",
           "label": "Gemini 3.1 Pro",
           "provider_model": "models/gemini-3.1-pro-preview",
-          "requires_pro": true
+          "requires_pro": true,
+          "tier": "pro"
         },
         {
           "key": "gemini_3_flash",
           "label": "Gemini 3 Flash",
           "provider_model": "models/gemini-3-flash-preview",
-          "requires_pro": true
+          "requires_pro": true,
+          "tier": "lite"
         },
         {
           "key": "gemini_2.5_flash_lite",
           "label": "Gemini 2.5 Flash Lite",
           "provider_model": "models/gemini-3.1-flash-lite-preview",
-          "requires_pro": true
+          "requires_pro": true,
+          "tier": "lite"
         }
       ]
     },
     "kimi": {
       "label": "Kimi",
       "default_model": "kimi_k2.5",
+      "lite_model": "kimi_k2.5",
+      "caching": "auto",
       "models": [
         {
           "key": "kimi_k2.5",
           "label": "Kimi K2.5",
           "provider_model": "kimi-k2.5",
-          "requires_pro": true
+          "requires_pro": true,
+          "tier": "pro"
         }
       ]
     },
     "deepseek": {
       "label": "DeepSeek",
       "default_model": "deepseek_v4_pro",
+      "lite_model": "deepseek_v4_flash",
+      "caching": "auto",
       "models": [
         {
           "key": "deepseek_v4_pro",
           "label": "DeepSeek V4 Pro",
           "provider_model": "deepseek-v4-pro",
-          "requires_pro": true
+          "requires_pro": true,
+          "tier": "pro"
         },
         {
           "key": "deepseek_v4_flash",
           "label": "DeepSeek V4 Flash",
           "provider_model": "deepseek-v4-flash",
-          "requires_pro": true
+          "requires_pro": true,
+          "tier": "lite"
         }
       ]
     },
     "glm": {
       "label": "GLM (Z.ai)",
       "default_model": "glm_5.2",
+      "lite_model": "glm_5.2",
+      "caching": "auto",
       "models": [
         {
           "key": "glm_5.2",
           "label": "GLM 5.2",
           "provider_model": "glm-5.2",
-          "requires_pro": true
+          "requires_pro": true,
+          "tier": "pro"
         }
       ]
     }

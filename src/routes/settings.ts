@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { requireAuth } from "../auth/middleware.ts";
 import { db } from "../config/db.ts";
-import { llmApiKeys, profiles, githubTokens } from "../db/schema/users.ts";
+import { llmApiKeys, profiles, githubTokens, gitlabTokens } from "../db/schema/users.ts";
 import { telegramBots } from "../db/schema/telegram.ts";
 import { composioToolkits } from "../db/schema/composio.ts";
 import { eq } from "drizzle-orm";
@@ -42,6 +42,11 @@ async function getGithubToken(userId: string) {
   return row ?? null;
 }
 
+async function getGitlabToken(userId: string) {
+  const [row] = await db.select().from(gitlabTokens).where(eq(gitlabTokens.userId, userId));
+  return row ?? null;
+}
+
 async function getTelegramBot(userId: string) {
   const [row] = await db.select().from(telegramBots).where(eq(telegramBots.userId, userId));
   return row ?? null;
@@ -50,10 +55,11 @@ async function getTelegramBot(userId: string) {
 // GET /settings
 settingsRouter.get("/settings", async (c) => {
   const user = c.get("user");
-  const [keys, profile, ghToken] = await Promise.all([
+  const [keys, profile, ghToken, glToken] = await Promise.all([
     getOrCreateApiKeys(user.id),
     getProfile(user.id),
     getGithubToken(user.id),
+    getGitlabToken(user.id),
   ]);
   return c.html(
     SettingsPage({
@@ -77,6 +83,11 @@ settingsRouter.get("/settings", async (c) => {
         connected: !!ghToken,
         username: ghToken?.githubUsername ?? null,
         avatarUrl: ghToken?.githubAvatarUrl ?? null,
+      },
+      gitlab: {
+        connected: !!glToken,
+        username: glToken?.gitlabUsername ?? null,
+        avatarUrl: glToken?.gitlabAvatarUrl ?? null,
       },
     })
   );
@@ -184,10 +195,11 @@ settingsRouter.post("/settings/claude-code/disconnect", async (c) => {
 // GET /settings/integrations — Integrations section (Claude Code + GitHub + Telegram + Composio)
 settingsRouter.get("/settings/integrations", async (c) => {
   const user = c.get("user");
-  const [keys, profile, ghToken, tgBot, userToolkits] = await Promise.all([
+  const [keys, profile, ghToken, glToken, tgBot, userToolkits] = await Promise.all([
     getOrCreateApiKeys(user.id),
     getProfile(user.id),
     getGithubToken(user.id),
+    getGitlabToken(user.id),
     getTelegramBot(user.id),
     db.select().from(composioToolkits).where(eq(composioToolkits.userId, user.id)),
   ]);
@@ -216,6 +228,11 @@ settingsRouter.get("/settings/integrations", async (c) => {
         connected: !!ghToken,
         username: ghToken?.githubUsername ?? null,
         avatarUrl: ghToken?.githubAvatarUrl ?? null,
+      },
+      gitlab: {
+        connected: !!glToken,
+        username: glToken?.gitlabUsername ?? null,
+        avatarUrl: glToken?.gitlabAvatarUrl ?? null,
       },
       telegram: {
         connected: !!tgBot,
@@ -252,6 +269,19 @@ settingsRouter.get("/accounts/github-connect", async (c) => {
     "Set-Cookie",
     `github_oauth_state=${state}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`
   );
+
+  // Remember where to return after the callback. Only accept same-site paths
+  // (must start with a single "/") to avoid open-redirects.
+  const returnTo = c.req.query("returnTo");
+  const safeReturn =
+    returnTo && returnTo.startsWith("/") && !returnTo.startsWith("//") ? returnTo : "";
+  if (safeReturn) {
+    c.header(
+      "Set-Cookie",
+      `github_oauth_return=${encodeURIComponent(safeReturn)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`,
+      { append: true }
+    );
+  }
 
   const baseUrl = env.BETTER_AUTH_URL; // e.g. http://localhost:8000
   const redirectUri = `${baseUrl}/accounts/github-callback`;
@@ -375,6 +405,19 @@ settingsRouter.get("/accounts/github-callback", async (c) => {
     }
 
     console.log(`[github-oauth] Connected GitHub for user ${user.id}: @${ghUser.login}`);
+
+    // If the flow was started from somewhere specific (e.g. a project's Link
+    // Repository modal), return the user there instead of Settings.
+    const cookieHdr = c.req.header("Cookie") ?? "";
+    const returnMatch = cookieHdr.match(/github_oauth_return=([^;]+)/);
+    const returnTo = returnMatch?.[1] ? decodeURIComponent(returnMatch[1]) : "";
+    if (returnTo) {
+      // Clear the return cookie.
+      c.header("Set-Cookie", `github_oauth_return=; Path=/; HttpOnly; Max-Age=0`, { append: true });
+      if (returnTo.startsWith("/") && !returnTo.startsWith("//")) {
+        return c.redirect(returnTo);
+      }
+    }
     return c.redirect("/settings/integrations?success=GitHub+connected");
   } catch (err) {
     console.error("[github-oauth] Callback error:", err);
@@ -387,6 +430,160 @@ settingsRouter.post("/settings/github/disconnect", async (c) => {
   const user = c.get("user");
   await db.delete(githubTokens).where(eq(githubTokens.userId, user.id));
   return c.redirect("/settings/integrations?success=GitHub+disconnected");
+});
+
+// ── GitLab OAuth (mirror of the GitHub flow; gitlab.com or self-hosted via GITLAB_BASE_URL) ──
+
+const GITLAB_BASE = (env.GITLAB_BASE_URL || "https://gitlab.com").replace(/\/$/, "");
+
+// GET /accounts/gitlab-connect — initiate OAuth
+settingsRouter.get("/accounts/gitlab-connect", async (c) => {
+  const clientId = env.GITLAB_CLIENT_ID;
+  if (!clientId) return c.redirect("/settings/integrations?error=GitLab+OAuth+not+configured");
+
+  const state = crypto.randomUUID();
+  c.header("Set-Cookie", `gitlab_oauth_state=${state}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`);
+
+  const returnTo = c.req.query("returnTo");
+  const safeReturn =
+    returnTo && returnTo.startsWith("/") && !returnTo.startsWith("//") ? returnTo : "";
+  if (safeReturn) {
+    c.header(
+      "Set-Cookie",
+      `gitlab_oauth_return=${encodeURIComponent(safeReturn)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`,
+      { append: true }
+    );
+  }
+
+  const redirectUri = `${env.BETTER_AUTH_URL}/accounts/gitlab-callback`;
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: "code",
+    scope: "read_user api write_repository",
+    state,
+  });
+
+  return c.redirect(`${GITLAB_BASE}/oauth/authorize?${params.toString()}`);
+});
+
+// GET /accounts/gitlab-callback — OAuth callback
+settingsRouter.get("/accounts/gitlab-callback", async (c) => {
+  const user = c.get("user");
+  const code = c.req.query("code");
+  const state = c.req.query("state");
+
+  const cookieHeader = c.req.header("Cookie") ?? "";
+  const stateMatch = cookieHeader.match(/gitlab_oauth_state=([^;]+)/);
+  const storedState = stateMatch?.[1];
+
+  if (!code) return c.redirect("/settings/integrations?error=No+code+from+GitLab");
+  if (!state || state !== storedState) {
+    return c.redirect("/settings/integrations?error=Invalid+OAuth+state");
+  }
+
+  c.header("Set-Cookie", `gitlab_oauth_state=; Path=/; HttpOnly; Max-Age=0`);
+
+  const clientId = env.GITLAB_CLIENT_ID;
+  const clientSecret = env.GITLAB_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    return c.redirect("/settings/integrations?error=GitLab+OAuth+not+configured");
+  }
+
+  const redirectUri = `${env.BETTER_AUTH_URL}/accounts/gitlab-callback`;
+
+  try {
+    const tokenResp = await fetch(`${GITLAB_BASE}/oauth/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        client_id: clientId,
+        client_secret: clientSecret,
+        code,
+        grant_type: "authorization_code",
+        redirect_uri: redirectUri,
+      }),
+    });
+
+    const tokenData = (await tokenResp.json()) as {
+      access_token?: string;
+      refresh_token?: string;
+      expires_in?: number;
+      scope?: string;
+      error?: string;
+      error_description?: string;
+    };
+
+    if (!tokenData.access_token) {
+      console.error("[gitlab-oauth] Token exchange failed:", tokenData);
+      return c.redirect(
+        `/settings/integrations?error=${encodeURIComponent(tokenData.error_description ?? tokenData.error ?? "Token exchange failed")}`
+      );
+    }
+
+    const accessToken = tokenData.access_token;
+    const refreshToken = tokenData.refresh_token ?? null;
+    const tokenExpiresAt = tokenData.expires_in
+      ? new Date(Date.now() + tokenData.expires_in * 1000)
+      : null;
+    const scope = tokenData.scope ?? "";
+
+    const userResp = await fetch(`${GITLAB_BASE}/api/v4/user`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const glUser = (await userResp.json()) as {
+      id?: number;
+      username?: string;
+      avatar_url?: string;
+    };
+
+    const existing = await db
+      .select()
+      .from(gitlabTokens)
+      .where(eq(gitlabTokens.userId, user.id))
+      .limit(1);
+
+    const values = {
+      accessToken,
+      refreshToken,
+      tokenExpiresAt,
+      gitlabUserId: String(glUser.id ?? ""),
+      gitlabUsername: glUser.username ?? null,
+      gitlabAvatarUrl: glUser.avatar_url ?? null,
+      scope,
+    };
+
+    if (existing.length > 0) {
+      await db
+        .update(gitlabTokens)
+        .set({ ...values, updatedAt: new Date() })
+        .where(eq(gitlabTokens.userId, user.id));
+    } else {
+      await db.insert(gitlabTokens).values({ userId: user.id, ...values });
+    }
+
+    console.log(`[gitlab-oauth] Connected GitLab for user ${user.id}: @${glUser.username}`);
+
+    const returnMatch = cookieHeader.match(/gitlab_oauth_return=([^;]+)/);
+    const returnTo = returnMatch?.[1] ? decodeURIComponent(returnMatch[1]) : "";
+    if (returnTo) {
+      c.header("Set-Cookie", `gitlab_oauth_return=; Path=/; HttpOnly; Max-Age=0`, { append: true });
+      if (returnTo.startsWith("/") && !returnTo.startsWith("//")) {
+        return c.redirect(returnTo);
+      }
+    }
+    return c.redirect("/settings/integrations?success=GitLab+connected");
+  } catch (err) {
+    console.error("[gitlab-oauth] Callback error:", err);
+    return c.redirect(`/settings/integrations?error=${encodeURIComponent(String(err))}`);
+  }
+});
+
+// POST /settings/gitlab/disconnect — Remove GitLab token
+settingsRouter.post("/settings/gitlab/disconnect", async (c) => {
+  const user = c.get("user");
+  await db.delete(gitlabTokens).where(eq(gitlabTokens.userId, user.id));
+  return c.redirect("/settings/integrations?success=GitLab+disconnected");
 });
 
 export default settingsRouter;
