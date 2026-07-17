@@ -5,7 +5,9 @@ import {
   projects,
   projectMembers,
   projectEnvironmentVariables,
+  projectInvitations,
 } from "../db/schema/projects.ts";
+import { users } from "../db/schema/users.ts";
 import { projectFiles, projectFileVersions } from "../db/schema/documents.ts";
 import { conversations } from "../db/schema/chat.ts";
 import { ticketStages, projectTickets } from "../db/schema/tickets.ts";
@@ -126,10 +128,38 @@ projectsRouter.get("/projects", async (c) => {
     .where(eq(agents.userId, user.id))
     .orderBy(desc(agents.createdAt));
 
+  // Pending invitations addressed to this user's email (robust fallback so an
+  // invited user always sees & can accept, even if the invite link's redirect
+  // got lost during login/registration).
+  const memberProjectIds = new Set(rows.map((r) => r.id));
+  const inviteRows = await db
+    .select({
+      token: projectInvitations.token,
+      role: projectInvitations.role,
+      projectId: projectInvitations.projectId,
+      projectName: projects.name,
+      projectIcon: projects.icon,
+      inviterName: users.name,
+    })
+    .from(projectInvitations)
+    .innerJoin(projects, eq(projectInvitations.projectId, projects.id))
+    .leftJoin(users, eq(projectInvitations.inviterId, users.id))
+    .where(and(eq(projectInvitations.email, user.email), eq(projectInvitations.status, "pending")));
+  const pendingInvites = inviteRows
+    .filter((i) => !memberProjectIds.has(i.projectId)) // hide ones already accepted
+    .map((i) => ({
+      token: i.token,
+      role: i.role,
+      projectName: i.projectName ?? "a project",
+      projectIcon: i.projectIcon ?? "📋",
+      inviterName: i.inviterName ?? "Someone",
+    }));
+
   return c.html(ProjectListPage({
     user: { id: user.id, name: user.name, email: user.email },
     projects: rows,
     instantApps: appRows,
+    pendingInvites,
     agents: agentRows.map((a) => ({
       agentId: a.agentId,
       name: a.name,

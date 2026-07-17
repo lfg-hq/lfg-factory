@@ -33,17 +33,27 @@ interface AgentSummary {
   updatedAt: Date;
 }
 
+interface PendingInvite {
+  token: string;
+  role: string;
+  projectName: string;
+  projectIcon: string;
+  inviterName: string;
+}
+
 interface ProjectListPageProps {
   user: { id: string; name: string; email?: string };
   projects: Project[];
   instantApps?: InstantApp[];
   agents?: AgentSummary[];
+  pendingInvites?: PendingInvite[];
   activeTab?: string;
   error?: string;
   success?: string;
 }
 
-export function ProjectListPage({ user, projects, instantApps = [], agents = [], activeTab = "projects", error, success }: ProjectListPageProps) {
+export function ProjectListPage({ user, projects, instantApps = [], agents = [], pendingInvites = [], activeTab = "projects", error, success }: ProjectListPageProps) {
+  const roleLabel = (r: string) => (r === "viewer" || r === "guest" ? "Viewer" : r === "admin" ? "Admin" : "Collaborator");
   const avatarLetter = (user.name?.[0] ?? user.email?.[0] ?? "?").toUpperCase();
   const isAppsTab = activeTab === "instant_apps";
   const isAgentsTab = activeTab === "agents";
@@ -156,6 +166,26 @@ export function ProjectListPage({ user, projects, instantApps = [], agents = [],
             </button>
           `}
         </div>
+
+        ${pendingInvites.length > 0 ? html`
+          <div style="margin-bottom:1.5rem;">
+            <div style="font-size:0.8rem;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.03em;margin-bottom:0.6rem;">
+              <i class="fas fa-envelope-open-text" style="margin-right:0.4rem;color:var(--primary-color);"></i>Project invitations
+            </div>
+            ${pendingInvites.map((inv) => html`
+              <div style="display:flex;align-items:center;gap:1rem;padding:1rem 1.25rem;border:1px solid var(--primary-color);border-radius:var(--radius);background:rgba(139,92,246,0.06);margin-bottom:0.6rem;">
+                <span style="font-size:1.5rem;">${inv.projectIcon}</span>
+                <div style="flex:1;">
+                  <div style="font-weight:600;color:var(--text-color);">${inv.projectName}</div>
+                  <div style="font-size:0.8rem;color:var(--text-secondary);">${inv.inviterName} invited you as ${roleLabel(inv.role)}</div>
+                </div>
+                <form method="POST" action="/invitations/accept/${inv.token}" style="margin:0;">
+                  <button type="submit" class="btn btn-primary" style="font-size:0.85rem;"><i class="fas fa-check"></i> Accept</button>
+                </form>
+              </div>
+            `)}
+          </div>
+        ` : ""}
 
         <!-- Tabs -->
         <div style="display:flex;gap:0;border-bottom:1px solid var(--border-color);margin-bottom:1.5rem;">

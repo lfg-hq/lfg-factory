@@ -387,11 +387,18 @@ export const AuthPage = ({ turnstileSiteKey = "" }: { turnstileSiteKey?: string 
                 const res = await fetch('/api/auth/sign-up/email', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name, email, password, turnstileToken: registerTurnstileToken }),
+                    body: JSON.stringify({ name, email, password, turnstileToken: registerTurnstileToken, callbackURL: getNextUrl() }),
                     credentials: 'include',
                 });
                 if (res.ok) {
-                    window.location.href = getNextUrl();
+                    // Email verification is required — no session yet. Tell the user
+                    // to check their inbox; the verify link signs them in and returns
+                    // them to their destination (e.g. a pending project invite).
+                    document.querySelector('.register-form').classList.add('hidden');
+                    document.getElementById('auth-error').classList.add('hidden');
+                    const ok = document.getElementById('auth-success');
+                    ok.innerHTML = '<strong>Almost there!</strong><br>We sent a verification link to <strong>' + email.replace(/[<>&]/g,'') + '</strong>. Click it to verify your email and finish signing in.';
+                    ok.classList.remove('hidden');
                 } else {
                     const data = await res.json().catch(() => ({}));
                     showError(data.message || 'Registration failed. The email may already be in use.');

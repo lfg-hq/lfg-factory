@@ -36,7 +36,7 @@ export const auth = betterAuth({
     enabled: true,
     minPasswordLength: 8,
     autoSignIn: true,
-    requireEmailVerification: false, // enable later when email flow is tested
+    requireEmailVerification: true, // block sign-in until the email is verified
 
     sendResetPassword: async ({ user, url }) => {
       await sendEmail({
