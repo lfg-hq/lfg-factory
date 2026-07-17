@@ -139,14 +139,13 @@
 /* Tab Navigation */
 .project-tabs {
     display: flex !important;
-    gap: 0.5rem;
+    gap: 0.25rem;
     margin-bottom: 0;
+    border: none;
     border-bottom: 1px solid var(--border-color);
-    background-color: var(--card-bg);
-    border-radius: var(--radius-md) var(--radius-md) 0 0;
-    padding: 0.5rem 0.5rem 0;
-    border: 1px solid var(--border-color);
-    border-bottom: none;
+    background: transparent;
+    border-radius: 0;
+    padding: 0;
     position: relative;
     z-index: 2;
 }
@@ -167,13 +166,13 @@
 
 .tab-item:hover {
     color: var(--text-color);
-    background-color: rgba(167, 139, 250, 0.05);
+    background-color: transparent;
 }
 
 .tab-item.active {
     color: var(--primary-color);
     border-bottom-color: var(--primary-color);
-    background-color: rgba(167, 139, 250, 0.1);
+    background-color: transparent;
 }
 
 .tab-count {

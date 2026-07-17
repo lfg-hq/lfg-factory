@@ -179,7 +179,7 @@ projectsRouter.get("/projects/:projectId", async (c) => {
   const { projectId } = c.req.param();
   if (!projectId) return c.text("Missing projectId", 400);
 
-  const tab = c.req.query("tab") ?? "inbox";
+  const tab = c.req.query("tab") ?? "conversations";
 
   const access = await getProjectAccess(projectId, user.id);
   if (!access) return c.text("Project not found", 404);
