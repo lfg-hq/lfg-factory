@@ -259,10 +259,65 @@ export function ProjectDetailPage({
           <div id="inbox-section" style="margin-bottom:2rem;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
               <h2 style="font-size:1.1rem;font-weight:600;color:var(--text-color);margin:0;"><i class="fas fa-inbox" style="margin-right:0.4rem;color:var(--primary-color);"></i>Your Inbox</h2>
-              <button id="inbox-markread" onclick="markAllInboxRead()" class="btn btn-secondary" style="font-size:0.75rem;display:none;">Mark all read</button>
+              <div style="display:flex;gap:0.5rem;">
+                <button id="inbox-markread" onclick="markAllInboxRead()" class="btn btn-secondary" style="font-size:0.75rem;display:none;">Mark all read</button>
+                <button onclick="openRequestModal()" class="btn btn-primary" style="font-size:0.75rem;"><i class="fas fa-paper-plane"></i> New request</button>
+              </div>
             </div>
-            <div id="inbox-list"><div style="color:var(--text-secondary);font-size:0.875rem;padding:1rem;border:1px dashed var(--border-color);border-radius:var(--radius);text-align:center;">No items yet — tickets assigned to you and comments that tag you will show up here.</div></div>
+            <div id="inbox-list"><div style="color:var(--text-secondary);font-size:0.875rem;padding:1rem;border:1px dashed var(--border-color);border-radius:var(--radius);text-align:center;">No items yet — assign a ticket, tag someone in a comment, or send a request to get started.</div></div>
           </div>
+
+          <div class="modal-overlay" id="requestModal" style="position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.7);align-items:center;justify-content:center;">
+            <div style="background:var(--card-bg);border:1px solid var(--border-color);border-radius:var(--radius-lg);width:100%;max-width:480px;">
+              <div style="display:flex;align-items:center;justify-content:space-between;padding:1.25rem 1.5rem;border-bottom:1px solid var(--border-color);">
+                <h3 style="margin:0;font-size:1.1rem;font-weight:600;color:var(--text-color);">Send a request</h3>
+                <button type="button" onclick="closeRequestModal()" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:1.25rem;line-height:1;">&times;</button>
+              </div>
+              <div style="padding:1.5rem;">
+                <div style="margin-bottom:1rem;"><label style="display:block;font-size:0.875rem;font-weight:500;color:var(--text-color);margin-bottom:0.4rem;">To</label><select id="rq-user" class="input" style="width:100%;"></select></div>
+                <div style="margin-bottom:1rem;"><label style="display:block;font-size:0.875rem;font-weight:500;color:var(--text-color);margin-bottom:0.4rem;">About (optional)</label><select id="rq-doc" class="input" style="width:100%;"><option value="">— No specific document —</option></select></div>
+                <div style="margin-bottom:1.25rem;"><label style="display:block;font-size:0.875rem;font-weight:500;color:var(--text-color);margin-bottom:0.4rem;">Message</label><textarea id="rq-msg" rows="3" class="input" style="width:100%;box-sizing:border-box;resize:vertical;" placeholder="e.g. Please review the Frontend Remediation Plan"></textarea></div>
+                <div id="rq-error" style="display:none;color:#ef4444;font-size:0.8125rem;margin-bottom:0.75rem;"></div>
+                <div style="display:flex;gap:0.75rem;justify-content:flex-end;">
+                  <button type="button" class="btn btn-secondary" onclick="closeRequestModal()">Cancel</button>
+                  <button type="button" class="btn btn-primary" onclick="submitRequest()"><i class="fas fa-paper-plane"></i> Send</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <script>
+            (function(){
+              var RQ_PID = '${project.projectId}';
+              window.openRequestModal = function(){
+                document.getElementById('requestModal').classList.add('active');
+                Promise.all([
+                  fetch('/api/projects/'+RQ_PID+'/members').then(function(r){return r.json();}),
+                  fetch('/projects/'+RQ_PID+'/api/files/browser/?per_page=100').then(function(r){return r.json();}).catch(function(){return {files:[]};})
+                ]).then(function(res){
+                  var m = res[0]||{}; var people = [];
+                  if (m.owner) people.push({ id:m.owner.id, name:m.owner.name||m.owner.email });
+                  (m.members||[]).forEach(function(x){ people.push({ id:x.userId, name:x.userName||x.userEmail }); });
+                  var uSel = document.getElementById('rq-user');
+                  uSel.innerHTML = people.map(function(p){ return '<option value="'+p.id+'">'+(p.name||'').replace(/[<>&]/g,'')+'</option>'; }).join('');
+                  var docs = (res[1]&&res[1].files)||[];
+                  var dSel = document.getElementById('rq-doc');
+                  dSel.innerHTML = '<option value="">— No specific document —</option>' + docs.map(function(d){ return '<option value="'+d.id+'">'+(d.name||'').replace(/[<>&]/g,'')+'</option>'; }).join('');
+                });
+              };
+              window.closeRequestModal = function(){ document.getElementById('requestModal').classList.remove('active'); };
+              window.submitRequest = function(){
+                var toUserId = document.getElementById('rq-user').value;
+                var docId = document.getElementById('rq-doc').value || undefined;
+                var message = document.getElementById('rq-msg').value.trim();
+                var err = document.getElementById('rq-error');
+                if (!toUserId || !message){ err.style.display='block'; err.textContent='Pick a person and write a message.'; return; }
+                err.style.display='none';
+                fetch('/api/projects/'+RQ_PID+'/requests', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ toUserId:toUserId, message:message, docId:docId }) })
+                  .then(function(r){ return r.json().then(function(d){return{ok:r.ok,data:d};}); })
+                  .then(function(res){ if(!res.ok){ err.style.display='block'; err.textContent=(res.data&&res.data.error)||'Failed to send'; return; } document.getElementById('rq-msg').value=''; closeRequestModal(); });
+              };
+            })();
+          </script>
           <script>
             (function(){
               var IB_PID = '${project.projectId}';

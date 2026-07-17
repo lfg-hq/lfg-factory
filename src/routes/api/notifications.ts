@@ -8,6 +8,8 @@ import { db } from "../../config/db.ts";
 import { notifications } from "../../db/schema/notifications.ts";
 import { users } from "../../db/schema/users.ts";
 import { and, eq, desc, isNull } from "drizzle-orm";
+import { getProjectAccess } from "../../auth/project-access.ts";
+import { notify } from "../../services/notify.ts";
 import type { auth } from "../../auth/index.ts";
 
 type Env = { Variables: { user: typeof auth.$Infer.Session.user } };
@@ -66,6 +68,35 @@ notificationsApi.post("/:projectId/notifications/read", async (c) => {
       );
   }
   return c.json({ ok: true });
+});
+
+// POST /api/projects/:projectId/requests — send a request/review to a teammate
+// (e.g. "please review this doc"). Lands in their inbox.
+notificationsApi.post("/:projectId/requests", async (c) => {
+  const user = c.get("user");
+  const { projectId } = c.req.param();
+  const access = await getProjectAccess(projectId!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+
+  const body = await c.req.json<{ toUserId: string; message: string; docId?: string }>().catch(() => null);
+  if (!body?.toUserId || !body.message?.trim()) {
+    return c.json({ error: "toUserId and message are required" }, 400);
+  }
+
+  const link = body.docId
+    ? `/projects/${projectId}/?tab=documents`
+    : `/projects/${projectId}`;
+  const row = await notify({
+    userId: body.toUserId,
+    actorId: user.id,
+    projectId: projectId!,
+    type: "review_requested",
+    targetType: body.docId ? "document" : "project",
+    targetId: body.docId ?? projectId!,
+    message: `${user.name || "Someone"}: ${body.message.trim()}`,
+    link,
+  });
+  return c.json({ ok: true, notification: row }, 201);
 });
 
 export default notificationsApi;
