@@ -300,10 +300,20 @@
 
     html += '<div class="comments-panel-body">';
 
+    // Composer to add a document-level comment (no text selection needed).
+    if (state.canComment) {
+      html += '<div class="comment-composer" style="margin-bottom:0.75rem;">' +
+        '<textarea id="new-comment-text" rows="2" class="input" style="width:100%;box-sizing:border-box;resize:vertical;font-size:0.8125rem;" placeholder="Add a comment…"></textarea>' +
+        '<div style="display:flex;justify-content:flex-end;margin-top:0.4rem;">' +
+          '<button class="btn btn-primary" style="font-size:0.75rem;padding:0.3rem 0.6rem;" onclick="submitNewComment()">Comment</button>' +
+        '</div>' +
+        '<div style="font-size:0.7rem;color:var(--text-secondary);margin-top:0.25rem;">Tip: select text in the doc to comment on a specific part.</div>' +
+      '</div>';
+    }
+
     if (state.comments.length === 0) {
-      html += '<div style="padding:1.5rem 1rem;text-align:center;color:var(--text-secondary);font-size:0.8125rem;line-height:1.5;">' +
-        '<i class="fas fa-highlighter" style="font-size:1.25rem;opacity:0.5;display:block;margin-bottom:0.5rem;"></i>' +
-        'No comments yet.<br>Select any text in the document to add one.' +
+      html += '<div style="padding:1rem;text-align:center;color:var(--text-secondary);font-size:0.8125rem;line-height:1.5;">' +
+        'No comments yet.' +
       '</div>';
     }
 
@@ -321,8 +331,25 @@
     html += '</div>';
     panel.innerHTML = html;
     panel.style.display = "block";
+    var composer = document.getElementById("new-comment-text");
+    if (composer) attachMentionAutocomplete(composer);
     ensureCommentsFab();
   }
+
+  // Post a document-level comment (not tied to a text selection).
+  window.submitNewComment = function () {
+    var ta = document.getElementById("new-comment-text");
+    if (!ta) return;
+    var content = ta.value.trim();
+    if (!content) return;
+    fetch(apiBase(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: content }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function () { ta.value = ""; state.panelOpen = true; loadComments(); });
+  };
 
   function renderCommentCard(comment, isResolved) {
     var card = '<div class="comment-card' + (isResolved ? ' resolved' : '') + '" data-comment-id="' + comment.id + '">' +
@@ -333,7 +360,9 @@
           '<button onclick="deleteComment(\'' + comment.id + '\')" title="Delete" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:0.75rem;"><i class="fas fa-trash"></i></button>' +
         '</div>' +
       '</div>' +
-      '<div style="font-size:0.75rem;color:var(--text-secondary);font-style:italic;margin:0.25rem 0;max-height:1.5em;overflow:hidden;">"' + escapeHtml(comment.selectedText.slice(0, 60)) + '"</div>' +
+      ((comment.selectedText && comment.selectedText.length >= 2)
+        ? '<div style="font-size:0.75rem;color:var(--text-secondary);font-style:italic;margin:0.25rem 0;max-height:1.5em;overflow:hidden;">"' + escapeHtml(comment.selectedText.slice(0, 60)) + '"</div>'
+        : '') +
       '<div style="font-size:0.8125rem;color:var(--text-color);margin-top:0.25rem;">' + escapeHtml(comment.content) + '</div>';
 
     // Replies

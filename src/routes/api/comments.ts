@@ -202,14 +202,14 @@ commentsApi.post("/:projectId/files/:fileId/comments", async (c) => {
   try { requirePermission(access, "canChat"); } catch { return c.json({ error: "Forbidden" }, 403); }
 
   const body = await c.req.json<{
-    selectedText: string;
-    rangeStart: number;
-    rangeEnd: number;
+    selectedText?: string;
+    rangeStart?: number;
+    rangeEnd?: number;
     content: string;
   }>();
 
-  if (!body.content?.trim() || !body.selectedText) {
-    return c.json({ error: "content and selectedText are required" }, 400);
+  if (!body.content?.trim()) {
+    return c.json({ error: "content is required" }, 400);
   }
 
   const [comment] = await db
@@ -217,9 +217,9 @@ commentsApi.post("/:projectId/files/:fileId/comments", async (c) => {
     .values({
       fileId: fileId!,
       userId: user.id,
-      selectedText: body.selectedText,
-      rangeStart: body.rangeStart,
-      rangeEnd: body.rangeEnd,
+      selectedText: body.selectedText ?? "", // empty = document-level comment
+      rangeStart: body.rangeStart ?? 0,
+      rangeEnd: body.rangeEnd ?? 0,
       content: body.content.trim(),
     })
     .returning();
