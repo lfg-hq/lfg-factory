@@ -275,6 +275,27 @@ export function ProjectDetailPage({
       <!-- Tab content -->
       <div style="padding:2rem;max-width:1200px;margin:0 auto;">
         ${activeTab === "inbox" ? html`
+          ${conversations.length === 0 ? html`
+            <div style="border:1px solid var(--primary-color);background:rgba(139,92,246,0.06);border-radius:var(--radius-lg);padding:1.5rem;margin-bottom:2rem;">
+              <h2 style="margin:0 0 0.35rem;font-size:1.15rem;font-weight:700;color:var(--text-color);">👋 Welcome to ${project.name}</h2>
+              <p style="margin:0 0 1.25rem;color:var(--text-secondary);font-size:0.9rem;">Get started by chatting with the AI to plan and build your app${!project.repoUrl ? ", or connect an existing GitHub repo" : ""}.</p>
+              <div style="display:flex;gap:0.75rem;flex-wrap:wrap;">
+                <a href="/chat/project/${project.projectId}" class="btn btn-primary" style="display:inline-flex;align-items:center;gap:0.5rem;font-size:0.9rem;">
+                  <i class="fas fa-comments"></i> Start building with a chat
+                </a>
+                ${!project.repoUrl ? html`
+                  <button onclick="showCodebaseModal()" class="btn btn-secondary" style="display:inline-flex;align-items:center;gap:0.5rem;font-size:0.9rem;">
+                    <i class="fab fa-github"></i> Connect a GitHub repo
+                  </button>
+                ` : ""}
+                ${isOwner ? html`
+                  <a href="/projects/${project.projectId}?tab=settings" class="btn btn-secondary" style="display:inline-flex;align-items:center;gap:0.5rem;font-size:0.9rem;">
+                    <i class="fas fa-user-plus"></i> Invite teammates
+                  </a>
+                ` : ""}
+              </div>
+            </div>
+          ` : ""}
           <!-- Your inbox: tickets assigned to you / comments tagging you / messages -->
           <div id="inbox-section" style="margin-bottom:2rem;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
