@@ -841,6 +841,12 @@ export function ProjectDetailPage({
             #filebrowser-viewer .viewer-header { border-bottom-color: var(--border-color) !important; }
             [data-theme="light"] #filebrowser-viewer .viewer-back:hover,
             [data-theme="light"] #filebrowser-viewer .viewer-actions button:hover { background: rgba(0,0,0,0.06) !important; }
+            /* Theme the options / download dropdowns (they use hardcoded dark colors in JS). */
+            #viewer-options-dropdown, #viewer-options-dropdown div { background: var(--card-bg) !important; border-color: var(--border-color) !important; box-shadow: 0 4px 16px rgba(0,0,0,0.18) !important; }
+            #viewer-options-dropdown button { color: var(--text-color) !important; background: transparent !important; }
+            #viewer-options-dropdown button:hover { background: rgba(139,92,246,0.12) !important; }
+            /* Subtle divider lines in the rendered doc (default hr looks thick in dark mode). */
+            #viewer-markdown hr { border: none !important; border-top: 1px solid var(--border-color) !important; height: 0 !important; background: none !important; margin: 1.75rem 0 !important; }
           </style>
           <div id="filebrowser" class="filebrowser-container" style="position:relative;display:flex;flex-direction:column;">
             <div id="filebrowser-main" style="display:flex;flex-direction:column;">
@@ -890,6 +896,8 @@ export function ProjectDetailPage({
           </div>
           <script src="/public/js/marked.min.js"></script>
           <script src="/public/js/markdown-config.js"></script>
+          <!-- jsPDF (UMD) — powers the "Download → PDF" option in the doc viewer -->
+          <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
           <script src="/public/js/artifacts-loader.js"></script>
           <script src="/public/js/document-comments.js"></script>
           <script>
