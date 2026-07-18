@@ -5545,28 +5545,62 @@ document.addEventListener('DOMContentLoaded', function() {
                         const contentH = pageH - headerH - footerH; // mm available per page
                         const pxPerMm = canvas.width / contentW;    // horizontal scale (image fills content width)
                         const pageContentPx = Math.floor(contentH * pxPerMm);
-                        const totalPages = Math.max(1, Math.ceil(canvas.height / pageContentPx));
                         const headerTitle = String(title || 'Document');
+                        const srcCtx = canvas.getContext('2d');
 
-                        let renderedPx = 0;
-                        let pageNum = 0;
-                        while (renderedPx < canvas.height) {
-                            const sliceH = Math.min(pageContentPx, canvas.height - renderedPx);
-                            // Crop this page's slice onto its own canvas (avoids cross-page overlap).
+                        // Find a page break near `ideal` that lands on a blank (all-white)
+                        // row, so text lines / code rows aren't sliced in half. Searches
+                        // upward within a window; falls back to a hard cut if none found.
+                        const searchPx = Math.floor(pageContentPx * 0.28);
+                        function findBreak(start, ideal) {
+                            const top = Math.max(start + Math.floor(pageContentPx * 0.5), ideal - searchPx);
+                            const winH = ideal - top;
+                            if (winH <= 0) return ideal;
+                            let data;
+                            try { data = srcCtx.getImageData(0, top, canvas.width, winH).data; } catch (e) { return ideal; }
+                            for (let y = winH - 1; y >= 0; y--) {
+                                let blank = true;
+                                const base = y * canvas.width * 4;
+                                for (let x = 0; x < canvas.width; x += 4) {
+                                    const i = base + x * 4;
+                                    if (data[i] < 245 || data[i + 1] < 245 || data[i + 2] < 245) { blank = false; break; }
+                                }
+                                if (blank) return top + y;
+                            }
+                            return ideal; // no clean row → accept the cut
+                        }
+
+                        // Pass 1: compute page slices (variable heights, breaking on blank rows).
+                        const slices = [];
+                        let cursor = 0;
+                        while (cursor < canvas.height) {
+                            let h;
+                            if (cursor + pageContentPx >= canvas.height) {
+                                h = canvas.height - cursor;
+                            } else {
+                                const brk = findBreak(cursor, cursor + pageContentPx);
+                                h = brk - cursor;
+                                if (h < pageContentPx * 0.4) h = pageContentPx; // avoid near-empty pages
+                            }
+                            slices.push({ y: cursor, h });
+                            cursor += h;
+                        }
+                        const totalPages = slices.length;
+
+                        // Pass 2: render each slice with header + footer.
+                        slices.forEach((s, idx) => {
                             const pageCanvas = document.createElement('canvas');
                             pageCanvas.width = canvas.width;
-                            pageCanvas.height = sliceH;
-                            const ctx = pageCanvas.getContext('2d');
-                            ctx.fillStyle = '#ffffff';
-                            ctx.fillRect(0, 0, pageCanvas.width, sliceH);
-                            ctx.drawImage(canvas, 0, renderedPx, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
+                            pageCanvas.height = s.h;
+                            const pctx = pageCanvas.getContext('2d');
+                            pctx.fillStyle = '#ffffff';
+                            pctx.fillRect(0, 0, pageCanvas.width, s.h);
+                            pctx.drawImage(canvas, 0, s.y, canvas.width, s.h, 0, 0, canvas.width, s.h);
                             const sliceData = pageCanvas.toDataURL('image/jpeg', 0.92);
-                            const sliceHmm = sliceH / pxPerMm;
+                            const sliceHmm = s.h / pxPerMm;
 
-                            if (pageNum > 0) pdf.addPage();
-                            pageNum++;
+                            if (idx > 0) pdf.addPage();
 
-                            // Header
                             pdf.setFont('helvetica', 'bold');
                             pdf.setFontSize(9);
                             pdf.setTextColor(120, 120, 130);
@@ -5574,19 +5608,15 @@ document.addEventListener('DOMContentLoaded', function() {
                             pdf.setDrawColor(226, 232, 240);
                             pdf.line(margin, headerH - 1, pageW - margin, headerH - 1);
 
-                            // Content slice
                             pdf.addImage(sliceData, 'JPEG', margin, contentTop + 1, contentW, sliceHmm);
 
-                            // Footer
                             pdf.setDrawColor(226, 232, 240);
                             pdf.line(margin, pageH - footerH + 2, pageW - margin, pageH - footerH + 2);
                             pdf.setFont('helvetica', 'normal');
                             pdf.setFontSize(9);
                             pdf.setTextColor(120, 120, 130);
-                            pdf.text('Page ' + pageNum + ' of ' + totalPages, pageW / 2, pageH - footerH + 8, { align: 'center' });
-
-                            renderedPx += sliceH;
-                        }
+                            pdf.text('Page ' + (idx + 1) + ' of ' + totalPages, pageW / 2, pageH - footerH + 8, { align: 'center' });
+                        });
                         pdf.save(String(title || 'document').replace(/[^a-z0-9]/gi, '_').toLowerCase() + '.pdf');
                     } catch (e) { console.error('[ArtifactsLoader] PDF error', e); alert('Error generating PDF: ' + e.message); }
                     cleanup();
