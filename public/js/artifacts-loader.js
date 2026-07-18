@@ -5537,20 +5537,55 @@ document.addEventListener('DOMContentLoaded', function() {
                 window.html2canvas(holder, { scale: 2, backgroundColor: '#ffffff', useCORS: true, windowWidth: 800 }).then((canvas) => {
                     try {
                         const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-                        const pageW = 210, pageH = 297, margin = 10;
-                        const imgW = pageW - margin * 2;
-                        const imgH = canvas.height * imgW / canvas.width;
-                        const imgData = canvas.toDataURL('image/jpeg', 0.92);
-                        const usable = pageH - margin * 2;
-                        let heightLeft = imgH;
-                        let position = margin;
-                        pdf.addImage(imgData, 'JPEG', margin, position, imgW, imgH);
-                        heightLeft -= usable;
-                        while (heightLeft > 0) {
-                            position = margin - (imgH - heightLeft);
-                            pdf.addPage();
-                            pdf.addImage(imgData, 'JPEG', margin, position, imgW, imgH);
-                            heightLeft -= usable;
+                        const pageW = 210, pageH = 297, margin = 12;
+                        const headerH = 14;  // top band: doc title
+                        const footerH = 12;  // bottom band: page number
+                        const contentW = pageW - margin * 2;
+                        const contentTop = headerH;
+                        const contentH = pageH - headerH - footerH; // mm available per page
+                        const pxPerMm = canvas.width / contentW;    // horizontal scale (image fills content width)
+                        const pageContentPx = Math.floor(contentH * pxPerMm);
+                        const totalPages = Math.max(1, Math.ceil(canvas.height / pageContentPx));
+                        const headerTitle = String(title || 'Document');
+
+                        let renderedPx = 0;
+                        let pageNum = 0;
+                        while (renderedPx < canvas.height) {
+                            const sliceH = Math.min(pageContentPx, canvas.height - renderedPx);
+                            // Crop this page's slice onto its own canvas (avoids cross-page overlap).
+                            const pageCanvas = document.createElement('canvas');
+                            pageCanvas.width = canvas.width;
+                            pageCanvas.height = sliceH;
+                            const ctx = pageCanvas.getContext('2d');
+                            ctx.fillStyle = '#ffffff';
+                            ctx.fillRect(0, 0, pageCanvas.width, sliceH);
+                            ctx.drawImage(canvas, 0, renderedPx, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
+                            const sliceData = pageCanvas.toDataURL('image/jpeg', 0.92);
+                            const sliceHmm = sliceH / pxPerMm;
+
+                            if (pageNum > 0) pdf.addPage();
+                            pageNum++;
+
+                            // Header
+                            pdf.setFont('helvetica', 'bold');
+                            pdf.setFontSize(9);
+                            pdf.setTextColor(120, 120, 130);
+                            pdf.text(pdf.splitTextToSize(headerTitle, contentW)[0], margin, headerH - 4);
+                            pdf.setDrawColor(226, 232, 240);
+                            pdf.line(margin, headerH - 1, pageW - margin, headerH - 1);
+
+                            // Content slice
+                            pdf.addImage(sliceData, 'JPEG', margin, contentTop + 1, contentW, sliceHmm);
+
+                            // Footer
+                            pdf.setDrawColor(226, 232, 240);
+                            pdf.line(margin, pageH - footerH + 2, pageW - margin, pageH - footerH + 2);
+                            pdf.setFont('helvetica', 'normal');
+                            pdf.setFontSize(9);
+                            pdf.setTextColor(120, 120, 130);
+                            pdf.text('Page ' + pageNum + ' of ' + totalPages, pageW / 2, pageH - footerH + 8, { align: 'center' });
+
+                            renderedPx += sliceH;
                         }
                         pdf.save(String(title || 'document').replace(/[^a-z0-9]/gi, '_').toLowerCase() + '.pdf');
                     } catch (e) { console.error('[ArtifactsLoader] PDF error', e); alert('Error generating PDF: ' + e.message); }
@@ -7015,14 +7050,15 @@ document.addEventListener('DOMContentLoaded', function() {
                         downloadOption.appendChild(downloadButton);
                         downloadOption.appendChild(downloadSubmenu);
                         
-                        // Show submenu on hover - use the parent div for better hover handling
-                        downloadOption.addEventListener('mouseenter', () => {
-                            downloadSubmenu.style.display = 'block';
-                        });
-                        
-                        downloadOption.addEventListener('mouseleave', () => {
-                            downloadSubmenu.style.display = 'none';
-                        });
+                        // Show submenu on hover — keep it open while moving between the
+                        // Download row and the flyout (small hide delay bridges the gap).
+                        let submenuHideTimer = null;
+                        const showSubmenu = () => { if (submenuHideTimer) { clearTimeout(submenuHideTimer); submenuHideTimer = null; } downloadSubmenu.style.display = 'block'; };
+                        const hideSubmenuSoon = () => { submenuHideTimer = setTimeout(() => { downloadSubmenu.style.display = 'none'; }, 260); };
+                        downloadOption.addEventListener('mouseenter', showSubmenu);
+                        downloadOption.addEventListener('mouseleave', hideSubmenuSoon);
+                        downloadSubmenu.addEventListener('mouseenter', showSubmenu);
+                        downloadSubmenu.addEventListener('mouseleave', hideSubmenuSoon);
                         
                         // Delete option
                         const deleteOption = document.createElement('button');
