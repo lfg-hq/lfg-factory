@@ -15,7 +15,7 @@ import { applicationState, githubTokens, gitlabTokens } from "../db/schema/users
 import { instantApps } from "../db/schema/instant.ts";
 import { env } from "../config/env.ts";
 import { agents } from "../db/schema/agents.ts";
-import { eq, and, desc, asc, notExists, or } from "drizzle-orm";
+import { eq, and, desc, asc, notExists, or, sql } from "drizzle-orm";
 import { listModels } from "../ai/provider.ts";
 import { saveContent, getContent, deleteContent } from "../services/s3.ts";
 import { getProjectActivities } from "../services/activity-log.ts";
@@ -252,6 +252,18 @@ projectsRouter.get("/projects/:projectId", async (c) => {
     if (row.stageId) ticketCounts[row.stageId] = (ticketCounts[row.stageId] ?? 0) + 1;
   }
 
+  // Counts for the Home summary strip.
+  const [docCountRow, memberCountRow] = await Promise.all([
+    db.select({ n: sql<number>`count(*)` }).from(projectFiles).where(eq(projectFiles.projectId, project.id)),
+    db
+      .select({ n: sql<number>`count(*)` })
+      .from(projectMembers)
+      .where(and(eq(projectMembers.projectId, project.id), eq(projectMembers.status, "active"))),
+  ]);
+  const docsCount = Number(docCountRow[0]?.n ?? 0);
+  const memberCount = Number(memberCountRow[0]?.n ?? 0) + 1; // + owner
+  const openTicketCount = ticketRows.length;
+
   // Has the user connected GitHub / GitLab? Used to gate the Link Repository flow —
   // without a token, linking a URL would silently fail later at clone/query time.
   const [ghTok] = await db
@@ -290,6 +302,9 @@ projectsRouter.get("/projects/:projectId", async (c) => {
       conversations: convRows,
       stages: stageRows,
       ticketCounts,
+      docsCount,
+      memberCount,
+      openTicketCount,
       envVars: envRows.map((e) => ({
         id: e.id,
         key: e.key,

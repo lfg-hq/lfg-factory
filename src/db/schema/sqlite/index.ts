@@ -18,3 +18,5 @@ export * from "./notifications.ts";
 export * from "./public-instant.ts";
 export * from "./agents.ts";
 export * from "./composio.ts";
+
+export * from "./pins.ts";

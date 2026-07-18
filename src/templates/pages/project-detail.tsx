@@ -54,6 +54,9 @@ interface ProjectDetailPageProps {
   ticketCounts: Record<string, number>;
   envVars: EnvVar[];
   instantApps: InstantAppSummary[];
+  docsCount?: number;
+  memberCount?: number;
+  openTicketCount?: number;
   activeTab?: string;
 }
 
@@ -69,6 +72,9 @@ export function ProjectDetailPage({
   ticketCounts,
   envVars,
   instantApps = [],
+  docsCount = 0,
+  memberCount = 1,
+  openTicketCount = 0,
   activeTab = "conversations",
 }: ProjectDetailPageProps) {
   const totalTickets = Object.values(ticketCounts).reduce((a, b) => a + b, 0);
@@ -227,7 +233,7 @@ export function ProjectDetailPage({
       <!-- Horizontal Tab Nav -->
       <div class="project-tabs" style="display:flex;gap:0;border-bottom:1px solid var(--border-color);padding:0 2rem;background:var(--body-bg);">
         <a href="/projects/${project.projectId}" class="tab-item${activeTab === "inbox" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "inbox" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "inbox" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
-          <i class="fas fa-inbox"></i> Inbox
+          <i class="fas fa-house"></i> Home
           <span id="inbox-tab-badge" style="display:none;font-size:0.7rem;background:var(--primary-color);color:#fff;padding:0.1rem 0.4rem;border-radius:9999px;"></span>
         </a>
         <a href="/projects/${project.projectId}?tab=conversations" class="tab-item${activeTab === "conversations" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "conversations" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "conversations" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
@@ -275,43 +281,117 @@ export function ProjectDetailPage({
       <!-- Tab content -->
       <div style="padding:2rem;max-width:1200px;margin:0 auto;">
         ${activeTab === "inbox" ? html`
-          ${conversations.length === 0 ? html`
-            <div style="border:1px solid var(--primary-color);background:rgba(139,92,246,0.06);border-radius:var(--radius-lg);padding:1.5rem;margin-bottom:2rem;">
-              <h2 style="margin:0 0 0.35rem;font-size:1.15rem;font-weight:700;color:var(--text-color);">👋 Welcome to ${project.name}</h2>
-              <p style="margin:0 0 1.25rem;color:var(--text-secondary);font-size:0.9rem;">Get started by chatting with the AI to plan and build your app${!project.repoUrl ? ", or connect an existing GitHub repo" : ""}.</p>
-              <div style="display:flex;gap:0.75rem;flex-wrap:wrap;">
-                <a href="/chat/project/${project.projectId}" class="btn btn-primary" style="display:inline-flex;align-items:center;gap:0.5rem;font-size:0.9rem;">
-                  <i class="fas fa-comments"></i> Start building with a chat
-                </a>
-                ${!project.repoUrl ? html`
-                  <button onclick="showCodebaseModal()" class="btn btn-secondary" style="display:inline-flex;align-items:center;gap:0.5rem;font-size:0.9rem;">
-                    <i class="fab fa-github"></i> Connect a GitHub repo
-                  </button>
-                ` : ""}
-                ${isOwner ? html`
-                  <a href="/projects/${project.projectId}?tab=settings" class="btn btn-secondary" style="display:inline-flex;align-items:center;gap:0.5rem;font-size:0.9rem;">
-                    <i class="fas fa-user-plus"></i> Invite teammates
-                  </a>
-                ` : ""}
-              </div>
-            </div>
-          ` : ""}
-          <!-- Your inbox: tickets assigned to you / comments tagging you / messages -->
-          <div id="inbox-section" style="margin-bottom:2rem;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
-              <div style="display:flex;gap:1rem;align-items:center;">
-                <h2 style="font-size:1.1rem;font-weight:600;color:var(--text-color);margin:0;">Inbox</h2>
-                <div style="display:inline-flex;gap:1rem;">
-                  <button id="inbox-tab-received" onclick="switchInboxTab('received')" style="font-size:0.85rem;padding:0.15rem 0;border:none;background:none;color:var(--text-color);font-weight:600;border-bottom:2px solid var(--primary-color);cursor:pointer;">Received</button>
-                  <button id="inbox-tab-sent" onclick="switchInboxTab('sent')" style="font-size:0.85rem;padding:0.15rem 0;border:none;background:none;color:var(--text-secondary);font-weight:500;border-bottom:2px solid transparent;cursor:pointer;">Sent</button>
+          <style>
+            @media (max-width: 900px) { .home-grid { grid-template-columns: 1fr !important; } }
+            .home-card { border:1px solid var(--border-color); border-radius:var(--radius-lg); background:var(--card-bg); padding:1.25rem 1.5rem; }
+            .home-sec-title { font-size:0.75rem; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.03em; margin:0 0 0.75rem; }
+          </style>
+
+          <!-- Summary strip + quick actions -->
+          <div class="home-card" style="margin-bottom:1.5rem;">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1.5rem;flex-wrap:wrap;">
+              <div style="min-width:0;flex:1 1 auto;">
+                <div style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;">
+                  <span style="font-size:1.4rem;">${project.icon}</span>
+                  <h2 style="margin:0;font-size:1.25rem;font-weight:700;color:var(--text-color);">${project.name}</h2>
+                  <span style="font-size:0.72rem;padding:0.15rem 0.5rem;border-radius:9999px;background:${project.status === "active" ? "rgba(34,197,94,0.12)" : "rgba(156,163,175,0.12)"};color:${project.status === "active" ? "#22c55e" : "var(--text-secondary)"};">${project.status}</span>
+                </div>
+                ${project.description ? html`<p style="margin:0.6rem 0 0;color:var(--text-secondary);font-size:0.9rem;line-height:1.5;">${project.description}</p>` : ""}
+                <div style="display:flex;gap:1.25rem;flex-wrap:wrap;margin-top:0.85rem;font-size:0.82rem;color:var(--text-secondary);">
+                  <span><i class="fas fa-file-lines" style="margin-right:0.35rem;opacity:0.7;"></i>${docsCount} doc${docsCount === 1 ? "" : "s"}</span>
+                  <span><i class="fas fa-list-check" style="margin-right:0.35rem;opacity:0.7;"></i>${openTicketCount} ticket${openTicketCount === 1 ? "" : "s"}</span>
+                  <span><i class="fas fa-users" style="margin-right:0.35rem;opacity:0.7;"></i>${memberCount} member${memberCount === 1 ? "" : "s"}</span>
+                  ${project.repoUrl ? html`<a href="${project.repoUrl}" target="_blank" style="color:var(--text-secondary);text-decoration:none;"><i class="fab ${project.repoProvider === "gitlab" ? "fa-gitlab" : "fa-github"}" style="margin-right:0.35rem;"></i>${project.repoOwner}/${project.repoName}</a>` : html`<span style="color:var(--text-secondary);opacity:0.8;"><i class="fas fa-code-branch" style="margin-right:0.35rem;"></i>No repo linked</span>`}
                 </div>
               </div>
-              <div style="display:flex;gap:0.5rem;align-items:center;">
-                <button id="inbox-markread" onclick="markAllInboxRead()" class="btn btn-secondary" style="font-size:0.75rem;display:none;">Mark all read</button>
-                <button onclick="openRequestModal()" class="btn btn-primary" style="font-size:0.75rem;"><i class="fas fa-paper-plane"></i> New message</button>
+              <div style="display:flex;gap:0.5rem;flex-wrap:wrap;flex:0 0 auto;">
+                ${role !== "viewer" ? html`<a href="/chat/project/${project.projectId}" class="btn btn-primary" style="display:inline-flex;align-items:center;gap:0.45rem;font-size:0.85rem;white-space:nowrap;"><i class="fas fa-comments"></i> Start a chat</a>` : ""}
+                ${role !== "viewer" ? html`<a href="/projects/${project.projectId}?tab=tickets" class="btn btn-secondary" style="display:inline-flex;align-items:center;gap:0.45rem;font-size:0.85rem;white-space:nowrap;"><i class="fas fa-plus"></i> New ticket</a>` : ""}
+                ${!project.repoUrl && (isOwner || role === "admin") ? html`<button onclick="showCodebaseModal()" class="btn btn-secondary" style="display:inline-flex;align-items:center;gap:0.45rem;font-size:0.85rem;white-space:nowrap;"><i class="fab fa-github"></i> Connect repo</button>` : ""}
+                ${(isOwner || role === "admin") ? html`<a href="/projects/${project.projectId}?tab=settings" class="btn btn-secondary" style="display:inline-flex;align-items:center;gap:0.45rem;font-size:0.85rem;white-space:nowrap;"><i class="fas fa-user-plus"></i> Invite</a>` : ""}
               </div>
             </div>
-            <div id="inbox-list"><div style="color:var(--text-secondary);font-size:0.875rem;padding:1rem;border:1px dashed var(--border-color);border-radius:var(--radius);text-align:center;">No items yet — assigned tickets, mentions and messages sent to you show up here.</div></div>
+          </div>
+
+          <!-- Two-column: activity feed | team + pins + inbox -->
+          <div class="home-grid" style="display:grid;grid-template-columns:1fr 340px;gap:1.5rem;align-items:start;">
+            <!-- Activity feed -->
+            <div class="home-card">
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <h3 class="home-sec-title" style="margin:0;">Activity</h3>
+                <a href="/projects/${project.projectId}?tab=events" style="font-size:0.78rem;color:var(--primary-color);text-decoration:none;">See all</a>
+              </div>
+              <div id="home-activity" style="margin-top:0.5rem;"><div style="color:var(--text-secondary);font-size:0.85rem;padding:0.75rem 0;">Loading…</div></div>
+            </div>
+
+            <!-- Sidebar -->
+            <div style="display:flex;flex-direction:column;gap:1.5rem;">
+              <!-- Team -->
+              <div class="home-card">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                  <h3 class="home-sec-title" style="margin:0;">Team</h3>
+                  ${(isOwner || role === "admin") ? html`<a href="/projects/${project.projectId}?tab=settings" style="font-size:0.78rem;color:var(--primary-color);text-decoration:none;">Manage</a>` : ""}
+                </div>
+                <div id="home-team" style="margin-top:0.6rem;"><div style="color:var(--text-secondary);font-size:0.85rem;">Loading…</div></div>
+              </div>
+
+              <!-- Pinned "Start here" -->
+              <div class="home-card">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                  <h3 class="home-sec-title" style="margin:0;">📌 Start here</h3>
+                  <button id="home-pin-add" onclick="openPinModal()" style="display:none;background:none;border:none;color:var(--primary-color);cursor:pointer;font-size:0.78rem;"><i class="fas fa-plus"></i> Pin</button>
+                </div>
+                <div id="home-pins" style="margin-top:0.6rem;"><div style="color:var(--text-secondary);font-size:0.85rem;">Loading…</div></div>
+              </div>
+
+              <!-- Your inbox (personal) -->
+              <div class="home-card" id="inbox-section">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+                  <div style="display:flex;gap:0.85rem;align-items:center;">
+                    <h3 class="home-sec-title" style="margin:0;">Inbox</h3>
+                    <div style="display:inline-flex;gap:0.85rem;">
+                      <button id="inbox-tab-received" onclick="switchInboxTab('received')" style="font-size:0.8rem;padding:0.1rem 0;border:none;background:none;color:var(--text-color);font-weight:600;border-bottom:2px solid var(--primary-color);cursor:pointer;">Received</button>
+                      <button id="inbox-tab-sent" onclick="switchInboxTab('sent')" style="font-size:0.8rem;padding:0.1rem 0;border:none;background:none;color:var(--text-secondary);font-weight:500;border-bottom:2px solid transparent;cursor:pointer;">Sent</button>
+                    </div>
+                  </div>
+                  <div style="display:flex;gap:0.4rem;align-items:center;">
+                    <button id="inbox-markread" onclick="markAllInboxRead()" class="btn btn-secondary" style="font-size:0.72rem;display:none;">Mark all read</button>
+                    <button onclick="openRequestModal()" class="btn btn-primary" style="font-size:0.72rem;"><i class="fas fa-paper-plane"></i> New</button>
+                  </div>
+                </div>
+                <div id="inbox-list" style="margin-top:0.6rem;"><div style="color:var(--text-secondary);font-size:0.85rem;padding:0.75rem 0;">No items yet — assigned tickets, mentions and messages show up here.</div></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Pin modal (owner/admin) -->
+          <div class="modal-overlay" id="pinModal" style="position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.7);align-items:center;justify-content:center;">
+            <div style="background:var(--card-bg);border:1px solid var(--border-color);border-radius:var(--radius-lg);width:100%;max-width:440px;">
+              <div style="display:flex;align-items:center;justify-content:space-between;padding:1.25rem 1.5rem;border-bottom:1px solid var(--border-color);">
+                <h3 style="margin:0;font-size:1.1rem;font-weight:600;color:var(--text-color);">Pin a resource</h3>
+                <button type="button" onclick="document.getElementById('pinModal').classList.remove('active')" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:1.25rem;">&times;</button>
+              </div>
+              <div style="padding:1.5rem;">
+                <div style="margin-bottom:1rem;"><label style="display:block;font-size:0.85rem;font-weight:500;margin-bottom:0.4rem;color:var(--text-color);">Type</label>
+                  <select id="pin-type" class="input" style="width:100%;" onchange="onPinTypeChange()">
+                    <option value="document">Document</option>
+                    <option value="link">External link</option>
+                  </select></div>
+                <div id="pin-doc-wrap" style="margin-bottom:1rem;"><label style="display:block;font-size:0.85rem;font-weight:500;margin-bottom:0.4rem;color:var(--text-color);">Document</label>
+                  <select id="pin-doc" class="input" style="width:100%;"></select></div>
+                <div id="pin-link-wrap" style="margin-bottom:1rem;display:none;">
+                  <label style="display:block;font-size:0.85rem;font-weight:500;margin-bottom:0.4rem;color:var(--text-color);">Label</label>
+                  <input id="pin-label" class="input" style="width:100%;box-sizing:border-box;margin-bottom:0.6rem;" placeholder="e.g. How we work" />
+                  <label style="display:block;font-size:0.85rem;font-weight:500;margin-bottom:0.4rem;color:var(--text-color);">URL</label>
+                  <input id="pin-url" class="input" style="width:100%;box-sizing:border-box;" placeholder="https://…" />
+                </div>
+                <div id="pin-error" style="display:none;color:#ef4444;font-size:0.8rem;margin-bottom:0.6rem;"></div>
+                <div style="display:flex;gap:0.75rem;justify-content:flex-end;">
+                  <button class="btn btn-secondary" onclick="document.getElementById('pinModal').classList.remove('active')">Cancel</button>
+                  <button class="btn btn-primary" onclick="submitPin()">Pin</button>
+                </div>
+              </div>
+            </div>
           </div>
 
           <!-- Sent-message detail modal -->
@@ -548,6 +628,97 @@ export function ProjectDetailPage({
                 });
               }
               if ('${activeTab}' === 'inbox') loadInbox();
+            })();
+          </script>
+          <script>
+            (function(){
+              var HM_PID = '${project.projectId}';
+              function hEsc(s){ return (s||'').replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+              function hRel(ts){ if(!ts) return ''; var d=new Date(ts); var s=Math.floor((Date.now()-d.getTime())/1000); if(s<60)return 'just now'; if(s<3600)return Math.floor(s/60)+'m ago'; if(s<86400)return Math.floor(s/3600)+'h ago'; return d.toLocaleDateString(); }
+              function actIcon(t){ t=t||''; if(t.indexOf('ticket')>=0)return 'fa-list-check'; if(t.indexOf('doc')>=0||t.indexOf('file')>=0)return 'fa-file-lines'; if(t.indexOf('member')>=0||t.indexOf('join')>=0||t.indexOf('invite')>=0)return 'fa-user-plus'; if(t.indexOf('build')>=0||t.indexOf('deploy')>=0)return 'fa-hammer'; if(t.indexOf('chat')>=0||t.indexOf('conversation')>=0||t.indexOf('message')>=0)return 'fa-comments'; if(t.indexOf('comment')>=0)return 'fa-comment'; return 'fa-circle-dot'; }
+              function initials(n){ n=(n||'').trim(); if(!n) return '?'; var p=n.split(/\\s+/); return (p[0][0]+(p[1]?p[1][0]:'')).toUpperCase(); }
+              function roleLabel(r){ return (r==='viewer'||r==='guest')?'Viewer':(r==='admin'?'Admin':(r==='owner'?'Owner':'Collaborator')); }
+
+              // Activity feed
+              fetch('/projects/'+HM_PID+'/api/activities?limit=12').then(function(r){return r.json();}).then(function(d){
+                var acts = d.activities || [];
+                var el = document.getElementById('home-activity');
+                if (!acts.length){ el.innerHTML = '<div style="color:var(--text-secondary);font-size:0.85rem;padding:0.75rem 0;">No activity yet. Actions across the project will appear here.</div>'; return; }
+                el.innerHTML = acts.map(function(a){
+                  return '<div style="display:flex;gap:0.7rem;padding:0.6rem 0;border-bottom:1px solid var(--border-color);">'
+                    + '<i class="fas '+actIcon(a.activityType)+'" style="color:var(--primary-color);margin-top:0.15rem;width:1rem;text-align:center;font-size:0.8rem;"></i>'
+                    + '<div style="flex:1;min-width:0;"><div style="font-size:0.85rem;color:var(--text-color);">'+hEsc(a.title)+'</div>'
+                    + (a.description?'<div style="font-size:0.78rem;color:var(--text-secondary);margin-top:0.1rem;">'+hEsc(a.description)+'</div>':'')
+                    + '<div style="font-size:0.7rem;color:var(--text-secondary);margin-top:0.15rem;">'+hRel(a.createdAt)+'</div></div>'
+                    + '</div>';
+                }).join('');
+              }).catch(function(){ var el=document.getElementById('home-activity'); if(el) el.innerHTML='<div style="color:var(--text-secondary);font-size:0.85rem;">Couldn\\'t load activity.</div>'; });
+
+              // Team
+              fetch('/api/projects/'+HM_PID+'/members').then(function(r){return r.json();}).then(function(m){
+                var people = [];
+                if (m.owner) people.push({ name:m.owner.name, email:m.owner.email, role:'owner' });
+                (m.members||[]).forEach(function(x){ people.push({ name:x.userName, email:x.userEmail, role:x.role }); });
+                var el = document.getElementById('home-team');
+                el.innerHTML = people.map(function(p){
+                  return '<div style="display:flex;align-items:center;gap:0.6rem;padding:0.35rem 0;">'
+                    + '<span style="width:28px;height:28px;border-radius:50%;background:rgba(139,92,246,0.15);color:var(--primary-color);display:inline-flex;align-items:center;justify-content:center;font-size:0.72rem;font-weight:600;flex:none;">'+hEsc(initials(p.name||p.email))+'</span>'
+                    + '<div style="flex:1;min-width:0;"><div style="font-size:0.85rem;color:var(--text-color);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+hEsc(p.name||p.email||'Member')+'</div></div>'
+                    + '<span style="font-size:0.7rem;color:var(--text-secondary);flex:none;">'+roleLabel(p.role)+'</span>'
+                    + '</div>';
+                }).join('');
+              }).catch(function(){});
+
+              // Pins ("Start here")
+              function loadPins(){
+                fetch('/api/projects/'+HM_PID+'/pins').then(function(r){return r.json();}).then(function(d){
+                  window.__pinCanManage = !!d.canManage;
+                  var addBtn = document.getElementById('home-pin-add'); if (addBtn) addBtn.style.display = d.canManage ? '' : 'none';
+                  var pins = d.pins || [];
+                  var el = document.getElementById('home-pins');
+                  if (!pins.length){ el.innerHTML = '<div style="color:var(--text-secondary);font-size:0.82rem;">'+(d.canManage?'Pin key docs or links so everyone knows where to start.':'Nothing pinned yet.')+'</div>'; return; }
+                  el.innerHTML = pins.map(function(p){
+                    var icon = p.targetType==='link'?'fa-link':(p.targetType==='ticket'?'fa-list-check':'fa-file-lines');
+                    var ext = p.targetType==='link' ? ' target="_blank"' : '';
+                    return '<div style="display:flex;align-items:center;gap:0.5rem;padding:0.3rem 0;">'
+                      + '<a href="'+hEsc(p.href)+'"'+ext+' style="flex:1;display:flex;align-items:center;gap:0.5rem;text-decoration:none;color:var(--text-color);font-size:0.85rem;min-width:0;"><i class="fas '+icon+'" style="color:var(--primary-color);font-size:0.8rem;"></i> <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+hEsc(p.label)+'</span></a>'
+                      + (window.__pinCanManage?'<button onclick="deletePin(\\''+p.id+'\\')" title="Unpin" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:0.72rem;flex:none;"><i class="fas fa-times"></i></button>':'')
+                      + '</div>';
+                  }).join('');
+                }).catch(function(){});
+              }
+              window.__loadPins = loadPins;
+              loadPins();
+
+              window.deletePin = function(id){
+                if (!confirm('Unpin this?')) return;
+                fetch('/api/projects/'+HM_PID+'/pins/'+id, { method:'DELETE' }).then(function(){ loadPins(); });
+              };
+              window.onPinTypeChange = function(){
+                var t = document.getElementById('pin-type').value;
+                document.getElementById('pin-doc-wrap').style.display = t==='document'?'':'none';
+                document.getElementById('pin-link-wrap').style.display = t==='link'?'':'none';
+              };
+              window.openPinModal = function(){
+                document.getElementById('pin-error').style.display='none';
+                document.getElementById('pinModal').classList.add('active');
+                onPinTypeChange();
+                var dSel = document.getElementById('pin-doc'); dSel.innerHTML = '<option value="">Loading…</option>';
+                fetch('/projects/'+HM_PID+'/api/files/browser/?per_page=200').then(function(r){return r.json();}).then(function(d){
+                  var docs = (d&&d.files)||[];
+                  dSel.innerHTML = docs.length ? docs.map(function(x){ return '<option value="'+x.id+'">'+hEsc(x.name||'Untitled')+'</option>'; }).join('') : '<option value="">No documents yet</option>';
+                }).catch(function(){ dSel.innerHTML='<option value="">Failed to load</option>'; });
+              };
+              window.submitPin = function(){
+                var t = document.getElementById('pin-type').value;
+                var err = document.getElementById('pin-error');
+                var body = { targetType: t };
+                if (t==='document'){ var id=document.getElementById('pin-doc').value; if(!id){ err.textContent='Pick a document.'; err.style.display='block'; return; } body.targetId=id; body.label=document.getElementById('pin-doc').selectedOptions[0].text; }
+                else { var url=document.getElementById('pin-url').value.trim(); var lbl=document.getElementById('pin-label').value.trim(); if(!url||!lbl){ err.textContent='Label and URL are required.'; err.style.display='block'; return; } body.url=url; body.label=lbl; }
+                fetch('/api/projects/'+HM_PID+'/pins', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) })
+                  .then(function(r){ return r.json().then(function(dd){return {ok:r.ok,data:dd};}); })
+                  .then(function(res){ if(!res.ok){ err.textContent=(res.data&&res.data.error)||'Failed'; err.style.display='block'; return; } document.getElementById('pinModal').classList.remove('active'); loadPins(); });
+              };
             })();
           </script>
         ` : ""}
