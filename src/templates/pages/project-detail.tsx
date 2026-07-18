@@ -842,9 +842,12 @@ export function ProjectDetailPage({
             [data-theme="light"] #filebrowser-viewer .viewer-back:hover,
             [data-theme="light"] #filebrowser-viewer .viewer-actions button:hover { background: rgba(0,0,0,0.06) !important; }
             /* Theme the options / download dropdowns (they use hardcoded dark colors in JS). */
-            #viewer-options-dropdown, #viewer-options-dropdown div { background: var(--card-bg) !important; border-color: var(--border-color) !important; box-shadow: 0 4px 16px rgba(0,0,0,0.18) !important; }
+            #viewer-options-dropdown { background: var(--card-bg) !important; border: 1px solid var(--border-color) !important; box-shadow: 0 4px 16px rgba(0,0,0,0.18) !important; }
             #viewer-options-dropdown button { color: var(--text-color) !important; background: transparent !important; }
             #viewer-options-dropdown button:hover { background: rgba(139,92,246,0.12) !important; }
+            /* the Download row is a bare wrapper (no box); its nested submenu is the floating menu */
+            #viewer-options-dropdown > div { background: transparent !important; border: none !important; box-shadow: none !important; }
+            #viewer-options-dropdown > div > div { background: var(--card-bg) !important; border: 1px solid var(--border-color) !important; box-shadow: 0 4px 16px rgba(0,0,0,0.18) !important; }
             /* Subtle divider lines in the rendered doc (default hr looks thick in dark mode). */
             #viewer-markdown hr { border: none !important; border-top: 1px solid var(--border-color) !important; height: 0 !important; background: none !important; margin: 1.75rem 0 !important; }
           </style>
