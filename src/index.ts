@@ -46,6 +46,21 @@ import { DEFAULT_MODEL_KEY } from "./ai/provider.ts";
 
 const app = new Hono();
 
+// ── Static files (served FIRST, before auth/logger/trailing-slash) ───
+// Long-lived, CDN-cacheable headers so Cloudflare serves them from the edge and
+// browsers cache them — the origin (which can be busy with LLM/build work) then
+// serves each asset at most once per cache window instead of on every page load.
+const STATIC_CACHE = "public, max-age=3600, s-maxage=604800, stale-while-revalidate=86400";
+app.use("/public/*", async (c, next) => {
+  await next();
+  if (c.res && c.res.status === 200) c.header("Cache-Control", STATIC_CACHE);
+});
+app.use("/public/*", serveStatic({ root: "./" }));
+app.use("/uploads/*", serveStatic({ root: "./" }));
+
+// Root favicon — browsers request /favicon.ico regardless of <link> tags.
+app.get("/favicon.ico", serveStatic({ path: "./public/favicon.ico" }));
+
 // ── Trim trailing slashes (Django-compat: chat.js calls /api/foo/:id/) ──
 // Skip for CLI callback routes — trimTrailingSlash 301-redirects POST→GET which breaks them
 app.use("*", async (c, next) => {
@@ -58,10 +73,6 @@ app.use("*", async (c, next) => {
 
 // ── Request logging ──────────────────────────────────────────────────
 app.use("*", logger());
-
-// ── Static files ────────────────────────────────────────────────────
-app.use("/public/*", serveStatic({ root: "./" }));
-app.use("/uploads/*", serveStatic({ root: "./" }));
 
 // ── Health check ────────────────────────────────────────────────────
 app.get("/health", (c) => c.json({ status: "ok" }));
