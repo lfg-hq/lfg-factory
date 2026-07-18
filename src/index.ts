@@ -22,6 +22,7 @@ import sharingApi from "./routes/api/sharing.ts";
 import commentsApi from "./routes/api/comments.ts";
 import notificationsApi from "./routes/api/notifications.ts";
 import pinsApi from "./routes/api/pins.ts";
+import homeApi from "./routes/api/project-home.ts";
 import projectTransferApi from "./routes/api/project-transfer.ts";
 import agentsRoutes from "./routes/agents.ts";
 import agentsApi from "./routes/api/agents.ts";
@@ -91,6 +92,7 @@ app.route("/api/projects", sharingApi);
 app.route("/api/projects", commentsApi);
 app.route("/api/projects", notificationsApi);
 app.route("/api/projects", pinsApi);
+app.route("/api/projects", homeApi);
 app.route("/api/projects", projectTransferApi);
 
 // ── Django-compat stubs ──────────────────────────────────────────────

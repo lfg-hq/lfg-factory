@@ -272,7 +272,9 @@ export function ProjectDetailPage({
       </style>
       <script>
         (function(){
-          // Populate the Inbox tab's unread badge on every page (any tab).
+          // Populate the Inbox tab's unread badge. On Home the /home payload
+          // already sets it, so skip the extra call there.
+          if ('${activeTab}' === 'home') return;
           fetch('/api/projects/${project.projectId}/notifications').then(function(r){return r.json();}).then(function(d){
             var unread = (d.notifications||[]).filter(function(n){ return !n.readAt; }).length;
             var b = document.getElementById('inbox-tab-badge');
@@ -681,11 +683,9 @@ export function ProjectDetailPage({
               function initials(n){ n=(n||'').trim(); if(!n) return '?'; var p=n.split(/\\s+/); return (p[0][0]+(p[1]?p[1][0]:'')).toUpperCase(); }
               function roleLabel(r){ return (r==='viewer'||r==='guest')?'Viewer':(r==='admin'?'Admin':(r==='owner'?'Owner':'Collaborator')); }
 
-              // Activity feed
-              fetch('/projects/'+HM_PID+'/api/activities?limit=12').then(function(r){return r.json();}).then(function(d){
-                var acts = d.activities || [];
-                var el = document.getElementById('home-activity');
-                if (!acts.length){ el.innerHTML = '<div style="color:var(--text-secondary);font-size:0.85rem;padding:0.75rem 0;">No activity yet. Actions across the project will appear here.</div>'; return; }
+              function renderActivity(acts){
+                var el = document.getElementById('home-activity'); if(!el) return;
+                if (!acts || !acts.length){ el.innerHTML = '<div style="color:var(--text-secondary);font-size:0.85rem;padding:0.75rem 0;">No activity yet. Actions across the project will appear here.</div>'; return; }
                 el.innerHTML = acts.map(function(a){
                   return '<div style="display:flex;gap:0.7rem;padding:0.6rem 0;border-bottom:1px solid var(--border-color);">'
                     + '<i class="fas '+actIcon(a.activityType)+'" style="color:var(--primary-color);margin-top:0.15rem;width:1rem;text-align:center;font-size:0.8rem;"></i>'
@@ -694,11 +694,9 @@ export function ProjectDetailPage({
                     + '<div style="font-size:0.7rem;color:var(--text-secondary);margin-top:0.15rem;">'+hRel(a.createdAt)+'</div></div>'
                     + '</div>';
                 }).join('');
-              }).catch(function(){ var el=document.getElementById('home-activity'); if(el) el.innerHTML='<div style="color:var(--text-secondary);font-size:0.85rem;">Couldn\\'t load activity.</div>'; });
-
-              // Required actions — unread inbox items (only unopened ones)
-              fetch('/api/projects/'+HM_PID+'/notifications').then(function(r){return r.json();}).then(function(d){
-                var unread = (d.notifications||[]).filter(function(n){ return !n.readAt; });
+              }
+              function renderActions(notifs){
+                var unread = (notifs||[]).filter(function(n){ return !n.readAt; });
                 var card = document.getElementById('home-actions'), list = document.getElementById('home-actions-list');
                 if (!card || !list || !unread.length) return;
                 list.innerHTML = unread.slice(0,6).map(function(n){
@@ -709,14 +707,12 @@ export function ProjectDetailPage({
                     + '<span style="font-size:0.7rem;color:var(--text-secondary);flex:none;">'+hRel(n.createdAt)+'</span></a>';
                 }).join('');
                 card.style.display = '';
-              }).catch(function(){});
-
-              // Team
-              fetch('/api/projects/'+HM_PID+'/members').then(function(r){return r.json();}).then(function(m){
+              }
+              function renderTeam(m){
                 var people = [];
-                if (m.owner) people.push({ name:m.owner.name, email:m.owner.email, role:'owner' });
-                (m.members||[]).forEach(function(x){ people.push({ name:x.userName, email:x.userEmail, role:x.role }); });
-                var el = document.getElementById('home-team');
+                if (m && m.owner) people.push({ name:m.owner.name, email:m.owner.email, role:'owner' });
+                ((m&&m.members)||[]).forEach(function(x){ people.push({ name:x.userName, email:x.userEmail, role:x.role }); });
+                var el = document.getElementById('home-team'); if(!el) return;
                 el.innerHTML = people.map(function(p){
                   return '<div style="display:flex;align-items:center;gap:0.6rem;padding:0.35rem 0;">'
                     + '<span style="width:28px;height:28px;border-radius:50%;background:rgba(139,92,246,0.15);color:var(--primary-color);display:inline-flex;align-items:center;justify-content:center;font-size:0.72rem;font-weight:600;flex:none;">'+hEsc(initials(p.name||p.email))+'</span>'
@@ -724,28 +720,36 @@ export function ProjectDetailPage({
                     + '<span style="font-size:0.7rem;color:var(--text-secondary);flex:none;">'+roleLabel(p.role)+'</span>'
                     + '</div>';
                 }).join('');
-              }).catch(function(){});
-
-              // Pins ("Start here")
+              }
+              function renderPins(pins, canManage){
+                window.__pinCanManage = !!canManage;
+                var addBtn = document.getElementById('home-pin-add'); if (addBtn) addBtn.style.display = canManage ? '' : 'none';
+                var el = document.getElementById('home-pins'); if(!el) return;
+                pins = pins || [];
+                if (!pins.length){ el.innerHTML = '<div style="color:var(--text-secondary);font-size:0.82rem;">'+(canManage?'Pin key docs or links so everyone knows where to start.':'Nothing pinned yet.')+'</div>'; return; }
+                el.innerHTML = pins.map(function(p){
+                  var icon = p.targetType==='link'?'fa-link':(p.targetType==='ticket'?'fa-list-check':'fa-file-lines');
+                  var ext = p.targetType==='link' ? ' target="_blank"' : '';
+                  return '<div style="display:flex;align-items:center;gap:0.5rem;padding:0.3rem 0;">'
+                    + '<a href="'+hEsc(p.href)+'"'+ext+' style="flex:1;display:flex;align-items:center;gap:0.5rem;text-decoration:none;color:var(--text-color);font-size:0.85rem;min-width:0;"><i class="fas '+icon+'" style="color:var(--primary-color);font-size:0.8rem;"></i> <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+hEsc(p.label)+'</span></a>'
+                    + (window.__pinCanManage?'<button onclick="deletePin(\\''+p.id+'\\')" title="Unpin" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:0.72rem;flex:none;"><i class="fas fa-times"></i></button>':'')
+                    + '</div>';
+                }).join('');
+              }
               function loadPins(){
-                fetch('/api/projects/'+HM_PID+'/pins').then(function(r){return r.json();}).then(function(d){
-                  window.__pinCanManage = !!d.canManage;
-                  var addBtn = document.getElementById('home-pin-add'); if (addBtn) addBtn.style.display = d.canManage ? '' : 'none';
-                  var pins = d.pins || [];
-                  var el = document.getElementById('home-pins');
-                  if (!pins.length){ el.innerHTML = '<div style="color:var(--text-secondary);font-size:0.82rem;">'+(d.canManage?'Pin key docs or links so everyone knows where to start.':'Nothing pinned yet.')+'</div>'; return; }
-                  el.innerHTML = pins.map(function(p){
-                    var icon = p.targetType==='link'?'fa-link':(p.targetType==='ticket'?'fa-list-check':'fa-file-lines');
-                    var ext = p.targetType==='link' ? ' target="_blank"' : '';
-                    return '<div style="display:flex;align-items:center;gap:0.5rem;padding:0.3rem 0;">'
-                      + '<a href="'+hEsc(p.href)+'"'+ext+' style="flex:1;display:flex;align-items:center;gap:0.5rem;text-decoration:none;color:var(--text-color);font-size:0.85rem;min-width:0;"><i class="fas '+icon+'" style="color:var(--primary-color);font-size:0.8rem;"></i> <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+hEsc(p.label)+'</span></a>'
-                      + (window.__pinCanManage?'<button onclick="deletePin(\\''+p.id+'\\')" title="Unpin" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:0.72rem;flex:none;"><i class="fas fa-times"></i></button>':'')
-                      + '</div>';
-                  }).join('');
-                }).catch(function(){});
+                fetch('/api/projects/'+HM_PID+'/pins').then(function(r){return r.json();}).then(function(d){ renderPins(d.pins, d.canManage); }).catch(function(){});
               }
               window.__loadPins = loadPins;
-              loadPins();
+
+              // One combined request for the whole Home (activities + notifications
+              // + members + pins) instead of four separate round-trips.
+              fetch('/api/projects/'+HM_PID+'/home').then(function(r){return r.json();}).then(function(d){
+                renderActivity(d.activities);
+                renderActions(d.notifications);
+                renderTeam(d.members || {});
+                renderPins(d.pins, d.canManagePins);
+                var b = document.getElementById('inbox-tab-badge'); if (b && d.unreadCount){ b.textContent = d.unreadCount; b.style.display = ''; }
+              }).catch(function(){ var el=document.getElementById('home-activity'); if(el) el.innerHTML='<div style="color:var(--text-secondary);font-size:0.85rem;">Couldn\\'t load.</div>'; });
 
               window.deletePin = function(id){
                 if (!confirm('Unpin this?')) return;
