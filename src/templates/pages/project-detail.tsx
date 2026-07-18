@@ -317,15 +317,26 @@ export function ProjectDetailPage({
             </div>
           </div>
 
-          <!-- Two-column: activity feed | team + pins + inbox -->
+          <!-- Two-column: (required actions + activity) | team + pins -->
           <div class="home-grid" style="display:grid;grid-template-columns:1fr 340px;gap:1.5rem;align-items:start;">
-            <!-- Activity feed -->
-            <div class="home-card">
-              <div style="display:flex;justify-content:space-between;align-items:center;">
-                <h3 class="home-sec-title" style="margin:0;">Activity</h3>
-                <a href="/projects/${project.projectId}?tab=events" style="font-size:0.78rem;color:var(--primary-color);text-decoration:none;">See all</a>
+            <div style="display:flex;flex-direction:column;gap:1.5rem;">
+              <!-- Required actions (unread inbox items) -->
+              <div class="home-card" id="home-actions" style="display:none;border-color:var(--primary-color);background:rgba(139,92,246,0.05);">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                  <h3 class="home-sec-title" style="margin:0;color:var(--primary-color);"><i class="fas fa-bell" style="margin-right:0.35rem;"></i>Needs your attention</h3>
+                  <a href="/projects/${project.projectId}?tab=inbox" style="font-size:0.78rem;color:var(--primary-color);text-decoration:none;">Open inbox</a>
+                </div>
+                <div id="home-actions-list" style="margin-top:0.5rem;"></div>
               </div>
-              <div id="home-activity" style="margin-top:0.5rem;"><div style="color:var(--text-secondary);font-size:0.85rem;padding:0.75rem 0;">Loading…</div></div>
+
+              <!-- Activity feed -->
+              <div class="home-card">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                  <h3 class="home-sec-title" style="margin:0;">Activity</h3>
+                  <a href="/projects/${project.projectId}?tab=events" style="font-size:0.78rem;color:var(--primary-color);text-decoration:none;">See all</a>
+                </div>
+                <div id="home-activity" style="margin-top:0.5rem;"><div style="color:var(--text-secondary);font-size:0.85rem;padding:0.75rem 0;">Loading…</div></div>
+              </div>
             </div>
 
             <!-- Sidebar -->
@@ -661,6 +672,21 @@ export function ProjectDetailPage({
                     + '</div>';
                 }).join('');
               }).catch(function(){ var el=document.getElementById('home-activity'); if(el) el.innerHTML='<div style="color:var(--text-secondary);font-size:0.85rem;">Couldn\\'t load activity.</div>'; });
+
+              // Required actions — unread inbox items (only unopened ones)
+              fetch('/api/projects/'+HM_PID+'/notifications').then(function(r){return r.json();}).then(function(d){
+                var unread = (d.notifications||[]).filter(function(n){ return !n.readAt; });
+                var card = document.getElementById('home-actions'), list = document.getElementById('home-actions-list');
+                if (!card || !list || !unread.length) return;
+                list.innerHTML = unread.slice(0,6).map(function(n){
+                  var body = (n.message||'').split(' — re: ')[0];
+                  return '<a href="'+(n.link||('/projects/'+HM_PID+'?tab=inbox'))+'" style="display:flex;align-items:center;gap:0.6rem;padding:0.5rem 0;border-bottom:1px solid var(--border-color);text-decoration:none;color:var(--text-color);">'
+                    + '<span style="width:7px;height:7px;border-radius:50%;background:var(--primary-color);flex:none;"></span>'
+                    + '<span style="flex:1;font-size:0.85rem;">'+hEsc(body)+'</span>'
+                    + '<span style="font-size:0.7rem;color:var(--text-secondary);flex:none;">'+hRel(n.createdAt)+'</span></a>';
+                }).join('');
+                card.style.display = '';
+              }).catch(function(){});
 
               // Team
               fetch('/api/projects/'+HM_PID+'/members').then(function(r){return r.json();}).then(function(m){
