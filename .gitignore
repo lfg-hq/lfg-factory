@@ -29,3 +29,9 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # Finder (MacOS) folder config
 .DS_Store
+
+# Local databases (never commit real data / tokens / stored API keys)
+*.db
+*.sqlite
+*.sqlite3
+data/*.db
