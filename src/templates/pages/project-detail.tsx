@@ -899,8 +899,9 @@ export function ProjectDetailPage({
           </div>
           <script src="/public/js/marked.min.js"></script>
           <script src="/public/js/markdown-config.js"></script>
-          <!-- jsPDF (UMD) — powers the "Download → PDF" option in the doc viewer -->
+          <!-- jsPDF + html2canvas — power "Download → PDF" (renders tables/code faithfully) -->
           <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+          <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
           <script src="/public/js/artifacts-loader.js"></script>
           <script src="/public/js/document-comments.js"></script>
           <script>

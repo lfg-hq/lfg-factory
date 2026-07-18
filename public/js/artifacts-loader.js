@@ -5512,7 +5512,53 @@ document.addEventListener('DOMContentLoaded', function() {
                 alert('PDF generation library not loaded. Please refresh the page and try again.');
                 return;
             }
-            
+
+            // Preferred path: render the actual formatted HTML (tables, code blocks,
+            // headings) to the PDF via html2canvas, on a print-friendly white sheet.
+            // Falls through to the legacy text-only walker if html2canvas is missing.
+            if (typeof window.html2canvas === 'function') {
+                const { jsPDF } = window.jspdf;
+                const html = (typeof marked !== 'undefined') ? marked.parse(content || '') : (content || '');
+                const holder = document.createElement('div');
+                holder.id = 'lfg-pdf-holder';
+                holder.style.cssText = 'position:fixed;left:-99999px;top:0;width:800px;background:#ffffff;color:#111827;padding:32px;box-sizing:border-box;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.6;';
+                holder.innerHTML = '<h1 style="font-size:24px;margin:0 0 16px;">' + String(title || 'Document').replace(/[<>&]/g, '') + '</h1>' + html;
+                const pstyle = document.createElement('style');
+                pstyle.textContent = '#lfg-pdf-holder,#lfg-pdf-holder *{color:#111827 !important;} #lfg-pdf-holder a{color:#4f46e5 !important;} #lfg-pdf-holder h1,#lfg-pdf-holder h2,#lfg-pdf-holder h3{margin-top:1.2em;line-height:1.25;} #lfg-pdf-holder table{border-collapse:collapse;width:100%;margin:12px 0;} #lfg-pdf-holder th,#lfg-pdf-holder td{border:1px solid #d1d5db;padding:6px 10px;text-align:left;font-size:13px;vertical-align:top;} #lfg-pdf-holder th{background:#f3f4f6 !important;} #lfg-pdf-holder pre{background:#f6f8fa !important;border:1px solid #e5e7eb;border-radius:6px;padding:12px;white-space:pre-wrap;word-wrap:break-word;font-size:12px;} #lfg-pdf-holder code{background:#f3f4f6 !important;padding:1px 4px;border-radius:4px;font-size:12px;} #lfg-pdf-holder pre code{background:none !important;padding:0;} #lfg-pdf-holder img{max-width:100%;} #lfg-pdf-holder hr{border:none;border-top:1px solid #e5e7eb;margin:16px 0;}';
+                document.head.appendChild(pstyle);
+                document.body.appendChild(holder);
+
+                const overlay = document.createElement('div');
+                overlay.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;';
+                overlay.innerHTML = '<div style="background:#fff;color:#111;padding:14px 24px;border-radius:8px;font-family:Arial;">Generating PDF…</div>';
+                document.body.appendChild(overlay);
+                const cleanup = () => [holder, pstyle, overlay].forEach(n => { if (n && n.parentNode) n.parentNode.removeChild(n); });
+
+                window.html2canvas(holder, { scale: 2, backgroundColor: '#ffffff', useCORS: true, windowWidth: 800 }).then((canvas) => {
+                    try {
+                        const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+                        const pageW = 210, pageH = 297, margin = 10;
+                        const imgW = pageW - margin * 2;
+                        const imgH = canvas.height * imgW / canvas.width;
+                        const imgData = canvas.toDataURL('image/jpeg', 0.92);
+                        const usable = pageH - margin * 2;
+                        let heightLeft = imgH;
+                        let position = margin;
+                        pdf.addImage(imgData, 'JPEG', margin, position, imgW, imgH);
+                        heightLeft -= usable;
+                        while (heightLeft > 0) {
+                            position = margin - (imgH - heightLeft);
+                            pdf.addPage();
+                            pdf.addImage(imgData, 'JPEG', margin, position, imgW, imgH);
+                            heightLeft -= usable;
+                        }
+                        pdf.save(String(title || 'document').replace(/[^a-z0-9]/gi, '_').toLowerCase() + '.pdf');
+                    } catch (e) { console.error('[ArtifactsLoader] PDF error', e); alert('Error generating PDF: ' + e.message); }
+                    cleanup();
+                }).catch((e) => { console.error('[ArtifactsLoader] html2canvas error', e); alert('Error generating PDF: ' + e.message); cleanup(); });
+                return;
+            }
+
             // Create progress indicator
             const progressOverlay = document.createElement('div');
             progressOverlay.style.cssText = `
