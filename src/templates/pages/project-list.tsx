@@ -157,15 +157,65 @@ export function ProjectListPage({ user, projects, instantApps = [], agents = [],
               <i class="fas fa-plus"></i> New Agent
             </button>
           ` : html`
-            <button
-              onclick="document.getElementById('create-modal').classList.add('active')"
-              class="btn btn-primary"
-              style="display:flex;align-items:center;gap:0.5rem;"
-            >
-              <i class="fas fa-plus"></i> New Project
-            </button>
+            <div style="display:flex;gap:0.5rem;">
+              <button onclick="document.getElementById('import-modal').classList.add('active')" class="btn btn-secondary" style="display:flex;align-items:center;gap:0.5rem;">
+                <i class="fas fa-upload"></i> Import
+              </button>
+              <button
+                onclick="document.getElementById('create-modal').classList.add('active')"
+                class="btn btn-primary"
+                style="display:flex;align-items:center;gap:0.5rem;"
+              >
+                <i class="fas fa-plus"></i> New Project
+              </button>
+            </div>
           `}
         </div>
+
+        <!-- Import project modal -->
+        <div class="modal-overlay" id="import-modal" style="position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.7);align-items:center;justify-content:center;">
+          <div style="background:var(--card-bg);border:1px solid var(--border-color);border-radius:var(--radius-lg);width:100%;max-width:480px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:1.25rem 1.5rem;border-bottom:1px solid var(--border-color);">
+              <h3 style="margin:0;font-size:1.1rem;font-weight:600;color:var(--text-color);">Import a project</h3>
+              <button type="button" onclick="document.getElementById('import-modal').classList.remove('active')" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:1.25rem;">&times;</button>
+            </div>
+            <div style="padding:1.5rem;">
+              <p style="margin:0 0 1rem;color:var(--text-secondary);font-size:0.85rem;line-height:1.5;">Upload a project export file. <strong style="color:#ef4444;">If a project with the same id already exists, its data is wiped and replaced</strong> — this is not a merge.</p>
+              <input type="file" id="import-file" accept="application/json,.json" class="input" style="width:100%;box-sizing:border-box;margin-bottom:1rem;" />
+              <label style="display:block;font-size:0.85rem;color:var(--text-color);margin-bottom:0.35rem;">Type <strong>IMPORT</strong> to confirm</label>
+              <input type="text" id="import-confirm" class="input" style="width:100%;box-sizing:border-box;margin-bottom:1rem;" placeholder="IMPORT" />
+              <div id="import-error" style="display:none;color:#ef4444;font-size:0.8rem;margin-bottom:0.75rem;"></div>
+              <div style="display:flex;gap:0.75rem;justify-content:flex-end;">
+                <button class="btn btn-secondary" onclick="document.getElementById('import-modal').classList.remove('active')">Cancel</button>
+                <button class="btn btn-primary" id="import-submit" onclick="submitImport()"><i class="fas fa-upload"></i> Import</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <script>
+          window.submitImport = function(){
+            var err = document.getElementById('import-error');
+            var fileInput = document.getElementById('import-file');
+            var confirmVal = (document.getElementById('import-confirm').value || '').trim();
+            if (confirmVal !== 'IMPORT'){ err.textContent = 'Type IMPORT to confirm.'; err.style.display='block'; return; }
+            if (!fileInput.files || !fileInput.files[0]){ err.textContent = 'Choose an export file.'; err.style.display='block'; return; }
+            err.style.display='none';
+            var btn = document.getElementById('import-submit'); btn.disabled = true; btn.textContent = 'Importing…';
+            var reader = new FileReader();
+            reader.onload = function(){
+              var payload;
+              try { payload = JSON.parse(reader.result); } catch(e){ err.textContent='That file is not valid JSON.'; err.style.display='block'; btn.disabled=false; btn.innerHTML='<i class="fas fa-upload"></i> Import'; return; }
+              fetch('/api/projects/import', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) })
+                .then(function(r){ return r.json().then(function(d){return {ok:r.ok,data:d};}); })
+                .then(function(res){
+                  if(!res.ok){ err.textContent=(res.data&&res.data.error)||'Import failed'; err.style.display='block'; btn.disabled=false; btn.innerHTML='<i class="fas fa-upload"></i> Import'; return; }
+                  window.location.href = '/projects/' + res.data.projectId;
+                })
+                .catch(function(){ err.textContent='Import failed.'; err.style.display='block'; btn.disabled=false; btn.innerHTML='<i class="fas fa-upload"></i> Import'; });
+            };
+            reader.readAsText(fileInput.files[0]);
+          };
+        </script>
 
         ${pendingInvites.length > 0 ? html`
           <div style="margin-bottom:1.5rem;">

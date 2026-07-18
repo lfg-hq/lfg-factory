@@ -1148,6 +1148,16 @@ export function ProjectDetailPage({
               ${isOwner ? html`<div id="invitations-list" style="margin-bottom:1rem;"></div>` : ""}
             </div>
 
+            ${(isOwner || role === "admin") ? html`
+            <div style="margin-top:2.5rem;padding-top:2rem;border-top:1px solid var(--border-color);">
+              <h3 style="font-size:1rem;font-weight:600;color:var(--text-color);margin:0 0 0.35rem;">Export project</h3>
+              <p style="margin:0 0 0.75rem;color:var(--text-secondary);font-size:0.85rem;">Download this project (docs, tickets, chats, pins, activity) as a file you can import on another LFG server. Env-var values and build history are not included.</p>
+              <a href="/api/projects/${project.projectId}/export" class="btn btn-secondary" style="display:inline-flex;align-items:center;gap:0.5rem;font-size:0.85rem;">
+                <i class="fas fa-download"></i> Export to file
+              </a>
+            </div>
+            ` : ""}
+
             ${isOwner ? html`
             <div style="margin-top:2.5rem;padding-top:2rem;border-top:1px solid var(--border-color);">
               <h3 style="font-size:1rem;font-weight:600;color:var(--danger-color);margin:0 0 0.75rem;">Danger Zone</h3>
