@@ -142,7 +142,7 @@ export function ProjectDetailPage({
             <i class="fas fa-comments"></i>
             <span class="nav-text">Chat</span>
           </a>
-          <a href="/projects/${project.projectId}" class="nav-link${activeTab === "inbox" ? " active" : ""}">
+          <a href="/projects/${project.projectId}" class="nav-link${activeTab === "home" ? " active" : ""}">
             <i class="fas fa-tachometer-alt"></i>
             <span class="nav-text">Dashboard</span>
           </a>
@@ -232,8 +232,11 @@ export function ProjectDetailPage({
 
       <!-- Horizontal Tab Nav -->
       <div class="project-tabs" style="display:flex;gap:0;border-bottom:1px solid var(--border-color);padding:0 2rem;background:var(--body-bg);">
-        <a href="/projects/${project.projectId}" class="tab-item${activeTab === "inbox" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "inbox" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "inbox" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
+        <a href="/projects/${project.projectId}" class="tab-item${activeTab === "home" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "home" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "home" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
           <i class="fas fa-house"></i> Home
+        </a>
+        <a href="/projects/${project.projectId}?tab=inbox" class="tab-item${activeTab === "inbox" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "inbox" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "inbox" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
+          <i class="fas fa-inbox"></i> Inbox
           <span id="inbox-tab-badge" style="display:none;font-size:0.7rem;background:var(--primary-color);color:#fff;padding:0.1rem 0.4rem;border-radius:9999px;"></span>
         </a>
         <a href="/projects/${project.projectId}?tab=conversations" class="tab-item${activeTab === "conversations" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "conversations" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "conversations" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
@@ -280,13 +283,14 @@ export function ProjectDetailPage({
 
       <!-- Tab content -->
       <div style="padding:2rem;max-width:1200px;margin:0 auto;">
-        ${activeTab === "inbox" ? html`
+        ${(activeTab === "home" || activeTab === "inbox") ? html`
           <style>
             @media (max-width: 900px) { .home-grid { grid-template-columns: 1fr !important; } }
             .home-card { border:1px solid var(--border-color); border-radius:var(--radius-lg); background:var(--card-bg); padding:1.25rem 1.5rem; }
             .home-sec-title { font-size:0.75rem; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.03em; margin:0 0 0.75rem; }
           </style>
 
+          ${activeTab === "home" ? html`
           <!-- Summary strip + quick actions -->
           <div class="home-card" style="margin-bottom:1.5rem;">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1.5rem;flex-wrap:wrap;">
@@ -343,24 +347,6 @@ export function ProjectDetailPage({
                 </div>
                 <div id="home-pins" style="margin-top:0.6rem;"><div style="color:var(--text-secondary);font-size:0.85rem;">Loading…</div></div>
               </div>
-
-              <!-- Your inbox (personal) -->
-              <div class="home-card" id="inbox-section">
-                <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;">
-                  <div style="display:flex;gap:0.85rem;align-items:center;">
-                    <h3 class="home-sec-title" style="margin:0;">Inbox</h3>
-                    <div style="display:inline-flex;gap:0.85rem;">
-                      <button id="inbox-tab-received" onclick="switchInboxTab('received')" style="font-size:0.8rem;padding:0.1rem 0;border:none;background:none;color:var(--text-color);font-weight:600;border-bottom:2px solid var(--primary-color);cursor:pointer;">Received</button>
-                      <button id="inbox-tab-sent" onclick="switchInboxTab('sent')" style="font-size:0.8rem;padding:0.1rem 0;border:none;background:none;color:var(--text-secondary);font-weight:500;border-bottom:2px solid transparent;cursor:pointer;">Sent</button>
-                    </div>
-                  </div>
-                  <div style="display:flex;gap:0.4rem;align-items:center;">
-                    <button id="inbox-markread" onclick="markAllInboxRead()" class="btn btn-secondary" style="font-size:0.72rem;display:none;">Mark all read</button>
-                    <button onclick="openRequestModal()" class="btn btn-primary" style="font-size:0.72rem;"><i class="fas fa-paper-plane"></i> New</button>
-                  </div>
-                </div>
-                <div id="inbox-list" style="margin-top:0.6rem;"><div style="color:var(--text-secondary);font-size:0.85rem;padding:0.75rem 0;">No items yet — assigned tickets, mentions and messages show up here.</div></div>
-              </div>
             </div>
           </div>
 
@@ -393,6 +379,26 @@ export function ProjectDetailPage({
               </div>
             </div>
           </div>
+          ` : ""}
+
+          ${activeTab === "inbox" ? html`
+          <!-- Dedicated Inbox: received / sent messages -->
+          <div class="home-card" id="inbox-section" style="margin-bottom:1.5rem;">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;flex-wrap:wrap;margin-bottom:0.75rem;">
+              <div style="display:flex;gap:1rem;align-items:center;">
+                <h2 style="margin:0;font-size:1.1rem;font-weight:600;color:var(--text-color);">Inbox</h2>
+                <div style="display:inline-flex;gap:1rem;">
+                  <button id="inbox-tab-received" onclick="switchInboxTab('received')" style="font-size:0.85rem;padding:0.15rem 0;border:none;background:none;color:var(--text-color);font-weight:600;border-bottom:2px solid var(--primary-color);cursor:pointer;">Received</button>
+                  <button id="inbox-tab-sent" onclick="switchInboxTab('sent')" style="font-size:0.85rem;padding:0.15rem 0;border:none;background:none;color:var(--text-secondary);font-weight:500;border-bottom:2px solid transparent;cursor:pointer;">Sent</button>
+                </div>
+              </div>
+              <div style="display:flex;gap:0.5rem;align-items:center;">
+                <button id="inbox-markread" onclick="markAllInboxRead()" class="btn btn-secondary" style="font-size:0.75rem;display:none;">Mark all read</button>
+                <button onclick="openRequestModal()" class="btn btn-primary" style="font-size:0.75rem;"><i class="fas fa-paper-plane"></i> New message</button>
+              </div>
+            </div>
+            <div id="inbox-list"><div style="color:var(--text-secondary);font-size:0.875rem;padding:1rem;border:1px dashed var(--border-color);border-radius:var(--radius);text-align:center;">No items yet — assigned tickets, mentions and messages sent to you show up here.</div></div>
+          </div>
 
           <!-- Sent-message detail modal -->
           <div class="modal-overlay" id="sentDetailModal" style="position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.7);align-items:center;justify-content:center;">
@@ -424,6 +430,7 @@ export function ProjectDetailPage({
               </div>
             </div>
           </div>
+          ` : ""}
           <script>
             (function(){
               var RQ_PID = '${project.projectId}';
@@ -632,6 +639,7 @@ export function ProjectDetailPage({
           </script>
           <script>
             (function(){
+              if ('${activeTab}' !== 'home') return; // Home-only widgets (shared script block)
               var HM_PID = '${project.projectId}';
               function hEsc(s){ return (s||'').replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
               function hRel(ts){ if(!ts) return ''; var d=new Date(ts); var s=Math.floor((Date.now()-d.getTime())/1000); if(s<60)return 'just now'; if(s<3600)return Math.floor(s/60)+'m ago'; if(s<86400)return Math.floor(s/3600)+'h ago'; return d.toLocaleDateString(); }
