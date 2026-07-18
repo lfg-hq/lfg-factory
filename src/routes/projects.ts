@@ -15,7 +15,8 @@ import { applicationState, githubTokens, gitlabTokens } from "../db/schema/users
 import { instantApps } from "../db/schema/instant.ts";
 import { env } from "../config/env.ts";
 import { agents } from "../db/schema/agents.ts";
-import { eq, and, desc, asc, notExists, or, sql } from "drizzle-orm";
+import { notifications } from "../db/schema/notifications.ts";
+import { eq, and, desc, asc, notExists, or, sql, inArray, isNull } from "drizzle-orm";
 import { listModels } from "../ai/provider.ts";
 import { saveContent, getContent, deleteContent } from "../services/s3.ts";
 import { getProjectActivities } from "../services/activity-log.ts";
@@ -103,6 +104,37 @@ projectsRouter.get("/projects", async (c) => {
     ...memberRows.map((r) => r.project).filter((p) => !ownedIds.has(p.id)),
   ];
 
+  // Per-project stats for the cards: chats, tickets, docs, and pending items
+  // for the current user. (conversations + notifications key off the PUBLIC id.)
+  const projInternalIds = rows.map((r) => r.id);
+  const projPublicIds = rows.map((r) => r.projectId);
+  const toMap = (arr: { pid: string | null; n: number }[]) => {
+    const m: Record<string, number> = {};
+    for (const r of arr) if (r.pid) m[r.pid] = Number(r.n);
+    return m;
+  };
+  const [convAgg, ticketAgg, docAgg, pendingAgg] = projInternalIds.length
+    ? await Promise.all([
+        db.select({ pid: conversations.projectId, n: sql<number>`count(*)` }).from(conversations).where(inArray(conversations.projectId, projPublicIds)).groupBy(conversations.projectId),
+        db.select({ pid: projectTickets.projectId, n: sql<number>`count(*)` }).from(projectTickets).where(inArray(projectTickets.projectId, projInternalIds)).groupBy(projectTickets.projectId),
+        db.select({ pid: projectFiles.projectId, n: sql<number>`count(*)` }).from(projectFiles).where(inArray(projectFiles.projectId, projInternalIds)).groupBy(projectFiles.projectId),
+        db.select({ pid: notifications.projectId, n: sql<number>`count(*)` }).from(notifications).where(and(eq(notifications.userId, user.id), inArray(notifications.projectId, projPublicIds), isNull(notifications.readAt))).groupBy(notifications.projectId),
+      ])
+    : [[], [], [], []];
+  const convByPub = toMap(convAgg);
+  const ticketByInt = toMap(ticketAgg);
+  const docByInt = toMap(docAgg);
+  const pendingByPub = toMap(pendingAgg);
+  const projectStats: Record<string, { conversations: number; tickets: number; docs: number; pending: number }> = {};
+  for (const p of rows) {
+    projectStats[p.id] = {
+      conversations: convByPub[p.projectId] ?? 0,
+      tickets: ticketByInt[p.id] ?? 0,
+      docs: docByInt[p.id] ?? 0,
+      pending: pendingByPub[p.projectId] ?? 0,
+    };
+  }
+
   // Fetch all instant apps for the user (across all projects + standalone)
   const appRows = await db
     .select({
@@ -158,6 +190,7 @@ projectsRouter.get("/projects", async (c) => {
   return c.html(ProjectListPage({
     user: { id: user.id, name: user.name, email: user.email },
     projects: rows,
+    projectStats,
     instantApps: appRows,
     pendingInvites,
     agents: agentRows.map((a) => ({

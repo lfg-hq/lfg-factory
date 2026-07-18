@@ -44,6 +44,7 @@ interface PendingInvite {
 interface ProjectListPageProps {
   user: { id: string; name: string; email?: string };
   projects: Project[];
+  projectStats?: Record<string, { conversations: number; tickets: number; docs: number; pending: number }>;
   instantApps?: InstantApp[];
   agents?: AgentSummary[];
   pendingInvites?: PendingInvite[];
@@ -52,7 +53,7 @@ interface ProjectListPageProps {
   success?: string;
 }
 
-export function ProjectListPage({ user, projects, instantApps = [], agents = [], pendingInvites = [], activeTab = "projects", error, success }: ProjectListPageProps) {
+export function ProjectListPage({ user, projects, projectStats = {}, instantApps = [], agents = [], pendingInvites = [], activeTab = "projects", error, success }: ProjectListPageProps) {
   const roleLabel = (r: string) => (r === "viewer" || r === "guest" ? "Viewer" : r === "admin" ? "Admin" : "Collaborator");
   const avatarLetter = (user.name?.[0] ?? user.email?.[0] ?? "?").toUpperCase();
   const isAppsTab = activeTab === "instant_apps";
@@ -415,24 +416,32 @@ export function ProjectListPage({ user, projects, instantApps = [], agents = [],
             </div>
           ` : html`
             <div class="project-list">
-              ${projects.map((p) => html`
+              ${projects.map((p) => {
+                const st = projectStats[p.id] ?? { conversations: 0, tickets: 0, docs: 0, pending: 0 };
+                return html`
                 <div class="project-list-item">
                   <a href="/projects/${p.projectId}" class="project-list-link">
                     <div class="project-list-main">
                       <div class="project-list-header">
                         <span class="project-icon">${p.icon}</span>
                         <h3 class="project-name">${p.name}</h3>
+                        ${st.pending > 0 ? html`<span title="${st.pending} item${st.pending === 1 ? "" : "s"} need your attention" style="margin-left:0.5rem;font-size:0.7rem;background:var(--primary-color);color:#fff;padding:0.1rem 0.5rem;border-radius:9999px;font-weight:600;"><i class="fas fa-bell" style="font-size:0.6rem;margin-right:0.25rem;"></i>${st.pending}</span>` : ""}
                       </div>
                       <div class="project-stats">
                         <div class="stat-item">
                           <i class="fas fa-comments"></i>
-                          <span class="stat-value">0</span>
-                          <span class="stat-label">Conversations</span>
+                          <span class="stat-value">${st.conversations}</span>
+                          <span class="stat-label">Chat${st.conversations === 1 ? "" : "s"}</span>
+                        </div>
+                        <div class="stat-item">
+                          <i class="fas fa-file-lines"></i>
+                          <span class="stat-value">${st.docs}</span>
+                          <span class="stat-label">Doc${st.docs === 1 ? "" : "s"}</span>
                         </div>
                         <div class="stat-item">
                           <i class="fas fa-tasks"></i>
-                          <span class="stat-value">0</span>
-                          <span class="stat-label">Tickets</span>
+                          <span class="stat-value">${st.tickets}</span>
+                          <span class="stat-label">Ticket${st.tickets === 1 ? "" : "s"}</span>
                         </div>
                       </div>
                     </div>
@@ -449,7 +458,7 @@ export function ProjectListPage({ user, projects, instantApps = [], agents = [],
                     </a>
                   </div>
                 </div>
-              `)}
+              `; })}
             </div>
           `}
         `}
