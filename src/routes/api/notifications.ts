@@ -122,9 +122,9 @@ notificationsApi.post("/:projectId/requests", async (c) => {
     : [];
 
   const link = ticketRows.length && !docRows.length
-    ? `/projects/${projectId}/?tab=tickets`
+    ? `/projects/${projectId}?tab=tickets`
     : docRows.length
-      ? `/projects/${projectId}/?tab=documents`
+      ? `/projects/${projectId}?tab=documents`
       : `/projects/${projectId}`;
 
   const refs = [

@@ -6214,7 +6214,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     order: currentOrder
                 });
                 
-                fetch(`/projects/${projectId}/api/files/browser/?${params}`, {
+                fetch(`/projects/${projectId}/api/files/browser?${params}`, {
                     method: 'GET',
                     headers: {
                         'Content-Type': 'application/json',
@@ -6749,7 +6749,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                 }
 
-                fetch(`/projects/${projectId}/api/files/${fileId}/content/`, {
+                fetch(`/projects/${projectId}/api/files/${fileId}/content`, {
                     method: 'GET',
                     headers: {
                         'Content-Type': 'application/json',
@@ -8729,7 +8729,7 @@ document.addEventListener('DOMContentLoaded', function() {
             
             // Copy file content to clipboard
             const copyFileContent = (fileId) => {
-                fetch(`/projects/${projectId}/api/files/${fileId}/content/`, {
+                fetch(`/projects/${projectId}/api/files/${fileId}/content`, {
                     method: 'GET',
                     headers: {
                         'Content-Type': 'application/json',

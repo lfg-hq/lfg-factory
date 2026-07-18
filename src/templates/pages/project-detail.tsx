@@ -483,7 +483,7 @@ export function ProjectDetailPage({
                 document.getElementById('rq-tickets').innerHTML = 'Loading…';
                 Promise.all([
                   fetch('/api/projects/'+RQ_PID+'/members').then(function(r){return r.json();}),
-                  fetch('/projects/'+RQ_PID+'/api/files/browser/?per_page=100').then(function(r){return r.json();}).catch(function(){return {files:[]};}),
+                  fetch('/projects/'+RQ_PID+'/api/files/browser?per_page=100').then(function(r){return r.json();}).catch(function(){return {files:[]};}),
                   fetch('/api/projects/'+RQ_PID+'/tickets').then(function(r){return r.json();}).catch(function(){return {tickets:[]};})
                 ]).then(function(res){
                   var m = res[0]||{}; var raw = [];
@@ -560,7 +560,7 @@ export function ProjectDetailPage({
               var IB_DOCS = null;
               function ensureDocs(cb){
                 if (IB_DOCS) return cb(IB_DOCS);
-                fetch('/projects/'+IB_PID+'/api/files/browser/?per_page=200').then(function(r){return r.json();})
+                fetch('/projects/'+IB_PID+'/api/files/browser?per_page=200').then(function(r){return r.json();})
                   .then(function(d){ IB_DOCS = (d && d.files) || []; cb(IB_DOCS); })
                   .catch(function(){ IB_DOCS = []; cb(IB_DOCS); });
               }
@@ -761,7 +761,7 @@ export function ProjectDetailPage({
                 document.getElementById('pinModal').classList.add('active');
                 onPinTypeChange();
                 var dSel = document.getElementById('pin-doc'); dSel.innerHTML = '<option value="">Loading…</option>';
-                fetch('/projects/'+HM_PID+'/api/files/browser/?per_page=200').then(function(r){return r.json();}).then(function(d){
+                fetch('/projects/'+HM_PID+'/api/files/browser?per_page=200').then(function(r){return r.json();}).then(function(d){
                   var docs = (d&&d.files)||[];
                   dSel.innerHTML = docs.length ? docs.map(function(x){ return '<option value="'+x.id+'">'+hEsc(x.name||'Untitled')+'</option>'; }).join('') : '<option value="">No documents yet</option>';
                 }).catch(function(){ dSel.innerHTML='<option value="">Failed to load</option>'; });

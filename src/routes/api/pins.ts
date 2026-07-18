@@ -52,10 +52,10 @@ pinsApi.get("/:projectId/pins", async (c) => {
     let label = r.label;
     if (r.targetType === "document" && r.targetId) {
       label = docNames.get(r.targetId) ?? r.label;
-      href = `/projects/${projectId}/?tab=documents&doc=${encodeURIComponent(r.targetId)}&docName=${encodeURIComponent(label)}`;
+      href = `/projects/${projectId}?tab=documents&doc=${encodeURIComponent(r.targetId)}&docName=${encodeURIComponent(label)}`;
     } else if (r.targetType === "ticket" && r.targetId) {
       label = ticketNames.get(r.targetId) ?? r.label;
-      href = `/projects/${projectId}/?tab=tickets`;
+      href = `/projects/${projectId}?tab=tickets`;
     }
     return { id: r.id, targetType: r.targetType, label, href };
   });

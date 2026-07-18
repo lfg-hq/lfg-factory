@@ -5438,7 +5438,7 @@ document.addEventListener('DOMContentLoaded', () => {
         
         try {
             // Get the file content
-            const url = `/projects/${currentProjectId}/api/files/${file.id}/content/`;
+            const url = `/projects/${currentProjectId}/api/files/${file.id}/content`;
             const response = await fetch(url, {
                 method: 'GET',
                 headers: {
