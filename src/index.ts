@@ -182,10 +182,18 @@ async function handleFetch(req: Request, server: import("bun").Server<WsData>): 
     return new Response("WebSocket upgrade failed", { status: 500 });
   }
 
-  // Strip trailing slashes from CLI callback URLs — the VM may POST with
-  // trailing slashes and Hono's trimTrailingSlash issues 301 redirects that
-  // lose POST bodies. Rewrite the URL in-place before handing to Hono.
-  if (url.pathname.startsWith("/api/v1/cli") && url.pathname.endsWith("/") && url.pathname.length > 1) {
+  // Normalize trailing slashes for the API/app namespaces in-place (no redirect).
+  // The frontend uses Django-style "/…/" URLs everywhere; Hono's trimTrailingSlash
+  // would 301-redirect each one — a wasted round-trip per call (and it drops POST
+  // bodies). Rewriting the URL here before routing avoids the redirect entirely.
+  // Landing/marketing pages are left to trimTrailingSlash (SEO canonical URLs).
+  if (
+    url.pathname.length > 1 &&
+    url.pathname.endsWith("/") &&
+    (url.pathname.startsWith("/api/") ||
+      url.pathname.startsWith("/projects/") ||
+      url.pathname.startsWith("/accounts/"))
+  ) {
     const cleaned = url.pathname.replace(/\/+$/, "") + url.search;
     const rewritten = new Request(new URL(cleaned, url.origin).toString(), req);
     return app.fetch(rewritten);
