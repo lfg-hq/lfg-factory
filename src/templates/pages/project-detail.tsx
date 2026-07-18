@@ -311,6 +311,7 @@ export function ProjectDetailPage({
               <div style="display:flex;gap:0.5rem;flex-wrap:wrap;flex:0 0 auto;">
                 ${role !== "viewer" ? html`<a href="/chat/project/${project.projectId}" class="btn btn-primary" style="display:inline-flex;align-items:center;gap:0.45rem;font-size:0.85rem;white-space:nowrap;"><i class="fas fa-comments"></i> Start a chat</a>` : ""}
                 ${role !== "viewer" ? html`<a href="/projects/${project.projectId}?tab=tickets" class="btn btn-secondary" style="display:inline-flex;align-items:center;gap:0.45rem;font-size:0.85rem;white-space:nowrap;"><i class="fas fa-plus"></i> New ticket</a>` : ""}
+                <button onclick="openRequestModal()" class="btn btn-secondary" style="display:inline-flex;align-items:center;gap:0.45rem;font-size:0.85rem;white-space:nowrap;"><i class="fas fa-paper-plane"></i> New message</button>
                 ${!project.repoUrl && (isOwner || role === "admin") ? html`<button onclick="showCodebaseModal()" class="btn btn-secondary" style="display:inline-flex;align-items:center;gap:0.45rem;font-size:0.85rem;white-space:nowrap;"><i class="fab fa-github"></i> Connect repo</button>` : ""}
                 ${(isOwner || role === "admin") ? html`<a href="/projects/${project.projectId}?tab=settings" class="btn btn-secondary" style="display:inline-flex;align-items:center;gap:0.45rem;font-size:0.85rem;white-space:nowrap;"><i class="fas fa-user-plus"></i> Invite</a>` : ""}
               </div>
@@ -327,6 +328,26 @@ export function ProjectDetailPage({
                   <a href="/projects/${project.projectId}?tab=inbox" style="font-size:0.78rem;color:var(--primary-color);text-decoration:none;">Open inbox</a>
                 </div>
                 <div id="home-actions-list" style="margin-top:0.5rem;"></div>
+              </div>
+
+              <!-- Recent chats -->
+              <div class="home-card">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                  <h3 class="home-sec-title" style="margin:0;">Recent chats</h3>
+                  <a href="/projects/${project.projectId}?tab=conversations" style="font-size:0.78rem;color:var(--primary-color);text-decoration:none;">See all</a>
+                </div>
+                ${conversations.length === 0 ? html`
+                  <div style="margin-top:0.5rem;color:var(--text-secondary);font-size:0.85rem;padding:0.5rem 0;">No chats yet. <a href="/chat/project/${project.projectId}" style="color:var(--primary-color);text-decoration:none;">Start one →</a></div>
+                ` : html`
+                  <div class="lfg-list" style="margin-top:0.6rem;">
+                    ${conversations.slice(0, 5).map((cv) => html`
+                      <a href="/chat/project/${project.projectId}/conversation/${cv.id}" class="lfg-row">
+                        <span style="flex:1;font-size:0.875rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${cv.title ?? "Untitled conversation"}</span>
+                        <span style="font-size:0.72rem;color:var(--text-secondary);flex:none;">${new Date(cv.updatedAt).toLocaleDateString()}</span>
+                      </a>
+                    `)}
+                  </div>
+                `}
               </div>
 
               <!-- Activity feed -->
@@ -421,7 +442,9 @@ export function ProjectDetailPage({
               <div id="sent-detail-body" style="padding:1.5rem;font-size:0.9rem;color:var(--text-color);"></div>
             </div>
           </div>
+          ` : ""}
 
+          <!-- Compose-message modal (shared by Home + Inbox) -->
           <div class="modal-overlay" id="requestModal" style="position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.7);align-items:center;justify-content:center;">
             <div style="background:var(--card-bg);border:1px solid var(--border-color);border-radius:var(--radius-lg);width:100%;max-width:480px;">
               <div style="display:flex;align-items:center;justify-content:space-between;padding:1.25rem 1.5rem;border-bottom:1px solid var(--border-color);">
@@ -441,7 +464,6 @@ export function ProjectDetailPage({
               </div>
             </div>
           </div>
-          ` : ""}
           <script>
             (function(){
               var RQ_PID = '${project.projectId}';
@@ -616,9 +638,10 @@ export function ProjectDetailPage({
                   + '</div>';
               }
               function loadInbox(){
+                var list = document.getElementById('inbox-list');
+                if (!list) return; // not on the Inbox tab
                 fetch('/api/projects/'+IB_PID+'/notifications').then(function(r){return r.json();}).then(function(data){
                   IB_RECV = data.notifications || [];
-                  var list = document.getElementById('inbox-list');
                   if (!IB_RECV.length){ list.innerHTML = ibEmpty('No items yet — assigned tickets, mentions and messages sent to you show up here.'); return; }
                   document.getElementById('inbox-markread').style.display = IB_RECV.some(function(n){return !n.readAt;}) ? '' : 'none';
                   var html = '<div class="lfg-list">';
