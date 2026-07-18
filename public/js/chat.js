@@ -4974,7 +4974,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Function to load agent settings including turbo mode
     async function loadAgentSettings() {
         try {
-            const response = await fetch('/accounts/agent-settings/', {
+            const response = await fetch('/accounts/agent-settings', {
                 method: 'GET',
                 headers: {
                     'X-CSRFToken': getCsrfToken(),

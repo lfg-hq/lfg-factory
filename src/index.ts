@@ -94,8 +94,10 @@ app.route("/api/projects", pinsApi);
 app.route("/api/projects", projectTransferApi);
 
 // ── Django-compat stubs ──────────────────────────────────────────────
-// chat.js calls /accounts/agent-settings/ for turbo mode + role state
-app.get("/accounts/agent-settings/", async (c) => {
+// chat.js calls /accounts/agent-settings for turbo mode + role state.
+// Registered WITHOUT a trailing slash: trimTrailingSlash() strips the slash and
+// 301-redirects before routing, so a "/…/" registration would 404 post-redirect.
+app.get("/accounts/agent-settings", async (c) => {
   const session = await auth.api.getSession({ headers: c.req.raw.headers });
   if (!session?.user) return c.json({ success: false }, 401);
 
