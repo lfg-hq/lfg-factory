@@ -3,21 +3,23 @@
  * that hosts the app + its DBs (co-located, reached over 127.0.0.1) + git
  * worktrees per branch. Used for testing the app, QA, and building tickets.
  *
- * Validated live: keepAlive keeps the VM stable; DBs install NATIVELY via apk
- * (docker OOMs a 4GB VM); the app talks to them over localhost. Two required
- * fixes are baked into the recipes: `chmod 711 /root` (so the db user can
- * traverse into a datadir under /root) and enabling TCP (Alpine disables it).
+ * VM model (standardized on Instant): a local ext4 volume (diskGb) mounted at
+ * /data, NO JuiceFS/S3 sync (noSync). The app (/data/project) and DB datadirs
+ * (/data/db-*) both live on that volume — nothing is on the synced /workspace,
+ * so we don't pay for or risk that mount. keepAlive keeps this box always-on
+ * (unlike Instant, which reaps + rebuilds from GitHub) since it hosts the DBs.
  *
- * Persistence note: the sandbox is kept alive (never reaped) because S3
- * restore-on-respawn isn't confirmed yet — so data survives as long as the env
- * is up. Stopping is intentionally not exposed until sync-on-stop is verified.
+ * DBs install NATIVELY via apk (docker OOMs a 4GB VM); the app talks to them
+ * over 127.0.0.1. The one required fix baked into the recipes is enabling TCP
+ * (Alpine disables it). Data persists as long as the VM is up; a hard VM loss
+ * means a fresh setup (re-clone + re-provision), same tradeoff as Instant.
  */
 import { db } from "../config/db.ts";
 import { projectEnvironments } from "../db/schema/project-environments.ts";
 import { projectDatabases } from "../db/schema/project-databases.ts";
 import { and, eq } from "drizzle-orm";
 import { encryptSecret, decryptSecret } from "../utils/crypto.ts";
-import { newWorkspace, execOnWorkspace, findJob } from "./mags.ts";
+import { newWorkspace, execOnWorkspace, findJob, deleteWorkspace } from "./mags.ts";
 
 export type DbEngine = "postgres" | "mysql" | "redis";
 
@@ -31,15 +33,18 @@ export interface EngineSpec {
   connectionString: (c: { port: number; db: string; user: string; pw: string }) => string;
 }
 
-// Datadirs live on /root (persists across execs while the always-on VM is up).
+// Datadirs live on /data — the big ext4 volume (diskGb) mounted by Mags, same as
+// Instant. NOT /root (only ~1.9GB → fills up). Co-located with the app in
+// /data/project; persists as long as the keep-alive VM is up.
 export const ENGINES: Record<DbEngine, EngineSpec> = {
   mysql: {
     pkgs: "mariadb mariadb-client", port: 3306, defaultDb: "app", username: "app",
     bringup: (pw) => `set -e
 apk add --no-cache mariadb mariadb-client >/dev/null 2>&1
-mkdir -p /run/mysqld /root/db-mysql && chmod 711 /root && chown -R mysql:mysql /run/mysqld /root/db-mysql
-[ -d /root/db-mysql/mysql ] || mariadb-install-db --user=mysql --datadir=/root/db-mysql --auth-root-authentication-method=normal >/dev/null 2>&1
-pgrep mariadbd >/dev/null || (setsid mariadbd --user=mysql --datadir=/root/db-mysql --socket=/run/mysqld/mysqld.sock --skip-networking=0 --bind-address=127.0.0.1 --port=3306 >/root/mysql.log 2>&1 &)
+chmod 755 /data 2>/dev/null || true
+mkdir -p /run/mysqld /data/db-mysql && chown -R mysql:mysql /run/mysqld /data/db-mysql
+[ -d /data/db-mysql/mysql ] || mariadb-install-db --user=mysql --datadir=/data/db-mysql --auth-root-authentication-method=normal >/dev/null 2>&1
+pgrep mariadbd >/dev/null || (setsid mariadbd --user=mysql --datadir=/data/db-mysql --socket=/run/mysqld/mysqld.sock --skip-networking=0 --bind-address=127.0.0.1 --port=3306 >/data/mysql.log 2>&1 &)
 for i in $(seq 1 30); do mariadb-admin ping --socket=/run/mysqld/mysqld.sock 2>/dev/null | grep -q alive && break; sleep 2; done
 mariadb --socket=/run/mysqld/mysqld.sock -e "CREATE DATABASE IF NOT EXISTS app; CREATE USER IF NOT EXISTS 'app'@'127.0.0.1' IDENTIFIED BY '${pw}'; GRANT ALL ON app.* TO 'app'@'127.0.0.1'; FLUSH PRIVILEGES;" 2>/dev/null
 mariadb-admin ping --socket=/run/mysqld/mysqld.sock 2>/dev/null | grep -q alive && echo ENGINE_READY || echo ENGINE_ERROR`,
@@ -49,12 +54,12 @@ mariadb-admin ping --socket=/run/mysqld/mysqld.sock 2>/dev/null | grep -q alive 
     pkgs: "postgresql postgresql-client", port: 5432, defaultDb: "app", username: "app",
     bringup: (pw) => `set -e
 apk add --no-cache postgresql postgresql-client >/dev/null 2>&1
-chmod 711 /root; mkdir -p /root/db-postgres /run/postgresql
-chown postgres:postgres /root/db-postgres /run/postgresql; chmod 700 /root/db-postgres
-[ -f /root/db-postgres/PG_VERSION ] || su postgres -c "initdb -D /root/db-postgres" >/dev/null 2>&1
-grep -q "listen_addresses='127.0.0.1'" /root/db-postgres/postgresql.conf || echo "listen_addresses='127.0.0.1'" >> /root/db-postgres/postgresql.conf
-grep -q "127.0.0.1/32 md5" /root/db-postgres/pg_hba.conf || echo "host all all 127.0.0.1/32 md5" >> /root/db-postgres/pg_hba.conf
-pgrep -x postgres >/dev/null || su postgres -c "pg_ctl -D /root/db-postgres -l /root/pg.log -o '-p 5432' -w start" >/dev/null 2>&1
+chmod 755 /data 2>/dev/null || true; mkdir -p /data/db-postgres /run/postgresql
+chown postgres:postgres /data/db-postgres /run/postgresql; chmod 700 /data/db-postgres
+[ -f /data/db-postgres/PG_VERSION ] || su postgres -c "initdb -D /data/db-postgres" >/dev/null 2>&1
+grep -q "listen_addresses='127.0.0.1'" /data/db-postgres/postgresql.conf || echo "listen_addresses='127.0.0.1'" >> /data/db-postgres/postgresql.conf
+grep -q "127.0.0.1/32 md5" /data/db-postgres/pg_hba.conf || echo "host all all 127.0.0.1/32 md5" >> /data/db-postgres/pg_hba.conf
+pgrep -x postgres >/dev/null || su postgres -c "pg_ctl -D /data/db-postgres -l /data/pg.log -o '-p 5432' -w start" >/dev/null 2>&1
 sleep 2
 su postgres -c "psql -tAc \\"SELECT 1 FROM pg_database WHERE datname='app'\\"" 2>/dev/null | grep -q 1 || su postgres -c "createdb app" 2>/dev/null
 su postgres -c "psql -tAc \\"SELECT 1 FROM pg_roles WHERE rolname='app'\\"" 2>/dev/null | grep -q 1 || su postgres -c "psql -c \\"CREATE ROLE app LOGIN PASSWORD '${pw}'\\"" 2>/dev/null
@@ -66,8 +71,8 @@ su postgres -c "pg_isready -h 127.0.0.1 -p 5432" 2>/dev/null | grep -q "acceptin
     pkgs: "redis", port: 6379, defaultDb: "0", username: "default",
     bringup: (pw) => `set -e
 apk add --no-cache redis >/dev/null 2>&1
-mkdir -p /root/db-redis
-pgrep redis-server >/dev/null || (setsid redis-server --bind 127.0.0.1 --port 6379 --requirepass '${pw}' --dir /root/db-redis --appendonly yes >/root/redis.log 2>&1 &)
+mkdir -p /data/db-redis
+pgrep redis-server >/dev/null || (setsid redis-server --bind 127.0.0.1 --port 6379 --requirepass '${pw}' --dir /data/db-redis --appendonly yes >/data/redis.log 2>&1 &)
 for i in $(seq 1 15); do redis-cli -a '${pw}' ping 2>/dev/null | grep -q PONG && break; sleep 1; done
 redis-cli -a '${pw}' ping 2>/dev/null | grep -q PONG && echo ENGINE_READY || echo ENGINE_ERROR`,
     connectionString: (c) => `redis://${c.user}:${c.pw}@127.0.0.1:${c.port}`,
@@ -91,14 +96,29 @@ export async function ensureProjectSandbox(projectId: string): Promise<{ workspa
   const job = await findJob(workspaceId).catch(() => null);
   const alive = job?.status === "running";
   if (!alive) {
-    try {
-      // create (or respawn) — same workspaceId re-mounts if it exists
-      await newWorkspace(workspaceId, { memGb: 4, diskGb: 20, keepAlive: true });
-    } catch (err) {
-      // "already exists (status: running)" is success — the always-on sandbox is
-      // up, which is exactly what we want. Only rethrow genuine failures.
-      const msg = (err as Error)?.message ?? String(err);
-      if (!/already exists/i.test(msg)) throw err;
+    // Standardized on the Instant VM model: a local ext4 volume mounted at /data
+    // (diskGb), NO JuiceFS/S3 sync (noSync) — the app + DBs live on /data, not on
+    // the synced /workspace, so syncing it only added cost + flakiness. keepAlive
+    // keeps this always-on box up (it hosts the DBs), unlike Instant which reaps.
+    const opts = { noSync: true, diskGb: 20, memGb: 4, keepAlive: true } as const;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await newWorkspace(workspaceId, opts);
+        break;
+      } catch (err) {
+        const msg = (err as Error)?.message ?? String(err);
+        // Already up → success (that's the goal).
+        if (/already exists/i.test(msg)) break;
+        // Transient Mags provisioning failure (VM ended with status: error /
+        // completed, or never started) — clear the bad VM and retry.
+        if (attempt < 3 && /status: error|status: completed|did not start/i.test(msg)) {
+          console.warn(`[project-sandbox] VM ${workspaceId} attempt ${attempt} failed (${msg.slice(0, 80)}); recreating…`);
+          await deleteWorkspace(workspaceId).catch(() => {});
+          await sleep(3000);
+          continue;
+        }
+        throw err;
+      }
     }
   }
 

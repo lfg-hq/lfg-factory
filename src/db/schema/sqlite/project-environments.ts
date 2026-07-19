@@ -3,9 +3,9 @@ import { sql } from "drizzle-orm";
 import { projects } from "./projects.ts";
 
 // ── Project environments ─────────────────────────────────────────────
-// ONE persistent, S3-backed Mags sandbox per project — hosts the app, its DBs
-// (co-located, localhost), and git worktrees per branch. Data lives on the
-// synced workspace (/root) so it survives stop → respawn.
+// ONE always-on Mags sandbox per project (Instant VM model: local /data ext4
+// volume, noSync) — hosts the app + its DBs (co-located under /data, localhost).
+// Data lives on the /data volume; persists as long as the VM is up.
 export const projectEnvironments = sqliteTable(
   "project_environment",
   {
