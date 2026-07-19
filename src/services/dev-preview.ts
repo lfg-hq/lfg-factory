@@ -18,13 +18,15 @@ import { and, eq } from "drizzle-orm";
 import { db } from "../config/db.ts";
 import { projects, projectEnvironmentVariables } from "../db/schema/projects.ts";
 import { projectEnvironments } from "../db/schema/project-environments.ts";
-import { githubTokens } from "../db/schema/users.ts";
+import { githubTokens, llmApiKeys } from "../db/schema/users.ts";
+import { modelSelections } from "../db/schema/chat.ts";
 import { getValidGitlabToken } from "./gitlab-token.ts";
-import { getModel, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
+import { getModel, getProviderName, getProviderModel, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
 import { decryptSecret } from "../utils/crypto.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { enableHttpAccess, execOnWorkspace, setStableUrl } from "./mags.ts";
-import { ensureProjectSandbox, ensureEngine, type DbEngine } from "./project-sandbox.ts";
+import { ensureProjectSandbox, ensureEngine, type DbEngine, type EngineHandle } from "./project-sandbox.ts";
+import { startPiCli, streamPiToCompletion, isPiSupportedProvider } from "./pi-cli.ts";
 
 const PROJECT_DIR = "/data/project";
 const DEFAULT_PORT = 8080; // fallback ONLY — the real port is decided by the detected manifest per stack
@@ -210,6 +212,83 @@ echo LAUNCHED
   return checkServer(workspaceId, port, 20); // ~60s
 }
 
+// ── Agent runner (full loop): an in-sandbox coding agent gets the app running
+// and verifies it against the port, self-correcting from logs. Matches the
+// project chat model via Pi. ────────────────────────────────────────────────
+async function resolveAgentModel(userId: string): Promise<{ provider: string; modelId: string; apiKey: string } | null> {
+  const [sel] = await db.select().from(modelSelections).where(eq(modelSelections.userId, userId));
+  const modelKey = sel?.selectedModel ?? DEFAULT_MODEL_KEY;
+  const provider = getProviderName(modelKey);
+  if (!provider || !isPiSupportedProvider(provider)) return null; // e.g. anthropic → deterministic fallback
+  const [keys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, userId));
+  const apiKey = (keys as Record<string, string | null> | undefined)?.[`${provider}ApiKey`] || "";
+  if (!apiKey) return null;
+  return { provider, modelId: getProviderModel(modelKey) ?? modelKey, apiKey };
+}
+
+function buildRunPrompt(manifest: PreviewManifest, engines: EngineHandle[]): string {
+  const port = manifest.port;
+  const dbLines = engines.length
+    ? engines.map((e) => `  - ${e.engine} on 127.0.0.1:${e.port} (db "${e.dbName}", user "${e.username}") — connection string in .env`).join("\n")
+    : "  - none";
+  const hint = (label: string, v: string) => (v ? `  - ${label}: \`${v}\`` : "");
+  return `You are getting an EXISTING application RUNNING inside a Linux sandbox so it can be previewed live in a browser. Work in ${PROJECT_DIR}.
+
+Context:
+- The repo is already cloned at ${PROJECT_DIR}.
+- A .env file already exists there with database credentials and PORT/HOST — load and use it (\`set -a; . ./.env; set +a\`).
+- Databases are already installed and RUNNING locally (do not install or start any database):
+${dbLines}
+- Detected stack is only a HINT — verify against the actual code: runtime=${manifest.runtime || "?"}, framework=${manifest.framework || "?"}.
+${[hint("install", manifest.installCmd), hint("build", manifest.buildCmd), hint("migrate", manifest.migrateCmd), hint("seed", manifest.seedCmd), hint("run", manifest.runCmd)].filter(Boolean).join("\n")}
+
+GOAL: the app must be serving HTTP on 0.0.0.0:${port} and actually respond.
+
+Steps:
+1. Install dependencies.
+2. Run DB migrations and seed data if the app has them (creds are already in .env).
+3. Start the app in the BACKGROUND, bound to host 0.0.0.0 on port ${port}, DETACHED so it keeps running after your command returns — e.g. \`setsid sh -c 'set -a; . ./.env; set +a; export PORT=${port} HOST=0.0.0.0; <run command>' </dev/null > ${PROJECT_DIR}/preview.log 2>&1 &\`.
+4. VERIFY it is truly up: \`curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:${port}/\`. A 2xx/3xx/4xx = serving. 000 or "connection refused" = NOT up.
+5. If it is not up: read ${PROJECT_DIR}/preview.log and the build output, DIAGNOSE (missing dep, wrong build step, missing env var, DB not migrated, needs a production build first, wrong host/port), FIX it, and RETRY. Iterate until it responds.
+
+When the app responds on port ${port}, print on its own line exactly:
+PREVIEW_READY ${port}
+If after genuine effort it truly cannot run, print exactly:
+PREVIEW_FAILED <one-line reason>
+
+Hard rules: the server MUST bind 0.0.0.0 (not localhost-only) and MUST be detached (survive your shell). Never print secrets. Keep going until the app serves HTTP on port ${port} or you are certain it cannot.`;
+}
+
+async function runViaAgent(
+  projectId: string,
+  userId: string,
+  workspaceId: string,
+  manifest: PreviewManifest,
+  engines: EngineHandle[],
+  agent: { provider: string; modelId: string; apiKey: string },
+): Promise<boolean> {
+  const prompt = buildRunPrompt(manifest, engines);
+  const pi = await startPiCli({
+    workspaceId,
+    prompt,
+    projectDir: PROJECT_DIR, // pi-cli strips /data/ → "project"
+    provider: agent.provider,
+    modelId: agent.modelId,
+    apiKey: agent.apiKey,
+  });
+  const result = await streamPiToCompletion({
+    workspaceId,
+    outputFile: pi.outputFile,
+    backgroundPid: pi.backgroundPid,
+    timeoutMs: 20 * 60_000,
+    onProgress: (m) => { setPreview(projectId, userId, { previewStatus: "starting" }, m).catch(() => {}); },
+  });
+  // Trust the reality of the port, not just the agent's word: confirm it listens.
+  if (await checkServer(workspaceId, manifest.port, 8)) return true;
+  if (result.tail && /PREVIEW_READY/.test(result.tail)) return await checkServer(workspaceId, manifest.port, 4);
+  return false;
+}
+
 // ── Public API ───────────────────────────────────────────────────────────────
 export interface SetupOptions { userId: string; branch?: string; rebuildManifest?: boolean }
 
@@ -274,12 +353,14 @@ fi`, 240_000);
       await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
     }
 
-    // 3. Provision the DBs the app needs.
+    // 3. Provision the DBs the app needs (keep the handles for the agent prompt).
     const provisioned: Record<string, string> = {};
+    const engineHandles: EngineHandle[] = [];
     if (manifest.engines.length) {
       await setPreview(projectId, userId, { previewStatus: "provisioning" }, `Provisioning ${manifest.engines.join(", ")}…`);
       for (const engine of manifest.engines) {
         const h = await ensureEngine(projectId, engine);
+        engineHandles.push(h);
         Object.assign(provisioned, engineEnv(engine, h));
       }
     }
@@ -287,31 +368,33 @@ fi`, 240_000);
     // 4. Write env (provisioned creds + stored project vars).
     await writeEnvFile(workspaceId, projectId, manifest, provisioned);
 
-    // 5. Install deps.
-    await setPreview(projectId, userId, { previewStatus: "installing" }, "Installing dependencies…");
-    const install = await sh(workspaceId, `
+    // 5. Get the app running + VERIFIED. Preferred: an in-sandbox coding agent
+    // (matches the project chat model) that installs, migrates/seeds, starts the
+    // server, curls the port, and self-corrects from logs. Falls back to the
+    // deterministic runner when no Pi-capable model/key is available.
+    const agent = await resolveAgentModel(userId);
+    let up = false;
+    if (agent) {
+      await setPreview(projectId, userId, { previewStatus: "starting" }, `Agent (${agent.provider}) is getting the app running…`);
+      up = await runViaAgent(projectId, userId, workspaceId, manifest, engineHandles, agent);
+    } else {
+      // Deterministic fallback: install → migrate/seed → start.
+      await setPreview(projectId, userId, { previewStatus: "installing" }, "Installing dependencies…");
+      await sh(workspaceId, `
 export PATH=/root/node/current/bin:/root/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:$PATH
 export npm_config_cache=/data/.npm-cache NODE_OPTIONS="--max-old-space-size=1536"
 cd ${PROJECT_DIR} && ${manifest.installCmd} > install.log 2>&1; echo "INSTALL_EXIT=$?"; tail -3 install.log`, 480_000);
-    const installExit = (install.output.match(/INSTALL_EXIT=(\d+)/) || [])[1];
-    if (installExit && installExit !== "0") {
-      // Non-fatal for some stacks, but log it.
-      console.warn(`[dev-preview] install exit ${installExit}: ${install.output.slice(-300)}`);
+      if (manifest.migrateCmd || manifest.seedCmd) {
+        await setPreview(projectId, userId, { previewStatus: "seeding" }, "Running migrations + seed…");
+        if (manifest.migrateCmd) await sh(workspaceId, `cd ${PROJECT_DIR} && set -a; . ./.env 2>/dev/null; set +a; ${manifest.migrateCmd} >> migrate.log 2>&1; echo done`, 300_000);
+        if (manifest.seedCmd) await sh(workspaceId, `cd ${PROJECT_DIR} && set -a; . ./.env 2>/dev/null; set +a; ${manifest.seedCmd} >> migrate.log 2>&1; echo done`, 300_000);
+      }
+      await setPreview(projectId, userId, { previewStatus: "starting" }, "Starting the app…");
+      up = await startApp(workspaceId, manifest);
     }
-
-    // 6. Migrate + seed.
-    if (manifest.migrateCmd || manifest.seedCmd) {
-      await setPreview(projectId, userId, { previewStatus: "seeding" }, "Running migrations + seed…");
-      if (manifest.migrateCmd) await sh(workspaceId, `cd ${PROJECT_DIR} && set -a; . ./.env 2>/dev/null; set +a; ${manifest.migrateCmd} >> migrate.log 2>&1; echo done`, 300_000);
-      if (manifest.seedCmd) await sh(workspaceId, `cd ${PROJECT_DIR} && set -a; . ./.env 2>/dev/null; set +a; ${manifest.seedCmd} >> migrate.log 2>&1; echo done`, 300_000);
-    }
-
-    // 7. Start the app (detached) and wait for it to listen.
-    await setPreview(projectId, userId, { previewStatus: "starting" }, "Starting the app…");
-    const up = await startApp(workspaceId, manifest);
     if (!up) {
-      const log = await sh(workspaceId, `tail -30 ${PROJECT_DIR}/preview.log 2>/dev/null`, 20_000);
-      return failed(projectId, userId, `The app did not start on port ${manifest.port}. Last log:\n${log.output.slice(-600)}`);
+      const log = await sh(workspaceId, `tail -40 ${PROJECT_DIR}/preview.log 2>/dev/null`, 20_000);
+      return failed(projectId, userId, `The app did not come up on port ${manifest.port}. Last log:\n${log.output.slice(-800)}`);
     }
 
     // 8. Expose the app's OWN port publicly (whatever the manifest decided).
