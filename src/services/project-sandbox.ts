@@ -17,7 +17,7 @@ import { projectEnvironments } from "../db/schema/project-environments.ts";
 import { projectDatabases } from "../db/schema/project-databases.ts";
 import { and, eq } from "drizzle-orm";
 import { encryptSecret, decryptSecret } from "../utils/crypto.ts";
-import { newWorkspace, execOnWorkspace, getJobStatus } from "./mags.ts";
+import { newWorkspace, execOnWorkspace, findJob } from "./mags.ts";
 
 export type DbEngine = "postgres" | "mysql" | "redis";
 
@@ -86,11 +86,20 @@ export async function ensureProjectSandbox(projectId: string): Promise<{ workspa
   const workspaceId = `env-${projectId}`;
   const [existing] = await db.select().from(projectEnvironments).where(eq(projectEnvironments.projectId, projectId));
 
-  const status = await getJobStatus(workspaceId).catch(() => null);
-  const alive = status?.status === "running";
+  // Resolve the workspace by NAME (findJob), not getJobStatus — the env-<uuid>
+  // name is long/dashed and getJobStatus would misread it as a request_id.
+  const job = await findJob(workspaceId).catch(() => null);
+  const alive = job?.status === "running";
   if (!alive) {
-    // create (or respawn) — same workspaceId re-mounts if it exists
-    await newWorkspace(workspaceId, { memGb: 4, diskGb: 20, keepAlive: true });
+    try {
+      // create (or respawn) — same workspaceId re-mounts if it exists
+      await newWorkspace(workspaceId, { memGb: 4, diskGb: 20, keepAlive: true });
+    } catch (err) {
+      // "already exists (status: running)" is success — the always-on sandbox is
+      // up, which is exactly what we want. Only rethrow genuine failures.
+      const msg = (err as Error)?.message ?? String(err);
+      if (!/already exists/i.test(msg)) throw err;
+    }
   }
 
   if (existing) {
