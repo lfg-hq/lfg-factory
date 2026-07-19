@@ -19,6 +19,7 @@ import { db } from "../config/db.ts";
 import { projects, projectEnvironmentVariables } from "../db/schema/projects.ts";
 import { projectEnvironments } from "../db/schema/project-environments.ts";
 import { githubTokens } from "../db/schema/users.ts";
+import { getValidGitlabToken } from "./gitlab-token.ts";
 import { getModel, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
 import { decryptSecret } from "../utils/crypto.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
@@ -220,29 +221,42 @@ export async function setupPreview(projectId: string, opts: SetupOptions): Promi
   const { userId } = opts;
   const [project] = await db.select().from(projects).where(eq(projects.id, projectId));
   if (!project) return { error: "project not found" };
-  const branch = opts.branch || "lfg-agent";
+  const branch = opts.branch || ""; // "" → use the repo's default branch
 
   try {
     await ensureProjectSandbox(projectId);
     const workspaceId = `env-${projectId}`;
-    await setPreview(projectId, userId, { previewStatus: "detecting", previewError: null, previewBranch: branch }, "Preparing sandbox…");
+    await setPreview(projectId, userId, { previewStatus: "detecting", previewError: null, previewBranch: branch || "(default)" }, "Preparing sandbox…");
 
-    // 1. Clone / update the repo into the sandbox.
-    const [ghToken] = await db.select().from(githubTokens).where(eq(githubTokens.userId, project.ownerId)).limit(1);
-    const repoUrl = project.repoUrl || (project.repoOwner && project.repoName ? `https://github.com/${project.repoOwner}/${project.repoName}.git` : "");
+    // 1. Resolve the repo URL + provider auth (GitHub or GitLab), then clone/update.
+    const provider = (project.repoProvider || "github").toLowerCase();
+    const host = provider === "gitlab" ? "gitlab.com" : "github.com";
+    const repoUrl = project.repoUrl || (project.repoOwner && project.repoName ? `https://${host}/${project.repoOwner}/${project.repoName}.git` : "");
     if (!repoUrl) return failed(projectId, userId, "This project has no connected repository to preview.");
-    if (!ghToken?.accessToken) return failed(projectId, userId, "No GitHub token — connect GitHub to preview this project.");
+
+    let token = "";
+    if (provider === "gitlab") {
+      token = (await getValidGitlabToken(project.ownerId)) || "";
+      if (!token) return failed(projectId, userId, "No GitLab token — reconnect GitLab in settings to preview this project.");
+    } else {
+      const [ghToken] = await db.select().from(githubTokens).where(eq(githubTokens.userId, project.ownerId)).limit(1);
+      token = ghToken?.accessToken || "";
+      if (!token) return failed(projectId, userId, "No GitHub token — connect GitHub to preview this project.");
+    }
+    // GitLab OAuth clones auth as oauth2:<token>@; GitHub as x-access-token:<token>@.
+    const cred = provider === "gitlab" ? `oauth2:${token}` : `x-access-token:${token}`;
+    const authUrl = repoUrl.replace(/^https:\/\//, `https://${cred}@`);
+    const coBranch = branch ? `git checkout ${branch} 2>/dev/null || true` : "true";
 
     await setPreview(projectId, userId, { previewStatus: "detecting" }, "Fetching the code…");
-    const authUrl = repoUrl.replace("https://", `https://x-access-token:${ghToken.accessToken}@`);
     const clone = await sh(workspaceId, `
 export PATH=/root/node/current/bin:/usr/local/bin:/usr/bin:/bin:$PATH
 apk add --no-cache git ca-certificates >/dev/null 2>&1 || true
 mkdir -p /data
 if [ -d ${PROJECT_DIR}/.git ]; then
-  cd ${PROJECT_DIR} && git remote set-url origin "${authUrl}" && git fetch origin >/dev/null 2>&1 && git checkout ${branch} 2>/dev/null && git reset --hard origin/${branch} 2>/dev/null && echo CLONE_OK
+  cd ${PROJECT_DIR} && git remote set-url origin "${authUrl}" && git fetch origin 2>&1 && { ${coBranch}; git pull --ff-only >/dev/null 2>&1; echo CLONE_OK; }
 else
-  rm -rf ${PROJECT_DIR}; git clone "${authUrl}" ${PROJECT_DIR} 2>&1 | tail -2 && cd ${PROJECT_DIR} && (git checkout ${branch} 2>/dev/null || true) && echo CLONE_OK
+  rm -rf ${PROJECT_DIR}; git clone "${authUrl}" ${PROJECT_DIR} 2>&1 | tail -3; if [ -d ${PROJECT_DIR}/.git ]; then cd ${PROJECT_DIR} && (${coBranch}) && echo CLONE_OK; fi
 fi`, 240_000);
     if (!clone.output.includes("CLONE_OK")) return failed(projectId, userId, `Could not fetch the repo:\n${clone.output.slice(-400)}`);
 

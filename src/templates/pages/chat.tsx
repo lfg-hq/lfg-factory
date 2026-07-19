@@ -209,10 +209,10 @@ export function ChatPage({
         <!-- Preview Tab — run the connected project live in its sandbox -->
         <div class="tab-pane" id="preview">
           <div id="preview-root" data-project-id="${projectId}" style="height:100%;display:flex;flex-direction:column;">
-            <div class="preview-header" style="padding:16px 20px;border-bottom:1px solid #2a2a2a;display:flex;align-items:center;justify-content:space-between;gap:12px;">
+            <div class="preview-header" style="padding:16px 20px;border-bottom:1px solid var(--border-color,#2a2a2a);display:flex;align-items:center;justify-content:space-between;gap:12px;">
               <div style="display:flex;flex-direction:column;gap:2px;min-width:0;">
-                <h3 style="color:#e2e8f0;margin:0;font-size:16px;font-weight:600;">Preview</h3>
-                <span id="preview-substatus" style="color:#9ca3af;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Loading…</span>
+                <h3 style="color:var(--text-color,#e2e8f0);margin:0;font-size:16px;font-weight:600;">Preview</h3>
+                <span id="preview-substatus" style="color:var(--text-secondary,#9ca3af);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Loading…</span>
               </div>
               <div id="preview-actions" style="display:flex;gap:8px;align-items:center;"></div>
             </div>

@@ -38,7 +38,7 @@
   function btn(label, opts = {}) {
     const style = opts.primary
       ? "background:#7c3aed;color:#fff;border:none;"
-      : "background:#2a2a2a;color:#e2e8f0;border:1px solid #333;";
+      : "background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);";
     return `<button data-action="${opts.action}" style="padding:7px 14px;border-radius:6px;cursor:pointer;font-size:13px;display:inline-flex;align-items:center;gap:6px;${style}">${opts.icon ? `<i class="fas ${opts.icon}"></i>` : ""}${esc(label)}</button>`;
   }
 
@@ -57,10 +57,10 @@
       setSub(STEP_LABEL[status] || "Working…");
       renderActions(btn("Cancel", { action: "stop", icon: "fa-stop" }));
       body.innerHTML = `
-        <div style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;color:#9ca3af;">
+        <div style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;color:var(--text-secondary,#9ca3af);">
           <div class="spinner"></div>
           <div style="font-size:14px;">${esc(STEP_LABEL[status] || "Setting up your preview…")}</div>
-          <div style="font-size:12px;color:#6b7280;">This can take a couple of minutes on first run.</div>
+          <div style="font-size:12px;color:var(--text-secondary,#9ca3af);">This can take a couple of minutes on first run.</div>
         </div>`;
       return;
     }
@@ -80,10 +80,10 @@
       setSub("Failed");
       renderActions(btn("Try again", { action: "setup", primary: true, icon: "fa-redo" }));
       body.innerHTML = `
-        <div style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:32px;text-align:center;color:#9ca3af;">
+        <div style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:32px;text-align:center;color:var(--text-secondary,#9ca3af);">
           <div style="font-size:28px;color:#ef4444;"><i class="fas fa-triangle-exclamation"></i></div>
-          <div style="font-size:14px;color:#e2e8f0;">The preview couldn't start</div>
-          <pre style="max-width:100%;max-height:220px;overflow:auto;text-align:left;background:#141414;border:1px solid #2a2a2a;border-radius:8px;padding:12px;font-size:12px;color:#cbd5e1;white-space:pre-wrap;">${esc(state.error || "Unknown error")}</pre>
+          <div style="font-size:14px;color:var(--text-color,#e2e8f0);">The preview couldn't start</div>
+          <pre style="max-width:100%;max-height:220px;overflow:auto;text-align:left;background:var(--background-surface,#141414);border:1px solid var(--border-color,#2a2a2a);border-radius:8px;padding:12px;font-size:12px;color:var(--text-color,#cbd5e1);white-space:pre-wrap;">${esc(state.error || "Unknown error")}</pre>
         </div>`;
       return;
     }
@@ -93,9 +93,9 @@
     setSub(stopped ? "Stopped" : "Not running");
     renderActions("");
     body.innerHTML = `
-      <div style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:32px;text-align:center;color:#9ca3af;">
+      <div style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:32px;text-align:center;color:var(--text-secondary,#9ca3af);">
         <div style="font-size:30px;color:#7c3aed;"><i class="fas fa-play-circle"></i></div>
-        <div style="font-size:15px;color:#e2e8f0;font-weight:600;">${stopped ? "Preview stopped" : "Run this project live"}</div>
+        <div style="font-size:15px;color:var(--text-color,#e2e8f0);font-weight:600;">${stopped ? "Preview stopped" : "Run this project live"}</div>
         <div style="font-size:13px;max-width:420px;line-height:1.5;">
           Spins up a sandbox, detects the stack, provisions the databases it needs, seeds data,
           and starts the app — then shows it right here. First run takes a couple of minutes.
