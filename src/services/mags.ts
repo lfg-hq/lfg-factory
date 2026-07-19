@@ -43,6 +43,9 @@ export async function newWorkspace(name: string, opts?: {
   noSync?: boolean;
   /** Idle reaper window in minutes (env __MAGS_IDLE_MIN) — matches CLI `-e <minutes>`. */
   idleMinutes?: number;
+  /** Never idle-reap (env __MAGS_KEEP_ALIVE) — matches CLI `--no-sleep`. Use for
+   *  DB sandboxes / anything that must stay live (a DB shouldn't reap mid-write). */
+  keepAlive?: boolean;
   /** Disk size in GB. Mags defaults to 2GB — too small for a full Next.js install. */
   diskGb?: number;
   /** RAM in GB (env __MAGS_MEM_GB). Mags defaults to ~2GB — too small for Pi + a
@@ -95,6 +98,7 @@ export async function newWorkspace(name: string, opts?: {
   const environment: Record<string, string> = {};
   if (useEnvRootfs) environment.__MAGS_ROOTFS_TYPE = rootfsType;
   if (opts?.idleMinutes) environment.__MAGS_IDLE_MIN = String(opts.idleMinutes);
+  if (opts?.keepAlive) environment.__MAGS_KEEP_ALIVE = "true";
   if (opts?.memGb) environment.__MAGS_MEM_GB = String(opts.memGb);
   if (Object.keys(environment).length) runOpts.environment = environment;
   const result = await client.run("sleep infinity", runOpts);
