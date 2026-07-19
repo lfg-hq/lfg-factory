@@ -21,6 +21,13 @@ export const projectEnvironments = sqliteTable(
     status: text("status").notNull().default("stopped"), // stopped | running | error
     appUrl: text("app_url"),
     appPort: integer("app_port"),
+    // ── Preview (localhost-style run of the client app) ──
+    previewStatus: text("preview_status").notNull().default("idle"), // idle | detecting | provisioning | installing | seeding | starting | running | error | stopped
+    previewError: text("preview_error"),
+    previewBranch: text("preview_branch"), // git branch currently previewed
+    stableAlias: text("stable_alias"), // Mags stable subdomain for a persistent URL
+    setupManifest: text("setup_manifest"), // JSON: detected stack/commands/engines/env
+    setupLog: text("setup_log"), // last setup run's step log (truncated)
     lastAwakeAt: integer("last_awake_at", { mode: "timestamp" }),
     createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
     updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),

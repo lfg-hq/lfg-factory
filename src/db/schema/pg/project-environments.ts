@@ -22,6 +22,13 @@ export const projectEnvironments = pgTable(
     status: text("status").notNull().default("stopped"), // stopped | running | error
     appUrl: text("app_url"), // Mags public URL for the running app (preview)
     appPort: integer("app_port"), // port the app runs on inside the sandbox
+    // ── Preview (localhost-style run of the client app) ──
+    previewStatus: text("preview_status").notNull().default("idle"), // idle | detecting | provisioning | installing | seeding | starting | running | error | stopped
+    previewError: text("preview_error"),
+    previewBranch: text("preview_branch"), // git branch currently previewed
+    stableAlias: text("stable_alias"), // Mags stable subdomain for a persistent URL
+    setupManifest: text("setup_manifest"), // JSON: detected stack/commands/engines/env
+    setupLog: text("setup_log"), // last setup run's step log (truncated)
     lastAwakeAt: timestamp("last_awake_at", { mode: "date" }),
     createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),
     updatedAt: timestamp("updated_at", { mode: "date" }).notNull().default(sql`now()`),
