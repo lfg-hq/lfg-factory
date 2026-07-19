@@ -188,6 +188,7 @@ export function ChatPage({
       <div style="display:flex;">
         <button class="tab-button active" data-tab="filebrowser">Docs</button>
         <button class="tab-button" data-tab="checklist">Task List</button>
+        <button class="tab-button" data-tab="preview">Preview</button>
       </div>
       <button class="panel-arrow-right" id="artifacts-toggle" style="margin-left:auto;padding:8px;background:none;border:none;color:#ccc;cursor:pointer;">
         <i class="fas fa-chevron-right"></i>
@@ -202,6 +203,22 @@ export function ChatPage({
           <div class="empty-state">
             <div class="empty-state-icon"><i class="fas fa-check-square"></i></div>
             <div class="empty-state-text">No checklist items created yet.</div>
+          </div>
+        </div>
+
+        <!-- Preview Tab — run the connected project live in its sandbox -->
+        <div class="tab-pane" id="preview">
+          <div id="preview-root" data-project-id="${projectId}" style="height:100%;display:flex;flex-direction:column;">
+            <div class="preview-header" style="padding:16px 20px;border-bottom:1px solid #2a2a2a;display:flex;align-items:center;justify-content:space-between;gap:12px;">
+              <div style="display:flex;flex-direction:column;gap:2px;min-width:0;">
+                <h3 style="color:#e2e8f0;margin:0;font-size:16px;font-weight:600;">Preview</h3>
+                <span id="preview-substatus" style="color:#9ca3af;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Loading…</span>
+              </div>
+              <div id="preview-actions" style="display:flex;gap:8px;align-items:center;"></div>
+            </div>
+            <div id="preview-body" style="flex:1;min-height:0;position:relative;overflow:hidden;">
+              <!-- states rendered by preview-tab.js -->
+            </div>
           </div>
         </div>
 
@@ -316,6 +333,7 @@ export function ChatPage({
   <script src="/public/js/artifacts-loader.js"></script>
   <script src="/public/js/document-comments.js"></script>
   <script src="/public/js/artifacts.js"></script>
+  <script src="/public/js/preview-tab.js"></script>
   <script src="/public/js/sidebar.js"></script>
   <script src="/public/js/custom-dropdown.js"></script>
   <script src="/public/js/chat.js"></script>

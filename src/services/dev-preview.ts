@@ -37,8 +37,8 @@ export const manifestSchema = z.object({
   framework: z.string().describe("e.g. next, vite, django, rails, express, dotnet, laravel; '' if unknown"),
   installCmd: z.string().describe("Command to install deps, e.g. 'npm install', 'pip install -r requirements.txt', 'bundle install'"),
   buildCmd: z.string().describe("Build command if the app needs one before running (e.g. 'npm run build'); '' if none"),
-  runCmd: z.string().describe("Command to START the app in the FOREGROUND on `port` below, bound to 0.0.0.0 (ALL interfaces, NOT localhost) using THIS stack's own mechanism — e.g. .NET 'dotnet run --urls http://0.0.0.0:5000', Django 'python manage.py runserver 0.0.0.0:8000', Rails 'bin/rails server -b 0.0.0.0 -p 3000', Vite 'npm run dev -- --host 0.0.0.0 --port 5173', Next 'npm start -- -H 0.0.0.0 -p 3000'."),
-  port: z.number().describe("The app's NATURAL port — DETECT it from the codebase, do not force a standard value. Look at .NET launchSettings.json / ASPNETCORE_URLS, Django/Rails/Vite/Next config or their defaults, docker-compose 'ports', Dockerfile EXPOSE, and .env(.example). Use the port this app actually listens on; THIS exact port is what gets exposed publicly."),
+  runCmd: z.string().describe("Command to START the app in the FOREGROUND on `port` below, bound to 0.0.0.0 (ALL interfaces, NOT localhost) using whatever mechanism this framework provides (a --host/--port flag, a bind arg, or an env var it reads)."),
+  port: z.number().describe("The app's real port — DETECT it from the codebase, do not force a standard value. Determine it from however THIS stack declares its port: run scripts / framework config, docker-compose 'ports', Dockerfile EXPOSE, .env(.example), or the framework's documented default. Use the port this app actually listens on; THIS exact port is what gets exposed publicly."),
   engines: z.array(z.enum(["postgres", "mysql", "redis"])).describe("Databases the app needs, inferred from deps/config. Empty if none."),
   migrateCmd: z.string().describe("DB migration command if any (e.g. 'npx prisma migrate deploy', 'python manage.py migrate', 'bundle exec rails db:migrate'); '' if none"),
   seedCmd: z.string().describe("Seed command if the repo has one (e.g. 'npx prisma db seed', 'python manage.py loaddata seed.json'); '' if none"),
@@ -120,9 +120,9 @@ export async function detectManifest(projectId: string): Promise<PreviewManifest
     prompt: `You are the build engineer configuring how to RUN this repository inside a Linux sandbox so a developer can preview it live. YOU decide the whole run config from the codebase — the stack, the commands, the databases, and the PORT. Do not assume anything; read the fingerprint.
 
 Decide:
-- port: the app's real port for THIS stack — detect it (e.g. .NET launchSettings.json / ASPNETCORE_URLS → 5000/5001, Django → 8000, Rails → 3000, Vite → 5173, Next → 3000, Express → whatever process.env.PORT/app.listen uses; also docker-compose 'ports', Dockerfile EXPOSE, .env.example). Do NOT force a standard number. Whatever port you return is exactly the port we expose publicly.
+- port: the app's real port — detect it from however THIS stack declares its port (run scripts, framework config, docker-compose 'ports', Dockerfile EXPOSE, .env(.example), or the framework's documented default). Do NOT force a standard number. Whatever port you return is exactly the port we expose publicly.
 - runCmd: start the app in the foreground on that port, bound to 0.0.0.0 (all interfaces — a localhost-only bind is NOT reachable by the proxy), using the stack's own flag/env mechanism.
-- installCmd / buildCmd / migrateCmd / seedCmd: the correct commands for the detected stack (npm/pnpm/yarn, pip, bundle, dotnet restore/build, composer, go). '' when a step doesn't apply.
+- installCmd / buildCmd / migrateCmd / seedCmd: the correct commands for the detected stack. '' when a step doesn't apply.
 - engines: only DBs the app truly needs (deps like pg/psycopg/mysql/mysql2/redis/ioredis, prisma provider, docker-compose services, DATABASE_URL scheme in .env.example). Postgres/MySQL/Redis only.
 - envVars: real external config (API keys, feature flags) from .env(.example). EXCLUDE DATABASE_URL, REDIS_URL, DB_*, PG* — those are auto-provisioned and injected.
 
@@ -151,15 +151,20 @@ function engineEnv(engine: DbEngine, h: { connectionString: string; host: string
   };
 }
 
-async function writeEnvFile(workspaceId: string, projectId: string, port: number, provisioned: Record<string, string>) {
-  // Stored project env vars (decrypted) + provisioned DB creds + run hints.
+async function writeEnvFile(workspaceId: string, projectId: string, manifest: PreviewManifest, provisioned: Record<string, string>) {
+  const port = manifest.port;
+  // Stored project env vars (decrypted) + provisioned DB creds + generic run hints.
   const stored = await db.select().from(projectEnvironmentVariables).where(eq(projectEnvironmentVariables.projectId, projectId));
-  // PORT/HOST/ASPNETCORE_URLS are hints for stacks that read them; the manifest
-  // runCmd is authoritative for the actual bind.
-  const vars: Record<string, string> = {
-    PORT: String(port), HOST: "0.0.0.0", ASPNETCORE_URLS: `http://0.0.0.0:${port}`,
-    ...provisioned,
-  };
+  // PORT/HOST are near-universal hints (frameworks that don't read them ignore
+  // them); the manifest runCmd is authoritative for the actual bind. Anything
+  // stack-specific is only added when that stack is actually detected.
+  const runtime = (manifest.runtime || "").toLowerCase();
+  const framework = (manifest.framework || "").toLowerCase();
+  const vars: Record<string, string> = { PORT: String(port), HOST: "0.0.0.0" };
+  if (runtime.includes("dotnet") || framework.includes("dotnet") || framework.includes("asp")) {
+    vars.ASPNETCORE_URLS = `http://0.0.0.0:${port}`;
+  }
+  Object.assign(vars, provisioned);
   for (const v of stored) {
     if (!v.hasValue) continue;
     try { vars[v.key] = decryptSecret(v.encryptedValue); } catch { /* skip unreadable */ }
@@ -262,7 +267,7 @@ fi`, 240_000);
     }
 
     // 4. Write env (provisioned creds + stored project vars).
-    await writeEnvFile(workspaceId, projectId, manifest.port, provisioned);
+    await writeEnvFile(workspaceId, projectId, manifest, provisioned);
 
     // 5. Install deps.
     await setPreview(projectId, userId, { previewStatus: "installing" }, "Installing dependencies…");

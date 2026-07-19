@@ -1,0 +1,192 @@
+/**
+ * Preview tab — runs the connected project live in its sandbox and shows it in
+ * an iframe. Talks to /api/projects/:projectId/preview (GET state, POST setup /
+ * stop). Live status arrives over the chat WebSocket as `preview_status`
+ * (dispatched here via window.PreviewTab.onStatus); polling is a fallback.
+ */
+(function () {
+  const IN_PROGRESS = ["detecting", "provisioning", "installing", "seeding", "starting"];
+  const STEP_LABEL = {
+    detecting: "Analyzing the codebase & fetching code…",
+    provisioning: "Provisioning databases…",
+    installing: "Installing dependencies…",
+    seeding: "Running migrations & seed data…",
+    starting: "Starting the app…",
+  };
+
+  let projectId = null;
+  let pollTimer = null;
+  let current = null; // last known state
+  let loadedOnce = false;
+
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  function api(path, opts) {
+    return fetch(`/api/projects/${projectId}/preview${path}`, {
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      ...opts,
+    });
+  }
+
+  function setSub(text) {
+    const el = $("preview-substatus");
+    if (el) el.textContent = text || "";
+  }
+
+  function btn(label, opts = {}) {
+    const style = opts.primary
+      ? "background:#7c3aed;color:#fff;border:none;"
+      : "background:#2a2a2a;color:#e2e8f0;border:1px solid #333;";
+    return `<button data-action="${opts.action}" style="padding:7px 14px;border-radius:6px;cursor:pointer;font-size:13px;display:inline-flex;align-items:center;gap:6px;${style}">${opts.icon ? `<i class="fas ${opts.icon}"></i>` : ""}${esc(label)}</button>`;
+  }
+
+  function renderActions(html) {
+    const el = $("preview-actions");
+    if (el) el.innerHTML = html || "";
+  }
+
+  function render(state) {
+    current = state;
+    const body = $("preview-body");
+    if (!body) return;
+    const status = state.previewStatus || "idle";
+
+    if (IN_PROGRESS.includes(status)) {
+      setSub(STEP_LABEL[status] || "Working…");
+      renderActions(btn("Cancel", { action: "stop", icon: "fa-stop" }));
+      body.innerHTML = `
+        <div style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;color:#9ca3af;">
+          <div class="spinner"></div>
+          <div style="font-size:14px;">${esc(STEP_LABEL[status] || "Setting up your preview…")}</div>
+          <div style="font-size:12px;color:#6b7280;">This can take a couple of minutes on first run.</div>
+        </div>`;
+      return;
+    }
+
+    if (status === "running" && state.previewUrl) {
+      setSub("Live" + (state.branch ? ` · ${state.branch}` : ""));
+      renderActions(
+        btn("Open", { action: "open", icon: "fa-external-link-alt" }) +
+        btn("Restart", { action: "setup", icon: "fa-redo" }) +
+        btn("Stop", { action: "stop", icon: "fa-stop" })
+      );
+      body.innerHTML = `<iframe id="preview-iframe" src="${esc(state.previewUrl)}" style="width:100%;height:100%;border:0;background:#fff;" allow="clipboard-read; clipboard-write"></iframe>`;
+      return;
+    }
+
+    if (status === "error") {
+      setSub("Failed");
+      renderActions(btn("Try again", { action: "setup", primary: true, icon: "fa-redo" }));
+      body.innerHTML = `
+        <div style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:32px;text-align:center;color:#9ca3af;">
+          <div style="font-size:28px;color:#ef4444;"><i class="fas fa-triangle-exclamation"></i></div>
+          <div style="font-size:14px;color:#e2e8f0;">The preview couldn't start</div>
+          <pre style="max-width:100%;max-height:220px;overflow:auto;text-align:left;background:#141414;border:1px solid #2a2a2a;border-radius:8px;padding:12px;font-size:12px;color:#cbd5e1;white-space:pre-wrap;">${esc(state.error || "Unknown error")}</pre>
+        </div>`;
+      return;
+    }
+
+    // idle | stopped | anything else → the intro / start screen
+    const stopped = status === "stopped";
+    setSub(stopped ? "Stopped" : "Not running");
+    renderActions("");
+    body.innerHTML = `
+      <div style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:32px;text-align:center;color:#9ca3af;">
+        <div style="font-size:30px;color:#7c3aed;"><i class="fas fa-play-circle"></i></div>
+        <div style="font-size:15px;color:#e2e8f0;font-weight:600;">${stopped ? "Preview stopped" : "Run this project live"}</div>
+        <div style="font-size:13px;max-width:420px;line-height:1.5;">
+          Spins up a sandbox, detects the stack, provisions the databases it needs, seeds data,
+          and starts the app — then shows it right here. First run takes a couple of minutes.
+        </div>
+        ${btn(stopped ? "Start preview" : "Set up preview", { action: "setup", primary: true, icon: "fa-play" })}
+      </div>`;
+  }
+
+  async function load() {
+    if (!projectId) return;
+    try {
+      const r = await api("");
+      if (!r.ok) throw new Error("state " + r.status);
+      const state = await r.json();
+      render(state);
+      managePolling(state.previewStatus);
+    } catch (e) {
+      console.warn("[preview] load failed", e);
+      if (!current) render({ previewStatus: "idle" });
+    }
+  }
+
+  function managePolling(status) {
+    if (IN_PROGRESS.includes(status)) {
+      if (!pollTimer) pollTimer = setInterval(load, 4000);
+    } else if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  }
+
+  async function doSetup(rebuildManifest) {
+    render({ previewStatus: "detecting" });
+    managePolling("detecting");
+    try {
+      await api("/setup", { method: "POST", body: JSON.stringify({ rebuildManifest: !!rebuildManifest }) });
+    } catch (e) {
+      render({ previewStatus: "error", error: "Could not start setup: " + e.message });
+    }
+  }
+
+  async function doStop() {
+    setSub("Stopping…");
+    try { await api("/stop", { method: "POST" }); } catch (_) {}
+    load();
+  }
+
+  function onActionClick(e) {
+    const b = e.target.closest("[data-action]");
+    if (!b) return;
+    const action = b.getAttribute("data-action");
+    if (action === "setup") doSetup(false);
+    else if (action === "stop") doStop();
+    else if (action === "open" && current && current.previewUrl) window.open(current.previewUrl, "_blank");
+  }
+
+  // Live updates pushed from the server over the chat WS. There's one project
+  // per page (and the WS keys on the internal id while we hold the public id),
+  // so we accept every preview_status for this page.
+  window.PreviewTab = {
+    onStatus(data) {
+      const next = {
+        previewStatus: data.status || (current && current.previewStatus) || "idle",
+        previewUrl: data.previewUrl || (current && current.previewUrl) || null,
+        error: data.error || null,
+        branch: (current && current.branch) || null,
+      };
+      // On terminal transitions, pull authoritative state (URL/manifest/branch).
+      if (data.status === "running" || data.status === "error" || data.status === "stopped") {
+        load();
+      } else {
+        render(next);
+        managePolling(next.previewStatus);
+      }
+      if (data.message) setSub(data.message);
+    },
+  };
+
+  function init() {
+    const root = $("preview-root");
+    if (!root) return;
+    projectId = root.getAttribute("data-project-id");
+    $("preview-actions")?.addEventListener("click", onActionClick);
+    $("preview-body")?.addEventListener("click", onActionClick);
+
+    // Load when the Preview tab is opened (and once up front if already active).
+    const tabBtn = document.querySelector('.tab-button[data-tab="preview"]');
+    tabBtn?.addEventListener("click", () => { if (!loadedOnce) { loadedOnce = true; } load(); });
+    if (document.getElementById("preview")?.classList.contains("active")) load();
+  }
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
+  else init();
+})();

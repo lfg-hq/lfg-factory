@@ -1115,6 +1115,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 return;
             }
+
+            // Live dev-preview status → Preview tab
+            if (data.type === 'preview_status') {
+                if (window.PreviewTab && window.PreviewTab.onStatus) window.PreviewTab.onStatus(data);
+                return;
+            }
             
             // Reduced logging — only log non-chunk message types
             if (data.type !== 'ai_chunk' && data.type !== 'heartbeat') {
