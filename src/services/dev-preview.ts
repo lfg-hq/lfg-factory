@@ -246,14 +246,19 @@ async function resolveAgentModel(userId: string): Promise<{ provider: string; mo
   return { provider, modelId: getProviderModel(modelKey) ?? modelKey, apiKey };
 }
 
-function buildRunPrompt(manifest: PreviewManifest, engines: EngineHandle[]): string {
+function buildRunPrompt(manifest: PreviewManifest, engines: EngineHandle[], round: number, prevTail?: string): string {
   const port = manifest.port;
   const dbLines = engines.length
     ? engines.map((e) => `  - ${e.engine} on 127.0.0.1:${e.port} (db "${e.dbName}", user "${e.username}") — connection string in .env`).join("\n")
     : "  - none";
   const hint = (label: string, v: string) => (v ? `  - ${label}: \`${v}\`` : "");
-  return `You are getting an EXISTING application RUNNING inside a Linux sandbox so it can be previewed live in a browser. Work in ${PROJECT_DIR}.
 
+  const continuation = round > 1
+    ? `\n⚠️ THIS IS RETRY #${round}. A previous attempt did NOT get the app serving on port ${port} — but its work is still here (installed SDKs/toolchains, restored packages, node_modules all persist in this sandbox). DO NOT start over from scratch; pick up where it left off. First check what's already there and whether anything is listening (\`curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${port}/ ; ls ${PROJECT_DIR}\`), read ${PROJECT_DIR}/preview.log, then continue.${prevTail ? `\nTail of the previous attempt:\n${prevTail.slice(-1200)}` : ""}\n`
+    : "";
+
+  return `You are getting an EXISTING application RUNNING inside a Linux sandbox so it can be previewed live in a browser. Work in ${PROJECT_DIR}.
+${continuation}
 Context:
 - The repo is already cloned at ${PROJECT_DIR}.
 - A .env file already exists there with database credentials and PORT/HOST — load and use it (\`set -a; . ./.env; set +a\`).
@@ -265,19 +270,27 @@ ${[hint("install", manifest.installCmd), hint("build", manifest.buildCmd), hint(
 GOAL: the app must be serving HTTP on 0.0.0.0:${port} and actually respond.
 
 Steps:
-1. Install dependencies.
-2. Run DB migrations and seed data if the app has them (creds are already in .env).
-3. Start the app in the BACKGROUND, bound to host 0.0.0.0 on port ${port}, DETACHED so it keeps running after your command returns — e.g. \`setsid sh -c 'set -a; . ./.env; set +a; export PORT=${port} HOST=0.0.0.0; <run command>' </dev/null > ${PROJECT_DIR}/preview.log 2>&1 &\`.
-4. VERIFY it is truly up: \`curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:${port}/\`. A 2xx/3xx/4xx = serving. 000 or "connection refused" = NOT up.
-5. If it is not up: read ${PROJECT_DIR}/preview.log and the build output, DIAGNOSE (missing dep, wrong build step, missing env var, DB not migrated, needs a production build first, wrong host/port), FIX it, and RETRY. Iterate until it responds.
+1. Install the toolchain + dependencies if not already done.
+2. For COMPILED stacks (.NET, Java, Go, Rust): restore → BUILD → then run. Do the build BEFORE trying to run. For a multi-project solution, find the WEB/startup project (the one referencing ASP.NET Core / a web SDK) and run THAT specific project, not the whole solution.
+3. Run DB migrations and seed data if the app has them (creds are already in .env).
+4. Start the app in the BACKGROUND, bound to host 0.0.0.0 on port ${port}, DETACHED so it keeps running after your command returns — e.g. \`setsid sh -c 'set -a; . ./.env; set +a; export PORT=${port} HOST=0.0.0.0; <run command>' </dev/null > ${PROJECT_DIR}/preview.log 2>&1 &\`.
+5. VERIFY it is truly up: \`curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:${port}/\`. A 2xx/3xx/4xx = serving. 000 or "connection refused" = NOT up.
+6. If it is not up: read ${PROJECT_DIR}/preview.log and the build output, DIAGNOSE (missing dep, wrong build step, missing env var, DB not migrated, needs a production build first, wrong host/port, wrong startup project), FIX it, and RETRY. Iterate until it responds.
+
+CRITICAL — DO NOT GIVE UP EARLY:
+- restore/build/install for large apps can take SEVERAL MINUTES. Give slow commands a generous timeout (e.g. run bash with timeout 600 for restore/build). A slow command is NOT a failure — wait for it.
+- If a command errors, READ the error and fix it, then try again. Never stop just because one command failed.
+- Keep working step by step until \`curl\` on port ${port} returns a real HTTP code. Do not end your turn while the app is not yet responding, unless you have truly exhausted every option.
 
 When the app responds on port ${port}, print on its own line exactly:
 PREVIEW_READY ${port}
-If after genuine effort it truly cannot run, print exactly:
+Only if you have genuinely exhausted all options, print exactly:
 PREVIEW_FAILED <one-line reason>
 
-Hard rules: the server MUST bind 0.0.0.0 (not localhost-only) and MUST be detached (survive your shell). Never print secrets. Keep going until the app serves HTTP on port ${port} or you are certain it cannot.`;
+Hard rules: the server MUST bind 0.0.0.0 (not localhost-only) and MUST be detached (survive your shell). Never print secrets.`;
 }
+
+const MAX_AGENT_ROUNDS = 4;
 
 async function runViaAgent(
   projectId: string,
@@ -287,36 +300,46 @@ async function runViaAgent(
   engines: EngineHandle[],
   agent: { provider: string; modelId: string; apiKey: string },
 ): Promise<boolean> {
-  const prompt = buildRunPrompt(manifest, engines);
-  const pi = await startPiCli({
-    workspaceId,
-    prompt,
-    projectDir: PROJECT_DIR, // pi-cli strips /data/ → "project"
-    provider: agent.provider,
-    modelId: agent.modelId,
-    apiKey: agent.apiKey,
-  });
-  let lastLine = "";
-  const result = await streamPiToCompletion({
-    workspaceId,
-    outputFile: pi.outputFile,
-    backgroundPid: pi.backgroundPid,
-    timeoutMs: 20 * 60_000,
-    onProgress: (m) => {
-      if (m && m !== lastLine) { lastLine = m; plog(projectId, userId, `agent: ${m}`); }
-      setPreview(projectId, userId, { previewStatus: "starting" }, m).catch(() => {});
-    },
-  });
-  if (result.fatalError) plog(projectId, userId, `agent error: ${result.fatalError}`, { level: "error" });
+  let prevTail = "";
+  for (let round = 1; round <= MAX_AGENT_ROUNDS; round++) {
+    if (round > 1) plog(projectId, userId, `Agent stopped before the app was up — resuming (attempt ${round}/${MAX_AGENT_ROUNDS})…`);
+    const prompt = buildRunPrompt(manifest, engines, round, prevTail);
+    const pi = await startPiCli({
+      workspaceId,
+      prompt,
+      projectDir: PROJECT_DIR, // pi-cli strips /data/ → "project"
+      provider: agent.provider,
+      modelId: agent.modelId,
+      apiKey: agent.apiKey,
+    });
+    let lastLine = "";
+    const result = await streamPiToCompletion({
+      workspaceId,
+      outputFile: pi.outputFile,
+      backgroundPid: pi.backgroundPid,
+      timeoutMs: 15 * 60_000,
+      onProgress: (m) => {
+        if (m && m !== lastLine) { lastLine = m; plog(projectId, userId, `agent: ${m}`); }
+        setPreview(projectId, userId, { previewStatus: "starting" }, m).catch(() => {});
+      },
+    });
+    if (result.fatalError) plog(projectId, userId, `agent exited: ${result.fatalError}`, { level: "error" });
 
-  // Trust the reality of the port, not just the agent's word: confirm it listens.
-  if (await checkServer(workspaceId, manifest.port, 8)) return true;
-  if (result.tail && /PREVIEW_READY/.test(result.tail)) return await checkServer(workspaceId, manifest.port, 4);
-  // Not up — surface what the agent actually did/said and the app's own log.
-  const tail = await sh(workspaceId, `tail -25 ${PROJECT_DIR}/preview.log 2>/dev/null`, 20_000).catch(() => ({ output: "" }));
-  const agentTail = (result.tail || "").split("\n").slice(-8).join("\n");
-  const detail = [agentTail && `agent output:\n${agentTail}`, tail.output && `preview.log:\n${tail.output}`].filter(Boolean).join("\n\n");
-  if (detail) plog(projectId, userId, "Agent could not get the app serving", { level: "error", detail });
+    // Trust the reality of the port, not the agent's word: confirm it listens.
+    if (await checkServer(workspaceId, manifest.port, 8)) return true;
+    if (result.tail && /PREVIEW_READY/.test(result.tail) && await checkServer(workspaceId, manifest.port, 4)) return true;
+
+    // Not up yet — capture what happened, feed it into the next round's prompt.
+    const tail = await sh(workspaceId, `tail -25 ${PROJECT_DIR}/preview.log 2>/dev/null`, 20_000).catch(() => ({ output: "" }));
+    const agentTail = (result.tail || "").split("\n").filter((l) => l.trim()).slice(-6).join("\n");
+    prevTail = [agentTail && `agent:\n${agentTail}`, tail.output && `preview.log:\n${tail.output}`].filter(Boolean).join("\n\n");
+    // If the agent explicitly declared it cannot run, stop retrying.
+    if (result.tail && /PREVIEW_FAILED/.test(result.tail)) {
+      plog(projectId, userId, "Agent reported it cannot run this app", { level: "error", detail: prevTail });
+      return false;
+    }
+    plog(projectId, userId, `App still not responding on port ${manifest.port} after attempt ${round}`, round === MAX_AGENT_ROUNDS ? { level: "error", detail: prevTail } : undefined);
+  }
   return false;
 }
 
