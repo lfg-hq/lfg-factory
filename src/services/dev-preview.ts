@@ -26,7 +26,7 @@ import { enableHttpAccess, execOnWorkspace, setStableUrl } from "./mags.ts";
 import { ensureProjectSandbox, ensureEngine, type DbEngine } from "./project-sandbox.ts";
 
 const PROJECT_DIR = "/data/project";
-const APP_PORT = 8080; // Mags HTTP proxy port (same as Instant)
+const DEFAULT_PORT = 8080; // fallback ONLY — the real port is decided by the detected manifest per stack
 
 export type PreviewStatus =
   | "idle" | "detecting" | "provisioning" | "installing" | "seeding" | "starting" | "running" | "error" | "stopped";
@@ -37,8 +37,8 @@ export const manifestSchema = z.object({
   framework: z.string().describe("e.g. next, vite, django, rails, express, dotnet, laravel; '' if unknown"),
   installCmd: z.string().describe("Command to install deps, e.g. 'npm install', 'pip install -r requirements.txt', 'bundle install'"),
   buildCmd: z.string().describe("Build command if the app needs one before running (e.g. 'npm run build'); '' if none"),
-  runCmd: z.string().describe("Command to START the app in the foreground, bound to host 0.0.0.0 and port 8080 (use env PORT/HOST). e.g. 'npm start', 'python manage.py runserver 0.0.0.0:8080'"),
-  port: z.number().describe("Port the app listens on. Prefer 8080."),
+  runCmd: z.string().describe("Command to START the app in the FOREGROUND on `port` below, bound to 0.0.0.0 (ALL interfaces, NOT localhost) using THIS stack's own mechanism — e.g. .NET 'dotnet run --urls http://0.0.0.0:5000', Django 'python manage.py runserver 0.0.0.0:8000', Rails 'bin/rails server -b 0.0.0.0 -p 3000', Vite 'npm run dev -- --host 0.0.0.0 --port 5173', Next 'npm start -- -H 0.0.0.0 -p 3000'."),
+  port: z.number().describe("The app's NATURAL port — DETECT it from the codebase, do not force a standard value. Look at .NET launchSettings.json / ASPNETCORE_URLS, Django/Rails/Vite/Next config or their defaults, docker-compose 'ports', Dockerfile EXPOSE, and .env(.example). Use the port this app actually listens on; THIS exact port is what gets exposed publicly."),
   engines: z.array(z.enum(["postgres", "mysql", "redis"])).describe("Databases the app needs, inferred from deps/config. Empty if none."),
   migrateCmd: z.string().describe("DB migration command if any (e.g. 'npx prisma migrate deploy', 'python manage.py migrate', 'bundle exec rails db:migrate'); '' if none"),
   seedCmd: z.string().describe("Seed command if the repo has one (e.g. 'npx prisma db seed', 'python manage.py loaddata seed.json'); '' if none"),
@@ -117,13 +117,14 @@ export async function detectManifest(projectId: string): Promise<PreviewManifest
   const { object } = await generateObject({
     model,
     schema: manifestSchema,
-    prompt: `You are configuring a dev preview that RUNS this repository inside a Linux sandbox and exposes it on host 0.0.0.0 port 8080. Analyze the repo fingerprint and produce the exact commands to install, migrate, seed, and run it.
+    prompt: `You are the build engineer configuring how to RUN this repository inside a Linux sandbox so a developer can preview it live. YOU decide the whole run config from the codebase — the stack, the commands, the databases, and the PORT. Do not assume anything; read the fingerprint.
 
-Rules:
-- runCmd MUST make the app listen on 0.0.0.0:8080. Use the env vars PORT=8080 and HOST=0.0.0.0 which will be set, or pass flags explicitly (e.g. 'python manage.py runserver 0.0.0.0:8080', 'npm run dev -- --host 0.0.0.0 --port 8080').
-- engines: only DBs the app truly needs (look at deps like pg/psycopg/mysql/mysql2/redis/ioredis/prisma provider, docker-compose services, DATABASE_URL in .env.example). Postgres/MySQL/Redis only.
-- envVars: real external config the app needs (API keys, feature flags) from .env.example. DO NOT include DATABASE_URL, REDIS_URL, DB_* — those are auto-provisioned.
-- If something is unknown, choose the most standard command for the detected stack.
+Decide:
+- port: the app's real port for THIS stack — detect it (e.g. .NET launchSettings.json / ASPNETCORE_URLS → 5000/5001, Django → 8000, Rails → 3000, Vite → 5173, Next → 3000, Express → whatever process.env.PORT/app.listen uses; also docker-compose 'ports', Dockerfile EXPOSE, .env.example). Do NOT force a standard number. Whatever port you return is exactly the port we expose publicly.
+- runCmd: start the app in the foreground on that port, bound to 0.0.0.0 (all interfaces — a localhost-only bind is NOT reachable by the proxy), using the stack's own flag/env mechanism.
+- installCmd / buildCmd / migrateCmd / seedCmd: the correct commands for the detected stack (npm/pnpm/yarn, pip, bundle, dotnet restore/build, composer, go). '' when a step doesn't apply.
+- engines: only DBs the app truly needs (deps like pg/psycopg/mysql/mysql2/redis/ioredis, prisma provider, docker-compose services, DATABASE_URL scheme in .env.example). Postgres/MySQL/Redis only.
+- envVars: real external config (API keys, feature flags) from .env(.example). EXCLUDE DATABASE_URL, REDIS_URL, DB_*, PG* — those are auto-provisioned and injected.
 
 Repo fingerprint:
 ${fingerprint}`,
@@ -134,7 +135,7 @@ ${fingerprint}`,
     ...object,
     installCmd: project.customInstallCmd || object.installCmd,
     runCmd: project.customDevCmd || object.runCmd,
-    port: project.customDefaultPort || object.port || APP_PORT,
+    port: project.customDefaultPort || object.port || DEFAULT_PORT,
   };
   return manifest;
 }
@@ -150,10 +151,15 @@ function engineEnv(engine: DbEngine, h: { connectionString: string; host: string
   };
 }
 
-async function writeEnvFile(workspaceId: string, projectId: string, provisioned: Record<string, string>) {
+async function writeEnvFile(workspaceId: string, projectId: string, port: number, provisioned: Record<string, string>) {
   // Stored project env vars (decrypted) + provisioned DB creds + run hints.
   const stored = await db.select().from(projectEnvironmentVariables).where(eq(projectEnvironmentVariables.projectId, projectId));
-  const vars: Record<string, string> = { PORT: String(APP_PORT), HOST: "0.0.0.0", ...provisioned };
+  // PORT/HOST/ASPNETCORE_URLS are hints for stacks that read them; the manifest
+  // runCmd is authoritative for the actual bind.
+  const vars: Record<string, string> = {
+    PORT: String(port), HOST: "0.0.0.0", ASPNETCORE_URLS: `http://0.0.0.0:${port}`,
+    ...provisioned,
+  };
   for (const v of stored) {
     if (!v.hasValue) continue;
     try { vars[v.key] = decryptSecret(v.encryptedValue); } catch { /* skip unreadable */ }
@@ -166,9 +172,9 @@ async function writeEnvFile(workspaceId: string, projectId: string, provisioned:
 }
 
 // ── Run the app (detached, survives exec teardown) ──────────────────────────
-async function checkServer(workspaceId: string, tries: number): Promise<boolean> {
+async function checkServer(workspaceId: string, port: number, tries: number): Promise<boolean> {
   for (let i = 0; i < tries; i++) {
-    const { output } = await sh(workspaceId, `curl -s -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:${APP_PORT}/ 2>/dev/null || echo 000`, 15_000);
+    const { output } = await sh(workspaceId, `curl -s -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:${port}/ 2>/dev/null || echo 000`, 15_000);
     const code = (output.match(/\d{3}/) || ["000"])[0];
     if (code !== "000") return true; // anything listening (even 404/500) means the server is up
     await sleep(3000);
@@ -177,15 +183,16 @@ async function checkServer(workspaceId: string, tries: number): Promise<boolean>
 }
 
 async function startApp(workspaceId: string, manifest: PreviewManifest): Promise<boolean> {
+  const port = manifest.port;
   const buildStep = manifest.buildCmd ? `${manifest.buildCmd} >> preview.log 2>&1 || echo BUILD_FAILED >> preview.log` : "true";
   const script = `
 export PATH=/root/node/current/bin:/root/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:$PATH
 export NODE_OPTIONS="--max-old-space-size=1536"
 cd ${PROJECT_DIR} || exit 1
-# free the port
-fuser -k ${APP_PORT}/tcp 2>/dev/null; pkill -f ':${APP_PORT}' 2>/dev/null; sleep 1
+# free the app's port
+fuser -k ${port}/tcp 2>/dev/null; pkill -f ':${port}' 2>/dev/null; sleep 1
 ${buildStep}
-CMD='set -a; [ -f ./.env ] && . ./.env; set +a; export PORT=${APP_PORT} HOST=0.0.0.0; cd ${PROJECT_DIR}; exec ${manifest.runCmd.replace(/'/g, "'\\''")}'
+CMD='set -a; [ -f ./.env ] && . ./.env; set +a; export PORT=${port} HOST=0.0.0.0; cd ${PROJECT_DIR}; exec ${manifest.runCmd.replace(/'/g, "'\\''")}'
 if command -v setsid >/dev/null 2>&1; then
   setsid sh -c "$CMD" </dev/null >> preview.log 2>&1 &
 else
@@ -194,7 +201,7 @@ fi
 echo LAUNCHED
 `;
   await sh(workspaceId, script, 300_000);
-  return checkServer(workspaceId, 20); // ~60s
+  return checkServer(workspaceId, port, 20); // ~60s
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
@@ -255,7 +262,7 @@ fi`, 240_000);
     }
 
     // 4. Write env (provisioned creds + stored project vars).
-    await writeEnvFile(workspaceId, projectId, provisioned);
+    await writeEnvFile(workspaceId, projectId, manifest.port, provisioned);
 
     // 5. Install deps.
     await setPreview(projectId, userId, { previewStatus: "installing" }, "Installing dependencies…");
@@ -281,18 +288,18 @@ cd ${PROJECT_DIR} && ${manifest.installCmd} > install.log 2>&1; echo "INSTALL_EX
     const up = await startApp(workspaceId, manifest);
     if (!up) {
       const log = await sh(workspaceId, `tail -30 ${PROJECT_DIR}/preview.log 2>/dev/null`, 20_000);
-      return failed(projectId, userId, `The app did not start on port ${APP_PORT}. Last log:\n${log.output.slice(-600)}`);
+      return failed(projectId, userId, `The app did not start on port ${manifest.port}. Last log:\n${log.output.slice(-600)}`);
     }
 
-    // 8. Expose a stable public URL.
-    await enableHttpAccess(workspaceId, APP_PORT);
+    // 8. Expose the app's OWN port publicly (whatever the manifest decided).
+    await enableHttpAccess(workspaceId, manifest.port);
     const alias = existing?.stableAlias || `preview-${projectId.slice(0, 8)}`;
     let previewUrl = "";
     try { previewUrl = await setStableUrl(alias, workspaceId); }
-    catch { previewUrl = await enableHttpAccess(workspaceId, APP_PORT); }
+    catch { previewUrl = await enableHttpAccess(workspaceId, manifest.port); }
 
     await db.update(projectEnvironments).set({ stableAlias: alias, updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
-    await setPreview(projectId, userId, { previewStatus: "running", appUrl: previewUrl, appPort: APP_PORT, previewError: null }, "Preview is live");
+    await setPreview(projectId, userId, { previewStatus: "running", appUrl: previewUrl, appPort: manifest.port, previewError: null }, "Preview is live");
     return { previewUrl };
   } catch (err) {
     return failed(projectId, userId, (err as Error).message ?? String(err));
@@ -321,6 +328,10 @@ export async function getPreviewState(projectId: string) {
 /** Stop the running app (leaves the sandbox + DBs up). */
 export async function stopPreview(projectId: string, userId: string): Promise<void> {
   const workspaceId = `env-${projectId}`;
-  await sh(workspaceId, `fuser -k ${APP_PORT}/tcp 2>/dev/null; pkill -f ':${APP_PORT}' 2>/dev/null; echo stopped`, 30_000).catch(() => {});
+  const row = await getEnv(projectId);
+  const port = row?.appPort
+    ?? (row?.setupManifest ? (JSON.parse(row.setupManifest) as PreviewManifest).port : undefined)
+    ?? DEFAULT_PORT;
+  await sh(workspaceId, `fuser -k ${port}/tcp 2>/dev/null; pkill -f ':${port}' 2>/dev/null; echo stopped`, 30_000).catch(() => {});
   await setPreview(projectId, userId, { previewStatus: "stopped", appUrl: null }, "Preview stopped");
 }
