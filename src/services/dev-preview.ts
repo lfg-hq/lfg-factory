@@ -229,10 +229,14 @@ export async function setupPreview(projectId: string, opts: SetupOptions): Promi
     await setPreview(projectId, userId, { previewStatus: "detecting", previewError: null, previewBranch: branch || "(default)" }, "Preparing sandbox…");
 
     // 1. Resolve the repo URL + provider auth (GitHub or GitLab), then clone/update.
-    const provider = (project.repoProvider || "github").toLowerCase();
-    const host = provider === "gitlab" ? "gitlab.com" : "github.com";
-    const repoUrl = project.repoUrl || (project.repoOwner && project.repoName ? `https://${host}/${project.repoOwner}/${project.repoName}.git` : "");
+    // Prefer the URL host as the source of truth (dual-provider app) and fall
+    // back to the stored repoProvider column when there's no explicit URL.
+    const columnProvider = (project.repoProvider || "github").toLowerCase();
+    const repoUrl = project.repoUrl || (project.repoOwner && project.repoName
+      ? `https://${columnProvider === "gitlab" ? "gitlab.com" : "github.com"}/${project.repoOwner}/${project.repoName}.git`
+      : "");
     if (!repoUrl) return failed(projectId, userId, "This project has no connected repository to preview.");
+    const provider = /gitlab\.com|\/gitlab\b/i.test(repoUrl) ? "gitlab" : /github\.com/i.test(repoUrl) ? "github" : columnProvider;
 
     let token = "";
     if (provider === "gitlab") {
