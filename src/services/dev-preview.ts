@@ -203,8 +203,10 @@ async function writeEnvFile(workspaceId: string, projectId: string, manifest: Pr
 async function checkServer(workspaceId: string, port: number, tries: number): Promise<boolean> {
   for (let i = 0; i < tries; i++) {
     const { output } = await sh(workspaceId, `curl -s -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:${port}/ 2>/dev/null || echo 000`, 15_000);
-    const code = (output.match(/\d{3}/) || ["000"])[0];
-    if (code !== "000") return true; // anything listening (even 404/500) means the server is up
+    const code = parseInt((output.match(/\d{3}/) || ["000"])[0], 10);
+    // Reachable and NOT a server error: 2xx/3xx = serving, 4xx = up (e.g. API-only
+    // app with no route at /). 5xx = app crashed on the request → not "live". 000 = down.
+    if (code >= 200 && code < 500) return true;
     await sleep(3000);
   }
   return false;
@@ -274,23 +276,23 @@ Steps:
 2. For COMPILED stacks (.NET, Java, Go, Rust): restore → BUILD → then run. Do the build BEFORE trying to run. For a multi-project solution, find the WEB/startup project (the one referencing ASP.NET Core / a web SDK) and run THAT specific project, not the whole solution.
 3. Run DB migrations and seed data if the app has them (creds are already in .env).
 4. Start the app in the BACKGROUND, bound to host 0.0.0.0 on port ${port}, DETACHED so it keeps running after your command returns — e.g. \`setsid sh -c 'set -a; . ./.env; set +a; export PORT=${port} HOST=0.0.0.0; <run command>' </dev/null > ${PROJECT_DIR}/preview.log 2>&1 &\`.
-5. VERIFY it is truly up: \`curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:${port}/\`. A 2xx/3xx/4xx = serving. 000 or "connection refused" = NOT up.
-6. If it is not up: read ${PROJECT_DIR}/preview.log and the build output, DIAGNOSE (missing dep, wrong build step, missing env var, DB not migrated, needs a production build first, wrong host/port, wrong startup project), FIX it, and RETRY. Iterate until it responds.
+5. VERIFY BY ACTUALLY REQUESTING THE APP over localhost and INSPECTING THE RESPONSE — do not assume: \`curl -sS -i http://127.0.0.1:${port}/\`. It is working ONLY if you get a real HTTP response with a 2xx/3xx status AND actual page content. It is NOT working if you get connection refused (000), a 5xx server error, or an error/stack-trace page — in that case keep diagnosing and fixing.
+6. If it is not up: read ${PROJECT_DIR}/preview.log and the build output, DIAGNOSE (missing dep, wrong build step, missing env var, DB not migrated, needs a production build first, wrong host/port, wrong startup project), FIX THE ENVIRONMENT, and RETRY. Iterate until it responds.
 
-CRITICAL — DO NOT GIVE UP EARLY:
-- restore/build/install for large apps can take SEVERAL MINUTES. Give slow commands a generous timeout (e.g. run bash with timeout 600 for restore/build). A slow command is NOT a failure — wait for it.
-- If a command errors, READ the error and fix it, then try again. Never stop just because one command failed.
-- Keep working step by step until \`curl\` on port ${port} returns a real HTTP code. Do not end your turn while the app is not yet responding, unless you have truly exhausted every option.
+CRITICAL RULES:
+- DO NOT MODIFY THE APPLICATION'S SOURCE CODE. This is a preview of the user's EXISTING repository. You MAY install tools/dependencies, set environment variables, pick the correct build/run command, and fix host/port binding — but you must NOT edit, create, or delete any application source file. If the app genuinely cannot run without a code change, do NOT change it: stop and report PREVIEW_FAILED with the exact code-level reason so the user can fix it.
+- DO NOT GIVE UP EARLY. restore/build/install for large apps can take SEVERAL MINUTES — give slow commands a generous timeout (e.g. run bash with timeout 600). A slow command is NOT a failure; wait for it. If a command errors, READ the error, fix the ENVIRONMENT (not the code), and try again. Keep working until the app actually serves on port ${port}, unless you have truly exhausted every option.
+- RELAY ERRORS ACCURATELY. Whenever something fails, surface the ACTUAL error text you saw (the real compiler/runtime/log message) — do not paraphrase it away. If you must give up, PREVIEW_FAILED's reason must contain the concrete error.
 
-When the app responds on port ${port}, print on its own line exactly:
+Only after curl confirms the app responds with real content on port ${port}, print on its own line exactly:
 PREVIEW_READY ${port}
-Only if you have genuinely exhausted all options, print exactly:
-PREVIEW_FAILED <one-line reason>
+If (and only if) you have genuinely exhausted all environment fixes — or it needs a source-code change — print exactly:
+PREVIEW_FAILED <concrete reason incl. the real error>
 
 Hard rules: the server MUST bind 0.0.0.0 (not localhost-only) and MUST be detached (survive your shell). Never print secrets.`;
 }
 
-const MAX_AGENT_ROUNDS = 4;
+const MAX_AGENT_ROUNDS = 2; // initial attempt + one resume
 
 async function runViaAgent(
   projectId: string,
