@@ -18,6 +18,7 @@
   let pollTimer = null;
   let current = null; // last known state
   let loadedOnce = false;
+  let logText = ""; // accumulated setup log
 
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -47,6 +48,15 @@
     if (el) el.innerHTML = html || "";
   }
 
+  // Scrollable live log panel (shared by the in-progress and error views).
+  function logPanel(flex) {
+    return `<pre id="preview-log" style="${flex ? "flex:1;min-height:0;" : "max-height:260px;"}margin:0;overflow:auto;text-align:left;background:var(--background-surface,#141414);border:1px solid var(--border-color,#2a2a2a);border-radius:8px;padding:12px 14px;font-size:12px;line-height:1.55;color:var(--text-color,#cbd5e1);white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${esc(logText || "Starting…")}</pre>`;
+  }
+  function scrollLog() {
+    const el = $("preview-log");
+    if (el) el.scrollTop = el.scrollHeight;
+  }
+
   function render(state) {
     current = state;
     const body = $("preview-body");
@@ -57,11 +67,14 @@
       setSub(STEP_LABEL[status] || "Working…");
       renderActions(btn("Cancel", { action: "stop", icon: "fa-stop" }));
       body.innerHTML = `
-        <div style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;color:var(--text-secondary,#9ca3af);">
-          <div class="spinner"></div>
-          <div style="font-size:14px;">${esc(STEP_LABEL[status] || "Setting up your preview…")}</div>
-          <div style="font-size:12px;color:var(--text-secondary,#9ca3af);">This can take a couple of minutes on first run.</div>
+        <div style="height:100%;display:flex;flex-direction:column;gap:12px;padding:16px 20px;">
+          <div style="display:flex;align-items:center;gap:12px;color:var(--text-color,#e2e8f0);font-size:14px;">
+            <div class="spinner" style="width:18px;height:18px;flex:none;"></div>
+            <span>${esc(STEP_LABEL[status] || "Setting up your preview…")}</span>
+          </div>
+          ${logPanel(true)}
         </div>`;
+      scrollLog();
       return;
     }
 
@@ -69,6 +82,7 @@
       setSub("Live" + (state.branch ? ` · ${state.branch}` : ""));
       renderActions(
         btn("Open", { action: "open", icon: "fa-external-link-alt" }) +
+        btn("Logs", { action: "togglelog", icon: "fa-terminal" }) +
         btn("Restart", { action: "setup", icon: "fa-redo" }) +
         btn("Stop", { action: "stop", icon: "fa-stop" })
       );
@@ -80,11 +94,15 @@
       setSub("Failed");
       renderActions(btn("Try again", { action: "setup", primary: true, icon: "fa-redo" }));
       body.innerHTML = `
-        <div style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:32px;text-align:center;color:var(--text-secondary,#9ca3af);">
-          <div style="font-size:28px;color:#ef4444;"><i class="fas fa-triangle-exclamation"></i></div>
-          <div style="font-size:14px;color:var(--text-color,#e2e8f0);">The preview couldn't start</div>
-          <pre style="max-width:100%;max-height:220px;overflow:auto;text-align:left;background:var(--background-surface,#141414);border:1px solid var(--border-color,#2a2a2a);border-radius:8px;padding:12px;font-size:12px;color:var(--text-color,#cbd5e1);white-space:pre-wrap;">${esc(state.error || "Unknown error")}</pre>
+        <div style="height:100%;display:flex;flex-direction:column;gap:12px;padding:16px 20px;">
+          <div style="display:flex;align-items:center;gap:10px;color:var(--text-color,#e2e8f0);font-size:14px;">
+            <i class="fas fa-triangle-exclamation" style="color:#ef4444;font-size:18px;"></i>
+            <span>The preview couldn't start${state.error ? " — " + esc(state.error.split("\n")[0].slice(0, 120)) : ""}</span>
+          </div>
+          <div style="font-size:12px;color:var(--text-secondary,#9ca3af);">Full log — the failing step and its output are below.</div>
+          ${logPanel(true)}
         </div>`;
+      scrollLog();
       return;
     }
 
@@ -110,6 +128,7 @@
       const r = await api("");
       if (!r.ok) throw new Error("state " + r.status);
       const state = await r.json();
+      if (typeof state.log === "string" && state.log) logText = state.log;
       render(state);
       managePolling(state.previewStatus);
     } catch (e) {
@@ -128,6 +147,7 @@
   }
 
   async function doSetup(rebuildManifest) {
+    logText = ""; // fresh run → fresh log
     render({ previewStatus: "detecting" });
     managePolling("detecting");
     try {
@@ -135,6 +155,20 @@
     } catch (e) {
       render({ previewStatus: "error", error: "Could not start setup: " + e.message });
     }
+  }
+
+  // Toggle a log overlay on top of the running iframe.
+  function toggleLog() {
+    const body = $("preview-body");
+    if (!body) return;
+    const existing = document.getElementById("preview-log-overlay");
+    if (existing) { existing.remove(); return; }
+    const overlay = document.createElement("div");
+    overlay.id = "preview-log-overlay";
+    overlay.style.cssText = "position:absolute;inset:0;padding:16px 20px;background:var(--bg-color,#0f0f0f);display:flex;flex-direction:column;gap:8px;z-index:5;";
+    overlay.innerHTML = `<div style="font-size:12px;color:var(--text-secondary,#9ca3af);">Setup log</div>${logPanel(true)}`;
+    body.appendChild(overlay);
+    scrollLog();
   }
 
   async function doStop() {
@@ -149,12 +183,13 @@
     const action = b.getAttribute("data-action");
     if (action === "setup") doSetup(false);
     else if (action === "stop") doStop();
+    else if (action === "togglelog") toggleLog();
     else if (action === "open" && current && current.previewUrl) window.open(current.previewUrl, "_blank");
   }
 
   // Live updates pushed from the server over the chat WS. There's one project
   // per page (and the WS keys on the internal id while we hold the public id),
-  // so we accept every preview_status for this page.
+  // so we accept every preview_status/preview_log for this page.
   window.PreviewTab = {
     onStatus(data) {
       const next = {
@@ -171,6 +206,17 @@
         managePolling(next.previewStatus);
       }
       if (data.message) setSub(data.message);
+    },
+    onLog(data) {
+      if (!data || !data.line) return;
+      logText = (logText + data.line + "\n").slice(-16000);
+      // Append incrementally if the log panel is visible (preserve scroll pos).
+      const el = $("preview-log");
+      if (el) {
+        const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+        el.textContent = logText;
+        if (atBottom) el.scrollTop = el.scrollHeight;
+      }
     },
   };
 

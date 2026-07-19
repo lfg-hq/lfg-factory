@@ -75,7 +75,7 @@ async function setPreview(
   message?: string,
 ) {
   await db.update(projectEnvironments)
-    .set({ ...patch, updatedAt: new Date() })
+    .set({ ...patch, setupLog: logBuffers.get(projectId), updatedAt: new Date() })
     .where(eq(projectEnvironments.projectId, projectId));
   broadcastToUser(userId, {
     type: "preview_status",
@@ -86,6 +86,26 @@ async function setPreview(
     error: patch.previewError ?? undefined,
   });
 }
+
+// ── Live setup log — one buffer per project, streamed to the Preview tab as
+// `preview_log` and persisted on project_environments.setupLog so it survives a
+// reload. This is how the UI shows "pulling repo / installing deps / …" and the
+// REAL error output instead of an opaque plumbing message. ────────────────────
+const logBuffers = new Map<string, string>();
+
+/** Append a human-readable line to the project's setup log (UI + server + DB). */
+function plog(projectId: string, userId: string, line: string, opts?: { level?: "info" | "error"; detail?: string }) {
+  const ts = new Date().toISOString().slice(11, 19);
+  const level = opts?.level ?? "info";
+  let entry = `[${ts}] ${line}`;
+  if (opts?.detail) entry += "\n" + opts.detail.split("\n").map((l) => "    " + l).join("\n");
+  const buf = ((logBuffers.get(projectId) ?? "") + entry + "\n").slice(-12_000); // keep last ~12KB
+  logBuffers.set(projectId, buf);
+  console.log(`[dev-preview] ${projectId.slice(0, 8)} ${level === "error" ? "ERROR " : ""}${line}${opts?.detail ? " :: " + opts.detail.replace(/\n/g, " ").slice(0, 300) : ""}`);
+  broadcastToUser(userId, { type: "preview_log", projectId, line: entry, level });
+}
+
+function resetLog(projectId: string) { logBuffers.set(projectId, ""); }
 
 // ── Stack detection → manifest ─────────────────────────────────────────────
 async function gatherFingerprint(workspaceId: string): Promise<string> {
@@ -276,16 +296,27 @@ async function runViaAgent(
     modelId: agent.modelId,
     apiKey: agent.apiKey,
   });
+  let lastLine = "";
   const result = await streamPiToCompletion({
     workspaceId,
     outputFile: pi.outputFile,
     backgroundPid: pi.backgroundPid,
     timeoutMs: 20 * 60_000,
-    onProgress: (m) => { setPreview(projectId, userId, { previewStatus: "starting" }, m).catch(() => {}); },
+    onProgress: (m) => {
+      if (m && m !== lastLine) { lastLine = m; plog(projectId, userId, `agent: ${m}`); }
+      setPreview(projectId, userId, { previewStatus: "starting" }, m).catch(() => {});
+    },
   });
+  if (result.fatalError) plog(projectId, userId, `agent error: ${result.fatalError}`, { level: "error" });
+
   // Trust the reality of the port, not just the agent's word: confirm it listens.
   if (await checkServer(workspaceId, manifest.port, 8)) return true;
   if (result.tail && /PREVIEW_READY/.test(result.tail)) return await checkServer(workspaceId, manifest.port, 4);
+  // Not up — surface what the agent actually did/said and the app's own log.
+  const tail = await sh(workspaceId, `tail -25 ${PROJECT_DIR}/preview.log 2>/dev/null`, 20_000).catch(() => ({ output: "" }));
+  const agentTail = (result.tail || "").split("\n").slice(-8).join("\n");
+  const detail = [agentTail && `agent output:\n${agentTail}`, tail.output && `preview.log:\n${tail.output}`].filter(Boolean).join("\n\n");
+  if (detail) plog(projectId, userId, "Agent could not get the app serving", { level: "error", detail });
   return false;
 }
 
@@ -302,9 +333,12 @@ export async function setupPreview(projectId: string, opts: SetupOptions): Promi
   if (!project) return { error: "project not found" };
   const branch = opts.branch || ""; // "" → use the repo's default branch
 
+  resetLog(projectId);
   try {
+    plog(projectId, userId, "Starting the project's sandbox…");
     await ensureProjectSandbox(projectId);
     const workspaceId = `env-${projectId}`;
+    plog(projectId, userId, `Sandbox ready (${workspaceId})`);
     await setPreview(projectId, userId, { previewStatus: "detecting", previewError: null, previewBranch: branch || "(default)" }, "Preparing sandbox…");
 
     // 1. Resolve the repo URL + provider auth (GitHub or GitLab), then clone/update.
@@ -331,6 +365,7 @@ export async function setupPreview(projectId: string, opts: SetupOptions): Promi
     const authUrl = repoUrl.replace(/^https:\/\//, `https://${cred}@`);
     const coBranch = branch ? `git checkout ${branch} 2>/dev/null || true` : "true";
 
+    plog(projectId, userId, `Pulling repo from ${provider === "gitlab" ? "GitLab" : "GitHub"} (${repoUrl.replace(/^https:\/\//, "")})${branch ? ` @ ${branch}` : ""}…`);
     await setPreview(projectId, userId, { previewStatus: "detecting" }, "Fetching the code…");
     const clone = await sh(workspaceId, `
 export PATH=/root/node/current/bin:/usr/local/bin:/usr/bin:/bin:$PATH
@@ -341,16 +376,25 @@ if [ -d ${PROJECT_DIR}/.git ]; then
 else
   rm -rf ${PROJECT_DIR}; git clone "${authUrl}" ${PROJECT_DIR} 2>&1 | tail -3; if [ -d ${PROJECT_DIR}/.git ]; then cd ${PROJECT_DIR} && (${coBranch}) && echo CLONE_OK; fi
 fi`, 240_000);
-    if (!clone.output.includes("CLONE_OK")) return failed(projectId, userId, `Could not fetch the repo:\n${clone.output.slice(-400)}`);
+    if (!clone.output.includes("CLONE_OK")) {
+      // Scrub any credential that leaked into git's error text before showing it.
+      const safe = clone.output.replace(/\/\/[^@\s]+@/g, "//***@").slice(-500);
+      plog(projectId, userId, "Could not fetch the repo", { level: "error", detail: safe });
+      return failed(projectId, userId, `Could not fetch the repo:\n${safe}`);
+    }
+    plog(projectId, userId, "Repo fetched ✓");
 
     // 2. Detect (or reuse) the setup manifest.
     const existing = await getEnv(projectId);
     let manifest: PreviewManifest;
     if (!opts.rebuildManifest && existing?.setupManifest) {
       manifest = JSON.parse(existing.setupManifest);
+      plog(projectId, userId, `Using saved config (${manifest.framework || manifest.runtime}, port ${manifest.port})`);
     } else {
+      plog(projectId, userId, "Analyzing the codebase to work out how to run it…");
       manifest = await detectManifest(projectId);
       await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
+      plog(projectId, userId, `Detected: ${manifest.runtime}${manifest.framework ? "/" + manifest.framework : ""}, port ${manifest.port}, databases: ${manifest.engines.length ? manifest.engines.join(", ") : "none"}`);
     }
 
     // 3. Provision the DBs the app needs (keep the handles for the agent prompt).
@@ -359,14 +403,17 @@ fi`, 240_000);
     if (manifest.engines.length) {
       await setPreview(projectId, userId, { previewStatus: "provisioning" }, `Provisioning ${manifest.engines.join(", ")}…`);
       for (const engine of manifest.engines) {
+        plog(projectId, userId, `Provisioning ${engine}…`);
         const h = await ensureEngine(projectId, engine);
         engineHandles.push(h);
         Object.assign(provisioned, engineEnv(engine, h));
+        plog(projectId, userId, `${engine} ready at 127.0.0.1:${h.port} (db "${h.dbName}") ✓`);
       }
     }
 
     // 4. Write env (provisioned creds + stored project vars).
     await writeEnvFile(workspaceId, projectId, manifest, provisioned);
+    plog(projectId, userId, "Wrote .env (DB credentials + project env vars)");
 
     // 5. Get the app running + VERIFIED. Preferred: an in-sandbox coding agent
     // (matches the project chat model) that installs, migrates/seeds, starts the
@@ -375,29 +422,41 @@ fi`, 240_000);
     const agent = await resolveAgentModel(userId);
     let up = false;
     if (agent) {
+      plog(projectId, userId, `Handing off to the ${agent.provider} agent to install, run, and verify the app on port ${manifest.port}…`);
       await setPreview(projectId, userId, { previewStatus: "starting" }, `Agent (${agent.provider}) is getting the app running…`);
       up = await runViaAgent(projectId, userId, workspaceId, manifest, engineHandles, agent);
     } else {
-      // Deterministic fallback: install → migrate/seed → start.
+      plog(projectId, userId, "No agent model available — using the deterministic runner.");
       await setPreview(projectId, userId, { previewStatus: "installing" }, "Installing dependencies…");
-      await sh(workspaceId, `
+      plog(projectId, userId, `Installing dependencies (${manifest.installCmd})…`);
+      const inst = await sh(workspaceId, `
 export PATH=/root/node/current/bin:/root/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:$PATH
 export npm_config_cache=/data/.npm-cache NODE_OPTIONS="--max-old-space-size=1536"
-cd ${PROJECT_DIR} && ${manifest.installCmd} > install.log 2>&1; echo "INSTALL_EXIT=$?"; tail -3 install.log`, 480_000);
+cd ${PROJECT_DIR} && ${manifest.installCmd} > install.log 2>&1; echo "INSTALL_EXIT=$?"; tail -4 install.log`, 480_000);
+      const instExit = (inst.output.match(/INSTALL_EXIT=(\d+)/) || [])[1];
+      plog(projectId, userId, instExit === "0" ? "Dependencies installed ✓" : `Install exited ${instExit}`, instExit && instExit !== "0" ? { level: "error", detail: inst.output.slice(-500) } : undefined);
       if (manifest.migrateCmd || manifest.seedCmd) {
         await setPreview(projectId, userId, { previewStatus: "seeding" }, "Running migrations + seed…");
-        if (manifest.migrateCmd) await sh(workspaceId, `cd ${PROJECT_DIR} && set -a; . ./.env 2>/dev/null; set +a; ${manifest.migrateCmd} >> migrate.log 2>&1; echo done`, 300_000);
-        if (manifest.seedCmd) await sh(workspaceId, `cd ${PROJECT_DIR} && set -a; . ./.env 2>/dev/null; set +a; ${manifest.seedCmd} >> migrate.log 2>&1; echo done`, 300_000);
+        if (manifest.migrateCmd) { plog(projectId, userId, `Migrating (${manifest.migrateCmd})…`); await sh(workspaceId, `cd ${PROJECT_DIR} && set -a; . ./.env 2>/dev/null; set +a; ${manifest.migrateCmd} >> migrate.log 2>&1; echo done`, 300_000); }
+        if (manifest.seedCmd) { plog(projectId, userId, `Seeding (${manifest.seedCmd})…`); await sh(workspaceId, `cd ${PROJECT_DIR} && set -a; . ./.env 2>/dev/null; set +a; ${manifest.seedCmd} >> migrate.log 2>&1; echo done`, 300_000); }
       }
       await setPreview(projectId, userId, { previewStatus: "starting" }, "Starting the app…");
+      plog(projectId, userId, `Starting the app (${manifest.runCmd})…`);
       up = await startApp(workspaceId, manifest);
     }
-    if (!up) {
-      const log = await sh(workspaceId, `tail -40 ${PROJECT_DIR}/preview.log 2>/dev/null`, 20_000);
-      return failed(projectId, userId, `The app did not come up on port ${manifest.port}. Last log:\n${log.output.slice(-800)}`);
-    }
 
-    // 8. Expose the app's OWN port publicly (whatever the manifest decided).
+    // 6. Confirm the app is actually serving on its port (reality check).
+    plog(projectId, userId, `Verifying the app responds on 127.0.0.1:${manifest.port}…`);
+    if (!up) {
+      const log = await sh(workspaceId, `tail -40 ${PROJECT_DIR}/preview.log 2>/dev/null; echo '--- install.log ---'; tail -15 ${PROJECT_DIR}/install.log 2>/dev/null`, 20_000);
+      const detail = (log.output || "").trim() || "(no log output captured)";
+      plog(projectId, userId, `The app did not respond on port ${manifest.port}`, { level: "error", detail });
+      return failed(projectId, userId, `The app did not come up on port ${manifest.port}.\n\n${detail.slice(-1000)}`);
+    }
+    plog(projectId, userId, "App is responding ✓");
+
+    // 7. Expose the app's OWN port publicly (whatever the manifest decided).
+    plog(projectId, userId, `Exposing port ${manifest.port} as a public URL…`);
     await enableHttpAccess(workspaceId, manifest.port);
     const alias = existing?.stableAlias || `preview-${projectId.slice(0, 8)}`;
     let previewUrl = "";
@@ -405,29 +464,33 @@ cd ${PROJECT_DIR} && ${manifest.installCmd} > install.log 2>&1; echo "INSTALL_EX
     catch { previewUrl = await enableHttpAccess(workspaceId, manifest.port); }
 
     await db.update(projectEnvironments).set({ stableAlias: alias, updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
+    plog(projectId, userId, `Preview live: ${previewUrl}`);
     await setPreview(projectId, userId, { previewStatus: "running", appUrl: previewUrl, appPort: manifest.port, previewError: null }, "Preview is live");
     return { previewUrl };
   } catch (err) {
-    return failed(projectId, userId, (err as Error).message ?? String(err));
+    const msg = (err as Error).message ?? String(err);
+    plog(projectId, userId, "Setup failed", { level: "error", detail: msg });
+    return failed(projectId, userId, msg);
   }
 }
 
 async function failed(projectId: string, userId: string, error: string): Promise<{ error: string }> {
   console.error(`[dev-preview] ${projectId}: ${error}`);
-  await setPreview(projectId, userId, { previewStatus: "error", previewError: error.slice(0, 2000) }, "Preview failed").catch(() => {});
+  await setPreview(projectId, userId, { previewStatus: "error", previewError: error.slice(0, 4000) }, "Preview failed").catch(() => {});
   return { error };
 }
 
 /** Current preview state for the Preview tab. */
 export async function getPreviewState(projectId: string) {
   const row = await getEnv(projectId);
-  if (!row) return { previewStatus: "idle" as PreviewStatus, previewUrl: null, manifest: null, error: null, branch: null };
+  if (!row) return { previewStatus: "idle" as PreviewStatus, previewUrl: null, manifest: null, error: null, branch: null, log: "" };
   return {
     previewStatus: (row.previewStatus as PreviewStatus) ?? "idle",
     previewUrl: row.appUrl ?? null,
     manifest: row.setupManifest ? JSON.parse(row.setupManifest) : null,
     error: row.previewError ?? null,
     branch: row.previewBranch ?? null,
+    log: logBuffers.get(projectId) ?? row.setupLog ?? "",
   };
 }
 

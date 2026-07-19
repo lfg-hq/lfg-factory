@@ -1116,9 +1116,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
-            // Live dev-preview status → Preview tab
+            // Live dev-preview status + step log → Preview tab
             if (data.type === 'preview_status') {
                 if (window.PreviewTab && window.PreviewTab.onStatus) window.PreviewTab.onStatus(data);
+                return;
+            }
+            if (data.type === 'preview_log') {
+                if (window.PreviewTab && window.PreviewTab.onLog) window.PreviewTab.onLog(data);
                 return;
             }
             
