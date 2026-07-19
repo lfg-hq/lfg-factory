@@ -497,8 +497,11 @@ elif [ -d "${projectDirName}" ] && [ "$(ls -A ${projectDirName} 2>/dev/null)" ];
 else
     echo "CLONING_REPO"
     rm -rf ${projectDirName}
-    git clone https://${githubToken}@github.com/${githubOwner}/${githubRepo}.git ${projectDirName}
-    cd ${projectDirName}
+    git clone https://${githubToken}@github.com/${githubOwner}/${githubRepo}.git ${projectDirName} 2>&1
+    # A failed clone (TLS/network/auth) leaves no dir — do NOT fall through and run
+    # git ops in the parent (WORKING_DIR); fail loudly so the caller aborts.
+    cd ${projectDirName} 2>/dev/null || { echo "GIT_CLONE_FAILED"; exit 1; }
+    [ -d ".git" ] || { echo "GIT_CLONE_FAILED"; exit 1; }
 fi
 
 # Ensure lfg-agent branch exists (create from main/default if not)
@@ -549,6 +552,13 @@ git branch --show-current
             .set({ githubBranch: featureBranch, githubMergeStatus: "pending", updatedAt: new Date() })
             .where(eq(projectTickets.id, ticketId));
         }
+      } else if (gitResult.output.includes("GIT_CLONE_FAILED") || gitResult.output.includes("GIT_SETUP_FAILED_NO_GIT")) {
+        // The clone genuinely failed — no code in the VM. Running the agent
+        // against an empty dir is the "round and round" flailing; fail cleanly.
+        const reason = `repository clone failed (network/TLS/auth) — no code in the build VM for ${githubOwner}/${githubRepo}`;
+        console.error(`[ticket-executor] ${reason}`);
+        await markTicketFailed(ticketId, `Git setup failed — ${reason}`, ownerId, { emitEvent: false });
+        return;
       } else {
         gitSetupError = `Git setup issue: ${gitResult.output.slice(0, 200)}`;
         console.warn(`[ticket-executor] ${gitSetupError}`);
@@ -1392,8 +1402,11 @@ elif [ -d "${projectDirName}" ] && [ "$(ls -A ${projectDirName} 2>/dev/null)" ];
 else
     echo "CLONING_REPO"
     rm -rf ${projectDirName}
-    git clone https://${githubToken}@github.com/${githubOwner}/${githubRepo}.git ${projectDirName}
-    cd ${projectDirName}
+    git clone https://${githubToken}@github.com/${githubOwner}/${githubRepo}.git ${projectDirName} 2>&1
+    # A failed clone (TLS/network/auth) leaves no dir — do NOT fall through and run
+    # git ops in the parent (WORKING_DIR); fail loudly so the caller aborts.
+    cd ${projectDirName} 2>/dev/null || { echo "GIT_CLONE_FAILED"; exit 1; }
+    [ -d ".git" ] || { echo "GIT_CLONE_FAILED"; exit 1; }
 fi
 
 if ! git rev-parse --verify origin/lfg-agent 2>/dev/null; then
@@ -1439,8 +1452,8 @@ git branch --show-current
         // Clone/setup failed — do NOT run the agent against an empty dir (that's
         // the "round and round" flailing). Fail the ticket with a clear reason.
         throw new Error(
-          gitResult.output.includes("GIT_SETUP_FAILED_NO_GIT")
-            ? `repository clone failed (network/TLS) — no code in the build VM for ${githubOwner}/${githubRepo}`
+          gitResult.output.includes("GIT_CLONE_FAILED") || gitResult.output.includes("GIT_SETUP_FAILED_NO_GIT")
+            ? `repository clone failed (network/TLS/auth) — no code in the build VM for ${githubOwner}/${githubRepo}`
             : `git setup did not complete: ${gitResult.output.slice(0, 200)}`
         );
       }
