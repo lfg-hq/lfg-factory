@@ -20,3 +20,5 @@ export * from "./agents.ts";
 export * from "./composio.ts";
 
 export * from "./pins.ts";
+
+export * from "./project-databases.ts";
