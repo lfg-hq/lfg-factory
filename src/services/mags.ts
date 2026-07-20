@@ -136,26 +136,25 @@ export async function newWorkspaceV2(
 ): Promise<{ jobId: string; workspaceId: string }> {
   const token = process.env.MAGS_API_TOKEN;
   if (!token) throw new Error("MAGS_API_TOKEN not set");
-  const base = (process.env.MAGS_API_URL || "https://mags.run").replace(/\/+$/, "");
+  const base = (process.env.MAGS_API_URL || "https://api.magpiecloud.com").replace(/\/+$/, "");
 
-  const environment: Record<string, string> = {};
-  if (opts.keepAlive) environment.__MAGS_KEEP_ALIVE = "true";
-  if (opts.idleMinutes) environment.__MAGS_IDLE_MIN = String(opts.idleMinutes);
-
+  // Exact v2 payload — top-level vcpus/memory_mb/disk_gb (verified 4 vCPU / 8GB).
+  // keepAlive uses the top-level `no_sleep` flag. Do NOT pass an `environment`
+  // map here — that kicks the job onto a legacy path that ignores the sizing.
   const payload: Record<string, unknown> = {
     script: "sleep infinity",
     type: "inline",
     persistent: true,
     name,
     workspace_id: name,
-    startup_command: "sleep infinity",
     vcpus: opts.vcpus ?? 4,
     memory_mb: opts.memoryMb ?? 8192,
+    startup_command: "sleep infinity",
   };
   if (opts.diskGb) payload.disk_gb = opts.diskGb;
-  if (Object.keys(environment).length) payload.environment = environment;
+  if (opts.keepAlive) payload.no_sleep = true;
 
-  console.log(`[mags] newWorkspaceV2 '${name}': POST ${base}/api/v2/mags-jobs (vcpus=${payload.vcpus} mem=${payload.memory_mb}MB disk=${opts.diskGb ?? "-"})`);
+  console.log(`[mags] newWorkspaceV2 '${name}': POST ${base}/api/v2/mags-jobs (vcpus=${payload.vcpus} mem=${payload.memory_mb}MB disk=${opts.diskGb ?? "-"} no_sleep=${!!opts.keepAlive})`);
   const resp = await fetch(`${base}/api/v2/mags-jobs`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },

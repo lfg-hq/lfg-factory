@@ -158,7 +158,9 @@ export async function detectManifest(projectId: string): Promise<PreviewManifest
   const { object } = await generateObject({
     model,
     schema: manifestSchema,
-    prompt: `You are a senior build engineer preparing a SETUP PLAN to run this EXISTING repository inside a fresh Alpine Linux sandbox so a developer can preview it live. You have a full read of the codebase below (solution/project files, appsettings, docker-compose, ORM config, SQL scripts, env examples, README). Produce a COMPLETE, concrete plan — everything needed to get this specific app serving HTTP. Do NOT be vague; do NOT assume; base every field on what the code actually shows.
+    prompt: `You are a senior build engineer preparing a SETUP PLAN to run this EXISTING repository inside a fresh sandbox so a developer can preview it live. You have a full read of the codebase below (solution/project files, appsettings, docker-compose, ORM config, SQL scripts, env examples, README). Produce a COMPLETE, concrete plan — everything needed to get this specific app serving HTTP. Do NOT be vague; do NOT assume; base every field on what the code actually shows.
+
+ENVIRONMENT: the sandbox is ALPINE LINUX (musl libc, apk package manager, OpenRC, busybox). Every command MUST be Alpine-compatible: use \`apk add --no-cache <pkg>\` (NEVER apt/apt-get/yum/dnf), start system services with \`rc-service <svc> start\` (NEVER systemctl), and note that glibc-only prebuilt binaries may need \`apk add gcompat\`. Docker is ALREADY installed and running (use it for SQL Server). Package names are Alpine's (e.g. dotnet8-sdk, nodejs, npm, python3, py3-pip, postgresql-client).
 
 Work out and fill in:
 - stack / runtime / framework / versions — read .csproj <TargetFramework>, global.json, package.json engines, etc.
@@ -312,6 +314,8 @@ function buildRunPrompt(manifest: PreviewManifest, engines: EngineHandle[], roun
 
   return `You are getting an EXISTING application RUNNING inside an Alpine Linux sandbox so it can be previewed live in a browser. Work in ${PROJECT_DIR}.
 ${continuation}
+ENVIRONMENT: this is an ALPINE LINUX sandbox (musl libc, apk, OpenRC, busybox) — NOT Debian/Ubuntu. Use \`apk add --no-cache <pkg>\` for packages (never apt/yum), \`rc-service <svc> start\` to start services (never systemctl), and \`apk add gcompat\` if a glibc-only binary fails to run. Docker is ALREADY installed and running.
+
 Context:
 - The repo is already cloned at ${PROJECT_DIR}.
 - A .env file already exists with PORT/HOST and every DB connection string — ALWAYS load it before running commands (\`set -a; . ./.env; set +a\`).
@@ -415,8 +419,14 @@ export async function setupPreview(projectId: string, opts: SetupOptions): Promi
     plog(projectId, userId, "Starting the project's sandbox…");
     await ensureProjectSandbox(projectId);
     const workspaceId = `env-${projectId}`;
-    plog(projectId, userId, `Sandbox ready (${workspaceId})`);
+    plog(projectId, userId, `Sandbox ready (${workspaceId}) — Alpine Linux, 8GB, Docker-capable`);
     await setPreview(projectId, userId, { previewStatus: "detecting", previewError: null, previewBranch: branch || "(default)" }, "Preparing sandbox…");
+
+    // 0. Install + start Docker UP FRONT (before pulling the code) so it's ready
+    // for any Docker-based DB (SQL Server) and for the run agent. Alpine → OpenRC.
+    plog(projectId, userId, "Installing + starting Docker…");
+    const dockerReady = await ensureDocker(projectId);
+    plog(projectId, userId, dockerReady ? "Docker ready ✓" : "Docker did not start (only fatal if a Docker-based DB is needed)", dockerReady ? undefined : { level: "error" });
 
     // 1. Resolve the repo URL + provider auth (GitHub or GitLab), then clone/update.
     // Prefer the URL host as the source of truth (dual-provider app) and fall
@@ -490,16 +500,6 @@ fi`, 240_000);
           `run: ${manifest.runCmd}`,
         ].filter(Boolean).join("\n"),
       });
-    }
-
-    // 2b. Make Docker available before handoff — SQL Server runs as a container,
-    // and the run agent can use it too. Best-effort (only fatal later if an
-    // mssql engine actually needs it and it isn't up).
-    const needsDocker = manifest.databases.some((d) => d.engine === "mssql");
-    if (needsDocker) {
-      plog(projectId, userId, "Starting Docker in the sandbox (needed for SQL Server)…");
-      const ok = await ensureDocker(projectId);
-      plog(projectId, userId, ok ? "Docker ready ✓" : "Docker did not start", ok ? undefined : { level: "error" });
     }
 
     // 3. Provision the DBs the plan calls for, and inject each connection string
