@@ -446,6 +446,21 @@
     overflow-wrap: break-word;
 }
 
+/* Inline images (e.g. preview screenshots) render as a small thumbnail, not
+   full-bleed. Click opens the full image in a new tab. */
+.message-content img {
+    max-width: 340px;
+    max-height: 240px;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    border-radius: 8px;
+    border: 1px solid var(--border-color, #2a2a2a);
+    display: block;
+    margin: 8px 0;
+    cursor: zoom-in;
+}
+
 /* Preserve line breaks only for user messages */
 .message.user .message-content {
     white-space: pre-wrap;

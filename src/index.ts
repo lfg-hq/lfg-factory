@@ -25,6 +25,7 @@ import pinsApi from "./routes/api/pins.ts";
 import homeApi from "./routes/api/project-home.ts";
 import projectTransferApi from "./routes/api/project-transfer.ts";
 import previewApi from "./routes/api/preview.ts";
+import previewProxy from "./routes/preview-proxy.ts";
 import agentsRoutes from "./routes/agents.ts";
 import agentsApi from "./routes/api/agents.ts";
 import { agentCliRouter } from "./routes/api/agent-cli.ts";
@@ -107,6 +108,7 @@ app.route("/api/projects", pinsApi);
 app.route("/api/projects", homeApi);
 app.route("/api/projects", projectTransferApi);
 app.route("/api/projects", previewApi);
+app.route("/preview-proxy", previewProxy);
 
 // ── Django-compat stubs ──────────────────────────────────────────────
 // chat.js calls /accounts/agent-settings for turbo mode + role state.

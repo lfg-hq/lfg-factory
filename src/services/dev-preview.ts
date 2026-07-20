@@ -870,7 +870,7 @@ export async function capturePreviewScreenshot(
   // 3. Post it into the chat conversation as a markdown image.
   if (conversationId) {
     const when = new Date().toISOString().slice(0, 16).replace("T", " ");
-    const content = `📸 **Preview screenshot** — captured ${when}\n\n![Preview screenshot](${url})`;
+    const content = `📸 **Preview screenshot** — captured ${when}\n\n[![Preview screenshot](${url})](${url})`;
     await db.insert(messages).values({ conversationId, role: "assistant", content });
     // Live-render in the open chat (shape the chat expects: sender + message).
     broadcastToUser(userId, { type: "message", sender: "assistant", message: content, conversation_id: conversationId });

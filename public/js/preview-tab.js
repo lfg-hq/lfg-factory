@@ -28,6 +28,7 @@
   let bActive = null;    // active tab id
   let bBase = null;      // preview URL the browser was mounted for
   let bSeq = 0;
+  let proxyMode = false; // in-app links via the same-origin proxy (may break WS/SignalR)
 
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -100,6 +101,7 @@
           <button data-bx="fwd" title="Forward" style="${navBtn()}"><i class="fas fa-arrow-right"></i></button>
           <button data-bx="reload" title="Reload page" style="${navBtn()}"><i class="fas fa-rotate-right"></i></button>
           <input id="pv-addr" spellcheck="false" style="flex:1;min-width:0;padding:7px 12px;border-radius:8px;border:1px solid var(--border-color,#2a2a2a);background:var(--background-surface,#141414);color:var(--text-color,#e2e8f0);font-size:12.5px;font-family:ui-monospace,Menlo,monospace;" />
+          <button id="pv-proxy" data-bx="proxy" title="Keep links inside this browser (in-app links). May break real-time features like SignalR/WebSockets." style="${navBtn()}"><i class="fas fa-link"></i></button>
           <button data-bx="external" title="Open in a real browser tab" style="${navBtn()}"><i class="fas fa-external-link-alt"></i></button>
         </div>
         <div id="pv-frames" style="flex:1;position:relative;background:#fff;"></div>
@@ -112,6 +114,16 @@
     addr?.addEventListener("keydown", (e) => { if (e.key === "Enter") navigate(bActive, addr.value.trim()); });
   }
   const navBtn = () => "padding:6px 9px;border-radius:7px;cursor:pointer;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);font-size:12px;flex:none;";
+  // The actual iframe src: raw app URL, or routed through our same-origin proxy
+  // so links (incl. target=_blank) stay in-app. Address bar always shows the real URL.
+  function frameSrc(u) {
+    if (!proxyMode) return u;
+    try { const x = new URL(u); return `/preview-proxy/${projectId}` + x.pathname + x.search; } catch (_) { return u; }
+  }
+  function updateProxyBtn() {
+    const b = document.getElementById("pv-proxy");
+    if (b) { b.style.background = proxyMode ? "#7c3aed" : "var(--border-color,#2a2a2a)"; b.style.color = proxyMode ? "#fff" : "var(--text-color,#e2e8f0)"; }
+  }
   function renderTabs() {
     const strip = document.getElementById("pv-tabstrip");
     if (!strip) return;
@@ -133,7 +145,7 @@
       if (!f) {
         f = document.createElement("iframe");
         f.id = `pv-frame-${t.id}`;
-        f.src = t.url;
+        f.src = frameSrc(t.url);
         f.setAttribute("allow", "clipboard-read; clipboard-write");
         f.style.cssText = "position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff;";
         frames.appendChild(f);
@@ -157,16 +169,23 @@
     const t = tabById(tabId); if (!t) return;
     const url = normalizeUrl(raw); if (!url) return;
     t.url = url; t.history = t.history.slice(0, t.hi + 1); t.history.push(url); t.hi = t.history.length - 1;
-    const f = document.getElementById(`pv-frame-${tabId}`); if (f) f.src = url;
+    const f = document.getElementById(`pv-frame-${tabId}`); if (f) f.src = frameSrc(url);
     renderTabs(); syncAddr();
   }
   function bxAction(kind) {
     const t = tabById(bActive); if (!t) return;
     const f = document.getElementById(`pv-frame-${t.id}`);
     if (kind === "reload" && f) { f.src = f.src; }
-    else if (kind === "back" && t.hi > 0) { t.hi--; t.url = t.history[t.hi]; if (f) f.src = t.url; syncAddr(); renderTabs(); }
-    else if (kind === "fwd" && t.hi < t.history.length - 1) { t.hi++; t.url = t.history[t.hi]; if (f) f.src = t.url; syncAddr(); renderTabs(); }
+    else if (kind === "back" && t.hi > 0) { t.hi--; t.url = t.history[t.hi]; if (f) f.src = frameSrc(t.url); syncAddr(); renderTabs(); }
+    else if (kind === "fwd" && t.hi < t.history.length - 1) { t.hi++; t.url = t.history[t.hi]; if (f) f.src = frameSrc(t.url); syncAddr(); renderTabs(); }
     else if (kind === "external") { window.open(t.url, "_blank"); }
+    else if (kind === "proxy") {
+      proxyMode = !proxyMode;
+      updateProxyBtn();
+      toast(proxyMode ? "In-app links ON (real-time features may not work)" : "In-app links OFF");
+      // Reload every tab through/without the proxy.
+      for (const tt of bTabs) { const ff = document.getElementById(`pv-frame-${tt.id}`); if (ff) ff.src = frameSrc(tt.url); }
+    }
   }
   function onTabStripClick(e) {
     const nt = e.target.closest("[data-newtab]");
