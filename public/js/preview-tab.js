@@ -23,6 +23,12 @@
   let stepsData = null; // checkpoint runbook steps
   let currentView = null; // "progress" | "running" | "error" | "idle" — only re-render on change
 
+  // ── In-app browser (tabbed) ──
+  let bTabs = [];        // [{ id, url, history:[urls], hi }]
+  let bActive = null;    // active tab id
+  let bBase = null;      // preview URL the browser was mounted for
+  let bSeq = 0;
+
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
@@ -74,6 +80,103 @@
     setTimeout(() => t.remove(), 1800);
   }
 
+  // ── In-app tabbed browser ──────────────────────────────────────────────────
+  // NOTE: the preview is a CROSS-ORIGIN iframe (apps.mags.run), so the browser
+  // can't read where the user navigates inside it or intercept the app's own
+  // target="_blank" links — that's a hard browser-security boundary. What we CAN
+  // do: multiple tabs, an editable address bar, reload, back/forward over the
+  // URLs WE load, and a "＋" to open any URL (paste a link) in a new in-app tab.
+  const tabById = (id) => bTabs.find((t) => t.id === id);
+  function mountBrowser(body, previewUrl) {
+    // Already mounted for this preview → keep the live iframes (don't reload).
+    if (bBase === previewUrl && document.getElementById("pv-frames")) return;
+    bBase = previewUrl;
+    if (!bTabs.length) { const id = ++bSeq; bTabs = [{ id, url: previewUrl, history: [previewUrl], hi: 0 }]; bActive = id; }
+    body.innerHTML = `
+      <div style="height:100%;display:flex;flex-direction:column;background:var(--bg-color,#0f0f0f);">
+        <div id="pv-tabstrip" style="display:flex;align-items:center;gap:3px;padding:6px 8px 0;overflow-x:auto;"></div>
+        <div style="display:flex;align-items:center;gap:6px;padding:6px 8px;border-bottom:1px solid var(--border-color,#2a2a2a);">
+          <button data-bx="back" title="Back" style="${navBtn()}"><i class="fas fa-arrow-left"></i></button>
+          <button data-bx="fwd" title="Forward" style="${navBtn()}"><i class="fas fa-arrow-right"></i></button>
+          <button data-bx="reload" title="Reload page" style="${navBtn()}"><i class="fas fa-rotate-right"></i></button>
+          <input id="pv-addr" spellcheck="false" style="flex:1;min-width:0;padding:7px 12px;border-radius:8px;border:1px solid var(--border-color,#2a2a2a);background:var(--background-surface,#141414);color:var(--text-color,#e2e8f0);font-size:12.5px;font-family:ui-monospace,Menlo,monospace;" />
+          <button data-bx="external" title="Open in a real browser tab" style="${navBtn()}"><i class="fas fa-external-link-alt"></i></button>
+        </div>
+        <div id="pv-frames" style="flex:1;position:relative;background:#fff;"></div>
+      </div>`;
+    renderTabs(); renderFrames(); syncAddr();
+    const strip = document.getElementById("pv-tabstrip");
+    const addr = document.getElementById("pv-addr");
+    document.querySelectorAll("[data-bx]").forEach((el) => el.addEventListener("click", () => bxAction(el.getAttribute("data-bx"))));
+    strip?.addEventListener("click", onTabStripClick);
+    addr?.addEventListener("keydown", (e) => { if (e.key === "Enter") navigate(bActive, addr.value.trim()); });
+  }
+  const navBtn = () => "padding:6px 9px;border-radius:7px;cursor:pointer;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);font-size:12px;flex:none;";
+  function renderTabs() {
+    const strip = document.getElementById("pv-tabstrip");
+    if (!strip) return;
+    strip.innerHTML = bTabs.map((t) => {
+      const on = t.id === bActive;
+      let host = t.url; try { host = new URL(t.url).host; } catch (_) {}
+      return `<div data-tab="${t.id}" style="display:flex;align-items:center;gap:6px;max-width:200px;padding:6px 10px;border-radius:8px 8px 0 0;cursor:pointer;font-size:12px;white-space:nowrap;${on ? "background:#fff;color:#111;" : "background:var(--background-surface,#141414);color:var(--text-secondary,#9ca3af);"}">
+        <span style="overflow:hidden;text-overflow:ellipsis;">${esc(host)}</span>
+        ${bTabs.length > 1 ? `<span data-close="${t.id}" style="opacity:.7;">✕</span>` : ""}
+      </div>`;
+    }).join("") + `<button data-newtab="1" title="New tab" style="${navBtn()}margin-left:4px;"><i class="fas fa-plus"></i></button>`;
+  }
+  function renderFrames() {
+    const frames = document.getElementById("pv-frames");
+    if (!frames) return;
+    // Keep an iframe per tab; show only the active one (so switching tabs doesn't reload).
+    for (const t of bTabs) {
+      let f = document.getElementById(`pv-frame-${t.id}`);
+      if (!f) {
+        f = document.createElement("iframe");
+        f.id = `pv-frame-${t.id}`;
+        f.src = t.url;
+        f.setAttribute("allow", "clipboard-read; clipboard-write");
+        f.style.cssText = "position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff;";
+        frames.appendChild(f);
+      }
+      f.style.display = t.id === bActive ? "block" : "none";
+    }
+    // Remove frames for closed tabs.
+    Array.from(frames.querySelectorAll("iframe")).forEach((f) => {
+      const id = Number(f.id.replace("pv-frame-", ""));
+      if (!tabById(id)) f.remove();
+    });
+  }
+  function syncAddr() { const a = document.getElementById("pv-addr"); const t = tabById(bActive); if (a && t) a.value = t.url; }
+  function normalizeUrl(u) {
+    u = (u || "").trim(); if (!u) return "";
+    if (/^https?:\/\//i.test(u)) return u;
+    if (u.startsWith("/")) { try { return new URL(u, bBase).href; } catch (_) { return u; } }
+    return "https://" + u;
+  }
+  function navigate(tabId, raw) {
+    const t = tabById(tabId); if (!t) return;
+    const url = normalizeUrl(raw); if (!url) return;
+    t.url = url; t.history = t.history.slice(0, t.hi + 1); t.history.push(url); t.hi = t.history.length - 1;
+    const f = document.getElementById(`pv-frame-${tabId}`); if (f) f.src = url;
+    renderTabs(); syncAddr();
+  }
+  function bxAction(kind) {
+    const t = tabById(bActive); if (!t) return;
+    const f = document.getElementById(`pv-frame-${t.id}`);
+    if (kind === "reload" && f) { f.src = f.src; }
+    else if (kind === "back" && t.hi > 0) { t.hi--; t.url = t.history[t.hi]; if (f) f.src = t.url; syncAddr(); renderTabs(); }
+    else if (kind === "fwd" && t.hi < t.history.length - 1) { t.hi++; t.url = t.history[t.hi]; if (f) f.src = t.url; syncAddr(); renderTabs(); }
+    else if (kind === "external") { window.open(t.url, "_blank"); }
+  }
+  function onTabStripClick(e) {
+    const nt = e.target.closest("[data-newtab]");
+    if (nt) { const id = ++bSeq; bTabs.push({ id, url: bBase, history: [bBase], hi: 0 }); bActive = id; renderTabs(); renderFrames(); syncAddr(); const a = document.getElementById("pv-addr"); if (a) { a.focus(); a.select(); } return; }
+    const cl = e.target.closest("[data-close]");
+    if (cl) { const id = Number(cl.getAttribute("data-close")); bTabs = bTabs.filter((t) => t.id !== id); if (bActive === id) bActive = bTabs[bTabs.length - 1]?.id ?? null; renderTabs(); renderFrames(); syncAddr(); return; }
+    const tb = e.target.closest("[data-tab]");
+    if (tb) { bActive = Number(tb.getAttribute("data-tab")); renderTabs(); renderFrames(); syncAddr(); }
+  }
+
   // Checkpoint runbook — the ordered command list with per-step status.
   const STEP_ICON = { done: '<span style="color:#10b981;">✓</span>', running: '<span class="spinner" style="width:11px;height:11px;display:inline-block;vertical-align:middle;"></span>', failed: '<span style="color:#ef4444;">✗</span>', pending: '<span style="color:var(--text-secondary,#9ca3af);">○</span>' };
   function stepsPanel() {
@@ -114,13 +217,12 @@
       currentView = "running";
       setSub("Live" + (state.branch ? ` · ${state.branch}` : ""));
       renderActions(
-        btn("Open", { action: "open", icon: "fa-external-link-alt" }) +
         btn("Screenshot", { action: "screenshot", icon: "fa-camera" }) +
         btn("Logs", { action: "togglelog", icon: "fa-terminal" }) +
-        btn("Restart", { action: "setup", icon: "fa-redo" }) +
+        btn("Restart", { action: "restart", icon: "fa-power-off" }) +
         btn("Stop", { action: "stop", icon: "fa-stop" })
       );
-      body.innerHTML = `<iframe id="preview-iframe" src="${esc(state.previewUrl)}" style="width:100%;height:100%;border:0;background:#fff;" allow="clipboard-read; clipboard-write"></iframe>`;
+      mountBrowser(body, state.previewUrl);
       return;
     }
 
@@ -186,6 +288,7 @@
 
   async function doSetup(rebuildManifest) {
     logText = ""; // fresh run → fresh log
+    bTabs = []; bBase = null; bActive = null; // fresh browser on a new build
     render({ previewStatus: "detecting" });
     managePolling("detecting");
     try {
@@ -287,11 +390,23 @@
     load();
   }
 
+  // Restart = restart the app SERVER (fast: reuses install/build). Different from
+  // "reload" (which just refreshes the current page in the in-app browser).
+  async function doRestart() {
+    setSub("Restarting the app…");
+    logText = "";
+    render({ previewStatus: "starting" });
+    managePolling("starting");
+    try { await api("/restart", { method: "POST" }); }
+    catch (e) { render({ previewStatus: "error", error: "Restart failed: " + e.message }); }
+  }
+
   function onActionClick(e) {
     const b = e.target.closest("[data-action]");
     if (!b) return;
     const action = b.getAttribute("data-action");
     if (action === "setup") doSetup(false);
+    else if (action === "restart") doRestart();
     else if (action === "stop") doStop();
     else if (action === "togglelog") toggleLog();
     else if (action === "copylog") copyLog();

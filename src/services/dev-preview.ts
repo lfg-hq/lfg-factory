@@ -870,14 +870,48 @@ export async function capturePreviewScreenshot(
   // 3. Post it into the chat conversation as a markdown image.
   if (conversationId) {
     const when = new Date().toISOString().slice(0, 16).replace("T", " ");
-    await db.insert(messages).values({
-      conversationId,
-      role: "assistant",
-      content: `📸 **Preview screenshot** — captured ${when}\n\n![Preview screenshot](${url})`,
-    });
-    broadcastToUser(userId, { type: "message", conversationId, role: "assistant", content: `📸 Preview screenshot captured` });
+    const content = `📸 **Preview screenshot** — captured ${when}\n\n![Preview screenshot](${url})`;
+    await db.insert(messages).values({ conversationId, role: "assistant", content });
+    // Live-render in the open chat (shape the chat expects: sender + message).
+    broadcastToUser(userId, { type: "message", sender: "assistant", message: content, conversation_id: conversationId });
   }
   return { url };
+}
+
+/**
+ * Restart just the app SERVER (kill + re-run the stored run command). Fast — does
+ * NOT reinstall or rebuild. Falls back to a full setup if we have no run command.
+ */
+export async function restartPreview(projectId: string, opts: SetupOptions): Promise<{ previewUrl: string } | { error: string }> {
+  const { userId } = opts;
+  const row = await getEnv(projectId);
+  if (!row?.setupManifest || !row?.runCommand || row?.setupComplete !== 1) {
+    // Nothing to restart yet → run the full setup.
+    return setupPreview(projectId, opts);
+  }
+  const manifest = JSON.parse(row.setupManifest) as PreviewManifest;
+  resetLog(projectId);
+  try {
+    plog(projectId, userId, "Restarting the app server…");
+    await ensureProjectSandbox(projectId);
+    const workspaceId = `env-${projectId}`;
+    await setPreview(projectId, userId, { previewStatus: "starting", previewError: null }, "Restarting the app…");
+    await runDetachedPolled(projectId, userId, workspaceId, appStartCommand(manifest), 60_000);
+    if (!(await checkServer(workspaceId, manifest.port, 20))) {
+      const tail = await sh(workspaceId, `tail -20 ${PROJECT_DIR}/preview.log 2>/dev/null`, 20_000).catch(() => ({ output: "" }));
+      return failed(projectId, userId, `The app did not come back up on port ${manifest.port}.\n\n${(tail.output || "").slice(-800)}`);
+    }
+    plog(projectId, userId, "App restarted ✓");
+    // Re-expose (idempotent) and mark running.
+    await enableHttpAccess(workspaceId, manifest.port).catch(() => {});
+    const alias = row.stableAlias || `preview-${projectId.slice(0, 8)}`;
+    let previewUrl = row.appUrl || "";
+    try { previewUrl = await setStableUrl(alias, workspaceId); } catch { /* keep existing */ }
+    await setPreview(projectId, userId, { previewStatus: "running", appUrl: previewUrl, appPort: manifest.port, previewError: null }, "Preview is live");
+    return { previewUrl };
+  } catch (err) {
+    return failed(projectId, userId, (err as Error).message ?? String(err));
+  }
 }
 
 /** Stop the running app (leaves the sandbox + DBs up). */

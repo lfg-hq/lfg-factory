@@ -12,7 +12,7 @@ import { requireAuth } from "../../auth/middleware.ts";
 import { getProjectAccess } from "../../auth/project-access.ts";
 import { db } from "../../config/db.ts";
 import { projectEnvironments } from "../../db/schema/project-environments.ts";
-import { getPreviewState, setupPreview, stopPreview, detectManifest, manifestSchema, capturePreviewScreenshot } from "../../services/dev-preview.ts";
+import { getPreviewState, setupPreview, restartPreview, stopPreview, detectManifest, manifestSchema, capturePreviewScreenshot } from "../../services/dev-preview.ts";
 import type { auth } from "../../auth/index.ts";
 
 type Env = { Variables: { user: typeof auth.$Infer.Session.user } };
@@ -42,6 +42,14 @@ previewApi.post("/:projectId/preview/setup", async (c) => {
   }).catch((e) => console.error("[preview] setup failed:", e));
 
   return c.json({ ok: true, status: "detecting" }, 202);
+});
+
+previewApi.post("/:projectId/preview/restart", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId")!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  restartPreview(access.project.id, { userId: user.id }).catch((e) => console.error("[preview] restart failed:", e));
+  return c.json({ ok: true, status: "starting" }, 202);
 });
 
 previewApi.post("/:projectId/preview/stop", async (c) => {
