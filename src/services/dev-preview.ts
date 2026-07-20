@@ -349,14 +349,62 @@ HOW TO WORK:
 - Install the toolchain, then dependencies. On Alpine, if \`apk add dotnet8-sdk\` is unavailable/broken, install via \`curl -sSL https://dot.net/v1/dotnet-install.sh | bash -s -- --channel 8.0 --install-dir /data/.dotnet\` (it's already on PATH after that).
 - For compiled stacks: restore → BUILD → run. For a multi-project solution, run the startup project named above.
 - Apply migrations, then the SQL scripts in order (SQL Server runs in Docker — use \`docker exec\` with sqlcmd inside the mssql container, or a client you install; the connection string is in .env).
-- Start the app in the BACKGROUND, DETACHED so it survives the command: \`setsid sh -c '<run command>' </dev/null > ${PROJECT_DIR}/preview.log 2>&1 &\` — it must bind 0.0.0.0:${port}.
+- Start the APP SERVER detached so it keeps running after the command returns: \`setsid sh -c '<run command>' </dev/null > ${PROJECT_DIR}/preview.log 2>&1 &\` — it must bind 0.0.0.0:${port}. (This is the ONLY case where you background a command yourself.)
 - VERIFY for real: \`curl -sS -i http://127.0.0.1:${port}/\`. Up = a real 2xx/3xx/4xx response. 000/connection-refused/5xx = NOT up → read ${PROJECT_DIR}/preview.log, diagnose, fix, retry.
+
+RUNNING COMMANDS — IMPORTANT:
+- The \`run\` tool already runs each command DETACHED and polls it to completion, so restore/build/install take as long as they need — you do NOT need to background them, add \`&\`, nohup, or your own timeout wrapper. Just run the plain command (e.g. \`dotnet build Cohire.sln -c Release\`).
+- Pass a large \`timeoutSec\` (~1500) for restore/build. If a command returns exitCode -2 ("still running after Ns"), it is STILL RUNNING — do NOT restart it; call \`run\` again (e.g. \`sleep 5\` or re-issue with a bigger timeoutSec) to keep waiting for it to finish. Never kill and restart a build that's progressing.
 
 RULES:
 - Do NOT modify the application's SOURCE CODE. You may install tools/deps, set env, choose commands, fix host/port. If it genuinely needs a code change to run, call \`finish\` with status "failed" and the exact reason.
-- restore/build for a package-heavy solution can take 10-20 MINUTES on a cold cache — ALWAYS pass a large timeoutSec (e.g. 1500) on the \`dotnet restore\` / \`dotnet build\` / \`npm install\` calls and WAIT. Slow ≠ failed. The NuGet cache is on /data and persists, so a repeat restore is fast. If a restore times out, just re-run it with a bigger timeoutSec — it resumes from the cache.
-- When a command fails, read the real error and fix the ENVIRONMENT, then continue. Keep going until the app responds or it truly cannot run.
+- When a command genuinely fails (a real non-zero exit with an error), read the error and fix the ENVIRONMENT, then continue. Keep going until the app responds or it truly cannot run.
 - One command per \`run\` call. Never print secrets.`;
+}
+
+/**
+ * Run a command in the sandbox that may take LONGER than the ~120s Cloudflare
+ * gateway limit on Mags' /exec endpoint (which 524s any single HTTP call past
+ * ~120s). We launch the command DETACHED (setsid) writing to a log + an
+ * exit-code marker, then poll with SHORT exec calls until it finishes. Each HTTP
+ * call stays well under the gateway cap, so a 20-min build works fine.
+ */
+async function runDetachedPolled(
+  projectId: string, userId: string, workspaceId: string, command: string, maxMs: number,
+): Promise<{ exitCode: number; output: string }> {
+  const id = `r${Date.now().toString(36)}${Math.floor(Math.random() * 1e7).toString(36)}`;
+  const dir = "/data/.run";
+  const logf = `${dir}/${id}.log`, donef = `${dir}/${id}.done`, scriptf = `${dir}/${id}.sh`;
+  // The actual work script (env prefix + the model's command).
+  const workB64 = Buffer.from(`${envPrefix()}\n${command}`).toString("base64");
+  // Launcher: write the script, run it detached, record exit code in the marker.
+  const launcher =
+    `mkdir -p ${dir}; echo ${workB64} | base64 -d > ${scriptf}; ` +
+    `setsid sh -c 'sh ${scriptf} > ${logf} 2>&1; echo $? > ${donef}' </dev/null >/dev/null 2>&1 & echo LAUNCHED`;
+  const lb64 = Buffer.from(launcher).toString("base64");
+  const launch = await execOnWorkspace(workspaceId, `echo ${lb64} | base64 -d | bash`, { timeout: 30_000 })
+    .catch((e: any) => ({ output: "", stderr: String(e?.message ?? e), exitCode: -1 }));
+  if (!/LAUNCHED/.test(launch.output || "")) {
+    return { exitCode: -1, output: `failed to launch: ${(launch.output || "") + ((launch as any).stderr || "")}`.slice(-2000) };
+  }
+
+  const deadline = Date.now() + maxMs;
+  let interval = 3000;
+  while (Date.now() < deadline) {
+    await sleep(interval);
+    interval = Math.min(interval + 2000, 15000); // back off: 3s,5s,7s…15s
+    const chk = await execOnWorkspace(workspaceId, `if [ -f ${donef} ]; then printf 'DONE:'; cat ${donef}; else echo RUNNING; fi`, { timeout: 30_000 })
+      .catch(() => ({ output: "RUNNING", stderr: "", exitCode: 0 }));
+    if ((chk.output || "").includes("DONE:")) {
+      const code = parseInt(((chk.output || "").match(/DONE:(\d+)/) || [])[1] ?? "-1", 10);
+      const out = await execOnWorkspace(workspaceId, `tail -c 6000 ${logf} 2>/dev/null`, { timeout: 30_000 })
+        .catch(() => ({ output: "", stderr: "", exitCode: 0 }));
+      return { exitCode: code, output: (out.output || "").trim() || "(no output)" };
+    }
+  }
+  // Timed out — leave it running (a build may still finish); tell the model.
+  const tail = await execOnWorkspace(workspaceId, `tail -c 2000 ${logf} 2>/dev/null`, { timeout: 30_000 }).catch(() => ({ output: "" }));
+  return { exitCode: -2, output: `(still running after ${Math.round(maxMs / 1000)}s; poll again later. Recent output:\n${tail.output || ""})`.slice(-4000) };
 }
 
 async function driveSandbox(
@@ -372,24 +420,18 @@ async function driveSandbox(
 
   const tools = {
     run: tool({
-      description: "Run one shell command in the Alpine sandbox (bash). The toolchain PATH, /data caches, and the project's .env are already set up. Returns exit code + combined stdout/stderr (last 6KB).",
+      description: "Run one shell command in the Alpine sandbox (bash). The toolchain PATH, /data caches, and the project's .env are already set up. The command runs to completion no matter how long it takes (build/restore are fine) — we run it detached and poll, so you don't need to background it yourself. Returns exit code + combined stdout/stderr (last 6KB). exitCode -2 = still running after your timeout; just call run again to keep polling.",
       inputSchema: zodSchema(z.object({
-        command: z.string().describe("The shell command to run (one command; use && or a heredoc for multi-step)."),
-        timeoutSec: z.number().optional().describe("Timeout in seconds (default 300, max 900). Use ~600 for restore/build."),
+        command: z.string().describe("The shell command to run (one command; use && or a heredoc for multi-step). Run it in the FOREGROUND — do NOT add '&'/nohup/setsid yourself; we detach it for you. EXCEPTION: the app server itself must be started detached (setsid ... &) so it keeps running."),
+        timeoutSec: z.number().optional().describe("How long to wait for THIS command before returning control (default 600, max 1800). For a big restore/build use ~1500. If it returns exitCode -2 (still running), call run again with the same/again to keep waiting."),
       })),
       execute: async ({ command, timeoutSec }: { command: string; timeoutSec?: number }) => {
-        // Default 600s; allow up to 1800s (30min) for a cold restore/build of a
-        // package-heavy solution (ML.NET/Syncfusion/etc. can take 10-20min).
-        const t = Math.min(Math.max(timeoutSec ?? 600, 10), 1800) * 1000;
+        const maxMs = Math.min(Math.max(timeoutSec ?? 600, 10), 1800) * 1000;
         plog(projectId, userId, `$ ${command}`);
         setPreview(projectId, userId, { previewStatus: "starting" }, `$ ${command.slice(0, 110)}`).catch(() => {});
-        const full = `${envPrefix()}\n${command}`;
-        const b64 = Buffer.from(full).toString("base64");
-        const r = await execOnWorkspace(workspaceId, `echo ${b64} | base64 -d | bash`, { timeout: t })
-          .catch((e: any) => ({ output: "", stderr: String(e?.message ?? e), exitCode: -1 }));
-        const output = ((r.output || "") + (r.stderr ? "\n" + r.stderr : "")).trim();
-        plog(projectId, userId, `  → exit ${r.exitCode ?? -1}`, output ? { detail: output.slice(-1800), level: (r.exitCode ?? -1) === 0 ? "info" : "error" } : undefined);
-        return { exitCode: r.exitCode ?? -1, output: output.slice(-6000) || "(no output)" };
+        const r = await runDetachedPolled(projectId, userId, workspaceId, command, maxMs);
+        plog(projectId, userId, `  → exit ${r.exitCode}`, r.output ? { detail: r.output.slice(-1800), level: r.exitCode === 0 ? "info" : "error" } : undefined);
+        return { exitCode: r.exitCode, output: r.output.slice(-6000) || "(no output)" };
       },
     }),
     finish: tool({
