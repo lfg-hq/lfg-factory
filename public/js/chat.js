@@ -2926,6 +2926,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 name: window.attachedFile.name,
                 type: window.attachedFile.type,
                 size: window.attachedFile.size,
+                // Image → show it inline immediately (local object URL).
+                previewUrl: (window.attachedFile.type || '').startsWith('image/') && window.attachedFile.file
+                    ? URL.createObjectURL(window.attachedFile.file) : undefined,
             };
             addMessageToChat('user', message, optimisticFileData);
             window.attachedFile.bubbleRendered = true;
@@ -2985,10 +2988,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 type: window.attachedFile.type,
                 size: window.attachedFile.size
             };
-            
+
             // If the file was already uploaded, it will have an id
             if (window.attachedFile.id) {
                 fileData.id = window.attachedFile.id;
+            }
+            // Image → render an inline thumbnail in the user bubble (local URL).
+            if ((window.attachedFile.type || '').startsWith('image/') && window.attachedFile.file) {
+                fileData.previewUrl = URL.createObjectURL(window.attachedFile.file);
             }
         }
         
@@ -3562,6 +3569,19 @@ document.addEventListener('DOMContentLoaded', () => {
                     // For audio messages, replace the entire content
                     contentDiv.innerHTML = '';
                     contentDiv.appendChild(fileData.audioIndicator);
+                } else if (fileData.type && fileData.type.startsWith('image/') && (fileData.previewUrl || fileData.url)) {
+                    // Image → render an inline thumbnail (like the preview screenshot).
+                    const src = fileData.previewUrl || fileData.url;
+                    const link = document.createElement('a');
+                    link.href = fileData.url || src;
+                    link.target = '_blank';
+                    link.rel = 'noopener';
+                    const img = document.createElement('img');
+                    img.src = src;
+                    img.alt = fileData.name || 'image';
+                    link.appendChild(img);
+                    contentDiv.appendChild(document.createElement('br'));
+                    contentDiv.appendChild(link);
                 } else if (fileData.name) {
                     const fileAttachment = document.createElement('div');
                     fileAttachment.className = 'file-attachment';
