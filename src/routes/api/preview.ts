@@ -12,7 +12,7 @@ import { requireAuth } from "../../auth/middleware.ts";
 import { getProjectAccess } from "../../auth/project-access.ts";
 import { db } from "../../config/db.ts";
 import { projectEnvironments } from "../../db/schema/project-environments.ts";
-import { getPreviewState, setupPreview, stopPreview, detectManifest, manifestSchema } from "../../services/dev-preview.ts";
+import { getPreviewState, setupPreview, stopPreview, detectManifest, manifestSchema, capturePreviewScreenshot } from "../../services/dev-preview.ts";
 import type { auth } from "../../auth/index.ts";
 
 type Env = { Variables: { user: typeof auth.$Infer.Session.user } };
@@ -50,6 +50,19 @@ previewApi.post("/:projectId/preview/stop", async (c) => {
   if (!access) return c.json({ error: "Project not found" }, 404);
   await stopPreview(access.project.id, user.id);
   return c.json({ ok: true });
+});
+
+// Screenshot the live preview → S3 → post into the chat conversation.
+previewApi.post("/:projectId/preview/screenshot", async (c) => {
+  const user = c.get("user");
+  const publicProjectId = c.req.param("projectId")!;
+  const access = await getProjectAccess(publicProjectId, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  const body = await c.req.json().catch(() => ({}));
+  const conversationId = typeof body.conversationId === "string" ? body.conversationId : null;
+  const result = await capturePreviewScreenshot(access.project.id, user.id, publicProjectId, conversationId);
+  if ("error" in result) return c.json(result, 400);
+  return c.json(result);
 });
 
 // Re-run detection only (returns the manifest for review, does not run the app).

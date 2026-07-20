@@ -24,8 +24,11 @@ import { getValidGitlabToken } from "./gitlab-token.ts";
 import { getModel, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
 import { decryptSecret } from "../utils/crypto.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
-import { enableHttpAccess, execOnWorkspace, setStableUrl } from "./mags.ts";
+import { enableHttpAccess, execOnWorkspace, setStableUrl, startBrowserSession, stopWorkspace } from "./mags.ts";
 import { ensureProjectSandbox, ensureEngine, ensureDocker, type EngineHandle } from "./project-sandbox.ts";
+import { isS3Enabled, buildS3Key, uploadBinary, getPresignedGetUrl } from "./s3.ts";
+import { messages } from "../db/schema/chat.ts";
+import { spawn } from "node:child_process";
 
 const PROJECT_DIR = "/data/project";
 const DEFAULT_PORT = 8080; // fallback ONLY — the real port is decided by the detected manifest per stack
@@ -817,6 +820,64 @@ export async function getPreviewState(projectId: string) {
     steps: row.setupSteps ? (JSON.parse(row.setupSteps) as RunStep[]) : [],
     setupComplete: row.setupComplete === 1,
   };
+}
+
+/**
+ * Capture a screenshot of the LIVE preview (via a headless browser hitting the
+ * public URL), store it in S3, and post it into the chat conversation.
+ */
+export async function capturePreviewScreenshot(
+  projectId: string, userId: string, publicProjectId: string, conversationId: string | null,
+): Promise<{ url: string } | { error: string }> {
+  const row = await getEnv(projectId);
+  const previewUrl = row?.appUrl;
+  if (!previewUrl || row?.previewStatus !== "running") return { error: "The preview isn't running — start it first." };
+  if (!isS3Enabled) return { error: "File storage (S3) isn't configured." };
+
+  // 1. Headless browser → screenshot (Node subprocess; Playwright hangs on Bun).
+  let session: { requestId: string; wsEndpoint: string } | null = null;
+  let dataB64 = "";
+  try {
+    session = await startBrowserSession({ timeout: 120_000 });
+    dataB64 = await new Promise<string>((resolve, reject) => {
+      const child = spawn("node", [`${process.cwd()}/scripts/screenshot-worker.mjs`], { stdio: ["pipe", "pipe", "inherit"] });
+      let buf = ""; let err: string | null = null;
+      child.stdout.on("data", (d: Buffer) => {
+        buf += d.toString(); let nl: number;
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+          if (!line) continue;
+          try { const m = JSON.parse(line); if (m.type === "shot") resolve(m.dataB64); else if (m.type === "error") err = m.message; } catch { /* ignore */ }
+        }
+      });
+      child.on("error", reject);
+      child.on("exit", () => { if (err) reject(new Error(err)); else if (!buf) reject(new Error("no screenshot produced")); });
+      child.stdin.write(JSON.stringify({ wsEndpoint: session!.wsEndpoint, url: previewUrl, width: 1440, height: 900 }));
+      child.stdin.end();
+    });
+  } catch (e) {
+    if (session) await stopWorkspace(session.requestId).catch(() => {});
+    return { error: `Could not capture the screenshot: ${(e as Error).message}` };
+  }
+  await stopWorkspace(session.requestId).catch(() => {});
+
+  // 2. Upload to S3 + get a durable (7-day) URL.
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const key = buildS3Key(publicProjectId, "preview-screenshots", `preview-${stamp}.png`);
+  await uploadBinary(key, Buffer.from(dataB64, "base64"), "image/png");
+  const url = await getPresignedGetUrl(key, 7 * 24 * 3600);
+
+  // 3. Post it into the chat conversation as a markdown image.
+  if (conversationId) {
+    const when = new Date().toISOString().slice(0, 16).replace("T", " ");
+    await db.insert(messages).values({
+      conversationId,
+      role: "assistant",
+      content: `📸 **Preview screenshot** — captured ${when}\n\n![Preview screenshot](${url})`,
+    });
+    broadcastToUser(userId, { type: "message", conversationId, role: "assistant", content: `📸 Preview screenshot captured` });
+  }
+  return { url };
 }
 
 /** Stop the running app (leaves the sandbox + DBs up). */

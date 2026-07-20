@@ -20,6 +20,8 @@
   let loadedOnce = false;
   let logText = ""; // accumulated setup log
   let manifest = null; // the setup plan
+  let stepsData = null; // checkpoint runbook steps
+  let currentView = null; // "progress" | "running" | "error" | "idle" — only re-render on change
 
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -49,13 +51,40 @@
     if (el) el.innerHTML = html || "";
   }
 
-  // Scrollable live log panel (shared by the in-progress and error views).
+  // Scrollable live log panel with a Copy button (shared by in-progress + error).
   function logPanel(flex) {
-    return `<pre id="preview-log" style="${flex ? "flex:1;min-height:0;" : "max-height:260px;"}margin:0;overflow:auto;text-align:left;background:var(--background-surface,#141414);border:1px solid var(--border-color,#2a2a2a);border-radius:8px;padding:12px 14px;font-size:12px;line-height:1.55;color:var(--text-color,#cbd5e1);white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${esc(logText || "Starting…")}</pre>`;
+    return `<div style="position:relative;${flex ? "flex:1;min-height:0;" : ""}display:flex;flex-direction:column;">
+      <button data-action="copylog" title="Copy logs" style="position:absolute;top:8px;right:10px;z-index:2;padding:5px 10px;font-size:12px;border-radius:6px;cursor:pointer;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);display:inline-flex;align-items:center;gap:5px;"><i class="fas fa-copy"></i><span>Copy</span></button>
+      <pre id="preview-log" style="${flex ? "flex:1;min-height:0;" : "max-height:260px;"}margin:0;overflow:auto;text-align:left;background:var(--background-surface,#141414);border:1px solid var(--border-color,#2a2a2a);border-radius:8px;padding:12px 14px;font-size:12px;line-height:1.55;color:var(--text-color,#cbd5e1);white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${esc(logText || "Starting…")}</pre>
+    </div>`;
   }
   function scrollLog() {
     const el = $("preview-log");
     if (el) el.scrollTop = el.scrollHeight;
+  }
+  async function copyLog() {
+    try { await navigator.clipboard.writeText(logText || ""); toast("Logs copied"); }
+    catch { const ta = document.createElement("textarea"); ta.value = logText || ""; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); toast("Logs copied"); }
+  }
+  function toast(msg) {
+    const t = document.createElement("div");
+    t.textContent = msg;
+    t.style.cssText = "position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:9999;background:#111;color:#fff;padding:9px 16px;border-radius:8px;font-size:13px;box-shadow:0 4px 16px rgba(0,0,0,.3);";
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 1800);
+  }
+
+  // Checkpoint runbook — the ordered command list with per-step status.
+  const STEP_ICON = { done: '<span style="color:#10b981;">✓</span>', running: '<span class="spinner" style="width:11px;height:11px;display:inline-block;vertical-align:middle;"></span>', failed: '<span style="color:#ef4444;">✗</span>', pending: '<span style="color:var(--text-secondary,#9ca3af);">○</span>' };
+  function stepsPanel() {
+    if (!stepsData || !stepsData.length) return "";
+    const rows = stepsData.map((s) => `<div style="display:flex;gap:8px;padding:3px 0;font-size:12px;align-items:baseline;">
+      <span style="width:14px;flex:none;text-align:center;">${STEP_ICON[s.status] || STEP_ICON.pending}</span>
+      <span style="min-width:64px;flex:none;color:var(--text-secondary,#9ca3af);text-transform:uppercase;font-size:10px;letter-spacing:.4px;padding-top:1px;">${esc(s.phase)}</span>
+      <span style="flex:1;color:${s.status === "failed" ? "#ef4444" : "var(--text-color,#e2e8f0)"};word-break:break-word;font-family:ui-monospace,Menlo,monospace;">${esc(s.label)}</span>
+    </div>`).join("");
+    return `<div style="max-height:34%;overflow:auto;border:1px solid var(--border-color,#2a2a2a);border-radius:8px;padding:8px 12px;background:var(--background-surface,#141414);">
+      <div style="font-size:11px;color:var(--text-secondary,#9ca3af);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Setup steps (checkpointed — a restart resumes here)</div>${rows}</div>`;
   }
 
   function render(state) {
@@ -65,14 +94,16 @@
     const status = state.previewStatus || "idle";
 
     if (IN_PROGRESS.includes(status)) {
+      currentView = "progress";
       setSub(STEP_LABEL[status] || "Working…");
       renderActions(btn("Cancel", { action: "stop", icon: "fa-stop" }));
       body.innerHTML = `
-        <div style="height:100%;display:flex;flex-direction:column;gap:12px;padding:16px 20px;">
-          <div style="display:flex;align-items:center;gap:12px;color:var(--text-color,#e2e8f0);font-size:14px;">
+        <div style="height:100%;display:flex;flex-direction:column;gap:10px;padding:16px 20px;">
+          <div id="preview-progress-head" style="display:flex;align-items:center;gap:12px;color:var(--text-color,#e2e8f0);font-size:14px;">
             <div class="spinner" style="width:18px;height:18px;flex:none;"></div>
             <span>${esc(STEP_LABEL[status] || "Setting up your preview…")}</span>
           </div>
+          <div id="preview-steps-wrap">${stepsPanel()}</div>
           ${logPanel(true)}
         </div>`;
       scrollLog();
@@ -80,9 +111,11 @@
     }
 
     if (status === "running" && state.previewUrl) {
+      currentView = "running";
       setSub("Live" + (state.branch ? ` · ${state.branch}` : ""));
       renderActions(
         btn("Open", { action: "open", icon: "fa-external-link-alt" }) +
+        btn("Screenshot", { action: "screenshot", icon: "fa-camera" }) +
         btn("Logs", { action: "togglelog", icon: "fa-terminal" }) +
         btn("Restart", { action: "setup", icon: "fa-redo" }) +
         btn("Stop", { action: "stop", icon: "fa-stop" })
@@ -92,6 +125,7 @@
     }
 
     if (status === "error") {
+      currentView = "error";
       setSub("Failed");
       renderActions(btn("Try again", { action: "setup", primary: true, icon: "fa-redo" }));
       body.innerHTML = `
@@ -108,6 +142,7 @@
     }
 
     // idle | stopped | anything else → the intro / start screen
+    currentView = "idle";
     const stopped = status === "stopped";
     setSub(stopped ? "Stopped" : "Not running");
     renderActions("");
@@ -131,6 +166,7 @@
       const state = await r.json();
       if (typeof state.log === "string" && state.log) logText = state.log;
       if (state.manifest) manifest = state.manifest;
+      if (Array.isArray(state.steps)) stepsData = state.steps;
       render(state);
       managePolling(state.previewStatus);
     } catch (e) {
@@ -258,42 +294,79 @@
     if (action === "setup") doSetup(false);
     else if (action === "stop") doStop();
     else if (action === "togglelog") toggleLog();
+    else if (action === "copylog") copyLog();
+    else if (action === "screenshot") takeScreenshot(b);
     else if (action === "closeplan") togglePlan();
     else if (action === "saveplan") savePlan();
     else if (action === "reanalyze") reanalyze();
     else if (action === "open" && current && current.previewUrl) window.open(current.previewUrl, "_blank");
   }
 
+  async function takeScreenshot(btn) {
+    const label = btn ? btn.querySelector("span") : null;
+    const orig = label ? label.textContent : "";
+    if (label) label.textContent = "Capturing…";
+    if (btn) btn.style.pointerEvents = "none";
+    try {
+      const r = await api("/screenshot", { method: "POST", body: JSON.stringify({ conversationId: window.currentConversationId || null }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+      toast("Screenshot saved to chat");
+    } catch (e) {
+      toast("Screenshot failed: " + e.message);
+    } finally {
+      if (label) label.textContent = orig;
+      if (btn) btn.style.pointerEvents = "";
+    }
+  }
+
   // Live updates pushed from the server over the chat WS. There's one project
   // per page (and the WS keys on the internal id while we hold the public id),
   // so we accept every preview_status/preview_log for this page.
+  const viewOf = (s) => IN_PROGRESS.includes(s) ? "progress" : s === "running" ? "running" : s === "error" ? "error" : "idle";
+
   window.PreviewTab = {
     onStatus(data) {
-      const next = {
-        previewStatus: data.status || (current && current.previewStatus) || "idle",
-        previewUrl: data.previewUrl || (current && current.previewUrl) || null,
-        error: data.error || null,
-        branch: (current && current.branch) || null,
-      };
-      // On terminal transitions, pull authoritative state (URL/manifest/branch).
+      const nextStatus = data.status || (current && current.previewStatus) || "idle";
+      const nextView = viewOf(nextStatus);
+      // Terminal transitions (→ running/error/stopped) need authoritative state.
       if (data.status === "running" || data.status === "error" || data.status === "stopped") {
         load();
-      } else {
-        render(next);
-        managePolling(next.previewStatus);
+        if (data.message) setSub(data.message);
+        return;
       }
+      // Same view (still in-progress): DON'T rebuild the DOM — that resets the log
+      // scroll / closes overlays. Just update the header line + substatus in place.
+      if (nextView === currentView && currentView === "progress") {
+        current = { ...(current || {}), previewStatus: nextStatus };
+        if (data.message) {
+          setSub(data.message);
+          const head = document.querySelector("#preview-progress-head span");
+          if (head) head.textContent = data.message;
+        }
+        managePolling(nextStatus);
+        return;
+      }
+      // View changed → full render.
+      render({ previewStatus: nextStatus, previewUrl: (current && current.previewUrl) || null, error: data.error || null, branch: (current && current.branch) || null });
+      managePolling(nextStatus);
       if (data.message) setSub(data.message);
     },
     onLog(data) {
       if (!data || !data.line) return;
       logText = (logText + data.line + "\n").slice(-100000);
-      // Append incrementally if the log panel is visible (preserve scroll pos).
       const el = $("preview-log");
       if (el) {
         const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
         el.textContent = logText;
-        if (atBottom) el.scrollTop = el.scrollHeight;
+        if (atBottom) el.scrollTop = el.scrollHeight; // only autoscroll if already at bottom
       }
+    },
+    onSteps(data) {
+      if (!data || !Array.isArray(data.steps)) return;
+      stepsData = data.steps;
+      const wrap = $("preview-steps-wrap");
+      if (wrap) wrap.innerHTML = stepsPanel(); // update in place; no full rebuild
     },
   };
 
