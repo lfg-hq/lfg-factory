@@ -79,6 +79,18 @@ const CALLBACK_BASE_URL = process.env.APP_URL ?? "http://localhost:3000";
 const USE_PI_TICKET_BUILDER = (process.env.TICKET_BUILDER ?? "pi") !== "agent";
 
 /** Focused, self-contained prompt for the Pi coding agent building a ticket. */
+/** If the project has an always-on preview sandbox that's actually reachable,
+ *  return its workspace id (env-<projectId>) so tickets can reuse it via a git
+ *  worktree — same env (DBs, cached toolchain) as the preview, own branch. */
+async function resolvePreviewSandbox(internalProjectId: string): Promise<string | null> {
+  try {
+    const [env] = await db.select().from(projectEnvironments).where(eq(projectEnvironments.projectId, internalProjectId));
+    if (!env?.workspaceId) return null;
+    const probe = await execOnWorkspace(env.workspaceId, 'test -d /data/project/.git && echo REPO_OK || echo NO_REPO', { timeout: 60_000 }).catch(() => ({ output: "" } as any));
+    return (probe.output || "").includes("REPO_OK") ? env.workspaceId : null;
+  } catch { return null; }
+}
+
 /** Pull the project's build/run commands from the preview setup manifest (if it
  *  was ever set up), so tickets are told exactly how to build + run the app. */
 async function loadRunInfo(internalProjectId: string): Promise<{ installCmd?: string; buildCmd?: string; runCmd?: string; port?: number } | null> {
@@ -1301,8 +1313,20 @@ async function executeTicketApi(ticketId: string): Promise<void> {
   await moveTicketToStage(ticketId, project.id, "In Progress");
   await db.update(projectTickets).set({ status: "in_progress", queueStatus: "executing", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
 
-  const projectDirName = "project";
+  let projectDirName = "project";
   const featureBranch = `feature/ticket-${ticketId}`;
+
+  // ── Reuse the project's always-on PREVIEW sandbox via a git WORKTREE ──
+  // If the project has a running preview env (env-<projectId> with the repo at
+  // /data/project), run this ticket in a worktree there — same env + cached
+  // toolchain, on its own branch — instead of a fresh VM + full clone. Only
+  // when that sandbox exists; otherwise fall back to the fresh-VM path.
+  const sharedWorkspaceId = await resolvePreviewSandbox(project.id);
+  const useWorktree = !!sharedWorkspaceId;
+  if (useWorktree) {
+    projectDirName = `wt-ticket-${ticketId.slice(0, 12)}`;
+    await addLog(ticketId, `Reusing the project's preview sandbox (git worktree ${projectDirName})...`, "command", ownerId);
+  }
 
   // ── Resolve builder model early (needed to choose the VM rootfs) ─────
   const [appState] = await db.select().from(applicationState).where(eq(applicationState.userId, ownerId)).limit(1);
@@ -1325,7 +1349,19 @@ async function executeTicketApi(ticketId: string): Promise<void> {
   let sandboxRow = await findExistingSandbox(ticketId);
   let workspaceId = sandboxRow?.magsWorkspaceId ?? null;
 
-  if (workspaceId) {
+  // Worktree path: use the shared preview sandbox directly (don't create a VM).
+  if (useWorktree) {
+    workspaceId = sharedWorkspaceId!;
+    if (!sandboxRow) {
+      const created = await db.insert(sandboxes).values({
+        projectId: ticket.projectId, userId: ownerId, ticketId,
+        magsWorkspaceId: workspaceId, workspaceType: "ticket-worktree", status: "ready",
+      }).returning();
+      sandboxRow = (created[0] as any) ?? null;
+    }
+  }
+
+  if (!useWorktree && workspaceId) {
     await addLog(ticketId, "Reconnecting to existing workspace...", "command", ownerId);
     try {
       const probe = await execOnWorkspace(workspaceId, 'echo "WORKSPACE_READY"', { timeout: 60_000 });
@@ -1404,7 +1440,37 @@ async function executeTicketApi(ticketId: string): Promise<void> {
   if (githubOwner && githubRepo && githubToken) {
     await addLog(ticketId, `Setting up repo: ${githubOwner}/${githubRepo}`, "command", ownerId);
 
-    const gitSetupScript = `
+    // Worktree path: the repo is already cloned in the shared preview sandbox at
+    // /data/project. Add a git worktree for this ticket's branch (own working
+    // dir, shared .git) so it never disturbs the running preview. In a worktree
+    // `.git` is a FILE, not a dir — so the readiness check accepts either.
+    const worktreeScript = `
+cd ${WORKING_DIR}/project || { echo "GIT_SETUP_FAILED_NO_GIT"; exit 1; }
+git config user.email "ai@lfg.dev"; git config user.name "LFG AI"
+git remote set-url origin https://${githubToken}@github.com/${githubOwner}/${githubRepo}.git 2>/dev/null || true
+git fetch origin 2>&1 || true
+if ! git rev-parse --verify origin/lfg-agent 2>/dev/null; then
+    echo "CREATING_LFG_AGENT_BRANCH"
+    DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || echo "main")
+    git branch lfg-agent origin/$DEFAULT_BRANCH 2>/dev/null || git branch lfg-agent 2>/dev/null || true
+    git push -u origin lfg-agent 2>&1 || true
+fi
+git worktree remove --force ${WORKING_DIR}/${projectDirName} 2>/dev/null || true
+rm -rf ${WORKING_DIR}/${projectDirName} 2>/dev/null || true
+git worktree prune 2>/dev/null || true
+if git rev-parse --verify origin/${featureBranch} 2>/dev/null; then
+    git worktree add --force -B ${featureBranch} ${WORKING_DIR}/${projectDirName} origin/${featureBranch} 2>&1
+else
+    git worktree add --force -B ${featureBranch} ${WORKING_DIR}/${projectDirName} origin/lfg-agent 2>&1 || git worktree add --force -B ${featureBranch} ${WORKING_DIR}/${projectDirName} lfg-agent 2>&1
+fi
+cd ${WORKING_DIR}/${projectDirName} 2>/dev/null || { echo "GIT_SETUP_FAILED_NO_GIT"; exit 1; }
+git config user.email "ai@lfg.dev"; git config user.name "LFG AI"
+if [ -e ".git" ]; then echo "GIT_SETUP_COMPLETE"; else echo "GIT_SETUP_FAILED_NO_GIT"; fi
+pwd
+git branch --show-current
+`.trim();
+
+    const cloneScript = `
 cd ${WORKING_DIR}
 
 if [ -d "${projectDirName}/.git" ]; then
@@ -1460,6 +1526,8 @@ if [ -d ".git" ]; then echo "GIT_SETUP_COMPLETE"; else echo "GIT_SETUP_FAILED_NO
 pwd
 git branch --show-current
 `.trim();
+
+    const gitSetupScript = useWorktree ? worktreeScript : cloneScript;
 
     try {
       const gitScriptB64 = Buffer.from(gitSetupScript).toString("base64");
@@ -1774,6 +1842,14 @@ git branch --show-current
   } else {
     await markTicketFailed(ticketId, "Implementation did not complete", ownerId, { emitEvent: false });
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "failed", queueStatus: "none" });
+  }
+
+  // Worktree cleanup: remove this ticket's worktree from the shared preview
+  // sandbox (leaves the sandbox + the preview's /data/project untouched) and drop
+  // the transient sandbox row that points at the shared VM (so nothing reaps it).
+  if (useWorktree) {
+    await execOnWorkspace(workspaceId, `cd ${WORKING_DIR}/project 2>/dev/null && git worktree remove --force ${WORKING_DIR}/${projectDirName} 2>/dev/null; rm -rf ${WORKING_DIR}/${projectDirName} 2>/dev/null; git worktree prune 2>/dev/null; echo cleaned`, { timeout: 60_000 }).catch(() => {});
+    if (sandboxRow?.id) await db.delete(sandboxes).where(eq(sandboxes.id, sandboxRow.id)).catch(() => {});
   }
 }
 
