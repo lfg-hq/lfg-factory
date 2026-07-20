@@ -19,6 +19,7 @@
 import { db } from "../config/db.ts";
 import { projectTickets, projectTodoLists, ticketStages } from "../db/schema/tickets.ts";
 import { projects, projectEnvironmentVariables } from "../db/schema/projects.ts";
+import { projectEnvironments } from "../db/schema/project-environments.ts";
 import { profiles, githubTokens, applicationState, llmApiKeys } from "../db/schema/users.ts";
 import { sandboxes } from "../db/schema/sandbox.ts";
 import { decrypt } from "../ai/tools/env-tools.ts";
@@ -78,16 +79,36 @@ const CALLBACK_BASE_URL = process.env.APP_URL ?? "http://localhost:3000";
 const USE_PI_TICKET_BUILDER = (process.env.TICKET_BUILDER ?? "pi") !== "agent";
 
 /** Focused, self-contained prompt for the Pi coding agent building a ticket. */
+/** Pull the project's build/run commands from the preview setup manifest (if it
+ *  was ever set up), so tickets are told exactly how to build + run the app. */
+async function loadRunInfo(internalProjectId: string): Promise<{ installCmd?: string; buildCmd?: string; runCmd?: string; port?: number } | null> {
+  try {
+    const [env] = await db.select().from(projectEnvironments).where(eq(projectEnvironments.projectId, internalProjectId));
+    if (!env?.setupManifest) return null;
+    const m = JSON.parse(env.setupManifest) as { installCmd?: string; buildCmd?: string; runCmd?: string; port?: number };
+    return { installCmd: m.installCmd, buildCmd: m.buildCmd, runCmd: m.runCmd, port: m.port };
+  } catch { return null; }
+}
+
 function buildPiTicketPrompt(args: {
   ticket: { name: string; description: string | null; notes?: string | null; acceptanceCriteria?: string[] | null };
   techStack?: { language?: string; framework?: string; packageManager?: string; port?: number } | null;
   projectDir: string;
   /** True when the project is already scaffolded (boilerplate or server-side scaffold). */
   prescaffolded?: boolean;
+  /** How to build/run this project (from the preview setup manifest, if any). */
+  runInfo?: { installCmd?: string; buildCmd?: string; runCmd?: string; port?: number } | null;
 }): string {
   const t = args.ticket;
   const ac = (t.acceptanceCriteria ?? []).map((c, i) => `${i + 1}. ${c}`).join("\n") || "Not specified.";
-  const port = args.techStack?.port ?? 8080;
+  const port = args.runInfo?.port ?? args.techStack?.port ?? 8080;
+  const runBlock = args.runInfo && (args.runInfo.installCmd || args.runInfo.buildCmd || args.runInfo.runCmd)
+    ? `\n## How to build & run this project\n` +
+      [args.runInfo.installCmd && `- Install: \`${args.runInfo.installCmd}\``,
+       args.runInfo.buildCmd && `- Build: \`${args.runInfo.buildCmd}\``,
+       args.runInfo.runCmd && `- Run: \`${args.runInfo.runCmd}\` (must serve on 0.0.0.0:${port})`].filter(Boolean).join("\n") +
+      `\nUse these exact commands to verify your change builds and runs before finishing.\n`
+    : "";
   // Scaffolding is done deterministically server-side (or by the boilerplate
   // rootfs). Never ask the agent to run create-next-app — that's what makes
   // weak agents loop.
@@ -114,7 +135,7 @@ ${ac}
 
 ## Tech stack
 ${stack}
-
+${runBlock}
 ## Instructions
 - Explore the project first; reuse existing patterns, dependencies, and files.
 - Implement the ticket end to end so every acceptance criterion is met.
@@ -1588,6 +1609,7 @@ git branch --show-current
       techStack: savedTechStack,
       projectDir,
       prescaffolded,
+      runInfo: await loadRunInfo(project.id),
     });
     try {
       const pi = await startPiCli({
