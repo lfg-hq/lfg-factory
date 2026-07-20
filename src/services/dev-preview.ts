@@ -13,7 +13,7 @@
  * The DB provisioning uses the validated recipes in ./project-sandbox.ts.
  */
 import { z } from "zod";
-import { generateObject } from "ai";
+import { generateObject, generateText, stepCountIs, tool, zodSchema } from "ai";
 import { and, eq } from "drizzle-orm";
 import { db } from "../config/db.ts";
 import { projects, projectEnvironmentVariables } from "../db/schema/projects.ts";
@@ -21,12 +21,11 @@ import { projectEnvironments } from "../db/schema/project-environments.ts";
 import { githubTokens, llmApiKeys } from "../db/schema/users.ts";
 import { modelSelections } from "../db/schema/chat.ts";
 import { getValidGitlabToken } from "./gitlab-token.ts";
-import { getModel, getProviderName, getProviderModel, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
+import { getModel, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
 import { decryptSecret } from "../utils/crypto.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { enableHttpAccess, execOnWorkspace, setStableUrl } from "./mags.ts";
 import { ensureProjectSandbox, ensureEngine, ensureDocker, type EngineHandle } from "./project-sandbox.ts";
-import { startPiCli, streamPiToCompletion, isPiSupportedProvider } from "./pi-cli.ts";
 
 const PROJECT_DIR = "/data/project";
 const DEFAULT_PORT = 8080; // fallback ONLY — the real port is decided by the detected manifest per stack
@@ -282,136 +281,145 @@ echo LAUNCHED
   return checkServer(workspaceId, port, 20); // ~60s
 }
 
-// ── Agent runner (full loop): an in-sandbox coding agent gets the app running
-// and verifies it against the port, self-correcting from logs. Matches the
-// project chat model via Pi. ────────────────────────────────────────────────
-async function resolveAgentModel(userId: string): Promise<{ provider: string; modelId: string; apiKey: string } | null> {
+// ── Master-slave sandbox driver ──────────────────────────────────────────────
+// WE (the server) are the master; the sandbox is the slave. An AI on OUR side
+// drives it by issuing shell commands through a `run` tool that we execute in the
+// sandbox via execOnWorkspace — reading each command's real output and deciding
+// the next step — instead of handing a black-box prompt to an agent inside the
+// VM (Pi), which quit early / looped / got guillotined by a blind timeout.
+
+/** The user's chat model for the AI SDK (+ their provider keys). */
+async function resolveDriverModel(userId: string) {
   const [sel] = await db.select().from(modelSelections).where(eq(modelSelections.userId, userId));
   const modelKey = sel?.selectedModel ?? DEFAULT_MODEL_KEY;
-  const provider = getProviderName(modelKey);
-  if (!provider || !isPiSupportedProvider(provider)) return null; // e.g. anthropic → deterministic fallback
   const [keys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, userId));
-  const apiKey = (keys as Record<string, string | null> | undefined)?.[`${provider}ApiKey`] || "";
-  if (!apiKey) return null;
-  return { provider, modelId: getProviderModel(modelKey) ?? modelKey, apiKey };
+  const userApiKeys = keys ? {
+    anthropic: keys.anthropicApiKey ?? undefined, openai: keys.openaiApiKey ?? undefined,
+    google: keys.googleApiKey ?? undefined, kimi: keys.kimiApiKey ?? undefined,
+    deepseek: keys.deepseekApiKey ?? undefined, glm: keys.glmApiKey ?? undefined,
+  } : undefined;
+  try {
+    return { model: getModel(modelKey, userApiKeys, { allowEnvFallback: true }), modelKey };
+  } catch {
+    return null; // no key for this model → deterministic fallback
+  }
 }
 
-function buildRunPrompt(manifest: PreviewManifest, engines: EngineHandle[], round: number, prevTail?: string): string {
+/** Prefix that puts the toolchain on PATH, caches on /data, and loads .env. */
+function envPrefix(): string {
+  return `export PATH="/data/.dotnet:/data/.dotnet/tools:/root/.dotnet/tools:/usr/local/bin:/usr/bin:/bin:/sbin:$PATH"; ` +
+    `export DOTNET_ROOT=/data/.dotnet DOTNET_CLI_HOME=/data/.dotnet NUGET_PACKAGES=/data/.nuget ` +
+    `DOTNET_NOLOGO=1 DOTNET_CLI_TELEMETRY_OPTOUT=1 TMPDIR=/data/tmp; mkdir -p /data/tmp; ` +
+    `cd ${PROJECT_DIR} 2>/dev/null; set -a; [ -f ./.env ] && . ./.env; set +a; `;
+}
+
+function buildDriverSystemPrompt(manifest: PreviewManifest, engines: EngineHandle[]): string {
   const port = manifest.port;
   const dbLines = engines.length
     ? manifest.databases.map((d, i) => `  - ${d.engine} on 127.0.0.1:${engines[i]?.port ?? "?"} (db "${engines[i]?.dbName ?? "app"}") — connection string ALREADY in .env as ${d.connectionEnvVar}`).join("\n")
     : "  - none";
   const list = (label: string, items: string[]) => items.length ? `- ${label}:\n${items.map((s) => `    • ${s}`).join("\n")}` : "";
   const one = (label: string, v: string) => (v ? `- ${label}: \`${v}\`` : "");
-
-  // The PLAN, produced by reading the codebase — the exact steps to run this app.
   const plan = [
     `- stack: ${manifest.stack || `${manifest.runtime}/${manifest.framework}`}`,
-    list("toolchain (install these first if missing)", manifest.toolchain || []),
+    list("toolchain (install first if missing)", manifest.toolchain || []),
     one("install libraries", manifest.installCmd),
-    one("build (do this BEFORE running — compiled stacks)", manifest.buildCmd),
-    manifest.startupProject ? `- startup project (multi-project solution — run THIS one): ${manifest.startupProject}` : "",
-    list("apply DB migrations (schema)", manifest.migrations || []),
-    list("apply these SQL script files to the DB in order", manifest.sqlScripts || []),
+    one("build (BEFORE running — compiled stacks)", manifest.buildCmd),
+    manifest.startupProject ? `- startup project (run THIS one): ${manifest.startupProject}` : "",
+    list("apply DB migrations", manifest.migrations || []),
+    list("apply these SQL files to the DB in order", manifest.sqlScripts || []),
     one("seed", manifest.seedCmd),
     one("run (foreground, bind 0.0.0.0)", manifest.runCmd),
     `- port: ${port}`,
   ].filter(Boolean).join("\n");
 
-  const continuation = round > 1
-    ? `\n⚠️ THIS IS RETRY #${round}. A previous attempt did NOT get the app serving on port ${port} — but its work is still here (installed SDKs/toolchains, restored packages all persist in this sandbox). DO NOT start over; pick up where it left off. First check what's already there and whether anything is listening (\`curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${port}/ ; ls ${PROJECT_DIR}\`), read ${PROJECT_DIR}/preview.log, then continue.${prevTail ? `\nTail of the previous attempt:\n${prevTail.slice(-1200)}` : ""}\n`
-    : "";
+  return `You are an expert DevOps engineer bringing an EXISTING application up so it can be previewed live. You DRIVE a remote Alpine Linux sandbox by calling the \`run\` tool with shell commands — one command per call — and reading the real output before deciding the next. When the app is confirmed serving, call \`finish\`.
 
-  return `You are getting an EXISTING application RUNNING inside an Alpine Linux sandbox so it can be previewed live in a browser. Work in ${PROJECT_DIR}.
-${continuation}
-ENVIRONMENT: this is an ALPINE LINUX sandbox (musl libc, apk, OpenRC, busybox) — NOT Debian/Ubuntu. Use \`apk add --no-cache <pkg>\` for packages (never apt/yum), \`rc-service <svc> start\` to start services (never systemctl), and \`apk add gcompat\` if a glibc-only binary fails to run. Docker is ALREADY installed and running.
+SANDBOX: Alpine Linux (musl, apk, OpenRC/rc-service, busybox) — NOT Debian. Use \`apk add --no-cache <pkg>\` (never apt/yum), \`rc-service <svc> start\` (never systemctl). Docker is installed and running. Every \`run\` command ALREADY has: the .NET toolchain on PATH (if installed to /data/.dotnet), caches pointed at /data (NUGET_PACKAGES, DOTNET_CLI_HOME, TMPDIR — keep everything on /data, the 20GB volume; the root fs is tiny), and the project's .env sourced. You are in ${PROJECT_DIR}.
 
-Context:
-- The repo is already cloned at ${PROJECT_DIR}.
-- A .env file already exists with PORT/HOST and every DB connection string — ALWAYS load it before running commands (\`set -a; . ./.env; set +a\`).
-- These databases are ALREADY installed + running locally (do NOT install or start any database) — their connection strings are already in .env under the env var named:
+The repo is already cloned. The databases below are already installed + running (do NOT install/start any DB); their connection strings are already in .env:
 ${dbLines}
 
-SETUP PLAN (prepared by analyzing this codebase — follow it; it may need small corrections, verify against the real files):
+SETUP PLAN (from analyzing the codebase — follow it, but verify against reality and adapt when a command fails):
 ${plan}
 
-GOAL: the app must be serving HTTP on 0.0.0.0:${port} and actually respond.
+GOAL: the app must serve HTTP on 0.0.0.0:${port} and actually respond.
 
-Steps:
-1. Run the toolchain installs, then install libraries.
-2. For COMPILED stacks, BUILD before running. For a multi-project solution, run the startup project named above.
-3. Apply the DB migrations / SQL scripts / seed from the plan (the DB connection is already in .env — for a raw .sql file use the matching client, e.g. \`psql "$ConnectionEnvVar" -f file.sql\` or pipe into \`mysql\`).
-4. Start the app in the BACKGROUND, bound to 0.0.0.0 on port ${port}, DETACHED so it survives your shell — e.g. \`setsid sh -c 'set -a; . ./.env; set +a; <run command>' </dev/null > ${PROJECT_DIR}/preview.log 2>&1 &\`.
-5. VERIFY BY ACTUALLY REQUESTING THE APP and INSPECTING THE RESPONSE — do not assume: \`curl -sS -i http://127.0.0.1:${port}/\`. Working ONLY on a real 2xx/3xx response WITH actual content. connection-refused (000), 5xx, or an error/stack-trace page = NOT working → keep fixing.
-6. If not up: read ${PROJECT_DIR}/preview.log + the build output, DIAGNOSE (missing dep, wrong build step, missing env var, DB not migrated, wrong startup project), FIX THE ENVIRONMENT, and RETRY until it responds.
+HOW TO WORK:
+- Install the toolchain, then dependencies. On Alpine, if \`apk add dotnet8-sdk\` is unavailable/broken, install via \`curl -sSL https://dot.net/v1/dotnet-install.sh | bash -s -- --channel 8.0 --install-dir /data/.dotnet\` (it's already on PATH after that).
+- For compiled stacks: restore → BUILD → run. For a multi-project solution, run the startup project named above.
+- Apply migrations, then the SQL scripts in order (SQL Server runs in Docker — use \`docker exec\` with sqlcmd inside the mssql container, or a client you install; the connection string is in .env).
+- Start the app in the BACKGROUND, DETACHED so it survives the command: \`setsid sh -c '<run command>' </dev/null > ${PROJECT_DIR}/preview.log 2>&1 &\` — it must bind 0.0.0.0:${port}.
+- VERIFY for real: \`curl -sS -i http://127.0.0.1:${port}/\`. Up = a real 2xx/3xx/4xx response. 000/connection-refused/5xx = NOT up → read ${PROJECT_DIR}/preview.log, diagnose, fix, retry.
 
-CRITICAL RULES:
-- DO NOT MODIFY THE APPLICATION'S SOURCE CODE. This is a preview of the user's EXISTING repository. You MAY install tools/dependencies, set environment variables, pick the correct build/run command, and fix host/port binding — but you must NOT edit, create, or delete any application source file. If the app genuinely cannot run without a code change, do NOT change it: stop and report PREVIEW_FAILED with the exact code-level reason so the user can fix it.
-- DO NOT GIVE UP EARLY. restore/build/install for large apps can take SEVERAL MINUTES — give slow commands a generous timeout (e.g. run bash with timeout 600). A slow command is NOT a failure; wait for it. If a command errors, READ the error, fix the ENVIRONMENT (not the code), and try again. Keep working until the app actually serves on port ${port}, unless you have truly exhausted every option.
-- RELAY ERRORS ACCURATELY. Whenever something fails, surface the ACTUAL error text you saw (the real compiler/runtime/log message) — do not paraphrase it away. If you must give up, PREVIEW_FAILED's reason must contain the concrete error.
-
-Only after curl confirms the app responds with real content on port ${port}, print on its own line exactly:
-PREVIEW_READY ${port}
-If (and only if) you have genuinely exhausted all environment fixes — or it needs a source-code change — print exactly:
-PREVIEW_FAILED <concrete reason incl. the real error>
-
-Hard rules: the server MUST bind 0.0.0.0 (not localhost-only) and MUST be detached (survive your shell). Never print secrets.`;
+RULES:
+- Do NOT modify the application's SOURCE CODE. You may install tools/deps, set env, choose commands, fix host/port. If it genuinely needs a code change to run, call \`finish\` with status "failed" and the exact reason.
+- restore/build can take minutes — pass a generous timeoutSec (e.g. 600) on those \`run\` calls and WAIT; slow ≠ failed.
+- When a command fails, read the real error and fix the ENVIRONMENT, then continue. Keep going until the app responds or it truly cannot run.
+- One command per \`run\` call. Never print secrets.`;
 }
 
-const MAX_AGENT_ROUNDS = 2; // initial attempt + one resume
-
-async function runViaAgent(
+async function driveSandbox(
   projectId: string,
   userId: string,
   workspaceId: string,
   manifest: PreviewManifest,
   engines: EngineHandle[],
-  agent: { provider: string; modelId: string; apiKey: string },
+  model: any,
 ): Promise<boolean> {
-  let prevTail = "";
-  for (let round = 1; round <= MAX_AGENT_ROUNDS; round++) {
-    if (round > 1) plog(projectId, userId, `Agent stopped before the app was up — resuming (attempt ${round}/${MAX_AGENT_ROUNDS})…`);
-    const prompt = buildRunPrompt(manifest, engines, round, prevTail);
-    // Log the FULL prompt handed to the agent (so you can see/test exactly what
-    // it was told), not a snippet.
-    plog(projectId, userId, `── Agent prompt (attempt ${round}) ──`, { detail: prompt });
-    const pi = await startPiCli({
-      workspaceId,
-      prompt,
-      projectDir: PROJECT_DIR, // pi-cli strips /data/ → "project"
-      provider: agent.provider,
-      modelId: agent.modelId,
-      apiKey: agent.apiKey,
-    });
-    let lastLine = "";
-    const result = await streamPiToCompletion({
-      workspaceId,
-      outputFile: pi.outputFile,
-      backgroundPid: pi.backgroundPid,
-      timeoutMs: 15 * 60_000,
-      progressMaxLen: 100_000, // log the FULL command the agent runs, not a cutoff
-      onProgress: (m) => {
-        if (m && m !== lastLine) { lastLine = m; plog(projectId, userId, `agent: ${m}`); } // full line → log
-        const head = m.length > 120 ? m.slice(0, 120) + "…" : m; // short line → header only
-        setPreview(projectId, userId, { previewStatus: "starting" }, head).catch(() => {});
+  const port = manifest.port;
+  let finished: { status: "ready" | "failed"; detail: string } | undefined;
+
+  const tools = {
+    run: tool({
+      description: "Run one shell command in the Alpine sandbox (bash). The toolchain PATH, /data caches, and the project's .env are already set up. Returns exit code + combined stdout/stderr (last 6KB).",
+      inputSchema: zodSchema(z.object({
+        command: z.string().describe("The shell command to run (one command; use && or a heredoc for multi-step)."),
+        timeoutSec: z.number().optional().describe("Timeout in seconds (default 300, max 900). Use ~600 for restore/build."),
+      })),
+      execute: async ({ command, timeoutSec }: { command: string; timeoutSec?: number }) => {
+        const t = Math.min(Math.max(timeoutSec ?? 300, 10), 900) * 1000;
+        plog(projectId, userId, `$ ${command}`);
+        setPreview(projectId, userId, { previewStatus: "starting" }, `$ ${command.slice(0, 110)}`).catch(() => {});
+        const full = `${envPrefix()}\n${command}`;
+        const b64 = Buffer.from(full).toString("base64");
+        const r = await execOnWorkspace(workspaceId, `echo ${b64} | base64 -d | bash`, { timeout: t })
+          .catch((e: any) => ({ output: "", stderr: String(e?.message ?? e), exitCode: -1 }));
+        const output = ((r.output || "") + (r.stderr ? "\n" + r.stderr : "")).trim();
+        plog(projectId, userId, `  → exit ${r.exitCode ?? -1}`, output ? { detail: output.slice(-1800), level: (r.exitCode ?? -1) === 0 ? "info" : "error" } : undefined);
+        return { exitCode: r.exitCode ?? -1, output: output.slice(-6000) || "(no output)" };
       },
+    }),
+    finish: tool({
+      description: "Call ONCE when the app is confirmed serving on the port (status 'ready'), or when it genuinely cannot run without a source-code change (status 'failed').",
+      inputSchema: zodSchema(z.object({
+        status: z.enum(["ready", "failed"]),
+        detail: z.string().describe("For 'ready': the URL/port. For 'failed': the concrete blocking reason incl. the real error."),
+      })),
+      execute: async ({ status, detail }: { status: "ready" | "failed"; detail: string }) => {
+        finished = { status, detail };
+        plog(projectId, userId, `Driver finished: ${status}`, { detail, level: status === "ready" ? "info" : "error" });
+        return "acknowledged";
+      },
+    }),
+  };
+
+  try {
+    await generateText({
+      model,
+      tools,
+      stopWhen: stepCountIs(80), // generous step budget — we control the loop, not a blind timer
+      system: buildDriverSystemPrompt(manifest, engines),
+      prompt: `Bring the app up and verify it serves on 0.0.0.0:${port}. Begin.`,
     });
-    if (result.fatalError) plog(projectId, userId, `agent exited: ${result.fatalError}`, { level: "error" });
+  } catch (e) {
+    plog(projectId, userId, `Driver loop error: ${(e as Error).message}`, { level: "error" });
+  }
 
-    // Trust the reality of the port, not the agent's word: confirm it listens.
-    if (await checkServer(workspaceId, manifest.port, 8)) return true;
-    if (result.tail && /PREVIEW_READY/.test(result.tail) && await checkServer(workspaceId, manifest.port, 4)) return true;
-
-    // Not up yet — capture what happened, feed it into the next round's prompt.
-    const tail = await sh(workspaceId, `tail -25 ${PROJECT_DIR}/preview.log 2>/dev/null`, 20_000).catch(() => ({ output: "" }));
-    const agentTail = (result.tail || "").split("\n").filter((l) => l.trim()).slice(-6).join("\n");
-    prevTail = [agentTail && `agent:\n${agentTail}`, tail.output && `preview.log:\n${tail.output}`].filter(Boolean).join("\n\n");
-    // If the agent explicitly declared it cannot run, stop retrying.
-    if (result.tail && /PREVIEW_FAILED/.test(result.tail)) {
-      plog(projectId, userId, "Agent reported it cannot run this app", { level: "error", detail: prevTail });
-      return false;
-    }
-    plog(projectId, userId, `App still not responding on port ${manifest.port} after attempt ${round}`, round === MAX_AGENT_ROUNDS ? { level: "error", detail: prevTail } : undefined);
+  // Trust reality, not the model's word: confirm the port actually serves.
+  if (await checkServer(workspaceId, port, 8)) return true;
+  if (finished?.status === "failed") {
+    plog(projectId, userId, "App could not be brought up", { level: "error", detail: finished.detail });
   }
   return false;
 }
@@ -537,18 +545,18 @@ fi`, 240_000);
     await writeEnvFile(workspaceId, projectId, manifest, provisioned);
     plog(projectId, userId, `Wrote .env (${Object.keys(provisioned).length} DB connection var(s) + run config)`);
 
-    // 5. Get the app running + VERIFIED. Preferred: an in-sandbox coding agent
-    // (matches the project chat model) that installs, migrates/seeds, starts the
-    // server, curls the port, and self-corrects from logs. Falls back to the
-    // deterministic runner when no Pi-capable model/key is available.
-    const agent = await resolveAgentModel(userId);
+    // 5. Get the app running + VERIFIED. Master-slave: an AI on OUR side drives
+    // the sandbox command-by-command (install → build → migrate → run → verify),
+    // reading each command's real output. Falls back to a straight deterministic
+    // run of the plan when no usable model/key is available.
+    await setPreview(projectId, userId, { previewStatus: "installing" }, "Setting up & running the app…");
+    const driver = await resolveDriverModel(userId);
     let up = false;
-    if (agent) {
-      plog(projectId, userId, `Handing off to the ${agent.provider} agent to install, run, and verify the app on port ${manifest.port}…`);
-      await setPreview(projectId, userId, { previewStatus: "starting" }, `Agent (${agent.provider}) is getting the app running…`);
-      up = await runViaAgent(projectId, userId, workspaceId, manifest, engineHandles, agent);
+    if (driver) {
+      plog(projectId, userId, `Driving the sandbox with ${driver.modelKey} to install, run, and verify the app on port ${manifest.port}…`);
+      up = await driveSandbox(projectId, userId, workspaceId, manifest, engineHandles, driver.model);
     } else {
-      plog(projectId, userId, "No agent model available — using the deterministic runner.");
+      plog(projectId, userId, "No usable model/key — running the plan deterministically.");
       // toolchain
       for (const t of manifest.toolchain || []) { plog(projectId, userId, `Toolchain: ${t}…`); await sh(workspaceId, `${t} >/dev/null 2>&1; echo done`, 300_000); }
       await setPreview(projectId, userId, { previewStatus: "installing" }, "Installing dependencies…");
@@ -586,13 +594,28 @@ cd ${PROJECT_DIR} && set -a; . ./.env 2>/dev/null; set +a; ${manifest.installCmd
     }
     plog(projectId, userId, "App is responding ✓");
 
-    // 7. Expose the app's OWN port publicly (whatever the manifest decided).
+    // 7. Expose the app's OWN port publicly. The app is CONFIRMED up, so a
+    // transient Mags "job not found" here must NOT throw away a working preview —
+    // retry the exposure (the VM name just needs a moment to re-resolve).
     plog(projectId, userId, `Exposing port ${manifest.port} as a public URL…`);
-    await enableHttpAccess(workspaceId, manifest.port);
     const alias = existing?.stableAlias || `preview-${projectId.slice(0, 8)}`;
     let previewUrl = "";
-    try { previewUrl = await setStableUrl(alias, workspaceId); }
-    catch { previewUrl = await enableHttpAccess(workspaceId, manifest.port); }
+    let exposeErr = "";
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      try {
+        await enableHttpAccess(workspaceId, manifest.port);
+        try { previewUrl = await setStableUrl(alias, workspaceId); }
+        catch { previewUrl = await enableHttpAccess(workspaceId, manifest.port); }
+        if (previewUrl) break;
+      } catch (e) {
+        exposeErr = (e as Error).message ?? String(e);
+        plog(projectId, userId, `Exposure attempt ${attempt}/5 failed (${exposeErr.slice(0, 60)}); retrying…`);
+        await sleep(5000);
+      }
+    }
+    if (!previewUrl) {
+      return failed(projectId, userId, `The app is running on port ${manifest.port}, but exposing the public URL failed: ${exposeErr}. Try again.`);
+    }
 
     await db.update(projectEnvironments).set({ stableAlias: alias, updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
     plog(projectId, userId, `Preview live: ${previewUrl}`);

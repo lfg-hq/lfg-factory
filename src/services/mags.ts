@@ -267,14 +267,38 @@ export function normalizeMagsAppUrl(url: string | null | undefined): string {
   return (url ?? "").replace(/\.apps\.magpiecloud\.com/i, `.${appDomain}`);
 }
 
+/** Raw Mags v2 API call by NAME (workspace_id). Mags standardized the endpoints
+ *  to accept the workspace NAME directly in the path, so we bypass the SDK's
+ *  list-scan resolver (which caps at ~50 jobs and throws "job not found" on a
+ *  busy account). The name is stable across respawns. */
+async function magsApi(method: string, path: string, body?: unknown): Promise<any> {
+  const token = process.env.MAGS_API_TOKEN;
+  if (!token) throw new Error("MAGS_API_TOKEN not set");
+  const base = (process.env.MAGS_API_URL || "https://api.magpiecloud.com").replace(/\/+$/, "");
+  const resp = await fetch(`${base}${path}`, {
+    method,
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  const json = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(`Mags ${method} ${path} → HTTP ${resp.status} ${JSON.stringify(json).slice(0, 200)}`);
+  return json;
+}
+
+/**
+ * Enable HTTP access on a port and return the public proxy URL. Uses the
+ * name-based endpoints directly: POST /mags-jobs/<name>/access {port}, then
+ * GET /mags-jobs/<name>/status for the URL. No SDK list-scan → no "job not found".
+ */
 export async function enableHttpAccess(
   nameOrId: string,
   port = 8080
 ): Promise<string> {
-  const client = getClient();
-  const result = await client.url(nameOrId, port);
-  const url = normalizeMagsAppUrl((result.url ?? result.proxy_url ?? "") as string);
-  if (!url) throw new Error(`No URL returned for VM '${nameOrId}'`);
+  await magsApi("POST", `/api/v2/mags-jobs/${encodeURIComponent(nameOrId)}/access`, { port });
+  const st = await magsApi("GET", `/api/v2/mags-jobs/${encodeURIComponent(nameOrId)}/status`);
+  const raw = (st.url as string) || (st.subdomain ? `https://${st.subdomain}.${process.env.MAGS_APP_DOMAIN || "apps.mags.run"}` : "");
+  const url = normalizeMagsAppUrl(raw);
+  if (!url) throw new Error(`No URL returned for VM '${nameOrId}' (status had no url/subdomain)`);
   return url;
 }
 
@@ -289,10 +313,11 @@ export async function setStableUrl(
   subdomain: string,
   workspaceId: string,
 ): Promise<string> {
-  const client = getClient();
   const appDomain = process.env.MAGS_APP_DOMAIN || "apps.mags.run";
-  await client.urlAliasDelete(subdomain).catch(() => {}); // clear any stale mapping
-  await client.urlAliasCreate(subdomain, workspaceId, appDomain);
+  // Attach a stable custom subdomain to the workspace NAME (survives respawns).
+  // POST is idempotent enough; ignore a "already exists" style error.
+  await magsApi("POST", `/api/v2/mags-url-aliases`, { subdomain, workspace_id: workspaceId, domain: appDomain })
+    .catch((e) => { if (!/exist|conflict|already/i.test((e as Error).message)) throw e; });
   return `https://${subdomain}.${appDomain}`;
 }
 
