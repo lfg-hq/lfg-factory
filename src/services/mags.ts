@@ -125,6 +125,67 @@ export async function newWorkspace(name: string, opts?: {
 }
 
 /**
+ * Create a BIG persistent VM via the raw v2 API (bypasses the SDK). The SDK's
+ * run() hard-caps memGb at 2/4 and never sends vcpus/memory_mb — so for larger
+ * boxes (verified live: 4 vCPU / 8GB) we POST /api/v2/mags-jobs directly. Reuses
+ * the SDK client for status/exec/etc. Resolves once the VM is running.
+ */
+export async function newWorkspaceV2(
+  name: string,
+  opts: { vcpus?: number; memoryMb?: number; diskGb?: number; keepAlive?: boolean; idleMinutes?: number } = {},
+): Promise<{ jobId: string; workspaceId: string }> {
+  const token = process.env.MAGS_API_TOKEN;
+  if (!token) throw new Error("MAGS_API_TOKEN not set");
+  const base = (process.env.MAGS_API_URL || "https://mags.run").replace(/\/+$/, "");
+
+  const environment: Record<string, string> = {};
+  if (opts.keepAlive) environment.__MAGS_KEEP_ALIVE = "true";
+  if (opts.idleMinutes) environment.__MAGS_IDLE_MIN = String(opts.idleMinutes);
+
+  const payload: Record<string, unknown> = {
+    script: "sleep infinity",
+    type: "inline",
+    persistent: true,
+    name,
+    workspace_id: name,
+    startup_command: "sleep infinity",
+    vcpus: opts.vcpus ?? 4,
+    memory_mb: opts.memoryMb ?? 8192,
+  };
+  if (opts.diskGb) payload.disk_gb = opts.diskGb;
+  if (Object.keys(environment).length) payload.environment = environment;
+
+  console.log(`[mags] newWorkspaceV2 '${name}': POST ${base}/api/v2/mags-jobs (vcpus=${payload.vcpus} mem=${payload.memory_mb}MB disk=${opts.diskGb ?? "-"})`);
+  const resp = await fetch(`${base}/api/v2/mags-jobs`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const json = (await resp.json().catch(() => ({}))) as { request_id?: string; message?: string };
+  if (!resp.ok || !json.request_id) {
+    throw new Error(`Mags v2 create failed: HTTP ${resp.status} ${JSON.stringify(json).slice(0, 300)}`);
+  }
+  const requestId = json.request_id;
+
+  // Poll to running (reuse the SDK status; requestId is a UUID → resolved directly).
+  const deadline = Date.now() + 60_000;
+  let polls = 0;
+  while (Date.now() < deadline) {
+    const st = await getJobStatus(requestId).catch(() => null);
+    polls++;
+    if (st?.status === "running" && st.vm_id) {
+      console.log(`[mags] newWorkspaceV2 '${name}': running vm_id=${st.vm_id} (poll ${polls})`);
+      return { jobId: requestId, workspaceId: name };
+    }
+    if (st?.status === "completed" || st?.status === "error") {
+      throw new Error(`VM '${name}' ended unexpectedly with status: ${st.status}`);
+    }
+    await sleep(1000);
+  }
+  throw new Error(`VM '${name}' did not start within 60s (polls=${polls})`);
+}
+
+/**
  * Execute a command on an existing persistent VM via SSH.
  * Uses client.exec() which handles SSH auth + chroot wrapping automatically.
  *

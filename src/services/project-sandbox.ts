@@ -3,23 +3,22 @@
  * that hosts the app + its DBs (co-located, reached over 127.0.0.1) + git
  * worktrees per branch. Used for testing the app, QA, and building tickets.
  *
- * VM model (standardized on Instant): a local ext4 volume (diskGb) mounted at
- * /data, NO JuiceFS/S3 sync (noSync). The app (/data/project) and DB datadirs
- * (/data/db-*) both live on that volume — nothing is on the synced /workspace,
- * so we don't pay for or risk that mount. keepAlive keeps this box always-on
- * (unlike Instant, which reaps + rebuilds from GitHub) since it hosts the DBs.
+ * VM model: a BIG persistent box created via the raw Mags v2 API (the SDK caps
+ * RAM at 4GB) — 4 vCPU / 8GB / 20GB disk, enough for SQL Server + a .NET build.
+ * keepAlive keeps it always-on since it hosts the DBs. The app (/data/project)
+ * and DB datadirs (/data/db-*) live on the /data volume.
  *
- * DBs install NATIVELY via apk (docker OOMs a 4GB VM); the app talks to them
- * over 127.0.0.1. The one required fix baked into the recipes is enabling TCP
- * (Alpine disables it). Data persists as long as the VM is up; a hard VM loss
- * means a fresh setup (re-clone + re-provision), same tradeoff as Instant.
+ * DBs run co-located over 127.0.0.1: postgres/mysql/redis install NATIVELY via
+ * apk (the one required fix is enabling TCP, which Alpine disables); SQL Server
+ * runs via Docker (no native Alpine build) — dockerd is bootstrapped in-VM.
+ * Data persists while the VM is up; a hard VM loss means a fresh setup.
  */
 import { db } from "../config/db.ts";
 import { projectEnvironments } from "../db/schema/project-environments.ts";
 import { projectDatabases } from "../db/schema/project-databases.ts";
 import { and, eq } from "drizzle-orm";
 import { encryptSecret, decryptSecret } from "../utils/crypto.ts";
-import { newWorkspace, execOnWorkspace, findJob, deleteWorkspace } from "./mags.ts";
+import { newWorkspaceV2, execOnWorkspace, findJob, deleteWorkspace } from "./mags.ts";
 
 export type DbEngine = "postgres" | "mysql" | "redis" | "mssql";
 
@@ -130,14 +129,13 @@ export async function ensureProjectSandbox(projectId: string): Promise<{ workspa
   const job = await findJob(workspaceId).catch(() => null);
   const alive = job?.status === "running";
   if (!alive) {
-    // Standardized on the Instant VM model: a local ext4 volume mounted at /data
-    // (diskGb), NO JuiceFS/S3 sync (noSync) — the app + DBs live on /data, not on
-    // the synced /workspace, so syncing it only added cost + flakiness. keepAlive
-    // keeps this always-on box up (it hosts the DBs), unlike Instant which reaps.
-    const opts = { noSync: true, diskGb: 20, memGb: 4, keepAlive: true } as const;
+    // Big always-on box via the raw v2 API (the SDK caps RAM at 4GB): 4 vCPU /
+    // 8GB / 20GB disk — enough for SQL Server + a .NET build without OOM. keepAlive
+    // keeps it up (it hosts the DBs). Data lives on the /data volume.
+    const opts = { vcpus: 4, memoryMb: 8192, diskGb: 20, keepAlive: true } as const;
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        await newWorkspace(workspaceId, opts);
+        await newWorkspaceV2(workspaceId, opts);
         break;
       } catch (err) {
         const msg = (err as Error)?.message ?? String(err);
@@ -159,7 +157,7 @@ export async function ensureProjectSandbox(projectId: string): Promise<{ workspa
   if (existing) {
     await db.update(projectEnvironments).set({ status: "running", lastAwakeAt: new Date(), updatedAt: new Date() }).where(eq(projectEnvironments.id, existing.id));
   } else {
-    await db.insert(projectEnvironments).values({ projectId, workspaceId, memGb: 4, diskGb: 20, status: "running", lastAwakeAt: new Date() });
+    await db.insert(projectEnvironments).values({ projectId, workspaceId, memGb: 8, diskGb: 20, status: "running", lastAwakeAt: new Date() });
   }
   return { workspaceId };
 }
@@ -221,7 +219,7 @@ export async function ensureEngine(projectId: string, engine: DbEngine): Promise
   if (!ready) throw new Error(`${engine} bring-up timed out`);
 
   const values = {
-    projectId, engine, workspaceId, memGb: 4, diskGb: 20,
+    projectId, engine, workspaceId, memGb: 8, diskGb: 20,
     host: "127.0.0.1", port: spec.port, endpoint: `127.0.0.1:${spec.port}`,
     dbName: spec.defaultDb, username: spec.username,
     passwordEncrypted: encryptSecret(password), status: "ready", updatedAt: new Date(),
