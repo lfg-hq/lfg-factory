@@ -1680,6 +1680,18 @@ git branch --show-current
       runInfo: await loadRunInfo(project.id),
     });
     try {
+      // Resolve (or mint) the CLI API key that authenticates the VM→server webhook.
+      let cliApiKey = (await db.select({ k: profiles.cliApiKey }).from(profiles).where(eq(profiles.userId, ownerId)).limit(1))[0]?.k ?? "";
+      if (!cliApiKey) {
+        cliApiKey = `lfg_cli_${crypto.randomUUID().replace(/-/g, "")}`;
+        await db.insert(profiles).values({ userId: ownerId, cliApiKey })
+          .onConflictDoUpdate({ target: profiles.userId, set: { cliApiKey, updatedAt: new Date() } });
+      }
+      // Prefer WEBHOOK (the in-VM forwarder pushes Pi's JSONL live to
+      // /api/v1/cli/output) when the callback URL is publicly reachable by the VM.
+      // In local dev (localhost APP_URL) the VM can't reach us → fall back to the
+      // server polling the VM. Exactly one channel writes logs (no duplicates).
+      const webhookReachable = !!cliApiKey && !/localhost|127\.0\.0\.1|\/\/0\.0\.0\.0/.test(CALLBACK_BASE_URL);
       const pi = await startPiCli({
         workspaceId,
         prompt: piPrompt,
@@ -1688,14 +1700,17 @@ git branch --show-current
         modelId: piModelId,
         apiKey: providerApiKey,
         envVars: piEnvVars,
+        forward: webhookReachable ? { apiUrl: CALLBACK_BASE_URL, apiKey: cliApiKey, mode: "ticket" as const, ticketId } : undefined,
       });
+      if (webhookReachable) await addLog(ticketId, "Streaming build logs via webhook…", "command", ownerId);
       let lastPiLog = 0;
       const piResult = await streamPiToCompletion({
         workspaceId,
         outputFile: pi.outputFile,
         backgroundPid: pi.backgroundPid,
         timeoutMs: 30 * 60 * 1000,
-        onProgress: (msg) => {
+        // Webhook active → poll is completion-only. Otherwise poll → logs.
+        onProgress: webhookReachable ? undefined : (msg) => {
           const now = Date.now();
           if (now - lastPiLog < 4_000) return;
           lastPiLog = now;

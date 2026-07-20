@@ -134,11 +134,11 @@ export interface PiRunOptions {
   apiKey: string; // the user's key for that provider
   envVars?: Record<string, string>; // app env vars to expose to the build
   outputFile?: string;
-  /** When set, an in-VM forwarder parses Pi's JSONL and POSTs compact tool-call ops
-   *  (verb/path/command) to LFG in real time — the live build activity stream. The big
-   *  reasoning stays in the VM; only small ops cross the wire. Graceful no-op if the VM
-   *  can't reach apiUrl. */
-  forward?: { apiUrl: string; apiKey: string; appId: string };
+  /** When set, an in-VM forwarder streams Pi's JSONL to LFG in real time (webhook
+   *  push) instead of the server polling the VM. mode="instant" POSTs compact
+   *  tool-call ops to /instant-progress (appId); mode="ticket" POSTs raw JSONL to
+   *  /output (ticketId). Graceful no-op if the VM can't reach apiUrl. */
+  forward?: { apiUrl: string; apiKey: string; appId?: string; mode?: "instant" | "ticket"; ticketId?: string };
 }
 
 export interface PiRunResult {
@@ -176,7 +176,8 @@ export async function startPiCli(opts: PiRunOptions): Promise<PiRunResult> {
       ? [
           `export LFG_API_URL=${JSON.stringify(opts.forward.apiUrl)}`,
           `export LFG_API_KEY=${JSON.stringify(opts.forward.apiKey)}`,
-          `export LFG_INSTANT_APP_ID=${JSON.stringify(opts.forward.appId)}`,
+          ...(opts.forward.appId ? [`export LFG_INSTANT_APP_ID=${JSON.stringify(opts.forward.appId)}`] : []),
+          ...(opts.forward.ticketId ? [`export LFG_TICKET_ID=${JSON.stringify(opts.forward.ticketId)}`] : []),
         ]
       : []),
     ...Object.entries(opts.envVars ?? {}).map(([k, v]) => `export ${k}=${JSON.stringify(v)}`),
@@ -228,6 +229,28 @@ process.stdin.setEncoding('utf8');
 process.stdin.on('data',d=>{ buf+=d; let i; while((i=buf.indexOf('\\n'))>=0){ take(buf.slice(0,i)); buf=buf.slice(i+1); } });
 process.stdin.on('end',async()=>{ clearInterval(timer); clearTimeout(pendTimer); if(buf) take(buf); commit(pend); pend=null; await flush(); process.exit(0); });
 `;
+
+  // Ticket forwarder: streams Pi's raw JSONL lines (base64 batched) to LFG's
+  // /api/v1/cli/output endpoint in real time — the SAME endpoint the Claude CLI
+  // path uses, which parses + logs + broadcasts. This is a WEBHOOK push (no
+  // server-side polling of the VM). Failures are swallowed.
+  const TICKET_FORWARDER_JS = `'use strict';
+const API=process.env.LFG_API_URL, KEY=process.env.LFG_API_KEY, TID=process.env.LFG_TICKET_ID;
+let buf='', batch=[], flushing=false;
+async function flush(){
+  if(flushing||!API||!KEY||!TID||!batch.length) return;
+  flushing=true;
+  const chunk=batch.join('\\n'); batch=[];
+  const data=Buffer.from(chunk).toString('base64');
+  try{ await fetch(API+'/api/v1/cli/output',{method:'POST',headers:{'X-CLI-API-Key':KEY,'Content-Type':'application/json','ngrok-skip-browser-warning':'true'},body:JSON.stringify({ticket_id:TID,data})}); }catch{}
+  flushing=false;
+}
+const timer=setInterval(flush,800);
+process.stdin.setEncoding('utf8');
+process.stdin.on('data',d=>{ buf+=d; let i; while((i=buf.indexOf('\\n'))>=0){ const line=buf.slice(0,i); buf=buf.slice(i+1); if(line.trim()) batch.push(line); } });
+process.stdin.on('end',async()=>{ clearInterval(timer); if(buf.trim()) batch.push(buf); await flush(); process.exit(0); });
+`;
+  const forwarderScript = opts.forward?.mode === "ticket" ? TICKET_FORWARDER_JS : FORWARDER_JS;
 
   // OpenAI-compatible custom providers (DeepSeek, Kimi) need a models.json entry.
   // Native providers (openai, google, anthropic) need none.
@@ -350,7 +373,7 @@ echo "___PI_EXIT_CODE=\$PI_EXIT" >> ${outputFile}
   const envB64 = Buffer.from(envExports).toString("base64");
   const runnerB64 = Buffer.from(runnerContent).toString("base64");
   const forwarderInject = opts.forward
-    ? `echo '${Buffer.from(FORWARDER_JS).toString("base64")}' | base64 -d > ${forwarderFile}`
+    ? `echo '${Buffer.from(forwarderScript).toString("base64")}' | base64 -d > ${forwarderFile}`
     : "";
 
   const startCmd = `export HOME=/root
