@@ -159,6 +159,11 @@ export async function ensureProjectSandbox(projectId: string): Promise<{ workspa
     }
   }
 
+  // Move /tmp onto the big /data volume (the 1.9GB root fills up during a .NET
+  // build — MSBuild writes scratch to /tmp). Redirect via a symlink so even tools
+  // that ignore $TMPDIR (and don't source .env) land on /data. Idempotent.
+  await execOnWorkspace(workspaceId, `sh -c 'mkdir -p /data/tmp && chmod 1777 /data/tmp; if [ ! -L /tmp ]; then rm -rf /tmp && ln -s /data/tmp /tmp; fi; echo tmp_ok'`, { timeout: 30_000 }).catch(() => {});
+
   if (existing) {
     await db.update(projectEnvironments).set({ status: "running", lastAwakeAt: new Date(), updatedAt: new Date() }).where(eq(projectEnvironments.id, existing.id));
   } else {

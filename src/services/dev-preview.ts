@@ -223,6 +223,9 @@ async function writeEnvFile(workspaceId: string, projectId: string, manifest: Pr
   // restores (NuGet can be GBs) survive restart and don't fill the 1.9GB root.
   const vars: Record<string, string> = {
     PORT: String(port), HOST: "0.0.0.0",
+    // Temp dirs on /data too — MSBuild/dotnet write scratch to $TMPDIR, and the
+    // 1.9GB root fills up ("No space left on device") if it stays on /tmp.
+    TMPDIR: "/data/tmp", TMP: "/data/tmp", TEMP: "/data/tmp",
     NUGET_PACKAGES: "/data/.nuget", DOTNET_CLI_HOME: "/data/.dotnet",
     npm_config_cache: "/data/.npm-cache", PIP_CACHE_DIR: "/data/.pip-cache",
     GOPATH: "/data/go", COMPOSER_CACHE_DIR: "/data/.composer",
