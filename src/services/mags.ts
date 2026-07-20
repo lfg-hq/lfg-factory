@@ -256,13 +256,13 @@ export async function findJob(nameOrId: string): Promise<{
  * Uses client.url() which calls enableAccess + constructs the URL.
  */
 /**
- * Normalize a Mags public URL to the live domain. The SDK/API still builds URLs on
- * the legacy `apps.magpiecloud.com` domain, which is dead — the live domain is
- * `apps.mags.run` (overridable via MAGS_APP_DOMAIN). The subdomain is correct, so we
- * only swap the suffix. Safe to call on already-correct or empty URLs.
+ * Normalize a Mags public URL to the live LFG domain. The SDK/API still builds
+ * URLs on the legacy `apps.magpiecloud.com` domain, which is dead — the live
+ * domain is `app.lfg.run` (overridable via MAGS_APP_DOMAIN). The subdomain is
+ * correct, so we only swap the suffix. Safe on already-correct or empty URLs.
  */
 export function normalizeMagsAppUrl(url: string | null | undefined): string {
-  const appDomain = process.env.MAGS_APP_DOMAIN || "apps.mags.run";
+  const appDomain = process.env.MAGS_APP_DOMAIN || "app.lfg.run";
   return (url ?? "").replace(/\.apps\.magpiecloud\.com/i, `.${appDomain}`);
 }
 
@@ -295,7 +295,7 @@ export async function enableHttpAccess(
 ): Promise<string> {
   await magsApi("POST", `/api/v2/mags-jobs/${encodeURIComponent(nameOrId)}/access`, { port });
   const st = await magsApi("GET", `/api/v2/mags-jobs/${encodeURIComponent(nameOrId)}/status`);
-  const raw = (st.url as string) || (st.subdomain ? `https://${st.subdomain}.${process.env.MAGS_APP_DOMAIN || "apps.mags.run"}` : "");
+  const raw = (st.url as string) || (st.subdomain ? `https://${st.subdomain}.${process.env.MAGS_APP_DOMAIN || "app.lfg.run"}` : "");
   const url = normalizeMagsAppUrl(raw);
   if (!url) throw new Error(`No URL returned for VM '${nameOrId}' (status had no url/subdomain)`);
   return url;
@@ -312,7 +312,7 @@ export async function setStableUrl(
   subdomain: string,
   workspaceId: string,
 ): Promise<string> {
-  const appDomain = process.env.MAGS_APP_DOMAIN || "apps.mags.run";
+  const appDomain = process.env.MAGS_APP_DOMAIN || "app.lfg.run";
   // Attach a stable custom subdomain to the workspace NAME (survives respawns).
   // POST is idempotent enough; ignore a "already exists" style error.
   await magsApi("POST", `/api/v2/mags-url-aliases`, { subdomain, workspace_id: workspaceId, domain: appDomain })
