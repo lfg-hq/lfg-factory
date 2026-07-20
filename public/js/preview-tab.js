@@ -19,6 +19,7 @@
   let current = null; // last known state
   let loadedOnce = false;
   let logText = ""; // accumulated setup log
+  let manifest = null; // the setup plan
 
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -129,6 +130,7 @@
       if (!r.ok) throw new Error("state " + r.status);
       const state = await r.json();
       if (typeof state.log === "string" && state.log) logText = state.log;
+      if (state.manifest) manifest = state.manifest;
       render(state);
       managePolling(state.previewStatus);
     } catch (e) {
@@ -171,6 +173,78 @@
     scrollLog();
   }
 
+  // ── Setup plan viewer/editor (the exact instructions used to run the app) ──
+  function planSummary(m) {
+    if (!m) return "";
+    const row = (k, v) => (v && v.length) ? `<div style="display:flex;gap:10px;padding:4px 0;border-bottom:1px solid var(--border-color,#2a2a2a);"><div style="min-width:120px;color:var(--text-secondary,#9ca3af);">${k}</div><div style="flex:1;color:var(--text-color,#e2e8f0);word-break:break-word;">${esc(Array.isArray(v) ? v.join("\n") : v)}</div></div>` : "";
+    const dbs = (m.databases || []).map((d) => `${d.engine} → ${d.connectionEnvVar} (${d.connectionFormat})`);
+    return [
+      row("stack", m.stack || `${m.runtime}/${m.framework}`),
+      row("port", String(m.port)),
+      row("startup project", m.startupProject),
+      row("toolchain", m.toolchain),
+      row("install", m.installCmd),
+      row("build", m.buildCmd),
+      row("databases", dbs),
+      row("migrations", m.migrations),
+      row("sql scripts", m.sqlScripts),
+      row("seed", m.seedCmd),
+      row("run", m.runCmd),
+    ].filter(Boolean).join("");
+  }
+
+  function togglePlan() {
+    const body = $("preview-body");
+    if (!body) return;
+    const existing = document.getElementById("preview-plan-overlay");
+    if (existing) { existing.remove(); return; }
+    const overlay = document.createElement("div");
+    overlay.id = "preview-plan-overlay";
+    overlay.style.cssText = "position:absolute;inset:0;padding:16px 20px;background:var(--bg-color,#0f0f0f);display:flex;flex-direction:column;gap:10px;z-index:6;overflow:auto;";
+    overlay.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <div style="font-size:14px;color:var(--text-color,#e2e8f0);font-weight:600;">Setup plan — the exact instructions used to run this project</div>
+        <button data-action="closeplan" style="background:none;border:none;color:var(--text-secondary,#9ca3af);cursor:pointer;font-size:16px;"><i class="fas fa-times"></i></button>
+      </div>
+      ${manifest ? `<div style="font-size:12.5px;">${planSummary(manifest)}</div>
+      <div style="font-size:12px;color:var(--text-secondary,#9ca3af);margin-top:6px;">Edit the plan JSON and Save to re-run with your changes, or Re-analyze to rebuild it from the code:</div>
+      <textarea id="preview-plan-json" spellcheck="false" style="flex:1;min-height:180px;background:var(--background-surface,#141414);color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#2a2a2a);border-radius:8px;padding:12px;font-family:ui-monospace,Menlo,monospace;font-size:12px;">${esc(JSON.stringify(manifest, null, 2))}</textarea>
+      <div id="preview-plan-msg" style="font-size:12px;color:var(--text-secondary,#9ca3af);min-height:16px;"></div>`
+      : `<div style="color:var(--text-secondary,#9ca3af);font-size:13px;">No plan yet — run "Set up preview", or Re-analyze to build one from the code.</div>`}
+      <div style="display:flex;gap:8px;">
+        ${btn("Re-analyze", { action: "reanalyze", icon: "fa-rotate" })}
+        ${manifest ? btn("Save plan", { action: "saveplan", primary: true, icon: "fa-floppy-disk" }) : ""}
+      </div>`;
+    body.appendChild(overlay);
+  }
+
+  async function savePlan() {
+    const ta = $("preview-plan-json");
+    const msg = $("preview-plan-msg");
+    if (!ta) return;
+    let parsed;
+    try { parsed = JSON.parse(ta.value); } catch (e) { if (msg) { msg.textContent = "Invalid JSON: " + e.message; msg.style.color = "#ef4444"; } return; }
+    try {
+      const r = await api("/manifest", { method: "PUT", body: JSON.stringify(parsed) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+      manifest = j.manifest || parsed;
+      if (msg) { msg.textContent = "Saved ✓ — click Set up preview to run with this plan."; msg.style.color = "#10b981"; }
+    } catch (e) { if (msg) { msg.textContent = "Save failed: " + e.message; msg.style.color = "#ef4444"; } }
+  }
+
+  async function reanalyze() {
+    const msg = $("preview-plan-msg");
+    if (msg) { msg.textContent = "Re-analyzing the codebase…"; msg.style.color = "var(--text-secondary,#9ca3af)"; }
+    try {
+      const r = await api("/detect", { method: "POST" });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+      manifest = j.manifest;
+      togglePlan(); togglePlan(); // rebuild the overlay with the new plan
+    } catch (e) { if (msg) { msg.textContent = "Re-analyze failed: " + e.message + " (the sandbox must exist — run Set up preview first)"; msg.style.color = "#ef4444"; } }
+  }
+
   async function doStop() {
     setSub("Stopping…");
     try { await api("/stop", { method: "POST" }); } catch (_) {}
@@ -184,6 +258,9 @@
     if (action === "setup") doSetup(false);
     else if (action === "stop") doStop();
     else if (action === "togglelog") toggleLog();
+    else if (action === "closeplan") togglePlan();
+    else if (action === "saveplan") savePlan();
+    else if (action === "reanalyze") reanalyze();
     else if (action === "open" && current && current.previewUrl) window.open(current.previewUrl, "_blank");
   }
 
@@ -226,6 +303,7 @@
     projectId = root.getAttribute("data-project-id");
     $("preview-actions")?.addEventListener("click", onActionClick);
     $("preview-body")?.addEventListener("click", onActionClick);
+    $("preview-plan-btn")?.addEventListener("click", () => { if (!current) load(); togglePlan(); });
 
     // Load when the Preview tab is opened (and once up front if already active).
     const tabBtn = document.querySelector('.tab-button[data-tab="preview"]');

@@ -25,7 +25,7 @@ import { getModel, getProviderName, getProviderModel, DEFAULT_MODEL_KEY } from "
 import { decryptSecret } from "../utils/crypto.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { enableHttpAccess, execOnWorkspace, setStableUrl } from "./mags.ts";
-import { ensureProjectSandbox, ensureEngine, type EngineHandle } from "./project-sandbox.ts";
+import { ensureProjectSandbox, ensureEngine, ensureDocker, type EngineHandle } from "./project-sandbox.ts";
 import { startPiCli, streamPiToCompletion, isPiSupportedProvider } from "./pi-cli.ts";
 
 const PROJECT_DIR = "/data/project";
@@ -51,7 +51,7 @@ export const manifestSchema = z.object({
   runCmd: z.string().describe("Command to START the app in the FOREGROUND on `port`, bound to 0.0.0.0. Use the startup project — e.g. 'dotnet run --project Cohire.Web --urls http://0.0.0.0:5000', 'python manage.py runserver 0.0.0.0:8000', 'npm start'."),
   port: z.number().describe("The app's real port, detected from the codebase (launchSettings/appsettings, run scripts, docker-compose, framework default). This exact port is exposed publicly."),
   databases: z.array(z.object({
-    engine: z.enum(["postgres", "mysql", "redis"]).describe("The DB engine to provision. If the app uses SQL Server, pick the closest supported engine and say so in `stack`; otherwise use the app's real engine."),
+    engine: z.enum(["postgres", "mysql", "redis", "mssql"]).describe("The DB engine to provision — use the app's REAL engine. 'mssql' = Microsoft SQL Server (run via Docker) — pick it for EF Core SqlServer / T-SQL apps. Do NOT downgrade SQL Server to postgres; they are not wire-compatible."),
     connectionEnvVar: z.string().describe("The EXACT env var / .NET config key the app reads its connection from. ASP.NET Core with appsettings ConnectionStrings:DefaultConnection → 'ConnectionStrings__DefaultConnection'. Rails/Node/Django with a URL → 'DATABASE_URL'. Redis → 'REDIS_URL'."),
     connectionFormat: z.enum(CONN_FORMATS).describe("How to FORMAT the connection string for that var: 'url' = scheme://user:pw@host:port/db (Node/Python/Rails/Prisma); 'dotnet-npgsql' = 'Host=..;Port=..;Database=..;Username=..;Password=..' (.NET+Postgres); 'dotnet-mysql' = 'Server=..;Port=..;Database=..;Uid=..;Pwd=..'; 'dotnet-sqlserver'; 'keyvalue' generic."),
   })).describe("Every database the app connects to AND how it connects — read appsettings*.json ConnectionStrings, docker-compose services, ORM config (Prisma/EF/TypeORM/SQLAlchemy), DATABASE_URL in .env.example. [] if none."),
@@ -166,7 +166,7 @@ Work out and fill in:
 - installCmd — restore the app's libraries (dotnet restore <the .sln you saw>, npm ci, pip install -r requirements.txt, uv sync, bundle install, composer install).
 - buildCmd — for COMPILED stacks, the build BEFORE running (dotnet build <sln> -c Release). '' for interpreted stacks.
 - startupProject + runCmd + port — for a MULTI-PROJECT solution, identify the WEB entry project (the .csproj referencing Microsoft.NET.Sdk.Web / ASP.NET Core) and run THAT (e.g. 'dotnet run --project Cohire.Web --urls http://0.0.0.0:<port>'). Detect the real port from launchSettings/appsettings/config. Bind 0.0.0.0.
-- databases — CRITICAL: find EVERY database the app connects to and HOW. Look at appsettings*.json "ConnectionStrings" (the .NET connection lives there, NOT in .env), docker-compose db services, ORM configs, DATABASE_URL in .env.example. For each: the engine to provision (postgres/mysql/redis; if the app targets SQL Server, choose postgres and note it in 'stack'), the EXACT env var/config key the app reads (e.g. 'ConnectionStrings__DefaultConnection', 'DATABASE_URL', 'REDIS_URL'), and the connectionFormat (.NET → 'dotnet-npgsql'/'dotnet-mysql'; URL-based stacks → 'url'). We will provision the DB and inject the string into that exact var.
+- databases — CRITICAL: find EVERY database the app connects to and HOW. Look at appsettings*.json "ConnectionStrings" (the .NET connection lives there, NOT in .env), docker-compose db services, ORM configs, DATABASE_URL in .env.example. For each: the engine to provision — use the app's REAL engine among postgres/mysql/redis/mssql (mssql = Microsoft SQL Server, which we run via Docker; pick it for EF Core SqlServer / T-SQL apps — do NOT downgrade to postgres), the EXACT env var/config key the app reads (e.g. 'ConnectionStrings__DefaultConnection', 'DATABASE_URL', 'REDIS_URL'), and the connectionFormat (SQL Server → 'dotnet-sqlserver'; .NET+Postgres → 'dotnet-npgsql'; .NET+MySQL → 'dotnet-mysql'; URL-based stacks → 'url'). We will provision the DB and inject the string into that exact var. If the app declares the SAME connection under several keys, list each key.
 - migrations — commands to create the schema (EF: 'dotnet ef database update --project <proj>'; Prisma/Django/Rails equivalents). []
 - sqlScripts — if the repo ships .sql schema/seed files (e.g. a "Sql Scripts" folder), list their paths IN RUN ORDER so we apply them to the provisioned DB. []
 - seedCmd / envVars — any other seed step / real external config (API keys) the app needs. EXCLUDE the DB connection vars (handled above).
@@ -189,6 +189,9 @@ ${fingerprint}`,
 /** Format a provisioned DB connection the way the app expects to read it. */
 function formatConnection(db: PlannedDb, h: EngineHandle): string {
   const { host, port, dbName, username, password, engine } = h;
+  // SQL Server always uses the ADO.NET keyword syntax regardless of what format
+  // the plan guessed — a url would be wrong for it.
+  if (engine === "mssql") return `Server=${host},${port};Database=${dbName};User Id=${username};Password=${password};TrustServerCertificate=True`;
   switch (db.connectionFormat) {
     case "dotnet-npgsql":
       return `Host=${host};Port=${port};Database=${dbName};Username=${username};Password=${password}`;
@@ -487,6 +490,16 @@ fi`, 240_000);
           `run: ${manifest.runCmd}`,
         ].filter(Boolean).join("\n"),
       });
+    }
+
+    // 2b. Make Docker available before handoff — SQL Server runs as a container,
+    // and the run agent can use it too. Best-effort (only fatal later if an
+    // mssql engine actually needs it and it isn't up).
+    const needsDocker = manifest.databases.some((d) => d.engine === "mssql");
+    if (needsDocker) {
+      plog(projectId, userId, "Starting Docker in the sandbox (needed for SQL Server)…");
+      const ok = await ensureDocker(projectId);
+      plog(projectId, userId, ok ? "Docker ready ✓" : "Docker did not start", ok ? undefined : { level: "error" });
     }
 
     // 3. Provision the DBs the plan calls for, and inject each connection string

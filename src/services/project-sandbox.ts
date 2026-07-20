@@ -21,7 +21,7 @@ import { and, eq } from "drizzle-orm";
 import { encryptSecret, decryptSecret } from "../utils/crypto.ts";
 import { newWorkspace, execOnWorkspace, findJob, deleteWorkspace } from "./mags.ts";
 
-export type DbEngine = "postgres" | "mysql" | "redis";
+export type DbEngine = "postgres" | "mysql" | "redis" | "mssql";
 
 export interface EngineSpec {
   pkgs: string;
@@ -77,7 +77,41 @@ for i in $(seq 1 15); do redis-cli -a '${pw}' ping 2>/dev/null | grep -q PONG &&
 redis-cli -a '${pw}' ping 2>/dev/null | grep -q PONG && echo ENGINE_READY || echo ENGINE_ERROR`,
     connectionString: (c) => `redis://${c.user}:${c.pw}@127.0.0.1:${c.port}`,
   },
+  // SQL Server can't build natively on Alpine → run the official image via Docker
+  // (dockerd is bootstrapped by ensureDocker). Data on the /data volume. Readiness
+  // is detected from the container log so we don't depend on sqlcmd being bundled.
+  mssql: {
+    pkgs: "", port: 1433, defaultDb: "app", username: "sa",
+    bringup: (pw) => `set -e
+mkdir -p /data/db-mssql && chmod 777 /data/db-mssql
+for i in $(seq 1 40); do docker info >/dev/null 2>&1 && break; sleep 3; done
+docker info >/dev/null 2>&1 || { echo "docker unavailable"; echo ENGINE_ERROR; exit 1; }
+if docker ps -a --format '{{.Names}}' | grep -qx mssql; then docker start mssql >/dev/null 2>&1 || true; else
+  docker run -d --name mssql -e ACCEPT_EULA=Y -e "MSSQL_SA_PASSWORD=${pw}" -e MSSQL_PID=Developer -p 1433:1433 -v /data/db-mssql:/var/opt/mssql mcr.microsoft.com/mssql/server:2022-latest >/dev/null 2>&1
+fi
+for i in $(seq 1 90); do docker logs mssql 2>&1 | grep -q "SQL Server is now ready for client connections" && break; sleep 4; done
+docker logs mssql 2>&1 | grep -q "SQL Server is now ready for client connections" && echo ENGINE_READY || { docker logs mssql 2>&1 | tail -5; echo ENGINE_ERROR; }`,
+    connectionString: (c) => `Server=127.0.0.1,${c.port};Database=${c.db};User Id=${c.user};Password=${c.pw};TrustServerCertificate=True`,
+  },
 };
+
+/** Bootstrap Docker (install + start dockerd) inside the sandbox — needed for
+ *  engines that ship as images (SQL Server) and available to the run agent too.
+ *  Best-effort; images + data live on the big /data volume. */
+export async function ensureDocker(projectId: string): Promise<boolean> {
+  const workspaceId = `env-${projectId}`;
+  const script = `
+command -v docker >/dev/null 2>&1 || apk add --no-cache docker docker-cli >/dev/null 2>&1 || apk add --no-cache docker >/dev/null 2>&1 || true
+if docker info >/dev/null 2>&1; then echo DOCKER_READY; exit 0; fi
+mountpoint -q /sys/fs/cgroup 2>/dev/null || mount -t cgroup2 none /sys/fs/cgroup 2>/dev/null || true
+mkdir -p /data/docker
+pgrep dockerd >/dev/null 2>&1 || (setsid dockerd --data-root=/data/docker --storage-driver=vfs --iptables=false >/data/dockerd.log 2>&1 &)
+for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
+docker info >/dev/null 2>&1 && echo DOCKER_READY || echo DOCKER_FAIL`;
+  const b64 = Buffer.from(script).toString("base64");
+  const r = await execOnWorkspace(workspaceId, `echo ${b64} | base64 -d | sh`, { timeout: 150_000 }).catch(() => ({ output: "" } as any));
+  return (r.output || "").includes("DOCKER_READY");
+}
 
 function generatePassword(): string {
   const raw = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
@@ -157,21 +191,32 @@ export async function ensureEngine(projectId: string, engine: DbEngine): Promise
   await ensureProjectSandbox(projectId);
   const workspaceId = `env-${projectId}`;
 
+  // Docker-backed engines (SQL Server) need dockerd up first.
+  if (engine === "mssql") {
+    const dockerOk = await ensureDocker(projectId);
+    if (!dockerOk) throw new Error("Docker could not be started in the sandbox (needed for SQL Server)");
+  }
+
   const [row] = await db.select().from(projectDatabases).where(and(eq(projectDatabases.projectId, projectId), eq(projectDatabases.engine, engine)));
   const password = row?.passwordEncrypted ? decryptSecret(row.passwordEncrypted) : generatePassword();
 
   // Run the idempotent bring-up in the background; poll a marker (avoids the
-  // exec socket timeout on apk install / init).
-  const logf = `/root/bringup-${engine}.log`;
-  const scriptf = `/root/bringup-${engine}.sh`;
+  // exec socket timeout on apk install / init / image pull).
+  const logf = `/data/bringup-${engine}.log`;
+  const scriptf = `/data/bringup-${engine}.sh`;
   await execOnWorkspace(workspaceId, `cat > ${scriptf} <<'EOSH'\n${spec.bringup(password)}\nEOSH\n: > ${logf}; nohup sh ${scriptf} >> ${logf} 2>&1 & echo launched`, { timeout: 60_000 });
 
+  // SQL Server pulls a ~1.5GB image on first run — allow much longer.
+  const maxPolls = engine === "mssql" ? 100 : 45; // ~13min / ~6min
   let ready = false;
-  for (let i = 0; i < 24; i++) {
+  for (let i = 0; i < maxPolls; i++) {
     await sleep(8000);
     const r = await execOnWorkspace(workspaceId, `tail -1 ${logf} 2>/dev/null`, { timeout: 40_000 }).catch(() => ({ output: "" } as any));
     if ((r.output || "").includes("ENGINE_READY")) { ready = true; break; }
-    if ((r.output || "").includes("ENGINE_ERROR")) throw new Error(`${engine} bring-up failed`);
+    if ((r.output || "").includes("ENGINE_ERROR")) {
+      const log = await execOnWorkspace(workspaceId, `tail -8 ${logf} 2>/dev/null`, { timeout: 20_000 }).catch(() => ({ output: "" } as any));
+      throw new Error(`${engine} bring-up failed: ${(log.output || "").slice(-300)}`);
+    }
   }
   if (!ready) throw new Error(`${engine} bring-up timed out`);
 

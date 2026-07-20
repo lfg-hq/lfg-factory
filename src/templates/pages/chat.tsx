@@ -214,7 +214,10 @@ export function ChatPage({
                 <h3 style="color:var(--text-color,#e2e8f0);margin:0;font-size:16px;font-weight:600;">Preview</h3>
                 <span id="preview-substatus" style="color:var(--text-secondary,#9ca3af);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Loading…</span>
               </div>
-              <div id="preview-actions" style="display:flex;gap:8px;align-items:center;"></div>
+              <div style="display:flex;gap:8px;align-items:center;">
+                <button id="preview-plan-btn" style="padding:7px 14px;border-radius:6px;cursor:pointer;font-size:13px;display:inline-flex;align-items:center;gap:6px;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);"><i class="fas fa-list-check"></i>Plan</button>
+                <div id="preview-actions" style="display:flex;gap:8px;align-items:center;"></div>
+              </div>
             </div>
             <div id="preview-body" style="flex:1;min-height:0;position:relative;overflow:hidden;">
               <!-- states rendered by preview-tab.js -->
