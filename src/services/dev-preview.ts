@@ -219,7 +219,14 @@ async function writeEnvFile(workspaceId: string, projectId: string, manifest: Pr
   // stack-specific is only added when that stack is actually detected.
   const runtime = (manifest.runtime || "").toLowerCase();
   const framework = (manifest.framework || "").toLowerCase();
-  const vars: Record<string, string> = { PORT: String(port), HOST: "0.0.0.0" };
+  // Route every package/build cache onto the big persistent /data volume so
+  // restores (NuGet can be GBs) survive restart and don't fill the 1.9GB root.
+  const vars: Record<string, string> = {
+    PORT: String(port), HOST: "0.0.0.0",
+    NUGET_PACKAGES: "/data/.nuget", DOTNET_CLI_HOME: "/data/.dotnet",
+    npm_config_cache: "/data/.npm-cache", PIP_CACHE_DIR: "/data/.pip-cache",
+    GOPATH: "/data/go", COMPOSER_CACHE_DIR: "/data/.composer",
+  };
   if (runtime.includes("dotnet") || framework.includes("dotnet") || framework.includes("asp")) {
     vars.ASPNETCORE_URLS = `http://0.0.0.0:${port}`;
   }

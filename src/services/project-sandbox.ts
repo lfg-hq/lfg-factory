@@ -99,15 +99,19 @@ docker logs mssql 2>&1 | grep -q "SQL Server is now ready for client connections
  *  Best-effort; images + data live on the big /data volume. */
 export async function ensureDocker(projectId: string): Promise<boolean> {
   const workspaceId = `env-${projectId}`;
-  // Alpine ships Docker as an OpenRC service — `rc-service docker start` does all
-  // the cgroup/mount setup (raw dockerd doesn't). Verified live in the sandbox.
+  // Alpine ships Docker as an OpenRC service — `rc-service docker start` does the
+  // cgroup/mount setup (raw dockerd doesn't). Pin data-root to /data/docker so
+  // images (SQL Server ~1.5GB) live on the big persistent volume, NOT the 1.9GB
+  // root. If Docker is already up on the wrong root, restart it to pick up /data.
   const script = `
 command -v docker >/dev/null 2>&1 || apk add --no-cache docker >/dev/null 2>&1 || true
-if docker info >/dev/null 2>&1; then echo DOCKER_READY; exit 0; fi
+mkdir -p /data/docker /etc/docker
+printf '{"data-root":"/data/docker"}\\n' > /etc/docker/daemon.json
 rc-update add docker boot >/dev/null 2>&1 || true
-rc-service docker start >/dev/null 2>&1 || true
-for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
-docker info >/dev/null 2>&1 && echo DOCKER_READY || { echo "--- docker log ---"; tail -5 /var/log/docker.log 2>/dev/null; echo DOCKER_FAIL; }`;
+if docker info 2>/dev/null | grep -q "Docker Root Dir: /data/docker"; then echo DOCKER_READY; exit 0; fi
+if docker info >/dev/null 2>&1; then rc-service docker restart >/dev/null 2>&1 || true; else rc-service docker start >/dev/null 2>&1 || true; fi
+for i in $(seq 1 30); do docker info 2>/dev/null | grep -q "Docker Root Dir: /data/docker" && break; sleep 2; done
+docker info 2>/dev/null | grep -q "Docker Root Dir: /data/docker" && echo DOCKER_READY || { echo "--- docker log ---"; tail -5 /var/log/docker.log 2>/dev/null; echo DOCKER_FAIL; }`;
   const b64 = Buffer.from(script).toString("base64");
   const r = await execOnWorkspace(workspaceId, `echo ${b64} | base64 -d | sh`, { timeout: 150_000 }).catch(() => ({ output: "" } as any));
   return (r.output || "").includes("DOCKER_READY");
