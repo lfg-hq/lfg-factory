@@ -29,6 +29,8 @@
   let bBase = null;      // preview URL the browser was mounted for
   let bSeq = 0;
   let proxyMode = false; // in-app links via the same-origin proxy (may break WS/SignalR)
+  let device = "desktop"; // desktop | tablet | mobile viewport
+  const DEVICE_W = { mobile: 390, tablet: 834, desktop: 0 };
 
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -101,6 +103,11 @@
           <button data-bx="fwd" title="Forward" style="${navBtn()}"><i class="fas fa-arrow-right"></i></button>
           <button data-bx="reload" title="Reload page" style="${navBtn()}"><i class="fas fa-rotate-right"></i></button>
           <input id="pv-addr" spellcheck="false" style="flex:1;min-width:0;padding:7px 12px;border-radius:8px;border:1px solid var(--border-color,#2a2a2a);background:var(--background-surface,#141414);color:var(--text-color,#e2e8f0);font-size:12.5px;font-family:ui-monospace,Menlo,monospace;" />
+          <div style="display:flex;gap:2px;flex:none;">
+            <button data-dev="desktop" title="Desktop view" style="${navBtn()}"><i class="fas fa-desktop"></i></button>
+            <button data-dev="tablet" title="Tablet view (834px)" style="${navBtn()}"><i class="fas fa-tablet-screen-button"></i></button>
+            <button data-dev="mobile" title="Mobile view (390px)" style="${navBtn()}"><i class="fas fa-mobile-screen-button"></i></button>
+          </div>
           <button id="pv-proxy" data-bx="proxy" title="Keep links inside this browser (in-app links). May break real-time features like SignalR/WebSockets." style="${navBtn()}"><i class="fas fa-link"></i></button>
           <button data-bx="external" title="Open in a real browser tab" style="${navBtn()}"><i class="fas fa-external-link-alt"></i></button>
         </div>
@@ -110,6 +117,7 @@
     const strip = document.getElementById("pv-tabstrip");
     const addr = document.getElementById("pv-addr");
     document.querySelectorAll("[data-bx]").forEach((el) => el.addEventListener("click", () => bxAction(el.getAttribute("data-bx"))));
+    document.querySelectorAll("[data-dev]").forEach((el) => el.addEventListener("click", () => { device = el.getAttribute("data-dev"); applyDevice(); }));
     strip?.addEventListener("click", onTabStripClick);
     addr?.addEventListener("keydown", (e) => { if (e.key === "Enter") navigate(bActive, addr.value.trim()); });
   }
@@ -123,6 +131,25 @@
   function updateProxyBtn() {
     const b = document.getElementById("pv-proxy");
     if (b) { b.style.background = proxyMode ? "#7c3aed" : "var(--border-color,#2a2a2a)"; b.style.color = proxyMode ? "#fff" : "var(--text-color,#e2e8f0)"; }
+  }
+  // Size the active iframe to the chosen device viewport (centered). Desktop = fill.
+  function applyDevice() {
+    const frames = document.getElementById("pv-frames");
+    if (frames) frames.style.background = device === "desktop" ? "#fff" : "var(--bg-color,#0f0f0f)";
+    const w = DEVICE_W[device];
+    for (const t of bTabs) {
+      const f = document.getElementById(`pv-frame-${t.id}`);
+      if (!f) continue;
+      const show = t.id === bActive ? "block" : "none";
+      f.style.cssText = w
+        ? `position:absolute;top:0;bottom:0;left:50%;transform:translateX(-50%);width:${w}px;height:100%;max-width:100%;border:0;background:#fff;box-shadow:0 0 0 1px var(--border-color,#2a2a2a);display:${show};`
+        : `position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff;display:${show};`;
+    }
+    document.querySelectorAll("[data-dev]").forEach((el) => {
+      const on = el.getAttribute("data-dev") === device;
+      el.style.background = on ? "#7c3aed" : "var(--border-color,#2a2a2a)";
+      el.style.color = on ? "#fff" : "var(--text-color,#e2e8f0)";
+    });
   }
   function renderTabs() {
     const strip = document.getElementById("pv-tabstrip");
@@ -147,16 +174,15 @@
         f.id = `pv-frame-${t.id}`;
         f.src = frameSrc(t.url);
         f.setAttribute("allow", "clipboard-read; clipboard-write");
-        f.style.cssText = "position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff;";
         frames.appendChild(f);
       }
-      f.style.display = t.id === bActive ? "block" : "none";
     }
     // Remove frames for closed tabs.
     Array.from(frames.querySelectorAll("iframe")).forEach((f) => {
       const id = Number(f.id.replace("pv-frame-", ""));
       if (!tabById(id)) f.remove();
     });
+    applyDevice();
   }
   function syncAddr() { const a = document.getElementById("pv-addr"); const t = tabById(bActive); if (a && t) a.value = t.url; }
   function normalizeUrl(u) {

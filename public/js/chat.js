@@ -646,8 +646,46 @@ document.addEventListener('DOMContentLoaded', () => {
                 }, 3000);
             }
         });
+
+        // ── Drag & drop upload ──
+        // Dropping a file anywhere in the chat area routes it through the SAME
+        // flow as the paperclip: set it into the file input and fire `change`.
+        const dropZone = document.querySelector('.chat-container') || document.getElementById('chat-messages');
+        if (dropZone) {
+            let dragDepth = 0;
+            const showOverlay = (on) => {
+                let ov = document.getElementById('chat-drop-overlay');
+                if (on) {
+                    if (!ov) {
+                        ov = document.createElement('div');
+                        ov.id = 'chat-drop-overlay';
+                        ov.textContent = 'Drop file to upload';
+                        ov.style.cssText = 'position:absolute;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;background:rgba(124,58,237,.10);border:2px dashed #7c3aed;border-radius:12px;color:#7c3aed;font-size:16px;font-weight:600;pointer-events:none;';
+                        const host = getComputedStyle(dropZone).position === 'static' ? (dropZone.style.position = 'relative', dropZone) : dropZone;
+                        host.appendChild(ov);
+                    }
+                } else if (ov) { ov.remove(); }
+            };
+            dropZone.addEventListener('dragenter', (e) => { e.preventDefault(); if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) { dragDepth++; showOverlay(true); } });
+            dropZone.addEventListener('dragover', (e) => { if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } });
+            dropZone.addEventListener('dragleave', (e) => { e.preventDefault(); dragDepth = Math.max(0, dragDepth - 1); if (dragDepth === 0) showOverlay(false); });
+            dropZone.addEventListener('drop', (e) => {
+                if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
+                e.preventDefault();
+                dragDepth = 0; showOverlay(false);
+                const file = e.dataTransfer.files[0];
+                try {
+                    const dt = new DataTransfer();
+                    dt.items.add(file);
+                    fileUploadInput.files = dt.files;
+                    fileUploadInput.dispatchEvent(new Event('change', { bubbles: true }));
+                } catch (err) {
+                    console.error('drop upload failed:', err);
+                }
+            });
+        }
     }
-    
+
     // Audio recording functionality
     const recordAudioBtn = document.getElementById('record-audio-btn');
     let mediaRecorder = null;
