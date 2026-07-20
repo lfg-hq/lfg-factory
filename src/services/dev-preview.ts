@@ -25,7 +25,7 @@ import { getModel, getProviderName, getProviderModel, DEFAULT_MODEL_KEY } from "
 import { decryptSecret } from "../utils/crypto.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { enableHttpAccess, execOnWorkspace, setStableUrl } from "./mags.ts";
-import { ensureProjectSandbox, ensureEngine, type DbEngine, type EngineHandle } from "./project-sandbox.ts";
+import { ensureProjectSandbox, ensureEngine, type EngineHandle } from "./project-sandbox.ts";
 import { startPiCli, streamPiToCompletion, isPiSupportedProvider } from "./pi-cli.ts";
 
 const PROJECT_DIR = "/data/project";
@@ -34,24 +34,38 @@ const DEFAULT_PORT = 8080; // fallback ONLY — the real port is decided by the 
 export type PreviewStatus =
   | "idle" | "detecting" | "provisioning" | "installing" | "seeding" | "starting" | "running" | "error" | "stopped";
 
-// ── Setup manifest (detected once, saved, editable, re-runnable) ─────────
+// ── Setup PLAN — produced by reading the actual codebase, then saved/editable.
+// This is the contract between the "analyze" phase and the "provision + run"
+// phases: it says exactly what toolchain, DBs (and how the app connects), schema
+// setup, and run command are needed. ────────────────────────────────────────
+const CONN_FORMATS = ["url", "dotnet-npgsql", "dotnet-mysql", "dotnet-sqlserver", "keyvalue"] as const;
+
 export const manifestSchema = z.object({
-  runtime: z.string().describe("e.g. node, python, ruby, dotnet, php, go"),
-  framework: z.string().describe("e.g. next, vite, django, rails, express, dotnet, laravel; '' if unknown"),
-  installCmd: z.string().describe("Command to install deps, e.g. 'npm install', 'pip install -r requirements.txt', 'bundle install'"),
-  buildCmd: z.string().describe("Build command if the app needs one before running (e.g. 'npm run build'); '' if none"),
-  runCmd: z.string().describe("Command to START the app in the FOREGROUND on `port` below, bound to 0.0.0.0 (ALL interfaces, NOT localhost) using whatever mechanism this framework provides (a --host/--port flag, a bind arg, or an env var it reads)."),
-  port: z.number().describe("The app's real port — DETECT it from the codebase, do not force a standard value. Determine it from however THIS stack declares its port: run scripts / framework config, docker-compose 'ports', Dockerfile EXPOSE, .env(.example), or the framework's documented default. Use the port this app actually listens on; THIS exact port is what gets exposed publicly."),
-  engines: z.array(z.enum(["postgres", "mysql", "redis"])).describe("Databases the app needs, inferred from deps/config. Empty if none."),
-  migrateCmd: z.string().describe("DB migration command if any (e.g. 'npx prisma migrate deploy', 'python manage.py migrate', 'bundle exec rails db:migrate'); '' if none"),
-  seedCmd: z.string().describe("Seed command if the repo has one (e.g. 'npx prisma db seed', 'python manage.py loaddata seed.json'); '' if none"),
+  stack: z.string().describe("Human summary incl. versions, e.g. '.NET 8 / ASP.NET Core, multi-project solution' or 'Next.js 14 + Prisma'."),
+  runtime: z.string().describe("e.g. dotnet, node, python, ruby, php, go"),
+  framework: z.string().describe("e.g. aspnet-core, next, vite, django, rails, express, laravel; '' if unknown"),
+  toolchain: z.array(z.string()).describe("Commands to install the language/runtime toolchain IN ORDER, e.g. ['apk add --no-cache dotnet8-sdk'] or ['apk add --no-cache nodejs npm']. [] if the base image already has it."),
+  installCmd: z.string().describe("Install the app's libraries/deps: npm ci / dotnet restore <Solution.sln> / pip install -r requirements.txt / uv sync / bundle install / composer install. '' if none."),
+  buildCmd: z.string().describe("Compile/build step needed BEFORE running (compiled stacks): 'dotnet build <sln> -c Release', 'npm run build', 'go build'. '' if none."),
+  startupProject: z.string().describe("For a multi-project solution, the WEB/entry project to actually run (e.g. 'Cohire.Web' — the one referencing an ASP.NET Core / web SDK). '' for single-project apps."),
+  runCmd: z.string().describe("Command to START the app in the FOREGROUND on `port`, bound to 0.0.0.0. Use the startup project — e.g. 'dotnet run --project Cohire.Web --urls http://0.0.0.0:5000', 'python manage.py runserver 0.0.0.0:8000', 'npm start'."),
+  port: z.number().describe("The app's real port, detected from the codebase (launchSettings/appsettings, run scripts, docker-compose, framework default). This exact port is exposed publicly."),
+  databases: z.array(z.object({
+    engine: z.enum(["postgres", "mysql", "redis"]).describe("The DB engine to provision. If the app uses SQL Server, pick the closest supported engine and say so in `stack`; otherwise use the app's real engine."),
+    connectionEnvVar: z.string().describe("The EXACT env var / .NET config key the app reads its connection from. ASP.NET Core with appsettings ConnectionStrings:DefaultConnection → 'ConnectionStrings__DefaultConnection'. Rails/Node/Django with a URL → 'DATABASE_URL'. Redis → 'REDIS_URL'."),
+    connectionFormat: z.enum(CONN_FORMATS).describe("How to FORMAT the connection string for that var: 'url' = scheme://user:pw@host:port/db (Node/Python/Rails/Prisma); 'dotnet-npgsql' = 'Host=..;Port=..;Database=..;Username=..;Password=..' (.NET+Postgres); 'dotnet-mysql' = 'Server=..;Port=..;Database=..;Uid=..;Pwd=..'; 'dotnet-sqlserver'; 'keyvalue' generic."),
+  })).describe("Every database the app connects to AND how it connects — read appsettings*.json ConnectionStrings, docker-compose services, ORM config (Prisma/EF/TypeORM/SQLAlchemy), DATABASE_URL in .env.example. [] if none."),
+  migrations: z.array(z.string()).describe("Commands to create/apply the schema IN ORDER, e.g. ['dotnet ef database update --project Cohire.Core'], ['npx prisma migrate deploy'], ['python manage.py migrate']. [] if none."),
+  sqlScripts: z.array(z.string()).describe("Raw .sql files the repo ships to build/seed the schema, as paths relative to the repo, IN THE ORDER they must run (e.g. ['Sql Scripts/01_schema.sql','Sql Scripts/02_seed.sql']). [] if none."),
+  seedCmd: z.string().describe("Seed command if separate from migrations (e.g. 'npm run seed', 'python manage.py loaddata seed.json'). '' if none."),
   envVars: z.array(z.object({
     key: z.string(),
     required: z.boolean(),
     description: z.string().describe("what this var is / where to get it"),
-  })).describe("Env vars the app needs (from .env.example / config). EXCLUDE DB connection vars — those are auto-provisioned."),
+  })).describe("OTHER env/config the app needs (API keys, feature flags) BEYOND database connections. EXCLUDE the DB connection vars above."),
 });
 export type PreviewManifest = z.infer<typeof manifestSchema>;
+type PlannedDb = PreviewManifest["databases"][number];
 
 // ── Small helpers ────────────────────────────────────────────────────────
 async function sh(workspaceId: string, script: string, timeout = 180_000): Promise<{ output: string; exitCode: number }> {
@@ -107,26 +121,30 @@ function plog(projectId: string, userId: string, line: string, opts?: { level?: 
 
 function resetLog(projectId: string) { logBuffers.set(projectId, ""); }
 
-// ── Stack detection → manifest ─────────────────────────────────────────────
+// ── Analyze: read the ACTUAL codebase (not a shallow fingerprint) so the plan
+// knows the real DB, connection config, versions, schema scripts, and — for
+// multi-project solutions — the entry project. ──────────────────────────────
 async function gatherFingerprint(workspaceId: string): Promise<string> {
   const script = `
 cd ${PROJECT_DIR} 2>/dev/null || exit 0
-echo "=== FILES ==="; ls -a1 | head -60
-echo "=== package.json ==="; head -c 4000 package.json 2>/dev/null
-echo "=== requirements.txt ==="; head -c 1500 requirements.txt 2>/dev/null
-echo "=== pyproject.toml ==="; head -c 1500 pyproject.toml 2>/dev/null
-echo "=== manage.py ==="; test -f manage.py && echo present
-echo "=== Gemfile ==="; head -c 1500 Gemfile 2>/dev/null
-echo "=== composer.json ==="; head -c 1500 composer.json 2>/dev/null
-echo "=== go.mod ==="; head -c 800 go.mod 2>/dev/null
-echo "=== csproj ==="; ls *.csproj **/*.csproj 2>/dev/null | head
-echo "=== docker-compose ==="; head -c 2500 docker-compose.yml 2>/dev/null; head -c 2500 docker-compose.yaml 2>/dev/null
-echo "=== .env.example ==="; head -c 2500 .env.example 2>/dev/null; head -c 2500 .env.sample 2>/dev/null
-echo "=== prisma ==="; head -c 1500 prisma/schema.prisma 2>/dev/null
-echo "=== migrations dirs ==="; ls -d */migrations migrations db/migrate 2>/dev/null | head
+echo "=== TREE (2 levels) ==="; find . -maxdepth 2 -not -path '*/.git/*' -not -path '*/node_modules/*' | head -120
+echo "=== .NET: solution ==="; cat *.sln 2>/dev/null | head -c 3000
+echo "=== .NET: csproj files (full) ==="; for f in $(find . -maxdepth 3 -name '*.csproj' 2>/dev/null | head -12); do echo "--- $f"; cat "$f" 2>/dev/null | head -c 2000; done
+echo "=== .NET: appsettings (CONNECTION STRINGS live here) ==="; for f in $(find . -maxdepth 3 -iname 'appsettings*.json' 2>/dev/null | head -8); do echo "--- $f"; cat "$f" 2>/dev/null | head -c 2500; done
+echo "=== .NET: launchSettings ==="; for f in $(find . -maxdepth 4 -iname 'launchSettings.json' 2>/dev/null | head -4); do echo "--- $f"; cat "$f" 2>/dev/null | head -c 1500; done
+echo "=== .NET/other: global.json / Dockerfile ==="; cat global.json 2>/dev/null | head -c 600; head -c 1500 Dockerfile 2>/dev/null
+echo "=== node: package.json ==="; cat package.json 2>/dev/null | head -c 4000
+echo "=== python: requirements/pyproject ==="; head -c 2000 requirements.txt 2>/dev/null; head -c 2000 pyproject.toml 2>/dev/null; test -f manage.py && echo '[django manage.py present]'
+echo "=== ruby/php/go ==="; head -c 1500 Gemfile 2>/dev/null; head -c 1500 composer.json 2>/dev/null; head -c 800 go.mod 2>/dev/null
+echo "=== docker-compose (declares DB services) ==="; head -c 3000 docker-compose.yml 2>/dev/null; head -c 3000 docker-compose.yaml 2>/dev/null
+echo "=== ORM config ==="; head -c 2000 prisma/schema.prisma 2>/dev/null; find . -maxdepth 3 -iname 'ormconfig*' -o -maxdepth 3 -iname 'knexfile*' 2>/dev/null | head
+echo "=== SQL scripts shipped in the repo (schema/seed) ==="; find . -maxdepth 3 -iname '*.sql' -not -path '*/node_modules/*' 2>/dev/null | head -40
+echo "=== migration dirs ==="; find . -maxdepth 3 -type d \\( -iname 'migrations' -o -iname 'migrate' \\) 2>/dev/null | head
+echo "=== .env example ==="; head -c 2500 .env.example 2>/dev/null; head -c 2500 .env.sample 2>/dev/null
+echo "=== README setup ==="; head -c 2500 README.md 2>/dev/null; head -c 1500 README* 2>/dev/null
 `.trim();
-  const { output } = await sh(workspaceId, script, 60_000);
-  return output.slice(0, 12_000);
+  const { output } = await sh(workspaceId, script, 90_000);
+  return output.slice(0, 24_000);
 }
 
 /** Detect (or re-detect) the setup manifest. Merges project custom overrides. */
@@ -140,16 +158,20 @@ export async function detectManifest(projectId: string): Promise<PreviewManifest
   const { object } = await generateObject({
     model,
     schema: manifestSchema,
-    prompt: `You are the build engineer configuring how to RUN this repository inside a Linux sandbox so a developer can preview it live. YOU decide the whole run config from the codebase — the stack, the commands, the databases, and the PORT. Do not assume anything; read the fingerprint.
+    prompt: `You are a senior build engineer preparing a SETUP PLAN to run this EXISTING repository inside a fresh Alpine Linux sandbox so a developer can preview it live. You have a full read of the codebase below (solution/project files, appsettings, docker-compose, ORM config, SQL scripts, env examples, README). Produce a COMPLETE, concrete plan — everything needed to get this specific app serving HTTP. Do NOT be vague; do NOT assume; base every field on what the code actually shows.
 
-Decide:
-- port: the app's real port — detect it from however THIS stack declares its port (run scripts, framework config, docker-compose 'ports', Dockerfile EXPOSE, .env(.example), or the framework's documented default). Do NOT force a standard number. Whatever port you return is exactly the port we expose publicly.
-- runCmd: start the app in the foreground on that port, bound to 0.0.0.0 (all interfaces — a localhost-only bind is NOT reachable by the proxy), using the stack's own flag/env mechanism.
-- installCmd / buildCmd / migrateCmd / seedCmd: the correct commands for the detected stack. '' when a step doesn't apply.
-- engines: only DBs the app truly needs (deps like pg/psycopg/mysql/mysql2/redis/ioredis, prisma provider, docker-compose services, DATABASE_URL scheme in .env.example). Postgres/MySQL/Redis only.
-- envVars: real external config (API keys, feature flags) from .env(.example). EXCLUDE DATABASE_URL, REDIS_URL, DB_*, PG* — those are auto-provisioned and injected.
+Work out and fill in:
+- stack / runtime / framework / versions — read .csproj <TargetFramework>, global.json, package.json engines, etc.
+- toolchain — exact apk/install commands to get the language + runtime (e.g. ['apk add --no-cache dotnet8-sdk'], ['apk add --no-cache nodejs npm'], ['apk add --no-cache python3 py3-pip']). [] only if truly preinstalled.
+- installCmd — restore the app's libraries (dotnet restore <the .sln you saw>, npm ci, pip install -r requirements.txt, uv sync, bundle install, composer install).
+- buildCmd — for COMPILED stacks, the build BEFORE running (dotnet build <sln> -c Release). '' for interpreted stacks.
+- startupProject + runCmd + port — for a MULTI-PROJECT solution, identify the WEB entry project (the .csproj referencing Microsoft.NET.Sdk.Web / ASP.NET Core) and run THAT (e.g. 'dotnet run --project Cohire.Web --urls http://0.0.0.0:<port>'). Detect the real port from launchSettings/appsettings/config. Bind 0.0.0.0.
+- databases — CRITICAL: find EVERY database the app connects to and HOW. Look at appsettings*.json "ConnectionStrings" (the .NET connection lives there, NOT in .env), docker-compose db services, ORM configs, DATABASE_URL in .env.example. For each: the engine to provision (postgres/mysql/redis; if the app targets SQL Server, choose postgres and note it in 'stack'), the EXACT env var/config key the app reads (e.g. 'ConnectionStrings__DefaultConnection', 'DATABASE_URL', 'REDIS_URL'), and the connectionFormat (.NET → 'dotnet-npgsql'/'dotnet-mysql'; URL-based stacks → 'url'). We will provision the DB and inject the string into that exact var.
+- migrations — commands to create the schema (EF: 'dotnet ef database update --project <proj>'; Prisma/Django/Rails equivalents). []
+- sqlScripts — if the repo ships .sql schema/seed files (e.g. a "Sql Scripts" folder), list their paths IN RUN ORDER so we apply them to the provisioned DB. []
+- seedCmd / envVars — any other seed step / real external config (API keys) the app needs. EXCLUDE the DB connection vars (handled above).
 
-Repo fingerprint:
+Full codebase read:
 ${fingerprint}`,
   });
 
@@ -164,14 +186,23 @@ ${fingerprint}`,
 }
 
 // ── Env file ───────────────────────────────────────────────────────────────
-function engineEnv(engine: DbEngine, h: { connectionString: string; host: string; port: number; dbName: string; username: string; password: string }): Record<string, string> {
-  if (engine === "redis") return { REDIS_URL: h.connectionString };
-  // primary SQL engine
-  return {
-    DATABASE_URL: h.connectionString,
-    DB_HOST: h.host, DB_PORT: String(h.port), DB_NAME: h.dbName, DB_USER: h.username, DB_PASSWORD: h.password,
-    ...(engine === "postgres" ? { PGHOST: h.host, PGPORT: String(h.port), PGDATABASE: h.dbName, PGUSER: h.username, PGPASSWORD: h.password } : {}),
-  };
+/** Format a provisioned DB connection the way the app expects to read it. */
+function formatConnection(db: PlannedDb, h: EngineHandle): string {
+  const { host, port, dbName, username, password, engine } = h;
+  switch (db.connectionFormat) {
+    case "dotnet-npgsql":
+      return `Host=${host};Port=${port};Database=${dbName};Username=${username};Password=${password}`;
+    case "dotnet-mysql":
+      return `Server=${host};Port=${port};Database=${dbName};Uid=${username};Pwd=${password}`;
+    case "dotnet-sqlserver":
+      return `Server=${host},${port};Database=${dbName};User Id=${username};Password=${password};TrustServerCertificate=True`;
+    case "keyvalue":
+      return `Host=${host};Port=${port};Database=${dbName};Username=${username};Password=${password}`;
+    case "url":
+    default:
+      if (engine === "redis") return `redis://${username}:${password}@${host}:${port}`;
+      return `${engine === "mysql" ? "mysql" : "postgresql"}://${username}:${password}@${host}:${port}/${dbName}`;
+  }
 }
 
 async function writeEnvFile(workspaceId: string, projectId: string, manifest: PreviewManifest, provisioned: Record<string, string>) {
@@ -192,8 +223,10 @@ async function writeEnvFile(workspaceId: string, projectId: string, manifest: Pr
     if (!v.hasValue) continue;
     try { vars[v.key] = decryptSecret(v.encryptedValue); } catch { /* skip unreadable */ }
   }
+  // Always double-quote (values like .NET connection strings contain ';', spaces,
+  // '=' — which break `set -a; . ./.env` sourcing if unquoted). Escape ", \, $, `.
   const body = Object.entries(vars)
-    .map(([k, val]) => `${k}=${/[\s"'#]/.test(val) ? JSON.stringify(val) : val}`)
+    .map(([k, val]) => `${k}="${String(val).replace(/(["\\$`])/g, "\\$1")}"`)
     .join("\n");
   const b64 = Buffer.from(body).toString("base64");
   await sh(workspaceId, `cd ${PROJECT_DIR} && echo ${b64} | base64 -d > .env && echo WROTE_ENV`, 30_000);
@@ -251,33 +284,49 @@ async function resolveAgentModel(userId: string): Promise<{ provider: string; mo
 function buildRunPrompt(manifest: PreviewManifest, engines: EngineHandle[], round: number, prevTail?: string): string {
   const port = manifest.port;
   const dbLines = engines.length
-    ? engines.map((e) => `  - ${e.engine} on 127.0.0.1:${e.port} (db "${e.dbName}", user "${e.username}") — connection string in .env`).join("\n")
+    ? manifest.databases.map((d, i) => `  - ${d.engine} on 127.0.0.1:${engines[i]?.port ?? "?"} (db "${engines[i]?.dbName ?? "app"}") — connection string ALREADY in .env as ${d.connectionEnvVar}`).join("\n")
     : "  - none";
-  const hint = (label: string, v: string) => (v ? `  - ${label}: \`${v}\`` : "");
+  const list = (label: string, items: string[]) => items.length ? `- ${label}:\n${items.map((s) => `    • ${s}`).join("\n")}` : "";
+  const one = (label: string, v: string) => (v ? `- ${label}: \`${v}\`` : "");
+
+  // The PLAN, produced by reading the codebase — the exact steps to run this app.
+  const plan = [
+    `- stack: ${manifest.stack || `${manifest.runtime}/${manifest.framework}`}`,
+    list("toolchain (install these first if missing)", manifest.toolchain || []),
+    one("install libraries", manifest.installCmd),
+    one("build (do this BEFORE running — compiled stacks)", manifest.buildCmd),
+    manifest.startupProject ? `- startup project (multi-project solution — run THIS one): ${manifest.startupProject}` : "",
+    list("apply DB migrations (schema)", manifest.migrations || []),
+    list("apply these SQL script files to the DB in order", manifest.sqlScripts || []),
+    one("seed", manifest.seedCmd),
+    one("run (foreground, bind 0.0.0.0)", manifest.runCmd),
+    `- port: ${port}`,
+  ].filter(Boolean).join("\n");
 
   const continuation = round > 1
-    ? `\n⚠️ THIS IS RETRY #${round}. A previous attempt did NOT get the app serving on port ${port} — but its work is still here (installed SDKs/toolchains, restored packages, node_modules all persist in this sandbox). DO NOT start over from scratch; pick up where it left off. First check what's already there and whether anything is listening (\`curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${port}/ ; ls ${PROJECT_DIR}\`), read ${PROJECT_DIR}/preview.log, then continue.${prevTail ? `\nTail of the previous attempt:\n${prevTail.slice(-1200)}` : ""}\n`
+    ? `\n⚠️ THIS IS RETRY #${round}. A previous attempt did NOT get the app serving on port ${port} — but its work is still here (installed SDKs/toolchains, restored packages all persist in this sandbox). DO NOT start over; pick up where it left off. First check what's already there and whether anything is listening (\`curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:${port}/ ; ls ${PROJECT_DIR}\`), read ${PROJECT_DIR}/preview.log, then continue.${prevTail ? `\nTail of the previous attempt:\n${prevTail.slice(-1200)}` : ""}\n`
     : "";
 
-  return `You are getting an EXISTING application RUNNING inside a Linux sandbox so it can be previewed live in a browser. Work in ${PROJECT_DIR}.
+  return `You are getting an EXISTING application RUNNING inside an Alpine Linux sandbox so it can be previewed live in a browser. Work in ${PROJECT_DIR}.
 ${continuation}
 Context:
 - The repo is already cloned at ${PROJECT_DIR}.
-- A .env file already exists there with database credentials and PORT/HOST — load and use it (\`set -a; . ./.env; set +a\`).
-- Databases are already installed and RUNNING locally (do not install or start any database):
+- A .env file already exists with PORT/HOST and every DB connection string — ALWAYS load it before running commands (\`set -a; . ./.env; set +a\`).
+- These databases are ALREADY installed + running locally (do NOT install or start any database) — their connection strings are already in .env under the env var named:
 ${dbLines}
-- Detected stack is only a HINT — verify against the actual code: runtime=${manifest.runtime || "?"}, framework=${manifest.framework || "?"}.
-${[hint("install", manifest.installCmd), hint("build", manifest.buildCmd), hint("migrate", manifest.migrateCmd), hint("seed", manifest.seedCmd), hint("run", manifest.runCmd)].filter(Boolean).join("\n")}
+
+SETUP PLAN (prepared by analyzing this codebase — follow it; it may need small corrections, verify against the real files):
+${plan}
 
 GOAL: the app must be serving HTTP on 0.0.0.0:${port} and actually respond.
 
 Steps:
-1. Install the toolchain + dependencies if not already done.
-2. For COMPILED stacks (.NET, Java, Go, Rust): restore → BUILD → then run. Do the build BEFORE trying to run. For a multi-project solution, find the WEB/startup project (the one referencing ASP.NET Core / a web SDK) and run THAT specific project, not the whole solution.
-3. Run DB migrations and seed data if the app has them (creds are already in .env).
-4. Start the app in the BACKGROUND, bound to host 0.0.0.0 on port ${port}, DETACHED so it keeps running after your command returns — e.g. \`setsid sh -c 'set -a; . ./.env; set +a; export PORT=${port} HOST=0.0.0.0; <run command>' </dev/null > ${PROJECT_DIR}/preview.log 2>&1 &\`.
-5. VERIFY BY ACTUALLY REQUESTING THE APP over localhost and INSPECTING THE RESPONSE — do not assume: \`curl -sS -i http://127.0.0.1:${port}/\`. It is working ONLY if you get a real HTTP response with a 2xx/3xx status AND actual page content. It is NOT working if you get connection refused (000), a 5xx server error, or an error/stack-trace page — in that case keep diagnosing and fixing.
-6. If it is not up: read ${PROJECT_DIR}/preview.log and the build output, DIAGNOSE (missing dep, wrong build step, missing env var, DB not migrated, needs a production build first, wrong host/port, wrong startup project), FIX THE ENVIRONMENT, and RETRY. Iterate until it responds.
+1. Run the toolchain installs, then install libraries.
+2. For COMPILED stacks, BUILD before running. For a multi-project solution, run the startup project named above.
+3. Apply the DB migrations / SQL scripts / seed from the plan (the DB connection is already in .env — for a raw .sql file use the matching client, e.g. \`psql "$ConnectionEnvVar" -f file.sql\` or pipe into \`mysql\`).
+4. Start the app in the BACKGROUND, bound to 0.0.0.0 on port ${port}, DETACHED so it survives your shell — e.g. \`setsid sh -c 'set -a; . ./.env; set +a; <run command>' </dev/null > ${PROJECT_DIR}/preview.log 2>&1 &\`.
+5. VERIFY BY ACTUALLY REQUESTING THE APP and INSPECTING THE RESPONSE — do not assume: \`curl -sS -i http://127.0.0.1:${port}/\`. Working ONLY on a real 2xx/3xx response WITH actual content. connection-refused (000), 5xx, or an error/stack-trace page = NOT working → keep fixing.
+6. If not up: read ${PROJECT_DIR}/preview.log + the build output, DIAGNOSE (missing dep, wrong build step, missing env var, DB not migrated, wrong startup project), FIX THE ENVIRONMENT, and RETRY until it responds.
 
 CRITICAL RULES:
 - DO NOT MODIFY THE APPLICATION'S SOURCE CODE. This is a preview of the user's EXISTING repository. You MAY install tools/dependencies, set environment variables, pick the correct build/run command, and fix host/port binding — but you must NOT edit, create, or delete any application source file. If the app genuinely cannot run without a code change, do NOT change it: stop and report PREVIEW_FAILED with the exact code-level reason so the user can fix it.
@@ -411,34 +460,54 @@ fi`, 240_000);
 
     // 2. Detect (or reuse) the setup manifest.
     const existing = await getEnv(projectId);
-    let manifest: PreviewManifest;
+    let manifest: PreviewManifest | null = null;
+    // Reuse a saved plan only if it matches the CURRENT schema (old shallow plans
+    // lack databases/toolchain → re-analyze instead of crashing).
     if (!opts.rebuildManifest && existing?.setupManifest) {
-      manifest = JSON.parse(existing.setupManifest);
-      plog(projectId, userId, `Using saved config (${manifest.framework || manifest.runtime}, port ${manifest.port})`);
-    } else {
-      plog(projectId, userId, "Analyzing the codebase to work out how to run it…");
+      const parsed = manifestSchema.safeParse(JSON.parse(existing.setupManifest));
+      if (parsed.success) {
+        manifest = parsed.data;
+        plog(projectId, userId, `Using saved plan (${manifest.stack || manifest.runtime}, port ${manifest.port}, ${manifest.databases.length} db)`);
+      }
+    }
+    if (!manifest) {
+      plog(projectId, userId, "Analyzing the codebase to build a setup plan…");
       manifest = await detectManifest(projectId);
       await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
-      plog(projectId, userId, `Detected: ${manifest.runtime}${manifest.framework ? "/" + manifest.framework : ""}, port ${manifest.port}, databases: ${manifest.engines.length ? manifest.engines.join(", ") : "none"}`);
+      plog(projectId, userId, `Plan: ${manifest.stack || manifest.runtime}`, {
+        detail: [
+          manifest.startupProject && `run project: ${manifest.startupProject}`,
+          `port: ${manifest.port}`,
+          manifest.toolchain?.length && `toolchain: ${manifest.toolchain.join("; ")}`,
+          `install: ${manifest.installCmd || "(none)"}`,
+          manifest.buildCmd && `build: ${manifest.buildCmd}`,
+          `databases: ${manifest.databases.length ? manifest.databases.map((d) => `${d.engine}→${d.connectionEnvVar}`).join(", ") : "none"}`,
+          manifest.migrations?.length && `migrations: ${manifest.migrations.join("; ")}`,
+          manifest.sqlScripts?.length && `sql scripts: ${manifest.sqlScripts.join(", ")}`,
+          `run: ${manifest.runCmd}`,
+        ].filter(Boolean).join("\n"),
+      });
     }
 
-    // 3. Provision the DBs the app needs (keep the handles for the agent prompt).
+    // 3. Provision the DBs the plan calls for, and inject each connection string
+    // into the EXACT env var the app reads it from (per the plan).
     const provisioned: Record<string, string> = {};
     const engineHandles: EngineHandle[] = [];
-    if (manifest.engines.length) {
-      await setPreview(projectId, userId, { previewStatus: "provisioning" }, `Provisioning ${manifest.engines.join(", ")}…`);
-      for (const engine of manifest.engines) {
-        plog(projectId, userId, `Provisioning ${engine}…`);
-        const h = await ensureEngine(projectId, engine);
+    if (manifest.databases.length) {
+      await setPreview(projectId, userId, { previewStatus: "provisioning" }, `Provisioning ${manifest.databases.map((d) => d.engine).join(", ")}…`);
+      for (const dbSpec of manifest.databases) {
+        plog(projectId, userId, `Provisioning ${dbSpec.engine} → ${dbSpec.connectionEnvVar}…`);
+        const h = await ensureEngine(projectId, dbSpec.engine);
         engineHandles.push(h);
-        Object.assign(provisioned, engineEnv(engine, h));
-        plog(projectId, userId, `${engine} ready at 127.0.0.1:${h.port} (db "${h.dbName}") ✓`);
+        provisioned[dbSpec.connectionEnvVar] = formatConnection(dbSpec, h);
+        plog(projectId, userId, `${dbSpec.engine} ready at 127.0.0.1:${h.port} (db "${h.dbName}") → ${dbSpec.connectionEnvVar} ✓`);
       }
     }
 
-    // 4. Write env (provisioned creds + stored project vars).
+    // 4. Write env: the plan's DB connection vars + PORT/HOST(/ASPNETCORE_URLS) +
+    // stored project vars.
     await writeEnvFile(workspaceId, projectId, manifest, provisioned);
-    plog(projectId, userId, "Wrote .env (DB credentials + project env vars)");
+    plog(projectId, userId, `Wrote .env (${Object.keys(provisioned).length} DB connection var(s) + run config)`);
 
     // 5. Get the app running + VERIFIED. Preferred: an in-sandbox coding agent
     // (matches the project chat model) that installs, migrates/seeds, starts the
@@ -452,18 +521,27 @@ fi`, 240_000);
       up = await runViaAgent(projectId, userId, workspaceId, manifest, engineHandles, agent);
     } else {
       plog(projectId, userId, "No agent model available — using the deterministic runner.");
+      // toolchain
+      for (const t of manifest.toolchain || []) { plog(projectId, userId, `Toolchain: ${t}…`); await sh(workspaceId, `${t} >/dev/null 2>&1; echo done`, 300_000); }
       await setPreview(projectId, userId, { previewStatus: "installing" }, "Installing dependencies…");
       plog(projectId, userId, `Installing dependencies (${manifest.installCmd})…`);
       const inst = await sh(workspaceId, `
 export PATH=/root/node/current/bin:/root/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:$PATH
 export npm_config_cache=/data/.npm-cache NODE_OPTIONS="--max-old-space-size=1536"
-cd ${PROJECT_DIR} && ${manifest.installCmd} > install.log 2>&1; echo "INSTALL_EXIT=$?"; tail -4 install.log`, 480_000);
+cd ${PROJECT_DIR} && set -a; . ./.env 2>/dev/null; set +a; ${manifest.installCmd || "true"} > install.log 2>&1; echo "INSTALL_EXIT=$?"; tail -4 install.log`, 600_000);
       const instExit = (inst.output.match(/INSTALL_EXIT=(\d+)/) || [])[1];
       plog(projectId, userId, instExit === "0" ? "Dependencies installed ✓" : `Install exited ${instExit}`, instExit && instExit !== "0" ? { level: "error", detail: inst.output.slice(-500) } : undefined);
-      if (manifest.migrateCmd || manifest.seedCmd) {
-        await setPreview(projectId, userId, { previewStatus: "seeding" }, "Running migrations + seed…");
-        if (manifest.migrateCmd) { plog(projectId, userId, `Migrating (${manifest.migrateCmd})…`); await sh(workspaceId, `cd ${PROJECT_DIR} && set -a; . ./.env 2>/dev/null; set +a; ${manifest.migrateCmd} >> migrate.log 2>&1; echo done`, 300_000); }
-        if (manifest.seedCmd) { plog(projectId, userId, `Seeding (${manifest.seedCmd})…`); await sh(workspaceId, `cd ${PROJECT_DIR} && set -a; . ./.env 2>/dev/null; set +a; ${manifest.seedCmd} >> migrate.log 2>&1; echo done`, 300_000); }
+      if (manifest.buildCmd) { plog(projectId, userId, `Building (${manifest.buildCmd})…`); await sh(workspaceId, `cd ${PROJECT_DIR} && set -a; . ./.env 2>/dev/null; set +a; ${manifest.buildCmd} > build.log 2>&1; echo done`, 600_000); }
+      // Apply raw .sql scripts against the first provisioned SQL engine.
+      const sqlEngine = engineHandles.find((h) => h.engine === "postgres" || h.engine === "mysql");
+      const applySql = (f: string) => !sqlEngine ? `echo "no SQL engine for ${f}"`
+        : sqlEngine.engine === "postgres"
+          ? `PGPASSWORD='${sqlEngine.password}' psql -h 127.0.0.1 -p ${sqlEngine.port} -U ${sqlEngine.username} -d ${sqlEngine.dbName} -f '${f}'`
+          : `mysql -h 127.0.0.1 -P ${sqlEngine.port} -u ${sqlEngine.username} -p'${sqlEngine.password}' ${sqlEngine.dbName} < '${f}'`;
+      const schemaSteps = [...(manifest.migrations || []), ...(manifest.sqlScripts || []).map(applySql), ...(manifest.seedCmd ? [manifest.seedCmd] : [])];
+      if (schemaSteps.length) {
+        await setPreview(projectId, userId, { previewStatus: "seeding" }, "Applying schema + seed…");
+        for (const step of schemaSteps) { plog(projectId, userId, `Schema: ${step}…`); await sh(workspaceId, `cd ${PROJECT_DIR} && set -a; . ./.env 2>/dev/null; set +a; ${step} >> migrate.log 2>&1; echo done`, 300_000); }
       }
       await setPreview(projectId, userId, { previewStatus: "starting" }, "Starting the app…");
       plog(projectId, userId, `Starting the app (${manifest.runCmd})…`);
