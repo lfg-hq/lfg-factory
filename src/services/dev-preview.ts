@@ -354,7 +354,7 @@ HOW TO WORK:
 
 RULES:
 - Do NOT modify the application's SOURCE CODE. You may install tools/deps, set env, choose commands, fix host/port. If it genuinely needs a code change to run, call \`finish\` with status "failed" and the exact reason.
-- restore/build can take minutes — pass a generous timeoutSec (e.g. 600) on those \`run\` calls and WAIT; slow ≠ failed.
+- restore/build for a package-heavy solution can take 10-20 MINUTES on a cold cache — ALWAYS pass a large timeoutSec (e.g. 1500) on the \`dotnet restore\` / \`dotnet build\` / \`npm install\` calls and WAIT. Slow ≠ failed. The NuGet cache is on /data and persists, so a repeat restore is fast. If a restore times out, just re-run it with a bigger timeoutSec — it resumes from the cache.
 - When a command fails, read the real error and fix the ENVIRONMENT, then continue. Keep going until the app responds or it truly cannot run.
 - One command per \`run\` call. Never print secrets.`;
 }
@@ -378,7 +378,9 @@ async function driveSandbox(
         timeoutSec: z.number().optional().describe("Timeout in seconds (default 300, max 900). Use ~600 for restore/build."),
       })),
       execute: async ({ command, timeoutSec }: { command: string; timeoutSec?: number }) => {
-        const t = Math.min(Math.max(timeoutSec ?? 300, 10), 900) * 1000;
+        // Default 600s; allow up to 1800s (30min) for a cold restore/build of a
+        // package-heavy solution (ML.NET/Syncfusion/etc. can take 10-20min).
+        const t = Math.min(Math.max(timeoutSec ?? 600, 10), 1800) * 1000;
         plog(projectId, userId, `$ ${command}`);
         setPreview(projectId, userId, { previewStatus: "starting" }, `$ ${command.slice(0, 110)}`).catch(() => {});
         const full = `${envPrefix()}\n${command}`;

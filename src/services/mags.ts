@@ -23,11 +23,12 @@ export interface MagsExecResult {
   stderr: string;
 }
 
-function getClient() {
+function getClient(timeoutMs = 120_000) {
   const token = process.env.MAGS_API_TOKEN;
   if (!token) throw new Error("MAGS_API_TOKEN not set");
-  // timeout here is the HTTP socket timeout — must be > any exec command we run
-  return new MagsClient({ apiToken: token, timeout: 120_000 });
+  // HTTP socket timeout — MUST exceed the command's own timeout, else a long
+  // command (a big `dotnet restore`) is cut off at the socket, not the command.
+  return new MagsClient({ apiToken: token, timeout: timeoutMs });
 }
 
 /**
@@ -199,8 +200,10 @@ export async function execOnWorkspace(
   command: string,
   opts: { timeout?: number } = {}
 ): Promise<MagsExecResult> {
-  const client = getClient();
   const timeout = opts.timeout ?? 300_000; // 5 min default
+  // The HTTP socket must OUTLIVE the command, or a long restore/build is cut off
+  // at the socket (was hard-capped at 120s) instead of running to its timeout.
+  const client = getClient(timeout + 30_000);
 
   let lastError: Error | null = null;
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -212,17 +215,13 @@ export async function execOnWorkspace(
     } catch (err) {
       lastError = err as Error;
       const msg = (lastError.message ?? "").toLowerCase();
-      // Treat connection/SSH errors and timeouts as transient (VM may not have SSH ready yet)
-      if (
-        msg.includes("no running") ||
-        msg.includes("no vm") ||
-        msg.includes("connection refused") ||
-        msg.includes("ssh") ||
-        msg.includes("not running") ||
-        msg.includes("no job found") ||
-        msg.includes("timed out") ||
-        msg.includes("timeout")
-      ) {
+      // Retry ONLY genuine transient connection/SSH-not-ready errors. Do NOT retry
+      // a command timeout — the command ran its full budget; re-running a 10-min
+      // restore from scratch just wastes time. Let the caller see the timeout.
+      const transient = msg.includes("no running") || msg.includes("no vm") ||
+        msg.includes("connection refused") || msg.includes("ssh") ||
+        msg.includes("not running") || msg.includes("no job found");
+      if (transient) {
         console.log(`[mags] exec attempt ${attempt + 1} failed (${msg.slice(0, 80)}), retrying...`);
         continue;
       }
