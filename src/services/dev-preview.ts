@@ -113,7 +113,7 @@ function plog(projectId: string, userId: string, line: string, opts?: { level?: 
   const level = opts?.level ?? "info";
   let entry = `[${ts}] ${line}`;
   if (opts?.detail) entry += "\n" + opts.detail.split("\n").map((l) => "    " + l).join("\n");
-  const buf = ((logBuffers.get(projectId) ?? "") + entry + "\n").slice(-12_000); // keep last ~12KB
+  const buf = ((logBuffers.get(projectId) ?? "") + entry + "\n").slice(-80_000); // keep last ~80KB (full prompt + commands)
   logBuffers.set(projectId, buf);
   console.log(`[dev-preview] ${projectId.slice(0, 8)} ${level === "error" ? "ERROR " : ""}${line}${opts?.detail ? " :: " + opts.detail.replace(/\n/g, " ").slice(0, 300) : ""}`);
   broadcastToUser(userId, { type: "preview_log", projectId, line: entry, level });
@@ -372,6 +372,9 @@ async function runViaAgent(
   for (let round = 1; round <= MAX_AGENT_ROUNDS; round++) {
     if (round > 1) plog(projectId, userId, `Agent stopped before the app was up — resuming (attempt ${round}/${MAX_AGENT_ROUNDS})…`);
     const prompt = buildRunPrompt(manifest, engines, round, prevTail);
+    // Log the FULL prompt handed to the agent (so you can see/test exactly what
+    // it was told), not a snippet.
+    plog(projectId, userId, `── Agent prompt (attempt ${round}) ──`, { detail: prompt });
     const pi = await startPiCli({
       workspaceId,
       prompt,
@@ -386,9 +389,11 @@ async function runViaAgent(
       outputFile: pi.outputFile,
       backgroundPid: pi.backgroundPid,
       timeoutMs: 15 * 60_000,
+      progressMaxLen: 100_000, // log the FULL command the agent runs, not a cutoff
       onProgress: (m) => {
-        if (m && m !== lastLine) { lastLine = m; plog(projectId, userId, `agent: ${m}`); }
-        setPreview(projectId, userId, { previewStatus: "starting" }, m).catch(() => {});
+        if (m && m !== lastLine) { lastLine = m; plog(projectId, userId, `agent: ${m}`); } // full line → log
+        const head = m.length > 120 ? m.slice(0, 120) + "…" : m; // short line → header only
+        setPreview(projectId, userId, { previewStatus: "starting" }, head).catch(() => {});
       },
     });
     if (result.fatalError) plog(projectId, userId, `agent exited: ${result.fatalError}`, { level: "error" });

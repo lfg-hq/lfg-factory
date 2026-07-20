@@ -447,12 +447,12 @@ export function detectPiFatalError(allOutput: string): string | null {
  *   grep/find/glob/search → "Searching <pattern>"
  *   ls/list               → "Listing <path>"
  */
-export function describePiTool(name: string, args: Record<string, any> | undefined): string {
+export function describePiTool(name: string, args: Record<string, any> | undefined, maxLen = 90): string {
   const tool = name.toLowerCase();
   const path = args?.path ?? args?.file_path ?? args?.filePath;
   const cmd: string | undefined = args?.command ?? args?.cmd;
   const pattern = args?.pattern ?? args?.query ?? args?.regex;
-  const short = (s: string, n = 90) => (s.length > n ? s.slice(0, n) + "…" : s);
+  const short = (s: string, n = maxLen) => (s.length > n ? s.slice(0, n) + "…" : s);
 
   if (tool.includes("bash") || tool.includes("shell") || tool.includes("exec") || tool.includes("run")) {
     if (cmd) {
@@ -481,7 +481,8 @@ export function describePiTool(name: string, args: Record<string, any> | undefin
  * Pi uses: top-level toolName/name, or a tool_use block inside an assistant message)
  * and describe it; falling back to the latest assistant text.
  */
-export function extractPiProgress(data: string): string | null {
+export function extractPiProgress(data: string, maxLen = 90): string | null {
+  const textCap = maxLen >= 4000 ? maxLen : 160; // assistant-text cap scales too
   const lines = data.split("\n");
   for (let i = lines.length - 1; i >= 0; i--) {
     const trimmed = lines[i]!.trim();
@@ -496,7 +497,7 @@ export function extractPiProgress(data: string): string | null {
     // Shape 1: top-level tool call event.
     const topName = evt.toolName ?? evt.tool ?? evt.name;
     const topArgs = evt.input ?? evt.arguments ?? evt.args;
-    if (typeof topName === "string") return describePiTool(topName, topArgs);
+    if (typeof topName === "string") return describePiTool(topName, topArgs, maxLen);
 
     // Shape 2: tool_use block inside an assistant message's content array.
     const content = evt.message?.content;
@@ -504,16 +505,16 @@ export function extractPiProgress(data: string): string | null {
       for (let j = content.length - 1; j >= 0; j--) {
         const block = content[j];
         if (block && typeof block === "object" && /tool/.test(String(block.type)) && (block.name || block.toolName)) {
-          return describePiTool(String(block.name ?? block.toolName), block.input ?? block.arguments ?? block.args);
+          return describePiTool(String(block.name ?? block.toolName), block.input ?? block.arguments ?? block.args, maxLen);
         }
       }
       // Plain assistant text block.
       const textBlock = content.find((b: any) => b?.type === "text" && typeof b.text === "string" && b.text.trim());
-      if (textBlock) return `Agent: ${textBlock.text.trim().slice(0, 160)}`;
+      if (textBlock) return `Agent: ${textBlock.text.trim().slice(0, textCap)}`;
     }
 
     const text = evt.text ?? (typeof evt.content === "string" ? evt.content : undefined);
-    if (typeof text === "string" && text.trim()) return `Agent: ${text.trim().slice(0, 160)}`;
+    if (typeof text === "string" && text.trim()) return `Agent: ${text.trim().slice(0, textCap)}`;
   }
   return null;
 }
@@ -536,8 +537,11 @@ export async function streamPiToCompletion(params: {
   backgroundPid?: string;
   timeoutMs: number;
   onProgress?: (message: string) => void;
+  /** Max chars of a command/text surfaced per progress line. Default 90 (compact
+   *  UI); pass a large value to log the FULL command (e.g. dev-preview). */
+  progressMaxLen?: number;
 }): Promise<{ exitCode: number | null; fatalError: string | null; didWork: boolean; toolCalls: number; tail: string }> {
-  const { workspaceId, outputFile, backgroundPid, timeoutMs, onProgress } = params;
+  const { workspaceId, outputFile, backgroundPid, timeoutMs, onProgress, progressMaxLen = 90 } = params;
   const f = JSON.stringify(outputFile);
   // Install log shares the timestamp suffix (set in startPiCli) — derive it so the
   // final analysis can surface it if Pi produced nothing.
@@ -600,7 +604,7 @@ printf 'TL=%s\\n' "$TL"`;
       console.log(`[pi-cli] still building — ${Math.round((Date.now() - startedAt) / 1000)}s elapsed, alive=${alive}, done=${done}`);
     }
 
-    const progress = tail ? extractPiProgress(tail) : null;
+    const progress = tail ? extractPiProgress(tail, progressMaxLen) : null;
 
     // Stall detection: the same progress line repeating with nothing new.
     if (progress) {

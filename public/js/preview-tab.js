@@ -286,7 +286,7 @@
     },
     onLog(data) {
       if (!data || !data.line) return;
-      logText = (logText + data.line + "\n").slice(-16000);
+      logText = (logText + data.line + "\n").slice(-100000);
       // Append incrementally if the log panel is visible (preserve scroll pos).
       const el = $("preview-log");
       if (el) {
