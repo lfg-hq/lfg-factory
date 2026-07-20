@@ -1,6 +1,8 @@
-import { streamText, stepCountIs } from "ai";
+import { streamText, stepCountIs, generateText } from "ai";
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import { db } from "../config/db.ts";
-import { messages, conversations, modelSelections, agentRoles } from "../db/schema/chat.ts";
+import { messages, conversations, modelSelections, agentRoles, chatFiles } from "../db/schema/chat.ts";
 import { llmApiKeys } from "../db/schema/users.ts";
 import { projects } from "../db/schema/projects.ts";
 import { projectFiles } from "../db/schema/documents.ts";
@@ -128,7 +130,43 @@ export interface StreamRequest {
   turboMode?: boolean;
   instantMode?: boolean;
   userRole?: string;
+  file?: { id?: string; name?: string; type?: string; size?: number } | null;
   abortController: AbortController;
+}
+
+// Providers whose configured models can view images directly (multimodal).
+const VISION_NATIVE = new Set(["anthropic", "openai", "google"]);
+// A cheap/fast vision model per provider, used to describe an image for a
+// text-only model (DeepSeek's hosted API is text-only) — the "vision model
+// first, reasoning model second" pattern.
+const VISION_MODEL: Record<string, string> = {
+  openai: "gpt-5.6-luna", google: "gemini_2.5_flash_lite", anthropic: "claude_4.5_haiku",
+};
+
+/** Describe an image using whatever vision-capable key the user has. Returns the
+ *  text description, or null if no vision model is available / it fails. */
+async function analyzeImage(bytes: Uint8Array, mediaType: string, userApiKeys: any): Promise<string | null> {
+  for (const provider of ["openai", "google", "anthropic"]) {
+    if (!userApiKeys?.[provider]) continue;
+    try {
+      const model = getModel(VISION_MODEL[provider]!, userApiKeys, { allowEnvFallback: true });
+      const { text } = await generateText({
+        model,
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text", text: "Describe this screenshot/image in precise detail for another AI that CANNOT see it. Extract ALL visible text verbatim, name the page/section, describe the UI layout and any data, charts, errors, or code. Be factual — do not guess." },
+            { type: "image", image: bytes, mediaType },
+          ],
+        }],
+        maxOutputTokens: 1000,
+      });
+      return text?.trim() || null;
+    } catch (e) {
+      console.warn(`[vision] ${provider} describe failed:`, (e as Error).message?.slice(0, 120));
+    }
+  }
+  return null;
 }
 
 export async function handleStream(req: StreamRequest): Promise<{ conversationId: string }> {
@@ -245,6 +283,37 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
     const result = getModelWithSearch(DEFAULT_MODEL_KEY, undefined, { allowEnvFallback: true });
     model = result.model;
     searchTools = result.searchTools;
+  }
+
+  // ── 4b. Attach an uploaded IMAGE to the model turn ──────────────────────────
+  // Vision-native models (Claude/GPT/Gemini) get the image directly. Text-only
+  // models (DeepSeek's hosted API is text-only) can't view images, so we run a
+  // vision pre-pass with the user's vision key and feed DeepSeek the description.
+  const imgFile = req.file && (req.file.type || "").startsWith("image/") && req.file.id ? req.file : null;
+  if (imgFile) {
+    let bytes: Uint8Array | null = null;
+    try {
+      const [cf] = await db.select().from(chatFiles).where(eq(chatFiles.id, imgFile.id!));
+      if (cf?.filePath) bytes = new Uint8Array(await fs.readFile(path.resolve(cf.filePath)));
+    } catch (e) { console.warn(`[stream] could not read uploaded image:`, (e as Error).message?.slice(0, 120)); }
+
+    const setLastUser = (content: any) => {
+      for (let i = contextMessages.length - 1; i >= 0; i--) {
+        if (contextMessages[i].role === "user") { contextMessages[i] = { role: "user", content }; return; }
+      }
+    };
+    const providerName = getProviderName(modelKey);
+    if (bytes && providerName && VISION_NATIVE.has(providerName)) {
+      setLastUser([{ type: "text", text: userMessage }, { type: "image", image: bytes, mediaType: imgFile.type }]);
+    } else if (bytes) {
+      ws.send(JSON.stringify({ type: "ai_chunk", chunk: "", is_final: false, is_notification: true, notification_type: "status", message: "Analyzing image…" }));
+      const desc = await analyzeImage(bytes, imgFile.type || "image/png", userApiKeys);
+      if (desc) {
+        setLastUser(`${userMessage}\n\n[Attached image "${imgFile.name}". The current model can't view images, so here is a vision model's description of it — treat it as ground truth:\n\n${desc}]`);
+      } else {
+        setLastUser(`${userMessage}\n\n[The user attached an image "${imgFile.name}", but the selected model can't view images and no vision-capable key (OpenAI / Google / Anthropic) is configured. Tell them to add one in Settings → LLM Keys or switch to a vision model — do NOT guess what the image shows.]`);
+      }
+    }
   }
 
   // ── 5. Select system prompt & tools ─────────────────────────────────────────

@@ -142,6 +142,7 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
         turboMode: turbo_mode,
         instantMode: instant_mode,
         userRole: user_role,
+        file: resolvedFile,
         abortController: conn.abortController,
       });
 
