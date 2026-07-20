@@ -305,6 +305,137 @@ async function resolveDriverModel(userId: string) {
   }
 }
 
+// ── Checkpointed runbook ─────────────────────────────────────────────────────
+// The plan is compiled into an ORDERED list of commands (a runbook). We run them
+// one by one, log pass/fail against each, and PERSIST the statuses after every
+// step — so a restart resumes from the first not-done step instead of the top.
+export interface RunStep {
+  id: string;
+  phase: "toolchain" | "install" | "build" | "schema" | "run";
+  label: string;
+  command: string;
+  status: "pending" | "running" | "done" | "failed";
+  error?: string;
+  optional?: boolean; // schema steps: a failure is logged but doesn't block
+}
+
+/** Build the shell command that applies a raw .sql file to the provisioned DB. */
+function sqlApplyCommand(engines: EngineHandle[], file: string): string {
+  const f = `${PROJECT_DIR}/${file.replace(/"/g, '\\"')}`;
+  const ms = engines.find((e) => e.engine === "mssql");
+  const pg = engines.find((e) => e.engine === "postgres");
+  const my = engines.find((e) => e.engine === "mysql");
+  if (ms) return `cat "${f}" | docker exec -i mssql sh -c '/opt/mssql-tools18/bin/sqlcmd -S localhost -U ${ms.username} -P "${ms.password}" -C -d ${ms.dbName} -b || /opt/mssql-tools/bin/sqlcmd -S localhost -U ${ms.username} -P "${ms.password}" -d ${ms.dbName} -b'`;
+  if (pg) return `PGPASSWORD='${pg.password}' psql -h 127.0.0.1 -p ${pg.port} -U ${pg.username} -d ${pg.dbName} -v ON_ERROR_STOP=0 -f "${f}"`;
+  if (my) return `mysql -h 127.0.0.1 -P ${my.port} -u ${my.username} -p'${my.password}' ${my.dbName} < "${f}"`;
+  return `echo "no SQL engine provisioned to apply ${file}"`;
+}
+
+/** The detached app-start command (self-contained: cd + source .env + exec). */
+function appStartCommand(manifest: PreviewManifest): string {
+  const port = manifest.port;
+  const runCmd = manifest.runCmd.replace(/'/g, `'\\''`);
+  return `fuser -k ${port}/tcp 2>/dev/null; pkill -f ':${port}' 2>/dev/null; sleep 1; ` +
+    `setsid sh -c 'cd ${PROJECT_DIR}; set -a; . ./.env 2>/dev/null; set +a; exec ${runCmd}' </dev/null > ${PROJECT_DIR}/preview.log 2>&1 & echo STARTED`;
+}
+
+/** Compile the manifest into an ordered runbook. */
+function buildRunbook(manifest: PreviewManifest, engines: EngineHandle[]): RunStep[] {
+  const steps: RunStep[] = [];
+  (manifest.toolchain || []).forEach((c, i) => steps.push({ id: `toolchain-${i}`, phase: "toolchain", label: c, command: c, status: "pending" }));
+  if (manifest.installCmd) steps.push({ id: "install", phase: "install", label: manifest.installCmd, command: manifest.installCmd, status: "pending" });
+  if (manifest.buildCmd) steps.push({ id: "build", phase: "build", label: manifest.buildCmd, command: manifest.buildCmd, status: "pending" });
+  (manifest.migrations || []).forEach((c, i) => steps.push({ id: `migrate-${i}`, phase: "schema", label: c, command: c, status: "pending", optional: true }));
+  (manifest.sqlScripts || []).forEach((file, i) => steps.push({ id: `sql-${i}`, phase: "schema", label: `apply ${file}`, command: sqlApplyCommand(engines, file), status: "pending", optional: true }));
+  if (manifest.seedCmd) steps.push({ id: "seed", phase: "schema", label: manifest.seedCmd, command: manifest.seedCmd, status: "pending", optional: true });
+  steps.push({ id: "run", phase: "run", label: manifest.runCmd, command: appStartCommand(manifest), status: "pending" });
+  return steps;
+}
+
+const PHASE_STATUS: Record<RunStep["phase"], PreviewStatus> = {
+  toolchain: "installing", install: "installing", build: "installing", schema: "seeding", run: "starting",
+};
+
+/**
+ * Execute the runbook with checkpoints. Resumes from `resumeSteps` (skips steps
+ * already done). Deterministic happy path; on a critical failure or if the app
+ * doesn't come up, hands off to the AI driver (which sees the partial state).
+ * Returns { up, steps } — steps is the final checkpoint.
+ */
+async function executeRunbook(
+  projectId: string, userId: string, workspaceId: string,
+  manifest: PreviewManifest, engines: EngineHandle[], model: any,
+  resumeSteps: RunStep[] | null,
+): Promise<{ up: boolean; steps: RunStep[] }> {
+  const port = manifest.port;
+  const steps = buildRunbook(manifest, engines);
+  // Resume: carry over 'done' from a prior checkpoint (by id). The run step never
+  // stays "done" — the app may have stopped, so we always re-verify/restart it.
+  if (resumeSteps?.length) {
+    const done = new Set(resumeSteps.filter((s) => s.status === "done").map((s) => s.id));
+    for (const s of steps) if (s.phase !== "run" && done.has(s.id)) s.status = "done";
+  }
+
+  const persist = async () => {
+    await db.update(projectEnvironments)
+      .set({ setupSteps: JSON.stringify(steps), setupLog: logBuffers.get(projectId), updatedAt: new Date() })
+      .where(eq(projectEnvironments.projectId, projectId));
+    broadcastToUser(userId, { type: "preview_steps", projectId, steps });
+  };
+  const timeoutFor = (s: RunStep) => s.phase === "schema" ? 600_000 : s.phase === "run" ? 60_000 : 1_800_000;
+
+  await persist();
+
+  // ── Setup steps (everything except the app start) ──
+  for (const step of steps) {
+    if (step.phase === "run") continue;
+    if (step.status === "done") { plog(projectId, userId, `✓ (already done) ${step.label}`); continue; }
+    step.status = "running"; step.error = undefined; await persist();
+    await setPreview(projectId, userId, { previewStatus: PHASE_STATUS[step.phase] }, step.label);
+    plog(projectId, userId, `▶ ${step.phase}: ${step.command}`);
+    const r = await runDetachedPolled(projectId, userId, workspaceId, step.command, timeoutFor(step));
+    if (r.exitCode === 0) {
+      step.status = "done";
+      plog(projectId, userId, `  ✓ ${step.label}`, r.output && r.output !== "(no output)" ? { detail: r.output.slice(-700) } : undefined);
+    } else {
+      step.error = r.output.slice(-1200);
+      plog(projectId, userId, `  ✗ ${step.label} (exit ${r.exitCode})`, { level: "error", detail: r.output.slice(-1200) });
+      if (step.optional) {
+        step.status = "failed"; // logged, but don't block — schema scripts are often idempotent/partial
+      } else {
+        step.status = "failed"; await persist();
+        // Critical step failed → hand the rest to the AI driver (it sees state).
+        if (model) {
+          plog(projectId, userId, `Handing off to the AI driver to recover "${step.label}"…`);
+          const up = await driveSandbox(projectId, userId, workspaceId, manifest, engines, model);
+          if (up) { for (const s of steps) if (s.status !== "done") s.status = "done"; await persist(); return { up: true, steps }; }
+        }
+        await persist();
+        return { up: false, steps };
+      }
+    }
+    await persist();
+  }
+
+  // ── Start the app ──
+  const runStep = steps.find((s) => s.phase === "run")!;
+  runStep.status = "running"; runStep.error = undefined; await persist();
+  await setPreview(projectId, userId, { previewStatus: "starting" }, "Starting the app…");
+  plog(projectId, userId, `▶ start app: ${manifest.runCmd}`);
+  await runDetachedPolled(projectId, userId, workspaceId, runStep.command, 60_000);
+  if (await checkServer(workspaceId, port, 20)) { runStep.status = "done"; await persist(); return { up: true, steps }; }
+
+  // App didn't come up → AI driver recovery (schema/config/runtime issues).
+  const tail = await sh(workspaceId, `tail -20 ${PROJECT_DIR}/preview.log 2>/dev/null`, 20_000).catch(() => ({ output: "" }));
+  plog(projectId, userId, "App did not respond after start — handing to the AI driver to diagnose…", { level: "error", detail: tail.output.slice(-800) });
+  if (model) {
+    const up = await driveSandbox(projectId, userId, workspaceId, manifest, engines, model);
+    if (up) { runStep.status = "done"; await persist(); return { up: true, steps }; }
+  }
+  runStep.status = "failed"; runStep.error = tail.output.slice(-1000); await persist();
+  return { up: false, steps };
+}
+
 /** Prefix that puts the toolchain on PATH, caches on /data, and loads .env. */
 function envPrefix(): string {
   return `export PATH="/data/.dotnet:/data/.dotnet/tools:/root/.dotnet/tools:/usr/local/bin:/usr/bin:/bin:/sbin:$PATH"; ` +
@@ -589,49 +720,43 @@ fi`, 240_000);
     await writeEnvFile(workspaceId, projectId, manifest, provisioned);
     plog(projectId, userId, `Wrote .env (${Object.keys(provisioned).length} DB connection var(s) + run config)`);
 
-    // 5. Get the app running + VERIFIED. Master-slave: an AI on OUR side drives
-    // the sandbox command-by-command (install → build → migrate → run → verify),
-    // reading each command's real output. Falls back to a straight deterministic
-    // run of the plan when no usable model/key is available.
-    await setPreview(projectId, userId, { previewStatus: "installing" }, "Setting up & running the app…");
+    // 5. Get the app running + VERIFIED via the CHECKPOINTED RUNBOOK. The plan is
+    // an ordered command list; we run each with a checkpoint, so a restart resumes
+    // from the first not-done step. FAST PATH: if setup already completed on a
+    // prior run, just (re)start the app directly.
     const driver = await resolveDriverModel(userId);
     let up = false;
-    if (driver) {
-      plog(projectId, userId, `Driving the sandbox with ${driver.modelKey} to install, run, and verify the app on port ${manifest.port}…`);
-      up = await driveSandbox(projectId, userId, workspaceId, manifest, engineHandles, driver.model);
-    } else {
-      plog(projectId, userId, "No usable model/key — running the plan deterministically.");
-      // toolchain
-      for (const t of manifest.toolchain || []) { plog(projectId, userId, `Toolchain: ${t}…`); await sh(workspaceId, `${t} >/dev/null 2>&1; echo done`, 300_000); }
-      await setPreview(projectId, userId, { previewStatus: "installing" }, "Installing dependencies…");
-      plog(projectId, userId, `Installing dependencies (${manifest.installCmd})…`);
-      const inst = await sh(workspaceId, `
-export PATH=/root/node/current/bin:/root/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:$PATH
-export npm_config_cache=/data/.npm-cache NODE_OPTIONS="--max-old-space-size=1536"
-cd ${PROJECT_DIR} && set -a; . ./.env 2>/dev/null; set +a; ${manifest.installCmd || "true"} > install.log 2>&1; echo "INSTALL_EXIT=$?"; tail -4 install.log`, 600_000);
-      const instExit = (inst.output.match(/INSTALL_EXIT=(\d+)/) || [])[1];
-      plog(projectId, userId, instExit === "0" ? "Dependencies installed ✓" : `Install exited ${instExit}`, instExit && instExit !== "0" ? { level: "error", detail: inst.output.slice(-500) } : undefined);
-      if (manifest.buildCmd) { plog(projectId, userId, `Building (${manifest.buildCmd})…`); await sh(workspaceId, `cd ${PROJECT_DIR} && set -a; . ./.env 2>/dev/null; set +a; ${manifest.buildCmd} > build.log 2>&1; echo done`, 600_000); }
-      // Apply raw .sql scripts against the first provisioned SQL engine.
-      const sqlEngine = engineHandles.find((h) => h.engine === "postgres" || h.engine === "mysql");
-      const applySql = (f: string) => !sqlEngine ? `echo "no SQL engine for ${f}"`
-        : sqlEngine.engine === "postgres"
-          ? `PGPASSWORD='${sqlEngine.password}' psql -h 127.0.0.1 -p ${sqlEngine.port} -U ${sqlEngine.username} -d ${sqlEngine.dbName} -f '${f}'`
-          : `mysql -h 127.0.0.1 -P ${sqlEngine.port} -u ${sqlEngine.username} -p'${sqlEngine.password}' ${sqlEngine.dbName} < '${f}'`;
-      const schemaSteps = [...(manifest.migrations || []), ...(manifest.sqlScripts || []).map(applySql), ...(manifest.seedCmd ? [manifest.seedCmd] : [])];
-      if (schemaSteps.length) {
-        await setPreview(projectId, userId, { previewStatus: "seeding" }, "Applying schema + seed…");
-        for (const step of schemaSteps) { plog(projectId, userId, `Schema: ${step}…`); await sh(workspaceId, `cd ${PROJECT_DIR} && set -a; . ./.env 2>/dev/null; set +a; ${step} >> migrate.log 2>&1; echo done`, 300_000); }
-      }
+
+    const alreadyRun = existing?.setupComplete === 1 && !!existing?.runCommand;
+    if (alreadyRun && !opts.rebuildManifest) {
+      plog(projectId, userId, "Setup already complete — starting the app directly…");
       await setPreview(projectId, userId, { previewStatus: "starting" }, "Starting the app…");
-      plog(projectId, userId, `Starting the app (${manifest.runCmd})…`);
-      up = await startApp(workspaceId, manifest);
+      if (await checkServer(workspaceId, manifest.port, 2)) {
+        up = true; plog(projectId, userId, "App is already running ✓");
+      } else {
+        await runDetachedPolled(projectId, userId, workspaceId, appStartCommand(manifest), 60_000);
+        up = await checkServer(workspaceId, manifest.port, 20);
+      }
+    }
+
+    if (!up) {
+      await setPreview(projectId, userId, { previewStatus: "installing" }, "Setting up & running the app…");
+      const resumeSteps: RunStep[] | null = existing?.setupSteps ? (JSON.parse(existing.setupSteps) as RunStep[]) : null;
+      const result = await executeRunbook(projectId, userId, workspaceId, manifest, engineHandles, driver?.model, resumeSteps);
+      up = result.up;
+      // Mark setup complete + store the run command so the next click is a fast run.
+      const setupDone = result.steps.filter((s) => s.phase !== "run").every((s) => s.status === "done" || s.optional);
+      await db.update(projectEnvironments).set({
+        setupComplete: up && setupDone ? 1 : 0,
+        runCommand: manifest.runCmd,
+        updatedAt: new Date(),
+      }).where(eq(projectEnvironments.projectId, projectId));
     }
 
     // 6. Confirm the app is actually serving on its port (reality check).
     plog(projectId, userId, `Verifying the app responds on 127.0.0.1:${manifest.port}…`);
     if (!up) {
-      const log = await sh(workspaceId, `tail -40 ${PROJECT_DIR}/preview.log 2>/dev/null; echo '--- install.log ---'; tail -15 ${PROJECT_DIR}/install.log 2>/dev/null`, 20_000);
+      const log = await sh(workspaceId, `tail -40 ${PROJECT_DIR}/preview.log 2>/dev/null`, 20_000);
       const detail = (log.output || "").trim() || "(no log output captured)";
       plog(projectId, userId, `The app did not respond on port ${manifest.port}`, { level: "error", detail });
       return failed(projectId, userId, `The app did not come up on port ${manifest.port}.\n\n${detail.slice(-1000)}`);
@@ -681,7 +806,7 @@ async function failed(projectId: string, userId: string, error: string): Promise
 /** Current preview state for the Preview tab. */
 export async function getPreviewState(projectId: string) {
   const row = await getEnv(projectId);
-  if (!row) return { previewStatus: "idle" as PreviewStatus, previewUrl: null, manifest: null, error: null, branch: null, log: "" };
+  if (!row) return { previewStatus: "idle" as PreviewStatus, previewUrl: null, manifest: null, error: null, branch: null, log: "", steps: [], setupComplete: false };
   return {
     previewStatus: (row.previewStatus as PreviewStatus) ?? "idle",
     previewUrl: row.appUrl ?? null,
@@ -689,6 +814,8 @@ export async function getPreviewState(projectId: string) {
     error: row.previewError ?? null,
     branch: row.previewBranch ?? null,
     log: logBuffers.get(projectId) ?? row.setupLog ?? "",
+    steps: row.setupSteps ? (JSON.parse(row.setupSteps) as RunStep[]) : [],
+    setupComplete: row.setupComplete === 1,
   };
 }
 

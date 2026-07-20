@@ -30,6 +30,10 @@ export const projectEnvironments = pgTable(
     stableAlias: text("stable_alias"), // Mags stable subdomain for a persistent URL
     setupManifest: text("setup_manifest"), // JSON: detected stack/commands/engines/env
     setupLog: text("setup_log"), // last setup run's step log (truncated)
+    // ── Checkpointed runbook ──
+    setupSteps: text("setup_steps"), // JSON: ordered command list + per-step status (resume point)
+    setupComplete: integer("setup_complete").notNull().default(0), // 1 = install/build/schema all done → re-preview just runs the app
+    runCommand: text("run_command"), // the exact command that starts the app (for direct re-run)
     lastAwakeAt: timestamp("last_awake_at", { mode: "date" }),
     createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),
     updatedAt: timestamp("updated_at", { mode: "date" }).notNull().default(sql`now()`),

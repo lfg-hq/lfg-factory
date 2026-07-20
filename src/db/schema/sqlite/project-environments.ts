@@ -28,6 +28,9 @@ export const projectEnvironments = sqliteTable(
     stableAlias: text("stable_alias"), // Mags stable subdomain for a persistent URL
     setupManifest: text("setup_manifest"), // JSON: detected stack/commands/engines/env
     setupLog: text("setup_log"), // last setup run's step log (truncated)
+    setupSteps: text("setup_steps"), // JSON: ordered command list + per-step status (resume)
+    setupComplete: integer("setup_complete").notNull().default(0), // 1 = setup done → re-preview just runs
+    runCommand: text("run_command"), // the exact command that starts the app
     lastAwakeAt: integer("last_awake_at", { mode: "timestamp" }),
     createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
     updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
