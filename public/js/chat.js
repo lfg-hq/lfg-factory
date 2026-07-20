@@ -4584,9 +4584,14 @@ document.addEventListener('DOMContentLoaded', () => {
             // Add each message to the chat
             let rendered = 0;
             data.messages.forEach(message => {
-                // Skip empty messages and show all non-empty messages
-                if (message.content && message.content.trim() !== '') {
-                    addMessageToChat(message.role, message.content);
+                // Restore an attached image (if any) so it persists across reloads.
+                let fileData = null;
+                const cif = message.content_if_file;
+                if (Array.isArray(cif) && cif.length && (cif[0].type || '').startsWith('image/') && cif[0].url) {
+                    fileData = { name: cif[0].name, type: cif[0].type, url: cif[0].url };
+                }
+                if ((message.content && message.content.trim() !== '') || fileData) {
+                    addMessageToChat(message.role, message.content || '', fileData);
                     rendered++;
                 }
             });

@@ -54,6 +54,7 @@ conversationsApi.get("/:id", async (c) => {
       id: m.id,
       role: m.role,
       content: m.content,
+      content_if_file: m.contentIfFile ?? null,
       created_at: m.createdAt,
     })),
   });

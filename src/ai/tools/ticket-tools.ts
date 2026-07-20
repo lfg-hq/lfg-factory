@@ -34,7 +34,12 @@ export const createTickets = tool({
         "Formatted Markdown (NOT a plain paragraph). Use headings and bullet lists: " +
         "## Overview, ## Implementation Notes (stack, data model, API routes, edge cases), " +
         "## UI / UX (screens, states, design references), ## Out of Scope. " +
-        "Use `inline code` for identifiers, endpoints, and hex values."
+        "Use `inline code` for identifiers, endpoints, and hex values. " +
+        "CRITICAL: this ticket is handed to a SEPARATE coding agent that has ONLY this ticket " +
+        "as context (it does NOT see this conversation). So make it SELF-CONTAINED: name the exact " +
+        "files/modules/components to touch (with paths), the precise change, relevant existing " +
+        "patterns/functions to reuse, data shapes, and any gotchas — enough that the agent can " +
+        "implement it correctly without asking questions or re-discovering the codebase."
       ),
       acceptanceCriteria: z.array(z.string()).min(2).describe("2-4 specific, testable acceptance criteria — never empty"),
       priority: z.enum(["High", "Medium", "Low"]).default("Medium"),

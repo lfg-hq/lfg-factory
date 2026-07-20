@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { requireAuth } from "../../auth/middleware.ts";
 import { db } from "../../config/db.ts";
-import { chatFiles } from "../../db/schema/chat.ts";
+import { chatFiles, conversations } from "../../db/schema/chat.ts";
 import { eq } from "drizzle-orm";
 import { env } from "../../config/env.ts";
 import * as path from "node:path";
@@ -67,6 +67,23 @@ files.post("/upload", async (c) => {
     fileSize: file.size,
     path: `uploads/${filename}`,
   });
+});
+
+// GET /api/files/:id — serve an uploaded chat file (so images persist in chat
+// history across a reload). Auth: the requester must own the conversation.
+files.get("/:id", async (c) => {
+  const user = c.get("user");
+  const id = c.req.param("id");
+  const [cf] = await db.select().from(chatFiles).where(eq(chatFiles.id, id));
+  if (!cf) return c.json({ error: "not found" }, 404);
+  const [conv] = await db.select({ userId: conversations.userId }).from(conversations).where(eq(conversations.id, cf.conversationId));
+  if (!conv || conv.userId !== user.id) return c.json({ error: "forbidden" }, 403);
+  try {
+    const buf = await fs.readFile(path.resolve(cf.filePath));
+    return new Response(buf, { headers: { "Content-Type": cf.fileType || "application/octet-stream", "Cache-Control": "private, max-age=86400" } });
+  } catch {
+    return c.json({ error: "file missing" }, 404);
+  }
 });
 
 // GET /api/files/transcribe/:fileId — transcribe audio via OpenAI Whisper

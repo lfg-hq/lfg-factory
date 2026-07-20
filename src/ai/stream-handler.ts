@@ -196,11 +196,11 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
   const agentRecord = convId ? await getAgentByConversation(convId) : null;
 
   // ── 2. Save user message ─────────────────────────────────────────────────────
-  await db.insert(messages).values({
+  const [userMsgRow] = await db.insert(messages).values({
     conversationId: convId,
     role: "user",
     content: userMessage,
-  });
+  }).returning({ id: messages.id });
 
   // ── 3. Load recent history ───────────────────────────────────────────────────
   const history = await db
@@ -296,6 +296,13 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
       const [cf] = await db.select().from(chatFiles).where(eq(chatFiles.id, imgFile.id!));
       if (cf?.filePath) bytes = new Uint8Array(await fs.readFile(path.resolve(cf.filePath)));
     } catch (e) { console.warn(`[stream] could not read uploaded image:`, (e as Error).message?.slice(0, 120)); }
+
+    // Persist the image on the message so it renders in history after a reload.
+    if (userMsgRow?.id) {
+      await db.update(messages)
+        .set({ contentIfFile: [{ id: imgFile.id, name: imgFile.name, type: imgFile.type, url: `/api/files/${imgFile.id}` }] })
+        .where(eq(messages.id, userMsgRow.id)).catch(() => {});
+    }
 
     const setLastUser = (content: any) => {
       for (let i = contextMessages.length - 1; i >= 0; i--) {
