@@ -23,6 +23,8 @@
   let stepsData = null; // checkpoint runbook steps
   let currentView = null; // "progress" | "running" | "error" | "idle" — only re-render on change
   let progressTab = "logs"; // during setup: "logs" | "steps"
+  let branches = [{ id: "default", label: "Default branch", ticketId: null }]; // previewable branches
+  let branchId = "default"; // which branch is currently being previewed
 
   // ── In-app browser (tabbed) ──
   let bTabs = [];        // [{ id, url, history:[urls], hi }]
@@ -266,13 +268,22 @@
     if (status === "running" && state.previewUrl) {
       currentView = "running";
       setSub("Live" + (state.branch ? ` · ${state.branch}` : ""));
+      const opts = branches.map((b) => `<option value="${esc(b.id)}"${b.id === branchId ? " selected" : ""}>${esc(b.label)}</option>`).join("");
+      const branchSel = `<select data-branch title="Run a ticket's branch or the default" style="padding:6px 8px;border-radius:6px;font-size:12.5px;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);max-width:200px;">${opts}</select>`;
       renderActions(
+        branchSel +
         btn("Screenshot", { action: "screenshot", icon: "fa-camera" }) +
         btn("Logs", { action: "togglelog", icon: "fa-terminal" }) +
         btn("Restart", { action: "restart", icon: "fa-power-off" }) +
         btn("Stop", { action: "stop", icon: "fa-stop" })
       );
       mountBrowser(body, state.previewUrl);
+      // Refresh the branch list (ticket worktrees may have appeared) and update the
+      // selector options in place — without remounting the iframe.
+      loadBranches().then(() => {
+        const sel = document.querySelector("#preview-actions [data-branch]");
+        if (sel) sel.innerHTML = branches.map((b) => `<option value="${esc(b.id)}"${b.id === branchId ? " selected" : ""}>${esc(b.label)}</option>`).join("");
+      });
       return;
     }
 
@@ -459,12 +470,28 @@
   // Restart = restart the app SERVER (fast: reuses install/build). Different from
   // "reload" (which just refreshes the current page in the in-app browser).
   async function doRestart() {
-    setSub("Restarting the app…");
+    const ticketId = branchId && branchId !== "default" ? branchId : null;
+    setSub(ticketId ? "Running branch…" : "Restarting the app…");
     logText = "";
     render({ previewStatus: "starting" });
     managePolling("starting");
-    try { await api("/restart", { method: "POST" }); }
+    try { await api("/restart", { method: "POST", body: JSON.stringify({ ticketId }) }); }
     catch (e) { render({ previewStatus: "error", error: "Restart failed: " + e.message }); }
+  }
+
+  // Fetch the previewable branches (default + ticket worktrees) for the selector.
+  async function loadBranches() {
+    try {
+      const r = await api("/branches");
+      const j = await r.json();
+      if (Array.isArray(j.branches) && j.branches.length) branches = j.branches;
+    } catch (_) { /* keep default */ }
+  }
+
+  // Switch which branch the preview runs (default or a ticket's worktree).
+  function doRunBranch(id) {
+    branchId = id || "default";
+    doRestart();
   }
 
   function onActionClick(e) {
@@ -564,6 +591,11 @@
     projectId = root.getAttribute("data-project-id");
     $("preview-actions")?.addEventListener("click", onActionClick);
     $("preview-body")?.addEventListener("click", onActionClick);
+    // Branch selector (running view) — switch which branch/ticket the preview runs.
+    $("preview-actions")?.addEventListener("change", (e) => {
+      const sel = e.target.closest("[data-branch]");
+      if (sel) doRunBranch(sel.value);
+    });
     $("preview-plan-btn")?.addEventListener("click", () => { if (!current) load(); togglePlan(); });
 
     // Load when the Preview tab is opened (and once up front if already active).

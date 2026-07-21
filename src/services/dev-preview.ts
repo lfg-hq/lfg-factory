@@ -22,12 +22,14 @@ import { githubTokens, llmApiKeys } from "../db/schema/users.ts";
 import { modelSelections } from "../db/schema/chat.ts";
 import { getValidGitlabToken } from "./gitlab-token.ts";
 import { getModel, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
-import { decryptSecret } from "../utils/crypto.ts";
+import { decryptSecret, encryptSecret } from "../utils/crypto.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { enableHttpAccess, execOnWorkspace, setStableUrl, startBrowserSession, stopWorkspace } from "./mags.ts";
 import { ensureProjectSandbox, ensureEngine, ensureDocker, envWorkspaceId, type EngineHandle } from "./project-sandbox.ts";
 import { isS3Enabled, buildS3Key, uploadBinary, getPresignedGetUrl } from "./s3.ts";
 import { messages } from "../db/schema/chat.ts";
+import { projectTickets } from "../db/schema/tickets.ts";
+import { sandboxes } from "../db/schema/sandbox.ts";
 import { spawn } from "node:child_process";
 
 const PROJECT_DIR = "/data/project";
@@ -375,11 +377,11 @@ function sqlApplyCommand(engines: EngineHandle[], file: string): string {
 }
 
 /** The detached app-start command (self-contained: cd + source .env + exec). */
-function appStartCommand(manifest: PreviewManifest): string {
+function appStartCommand(manifest: PreviewManifest, dir: string = PROJECT_DIR): string {
   const port = manifest.port;
   const runCmd = manifest.runCmd.replace(/'/g, `'\\''`);
   return `fuser -k ${port}/tcp 2>/dev/null; pkill -f ':${port}' 2>/dev/null; sleep 1; ` +
-    `setsid sh -c 'cd ${PROJECT_DIR}; set -a; . ./.env 2>/dev/null; set +a; exec ${runCmd}' </dev/null > ${PROJECT_DIR}/preview.log 2>&1 & echo STARTED`;
+    `setsid sh -c 'cd ${dir}; set -a; . ./.env 2>/dev/null; set +a; exec ${runCmd}' </dev/null > ${dir}/preview.log 2>&1 & echo STARTED`;
 }
 
 /** Compile the manifest into an ordered runbook. */
@@ -556,7 +558,7 @@ HOW TO WORK:
 - VERIFY for real: \`curl -sS -i http://127.0.0.1:${port}/\`. Up = a real 2xx/3xx/4xx response. 000/connection-refused/5xx = NOT up → read ${PROJECT_DIR}/preview.log, diagnose, fix, retry.
 
 PERSISTING WHAT YOU LEARN (so the next run doesn't repeat your work):
-- Each \`run\` command starts a FRESH shell, so a bare \`export FOO=bar\` does NOT carry to the next command or survive a restart. For an environment fix that must stick (an env var, a cert/CA path, a package source), APPEND it to ./.env — it is sourced before every command and on every restart: \`echo 'FOO=bar' >> ${PROJECT_DIR}/.env\`.
+- Each \`run\` command starts a FRESH shell, so a bare \`export FOO=bar\` does NOT carry to the next command. For an environment fix that must stick (an env var, a cert/CA path, a package source), call the \`setEnv\` tool — it stores the var on the project (encrypted) AND writes it into .env now, so it is re-applied on every future setup and SURVIVES a VM rebuild. (Appending to ./.env only lasts while this VM lives — if the VM is recreated you'd have to rediscover the fix.)
 - When you discover the PLAN itself was wrong and found what works — a different toolchain install, install/build/run command, startup project, or port — call \`updatePlan\` to persist the corrected value. Do this AFTER you've confirmed the new command works. This is how the checklist self-heals: the next preview run skips straight to the working commands.
 
 RUNNING COMMANDS — IMPORTANT:
@@ -687,6 +689,28 @@ async function driveSandbox(
         return "plan updated — the next run will use this.";
       },
     }),
+    setEnv: tool({
+      description: "PERSIST an environment variable the app/build needs so it SURVIVES a sandbox rebuild (a VM crash gives a fresh /data — .env and installed tools are lost). Use this for any env fix you discover — a cert/CA path (e.g. SSL_CERT_FILE), a package source, a required runtime flag — INSTEAD of only echoing to .env. It's stored (encrypted) on the project and re-written into .env on every future setup, so the next build won't rediscover it. Also writes it into the CURRENT .env immediately.",
+      inputSchema: zodSchema(z.object({
+        key: z.string().describe("Env var name, e.g. SSL_CERT_FILE"),
+        value: z.string().describe("Its value"),
+        reason: z.string().optional().describe("Why it's needed"),
+      })),
+      execute: async ({ key, value, reason }: { key: string; value: string; reason?: string }) => {
+        try {
+          await db.insert(projectEnvironmentVariables)
+            .values({ projectId, key, encryptedValue: encryptSecret(value), isSecret: false, hasValue: true, description: reason || "preview setup fix" })
+            .onConflictDoUpdate({ target: [projectEnvironmentVariables.projectId, projectEnvironmentVariables.key], set: { encryptedValue: encryptSecret(value), hasValue: true, updatedAt: new Date() } });
+          const line = `${key}="${String(value).replace(/(["\\$`])/g, "\\$1")}"`;
+          const b64 = Buffer.from(line).toString("base64");
+          await sh(workspaceId, `cd ${PROJECT_DIR} && (grep -v '^${key}=' .env 2>/dev/null > .env.tmp; echo ${b64} | base64 -d >> .env.tmp; mv .env.tmp .env) && echo SET_ENV`, 30_000);
+          plog(projectId, userId, `Persisted env ${key} (survives VM rebuild)`, { detail: reason });
+          return `persisted ${key} — it will be re-applied on every setup.`;
+        } catch (e) {
+          return `failed to persist env: ${(e as Error).message}`;
+        }
+      },
+    }),
     finish: tool({
       description: "Call ONCE when the app is confirmed serving on the port (status 'ready'), or when it genuinely cannot run without a source-code change (status 'failed').",
       inputSchema: zodSchema(z.object({
@@ -810,7 +834,11 @@ Do exactly what the user asked — inspect logs, fix env/deps, (re)start the app
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
-export interface SetupOptions { userId: string; branch?: string; rebuildManifest?: boolean }
+export interface SetupOptions { userId: string; branch?: string; rebuildManifest?: boolean; ticketId?: string }
+
+/** The worktree directory for a ticket's branch inside the preview sandbox. Must
+ *  match the name the ticket executor creates: `wt-ticket-<ticketId first 12>`. */
+function ticketWorktreeDir(ticketId: string): string { return `/data/wt-ticket-${ticketId.slice(0, 12)}`; }
 
 /**
  * Full setup: bring the client app up live in its sandbox and return a preview
@@ -1114,36 +1142,83 @@ export async function capturePreviewScreenshot(
 }
 
 /**
- * Restart just the app SERVER (kill + re-run the stored run command). Fast — does
- * NOT reinstall or rebuild. Falls back to a full setup if we have no run command.
+ * The branches that can be previewed: the DEFAULT checkout (/data/project) plus
+ * every ticket that still has a live git worktree in this sandbox (kept until the
+ * ticket is approved → Done). Powers the preview branch selector.
+ */
+export async function getPreviewBranches(projectId: string): Promise<Array<{ id: string; label: string; ticketId: string | null; branch: string }>> {
+  const out: Array<{ id: string; label: string; ticketId: string | null; branch: string }> = [
+    { id: "default", label: "Default branch", ticketId: null, branch: "(default)" },
+  ];
+  // Ticket worktrees are recorded as sandbox rows (workspaceType "ticket-worktree")
+  // pointing at this project's preview workspace. Join tickets for a readable label.
+  const rows = await db
+    .select({ ticketId: sandboxes.ticketId, name: projectTickets.name, key: projectTickets.ticketKey })
+    .from(sandboxes)
+    .leftJoin(projectTickets, eq(sandboxes.ticketId, projectTickets.id))
+    .where(and(eq(sandboxes.projectId, projectId), eq(sandboxes.workspaceType, "ticket-worktree")));
+  for (const r of rows) {
+    if (!r.ticketId) continue;
+    const label = `${r.key ? r.key + " — " : ""}${r.name ?? "ticket"}`.slice(0, 60);
+    out.push({ id: r.ticketId, label, ticketId: r.ticketId, branch: `feature/ticket-${r.ticketId}` });
+  }
+  return out;
+}
+
+/**
+ * Restart the app SERVER (kill + re-run the stored run command). Fast — does NOT
+ * reinstall or rebuild. Falls back to a full setup if we have no run command.
+ * If `opts.ticketId` is set, runs the app from THAT ticket's git worktree (its
+ * feature branch) instead of the default /data/project checkout — so you can
+ * preview individual tickets. The DB creds/.env are shared (same sandbox).
  */
 export async function restartPreview(projectId: string, opts: SetupOptions): Promise<{ previewUrl: string } | { error: string }> {
-  const { userId } = opts;
+  const { userId, ticketId } = opts;
   const row = await getEnv(projectId);
   if (!row?.setupManifest || !row?.runCommand || row?.setupComplete !== 1) {
-    // Nothing to restart yet → run the full setup.
+    // Nothing to restart yet → run the full setup (default branch only).
+    if (ticketId) return { error: "Set up the preview first, then you can run a ticket's branch." };
     return setupPreview(projectId, opts);
   }
   const manifest = JSON.parse(row.setupManifest) as PreviewManifest;
   resetLog(projectId);
   await loadPublicId(projectId); // for WS routing
   try {
-    plog(projectId, userId, "Restarting the app server…");
     await ensureProjectSandbox(projectId);
     const workspaceId = await envWorkspaceId(projectId);
-    await setPreview(projectId, userId, { previewStatus: "starting", previewError: null }, "Restarting the app…");
-    await runDetachedPolled(projectId, userId, workspaceId, appStartCommand(manifest), 60_000);
+
+    // Pick the run directory: a ticket's worktree, or the default checkout.
+    let runDir = PROJECT_DIR;
+    let branchLabel = "(default)";
+    if (ticketId) {
+      runDir = ticketWorktreeDir(ticketId);
+      branchLabel = `feature/ticket-${ticketId}`;
+      // The worktree is removed when the ticket is approved (Done). If it's gone,
+      // tell the user to rebuild rather than silently running the default branch.
+      const chk = await sh(workspaceId, `test -d ${runDir} && test -e ${runDir}/.git && echo OK || echo MISSING`, 20_000);
+      if (!chk.output.includes("OK")) {
+        return failed(projectId, userId, `That ticket's build workspace no longer exists (it's removed once a ticket is approved). Rebuild the ticket to preview its branch again.`);
+      }
+      plog(projectId, userId, `Running ticket branch ${branchLabel} from its worktree…`);
+      // Share the preview's DB creds/run config: copy the default .env into the worktree.
+      await sh(workspaceId, `cp ${PROJECT_DIR}/.env ${runDir}/.env 2>/dev/null || true; echo env`, 20_000);
+    } else {
+      plog(projectId, userId, "Restarting the app server (default branch)…");
+    }
+
+    await setPreview(projectId, userId, { previewStatus: "starting", previewError: null, previewBranch: branchLabel }, ticketId ? `Running ${branchLabel}…` : "Restarting the app…");
+    await runDetachedPolled(projectId, userId, workspaceId, appStartCommand(manifest, runDir), 60_000);
     if (!(await checkServer(workspaceId, manifest.port, 20))) {
-      const tail = await sh(workspaceId, `tail -20 ${PROJECT_DIR}/preview.log 2>/dev/null`, 20_000).catch(() => ({ output: "" }));
+      const tail = await sh(workspaceId, `tail -20 ${runDir}/preview.log 2>/dev/null`, 20_000).catch(() => ({ output: "" }));
       return failed(projectId, userId, `The app did not come back up on port ${manifest.port}.\n\n${(tail.output || "").slice(-800)}`);
     }
-    plog(projectId, userId, "App restarted ✓");
+    plog(projectId, userId, `App running ✓ (${branchLabel})`);
     // Re-expose (idempotent) and mark running.
     await enableHttpAccess(workspaceId, manifest.port).catch(() => {});
     const alias = row.stableAlias || randomAlias();
     let previewUrl = row.appUrl || "";
     try { previewUrl = await setStableUrl(alias, workspaceId); } catch { /* keep existing */ }
-    await setPreview(projectId, userId, { previewStatus: "running", appUrl: previewUrl, appPort: manifest.port, previewError: null }, "Preview is live");
+    await setPreview(projectId, userId, { previewStatus: "running", appUrl: previewUrl, appPort: manifest.port, previewError: null, previewBranch: branchLabel }, "Preview is live");
     return { previewUrl };
   } catch (err) {
     return failed(projectId, userId, (err as Error).message ?? String(err));

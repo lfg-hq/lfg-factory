@@ -12,7 +12,7 @@ import { requireAuth } from "../../auth/middleware.ts";
 import { getProjectAccess } from "../../auth/project-access.ts";
 import { db } from "../../config/db.ts";
 import { projectEnvironments } from "../../db/schema/project-environments.ts";
-import { getPreviewState, setupPreview, restartPreview, stopPreview, detectManifest, manifestSchema, capturePreviewScreenshot } from "../../services/dev-preview.ts";
+import { getPreviewState, setupPreview, restartPreview, stopPreview, detectManifest, manifestSchema, capturePreviewScreenshot, getPreviewBranches } from "../../services/dev-preview.ts";
 import type { auth } from "../../auth/index.ts";
 
 type Env = { Variables: { user: typeof auth.$Infer.Session.user } };
@@ -48,8 +48,18 @@ previewApi.post("/:projectId/preview/restart", async (c) => {
   const user = c.get("user");
   const access = await getProjectAccess(c.req.param("projectId")!, user.id);
   if (!access) return c.json({ error: "Project not found" }, 404);
-  restartPreview(access.project.id, { userId: user.id }).catch((e) => console.error("[preview] restart failed:", e));
+  const body = await c.req.json().catch(() => ({}));
+  const ticketId = typeof body.ticketId === "string" && body.ticketId ? body.ticketId : undefined;
+  restartPreview(access.project.id, { userId: user.id, ticketId }).catch((e) => console.error("[preview] restart failed:", e));
   return c.json({ ok: true, status: "starting" }, 202);
+});
+
+// List the branches that can be previewed: default + each ticket with a live worktree.
+previewApi.get("/:projectId/preview/branches", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId")!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  return c.json({ branches: await getPreviewBranches(access.project.id) });
 });
 
 previewApi.post("/:projectId/preview/stop", async (c) => {
