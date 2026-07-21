@@ -22,6 +22,7 @@ import { getAgentByConversation } from "../services/agent-manager.ts";
 import { createAgentTools } from "./tools/agent-tools.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { getComposioTools, listConnectors } from "../services/composio-manager.ts";
+import { downloadBinary } from "../services/s3.ts";
 import type { ServerWebSocket } from "bun";
 import type { WsData } from "../ws/types.ts";
 
@@ -294,7 +295,12 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
     let bytes: Uint8Array | null = null;
     try {
       const [cf] = await db.select().from(chatFiles).where(eq(chatFiles.id, imgFile.id!));
-      if (cf?.filePath) bytes = new Uint8Array(await fs.readFile(path.resolve(cf.filePath)));
+      if (cf?.filePath?.startsWith("s3:")) {
+        const { body } = await downloadBinary(cf.filePath.slice(3));
+        bytes = new Uint8Array(body);
+      } else if (cf?.filePath) {
+        bytes = new Uint8Array(await fs.readFile(path.resolve(cf.filePath)));
+      }
     } catch (e) { console.warn(`[stream] could not read uploaded image:`, (e as Error).message?.slice(0, 120)); }
 
     // Persist the image on the message so it renders in history after a reload.

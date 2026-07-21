@@ -130,10 +130,11 @@ files.get("/transcribe/:fileId", async (c) => {
 
   if (!fileRow) return c.json({ error: "File not found" }, 404);
 
-  const fullPath = path.resolve(fileRow.filePath);
   let fileData: Buffer;
   try {
-    fileData = await fs.readFile(fullPath);
+    fileData = fileRow.filePath.startsWith("s3:")
+      ? (await downloadBinary(fileRow.filePath.slice(3))).body
+      : await fs.readFile(path.resolve(fileRow.filePath));
   } catch {
     return c.json({ error: "File not readable" }, 404);
   }
