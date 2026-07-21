@@ -1205,6 +1205,19 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
   const manifest = JSON.parse(row.setupManifest) as PreviewManifest;
   resetLog(projectId);
   await loadPublicId(projectId); // for WS routing
+
+  // A restart/branch run has its OWN 2-step checklist (locate → start) so the Steps
+  // view reflects THIS run, not the stale full-setup prep list.
+  const branchLabel0 = ticketId ? `feature/ticket-${ticketId}` : "(default)";
+  const steps: RunStep[] = [
+    { id: "locate", phase: "prepare", label: ticketId ? `Locate the ticket worktree (${branchLabel0})` : "Use the default checkout", command: "", status: "pending" },
+    { id: "run", phase: "run", label: `Start the app — ${manifest.runCmd}`, command: "", status: "pending" },
+  ];
+  const setStep = async (id: string, s: RunStep["status"]) => {
+    const st = steps.find((x) => x.id === id); if (st) st.status = s;
+    await persistSteps(projectId, userId, steps);
+  };
+
   try {
     await ensureProjectSandbox(projectId);
     const workspaceId = await envWorkspaceId(projectId);
@@ -1212,6 +1225,7 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
     // Pick the run directory: a ticket's worktree, or the default checkout.
     let runDir = PROJECT_DIR;
     let branchLabel = "(default)";
+    await setStep("locate", "running");
     if (ticketId) {
       runDir = ticketWorktreeDir(ticketId);
       branchLabel = `feature/ticket-${ticketId}`;
@@ -1219,6 +1233,7 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
       // tell the user to rebuild rather than silently running the default branch.
       const chk = await sh(workspaceId, `test -d ${runDir} && test -e ${runDir}/.git && echo OK || echo MISSING`, 20_000);
       if (!chk.output.includes("OK")) {
+        await setStep("locate", "failed");
         return failed(projectId, userId, `That ticket's build workspace no longer exists (it's removed once a ticket is approved). Rebuild the ticket to preview its branch again.`);
       }
       plog(projectId, userId, `Running ticket branch ${branchLabel} from its worktree…`);
@@ -1227,7 +1242,9 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
     } else {
       plog(projectId, userId, "Restarting the app server (default branch)…");
     }
+    await setStep("locate", "done");
 
+    await setStep("run", "running");
     await setPreview(projectId, userId, { previewStatus: "starting", previewError: null, previewBranch: branchLabel }, ticketId ? `Running ${branchLabel}…` : "Restarting the app…");
     // A ticket worktree isn't pre-built, so `dotnet run`/`go run`/etc. build on
     // first start — that can take minutes. Be patient for compiled stacks and
@@ -1237,10 +1254,12 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
     await runDetachedPolled(projectId, userId, workspaceId, appStartCommand(manifest, runDir), 30_000);
     const up = await waitForAppUp(projectId, userId, workspaceId, manifest.port, `${runDir}/preview.log`, waitMs);
     if (!up) {
+      await setStep("run", "failed");
       const tail = await sh(workspaceId, `tail -40 ${runDir}/preview.log 2>/dev/null`, 20_000).catch(() => ({ output: "" }));
       plog(projectId, userId, `The app did not come up on port ${manifest.port}`, { level: "error", detail: (tail.output || "(no output — the app may have failed to build)").slice(-1500) });
       return failed(projectId, userId, `The app did not come back up on port ${manifest.port}.\n\n${(tail.output || "").slice(-800)}`);
     }
+    await setStep("run", "done");
     plog(projectId, userId, `App running ✓ (${branchLabel})`);
     // Re-expose (idempotent) and mark running.
     await enableHttpAccess(workspaceId, manifest.port).catch(() => {});

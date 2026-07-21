@@ -303,7 +303,17 @@
     if (status === "error") {
       currentView = "error";
       setSub("Failed");
-      renderActions(btn("Try again", { action: "setup", primary: true, icon: "fa-redo" }));
+      const eopts = branches.map((b) => `<option value="${esc(b.id)}"${b.id === branchId ? " selected" : ""}>${esc(b.label)}</option>`).join("");
+      const eBranchSel = branches.length > 1 ? `<select data-branch title="Run a branch" style="padding:6px 8px;border-radius:6px;font-size:12.5px;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);max-width:200px;">${eopts}</select>` : "";
+      renderActions(eBranchSel + btn("Try again", { action: "setup", primary: true, icon: "fa-redo" }));
+      // Load branches so the selector can offer "Default branch" / other tickets.
+      loadBranches().then(() => {
+        const sel = document.querySelector("#preview-actions [data-branch]");
+        if (branches.length > 1 && currentView === "error") renderActions(
+          `<select data-branch title="Run a branch" style="padding:6px 8px;border-radius:6px;font-size:12.5px;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);max-width:200px;">${branches.map((b) => `<option value="${esc(b.id)}"${b.id === branchId ? " selected" : ""}>${esc(b.label)}</option>`).join("")}</select>` +
+          btn("Try again", { action: "setup", primary: true, icon: "fa-redo" })
+        );
+      });
       body.innerHTML = `
         <div style="height:100%;display:flex;flex-direction:column;gap:12px;padding:16px 20px;">
           <div style="display:flex;align-items:center;gap:10px;color:var(--text-color,#e2e8f0);font-size:14px;">
