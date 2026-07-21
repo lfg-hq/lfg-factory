@@ -74,6 +74,21 @@
     const el = $("preview-log");
     if (el) el.scrollTop = el.scrollHeight;
   }
+
+  // ── Shared Logs | Steps toggle (used in the progress, running-overlay, and
+  // error views). `progressTab` is the shared state; refreshPanes() swaps the
+  // visible pane(s) in place so no view is rebuilt (keeps the iframe mounted). ──
+  function segInner() {
+    const seg = (id, label) => `<button data-ptab="${id}" style="padding:5px 14px;border-radius:7px;cursor:pointer;font-size:12.5px;border:1px solid var(--border-color,#333);background:${progressTab === id ? "#7c3aed" : "var(--border-color,#2a2a2a)"};color:${progressTab === id ? "#fff" : "var(--text-color,#e2e8f0)"};">${label}</button>`;
+    return seg("logs", "Logs") + seg("steps", "Steps");
+  }
+  function segButtons() { return `<div data-ptab-header style="display:flex;gap:4px;flex:none;">${segInner()}</div>`; }
+  function activePane() { return progressTab === "steps" ? stepsPanel(true) : logPanel(true); }
+  function refreshPanes() {
+    document.querySelectorAll("[data-ptab-header]").forEach((h) => { h.innerHTML = segInner(); });
+    document.querySelectorAll("[data-pane]").forEach((p) => { p.innerHTML = activePane(); });
+    if (progressTab === "logs") scrollLog();
+  }
   async function copyLog() {
     try { await navigator.clipboard.writeText(logText || ""); toast("Logs copied"); }
     catch { const ta = document.createElement("textarea"); ta.value = logText || ""; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); toast("Logs copied"); }
@@ -248,7 +263,6 @@
       currentView = "progress";
       setSub(STEP_LABEL[status] || "Working…");
       renderActions(btn("Cancel", { action: "stop", icon: "fa-stop" }));
-      const seg = (id, label) => `<button data-ptab="${id}" style="padding:5px 14px;border-radius:7px;cursor:pointer;font-size:12.5px;border:1px solid var(--border-color,#333);background:${progressTab === id ? "#7c3aed" : "var(--border-color,#2a2a2a)"};color:${progressTab === id ? "#fff" : "var(--text-color,#e2e8f0)"};">${label}</button>`;
       body.innerHTML = `
         <div style="height:100%;display:flex;flex-direction:column;gap:10px;padding:16px 20px;">
           <div style="display:flex;align-items:center;gap:12px;">
@@ -256,11 +270,10 @@
               <div class="spinner" style="width:18px;height:18px;flex:none;"></div>
               <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(STEP_LABEL[status] || "Setting up your preview…")}</span>
             </div>
-            <div style="display:flex;gap:4px;flex:none;">${seg("logs", "Logs")}${seg("steps", "Steps")}</div>
+            ${segButtons()}
           </div>
-          <div id="preview-pane" style="flex:1;min-height:0;display:flex;flex-direction:column;">${progressTab === "steps" ? stepsPanel(true) : logPanel(true)}</div>
+          <div id="preview-pane" data-pane style="flex:1;min-height:0;display:flex;flex-direction:column;">${activePane()}</div>
         </div>`;
-      document.querySelectorAll("[data-ptab]").forEach((el) => el.addEventListener("click", () => { progressTab = el.getAttribute("data-ptab"); render(current || { previewStatus: status }); }));
       if (progressTab === "logs") scrollLog();
       return;
     }
@@ -297,8 +310,11 @@
             <i class="fas fa-triangle-exclamation" style="color:#ef4444;font-size:18px;"></i>
             <span>The preview couldn't start${state.error ? " — " + esc(state.error.split("\n")[0].slice(0, 120)) : ""}</span>
           </div>
-          <div style="font-size:12px;color:var(--text-secondary,#9ca3af);">Full log — the failing step and its output are below.</div>
-          ${logPanel(true)}
+          <div style="display:flex;align-items:center;gap:12px;">
+            <div style="flex:1;font-size:12px;color:var(--text-secondary,#9ca3af);">The failing step and its output are below.</div>
+            ${segButtons()}
+          </div>
+          <div data-pane style="flex:1;min-height:0;display:flex;flex-direction:column;">${activePane()}</div>
         </div>`;
       scrollLog();
       return;
@@ -383,10 +399,16 @@
     if (existing) { existing.remove(); return; }
     const overlay = document.createElement("div");
     overlay.id = "preview-log-overlay";
-    overlay.style.cssText = "position:absolute;inset:0;padding:16px 20px;background:var(--bg-color,#0f0f0f);display:flex;flex-direction:column;gap:8px;z-index:5;";
-    overlay.innerHTML = `<div style="font-size:12px;color:var(--text-secondary,#9ca3af);">Setup log</div>${logPanel(true)}`;
+    overlay.style.cssText = "position:absolute;inset:0;padding:16px 20px;background:var(--bg-color,#0f0f0f);display:flex;flex-direction:column;gap:10px;z-index:5;";
+    overlay.innerHTML = `
+      <div style="display:flex;align-items:center;gap:12px;">
+        <div style="flex:1;font-size:12px;color:var(--text-secondary,#9ca3af);">Preview</div>
+        ${segButtons()}
+        <button data-action="togglelog" title="Close" style="flex:none;padding:5px 9px;border-radius:6px;cursor:pointer;font-size:12px;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);"><i class="fas fa-times"></i></button>
+      </div>
+      <div data-pane style="flex:1;min-height:0;display:flex;flex-direction:column;">${activePane()}</div>`;
     body.appendChild(overlay);
-    scrollLog();
+    if (progressTab === "logs") scrollLog();
   }
 
   // ── Setup plan viewer/editor (the exact instructions used to run the app) ──
@@ -495,6 +517,9 @@
   }
 
   function onActionClick(e) {
+    // Logs | Steps toggle (present in progress, running-overlay, and error views).
+    const pt = e.target.closest("[data-ptab]");
+    if (pt) { progressTab = pt.getAttribute("data-ptab"); refreshPanes(); return; }
     const b = e.target.closest("[data-action]");
     if (!b) return;
     const action = b.getAttribute("data-action");
