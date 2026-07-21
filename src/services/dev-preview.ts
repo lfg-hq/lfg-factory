@@ -339,7 +339,7 @@ async function resolveDriverModel(userId: string) {
 // step — so a restart resumes from the first not-done step instead of the top.
 export interface RunStep {
   id: string;
-  phase: "toolchain" | "install" | "build" | "schema" | "run";
+  phase: "prepare" | "toolchain" | "install" | "build" | "schema" | "run";
   label: string;
   command: string;
   status: "pending" | "running" | "done" | "failed";
@@ -381,8 +381,30 @@ function buildRunbook(manifest: PreviewManifest, engines: EngineHandle[]): RunSt
 }
 
 const PHASE_STATUS: Record<RunStep["phase"], PreviewStatus> = {
-  toolchain: "installing", install: "installing", build: "installing", schema: "seeding", run: "starting",
+  prepare: "provisioning", toolchain: "installing", install: "installing", build: "installing", schema: "seeding", run: "starting",
 };
+
+// ── Pipeline prelude — the infra phases that run BEFORE the manifest runbook
+// (VM, Docker, clone, plan, DBs, env). Surfaced as checklist steps too, so the
+// Steps view shows the WHOLE pipeline, not just the build commands. ────────────
+function buildPrelude(): RunStep[] {
+  return [
+    { id: "vm", phase: "prepare", label: "Launch the sandbox VM", command: "", status: "pending" },
+    { id: "docker", phase: "prepare", label: "Install + start Docker", command: "", status: "pending" },
+    { id: "clone", phase: "prepare", label: "Pull the codebase", command: "", status: "pending" },
+    { id: "plan", phase: "prepare", label: "Analyze the codebase & build the plan", command: "", status: "pending" },
+    { id: "db", phase: "prepare", label: "Provision databases", command: "", status: "pending" },
+    { id: "env", phase: "prepare", label: "Write environment (.env)", command: "", status: "pending" },
+  ];
+}
+
+/** Persist + broadcast the full step list (prelude + runbook). */
+async function persistSteps(projectId: string, userId: string, steps: RunStep[]) {
+  await db.update(projectEnvironments)
+    .set({ setupSteps: JSON.stringify(steps), setupLog: logBuffers.get(projectId), updatedAt: new Date() })
+    .where(eq(projectEnvironments.projectId, projectId)).catch(() => {});
+  broadcastToUser(userId, { type: "preview_steps", projectId, steps });
+}
 
 /**
  * Execute the runbook with checkpoints. Resumes from `resumeSteps` (skips steps
@@ -393,10 +415,12 @@ const PHASE_STATUS: Record<RunStep["phase"], PreviewStatus> = {
 async function executeRunbook(
   projectId: string, userId: string, workspaceId: string,
   manifest: PreviewManifest, engines: EngineHandle[], model: any,
-  resumeSteps: RunStep[] | null,
+  resumeSteps: RunStep[] | null, prelude: RunStep[] = [],
 ): Promise<{ up: boolean; steps: RunStep[] }> {
   const port = manifest.port;
-  const steps = buildRunbook(manifest, engines);
+  // Prepend the (already-completed) infra prelude so the Steps view shows the
+  // whole pipeline; the loop below skips them (phase "prepare").
+  const steps = [...prelude, ...buildRunbook(manifest, engines)];
   // Resume: carry over 'done' from a prior checkpoint (by id). The run step never
   // stays "done" — the app may have stopped, so we always re-verify/restart it.
   if (resumeSteps?.length) {
@@ -414,9 +438,9 @@ async function executeRunbook(
 
   await persist();
 
-  // ── Setup steps (everything except the app start) ──
+  // ── Setup steps (everything except the infra prelude and the app start) ──
   for (const step of steps) {
-    if (step.phase === "run") continue;
+    if (step.phase === "prepare" || step.phase === "run") continue;
     throwIfCancelled(projectId);
     if (step.status === "done") { plog(projectId, userId, `✓ (already done) ${step.label}`); continue; }
     step.status = "running"; step.error = undefined; await persist();
@@ -709,17 +733,27 @@ export async function setupPreview(projectId: string, opts: SetupOptions): Promi
 
   resetLog(projectId);
   cancelledProjects.delete(projectId); // fresh run
+  // Pipeline steps (infra prelude) — surfaced in the Steps view as they progress.
+  const prelude = buildPrelude();
+  const prep = async (id: string, status: RunStep["status"]) => {
+    const s = prelude.find((p) => p.id === id); if (s) s.status = status;
+    await persistSteps(projectId, userId, prelude);
+  };
   try {
+    await prep("vm", "running");
     plog(projectId, userId, "Starting the project's sandbox…");
     const { workspaceId } = await ensureProjectSandbox(projectId);
     plog(projectId, userId, `Sandbox ready — Alpine Linux, 8GB, Docker-capable`);
+    await prep("vm", "done");
     await setPreview(projectId, userId, { previewStatus: "detecting", previewError: null, previewBranch: branch || "(default)" }, "Preparing sandbox…");
 
     // 0. Install + start Docker UP FRONT (before pulling the code) so it's ready
     // for any Docker-based DB (SQL Server) and for the run agent. Alpine → OpenRC.
+    await prep("docker", "running");
     plog(projectId, userId, "Installing + starting Docker…");
     const dockerReady = await ensureDocker(projectId);
     plog(projectId, userId, dockerReady ? "Docker ready ✓" : "Docker did not start (only fatal if a Docker-based DB is needed)", dockerReady ? undefined : { level: "error" });
+    await prep("docker", dockerReady ? "done" : "failed");
 
     // 1. Resolve the repo URL + provider auth (GitHub or GitLab), then clone/update.
     // Prefer the URL host as the source of truth (dual-provider app) and fall
@@ -745,6 +779,7 @@ export async function setupPreview(projectId: string, opts: SetupOptions): Promi
     const authUrl = repoUrl.replace(/^https:\/\//, `https://${cred}@`);
     const coBranch = branch ? `git checkout ${branch} 2>/dev/null || true` : "true";
 
+    await prep("clone", "running");
     plog(projectId, userId, `Pulling repo from ${provider === "gitlab" ? "GitLab" : "GitHub"} (${repoUrl.replace(/^https:\/\//, "")})${branch ? ` @ ${branch}` : ""}…`);
     await setPreview(projectId, userId, { previewStatus: "detecting" }, "Fetching the code…");
     const clone = await sh(workspaceId, `
@@ -760,11 +795,14 @@ fi`, 240_000);
       // Scrub any credential that leaked into git's error text before showing it.
       const safe = clone.output.replace(/\/\/[^@\s]+@/g, "//***@").slice(-500);
       plog(projectId, userId, "Could not fetch the repo", { level: "error", detail: safe });
+      await prep("clone", "failed");
       return failed(projectId, userId, `Could not fetch the repo:\n${safe}`);
     }
+    await prep("clone", "done");
     plog(projectId, userId, "Repo fetched ✓");
 
     // 2. Detect (or reuse) the setup manifest.
+    await prep("plan", "running");
     const existing = await getEnv(projectId);
     let manifest: PreviewManifest | null = null;
     // Reuse a saved plan only if it matches the CURRENT schema (old shallow plans
@@ -794,9 +832,11 @@ fi`, 240_000);
         ].filter(Boolean).join("\n"),
       });
     }
+    await prep("plan", "done");
 
     // 3. Provision the DBs the plan calls for, and inject each connection string
     // into the EXACT env var the app reads it from (per the plan).
+    await prep("db", manifest.databases.length ? "running" : "done");
     const provisioned: Record<string, string> = {};
     const engineHandles: EngineHandle[] = [];
     if (manifest.databases.length) {
@@ -808,12 +848,15 @@ fi`, 240_000);
         provisioned[dbSpec.connectionEnvVar] = formatConnection(dbSpec, h);
         plog(projectId, userId, `${dbSpec.engine} ready at 127.0.0.1:${h.port} (db "${h.dbName}") → ${dbSpec.connectionEnvVar} ✓`);
       }
+      await prep("db", "done");
     }
 
     // 4. Write env: the plan's DB connection vars + PORT/HOST(/ASPNETCORE_URLS) +
     // stored project vars.
+    await prep("env", "running");
     await writeEnvFile(workspaceId, projectId, manifest, provisioned);
     plog(projectId, userId, `Wrote .env (${Object.keys(provisioned).length} DB connection var(s) + run config)`);
+    await prep("env", "done");
 
     // 5. Get the app running + VERIFIED via the CHECKPOINTED RUNBOOK. The plan is
     // an ordered command list; we run each with a checkpoint, so a restart resumes
@@ -837,7 +880,7 @@ fi`, 240_000);
     if (!up) {
       await setPreview(projectId, userId, { previewStatus: "installing" }, "Setting up & running the app…");
       const resumeSteps: RunStep[] | null = existing?.setupSteps ? (JSON.parse(existing.setupSteps) as RunStep[]) : null;
-      const result = await executeRunbook(projectId, userId, workspaceId, manifest, engineHandles, driver?.model, resumeSteps);
+      const result = await executeRunbook(projectId, userId, workspaceId, manifest, engineHandles, driver?.model, resumeSteps, prelude);
       up = result.up;
       // Mark setup complete + store the run command so the next click is a fast run.
       const setupDone = result.steps.filter((s) => s.phase !== "run").every((s) => s.status === "done" || s.optional);
