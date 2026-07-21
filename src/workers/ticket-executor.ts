@@ -1924,15 +1924,14 @@ function waitForCompletion(
 }
 
 async function findExistingSandbox(ticketId: string) {
+  // Match the ticket's sandbox regardless of workspaceType — worktree runs store
+  // "ticket-worktree", so restricting to "ticket" meant retries never found the
+  // existing row and re-inserted (→ unique-constraint clash on the shared
+  // preview workspace).
   const result = await db
     .select()
     .from(sandboxes)
-    .where(
-      and(
-        eq(sandboxes.ticketId, ticketId),
-        eq(sandboxes.workspaceType, "ticket")
-      )
-    )
+    .where(eq(sandboxes.ticketId, ticketId))
     .limit(1);
   return result[0] ?? null;
 }

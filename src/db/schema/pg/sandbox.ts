@@ -6,7 +6,6 @@ import {
   timestamp,
   jsonb,
   index,
-  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { users } from "./users.ts";
@@ -22,7 +21,10 @@ export const sandboxes = pgTable(
     projectId: text("project_id").references(() => projects.id, { onDelete: "set null" }),
     userId: text("user_id").references(() => users.id, { onDelete: "set null" }),
     ticketId: text("ticket_id").references(() => projectTickets.id, { onDelete: "set null" }),
-    magsWorkspaceId: text("mags_workspace_id").unique(),
+    // NOT unique: the worktree model shares ONE Mags workspace across many ticket
+    // sandbox rows (each on its own git worktree/branch), so several rows
+    // legitimately carry the same mags_workspace_id.
+    magsWorkspaceId: text("mags_workspace_id"),
     magsJobId: text("mags_job_id"),
     magsBaseWorkspaceId: text("mags_base_workspace_id"),
     workspaceType: text("workspace_type").notNull().default("ticket"),
@@ -47,7 +49,7 @@ export const sandboxes = pgTable(
     index("sb_project_idx").on(t.projectId),
     index("sb_ticket_idx").on(t.ticketId),
     index("sb_user_idx").on(t.userId),
-    uniqueIndex("sb_mags_ws_idx").on(t.magsWorkspaceId),
+    index("sb_mags_ws_idx").on(t.magsWorkspaceId),
   ]
 );
 

@@ -3,7 +3,6 @@ import {
   text,
   integer,
   index,
-  uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
 import { users } from "./users.ts";
@@ -33,7 +32,9 @@ export const sandboxes = sqliteTable(
     // Mags VM identifiers
     // magsWorkspaceId is the human-readable name used when creating the VM
     // e.g. "{ticketId}-{uuid8}" — also used as the workspace_id for subsequent runs
-    magsWorkspaceId: text("mags_workspace_id").unique(),
+    // NOT unique: the worktree model shares one Mags workspace across many ticket
+    // sandbox rows, so several rows legitimately carry the same value.
+    magsWorkspaceId: text("mags_workspace_id"),
     // The request_id returned when the persistent workspace was first created
     magsJobId: text("mags_job_id"),
     // Base workspace ID used as the snapshot to clone from
@@ -78,7 +79,7 @@ export const sandboxes = sqliteTable(
     index("sb_project_idx").on(t.projectId),
     index("sb_ticket_idx").on(t.ticketId),
     index("sb_user_idx").on(t.userId),
-    uniqueIndex("sb_mags_ws_idx").on(t.magsWorkspaceId),
+    index("sb_mags_ws_idx").on(t.magsWorkspaceId),
   ]
 );
 
