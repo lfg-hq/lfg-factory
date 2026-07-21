@@ -49,6 +49,63 @@ import { buildApiBuilderPrompt } from "../ai/prompts/builder-api.ts";
 import { createBuilderTools } from "../ai/tools/builder-tools.ts";
 import { getModel, getProviderName, getProviderModel, DEFAULT_MODEL_KEY, type ProviderName } from "../ai/provider.ts";
 import { modelSelections } from "../db/schema/chat.ts";
+import { getValidGitlabToken } from "../services/gitlab-token.ts";
+
+interface RepoAuth {
+  provider: "github" | "gitlab";
+  owner: string; repo: string;
+  repoUrl: string;   // https, no creds, ends .git
+  authUrl: string;   // https with embedded credential
+  token: string;
+  tokenUser: string; // "x-access-token" (GitHub) | "oauth2" (GitLab)
+}
+
+/**
+ * Resolve the project's repo provider + a correctly-authenticated remote URL.
+ * Supports BOTH GitHub (x-access-token) and GitLab (oauth2). Provider is inferred
+ * from the repo URL host (dual-provider apps), falling back to repoProvider.
+ * Returns null if there's no connected repo or no valid token for its provider.
+ */
+async function resolveRepoAuth(
+  project: { repoOwner: string | null; repoName: string | null; repoUrl: string | null; repoProvider?: string | null; stack?: string | null },
+  ownerId: string,
+): Promise<RepoAuth | null> {
+  const columnProvider = (project.repoProvider || "github").toLowerCase();
+  let repoUrl = (project.repoUrl || extractRepoUrl(project.stack ?? "") || "").trim();
+  let owner = project.repoOwner ?? "";
+  let repo = project.repoName ?? "";
+  if ((!owner || !repo) && repoUrl) {
+    const m = repoUrl.match(/(?:github|gitlab)\.com[:/]+([^/]+)\/([^/.]+)/i);
+    if (m) { owner = owner || m[1]!; repo = repo || m[2]!; }
+  }
+  const provider: "github" | "gitlab" = /gitlab\.com|\/gitlab\b/i.test(repoUrl) ? "gitlab"
+    : /github\.com/i.test(repoUrl) ? "github" : (columnProvider === "gitlab" ? "gitlab" : "github");
+  const host = provider === "gitlab" ? "gitlab.com" : "github.com";
+  if (!repoUrl && owner && repo) repoUrl = `https://${host}/${owner}/${repo}.git`;
+  if (!repoUrl || !owner || !repo) return null;
+  repoUrl = repoUrl.replace(/^git@([^:]+):/, "https://$1/").replace(/\/+$/, "").replace(/\.git$/, "") + ".git";
+  const token = provider === "gitlab"
+    ? (await getValidGitlabToken(ownerId)) || ""
+    : (await db.select().from(githubTokens).where(eq(githubTokens.userId, ownerId)).limit(1))[0]?.accessToken || "";
+  if (!token) return null;
+  const tokenUser = provider === "gitlab" ? "oauth2" : "x-access-token";
+  return { provider, owner, repo, repoUrl, authUrl: repoUrl.replace("https://", `https://${tokenUser}:${token}@`), token, tokenUser };
+}
+
+/**
+ * Remove a ticket's git worktree from the shared preview sandbox and drop its
+ * sandbox row. Called ONLY when the ticket is approved and moved to Done — the
+ * worktree is kept alive through In-Review so the user can preview/test the branch.
+ */
+export async function cleanupTicketWorktree(ticketId: string): Promise<void> {
+  const [sb] = await db.select().from(sandboxes).where(eq(sandboxes.ticketId, ticketId)).limit(1);
+  if (!sb) return;
+  if (sb.magsWorkspaceId && sb.workspaceType === "ticket-worktree") {
+    const dir = `wt-ticket-${ticketId.slice(0, 12)}`;
+    await execOnWorkspace(sb.magsWorkspaceId, `cd ${WORKING_DIR}/project 2>/dev/null && git worktree remove --force ${WORKING_DIR}/${dir} 2>/dev/null; rm -rf ${WORKING_DIR}/${dir} 2>/dev/null; git worktree prune 2>/dev/null; echo cleaned`, { timeout: 60_000 }).catch(() => {});
+  }
+  await db.delete(sandboxes).where(eq(sandboxes.id, sb.id)).catch(() => {});
+}
 
 /**
  * The model to build tickets with. Precedence: an explicit builder model (if the
@@ -1440,24 +1497,18 @@ async function executeTicketApi(ticketId: string): Promise<void> {
     );
   }
 
-  // ── Git setup (same as CLI mode) ────────────────────────────────────
+  // ── Git setup (same as CLI mode) — provider-aware (GitHub OR GitLab) ─
   console.log(`[ticket-executor-api] Setting up git`);
-  let githubOwner: string | null = project.repoOwner ?? null;
-  let githubRepo: string | null = project.repoName ?? null;
-  const repoUrl = project.repoUrl ?? extractRepoUrl(project.stack ?? "");
+  const auth = await resolveRepoAuth(project, ownerId);
+  let githubOwner: string | null = auth?.owner ?? project.repoOwner ?? null;
+  let githubRepo: string | null = auth?.repo ?? project.repoName ?? null;
+  const repoUrl = auth?.repoUrl ?? project.repoUrl ?? extractRepoUrl(project.stack ?? "");
+  // The credential used for the commit/push phase — provider-correct.
+  let pushAuth: { repoUrl: string; token: string; tokenUser: string } | null =
+    auth ? { repoUrl: auth.repoUrl, token: auth.token, tokenUser: auth.tokenUser } : null;
 
-  if (!githubOwner || !githubRepo) {
-    if (repoUrl) {
-      const ghMatch = repoUrl.match(/github\.com\/([^/]+)\/([^/.]+)/);
-      if (ghMatch) {
-        githubOwner = ghMatch[1] ?? null;
-        githubRepo = ghMatch[2] ?? null;
-      }
-    }
-  }
-
-  if (githubOwner && githubRepo && githubToken) {
-    await addLog(ticketId, `Setting up repo: ${githubOwner}/${githubRepo}`, "command", ownerId);
+  if (auth) {
+    await addLog(ticketId, `Setting up repo: ${auth.owner}/${auth.repo} (${auth.provider})`, "command", ownerId);
 
     // Worktree path: the repo is already cloned in the shared preview sandbox at
     // /data/project. Add a git worktree for this ticket's branch (own working
@@ -1466,7 +1517,7 @@ async function executeTicketApi(ticketId: string): Promise<void> {
     const worktreeScript = `
 cd ${WORKING_DIR}/project || { echo "GIT_SETUP_FAILED_NO_GIT"; exit 1; }
 git config user.email "ai@lfg.dev"; git config user.name "LFG AI"
-git remote set-url origin https://${githubToken}@github.com/${githubOwner}/${githubRepo}.git 2>/dev/null || true
+git remote set-url origin "${auth.authUrl}" 2>/dev/null || git remote add origin "${auth.authUrl}" 2>/dev/null || true
 git fetch origin 2>&1 || true
 if ! git rev-parse --verify origin/lfg-agent 2>/dev/null; then
     echo "CREATING_LFG_AGENT_BRANCH"
@@ -1502,13 +1553,13 @@ elif [ -d "${projectDirName}" ] && [ "$(ls -A ${projectDirName} 2>/dev/null)" ];
     echo "INIT_EXISTING_DIR"
     cd ${projectDirName}
     git init
-    git remote add origin https://${githubToken}@github.com/${githubOwner}/${githubRepo}.git 2>/dev/null || \\
-        git remote set-url origin https://${githubToken}@github.com/${githubOwner}/${githubRepo}.git
+    git remote add origin "${auth.authUrl}" 2>/dev/null || \\
+        git remote set-url origin "${auth.authUrl}"
     git fetch origin
 else
     echo "CLONING_REPO"
     rm -rf ${projectDirName}
-    git clone https://${githubToken}@github.com/${githubOwner}/${githubRepo}.git ${projectDirName} 2>&1
+    git clone "${auth.authUrl}" ${projectDirName} 2>&1
     # A failed clone (TLS/network/auth) leaves no dir — do NOT fall through and run
     # git ops in the parent (WORKING_DIR); fail loudly so the caller aborts.
     cd ${projectDirName} 2>/dev/null || { echo "GIT_CLONE_FAILED"; exit 1; }
@@ -1578,6 +1629,7 @@ git branch --show-current
       const repoResult = await createGitHubRepo({ repoName, description: `LFG Project: ${project.name}`, isPrivate: true, githubToken });
       githubOwner = repoResult.owner;
       githubRepo = repoResult.repoName;
+      pushAuth = { repoUrl: `https://github.com/${repoResult.owner}/${repoResult.repoName}.git`, token: githubToken, tokenUser: "x-access-token" };
 
       await db.update(projects).set({ repoUrl: repoResult.repoUrl, repoOwner: repoResult.owner, repoName: repoResult.repoName, updatedAt: new Date() }).where(eq(projects.id, project.id));
 
@@ -1819,7 +1871,8 @@ git branch --show-current
   // ── Finalize: commit, push, merge ───────────────────────────────────
   const durationMs = Date.now() - startTime;
 
-  if (implementationStatus === "complete" && githubOwner && githubRepo && githubToken) {
+  let commitFailed = false;
+  if (implementationStatus === "complete" && pushAuth) {
     try {
       await addLog(ticketId, "Committing changes...", "command", ownerId);
       const { sha } = await commitAndPush({
@@ -1827,8 +1880,9 @@ git branch --show-current
         projectDir,
         commitMessage: `feat: ${ticket.name}`,
         featureBranch,
-        repoUrl: `https://github.com/${githubOwner}/${githubRepo}.git`,
-        githubToken,
+        repoUrl: pushAuth.repoUrl,
+        githubToken: pushAuth.token,
+        tokenUser: pushAuth.tokenUser,
       });
 
       await db.update(projectTickets).set({ githubBranch: featureBranch, githubCommitSha: sha, updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
@@ -1849,8 +1903,9 @@ git branch --show-current
           workspaceId,
           projectDir,
           featureBranch,
-          repoUrl: `https://github.com/${githubOwner}/${githubRepo}.git`,
-          githubToken,
+          repoUrl: pushAuth.repoUrl,
+          githubToken: pushAuth.token,
+          tokenUser: pushAuth.tokenUser,
         });
         await db.update(projectTickets).set({ githubMergeStatus: "merged", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
         await addLog(ticketId, `Merged to lfg-agent (${mergeSha.slice(0, 7)})`, "command", ownerId);
@@ -1858,11 +1913,15 @@ git branch --show-current
         console.warn(`[ticket-executor-api] Merge to lfg-agent failed:`, mergeErr);
       }
     } catch (err) {
-      await addLog(ticketId, `Git commit failed: ${err}`, "command", ownerId);
+      // A failed commit/push means the work is NOT saved — do NOT report success.
+      commitFailed = true;
+      const msg = (err as Error).message?.slice(0, 400) ?? String(err);
+      await addLog(ticketId, `Git commit/push FAILED — changes were NOT saved: ${msg}`, "command", ownerId);
+      console.error(`[ticket-executor-api] commit/push failed:`, err);
     }
   }
 
-  if (implementationStatus === "complete") {
+  if (implementationStatus === "complete" && !commitFailed) {
     const reviewStageId = await moveTicketToStage(ticketId, project.id, "In Review");
     await db.update(projectTickets).set({
       status: "review",
@@ -1874,17 +1933,17 @@ git branch --show-current
     await addLog(ticketId, "Ticket implementation complete!", "command", ownerId);
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId });
   } else {
-    await markTicketFailed(ticketId, "Implementation did not complete", ownerId, { emitEvent: false });
+    const reason = commitFailed
+      ? "the changes were built but the commit/push failed — the work is preserved in the ticket's worktree; fix the cause and retry"
+      : "Implementation did not complete";
+    await markTicketFailed(ticketId, reason, ownerId, { emitEvent: false });
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "failed", queueStatus: "none" });
   }
 
-  // Worktree cleanup: remove this ticket's worktree from the shared preview
-  // sandbox (leaves the sandbox + the preview's /data/project untouched) and drop
-  // the transient sandbox row that points at the shared VM (so nothing reaps it).
-  if (useWorktree) {
-    await execOnWorkspace(workspaceId, `cd ${WORKING_DIR}/project 2>/dev/null && git worktree remove --force ${WORKING_DIR}/${projectDirName} 2>/dev/null; rm -rf ${WORKING_DIR}/${projectDirName} 2>/dev/null; git worktree prune 2>/dev/null; echo cleaned`, { timeout: 60_000 }).catch(() => {});
-    if (sandboxRow?.id) await db.delete(sandboxes).where(eq(sandboxes.id, sandboxRow.id)).catch(() => {});
-  }
+  // NOTE: the ticket's git worktree + its sandbox row are intentionally KEPT here.
+  // They are cleaned up only when the ticket is approved and moved to Done (via
+  // cleanupTicketWorktree), so the user can preview/test the branch first — and a
+  // failed push never destroys the work.
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────

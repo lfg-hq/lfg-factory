@@ -26,6 +26,9 @@ export interface GitCommitOptions {
   featureBranch: string;
   repoUrl: string;
   githubToken?: string;
+  /** Auth username for the embedded HTTPS credential: "x-access-token" for GitHub
+   *  (default), "oauth2" for GitLab. */
+  tokenUser?: string;
 }
 
 export interface GitMergeOptions {
@@ -111,14 +114,15 @@ echo "GIT_SETUP_OK"
  */
 export async function commitAndPush(opts: GitCommitOptions): Promise<GitCommitResult> {
   const { workspaceId, projectDir, commitMessage, featureBranch, repoUrl, githubToken } = opts;
+  const tokenUser = opts.tokenUser ?? "x-access-token"; // GitHub default; "oauth2" for GitLab
 
   const authorName = opts.authorName ?? "LFG Agent";
   const authorEmail = opts.authorEmail ?? "agent@lfg.dev";
   const msgB64 = Buffer.from(commitMessage).toString("base64");
 
-  // Build authenticated remote URL
+  // Build authenticated remote URL (provider-aware credential prefix)
   const authUrl = githubToken
-    ? repoUrl.replace("https://", `https://x-access-token:${githubToken}@`)
+    ? repoUrl.replace("https://", `https://${tokenUser}:${githubToken}@`)
     : repoUrl;
 
   const script = `
@@ -246,9 +250,11 @@ export async function mergeToLfgAgent(opts: {
   featureBranch: string;
   repoUrl: string;
   githubToken: string;
+  tokenUser?: string;
 }): Promise<{ sha: string }> {
   const { workspaceId, projectDir, featureBranch, repoUrl, githubToken } = opts;
-  const authUrl = repoUrl.replace("https://", `https://x-access-token:${githubToken}@`);
+  const tokenUser = opts.tokenUser ?? "x-access-token";
+  const authUrl = repoUrl.replace("https://", `https://${tokenUser}:${githubToken}@`);
 
   const script = `
 set -e

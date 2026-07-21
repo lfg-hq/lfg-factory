@@ -11,6 +11,7 @@ import { users } from "../db/schema/users.ts";
 import { projectFiles, projectFileVersions } from "../db/schema/documents.ts";
 import { conversations } from "../db/schema/chat.ts";
 import { ticketStages, projectTickets } from "../db/schema/tickets.ts";
+import { cleanupTicketWorktree } from "../workers/ticket-executor.ts";
 import { applicationState, githubTokens, gitlabTokens } from "../db/schema/users.ts";
 import { instantApps } from "../db/schema/instant.ts";
 import { env } from "../config/env.ts";
@@ -518,6 +519,17 @@ projectsRouter.patch("/projects/:projectId/api/checklist/:ticketId/stage", async
   await db.update(projectTickets).set({ stageId, updatedAt: new Date() }).where(
     and(eq(projectTickets.id, ticketId!), eq(projectTickets.projectId, project.id))
   );
+
+  // Moving into a COMPLETED stage (Done) = the user approved the ticket → reclaim
+  // its build worktree + sandbox row (kept alive through In-Review so the branch
+  // could be previewed/tested).
+  try {
+    const [stage] = await db.select({ isCompleted: ticketStages.isCompleted, name: ticketStages.name })
+      .from(ticketStages).where(eq(ticketStages.id, stageId)).limit(1);
+    if (stage?.isCompleted || /^done$/i.test(stage?.name ?? "")) {
+      await cleanupTicketWorktree(ticketId!).catch(() => {});
+    }
+  } catch { /* best-effort cleanup */ }
 
   return c.json({ success: true });
 });
