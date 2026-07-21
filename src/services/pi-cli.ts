@@ -499,6 +499,51 @@ export function describePiTool(name: string, args: Record<string, any> | undefin
 }
 
 /**
+ * Turn a SINGLE Pi JSONL line into a human log label (or null to skip noise).
+ * Pi's `--mode json` format differs from Claude CLI's — top-level toolName/name,
+ * tool_use/text blocks inside an assistant message, or plain text/content — so the
+ * Claude parser used by /api/v1/cli/output would drop all of it. This lets the
+ * webhook handler log Pi ticket-build output line by line.
+ */
+export function describePiLine(line: string, maxLen = 400): string | null {
+  const t = line.trim();
+  if (!t.startsWith("{")) return null;
+  let evt: Record<string, any>;
+  try { evt = JSON.parse(t); } catch { return null; }
+
+  // Top-level tool call.
+  const topName = evt.toolName ?? evt.tool ?? evt.name;
+  if (typeof topName === "string") return describePiTool(topName, evt.input ?? evt.arguments ?? evt.args, Math.min(maxLen, 120));
+
+  // Assistant message with content blocks (tool_use + text).
+  const content = evt.message?.content ?? evt.content;
+  if (Array.isArray(content)) {
+    const parts: string[] = [];
+    for (const block of content) {
+      if (!block || typeof block !== "object") continue;
+      if (/tool/.test(String(block.type)) && (block.name || block.toolName)) {
+        parts.push(describePiTool(String(block.name ?? block.toolName), block.input ?? block.arguments ?? block.args, Math.min(maxLen, 120)));
+      } else if (block.type === "text" && typeof block.text === "string" && block.text.trim()) {
+        parts.push(block.text.trim().slice(0, maxLen));
+      }
+    }
+    return parts.length ? parts.join("\n") : null;
+  }
+
+  // Tool result output.
+  if (evt.type === "tool_result" || evt.toolResult != null) {
+    const r = typeof evt.content === "string" ? evt.content : (evt.result ?? evt.output);
+    if (typeof r === "string" && r.trim().length > 30) return r.trim().slice(0, maxLen);
+    return null;
+  }
+
+  // Plain text / content string.
+  const text = evt.text ?? (typeof evt.content === "string" ? evt.content : undefined);
+  if (typeof text === "string" && text.trim()) return text.trim().slice(0, maxLen);
+  return null;
+}
+
+/**
  * Best-effort progress line from Pi's JSONL stream. Pi's `--mode json` emits one
  * JSON object per line. We look for the most recent tool call (in any of the shapes
  * Pi uses: top-level toolName/name, or a tool_use block inside an assistant message)

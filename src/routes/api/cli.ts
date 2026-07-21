@@ -22,7 +22,7 @@ import { eq, and } from "drizzle-orm";
 import { emit } from "../../events/bus.ts";
 import { parseJsonlEvents, extractSessionId, isStreamComplete } from "../../services/claude-cli.ts";
 import { addLog, formatToolUse } from "../../services/ticket-logs.ts";
-import { describePiTool } from "../../services/pi-cli.ts";
+import { describePiTool, describePiLine } from "../../services/pi-cli.ts";
 import { broadcastInstantStatus } from "../../services/instant-app.ts";
 
 export const cliRouter = new Hono();
@@ -395,8 +395,12 @@ cliRouter.post("/output", async (c) => {
     return c.json({ error: "Invalid base64 data" }, 400);
   }
 
-  // Parse JSONL events
+  // Parse JSONL events. This endpoint receives BOTH Claude CLI JSONL (Claude Code
+  // path) AND Pi JSONL (DeepSeek/Pi ticket builds) — the two formats differ, so we
+  // try Claude parsing first and fall back to a Pi-aware per-line parser. `logged`
+  // tracks whether anything was surfaced so the fallback only runs when needed.
   const events = parseJsonlEvents(rawText);
+  let logged = 0;
 
   if (events.length > 0) {
     // Extract session ID if present — save to sandbox
@@ -417,10 +421,10 @@ cliRouter.post("/output", async (c) => {
         if (ev.type === "assistant") {
           for (const block of content) {
             if (block.type === "text" && block.text?.trim()) {
-              await addLog(ticket_id, block.text, "ai_response", ownerId);
+              await addLog(ticket_id, block.text, "ai_response", ownerId); logged++;
             } else if (block.type === "tool_use" && block.name) {
               const toolMsg = formatToolUse(block.name, block.input ?? {});
-              await addLog(ticket_id, toolMsg, "command", ownerId);
+              await addLog(ticket_id, toolMsg, "command", ownerId); logged++;
             }
           }
         } else if (ev.type === "user") {
@@ -433,7 +437,7 @@ cliRouter.post("/output", async (c) => {
                   ? block.content.map((b: any) => b.text ?? "").join("\n")
                   : "";
               if (text.length > 50) {
-                await addLog(ticket_id, text.slice(0, 500), "command", ownerId);
+                await addLog(ticket_id, text.slice(0, 500), "command", ownerId); logged++;
               }
             }
           }
@@ -442,15 +446,28 @@ cliRouter.post("/output", async (c) => {
           // final assistant message. Only log if it's an error subtype.
         } else if (ev.type === "error") {
           const errMsg = (ev as { type: "error"; error: string }).error;
-          await addLog(ticket_id, `CLI error: ${errMsg}`, "cli_error", ownerId);
+          await addLog(ticket_id, `CLI error: ${errMsg}`, "cli_error", ownerId); logged++;
         }
       } catch (err) {
         console.error(`[cli/output] Error processing event type=${ev.type}:`, err);
       }
     }
-  } else if (rawText.trim()) {
-    // Non-JSONL text — log as cli_error (e.g. stderr output)
-    await addLog(ticket_id, rawText.trim().slice(0, 1000), "cli_error", ownerId);
+  }
+
+  // Pi format (or anything the Claude parser didn't surface): parse each line with
+  // the Pi-aware describer so DeepSeek/Pi ticket builds stream real output.
+  if (logged === 0 && rawText.trim()) {
+    for (const line of rawText.split("\n")) {
+      try {
+        const label = describePiLine(line);
+        if (label) { await addLog(ticket_id, label, "command", ownerId); logged++; }
+      } catch { /* skip a bad line */ }
+    }
+    // Truly opaque non-JSON output (stderr) — surface it rather than drop it.
+    if (logged === 0) {
+      const plain = rawText.trim();
+      if (plain && !plain.startsWith("{")) await addLog(ticket_id, plain.slice(0, 1000), "cli_error", ownerId);
+    }
   }
 
   // If VM signals completion, emit the event
