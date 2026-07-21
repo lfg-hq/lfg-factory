@@ -108,6 +108,7 @@ async function setPreview(
 // reload. This is how the UI shows "pulling repo / installing deps / …" and the
 // REAL error output instead of an opaque plumbing message. ────────────────────
 const logBuffers = new Map<string, string>();
+const logFlushAt = new Map<string, number>(); // last DB-flush time per project
 
 /** Append a human-readable line to the project's setup log (UI + server + DB). */
 function plog(projectId: string, userId: string, line: string, opts?: { level?: "info" | "error"; detail?: string }) {
@@ -119,9 +120,26 @@ function plog(projectId: string, userId: string, line: string, opts?: { level?: 
   logBuffers.set(projectId, buf);
   console.log(`[dev-preview] ${projectId.slice(0, 8)} ${level === "error" ? "ERROR " : ""}${line}${opts?.detail ? " :: " + opts.detail.replace(/\n/g, " ").slice(0, 300) : ""}`);
   broadcastToUser(userId, { type: "preview_log", projectId, line: entry, level });
+  // Also persist to the DB on a throttle so the polling fallback (and a reload)
+  // always shows fresh logs even during a long silent phase / if WS drops.
+  const now = Date.now();
+  if (now - (logFlushAt.get(projectId) ?? 0) > 1500) {
+    logFlushAt.set(projectId, now);
+    db.update(projectEnvironments).set({ setupLog: buf, updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId)).catch(() => {});
+  }
 }
 
-function resetLog(projectId: string) { logBuffers.set(projectId, ""); }
+function resetLog(projectId: string) { logBuffers.set(projectId, ""); logFlushAt.set(projectId, 0); }
+
+// ── Cancellation ─────────────────────────────────────────────────────────────
+// The setup pipeline runs as a fire-and-forget background task; Stop sets this
+// flag and the pipeline bails at the next checkpoint (between phases + inside the
+// runbook/agent loops), so a stuck/long run can actually be halted.
+const cancelledProjects = new Set<string>();
+export function cancelPreviewSetup(projectId: string) { cancelledProjects.add(projectId); }
+function isCancelled(projectId: string): boolean { return cancelledProjects.has(projectId); }
+/** Throws a sentinel if the run was cancelled — callers let it bubble to the catch. */
+function throwIfCancelled(projectId: string) { if (cancelledProjects.has(projectId)) throw new Error("__CANCELLED__"); }
 
 // ── Analyze: read the ACTUAL codebase (not a shallow fingerprint) so the plan
 // knows the real DB, connection config, versions, schema scripts, and — for
@@ -392,6 +410,7 @@ async function executeRunbook(
   // ── Setup steps (everything except the app start) ──
   for (const step of steps) {
     if (step.phase === "run") continue;
+    throwIfCancelled(projectId);
     if (step.status === "done") { plog(projectId, userId, `✓ (already done) ${step.label}`); continue; }
     step.status = "running"; step.error = undefined; await persist();
     await setPreview(projectId, userId, { previewStatus: PHASE_STATUS[step.phase] }, step.label);
@@ -527,6 +546,11 @@ async function runDetachedPolled(
   while (Date.now() < deadline) {
     await sleep(interval);
     interval = Math.min(interval + 2000, 15000); // back off: 3s,5s,7s…15s
+    // Cancelled → kill the detached command's process tree and bail.
+    if (isCancelled(projectId)) {
+      await execOnWorkspace(workspaceId, `pkill -9 -f ${id} 2>/dev/null; echo cancelled`, { timeout: 20_000 }).catch(() => {});
+      return { exitCode: -3, output: "(cancelled)" };
+    }
     const chk = await execOnWorkspace(workspaceId, `if [ -f ${donef} ]; then printf 'DONE:'; cat ${donef}; else echo RUNNING; fi`, { timeout: 30_000 })
       .catch(() => ({ output: "RUNNING", stderr: "", exitCode: 0 }));
     if ((chk.output || "").includes("DONE:")) {
@@ -560,6 +584,7 @@ async function driveSandbox(
         timeoutSec: z.number().optional().describe("How long to wait for THIS command before returning control (default 600, max 1800). For a big restore/build use ~1500. If it returns exitCode -2 (still running), call run again with the same/again to keep waiting."),
       })),
       execute: async ({ command, timeoutSec }: { command: string; timeoutSec?: number }) => {
+        throwIfCancelled(projectId); // Stop pressed → abort the agent loop
         const maxMs = Math.min(Math.max(timeoutSec ?? 600, 10), 1800) * 1000;
         plog(projectId, userId, `$ ${command}`);
         setPreview(projectId, userId, { previewStatus: "starting" }, `$ ${command.slice(0, 110)}`).catch(() => {});
@@ -616,6 +641,7 @@ export async function setupPreview(projectId: string, opts: SetupOptions): Promi
   const branch = opts.branch || ""; // "" → use the repo's default branch
 
   resetLog(projectId);
+  cancelledProjects.delete(projectId); // fresh run
   try {
     plog(projectId, userId, "Starting the project's sandbox…");
     await ensureProjectSandbox(projectId);
@@ -795,8 +821,16 @@ fi`, 240_000);
     return { previewUrl };
   } catch (err) {
     const msg = (err as Error).message ?? String(err);
+    if (msg === "__CANCELLED__" || isCancelled(projectId)) {
+      cancelledProjects.delete(projectId);
+      plog(projectId, userId, "Setup cancelled by user");
+      await setPreview(projectId, userId, { previewStatus: "stopped", appUrl: null, previewError: null }, "Preview stopped");
+      return { error: "cancelled" };
+    }
     plog(projectId, userId, "Setup failed", { level: "error", detail: msg });
     return failed(projectId, userId, msg);
+  } finally {
+    cancelledProjects.delete(projectId);
   }
 }
 
@@ -916,11 +950,16 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
 
 /** Stop the running app (leaves the sandbox + DBs up). */
 export async function stopPreview(projectId: string, userId: string): Promise<void> {
+  // Signal any in-flight setup to abort at its next checkpoint (Stop during setup).
+  cancelPreviewSetup(projectId);
+  plog(projectId, userId, "Stop requested — cancelling…");
+  await setPreview(projectId, userId, { previewStatus: "stopped", appUrl: null }, "Stopping…");
   const workspaceId = `env-${projectId}`;
   const row = await getEnv(projectId);
   const port = row?.appPort
     ?? (row?.setupManifest ? (JSON.parse(row.setupManifest) as PreviewManifest).port : undefined)
     ?? DEFAULT_PORT;
-  await sh(workspaceId, `fuser -k ${port}/tcp 2>/dev/null; pkill -f ':${port}' 2>/dev/null; echo stopped`, 30_000).catch(() => {});
+  // Kill the app port + any lingering build/install processes started for this run.
+  await sh(workspaceId, `fuser -k ${port}/tcp 2>/dev/null; pkill -f ':${port}' 2>/dev/null; pkill -f 'dotnet' 2>/dev/null; pkill -f 'npm ' 2>/dev/null; echo stopped`, 30_000).catch(() => {});
   await setPreview(projectId, userId, { previewStatus: "stopped", appUrl: null }, "Preview stopped");
 }

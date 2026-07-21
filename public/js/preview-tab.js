@@ -311,16 +311,29 @@
       const r = await api("");
       if (!r.ok) throw new Error("state " + r.status);
       const state = await r.json();
-      if (typeof state.log === "string" && state.log) logText = state.log;
+      // Never SHRINK the log — WS may have appended newer lines than the DB copy.
+      if (typeof state.log === "string" && state.log.length > logText.length) logText = state.log;
       if (state.manifest) manifest = state.manifest;
       if (Array.isArray(state.steps)) stepsData = state.steps;
-      render(state);
+      const nextView = statusView(state.previewStatus);
+      current = state;
+      if (nextView === currentView && currentView === "progress") {
+        // Same in-progress view → update in place (don't rebuild → keeps scroll +
+        // the live WS-appended log lines).
+        const stepsWrap = document.getElementById("preview-steps-wrap");
+        if (stepsWrap) stepsWrap.innerHTML = stepsPanel();
+        const el = document.getElementById("preview-log");
+        if (el) { const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40; el.textContent = logText; if (atBottom) el.scrollTop = el.scrollHeight; }
+      } else {
+        render(state);
+      }
       managePolling(state.previewStatus);
     } catch (e) {
       console.warn("[preview] load failed", e);
       if (!current) render({ previewStatus: "idle" });
     }
   }
+  const statusView = (s) => IN_PROGRESS.includes(s) ? "progress" : s === "running" ? "running" : s === "error" ? "error" : "idle";
 
   function managePolling(status) {
     if (IN_PROGRESS.includes(status)) {
