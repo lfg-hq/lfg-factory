@@ -302,6 +302,28 @@ async function checkServer(workspaceId: string, port: number, tries: number): Pr
   return false;
 }
 
+/**
+ * Wait for the app to answer on `port`, STREAMING new lines from its log the whole
+ * time so the user sees the build/run progress (and any failure) instead of a blank
+ * screen. Returns true as soon as the port serves, false at the deadline.
+ */
+async function waitForAppUp(projectId: string, userId: string, workspaceId: string, port: number, logFile: string, maxMs: number): Promise<boolean> {
+  const deadline = Date.now() + maxMs;
+  let off = 0;
+  while (Date.now() < deadline) {
+    throwIfCancelled(projectId);
+    const r = await sh(workspaceId, `tail -c +${off + 1} ${logFile} 2>/dev/null`, 15_000).catch(() => ({ output: "" }));
+    const out = r.output || "";
+    if (out.trim()) {
+      off += Buffer.byteLength(out, "utf8");
+      plog(projectId, userId, out.trim().split("\n").slice(-1)[0]!.slice(0, 200), { detail: out.trim().slice(-1200) });
+    }
+    if (await checkServer(workspaceId, port, 1)) return true;
+    await sleep(6000);
+  }
+  return false;
+}
+
 async function startApp(workspaceId: string, manifest: PreviewManifest): Promise<boolean> {
   const port = manifest.port;
   const buildStep = manifest.buildCmd ? `${manifest.buildCmd} >> preview.log 2>&1 || echo BUILD_FAILED >> preview.log` : "true";
@@ -1207,9 +1229,16 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
     }
 
     await setPreview(projectId, userId, { previewStatus: "starting", previewError: null, previewBranch: branchLabel }, ticketId ? `Running ${branchLabel}…` : "Restarting the app…");
-    await runDetachedPolled(projectId, userId, workspaceId, appStartCommand(manifest, runDir), 60_000);
-    if (!(await checkServer(workspaceId, manifest.port, 20))) {
-      const tail = await sh(workspaceId, `tail -20 ${runDir}/preview.log 2>/dev/null`, 20_000).catch(() => ({ output: "" }));
+    // A ticket worktree isn't pre-built, so `dotnet run`/`go run`/etc. build on
+    // first start — that can take minutes. Be patient for compiled stacks and
+    // STREAM the app log so the build/run output (and any error) is visible.
+    const compiled = !!manifest.buildCmd || /dotnet|asp|java|go|rust|maven|gradle/i.test(`${manifest.runtime} ${manifest.framework}`);
+    const waitMs = ticketId && compiled ? 300_000 : ticketId ? 120_000 : 60_000;
+    await runDetachedPolled(projectId, userId, workspaceId, appStartCommand(manifest, runDir), 30_000);
+    const up = await waitForAppUp(projectId, userId, workspaceId, manifest.port, `${runDir}/preview.log`, waitMs);
+    if (!up) {
+      const tail = await sh(workspaceId, `tail -40 ${runDir}/preview.log 2>/dev/null`, 20_000).catch(() => ({ output: "" }));
+      plog(projectId, userId, `The app did not come up on port ${manifest.port}`, { level: "error", detail: (tail.output || "(no output — the app may have failed to build)").slice(-1500) });
       return failed(projectId, userId, `The app did not come back up on port ${manifest.port}.\n\n${(tail.output || "").slice(-800)}`);
     }
     plog(projectId, userId, `App running ✓ (${branchLabel})`);
