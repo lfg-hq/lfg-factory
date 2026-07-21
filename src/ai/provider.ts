@@ -128,9 +128,19 @@ for (const [providerName, cfg] of Object.entries(
 
 export const DEFAULT_MODEL_KEY = modelsConfig.default_model;
 
+// Backward-compat aliases: model keys that were renamed/removed but may still be
+// stored in the DB (e.g. builderModelKey defaulted to "claude_4.5_sonnet") or
+// hardcoded as a fallback. Maps a dead key → the current one so getModel doesn't
+// throw "Unknown model key" and, e.g., ticket builds don't fail.
+const MODEL_ALIASES: Record<string, string> = {
+  "claude_4.5_sonnet": "claude_4.6_sonnet",
+  "claude_4.5_opus": "claude_4.6_opus",
+};
+function resolveModelKey(key: string): string { return MODEL_ALIASES[key] ?? key; }
+
 /** Resolve the caching mode for a model key (defaults to "none" if unknown). */
 export function getModelCaching(modelKey: string): CachingMode {
-  return modelIndex.get(modelKey)?.caching ?? "none";
+  return modelIndex.get(resolveModelKey(modelKey))?.caching ?? "none";
 }
 
 /** The cheap model key for a provider, or null if none is configured. */
@@ -164,7 +174,7 @@ export function getModel(
   userApiKeys?: { anthropic?: string; openai?: string; google?: string; kimi?: string; deepseek?: string; glm?: string },
   { allowEnvFallback = false }: { allowEnvFallback?: boolean } = {}
 ): LanguageModel {
-  const entry = modelIndex.get(modelKey);
+  const entry = modelIndex.get(resolveModelKey(modelKey));
   if (!entry) {
     throw new Error(`Unknown model key: ${modelKey}`);
   }
@@ -228,12 +238,12 @@ export function getModel(
 
 /** Get the provider name for a given model key */
 export function getProviderName(modelKey: string): ProviderName | null {
-  return modelIndex.get(modelKey)?.provider ?? null;
+  return modelIndex.get(resolveModelKey(modelKey))?.provider ?? null;
 }
 
 /** Get the provider-native model id (e.g. "deepseek-v4-pro") for a model key. */
 export function getProviderModel(modelKey: string): string | null {
-  return modelIndex.get(modelKey)?.model ?? null;
+  return modelIndex.get(resolveModelKey(modelKey))?.model ?? null;
 }
 
 /**
@@ -245,7 +255,7 @@ export function getModelWithSearch(
   userApiKeys?: { anthropic?: string; openai?: string; google?: string; kimi?: string; deepseek?: string; glm?: string },
   { allowEnvFallback = false }: { allowEnvFallback?: boolean } = {}
 ): { model: LanguageModel; searchTools: Record<string, unknown> } {
-  const entry = modelIndex.get(modelKey);
+  const entry = modelIndex.get(resolveModelKey(modelKey));
   if (!entry) throw new Error(`Unknown model key: ${modelKey}`);
 
   const { provider, model: modelId } = entry;

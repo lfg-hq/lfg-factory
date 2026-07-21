@@ -47,7 +47,26 @@ import {
 } from "../ai/prompts/builder.ts";
 import { buildApiBuilderPrompt } from "../ai/prompts/builder-api.ts";
 import { createBuilderTools } from "../ai/tools/builder-tools.ts";
-import { getModel, getProviderName, getProviderModel, type ProviderName } from "../ai/provider.ts";
+import { getModel, getProviderName, getProviderModel, DEFAULT_MODEL_KEY, type ProviderName } from "../ai/provider.ts";
+import { modelSelections } from "../db/schema/chat.ts";
+
+/**
+ * The model to build tickets with. Precedence: an explicit builder model (if the
+ * user set one in Settings) → the user's SELECTED CHAT model → the global default.
+ * This is why a DeepSeek chat user's tickets build with DeepSeek, not a hardcoded
+ * Claude. (The old hardcoded "claude_4.5_sonnet" fallback ignored the chat pick
+ * AND was a dead key.)
+ */
+// The old schema DEFAULT wrote this into builderModelKey for every row, so a
+// stored value equal to it is indistinguishable from "never chose a builder
+// model" — treat it as unset so those users follow their chat pick.
+const LEGACY_BUILDER_DEFAULT = "claude_4.5_sonnet";
+async function resolveBuilderModelKey(ownerId: string): Promise<string> {
+  const [appState] = await db.select({ k: applicationState.builderModelKey }).from(applicationState).where(eq(applicationState.userId, ownerId)).limit(1);
+  if (appState?.k && appState.k !== LEGACY_BUILDER_DEFAULT) return appState.k; // explicit, non-legacy pick
+  const [sel] = await db.select({ m: modelSelections.selectedModel }).from(modelSelections).where(eq(modelSelections.userId, ownerId)).limit(1);
+  return sel?.m || DEFAULT_MODEL_KEY;
+}
 import { startPiCli, streamPiToCompletion, isPiSupportedProvider } from "../services/pi-cli.ts";
 import { getBuildProfile, detectProjectType } from "../services/instant-profiles.ts";
 import { generateText, stepCountIs } from "ai";
@@ -1278,8 +1297,7 @@ async function getBuilderProvider(projectId: string | null): Promise<ProviderNam
   if (!projectId) return null;
   const [project] = await db.select({ ownerId: projects.ownerId }).from(projects).where(eq(projects.id, projectId)).limit(1);
   if (!project) return null;
-  const [appState] = await db.select({ builderModelKey: applicationState.builderModelKey }).from(applicationState).where(eq(applicationState.userId, project.ownerId)).limit(1);
-  return getProviderName(appState?.builderModelKey ?? "claude_4.5_sonnet");
+  return getProviderName(await resolveBuilderModelKey(project.ownerId));
 }
 
 /**
@@ -1329,8 +1347,9 @@ async function executeTicketApi(ticketId: string): Promise<void> {
   }
 
   // ── Resolve builder model early (needed to choose the VM rootfs) ─────
-  const [appState] = await db.select().from(applicationState).where(eq(applicationState.userId, ownerId)).limit(1);
-  const modelKey = appState?.builderModelKey ?? "claude_4.5_sonnet";
+  // Follows the user's chat selection (e.g. DeepSeek) when no explicit builder
+  // model is set — NOT a hardcoded Claude.
+  const modelKey = await resolveBuilderModelKey(ownerId);
   const [userKeys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, ownerId)).limit(1);
   const provider = getProviderName(modelKey);
 
