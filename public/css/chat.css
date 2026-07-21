@@ -1823,8 +1823,10 @@ input:checked + .turbo-slider + .turbo-label,
     border-radius: 8px;
     font-size: 0.85rem;
     line-height: 1.4;
-    color: #d1d5db;
-    background: rgba(45, 55, 72, 0.4);
+    /* Theme-aware: dark text in light mode, light text in dark mode. Hardcoding
+       a light gray here made these unreadable on light mode's light tints. */
+    color: var(--text-color, #d1d5db);
+    background: rgba(99, 102, 241, 0.08);
     border-left: 3px solid #6366f1;
 }
 
@@ -1851,9 +1853,15 @@ input:checked + .turbo-slider + .turbo-label,
 .system-message strong {
     display: block;
     margin-bottom: 4px;
-    color: #f3f4f6;
+    color: var(--text-color, #f3f4f6);
     font-size: 0.875rem;
 }
+
+/* Saturated semantic heading colors — legible on both light and dark tints. */
+.system-message.ticket-complete strong { color: #16a34a; }
+.system-message.ticket-failed strong { color: #dc2626; }
+.system-message.batch-complete strong { color: #4f46e5; }
+.system-message.batch-complete.has-failures strong { color: #d97706; }
 
 /* ── MCP Integrations Modal ─────────────────────────────────────── */
 
