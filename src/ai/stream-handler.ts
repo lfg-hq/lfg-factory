@@ -148,7 +148,10 @@ const VISION_MODEL: Record<string, string> = {
  *  text description, or null if no vision model is available / it fails. */
 async function analyzeImage(bytes: Uint8Array, mediaType: string, userApiKeys: any): Promise<string | null> {
   for (const provider of ["openai", "google", "anthropic"]) {
-    if (!userApiKeys?.[provider]) continue;
+    // Use the user's vision key if they have one, else fall back to the SERVER's
+    // env key (allowEnvFallback). getModel throws only if NEITHER exists for this
+    // provider → catch + try the next. This is what makes the DeepSeek (text-only)
+    // vision pre-pass work on prod where the user has no personal vision key.
     try {
       const model = getModel(VISION_MODEL[provider]!, userApiKeys, { allowEnvFallback: true });
       const { text } = await generateText({
@@ -162,7 +165,8 @@ async function analyzeImage(bytes: Uint8Array, mediaType: string, userApiKeys: a
         }],
         maxOutputTokens: 1000,
       });
-      return text?.trim() || null;
+      const out = text?.trim() || null;
+      if (out) { console.log(`[vision] described image via ${provider} (${out.length} chars)`); return out; }
     } catch (e) {
       console.warn(`[vision] ${provider} describe failed:`, (e as Error).message?.slice(0, 120));
     }
