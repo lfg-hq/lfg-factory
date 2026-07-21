@@ -25,13 +25,20 @@ import { getModel, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
 import { decryptSecret } from "../utils/crypto.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { enableHttpAccess, execOnWorkspace, setStableUrl, startBrowserSession, stopWorkspace } from "./mags.ts";
-import { ensureProjectSandbox, ensureEngine, ensureDocker, type EngineHandle } from "./project-sandbox.ts";
+import { ensureProjectSandbox, ensureEngine, ensureDocker, envWorkspaceId, type EngineHandle } from "./project-sandbox.ts";
 import { isS3Enabled, buildS3Key, uploadBinary, getPresignedGetUrl } from "./s3.ts";
 import { messages } from "../db/schema/chat.ts";
 import { spawn } from "node:child_process";
 
 const PROJECT_DIR = "/data/project";
 const DEFAULT_PORT = 8080; // fallback ONLY — the real port is decided by the detected manifest per stack
+
+/** A random, unguessable public subdomain for the preview URL — so preview URLs
+ *  can't be enumerated from the project id (preview-<hex>.app.lfg.run). Persisted
+ *  in stableAlias, so it stays stable for a project once created. */
+function randomAlias(): string {
+  return `preview-${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
+}
 
 export type PreviewStatus =
   | "idle" | "detecting" | "provisioning" | "installing" | "seeding" | "starting" | "running" | "error" | "stopped";
@@ -171,7 +178,7 @@ echo "=== README setup ==="; head -c 2500 README.md 2>/dev/null; head -c 1500 RE
 export async function detectManifest(projectId: string): Promise<PreviewManifest> {
   const [project] = await db.select().from(projects).where(eq(projects.id, projectId));
   if (!project) throw new Error("project not found");
-  const workspaceId = `env-${projectId}`;
+  const workspaceId = await envWorkspaceId(projectId);
   const fingerprint = await gatherFingerprint(workspaceId);
 
   const model = getModel(DEFAULT_MODEL_KEY, undefined, { allowEnvFallback: true });
@@ -644,9 +651,8 @@ export async function setupPreview(projectId: string, opts: SetupOptions): Promi
   cancelledProjects.delete(projectId); // fresh run
   try {
     plog(projectId, userId, "Starting the project's sandbox…");
-    await ensureProjectSandbox(projectId);
-    const workspaceId = `env-${projectId}`;
-    plog(projectId, userId, `Sandbox ready (${workspaceId}) — Alpine Linux, 8GB, Docker-capable`);
+    const { workspaceId } = await ensureProjectSandbox(projectId);
+    plog(projectId, userId, `Sandbox ready — Alpine Linux, 8GB, Docker-capable`);
     await setPreview(projectId, userId, { previewStatus: "detecting", previewError: null, previewBranch: branch || "(default)" }, "Preparing sandbox…");
 
     // 0. Install + start Docker UP FRONT (before pulling the code) so it's ready
@@ -796,7 +802,7 @@ fi`, 240_000);
     // transient Mags "job not found" here must NOT throw away a working preview —
     // retry the exposure (the VM name just needs a moment to re-resolve).
     plog(projectId, userId, `Exposing port ${manifest.port} as a public URL…`);
-    const alias = existing?.stableAlias || `preview-${projectId.slice(0, 8)}`;
+    const alias = existing?.stableAlias || randomAlias();
     let previewUrl = "";
     let exposeErr = "";
     for (let attempt = 1; attempt <= 5; attempt++) {
@@ -928,7 +934,7 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
   try {
     plog(projectId, userId, "Restarting the app server…");
     await ensureProjectSandbox(projectId);
-    const workspaceId = `env-${projectId}`;
+    const workspaceId = await envWorkspaceId(projectId);
     await setPreview(projectId, userId, { previewStatus: "starting", previewError: null }, "Restarting the app…");
     await runDetachedPolled(projectId, userId, workspaceId, appStartCommand(manifest), 60_000);
     if (!(await checkServer(workspaceId, manifest.port, 20))) {
@@ -938,7 +944,7 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
     plog(projectId, userId, "App restarted ✓");
     // Re-expose (idempotent) and mark running.
     await enableHttpAccess(workspaceId, manifest.port).catch(() => {});
-    const alias = row.stableAlias || `preview-${projectId.slice(0, 8)}`;
+    const alias = row.stableAlias || randomAlias();
     let previewUrl = row.appUrl || "";
     try { previewUrl = await setStableUrl(alias, workspaceId); } catch { /* keep existing */ }
     await setPreview(projectId, userId, { previewStatus: "running", appUrl: previewUrl, appPort: manifest.port, previewError: null }, "Preview is live");
@@ -954,7 +960,8 @@ export async function stopPreview(projectId: string, userId: string): Promise<vo
   cancelPreviewSetup(projectId);
   plog(projectId, userId, "Stop requested — cancelling…");
   await setPreview(projectId, userId, { previewStatus: "stopped", appUrl: null }, "Stopping…");
-  const workspaceId = `env-${projectId}`;
+  const workspaceId = await envWorkspaceId(projectId).catch(() => null);
+  if (!workspaceId) return; // no sandbox provisioned → nothing running to kill
   const row = await getEnv(projectId);
   const port = row?.appPort
     ?? (row?.setupManifest ? (JSON.parse(row.setupManifest) as PreviewManifest).port : undefined)

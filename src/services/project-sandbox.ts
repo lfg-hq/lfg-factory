@@ -98,7 +98,7 @@ docker logs mssql 2>&1 | grep -q "SQL Server is now ready for client connections
  *  engines that ship as images (SQL Server) and available to the run agent too.
  *  Best-effort; images + data live on the big /data volume. */
 export async function ensureDocker(projectId: string): Promise<boolean> {
-  const workspaceId = `env-${projectId}`;
+  const workspaceId = await envWorkspaceId(projectId);
   // Alpine ships Docker as an OpenRC service — `rc-service docker start` does the
   // cgroup/mount setup (raw dockerd doesn't). Pin data-root to /data/docker so
   // images (SQL Server ~1.5GB) live on the big persistent volume, NOT the 1.9GB
@@ -124,13 +124,24 @@ function generatePassword(): string {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Resolve the project's (RANDOM, unguessable) sandbox workspace id from the DB.
+ *  Throws if the project has no sandbox yet (ensureProjectSandbox creates it). */
+export async function envWorkspaceId(projectId: string): Promise<string> {
+  const [row] = await db.select({ w: projectEnvironments.workspaceId }).from(projectEnvironments).where(eq(projectEnvironments.projectId, projectId));
+  if (!row?.w) throw new Error(`no sandbox provisioned for project ${projectId}`);
+  return row.w;
+}
+
 /** Ensure the project's single always-on sandbox exists and is running. */
 export async function ensureProjectSandbox(projectId: string): Promise<{ workspaceId: string }> {
-  const workspaceId = `env-${projectId}`;
   const [existing] = await db.select().from(projectEnvironments).where(eq(projectEnvironments.projectId, projectId));
+  // Use a RANDOM, unguessable workspace name (not env-<projectId>, which is
+  // derivable from the project URL and would let a motivated actor target the VM
+  // / its exposed URL). Generated once, then persisted + reused.
+  const workspaceId = existing?.workspaceId || `pv-${crypto.randomUUID().replace(/-/g, "")}${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
 
-  // Resolve the workspace by NAME (findJob), not getJobStatus — the env-<uuid>
-  // name is long/dashed and getJobStatus would misread it as a request_id.
+  // Resolve the workspace by NAME (findJob), not getJobStatus — the name is
+  // long/dashed and getJobStatus would misread it as a request_id.
   const job = await findJob(workspaceId).catch(() => null);
   const alive = job?.status === "running";
   if (!alive) {
@@ -176,7 +187,7 @@ export async function ensureProjectSandbox(projectId: string): Promise<{ workspa
 
 /** Run a command inside the project's sandbox. */
 export async function execInEnv(projectId: string, cmd: string, timeoutMs = 110_000): Promise<{ output: string; exitCode: number }> {
-  const workspaceId = `env-${projectId}`;
+  const workspaceId = await envWorkspaceId(projectId);
   const r = await execOnWorkspace(workspaceId, cmd, { timeout: timeoutMs });
   return { output: (r.output || "") + (r.stderr ? "\n" + r.stderr : ""), exitCode: r.exitCode };
 }
@@ -199,7 +210,7 @@ export async function ensureEngine(projectId: string, engine: DbEngine): Promise
   const spec = ENGINES[engine];
   if (!spec) throw new Error(`Unsupported engine: ${engine}`);
   await ensureProjectSandbox(projectId);
-  const workspaceId = `env-${projectId}`;
+  const workspaceId = await envWorkspaceId(projectId);
 
   // Docker-backed engines (SQL Server) need dockerd up first.
   if (engine === "mssql") {
