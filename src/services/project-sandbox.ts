@@ -137,7 +137,9 @@ export async function ensureProjectSandbox(projectId: string): Promise<{ workspa
     // Big always-on box via the raw v2 API (the SDK caps RAM at 4GB): 4 vCPU /
     // 8GB / 20GB disk — enough for SQL Server + a .NET build without OOM. keepAlive
     // keeps it up (it hosts the DBs). Data lives on the /data volume.
-    const opts = { vcpus: 4, memoryMb: 8192, diskGb: 20, keepAlive: true } as const;
+    // Boot the "pi" rootfs (node 22 + Pi preinstalled), same base as tickets +
+    // instant apps — a richer, consistent starting image than the bare default.
+    const opts = { vcpus: 4, memoryMb: 8192, diskGb: 20, keepAlive: true, rootfsType: process.env.PREVIEW_ROOTFS || "pi" } as const;
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         await newWorkspaceV2(workspaceId, opts);

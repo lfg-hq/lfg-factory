@@ -133,15 +133,16 @@ export async function newWorkspace(name: string, opts?: {
  */
 export async function newWorkspaceV2(
   name: string,
-  opts: { vcpus?: number; memoryMb?: number; diskGb?: number; keepAlive?: boolean; idleMinutes?: number } = {},
+  opts: { vcpus?: number; memoryMb?: number; diskGb?: number; keepAlive?: boolean; idleMinutes?: number; rootfsType?: string } = {},
 ): Promise<{ jobId: string; workspaceId: string }> {
   const token = process.env.MAGS_API_TOKEN;
   if (!token) throw new Error("MAGS_API_TOKEN not set");
   const base = (process.env.MAGS_API_URL || "https://api.magpiecloud.com").replace(/\/+$/, "");
 
   // Exact v2 payload — top-level vcpus/memory_mb/disk_gb (verified 4 vCPU / 8GB).
-  // keepAlive uses the top-level `no_sleep` flag. Do NOT pass an `environment`
-  // map here — that kicks the job onto a legacy path that ignores the sizing.
+  // keepAlive uses the top-level `no_sleep` flag. rootfs_type is a peer top-level
+  // field (same as the SDK's run()). Do NOT pass an `environment` map here — that
+  // kicks the job onto a legacy path that ignores the sizing.
   const payload: Record<string, unknown> = {
     script: "sleep infinity",
     type: "inline",
@@ -154,6 +155,7 @@ export async function newWorkspaceV2(
   };
   if (opts.diskGb) payload.disk_gb = opts.diskGb;
   if (opts.keepAlive) payload.no_sleep = true;
+  if (opts.rootfsType) payload.rootfs_type = opts.rootfsType;
 
   console.log(`[mags] newWorkspaceV2 '${name}': POST ${base}/api/v2/mags-jobs (vcpus=${payload.vcpus} mem=${payload.memory_mb}MB disk=${opts.diskGb ?? "-"} no_sleep=${!!opts.keepAlive})`);
   const resp = await fetch(`${base}/api/v2/mags-jobs`, {
