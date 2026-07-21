@@ -38,8 +38,7 @@ export interface EngineSpec {
 export const ENGINES: Record<DbEngine, EngineSpec> = {
   mysql: {
     pkgs: "mariadb mariadb-client", port: 3306, defaultDb: "app", username: "app",
-    bringup: (pw) => `set -e
-apk add --no-cache mariadb mariadb-client >/dev/null 2>&1
+    bringup: (pw) => `apk add --no-cache mariadb mariadb-client >/dev/null 2>&1 || echo "apk mariadb install failed" >&2
 chmod 755 /data 2>/dev/null || true
 mkdir -p /run/mysqld /data/db-mysql && chown -R mysql:mysql /run/mysqld /data/db-mysql
 [ -d /data/db-mysql/mysql ] || mariadb-install-db --user=mysql --datadir=/data/db-mysql --auth-root-authentication-method=normal >/dev/null 2>&1
@@ -51,25 +50,28 @@ mariadb-admin ping --socket=/run/mysqld/mysqld.sock 2>/dev/null | grep -q alive 
   },
   postgres: {
     pkgs: "postgresql postgresql-client", port: 5432, defaultDb: "app", username: "app",
-    bringup: (pw) => `set -e
-apk add --no-cache postgresql postgresql-client >/dev/null 2>&1
+    // NOTE: no `set -e` — a failing intermediate step must NOT abort the script
+    // before it prints a READY/ERROR marker (that surfaces as an opaque "bring-up
+    // timed out" with no reason). Every step is best-effort; the FINAL pg_isready
+    // decides READY vs ERROR, and on error we dump the real init/start logs.
+    bringup: (pw) => `export PATH="$(ls -d /usr/libexec/postgresql* /usr/lib/postgresql*/bin 2>/dev/null | head -1):$PATH"
+apk add --no-cache postgresql postgresql-client >/dev/null 2>&1 || echo "apk postgresql install failed" >&2
 chmod 755 /data 2>/dev/null || true; mkdir -p /data/db-postgres /run/postgresql
-chown postgres:postgres /data/db-postgres /run/postgresql; chmod 700 /data/db-postgres
-[ -f /data/db-postgres/PG_VERSION ] || su postgres -c "initdb -D /data/db-postgres" >/dev/null 2>&1
+chown postgres:postgres /data/db-postgres /run/postgresql 2>/dev/null; chmod 700 /data/db-postgres 2>/dev/null
+[ -f /data/db-postgres/PG_VERSION ] || su postgres -c "initdb -D /data/db-postgres" > /data/pg-initdb.log 2>&1
 grep -q "listen_addresses='127.0.0.1'" /data/db-postgres/postgresql.conf || echo "listen_addresses='127.0.0.1'" >> /data/db-postgres/postgresql.conf
 grep -q "127.0.0.1/32 md5" /data/db-postgres/pg_hba.conf || echo "host all all 127.0.0.1/32 md5" >> /data/db-postgres/pg_hba.conf
-pgrep -x postgres >/dev/null || su postgres -c "pg_ctl -D /data/db-postgres -l /data/pg.log -o '-p 5432' -w start" >/dev/null 2>&1
-sleep 2
+pgrep -x postgres >/dev/null || su postgres -c "pg_ctl -D /data/db-postgres -l /data/pg.log -o '-p 5432' -w -t 60 start" >/dev/null 2>&1
+for i in $(seq 1 20); do su postgres -c "pg_isready -h 127.0.0.1 -p 5432" 2>/dev/null | grep -q "accepting" && break; sleep 2; done
 su postgres -c "psql -tAc \\"SELECT 1 FROM pg_database WHERE datname='app'\\"" 2>/dev/null | grep -q 1 || su postgres -c "createdb app" 2>/dev/null
 su postgres -c "psql -tAc \\"SELECT 1 FROM pg_roles WHERE rolname='app'\\"" 2>/dev/null | grep -q 1 || su postgres -c "psql -c \\"CREATE ROLE app LOGIN PASSWORD '${pw}'\\"" 2>/dev/null
 su postgres -c "psql -c \\"ALTER ROLE app PASSWORD '${pw}'; GRANT ALL ON DATABASE app TO app;\\"" >/dev/null 2>&1
-su postgres -c "pg_isready -h 127.0.0.1 -p 5432" 2>/dev/null | grep -q "accepting" && echo ENGINE_READY || echo ENGINE_ERROR`,
+if su postgres -c "pg_isready -h 127.0.0.1 -p 5432" 2>/dev/null | grep -q "accepting"; then echo ENGINE_READY; else echo ENGINE_ERROR; echo "--- pg-initdb.log ---"; tail -15 /data/pg-initdb.log 2>/dev/null; echo "--- pg.log ---"; tail -20 /data/pg.log 2>/dev/null; echo "--- binaries ---"; command -v postgres initdb pg_ctl 2>/dev/null; fi`,
     connectionString: (c) => `postgresql://${c.user}:${c.pw}@127.0.0.1:${c.port}/${c.db}`,
   },
   redis: {
     pkgs: "redis", port: 6379, defaultDb: "0", username: "default",
-    bringup: (pw) => `set -e
-apk add --no-cache redis >/dev/null 2>&1
+    bringup: (pw) => `apk add --no-cache redis >/dev/null 2>&1 || echo "apk redis install failed" >&2
 mkdir -p /data/db-redis
 pgrep redis-server >/dev/null || (setsid redis-server --bind 127.0.0.1 --port 6379 --requirepass '${pw}' --dir /data/db-redis --appendonly yes >/data/redis.log 2>&1 &)
 for i in $(seq 1 15); do redis-cli -a '${pw}' ping 2>/dev/null | grep -q PONG && break; sleep 1; done
@@ -81,8 +83,7 @@ redis-cli -a '${pw}' ping 2>/dev/null | grep -q PONG && echo ENGINE_READY || ech
   // is detected from the container log so we don't depend on sqlcmd being bundled.
   mssql: {
     pkgs: "", port: 1433, defaultDb: "app", username: "sa",
-    bringup: (pw) => `set -e
-mkdir -p /data/db-mssql && chmod 777 /data/db-mssql
+    bringup: (pw) => `mkdir -p /data/db-mssql && chmod 777 /data/db-mssql
 for i in $(seq 1 40); do docker info >/dev/null 2>&1 && break; sleep 3; done
 docker info >/dev/null 2>&1 || { echo "docker unavailable"; echo ENGINE_ERROR; exit 1; }
 if docker ps -a --format '{{.Names}}' | grep -qx mssql; then docker start mssql >/dev/null 2>&1 || true; else

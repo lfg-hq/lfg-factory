@@ -102,7 +102,7 @@ async function setPreview(
     .where(eq(projectEnvironments.projectId, projectId));
   broadcastToUser(userId, {
     type: "preview_status",
-    projectId,
+    projectId: pub(projectId),
     status: patch.previewStatus,
     message: message ?? "",
     previewUrl: patch.appUrl ?? undefined,
@@ -117,6 +117,19 @@ async function setPreview(
 const logBuffers = new Map<string, string>();
 const logFlushAt = new Map<string, number>(); // last DB-flush time per project
 
+// WS broadcasts go to ALL of a user's open pages, so every preview event MUST
+// carry the PUBLIC project id (the one the Preview tab holds) and the client
+// filters on it — otherwise, with two projects open, logs/status from one leak
+// into the other's Preview tab. We only have the INTERNAL id here, so cache the
+// internal→public mapping (populated at each entry point).
+const publicIdCache = new Map<string, string>();
+function pub(internalId: string): string { return publicIdCache.get(internalId) ?? internalId; }
+async function loadPublicId(internalId: string): Promise<void> {
+  if (publicIdCache.has(internalId)) return;
+  const [p] = await db.select({ pid: projects.projectId }).from(projects).where(eq(projects.id, internalId));
+  if (p?.pid) publicIdCache.set(internalId, p.pid);
+}
+
 /** Append a human-readable line to the project's setup log (UI + server + DB). */
 function plog(projectId: string, userId: string, line: string, opts?: { level?: "info" | "error"; detail?: string }) {
   const ts = new Date().toISOString().slice(11, 19);
@@ -126,7 +139,7 @@ function plog(projectId: string, userId: string, line: string, opts?: { level?: 
   const buf = ((logBuffers.get(projectId) ?? "") + entry + "\n").slice(-80_000); // keep last ~80KB (full prompt + commands)
   logBuffers.set(projectId, buf);
   console.log(`[dev-preview] ${projectId.slice(0, 8)} ${level === "error" ? "ERROR " : ""}${line}${opts?.detail ? " :: " + opts.detail.replace(/\n/g, " ").slice(0, 300) : ""}`);
-  broadcastToUser(userId, { type: "preview_log", projectId, line: entry, level });
+  broadcastToUser(userId, { type: "preview_log", projectId: pub(projectId), line: entry, level });
   // Also persist to the DB on a throttle so the polling fallback (and a reload)
   // always shows fresh logs even during a long silent phase / if WS drops.
   const now = Date.now();
@@ -432,7 +445,7 @@ async function executeRunbook(
     await db.update(projectEnvironments)
       .set({ setupSteps: JSON.stringify(steps), setupLog: logBuffers.get(projectId), updatedAt: new Date() })
       .where(eq(projectEnvironments.projectId, projectId));
-    broadcastToUser(userId, { type: "preview_steps", projectId, steps });
+    broadcastToUser(userId, { type: "preview_steps", projectId: pub(projectId), steps });
   };
   const timeoutFor = (s: RunStep) => s.phase === "schema" ? 600_000 : s.phase === "run" ? 60_000 : 1_800_000;
 
@@ -729,6 +742,7 @@ export async function setupPreview(projectId: string, opts: SetupOptions): Promi
   const { userId } = opts;
   const [project] = await db.select().from(projects).where(eq(projects.id, projectId));
   if (!project) return { error: "project not found" };
+  if (project.projectId) publicIdCache.set(projectId, project.projectId); // for WS routing
   const branch = opts.branch || ""; // "" → use the repo's default branch
 
   resetLog(projectId);
@@ -1034,6 +1048,7 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
   }
   const manifest = JSON.parse(row.setupManifest) as PreviewManifest;
   resetLog(projectId);
+  await loadPublicId(projectId); // for WS routing
   try {
     plog(projectId, userId, "Restarting the app server…");
     await ensureProjectSandbox(projectId);
@@ -1059,6 +1074,7 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
 
 /** Stop the running app (leaves the sandbox + DBs up). */
 export async function stopPreview(projectId: string, userId: string): Promise<void> {
+  await loadPublicId(projectId); // for WS routing
   // Signal any in-flight setup to abort at its next checkpoint (Stop during setup).
   cancelPreviewSetup(projectId);
   plog(projectId, userId, "Stop requested — cancelling…");

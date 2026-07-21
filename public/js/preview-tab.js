@@ -506,8 +506,13 @@
   // so we accept every preview_status/preview_log for this page.
   const viewOf = (s) => IN_PROGRESS.includes(s) ? "progress" : s === "running" ? "running" : s === "error" ? "error" : "idle";
 
+  // The chat WS delivers preview events for EVERY project the user has open, so
+  // drop anything that isn't for THIS project (else two open projects cross-talk).
+  const forOther = (data) => data && data.projectId && projectId && data.projectId !== projectId;
+
   window.PreviewTab = {
     onStatus(data) {
+      if (forOther(data)) return;
       const nextStatus = data.status || (current && current.previewStatus) || "idle";
       const nextView = viewOf(nextStatus);
       // Terminal transitions (→ running/error/stopped) need authoritative state.
@@ -534,7 +539,7 @@
       if (data.message) setSub(data.message);
     },
     onLog(data) {
-      if (!data || !data.line) return;
+      if (!data || !data.line || forOther(data)) return;
       logText = (logText + data.line + "\n").slice(-100000);
       const el = $("preview-log");
       if (el) {
@@ -544,7 +549,7 @@
       }
     },
     onSteps(data) {
-      if (!data || !Array.isArray(data.steps)) return;
+      if (!data || !Array.isArray(data.steps) || forOther(data)) return;
       stepsData = data.steps;
       if (progressTab === "steps") {
         const pane = document.getElementById("preview-pane");
