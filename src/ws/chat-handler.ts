@@ -10,6 +10,8 @@ import { handleStream } from "../ai/stream-handler.ts";
 import { db } from "../config/db.ts";
 import { messages, conversations } from "../db/schema/chat.ts";
 import { eq, asc, desc } from "drizzle-orm";
+import { runPreviewChat } from "../services/dev-preview.ts";
+import { getProjectAccess } from "../auth/project-access.ts";
 
 const HEARTBEAT_INTERVAL_MS = 20_000;
 
@@ -133,25 +135,77 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
     conn.abortController = new AbortController();
 
     try {
-      const result = await handleStream({
-        ws,
-        userId: conn.userId,
-        userMessage: normalizedMessage,
-        conversationId: conn.conversationId,
-        projectId: conn.projectId,
-        turboMode: turbo_mode,
-        instantMode: instant_mode,
-        userRole: user_role,
-        file: resolvedFile,
-        abortController: conn.abortController,
-      });
+      // "@preview …" → route to the interactive Preview agent (full control of the
+      // project's live sandbox) instead of the normal chat model.
+      if (/^\s*@preview\b/i.test(normalizedMessage) && conn.projectId) {
+        await handlePreviewChat(ws, conn, normalizedMessage);
+      } else {
+        const result = await handleStream({
+          ws,
+          userId: conn.userId,
+          userMessage: normalizedMessage,
+          conversationId: conn.conversationId,
+          projectId: conn.projectId,
+          turboMode: turbo_mode,
+          instantMode: instant_mode,
+          userRole: user_role,
+          file: resolvedFile,
+          abortController: conn.abortController,
+        });
 
-      // Update connection with resolved conversationId
-      conn.conversationId = result.conversationId;
+        // Update connection with resolved conversationId
+        conn.conversationId = result.conversationId;
+      }
     } finally {
       conn.isStreaming = false;
       conn.abortController = undefined;
     }
+  }
+}
+
+/**
+ * Route a "@preview …" chat message to the interactive Preview agent, which has
+ * full shell control of the project's LIVE sandbox. Detailed command output
+ * streams into the Preview tab log; a concise summary comes back inline in chat.
+ * Ends with an is_final ai_chunk so the chat input re-enables like a normal reply.
+ */
+async function handlePreviewChat(ws: ServerWebSocket<WsData>, conn: WsConnection, rawMessage: string): Promise<void> {
+  const userId = conn.userId;
+  const publicProjectId = conn.projectId as string;
+  const conversationId = conn.conversationId ?? null;
+  const instruction = rawMessage.replace(/^\s*@preview\b[:\s]*/i, "").trim();
+
+  // Persist the user's message (normal chat persists it server-side too).
+  if (conversationId) {
+    await db.insert(messages).values({ conversationId, role: "user", content: rawMessage }).catch(() => {});
+  }
+
+  const finish = async (content: string) => {
+    if (conversationId) await db.insert(messages).values({ conversationId, role: "assistant", content }).catch(() => {});
+    // is_final ai_chunk → renders the bubble AND re-enables the chat input.
+    send(ws, { type: "ai_chunk", chunk: content, is_final: true, conversation_id: conversationId, provider: "preview-agent" });
+  };
+
+  if (!instruction) {
+    await finish("🔧 **Preview agent** — tell me what to do, e.g. `@preview restart the app`, `@preview why is postgres failing?`, or `@preview tail the last 50 lines of the app log`.");
+    return;
+  }
+
+  const access = await getProjectAccess(publicProjectId, userId).catch(() => null);
+  if (!access) { await finish("I couldn't find this project to work on its preview."); return; }
+
+  try {
+    const { reply } = await runPreviewChat({
+      projectId: access.project.id,
+      publicProjectId,
+      userId,
+      conversationId,
+      instruction,
+      abortSignal: conn.abortController?.signal,
+    });
+    await finish(`🔧 **Preview agent**\n\n${reply}`);
+  } catch (e) {
+    await finish(`🔧 **Preview agent** — I hit an error: ${(e as Error).message?.slice(0, 300) || "unknown error"}`);
   }
 }
 

@@ -731,6 +731,82 @@ async function driveSandbox(
   return false;
 }
 
+// ── Interactive preview agent (@preview in chat) ──────────────────────────────
+// Full shell control of the project's LIVE sandbox, driven by a chat request
+// ("@preview restart the app", "@preview why is postgres failing?"). Same `run`
+// loop as the setup driver, but the goal is the user's instruction and it replies
+// with a chat summary. Commands stream into the Preview tab log; abort via the
+// chat Stop. Does NOT re-run setup — it acts on the already-provisioned sandbox.
+export async function runPreviewChat(opts: {
+  projectId: string;          // internal id
+  publicProjectId: string;
+  userId: string;
+  conversationId: string | null;
+  instruction: string;
+  abortSignal?: AbortSignal;
+}): Promise<{ reply: string }> {
+  const { projectId, publicProjectId, userId, instruction, abortSignal } = opts;
+  publicIdCache.set(projectId, publicProjectId); // WS routing for plog
+
+  const driver = await resolveDriverModel(userId);
+  if (!driver) return { reply: "I can't reach an AI model — add an API key in Settings to use the preview agent." };
+
+  let workspaceId: string;
+  try { ({ workspaceId } = await ensureProjectSandbox(projectId)); }
+  catch { return { reply: "There's no preview sandbox for this project yet. Open the **Preview** tab and run setup first, then ask me again." }; }
+
+  const row = await getEnv(projectId);
+  const manifest = row?.setupManifest ? (JSON.parse(row.setupManifest) as PreviewManifest) : null;
+  const port = manifest?.port ?? DEFAULT_PORT;
+  const runCmd = row?.runCommand || manifest?.runCmd || "";
+
+  plog(projectId, userId, `@preview: ${instruction}`);
+
+  let reply = "";
+  const tools = {
+    run: tool({
+      description: "Run one shell command in the project's live Alpine sandbox (bash). Runs detached + polled, so long commands are fine. Returns exit code + combined stdout/stderr (last 6KB). exitCode -2 = still running (call again to keep waiting); -4 = we killed it after ~4 min of no output (stuck — change approach).",
+      inputSchema: zodSchema(z.object({
+        command: z.string().describe("One shell command (use && or a heredoc for multi-step). Run in the FOREGROUND — do NOT add '&'/nohup/setsid yourself; we detach it. EXCEPTION: the app server must be launched detached (setsid ... &) so it keeps running."),
+        timeoutSec: z.number().optional().describe("Seconds to wait before returning control (default 600, max 1800)."),
+      })),
+      execute: async ({ command, timeoutSec }: { command: string; timeoutSec?: number }) => {
+        const maxMs = Math.min(Math.max(timeoutSec ?? 600, 10), 1800) * 1000;
+        plog(projectId, userId, `$ ${command}`);
+        const r = await runDetachedPolled(projectId, userId, workspaceId, command, maxMs, { stallMs: 240_000 });
+        plog(projectId, userId, `  → exit ${r.exitCode}`, r.output ? { detail: r.output.slice(-1800), level: r.exitCode === 0 ? "info" : "error" } : undefined);
+        return { exitCode: r.exitCode, output: r.output.slice(-6000) || "(no output)" };
+      },
+    }),
+    reply: tool({
+      description: "Call ONCE when you've finished the user's request. Give a concise, friendly chat summary of what you did or found (markdown ok). If you confirmed something works, say how you verified it.",
+      inputSchema: zodSchema(z.object({ summary: z.string() })),
+      execute: async ({ summary }: { summary: string }) => { reply = summary; return "acknowledged"; },
+    }),
+  };
+
+  const startHint = `setsid sh -c 'cd ${PROJECT_DIR}; set -a; . ./.env 2>/dev/null; set +a; exec ${runCmd || "<run command>"}' </dev/null > ${PROJECT_DIR}/preview.log 2>&1 &`;
+  const system = `You are the LFG **Preview agent** for this project. You have FULL shell control of the project's LIVE Alpine sandbox (musl, apk, OpenRC/rc-service, busybox — Docker is available) via the \`run\` tool: one command per call, run detached + polled so long commands are fine. The repo is at ${PROJECT_DIR}; its .env is sourced before every command; the toolchain + /data caches are already on PATH.
+
+${manifest ? `App: ${manifest.stack || `${manifest.runtime}/${manifest.framework}`}. Run command: \`${runCmd || "(unknown)"}\`. Port: ${port}. Databases: ${manifest.databases.length ? manifest.databases.map((d) => `${d.engine} (127.0.0.1, connection in .env as ${d.connectionEnvVar})`).join(", ") : "none"}.` : "This preview has not been fully set up yet — the app may not be running."}
+
+The app server (if running) listens on 127.0.0.1:${port}. To (re)start it, launch it DETACHED:
+  ${startHint}
+then VERIFY for real: \`curl -sS -i http://127.0.0.1:${port}/\` (2xx/3xx/4xx = up; 000/refused/5xx = not up → read ${PROJECT_DIR}/preview.log).
+
+Do exactly what the user asked — inspect logs, fix env/deps, (re)start the app, run DB queries/scripts, check status, diagnose failures. RULES: do NOT edit the application's SOURCE CODE (installing tools/deps, editing ./.env and config is fine). Make persistent env fixes by appending to ${PROJECT_DIR}/.env (sourced before every command + on restart). Verify with real commands — never claim success without checking. Keep going until the request is done or genuinely can't be. When finished, call \`reply\` with a short summary for the chat. Never print secrets.`;
+
+  try {
+    await generateText({ model: driver.model, tools, stopWhen: stepCountIs(40), system, prompt: instruction, abortSignal });
+  } catch (e) {
+    const msg = (e as Error).message || String(e);
+    if (abortSignal?.aborted || /abort/i.test(msg)) return { reply: reply || "Stopped." };
+    plog(projectId, userId, `Preview agent error: ${msg}`, { level: "error" });
+    return { reply: reply || `I ran into an error: ${msg.slice(0, 300)}` };
+  }
+  return { reply: reply || "Done — but I didn't produce a summary. Check the Preview tab logs for details." };
+}
+
 // ── Public API ───────────────────────────────────────────────────────────────
 export interface SetupOptions { userId: string; branch?: string; rebuildManifest?: boolean }
 
