@@ -360,15 +360,17 @@ export interface RunStep {
   optional?: boolean; // schema steps: a failure is logged but doesn't block
 }
 
-/** Build the shell command that applies a raw .sql file to the provisioned DB. */
+/** Build the shell command that applies a raw .sql file to the provisioned DB.
+ *  Every engine runs as a Docker container, so we pipe the host file into the
+ *  container's own client via `docker exec -i` (no DB client needed on the host). */
 function sqlApplyCommand(engines: EngineHandle[], file: string): string {
   const f = `${PROJECT_DIR}/${file.replace(/"/g, '\\"')}`;
   const ms = engines.find((e) => e.engine === "mssql");
   const pg = engines.find((e) => e.engine === "postgres");
   const my = engines.find((e) => e.engine === "mysql");
   if (ms) return `cat "${f}" | docker exec -i mssql sh -c '/opt/mssql-tools18/bin/sqlcmd -S localhost -U ${ms.username} -P "${ms.password}" -C -d ${ms.dbName} -b || /opt/mssql-tools/bin/sqlcmd -S localhost -U ${ms.username} -P "${ms.password}" -d ${ms.dbName} -b'`;
-  if (pg) return `PGPASSWORD='${pg.password}' psql -h 127.0.0.1 -p ${pg.port} -U ${pg.username} -d ${pg.dbName} -v ON_ERROR_STOP=0 -f "${f}"`;
-  if (my) return `mysql -h 127.0.0.1 -P ${my.port} -u ${my.username} -p'${my.password}' ${my.dbName} < "${f}"`;
+  if (pg) return `cat "${f}" | docker exec -i -e PGPASSWORD='${pg.password}' postgres psql -U ${pg.username} -d ${pg.dbName} -v ON_ERROR_STOP=0`;
+  if (my) return `cat "${f}" | docker exec -i mysql mysql -u${my.username} -p'${my.password}' ${my.dbName}`;
   return `echo "no SQL engine provisioned to apply ${file}"`;
 }
 

@@ -8,10 +8,10 @@
  * keepAlive keeps it always-on since it hosts the DBs. The app (/data/project)
  * and DB datadirs (/data/db-*) live on the /data volume.
  *
- * DBs run co-located over 127.0.0.1: postgres/mysql/redis install NATIVELY via
- * apk (the one required fix is enabling TCP, which Alpine disables); SQL Server
- * runs via Docker (no native Alpine build) — dockerd is bootstrapped in-VM.
- * Data persists while the VM is up; a hard VM loss means a fresh setup.
+ * DBs run co-located over 127.0.0.1 as official DOCKER images (postgres/mysql/
+ * redis/mssql) — uniform + robust, no musl/locale/init quirks of native Alpine
+ * installs; dockerd is bootstrapped in-VM. Ports publish to 127.0.0.1 only; data
+ * persists on /data while the VM is up; a hard VM loss means a fresh setup.
  */
 import { db } from "../config/db.ts";
 import { projectEnvironments } from "../db/schema/project-environments.ts";
@@ -23,74 +23,104 @@ import { newWorkspaceV2, execOnWorkspace, findJob, deleteWorkspace } from "./mag
 export type DbEngine = "postgres" | "mysql" | "redis" | "mssql";
 
 export interface EngineSpec {
-  pkgs: string;
+  /** Container name (docker-scoped; also the target for `docker exec` SQL apply). */
+  container: string;
   port: number;
   defaultDb: string;
   username: string;
-  /** Idempotent bring-up: install → init datadir → start → create db/user. */
+  /** Idempotent bring-up: run the official image (or start it) + wait for ready. */
   bringup: (pw: string) => string;
   connectionString: (c: { port: number; db: string; user: string; pw: string }) => string;
 }
 
-// Datadirs live on /data — the big ext4 volume (diskGb) mounted by Mags, same as
-// Instant. NOT /root (only ~1.9GB → fills up). Co-located with the app in
-// /data/project; persists as long as the keep-alive VM is up.
+// ALL databases run as official Docker images (dockerd bootstrapped by
+// ensureDocker). This is uniform + robust: the images self-initialize from env
+// vars and behave identically regardless of the sandbox rootfs — no musl/locale/
+// initdb quirks like the native Alpine installs had. Images + data live on the
+// big /data volume; ports are published to 127.0.0.1 ONLY (never exposed off-box).
+//
+// Shared, idempotent bring-up: if the container exists, start it; else `docker
+// run` the pinned image; then poll a readiness probe (via `docker exec`) and emit
+// ENGINE_READY / ENGINE_ERROR (+ container logs on failure, so a real reason
+// surfaces instead of an opaque timeout). `restart=unless-stopped` survives a VM
+// reboot. First run pulls the image (blocking) — the outer poll budget accounts
+// for that.
+function dockerBringup(o: {
+  name: string; image: string; port: number; volume: string;
+  env?: string[];       // -e flags (KEY=VAL)
+  cmd?: string;         // args appended after the image (e.g. redis-server ...)
+  readyProbe: string;   // a `docker exec <name> …` command
+  readyGrep: string;    // string that must appear in the probe's output when ready
+}): string {
+  const envFlags = (o.env ?? []).map((e) => `-e ${e}`).join(" ");
+  return `mkdir -p ${o.volume.split(":")[0]} 2>/dev/null || true
+for i in $(seq 1 40); do docker info >/dev/null 2>&1 && break; sleep 3; done
+docker info >/dev/null 2>&1 || { echo "docker daemon unavailable"; echo ENGINE_ERROR; exit 1; }
+if docker ps -a --format '{{.Names}}' | grep -qx ${o.name}; then
+  docker start ${o.name} >/dev/null 2>&1 || true
+else
+  # Free the port from any leftover NATIVE daemon (older sandboxes ran these
+  # engines natively) so the container's port publish doesn't collide.
+  fuser -k ${o.port}/tcp >/dev/null 2>&1 || true; sleep 1
+  docker run -d --name ${o.name} --restart unless-stopped ${envFlags} -p 127.0.0.1:${o.port}:${o.port} -v ${o.volume} ${o.image} ${o.cmd ?? ""} >/dev/null 2>&1
+fi
+for i in $(seq 1 90); do ${o.readyProbe} 2>/dev/null | grep -q "${o.readyGrep}" && { echo ENGINE_READY; exit 0; }; sleep 3; done
+echo "--- ${o.name} container logs ---"; docker logs --tail 25 ${o.name} 2>&1; echo ENGINE_ERROR`;
+}
+
 export const ENGINES: Record<DbEngine, EngineSpec> = {
-  mysql: {
-    pkgs: "mariadb mariadb-client", port: 3306, defaultDb: "app", username: "app",
-    bringup: (pw) => `apk add --no-cache mariadb mariadb-client >/dev/null 2>&1 || echo "apk mariadb install failed" >&2
-chmod 755 /data 2>/dev/null || true
-mkdir -p /run/mysqld /data/db-mysql && chown -R mysql:mysql /run/mysqld /data/db-mysql
-[ -d /data/db-mysql/mysql ] || mariadb-install-db --user=mysql --datadir=/data/db-mysql --auth-root-authentication-method=normal >/dev/null 2>&1
-pgrep mariadbd >/dev/null || (setsid mariadbd --user=mysql --datadir=/data/db-mysql --socket=/run/mysqld/mysqld.sock --skip-networking=0 --bind-address=127.0.0.1 --port=3306 >/data/mysql.log 2>&1 &)
-for i in $(seq 1 30); do mariadb-admin ping --socket=/run/mysqld/mysqld.sock 2>/dev/null | grep -q alive && break; sleep 2; done
-mariadb --socket=/run/mysqld/mysqld.sock -e "CREATE DATABASE IF NOT EXISTS app; CREATE USER IF NOT EXISTS 'app'@'127.0.0.1' IDENTIFIED BY '${pw}'; GRANT ALL ON app.* TO 'app'@'127.0.0.1'; FLUSH PRIVILEGES;" 2>/dev/null
-mariadb-admin ping --socket=/run/mysqld/mysqld.sock 2>/dev/null | grep -q alive && echo ENGINE_READY || echo ENGINE_ERROR`,
-    connectionString: (c) => `mysql://${c.user}:${c.pw}@127.0.0.1:${c.port}/${c.db}`,
-  },
   postgres: {
-    pkgs: "postgresql postgresql-client", port: 5432, defaultDb: "app", username: "app",
-    // NOTE: no `set -e` — a failing intermediate step must NOT abort the script
-    // before it prints a READY/ERROR marker (that surfaces as an opaque "bring-up
-    // timed out" with no reason). Every step is best-effort; the FINAL pg_isready
-    // decides READY vs ERROR, and on error we dump the real init/start logs.
-    bringup: (pw) => `export PATH="$(ls -d /usr/libexec/postgresql* /usr/lib/postgresql*/bin 2>/dev/null | head -1):$PATH"
-apk add --no-cache postgresql postgresql-client >/dev/null 2>&1 || echo "apk postgresql install failed" >&2
-chmod 755 /data 2>/dev/null || true; mkdir -p /data/db-postgres /run/postgresql
-chown postgres:postgres /data/db-postgres /run/postgresql 2>/dev/null; chmod 700 /data/db-postgres 2>/dev/null
-[ -f /data/db-postgres/PG_VERSION ] || su postgres -c "initdb -D /data/db-postgres" > /data/pg-initdb.log 2>&1
-grep -q "listen_addresses='127.0.0.1'" /data/db-postgres/postgresql.conf || echo "listen_addresses='127.0.0.1'" >> /data/db-postgres/postgresql.conf
-grep -q "127.0.0.1/32 md5" /data/db-postgres/pg_hba.conf || echo "host all all 127.0.0.1/32 md5" >> /data/db-postgres/pg_hba.conf
-pgrep -x postgres >/dev/null || su postgres -c "pg_ctl -D /data/db-postgres -l /data/pg.log -o '-p 5432' -w -t 60 start" >/dev/null 2>&1
-for i in $(seq 1 20); do su postgres -c "pg_isready -h 127.0.0.1 -p 5432" 2>/dev/null | grep -q "accepting" && break; sleep 2; done
-su postgres -c "psql -tAc \\"SELECT 1 FROM pg_database WHERE datname='app'\\"" 2>/dev/null | grep -q 1 || su postgres -c "createdb app" 2>/dev/null
-su postgres -c "psql -tAc \\"SELECT 1 FROM pg_roles WHERE rolname='app'\\"" 2>/dev/null | grep -q 1 || su postgres -c "psql -c \\"CREATE ROLE app LOGIN PASSWORD '${pw}'\\"" 2>/dev/null
-su postgres -c "psql -c \\"ALTER ROLE app PASSWORD '${pw}'; GRANT ALL ON DATABASE app TO app;\\"" >/dev/null 2>&1
-if su postgres -c "pg_isready -h 127.0.0.1 -p 5432" 2>/dev/null | grep -q "accepting"; then echo ENGINE_READY; else echo ENGINE_ERROR; echo "--- pg-initdb.log ---"; tail -15 /data/pg-initdb.log 2>/dev/null; echo "--- pg.log ---"; tail -20 /data/pg.log 2>/dev/null; echo "--- binaries ---"; command -v postgres initdb pg_ctl 2>/dev/null; fi`,
+    container: "postgres", port: 5432, defaultDb: "app", username: "app",
+    // The postgres image creates the role+db from POSTGRES_* on first init and
+    // allows password auth over TCP by default — no manual initdb/pg_hba needed.
+    bringup: (pw) => dockerBringup({
+      name: "postgres", image: "postgres:16-alpine", port: 5432,
+      // Fresh docker-era volume (not the old native /data/db-postgres cluster,
+      // which could be a different PG build and confuse the image).
+      volume: "/data/pgdata:/var/lib/postgresql/data",
+      env: [`POSTGRES_DB=app`, `POSTGRES_USER=app`, `POSTGRES_PASSWORD=${pw}`],
+      readyProbe: `docker exec postgres pg_isready -U app -d app`,
+      readyGrep: "accepting connections",
+    }),
     connectionString: (c) => `postgresql://${c.user}:${c.pw}@127.0.0.1:${c.port}/${c.db}`,
   },
+  mysql: {
+    container: "mysql", port: 3306, defaultDb: "app", username: "app",
+    // mysql_native_password for broad driver compatibility (.NET/Node/PHP mysql
+    // clients). Image creates app db+user from MYSQL_* on first init.
+    bringup: (pw) => dockerBringup({
+      name: "mysql", image: "mysql:8.0", port: 3306,
+      volume: "/data/mysqldata:/var/lib/mysql",
+      env: [`MYSQL_DATABASE=app`, `MYSQL_USER=app`, `MYSQL_PASSWORD=${pw}`, `MYSQL_ROOT_PASSWORD=${pw}`],
+      cmd: "--default-authentication-plugin=mysql_native_password",
+      readyProbe: `docker exec mysql mysqladmin ping -uroot -p${pw}`,
+      readyGrep: "alive",
+    }),
+    connectionString: (c) => `mysql://${c.user}:${c.pw}@127.0.0.1:${c.port}/${c.db}`,
+  },
   redis: {
-    pkgs: "redis", port: 6379, defaultDb: "0", username: "default",
-    bringup: (pw) => `apk add --no-cache redis >/dev/null 2>&1 || echo "apk redis install failed" >&2
-mkdir -p /data/db-redis
-pgrep redis-server >/dev/null || (setsid redis-server --bind 127.0.0.1 --port 6379 --requirepass '${pw}' --dir /data/db-redis --appendonly yes >/data/redis.log 2>&1 &)
-for i in $(seq 1 15); do redis-cli -a '${pw}' ping 2>/dev/null | grep -q PONG && break; sleep 1; done
-redis-cli -a '${pw}' ping 2>/dev/null | grep -q PONG && echo ENGINE_READY || echo ENGINE_ERROR`,
+    container: "redis", port: 6379, defaultDb: "0", username: "default",
+    bringup: (pw) => dockerBringup({
+      name: "redis", image: "redis:7-alpine", port: 6379,
+      volume: "/data/redisdata:/data",
+      cmd: `redis-server --requirepass '${pw}' --appendonly yes --dir /data`,
+      readyProbe: `docker exec redis redis-cli -a '${pw}' ping`,
+      readyGrep: "PONG",
+    }),
     connectionString: (c) => `redis://${c.user}:${c.pw}@127.0.0.1:${c.port}`,
   },
-  // SQL Server can't build natively on Alpine → run the official image via Docker
-  // (dockerd is bootstrapped by ensureDocker). Data on the /data volume. Readiness
-  // is detected from the container log so we don't depend on sqlcmd being bundled.
   mssql: {
-    pkgs: "", port: 1433, defaultDb: "app", username: "sa",
+    container: "mssql", port: 1433, defaultDb: "app", username: "sa",
+    // Readiness from the container log (sqlcmd isn't reliably on PATH inside the
+    // image at first boot); the SA login is what apps use.
     bringup: (pw) => `mkdir -p /data/db-mssql && chmod 777 /data/db-mssql
 for i in $(seq 1 40); do docker info >/dev/null 2>&1 && break; sleep 3; done
-docker info >/dev/null 2>&1 || { echo "docker unavailable"; echo ENGINE_ERROR; exit 1; }
+docker info >/dev/null 2>&1 || { echo "docker daemon unavailable"; echo ENGINE_ERROR; exit 1; }
 if docker ps -a --format '{{.Names}}' | grep -qx mssql; then docker start mssql >/dev/null 2>&1 || true; else
-  docker run -d --name mssql -e ACCEPT_EULA=Y -e "MSSQL_SA_PASSWORD=${pw}" -e MSSQL_PID=Developer -p 1433:1433 -v /data/db-mssql:/var/opt/mssql mcr.microsoft.com/mssql/server:2022-latest >/dev/null 2>&1
+  docker run -d --name mssql --restart unless-stopped -e ACCEPT_EULA=Y -e "MSSQL_SA_PASSWORD=${pw}" -e MSSQL_PID=Developer -p 127.0.0.1:1433:1433 -v /data/db-mssql:/var/opt/mssql mcr.microsoft.com/mssql/server:2022-latest >/dev/null 2>&1
 fi
 for i in $(seq 1 90); do docker logs mssql 2>&1 | grep -q "SQL Server is now ready for client connections" && break; sleep 4; done
-docker logs mssql 2>&1 | grep -q "SQL Server is now ready for client connections" && echo ENGINE_READY || { docker logs mssql 2>&1 | tail -5; echo ENGINE_ERROR; }`,
+docker logs mssql 2>&1 | grep -q "SQL Server is now ready for client connections" && echo ENGINE_READY || { echo "--- mssql container logs ---"; docker logs --tail 25 mssql 2>&1; echo ENGINE_ERROR; }`,
     connectionString: (c) => `Server=127.0.0.1,${c.port};Database=${c.db};User Id=${c.user};Password=${c.pw};TrustServerCertificate=True`,
   },
 };
@@ -213,11 +243,9 @@ export async function ensureEngine(projectId: string, engine: DbEngine): Promise
   await ensureProjectSandbox(projectId);
   const workspaceId = await envWorkspaceId(projectId);
 
-  // Docker-backed engines (SQL Server) need dockerd up first.
-  if (engine === "mssql") {
-    const dockerOk = await ensureDocker(projectId);
-    if (!dockerOk) throw new Error("Docker could not be started in the sandbox (needed for SQL Server)");
-  }
+  // Every engine now runs as a Docker container → dockerd must be up first.
+  const dockerOk = await ensureDocker(projectId);
+  if (!dockerOk) throw new Error(`Docker could not be started in the sandbox — it's required to run the ${engine} database. Check the sandbox's Docker setup and retry.`);
 
   const [row] = await db.select().from(projectDatabases).where(and(eq(projectDatabases.projectId, projectId), eq(projectDatabases.engine, engine)));
   const password = row?.passwordEncrypted ? decryptSecret(row.passwordEncrypted) : generatePassword();
@@ -228,8 +256,9 @@ export async function ensureEngine(projectId: string, engine: DbEngine): Promise
   const scriptf = `/data/bringup-${engine}.sh`;
   await execOnWorkspace(workspaceId, `cat > ${scriptf} <<'EOSH'\n${spec.bringup(password)}\nEOSH\n: > ${logf}; nohup sh ${scriptf} >> ${logf} 2>&1 & echo launched`, { timeout: 60_000 });
 
-  // SQL Server pulls a ~1.5GB image on first run — allow much longer.
-  const maxPolls = engine === "mssql" ? 100 : 45; // ~13min / ~6min
+  // First run pulls the image (blocking inside the bring-up) — budget for it.
+  // mssql ~1.5GB, mysql ~600MB, postgres ~150MB, redis ~40MB (poll = 8s each).
+  const maxPolls = { mssql: 120, mysql: 100, postgres: 75, redis: 60 }[engine] ?? 60; // ~16 / 13 / 10 / 8 min
   let ready = false;
   for (let i = 0; i < maxPolls; i++) {
     await sleep(8000);
