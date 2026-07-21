@@ -22,6 +22,7 @@
   let manifest = null; // the setup plan
   let stepsData = null; // checkpoint runbook steps
   let currentView = null; // "progress" | "running" | "error" | "idle" — only re-render on change
+  let progressTab = "logs"; // during setup: "logs" | "steps"
 
   // ── In-app browser (tabbed) ──
   let bTabs = [];        // [{ id, url, history:[urls], hi }]
@@ -224,14 +225,14 @@
 
   // Checkpoint runbook — the ordered command list with per-step status.
   const STEP_ICON = { done: '<span style="color:#10b981;">✓</span>', running: '<span class="spinner" style="width:11px;height:11px;display:inline-block;vertical-align:middle;"></span>', failed: '<span style="color:#ef4444;">✗</span>', pending: '<span style="color:var(--text-secondary,#9ca3af);">○</span>' };
-  function stepsPanel() {
-    if (!stepsData || !stepsData.length) return "";
+  function stepsPanel(flex) {
+    if (!stepsData || !stepsData.length) return `<div style="color:var(--text-secondary,#9ca3af);font-size:13px;padding:8px;">No setup steps yet — the plan is being built.</div>`;
     const rows = stepsData.map((s) => `<div style="display:flex;gap:8px;padding:3px 0;font-size:12px;align-items:baseline;">
       <span style="width:14px;flex:none;text-align:center;">${STEP_ICON[s.status] || STEP_ICON.pending}</span>
       <span style="min-width:64px;flex:none;color:var(--text-secondary,#9ca3af);text-transform:uppercase;font-size:10px;letter-spacing:.4px;padding-top:1px;">${esc(s.phase)}</span>
       <span style="flex:1;color:${s.status === "failed" ? "#ef4444" : "var(--text-color,#e2e8f0)"};word-break:break-word;font-family:ui-monospace,Menlo,monospace;">${esc(s.label)}</span>
     </div>`).join("");
-    return `<div style="max-height:34%;overflow:auto;border:1px solid var(--border-color,#2a2a2a);border-radius:8px;padding:8px 12px;background:var(--background-surface,#141414);">
+    return `<div id="preview-steps-wrap" style="${flex ? "flex:1;min-height:0;" : "max-height:34%;"}overflow:auto;border:1px solid var(--border-color,#2a2a2a);border-radius:8px;padding:8px 12px;background:var(--background-surface,#141414);">
       <div style="font-size:11px;color:var(--text-secondary,#9ca3af);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Setup steps (checkpointed — a restart resumes here)</div>${rows}</div>`;
   }
 
@@ -245,16 +246,20 @@
       currentView = "progress";
       setSub(STEP_LABEL[status] || "Working…");
       renderActions(btn("Cancel", { action: "stop", icon: "fa-stop" }));
+      const seg = (id, label) => `<button data-ptab="${id}" style="padding:5px 14px;border-radius:7px;cursor:pointer;font-size:12.5px;border:1px solid var(--border-color,#333);background:${progressTab === id ? "#7c3aed" : "var(--border-color,#2a2a2a)"};color:${progressTab === id ? "#fff" : "var(--text-color,#e2e8f0)"};">${label}</button>`;
       body.innerHTML = `
         <div style="height:100%;display:flex;flex-direction:column;gap:10px;padding:16px 20px;">
-          <div id="preview-progress-head" style="display:flex;align-items:center;gap:12px;color:var(--text-color,#e2e8f0);font-size:14px;">
-            <div class="spinner" style="width:18px;height:18px;flex:none;"></div>
-            <span>${esc(STEP_LABEL[status] || "Setting up your preview…")}</span>
+          <div style="display:flex;align-items:center;gap:12px;">
+            <div id="preview-progress-head" style="display:flex;align-items:center;gap:10px;color:var(--text-color,#e2e8f0);font-size:14px;flex:1;min-width:0;">
+              <div class="spinner" style="width:18px;height:18px;flex:none;"></div>
+              <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(STEP_LABEL[status] || "Setting up your preview…")}</span>
+            </div>
+            <div style="display:flex;gap:4px;flex:none;">${seg("logs", "Logs")}${seg("steps", "Steps")}</div>
           </div>
-          <div id="preview-steps-wrap">${stepsPanel()}</div>
-          ${logPanel(true)}
+          <div id="preview-pane" style="flex:1;min-height:0;display:flex;flex-direction:column;">${progressTab === "steps" ? stepsPanel(true) : logPanel(true)}</div>
         </div>`;
-      scrollLog();
+      document.querySelectorAll("[data-ptab]").forEach((el) => el.addEventListener("click", () => { progressTab = el.getAttribute("data-ptab"); render(current || { previewStatus: status }); }));
+      if (progressTab === "logs") scrollLog();
       return;
     }
 
@@ -318,12 +323,15 @@
       const nextView = statusView(state.previewStatus);
       current = state;
       if (nextView === currentView && currentView === "progress") {
-        // Same in-progress view → update in place (don't rebuild → keeps scroll +
-        // the live WS-appended log lines).
-        const stepsWrap = document.getElementById("preview-steps-wrap");
-        if (stepsWrap) stepsWrap.innerHTML = stepsPanel();
-        const el = document.getElementById("preview-log");
-        if (el) { const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40; el.textContent = logText; if (atBottom) el.scrollTop = el.scrollHeight; }
+        // Same in-progress view → update the active pane in place (don't rebuild →
+        // keeps scroll + the live WS-appended log lines).
+        if (progressTab === "steps") {
+          const pane = document.getElementById("preview-pane");
+          if (pane) pane.innerHTML = stepsPanel(true);
+        } else {
+          const el = document.getElementById("preview-log");
+          if (el) { const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40; el.textContent = logText; if (atBottom) el.scrollTop = el.scrollHeight; }
+        }
       } else {
         render(state);
       }
@@ -538,8 +546,10 @@
     onSteps(data) {
       if (!data || !Array.isArray(data.steps)) return;
       stepsData = data.steps;
-      const wrap = $("preview-steps-wrap");
-      if (wrap) wrap.innerHTML = stepsPanel(); // update in place; no full rebuild
+      if (progressTab === "steps") {
+        const pane = document.getElementById("preview-pane");
+        if (pane) pane.innerHTML = stepsPanel(true); // update the visible steps pane
+      }
     },
   };
 
