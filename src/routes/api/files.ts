@@ -4,6 +4,7 @@ import { db } from "../../config/db.ts";
 import { chatFiles, conversations } from "../../db/schema/chat.ts";
 import { eq } from "drizzle-orm";
 import { env } from "../../config/env.ts";
+import { isS3Enabled, buildS3Key, uploadBinary, downloadBinary, guessContentType } from "../../services/s3.ts";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import type { auth } from "../../auth/index.ts";
@@ -27,46 +28,69 @@ async function ensureUploadsDir() {
 // POST /api/files/upload
 files.post("/upload", async (c) => {
   const user = c.get("user");
-  const body = await c.req.parseBody();
+  try {
+    const body = await c.req.parseBody();
+    const file = body["file"] as File | undefined;
+    const conversationId = body["conversation_id"] as string | undefined;
+    if (!file) return c.json({ error: "No file provided" }, 400);
 
-  const file = body["file"] as File | undefined;
-  const conversationId = body["conversation_id"] as string | undefined;
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const ext = (file.name.split(".").pop() ?? "bin").toLowerCase();
+    const filename = `${crypto.randomUUID()}.${ext}`;
+    const contentType = file.type || guessContentType(file.name);
 
-  if (!file) return c.json({ error: "No file provided" }, 400);
+    // Prefer S3 (the prod container's filesystem is ephemeral/read-only, so a
+    // local write throws a bare 500). Store the S3 key in filePath with an "s3:"
+    // marker; fall back to local disk in dev where S3 isn't configured.
+    let storedPath = "";
+    if (isS3Enabled) {
+      const key = buildS3Key(conversationId || "chat", "chat-files", filename);
+      try {
+        await uploadBinary(key, buffer, contentType);
+        storedPath = `s3:${key}`;
+      } catch (err) {
+        console.error("[files.upload] S3 upload failed, falling back to local:", (err as Error).message);
+      }
+    }
+    if (!storedPath) {
+      await ensureUploadsDir();
+      await fs.writeFile(path.join(UPLOADS_DIR, filename), buffer);
+      storedPath = `uploads/${filename}`;
+    }
 
-  await ensureUploadsDir();
-
-  const ext = file.name.split(".").pop() ?? "";
-  const filename = `${crypto.randomUUID()}.${ext}`;
-  const filePath = path.join(UPLOADS_DIR, filename);
-
-  const buffer = await file.arrayBuffer();
-  await fs.writeFile(filePath, Buffer.from(buffer));
-
-  // Insert into chatFiles if we have a conversation context
-  let fileRecord = null;
-  if (conversationId) {
-    const [row] = await db
-      .insert(chatFiles)
-      .values({
+    // chatFiles row → the client references it via /api/files/:id. Requires a
+    // real, owned conversation (FK). If it isn't persisted yet, fail clearly
+    // instead of an opaque FK 500.
+    let fileRecord = null;
+    if (conversationId) {
+      const [conv] = await db.select({ id: conversations.id, userId: conversations.userId })
+        .from(conversations).where(eq(conversations.id, conversationId));
+      if (!conv || conv.userId !== user.id) {
+        return c.json({ error: "Conversation not found — send a message first, then attach the file." }, 400);
+      }
+      const [row] = await db.insert(chatFiles).values({
         conversationId,
-        filePath: `uploads/${filename}`,
+        filePath: storedPath,
         originalFilename: file.name,
-        fileType: file.type,
+        fileType: contentType,
         fileSize: file.size,
-      })
-      .returning();
-    fileRecord = row;
-  }
+      }).returning();
+      fileRecord = row;
+    }
 
-  return c.json({
-    id: fileRecord?.id ?? null,
-    filename,
-    originalName: file.name,
-    fileType: file.type,
-    fileSize: file.size,
-    path: `uploads/${filename}`,
-  });
+    return c.json({
+      id: fileRecord?.id ?? null,
+      filename,
+      originalName: file.name,
+      fileType: contentType,
+      fileSize: file.size,
+      path: storedPath,
+      url: fileRecord ? `/api/files/${fileRecord.id}` : undefined,
+    });
+  } catch (err) {
+    console.error("[files.upload] failed:", err);
+    return c.json({ error: `Upload failed: ${(err as Error).message || "server error"}` }, 500);
+  }
 });
 
 // GET /api/files/:id — serve an uploaded chat file (so images persist in chat
@@ -79,9 +103,15 @@ files.get("/:id", async (c) => {
   const [conv] = await db.select({ userId: conversations.userId }).from(conversations).where(eq(conversations.id, cf.conversationId));
   if (!conv || conv.userId !== user.id) return c.json({ error: "forbidden" }, 403);
   try {
+    // S3-stored (filePath = "s3:<key>") vs legacy local disk.
+    if (cf.filePath.startsWith("s3:")) {
+      const { body, contentType } = await downloadBinary(cf.filePath.slice(3));
+      return new Response(body, { headers: { "Content-Type": contentType || cf.fileType || "application/octet-stream", "Cache-Control": "private, max-age=86400" } });
+    }
     const buf = await fs.readFile(path.resolve(cf.filePath));
     return new Response(buf, { headers: { "Content-Type": cf.fileType || "application/octet-stream", "Cache-Control": "private, max-age=86400" } });
-  } catch {
+  } catch (err) {
+    console.error("[files.get] serve failed:", (err as Error).message);
     return c.json({ error: "file missing" }, 404);
   }
 });
