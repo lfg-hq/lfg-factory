@@ -422,7 +422,10 @@ async function executeRunbook(
     step.status = "running"; step.error = undefined; await persist();
     await setPreview(projectId, userId, { previewStatus: PHASE_STATUS[step.phase] }, step.label);
     plog(projectId, userId, `▶ ${step.phase}: ${step.command}`);
-    const r = await runDetachedPolled(projectId, userId, workspaceId, step.command, timeoutFor(step));
+    // Schema (SQL restores) can be legitimately silent for long stretches → no
+    // stall guard; toolchain/install/build should stream progress → kill if they
+    // go silent for 4 min (a hung network/TLS op) and let the AI driver recover.
+    const r = await runDetachedPolled(projectId, userId, workspaceId, step.command, timeoutFor(step), { stallMs: step.phase === "schema" ? 0 : 240_000 });
     if (r.exitCode === 0) {
       step.status = "done";
       plog(projectId, userId, `  ✓ ${step.label}`, r.output && r.output !== "(no output)" ? { detail: r.output.slice(-700) } : undefined);
@@ -506,19 +509,25 @@ ${plan}
 GOAL: the app must serve HTTP on 0.0.0.0:${port} and actually respond.
 
 HOW TO WORK:
-- Install the toolchain, then dependencies. On Alpine, if \`apk add dotnet8-sdk\` is unavailable/broken, install via \`curl -sSL https://dot.net/v1/dotnet-install.sh | bash -s -- --channel 8.0 --install-dir /data/.dotnet\` (it's already on PATH after that).
+- The SETUP PLAN above is a best-effort guess from reading the code — it is NOT authoritative. VERIFY it against reality and OVERRIDE it whenever a command fails or a better approach exists. You are the one who figures out how to make this app run; the plan is just a starting hint.
+- Install the toolchain, then dependencies. If a plan command (e.g. \`apk add dotnet8-sdk\`) is unavailable, broken, or the wrong version, use whatever works instead (e.g. \`curl -sSL https://dot.net/v1/dotnet-install.sh | bash -s -- --channel 8.0 --install-dir /data/.dotnet\`).
 - For compiled stacks: restore → BUILD → run. For a multi-project solution, run the startup project named above.
 - Apply migrations, then the SQL scripts in order (SQL Server runs in Docker — use \`docker exec\` with sqlcmd inside the mssql container, or a client you install; the connection string is in .env).
 - Start the APP SERVER detached so it keeps running after the command returns: \`setsid sh -c '<run command>' </dev/null > ${PROJECT_DIR}/preview.log 2>&1 &\` — it must bind 0.0.0.0:${port}. (This is the ONLY case where you background a command yourself.)
 - VERIFY for real: \`curl -sS -i http://127.0.0.1:${port}/\`. Up = a real 2xx/3xx/4xx response. 000/connection-refused/5xx = NOT up → read ${PROJECT_DIR}/preview.log, diagnose, fix, retry.
 
+PERSISTING WHAT YOU LEARN (so the next run doesn't repeat your work):
+- Each \`run\` command starts a FRESH shell, so a bare \`export FOO=bar\` does NOT carry to the next command or survive a restart. For an environment fix that must stick (an env var, a cert/CA path, a package source), APPEND it to ./.env — it is sourced before every command and on every restart: \`echo 'FOO=bar' >> ${PROJECT_DIR}/.env\`.
+- When you discover the PLAN itself was wrong and found what works — a different toolchain install, install/build/run command, startup project, or port — call \`updatePlan\` to persist the corrected value. Do this AFTER you've confirmed the new command works. This is how the checklist self-heals: the next preview run skips straight to the working commands.
+
 RUNNING COMMANDS — IMPORTANT:
 - The \`run\` tool already runs each command DETACHED and polls it to completion, so restore/build/install take as long as they need — you do NOT need to background them, add \`&\`, nohup, or your own timeout wrapper. Just run the plain command (e.g. \`dotnet build Cohire.sln -c Release\`).
 - Pass a large \`timeoutSec\` (~1500) for restore/build. If a command returns exitCode -2 ("still running after Ns"), it is STILL RUNNING — do NOT restart it; call \`run\` again (e.g. \`sleep 5\` or re-issue with a bigger timeoutSec) to keep waiting for it to finish. Never kill and restart a build that's progressing.
+- If a command returns exitCode -4, we KILLED it: it produced NO output for ~4 min and looked stuck (commonly a hung network/TLS/DNS op — e.g. a package restore that can't validate a source's certificate even though \`curl\` to it works). Do NOT re-run the identical command. Diagnose the hang and change the approach (fix certs/CA path, a different package source or install method, offline/cached packages), then retry.
 
 RULES:
-- Do NOT modify the application's SOURCE CODE. You may install tools/deps, set env, choose commands, fix host/port. If it genuinely needs a code change to run, call \`finish\` with status "failed" and the exact reason.
-- When a command genuinely fails (a real non-zero exit with an error), read the error and fix the ENVIRONMENT, then continue. Keep going until the app responds or it truly cannot run.
+- Do NOT modify the application's SOURCE CODE. You may install tools/deps, set env, choose commands, fix host/port, edit ./.env. If it genuinely needs a code change to run, call \`finish\` with status "failed" and the exact reason.
+- When a command genuinely fails (a real non-zero exit with an error), read the error and fix the ENVIRONMENT, then continue. Keep going until the app responds or it truly cannot run — do not give up after one failed attempt.
 - One command per \`run\` call. Never print secrets.`;
 }
 
@@ -531,6 +540,7 @@ RULES:
  */
 async function runDetachedPolled(
   projectId: string, userId: string, workspaceId: string, command: string, maxMs: number,
+  opts?: { stallMs?: number },
 ): Promise<{ exitCode: number; output: string }> {
   const id = `r${Date.now().toString(36)}${Math.floor(Math.random() * 1e7).toString(36)}`;
   const dir = "/data/.run";
@@ -548,8 +558,15 @@ async function runDetachedPolled(
     return { exitCode: -1, output: `failed to launch: ${(launch.output || "") + ((launch as any).stderr || "")}`.slice(-2000) };
   }
 
+  // Stall detection: a command that produces NO new output for `stallMs` is
+  // treated as stuck (e.g. a network op hanging on a TLS/DNS failure) and killed,
+  // so the driver gets fast feedback (~minutes) instead of burning the full
+  // maxMs. 0 = disabled (for genuinely-silent steps like SQL restores).
+  const stallMs = opts?.stallMs ?? 0;
   const deadline = Date.now() + maxMs;
   let interval = 3000;
+  let lastSize = -1;
+  let lastGrowthAt = Date.now();
   while (Date.now() < deadline) {
     await sleep(interval);
     interval = Math.min(interval + 2000, 15000); // back off: 3s,5s,7s…15s
@@ -558,13 +575,23 @@ async function runDetachedPolled(
       await execOnWorkspace(workspaceId, `pkill -9 -f ${id} 2>/dev/null; echo cancelled`, { timeout: 20_000 }).catch(() => {});
       return { exitCode: -3, output: "(cancelled)" };
     }
-    const chk = await execOnWorkspace(workspaceId, `if [ -f ${donef} ]; then printf 'DONE:'; cat ${donef}; else echo RUNNING; fi`, { timeout: 30_000 })
-      .catch(() => ({ output: "RUNNING", stderr: "", exitCode: 0 }));
-    if ((chk.output || "").includes("DONE:")) {
-      const code = parseInt(((chk.output || "").match(/DONE:(\d+)/) || [])[1] ?? "-1", 10);
+    // One call: the done-marker AND the current log size (for stall detection).
+    const chk = await execOnWorkspace(workspaceId, `if [ -f ${donef} ]; then printf 'DONE:'; cat ${donef}; else echo RUNNING; fi; printf ' SIZE:'; wc -c < ${logf} 2>/dev/null || printf 0`, { timeout: 30_000 })
+      .catch(() => ({ output: "RUNNING SIZE:0", stderr: "", exitCode: 0 }));
+    const chkOut = chk.output || "";
+    if (chkOut.includes("DONE:")) {
+      const code = parseInt((chkOut.match(/DONE:(-?\d+)/) || [])[1] ?? "-1", 10);
       const out = await execOnWorkspace(workspaceId, `tail -c 6000 ${logf} 2>/dev/null`, { timeout: 30_000 })
         .catch(() => ({ output: "", stderr: "", exitCode: 0 }));
       return { exitCode: code, output: (out.output || "").trim() || "(no output)" };
+    }
+    if (stallMs > 0) {
+      const size = parseInt((chkOut.match(/SIZE:(\d+)/) || [])[1] ?? "0", 10);
+      if (size > lastSize) { lastSize = size; lastGrowthAt = Date.now(); }
+      else if (Date.now() - lastGrowthAt > stallMs) {
+        const tail = await execOnWorkspace(workspaceId, `pkill -9 -f ${id} 2>/dev/null; tail -c 2000 ${logf} 2>/dev/null`, { timeout: 30_000 }).catch(() => ({ output: "" }));
+        return { exitCode: -4, output: `(killed — no output for ${Math.round(stallMs / 1000)}s, command appears stuck. Do NOT re-run the same command; try a DIFFERENT approach. Recent output:\n${(tail as any).output || ""})`.slice(-4000) };
+      }
     }
   }
   // Timed out — leave it running (a build may still finish); tell the model.
@@ -585,7 +612,7 @@ async function driveSandbox(
 
   const tools = {
     run: tool({
-      description: "Run one shell command in the Alpine sandbox (bash). The toolchain PATH, /data caches, and the project's .env are already set up. The command runs to completion no matter how long it takes (build/restore are fine) — we run it detached and poll, so you don't need to background it yourself. Returns exit code + combined stdout/stderr (last 6KB). exitCode -2 = still running after your timeout; just call run again to keep polling.",
+      description: "Run one shell command in the Alpine sandbox (bash). The toolchain PATH, /data caches, and the project's .env are already set up. The command runs to completion no matter how long it takes (build/restore are fine) — we run it detached and poll, so you don't need to background it yourself. Returns exit code + combined stdout/stderr (last 6KB). exitCode -2 = still running after your timeout (call run again to keep polling — do NOT restart it). exitCode -4 = we KILLED it because it produced no output for ~4 min (stuck, e.g. a hung network/TLS op) — do NOT re-run the same command, change the approach.",
       inputSchema: zodSchema(z.object({
         command: z.string().describe("The shell command to run (one command; use && or a heredoc for multi-step). Run it in the FOREGROUND — do NOT add '&'/nohup/setsid yourself; we detach it for you. EXCEPTION: the app server itself must be started detached (setsid ... &) so it keeps running."),
         timeoutSec: z.number().optional().describe("How long to wait for THIS command before returning control (default 600, max 1800). For a big restore/build use ~1500. If it returns exitCode -2 (still running), call run again with the same/again to keep waiting."),
@@ -595,9 +622,30 @@ async function driveSandbox(
         const maxMs = Math.min(Math.max(timeoutSec ?? 600, 10), 1800) * 1000;
         plog(projectId, userId, `$ ${command}`);
         setPreview(projectId, userId, { previewStatus: "starting" }, `$ ${command.slice(0, 110)}`).catch(() => {});
-        const r = await runDetachedPolled(projectId, userId, workspaceId, command, maxMs);
+        // Kill a command that goes silent for 4 min (stuck) so the agent iterates
+        // fast instead of burning the full timeout on a hang.
+        const r = await runDetachedPolled(projectId, userId, workspaceId, command, maxMs, { stallMs: 240_000 });
         plog(projectId, userId, `  → exit ${r.exitCode}`, r.output ? { detail: r.output.slice(-1800), level: r.exitCode === 0 ? "info" : "error" } : undefined);
         return { exitCode: r.exitCode, output: r.output.slice(-6000) || "(no output)" };
+      },
+    }),
+    updatePlan: tool({
+      description: "Persist a correction to the saved SETUP PLAN (the checklist) so the NEXT run uses the working approach instead of repeating the failed one. Call this the moment you discover a plan command is wrong and you found what works — e.g. the toolchain 'apk add dotnet8-sdk' fails so you installed the runtime a different way, or the install/build/run command, startup project, or port in the plan is wrong. This does NOT run anything; it just rewrites the checklist. (For an environment fix that must persist across steps/restarts — an env var, a cert path, a package source — append it to ./.env instead; it is sourced before every command.)",
+      inputSchema: zodSchema(z.object({
+        field: z.enum(["toolchain", "installCmd", "buildCmd", "runCmd", "port", "startupProject"]).describe("Which plan field to correct."),
+        value: z.string().describe("The corrected value. For 'toolchain', the FULL working command sequence, one command per line (replaces the old toolchain). For 'port', the number as a string. Otherwise the exact command/name."),
+        reason: z.string().describe("Briefly: what was wrong and what you changed it to."),
+      })),
+      execute: async ({ field, value, reason }: { field: string; value: string; reason: string }) => {
+        if (field === "toolchain") manifest.toolchain = value.split("\n").map((s) => s.trim()).filter(Boolean);
+        else if (field === "port") { const p = parseInt(value, 10); if (p > 0) manifest.port = p; }
+        else (manifest as any)[field] = value;
+        await db.update(projectEnvironments)
+          .set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() })
+          .where(eq(projectEnvironments.projectId, projectId)).catch(() => {});
+        const shown = field === "toolchain" ? manifest.toolchain.join("; ") : String((manifest as any)[field]);
+        plog(projectId, userId, `Updated plan: ${field} → ${shown}`, { detail: reason });
+        return "plan updated — the next run will use this.";
       },
     }),
     finish: tool({
@@ -614,6 +662,11 @@ async function driveSandbox(
     }),
   };
 
+  // Stop → abort the agent loop cleanly (AbortController), instead of every
+  // command throwing __CANCELLED__ back to the model (which reads it as "the
+  // sandbox went unresponsive" and flails). A watcher fires abort on cancel.
+  const ac = new AbortController();
+  const watch = setInterval(() => { if (isCancelled(projectId)) ac.abort(); }, 1000);
   try {
     await generateText({
       model,
@@ -621,9 +674,16 @@ async function driveSandbox(
       stopWhen: stepCountIs(80), // generous step budget — we control the loop, not a blind timer
       system: buildDriverSystemPrompt(manifest, engines),
       prompt: `Bring the app up and verify it serves on 0.0.0.0:${port}. Begin.`,
+      abortSignal: ac.signal,
     });
   } catch (e) {
-    plog(projectId, userId, `Driver loop error: ${(e as Error).message}`, { level: "error" });
+    const msg = (e as Error).message || String(e);
+    // A cancel-driven abort is expected — don't surface it as a scary error.
+    if (!isCancelled(projectId) && !/abort/i.test(msg)) {
+      plog(projectId, userId, `Driver loop error: ${msg}`, { level: "error" });
+    }
+  } finally {
+    clearInterval(watch);
   }
 
   // Trust reality, not the model's word: confirm the port actually serves.
