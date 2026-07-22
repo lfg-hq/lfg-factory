@@ -1345,6 +1345,57 @@ export async function getPreviewBranches(projectId: string): Promise<Array<{ id:
 }
 
 /**
+ * Compute the git diff of a ticket's feature branch vs a base branch (default
+ * main), using the sandbox's clone (which has all remote branches fetched).
+ * Returns the branch list (for the base selector), per-file +/- counts, and the
+ * unified diff text. `base...head` = what this ticket changed since it diverged.
+ */
+export async function getTicketDiff(projectId: string, ticketId: string, base: string): Promise<{
+  branches: string[]; base: string; head: string;
+  files: Array<{ path: string; added: number; removed: number }>; diff: string; error?: string;
+}> {
+  const head = `feature/ticket-${ticketId}`;
+  const b = (base || "main").replace(/[^\w./-]/g, "") || "main";
+  let workspaceId: string;
+  try { ({ workspaceId } = await ensureProjectSandbox(projectId)); }
+  catch { return { branches: [], base: b, head, files: [], diff: "", error: "No preview sandbox yet — open the Preview tab and set it up first." }; }
+
+  const script = `
+cd ${PROJECT_DIR} 2>/dev/null || { echo "NO_REPO"; exit 1; }
+[ -e .git ] || { echo "NO_REPO"; exit 1; }
+git fetch origin --prune >/dev/null 2>&1 || true
+echo "===BRANCHES==="
+git for-each-ref --format='%(refname:short)' refs/remotes/origin 2>/dev/null | sed 's#^origin/##' | grep -v '^HEAD$' | sort -u
+echo "===REFS==="
+BASE=$(git rev-parse --verify -q origin/${b} >/dev/null 2>&1 && echo origin/${b} || echo ${b})
+HEAD=$(git rev-parse --verify -q origin/${head} >/dev/null 2>&1 && echo origin/${head} || echo ${head})
+git rev-parse --verify -q "$HEAD" >/dev/null 2>&1 || { echo "NO_HEAD"; exit 0; }
+echo "===NUMSTAT==="
+git diff --numstat "$BASE"..."$HEAD" 2>/dev/null | head -500
+echo "===DIFF==="
+git diff "$BASE"..."$HEAD" 2>/dev/null | head -c 300000
+`;
+  const { output } = await sh(workspaceId, script, 90_000);
+  if (output.includes("NO_REPO")) return { branches: [], base: b, head, files: [], diff: "", error: "The repo isn't cloned in the sandbox — set up the preview first." };
+  const sect = (name: string) => {
+    const start = output.indexOf(`===${name}===`);
+    if (start < 0) return "";
+    const from = start + `===${name}===`.length;
+    const rest = output.slice(from);
+    const next = rest.search(/\n===[A-Z]+===/);
+    return (next < 0 ? rest : rest.slice(0, next)).trim();
+  };
+  const branches = sect("BRANCHES").split("\n").map((s) => s.trim()).filter(Boolean);
+  if (output.includes("NO_HEAD")) return { branches, base: b, head, files: [], diff: "", error: `Branch ${head} not found — rebuild the ticket to create/push it.` };
+  const files = sect("NUMSTAT").split("\n").filter(Boolean).map((l) => {
+    const parts = l.split("\t"); const added = parseInt(parts[0]!, 10); const removed = parseInt(parts[1]!, 10);
+    return { path: parts.slice(2).join("\t"), added: isNaN(added) ? 0 : added, removed: isNaN(removed) ? 0 : removed };
+  }).filter((f) => f.path);
+  const diff = output.split("===DIFF===")[1]?.trim() || "";
+  return { branches, base: b, head, files, diff };
+}
+
+/**
  * Restart the app SERVER (kill + re-run the stored run command). Fast — does NOT
  * reinstall or rebuild. Falls back to a full setup if we have no run command.
  * If `opts.ticketId` is set, runs the app from THAT ticket's git worktree (its

@@ -675,6 +675,18 @@ ticketsApi.get("/:projectId/tickets/:ticketId/server-logs", async (c) => {
   }
 });
 
+// ── GET /:projectId/tickets/:ticketId/git/diff?base=main ────────────
+// Diff the ticket's feature branch vs a base branch (for the Git-tab viewer).
+ticketsApi.get("/:projectId/tickets/:ticketId/git/diff", async (c) => {
+  const user = c.get("user");
+  const { projectId, ticketId } = c.req.param();
+  const access = await getProjectAccess(projectId, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  const base = c.req.query("base") || "main";
+  const { getTicketDiff } = await import("../../services/dev-preview.ts");
+  return c.json(await getTicketDiff(access.project.id, ticketId, base));
+});
+
 // ── POST /:projectId/tickets/:ticketId/git/create-pr ────────────────
 // Create a GitHub PR for the ticket's feature branch
 

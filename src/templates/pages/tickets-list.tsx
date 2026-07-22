@@ -1235,8 +1235,77 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       + '<i class="fas fa-cloud-upload-alt"></i> Push & Merge to lfg-agent</button>';
     html += '</div>';
 
-    html += '</div>';
+    html += '</div>'; // /git-info-grid
+
+    // Branch diff viewer: this ticket's branch vs a selectable base (default main).
+    html += '<div id="git-diff-wrap" style="margin-top:1rem;border-top:1px solid var(--border-color,#2a2a2a);padding-top:1rem;">'
+      + '<div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.75rem;">'
+      + '<span class="git-label">Changes</span>'
+      + '<code class="git-branch-badge">' + escHtml(branch || ('feature/ticket-' + _currentTicketId)) + '</code>'
+      + '<span style="color:var(--text-secondary,#9ca3af);">vs</span>'
+      + '<select id="git-diff-base" onchange="loadGitDiff(this.value)" style="padding:4px 8px;border-radius:6px;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);font-size:12px;"><option>main</option></select>'
+      + '<button onclick="loadGitDiff(document.getElementById(\'git-diff-base\').value)" class="git-action-btn" style="padding:4px 10px;"><i class="fas fa-sync-alt"></i></button>'
+      + '</div>'
+      + '<div id="git-diff-body"><div class="git-empty">Loading diff…</div></div>'
+      + '</div>';
+
     info.innerHTML = html;
+    loadGitDiff('main');
+  }
+
+  async function loadGitDiff(base) {
+    var body = document.getElementById('git-diff-body');
+    if (!body || !_currentTicketId) return;
+    body.innerHTML = '<div class="git-empty">Loading diff…</div>';
+    var data = await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + _currentTicketId + '/git/diff?base=' + encodeURIComponent(base || 'main'))
+      .then(function(r){ return r.json(); }).catch(function(){ return null; });
+    if (!data) { body.innerHTML = '<div class="git-empty">Failed to load diff.</div>'; return; }
+    var sel = document.getElementById('git-diff-base');
+    if (sel && Array.isArray(data.branches) && data.branches.length) {
+      var cur = data.base || 'main';
+      sel.innerHTML = data.branches.map(function(b){ return '<option' + (b === cur ? ' selected' : '') + '>' + escHtml(b) + '</option>'; }).join('');
+    }
+    if (data.error) { body.innerHTML = '<div class="git-empty">' + escHtml(data.error) + '</div>'; return; }
+    if (!data.files || !data.files.length) { body.innerHTML = '<div class="git-empty">No changes between these branches.</div>'; return; }
+    body.innerHTML = renderGitDiff(data);
+  }
+
+  function _parseDiffByFile(diff) {
+    var map = {}; var parts = (diff || '').split(/\ndiff --git /);
+    parts.forEach(function(p, idx){
+      if (!p.trim()) return;
+      var chunk = (idx === 0 ? p : 'diff --git ' + p);
+      var m = chunk.match(/ b\/([^\n]+)/);
+      if (m) map[m[1].trim()] = chunk;
+    });
+    return map;
+  }
+  function _renderHunks(block) {
+    var lines = (block || '').split('\n');
+    var out = '<pre style="margin:0;font-size:12px;line-height:1.5;font-family:ui-monospace,Menlo,monospace;">';
+    lines.forEach(function(l){
+      if (/^diff --git|^index |^--- |^\+\+\+ |^new file|^deleted file|^similarity |^rename /.test(l)) return;
+      var bg = '', color = 'var(--text-color,#cbd5e1)';
+      if (l.indexOf('@@') === 0) { bg = 'rgba(99,102,241,0.12)'; color = '#818cf8'; }
+      else if (l.charAt(0) === '+') { bg = 'rgba(52,211,153,0.12)'; color = '#34d399'; }
+      else if (l.charAt(0) === '-') { bg = 'rgba(248,113,113,0.12)'; color = '#f87171'; }
+      out += '<div style="background:' + bg + ';color:' + color + ';padding:0 10px;white-space:pre-wrap;word-break:break-all;">' + escHtml(l || ' ') + '</div>';
+    });
+    return out + '</pre>';
+  }
+  function renderGitDiff(data) {
+    var totA = 0, totR = 0; data.files.forEach(function(f){ totA += f.added; totR += f.removed; });
+    var out = '<div style="font-size:12px;color:var(--text-secondary,#9ca3af);margin-bottom:0.6rem;">' + data.files.length + ' file' + (data.files.length > 1 ? 's' : '') + ' changed · <span style="color:#34d399;">+' + totA + '</span> <span style="color:#f87171;">-' + totR + '</span></div>';
+    var blocks = _parseDiffByFile(data.diff || '');
+    var openAll = data.files.length <= 4;
+    data.files.forEach(function(f){
+      out += '<details' + (openAll ? ' open' : '') + ' style="margin-bottom:0.5rem;border:1px solid var(--border-color,#2a2a2a);border-radius:8px;overflow:hidden;">'
+        + '<summary style="cursor:pointer;padding:8px 12px;background:var(--background-surface,#141414);display:flex;justify-content:space-between;align-items:center;font-size:12.5px;gap:8px;">'
+        + '<span style="font-family:ui-monospace,Menlo,monospace;word-break:break-all;">' + escHtml(f.path) + '</span>'
+        + '<span style="flex:none;"><span style="color:#34d399;">+' + f.added + '</span> <span style="color:#f87171;">-' + f.removed + '</span></span>'
+        + '</summary><div style="overflow:auto;max-height:480px;">' + _renderHunks(blocks[f.path]) + '</div></details>';
+    });
+    return out;
   }
 
   async function pushToGithub() {
