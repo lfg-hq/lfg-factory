@@ -1465,25 +1465,38 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
     const startingMsg = ticketId ? `Starting the preview on ${branchLabel}…` : "Restarting the app…";
     await setPreview(projectId, userId, { previewStatus: "starting", previewError: null, previewBranch: branchLabel }, startingMsg);
     const compiled = !!manifest.buildCmd || /dotnet|asp|java|go|rust|maven|gradle/i.test(`${manifest.runtime} ${manifest.framework}`);
-    // Try a quick plain start first (fast for interpreted apps or an already-built
-    // tree). A worktree isn't pre-built, so a COMPILED app builds on first run and
-    // that output can be silent (a hung NuGet restore shows nothing) — so we only
-    // wait briefly here, then hand to the AI DRIVER, which runs restore→build→run as
-    // EXPLICIT, streamed steps you can watch, reusing the warm toolchain/cache.
-    plog(projectId, userId, `Launching the app from ${branchLabel}${compiled ? " (a compiled app builds on first run — you'll see the driver's build steps if the quick start doesn't take)" : ""}…`);
-    const waitMs = ticketId ? 90_000 : 60_000;
-    await runDetachedPolled(projectId, userId, workspaceId, appStartCommand(manifest, runDir), 30_000);
-    let up = await waitForAppUp(projectId, userId, workspaceId, manifest.port, `${runDir}/preview.log`, waitMs);
 
-    // Didn't come up quickly → hand off to the SAME AI driver that got main working,
-    // pointed at this worktree. It reuses the warm toolchain + NuGet cache + persisted
-    // env fixes, runs restore/build/run as streamed steps, fixes anything
-    // branch-specific, and persists new fixes (setEnv) so it's not redone.
+    // FAST DETERMINISTIC PATH: run the RECORDED build + run commands directly (they're
+    // known-good from the last successful setup, and the deps/DB/config are already
+    // set up on the persistent disk). Only if one of them ERRORS do we hand off to the
+    // AI driver — so a normal restart just builds (incremental, fast) + runs, instead
+    // of the driver re-investigating the whole plan (restore/migrate/PATH) every time.
+    let up = false;
+    let buildFailed = false;
+    if (compiled && manifest.buildCmd) {
+      plog(projectId, userId, `Building (recorded): ${manifest.buildCmd}`);
+      const br = await runDetachedPolled(projectId, userId, workspaceId, manifest.buildCmd, 1_200_000, { stallMs: 240_000, workDir: runDir });
+      if (br.exitCode !== 0) {
+        buildFailed = true;
+        plog(projectId, userId, `Recorded build failed (exit ${br.exitCode}) — handing to the AI driver to investigate`, { level: "error", detail: br.output.slice(-1200) });
+      } else {
+        plog(projectId, userId, "Build ✓");
+      }
+    }
+    if (!buildFailed) {
+      plog(projectId, userId, `Starting the app from ${branchLabel}…`);
+      await runDetachedPolled(projectId, userId, workspaceId, appStartCommand(manifest, runDir), 30_000);
+      up = await waitForAppUp(projectId, userId, workspaceId, manifest.port, `${runDir}/preview.log`, ticketId ? 90_000 : 60_000);
+    }
+
+    // Only if the recorded build/run didn't bring it up → hand off to the driver to
+    // investigate (it reuses the warm toolchain/cache/DB + persisted fixes, streams
+    // its steps, fixes what's actually broken, and persists new fixes via setEnv).
     if (!up) {
       const driver = await resolveDriverModel(userId);
       if (driver) {
-        plog(projectId, userId, "Handing to the AI driver — it will build + start the branch step by step (reusing the main-branch toolchain/cache)…");
-        await setPreview(projectId, userId, { previewStatus: "starting", previewBranch: branchLabel }, `Building & starting ${branchLabel} (AI driver)…`);
+        plog(projectId, userId, "Recorded build/run didn't bring the app up — handing to the AI driver to investigate…");
+        await setPreview(projectId, userId, { previewStatus: "starting", previewBranch: branchLabel }, `Investigating & starting ${branchLabel} (AI driver)…`);
         up = await driveSandbox(projectId, userId, workspaceId, manifest, [], driver.model, runDir);
       }
     }
