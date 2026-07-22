@@ -274,6 +274,12 @@ async function writeEnvFile(workspaceId: string, projectId: string, manifest: Pr
   };
   if (runtime.includes("dotnet") || framework.includes("dotnet") || framework.includes("asp")) {
     vars.ASPNETCORE_URLS = `http://0.0.0.0:${port}`;
+    // The app runs on plain HTTP but is served over the HTTPS app.lfg.run proxy.
+    // Enabling ForwardedHeaders makes ASP.NET Core honor the proxy's
+    // X-Forwarded-Proto/Host, so it generates https:// (not http://) absolute URLs
+    // for assets/links/redirects — otherwise the browser blocks them as mixed
+    // content (broken images) and redirects bounce. No app code change needed.
+    vars.ASPNETCORE_FORWARDEDHEADERS_ENABLED = "true";
   }
   Object.assign(vars, provisioned);
   for (const v of stored) {
