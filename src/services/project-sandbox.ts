@@ -18,7 +18,7 @@ import { projectEnvironments } from "../db/schema/project-environments.ts";
 import { projectDatabases } from "../db/schema/project-databases.ts";
 import { and, eq } from "drizzle-orm";
 import { encryptSecret, decryptSecret } from "../utils/crypto.ts";
-import { newWorkspaceV2, execOnWorkspace, findJob, deleteWorkspace } from "./mags.ts";
+import { newWorkspaceV2, execOnWorkspace, findJob, stopWorkspace } from "./mags.ts";
 
 export type DbEngine = "postgres" | "mysql" | "redis" | "mssql";
 
@@ -181,11 +181,11 @@ export async function ensureProjectSandbox(projectId: string): Promise<{ workspa
   // long/dashed and getJobStatus would misread it as a request_id.
   const job = await findJob(workspaceId).catch(() => null);
   const alive = job?.status === "running";
-  const recreated = !alive && !!existing?.workspaceId; // had a VM before, it's gone → /data reset
+  const recreated = !alive && !!existing?.workspaceId; // had a VM before, it wasn't running → respawn (data persists)
   if (alive) {
-    console.log(`[project-sandbox] REUSING existing sandbox VM ${workspaceId} (data intact) for project ${projectId}`);
+    console.log(`[project-sandbox] REUSING running sandbox VM ${workspaceId} for project ${projectId}`);
   } else if (recreated) {
-    console.warn(`[project-sandbox] Sandbox VM ${workspaceId} was NOT running (status: ${job?.status ?? "gone"}) — RECREATING a fresh VM. /data is RESET: the DB and installed toolchain are gone and must be rebuilt. project ${projectId}`);
+    console.log(`[project-sandbox] Sandbox VM ${workspaceId} was not running (status: ${job?.status ?? "gone"}) — RESPAWNING it. The workspace is persistent, so its /data (DB, repo, toolchain) reattaches. project ${projectId}`);
   } else {
     console.log(`[project-sandbox] Creating the project's first sandbox VM ${workspaceId} for project ${projectId}`);
   }
@@ -205,10 +205,15 @@ export async function ensureProjectSandbox(projectId: string): Promise<{ workspa
         // Already up → success (that's the goal).
         if (/already exists/i.test(msg)) break;
         // Transient Mags provisioning failure (VM ended with status: error /
-        // completed, or never started) — clear the bad VM and retry.
+        // completed, or never started) — terminate the bad VM job and retry.
+        // CRITICAL: use stopWorkspace (kills the VM), NOT deleteWorkspace — the
+        // workspace is persistent:true and its /data (DB, repo clone, toolchain,
+        // worktrees) is stored by name in JuiceFS/S3. Deleting it here wiped the
+        // whole project sandbox on a transient hiccup; a plain retry reattaches the
+        // SAME disk, so main's build/DB survive a respawn.
         if (attempt < 3 && /status: error|status: completed|did not start/i.test(msg)) {
-          console.warn(`[project-sandbox] VM ${workspaceId} attempt ${attempt} failed (${msg.slice(0, 80)}); recreating…`);
-          await deleteWorkspace(workspaceId).catch(() => {});
+          console.warn(`[project-sandbox] VM ${workspaceId} attempt ${attempt} failed (${msg.slice(0, 80)}); stopping the bad VM and retrying (data preserved)…`);
+          await stopWorkspace(workspaceId).catch(() => {});
           await sleep(3000);
           continue;
         }
