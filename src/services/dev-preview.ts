@@ -531,16 +531,19 @@ async function executeRunbook(
   return { up: false, steps };
 }
 
-/** Prefix that puts the toolchain on PATH, caches on /data, and loads .env. */
-function envPrefix(): string {
+/** Prefix that puts the toolchain on PATH, caches on /data, and loads .env. The
+ *  toolchain + NuGet cache live on the shared /data volume, so a worktree run gets
+ *  the SAME environment the main-branch run used (`dir` selects which checkout). */
+function envPrefix(dir: string = PROJECT_DIR): string {
   return `export PATH="/data/.dotnet:/data/.dotnet/tools:/root/.dotnet/tools:/usr/local/bin:/usr/bin:/bin:/sbin:$PATH"; ` +
     `export DOTNET_ROOT=/data/.dotnet DOTNET_CLI_HOME=/data/.dotnet NUGET_PACKAGES=/data/.nuget ` +
     `DOTNET_NOLOGO=1 DOTNET_CLI_TELEMETRY_OPTOUT=1 TMPDIR=/data/tmp; mkdir -p /data/tmp; ` +
-    `cd ${PROJECT_DIR} 2>/dev/null; set -a; [ -f ./.env ] && . ./.env; set +a; `;
+    `cd ${dir} 2>/dev/null; set -a; [ -f ./.env ] && . ./.env; set +a; `;
 }
 
-function buildDriverSystemPrompt(manifest: PreviewManifest, engines: EngineHandle[]): string {
+function buildDriverSystemPrompt(manifest: PreviewManifest, engines: EngineHandle[], workDir: string = PROJECT_DIR): string {
   const port = manifest.port;
+  const isBranch = workDir !== PROJECT_DIR;
   const dbLines = engines.length
     ? manifest.databases.map((d, i) => `  - ${d.engine} on 127.0.0.1:${engines[i]?.port ?? "?"} (db "${engines[i]?.dbName ?? "app"}") — connection string ALREADY in .env as ${d.connectionEnvVar}`).join("\n")
     : "  - none";
@@ -561,8 +564,8 @@ function buildDriverSystemPrompt(manifest: PreviewManifest, engines: EngineHandl
 
   return `You are an expert DevOps engineer bringing an EXISTING application up so it can be previewed live. You DRIVE a remote Alpine Linux sandbox by calling the \`run\` tool with shell commands — one command per call — and reading the real output before deciding the next. When the app is confirmed serving, call \`finish\`.
 
-SANDBOX: Alpine Linux (musl, apk, OpenRC/rc-service, busybox) — NOT Debian. Use \`apk add --no-cache <pkg>\` (never apt/yum), \`rc-service <svc> start\` (never systemctl). Docker is installed and running. Every \`run\` command ALREADY has: the .NET toolchain on PATH (if installed to /data/.dotnet), caches pointed at /data (NUGET_PACKAGES, DOTNET_CLI_HOME, TMPDIR — keep everything on /data, the 20GB volume; the root fs is tiny), and the project's .env sourced. You are in ${PROJECT_DIR}.
-
+SANDBOX: Alpine Linux (musl, apk, OpenRC/rc-service, busybox) — NOT Debian. Use \`apk add --no-cache <pkg>\` (never apt/yum), \`rc-service <svc> start\` (never systemctl). Docker is installed and running. Every \`run\` command ALREADY has: the .NET toolchain on PATH (if installed to /data/.dotnet), caches pointed at /data (NUGET_PACKAGES, DOTNET_CLI_HOME, TMPDIR — keep everything on /data, the 20GB volume; the root fs is tiny), and the .env in your working dir sourced. You are in ${workDir}.
+${isBranch ? `\nIMPORTANT — you are running a FEATURE BRANCH from a git worktree at ${workDir}. The MAIN branch already ran successfully on this same VM, so the toolchain (/data/.dotnet) and the package cache (/data/.nuget) are ALREADY installed and warm — do NOT reinstall the toolchain or re-fix things the main run already fixed; reuse them. The DB connection strings + any env fixes are already in this worktree's .env. You likely just need: restore (fast, cache is warm) → build → start the app. Work in ${workDir} (cd there for every command).\n` : ""}
 The repo is already cloned. The databases below are already installed + running (do NOT install/start any DB); their connection strings are already in .env:
 ${dbLines}
 
@@ -576,8 +579,8 @@ HOW TO WORK:
 - Install the toolchain, then dependencies. If a plan command (e.g. \`apk add dotnet8-sdk\`) is unavailable, broken, or the wrong version, use whatever works instead (e.g. \`curl -sSL https://dot.net/v1/dotnet-install.sh | bash -s -- --channel 8.0 --install-dir /data/.dotnet\`).
 - For compiled stacks: restore → BUILD → run. For a multi-project solution, run the startup project named above.
 - Apply migrations, then the SQL scripts in order (SQL Server runs in Docker — use \`docker exec\` with sqlcmd inside the mssql container, or a client you install; the connection string is in .env).
-- Start the APP SERVER detached so it keeps running after the command returns: \`setsid sh -c '<run command>' </dev/null > ${PROJECT_DIR}/preview.log 2>&1 &\` — it must bind 0.0.0.0:${port}. (This is the ONLY case where you background a command yourself.)
-- VERIFY for real: \`curl -sS -i http://127.0.0.1:${port}/\`. Up = a real 2xx/3xx/4xx response. 000/connection-refused/5xx = NOT up → read ${PROJECT_DIR}/preview.log, diagnose, fix, retry.
+- Start the APP SERVER detached so it keeps running after the command returns: \`setsid sh -c 'cd ${workDir}; <run command>' </dev/null > ${workDir}/preview.log 2>&1 &\` — it must bind 0.0.0.0:${port}. (This is the ONLY case where you background a command yourself.)
+- VERIFY for real: \`curl -sS -i http://127.0.0.1:${port}/\`. Up = a real 2xx/3xx/4xx response. 000/connection-refused/5xx = NOT up → read ${workDir}/preview.log, diagnose, fix, retry.
 
 PERSISTING WHAT YOU LEARN (so the next run doesn't repeat your work):
 - Each \`run\` command starts a FRESH shell, so a bare \`export FOO=bar\` does NOT carry to the next command. For an environment fix that must stick (an env var, a cert/CA path, a package source), call the \`setEnv\` tool — it stores the var on the project (encrypted) AND writes it into .env now, so it is re-applied on every future setup and SURVIVES a VM rebuild. (Appending to ./.env only lasts while this VM lives — if the VM is recreated you'd have to rediscover the fix.)
@@ -603,13 +606,13 @@ RULES:
  */
 async function runDetachedPolled(
   projectId: string, userId: string, workspaceId: string, command: string, maxMs: number,
-  opts?: { stallMs?: number },
+  opts?: { stallMs?: number; workDir?: string },
 ): Promise<{ exitCode: number; output: string }> {
   const id = `r${Date.now().toString(36)}${Math.floor(Math.random() * 1e7).toString(36)}`;
   const dir = "/data/.run";
   const logf = `${dir}/${id}.log`, donef = `${dir}/${id}.done`, scriptf = `${dir}/${id}.sh`;
   // The actual work script (env prefix + the model's command).
-  const workB64 = Buffer.from(`${envPrefix()}\n${command}`).toString("base64");
+  const workB64 = Buffer.from(`${envPrefix(opts?.workDir ?? PROJECT_DIR)}\n${command}`).toString("base64");
   // Launcher: write the script, run it detached, record exit code in the marker.
   const launcher =
     `mkdir -p ${dir}; echo ${workB64} | base64 -d > ${scriptf}; ` +
@@ -669,6 +672,7 @@ async function driveSandbox(
   manifest: PreviewManifest,
   engines: EngineHandle[],
   model: any,
+  workDir: string = PROJECT_DIR,
 ): Promise<boolean> {
   const port = manifest.port;
   let finished: { status: "ready" | "failed"; detail: string } | undefined;
@@ -687,7 +691,7 @@ async function driveSandbox(
         setPreview(projectId, userId, { previewStatus: "starting" }, `$ ${command.slice(0, 110)}`).catch(() => {});
         // Kill a command that goes silent for 4 min (stuck) so the agent iterates
         // fast instead of burning the full timeout on a hang.
-        const r = await runDetachedPolled(projectId, userId, workspaceId, command, maxMs, { stallMs: 240_000 });
+        const r = await runDetachedPolled(projectId, userId, workspaceId, command, maxMs, { stallMs: 240_000, workDir });
         plog(projectId, userId, `  → exit ${r.exitCode}`, r.output ? { detail: r.output.slice(-1800), level: r.exitCode === 0 ? "info" : "error" } : undefined);
         return { exitCode: r.exitCode, output: r.output.slice(-6000) || "(no output)" };
       },
@@ -725,7 +729,12 @@ async function driveSandbox(
             .onConflictDoUpdate({ target: [projectEnvironmentVariables.projectId, projectEnvironmentVariables.key], set: { encryptedValue: encryptSecret(value), hasValue: true, updatedAt: new Date() } });
           const line = `${key}="${String(value).replace(/(["\\$`])/g, "\\$1")}"`;
           const b64 = Buffer.from(line).toString("base64");
-          await sh(workspaceId, `cd ${PROJECT_DIR} && (grep -v '^${key}=' .env 2>/dev/null > .env.tmp; echo ${b64} | base64 -d >> .env.tmp; mv .env.tmp .env) && echo SET_ENV`, 30_000);
+          // Write into the current working dir's .env (a worktree during a branch
+          // recovery) AND the default checkout's .env, so it applies now and later.
+          const dirs = [...new Set([workDir, PROJECT_DIR])];
+          for (const d of dirs) {
+            await sh(workspaceId, `cd ${d} 2>/dev/null && (grep -v '^${key}=' .env 2>/dev/null > .env.tmp; echo ${b64} | base64 -d >> .env.tmp; mv .env.tmp .env) && echo SET_ENV`, 30_000);
+          }
           plog(projectId, userId, `Persisted env ${key} (survives VM rebuild)`, { detail: reason });
           return `persisted ${key} — it will be re-applied on every setup.`;
         } catch (e) {
@@ -757,8 +766,8 @@ async function driveSandbox(
       model,
       tools,
       stopWhen: stepCountIs(80), // generous step budget — we control the loop, not a blind timer
-      system: buildDriverSystemPrompt(manifest, engines),
-      prompt: `Bring the app up and verify it serves on 0.0.0.0:${port}. Begin.`,
+      system: buildDriverSystemPrompt(manifest, engines, workDir),
+      prompt: `Bring the app up and verify it serves on 0.0.0.0:${port} (working dir: ${workDir}). Begin.`,
       abortSignal: ac.signal,
     });
   } catch (e) {
@@ -1252,7 +1261,20 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
     const compiled = !!manifest.buildCmd || /dotnet|asp|java|go|rust|maven|gradle/i.test(`${manifest.runtime} ${manifest.framework}`);
     const waitMs = ticketId && compiled ? 300_000 : ticketId ? 120_000 : 60_000;
     await runDetachedPolled(projectId, userId, workspaceId, appStartCommand(manifest, runDir), 30_000);
-    const up = await waitForAppUp(projectId, userId, workspaceId, manifest.port, `${runDir}/preview.log`, waitMs);
+    let up = await waitForAppUp(projectId, userId, workspaceId, manifest.port, `${runDir}/preview.log`, waitMs);
+
+    // A plain start can fail on a fresh worktree (needs a build; may hit the same
+    // env issue the MAIN run already solved). Instead of giving up, hand off to the
+    // SAME AI driver that got main working — pointed at this worktree. It reuses the
+    // warm toolchain + NuGet cache + persisted env fixes from the main run, fixes
+    // anything branch-specific, and persists new fixes (setEnv) so it's not redone.
+    if (!up) {
+      const driver = await resolveDriverModel(userId);
+      if (driver) {
+        plog(projectId, userId, "App didn't start on its own — handing to the AI driver (reusing the main-branch toolchain/cache + persisted fixes)…");
+        up = await driveSandbox(projectId, userId, workspaceId, manifest, [], driver.model, runDir);
+      }
+    }
     if (!up) {
       await setStep("run", "failed");
       const tail = await sh(workspaceId, `tail -40 ${runDir}/preview.log 2>/dev/null`, 20_000).catch(() => ({ output: "" }));
