@@ -2915,6 +2915,15 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        // Tagging @preview routes to the Preview agent — auto-open the Preview tab
+        // so its live activity (commands/logs) is visible right away.
+        if (typeof message === 'string' && /^\s*@preview\b/i.test(message) && typeof window.switchTab === 'function') {
+            try { window.switchTab('preview'); } catch (_) {}
+            // Open the live log overlay shortly after the tab mounts so the agent's
+            // commands stream into view automatically.
+            setTimeout(() => { try { window.PreviewTab && window.PreviewTab.showLogs && window.PreviewTab.showLogs(); } catch (_) {} }, 400);
+        }
+
         // Optimistically render the user bubble RIGHT NOW so they see their
         // message immediately, even if we're about to wait for an in-flight
         // upload. Without this the bubble vanishes between click and upload-

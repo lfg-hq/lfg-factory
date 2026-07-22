@@ -610,6 +610,12 @@
         if (atBottom) el.scrollTop = el.scrollHeight; // only autoscroll if already at bottom
       }
     },
+    // Open the live log overlay (used when @preview is tagged so its activity shows).
+    showLogs() {
+      try {
+        if (currentView === "running" && !document.getElementById("preview-log-overlay")) toggleLog();
+      } catch (_) {}
+    },
     onSteps(data) {
       if (!data || !Array.isArray(data.steps) || forOther(data)) return;
       stepsData = data.steps;
