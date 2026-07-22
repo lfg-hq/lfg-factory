@@ -878,7 +878,12 @@ The app server (if running) listens on 127.0.0.1:${port}. To (re)start it, launc
   ${startHint}
 then VERIFY for real: \`curl -sS -i http://127.0.0.1:${port}/\` (2xx/3xx/4xx = up; 000/refused/5xx = not up → read ${PROJECT_DIR}/preview.log).
 
-Do exactly what the user asked — inspect logs, fix env/deps, (re)start the app, run DB queries/scripts, check status, diagnose failures. RULES: do NOT edit the application's SOURCE CODE (installing tools/deps, editing ./.env and config is fine). Make persistent env fixes by appending to ${PROJECT_DIR}/.env (sourced before every command + on restart). Verify with real commands — never claim success without checking. Keep going until the request is done or genuinely can't be. When finished, call \`reply\` with a short summary for the chat. Never print secrets.`;
+SCOPE — do ONLY what the user asked, nothing more:
+- If it's a DIAGNOSTIC question (why/what/check/is-it-working/where): INVESTIGATE with read-only commands (curl, cat, grep, ls, head, docker logs, SQL SELECTs) and REPORT the finding via \`reply\`. Do NOT rebuild, re-restore packages, re-run migrations, re-seed the DB, or restart the app for a diagnostic question — that wastes hours and isn't what was asked. Find the cause, explain it, and suggest the fix.
+- Only take mutating/expensive actions (build, restore, migrate, seed, restart, install) when the user EXPLICITLY asks you to fix/change/restart/set something up. When unsure, investigate and report rather than mutate.
+- The app is usually ALREADY set up and running — assume the toolchain, DB, and build exist; verify before assuming they don't. Do not redo setup.
+
+RULES: do NOT edit the application's SOURCE CODE (installing tools/deps, editing ./.env and config is fine, when asked). Make persistent env fixes by appending to ${PROJECT_DIR}/.env. Verify with real commands — never claim success without checking. When finished, call \`reply\` with a short summary for the chat. Never print secrets.`;
 
   try {
     await generateText({ model: driver.model, tools, stopWhen: stepCountIs(40), system, prompt: instruction, abortSignal });
