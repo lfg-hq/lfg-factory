@@ -281,6 +281,7 @@
     if (status === "running" && state.previewUrl) {
       currentView = "running";
       setSub("Live" + (state.branch ? ` · ${state.branch}` : ""));
+      syncBranchFromState(state); // reflect the actually-running branch
       const opts = branches.map((b) => `<option value="${esc(b.id)}"${b.id === branchId ? " selected" : ""}>${esc(b.label)}</option>`).join("");
       const branchSel = `<select data-branch title="Run a ticket's branch or the default" style="padding:6px 8px;border-radius:6px;font-size:12.5px;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);max-width:200px;">${opts}</select>`;
       renderActions(
@@ -291,9 +292,10 @@
         btn("Stop", { action: "stop", icon: "fa-stop" })
       );
       mountBrowser(body, state.previewUrl);
-      // Refresh the branch list (ticket worktrees may have appeared) and update the
-      // selector options in place — without remounting the iframe.
+      // Refresh the branch list (ticket worktrees may have appeared), re-sync to the
+      // running branch, and update the selector in place — without remounting the iframe.
       loadBranches().then(() => {
+        syncBranchFromState(current);
         const sel = document.querySelector("#preview-actions [data-branch]");
         if (sel) sel.innerHTML = branches.map((b) => `<option value="${esc(b.id)}"${b.id === branchId ? " selected" : ""}>${esc(b.label)}</option>`).join("");
       });
@@ -303,6 +305,7 @@
     if (status === "error") {
       currentView = "error";
       setSub("Failed");
+      syncBranchFromState(state);
       const eopts = branches.map((b) => `<option value="${esc(b.id)}"${b.id === branchId ? " selected" : ""}>${esc(b.label)}</option>`).join("");
       const eBranchSel = branches.length > 1 ? `<select data-branch title="Run a branch" style="padding:6px 8px;border-radius:6px;font-size:12.5px;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);max-width:200px;">${eopts}</select>` : "";
       renderActions(eBranchSel + btn("Try again", { action: "setup", primary: true, icon: "fa-redo" }));
@@ -518,6 +521,23 @@
       const j = await r.json();
       if (Array.isArray(j.branches) && j.branches.length) branches = j.branches;
     } catch (_) { /* keep default */ }
+  }
+
+  // Sync the selector to the branch the server says is ACTUALLY running
+  // (state.branch = the stored previewBranch), so a refresh reflects reality
+  // instead of resetting to "Default branch".
+  function syncBranchFromState(state) {
+    const sb = (state && state.branch) || "";
+    if (!sb || sb === "(default)") { branchId = "default"; return; }
+    const m = branches.find((b) => b.branch === sb);
+    if (m) { branchId = m.id; return; }
+    // App is running a ticket branch not yet in the loaded list — add it so the
+    // selector can show it as selected.
+    const tm = sb.match(/^feature\/ticket-(.+)$/);
+    if (tm) {
+      if (!branches.find((b) => b.branch === sb)) branches.push({ id: tm[1], label: sb, ticketId: tm[1], branch: sb });
+      branchId = tm[1];
+    }
   }
 
   // Switch which branch the preview runs (default or a ticket's worktree).
