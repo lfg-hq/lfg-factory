@@ -175,7 +175,18 @@ export async function ensureProjectSandbox(projectId: string): Promise<{ workspa
   // Use a RANDOM, unguessable workspace name (not env-<projectId>, which is
   // derivable from the project URL and would let a motivated actor target the VM
   // / its exposed URL). Generated once, then persisted + reused.
-  const workspaceId = existing?.workspaceId || `pv-${crypto.randomUUID().replace(/-/g, "")}${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
+  const candidateWorkspaceId = existing?.workspaceId || `pv-${crypto.randomUUID().replace(/-/g, "")}${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
+
+  // Atomically CLAIM the single project_environment row (unique on projectId) BEFORE
+  // touching the VM. This makes ensureProjectSandbox idempotent + race-safe: setup,
+  // ensureEngine, and @preview all call it, so a plain insert would hit the unique
+  // constraint (the error you saw). onConflictDoUpdate converges everyone on the
+  // SAME workspace instead of racing to insert.
+  const [claimed] = await db.insert(projectEnvironments)
+    .values({ projectId, workspaceId: candidateWorkspaceId, memGb: 8, diskGb: 20, status: "running", lastAwakeAt: new Date() })
+    .onConflictDoUpdate({ target: projectEnvironments.projectId, set: { status: "running", lastAwakeAt: new Date(), updatedAt: new Date() } })
+    .returning();
+  const workspaceId = claimed?.workspaceId ?? candidateWorkspaceId; // the winner's workspace
 
   // Resolve the workspace by NAME (findJob), not getJobStatus — the name is
   // long/dashed and getJobStatus would misread it as a request_id.
@@ -227,11 +238,7 @@ export async function ensureProjectSandbox(projectId: string): Promise<{ workspa
   // that ignore $TMPDIR (and don't source .env) land on /data. Idempotent.
   await execOnWorkspace(workspaceId, `sh -c 'mkdir -p /data/tmp && chmod 1777 /data/tmp; if [ ! -L /tmp ]; then rm -rf /tmp && ln -s /data/tmp /tmp; fi; echo tmp_ok'`, { timeout: 30_000 }).catch(() => {});
 
-  if (existing) {
-    await db.update(projectEnvironments).set({ status: "running", lastAwakeAt: new Date(), updatedAt: new Date() }).where(eq(projectEnvironments.id, existing.id));
-  } else {
-    await db.insert(projectEnvironments).values({ projectId, workspaceId, memGb: 8, diskGb: 20, status: "running", lastAwakeAt: new Date() });
-  }
+  // (The project_environment row was already claimed/updated via the upsert above.)
   return { workspaceId, created: !alive, recreated };
 }
 
