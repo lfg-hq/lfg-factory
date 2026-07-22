@@ -914,8 +914,10 @@ export async function setupPreview(projectId: string, opts: SetupOptions): Promi
   try {
     await prep("vm", "running");
     plog(projectId, userId, "Starting the project's sandbox…");
-    const { workspaceId } = await ensureProjectSandbox(projectId);
-    plog(projectId, userId, `Sandbox ready — Alpine Linux, 8GB, Docker-capable`);
+    const { workspaceId, recreated } = await ensureProjectSandbox(projectId);
+    plog(projectId, userId, recreated
+      ? "Sandbox VM had stopped — created a FRESH one (its /data was reset: the DB + build are gone and will be rebuilt from scratch)"
+      : "Sandbox ready — reusing the existing VM (Alpine Linux, 8GB, Docker-capable)");
     await prep("vm", "done");
     await setPreview(projectId, userId, { previewStatus: "detecting", previewError: null, previewBranch: branch || "(default)" }, "Preparing sandbox…");
 
@@ -1249,8 +1251,19 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
   };
 
   try {
-    await ensureProjectSandbox(projectId);
+    const { recreated } = await ensureProjectSandbox(projectId);
     const workspaceId = await envWorkspaceId(projectId);
+
+    // If the VM had stopped, ensureProjectSandbox made a FRESH one — /data is reset,
+    // so the built app, the DB schema, AND every ticket worktree are gone. A quick
+    // restart/branch-run can't work; rebuild is required.
+    if (recreated) {
+      if (ticketId) {
+        return failed(projectId, userId, `The preview sandbox was reset — its VM had stopped, so a fresh one was created and the DB, build, and this ticket's worktree are all gone. Rebuild the ticket, then preview its branch again.`);
+      }
+      plog(projectId, userId, "The sandbox VM was reset (fresh disk) — running a full setup to rebuild the toolchain, DB, and app…");
+      return setupPreview(projectId, { userId });
+    }
 
     // Pick the run directory: a ticket's worktree, or the default checkout.
     let runDir = PROJECT_DIR;

@@ -163,8 +163,14 @@ export async function envWorkspaceId(projectId: string): Promise<string> {
   return row.w;
 }
 
-/** Ensure the project's single always-on sandbox exists and is running. */
-export async function ensureProjectSandbox(projectId: string): Promise<{ workspaceId: string }> {
+/**
+ * Ensure the project's single always-on sandbox exists and is running. ALL runs
+ * (main + every ticket branch/worktree) share this ONE VM — we never spin a VM per
+ * branch. `created` is true when the VM was NOT already running and we had to
+ * launch a fresh one; `recreated` additionally means a sandbox existed before but
+ * its VM was gone — so /data (the DB + installed toolchain) was RESET.
+ */
+export async function ensureProjectSandbox(projectId: string): Promise<{ workspaceId: string; created: boolean; recreated: boolean }> {
   const [existing] = await db.select().from(projectEnvironments).where(eq(projectEnvironments.projectId, projectId));
   // Use a RANDOM, unguessable workspace name (not env-<projectId>, which is
   // derivable from the project URL and would let a motivated actor target the VM
@@ -175,6 +181,14 @@ export async function ensureProjectSandbox(projectId: string): Promise<{ workspa
   // long/dashed and getJobStatus would misread it as a request_id.
   const job = await findJob(workspaceId).catch(() => null);
   const alive = job?.status === "running";
+  const recreated = !alive && !!existing?.workspaceId; // had a VM before, it's gone → /data reset
+  if (alive) {
+    console.log(`[project-sandbox] REUSING existing sandbox VM ${workspaceId} (data intact) for project ${projectId}`);
+  } else if (recreated) {
+    console.warn(`[project-sandbox] Sandbox VM ${workspaceId} was NOT running (status: ${job?.status ?? "gone"}) — RECREATING a fresh VM. /data is RESET: the DB and installed toolchain are gone and must be rebuilt. project ${projectId}`);
+  } else {
+    console.log(`[project-sandbox] Creating the project's first sandbox VM ${workspaceId} for project ${projectId}`);
+  }
   if (!alive) {
     // Big always-on box via the raw v2 API (the SDK caps RAM at 4GB): 4 vCPU /
     // 8GB / 20GB disk — enough for SQL Server + a .NET build without OOM. keepAlive
@@ -213,7 +227,7 @@ export async function ensureProjectSandbox(projectId: string): Promise<{ workspa
   } else {
     await db.insert(projectEnvironments).values({ projectId, workspaceId, memGb: 8, diskGb: 20, status: "running", lastAwakeAt: new Date() });
   }
-  return { workspaceId };
+  return { workspaceId, created: !alive, recreated };
 }
 
 /** Run a command inside the project's sandbox. */
