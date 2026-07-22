@@ -244,11 +244,18 @@
   const STEP_ICON = { done: '<span style="color:#10b981;">✓</span>', running: '<span class="spinner" style="width:11px;height:11px;display:inline-block;vertical-align:middle;"></span>', failed: '<span style="color:#ef4444;">✗</span>', pending: '<span style="color:var(--text-secondary,#9ca3af);">○</span>' };
   function stepsPanel(flex) {
     if (!stepsData || !stepsData.length) return `<div style="color:var(--text-secondary,#9ca3af);font-size:13px;padding:8px;">No setup steps yet — the plan is being built.</div>`;
-    const rows = stepsData.map((s) => `<div style="display:flex;gap:8px;padding:3px 0;font-size:12px;align-items:baseline;">
-      <span style="width:14px;flex:none;text-align:center;">${STEP_ICON[s.status] || STEP_ICON.pending}</span>
-      <span style="min-width:64px;flex:none;color:var(--text-secondary,#9ca3af);text-transform:uppercase;font-size:10px;letter-spacing:.4px;padding-top:1px;">${esc(s.phase)}</span>
-      <span style="flex:1;color:${s.status === "failed" ? "#ef4444" : "var(--text-color,#e2e8f0)"};word-break:break-word;font-family:ui-monospace,Menlo,monospace;">${esc(s.label)}</span>
-    </div>`).join("");
+    const rows = stepsData.map((s) => {
+      const row = `<div style="display:flex;gap:8px;padding:3px 0;font-size:12px;align-items:baseline;">
+        <span style="width:14px;flex:none;text-align:center;">${STEP_ICON[s.status] || STEP_ICON.pending}</span>
+        <span style="min-width:64px;flex:none;color:var(--text-secondary,#9ca3af);text-transform:uppercase;font-size:10px;letter-spacing:.4px;padding-top:1px;">${esc(s.phase)}</span>
+        <span style="flex:1;color:${s.status === "failed" ? "#ef4444" : "var(--text-color,#e2e8f0)"};word-break:break-word;font-family:ui-monospace,Menlo,monospace;">${esc(s.label)}</span>
+      </div>`;
+      // Show WHY a step failed (its captured error) so it's not just a mystery ✗.
+      if (s.status === "failed" && s.error) {
+        return row + `<div style="margin:0 0 6px 84px;padding:6px 10px;border-left:2px solid #ef4444;background:rgba(239,68,68,0.06);border-radius:0 6px 6px 0;color:#fca5a5;font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,Menlo,monospace;max-height:160px;overflow:auto;">${esc(String(s.error).slice(-900))}</div>`;
+      }
+      return row;
+    }).join("");
     return `<div id="preview-steps-wrap" style="${flex ? "flex:1;min-height:0;" : "max-height:34%;"}overflow:auto;border:1px solid var(--border-color,#2a2a2a);border-radius:8px;padding:8px 12px;background:var(--background-surface,#141414);">
       <div style="font-size:11px;color:var(--text-secondary,#9ca3af);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Setup steps (checkpointed — a restart resumes here)</div>${rows}</div>`;
   }
