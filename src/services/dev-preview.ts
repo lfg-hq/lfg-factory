@@ -862,8 +862,41 @@ export async function runPreviewChat(opts: {
         return { exitCode: r.exitCode, output: r.output.slice(-6000) || "(no output)" };
       },
     }),
+    setEnv: tool({
+      description: "PERSIST an environment fix so it's applied on EVERY future preview/setup AND inherited by ticket branches — not just this live app. Use this whenever you fix something via an env var (a cert/CA path, ASPNETCORE_FORWARDEDHEADERS_ENABLED, a base URL, a runtime flag) INSTEAD of only echoing to .env. Stored (encrypted) on the project + written to .env now. This is how a fix you make on main automatically reaches feature branches and the next rebuild.",
+      inputSchema: zodSchema(z.object({ key: z.string(), value: z.string(), reason: z.string().optional() })),
+      execute: async ({ key, value, reason }: { key: string; value: string; reason?: string }) => {
+        try {
+          await db.insert(projectEnvironmentVariables)
+            .values({ projectId, key, encryptedValue: encryptSecret(value), isSecret: false, hasValue: true, description: reason || "preview fix" })
+            .onConflictDoUpdate({ target: [projectEnvironmentVariables.projectId, projectEnvironmentVariables.key], set: { encryptedValue: encryptSecret(value), hasValue: true, updatedAt: new Date() } });
+          const line = `${key}="${String(value).replace(/(["\\$`])/g, "\\$1")}"`;
+          const b64 = Buffer.from(line).toString("base64");
+          await sh(workspaceId, `cd ${PROJECT_DIR} && (grep -v '^${key}=' .env 2>/dev/null > .env.tmp; echo ${b64} | base64 -d >> .env.tmp; mv .env.tmp .env) && echo SET_ENV`, 30_000);
+          plog(projectId, userId, `Persisted env ${key} (applies to future runs + branches)`, { detail: reason });
+          return `persisted ${key} — future setups and branches inherit it.`;
+        } catch (e) { return `failed to persist env: ${(e as Error).message}`; }
+      },
+    }),
+    updatePlan: tool({
+      description: "PERSIST a correction to the saved setup plan (toolchain/install/build/run/port/startupProject) so the next preview build uses the working command, and branches inherit it. Use after you've confirmed the corrected command works.",
+      inputSchema: zodSchema(z.object({
+        field: z.enum(["toolchain", "installCmd", "buildCmd", "runCmd", "port", "startupProject"]),
+        value: z.string().describe("Corrected value. For 'toolchain', full command sequence one per line. For 'port', the number as a string."),
+        reason: z.string().optional(),
+      })),
+      execute: async ({ field, value, reason }: { field: string; value: string; reason?: string }) => {
+        if (!manifest) return "no saved plan to update yet — run a full setup first.";
+        if (field === "toolchain") manifest.toolchain = value.split("\n").map((s) => s.trim()).filter(Boolean);
+        else if (field === "port") { const p = parseInt(value, 10); if (p > 0) manifest.port = p; }
+        else (manifest as any)[field] = value;
+        await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId)).catch(() => {});
+        plog(projectId, userId, `Updated plan: ${field}`, { detail: reason });
+        return "plan updated — future builds + branches use this.";
+      },
+    }),
     reply: tool({
-      description: "Call ONCE when you've finished the user's request. Give a concise, friendly chat summary of what you did or found (markdown ok). If you confirmed something works, say how you verified it.",
+      description: "Call ONCE when you've finished the user's request. Give a concise, friendly chat summary of what you did or found (markdown ok). If you confirmed something works, say how you verified it. If you made a fix, say whether you PERSISTED it (setEnv/updatePlan) so it carries to branches.",
       inputSchema: zodSchema(z.object({ summary: z.string() })),
       execute: async ({ summary }: { summary: string }) => { reply = summary; return "acknowledged"; },
     }),
@@ -883,7 +916,12 @@ SCOPE — do ONLY what the user asked, nothing more:
 - Only take mutating/expensive actions (build, restore, migrate, seed, restart, install) when the user EXPLICITLY asks you to fix/change/restart/set something up. When unsure, investigate and report rather than mutate.
 - The app is usually ALREADY set up and running — assume the toolchain, DB, and build exist; verify before assuming they don't. Do not redo setup.
 
-RULES: do NOT edit the application's SOURCE CODE (installing tools/deps, editing ./.env and config is fine, when asked). Make persistent env fixes by appending to ${PROJECT_DIR}/.env. Verify with real commands — never claim success without checking. When finished, call \`reply\` with a short summary for the chat. Never print secrets.`;
+PERSIST YOUR FIXES (critical — otherwise they're lost and branches don't get them):
+- When you fix something with an ENV var (a cert/CA path, ASPNETCORE_FORWARDEDHEADERS_ENABLED for a reverse-proxy/HTTPS asset issue, a base URL, a runtime flag), call \`setEnv\` — do NOT just \`echo >> .env\`. setEnv records it on the project so EVERY future setup AND every ticket branch inherits it. An echo-only fix works for this one live app and then vanishes.
+- When you find a plan command was wrong and confirm the right one, call \`updatePlan\`.
+- This is exactly how a fix you make on main automatically reaches the feature branches.
+
+RULES: do NOT edit the application's SOURCE CODE (installing tools/deps, editing ./.env and config is fine, when asked). Verify with real commands — never claim success without checking. When finished, ALWAYS call \`reply\` with a short summary of what you found/did (and whether you persisted it). Never print secrets.`;
 
   try {
     await generateText({ model: driver.model, tools, stopWhen: stepCountIs(40), system, prompt: instruction, abortSignal });
@@ -893,7 +931,11 @@ RULES: do NOT edit the application's SOURCE CODE (installing tools/deps, editing
     plog(projectId, userId, `Preview agent error: ${msg}`, { level: "error" });
     return { reply: reply || `I ran into an error: ${msg.slice(0, 300)}` };
   }
-  return { reply: reply || "Done — but I didn't produce a summary. Check the Preview tab logs for details." };
+  if (reply) return { reply };
+  // Fallback: the agent didn't call reply — surface the tail of what it actually
+  // did so the chat isn't a dead-end "check the logs".
+  const tail = (logBuffers.get(projectId) || "").split("\n").filter((l) => l.trim()).slice(-8).join("\n");
+  return { reply: tail ? `Here's what I did (no summary was produced):\n\n\`\`\`\n${tail}\n\`\`\`` : "Done — check the Preview tab logs for details." };
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
