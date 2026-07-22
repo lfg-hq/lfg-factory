@@ -69,6 +69,11 @@ export const appProfileSchema = z.object({
   })).describe("Secrets the app NEEDS to run correctly that the system CANNOT generate or fake — real external credentials (Supabase, Stripe, OAuth client secrets, SMTP, third-party API keys). ONLY include ones without which the app fails to start or a core path 500s. Do NOT include DB connections (auto-provisioned) or things with safe dev defaults."),
   // ── Config quirks (so the run agent doesn't corrupt files or fight the config) ──
   configQuirks: z.array(z.string()).describe("Concrete gotchas the run/preview agent must respect, e.g. 'appsettings.json is JSONC (has // comments) — do NOT parse/edit it as JSON; inject the connection via the ConnectionStrings__ env var which ASP.NET overrides with', 'appsettings has a hardcoded prod SQL Server host — override via env, do not point at it', 'the app also reads ConnectionStrings:Cohyreconnectionstring — set that key too'. [] if none."),
+  // ── Accumulated run learnings (self-healing memory) ──
+  // Auto-appended from real runs when an agent discovers a correction the plan
+  // fields can't capture (schema ordering, a missing client, a working install
+  // method). The PROBE leaves this empty; it's populated by recordProfileLearning.
+  learnings: z.array(z.string()).optional().describe("Leave EMPTY — this is auto-filled from real runs, not by the probe."),
 });
 export type AppProfile = z.infer<typeof appProfileSchema>;
 export type RequiredSecret = AppProfile["secretsRequired"][number];
@@ -234,6 +239,50 @@ export async function missingSecrets(projectId: string, profile: AppProfile): Pr
     .from(projectEnvironmentVariables).where(eq(projectEnvironmentVariables.projectId, projectId));
   const provided = new Set(rows.filter((r) => r.hasValue).map((r) => r.key.toLowerCase()));
   return profile.secretsRequired.filter((s) => !provided.has(s.key.toLowerCase()));
+}
+
+// ── Self-healing: write corrections back into the profile ────────────────────
+/** All the notes an agent should respect this run: probe-found quirks + build
+ *  quirks + everything learned from prior runs. Injected into every driver prompt. */
+export function profileNotes(profile: AppProfile): string[] {
+  return [...profile.configQuirks, ...profile.buildQuirks, ...(profile.learnings ?? [])];
+}
+
+const PLAN_FIELDS = new Set(["toolchain", "installCmd", "buildCmd", "runCmd", "port", "startupProject"]);
+
+/**
+ * Persist a plan-FIELD correction the run agent discovered (toolchain/install/
+ * build/run/port/startupProject) back into the PROFILE — not just the derived
+ * manifest — so the next run's derive keeps it instead of clobbering it. Also
+ * records a learning line. Returns false if there's no profile to correct.
+ */
+export async function applyProfileCorrection(projectId: string, field: string, value: string, note?: string, branch = "default"): Promise<boolean> {
+  if (!PLAN_FIELDS.has(field)) return false;
+  const loaded = await loadAppProfile(projectId, branch);
+  if (!loaded) return false;
+  const p = loaded.profile;
+  if (field === "toolchain") p.toolchain = value.split("\n").map((s) => s.trim()).filter(Boolean);
+  else if (field === "port") { const n = parseInt(value, 10); if (n > 0) p.port = n; }
+  else (p as any)[field] = value;
+  const shown = field === "toolchain" ? p.toolchain.join("; ") : value;
+  p.learnings = [...(p.learnings ?? []), `learned: ${field} → ${shown}${note ? ` (${note})` : ""}`].slice(-40);
+  await saveAppProfile(projectId, p, branch);
+  return true;
+}
+
+/** Append a free-form learning (schema ordering, a missing client, etc.) to the
+ *  profile so future runs + branches see it in CONFIG QUIRKS. */
+export async function recordProfileLearning(projectId: string, note: string, branch = "default"): Promise<boolean> {
+  const trimmed = (note || "").trim();
+  if (!trimmed) return false;
+  const loaded = await loadAppProfile(projectId, branch);
+  if (!loaded) return false;
+  const p = loaded.profile;
+  // de-dupe: don't append a note we already have
+  if ((p.learnings ?? []).some((l) => l === `learned: ${trimmed}` || l === trimmed)) return true;
+  p.learnings = [...(p.learnings ?? []), `learned: ${trimmed}`].slice(-40);
+  await saveAppProfile(projectId, p, branch);
+  return true;
 }
 
 /** The chat message shown when secrets are missing (blocks the run). */

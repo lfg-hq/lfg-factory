@@ -26,7 +26,7 @@ import { decryptSecret, encryptSecret } from "../utils/crypto.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { enableHttpAccess, execOnWorkspace, setStableUrl, startBrowserSession, stopWorkspace } from "./mags.ts";
 import { ensureProjectSandbox, ensureEngine, ensureDocker, envWorkspaceId, checkEngineHealth, type EngineHandle } from "./project-sandbox.ts";
-import { probeAppProfile, saveAppProfile, loadAppProfile, deriveManifestFromProfile, missingSecrets, secretsPromptMessage, type AppProfile } from "./app-profile.ts";
+import { probeAppProfile, saveAppProfile, loadAppProfile, deriveManifestFromProfile, missingSecrets, secretsPromptMessage, applyProfileCorrection, recordProfileLearning, profileNotes, type AppProfile } from "./app-profile.ts";
 import { isS3Enabled, buildS3Key, uploadBinary, getPresignedGetUrl } from "./s3.ts";
 import { messages } from "../db/schema/chat.ts";
 import { projectTickets } from "../db/schema/tickets.ts";
@@ -718,6 +718,7 @@ HOW TO WORK:
 PERSISTING WHAT YOU LEARN (so the next run doesn't repeat your work):
 - Each \`run\` command starts a FRESH shell, so a bare \`export FOO=bar\` does NOT carry to the next command. For an environment fix that must stick (an env var, a cert/CA path, a package source), call the \`setEnv\` tool — it stores the var on the project (encrypted) AND writes it into .env now, so it is re-applied on every future setup and SURVIVES a VM rebuild. (Appending to ./.env only lasts while this VM lives — if the VM is recreated you'd have to rediscover the fix.)
 - When you discover the PLAN itself was wrong and found what works — a different toolchain install, install/build/run command, startup project, or port — call \`updatePlan\` to persist the corrected value. Do this AFTER you've confirmed the new command works. This is how the checklist self-heals: the next preview run skips straight to the working commands.
+- When you learn a FACT that no plan field captures — a schema/ordering rule (migration MUST run before a SQL script), a missing client (\`sqlcmd\` isn't installed → use \`docker exec\`), a config gotcha — call \`noteLearning\` so the next run and every feature branch see it up front. Record it the moment you learn it; this is what stops the "figure the same thing out for 2 hours every run" loop.
 
 RUNNING COMMANDS — IMPORTANT:
 - The \`run\` tool already runs each command DETACHED and polls it to completion, so restore/build/install take as long as they need — you do NOT need to background them, add \`&\`, nohup, or your own timeout wrapper. Just run the plain command (e.g. \`dotnet build Cohire.sln -c Release\`).
@@ -849,9 +850,23 @@ async function driveSandbox(
         await db.update(projectEnvironments)
           .set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() })
           .where(eq(projectEnvironments.projectId, projectId)).catch(() => {});
+        // Persist the correction into the PROFILE too — the manifest is re-derived
+        // from the profile each run, so a manifest-only fix would be clobbered.
+        await applyProfileCorrection(projectId, field, value, reason).catch(() => {});
         const shown = field === "toolchain" ? manifest.toolchain.join("; ") : String((manifest as any)[field]);
         plog(projectId, userId, `Updated plan: ${field} → ${shown}`, { detail: reason });
         return "plan updated — the next run will use this.";
+      },
+    }),
+    noteLearning: tool({
+      description: "Record a non-obvious FACT you learned about running THIS app that a plan field can't capture, so the NEXT run (and feature branches) get it up front instead of rediscovering it. Use for: schema/ordering rules (e.g. 'the EF migration MUST run before the Sql Scripts or the app 500s on Invalid column'), a required client/tool ('sqlcmd isn't installed — use `docker exec mssql`'), a config gotcha ('appsettings.json is JSONC — inject via env, never edit it'), or any workaround. It's stored on the profile and shown to future agents as a CONFIG QUIRK. Call it the moment you learn something worth not repeating.",
+      inputSchema: zodSchema(z.object({
+        note: z.string().describe("One concrete, actionable sentence — what's true and what to do about it."),
+      })),
+      execute: async ({ note }: { note: string }) => {
+        const ok = await recordProfileLearning(projectId, note).catch(() => false);
+        plog(projectId, userId, `Learned: ${note}`);
+        return ok ? "recorded — future runs and branches will see this." : "noted (no profile to attach it to yet).";
       },
     }),
     setEnv: tool({
@@ -956,7 +971,7 @@ export async function runPreviewChat(opts: {
   const port = manifest?.port ?? DEFAULT_PORT;
   const runCmd = row?.runCommand || manifest?.runCmd || "";
   const savedProfile = await loadAppProfile(projectId);
-  const configNotes = savedProfile ? [...savedProfile.profile.configQuirks, ...savedProfile.profile.buildQuirks] : [];
+  const configNotes = savedProfile ? profileNotes(savedProfile.profile) : [];
 
   // Operate on whatever branch is CURRENTLY being previewed — a ticket's git
   // worktree if a branch is live, else main's /data/project. Otherwise @preview
@@ -1020,8 +1035,18 @@ export async function runPreviewChat(opts: {
         else if (field === "port") { const p = parseInt(value, 10); if (p > 0) manifest.port = p; }
         else (manifest as any)[field] = value;
         await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId)).catch(() => {});
+        await applyProfileCorrection(projectId, field, value, reason).catch(() => {});
         plog(projectId, userId, `Updated plan: ${field}`, { detail: reason });
         return "plan updated — future builds + branches use this.";
+      },
+    }),
+    noteLearning: tool({
+      description: "Record a non-obvious FACT you learned about running THIS app that a plan field can't capture (a schema/ordering rule, a missing client, a config gotcha, a workaround) so future previews AND feature branches get it up front instead of rediscovering it. Persisted on the profile and shown to future agents as a CONFIG QUIRK.",
+      inputSchema: zodSchema(z.object({ note: z.string().describe("One concrete, actionable sentence.") })),
+      execute: async ({ note }: { note: string }) => {
+        const ok = await recordProfileLearning(projectId, note).catch(() => false);
+        plog(projectId, userId, `Learned: ${note}`);
+        return ok ? "recorded — future runs and branches will see this." : "noted (no profile yet).";
       },
     }),
     reply: tool({
@@ -1058,6 +1083,7 @@ SCOPE — do ONLY what the user asked, nothing more:
 PERSIST YOUR FIXES (critical — otherwise they're lost and branches don't get them):
 - When you fix something with an ENV var (a cert/CA path, ASPNETCORE_FORWARDEDHEADERS_ENABLED for a reverse-proxy/HTTPS asset issue, a base URL, a runtime flag), call \`setEnv\` — do NOT just \`echo >> .env\`. setEnv records it on the project so EVERY future setup AND every ticket branch inherits it. An echo-only fix works for this one live app and then vanishes.
 - When you find a plan command was wrong and confirm the right one, call \`updatePlan\`.
+- When you learn a FACT no field captures (a schema/ordering rule, a missing client like sqlcmd, a config gotcha), call \`noteLearning\` so the next run + branches see it.
 - This is exactly how a fix you make on main automatically reaches the feature branches.
 
 RULES: source-code edits follow the CODE CHANGES policy above (allowed only on a ticket branch). Installing tools/deps, editing ./.env and config is fine when asked. Verify with real commands — never claim success without checking. When finished, ALWAYS call \`reply\` with status (ok/error/stuck) + a short summary of what you found/did (and whether you persisted/committed it). Never print secrets.`;
@@ -1185,6 +1211,7 @@ fi`, 240_000);
       }
     }
     if (!profile) {
+      const prior = await loadAppProfile(projectId); // carry learnings across a re-probe
       const pac = new AbortController();
       const pw = setInterval(() => { if (isCancelled(projectId)) pac.abort(); }, 1000);
       try {
@@ -1194,7 +1221,13 @@ fi`, 240_000);
           abortSignal: pac.signal,
         });
       } finally { clearInterval(pw); }
-      if (profile) await saveAppProfile(projectId, profile);
+      if (profile) {
+        // A re-probe rewrites the plan but must NOT forget hard-won run learnings.
+        if (prior?.profile.learnings?.length) {
+          profile.learnings = [...prior.profile.learnings, ...(profile.learnings ?? [])].slice(-40);
+        }
+        await saveAppProfile(projectId, profile);
+      }
     }
     throwIfCancelled(projectId);
 
@@ -1284,7 +1317,7 @@ fi`, 240_000);
     if (!up) {
       await setPreview(projectId, userId, { previewStatus: "installing" }, "Setting up & running the app…");
       const resumeSteps: RunStep[] | null = existing?.setupSteps ? (JSON.parse(existing.setupSteps) as RunStep[]) : null;
-      const configNotes = profile ? [...profile.configQuirks, ...profile.buildQuirks] : [];
+      const configNotes = profile ? profileNotes(profile) : [];
       const result = await executeRunbook(projectId, userId, workspaceId, manifest, engineHandles, driver?.model, resumeSteps, prelude, configNotes);
       up = result.up;
       // Mark setup complete + store the run command so the next click is a fast run.
@@ -1521,7 +1554,7 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
   }
   const manifest = JSON.parse(row.setupManifest) as PreviewManifest;
   const savedProfile = await loadAppProfile(projectId);
-  const configNotes = savedProfile ? [...savedProfile.profile.configQuirks, ...savedProfile.profile.buildQuirks] : [];
+  const configNotes = savedProfile ? profileNotes(savedProfile.profile) : [];
   resetLog(projectId);
   await loadPublicId(projectId); // for WS routing
 
