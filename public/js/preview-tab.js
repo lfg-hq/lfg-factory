@@ -398,7 +398,7 @@
     render({ previewStatus: "detecting" });
     managePolling("detecting");
     try {
-      await api("/setup", { method: "POST", body: JSON.stringify({ rebuildManifest: !!rebuildManifest }) });
+      await api("/setup", { method: "POST", body: JSON.stringify({ rebuildManifest: !!rebuildManifest, conversationId: window.currentConversationId || null }) });
     } catch (e) {
       render({ previewStatus: "error", error: "Could not start setup: " + e.message });
     }
@@ -510,7 +510,7 @@
     logText = "";
     render({ previewStatus: "starting" });
     managePolling("starting");
-    try { await api("/restart", { method: "POST", body: JSON.stringify({ ticketId }) }); }
+    try { await api("/restart", { method: "POST", body: JSON.stringify({ ticketId, conversationId: window.currentConversationId || null }) }); }
     catch (e) { render({ previewStatus: "error", error: "Restart failed: " + e.message }); }
   }
 

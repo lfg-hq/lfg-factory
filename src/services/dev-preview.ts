@@ -25,7 +25,7 @@ import { getModel, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
 import { decryptSecret, encryptSecret } from "../utils/crypto.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { enableHttpAccess, execOnWorkspace, setStableUrl, startBrowserSession, stopWorkspace } from "./mags.ts";
-import { ensureProjectSandbox, ensureEngine, ensureDocker, envWorkspaceId, type EngineHandle } from "./project-sandbox.ts";
+import { ensureProjectSandbox, ensureEngine, ensureDocker, envWorkspaceId, checkEngineHealth, type EngineHandle } from "./project-sandbox.ts";
 import { isS3Enabled, buildS3Key, uploadBinary, getPresignedGetUrl } from "./s3.ts";
 import { messages } from "../db/schema/chat.ts";
 import { projectTickets } from "../db/schema/tickets.ts";
@@ -351,6 +351,63 @@ echo "CHECKED:$CHECKED"
   const missing = output.split("\n").filter((l) => l.startsWith("MISS ")).map((l) => l.slice(5).trim()).slice(0, 20);
   const mixed = output.split("\n").filter((l) => l.startsWith("MIXED ")).map((l) => l.slice(6).trim()).slice(0, 20);
   return { checked, missing, mixed };
+}
+
+/**
+ * Post-run verification: (1) URL responds, (2) images/CSS/JS load, (3) DB
+ * connections intact. Builds a chat-ready launch summary and an overall verdict.
+ * Assets are skipped when the page is a 5xx (a code/data error, not an asset issue).
+ */
+async function verifyPreview(projectId: string, userId: string, workspaceId: string, manifest: PreviewManifest, branchLabel: string): Promise<{ summary: string; overall: "ok" | "degraded" | "error" }> {
+  const port = manifest.port;
+  plog(projectId, userId, "Verifying the preview (URL, assets, databases)…");
+
+  // 1. URL
+  const code = await httpStatus(workspaceId, port).catch(() => 0);
+  const urlDown = code === 0;
+  const urlErr = code >= 500;             // serving, but a code/data error
+  const urlOk = code >= 200 && code < 500;
+  const urlLine = urlDown ? `❌ **URL** (:${port}) — not responding (down)`
+    : urlErr ? `⚠️ **URL** (:${port}) — live but returns HTTP ${code} (app/data error)`
+    : `✅ **URL** (:${port}) — responding (HTTP ${code})`;
+
+  // 2. Assets — only meaningful when the page renders (not a 5xx).
+  let assetLine = "⏭️ **Assets** — skipped (page returned a server error)";
+  let assetsBad = false;
+  if (urlOk) {
+    const a = await checkAssets(workspaceId, port).catch(() => ({ checked: 0, missing: [], mixed: [] }));
+    if (!a.checked) assetLine = "➖ **Assets** — none found on the homepage";
+    else if (!a.missing.length && !a.mixed.length) assetLine = `✅ **Assets** — ${a.checked} images/CSS/JS all load`;
+    else { assetsBad = true; assetLine = `⚠️ **Assets** — ${a.mixed.length} mixed-content + ${a.missing.length} missing of ${a.checked}${a.mixed.length ? " (mixed-content = the HTTPS proxy needs ForwardedHeaders/base-url)" : ""}`; }
+  }
+
+  // 3. Databases
+  const dbs = await checkEngineHealth(projectId).catch(() => []);
+  let dbLine: string; let dbBad = false;
+  if (!dbs.length) dbLine = "➖ **Databases** — none provisioned";
+  else {
+    const okDbs = dbs.filter((d) => d.ok).map((d) => d.engine);
+    const badDbs = dbs.filter((d) => !d.ok);
+    dbBad = badDbs.length > 0;
+    dbLine = dbBad
+      ? `❌ **Databases** — ${badDbs.map((d) => `${d.engine}: ${d.detail}`).join("; ")}${okDbs.length ? ` (ok: ${okDbs.join(", ")})` : ""}`
+      : `✅ **Databases** — ${okDbs.join(", ")} reachable`;
+  }
+
+  const overall: "ok" | "degraded" | "error" = urlDown ? "error" : (urlErr || assetsBad || dbBad) ? "degraded" : "ok";
+  const verdict = overall === "ok" ? "🟢 **All systems OK**"
+    : overall === "error" ? "🔴 **Failed — the app is not responding**"
+    : `🟡 **Degraded** — ${[urlErr ? "URL returns a server error" : "", assetsBad ? "some assets broken" : "", dbBad ? "a database is unreachable" : ""].filter(Boolean).join(", ")}`;
+
+  const summary = `🚀 **Preview launch summary** — branch: \`${branchLabel === "(default)" ? "main" : branchLabel}\`\n\n${urlLine}\n${assetLine}\n${dbLine}\n\n${verdict}`;
+  plog(projectId, userId, `Verification: ${overall}`, overall === "ok" ? undefined : { level: "error", detail: summary.replace(/\*\*/g, "") });
+  return { summary, overall };
+}
+
+/** Post the launch summary into the main chat (persist if a conversation is known). */
+async function publishSummary(userId: string, conversationId: string | null | undefined, content: string): Promise<void> {
+  if (conversationId) await db.insert(messages).values({ conversationId, role: "assistant", content }).catch(() => {});
+  broadcastToUser(userId, { type: "message", sender: "assistant", message: content, conversation_id: conversationId ?? undefined });
 }
 
 /** Run the asset check and log a clear warning listing any broken/mixed-content assets. */
@@ -1010,7 +1067,7 @@ RULES: source-code edits follow the CODE CHANGES policy above (allowed only on a
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
-export interface SetupOptions { userId: string; branch?: string; rebuildManifest?: boolean; ticketId?: string }
+export interface SetupOptions { userId: string; branch?: string; rebuildManifest?: boolean; ticketId?: string; conversationId?: string | null }
 
 /** The worktree directory for a ticket's branch inside the preview sandbox. Must
  *  match the name the ticket executor creates: `wt-ticket-<ticketId first 12>`. */
@@ -1198,7 +1255,6 @@ fi`, 240_000);
       return failed(projectId, userId, `The app did not come up on port ${manifest.port}.\n\n${detail.slice(-1000)}`);
     }
     plog(projectId, userId, "App is responding ✓");
-    await warnBrokenAssets(projectId, userId, workspaceId, manifest.port).catch(() => {});
 
     // 7. Expose the app's OWN port publicly. The app is CONFIRMED up, so a
     // transient Mags "job not found" here must NOT throw away a working preview —
@@ -1226,6 +1282,9 @@ fi`, 240_000);
     await db.update(projectEnvironments).set({ stableAlias: alias, updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
     plog(projectId, userId, `Preview live: ${previewUrl}`);
     await setPreview(projectId, userId, { previewStatus: "running", appUrl: previewUrl, appPort: manifest.port, previewError: null }, "Preview is live");
+    // Post-run verification (URL + assets + DB) → publish the launch summary to chat.
+    const v = await verifyPreview(projectId, userId, workspaceId, manifest, branch || "(default)").catch(() => null);
+    if (v) await publishSummary(userId, opts.conversationId, `${v.summary}\n\n🔗 ${previewUrl}`).catch(() => {});
     return { previewUrl };
   } catch (err) {
     const msg = (err as Error).message ?? String(err);
@@ -1508,22 +1567,15 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
     }
     await setStep("run", "done");
     plog(projectId, userId, `App running ✓ (${branchLabel})`);
-    // If the app serves but the homepage 500s, it's LIVE but has a runtime/data
-    // error (e.g. an incomplete DB schema) — surface it; the user can still
-    // navigate to pages that work (like the one this ticket changed).
-    const homeCode = await httpStatus(workspaceId, manifest.port).catch(() => 0);
-    if (homeCode >= 500) {
-      const tail = await sh(workspaceId, `tail -15 ${runDir}/preview.log 2>/dev/null`, 15_000).catch(() => ({ output: "" }));
-      plog(projectId, userId, `⚠ The app is LIVE but its homepage returns HTTP ${homeCode} — a runtime/data error in the app (not a build/env problem). Other pages may load fine. Recent error:`, { level: "error", detail: (tail.output || "").slice(-900) });
-    } else {
-      await warnBrokenAssets(projectId, userId, workspaceId, manifest.port).catch(() => {});
-    }
     // Re-expose (idempotent) and mark running.
     await enableHttpAccess(workspaceId, manifest.port).catch(() => {});
     const alias = row.stableAlias || randomAlias();
     let previewUrl = row.appUrl || "";
     try { previewUrl = await setStableUrl(alias, workspaceId); } catch { /* keep existing */ }
     await setPreview(projectId, userId, { previewStatus: "running", appUrl: previewUrl, appPort: manifest.port, previewError: null, previewBranch: branchLabel }, "Preview is live");
+    // Post-run verification (URL + assets + DB) → publish the launch summary to chat.
+    const v = await verifyPreview(projectId, userId, workspaceId, manifest, branchLabel).catch(() => null);
+    if (v) await publishSummary(userId, opts.conversationId, `${v.summary}\n\n🔗 ${previewUrl}`).catch(() => {});
     return { previewUrl };
   } catch (err) {
     return failed(projectId, userId, (err as Error).message ?? String(err));

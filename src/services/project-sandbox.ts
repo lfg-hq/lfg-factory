@@ -249,6 +249,36 @@ export async function execInEnv(projectId: string, cmd: string, timeoutMs = 110_
   return { output: (r.output || "") + (r.stderr ? "\n" + r.stderr : ""), exitCode: r.exitCode };
 }
 
+/**
+ * Health-check every provisioned DB by running a live connectivity probe against
+ * its container (pg_isready / mysqladmin ping / redis PONG / sqlcmd SELECT 1).
+ * Used by the preview post-run verification. Returns per-engine ok + detail.
+ */
+export async function checkEngineHealth(projectId: string): Promise<Array<{ engine: DbEngine; ok: boolean; detail: string }>> {
+  const workspaceId = await envWorkspaceId(projectId).catch(() => null);
+  if (!workspaceId) return [];
+  const rows = await db.select().from(projectDatabases).where(eq(projectDatabases.projectId, projectId));
+  const out: Array<{ engine: DbEngine; ok: boolean; detail: string }> = [];
+  for (const r of rows) {
+    const engine = r.engine as DbEngine;
+    const pw = r.passwordEncrypted ? decryptSecret(r.passwordEncrypted) : "";
+    let probe = "";
+    if (engine === "postgres") probe = `docker exec postgres pg_isready -U ${r.username} -d ${r.dbName} 2>&1`;
+    else if (engine === "mysql") probe = `docker exec mysql mysqladmin ping -uroot -p'${pw}' 2>&1`;
+    else if (engine === "redis") probe = `docker exec redis redis-cli -a '${pw}' ping 2>&1`;
+    else if (engine === "mssql") probe = `docker exec mssql sh -c "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P '${pw}' -C -Q 'SELECT 1' -b 2>&1 || /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P '${pw}' -Q 'SELECT 1' -b 2>&1" 2>&1`;
+    else continue;
+    const res = await execOnWorkspace(workspaceId, probe, { timeout: 30_000 }).catch((e: any) => ({ output: String(e?.message ?? e) } as any));
+    const o = (res.output || "").trim();
+    const ok = engine === "postgres" ? /accepting connections/.test(o)
+      : engine === "mysql" ? /alive/.test(o)
+      : engine === "redis" ? /PONG/.test(o)
+      : /(^|\s)1(\s|$)/.test(o) && !/error|failed|login failed|cannot open/i.test(o); // mssql SELECT 1
+    out.push({ engine, ok, detail: ok ? "reachable" : (o.replace(/\s+/g, " ").slice(0, 160) || "no response") });
+  }
+  return out;
+}
+
 export interface EngineHandle {
   engine: DbEngine;
   host: string;

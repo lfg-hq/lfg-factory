@@ -39,6 +39,7 @@ previewApi.post("/:projectId/preview/setup", async (c) => {
     userId: user.id,
     branch: typeof body.branch === "string" ? body.branch : undefined,
     rebuildManifest: body.rebuildManifest === true,
+    conversationId: typeof body.conversationId === "string" ? body.conversationId : null,
   }).catch((e) => console.error("[preview] setup failed:", e));
 
   return c.json({ ok: true, status: "detecting" }, 202);
@@ -50,7 +51,8 @@ previewApi.post("/:projectId/preview/restart", async (c) => {
   if (!access) return c.json({ error: "Project not found" }, 404);
   const body = await c.req.json().catch(() => ({}));
   const ticketId = typeof body.ticketId === "string" && body.ticketId ? body.ticketId : undefined;
-  restartPreview(access.project.id, { userId: user.id, ticketId }).catch((e) => console.error("[preview] restart failed:", e));
+  const conversationId = typeof body.conversationId === "string" ? body.conversationId : null;
+  restartPreview(access.project.id, { userId: user.id, ticketId, conversationId }).catch((e) => console.error("[preview] restart failed:", e));
   return c.json({ ok: true, status: "starting" }, 202);
 });
 
