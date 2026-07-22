@@ -1244,7 +1244,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       + '<code class="git-branch-badge">' + escHtml(branch || ('feature/ticket-' + _currentTicketId)) + '</code>'
       + '<span style="color:var(--text-secondary,#9ca3af);">vs</span>'
       + '<select id="git-diff-base" onchange="loadGitDiff(this.value)" style="padding:4px 8px;border-radius:6px;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);font-size:12px;"><option>main</option></select>'
-      + '<button onclick="loadGitDiff(document.getElementById(\'git-diff-base\').value)" class="git-action-btn" style="padding:4px 10px;"><i class="fas fa-sync-alt"></i></button>'
+      + '<button onclick="loadGitDiff()" class="git-action-btn" style="padding:4px 10px;"><i class="fas fa-sync-alt"></i></button>'
       + '</div>'
       + '<div id="git-diff-body"><div class="git-empty">Loading diff…</div></div>'
       + '</div>';
@@ -1256,6 +1256,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
   async function loadGitDiff(base) {
     var body = document.getElementById('git-diff-body');
     if (!body || !_currentTicketId) return;
+    if (!base) { var _s = document.getElementById('git-diff-base'); base = (_s && _s.value) || 'main'; }
     body.innerHTML = '<div class="git-empty">Loading diff…</div>';
     var data = await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + _currentTicketId + '/git/diff?base=' + encodeURIComponent(base || 'main'))
       .then(function(r){ return r.json(); }).catch(function(){ return null; });
@@ -1270,27 +1271,38 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     body.innerHTML = renderGitDiff(data);
   }
 
+  var _NL = String.fromCharCode(10); // avoid backslash-escapes in this template
   function _parseDiffByFile(diff) {
-    var map = {}; var parts = (diff || '').split(/\ndiff --git /);
-    parts.forEach(function(p, idx){
-      if (!p.trim()) return;
+    var map = {}; var parts = (diff || '').split(_NL + 'diff --git ');
+    for (var idx = 0; idx < parts.length; idx++) {
+      var p = parts[idx];
+      if (!p.trim()) continue;
       var chunk = (idx === 0 ? p : 'diff --git ' + p);
-      var m = chunk.match(/ b\/([^\n]+)/);
-      if (m) map[m[1].trim()] = chunk;
-    });
+      var bi = chunk.indexOf(' b/');
+      if (bi >= 0) {
+        var rest = chunk.slice(bi + 3);
+        var nlPos = rest.indexOf(_NL);
+        var path = (nlPos >= 0 ? rest.slice(0, nlPos) : rest).trim();
+        if (path) map[path] = chunk;
+      }
+    }
     return map;
   }
   function _renderHunks(block) {
-    var lines = (block || '').split('\n');
+    var lines = (block || '').split(_NL);
+    var skips = ['diff --git', 'index ', '--- ', '+++ ', 'new file', 'deleted file', 'similarity ', 'rename '];
     var out = '<pre style="margin:0;font-size:12px;line-height:1.5;font-family:ui-monospace,Menlo,monospace;">';
-    lines.forEach(function(l){
-      if (/^diff --git|^index |^--- |^\+\+\+ |^new file|^deleted file|^similarity |^rename /.test(l)) return;
+    for (var k = 0; k < lines.length; k++) {
+      var l = lines[k]; var skip = false;
+      for (var s = 0; s < skips.length; s++) { if (l.indexOf(skips[s]) === 0) { skip = true; break; } }
+      if (skip) continue;
+      var c0 = l.charAt(0);
       var bg = '', color = 'var(--text-color,#cbd5e1)';
       if (l.indexOf('@@') === 0) { bg = 'rgba(99,102,241,0.12)'; color = '#818cf8'; }
-      else if (l.charAt(0) === '+') { bg = 'rgba(52,211,153,0.12)'; color = '#34d399'; }
-      else if (l.charAt(0) === '-') { bg = 'rgba(248,113,113,0.12)'; color = '#f87171'; }
+      else if (c0 === '+') { bg = 'rgba(52,211,153,0.12)'; color = '#34d399'; }
+      else if (c0 === '-') { bg = 'rgba(248,113,113,0.12)'; color = '#f87171'; }
       out += '<div style="background:' + bg + ';color:' + color + ';padding:0 10px;white-space:pre-wrap;word-break:break-all;">' + escHtml(l || ' ') + '</div>';
-    });
+    }
     return out + '</pre>';
   }
   function renderGitDiff(data) {
