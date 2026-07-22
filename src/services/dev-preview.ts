@@ -321,6 +321,54 @@ async function httpStatus(workspaceId: string, port: number): Promise<number> {
 }
 
 /**
+ * Load the homepage and verify its assets (images/CSS/JS) actually resolve —
+ * catches the "broken images / unstyled page" class of problem. Reports assets
+ * that 404 (missing files) and absolute http:// asset URLs (mixed-content — a
+ * browser blocks these on the HTTPS preview even though curl fetches them).
+ */
+async function checkAssets(workspaceId: string, port: number): Promise<{ checked: number; missing: string[]; mixed: string[] }> {
+  const script = `
+BASE="http://127.0.0.1:${port}"
+HTML=$(curl -s --max-time 10 "$BASE/" 2>/dev/null)
+URLS=$(printf '%s' "$HTML" | grep -oE '(src|href)="[^"]+\\.(png|jpe?g|gif|svg|webp|ico|css|js|woff2?)([?][^"]*)?"' | sed -E 's/^(src|href)="//; s/"$//' | sort -u | head -60)
+CHECKED=0
+for u in $URLS; do
+  CHECKED=$((CHECKED+1))
+  case "$u" in
+    http://*) echo "MIXED $u"; continue ;;
+    https://*) continue ;;
+    //*) TARGET="http:$u" ;;
+    /*) TARGET="$BASE$u" ;;
+    *) TARGET="$BASE/$u" ;;
+  esac
+  CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 6 "$TARGET" 2>/dev/null || echo 000)
+  [ "$CODE" != "200" ] && [ "$CODE" != "304" ] && echo "MISS $CODE $u"
+done
+echo "CHECKED:$CHECKED"
+`;
+  const { output } = await sh(workspaceId, script, 90_000).catch(() => ({ output: "" }));
+  const checked = parseInt((output.match(/CHECKED:(\d+)/) || [])[1] || "0", 10);
+  const missing = output.split("\n").filter((l) => l.startsWith("MISS ")).map((l) => l.slice(5).trim()).slice(0, 20);
+  const mixed = output.split("\n").filter((l) => l.startsWith("MIXED ")).map((l) => l.slice(6).trim()).slice(0, 20);
+  return { checked, missing, mixed };
+}
+
+/** Run the asset check and log a clear warning listing any broken/mixed-content assets. */
+async function warnBrokenAssets(projectId: string, userId: string, workspaceId: string, port: number): Promise<void> {
+  const { checked, missing, mixed } = await checkAssets(workspaceId, port);
+  if (!checked) return;
+  if (!missing.length && !mixed.length) {
+    plog(projectId, userId, `Asset check ✓ — ${checked} images/CSS/JS all load`);
+    return;
+  }
+  const detail = [
+    mixed.length ? `MIXED CONTENT (absolute http:// blocked on the HTTPS preview — needs ForwardedHeaders/base-url fix):\n${mixed.map((u) => "  " + u).join("\n")}` : "",
+    missing.length ? `MISSING (404 — file not in the repo/build):\n${missing.map((u) => "  " + u).join("\n")}` : "",
+  ].filter(Boolean).join("\n\n");
+  plog(projectId, userId, `⚠ Asset check: ${mixed.length} mixed-content + ${missing.length} missing of ${checked} — images/styles may be broken`, { level: "error", detail });
+}
+
+/**
  * Wait for the app to answer on `port`, STREAMING new lines from its log the whole
  * time so the user sees the build/run progress (and any failure) instead of a blank
  * screen. Returns true as soon as the port serves, false at the deadline.
@@ -1127,6 +1175,7 @@ fi`, 240_000);
       return failed(projectId, userId, `The app did not come up on port ${manifest.port}.\n\n${detail.slice(-1000)}`);
     }
     plog(projectId, userId, "App is responding ✓");
+    await warnBrokenAssets(projectId, userId, workspaceId, manifest.port).catch(() => {});
 
     // 7. Expose the app's OWN port publicly. The app is CONFIRMED up, so a
     // transient Mags "job not found" here must NOT throw away a working preview —
@@ -1379,6 +1428,8 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
     if (homeCode >= 500) {
       const tail = await sh(workspaceId, `tail -15 ${runDir}/preview.log 2>/dev/null`, 15_000).catch(() => ({ output: "" }));
       plog(projectId, userId, `⚠ The app is LIVE but its homepage returns HTTP ${homeCode} — a runtime/data error in the app (not a build/env problem). Other pages may load fine. Recent error:`, { level: "error", detail: (tail.output || "").slice(-900) });
+    } else {
+      await warnBrokenAssets(projectId, userId, workspaceId, manifest.port).catch(() => {});
     }
     // Re-expose (idempotent) and mark running.
     await enableHttpAccess(workspaceId, manifest.port).catch(() => {});
