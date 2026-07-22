@@ -876,25 +876,38 @@ export async function runPreviewChat(opts: {
   conversationId: string | null;
   instruction: string;
   abortSignal?: AbortSignal;
-}): Promise<{ reply: string }> {
+}): Promise<{ reply: string; status: "ok" | "error" | "stuck" }> {
   const { projectId, publicProjectId, userId, instruction, abortSignal } = opts;
   publicIdCache.set(projectId, publicProjectId); // WS routing for plog
 
   const driver = await resolveDriverModel(userId);
-  if (!driver) return { reply: "I can't reach an AI model — add an API key in Settings to use the preview agent." };
+  if (!driver) return { reply: "I can't reach an AI model — add an API key in Settings to use the preview agent.", status: "error" };
 
   let workspaceId: string;
   try { ({ workspaceId } = await ensureProjectSandbox(projectId)); }
-  catch { return { reply: "There's no preview sandbox for this project yet. Open the **Preview** tab and run setup first, then ask me again." }; }
+  catch { return { reply: "There's no preview sandbox for this project yet. Open the **Preview** tab and run setup first, then ask me again.", status: "error" }; }
 
   const row = await getEnv(projectId);
   const manifest = row?.setupManifest ? (JSON.parse(row.setupManifest) as PreviewManifest) : null;
   const port = manifest?.port ?? DEFAULT_PORT;
   const runCmd = row?.runCommand || manifest?.runCmd || "";
 
-  plog(projectId, userId, `@preview: ${instruction}`);
+  // Operate on whatever branch is CURRENTLY being previewed — a ticket's git
+  // worktree if a branch is live, else main's /data/project. Otherwise @preview
+  // would act on main while you're looking at a ticket branch.
+  let workDir = PROJECT_DIR;
+  let branchNote = "the default branch";
+  const tm = (row?.previewBranch || "").match(/^feature\/ticket-(.+)$/);
+  if (tm?.[1]) {
+    const wt = ticketWorktreeDir(tm[1]);
+    const chk = await sh(workspaceId, `test -d ${wt} && test -e ${wt}/.git && echo OK || echo NO`, 20_000);
+    if (chk.output.includes("OK")) { workDir = wt; branchNote = `ticket branch ${row!.previewBranch} (worktree)`; }
+  }
+
+  plog(projectId, userId, `@preview (${branchNote}): ${instruction}`);
 
   let reply = "";
+  let replyStatus: "ok" | "error" | "stuck" = "ok";
   const tools = {
     run: tool({
       description: "Run one shell command in the project's live Alpine sandbox (bash). Runs detached + polled, so long commands are fine. Returns exit code + combined stdout/stderr (last 6KB). exitCode -2 = still running (call again to keep waiting); -4 = we killed it after ~4 min of no output (stuck — change approach).",
@@ -905,7 +918,7 @@ export async function runPreviewChat(opts: {
       execute: async ({ command, timeoutSec }: { command: string; timeoutSec?: number }) => {
         const maxMs = Math.min(Math.max(timeoutSec ?? 600, 10), 1800) * 1000;
         plog(projectId, userId, `$ ${command}`);
-        const r = await runDetachedPolled(projectId, userId, workspaceId, command, maxMs, { stallMs: 240_000 });
+        const r = await runDetachedPolled(projectId, userId, workspaceId, command, maxMs, { stallMs: 240_000, workDir });
         plog(projectId, userId, `  → exit ${r.exitCode}`, r.output ? { detail: r.output.slice(-1800), level: r.exitCode === 0 ? "info" : "error" } : undefined);
         return { exitCode: r.exitCode, output: r.output.slice(-6000) || "(no output)" };
       },
@@ -920,7 +933,9 @@ export async function runPreviewChat(opts: {
             .onConflictDoUpdate({ target: [projectEnvironmentVariables.projectId, projectEnvironmentVariables.key], set: { encryptedValue: encryptSecret(value), hasValue: true, updatedAt: new Date() } });
           const line = `${key}="${String(value).replace(/(["\\$`])/g, "\\$1")}"`;
           const b64 = Buffer.from(line).toString("base64");
-          await sh(workspaceId, `cd ${PROJECT_DIR} && (grep -v '^${key}=' .env 2>/dev/null > .env.tmp; echo ${b64} | base64 -d >> .env.tmp; mv .env.tmp .env) && echo SET_ENV`, 30_000);
+          for (const d of [...new Set([workDir, PROJECT_DIR])]) {
+            await sh(workspaceId, `cd ${d} 2>/dev/null && (grep -v '^${key}=' .env 2>/dev/null > .env.tmp; echo ${b64} | base64 -d >> .env.tmp; mv .env.tmp .env) && echo SET_ENV`, 30_000);
+          }
           plog(projectId, userId, `Persisted env ${key} (applies to future runs + branches)`, { detail: reason });
           return `persisted ${key} — future setups and branches inherit it.`;
         } catch (e) { return `failed to persist env: ${(e as Error).message}`; }
@@ -944,20 +959,28 @@ export async function runPreviewChat(opts: {
       },
     }),
     reply: tool({
-      description: "Call ONCE when you've finished the user's request. Give a concise, friendly chat summary of what you did or found (markdown ok). If you confirmed something works, say how you verified it. If you made a fix, say whether you PERSISTED it (setEnv/updatePlan) so it carries to branches.",
-      inputSchema: zodSchema(z.object({ summary: z.string() })),
-      execute: async ({ summary }: { summary: string }) => { reply = summary; return "acknowledged"; },
+      description: "Call ONCE when you've finished. Give a concise chat summary (markdown ok). Set status: 'ok' = you succeeded/verified the fix; 'error' = it failed or can't be done; 'stuck' = partially done / needs the user. If you made a fix, say whether you PERSISTED it (setEnv/updatePlan) and whether you committed code.",
+      inputSchema: zodSchema(z.object({
+        status: z.enum(["ok", "error", "stuck"]).describe("Outcome for the chat banner colour (green/red/yellow)."),
+        summary: z.string(),
+      })),
+      execute: async ({ status, summary }: { status: "ok" | "error" | "stuck"; summary: string }) => { reply = summary; replyStatus = status; return "acknowledged"; },
     }),
   };
 
-  const startHint = `setsid sh -c 'cd ${PROJECT_DIR}; set -a; . ./.env 2>/dev/null; set +a; exec ${runCmd || "<run command>"}' </dev/null > ${PROJECT_DIR}/preview.log 2>&1 &`;
-  const system = `You are the LFG **Preview agent** for this project. You have FULL shell control of the project's LIVE Alpine sandbox (musl, apk, OpenRC/rc-service, busybox — Docker is available) via the \`run\` tool: one command per call, run detached + polled so long commands are fine. The repo is at ${PROJECT_DIR}; its .env is sourced before every command; the toolchain + /data caches are already on PATH.
+  const startHint = `setsid sh -c 'cd ${workDir}; set -a; . ./.env 2>/dev/null; set +a; exec ${runCmd || "<run command>"}' </dev/null > ${workDir}/preview.log 2>&1 &`;
+  const canEditCode = workDir !== PROJECT_DIR; // only on a ticket's isolated branch
+  const system = `You are the LFG **Preview agent** for this project. You have FULL shell control of the project's LIVE Alpine sandbox (musl, apk, OpenRC/rc-service, busybox — Docker is available) via the \`run\` tool: one command per call, run detached + polled so long commands are fine. You are working in **${branchNote}** at ${workDir}; its .env is sourced before every command; the toolchain + /data caches are already on PATH.
+
+CODE CHANGES: ${canEditCode
+    ? `You ARE previewing a ticket's isolated feature branch (worktree at ${workDir}), so you MAY edit the app's SOURCE CODE here to fulfil the request (e.g. fix a .cshtml/CSS/JS UI issue). After editing: rebuild if it's a compiled stack (${manifest?.buildCmd || "the project's build command"}), restart the app (see below), verify with curl, and then COMMIT so the change persists on the branch: \`cd ${workDir} && git add -A && git commit -m "preview: <what you changed>" && git push 2>&1 || true\`. Tell the user in your reply exactly which files you changed.`
+    : `You are previewing the DEFAULT branch (${PROJECT_DIR}). Do NOT edit application SOURCE CODE here — code changes belong in a ticket/build, not on main. If the user asks for a code/UI change, say so in your reply and suggest they create/rebuild a ticket, or preview the ticket's branch (pick it in the branch selector) and ask again there.`}
 
 ${manifest ? `App: ${manifest.stack || `${manifest.runtime}/${manifest.framework}`}. Run command: \`${runCmd || "(unknown)"}\`. Port: ${port}. Databases: ${manifest.databases.length ? manifest.databases.map((d) => `${d.engine} (127.0.0.1, connection in .env as ${d.connectionEnvVar})`).join(", ") : "none"}.` : "This preview has not been fully set up yet — the app may not be running."}
 
 The app server (if running) listens on 127.0.0.1:${port}. To (re)start it, launch it DETACHED:
   ${startHint}
-then VERIFY for real: \`curl -sS -i http://127.0.0.1:${port}/\` (2xx/3xx/4xx = up; 000/refused/5xx = not up → read ${PROJECT_DIR}/preview.log).
+then VERIFY for real: \`curl -sS -i http://127.0.0.1:${port}/\` (2xx/3xx/4xx = up; 000/refused/5xx = not up → read ${workDir}/preview.log).
 
 SCOPE — do ONLY what the user asked, nothing more:
 - If it's a DIAGNOSTIC question (why/what/check/is-it-working/where): INVESTIGATE with read-only commands (curl, cat, grep, ls, head, docker logs, SQL SELECTs) and REPORT the finding via \`reply\`. Do NOT rebuild, re-restore packages, re-run migrations, re-seed the DB, or restart the app for a diagnostic question — that wastes hours and isn't what was asked. Find the cause, explain it, and suggest the fix.
@@ -969,21 +992,21 @@ PERSIST YOUR FIXES (critical — otherwise they're lost and branches don't get t
 - When you find a plan command was wrong and confirm the right one, call \`updatePlan\`.
 - This is exactly how a fix you make on main automatically reaches the feature branches.
 
-RULES: do NOT edit the application's SOURCE CODE (installing tools/deps, editing ./.env and config is fine, when asked). Verify with real commands — never claim success without checking. When finished, ALWAYS call \`reply\` with a short summary of what you found/did (and whether you persisted it). Never print secrets.`;
+RULES: source-code edits follow the CODE CHANGES policy above (allowed only on a ticket branch). Installing tools/deps, editing ./.env and config is fine when asked. Verify with real commands — never claim success without checking. When finished, ALWAYS call \`reply\` with status (ok/error/stuck) + a short summary of what you found/did (and whether you persisted/committed it). Never print secrets.`;
 
   try {
     await generateText({ model: driver.model, tools, stopWhen: stepCountIs(40), system, prompt: instruction, abortSignal });
   } catch (e) {
     const msg = (e as Error).message || String(e);
-    if (abortSignal?.aborted || /abort/i.test(msg)) return { reply: reply || "Stopped." };
+    if (abortSignal?.aborted || /abort/i.test(msg)) return { reply: reply || "Stopped.", status: "stuck" };
     plog(projectId, userId, `Preview agent error: ${msg}`, { level: "error" });
-    return { reply: reply || `I ran into an error: ${msg.slice(0, 300)}` };
+    return { reply: reply || `I ran into an error: ${msg.slice(0, 300)}`, status: "error" };
   }
-  if (reply) return { reply };
+  if (reply) return { reply, status: replyStatus };
   // Fallback: the agent didn't call reply — surface the tail of what it actually
   // did so the chat isn't a dead-end "check the logs".
   const tail = (logBuffers.get(projectId) || "").split("\n").filter((l) => l.trim()).slice(-8).join("\n");
-  return { reply: tail ? `Here's what I did (no summary was produced):\n\n\`\`\`\n${tail}\n\`\`\`` : "Done — check the Preview tab logs for details." };
+  return { reply: tail ? `Here's what I did (no summary was produced):\n\n\`\`\`\n${tail}\n\`\`\`` : "Done — check the Preview tab logs for details.", status: "stuck" };
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────

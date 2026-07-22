@@ -195,7 +195,7 @@ async function handlePreviewChat(ws: ServerWebSocket<WsData>, conn: WsConnection
   if (!access) { await finish("I couldn't find this project to work on its preview."); return; }
 
   try {
-    const { reply } = await runPreviewChat({
+    const { reply, status } = await runPreviewChat({
       projectId: access.project.id,
       publicProjectId,
       userId,
@@ -203,9 +203,11 @@ async function handlePreviewChat(ws: ServerWebSocket<WsData>, conn: WsConnection
       instruction,
       abortSignal: conn.abortController?.signal,
     });
-    await finish(`🔧 **Preview agent**\n\n${reply}`);
+    // Colour-coded status banner: green = ok, red = error, yellow = stuck.
+    const badge = status === "ok" ? "🟢 **Preview agent — done**" : status === "error" ? "🔴 **Preview agent — failed**" : "🟡 **Preview agent — needs attention**";
+    await finish(`${badge}\n\n${reply}`);
   } catch (e) {
-    await finish(`🔧 **Preview agent** — I hit an error: ${(e as Error).message?.slice(0, 300) || "unknown error"}`);
+    await finish(`🔴 **Preview agent — failed**\n\n${(e as Error).message?.slice(0, 300) || "unknown error"}`);
   }
 }
 
