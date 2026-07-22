@@ -308,8 +308,10 @@ async function checkServer(workspaceId: string, port: number, tries: number): Pr
  * screen. Returns true as soon as the port serves, false at the deadline.
  */
 async function waitForAppUp(projectId: string, userId: string, workspaceId: string, port: number, logFile: string, maxMs: number): Promise<boolean> {
-  const deadline = Date.now() + maxMs;
+  const start = Date.now();
+  const deadline = start + maxMs;
   let off = 0;
+  let lastMsgAt = start;
   while (Date.now() < deadline) {
     throwIfCancelled(projectId);
     const r = await sh(workspaceId, `tail -c +${off + 1} ${logFile} 2>/dev/null`, 15_000).catch(() => ({ output: "" }));
@@ -317,6 +319,12 @@ async function waitForAppUp(projectId: string, userId: string, workspaceId: stri
     if (out.trim()) {
       off += Buffer.byteLength(out, "utf8");
       plog(projectId, userId, out.trim().split("\n").slice(-1)[0]!.slice(0, 200), { detail: out.trim().slice(-1200) });
+      lastMsgAt = Date.now();
+    } else if (Date.now() - lastMsgAt > 12_000) {
+      // Heartbeat so a silent build (e.g. a hung restore that prints nothing) still
+      // shows liveness + elapsed time instead of a frozen spinner.
+      plog(projectId, userId, `…waiting for the app on port ${port} (${Math.round((Date.now() - start) / 1000)}s, no output yet)`);
+      lastMsgAt = Date.now();
     }
     if (await checkServer(workspaceId, port, 1)) return true;
     await sleep(6000);
@@ -1254,24 +1262,28 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
     await setStep("locate", "done");
 
     await setStep("run", "running");
-    await setPreview(projectId, userId, { previewStatus: "starting", previewError: null, previewBranch: branchLabel }, ticketId ? `Running ${branchLabel}…` : "Restarting the app…");
-    // A ticket worktree isn't pre-built, so `dotnet run`/`go run`/etc. build on
-    // first start — that can take minutes. Be patient for compiled stacks and
-    // STREAM the app log so the build/run output (and any error) is visible.
+    const startingMsg = ticketId ? `Starting the preview on ${branchLabel}…` : "Restarting the app…";
+    await setPreview(projectId, userId, { previewStatus: "starting", previewError: null, previewBranch: branchLabel }, startingMsg);
     const compiled = !!manifest.buildCmd || /dotnet|asp|java|go|rust|maven|gradle/i.test(`${manifest.runtime} ${manifest.framework}`);
-    const waitMs = ticketId && compiled ? 300_000 : ticketId ? 120_000 : 60_000;
+    // Try a quick plain start first (fast for interpreted apps or an already-built
+    // tree). A worktree isn't pre-built, so a COMPILED app builds on first run and
+    // that output can be silent (a hung NuGet restore shows nothing) — so we only
+    // wait briefly here, then hand to the AI DRIVER, which runs restore→build→run as
+    // EXPLICIT, streamed steps you can watch, reusing the warm toolchain/cache.
+    plog(projectId, userId, `Launching the app from ${branchLabel}${compiled ? " (a compiled app builds on first run — you'll see the driver's build steps if the quick start doesn't take)" : ""}…`);
+    const waitMs = ticketId ? 90_000 : 60_000;
     await runDetachedPolled(projectId, userId, workspaceId, appStartCommand(manifest, runDir), 30_000);
     let up = await waitForAppUp(projectId, userId, workspaceId, manifest.port, `${runDir}/preview.log`, waitMs);
 
-    // A plain start can fail on a fresh worktree (needs a build; may hit the same
-    // env issue the MAIN run already solved). Instead of giving up, hand off to the
-    // SAME AI driver that got main working — pointed at this worktree. It reuses the
-    // warm toolchain + NuGet cache + persisted env fixes from the main run, fixes
-    // anything branch-specific, and persists new fixes (setEnv) so it's not redone.
+    // Didn't come up quickly → hand off to the SAME AI driver that got main working,
+    // pointed at this worktree. It reuses the warm toolchain + NuGet cache + persisted
+    // env fixes, runs restore/build/run as streamed steps, fixes anything
+    // branch-specific, and persists new fixes (setEnv) so it's not redone.
     if (!up) {
       const driver = await resolveDriverModel(userId);
       if (driver) {
-        plog(projectId, userId, "App didn't start on its own — handing to the AI driver (reusing the main-branch toolchain/cache + persisted fixes)…");
+        plog(projectId, userId, "Handing to the AI driver — it will build + start the branch step by step (reusing the main-branch toolchain/cache)…");
+        await setPreview(projectId, userId, { previewStatus: "starting", previewBranch: branchLabel }, `Building & starting ${branchLabel} (AI driver)…`);
         up = await driveSandbox(projectId, userId, workspaceId, manifest, [], driver.model, runDir);
       }
     }
