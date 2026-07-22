@@ -291,15 +291,27 @@ async function writeEnvFile(workspaceId: string, projectId: string, manifest: Pr
 
 // ── Run the app (detached, survives exec teardown) ──────────────────────────
 async function checkServer(workspaceId: string, port: number, tries: number): Promise<boolean> {
+  let served5xx = false;
   for (let i = 0; i < tries; i++) {
     const { output } = await sh(workspaceId, `curl -s -o /dev/null -w '%{http_code}' --max-time 4 http://127.0.0.1:${port}/ 2>/dev/null || echo 000`, 15_000);
     const code = parseInt((output.match(/\d{3}/) || ["000"])[0], 10);
-    // Reachable and NOT a server error: 2xx/3xx = serving, 4xx = up (e.g. API-only
-    // app with no route at /). 5xx = app crashed on the request → not "live". 000 = down.
+    // 2xx/3xx = serving, 4xx = up (e.g. API-only app with no route at /). A 5xx
+    // means the app IS running but errors on the request — usually an APPLICATION
+    // or DATA problem (a SQL error, an unseeded/mismatched DB schema, a null-ref in
+    // a controller) that the sandbox can't fix. We still count it as "up" so the
+    // preview goes live and the user can navigate (other pages may work) and see
+    // the real error — instead of looping forever trying to fix a data/code bug.
     if (code >= 200 && code < 500) return true;
+    if (code >= 500) served5xx = true;
     await sleep(3000);
   }
-  return false;
+  return served5xx;
+}
+
+/** The homepage HTTP status (0 = down), so callers can warn when the app serves 5xx. */
+async function httpStatus(workspaceId: string, port: number): Promise<number> {
+  const { output } = await sh(workspaceId, `curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1:${port}/ 2>/dev/null || echo 000`, 15_000);
+  return parseInt((output.match(/\d{3}/) || ["0"])[0], 10);
 }
 
 /**
@@ -588,7 +600,8 @@ HOW TO WORK:
 - For compiled stacks: restore → BUILD → run. For a multi-project solution, run the startup project named above.
 - Apply migrations, then the SQL scripts in order (SQL Server runs in Docker — use \`docker exec\` with sqlcmd inside the mssql container, or a client you install; the connection string is in .env).
 - Start the APP SERVER detached so it keeps running after the command returns: \`setsid sh -c 'cd ${workDir}; <run command>' </dev/null > ${workDir}/preview.log 2>&1 &\` — it must bind 0.0.0.0:${port}. (This is the ONLY case where you background a command yourself.)
-- VERIFY for real: \`curl -sS -i http://127.0.0.1:${port}/\`. Up = a real 2xx/3xx/4xx response. 000/connection-refused/5xx = NOT up → read ${workDir}/preview.log, diagnose, fix, retry.
+- VERIFY for real: \`curl -sS -i http://127.0.0.1:${port}/\`. A real 2xx/3xx/4xx = up → \`finish\` ready. 000/connection-refused = down → read ${workDir}/preview.log, diagnose, fix, retry.
+- A 500 needs judgement: the app IS serving (running), but errored on the request. Read the error in ${workDir}/preview.log. If it's an ENVIRONMENT issue in YOUR remit (missing/wrong connection string, a service that isn't up, a missing env var) → fix it and retry. If it's an APPLICATION or DATA problem — a SQL error (e.g. "Invalid column name", "Invalid object name", a missing table/column), an unseeded/mismatched DB schema, or a bug in the app's own code — then the app is RUNNING and this is NOT yours to fix (you must not edit app source or seed data). Call \`finish\` with status "ready" and clearly state the runtime error (e.g. "App is up on :${port} but the homepage returns 500 from SQL error 207 'Invalid column name' — the DB schema is incomplete/mismatched"). Do NOT loop on it.
 
 PERSISTING WHAT YOU LEARN (so the next run doesn't repeat your work):
 - Each \`run\` command starts a FRESH shell, so a bare \`export FOO=bar\` does NOT carry to the next command. For an environment fix that must stick (an env var, a cert/CA path, a package source), call the \`setEnv\` tool — it stores the var on the project (encrypted) AND writes it into .env now, so it is re-applied on every future setup and SURVIVES a VM rebuild. (Appending to ./.env only lasts while this VM lives — if the VM is recreated you'd have to rediscover the fix.)
@@ -1295,6 +1308,14 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
     }
     await setStep("run", "done");
     plog(projectId, userId, `App running ✓ (${branchLabel})`);
+    // If the app serves but the homepage 500s, it's LIVE but has a runtime/data
+    // error (e.g. an incomplete DB schema) — surface it; the user can still
+    // navigate to pages that work (like the one this ticket changed).
+    const homeCode = await httpStatus(workspaceId, manifest.port).catch(() => 0);
+    if (homeCode >= 500) {
+      const tail = await sh(workspaceId, `tail -15 ${runDir}/preview.log 2>/dev/null`, 15_000).catch(() => ({ output: "" }));
+      plog(projectId, userId, `⚠ The app is LIVE but its homepage returns HTTP ${homeCode} — a runtime/data error in the app (not a build/env problem). Other pages may load fine. Recent error:`, { level: "error", detail: (tail.output || "").slice(-900) });
+    }
     // Re-expose (idempotent) and mark running.
     await enableHttpAccess(workspaceId, manifest.port).catch(() => {});
     const alias = row.stableAlias || randomAlias();
