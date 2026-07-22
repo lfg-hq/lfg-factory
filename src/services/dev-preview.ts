@@ -26,6 +26,7 @@ import { decryptSecret, encryptSecret } from "../utils/crypto.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { enableHttpAccess, execOnWorkspace, setStableUrl, startBrowserSession, stopWorkspace } from "./mags.ts";
 import { ensureProjectSandbox, ensureEngine, ensureDocker, envWorkspaceId, checkEngineHealth, type EngineHandle } from "./project-sandbox.ts";
+import { probeAppProfile, saveAppProfile, loadAppProfile, deriveManifestFromProfile, missingSecrets, secretsPromptMessage, type AppProfile } from "./app-profile.ts";
 import { isS3Enabled, buildS3Key, uploadBinary, getPresignedGetUrl } from "./s3.ts";
 import { messages } from "../db/schema/chat.ts";
 import { projectTickets } from "../db/schema/tickets.ts";
@@ -585,7 +586,7 @@ async function persistSteps(projectId: string, userId: string, steps: RunStep[])
 async function executeRunbook(
   projectId: string, userId: string, workspaceId: string,
   manifest: PreviewManifest, engines: EngineHandle[], model: any,
-  resumeSteps: RunStep[] | null, prelude: RunStep[] = [],
+  resumeSteps: RunStep[] | null, prelude: RunStep[] = [], configNotes: string[] = [],
 ): Promise<{ up: boolean; steps: RunStep[] }> {
   const port = manifest.port;
   // Prepend the (already-completed) infra prelude so the Steps view shows the
@@ -633,7 +634,7 @@ async function executeRunbook(
         // Critical step failed → hand the rest to the AI driver (it sees state).
         if (model) {
           plog(projectId, userId, `Handing off to the AI driver to recover "${step.label}"…`);
-          const up = await driveSandbox(projectId, userId, workspaceId, manifest, engines, model);
+          const up = await driveSandbox(projectId, userId, workspaceId, manifest, engines, model, PROJECT_DIR, configNotes);
           if (up) { for (const s of steps) if (s.status !== "done") s.status = "done"; await persist(); return { up: true, steps }; }
         }
         await persist();
@@ -655,7 +656,7 @@ async function executeRunbook(
   const tail = await sh(workspaceId, `tail -20 ${PROJECT_DIR}/preview.log 2>/dev/null`, 20_000).catch(() => ({ output: "" }));
   plog(projectId, userId, "App did not respond after start — handing to the AI driver to diagnose…", { level: "error", detail: tail.output.slice(-800) });
   if (model) {
-    const up = await driveSandbox(projectId, userId, workspaceId, manifest, engines, model);
+    const up = await driveSandbox(projectId, userId, workspaceId, manifest, engines, model, PROJECT_DIR, configNotes);
     if (up) { runStep.status = "done"; await persist(); return { up: true, steps }; }
   }
   runStep.status = "failed"; runStep.error = tail.output.slice(-1000); await persist();
@@ -672,7 +673,7 @@ function envPrefix(dir: string = PROJECT_DIR): string {
     `cd ${dir} 2>/dev/null; set -a; [ -f ./.env ] && . ./.env; set +a; `;
 }
 
-function buildDriverSystemPrompt(manifest: PreviewManifest, engines: EngineHandle[], workDir: string = PROJECT_DIR): string {
+function buildDriverSystemPrompt(manifest: PreviewManifest, engines: EngineHandle[], workDir: string = PROJECT_DIR, configNotes: string[] = []): string {
   const port = manifest.port;
   const isBranch = workDir !== PROJECT_DIR;
   const dbLines = engines.length
@@ -702,7 +703,7 @@ ${dbLines}
 
 SETUP PLAN (from analyzing the codebase — follow it, but verify against reality and adapt when a command fails):
 ${plan}
-
+${configNotes.length ? `\nCONFIG QUIRKS (discovered by the probe — RESPECT these, they prevent the exact failures that made past runs thrash):\n${configNotes.map((n) => `  ⚠ ${n}`).join("\n")}\n` : ""}
 GOAL: the app must serve HTTP on 0.0.0.0:${port} and actually respond.
 
 HOW TO WORK:
@@ -810,6 +811,7 @@ async function driveSandbox(
   engines: EngineHandle[],
   model: any,
   workDir: string = PROJECT_DIR,
+  configNotes: string[] = [],
 ): Promise<boolean> {
   const port = manifest.port;
   let finished: { status: "ready" | "failed"; detail: string } | undefined;
@@ -903,7 +905,7 @@ async function driveSandbox(
       model,
       tools,
       stopWhen: stepCountIs(80), // generous step budget — we control the loop, not a blind timer
-      system: buildDriverSystemPrompt(manifest, engines, workDir),
+      system: buildDriverSystemPrompt(manifest, engines, workDir, configNotes),
       prompt: `Bring the app up and verify it serves on 0.0.0.0:${port} (working dir: ${workDir}). Begin.`,
       abortSignal: ac.signal,
     });
@@ -953,6 +955,8 @@ export async function runPreviewChat(opts: {
   const manifest = row?.setupManifest ? (JSON.parse(row.setupManifest) as PreviewManifest) : null;
   const port = manifest?.port ?? DEFAULT_PORT;
   const runCmd = row?.runCommand || manifest?.runCmd || "";
+  const savedProfile = await loadAppProfile(projectId);
+  const configNotes = savedProfile ? [...savedProfile.profile.configQuirks, ...savedProfile.profile.buildQuirks] : [];
 
   // Operate on whatever branch is CURRENTLY being previewed — a ticket's git
   // worktree if a branch is live, else main's /data/project. Otherwise @preview
@@ -1039,6 +1043,7 @@ CODE CHANGES: ${canEditCode
     : `You are previewing the DEFAULT branch (${PROJECT_DIR}). Do NOT edit application SOURCE CODE here — code changes belong in a ticket/build, not on main. If the user asks for a code/UI change, say so in your reply and suggest they create/rebuild a ticket, or preview the ticket's branch (pick it in the branch selector) and ask again there.`}
 
 ${manifest ? `App: ${manifest.stack || `${manifest.runtime}/${manifest.framework}`}. Run command: \`${runCmd || "(unknown)"}\`. Port: ${port}. Databases: ${manifest.databases.length ? manifest.databases.map((d) => `${d.engine} (127.0.0.1, connection in .env as ${d.connectionEnvVar})`).join(", ") : "none"}.` : "This preview has not been fully set up yet — the app may not be running."}
+${configNotes.length ? `\nCONFIG QUIRKS (from the probe — RESPECT these; they prevent the exact mistakes that broke past runs, e.g. corrupting a JSONC appsettings.json):\n${configNotes.map((n) => `  ⚠ ${n}`).join("\n")}\n` : ""}
 
 The app server (if running) listens on 127.0.0.1:${port}. To (re)start it, launch it DETACHED:
   ${startHint}
@@ -1162,24 +1167,41 @@ fi`, 240_000);
     await prep("clone", "done");
     plog(projectId, userId, "Repo fetched ✓");
 
-    // 2. Detect (or reuse) the setup manifest.
+    // 2. Build (or reuse) the APP PROFILE (deep probe), then derive the plan.
+    // The profile is the persisted source of truth — a thorough one-time read of
+    // the repo (stack, versions, ordered schema recipe, env/secrets, config
+    // quirks) — and the runbook is DERIVED from it, so runs are deterministic
+    // instead of the agent re-investigating from scratch each time.
     await prep("plan", "running");
     const existing = await getEnv(projectId);
     let manifest: PreviewManifest | null = null;
-    // Reuse a saved plan only if it matches the CURRENT schema (old shallow plans
-    // lack databases/toolchain → re-analyze instead of crashing).
-    if (!opts.rebuildManifest && existing?.setupManifest) {
-      const parsed = manifestSchema.safeParse(JSON.parse(existing.setupManifest));
-      if (parsed.success) {
-        manifest = parsed.data;
-        plog(projectId, userId, `Using saved plan (${manifest.stack || manifest.runtime}, port ${manifest.port}, ${manifest.databases.length} db)`);
+    let profile: AppProfile | null = null;
+
+    if (!opts.rebuildManifest) {
+      const loaded = await loadAppProfile(projectId);
+      if (loaded) {
+        profile = loaded.profile;
+        plog(projectId, userId, `Using saved run profile v${loaded.version} (${profile.stack || profile.runtime})`);
       }
     }
-    if (!manifest) {
-      plog(projectId, userId, "Analyzing the codebase to build a setup plan…");
-      manifest = await detectManifest(projectId);
+    if (!profile) {
+      const pac = new AbortController();
+      const pw = setInterval(() => { if (isCancelled(projectId)) pac.abort(); }, 1000);
+      try {
+        profile = await probeAppProfile({
+          workspaceId,
+          onLog: (l, d) => plog(projectId, userId, l, d ? { detail: d } : undefined),
+          abortSignal: pac.signal,
+        });
+      } finally { clearInterval(pw); }
+      if (profile) await saveAppProfile(projectId, profile);
+    }
+    throwIfCancelled(projectId);
+
+    if (profile) {
+      manifest = deriveManifestFromProfile(profile);
       await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
-      plog(projectId, userId, `Plan: ${manifest.stack || manifest.runtime}`, {
+      plog(projectId, userId, `Plan (from profile): ${manifest.stack || manifest.runtime}`, {
         detail: [
           manifest.startupProject && `run project: ${manifest.startupProject}`,
           `port: ${manifest.port}`,
@@ -1188,10 +1210,31 @@ fi`, 240_000);
           manifest.buildCmd && `build: ${manifest.buildCmd}`,
           `databases: ${manifest.databases.length ? manifest.databases.map((d) => `${d.engine}→${d.connectionEnvVar}`).join(", ") : "none"}`,
           manifest.migrations?.length && `migrations: ${manifest.migrations.join("; ")}`,
-          manifest.sqlScripts?.length && `sql scripts: ${manifest.sqlScripts.join(", ")}`,
+          manifest.sqlScripts?.length && `sql scripts: ${manifest.sqlScripts.length} in dependency order`,
+          profile.configQuirks.length && `config notes: ${profile.configQuirks.length}`,
           `run: ${manifest.runCmd}`,
         ].filter(Boolean).join("\n"),
       });
+
+      // SECRET GATE — block until the user provides credentials we can't generate
+      // (Supabase / Stripe / OAuth / SMTP …). Ask in chat and stop the run here;
+      // the user adds them in env settings and presses Restart.
+      const missing = await missingSecrets(projectId, profile);
+      if (missing.length) {
+        await publishSummary(userId, opts.conversationId, secretsPromptMessage(missing));
+        plog(projectId, userId, `Paused — need ${missing.length} secret(s): ${missing.map((m) => m.key).join(", ")}`, { level: "error" });
+        await setPreview(projectId, userId, { previewStatus: "error", previewError: `Waiting for required secrets: ${missing.map((m) => m.key).join(", ")}` }, "Waiting for required secrets");
+        return { error: `waiting for required secrets: ${missing.map((m) => m.key).join(", ")}` };
+      }
+    }
+
+    // Fallback: the probe produced nothing (rare) — use the lighter detection so
+    // preview still functions.
+    if (!manifest) {
+      plog(projectId, userId, "Probe produced no profile — falling back to quick detection…");
+      manifest = await detectManifest(projectId);
+      await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
+      plog(projectId, userId, `Plan: ${manifest.stack || manifest.runtime}`);
     }
     await prep("plan", "done");
 
@@ -1241,7 +1284,8 @@ fi`, 240_000);
     if (!up) {
       await setPreview(projectId, userId, { previewStatus: "installing" }, "Setting up & running the app…");
       const resumeSteps: RunStep[] | null = existing?.setupSteps ? (JSON.parse(existing.setupSteps) as RunStep[]) : null;
-      const result = await executeRunbook(projectId, userId, workspaceId, manifest, engineHandles, driver?.model, resumeSteps, prelude);
+      const configNotes = profile ? [...profile.configQuirks, ...profile.buildQuirks] : [];
+      const result = await executeRunbook(projectId, userId, workspaceId, manifest, engineHandles, driver?.model, resumeSteps, prelude, configNotes);
       up = result.up;
       // Mark setup complete + store the run command so the next click is a fast run.
       const setupDone = result.steps.filter((s) => s.phase !== "run").every((s) => s.status === "done" || s.optional);
@@ -1476,6 +1520,8 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
     return setupPreview(projectId, opts);
   }
   const manifest = JSON.parse(row.setupManifest) as PreviewManifest;
+  const savedProfile = await loadAppProfile(projectId);
+  const configNotes = savedProfile ? [...savedProfile.profile.configQuirks, ...savedProfile.profile.buildQuirks] : [];
   resetLog(projectId);
   await loadPublicId(projectId); // for WS routing
 
@@ -1562,7 +1608,7 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
       if (driver) {
         plog(projectId, userId, "Recorded build/run didn't bring the app up — handing to the AI driver to investigate…");
         await setPreview(projectId, userId, { previewStatus: "starting", previewBranch: branchLabel }, `Investigating & starting ${branchLabel} (AI driver)…`);
-        up = await driveSandbox(projectId, userId, workspaceId, manifest, [], driver.model, runDir);
+        up = await driveSandbox(projectId, userId, workspaceId, manifest, [], driver.model, runDir, configNotes);
       }
     }
     if (!up) {

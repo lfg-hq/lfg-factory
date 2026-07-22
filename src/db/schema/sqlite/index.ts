@@ -24,3 +24,5 @@ export * from "./pins.ts";
 export * from "./project-databases.ts";
 
 export * from "./project-environments.ts";
+
+export * from "./app-profile.ts";

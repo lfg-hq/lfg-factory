@@ -1,0 +1,243 @@
+/**
+ * App Profile + Probe agent.
+ *
+ * The PROBE is a deep, tool-using read of the connected repo that runs BEFORE
+ * any build/run and produces a persisted, self-healing "how to run THIS app"
+ * profile — the single source of truth the preview runbook is derived from.
+ * It exists to kill the non-determinism of "an agent re-figures-it-out every
+ * run": instead we investigate once, thoroughly, record everything (stack,
+ * versions, the DB schema recipe in dependency order, env vars classified as
+ * auto-provided vs USER-REQUIRED secrets, and config/build quirks), persist it,
+ * and let every subsequent run derive deterministic steps from it. Failures +
+ * corrections get written back so re-runs get faster, not slower.
+ *
+ * This module deliberately does NOT import from dev-preview.ts at runtime (only
+ * the PreviewManifest *type*) so there is no import cycle — dev-preview.ts is
+ * the consumer.
+ */
+import { z } from "zod";
+import { generateText, tool, zodSchema, stepCountIs } from "ai";
+import { eq, and } from "drizzle-orm";
+import { db } from "../config/db.ts";
+import { appProfiles } from "../db/schema/app-profile.ts";
+import { projectEnvironmentVariables } from "../db/schema/projects.ts";
+import { getModel, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
+import { execOnWorkspace } from "./mags.ts";
+import type { PreviewManifest } from "./dev-preview.ts";
+
+const PROJECT_DIR = "/data/project";
+
+// ── The App Profile schema ───────────────────────────────────────────────────
+const CONN_FORMATS = ["url", "dotnet-npgsql", "dotnet-mysql", "dotnet-sqlserver", "keyvalue"] as const;
+
+export const appProfileSchema = z.object({
+  // ── Stack / versions ──
+  stack: z.string().describe("Human summary incl. versions, e.g. '.NET 8 / ASP.NET Core, multi-project solution'."),
+  runtime: z.string().describe("dotnet | node | python | ruby | php | go"),
+  framework: z.string().describe("aspnet-core | next | vite | django | rails | express | laravel; '' if unknown"),
+  runtimeVersion: z.string().describe("EXACT runtime/SDK version the app targets, read from .csproj <TargetFramework>, global.json, package.json engines, .python-version, etc. e.g. 'net8.0', 'node 20', 'python 3.12'. '' if truly unknowable."),
+  // ── Toolchain / build ──
+  toolchain: z.array(z.string()).describe("Alpine commands to install the language+runtime IN ORDER, e.g. ['apk add --no-cache dotnet8-sdk']. Prefer the official installer when the apk package is unreliable (e.g. dotnet-install.sh). [] if the base image already has it."),
+  installCmd: z.string().describe("Restore the app's libraries: 'dotnet restore <Solution.sln>' / 'npm ci' / 'pip install -r requirements.txt' / 'bundle install' / 'composer install'. '' if none."),
+  buildCmd: z.string().describe("Compile step BEFORE running (compiled stacks): 'dotnet build <sln> -c Release', 'npm run build'. '' if none."),
+  startupProject: z.string().describe("For a multi-project solution, the WEB/entry project to run (references Microsoft.NET.Sdk.Web / ASP.NET Core). '' for single-project apps."),
+  runCmd: z.string().describe("Command to START the app in the FOREGROUND on `port`, bound to 0.0.0.0."),
+  port: z.number().describe("The app's REAL port from the codebase (launchSettings/appsettings/run scripts/framework default)."),
+  buildQuirks: z.array(z.string()).describe("Known build gotchas / required flags discovered from the code, e.g. 'needs DOTNET_SYSTEM_NET_DISABLEIPV6=1 or NuGet restore hangs', 'run `dotnet ef` with -v since it hides build errors'. [] if none."),
+  // ── Databases ──
+  databases: z.array(z.object({
+    engine: z.enum(["postgres", "mysql", "redis", "mssql"]).describe("The app's REAL engine. mssql = Microsoft SQL Server (Docker). Do NOT downgrade SQL Server to postgres."),
+    connectionEnvVar: z.string().describe("EXACT env var / .NET config key the app reads the connection from, e.g. 'ConnectionStrings__DefaultConnection', 'DATABASE_URL', 'REDIS_URL'. If the app reads the SAME connection under several keys, list the primary here and note the others in configQuirks."),
+    connectionFormat: z.enum(CONN_FORMATS).describe("How to format the string: 'url' (Node/Python/Rails/Prisma), 'dotnet-npgsql', 'dotnet-mysql', 'dotnet-sqlserver', 'keyvalue'."),
+  })).describe("Every database the app connects to AND how. Read appsettings*.json ConnectionStrings, docker-compose, ORM config, DATABASE_URL. [] if none."),
+  // ── Schema build recipe (ORDERED — this is the part that keeps breaking) ──
+  schemaSteps: z.array(z.object({
+    kind: z.enum(["migration", "sqlScript", "seed"]).describe("migration = ORM migration command (EF/Prisma/Django); sqlScript = a raw .sql file the repo ships; seed = a seed/data-load command."),
+    command: z.string().describe("For 'migration'/'seed': the exact command (e.g. 'dotnet ef database update --project Cohire.Core --startup-project Cohire.Web'). For 'sqlScript': the file path RELATIVE to the repo (e.g. 'Sql Scripts/Create_Workspace_Tables.sql')."),
+    note: z.string().describe("Why this step / what it depends on, e.g. 'must run AFTER the EF migration creates the base tables'. Critical: order the whole array so dependencies come first (migrations before the scripts that ALTER their tables)."),
+  })).describe("The COMPLETE ordered recipe to build the schema so the app doesn't 500 on missing columns. Migrations first, then dependent SQL scripts, then seeds. [] only if the app has no schema setup."),
+  // ── Env / secrets ──
+  autoEnvVars: z.array(z.object({
+    key: z.string(),
+    value: z.string().describe("A concrete value the SYSTEM can set (a default/derivable value), or '' to just note it's needed."),
+    description: z.string(),
+  })).describe("Non-secret config the system can provide itself (feature flags, URLs, ports, safe defaults). EXCLUDE DB connection vars (handled from `databases`)."),
+  secretsRequired: z.array(z.object({
+    key: z.string().describe("The exact env var / config key, e.g. 'SUPABASE_URL', 'Stripe__SecretKey', 'SMTP__Password'."),
+    description: z.string().describe("What it's for."),
+    whereToGet: z.string().describe("How the USER obtains it, e.g. 'Supabase dashboard → Project Settings → API'. The system CANNOT generate this."),
+  })).describe("Secrets the app NEEDS to run correctly that the system CANNOT generate or fake — real external credentials (Supabase, Stripe, OAuth client secrets, SMTP, third-party API keys). ONLY include ones without which the app fails to start or a core path 500s. Do NOT include DB connections (auto-provisioned) or things with safe dev defaults."),
+  // ── Config quirks (so the run agent doesn't corrupt files or fight the config) ──
+  configQuirks: z.array(z.string()).describe("Concrete gotchas the run/preview agent must respect, e.g. 'appsettings.json is JSONC (has // comments) — do NOT parse/edit it as JSON; inject the connection via the ConnectionStrings__ env var which ASP.NET overrides with', 'appsettings has a hardcoded prod SQL Server host — override via env, do not point at it', 'the app also reads ConnectionStrings:Cohyreconnectionstring — set that key too'. [] if none."),
+});
+export type AppProfile = z.infer<typeof appProfileSchema>;
+export type RequiredSecret = AppProfile["secretsRequired"][number];
+
+// ── Probe: deep, tool-using read of the repo ─────────────────────────────────
+/** Bounded shell read against the workspace (used by the probe's tools). */
+async function probeSh(workspaceId: string, script: string, timeout = 45_000): Promise<string> {
+  const b64 = Buffer.from(script).toString("base64");
+  const r = await execOnWorkspace(workspaceId, `echo ${b64} | base64 -d | bash`, { timeout }).catch(
+    (e: any) => ({ output: "", stderr: e?.message ?? String(e), exitCode: -1 }),
+  );
+  return ((r.output || "") + (r.stderr ? "\n" + r.stderr : "")).slice(0, 12_000);
+}
+
+const PROBE_SYSTEM = `You are a senior build engineer PROBING an existing repository so it can be run in a fresh sandbox for a live preview. Investigate the ACTUAL code with your tools, then record a COMPLETE, concrete run profile. Do not guess — read the files.
+
+ENVIRONMENT: the sandbox is ALPINE LINUX (musl, apk, OpenRC, busybox). Every toolchain command must be Alpine-compatible (apk add --no-cache …, never apt/yum; rc-service, never systemctl). Docker is already installed and running (SQL Server / DBs run as Docker containers on 127.0.0.1).
+
+YOUR JOB — investigate and determine:
+- Exact stack, framework, and RUNTIME VERSION (read .csproj <TargetFramework>, global.json, package.json engines, lockfiles).
+- The toolchain, install, build, startup project, run command, and REAL port.
+- Every DATABASE and the EXACT config key the app reads its connection from (appsettings ConnectionStrings live in JSON, not .env). Note EVERY key the same connection is read under.
+- The COMPLETE, ORDERED schema recipe: ORM migrations AND the raw .sql scripts the repo ships AND seeds — in DEPENDENCY ORDER (migrations before the scripts that ALTER their tables). This is the #1 cause of the app 500ing on "Invalid column" — find the real order (README, a run.sh, the numeric/prefix order of a "Sql Scripts" folder, EF migration history).
+- USER-REQUIRED SECRETS: real external credentials the system CANNOT generate (Supabase, Stripe, OAuth secrets, SMTP, API keys) without which the app won't start or a core path fails. Be precise and conservative — only genuine blockers.
+- CONFIG QUIRKS the run agent must respect so it doesn't corrupt config: is appsettings.json actually JSONC with // comments (so it must be edited via env override, never JSON-parsed)? Are there hardcoded prod DB hosts to override? Multiple connection keys?
+
+INVESTIGATION TIPS: list the tree first; cat the solution/csproj/appsettings/docker-compose/package.json/README; grep for how the app reads config (GetEnvironmentVariable, IConfiguration[...], GetConnectionString, process.env); list the Sql Scripts folder to get the real ordering. Use ~10-25 tool calls, then call saveProfile ONCE with everything filled in.`;
+
+/**
+ * Run the probe agent against the cloned repo and return the structured profile.
+ * Does NOT persist — the caller persists via saveAppProfile so it controls the
+ * branch/version. Returns null if the agent never produced a profile.
+ */
+export async function probeAppProfile(opts: {
+  workspaceId: string;
+  workDir?: string;
+  onLog?: (line: string, detail?: string) => void;
+  abortSignal?: AbortSignal;
+}): Promise<AppProfile | null> {
+  const { workspaceId, workDir = PROJECT_DIR, onLog, abortSignal } = opts;
+  const log = (l: string, d?: string) => { try { onLog?.(l, d); } catch { /* noop */ } };
+  let profile: AppProfile | null = null;
+
+  const tools = {
+    listDir: tool({
+      description: "List a directory (relative to the repo root). Use to discover the tree, the Sql Scripts folder ordering, migration dirs.",
+      inputSchema: zodSchema(z.object({ path: z.string().describe("Path relative to the repo root, e.g. '.', 'Sql Scripts', 'Cohire.Core/Migrations'.") })),
+      execute: async ({ path }: { path: string }) => {
+        const safe = path.replace(/'/g, "");
+        return probeSh(workspaceId, `cd ${workDir} 2>/dev/null && ls -la './${safe}' 2>&1 | head -80`);
+      },
+    }),
+    readFile: tool({
+      description: "Read a file from the repo (first ~10KB). Use for .sln/.csproj/appsettings*.json/package.json/docker-compose/README/.env.example/launchSettings/run scripts.",
+      inputSchema: zodSchema(z.object({ path: z.string().describe("Path relative to the repo root.") })),
+      execute: async ({ path }: { path: string }) => {
+        const safe = path.replace(/'/g, "");
+        return probeSh(workspaceId, `cd ${workDir} 2>/dev/null && (head -c 10000 './${safe}' 2>&1 || echo '[not found]')`);
+      },
+    }),
+    grep: tool({
+      description: "Search the repo for a pattern (how the app reads config/connections/env). Returns matching lines with file:line.",
+      inputSchema: zodSchema(z.object({
+        pattern: z.string().describe("Extended-regex pattern, e.g. 'GetConnectionString|GetEnvironmentVariable|IConfiguration\\['."),
+        glob: z.string().optional().describe("Optional filename filter, e.g. '*.cs', '*.json'."),
+      })),
+      execute: async ({ pattern, glob }: { pattern: string; glob?: string }) => {
+        const p = pattern.replace(/'/g, "'\\''");
+        const inc = glob ? `--include='${glob.replace(/'/g, "")}'` : "";
+        return probeSh(workspaceId, `cd ${workDir} 2>/dev/null && grep -rInE ${inc} --exclude-dir=node_modules --exclude-dir=.git '${p}' . 2>/dev/null | head -60`);
+      },
+    }),
+    saveProfile: tool({
+      description: "Record the COMPLETE run profile. Call this exactly ONCE at the end, with every field filled in from what you actually read.",
+      inputSchema: zodSchema(appProfileSchema),
+      execute: async (p: AppProfile) => {
+        profile = p;
+        log(`Probe complete: ${p.stack}`, `DBs: ${p.databases.map((d) => d.engine).join(", ") || "none"} · schema steps: ${p.schemaSteps.length} · secrets needed: ${p.secretsRequired.length}`);
+        return "profile saved";
+      },
+    }),
+  };
+
+  log("Probing the codebase (deep read → run profile)…");
+  const model = getModel(DEFAULT_MODEL_KEY, undefined, { allowEnvFallback: true });
+  try {
+    await generateText({
+      model,
+      tools,
+      stopWhen: stepCountIs(40),
+      system: PROBE_SYSTEM,
+      prompt: `Probe the repository at ${workDir} and record its run profile. Investigate with the tools, then call saveProfile once. Begin.`,
+      abortSignal,
+    });
+  } catch (e) {
+    log(`Probe agent error: ${(e as Error).message}`);
+  }
+  return profile;
+}
+
+// ── Persistence ──────────────────────────────────────────────────────────────
+export async function loadAppProfile(projectId: string, branch = "default"): Promise<{ profile: AppProfile; version: number } | null> {
+  const [row] = await db.select().from(appProfiles)
+    .where(and(eq(appProfiles.projectId, projectId), eq(appProfiles.branch, branch)));
+  if (!row) return null;
+  try {
+    const parsed = appProfileSchema.safeParse(JSON.parse(row.profile));
+    if (!parsed.success) return null;
+    return { profile: parsed.data, version: row.version };
+  } catch { return null; }
+}
+
+export async function saveAppProfile(projectId: string, profile: AppProfile, branch = "default"): Promise<void> {
+  const existing = await db.select({ version: appProfiles.version }).from(appProfiles)
+    .where(and(eq(appProfiles.projectId, projectId), eq(appProfiles.branch, branch)));
+  const nextVersion = (existing[0]?.version ?? 0) + 1;
+  await db.insert(appProfiles)
+    .values({ projectId, branch, version: nextVersion, profile: JSON.stringify(profile), probedAt: new Date() })
+    .onConflictDoUpdate({
+      target: [appProfiles.projectId, appProfiles.branch],
+      set: { profile: JSON.stringify(profile), version: nextVersion, probedAt: new Date(), updatedAt: new Date() },
+    });
+}
+
+// ── Derive the runbook manifest from the profile ─────────────────────────────
+/** Map the rich profile onto the PreviewManifest the existing runbook consumes. */
+export function deriveManifestFromProfile(profile: AppProfile): PreviewManifest {
+  const migrations = profile.schemaSteps.filter((s) => s.kind === "migration").map((s) => s.command);
+  const sqlScripts = profile.schemaSteps.filter((s) => s.kind === "sqlScript").map((s) => s.command);
+  const seedCmd = profile.schemaSteps.find((s) => s.kind === "seed")?.command || "";
+  // Surface required secrets AND auto vars as manifest envVars (the .env writer
+  // + the driver prompt read these). Secrets are marked required.
+  const envVars = [
+    ...profile.secretsRequired.map((s) => ({ key: s.key, required: true, description: `${s.description} (${s.whereToGet})` })),
+    ...profile.autoEnvVars.map((v) => ({ key: v.key, required: false, description: v.description })),
+  ];
+  return {
+    stack: profile.stack,
+    runtime: profile.runtime,
+    framework: profile.framework,
+    toolchain: profile.toolchain,
+    installCmd: profile.installCmd,
+    buildCmd: profile.buildCmd,
+    startupProject: profile.startupProject,
+    runCmd: profile.runCmd,
+    port: profile.port,
+    databases: profile.databases,
+    migrations,
+    sqlScripts,
+    seedCmd,
+    envVars,
+  };
+}
+
+// ── Secret gate ──────────────────────────────────────────────────────────────
+/**
+ * Which required secrets are NOT yet provided for this project. A secret counts
+ * as provided if a project env var with the same key exists and has a value.
+ */
+export async function missingSecrets(projectId: string, profile: AppProfile): Promise<RequiredSecret[]> {
+  if (!profile.secretsRequired.length) return [];
+  const rows = await db.select({ key: projectEnvironmentVariables.key, hasValue: projectEnvironmentVariables.hasValue })
+    .from(projectEnvironmentVariables).where(eq(projectEnvironmentVariables.projectId, projectId));
+  const provided = new Set(rows.filter((r) => r.hasValue).map((r) => r.key.toLowerCase()));
+  return profile.secretsRequired.filter((s) => !provided.has(s.key.toLowerCase()));
+}
+
+/** The chat message shown when secrets are missing (blocks the run). */
+export function secretsPromptMessage(missing: RequiredSecret[]): string {
+  const lines = missing.map((s) => `• **${s.key}** — ${s.description}\n   ↳ _where to get it: ${s.whereToGet}_`);
+  return `⏸️ **Preview paused — this app needs secrets I can't generate.**\n\nBefore it can run correctly, please provide:\n\n${lines.join("\n")}\n\nAdd them in the project's **Environment Variables** settings, then press **Restart** on the Preview tab. The system provisions databases automatically, but real external credentials (like the above) have to come from you.`;
+}
