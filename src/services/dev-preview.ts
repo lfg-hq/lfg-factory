@@ -1775,6 +1775,8 @@ fuser -k ${manifest.port}/tcp 2>/dev/null; pkill -f ':${manifest.port}' 2>/dev/n
 git stash push -m lfg-preview-autostash 2>&1 | tail -1
 git fetch --no-tags origin "${remoteBranch}" 2>&1 | tail -3
 git checkout -B "${remoteBranch}" "origin/${remoteBranch}" 2>&1 | tail -3
+# Nuke stale build output so Release recompiles the Razor views (see worktree path).
+find "${PROJECT_DIR}" -maxdepth 3 -type d \\( -name bin -o -name obj \\) -exec rm -rf {} + 2>/dev/null || true
 echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
 `, 240_000);
         if (sw.output.includes("NO_MAIN")) { await setStep("locate", "failed"); return failed(projectId, userId, `The base checkout isn't set up on this sandbox yet — run the default-branch preview once, then preview this ticket.`); }
@@ -1812,6 +1814,12 @@ else
   rm -rf "${runDir}" 2>/dev/null
   git worktree add -f -B "${remoteBranch}" "${runDir}" "origin/${remoteBranch}" 2>&1 | tail -4
 fi
+# CRITICAL: remove stale build output. In Release, ASP.NET compiles .cshtml Razor
+# views INTO <App>.Views.dll at BUILD time — an incremental build can keep serving
+# the OLD compiled views (the page renders old code even though the source is new).
+# bin/obj are gitignored, so 'git clean -fd' does NOT remove them; nuke them so the
+# rebuild recompiles the views. (NuGet cache lives on /data, so restore stays fast.)
+find "${runDir}" -maxdepth 3 -type d \\( -name bin -o -name obj \\) -exec rm -rf {} + 2>/dev/null || true
 test -e "${runDir}/.git" && echo "WT_OK $(git -C "${runDir}" log -1 --oneline 2>/dev/null)" || echo WT_FAIL
 `, 240_000);
         if (prep.output.includes("NO_MAIN")) {
