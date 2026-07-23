@@ -154,6 +154,23 @@ function plog(projectId: string, userId: string, line: string, opts?: { level?: 
 
 function resetLog(projectId: string) { logBuffers.set(projectId, ""); logFlushAt.set(projectId, 0); }
 
+/**
+ * Distil an agent action journal from the setup log: the COMMANDS the setup/
+ * preview driver ran (+ their exit codes) and the decisions it made (plan
+ * updates, learnings, env persists, how it finished). Fed into the @preview
+ * prompt so a follow-up chat can CONTINUE from where the last run left off
+ * instead of re-investigating from scratch. Keeps only the last `maxLines`
+ * signal lines, so it stays compact even for a long, verbose run. */
+function summarizeAgentActions(log: string, maxLines = 60): string {
+  if (!log) return "";
+  const keep = log.split("\n").filter((l) =>
+    /\]\s+\$\s/.test(l) ||                                                     // a command:  [HH:MM:SS] $ …
+    /→\s*exit\s/.test(l) ||                                                    // its exit code
+    /Updated plan:|Learned:|Persisted env|Driver finished:|Handing off|did not respond|did not come up|App is responding|Preview live/.test(l)
+  );
+  return keep.slice(-maxLines).join("\n");
+}
+
 // ── Cancellation ─────────────────────────────────────────────────────────────
 // The setup pipeline runs as a fire-and-forget background task; Stop sets this
 // flag and the pipeline bails at the next checkpoint (between phases + inside the
@@ -986,6 +1003,10 @@ export async function runPreviewChat(opts: {
   const runCmd = row?.runCommand || manifest?.runCmd || "";
   const savedProfile = await loadAppProfile(projectId);
   const configNotes = savedProfile ? profileNotes(savedProfile.profile) : [];
+  // What the last setup/preview run already did — captured BEFORE this chat runs
+  // any commands of its own, so a follow-up @preview continues from where the
+  // previous run left off instead of re-investigating from scratch.
+  const priorActions = summarizeAgentActions(logBuffers.get(projectId) || row?.setupLog || "");
 
   // Operate on whatever branch is CURRENTLY being previewed — a ticket's git
   // worktree if a branch is live, else main's /data/project. Otherwise @preview
@@ -1083,6 +1104,7 @@ CODE CHANGES: ${canEditCode
 
 ${manifest ? `App: ${manifest.stack || `${manifest.runtime}/${manifest.framework}`}. Run command: \`${runCmd || "(unknown)"}\`. Port: ${port}. Databases: ${manifest.databases.length ? manifest.databases.map((d) => `${d.engine} (127.0.0.1, connection in .env as ${d.connectionEnvVar})`).join(", ") : "none"}.` : "This preview has not been fully set up yet — the app may not be running."}
 ${configNotes.length ? `\nCONFIG QUIRKS (from the probe — RESPECT these; they prevent the exact mistakes that broke past runs, e.g. corrupting a JSONC appsettings.json):\n${configNotes.map((n) => `  ⚠ ${n}`).join("\n")}\n` : ""}
+${priorActions ? `\nWHAT THE LAST RUN ALREADY DID (the setup/preview agent's most recent COMMANDS + exit codes + decisions — CONTINUE from here; do NOT redo steps that already succeeded, and start from the point it failed/stopped):\n${priorActions}\n` : ""}
 
 The app server (if running) listens on 127.0.0.1:${port}. To (re)start it, launch it DETACHED:
   ${startHint}
