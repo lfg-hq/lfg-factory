@@ -1407,6 +1407,46 @@ export async function getPreviewState(projectId: string) {
 }
 
 /**
+ * Re-run the PROBE against the cloned repo and save a fresh profile (keeping the
+ * accumulated learnings). Used by the "Re-probe" button in the Profile panel.
+ * Fire-and-forget: streams to the preview log and broadcasts `preview_profile`
+ * with the new profile when done. Requires the repo to already be cloned.
+ */
+export async function reprobeProfile(projectId: string, userId: string): Promise<void> {
+  await loadPublicId(projectId);
+  resetLog(projectId);
+  let workspaceId: string;
+  try { ({ workspaceId } = await ensureProjectSandbox(projectId)); }
+  catch { plog(projectId, userId, "Re-probe failed: no sandbox — run Set up preview first.", { level: "error" }); return; }
+
+  const has = await sh(workspaceId, `test -e ${PROJECT_DIR}/.git && echo OK || echo NO`, 20_000);
+  if (!has.output.includes("OK")) {
+    plog(projectId, userId, "Re-probe failed: the repo isn't cloned yet — run Set up preview first.", { level: "error" });
+    broadcastToUser(userId, { type: "preview_profile", projectId: pub(projectId), profile: null, error: "Repo not cloned yet — run Set up preview first." });
+    return;
+  }
+
+  const prior = await loadAppProfile(projectId);
+  const profile = await probeAppProfile({
+    workspaceId,
+    onLog: (l, d) => plog(projectId, userId, l, d ? { detail: d } : undefined),
+  });
+  if (!profile) {
+    plog(projectId, userId, "Re-probe produced no profile.", { level: "error" });
+    broadcastToUser(userId, { type: "preview_profile", projectId: pub(projectId), profile: null, error: "The probe produced nothing — check the logs." });
+    return;
+  }
+  // Keep hard-won learnings across the re-probe.
+  if (prior?.profile.learnings?.length) profile.learnings = [...prior.profile.learnings, ...(profile.learnings ?? [])].slice(-40);
+  await saveAppProfile(projectId, profile);
+  // Refresh the derived manifest so the next run uses the new plan.
+  const manifest = deriveManifestFromProfile(profile);
+  await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
+  plog(projectId, userId, "Re-probe complete — profile updated.");
+  broadcastToUser(userId, { type: "preview_profile", projectId: pub(projectId), profile });
+}
+
+/**
  * Capture a screenshot of the LIVE preview (via a headless browser hitting the
  * public URL), store it in S3, and post it into the chat conversation.
  */

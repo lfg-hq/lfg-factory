@@ -12,7 +12,8 @@ import { requireAuth } from "../../auth/middleware.ts";
 import { getProjectAccess } from "../../auth/project-access.ts";
 import { db } from "../../config/db.ts";
 import { projectEnvironments } from "../../db/schema/project-environments.ts";
-import { getPreviewState, setupPreview, restartPreview, stopPreview, detectManifest, manifestSchema, capturePreviewScreenshot, getPreviewBranches } from "../../services/dev-preview.ts";
+import { getPreviewState, setupPreview, restartPreview, stopPreview, detectManifest, manifestSchema, capturePreviewScreenshot, getPreviewBranches, reprobeProfile } from "../../services/dev-preview.ts";
+import { loadAppProfile, saveAppProfile, appProfileSchema } from "../../services/app-profile.ts";
 import type { auth } from "../../auth/index.ts";
 
 type Env = { Variables: { user: typeof auth.$Infer.Session.user } };
@@ -97,6 +98,35 @@ previewApi.post("/:projectId/preview/detect", async (c) => {
   } catch (e) {
     return c.json({ error: (e as Error).message }, 400);
   }
+});
+
+// ── App Profile (the detailed, persisted "how to run this app" plan) ──
+previewApi.get("/:projectId/preview/profile", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId")!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  const loaded = await loadAppProfile(access.project.id);
+  return c.json({ profile: loaded?.profile ?? null, version: loaded?.version ?? 0 });
+});
+
+previewApi.put("/:projectId/preview/profile", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId")!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  const parsed = appProfileSchema.safeParse(await c.req.json().catch(() => ({})));
+  if (!parsed.success) return c.json({ error: "Invalid profile", issues: parsed.error.issues }, 400);
+  await saveAppProfile(access.project.id, parsed.data);
+  return c.json({ ok: true, profile: parsed.data });
+});
+
+// Re-run the probe agent (fire-and-forget; streams to the preview log, then
+// broadcasts `preview_profile` with the fresh profile).
+previewApi.post("/:projectId/preview/profile/reprobe", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId")!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  reprobeProfile(access.project.id, user.id).catch((e) => console.error("[preview] reprobe failed:", e));
+  return c.json({ ok: true, status: "probing" }, 202);
 });
 
 previewApi.put("/:projectId/preview/manifest", async (c) => {

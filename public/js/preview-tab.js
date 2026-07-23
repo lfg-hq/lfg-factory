@@ -19,7 +19,8 @@
   let current = null; // last known state
   let loadedOnce = false;
   let logText = ""; // accumulated setup log
-  let manifest = null; // the setup plan
+  let manifest = null; // the setup plan (derived from the profile)
+  let profileData = null; // the App Profile — the detailed "how to run this app" plan
   let stepsData = null; // checkpoint runbook steps
   let currentView = null; // "progress" | "running" | "error" | "idle" — only re-render on change
   let progressTab = "logs"; // during setup: "logs" | "steps"
@@ -431,76 +432,121 @@
     if (progressTab === "logs") scrollLog();
   }
 
-  // ── Setup plan viewer/editor (the exact instructions used to run the app) ──
-  function planSummary(m) {
-    if (!m) return "";
-    const row = (k, v) => (v && v.length) ? `<div style="display:flex;gap:10px;padding:4px 0;border-bottom:1px solid var(--border-color,#2a2a2a);"><div style="min-width:120px;color:var(--text-secondary,#9ca3af);">${k}</div><div style="flex:1;color:var(--text-color,#e2e8f0);word-break:break-word;">${esc(Array.isArray(v) ? v.join("\n") : v)}</div></div>` : "";
-    const dbs = (m.databases || []).map((d) => `${d.engine} → ${d.connectionEnvVar} (${d.connectionFormat})`);
-    return [
-      row("stack", m.stack || `${m.runtime}/${m.framework}`),
-      row("port", String(m.port)),
-      row("startup project", m.startupProject),
-      row("toolchain", m.toolchain),
-      row("install", m.installCmd),
-      row("build", m.buildCmd),
-      row("databases", dbs),
-      row("migrations", m.migrations),
-      row("sql scripts", m.sqlScripts),
-      row("seed", m.seedCmd),
-      row("run", m.runCmd),
-    ].filter(Boolean).join("");
+  // ── Profile panel — the detailed, persisted "how to run this app" plan ──
+  // (probe output: stack, ordered schema recipe, DBs, required secrets, config
+  // quirks, and the self-healing learnings). Reviewable + editable + re-probeable.
+  const sect = (title, inner) => inner ? `<div style="margin-top:14px;"><div style="font-size:11px;color:var(--text-secondary,#9ca3af);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">${esc(title)}</div>${inner}</div>` : "";
+  const kv = (k, v) => (v && String(v).length) ? `<div style="display:flex;gap:10px;padding:4px 0;border-bottom:1px solid var(--border-color,#2a2a2a);"><div style="min-width:120px;color:var(--text-secondary,#9ca3af);">${esc(k)}</div><div style="flex:1;color:var(--text-color,#e2e8f0);word-break:break-word;font-family:ui-monospace,Menlo,monospace;font-size:12px;">${esc(Array.isArray(v) ? v.join("\n") : v)}</div></div>` : "";
+  const bullets = (arr, color) => (arr && arr.length) ? `<div style="display:flex;flex-direction:column;gap:5px;">${arr.map((s) => `<div style="display:flex;gap:8px;font-size:12px;color:${color || "var(--text-color,#e2e8f0)"};"><span style="color:var(--text-secondary,#9ca3af);">•</span><span style="flex:1;word-break:break-word;">${esc(s)}</span></div>`).join("")}</div>` : "";
+
+  function profileSections(p) {
+    if (!p) return "";
+    const KIND = { migration: "#60a5fa", sqlScript: "#a78bfa", seed: "#34d399" };
+    const dbs = (p.databases || []).map((d) => `${d.engine} → ${d.connectionEnvVar} (${d.connectionFormat})`);
+    const schema = (p.schemaSteps || []).map((s, i) => `<div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid var(--border-color,#222);font-size:12px;align-items:baseline;">
+      <span style="min-width:18px;color:var(--text-secondary,#9ca3af);">${i + 1}.</span>
+      <span style="min-width:74px;flex:none;color:${KIND[s.kind] || "#9ca3af"};text-transform:uppercase;font-size:10px;letter-spacing:.4px;">${esc(s.kind)}</span>
+      <span style="flex:1;"><span style="font-family:ui-monospace,Menlo,monospace;color:var(--text-color,#e2e8f0);word-break:break-word;">${esc(s.command)}</span>${s.note ? `<div style="color:var(--text-secondary,#9ca3af);margin-top:2px;">${esc(s.note)}</div>` : ""}</span>
+    </div>`).join("");
+    const secrets = (p.secretsRequired || []).map((s) => `<div style="padding:7px 10px;margin-bottom:6px;border-left:2px solid #f59e0b;background:rgba(245,158,11,0.06);border-radius:0 6px 6px 0;font-size:12px;">
+      <div style="color:#fbbf24;font-family:ui-monospace,Menlo,monospace;font-weight:600;">${esc(s.key)}</div>
+      <div style="color:var(--text-color,#e2e8f0);margin-top:2px;">${esc(s.description)}</div>
+      <div style="color:var(--text-secondary,#9ca3af);margin-top:2px;">↳ where to get it: ${esc(s.whereToGet)}</div>
+    </div>`).join("");
+    return `<div style="font-size:12.5px;">
+      ${kv("stack", p.stack || `${p.runtime}/${p.framework}`)}
+      ${kv("runtime version", p.runtimeVersion)}
+      ${kv("port", String(p.port))}
+      ${kv("startup project", p.startupProject)}
+      ${kv("toolchain", p.toolchain)}
+      ${kv("install", p.installCmd)}
+      ${kv("build", p.buildCmd)}
+      ${kv("run", p.runCmd)}
+    </div>
+    ${sect("databases", dbs.length ? `<div style="font-size:12.5px;">${dbs.map((d) => kv("", d)).join("")}</div>` : "")}
+    ${sect("schema recipe (in dependency order)", schema || `<div style="color:var(--text-secondary,#9ca3af);font-size:12px;">none</div>`)}
+    ${sect("secrets you must provide", secrets || `<div style="color:var(--text-secondary,#9ca3af);font-size:12px;">none — the system provisions everything it needs</div>`)}
+    ${sect("config quirks (respected by the run agents)", bullets(p.configQuirks, "#fca5a5") || `<div style="color:var(--text-secondary,#9ca3af);font-size:12px;">none</div>`)}
+    ${sect("build quirks", bullets(p.buildQuirks))}
+    ${sect("learnings from past runs (self-healing memory)", bullets(p.learnings, "#93c5fd") || `<div style="color:var(--text-secondary,#9ca3af);font-size:12px;">none yet — corrections found during runs accumulate here</div>`)}`;
   }
 
-  function togglePlan() {
+  // Inner body of the panel — split so a re-probe can refresh it in place.
+  function profileBodyHtml() {
+    if (profileData) {
+      return `${profileSections(profileData)}
+        <div style="margin-top:16px;">
+          <button data-action="toggleprofilejson" style="background:none;border:none;color:#7c3aed;cursor:pointer;font-size:12px;padding:0;">▸ Edit as JSON (advanced)</button>
+          <div id="preview-profile-json-wrap" style="display:none;margin-top:8px;">
+            <div style="font-size:12px;color:var(--text-secondary,#9ca3af);margin-bottom:6px;">Edit the profile and Save — the next run derives its steps from this.</div>
+            <textarea id="preview-plan-json" spellcheck="false" style="width:100%;box-sizing:border-box;min-height:220px;background:var(--background-surface,#141414);color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#2a2a2a);border-radius:8px;padding:12px;font-family:ui-monospace,Menlo,monospace;font-size:12px;">${esc(JSON.stringify(profileData, null, 2))}</textarea>
+          </div>
+        </div>
+        <div id="preview-plan-msg" style="font-size:12px;color:var(--text-secondary,#9ca3af);min-height:16px;margin-top:8px;"></div>`;
+    }
+    return `<div style="color:var(--text-secondary,#9ca3af);font-size:13px;">No profile yet — run <b>Set up preview</b> to probe the codebase, or click <b>Re-probe</b> below (the repo must already be cloned).</div>
+      <div id="preview-plan-msg" style="font-size:12px;color:var(--text-secondary,#9ca3af);min-height:16px;margin-top:8px;"></div>`;
+  }
+
+  function renderProfileBody() {
+    const el = document.getElementById("preview-plan-body");
+    if (el) el.innerHTML = profileBodyHtml();
+    const foot = document.getElementById("preview-plan-foot");
+    if (foot) foot.innerHTML = `${btn("Re-probe", { action: "reprobe", icon: "fa-rotate" })}${profileData ? btn("Save profile", { action: "saveprofile", primary: true, icon: "fa-floppy-disk" }) : ""}`;
+  }
+
+  async function togglePlan() {
     const body = $("preview-body");
     if (!body) return;
     const existing = document.getElementById("preview-plan-overlay");
     if (existing) { existing.remove(); return; }
     const overlay = document.createElement("div");
     overlay.id = "preview-plan-overlay";
-    overlay.style.cssText = "position:absolute;inset:0;padding:16px 20px;background:var(--bg-color,#0f0f0f);display:flex;flex-direction:column;gap:10px;z-index:6;overflow:auto;";
+    overlay.style.cssText = "position:absolute;inset:0;padding:16px 20px;background:var(--bg-color,#0f0f0f);display:flex;flex-direction:column;gap:6px;z-index:6;overflow:auto;";
     overlay.innerHTML = `
-      <div style="display:flex;align-items:center;justify-content:space-between;">
-        <div style="font-size:14px;color:var(--text-color,#e2e8f0);font-weight:600;">Setup plan — the exact instructions used to run this project</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;flex:none;">
+        <div style="font-size:14px;color:var(--text-color,#e2e8f0);font-weight:600;">App profile — how this project is set up &amp; run</div>
         <button data-action="closeplan" style="background:none;border:none;color:var(--text-secondary,#9ca3af);cursor:pointer;font-size:16px;"><i class="fas fa-times"></i></button>
       </div>
-      ${manifest ? `<div style="font-size:12.5px;">${planSummary(manifest)}</div>
-      <div style="font-size:12px;color:var(--text-secondary,#9ca3af);margin-top:6px;">Edit the plan JSON and Save to re-run with your changes, or Re-analyze to rebuild it from the code:</div>
-      <textarea id="preview-plan-json" spellcheck="false" style="flex:1;min-height:180px;background:var(--background-surface,#141414);color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#2a2a2a);border-radius:8px;padding:12px;font-family:ui-monospace,Menlo,monospace;font-size:12px;">${esc(JSON.stringify(manifest, null, 2))}</textarea>
-      <div id="preview-plan-msg" style="font-size:12px;color:var(--text-secondary,#9ca3af);min-height:16px;"></div>`
-      : `<div style="color:var(--text-secondary,#9ca3af);font-size:13px;">No plan yet — run "Set up preview", or Re-analyze to build one from the code.</div>`}
-      <div style="display:flex;gap:8px;">
-        ${btn("Re-analyze", { action: "reanalyze", icon: "fa-rotate" })}
-        ${manifest ? btn("Save plan", { action: "saveplan", primary: true, icon: "fa-floppy-disk" }) : ""}
-      </div>`;
+      <div id="preview-plan-body" style="flex:1;min-height:0;">
+        <div style="color:var(--text-secondary,#9ca3af);font-size:13px;padding:8px 0;">Loading profile…</div>
+      </div>
+      <div id="preview-plan-foot" style="display:flex;gap:8px;flex:none;padding-top:6px;"></div>`;
     body.appendChild(overlay);
+    // Fetch the saved profile, then render.
+    try {
+      const r = await api("/profile");
+      const j = await r.json();
+      profileData = j.profile || null;
+    } catch (_) { profileData = null; }
+    renderProfileBody();
   }
 
-  async function savePlan() {
+  async function saveProfile() {
     const ta = $("preview-plan-json");
     const msg = $("preview-plan-msg");
-    if (!ta) return;
+    if (!ta) { if (msg) { msg.textContent = "Open “Edit as JSON” to edit the profile."; } return; }
     let parsed;
     try { parsed = JSON.parse(ta.value); } catch (e) { if (msg) { msg.textContent = "Invalid JSON: " + e.message; msg.style.color = "#ef4444"; } return; }
     try {
-      const r = await api("/manifest", { method: "PUT", body: JSON.stringify(parsed) });
+      const r = await api("/profile", { method: "PUT", body: JSON.stringify(parsed) });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
-      manifest = j.manifest || parsed;
-      if (msg) { msg.textContent = "Saved ✓ — click Set up preview to run with this plan."; msg.style.color = "#10b981"; }
+      profileData = j.profile || parsed;
+      renderProfileBody();
+      const m2 = $("preview-plan-msg"); if (m2) { m2.textContent = "Saved ✓ — the next run derives its steps from this."; m2.style.color = "#10b981"; }
     } catch (e) { if (msg) { msg.textContent = "Save failed: " + e.message; msg.style.color = "#ef4444"; } }
   }
 
-  async function reanalyze() {
+  async function reprobe() {
     const msg = $("preview-plan-msg");
-    if (msg) { msg.textContent = "Re-analyzing the codebase…"; msg.style.color = "var(--text-secondary,#9ca3af)"; }
+    if (msg) { msg.textContent = "Re-probing the codebase — watch the logs…"; msg.style.color = "var(--text-secondary,#9ca3af)"; }
     try {
-      const r = await api("/detect", { method: "POST" });
+      const r = await api("/profile/reprobe", { method: "POST" });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
-      manifest = j.manifest;
-      togglePlan(); togglePlan(); // rebuild the overlay with the new plan
-    } catch (e) { if (msg) { msg.textContent = "Re-analyze failed: " + e.message + " (the sandbox must exist — run Set up preview first)"; msg.style.color = "#ef4444"; } }
+      // Result arrives via the preview_profile WS event → onProfile refreshes the panel.
+    } catch (e) { if (msg) { msg.textContent = "Re-probe failed: " + e.message; msg.style.color = "#ef4444"; } }
   }
 
   async function doStop() {
@@ -567,8 +613,12 @@
     else if (action === "copylog") copyLog();
     else if (action === "screenshot") takeScreenshot(b);
     else if (action === "closeplan") togglePlan();
-    else if (action === "saveplan") savePlan();
-    else if (action === "reanalyze") reanalyze();
+    else if (action === "saveprofile") saveProfile();
+    else if (action === "reprobe") reprobe();
+    else if (action === "toggleprofilejson") {
+      const w = document.getElementById("preview-profile-json-wrap");
+      if (w) { const open = w.style.display !== "none"; w.style.display = open ? "none" : "block"; if (b) b.textContent = (open ? "▸" : "▾") + " Edit as JSON (advanced)"; }
+    }
     else if (action === "open" && current && current.previewUrl) window.open(current.previewUrl, "_blank");
   }
 
@@ -650,6 +700,20 @@
         const pane = document.getElementById("preview-pane");
         if (pane) pane.innerHTML = stepsPanel(true); // update the visible steps pane
       }
+    },
+    // A re-probe finished → refresh the open Profile panel with the new profile.
+    onProfile(data) {
+      if (forOther(data)) return;
+      if (data && data.profile) profileData = data.profile;
+      if (!document.getElementById("preview-plan-overlay")) return;
+      if (data && data.error) {
+        const msg = document.getElementById("preview-plan-msg");
+        if (msg) { msg.textContent = "Re-probe: " + data.error; msg.style.color = "#ef4444"; }
+        return;
+      }
+      renderProfileBody();
+      const msg = document.getElementById("preview-plan-msg");
+      if (msg) { msg.textContent = "Re-probe complete ✓ — profile updated."; msg.style.color = "#10b981"; }
     },
   };
 
