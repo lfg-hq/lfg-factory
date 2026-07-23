@@ -557,12 +557,17 @@ function sqlApplyCommand(engines: EngineHandle[], file: string): string {
   return `echo "no SQL engine provisioned to apply ${file}"`;
 }
 
-/** The detached app-start command (self-contained: cd + source .env + exec). */
+/** The detached app-start command (self-contained: cd + source .env + run). */
 function appStartCommand(manifest: PreviewManifest, dir: string = PROJECT_DIR): string {
   const port = manifest.port;
   const runCmd = manifest.runCmd.replace(/'/g, `'\\''`);
+  // NOT `exec ${runCmd}`: recorded run commands often carry leading env-var
+  // assignments (e.g. `ASPNETCORE_URLS=… ASPNETCORE_ENVIRONMENT=Development dotnet
+  // run …`). `exec VAR=value cmd` makes exec treat `VAR=value` as the PROGRAM name
+  // → "exec: not found" and the app never starts. Running it as a plain command
+  // lets the shell apply the assignments correctly; setsid already detaches it.
   return `fuser -k ${port}/tcp 2>/dev/null; pkill -f ':${port}' 2>/dev/null; sleep 1; ` +
-    `setsid sh -c 'cd ${dir}; set -a; . ./.env 2>/dev/null; set +a; exec ${runCmd}' </dev/null > ${dir}/preview.log 2>&1 & echo STARTED`;
+    `setsid sh -c 'cd ${dir}; set -a; . ./.env 2>/dev/null; set +a; ${runCmd}' </dev/null > ${dir}/preview.log 2>&1 & echo STARTED`;
 }
 
 /** Compile the manifest into an ordered runbook. */
@@ -740,6 +745,7 @@ HOW TO WORK:
 - Apply migrations, then the SQL scripts in order (SQL Server runs in Docker — use \`docker exec\` with sqlcmd inside the mssql container, or a client you install; the connection string is in .env).
 - Start the APP SERVER detached so it keeps running after the command returns: \`setsid sh -c 'cd ${workDir}; <run command>' </dev/null > ${workDir}/preview.log 2>&1 &\` — it must bind 0.0.0.0:${port}. (This is the ONLY case where you background a command yourself.)
 - VERIFY for real: \`curl -sS -i http://127.0.0.1:${port}/\`. A real 2xx/3xx/4xx = up → \`finish\` ready. 000/connection-refused = down → read ${workDir}/preview.log, diagnose, fix, retry.
+- WINDOWS → LINUX CASE SENSITIVITY: this app was likely developed on Windows (case-INsensitive filesystem) but runs here on Linux (case-SENSITIVE). If static assets 404 (broken images/CSS/JS — e.g. HTML references \`/images/…\` or \`/js/cohyremodification.js\` but the real files are \`wwwroot/Images/…\`, \`wwwroot/js/CohyreModification.js\`), it's a case mismatch, NOT a missing file. Fix it in the preview by adding case-bridging SYMLINKS in the web root (e.g. \`cd ${workDir}/<web>/wwwroot && ln -s Images images && ln -s CohyreModification.js js/cohyremodification.js\`) so the referenced paths resolve, then re-check. Call \`noteLearning\` with the exact symlinks so the next run + branches reapply them. (The proper fix — correcting the casing in the .cshtml views — belongs in a ticket, not here.) Be mindful of case in every path you reference.
 - A 500 needs judgement: the app IS serving (running), but errored on the request. Read the error in ${workDir}/preview.log.
   • ENVIRONMENT issue in your remit (missing/wrong connection string, a service that isn't up, a missing env var) → fix it and retry.
   • A SCHEMA error ("Invalid column name", "Invalid object name", "relation does not exist", "Unknown column", a missing table/column — Postgres/MySQL/SQL Server alike) is almost always a schema that FAILED TO BUILD — and building the schema IS your job, so do NOT give up on it. (DB clients: SQL Server → \`docker exec -i mssql …sqlcmd…\`, list with \`SELECT name FROM sys.tables\`; Postgres → \`docker exec -i postgres psql\`, list with \`\\dt\` / information_schema.tables; MySQL → \`docker exec -i mysql mysql\`, \`SHOW TABLES\`.) First look at the Steps: did migration/schema steps FAIL (crossed out)? They usually did, for fixable reasons: (a) a SQL file has a UTF-8 BOM/encoding that breaks the first statement — re-apply stripping the BOM (\`tail -c +4 file | …\` if the first 3 bytes are EF BB BF); (b) the migration ran against a DIFFERENT database than the app (NEVER hardcode a DB name — use the .env connection the app uses; verify the app's DB actually has the tables); (c) wrong order — a script ALTERs a table an earlier failed step should have created, so fix the earlier step first; (d) a bad migration (e.g. drops a column before its table exists) — mark it applied in the ORM's migration-history table to skip it, per what you learn. (e) a script that RESTORES a whole database FROM DISK='…\\x.bak' — that backup lives on the original dev machine and is NOT in the repo/sandbox; SKIP it entirely (do not try to find, download, or recreate the .bak, and do not restore over the app's DB), the schema comes from the migrations + the other scripts. Re-apply the failed schema steps against the SAME DB the app uses, then restart and re-check the page. Call \`noteLearning\` for each fix so the next run has it.
@@ -1094,7 +1100,7 @@ export async function runPreviewChat(opts: {
     }),
   };
 
-  const startHint = `setsid sh -c 'cd ${workDir}; set -a; . ./.env 2>/dev/null; set +a; exec ${runCmd || "<run command>"}' </dev/null > ${workDir}/preview.log 2>&1 &`;
+  const startHint = `setsid sh -c 'cd ${workDir}; set -a; . ./.env 2>/dev/null; set +a; ${runCmd || "<run command>"}' </dev/null > ${workDir}/preview.log 2>&1 &`;
   const canEditCode = workDir !== PROJECT_DIR; // only on a ticket's isolated branch
   const system = `You are the LFG **Preview agent** for this project. You have FULL shell control of the project's LIVE Alpine sandbox (musl, apk, OpenRC/rc-service, busybox — Docker is available) via the \`run\` tool: one command per call, run detached + polled so long commands are fine. You are working in **${branchNote}** at ${workDir}; its .env is sourced before every command; the toolchain + /data caches are already on PATH.
 
@@ -1115,6 +1121,7 @@ SCOPE — do ONLY what the user asked, nothing more:
 - Only take mutating/expensive actions (build, restore, migrate, seed, restart, install) when the user EXPLICITLY asks you to fix/change/restart/set something up. When unsure, investigate and report rather than mutate.
 - The app is usually ALREADY set up and running — assume the toolchain, DB, and build exist; verify before assuming they don't. Do not redo setup.
 - RUN IN "LOG MODE" so an error shows the FIRST time — don't run a command that hides the error and forces a re-run. Keep \`2>&1\` and add the tool's verbose flag (e.g. \`dotnet ef … -v\` — plain ef only says "Build failed. Use dotnet build to see the errors."; use \`--verbosity normal\`/\`npm --loglevel verbose\`). Don't \`grep\`/\`head\` away the real error + its context. Errors are expected — the goal is to see WHAT failed immediately.
+- CASE SENSITIVITY: Windows-developed apps 404 their own assets on Linux (case-sensitive) — e.g. HTML asks for \`/images/…\` but the file is \`wwwroot/Images/…\`. That's a case mismatch, not a missing file: add bridging symlinks in the web root (\`ln -s Images images\`, etc.), then \`noteLearning\` the exact symlinks so future runs + branches reapply them. Be mindful of case in every path.
 
 PERSIST YOUR FIXES (critical — otherwise they're lost and branches don't get them):
 - When you fix something with an ENV var (a cert/CA path, ASPNETCORE_FORWARDEDHEADERS_ENABLED for a reverse-proxy/HTTPS asset issue, a base URL, a runtime flag), call \`setEnv\` — do NOT just \`echo >> .env\`. setEnv records it on the project so EVERY future setup AND every ticket branch inherits it. An echo-only fix works for this one live app and then vanishes.
