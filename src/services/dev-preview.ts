@@ -1783,35 +1783,47 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
       } else {
         // WORKTREE mode (default): a separate dir; the main checkout is untouched.
         runDir = ticketWorktreeDir(ticketId);
-        const chk = await sh(workspaceId, `test -d ${runDir} && test -e ${runDir}/.git && echo OK || echo MISSING`, 20_000);
-        if (!chk.output.includes("OK")) {
-          // Worktree gone (removed on approval, or a fresh VM) → RECONSTRUCT it from
-          // the remote branch. As long as the branch was pushed, a ticket can always
-          // be previewed. It reuses the base checkout's shared .git + the warm /data
-          // toolchain/NuGet caches + the same DB containers, so "if main runs, this runs".
-          await setPreview(projectId, userId, { previewStatus: "starting", previewBranch: remoteBranch }, `Reconstructing ${remoteBranch}…`);
-          plog(projectId, userId, `Ticket worktree missing — reconstructing ${remoteBranch} from the remote…`);
-          const rebuilt = await sh(workspaceId, `
+        // ALWAYS fetch + hard-sync the worktree to the LATEST pushed commit — an
+        // existing worktree can be at a STALE commit (the ticket was rebuilt), which
+        // is why "I don't see the new changes". Also repair the INVERTED layout where
+        // the main checkout (/data/project) is sitting ON the ticket branch (a prior
+        // build ran in the preview VM and switched it) — that blocks `git worktree add`.
+        await setPreview(projectId, userId, { previewStatus: "starting", previewBranch: remoteBranch }, `Syncing ${remoteBranch} to the latest commit…`);
+        plog(projectId, userId, `Preparing worktree for ${remoteBranch} (fetch + sync to the latest pushed commit)…`);
+        const prep = await sh(workspaceId, `
 cd ${PROJECT_DIR} 2>/dev/null || { echo NO_MAIN; exit 0; }
 git remote set-url origin "${auth.authUrl}" 2>/dev/null
+git fetch --no-tags --force origin "${remoteBranch}" 2>&1 | tail -3
+# If the MAIN checkout is on the target branch (inverted/corrupted), move it back to
+# the default branch so the branch is free to own in a worktree.
+CUR=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+if [ "$CUR" = "${remoteBranch}" ]; then
+  git remote set-head origin -a >/dev/null 2>&1
+  DEF=$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null | sed 's@^origin/@@'); [ -z "$DEF" ] && DEF=main
+  git checkout -f "$DEF" 2>&1 | tail -1 || true
+fi
 git worktree prune 2>/dev/null
-git fetch --no-tags origin "${remoteBranch}" 2>&1 | tail -4
-rm -rf "${runDir}" 2>/dev/null
-git worktree add -f -B "${remoteBranch}" "${runDir}" "origin/${remoteBranch}" 2>&1 | tail -6
-test -e "${runDir}/.git" && echo WT_OK || echo WT_FAIL
+if [ -e "${runDir}/.git" ]; then
+  # Existing worktree → hard-reset to the LATEST pushed commit (picks up new changes).
+  git -C "${runDir}" fetch --no-tags --force origin "${remoteBranch}" 2>&1 | tail -1
+  git -C "${runDir}" reset --hard "origin/${remoteBranch}" 2>&1 | tail -2
+  git -C "${runDir}" clean -fd 2>&1 | tail -1
+else
+  rm -rf "${runDir}" 2>/dev/null
+  git worktree add -f -B "${remoteBranch}" "${runDir}" "origin/${remoteBranch}" 2>&1 | tail -4
+fi
+test -e "${runDir}/.git" && echo "WT_OK $(git -C "${runDir}" log -1 --oneline 2>/dev/null)" || echo WT_FAIL
 `, 240_000);
-          if (rebuilt.output.includes("NO_MAIN")) {
-            await setStep("locate", "failed");
-            return failed(projectId, userId, `The base checkout isn't set up on this sandbox yet — run the default-branch preview once, then preview this ticket.`);
-          }
-          if (!rebuilt.output.includes("WT_OK")) {
-            await setStep("locate", "failed");
-            return failed(projectId, userId, `Couldn't reconstruct the ticket branch \`${remoteBranch}\` from the remote — is it pushed? Rebuild the ticket to (re)create it.\n\n${rebuilt.output.slice(-600)}`);
-          }
-          plog(projectId, userId, `Reconstructed worktree for ${remoteBranch} ✓ (fresh checkout from origin)`);
-        } else {
-          plog(projectId, userId, `Running ticket branch ${remoteBranch} from its worktree…`);
+        if (prep.output.includes("NO_MAIN")) {
+          await setStep("locate", "failed");
+          return failed(projectId, userId, `The base checkout isn't set up on this sandbox yet — run the default-branch preview once, then preview this ticket.`);
         }
+        if (!prep.output.includes("WT_OK")) {
+          await setStep("locate", "failed");
+          return failed(projectId, userId, `Couldn't prepare the ticket branch \`${remoteBranch}\` — is it pushed? Rebuild the ticket to (re)create it.\n\n${prep.output.slice(-600)}`);
+        }
+        const headLine = prep.output.match(/WT_OK\s+(.+)/)?.[1]?.trim();
+        plog(projectId, userId, `Worktree ready on ${remoteBranch} ✓ (HEAD: ${headLine || "synced to origin"})`);
         // Share the preview's DB creds/run config: copy the default .env into the worktree.
         await sh(workspaceId, `cp ${PROJECT_DIR}/.env ${runDir}/.env 2>/dev/null || true; echo env`, 20_000);
       }
