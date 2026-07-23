@@ -1715,23 +1715,48 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
     let runDir = PROJECT_DIR;
     let branchLabel = "(default)";
     await setStep("locate", "running");
+    const [projRow] = await db.select({ mode: projects.previewBranchMode }).from(projects).where(eq(projects.id, projectId));
+    const checkoutMode = (projRow?.mode || "worktree") === "checkout";
     if (ticketId) {
-      runDir = ticketWorktreeDir(ticketId);
       // The remote branch: the ticket's recorded branch, else the convention.
       const [tk] = await db.select({ gb: projectTickets.githubBranch }).from(projectTickets).where(eq(projectTickets.id, ticketId));
       const remoteBranch = tk?.gb || `feature/ticket-${ticketId}`;
       branchLabel = remoteBranch;
-      const chk = await sh(workspaceId, `test -d ${runDir} && test -e ${runDir}/.git && echo OK || echo MISSING`, 20_000);
-      if (!chk.output.includes("OK")) {
-        // Worktree gone (removed on approval, or a fresh VM) → RECONSTRUCT it from
-        // the remote branch. As long as the branch was pushed, a ticket can always
-        // be previewed. It reuses the base checkout's shared .git + the warm /data
-        // toolchain/NuGet caches + the same DB containers, so "if main runs, this runs".
-        await setPreview(projectId, userId, { previewStatus: "starting", previewBranch: remoteBranch }, `Reconstructing ${remoteBranch}…`);
-        plog(projectId, userId, `Ticket worktree missing — reconstructing ${remoteBranch} from the remote…`);
-        const auth = await resolveAuthedRepoUrl(projectId);
-        if ("error" in auth) { await setStep("locate", "failed"); return failed(projectId, userId, auth.error); }
-        const rebuilt = await sh(workspaceId, `
+      const auth = await resolveAuthedRepoUrl(projectId);
+      if ("error" in auth) { await setStep("locate", "failed"); return failed(projectId, userId, auth.error); }
+
+      if (checkoutMode) {
+        // CHECKOUT mode: run the branch by SWITCHING the single main checkout to it
+        // — no worktree dirs pile up. Stash local (tracked) changes first so the
+        // workstation stays clean; .env (gitignored) is preserved. Stop the app so
+        // we can switch source cleanly.
+        runDir = PROJECT_DIR;
+        await setPreview(projectId, userId, { previewStatus: "starting", previewBranch: remoteBranch }, `Switching to ${remoteBranch}…`);
+        plog(projectId, userId, `Preview mode "checkout": stashing local changes + switching the main checkout to ${remoteBranch}…`);
+        const sw = await sh(workspaceId, `
+cd ${PROJECT_DIR} 2>/dev/null || { echo NO_MAIN; exit 0; }
+git remote set-url origin "${auth.authUrl}" 2>/dev/null
+fuser -k ${manifest.port}/tcp 2>/dev/null; pkill -f ':${manifest.port}' 2>/dev/null; sleep 1
+git stash push -m lfg-preview-autostash 2>&1 | tail -1
+git fetch --no-tags origin "${remoteBranch}" 2>&1 | tail -3
+git checkout -B "${remoteBranch}" "origin/${remoteBranch}" 2>&1 | tail -3
+echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
+`, 240_000);
+        if (sw.output.includes("NO_MAIN")) { await setStep("locate", "failed"); return failed(projectId, userId, `The base checkout isn't set up on this sandbox yet — run the default-branch preview once, then preview this ticket.`); }
+        if (!sw.output.includes(`HEAD=${remoteBranch}`)) { await setStep("locate", "failed"); return failed(projectId, userId, `Couldn't switch the checkout to \`${remoteBranch}\` — is the branch pushed?\n\n${sw.output.slice(-500)}`); }
+        plog(projectId, userId, `Main checkout is now on ${remoteBranch} ✓ (local changes stashed)`);
+      } else {
+        // WORKTREE mode (default): a separate dir; the main checkout is untouched.
+        runDir = ticketWorktreeDir(ticketId);
+        const chk = await sh(workspaceId, `test -d ${runDir} && test -e ${runDir}/.git && echo OK || echo MISSING`, 20_000);
+        if (!chk.output.includes("OK")) {
+          // Worktree gone (removed on approval, or a fresh VM) → RECONSTRUCT it from
+          // the remote branch. As long as the branch was pushed, a ticket can always
+          // be previewed. It reuses the base checkout's shared .git + the warm /data
+          // toolchain/NuGet caches + the same DB containers, so "if main runs, this runs".
+          await setPreview(projectId, userId, { previewStatus: "starting", previewBranch: remoteBranch }, `Reconstructing ${remoteBranch}…`);
+          plog(projectId, userId, `Ticket worktree missing — reconstructing ${remoteBranch} from the remote…`);
+          const rebuilt = await sh(workspaceId, `
 cd ${PROJECT_DIR} 2>/dev/null || { echo NO_MAIN; exit 0; }
 git remote set-url origin "${auth.authUrl}" 2>/dev/null
 git worktree prune 2>/dev/null
@@ -1740,21 +1765,36 @@ rm -rf "${runDir}" 2>/dev/null
 git worktree add -f -B "${remoteBranch}" "${runDir}" "origin/${remoteBranch}" 2>&1 | tail -6
 test -e "${runDir}/.git" && echo WT_OK || echo WT_FAIL
 `, 240_000);
-        if (rebuilt.output.includes("NO_MAIN")) {
-          await setStep("locate", "failed");
-          return failed(projectId, userId, `The base checkout isn't set up on this sandbox yet — run the default-branch preview once, then preview this ticket.`);
+          if (rebuilt.output.includes("NO_MAIN")) {
+            await setStep("locate", "failed");
+            return failed(projectId, userId, `The base checkout isn't set up on this sandbox yet — run the default-branch preview once, then preview this ticket.`);
+          }
+          if (!rebuilt.output.includes("WT_OK")) {
+            await setStep("locate", "failed");
+            return failed(projectId, userId, `Couldn't reconstruct the ticket branch \`${remoteBranch}\` from the remote — is it pushed? Rebuild the ticket to (re)create it.\n\n${rebuilt.output.slice(-600)}`);
+          }
+          plog(projectId, userId, `Reconstructed worktree for ${remoteBranch} ✓ (fresh checkout from origin)`);
+        } else {
+          plog(projectId, userId, `Running ticket branch ${remoteBranch} from its worktree…`);
         }
-        if (!rebuilt.output.includes("WT_OK")) {
-          await setStep("locate", "failed");
-          return failed(projectId, userId, `Couldn't reconstruct the ticket branch \`${remoteBranch}\` from the remote — is it pushed? Rebuild the ticket to (re)create it.\n\n${rebuilt.output.slice(-600)}`);
-        }
-        plog(projectId, userId, `Reconstructed worktree for ${remoteBranch} ✓ (fresh checkout from origin)`);
-      } else {
-        plog(projectId, userId, `Running ticket branch ${remoteBranch} from its worktree…`);
+        // Share the preview's DB creds/run config: copy the default .env into the worktree.
+        await sh(workspaceId, `cp ${PROJECT_DIR}/.env ${runDir}/.env 2>/dev/null || true; echo env`, 20_000);
       }
-      // Share the preview's DB creds/run config: copy the default .env into the worktree.
-      await sh(workspaceId, `cp ${PROJECT_DIR}/.env ${runDir}/.env 2>/dev/null || true; echo env`, 20_000);
     } else {
+      // Default branch. In CHECKOUT mode the main checkout may currently be on a
+      // ticket branch (from a prior branch preview) — switch it back to the default.
+      if (checkoutMode) {
+        plog(projectId, userId, "Ensuring the main checkout is on the default branch…");
+        await sh(workspaceId, `
+cd ${PROJECT_DIR} 2>/dev/null || exit 0
+fuser -k ${manifest.port}/tcp 2>/dev/null; pkill -f ':${manifest.port}' 2>/dev/null; sleep 1
+git stash push -m lfg-preview-autostash 2>&1 | tail -1
+git remote set-head origin -a >/dev/null 2>&1
+DEF=$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null | sed 's@^origin/@@'); [ -z "$DEF" ] && DEF=main
+git checkout "$DEF" 2>&1 | tail -2 || git checkout master 2>&1 | tail -2
+echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
+`, 120_000);
+      }
       plog(projectId, userId, "Restarting the app server (default branch)…");
     }
     await setStep("locate", "done");

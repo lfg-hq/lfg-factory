@@ -55,6 +55,9 @@ export const projects = sqliteTable(
     // "isolated" = fresh throwaway pi VM per ticket (build → push → destroy);
     // "shared" = git worktree in the always-on preview VM.
     ticketBuildIsolation: text("ticket_build_isolation").notNull().default("isolated"),
+    // "worktree" = separate worktree dir; "checkout" = switch the main checkout to
+    // the branch after stashing (no extra dirs).
+    previewBranchMode: text("preview_branch_mode").notNull().default("worktree"),
 
     createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
     updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),

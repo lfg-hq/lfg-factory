@@ -47,6 +47,11 @@ export const projects = pgTable(
     // a git worktree inside the always-on preview VM (warm caches, but a bad build
     // can disrupt the preview).
     ticketBuildIsolation: text("ticket_build_isolation").notNull().default("isolated"),
+    // How the preview runs a ticket's FEATURE branch: "worktree" = a separate git
+    // worktree dir (keeps the main checkout untouched), "checkout" = switch the
+    // single main checkout to the branch after stashing local changes (no extra
+    // dirs — the workstation stays tidy).
+    previewBranchMode: text("preview_branch_mode").notNull().default("worktree"),
     createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),
     updatedAt: timestamp("updated_at", { mode: "date" }).notNull().default(sql`now()`),
   },

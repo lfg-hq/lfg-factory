@@ -12,6 +12,7 @@ import { requireAuth } from "../../auth/middleware.ts";
 import { getProjectAccess } from "../../auth/project-access.ts";
 import { db } from "../../config/db.ts";
 import { projectEnvironments } from "../../db/schema/project-environments.ts";
+import { projects } from "../../db/schema/projects.ts";
 import { getPreviewState, setupPreview, restartPreview, stopPreview, detectManifest, manifestSchema, capturePreviewScreenshot, getPreviewBranches, reprobeProfile } from "../../services/dev-preview.ts";
 import { loadAppProfile, saveAppProfile, appProfileSchema } from "../../services/app-profile.ts";
 import type { auth } from "../../auth/index.ts";
@@ -63,6 +64,32 @@ previewApi.get("/:projectId/preview/branches", async (c) => {
   const access = await getProjectAccess(c.req.param("projectId")!, user.id);
   if (!access) return c.json({ error: "Project not found" }, 404);
   return c.json({ branches: await getPreviewBranches(access.project.id) });
+});
+
+// Per-project build/preview settings: ticket build isolation + preview branch mode.
+previewApi.get("/:projectId/preview/build-settings", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId")!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  const p = access.project as { ticketBuildIsolation?: string; previewBranchMode?: string };
+  return c.json({
+    ticketBuildIsolation: p.ticketBuildIsolation ?? "isolated",
+    previewBranchMode: p.previewBranchMode ?? "worktree",
+  });
+});
+
+previewApi.post("/:projectId/preview/build-settings", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId")!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  const body = await c.req.json().catch(() => ({}));
+  const patch: Record<string, unknown> = {};
+  if (body.ticketBuildIsolation === "isolated" || body.ticketBuildIsolation === "shared") patch.ticketBuildIsolation = body.ticketBuildIsolation;
+  if (body.previewBranchMode === "worktree" || body.previewBranchMode === "checkout") patch.previewBranchMode = body.previewBranchMode;
+  if (!Object.keys(patch).length) return c.json({ error: "Nothing valid to update" }, 400);
+  patch.updatedAt = new Date();
+  await db.update(projects).set(patch).where(eq(projects.id, access.project.id));
+  return c.json({ ok: true, ...patch });
 });
 
 previewApi.post("/:projectId/preview/stop", async (c) => {

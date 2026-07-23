@@ -30,7 +30,7 @@ interface ExecutionModeConfig {
 
 interface TicketsListPageProps {
   user: { id: string; name: string; email?: string };
-  project: { id: string; projectId: string; name: string; icon: string };
+  project: { id: string; projectId: string; name: string; icon: string; ticketBuildIsolation?: string; previewBranchMode?: string };
   stages: TicketStage[];
   tickets: Ticket[];
   executionMode?: ExecutionModeConfig;
@@ -324,6 +324,16 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
           `)}
         </select>
       ` : ""}
+      <select class="builder-model-select" id="build-isolation-select" title="Where ticket builds run"
+        onchange="setBuildSetting('ticketBuildIsolation', this.value)">
+        <option value="isolated" ${(project.ticketBuildIsolation ?? "isolated") === "isolated" ? "selected" : ""}>Build: fresh sandbox</option>
+        <option value="shared" ${project.ticketBuildIsolation === "shared" ? "selected" : ""}>Build: shared preview VM</option>
+      </select>
+      <select class="builder-model-select" id="preview-branch-mode-select" title="How the preview runs a ticket branch"
+        onchange="setBuildSetting('previewBranchMode', this.value)">
+        <option value="worktree" ${(project.previewBranchMode ?? "worktree") === "worktree" ? "selected" : ""}>Preview: worktree</option>
+        <option value="checkout" ${project.previewBranchMode === "checkout" ? "selected" : ""}>Preview: switch branch</option>
+      </select>
       <a href="/chat/project/${project.projectId}" class="toolbar-btn-new">
         <i class="fas fa-plus"></i> New Ticket
       </a>
@@ -583,6 +593,16 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       body: JSON.stringify({ builderModelKey: modelKey }),
     });
   }
+
+  // Per-project build/preview settings (ticket build isolation, preview branch mode).
+  function setBuildSetting(key, value) {
+    fetch('/api/projects/' + PROJECT_ID + '/preview/build-settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ [key]: value }),
+    }).catch(function(){});
+  }
+  window.setBuildSetting = setBuildSetting;
 
   // Restore drawer state from sessionStorage on page load
   (function restoreDrawer() {
