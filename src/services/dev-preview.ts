@@ -1163,6 +1163,31 @@ export interface SetupOptions { userId: string; branch?: string; rebuildManifest
  *  match the name the ticket executor creates: `wt-ticket-<ticketId first 12>`. */
 function ticketWorktreeDir(ticketId: string): string { return `/data/wt-ticket-${ticketId.slice(0, 12)}`; }
 
+/** Resolve a token-embedded clone URL for the project's repo (GitHub or GitLab),
+ *  with a FRESH token — so a `git fetch` works even if the remote's baked-in token
+ *  from the original clone has since expired. Used to reconstruct a ticket worktree. */
+async function resolveAuthedRepoUrl(projectId: string): Promise<{ authUrl: string; provider: string } | { error: string }> {
+  const [project] = await db.select().from(projects).where(eq(projects.id, projectId));
+  if (!project) return { error: "project not found" };
+  const columnProvider = (project.repoProvider || "github").toLowerCase();
+  const repoUrl = project.repoUrl || (project.repoOwner && project.repoName
+    ? `https://${columnProvider === "gitlab" ? "gitlab.com" : "github.com"}/${project.repoOwner}/${project.repoName}.git`
+    : "");
+  if (!repoUrl) return { error: "This project has no connected repository." };
+  const provider = /gitlab\.com|\/gitlab\b/i.test(repoUrl) ? "gitlab" : /github\.com/i.test(repoUrl) ? "github" : columnProvider;
+  let token = "";
+  if (provider === "gitlab") {
+    token = (await getValidGitlabToken(project.ownerId)) || "";
+    if (!token) return { error: "No GitLab token — reconnect GitLab in settings." };
+  } else {
+    const [t] = await db.select().from(githubTokens).where(eq(githubTokens.userId, project.ownerId)).limit(1);
+    token = t?.accessToken || "";
+    if (!token) return { error: "No GitHub token — connect GitHub in settings." };
+  }
+  const cred = provider === "gitlab" ? `oauth2:${token}` : `x-access-token:${token}`;
+  return { authUrl: repoUrl.replace(/^https:\/\//, `https://${cred}@`), provider };
+}
+
 /**
  * Full setup: bring the client app up live in its sandbox and return a preview
  * URL. Long-running — call in the background and stream status over WS.
@@ -1685,15 +1710,41 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
     await setStep("locate", "running");
     if (ticketId) {
       runDir = ticketWorktreeDir(ticketId);
-      branchLabel = `feature/ticket-${ticketId}`;
-      // The worktree is removed when the ticket is approved (Done). If it's gone,
-      // tell the user to rebuild rather than silently running the default branch.
+      // The remote branch: the ticket's recorded branch, else the convention.
+      const [tk] = await db.select({ gb: projectTickets.githubBranch }).from(projectTickets).where(eq(projectTickets.id, ticketId));
+      const remoteBranch = tk?.gb || `feature/ticket-${ticketId}`;
+      branchLabel = remoteBranch;
       const chk = await sh(workspaceId, `test -d ${runDir} && test -e ${runDir}/.git && echo OK || echo MISSING`, 20_000);
       if (!chk.output.includes("OK")) {
-        await setStep("locate", "failed");
-        return failed(projectId, userId, `That ticket's build workspace no longer exists (it's removed once a ticket is approved). Rebuild the ticket to preview its branch again.`);
+        // Worktree gone (removed on approval, or a fresh VM) → RECONSTRUCT it from
+        // the remote branch. As long as the branch was pushed, a ticket can always
+        // be previewed. It reuses the base checkout's shared .git + the warm /data
+        // toolchain/NuGet caches + the same DB containers, so "if main runs, this runs".
+        await setPreview(projectId, userId, { previewStatus: "starting", previewBranch: remoteBranch }, `Reconstructing ${remoteBranch}…`);
+        plog(projectId, userId, `Ticket worktree missing — reconstructing ${remoteBranch} from the remote…`);
+        const auth = await resolveAuthedRepoUrl(projectId);
+        if ("error" in auth) { await setStep("locate", "failed"); return failed(projectId, userId, auth.error); }
+        const rebuilt = await sh(workspaceId, `
+cd ${PROJECT_DIR} 2>/dev/null || { echo NO_MAIN; exit 0; }
+git remote set-url origin "${auth.authUrl}" 2>/dev/null
+git worktree prune 2>/dev/null
+git fetch --no-tags origin "${remoteBranch}" 2>&1 | tail -4
+rm -rf "${runDir}" 2>/dev/null
+git worktree add -f -B "${remoteBranch}" "${runDir}" "origin/${remoteBranch}" 2>&1 | tail -6
+test -e "${runDir}/.git" && echo WT_OK || echo WT_FAIL
+`, 240_000);
+        if (rebuilt.output.includes("NO_MAIN")) {
+          await setStep("locate", "failed");
+          return failed(projectId, userId, `The base checkout isn't set up on this sandbox yet — run the default-branch preview once, then preview this ticket.`);
+        }
+        if (!rebuilt.output.includes("WT_OK")) {
+          await setStep("locate", "failed");
+          return failed(projectId, userId, `Couldn't reconstruct the ticket branch \`${remoteBranch}\` from the remote — is it pushed? Rebuild the ticket to (re)create it.\n\n${rebuilt.output.slice(-600)}`);
+        }
+        plog(projectId, userId, `Reconstructed worktree for ${remoteBranch} ✓ (fresh checkout from origin)`);
+      } else {
+        plog(projectId, userId, `Running ticket branch ${remoteBranch} from its worktree…`);
       }
-      plog(projectId, userId, `Running ticket branch ${branchLabel} from its worktree…`);
       // Share the preview's DB creds/run config: copy the default .env into the worktree.
       await sh(workspaceId, `cp ${PROJECT_DIR}/.env ${runDir}/.env 2>/dev/null || true; echo env`, 20_000);
     } else {
