@@ -26,7 +26,7 @@ import { decryptSecret, encryptSecret } from "../utils/crypto.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { enableHttpAccess, execOnWorkspace, setStableUrl, startBrowserSession, stopWorkspace } from "./mags.ts";
 import { ensureProjectSandbox, ensureEngine, ensureDocker, envWorkspaceId, checkEngineHealth, type EngineHandle } from "./project-sandbox.ts";
-import { probeAppProfile, saveAppProfile, loadAppProfile, deriveManifestFromProfile, missingSecrets, secretsPromptMessage, applyProfileCorrection, recordProfileLearning, profileNotes, type AppProfile } from "./app-profile.ts";
+import { probeAppProfile, saveAppProfile, loadAppProfile, deriveManifestFromProfile, missingSecrets, secretsNoticeMessage, applyProfileCorrection, recordProfileLearning, profileNotes, type AppProfile } from "./app-profile.ts";
 import { isS3Enabled, buildS3Key, uploadBinary, getPresignedGetUrl } from "./s3.ts";
 import { messages } from "../db/schema/chat.ts";
 import { projectTickets } from "../db/schema/tickets.ts";
@@ -1249,15 +1249,14 @@ fi`, 240_000);
         ].filter(Boolean).join("\n"),
       });
 
-      // SECRET GATE — block until the user provides credentials we can't generate
-      // (Supabase / Stripe / OAuth / SMTP …). Ask in chat and stop the run here;
-      // the user adds them in env settings and presses Restart.
+      // OPTIONAL secrets — NON-blocking. The app runs with its checked-in/default
+      // config, so we NEVER stop the run for these; we just note (once) which
+      // external credentials the user MAY add for full functionality and CONTINUE.
+      // The user can add them in env settings and Restart whenever they want.
       const missing = await missingSecrets(projectId, profile);
       if (missing.length) {
-        await publishSummary(userId, opts.conversationId, secretsPromptMessage(missing));
-        plog(projectId, userId, `Paused — need ${missing.length} secret(s): ${missing.map((m) => m.key).join(", ")}`, { level: "error" });
-        await setPreview(projectId, userId, { previewStatus: "error", previewError: `Waiting for required secrets: ${missing.map((m) => m.key).join(", ")}` }, "Waiting for required secrets");
-        return { error: `waiting for required secrets: ${missing.map((m) => m.key).join(", ")}` };
+        await publishSummary(userId, opts.conversationId, secretsNoticeMessage(missing)).catch(() => {});
+        plog(projectId, userId, `Note: ${missing.length} optional secret(s) not set (${missing.map((m) => m.key).join(", ")}) — continuing; add them + Restart for full functionality.`);
       }
     }
 

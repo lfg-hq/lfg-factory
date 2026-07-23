@@ -465,7 +465,7 @@
     </div>
     ${sect("databases", dbs.length ? `<div style="font-size:12.5px;">${dbs.map((d) => kv("", d)).join("")}</div>` : "")}
     ${sect("schema recipe (in dependency order)", schema || `<div style="color:var(--text-secondary,#9ca3af);font-size:12px;">none</div>`)}
-    ${sect("secrets you must provide", secrets || `<div style="color:var(--text-secondary,#9ca3af);font-size:12px;">none — the system provisions everything it needs</div>`)}
+    ${sect("external credentials (optional — for full functionality)", secrets || `<div style="color:var(--text-secondary,#9ca3af);font-size:12px;">none needed</div>`)}
     ${sect("config quirks (respected by the run agents)", bullets(p.configQuirks, "#fca5a5") || `<div style="color:var(--text-secondary,#9ca3af);font-size:12px;">none</div>`)}
     ${sect("build quirks", bullets(p.buildQuirks))}
     ${sect("learnings from past runs (self-healing memory)", bullets(p.learnings, "#93c5fd") || `<div style="color:var(--text-secondary,#9ca3af);font-size:12px;">none yet — corrections found during runs accumulate here</div>`)}`;

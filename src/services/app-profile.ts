@@ -66,7 +66,7 @@ export const appProfileSchema = z.object({
     key: z.string().describe("The exact env var / config key, e.g. 'SUPABASE_URL', 'Stripe__SecretKey', 'SMTP__Password'."),
     description: z.string().describe("What it's for."),
     whereToGet: z.string().describe("How the USER obtains it, e.g. 'Supabase dashboard → Project Settings → API'. The system CANNOT generate this."),
-  })).describe("Secrets the app NEEDS to run correctly that the system CANNOT generate or fake — real external credentials (Supabase, Stripe, OAuth client secrets, SMTP, third-party API keys). ONLY include ones without which the app fails to start or a core path 500s. Do NOT include DB connections (auto-provisioned) or things with safe dev defaults."),
+  })).describe("ONLY secrets WITHOUT which the app cannot START AT ALL — a real external credential the app reads FROM THE ENVIRONMENT with NO checked-in fallback, so startup crashes without it. CRITICAL: if appsettings/config already ships a value for the key (a checked-in value — even a placeholder/prod one), it is NOT required — the app runs with it, so DO NOT list it. Do NOT list DB connections (auto-provisioned), things with dev defaults, or keys only needed for a secondary feature (payments, captcha, email) that the app boots fine without. When unsure, DO NOT list it — this list is for genuine startup blockers only, and the vast majority of apps have NONE. Be extremely conservative."),
   // ── Config quirks (so the run agent doesn't corrupt files or fight the config) ──
   configQuirks: z.array(z.string()).describe("Concrete gotchas the run/preview agent must respect, e.g. 'appsettings.json is JSONC (has // comments) — do NOT parse/edit it as JSON; inject the connection via the ConnectionStrings__ env var which ASP.NET overrides with', 'appsettings has a hardcoded prod SQL Server host — override via env, do not point at it', 'the app also reads ConnectionStrings:Cohyreconnectionstring — set that key too'. [] if none."),
   // ── Accumulated run learnings (self-healing memory) ──
@@ -285,8 +285,9 @@ export async function recordProfileLearning(projectId: string, note: string, bra
   return true;
 }
 
-/** The chat message shown when secrets are missing (blocks the run). */
-export function secretsPromptMessage(missing: RequiredSecret[]): string {
+/** A NON-blocking, informational note: the app runs with its checked-in config;
+ *  these are external credentials the user MAY add for full functionality. */
+export function secretsNoticeMessage(missing: RequiredSecret[]): string {
   const lines = missing.map((s) => `• **${s.key}** — ${s.description}\n   ↳ _where to get it: ${s.whereToGet}_`);
-  return `⏸️ **Preview paused — this app needs secrets I can't generate.**\n\nBefore it can run correctly, please provide:\n\n${lines.join("\n")}\n\nAdd them in the project's **Environment Variables** settings, then press **Restart** on the Preview tab. The system provisions databases automatically, but real external credentials (like the above) have to come from you.`;
+  return `ℹ️ **Optional: external credentials for full functionality.**\n\nThe preview will keep starting with the app's checked-in/default config — you don't need to do anything to see it run. To enable these features for real, add the keys below in **Environment Variables** and press **Restart**:\n\n${lines.join("\n")}\n\n_(Databases are provisioned automatically; only real third-party credentials like these have to come from you — and only if you want those specific features working.)_`;
 }
