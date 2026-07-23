@@ -246,10 +246,10 @@
   function stepsPanel(flex) {
     if (!stepsData || !stepsData.length) return `<div style="color:var(--text-secondary,#9ca3af);font-size:13px;padding:8px;">No setup steps yet — the plan is being built.</div>`;
     const rows = stepsData.map((s) => {
-      const row = `<div style="display:flex;gap:8px;padding:3px 0;font-size:12px;align-items:baseline;">
-        <span style="width:14px;flex:none;text-align:center;">${STEP_ICON[s.status] || STEP_ICON.pending}</span>
-        <span style="min-width:64px;flex:none;color:var(--text-secondary,#9ca3af);text-transform:uppercase;font-size:10px;letter-spacing:.4px;padding-top:1px;">${esc(s.phase)}</span>
-        <span style="flex:1;color:${s.status === "failed" ? "#ef4444" : "var(--text-color,#e2e8f0)"};word-break:break-word;font-family:ui-monospace,Menlo,monospace;">${esc(s.label)}</span>
+      const row = `<div style="display:flex;gap:8px;padding:3px 0;font-size:12px;align-items:flex-start;line-height:18px;">
+        <span style="width:14px;height:18px;flex:none;display:flex;align-items:center;justify-content:center;">${STEP_ICON[s.status] || STEP_ICON.pending}</span>
+        <span style="min-width:64px;flex:none;color:var(--text-secondary,#9ca3af);text-transform:uppercase;font-size:10px;letter-spacing:.4px;line-height:18px;">${esc(s.phase)}</span>
+        <span style="flex:1;color:${s.status === "failed" ? "#ef4444" : "var(--text-color,#e2e8f0)"};word-break:break-word;font-family:ui-monospace,Menlo,monospace;line-height:18px;">${esc(s.label)}</span>
       </div>`;
       // Show WHY a step failed (its captured error) so it's not just a mystery ✗.
       if (s.status === "failed" && s.error) {
@@ -259,6 +259,18 @@
     }).join("");
     return `<div id="preview-steps-wrap" style="${flex ? "flex:1;min-height:0;" : "max-height:34%;"}overflow:auto;border:1px solid var(--border-color,#2a2a2a);border-radius:8px;padding:8px 12px;background:var(--background-surface,#141414);">
       <div style="font-size:11px;color:var(--text-secondary,#9ca3af);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Setup steps (checkpointed — a restart resumes here)</div>${rows}</div>`;
+  }
+
+  // Repaint the Steps pane WITHOUT losing the user's scroll position — otherwise
+  // every 4s poll / WS steps update rebuilds the list and yanks it back to the top
+  // while you're trying to read a step.
+  function paintSteps(pane) {
+    if (!pane) return;
+    const prev = pane.querySelector("#preview-steps-wrap");
+    const top = prev ? prev.scrollTop : 0;
+    pane.innerHTML = stepsPanel(true);
+    const next = pane.querySelector("#preview-steps-wrap");
+    if (next && top) next.scrollTop = top;
   }
 
   function render(state) {
@@ -374,8 +386,7 @@
         // Same in-progress view → update the active pane in place (don't rebuild →
         // keeps scroll + the live WS-appended log lines).
         if (progressTab === "steps") {
-          const pane = document.getElementById("preview-pane");
-          if (pane) pane.innerHTML = stepsPanel(true);
+          paintSteps(document.getElementById("preview-pane"));
         } else {
           const el = document.getElementById("preview-log");
           if (el) { const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40; el.textContent = logText; if (atBottom) el.scrollTop = el.scrollHeight; }
@@ -696,10 +707,7 @@
     onSteps(data) {
       if (!data || !Array.isArray(data.steps) || forOther(data)) return;
       stepsData = data.steps;
-      if (progressTab === "steps") {
-        const pane = document.getElementById("preview-pane");
-        if (pane) pane.innerHTML = stepsPanel(true); // update the visible steps pane
-      }
+      if (progressTab === "steps") paintSteps(document.getElementById("preview-pane")); // update in place, keep scroll
     },
     // A re-probe finished → refresh the open Profile panel with the new profile.
     onProfile(data) {

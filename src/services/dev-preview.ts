@@ -1130,6 +1130,10 @@ export async function setupPreview(projectId: string, opts: SetupOptions): Promi
     await persistSteps(projectId, userId, prelude);
   };
   try {
+    // Persist an in-progress status IMMEDIATELY — BEFORE the slow ensureProjectSandbox
+    // — so a client poll can't read the stale pre-run status (idle/stopped) and flash
+    // the idle screen before the pipeline's first real status write lands.
+    await setPreview(projectId, userId, { previewStatus: "detecting", previewError: null, previewBranch: branch || "(default)" }, "Starting…");
     await prep("vm", "running");
     plog(projectId, userId, "Starting the project's sandbox…");
     const { workspaceId, recreated } = await ensureProjectSandbox(projectId);
