@@ -1133,10 +1133,27 @@ RULES: source-code edits follow the CODE CHANGES policy above (allowed only on a
     return { reply: reply || `I ran into an error: ${msg.slice(0, 300)}`, status: "error" };
   }
   if (reply) return { reply, status: replyStatus };
-  // Fallback: the agent didn't call reply — surface the tail of what it actually
-  // did so the chat isn't a dead-end "check the logs".
-  const tail = (logBuffers.get(projectId) || "").split("\n").filter((l) => l.trim()).slice(-8).join("\n");
-  return { reply: tail ? `Here's what I did (no summary was produced):\n\n\`\`\`\n${tail}\n\`\`\`` : "Done — check the Preview tab logs for details.", status: "stuck" };
+  // Fallback: the agent ended WITHOUT calling reply. Do NOT dump raw log lines
+  // (that's the incoherent "here's the last SQL output" mess) — instead do one
+  // quick summarize pass over what it actually ran, so the chat gets a coherent,
+  // human answer with the finding + next step.
+  // Use the RAW recent log (commands AND their outputs) so the summarizer can see
+  // the actual findings — e.g. the SQL results proving a column is missing.
+  const rawTail = (logBuffers.get(projectId) || "").slice(-9000);
+  if (rawTail.trim()) {
+    try {
+      const { object } = await generateObject({
+        model: driver.model,
+        schema: zodSchema(z.object({
+          status: z.enum(["ok", "error", "stuck"]).describe("ok = fixed/verified; error = can't run; stuck = needs the user or is a genuine code/data bug"),
+          summary: z.string().describe("2-5 sentences, markdown ok. The finding, the ROOT CAUSE, and the recommended next step. Do NOT paste raw SQL/console output."),
+        })),
+        prompt: `You are the LFG Preview agent. You just investigated "${instruction}" on the live sandbox but didn't leave a summary. From the commands you ran and THEIR OUTPUTS below, write a concise, coherent chat reply for the user: what you found, the root cause, and what to do next. If the schema is fine but the app's own code queries a column/table that doesn't exist, say clearly it's an application/repo bug (name the exact column/table) that needs a code or migration fix — not something the preview can fix.\n\nRecent commands + outputs:\n${rawTail}`,
+      });
+      return { reply: object.summary, status: object.status };
+    } catch { /* fall through to the plain message */ }
+  }
+  return { reply: "I investigated but couldn't produce a clean summary — open the Preview tab logs for the details.", status: "stuck" };
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
