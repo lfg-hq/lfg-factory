@@ -337,8 +337,9 @@ ensure_node() {
   else
     # Last resort: Alpine's own musl node via apk (often >=20.17 on recent Alpine).
     echo "[pi-runner] node 22 tarball unavailable — trying apk add nodejs npm..." >> ${outputFile}
-    (command -v apk >/dev/null 2>&1 && apk add --no-cache nodejs npm >/dev/null 2>&1) || true
-    echo "[pi-runner] node now: \$(node -v 2>/dev/null || echo none)" >> ${outputFile}
+    (command -v apk >/dev/null 2>&1 && (apk update >/dev/null 2>&1; apk add --no-cache nodejs-current npm >/dev/null 2>&1 || apk add --no-cache nodejs npm >/dev/null 2>&1)) || true
+    hash -r 2>/dev/null || true
+    echo "[pi-runner] node now: \$(node -v 2>/dev/null || echo none) (if 'none', the rootfs snapshot lacks node 22 AND the sandbox can't fetch it — the 'pi' rootfs needs node 22 preinstalled)" >> ${outputFile}
   fi
 }
 ensure_node

@@ -1431,6 +1431,14 @@ async function executeTicketApi(ticketId: string): Promise<void> {
   // ── Setup workspace (shared logic) ──────────────────────────────────
   console.log(`[ticket-executor-api] Setting up workspace`);
   let sandboxRow = await findExistingSandbox(ticketId);
+  // In ISOLATED mode, NEVER reuse a shared-preview worktree row (it points at the
+  // always-on preview VM, "pv-…"). Reusing it would run the build IN the preview VM
+  // and then try to DESTROY it. Drop such a row so a dedicated throwaway VM is
+  // provisioned below, and the preview VM is never touched.
+  if (isolatedBuild && sandboxRow && (sandboxRow.workspaceType !== "ticket" || (sandboxRow.magsWorkspaceId ?? "").startsWith("pv-"))) {
+    await db.delete(sandboxes).where(eq(sandboxes.id, sandboxRow.id)).catch(() => {});
+    sandboxRow = null;
+  }
   let workspaceId = sandboxRow?.magsWorkspaceId ?? null;
 
   // Worktree path: use the shared preview sandbox directly (don't create a VM).
@@ -1955,7 +1963,9 @@ git branch --show-current
   // remote (on success) and the logs are persisted. Destroy it so it can't
   // accumulate cost or disrupt anything; previewing the ticket reconstructs the
   // branch worktree in the always-on preview VM from the remote.
-  if (isolatedBuild && !useWorktree && workspaceId) {
+  // SAFETY: only ever destroy a DEDICATED throwaway build VM — never the always-on
+  // preview VM ("pv-…"). Reusing a worktree here would be a bug, but guard anyway.
+  if (isolatedBuild && !useWorktree && workspaceId && !workspaceId.startsWith("pv-")) {
     await addLog(ticketId, "Isolated build finished — destroying the throwaway build sandbox…", "command", ownerId);
     await deleteWorkspace(workspaceId).catch((e) => console.warn(`[ticket-executor-api] destroy build VM failed:`, e));
     await db.update(sandboxes).set({ status: "destroyed", updatedAt: new Date() }).where(eq(sandboxes.ticketId, ticketId)).catch(() => {});
