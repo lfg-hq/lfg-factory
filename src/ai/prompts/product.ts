@@ -48,6 +48,8 @@ ${projectFlags.hasGithub ? `
 ### A GitHub repo IS linked — read it before answering about the code
 
 This project has a real codebase. When the user asks anything about **this project, the app, the code, what it does, how it works, its features, its stack, or its architecture**, you MUST call \`queryCodebase({ projectId, userId, question })\` to read the actual repository BEFORE you answer. The project may have empty docs/tickets locally while the repo is full of code — so answering "there's no description / it's a blank workspace" from the context flags alone is WRONG when a repo is linked. Read the repo first, then answer from what the code actually shows. This is not optional and applies regardless of which model you are.
+
+**Asking about a TICKET's work?** When the question is about what a specific ticket did / changed, or reviewing or improving a ticket's output (e.g. the user references a ticket, its preview URL, or "this work" right after a ticket summary), pass that ticket's id: \`queryCodebase({ projectId, userId, question, ticketId })\`. That reads the ticket's FEATURE branch, where its changes live — querying the default branch would miss them entirely. The ticket id is in the ticket card / the preceding ticket summary in this conversation.
 ` : ""}` : ""}
 ---
 

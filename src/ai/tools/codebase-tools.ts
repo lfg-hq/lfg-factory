@@ -12,6 +12,7 @@ import { tool, zodSchema } from "ai";
 import { z } from "zod";
 import { db } from "../../config/db.ts";
 import { projects } from "../../db/schema/projects.ts";
+import { projectTickets } from "../../db/schema/tickets.ts";
 import { githubTokens, llmApiKeys } from "../../db/schema/users.ts";
 import { modelSelections } from "../../db/schema/chat.ts";
 import { queryCodebaseInProcess } from "../../services/codebase-query-api.ts";
@@ -39,21 +40,26 @@ export const queryCodebase = tool({
   description:
     "Query the project's codebase to answer questions about code structure, " +
     "find implementations, understand patterns, or explore the repository. " +
-    "Reads the linked GitHub repo directly (file map + on-demand file reads / grep). " +
+    "Reads the linked GitHub/GitLab repo directly (file map + on-demand file reads / grep) at ANY branch. " +
     "Use this when the user asks about their code — how something works, " +
-    "where something is defined, code architecture, etc.",
+    "where something is defined, code architecture, etc. " +
+    "IMPORTANT: when the question is about the work done ON A TICKET (its changes, what a ticket implemented, or reviewing/critiquing a ticket's output), pass that ticket's `ticketId` so this reads the ticket's FEATURE branch — the ticket's changes live there, NOT on the default branch. Pass `branch` directly if you already know the branch name.",
   inputSchema: zodSchema(
     z.object({
       projectId: z.string().describe("The project ID"),
       userId: z.string().describe("The user ID"),
       question: z.string().describe("The question about the codebase"),
+      ticketId: z
+        .string()
+        .optional()
+        .describe("If the question is about a specific ticket's work, pass its ticket ID — the query then reads that ticket's feature branch (its changes) instead of the default branch."),
       branch: z
         .string()
         .optional()
-        .describe("Git branch to query. Default: the repo's default branch."),
+        .describe("Git branch to query. Default: the repo's default branch. Ignored if ticketId is given."),
     })
   ),
-  execute: async ({ projectId, userId, question, branch }) => {
+  execute: async ({ projectId, userId, question, ticketId, branch }) => {
     // 1. Load project → resolve owner/repo
     const [project] = await db
       .select()
@@ -71,6 +77,18 @@ export const queryCodebase = tool({
     }
 
     const provider = (project as { repoProvider?: string }).repoProvider === "gitlab" ? "gitlab" : "github";
+
+    // If the question is about a ticket's work, read THAT ticket's feature branch
+    // (its changes live there, not on the default branch).
+    let effectiveBranch = branch;
+    if (ticketId) {
+      const [tk] = await db
+        .select({ gb: projectTickets.githubBranch })
+        .from(projectTickets)
+        .where(eq(projectTickets.id, ticketId))
+        .limit(1);
+      effectiveBranch = tk?.gb || `feature/ticket-${ticketId}`;
+    }
 
     // 2. Load the repo provider's token for the user
     let accessToken: string | undefined;
@@ -124,7 +142,7 @@ export const queryCodebase = tool({
         provider,
         modelKey,
         userApiKeys,
-        branch,
+        branch: effectiveBranch,
         userId,
       });
       return { answer: result.answer, branch: result.branch };
