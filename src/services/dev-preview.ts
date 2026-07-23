@@ -933,7 +933,7 @@ async function driveSandbox(
     await generateText({
       model,
       tools,
-      stopWhen: stepCountIs(80), // generous step budget — we control the loop, not a blind timer
+      stopWhen: stepCountIs(150), // generous step budget — schema-heavy apps (30+ scripts) need room to repair AND start
       system: buildDriverSystemPrompt(manifest, engines, workDir, configNotes),
       prompt: `Bring the app up and verify it serves on 0.0.0.0:${port} (working dir: ${workDir}). Begin.`,
       abortSignal: ac.signal,
