@@ -312,20 +312,33 @@ ensure_node() {
     fi
   fi
   [ "\$OK" = "1" ] && return 0
-  echo "[pi-runner] node \$V too old for pi (need >=20.17 / >=22.9) — fetching node 22 to /data..." >> ${outputFile}
+  echo "[pi-runner] node \$V too old for pi (need >=20.17 / >=22.9) — installing node 22 to /data..." >> ${outputFile}
   NODE_DIR=/data/node22
-  if [ ! -x "\$NODE_DIR/bin/node" ]; then
+  # Verify node actually RUNS (not just that the file exists) — a glibc binary on
+  # musl has the exec bit set but can't run, so an -x check gives a false positive.
+  if ! "\$NODE_DIR/bin/node" -v >/dev/null 2>&1; then
     case "\$(uname -m)" in x86_64) NA=x64;; aarch64|arm64) NA=arm64;; *) NA=x64;; esac
     NVER=v22.11.0
+    # CRITICAL: Alpine is musl. The nodejs.org build is glibc-only and will NOT run
+    # here (→ pi exit 127). Use the unofficial MUSL build on Alpine/musl.
+    if ldd /bin/sh 2>&1 | grep -qi musl || [ -f /etc/alpine-release ]; then
+      NURL="https://unofficial-builds.nodejs.org/download/release/\$NVER/node-\$NVER-linux-\$NA-musl.tar.gz"
+    else
+      NURL="https://nodejs.org/dist/\$NVER/node-\$NVER-linux-\$NA.tar.gz"
+    fi
+    echo "[pi-runner] fetching \$NURL" >> ${outputFile}
     mkdir -p "\$NODE_DIR"
-    curl -fsSL "https://nodejs.org/dist/\$NVER/node-\$NVER-linux-\$NA.tar.gz" -o /tmp/node22.tar.gz \\
+    curl -fsSL --retry 3 --retry-delay 2 "\$NURL" -o /tmp/node22.tar.gz \\
       && tar -xzf /tmp/node22.tar.gz -C "\$NODE_DIR" --strip-components=1
   fi
-  if [ -x "\$NODE_DIR/bin/node" ]; then
+  if "\$NODE_DIR/bin/node" -v >/dev/null 2>&1; then
     export PATH="\$NODE_DIR/bin:\$PATH"
     echo "[pi-runner] now using node \$(node -v)" >> ${outputFile}
   else
-    echo "[pi-runner] WARNING: could not fetch node 22; proceeding with \$V" >> ${outputFile}
+    # Last resort: Alpine's own musl node via apk (often >=20.17 on recent Alpine).
+    echo "[pi-runner] node 22 tarball unavailable — trying apk add nodejs npm..." >> ${outputFile}
+    (command -v apk >/dev/null 2>&1 && apk add --no-cache nodejs npm >/dev/null 2>&1) || true
+    echo "[pi-runner] node now: \$(node -v 2>/dev/null || echo none)" >> ${outputFile}
   fi
 }
 ensure_node
