@@ -74,6 +74,16 @@ export const appProfileSchema = z.object({
   // fields can't capture (schema ordering, a missing client, a working install
   // method). The PROBE leaves this empty; it's populated by recordProfileLearning.
   learnings: z.array(z.string()).optional().describe("Leave EMPTY — this is auto-filled from real runs, not by the probe."),
+  // ── Replayable config-file patches (survive branch switches + rebuilds) ──
+  // Deployment edits to CONFIG files (not app source) that must be re-applied on
+  // every checkout — e.g. repointing an appsettings.json connection from a dead
+  // dev/prod host to the provisioned localhost DB. Auto-filled via persistConfigPatch.
+  configPatches: z.array(z.object({
+    file: z.string().describe("Path relative to the checkout, e.g. 'Cohire.Web/appsettings.json'."),
+    find: z.string().describe("Exact literal text to replace."),
+    replace: z.string().describe("Replacement text."),
+    note: z.string().optional(),
+  })).optional().describe("Leave EMPTY — auto-filled from runtime config fixes that must survive branch switches / rebuilds."),
 });
 export type AppProfile = z.infer<typeof appProfileSchema>;
 export type RequiredSecret = AppProfile["secretsRequired"][number];
@@ -304,6 +314,53 @@ export async function recordProfileLearning(projectId: string, note: string, bra
   p.learnings = [...(p.learnings ?? []), `learned: ${trimmed}`].slice(-40);
   await saveAppProfile(projectId, p, branch);
   return true;
+}
+
+// ── Replayable config patches (survive branch switches / rebuilds) ───────────
+export type ConfigPatch = { file: string; find: string; replace: string; note?: string };
+
+/** Persist a config-file patch onto the profile (de-duped by file+find), so it's
+ *  re-applied after every checkout. */
+export async function recordConfigPatch(projectId: string, patch: ConfigPatch, branch = "default"): Promise<boolean> {
+  const loaded = await loadAppProfile(projectId, branch);
+  if (!loaded) return false;
+  const p = loaded.profile;
+  const patches = (p.configPatches ?? []).slice();
+  const i = patches.findIndex((x) => x.file === patch.file && x.find === patch.find);
+  if (i >= 0) patches[i] = patch; else patches.push(patch);
+  p.configPatches = patches.slice(-30);
+  await saveAppProfile(projectId, p, branch);
+  return true;
+}
+
+/**
+ * Build a shell script that re-applies the given config patches to `dir` — a
+ * literal (non-regex) find/replace on each file, in one python3 pass (BOM/encoding
+ * safe). "" if no patches. Idempotent (skips if the replacement is already there).
+ * Degrades to a no-op if python3 is absent (the driver then re-patches, as before).
+ */
+export function buildConfigPatchScript(patches: ConfigPatch[] | undefined, dir: string): string {
+  if (!patches || !patches.length) return "";
+  const blob = Buffer.from(JSON.stringify(patches.map((p) => ({ file: p.file, find: p.find, replace: p.replace })))).toString("base64");
+  return `echo ${blob} | base64 -d > /tmp/_cfgpatch.json 2>/dev/null && python3 - "${dir}" <<'PYEOF' 2>/dev/null || true
+import json, os, sys
+base = sys.argv[1]
+try:
+    patches = json.load(open("/tmp/_cfgpatch.json"))
+except Exception:
+    patches = []
+for p in patches:
+    fp = os.path.join(base, p["file"])
+    if not os.path.isfile(fp):
+        continue
+    try:
+        s = open(fp, encoding="utf-8", errors="ignore").read()
+    except Exception:
+        continue
+    if p["find"] in s and p["replace"] not in s:
+        open(fp, "w", encoding="utf-8").write(s.replace(p["find"], p["replace"]))
+        print("re-applied config patch:", p["file"])
+PYEOF`;
 }
 
 /** A NON-blocking, informational note: the app runs with its checked-in config;
