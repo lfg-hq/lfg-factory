@@ -27,6 +27,7 @@ import { bus, emit } from "../events/bus.ts";
 import {
   newWorkspace,
   execOnWorkspace,
+  deleteWorkspace,
 } from "../services/mags.ts";
 import {
   startClaudeCli,
@@ -1396,11 +1397,18 @@ async function executeTicketApi(ticketId: string): Promise<void> {
   // /data/project), run this ticket in a worktree there — same env + cached
   // toolchain, on its own branch — instead of a fresh VM + full clone. Only
   // when that sandbox exists; otherwise fall back to the fresh-VM path.
-  const sharedWorkspaceId = await resolvePreviewSandbox(project.id);
+  // Build isolation: "isolated" (default) → a FRESH throwaway pi VM per ticket
+  // (build → commit → push → destroy), so a bad build can never disrupt the
+  // always-on preview VM (which reconstructs the branch worktree from the remote
+  // on demand). "shared" → reuse the preview VM via a git worktree (warm caches).
+  const isolatedBuild = ((project as { ticketBuildIsolation?: string }).ticketBuildIsolation ?? "isolated") !== "shared";
+  const sharedWorkspaceId = isolatedBuild ? null : await resolvePreviewSandbox(project.id);
   const useWorktree = !!sharedWorkspaceId;
   if (useWorktree) {
     projectDirName = `wt-ticket-${ticketId.slice(0, 12)}`;
     await addLog(ticketId, `Reusing the project's preview sandbox (git worktree ${projectDirName})...`, "command", ownerId);
+  } else if (isolatedBuild) {
+    await addLog(ticketId, `Isolated build: spinning up a fresh sandbox for this ticket (it's destroyed after the branch is pushed).`, "command", ownerId);
   }
 
   // ── Resolve builder model early (needed to choose the VM rootfs) ─────
@@ -1461,7 +1469,10 @@ async function executeTicketApi(ticketId: string): Promise<void> {
     const { jobId, workspaceId: wsId } = await newWorkspace(workspaceName, {
       diskGb: parseInt(process.env.INSTANT_DISK_GB || "8", 10),
       memGb: parseInt(process.env.INSTANT_MEM_GB || "4", 10),
-      ...(useBoilerplate ? { rootfsType: BOILERPLATE_ROOTFS } : {}),
+      // Empty projects → the pre-scaffolded boilerplate rootfs; everything else →
+      // the "pi" rootfs (node 22 + Pi preinstalled), same base as the preview VM,
+      // so Pi runs without an old-node bootstrap.
+      rootfsType: useBoilerplate ? BOILERPLATE_ROOTFS : (process.env.PREVIEW_ROOTFS || "pi"),
     });
     workspaceId = wsId;
     await sleep(8_000);
@@ -1940,7 +1951,16 @@ git branch --show-current
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "failed", queueStatus: "none" });
   }
 
-  // NOTE: the ticket's git worktree + its sandbox row are intentionally KEPT here.
+  // ISOLATED build: the throwaway pi VM has done its job — the branch is on the
+  // remote (on success) and the logs are persisted. Destroy it so it can't
+  // accumulate cost or disrupt anything; previewing the ticket reconstructs the
+  // branch worktree in the always-on preview VM from the remote.
+  if (isolatedBuild && !useWorktree && workspaceId) {
+    await addLog(ticketId, "Isolated build finished — destroying the throwaway build sandbox…", "command", ownerId);
+    await deleteWorkspace(workspaceId).catch((e) => console.warn(`[ticket-executor-api] destroy build VM failed:`, e));
+    await db.update(sandboxes).set({ status: "destroyed", updatedAt: new Date() }).where(eq(sandboxes.ticketId, ticketId)).catch(() => {});
+  }
+  // SHARED build: the ticket's git worktree + sandbox row are intentionally KEPT.
   // They are cleaned up only when the ticket is approved and moved to Done (via
   // cleanupTicketWorktree), so the user can preview/test the branch first — and a
   // failed push never destroys the work.

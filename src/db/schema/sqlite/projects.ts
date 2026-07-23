@@ -52,6 +52,9 @@ export const projects = sqliteTable(
 
     // Preview
     previewTicketId: text("preview_ticket_id"), // FK handled in relations
+    // "isolated" = fresh throwaway pi VM per ticket (build → push → destroy);
+    // "shared" = git worktree in the always-on preview VM.
+    ticketBuildIsolation: text("ticket_build_isolation").notNull().default("isolated"),
 
     createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
     updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),

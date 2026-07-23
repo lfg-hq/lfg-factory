@@ -42,6 +42,11 @@ export const projects = pgTable(
     linearSyncEnabled: boolean("linear_sync_enabled").notNull().default(false),
     ticketCounter: integer("ticket_counter").notNull().default(0),
     previewTicketId: text("preview_ticket_id"),
+    // How ticket builds run: "isolated" = a fresh throwaway pi VM per ticket
+    // (build → commit → push → destroy; the preview VM stays clean), "shared" =
+    // a git worktree inside the always-on preview VM (warm caches, but a bad build
+    // can disrupt the preview).
+    ticketBuildIsolation: text("ticket_build_isolation").notNull().default("isolated"),
     createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),
     updatedAt: timestamp("updated_at", { mode: "date" }).notNull().default(sql`now()`),
   },
