@@ -53,9 +53,9 @@ export const appProfileSchema = z.object({
   // ── Schema build recipe (ORDERED — this is the part that keeps breaking) ──
   schemaSteps: z.array(z.object({
     kind: z.enum(["migration", "sqlScript", "seed"]).describe("migration = ORM migration command (EF/Prisma/Django); sqlScript = a raw .sql file the repo ships; seed = a seed/data-load command."),
-    command: z.string().describe("For 'migration'/'seed': the exact command (e.g. 'dotnet ef database update --project Cohire.Core --startup-project Cohire.Web'). For 'sqlScript': the file path RELATIVE to the repo (e.g. 'Sql Scripts/Create_Workspace_Tables.sql')."),
+    command: z.string().describe("For 'migration'/'seed': the exact command with NO connection string and NO database name embedded — e.g. 'dotnet ef database update --project Cohire.Core --startup-project Cohire.Web'. CRITICAL: do NOT prepend ConnectionStrings__*=... or put a Database=... anywhere. The sandbox writes the ONE correct connection (to the auto-provisioned DB) into .env and sources it before every command, so the migration MUST inherit that — if you hardcode a DB name (e.g. one you saw in appsettings), the migration builds a DIFFERENT database than the app and the SQL scripts use, and the app then 500s on missing tables/columns. For a multi-DbContext app, add one migration step per context with --context. For 'sqlScript': ONLY the file path RELATIVE to the repo (e.g. 'Sql Scripts/Create_Workspace_Tables.sql') — the system pipes it into the provisioned DB itself."),
     note: z.string().describe("Why this step / what it depends on, e.g. 'must run AFTER the EF migration creates the base tables'. Critical: order the whole array so dependencies come first (migrations before the scripts that ALTER their tables)."),
-  })).describe("The COMPLETE ordered recipe to build the schema so the app doesn't 500 on missing columns. Migrations first, then dependent SQL scripts, then seeds. [] only if the app has no schema setup."),
+  })).describe("The COMPLETE ordered recipe to build the schema so the app doesn't 500 on missing columns. Migrations first, then dependent SQL scripts, then seeds. NONE of the commands may embed a connection string or database name — they all run against the single .env-provided connection. [] only if the app has no schema setup."),
   // ── Env / secrets ──
   autoEnvVars: z.array(z.object({
     key: z.string(),
@@ -96,7 +96,7 @@ YOUR JOB — investigate and determine:
 - Exact stack, framework, and RUNTIME VERSION (read .csproj <TargetFramework>, global.json, package.json engines, lockfiles).
 - The toolchain, install, build, startup project, run command, and REAL port.
 - Every DATABASE and the EXACT config key the app reads its connection from (appsettings ConnectionStrings live in JSON, not .env). Note EVERY key the same connection is read under.
-- The COMPLETE, ORDERED schema recipe: ORM migrations AND the raw .sql scripts the repo ships AND seeds — in DEPENDENCY ORDER (migrations before the scripts that ALTER their tables). This is the #1 cause of the app 500ing on "Invalid column" — find the real order (README, a run.sh, the numeric/prefix order of a "Sql Scripts" folder, EF migration history).
+- The COMPLETE, ORDERED schema recipe: ORM migrations AND the raw .sql scripts the repo ships AND seeds — in DEPENDENCY ORDER (migrations before the scripts that ALTER their tables). This is the #1 cause of the app 500ing on "Invalid column" — find the real order (README, a run.sh, the numeric/prefix order of a "Sql Scripts" folder, EF migration history). CRITICAL: the schema commands must NOT contain any connection string or database name — the sandbox injects the ONE correct connection (to the auto-provisioned DB) via .env, sourced before every command. If a migration hardcodes a DB name it saw in appsettings, it builds a SEPARATE database from the one the app and the SQL scripts use → guaranteed "Invalid column/object" 500s. For an app with multiple DbContexts, emit one migration step per context (--context).
 - USER-REQUIRED SECRETS: real external credentials the system CANNOT generate (Supabase, Stripe, OAuth secrets, SMTP, API keys) without which the app won't start or a core path fails. Be precise and conservative — only genuine blockers.
 - CONFIG QUIRKS the run agent must respect so it doesn't corrupt config: is appsettings.json actually JSONC with // comments (so it must be edited via env override, never JSON-parsed)? Are there hardcoded prod DB hosts to override? Multiple connection keys?
 
@@ -199,11 +199,32 @@ export async function saveAppProfile(projectId: string, profile: AppProfile, bra
 }
 
 // ── Derive the runbook manifest from the profile ─────────────────────────────
+/**
+ * Strip a hardcoded connection/DB from the FRONT of a schema command (e.g. a
+ * probe that prepended `ConnectionStrings__X='...Database=foo...' dotnet ef …`).
+ * Such a command builds a DIFFERENT database than the app + SQL scripts use (they
+ * take the .env connection), which guarantees "Invalid column/object" 500s. We
+ * remove only connection-ish leading assignments so the migration inherits .env.
+ */
+function stripInlineConnEnv(cmd: string): string {
+  let c = (cmd || "").trim();
+  const re = /^([A-Za-z_][A-Za-z0-9_]*)=('[^']*'|"[^"]*"|\S+)\s+/;
+  while (true) {
+    const m = c.match(re);
+    if (!m) break;
+    const key = m[1]!, val = m[2]!;
+    const isConn = /connection|database_url/i.test(key) || /Database=|Server=|Data Source=|Host=[^;]*Password=/i.test(val);
+    if (!isConn) break;
+    c = c.slice(m[0].length);
+  }
+  return c.trim();
+}
+
 /** Map the rich profile onto the PreviewManifest the existing runbook consumes. */
 export function deriveManifestFromProfile(profile: AppProfile): PreviewManifest {
-  const migrations = profile.schemaSteps.filter((s) => s.kind === "migration").map((s) => s.command);
+  const migrations = profile.schemaSteps.filter((s) => s.kind === "migration").map((s) => stripInlineConnEnv(s.command));
   const sqlScripts = profile.schemaSteps.filter((s) => s.kind === "sqlScript").map((s) => s.command);
-  const seedCmd = profile.schemaSteps.find((s) => s.kind === "seed")?.command || "";
+  const seedCmd = stripInlineConnEnv(profile.schemaSteps.find((s) => s.kind === "seed")?.command || "");
   // Surface required secrets AND auto vars as manifest envVars (the .env writer
   // + the driver prompt read these). Secrets are marked required.
   const envVars = [

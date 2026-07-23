@@ -524,9 +524,13 @@ function sqlApplyCommand(engines: EngineHandle[], file: string): string {
   const ms = engines.find((e) => e.engine === "mssql");
   const pg = engines.find((e) => e.engine === "postgres");
   const my = engines.find((e) => e.engine === "mysql");
-  if (ms) return `cat "${f}" | docker exec -i mssql sh -c '/opt/mssql-tools18/bin/sqlcmd -S localhost -U ${ms.username} -P "${ms.password}" -C -d ${ms.dbName} -b || /opt/mssql-tools/bin/sqlcmd -S localhost -U ${ms.username} -P "${ms.password}" -d ${ms.dbName} -b'`;
-  if (pg) return `cat "${f}" | docker exec -i -e PGPASSWORD='${pg.password}' postgres psql -U ${pg.username} -d ${pg.dbName} -v ON_ERROR_STOP=0`;
-  if (my) return `cat "${f}" | docker exec -i mysql mysql -u${my.username} -p'${my.password}' ${my.dbName}`;
+  // Read the file stripping a leading UTF-8 BOM (EF BB BF) — many .NET-shipped
+  // .sql files have one, and it makes sqlcmd/psql/mysql fail on the FIRST
+  // statement ("Incorrect syntax near '...'"). od/head/tail are busybox-available.
+  const read = `{ if [ "$(head -c3 "${f}" | od -An -tx1 | tr -d ' \\n')" = efbbbf ]; then tail -c +4 "${f}"; else cat "${f}"; fi; }`;
+  if (ms) return `${read} | docker exec -i mssql sh -c '/opt/mssql-tools18/bin/sqlcmd -S localhost -U ${ms.username} -P "${ms.password}" -C -d ${ms.dbName} -b || /opt/mssql-tools/bin/sqlcmd -S localhost -U ${ms.username} -P "${ms.password}" -d ${ms.dbName} -b'`;
+  if (pg) return `${read} | docker exec -i -e PGPASSWORD='${pg.password}' postgres psql -U ${pg.username} -d ${pg.dbName} -v ON_ERROR_STOP=0`;
+  if (my) return `${read} | docker exec -i mysql mysql -u${my.username} -p'${my.password}' ${my.dbName}`;
   return `echo "no SQL engine provisioned to apply ${file}"`;
 }
 
@@ -713,7 +717,10 @@ HOW TO WORK:
 - Apply migrations, then the SQL scripts in order (SQL Server runs in Docker — use \`docker exec\` with sqlcmd inside the mssql container, or a client you install; the connection string is in .env).
 - Start the APP SERVER detached so it keeps running after the command returns: \`setsid sh -c 'cd ${workDir}; <run command>' </dev/null > ${workDir}/preview.log 2>&1 &\` — it must bind 0.0.0.0:${port}. (This is the ONLY case where you background a command yourself.)
 - VERIFY for real: \`curl -sS -i http://127.0.0.1:${port}/\`. A real 2xx/3xx/4xx = up → \`finish\` ready. 000/connection-refused = down → read ${workDir}/preview.log, diagnose, fix, retry.
-- A 500 needs judgement: the app IS serving (running), but errored on the request. Read the error in ${workDir}/preview.log. If it's an ENVIRONMENT issue in YOUR remit (missing/wrong connection string, a service that isn't up, a missing env var) → fix it and retry. If it's an APPLICATION or DATA problem — a SQL error (e.g. "Invalid column name", "Invalid object name", a missing table/column), an unseeded/mismatched DB schema, or a bug in the app's own code — then the app is RUNNING and this is NOT yours to fix (you must not edit app source or seed data). Call \`finish\` with status "ready" and clearly state the runtime error (e.g. "App is up on :${port} but the homepage returns 500 from SQL error 207 'Invalid column name' — the DB schema is incomplete/mismatched"). Do NOT loop on it.
+- A 500 needs judgement: the app IS serving (running), but errored on the request. Read the error in ${workDir}/preview.log.
+  • ENVIRONMENT issue in your remit (missing/wrong connection string, a service that isn't up, a missing env var) → fix it and retry.
+  • A SQL SCHEMA error ("Invalid column name", "Invalid object name", missing table/column) is almost always a schema that FAILED TO BUILD — and building the schema IS your job, so do NOT give up on it. First look at the Steps: did migration/schema steps FAIL (crossed out)? They usually did, for fixable reasons: (a) a SQL script has a UTF-8 BOM or encoding that breaks the first statement — re-apply it stripping the BOM (\`tail -c +4 file | docker exec -i mssql …sqlcmd…\` if the first 3 bytes are EF BB BF); (b) the migration ran against a DIFFERENT database than the app (never hardcode a DB name — use the .env connection, which the app also uses; verify the app's DB actually has the tables with \`SELECT name FROM sys.tables\`); (c) wrong order — a script ALTERs a table an earlier failed step should have created, so fix the earlier step first; (d) a bad migration (e.g. drops a column before its table exists) — seed __EFMigrationsHistory to skip it, per what you learn. Re-apply the failed schema steps against the SAME DB the app uses, then restart and re-check the page. Call \`noteLearning\` for each fix so the next run has it.
+  • ONLY after the schema builds CLEANLY (all scripts applied to the app's DB with no errors) and the page STILL 500s on a missing column should you conclude it's a genuine app/repo bug (the app queries a column no migration/script creates) — THEN call \`finish\` "ready" and state precisely which column/table and that a clean schema build still lacks it. You may do up to ~2 full schema-repair passes; do not loop endlessly on the same failing command.
 
 PERSISTING WHAT YOU LEARN (so the next run doesn't repeat your work):
 - Each \`run\` command starts a FRESH shell, so a bare \`export FOO=bar\` does NOT carry to the next command. For an environment fix that must stick (an env var, a cert/CA path, a package source), call the \`setEnv\` tool — it stores the var on the project (encrypted) AND writes it into .env now, so it is re-applied on every future setup and SURVIVES a VM rebuild. (Appending to ./.env only lasts while this VM lives — if the VM is recreated you'd have to rediscover the fix.)
