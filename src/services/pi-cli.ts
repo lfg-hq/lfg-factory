@@ -285,11 +285,19 @@ echo '${modelsB64}' | base64 -d > /root/.pi/agent/models.json`;
   const piInstallLog = `/tmp/pi_install_${ts}.log`;
   const runnerContent = `#!/bin/bash
 export HOME=/root
-# Global npm prefix on /data (big disk) so the pi install never competes with the
-# 1.9GB root disk. bin dir goes first on PATH so our pi shadows any rootfs copy.
+# The "pi" rootfs ships node 22 + pi PREINSTALLED — but a non-login exec shell does
+# NOT inherit the login PATH (node 22 / pi are usually on nvm or profile.d), so a
+# hardcoded PATH would resolve \`node\` to an OLD system node ("too old") and not find
+# \`pi\` → we'd needlessly bootstrap node + reinstall pi and fail. Activate the rootfs
+# toolchain the same way a login shell does FIRST, then just prepend our npm-global
+# bin (used only as a fallback if the rootfs somehow lacks pi).
+[ -f /etc/profile ] && . /etc/profile 2>/dev/null || true
+for f in /etc/profile.d/*.sh; do [ -f "\$f" ] && . "\$f" 2>/dev/null; done
+export NVM_DIR="\${NVM_DIR:-\$HOME/.nvm}"
+if [ -s "\$NVM_DIR/nvm.sh" ]; then . "\$NVM_DIR/nvm.sh" 2>/dev/null; nvm use --silent 22 2>/dev/null || nvm use --silent node 2>/dev/null || true; fi
 export npm_config_prefix=/data/.npm-global
 mkdir -p /data/.npm-global /data/.npm-cache
-export PATH=/data/.npm-global/bin:/root/node/current/bin:/root/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:\$PATH
+export PATH=/data/.npm-global/bin:\$PATH
 export npm_config_cache=/data/.npm-cache
 export NPM_CONFIG_CACHE=/data/.npm-cache
 export NODE_OPTIONS="--max-old-space-size=1536"
