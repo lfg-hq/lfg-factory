@@ -151,6 +151,29 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       max-width: 160px;
     }
     .builder-model-select:focus { outline: 1px solid #7c3aed; }
+    /* Build & preview settings popover (declutters the toolbar) */
+    .build-settings-menu { position: relative; }
+    .build-settings-btn {
+      width: 34px; height: 34px; border-radius: 8px;
+      border: 1px solid var(--border-color); background: var(--input-bg);
+      color: var(--text-secondary); cursor: pointer; display: inline-flex;
+      align-items: center; justify-content: center; font-size: 0.85rem;
+    }
+    .build-settings-btn:hover { color: var(--text-color); border-color: #7c3aed; }
+    .build-settings-dropdown {
+      display: none; position: absolute; right: 0; top: calc(100% + 6px);
+      z-index: 40; min-width: 240px; padding: 10px 12px; border-radius: 10px;
+      background: var(--card-bg, #16161a); border: 1px solid var(--border-color);
+      box-shadow: 0 10px 30px rgba(0,0,0,.4);
+    }
+    .build-settings-dropdown.open { display: block; }
+    .build-settings-dropdown .bs-title { font-size: 0.7rem; text-transform: uppercase; letter-spacing: .5px; color: var(--text-secondary); margin-bottom: 8px; }
+    .build-settings-dropdown .bs-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; font-size: 0.72rem; color: var(--text-secondary); }
+    .build-settings-dropdown .bs-row:last-child { margin-bottom: 0; }
+    .build-settings-dropdown .bs-row select {
+      padding: 0.35rem 0.5rem; font-size: 0.78rem; border-radius: 6px;
+      border: 1px solid var(--border-color); background: var(--input-bg); color: var(--text-color); cursor: pointer;
+    }
     .kanban-wrap {
       flex: 1;
       overflow: hidden;
@@ -324,16 +347,24 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
           `)}
         </select>
       ` : ""}
-      <select class="builder-model-select" id="build-isolation-select" title="Where ticket builds run"
-        onchange="setBuildSetting('ticketBuildIsolation', this.value)">
-        <option value="isolated" ${(project.ticketBuildIsolation ?? "isolated") === "isolated" ? "selected" : ""}>Build: fresh sandbox</option>
-        <option value="shared" ${project.ticketBuildIsolation === "shared" ? "selected" : ""}>Build: shared preview VM</option>
-      </select>
-      <select class="builder-model-select" id="preview-branch-mode-select" title="How the preview runs a ticket branch"
-        onchange="setBuildSetting('previewBranchMode', this.value)">
-        <option value="worktree" ${(project.previewBranchMode ?? "worktree") === "worktree" ? "selected" : ""}>Preview: worktree</option>
-        <option value="checkout" ${project.previewBranchMode === "checkout" ? "selected" : ""}>Preview: switch branch</option>
-      </select>
+      <div class="build-settings-menu">
+        <button class="build-settings-btn" onclick="toggleBuildSettings(event)" title="Build & preview settings"><i class="fas fa-sliders-h"></i></button>
+        <div class="build-settings-dropdown" id="build-settings-dropdown">
+          <div class="bs-title">Build &amp; preview</div>
+          <label class="bs-row"><span>Ticket build</span>
+            <select id="build-isolation-select" onchange="setBuildSetting('ticketBuildIsolation', this.value)">
+              <option value="isolated" ${(project.ticketBuildIsolation ?? "isolated") === "isolated" ? "selected" : ""}>Fresh sandbox (isolated)</option>
+              <option value="shared" ${project.ticketBuildIsolation === "shared" ? "selected" : ""}>Shared preview VM</option>
+            </select>
+          </label>
+          <label class="bs-row"><span>Preview branch</span>
+            <select id="preview-branch-mode-select" onchange="setBuildSetting('previewBranchMode', this.value)">
+              <option value="worktree" ${(project.previewBranchMode ?? "worktree") === "worktree" ? "selected" : ""}>Worktree (separate dir)</option>
+              <option value="checkout" ${project.previewBranchMode === "checkout" ? "selected" : ""}>Switch branch (stash)</option>
+            </select>
+          </label>
+        </div>
+      </div>
       <a href="/chat/project/${project.projectId}" class="toolbar-btn-new">
         <i class="fas fa-plus"></i> New Ticket
       </a>
@@ -450,7 +481,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
           <span class="detail-label status-label" id="drawer-status"></span>
           <span class="detail-label priority-label" id="drawer-priority"></span>
           <div class="detail-meta-spacer"></div>
-          <button type="button" class="detail-edit-btn"><i class="fas fa-pen"></i> Edit</button>
+          <button type="button" class="detail-edit-btn" onclick="editCurrentTicket()"><i class="fas fa-pen"></i> Edit</button>
           <button type="button" class="detail-delete-btn" onclick="deleteCurrentTicket()"><i class="fas fa-trash"></i></button>
         </div>
         <div class="detail-section">
@@ -604,6 +635,18 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
   }
   window.setBuildSetting = setBuildSetting;
 
+  function toggleBuildSettings(e) {
+    if (e) e.stopPropagation();
+    var d = document.getElementById('build-settings-dropdown');
+    if (d) d.classList.toggle('open');
+  }
+  window.toggleBuildSettings = toggleBuildSettings;
+  // Close the popover on an outside click.
+  document.addEventListener('click', function (e) {
+    var menu = e.target.closest && e.target.closest('.build-settings-menu');
+    if (!menu) { var d = document.getElementById('build-settings-dropdown'); if (d) d.classList.remove('open'); }
+  });
+
   // Restore drawer state from sessionStorage on page load
   (function restoreDrawer() {
     var saved = sessionStorage.getItem('lfg_drawer_ticket_' + PROJECT_ID);
@@ -705,6 +748,49 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     _logsFirstLoad = true;
     stopServerLogPolling();
   }
+
+  // ── Inline ticket edit (title / priority / description) ──────────────
+  function _esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+  function editCurrentTicket() {
+    if (!_currentTicketId) return;
+    var t = ticketMap[_currentTicketId];
+    var descEl = document.getElementById('drawer-description');
+    if (!t || !descEl) return;
+    var fld = 'width:100%;box-sizing:border-box;margin-top:4px;padding:8px;border-radius:6px;border:1px solid var(--border-color);background:var(--input-bg);color:var(--text-color);';
+    var lbl = 'font-size:.72rem;color:var(--text-secondary);display:block;margin-bottom:10px;';
+    descEl.innerHTML =
+      '<div class="ticket-edit-form">' +
+        '<label style="'+lbl+'">Title<input id="edit-name" value="'+_esc(t.name)+'" style="'+fld+'font-size:.9rem;"/></label>' +
+        '<label style="'+lbl+'">Priority<select id="edit-priority" style="'+fld+'">' +
+          ['High','Medium','Low'].map(function(p){return '<option value="'+p+'"'+(t.priority===p?' selected':'')+'>'+p+'</option>';}).join('') +
+        '</select></label>' +
+        '<label style="'+lbl+'">Description (markdown)<textarea id="edit-desc" style="'+fld+'min-height:220px;font-family:ui-monospace,Menlo,monospace;font-size:.82rem;line-height:1.5;">'+_esc(t.description||'')+'</textarea></label>' +
+        '<div style="display:flex;gap:8px;"><button type="button" onclick="saveTicketEdit()" style="padding:7px 16px;border-radius:6px;border:none;background:#7c3aed;color:#fff;cursor:pointer;font-weight:600;">Save</button>' +
+        '<button type="button" onclick="cancelTicketEdit()" style="padding:7px 16px;border-radius:6px;border:1px solid var(--border-color);background:transparent;color:var(--text-color);cursor:pointer;">Cancel</button></div>' +
+      '</div>';
+  }
+  async function saveTicketEdit() {
+    if (!_currentTicketId) return;
+    var name = (document.getElementById('edit-name')||{}).value || '';
+    var description = (document.getElementById('edit-desc')||{}).value || '';
+    var priority = (document.getElementById('edit-priority')||{}).value || '';
+    try {
+      var r = await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + _currentTicketId, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name, description: description, priority: priority })
+      });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      if (ticketMap[_currentTicketId]) { ticketMap[_currentTicketId].name = name; ticketMap[_currentTicketId].description = description; ticketMap[_currentTicketId].priority = priority; }
+      var id = _currentTicketId;
+      // Update the board card's visible title, if present.
+      var card = document.querySelector('[data-ticket-id="' + id + '"] .kanban-card-title, [data-ticket-id="' + id + '"] .ticket-card-title');
+      openTicketDrawer(id); // re-render details from the updated map
+    } catch (e) { alert('Save failed: ' + e.message); }
+  }
+  function cancelTicketEdit() { if (_currentTicketId) openTicketDrawer(_currentTicketId); }
+  window.editCurrentTicket = editCurrentTicket;
+  window.saveTicketEdit = saveTicketEdit;
+  window.cancelTicketEdit = cancelTicketEdit;
 
   function switchDrawerTab(tabId, btn) {
     document.querySelectorAll('.drawer-tab').forEach(b => b.classList.remove('active'));
