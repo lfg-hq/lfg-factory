@@ -1128,6 +1128,81 @@ async function executeTicketChat(
   const projectDirName = "project";
   let sessionId = sandbox.cliSessionId ?? undefined;
 
+  // ── Route to Pi for non-Claude models (mirror the BUILD path) ───────────
+  // The chat used to be hardcoded to Claude Code — a DeepSeek/OpenAI/GLM user
+  // got "No valid Claude credentials" even though their ticket built with Pi.
+  // Same routing as the builder: a Pi-supported provider with a key → Pi.
+  const chatModelKey = await resolveBuilderModelKey(ownerId);
+  const chatProvider = getProviderName(chatModelKey);
+  const [chatUserKeys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, ownerId)).limit(1);
+  const chatProviderKey = chatProvider
+    ? ({
+        anthropic: chatUserKeys?.anthropicApiKey,
+        openai: chatUserKeys?.openaiApiKey,
+        google: chatUserKeys?.googleApiKey,
+        kimi: chatUserKeys?.kimiApiKey,
+        deepseek: chatUserKeys?.deepseekApiKey,
+        glm: chatUserKeys?.glmApiKey,
+      } as Record<string, string | null | undefined>)[chatProvider]
+    : undefined;
+  const chatUsePi = USE_PI_TICKET_BUILDER && !!chatProvider && chatProvider !== "anthropic"
+    && isPiSupportedProvider(chatProvider) && !!chatProviderKey;
+
+  if (chatUsePi && chatProvider && chatProviderKey) {
+    const piModelId = getProviderModel(chatModelKey) ?? chatModelKey;
+    await addLog(ticketId, `Continuing with Pi (${chatProvider}/${piModelId})…`, "command", ownerId);
+    const piEnvVars: Record<string, string> = {
+      LFG_API_URL: CALLBACK_BASE_URL, LFG_API_KEY: cliApiKey,
+      LFG_TICKET_ID: ticket.id, LFG_PROJECT_ID: project!.id,
+    };
+    const piEnvRows = await db
+      .select({ key: projectEnvironmentVariables.key, encryptedValue: projectEnvironmentVariables.encryptedValue })
+      .from(projectEnvironmentVariables)
+      .where(and(eq(projectEnvironmentVariables.projectId, project!.id), eq(projectEnvironmentVariables.hasValue, true)));
+    for (const r of piEnvRows) piEnvVars[r.key] = decrypt(r.encryptedValue);
+    const piPrompt = `You are continuing work on an existing ticket in the repository at /data/${projectDirName}.
+
+## Ticket
+${ticket.name}
+
+## Description
+${ticket.description ?? ""}
+
+## New instruction from the user
+${message}
+
+## Instructions
+- The repo is already cloned and set up at /data/${projectDirName}; explore it and reuse existing patterns.
+- Do exactly what the user's new instruction asks; keep the change focused.
+- Do NOT run 'git commit', 'git push', or switch branches — commit/push is handled automatically.
+- Before finishing, make sure the project still builds/compiles.`;
+    try {
+      const webhookReachable = !!cliApiKey && !/localhost|127\.0\.0\.1|\/\/0\.0\.0\.0/.test(CALLBACK_BASE_URL);
+      const pi = await startPiCli({
+        workspaceId, prompt: piPrompt, projectDir: projectDirName,
+        provider: chatProvider, modelId: piModelId, apiKey: chatProviderKey, envVars: piEnvVars,
+        forward: webhookReachable ? { apiUrl: CALLBACK_BASE_URL, apiKey: cliApiKey, mode: "ticket" as const, ticketId } : undefined,
+      });
+      let lastPiLog = 0;
+      const piResult = await streamPiToCompletion({
+        workspaceId, outputFile: pi.outputFile, backgroundPid: pi.backgroundPid, timeoutMs: 30 * 60 * 1000,
+        onProgress: webhookReachable ? undefined : (msg) => {
+          const now = Date.now(); if (now - lastPiLog < 4_000) return; lastPiLog = now;
+          void addLog(ticketId, msg, "command", ownerId).catch(() => {});
+        },
+      });
+      const piOk = (piResult.exitCode === null || piResult.exitCode === 0) && !piResult.fatalError;
+      if (!piOk) {
+        const reason = piResult.fatalError ?? (piResult.exitCode ? `exit code ${piResult.exitCode}` : "unknown error");
+        await addLog(ticketId, `Pi chat failed: ${reason}`, "cli_error", ownerId);
+      }
+    } catch (err) {
+      await addLog(ticketId, `Pi chat error: ${(err as Error).message}`, "cli_error", ownerId);
+    }
+    return;
+  }
+
+  // ── Otherwise: Claude Code path (Anthropic models) ──────────────────────
   // Refresh credentials from auth sandbox (may have been auto-refreshed)
   await refreshCredentialsFromAuthSandbox(ownerId);
 
