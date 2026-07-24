@@ -1195,6 +1195,13 @@ ${message}
       if (!piOk) {
         const reason = piResult.fatalError ?? (piResult.exitCode ? `exit code ${piResult.exitCode}` : "unknown error");
         await addLog(ticketId, `Pi chat failed: ${reason}`, "cli_error", ownerId);
+      } else if (piResult.didWork) {
+        // FINALIZE (same as a build): a chat that CHANGES CODE must COMMIT + PUSH +
+        // MERGE and update status — otherwise the work sits uncommitted in the VM,
+        // the status never moves, and nothing is on the remote. This was missing
+        // → "changes done but no commit / status / merge". A pure Q&A turn (no
+        // edits → !didWork) skips this and just leaves the answer in the log.
+        await finalizeTicketChat(ticketId, ownerId, project!, ticket, workspaceId, message);
       }
     } catch (err) {
       await addLog(ticketId, `Pi chat error: ${(err as Error).message}`, "cli_error", ownerId);
@@ -1406,6 +1413,62 @@ ${message}
       description: `Credentials from sandbox pushed back to DB after chat session.`,
       metadata: { workspaceId },
     });
+  }
+}
+
+/**
+ * Commit + push + merge the code a CHAT turn produced, then move the ticket to
+ * In Review — mirroring the build finalize. Without this, a chat that edits code
+ * leaves the work uncommitted in the VM, the ticket status frozen, and nothing on
+ * the remote. Best-effort + honest: a push/merge failure is logged, not silent.
+ */
+async function finalizeTicketChat(
+  ticketId: string,
+  ownerId: string,
+  project: { id: string; repoOwner: string | null; repoName: string | null; repoUrl: string | null; repoProvider?: string | null; stack?: string | null },
+  ticket: { id: string; name: string; githubBranch: string | null },
+  workspaceId: string,
+  message: string,
+): Promise<void> {
+  const projectDir = `${WORKING_DIR}/project`;
+  const featureBranch = ticket.githubBranch ?? `feature/ticket-${ticketId}`;
+  const auth = await resolveRepoAuth(project, ownerId);
+  if (!auth) {
+    await addLog(ticketId, "Changes made, but no git remote/token is configured — they stay in the sandbox. Connect the repo to persist chat edits.", "cli_error", ownerId);
+    return;
+  }
+  // Commit summary from the user's instruction (first line, trimmed).
+  const summary = (message.split("\n")[0] || "update").trim().slice(0, 72);
+  try {
+    await addLog(ticketId, "Committing chat changes…", "command", ownerId);
+    const { sha } = await commitAndPush({
+      workspaceId, projectDir,
+      commitMessage: `chore: ${summary}`,
+      featureBranch,
+      repoUrl: auth.repoUrl, githubToken: auth.token, tokenUser: auth.tokenUser,
+    });
+    await db.update(projectTickets).set({ githubBranch: featureBranch, githubCommitSha: sha, updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
+    await addLog(ticketId, `Committed + pushed ${sha.slice(0, 7)} to ${featureBranch}.`, "command", ownerId);
+
+    try {
+      await addLog(ticketId, "Merging to lfg-agent…", "command", ownerId);
+      const { sha: mergeSha } = await mergeToLfgAgent({
+        workspaceId, projectDir, featureBranch,
+        repoUrl: auth.repoUrl, githubToken: auth.token, tokenUser: auth.tokenUser,
+      });
+      await db.update(projectTickets).set({ githubMergeStatus: "merged", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
+      await addLog(ticketId, `Merged to lfg-agent (${mergeSha.slice(0, 7)}).`, "command", ownerId);
+    } catch (mergeErr) {
+      await addLog(ticketId, `Pushed, but merge to lfg-agent failed: ${(mergeErr as Error).message?.slice(0, 200)}`, "cli_error", ownerId);
+    }
+
+    // Move to In Review + broadcast so the status banner/kanban update live and
+    // survive a refresh (the durable ticket row now reflects the outcome).
+    const reviewStageId = await moveTicketToStage(ticketId, project.id, "In Review");
+    await db.update(projectTickets).set({ status: "review", queueStatus: "none", lastExecutionAt: new Date(), updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
+    broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId });
+  } catch (err) {
+    await addLog(ticketId, `Commit/push FAILED — chat changes were NOT saved to the remote: ${(err as Error).message?.slice(0, 300)}`, "cli_error", ownerId);
   }
 }
 
