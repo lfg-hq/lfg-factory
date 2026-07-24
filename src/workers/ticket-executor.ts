@@ -26,6 +26,7 @@ import { decrypt } from "../ai/tools/env-tools.ts";
 import { bus, emit } from "../events/bus.ts";
 import {
   newWorkspace,
+  newWorkspaceV2,
   execOnWorkspace,
   deleteWorkspace,
 } from "../services/mags.ts";
@@ -1474,12 +1475,17 @@ async function executeTicketApi(ticketId: string): Promise<void> {
     await addLog(ticketId, useBoilerplate ? "Creating VM workspace (app-stack)..." : "Creating VM workspace...", "command", ownerId);
     // Pi builds need memGb set both to avoid OOM-killing Pi + Next, AND because
     // mags only routes a custom rootfs (the boilerplate) via env when memGb is set.
-    const { jobId, workspaceId: wsId } = await newWorkspace(workspaceName, {
+    // Use newWorkspaceV2 (the SAME call the preview uses) so rootfs_type is a
+    // top-level v2 field — proven to boot the "pi" rootfs (pi-agent-vm, node 22 + Pi
+    // preinstalled). The older newWorkspace routes rootfs via the __MAGS_ROOTFS_TYPE
+    // env passthrough, which was silently landing on the DEFAULT rootfs (mags-vm,
+    // node 20.15.1) → Pi exit 127.
+    const { jobId, workspaceId: wsId } = await newWorkspaceV2(workspaceName, {
+      vcpus: 4,
+      memoryMb: parseInt(process.env.INSTANT_MEM_GB || "4", 10) * 1024,
       diskGb: parseInt(process.env.INSTANT_DISK_GB || "8", 10),
-      memGb: parseInt(process.env.INSTANT_MEM_GB || "4", 10),
       // Empty projects → the pre-scaffolded boilerplate rootfs; everything else →
-      // the "pi" rootfs (node 22 + Pi preinstalled), same base as the preview VM,
-      // so Pi runs without an old-node bootstrap.
+      // the "pi" rootfs (node 22 + Pi preinstalled), same base as the preview VM.
       rootfsType: useBoilerplate ? BOILERPLATE_ROOTFS : (process.env.PREVIEW_ROOTFS || "pi"),
     });
     workspaceId = wsId;
