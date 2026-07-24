@@ -26,7 +26,7 @@ import { decryptSecret, encryptSecret } from "../utils/crypto.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { enableHttpAccess, execOnWorkspace, setStableUrl, startBrowserSession, stopWorkspace } from "./mags.ts";
 import { ensureProjectSandbox, ensureEngine, ensureDocker, envWorkspaceId, checkEngineHealth, type EngineHandle } from "./project-sandbox.ts";
-import { probeAppProfile, saveAppProfile, loadAppProfile, deriveManifestFromProfile, missingSecrets, secretsNoticeMessage, applyProfileCorrection, recordProfileLearning, recordConfigPatch, buildConfigPatchScript, profileNotes, type AppProfile } from "./app-profile.ts";
+import { probeAppProfile, saveAppProfile, loadAppProfile, deriveManifestFromProfile, missingSecrets, secretsNoticeMessage, applyProfileCorrection, recordProfileLearning, recordDirective, recordConfigPatch, buildConfigPatchScript, profileNotes, type AppProfile } from "./app-profile.ts";
 import { isS3Enabled, buildS3Key, uploadBinary, getPresignedGetUrl } from "./s3.ts";
 import { messages } from "../db/schema/chat.ts";
 import { projectTickets } from "../db/schema/tickets.ts";
@@ -772,7 +772,7 @@ function envPrefix(dir: string = PROJECT_DIR): string {
     `cd ${dir} 2>/dev/null; set -a; [ -f ./.env ] && . ./.env; set +a; `;
 }
 
-function buildDriverSystemPrompt(manifest: PreviewManifest, engines: EngineHandle[], workDir: string = PROJECT_DIR, configNotes: string[] = []): string {
+function buildDriverSystemPrompt(manifest: PreviewManifest, engines: EngineHandle[], workDir: string = PROJECT_DIR, configNotes: string[] = [], directives: string[] = []): string {
   const port = manifest.port;
   const isBranch = workDir !== PROJECT_DIR;
   const dbLines = engines.length
@@ -800,7 +800,7 @@ ${isBranch ? `\nIMPORTANT — you are running a FEATURE BRANCH from a git worktr
 The repo is already cloned. The databases below are already installed + running (do NOT install/start any DB); their connection strings are already in .env:
 ${dbLines}
 
-SETUP PLAN (from analyzing the codebase — follow it, but verify against reality and adapt when a command fails):
+${directives.length ? `MANDATORY DIRECTIVES (project-specific rules — you MUST verify EACH is satisfied and make it so; do NOT skip any, and do NOT call finish until they hold):\n${directives.map((d) => `  ▣ ${d}`).join("\n")}\n\n` : ""}SETUP PLAN (from analyzing the codebase — follow it, but verify against reality and adapt when a command fails):
 ${plan}
 ${configNotes.length ? `\nCONFIG QUIRKS (discovered by the probe — RESPECT these, they prevent the exact failures that made past runs thrash):\n${configNotes.map((n) => `  ⚠ ${n}`).join("\n")}\n` : ""}
 GOAL: the app must serve HTTP on 0.0.0.0:${port} and actually respond.
@@ -921,6 +921,8 @@ async function driveSandbox(
 ): Promise<boolean> {
   const port = manifest.port;
   let finished: { status: "ready" | "failed"; detail: string } | undefined;
+  // Load the project's MANDATORY DIRECTIVES (user-authored + agent-appended must-dos).
+  const directives = (await loadAppProfile(projectId).catch(() => null))?.profile.directives ?? [];
 
   const tools = {
     run: tool({
@@ -972,6 +974,17 @@ async function driveSandbox(
         const ok = await recordProfileLearning(projectId, note).catch(() => false);
         plog(projectId, userId, `Learned: ${note}`);
         return ok ? "recorded — future runs and branches will see this." : "noted (no profile to attach it to yet).";
+      },
+    }),
+    addDirective: tool({
+      description: "Add a MANDATORY DIRECTIVE — a must-do rule that EVERY future run/preview of this project must verify and satisfy (stronger than noteLearning, which is only advisory). Use ONLY after you've SOLVED a significant blocker that must not regress, and phrase it as an imperative the next agent can check + enforce — e.g. 'Every appsettings*.json SQL connection must point at the local MSSQL, not a dev/prod host', 'The EF migration for CohyredemoDBEntities MUST run before applying the SQL Scripts'. These are shown to every future agent as MANDATORY DIRECTIVES it cannot skip.",
+      inputSchema: zodSchema(z.object({
+        directive: z.string().describe("One imperative, checkable rule the next run must satisfy."),
+      })),
+      execute: async ({ directive }: { directive: string }) => {
+        const ok = await recordDirective(projectId, directive).catch(() => false);
+        plog(projectId, userId, `Added mandatory directive: ${directive}`);
+        return ok ? "recorded — every future run must satisfy this." : "noted (no profile yet).";
       },
     }),
     persistConfigPatch: tool({
@@ -1041,7 +1054,7 @@ async function driveSandbox(
       model,
       tools,
       stopWhen: stepCountIs(150), // generous step budget — schema-heavy apps (30+ scripts) need room to repair AND start
-      system: buildDriverSystemPrompt(manifest, engines, workDir, configNotes),
+      system: buildDriverSystemPrompt(manifest, engines, workDir, configNotes, directives),
       prompt: `Bring the app up and verify it serves on 0.0.0.0:${port} (working dir: ${workDir}). Begin.`,
       abortSignal: ac.signal,
     });
@@ -1093,6 +1106,7 @@ export async function runPreviewChat(opts: {
   const runCmd = row?.runCommand || manifest?.runCmd || "";
   const savedProfile = await loadAppProfile(projectId);
   const configNotes = savedProfile ? profileNotes(savedProfile.profile) : [];
+  const directives = savedProfile?.profile.directives ?? [];
   // What the last setup/preview run already did — captured BEFORE this chat runs
   // any commands of its own, so a follow-up @preview continues from where the
   // previous run left off instead of re-investigating from scratch.
@@ -1174,6 +1188,15 @@ export async function runPreviewChat(opts: {
         return ok ? "recorded — future runs and branches will see this." : "noted (no profile yet).";
       },
     }),
+    addDirective: tool({
+      description: "Add a MANDATORY DIRECTIVE — a must-do rule every future run/preview must verify + satisfy (stronger than noteLearning). Use after solving a blocker that must never regress, phrased as an imperative the next agent can check.",
+      inputSchema: zodSchema(z.object({ directive: z.string() })),
+      execute: async ({ directive }: { directive: string }) => {
+        const ok = await recordDirective(projectId, directive).catch(() => false);
+        plog(projectId, userId, `Added mandatory directive: ${directive}`);
+        return ok ? "recorded — every future run must satisfy this." : "noted (no profile yet).";
+      },
+    }),
     persistConfigPatch: tool({
       description: "Persist a CONFIG-FILE edit so it SURVIVES a git branch switch / fresh checkout / rebuild (like setEnv for env vars, but for a tracked file). Use whenever you must edit a config file (NOT app source) for the app to RUN — e.g. repoint an appsettings.json connection from a dead host to the provisioned localhost DB. Exact literal find + replace. Applied now AND re-applied after every future checkout, so branches inherit it.",
       inputSchema: zodSchema(z.object({ file: z.string(), find: z.string(), replace: z.string(), reason: z.string().optional() })),
@@ -1204,7 +1227,7 @@ CODE CHANGES: ${canEditCode
     : `You are previewing the DEFAULT branch (${PROJECT_DIR}). Do NOT edit application SOURCE CODE here — code changes belong in a ticket/build, not on main. If the user asks for a code/UI change, say so in your reply and suggest they create/rebuild a ticket, or preview the ticket's branch (pick it in the branch selector) and ask again there.`}
 
 ${manifest ? `App: ${manifest.stack || `${manifest.runtime}/${manifest.framework}`}. Run command: \`${runCmd || "(unknown)"}\`. Port: ${port}. Databases: ${manifest.databases.length ? manifest.databases.map((d) => `${d.engine} (127.0.0.1, connection in .env as ${d.connectionEnvVar})`).join(", ") : "none"}.` : "This preview has not been fully set up yet — the app may not be running."}
-${configNotes.length ? `\nCONFIG QUIRKS (from the probe — RESPECT these; they prevent the exact mistakes that broke past runs, e.g. corrupting a JSONC appsettings.json):\n${configNotes.map((n) => `  ⚠ ${n}`).join("\n")}\n` : ""}
+${directives.length ? `\nMANDATORY DIRECTIVES (project rules you MUST honor and, if the request relates to them, verify/enforce):\n${directives.map((d) => `  ▣ ${d}`).join("\n")}\n` : ""}${configNotes.length ? `\nCONFIG QUIRKS (from the probe — RESPECT these; they prevent the exact mistakes that broke past runs, e.g. corrupting a JSONC appsettings.json):\n${configNotes.map((n) => `  ⚠ ${n}`).join("\n")}\n` : ""}
 ${priorActions ? `\nWHAT THE LAST RUN ALREADY DID (the setup/preview agent's most recent COMMANDS + exit codes + decisions — CONTINUE from here; do NOT redo steps that already succeeded, and start from the point it failed/stopped):\n${priorActions}\n` : ""}
 
 The app server (if running) listens on 127.0.0.1:${port}. To (re)start it, launch it DETACHED:

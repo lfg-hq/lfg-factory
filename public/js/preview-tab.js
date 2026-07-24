@@ -484,10 +484,22 @@
     ${sect("learnings from past runs (self-healing memory)", bullets(p.learnings, "#93c5fd") || `<div style="color:var(--text-secondary,#9ca3af);font-size:12px;">none yet — corrections found during runs accumulate here</div>`)}`;
   }
 
+  // Editable "mandatory directives" block — user-authored + agent-appended must-do
+  // rules the run/preview agents are required to verify every run.
+  function directivesEditorHtml(p) {
+    const val = (p.directives || []).join("\n");
+    return `<div style="margin-bottom:16px;padding:10px 12px;border:1px solid #f59e0b55;background:rgba(245,158,11,0.06);border-radius:8px;">
+      <div style="font-size:11px;color:#fbbf24;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">▣ Mandatory directives — always enforced (one per line)</div>
+      <div style="font-size:11px;color:var(--text-secondary,#9ca3af);margin-bottom:6px;">Project-specific must-do rules. Every run/preview agent must verify these. The agent also appends here when it solves a blocker.</div>
+      <textarea id="preview-directives" spellcheck="false" placeholder="e.g. All appsettings SQL connections must point at the local MSSQL, not a dev/prod host" style="width:100%;box-sizing:border-box;min-height:90px;background:var(--background-surface,#141414);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#2a2a2a);border-radius:6px;padding:10px;font-size:12px;line-height:1.5;">${esc(val)}</textarea>
+      <div style="margin-top:6px;">${btn("Save directives", { action: "savedirectives", primary: true, icon: "fa-floppy-disk" })}</div>
+    </div>`;
+  }
+
   // Inner body of the panel — split so a re-probe can refresh it in place.
   function profileBodyHtml() {
     if (profileData) {
-      return `${profileSections(profileData)}
+      return `${directivesEditorHtml(profileData)}${profileSections(profileData)}
         <div style="margin-top:16px;">
           <button data-action="toggleprofilejson" style="background:none;border:none;color:#7c3aed;cursor:pointer;font-size:12px;padding:0;">▸ Edit as JSON (advanced)</button>
           <div id="preview-profile-json-wrap" style="display:none;margin-top:8px;">
@@ -548,6 +560,22 @@
       profileData = j.profile || parsed;
       renderProfileBody();
       const m2 = $("preview-plan-msg"); if (m2) { m2.textContent = "Saved ✓ — the next run derives its steps from this."; m2.style.color = "#10b981"; }
+    } catch (e) { if (msg) { msg.textContent = "Save failed: " + e.message; msg.style.color = "#ef4444"; } }
+  }
+
+  // Save just the mandatory directives (merges into the profile, keeps everything else).
+  async function saveDirectives() {
+    const ta = $("preview-directives");
+    const msg = $("preview-plan-msg");
+    if (!ta || !profileData) return;
+    const directives = ta.value.split("\n").map((s) => s.trim()).filter(Boolean).slice(0, 40);
+    const next = Object.assign({}, profileData, { directives });
+    try {
+      const r = await api("/profile", { method: "PUT", body: JSON.stringify(next) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+      profileData = j.profile || next;
+      if (msg) { msg.textContent = "Directives saved ✓ — every future run must satisfy them."; msg.style.color = "#10b981"; }
     } catch (e) { if (msg) { msg.textContent = "Save failed: " + e.message; msg.style.color = "#ef4444"; } }
   }
 
@@ -628,6 +656,7 @@
     else if (action === "screenshot") takeScreenshot(b);
     else if (action === "closeplan") togglePlan();
     else if (action === "saveprofile") saveProfile();
+    else if (action === "savedirectives") saveDirectives();
     else if (action === "reprobe") reprobe();
     else if (action === "toggleprofilejson") {
       const w = document.getElementById("preview-profile-json-wrap");

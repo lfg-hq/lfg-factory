@@ -69,6 +69,12 @@ export const appProfileSchema = z.object({
   })).describe("ONLY secrets WITHOUT which the app cannot START AT ALL — a real external credential the app reads FROM THE ENVIRONMENT with NO checked-in fallback, so startup crashes without it. CRITICAL: if appsettings/config already ships a value for the key (a checked-in value — even a placeholder/prod one), it is NOT required — the app runs with it, so DO NOT list it. Do NOT list DB connections (auto-provisioned), things with dev defaults, or keys only needed for a secondary feature (payments, captcha, email) that the app boots fine without. When unsure, DO NOT list it — this list is for genuine startup blockers only, and the vast majority of apps have NONE. Be extremely conservative."),
   // ── Config quirks (so the run agent doesn't corrupt files or fight the config) ──
   configQuirks: z.array(z.string()).describe("Concrete gotchas the run/preview agent must respect, e.g. 'appsettings.json is JSONC (has // comments) — do NOT parse/edit it as JSON; inject the connection via the ConnectionStrings__ env var which ASP.NET overrides with', 'appsettings has a hardcoded prod SQL Server host — override via env, do not point at it', 'the app also reads ConnectionStrings:Cohyreconnectionstring — set that key too'. [] if none."),
+  // ── MANDATORY DIRECTIVES (must-do playbook for THIS project) ──
+  // User-authored AND agent-appended rules that the run/preview agents MUST verify
+  // and satisfy on every run (stronger than a learning, which is only advisory).
+  // The probe leaves this empty; the user edits it in the Profile panel and the
+  // agent appends to it (addDirective) when it solves a significant blocker.
+  directives: z.array(z.string()).optional().describe("Leave EMPTY — user-authored + agent-appended must-do rules; not filled by the probe."),
   // ── Accumulated run learnings (self-healing memory) ──
   // Auto-appended from real runs when an agent discovers a correction the plan
   // fields can't capture (schema ordering, a missing client, a working install
@@ -297,6 +303,20 @@ export async function applyProfileCorrection(projectId: string, field: string, v
   else (p as any)[field] = value;
   const shown = field === "toolchain" ? p.toolchain.join("; ") : value;
   p.learnings = [...(p.learnings ?? []), `learned: ${field} → ${shown}${note ? ` (${note})` : ""}`].slice(-40);
+  await saveAppProfile(projectId, p, branch);
+  return true;
+}
+
+/** Append a MANDATORY directive (a must-do rule the agent solved for or the user
+ *  authored) to the profile, so every future run/preview agent must verify it. */
+export async function recordDirective(projectId: string, note: string, branch = "default"): Promise<boolean> {
+  const trimmed = (note || "").trim();
+  if (!trimmed) return false;
+  const loaded = await loadAppProfile(projectId, branch);
+  if (!loaded) return false;
+  const p = loaded.profile;
+  if ((p.directives ?? []).some((d) => d.trim() === trimmed)) return true; // de-dupe
+  p.directives = [...(p.directives ?? []), trimmed].slice(-40);
   await saveAppProfile(projectId, p, branch);
   return true;
 }
