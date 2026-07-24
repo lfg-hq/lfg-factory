@@ -303,7 +303,10 @@ if ! command -v pi >/dev/null 2>&1; then
 fi
 export npm_config_prefix=/data/.npm-global
 mkdir -p /data/.npm-global /data/.npm-cache
-export PATH=/data/.npm-global/bin:\$PATH
+# Explicit PATH: /usr/local/bin (pi lives here) + /usr/bin (node 22 lives here) come
+# BEFORE any legacy /root/node/current/bin — that dir held an OLD node 20.15.1 that
+# was SHADOWING /usr/bin/node (v22) → the whole "node too old" + reinstall-pi loop.
+export PATH=/data/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:\$PATH
 export npm_config_cache=/data/.npm-cache
 export NPM_CONFIG_CACHE=/data/.npm-cache
 export NODE_OPTIONS="--max-old-space-size=1536"
