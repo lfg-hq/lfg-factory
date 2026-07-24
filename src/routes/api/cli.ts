@@ -27,6 +27,10 @@ import { broadcastInstantStatus } from "../../services/instant-app.ts";
 
 export const cliRouter = new Hono();
 
+// Last Pi action label logged per ticket — used to collapse Pi's repeated re-echoes
+// of the same tool call into one Actions-log row (across POST batches).
+const _lastPiLabel = new Map<string, string>();
+
 // ── Auth middleware ───────────────────────────────────────────────────
 
 cliRouter.use("*", async (c, next) => {
@@ -457,12 +461,17 @@ cliRouter.post("/output", async (c) => {
   // Pi format (or anything the Claude parser didn't surface): parse each line with
   // the Pi-aware describer so DeepSeek/Pi ticket builds stream real output.
   if (logged === 0 && rawText.trim()) {
+    // Pi's --mode json re-echoes each tool call many times as it streams, so the same
+    // "Reading X" arrives repeatedly. Collapse CONSECUTIVE identical labels — across
+    // POST batches too (via _lastPiLabel) — so the Actions log shows each action once.
+    let prev = _lastPiLabel.get(ticket_id) ?? "";
     for (const line of rawText.split("\n")) {
       try {
         const label = describePiLine(line);
-        if (label) { await addLog(ticket_id, label, "command", ownerId); logged++; }
+        if (label && label !== prev) { await addLog(ticket_id, label, "command", ownerId); logged++; prev = label; }
       } catch { /* skip a bad line */ }
     }
+    _lastPiLabel.set(ticket_id, prev);
     // Truly opaque non-JSON output (stderr) — surface it rather than drop it.
     if (logged === 0) {
       const plain = rawText.trim();
