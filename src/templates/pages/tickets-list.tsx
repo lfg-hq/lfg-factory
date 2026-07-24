@@ -566,6 +566,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
 
     <!-- Actions tab: Execution logs + chat -->
     <div class="drawer-tab-content" id="tab-actions">
+      <!-- Build status banner (persists across refresh — derived from ticket state) -->
+      <div id="ticket-status-banner" style="display:none;padding:.6rem 1rem;font-size:.82rem;font-weight:600;flex-shrink:0;border-bottom:1px solid rgba(255,255,255,.06);"></div>
       <!-- Git branch banner (hidden by default) -->
       <div id="actions-git-banner" style="display:none;padding:.5rem 1rem;background:rgba(139,92,246,.06);border-bottom:1px solid rgba(139,92,246,.12);flex-shrink:0;">
         <div style="display:flex;align-items:center;gap:.5rem;font-size:.8rem;">
@@ -811,6 +813,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
         var qs = live.queueStatus || live.queue_status || '';
         var st = live.status || t.status;
         var isActive = qs === 'queued' || qs === 'executing';
+        // Persistent build-status banner (survives refresh — from the ticket row).
+        updateTicketStatusBanner(live);
         var buildBtn = document.getElementById('drawer-build-btn');
         buildBtn.disabled = isActive;
         buildBtn.innerHTML = isActive
@@ -938,6 +942,35 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
   let _lastLogCount = 0;
   let _lastLogContent = '';
 
+  /**
+   * Render a persistent build-status banner in the Actions view from the ticket's
+   * DURABLE state (status/queueStatus/stage/merge) — so a page refresh still shows
+   * whether the last build completed, failed, or is running. Called on drawer open
+   * (from the fetched ticket) and on every WS status update.
+   */
+  function updateTicketStatusBanner(fields) {
+    var el = document.getElementById('ticket-status-banner');
+    if (!el) return;
+    var qs = (fields.queueStatus || fields.queue_status || '').toLowerCase();
+    var st = (fields.status || '').toLowerCase();
+    var merge = (fields.githubMergeStatus || fields.github_merge_status || '').toLowerCase();
+    var b = null;
+    if (qs === 'executing' || qs === 'queued') {
+      b = { bg: 'rgba(59,130,246,.12)', fg: '#93c5fd', icon: 'fa-spinner fa-spin', text: qs === 'queued' ? 'Queued — waiting to build…' : 'Building this ticket…' };
+    } else if (st === 'failed' || qs === 'failed') {
+      b = { bg: 'rgba(239,68,68,.12)', fg: '#fca5a5', icon: 'fa-circle-exclamation', text: 'Build failed — check the logs below and rebuild.' };
+    } else if (merge === 'merged' || st === 'done' || st === 'completed' || st === 'merged') {
+      b = { bg: 'rgba(16,185,129,.12)', fg: '#6ee7b7', icon: 'fa-circle-check', text: 'Build complete' + (merge === 'merged' ? ' — merged to lfg-agent.' : ' — ready for review.') };
+    } else if (st === 'in_review' || st === 'review') {
+      b = { bg: 'rgba(16,185,129,.12)', fg: '#6ee7b7', icon: 'fa-circle-check', text: 'Build complete — in review.' };
+    }
+    if (!b) { el.style.display = 'none'; el.innerHTML = ''; return; }
+    el.style.display = 'block';
+    el.style.background = b.bg;
+    el.style.color = b.fg;
+    el.innerHTML = '<i class="fas ' + b.icon + '" style="margin-right:.5rem;"></i>' + b.text;
+  }
+
   /** Called by WS when ticket status changes (build done/failed). */
   function handleTicketStatus(msg) {
     const ticketId = msg.ticketId;
@@ -966,6 +999,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     }
 
     if (ticketId !== _currentTicketId) return;
+    updateTicketStatusBanner(msg);
     if (qs !== 'queued' && qs !== 'executing') {
       hideThinkingIndicator();
       var btn = document.getElementById('drawer-build-btn');
@@ -1408,10 +1442,14 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
         : '<span class="git-empty">No branch yet</span>')
       + '</div>';
 
-    // Last Commit
+    // Last Commit (+ when it was built, so the SHA isn't a dateless mystery)
+    var commitWhen = ticket.lastExecutionAt || ticket.last_execution_at || ticket.updatedAt || ticket.updated_at || '';
     html += '<div class="git-field">'
       + '<span class="git-label">Last Commit</span>'
+      + '<span style="display:inline-flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">'
       + '<code class="git-value">' + (shortSha || '—') + '</code>'
+      + (shortSha && commitWhen ? '<span class="git-empty" style="font-size:0.75rem;">' + escHtml(fmtLogTime(commitWhen)) + '</span>' : '')
+      + '</span>'
       + '</div>';
 
     // Merge Status badge
