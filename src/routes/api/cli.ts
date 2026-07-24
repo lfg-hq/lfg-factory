@@ -461,15 +461,25 @@ cliRouter.post("/output", async (c) => {
   // Pi format (or anything the Claude parser didn't surface): parse each line with
   // the Pi-aware describer so DeepSeek/Pi ticket builds stream real output.
   if (logged === 0 && rawText.trim()) {
-    // Pi's --mode json re-echoes each tool call many times as it streams, so the same
-    // "Reading X" arrives repeatedly. Collapse CONSECUTIVE identical labels — across
-    // POST batches too (via _lastPiLabel) — so the Actions log shows each action once.
+    // Pi's --mode json streams each tool call AND each reasoning line token by
+    // token, so one action arrives as a run of GROWING-PREFIX labels — "Running
+    // grep", "Running grep -", "Running grep -A20"…, or "Reading /", "Reading
+    // /data", "Reading /data/project"…, or the same assistant sentence growing a
+    // word at a time. Exact-dedup misses these (each label differs). Collapse:
+    // emit a label only when the NEXT one does NOT extend it (i.e. it's final),
+    // then also drop exact repeats across POST batches (via _lastPiLabel).
     let prev = _lastPiLabel.get(ticket_id) ?? "";
+    const labels: string[] = [];
     for (const line of rawText.split("\n")) {
-      try {
-        const label = describePiLine(line);
-        if (label && label !== prev) { await addLog(ticket_id, label, "command", ownerId); logged++; prev = label; }
-      } catch { /* skip a bad line */ }
+      try { const l = describePiLine(line); if (l) labels.push(l); } catch { /* skip a bad line */ }
+    }
+    const norm = (s: string) => s.replace(/…+$/, "").trimEnd();
+    for (let i = 0; i < labels.length; i++) {
+      const cur = labels[i]!;
+      const next = labels[i + 1];
+      // A partial superseded by the next (longer) chunk of the same stream → skip.
+      if (next && norm(next).startsWith(norm(cur))) continue;
+      if (cur !== prev) { await addLog(ticket_id, cur, "command", ownerId); logged++; prev = cur; }
     }
     _lastPiLabel.set(ticket_id, prev);
     // Truly opaque non-JSON output (stderr) — surface it rather than drop it.

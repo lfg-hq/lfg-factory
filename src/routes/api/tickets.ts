@@ -339,14 +339,17 @@ ticketsApi.get("/:projectId/tickets/:ticketId/logs", async (c) => {
   if (!access) return c.json({ error: "Not found" }, 404);
   const project = access.project;
 
+  // Most-recent 500 (desc + limit), then flip back to chronological order. Using
+  // ASC+limit returned the OLDEST 500, so on a chatty ticket the user's latest
+  // message + latest activity fell off the end and never rendered.
   const logs = await db
     .select()
     .from(ticketLogs)
     .where(eq(ticketLogs.ticketId, ticketId))
-    .orderBy(ticketLogs.createdAt)
+    .orderBy(desc(ticketLogs.createdAt))
     .limit(500);
 
-  return c.json(logs.map((l) => ({
+  return c.json(logs.reverse().map((l) => ({
     id: l.id,
     type: l.logType,
     message: l.command,
