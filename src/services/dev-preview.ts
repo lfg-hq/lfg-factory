@@ -36,6 +36,12 @@ import { spawn } from "node:child_process";
 const PROJECT_DIR = "/data/project";
 const DEFAULT_PORT = 8080; // fallback ONLY — the real port is decided by the detected manifest per stack
 
+// Machine-specific env vars that must NEVER be persisted or injected — persisting a
+// value like PATH="/data/.dotnet:…" (as a driver once did) and re-writing it into
+// .env / another VM's shells clobbers the real PATH → `ls`/`node`/`apk` "not found".
+// The toolchain PATH is set deterministically by envPrefix instead.
+const UNSAFE_ENV_KEYS = new Set(["PATH", "HOME", "PWD", "OLDPWD", "SHELL", "USER", "LOGNAME", "TERM", "HOSTNAME", "SHLVL", "_", "LD_LIBRARY_PATH", "LD_PRELOAD"]);
+
 /** A random, unguessable public subdomain for the preview URL — so preview URLs
  *  can't be enumerated from the project id (preview-<hex>.app.lfg.run). Persisted
  *  in stableAlias, so it stays stable for a project once created. */
@@ -302,6 +308,7 @@ async function writeEnvFile(workspaceId: string, projectId: string, manifest: Pr
   Object.assign(vars, provisioned);
   for (const v of stored) {
     if (!v.hasValue) continue;
+    if (UNSAFE_ENV_KEYS.has(v.key)) continue; // never let a persisted PATH etc. clobber envPrefix's PATH
     try { vars[v.key] = decryptSecret(v.encryptedValue); } catch { /* skip unreadable */ }
   }
   // Always double-quote (values like .NET connection strings contain ';', spaces,
@@ -1011,6 +1018,9 @@ async function driveSandbox(
         reason: z.string().optional().describe("Why it's needed"),
       })),
       execute: async ({ key, value, reason }: { key: string; value: string; reason?: string }) => {
+        if (UNSAFE_ENV_KEYS.has(key)) {
+          return `Refused: ${key} is machine-specific and must NOT be persisted — a persisted ${key} gets injected into other VMs and clobbers their real ${key} (breaking ls/node/apk). The toolchain PATH is already set for every command. To use a tool, reference its absolute path or install it via updatePlan's toolchain step instead.`;
+        }
         try {
           await db.insert(projectEnvironmentVariables)
             .values({ projectId, key, encryptedValue: encryptSecret(value), isSecret: false, hasValue: true, description: reason || "preview setup fix" })
@@ -1147,6 +1157,9 @@ export async function runPreviewChat(opts: {
       description: "PERSIST an environment fix so it's applied on EVERY future preview/setup AND inherited by ticket branches — not just this live app. Use this whenever you fix something via an env var (a cert/CA path, ASPNETCORE_FORWARDEDHEADERS_ENABLED, a base URL, a runtime flag) INSTEAD of only echoing to .env. Stored (encrypted) on the project + written to .env now. This is how a fix you make on main automatically reaches feature branches and the next rebuild.",
       inputSchema: zodSchema(z.object({ key: z.string(), value: z.string(), reason: z.string().optional() })),
       execute: async ({ key, value, reason }: { key: string; value: string; reason?: string }) => {
+        if (UNSAFE_ENV_KEYS.has(key)) {
+          return `Refused: ${key} is machine-specific and must NOT be persisted — it gets injected into other VMs and clobbers their real ${key}. Reference the tool's absolute path instead.`;
+        }
         try {
           await db.insert(projectEnvironmentVariables)
             .values({ projectId, key, encryptedValue: encryptSecret(value), isSecret: false, hasValue: true, description: reason || "preview fix" })

@@ -1676,12 +1676,21 @@ git branch --show-current
     .from(projectEnvironmentVariables)
     .where(and(eq(projectEnvironmentVariables.projectId, project.id), eq(projectEnvironmentVariables.hasValue, true)));
 
-  if (projectEnvRows.length > 0) {
-    const envExports = projectEnvRows.map(r => `export ${r.key}="${decrypt(r.encryptedValue).replace(/"/g, '\\"')}"`).join("\n");
+  // NEVER inject machine-specific vars into the VM's shells. PATH especially: a
+  // previous run may have PERSISTED a PATH like "/data/.dotnet:…" (via the preview
+  // driver's setEnv). In THIS fresh VM those dirs don't exist, so exporting it into
+  // /etc/profile.d clobbers every shell's PATH → `ls`/`node`/`apk` "not found" →
+  // Pi dies with exit 127. Filter these out.
+  const UNSAFE_ENV_KEYS = new Set(["PATH", "HOME", "PWD", "OLDPWD", "SHELL", "USER", "LOGNAME", "TERM", "HOSTNAME", "SHLVL", "_", "LD_LIBRARY_PATH", "LD_PRELOAD"]);
+  const safeEnvRows = projectEnvRows.filter((r) => !UNSAFE_ENV_KEYS.has(r.key));
+  if (safeEnvRows.length > 0) {
+    // Append/export onto the EXISTING PATH (never replace it), in case a value does
+    // reference PATH.
+    const envExports = safeEnvRows.map(r => `export ${r.key}="${decrypt(r.encryptedValue).replace(/"/g, '\\"')}"`).join("\n");
     const envB64 = Buffer.from(envExports).toString("base64");
     // Write to /etc/profile.d so all shells get them
     await execOnWorkspace(workspaceId, `echo ${envB64} | base64 -d > /etc/profile.d/lfg_env.sh && source /etc/profile.d/lfg_env.sh`, { timeout: 15_000 });
-    console.log(`[ticket-executor-api] Injected ${projectEnvRows.length} env vars`);
+    console.log(`[ticket-executor-api] Injected ${safeEnvRows.length} env vars (skipped machine-specific: ${projectEnvRows.filter((r) => UNSAFE_ENV_KEYS.has(r.key)).map((r) => r.key).join(", ") || "none"})`);
   }
 
   // ── Build prompt + tools ────────────────────────────────────────────
