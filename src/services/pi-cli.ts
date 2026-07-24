@@ -546,15 +546,29 @@ export function describePiTool(name: string, args: Record<string, any> | undefin
  * Claude parser used by /api/v1/cli/output would drop all of it. This lets the
  * webhook handler log Pi ticket-build output line by line.
  */
+// Generic "no args yet" tool descriptions — these are emitted while Pi is still
+// STREAMING the tool call (the command/path hasn't arrived), so they're partials
+// that get superseded a token later. Dropping them (like the instant path does)
+// removes the "Running a command" / "Reading a file" noise and the redundant
+// expand-bodies. A real call ("Running npm i", "Reading /x") is always kept.
+const PI_ARGLESS_PARTIAL = new Set([
+  "Running a command", "Creating a file", "Editing a file", "Reading a file",
+  "Searching the project", "Listing files",
+]);
+function piToolOrNull(name: string, args: Record<string, any> | undefined, maxLen: number): string | null {
+  const label = describePiTool(name, args, maxLen);
+  return PI_ARGLESS_PARTIAL.has(label) ? null : label;
+}
+
 export function describePiLine(line: string, maxLen = 400): string | null {
   const t = line.trim();
   if (!t.startsWith("{")) return null;
   let evt: Record<string, any>;
   try { evt = JSON.parse(t); } catch { return null; }
 
-  // Top-level tool call.
+  // Top-level tool call (skip argless partials — they're superseded moments later).
   const topName = evt.toolName ?? evt.tool ?? evt.name;
-  if (typeof topName === "string") return describePiTool(topName, evt.input ?? evt.arguments ?? evt.args, Math.min(maxLen, 120));
+  if (typeof topName === "string") return piToolOrNull(topName, evt.input ?? evt.arguments ?? evt.args, Math.min(maxLen, 120));
 
   // Assistant message with content blocks (tool_use + text).
   const content = evt.message?.content ?? evt.content;
@@ -563,7 +577,8 @@ export function describePiLine(line: string, maxLen = 400): string | null {
     for (const block of content) {
       if (!block || typeof block !== "object") continue;
       if (/tool/.test(String(block.type)) && (block.name || block.toolName)) {
-        parts.push(describePiTool(String(block.name ?? block.toolName), block.input ?? block.arguments ?? block.args, Math.min(maxLen, 120)));
+        const tl = piToolOrNull(String(block.name ?? block.toolName), block.input ?? block.arguments ?? block.args, Math.min(maxLen, 120));
+        if (tl) parts.push(tl);
       } else if (block.type === "text" && typeof block.text === "string" && block.text.trim()) {
         parts.push(block.text.trim().slice(0, maxLen));
       }

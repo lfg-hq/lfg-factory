@@ -1837,7 +1837,8 @@ export async function getPreviewBranches(projectId: string): Promise<Array<{ id:
  */
 export async function getTicketDiff(projectId: string, ticketId: string, base: string): Promise<{
   branches: string[]; base: string; head: string;
-  files: Array<{ path: string; added: number; removed: number }>; diff: string; error?: string;
+  files: Array<{ path: string; added: number; removed: number }>; diff: string;
+  commits: Array<{ sha: string; when: number; subject: string }>; error?: string;
 }> {
   // Prefer the ticket's actually-pushed branch; fall back to the convention.
   const [tk] = await db.select({ gb: projectTickets.githubBranch }).from(projectTickets).where(eq(projectTickets.id, ticketId));
@@ -1845,7 +1846,7 @@ export async function getTicketDiff(projectId: string, ticketId: string, base: s
   const b = (base || "main").replace(/[^\w./-]/g, "") || "main";
   let workspaceId: string;
   try { ({ workspaceId } = await ensureProjectSandbox(projectId)); }
-  catch { return { branches: [], base: b, head, files: [], diff: "", error: "No preview sandbox yet — open the Preview tab and set it up first." }; }
+  catch { return { branches: [], base: b, head, files: [], diff: "", commits: [], error: "No preview sandbox yet — open the Preview tab and set it up first." }; }
 
   // Isolated builds push the branch from a throwaway VM that's since destroyed,
   // so this long-lived preview sandbox has no local copy. Fetch it from the
@@ -1865,13 +1866,15 @@ echo "===REFS==="
 BASE=$(git rev-parse --verify -q origin/${b} >/dev/null 2>&1 && echo origin/${b} || echo ${b})
 HEAD=$(git rev-parse --verify -q origin/${head} >/dev/null 2>&1 && echo origin/${head} || echo ${head})
 git rev-parse --verify -q "$HEAD" >/dev/null 2>&1 || { echo "NO_HEAD"; exit 0; }
+echo "===COMMITS==="
+git log --format='%h|%ct|%s' "$BASE".."$HEAD" 2>/dev/null | head -100
 echo "===NUMSTAT==="
 git diff --numstat "$BASE"..."$HEAD" 2>/dev/null | head -500
 echo "===DIFF==="
 git diff "$BASE"..."$HEAD" 2>/dev/null | head -c 300000
 `;
   const { output } = await sh(workspaceId, script, 90_000);
-  if (output.includes("NO_REPO")) return { branches: [], base: b, head, files: [], diff: "", error: "The repo isn't cloned in the sandbox — set up the preview first." };
+  if (output.includes("NO_REPO")) return { branches: [], base: b, head, files: [], diff: "", commits: [], error: "The repo isn't cloned in the sandbox — set up the preview first." };
   const sect = (name: string) => {
     const start = output.indexOf(`===${name}===`);
     if (start < 0) return "";
@@ -1881,13 +1884,17 @@ git diff "$BASE"..."$HEAD" 2>/dev/null | head -c 300000
     return (next < 0 ? rest : rest.slice(0, next)).trim();
   };
   const branches = sect("BRANCHES").split("\n").map((s) => s.trim()).filter(Boolean);
-  if (output.includes("NO_HEAD")) return { branches, base: b, head, files: [], diff: "", error: `Branch ${head} not found — rebuild the ticket to create/push it.` };
+  if (output.includes("NO_HEAD")) return { branches, base: b, head, files: [], diff: "", commits: [], error: `Branch ${head} not found — rebuild the ticket to create/push it.` };
+  const commits = sect("COMMITS").split("\n").filter(Boolean).map((l) => {
+    const [sha, ct, ...rest] = l.split("|");
+    return { sha: (sha || "").trim(), when: parseInt(ct || "0", 10) || 0, subject: rest.join("|").trim() };
+  }).filter((c) => c.sha);
   const files = sect("NUMSTAT").split("\n").filter(Boolean).map((l) => {
     const parts = l.split("\t"); const added = parseInt(parts[0]!, 10); const removed = parseInt(parts[1]!, 10);
     return { path: parts.slice(2).join("\t"), added: isNaN(added) ? 0 : added, removed: isNaN(removed) ? 0 : removed };
   }).filter((f) => f.path);
   const diff = output.split("===DIFF===")[1]?.trim() || "";
-  return { branches, base: b, head, files, diff };
+  return { branches, base: b, head, files, diff, commits };
 }
 
 /**

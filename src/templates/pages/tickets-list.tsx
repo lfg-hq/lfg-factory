@@ -1164,7 +1164,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
 
       updateActionsBanner();
 
-      var scrollContainer = area.closest('.drawer-body') || area;
+      var scrollContainer = area /* the .execution-logs-container is the real overflow scroller */;
       var shouldScroll = _logsFirstLoad || (scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight < 60);
       area.innerHTML = '';
 
@@ -1186,7 +1186,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
 
       if (shouldScroll) {
         requestAnimationFrame(function() {
-          var scrollParent = area.closest('.drawer-body') || area;
+          var scrollParent = area /* the .execution-logs-container is the real overflow scroller */;
           scrollParent.scrollTop = scrollParent.scrollHeight;
         });
       }
@@ -1232,7 +1232,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       '<span class="agent-thinking-dots">Thinking...</span>' +
       '</div>';
     area.appendChild(el);
-    var scrollParent = area.closest('.drawer-body') || area;
+    var scrollParent = area /* the .execution-logs-container is the real overflow scroller */;
     requestAnimationFrame(function() { scrollParent.scrollTop = scrollParent.scrollHeight; });
   }
 
@@ -1499,8 +1499,24 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       sel.innerHTML = data.branches.map(function(b){ return '<option' + (b === cur ? ' selected' : '') + '>' + escHtml(b) + '</option>'; }).join('');
     }
     if (data.error) { body.innerHTML = '<div class="git-empty">' + escHtml(data.error) + '</div>'; return; }
-    if (!data.files || !data.files.length) { body.innerHTML = '<div class="git-empty">No changes between these branches.</div>'; return; }
-    body.innerHTML = renderGitDiff(data);
+    // Commit list (multiple commits — e.g. build + chat follow-ups). Shown above
+    // the diff so you see every commit on the branch, not just the latest SHA.
+    var commitsHtml = '';
+    if (Array.isArray(data.commits) && data.commits.length) {
+      commitsHtml = '<div style="margin-bottom:.9rem;">'
+        + '<div class="git-label" style="margin-bottom:.4rem;">Commits (' + data.commits.length + ')</div>'
+        + data.commits.map(function(c){
+            var when = c.when ? fmtLogTime(c.when * 1000) : '';
+            return '<div style="display:flex;align-items:baseline;gap:.6rem;padding:.25rem 0;border-bottom:1px solid rgba(255,255,255,.04);">'
+              + '<code class="git-value" style="flex:none;">' + escHtml(c.sha || '') + '</code>'
+              + '<span style="flex:1;font-size:.8rem;color:var(--text-color,#e2e8f0);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(c.subject || '') + '</span>'
+              + '<span class="git-empty" style="flex:none;font-size:.72rem;">' + escHtml(when) + '</span>'
+              + '</div>';
+          }).join('')
+        + '</div>';
+    }
+    if (!data.files || !data.files.length) { body.innerHTML = commitsHtml + '<div class="git-empty">No file changes between these branches.</div>'; return; }
+    body.innerHTML = commitsHtml + renderGitDiff(data);
   }
 
   var _NL = String.fromCharCode(10); // avoid backslash-escapes in this template
@@ -1753,13 +1769,13 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       if (placeholder) area.innerHTML = '';
 
       var idx = area.children.length;
-      var scrollParent = area.closest('.drawer-body') || area;
+      var scrollParent = area /* the .execution-logs-container is the real overflow scroller */;
       var wasAtBottom = !area.children.length || (scrollParent.scrollHeight - scrollParent.scrollTop - scrollParent.clientHeight < 120);
       area.appendChild(renderLogEntry(log, 'live-' + idx));
 
       if (wasAtBottom) {
         requestAnimationFrame(function() {
-          var scrollParent = area.closest('.drawer-body') || area;
+          var scrollParent = area /* the .execution-logs-container is the real overflow scroller */;
           scrollParent.scrollTop = scrollParent.scrollHeight;
         });
       }
