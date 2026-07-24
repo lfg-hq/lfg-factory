@@ -285,16 +285,22 @@ echo '${modelsB64}' | base64 -d > /root/.pi/agent/models.json`;
   const piInstallLog = `/tmp/pi_install_${ts}.log`;
   const runnerContent = `#!/bin/bash
 export HOME=/root
-# The "pi" rootfs ships node 22 + pi PREINSTALLED — but a non-login exec shell does
-# NOT inherit the login PATH (node 22 / pi are usually on nvm or profile.d), so a
-# hardcoded PATH would resolve \`node\` to an OLD system node ("too old") and not find
-# \`pi\` → we'd needlessly bootstrap node + reinstall pi and fail. Activate the rootfs
-# toolchain the same way a login shell does FIRST, then just prepend our npm-global
-# bin (used only as a fallback if the rootfs somehow lacks pi).
-[ -f /etc/profile ] && . /etc/profile 2>/dev/null || true
-for f in /etc/profile.d/*.sh; do [ -f "\$f" ] && . "\$f" 2>/dev/null; done
+# The "pi" rootfs ships node 22 + pi PREINSTALLED, but on the LOGIN/interactive PATH
+# (nvm / ~/.bashrc / profile.d) which a non-login exec shell does NOT inherit — so a
+# hardcoded PATH resolves \`node\` to an OLD system node ("too old") and can't find
+# \`pi\`, and we needlessly bootstrap node + reinstall pi and fail with 127.
+# (1) Replay the login+interactive rc files a real shell would source:
+for rc in /etc/profile ~/.bash_profile ~/.profile ~/.bashrc; do [ -f "\$rc" ] && . "\$rc" >/dev/null 2>&1 || true; done
+for f in /etc/profile.d/*.sh; do [ -f "\$f" ] && . "\$f" >/dev/null 2>&1 || true; done
 export NVM_DIR="\${NVM_DIR:-\$HOME/.nvm}"
-if [ -s "\$NVM_DIR/nvm.sh" ]; then . "\$NVM_DIR/nvm.sh" 2>/dev/null; nvm use --silent 22 2>/dev/null || nvm use --silent node 2>/dev/null || true; fi
+[ -s "\$NVM_DIR/nvm.sh" ] && { . "\$NVM_DIR/nvm.sh" >/dev/null 2>&1; nvm use --silent 22 >/dev/null 2>&1 || nvm use --silent node >/dev/null 2>&1; } || true
+# (2) Mechanism-agnostic fallback: if pi still isn't on PATH, find its real binary and
+# prepend that dir (which also holds the node 22 it was installed against).
+if ! command -v pi >/dev/null 2>&1; then
+  PI_REAL="\$(ls -1 \$HOME/.nvm/versions/node/*/bin/pi /usr/local/bin/pi /usr/lib/node_modules/.bin/pi 2>/dev/null | head -1)"
+  [ -z "\$PI_REAL" ] && PI_REAL="\$(find /root /usr -maxdepth 7 -type f -name pi 2>/dev/null | head -1)"
+  [ -n "\$PI_REAL" ] && export PATH="\$(dirname "\$PI_REAL"):\$PATH"
+fi
 export npm_config_prefix=/data/.npm-global
 mkdir -p /data/.npm-global /data/.npm-cache
 export PATH=/data/.npm-global/bin:\$PATH
