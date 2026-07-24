@@ -14,7 +14,7 @@
  */
 import { z } from "zod";
 import { generateObject, generateText, stepCountIs, tool, zodSchema } from "ai";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNotNull, or } from "drizzle-orm";
 import { db } from "../config/db.ts";
 import { projects, projectEnvironmentVariables } from "../db/schema/projects.ts";
 import { projectEnvironments } from "../db/schema/project-environments.ts";
@@ -1737,25 +1737,45 @@ export async function capturePreviewScreenshot(
 
 /**
  * The branches that can be previewed: the DEFAULT checkout (/data/project) plus
- * every ticket that still has a live git worktree in this sandbox (kept until the
- * ticket is approved → Done). Powers the preview branch selector.
+ * every ticket that has a feature branch we can preview. Two sources:
+ *  - live git worktrees in THIS sandbox (shared builds), and
+ *  - tickets that were BUILT + PUSHED (isolated builds) — those run in a
+ *    throwaway VM that's since destroyed, so there's no local worktree row, but
+ *    the branch lives on the remote and the preview reconstructs it on select.
+ * Powers the preview branch selector.
  */
 export async function getPreviewBranches(projectId: string): Promise<Array<{ id: string; label: string; ticketId: string | null; branch: string }>> {
   const out: Array<{ id: string; label: string; ticketId: string | null; branch: string }> = [
     { id: "default", label: "Default branch", ticketId: null, branch: "(default)" },
   ];
-  // Ticket worktrees are recorded as sandbox rows (workspaceType "ticket-worktree")
-  // pointing at this project's preview workspace. Join tickets for a readable label.
-  const rows = await db
+  const seen = new Set<string>();
+  const add = (ticketId: string, name: string | null, key: string | null, branch: string) => {
+    if (!ticketId || seen.has(ticketId)) return;
+    seen.add(ticketId);
+    const label = `${key ? key + " — " : ""}${name ?? "ticket"}`.slice(0, 60);
+    out.push({ id: ticketId, label, ticketId, branch });
+  };
+
+  // 1) Ticket worktrees are recorded as sandbox rows (workspaceType
+  // "ticket-worktree") pointing at this project's preview workspace.
+  const wtRows = await db
     .select({ ticketId: sandboxes.ticketId, name: projectTickets.name, key: projectTickets.ticketKey })
     .from(sandboxes)
     .leftJoin(projectTickets, eq(sandboxes.ticketId, projectTickets.id))
     .where(and(eq(sandboxes.projectId, projectId), eq(sandboxes.workspaceType, "ticket-worktree")));
-  for (const r of rows) {
-    if (!r.ticketId) continue;
-    const label = `${r.key ? r.key + " — " : ""}${r.name ?? "ticket"}`.slice(0, 60);
-    out.push({ id: r.ticketId, label, ticketId: r.ticketId, branch: `feature/ticket-${r.ticketId}` });
-  }
+  for (const r of wtRows) if (r.ticketId) add(r.ticketId, r.name, r.key, `feature/ticket-${r.ticketId}`);
+
+  // 2) Tickets that were built + pushed (isolated builds destroy their VM, so
+  // there's no worktree row — but the branch exists on the remote).
+  const builtRows = await db
+    .select({ id: projectTickets.id, name: projectTickets.name, key: projectTickets.ticketKey, branch: projectTickets.githubBranch })
+    .from(projectTickets)
+    .where(and(
+      eq(projectTickets.projectId, projectId),
+      or(isNotNull(projectTickets.githubBranch), isNotNull(projectTickets.githubCommitSha)),
+    ));
+  for (const r of builtRows) add(r.id, r.name, r.key, r.branch || `feature/ticket-${r.id}`);
+
   return out;
 }
 
@@ -1769,15 +1789,25 @@ export async function getTicketDiff(projectId: string, ticketId: string, base: s
   branches: string[]; base: string; head: string;
   files: Array<{ path: string; added: number; removed: number }>; diff: string; error?: string;
 }> {
-  const head = `feature/ticket-${ticketId}`;
+  // Prefer the ticket's actually-pushed branch; fall back to the convention.
+  const [tk] = await db.select({ gb: projectTickets.githubBranch }).from(projectTickets).where(eq(projectTickets.id, ticketId));
+  const head = tk?.gb || `feature/ticket-${ticketId}`;
   const b = (base || "main").replace(/[^\w./-]/g, "") || "main";
   let workspaceId: string;
   try { ({ workspaceId } = await ensureProjectSandbox(projectId)); }
   catch { return { branches: [], base: b, head, files: [], diff: "", error: "No preview sandbox yet — open the Preview tab and set it up first." }; }
 
+  // Isolated builds push the branch from a throwaway VM that's since destroyed,
+  // so this long-lived preview sandbox has no local copy. Fetch it from the
+  // remote first — with auth, since the repo may be private (GitLab/GitHub).
+  const auth = await resolveAuthedRepoUrl(projectId);
+  const authUrl = "error" in auth ? "" : auth.authUrl;
+
   const script = `
 cd ${PROJECT_DIR} 2>/dev/null || { echo "NO_REPO"; exit 1; }
 [ -e .git ] || { echo "NO_REPO"; exit 1; }
+${authUrl ? `git remote set-url origin "${authUrl}" 2>/dev/null || true` : ""}
+git fetch --no-tags origin "${head}" "${b}" >/dev/null 2>&1 || true
 git fetch origin --prune >/dev/null 2>&1 || true
 echo "===BRANCHES==="
 git for-each-ref --format='%(refname:short)' refs/remotes/origin 2>/dev/null | sed 's#^origin/##' | grep -v '^HEAD$' | sort -u
