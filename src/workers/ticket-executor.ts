@@ -970,6 +970,13 @@ Before implementing, fix the git issue:
   // ── Step 8: Commit & finalize ───────────────────────────────────────
   const durationMs = Date.now() - startTime;
 
+  // A build isn't "done" until the work is on the remote. If we can't push (no
+  // repo/token) or the push throws, that's a FAILURE — don't mark it In Review.
+  let commitFailed = false;
+  if (implementationStatus === "complete" && !(githubOwner && githubRepo && githubToken)) {
+    commitFailed = true;
+    await addLog(ticketId, "Build finished but the work was NOT pushed — GitHub isn't connected (no repo/token). Connect GitHub in Settings and rebuild.", "cli_error", ownerId);
+  }
   if (implementationStatus === "complete" && githubOwner && githubRepo && githubToken) {
     try {
       await addLog(ticketId, "Committing changes...", "command", ownerId);
@@ -1034,11 +1041,13 @@ Before implementing, fix the git issue:
         await addLog(ticketId, `Merge to lfg-agent failed: ${mergeErr}`, "command", ownerId);
       }
     } catch (err) {
-      await addLog(ticketId, `Git commit failed: ${err}`, "command", ownerId);
+      // A thrown commit/push means the work is NOT on the remote → not a success.
+      commitFailed = true;
+      await addLog(ticketId, `Git commit/push FAILED — changes were NOT saved: ${err}`, "cli_error", ownerId);
     }
   }
 
-  if (implementationStatus === "complete") {
+  if (implementationStatus === "complete" && !commitFailed) {
     const reviewStageId = await moveTicketToStage(ticketId, project.id, "In Review");
     await db
       .update(projectTickets)
@@ -1053,7 +1062,10 @@ Before implementing, fix the git issue:
     await addLog(ticketId, "Ticket implementation complete!", "command", ownerId);
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId });
   } else {
-    await markTicketFailed(ticketId, "Implementation did not complete", ownerId, { emitEvent: false });
+    const reason = commitFailed
+      ? "the changes were built but were NOT pushed to git (commit/push failed or GitHub not connected) — fix the cause and rebuild"
+      : "Implementation did not complete";
+    await markTicketFailed(ticketId, reason, ownerId, { emitEvent: false });
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "failed", queueStatus: "none" });
   }
 
@@ -2044,6 +2056,16 @@ git branch --show-current
   const durationMs = Date.now() - startTime;
 
   let commitFailed = false;
+  // Build succeeded but we have NO way to push (no repo linked or the token
+  // expired/was revoked). Silently skipping the push here used to mark the ticket
+  // "In Review" anyway — and for an isolated build the VM is then destroyed, so
+  // the work is LOST while the UI says done. Treat it as a not-saved failure with
+  // an actionable message instead.
+  if (implementationStatus === "complete" && !pushAuth) {
+    commitFailed = true;
+    await addLog(ticketId, "Build finished but the work was NOT pushed — no repository/credentials resolved (repo not linked, or the GitHub/GitLab token expired). Reconnect the repo in Settings and rebuild.", "cli_error", ownerId);
+    console.error(`[ticket-executor-api] complete but pushAuth is null — cannot push ticket ${ticketId}`);
+  }
   if (implementationStatus === "complete" && pushAuth) {
     try {
       await addLog(ticketId, "Committing changes...", "command", ownerId);
@@ -2106,7 +2128,7 @@ git branch --show-current
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId });
   } else {
     const reason = commitFailed
-      ? "the changes were built but the commit/push failed — the work is preserved in the ticket's worktree; fix the cause and retry"
+      ? "the changes were built but were NOT pushed (commit/push failed or no repo/token) — fix the cause and rebuild; the build sandbox is kept so the work isn't lost"
       : "Implementation did not complete";
     await markTicketFailed(ticketId, reason, ownerId, { emitEvent: false });
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "failed", queueStatus: "none" });
@@ -2118,7 +2140,9 @@ git branch --show-current
   // branch worktree in the always-on preview VM from the remote.
   // SAFETY: only ever destroy a DEDICATED throwaway build VM — never the always-on
   // preview VM ("pv-…"). Reusing a worktree here would be a bug, but guard anyway.
-  if (isolatedBuild && !useWorktree && workspaceId && !workspaceId.startsWith("pv-")) {
+  // NEVER destroy it when the push failed — the ONLY copy of the work lives in this
+  // VM, so keep it alive for a retry instead of throwing the changes away.
+  if (isolatedBuild && !useWorktree && workspaceId && !workspaceId.startsWith("pv-") && !commitFailed) {
     await addLog(ticketId, "Isolated build finished — destroying the throwaway build sandbox…", "command", ownerId);
     await deleteWorkspace(workspaceId).catch((e) => console.warn(`[ticket-executor-api] destroy build VM failed:`, e));
     await db.update(sandboxes).set({ status: "destroyed", updatedAt: new Date() }).where(eq(sandboxes.ticketId, ticketId)).catch(() => {});
