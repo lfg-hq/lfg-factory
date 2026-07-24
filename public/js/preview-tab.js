@@ -33,8 +33,12 @@
   let bBase = null;      // preview URL the browser was mounted for
   let bSeq = 0;
   let proxyMode = false; // in-app links via the same-origin proxy (may break WS/SignalR)
+  let _pvResizeObs = null; // re-scales the device viewport when the pane resizes
   let device = "desktop"; // desktop | tablet | mobile viewport
-  const DEVICE_W = { mobile: 390, tablet: 834, desktop: 0 };
+  // Desktop renders at a REAL desktop width (1280) and is scaled down to fit the
+  // pane — otherwise the iframe fills the ~1100px pane and the SITE's own media
+  // queries treat that as tablet, showing the tablet layout in "desktop" mode.
+  const DEVICE_W = { mobile: 390, tablet: 834, desktop: 1280 };
 
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -137,6 +141,14 @@
     const addr = document.getElementById("pv-addr");
     document.querySelectorAll("[data-bx]").forEach((el) => el.addEventListener("click", () => bxAction(el.getAttribute("data-bx"))));
     document.querySelectorAll("[data-dev]").forEach((el) => el.addEventListener("click", () => { device = el.getAttribute("data-dev"); applyDevice(); }));
+    // Re-scale the iframe when the pane resizes (panel drag, window resize) so the
+    // desktop viewport stays correctly fitted instead of clipping/misaligning.
+    const frames = document.getElementById("pv-frames");
+    if (frames && window.ResizeObserver) {
+      if (_pvResizeObs) _pvResizeObs.disconnect();
+      _pvResizeObs = new ResizeObserver(() => applyDevice());
+      _pvResizeObs.observe(frames);
+    }
     strip?.addEventListener("click", onTabStripClick);
     addr?.addEventListener("keydown", (e) => { if (e.key === "Enter") navigate(bActive, addr.value.trim()); });
   }
@@ -151,18 +163,28 @@
     const b = document.getElementById("pv-proxy");
     if (b) { b.style.background = proxyMode ? "#7c3aed" : "var(--border-color,#2a2a2a)"; b.style.color = proxyMode ? "#fff" : "var(--text-color,#e2e8f0)"; }
   }
-  // Size the active iframe to the chosen device viewport (centered). Desktop = fill.
+  // Size the active iframe to the chosen device viewport. The iframe always gets
+  // the device's REAL CSS width (so the site's media queries pick the right
+  // layout), then it's scaled down to fit the pane if the pane is narrower —
+  // exactly how browser "responsive design mode" works. Desktop=1280 scaled to
+  // fit gives a true computer layout even in a ~1100px pane.
   function applyDevice() {
     const frames = document.getElementById("pv-frames");
     if (frames) frames.style.background = device === "desktop" ? "#fff" : "var(--bg-color,#0f0f0f)";
     const w = DEVICE_W[device];
+    const contW = frames ? frames.clientWidth : w;
+    const contH = frames ? frames.clientHeight : 0;
+    const scale = Math.min(1, contW / w); // never upscale
+    const fh = scale < 1 && contH ? Math.ceil(contH / scale) : 0; // fill height after scaling
     for (const t of bTabs) {
       const f = document.getElementById(`pv-frame-${t.id}`);
       if (!f) continue;
       const show = t.id === bActive ? "block" : "none";
-      f.style.cssText = w
-        ? `position:absolute;top:0;bottom:0;left:50%;transform:translateX(-50%);width:${w}px;height:100%;max-width:100%;border:0;background:#fff;box-shadow:0 0 0 1px var(--border-color,#2a2a2a);display:${show};`
-        : `position:absolute;inset:0;width:100%;height:100%;border:0;background:#fff;display:${show};`;
+      f.style.cssText =
+        `position:absolute;top:0;left:50%;` +
+        `transform:translateX(-50%) scale(${scale});transform-origin:top center;` +
+        `width:${w}px;height:${fh ? fh + "px" : "100%"};border:0;background:#fff;` +
+        `box-shadow:0 0 0 1px var(--border-color,#2a2a2a);display:${show};`;
     }
     document.querySelectorAll("[data-dev]").forEach((el) => {
       const on = el.getAttribute("data-dev") === device;
