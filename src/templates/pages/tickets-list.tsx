@@ -953,10 +953,12 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     if (!el) return;
     var qs = (fields.queueStatus || fields.queue_status || '').toLowerCase();
     var st = (fields.status || '').toLowerCase();
-    var merge = (fields.githubMergeStatus || fields.github_merge_status || '').toLowerCase();
+    var merge = (fields.githubMergeStatus || fields.github_merge_status || fields.mergeStatus || '').toLowerCase();
     var b = null;
     if (qs === 'executing' || qs === 'queued') {
       b = { bg: 'rgba(59,130,246,.12)', fg: '#93c5fd', icon: 'fa-spinner fa-spin', text: qs === 'queued' ? 'Queued — waiting to build…' : 'Building this ticket…' };
+    } else if (merge === 'not_pushed') {
+      b = { bg: 'rgba(248,113,113,.12)', fg: '#fca5a5', icon: 'fa-triangle-exclamation', text: 'Built but NOT pushed to git — reconnect the repo in Settings, then rebuild.' };
     } else if (st === 'failed' || qs === 'failed') {
       b = { bg: 'rgba(239,68,68,.12)', fg: '#fca5a5', icon: 'fa-circle-exclamation', text: 'Build failed — check the logs below and rebuild.' };
     } else if (merge === 'merged' || st === 'done' || st === 'completed' || st === 'merged') {
@@ -1410,7 +1412,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
   }
 
   // ── Git tab ──────────────────────────────────────────────────────
-  var _gitStatusColors = { pending:'#6b7280', pr_open:'#3b82f6', merged:'#34d399', failed:'#f87171' };
+  var _gitStatusColors = { pending:'#6b7280', pr_open:'#3b82f6', pushed:'#3b82f6', merged:'#34d399', failed:'#f87171', not_pushed:'#f87171' };
+  var _gitStatusLabels = { not_pushed:'Not pushed', pushed:'Pushed (not merged)' };
 
   async function loadGitInfo() {
     if (!_currentTicketId) return;
@@ -1430,7 +1433,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     const rawPrNum = ticket.githubPrNumber;
     const prNumber = (typeof rawPrNum === 'number' && rawPrNum > 0) ? rawPrNum : null;
     const statusColor = _gitStatusColors[mergeStatus] || '#6b7280';
-    const statusLabel = mergeStatus ? mergeStatus.replace(/_/g, ' ') : 'none';
+    const statusLabel = _gitStatusLabels[mergeStatus] || (mergeStatus ? mergeStatus.replace(/_/g, ' ') : 'none');
+    const notPushed = mergeStatus === 'not_pushed';
 
     var html = '<div class="git-info-grid">';
 
@@ -1457,9 +1461,20 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       + '<span class="git-label">Merge Status</span>'
       + '<span style="display:inline-flex;align-items:center;gap:0.4rem;">'
       + '<span style="width:8px;height:8px;border-radius:50%;background:' + statusColor + ';display:inline-block;"></span>'
-      + '<span class="git-value" style="text-transform:capitalize;">' + statusLabel + '</span>'
+      + '<span class="git-value">' + escHtml(statusLabel) + '</span>'
       + '</span>'
       + '</div>';
+
+    // Loud warning when the build finished but was NOT pushed (no repo/token or a
+    // failed push) — the work only lives in the sandbox, so make it impossible to miss.
+    if (notPushed) {
+      html += '<div style="grid-column:1/-1;margin-top:.25rem;padding:.6rem .75rem;border-radius:8px;'
+        + 'background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.3);color:#fca5a5;font-size:.8rem;line-height:1.45;">'
+        + '<i class="fas fa-triangle-exclamation" style="margin-right:.4rem;"></i>'
+        + '<strong>Changes were not pushed to git.</strong> The repo isn\'t connected or its token expired, so the work is only in the build sandbox. '
+        + '<a href="/settings" style="color:#fca5a5;text-decoration:underline;">Reconnect the repository in Settings</a>, then rebuild.'
+        + '</div>';
+    }
 
     // Actions
     html += '<div style="display:flex;gap:0.5rem;margin-top:0.25rem;flex-wrap:wrap;">';

@@ -994,6 +994,7 @@ Before implementing, fix the git issue:
         .set({
           githubBranch: featureBranch,
           githubCommitSha: sha,
+          githubMergeStatus: "pushed", // clears any prior "not_pushed" flag
           updatedAt: new Date(),
         })
         .where(eq(projectTickets.id, ticketId));
@@ -1065,8 +1066,9 @@ Before implementing, fix the git issue:
     const reason = commitFailed
       ? "the changes were built but were NOT pushed to git (commit/push failed or GitHub not connected) — fix the cause and rebuild"
       : "Implementation did not complete";
+    if (commitFailed) await db.update(projectTickets).set({ githubMergeStatus: "not_pushed", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId)).catch(() => {});
     await markTicketFailed(ticketId, reason, ownerId, { emitEvent: false });
-    broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "failed", queueStatus: "none" });
+    broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "failed", queueStatus: "none", mergeStatus: commitFailed ? "not_pushed" : undefined });
   }
 
   // Session ID is now saved by the /api/v1/cli/output/ endpoint
@@ -1459,7 +1461,7 @@ async function finalizeTicketChat(
       featureBranch,
       repoUrl: auth.repoUrl, githubToken: auth.token, tokenUser: auth.tokenUser,
     });
-    await db.update(projectTickets).set({ githubBranch: featureBranch, githubCommitSha: sha, updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
+    await db.update(projectTickets).set({ githubBranch: featureBranch, githubCommitSha: sha, githubMergeStatus: "pushed", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
     await addLog(ticketId, `Committed + pushed ${sha.slice(0, 7)} to ${featureBranch}.`, "command", ownerId);
 
     try {
@@ -2079,7 +2081,8 @@ git branch --show-current
         tokenUser: pushAuth.tokenUser,
       });
 
-      await db.update(projectTickets).set({ githubBranch: featureBranch, githubCommitSha: sha, updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
+      // "pushed" clears any prior "not_pushed" flag even if the merge below fails.
+      await db.update(projectTickets).set({ githubBranch: featureBranch, githubCommitSha: sha, githubMergeStatus: "pushed", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
 
       await logActivity({
         projectId: project.id,
@@ -2130,8 +2133,11 @@ git branch --show-current
     const reason = commitFailed
       ? "the changes were built but were NOT pushed (commit/push failed or no repo/token) — fix the cause and rebuild; the build sandbox is kept so the work isn't lost"
       : "Implementation did not complete";
+    // Persist a durable "not_pushed" merge state so the Git tab flags it (red)
+    // even after refresh — not just a transient Actions-log line.
+    if (commitFailed) await db.update(projectTickets).set({ githubMergeStatus: "not_pushed", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId)).catch(() => {});
     await markTicketFailed(ticketId, reason, ownerId, { emitEvent: false });
-    broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "failed", queueStatus: "none" });
+    broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "failed", queueStatus: "none", mergeStatus: commitFailed ? "not_pushed" : undefined });
   }
 
   // ISOLATED build: the throwaway pi VM has done its job — the branch is on the
