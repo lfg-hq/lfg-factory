@@ -141,14 +141,15 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     .exec-mode-btn:hover:not(.active) { background: var(--card-bg-hover); }
 
     .builder-model-select {
-      padding: 0.3rem 0.5rem;
+      padding: 0.3rem 1.7rem 0.3rem 0.6rem; /* extra right pad so the native chevron doesn't overlap the text */
       font-size: 0.75rem;
       border-radius: 6px;
       border: 1px solid var(--border-color);
       background: var(--input-bg);
       color: var(--text-color);
       cursor: pointer;
-      max-width: 160px;
+      max-width: 190px;
+      text-overflow: ellipsis;
     }
     .builder-model-select:focus { outline: 1px solid #7c3aed; }
     /* Build & preview settings popover (declutters the toolbar) */
@@ -171,9 +172,34 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     .build-settings-dropdown .bs-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; font-size: 0.72rem; color: var(--text-secondary); }
     .build-settings-dropdown .bs-row:last-child { margin-bottom: 0; }
     .build-settings-dropdown .bs-row select {
-      padding: 0.35rem 0.5rem; font-size: 0.78rem; border-radius: 6px;
+      padding: 0.35rem 1.7rem 0.35rem 0.5rem; font-size: 0.78rem; border-radius: 6px;
       border: 1px solid var(--border-color); background: var(--input-bg); color: var(--text-color); cursor: pointer;
     }
+    /* Create-ticket modal */
+    .create-ticket-overlay {
+      display: none; position: fixed; inset: 0; z-index: 200;
+      background: rgba(0,0,0,.55); align-items: flex-start; justify-content: center; padding: 8vh 1rem;
+    }
+    .create-ticket-overlay.open { display: flex; }
+    .create-ticket-modal {
+      width: 100%; max-width: 560px; background: var(--card-bg, #16161a);
+      border: 1px solid var(--border-color); border-radius: 14px; padding: 18px 20px;
+      box-shadow: 0 20px 60px rgba(0,0,0,.5); display: flex; flex-direction: column; gap: 12px;
+    }
+    .ctm-header { display: flex; align-items: center; justify-content: space-between; }
+    .ctm-title { font-size: 1rem; font-weight: 600; color: var(--text-color); }
+    .ctm-close { background: none; border: none; color: var(--text-secondary); cursor: pointer; font-size: 1rem; }
+    .ctm-field { display: flex; flex-direction: column; gap: 5px; font-size: .72rem; color: var(--text-secondary); }
+    .ctm-field input, .ctm-field select, .ctm-field textarea {
+      padding: 9px 10px; border-radius: 8px; border: 1px solid var(--border-color);
+      background: var(--input-bg); color: var(--text-color); font-size: .9rem; font-family: inherit; box-sizing: border-box; width: 100%;
+    }
+    .ctm-field textarea { min-height: 160px; resize: vertical; font-size: .85rem; line-height: 1.5; }
+    .ctm-msg { font-size: .8rem; min-height: 16px; }
+    .ctm-actions { display: flex; align-items: center; gap: 8px; }
+    .ctm-chat-link { font-size: .8rem; color: #7c3aed; text-decoration: none; }
+    .ctm-btn-secondary { padding: 8px 16px; border-radius: 8px; border: 1px solid var(--border-color); background: transparent; color: var(--text-color); cursor: pointer; }
+    .ctm-btn-primary { padding: 8px 18px; border-radius: 8px; border: none; background: #7c3aed; color: #fff; font-weight: 600; cursor: pointer; }
     .kanban-wrap {
       flex: 1;
       overflow: hidden;
@@ -365,9 +391,39 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
           </label>
         </div>
       </div>
-      <a href="/chat/project/${project.projectId}" class="toolbar-btn-new">
+      <button type="button" class="toolbar-btn-new" onclick="openCreateTicket()">
         <i class="fas fa-plus"></i> New Ticket
-      </a>
+      </button>
+    </div>
+
+    <!-- Create-ticket modal -->
+    <div class="create-ticket-overlay" id="create-ticket-overlay" onclick="if(event.target===this)closeCreateTicket()">
+      <div class="create-ticket-modal">
+        <div class="ctm-header">
+          <div class="ctm-title">New ticket</div>
+          <button type="button" class="ctm-close" onclick="closeCreateTicket()"><i class="fas fa-times"></i></button>
+        </div>
+        <label class="ctm-field"><span>Title</span>
+          <input id="ctm-name" type="text" placeholder="Short summary of the work" />
+        </label>
+        <label class="ctm-field"><span>Priority</span>
+          <select id="ctm-priority">
+            <option value="High">High</option>
+            <option value="Medium" selected>Medium</option>
+            <option value="Low">Low</option>
+          </select>
+        </label>
+        <label class="ctm-field"><span>Description (markdown)</span>
+          <textarea id="ctm-desc" placeholder="What needs to be done, acceptance criteria, files to touch…"></textarea>
+        </label>
+        <div class="ctm-msg" id="ctm-msg"></div>
+        <div class="ctm-actions">
+          <a href="/chat/project/${project.projectId}" class="ctm-chat-link">Or plan it in chat →</a>
+          <div style="flex:1"></div>
+          <button type="button" class="ctm-btn-secondary" onclick="closeCreateTicket()">Cancel</button>
+          <button type="button" class="ctm-btn-primary" onclick="submitCreateTicket()">Create ticket</button>
+        </div>
+      </div>
     </div>
 
     <!-- Kanban board -->
@@ -641,6 +697,38 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     if (d) d.classList.toggle('open');
   }
   window.toggleBuildSettings = toggleBuildSettings;
+
+  // ── New-ticket create modal ──────────────────────────────────────────
+  function openCreateTicket() {
+    var o = document.getElementById('create-ticket-overlay');
+    if (!o) return;
+    o.classList.add('open');
+    var m = document.getElementById('ctm-msg'); if (m) m.textContent = '';
+    var n = document.getElementById('ctm-name'); if (n) { n.value=''; setTimeout(function(){ n.focus(); }, 30); }
+    var d = document.getElementById('ctm-desc'); if (d) d.value='';
+  }
+  function closeCreateTicket() { var o = document.getElementById('create-ticket-overlay'); if (o) o.classList.remove('open'); }
+  async function submitCreateTicket() {
+    var name = (document.getElementById('ctm-name')||{}).value || '';
+    var description = (document.getElementById('ctm-desc')||{}).value || '';
+    var priority = (document.getElementById('ctm-priority')||{}).value || 'Medium';
+    var msg = document.getElementById('ctm-msg');
+    if (!name.trim()) { if (msg){ msg.textContent='Title is required.'; msg.style.color='#ef4444'; } return; }
+    if (!description.trim()) { if (msg){ msg.textContent='Description is required.'; msg.style.color='#ef4444'; } return; }
+    if (msg){ msg.textContent='Creating…'; msg.style.color='var(--text-secondary)'; }
+    try {
+      var r = await fetch('/api/projects/' + PROJECT_ID + '/tickets', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim(), description: description, priority: priority })
+      });
+      if (!r.ok) { var j = await r.json().catch(function(){return{};}); throw new Error(j.error || ('HTTP ' + r.status)); }
+      closeCreateTicket();
+      location.reload(); // show the new card on the board
+    } catch (e) { if (msg){ msg.textContent='Failed: ' + e.message; msg.style.color='#ef4444'; } }
+  }
+  window.openCreateTicket = openCreateTicket;
+  window.closeCreateTicket = closeCreateTicket;
+  window.submitCreateTicket = submitCreateTicket;
   // Close the popover on an outside click.
   document.addEventListener('click', function (e) {
     var menu = e.target.closest && e.target.closest('.build-settings-menu');
