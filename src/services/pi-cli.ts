@@ -170,6 +170,10 @@ export async function startPiCli(opts: PiRunOptions): Promise<PiRunResult> {
   const projectDirName = opts.projectDir.replace(/^\/(root|data)\//, "").replace(/^\//, "");
 
   // Env file: provider key + app env vars + (when forwarding) the LFG callback coords.
+  // NEVER write PATH (or other machine-specific vars): the runner sources this file,
+  // and a persisted PATH like "/data/.dotnet:…" would OVERWRITE the toolchain PATH →
+  // `node`/`pi` "not found" → the reinstall/127 loop.
+  const PI_UNSAFE_ENV = new Set(["PATH", "HOME", "PWD", "OLDPWD", "SHELL", "USER", "LOGNAME", "TERM", "HOSTNAME", "SHLVL", "_", "LD_LIBRARY_PATH", "LD_PRELOAD"]);
   const envExports = [
     `export ${cfg.envVar}=${JSON.stringify(opts.apiKey)}`,
     ...(opts.forward
@@ -180,7 +184,7 @@ export async function startPiCli(opts: PiRunOptions): Promise<PiRunResult> {
           ...(opts.forward.ticketId ? [`export LFG_TICKET_ID=${JSON.stringify(opts.forward.ticketId)}`] : []),
         ]
       : []),
-    ...Object.entries(opts.envVars ?? {}).map(([k, v]) => `export ${k}=${JSON.stringify(v)}`),
+    ...Object.entries(opts.envVars ?? {}).filter(([k]) => !PI_UNSAFE_ENV.has(k)).map(([k, v]) => `export ${k}=${JSON.stringify(v)}`),
   ].join("\n");
 
   // In-VM forwarder: reads Pi's --mode json stream on stdin, extracts each tool call
@@ -311,7 +315,13 @@ export npm_config_cache=/data/.npm-cache
 export NPM_CONFIG_CACHE=/data/.npm-cache
 export NODE_OPTIONS="--max-old-space-size=1536"
 source ${envFile}
+# RE-ASSERT the toolchain PATH AFTER sourcing envFile — sourcing it can (and did)
+# overwrite PATH with a persisted value that lacks /usr/bin, hiding node 22 + pi.
+export PATH=/data/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:\$PATH
 cd ${WORKING_DIR}/${projectDirName}
+# DIAGNOSTIC (PATHFIX-v3): show the TRUTH — resolved node/pi, whether the binaries
+# exist on disk, and the actual PATH — so we can see exactly what's wrong.
+echo "[pi-runner] PATHFIX-v3 node=\$(command -v node || echo none) ver=\$(node -v 2>/dev/null || echo ?) pi=\$(command -v pi || echo none) | /usr/bin/node:\$([ -x /usr/bin/node ] && /usr/bin/node -v || echo MISSING) /usr/local/bin/pi:\$([ -x /usr/local/bin/pi ] && echo yes || echo MISSING) | PATH=\$PATH" >> ${outputFile}
 
 # Pi's deps require node ^20.17 || >=22.9. Mags sometimes hands out a STALE rootfs
 # snapshot with node 20.15.1 (and no preinstalled pi), where the pi install fails
