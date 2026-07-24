@@ -578,6 +578,65 @@ function appStartCommand(manifest: PreviewManifest, dir: string = PROJECT_DIR): 
     `setsid sh -c 'cd ${dir}; set -a; . ./.env 2>/dev/null; set +a; ${runCmd}' </dev/null > ${dir}/preview.log 2>&1 & echo STARTED`;
 }
 
+/**
+ * Deterministic RULE (not a fixed find/replace): rewrite EVERY SQL Server
+ * connection string in EVERY appsettings*.json under `dir` (all modules — Web,
+ * Admin, …) that points at a NON-local host (a dev machine like SHABEER-PC-2, a
+ * prod server) to the provisioned local MSSQL — keeping each connection's own
+ * database name. Idempotent (skips ones already on 127.0.0.1). This makes the
+ * "app has DB creds hardcoded in appsettings pointing at some dev's box" problem
+ * a non-issue on the FIRST run, for every project — no note or patch needed.
+ * Returns "" if there's no mssql engine. Needs python3 (on the pi rootfs).
+ */
+function buildAppsettingsRewriteScript(engines: EngineHandle[], dir: string): string {
+  const ms = engines.find((e) => e.engine === "mssql");
+  if (!ms) return "";
+  const conf = Buffer.from(JSON.stringify({ host: ms.host, port: ms.port, user: ms.username, pw: ms.password })).toString("base64");
+  return `echo ${conf} | base64 -d > /tmp/_msconf.json 2>/dev/null && python3 - "${dir}" <<'PYEOF' 2>&1 || true
+import json, os, re, sys
+base = sys.argv[1]
+try:
+    c = json.load(open("/tmp/_msconf.json"))
+except Exception:
+    sys.exit(0)
+host, port, user, pw = c["host"], c["port"], c["user"], c["pw"]
+# A SQL Server connection string value: has (Data Source|Server)= AND (Initial Catalog|Database)=.
+rx = re.compile(r'"([^"\\n]*(?:Data Source|Server)\\s*=[^"\\n]*(?:Initial Catalog|Database)\\s*=[^"\\n]*)"')
+def dbname(s):
+    m = re.search(r'(?:Initial Catalog|Database)\\s*=\\s*([^;"]+)', s, re.I)
+    return (m.group(1).strip() if m else "app")
+def islocal(s):
+    return bool(re.search(r'(?:Data Source|Server)\\s*=\\s*(?:127\\.0\\.0\\.1|localhost)\\b', s, re.I))
+def newconn(s):
+    return "Server=%s,%s;Database=%s;User Id=%s;Password=%s;TrustServerCertificate=True;MultipleActiveResultSets=True;" % (host, port, dbname(s), user, pw)
+count = 0
+for root, dirs, files in os.walk(base):
+    dirs[:] = [d for d in dirs if d not in ("node_modules", ".git", "bin", "obj")]
+    for fn in files:
+        if not (fn.lower().startswith("appsettings") and fn.lower().endswith(".json")):
+            continue
+        fp = os.path.join(root, fn)
+        try:
+            txt = open(fp, encoding="utf-8", errors="ignore").read()
+        except Exception:
+            continue
+        hit = [0]
+        def repl(m):
+            val = m.group(1)
+            if islocal(val):
+                return m.group(0)
+            hit[0] += 1
+            return '"' + newconn(val) + '"'
+        out = rx.sub(repl, txt)
+        if hit[0]:
+            open(fp, "w", encoding="utf-8").write(out)
+            count += 1
+            print("repointed %d connection(s) -> local MSSQL in %s" % (hit[0], os.path.relpath(fp, base)))
+if count == 0:
+    print("appsettings: no non-local SQL connections to repoint")
+PYEOF`;
+}
+
 /** Compile the manifest into an ordered runbook. */
 function buildRunbook(manifest: PreviewManifest, engines: EngineHandle[]): RunStep[] {
   const steps: RunStep[] = [];
@@ -1418,8 +1477,15 @@ fi`, 240_000);
     await prep("env", "running");
     await writeEnvFile(workspaceId, projectId, manifest, provisioned);
     plog(projectId, userId, `Wrote .env (${Object.keys(provisioned).length} DB connection var(s) + run config)`);
-    // Re-apply persisted config-file patches (e.g. appsettings connection repoints)
-    // so a fresh checkout / rebuild inherits them without the driver rediscovering.
+    // Deterministic RULE: repoint every hardcoded non-local SQL connection in EVERY
+    // appsettings*.json (Web, Admin, …) to the provisioned local MSSQL — so the app
+    // doesn't crash on a dead dev/prod host baked into the config, on the FIRST run.
+    const rewriteScript = buildAppsettingsRewriteScript(engineHandles, PROJECT_DIR);
+    if (rewriteScript) {
+      const r = await sh(workspaceId, rewriteScript, 60_000).catch(() => ({ output: "" }));
+      plog(projectId, userId, "Repointed appsettings SQL connections → local MSSQL", { detail: (r.output || "").slice(-500) });
+    }
+    // Re-apply persisted config-file patches (any app-specific fixes beyond the above).
     if (profile?.configPatches?.length) {
       const patchScript = buildConfigPatchScript(profile.configPatches, PROJECT_DIR);
       if (patchScript) { await sh(workspaceId, patchScript, 60_000).catch(() => {}); plog(projectId, userId, `Re-applied ${profile.configPatches.length} saved config patch(es)`); }
@@ -1863,6 +1929,15 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
     }
     await setStep("locate", "done");
 
+    // Deterministic RULE: repoint every non-local SQL connection in the run dir's
+    // appsettings*.json (Web, Admin, …) to the provisioned local MSSQL, so a fresh
+    // branch checkout doesn't crash on a hardcoded dead host (e.g. Admin still
+    // pointing at SHABEER on the branch). Runs on the worktree OR the switched checkout.
+    if ((manifest.databases || []).some((d) => d.engine === "mssql")) {
+      const ms = await ensureEngine(projectId, "mssql").catch(() => null);
+      const rw = ms ? buildAppsettingsRewriteScript([ms], runDir) : "";
+      if (rw) { const r = await sh(workspaceId, rw, 60_000).catch(() => ({ output: "" })); plog(projectId, userId, "Repointed appsettings SQL connections → local MSSQL", { detail: (r.output || "").slice(-400) }); }
+    }
     // Re-apply persisted config-file patches to the run dir — this is what makes a
     // branch switch / worktree / fresh checkout inherit the connection repoints etc.
     // (they'd otherwise be reset by the checkout), so branches don't re-investigate.
