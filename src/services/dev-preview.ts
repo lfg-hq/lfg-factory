@@ -557,10 +557,18 @@ function sqlApplyCommand(engines: EngineHandle[], file: string): string {
   return `echo "no SQL engine provisioned to apply ${file}"`;
 }
 
+/** Rewrite absolute PROJECT_DIR (/data/project) references in a RECORDED command to
+ *  the actual run dir, so a command the driver recorded on main (which may contain
+ *  hardcoded `/data/project/...` paths, e.g. a `mv .../wwwroot/CohireFiles ...`
+ *  NETSDK1022 workaround) operates on the FEATURE-BRANCH worktree — not on main. */
+function localizeCmd(cmd: string, dir: string): string {
+  return dir === PROJECT_DIR ? cmd : (cmd || "").split(PROJECT_DIR).join(dir);
+}
+
 /** The detached app-start command (self-contained: cd + source .env + run). */
 function appStartCommand(manifest: PreviewManifest, dir: string = PROJECT_DIR): string {
   const port = manifest.port;
-  const runCmd = manifest.runCmd.replace(/'/g, `'\\''`);
+  const runCmd = localizeCmd(manifest.runCmd, dir).replace(/'/g, `'\\''`);
   // NOT `exec ${runCmd}`: recorded run commands often carry leading env-var
   // assignments (e.g. `ASPNETCORE_URLS=… ASPNETCORE_ENVIRONMENT=Development dotnet
   // run …`). `exec VAR=value cmd` makes exec treat `VAR=value` as the PROGRAM name
@@ -754,7 +762,7 @@ HOW TO WORK:
 
 PERSISTING WHAT YOU LEARN (so the next run doesn't repeat your work):
 - Each \`run\` command starts a FRESH shell, so a bare \`export FOO=bar\` does NOT carry to the next command. For an environment fix that must stick (an env var, a cert/CA path, a package source), call the \`setEnv\` tool — it stores the var on the project (encrypted) AND writes it into .env now, so it is re-applied on every future setup and SURVIVES a VM rebuild. (Appending to ./.env only lasts while this VM lives — if the VM is recreated you'd have to rediscover the fix.)
-- When you discover the PLAN itself was wrong and found what works — a different toolchain install, install/build/run command, startup project, or port — call \`updatePlan\` to persist the corrected value. Do this AFTER you've confirmed the new command works. This is how the checklist self-heals: the next preview run skips straight to the working commands.
+- When you discover the PLAN itself was wrong and found what works — a different toolchain install, install/build/run command, startup project, or port — call \`updatePlan\` to persist the corrected value. Do this AFTER you've confirmed the new command works. This is how the checklist self-heals: the next preview run skips straight to the working commands. IMPORTANT: in a build/run command you persist, use paths RELATIVE to the working dir (e.g. \`Cohire.Web/wwwroot/CohireFiles\`), NOT absolute \`${PROJECT_DIR}/...\` — the same command is later run in FEATURE-BRANCH worktrees, and a hardcoded ${PROJECT_DIR} path would touch main instead of the worktree.
 - When you learn a FACT that no plan field captures — a schema/ordering rule (migration MUST run before a SQL script), a missing client (\`sqlcmd\` isn't installed → use \`docker exec\`), a config gotcha — call \`noteLearning\` so the next run and every feature branch see it up front. Record it the moment you learn it; this is what stops the "figure the same thing out for 2 hours every run" loop.
 - When you EDIT A CONFIG FILE for the app to run (e.g. repoint a connection string in appsettings.json from a dead dev/prod host to the provisioned localhost DB, or a Serilog sink connection the app reads from the file), use \`persistConfigPatch\` — NOT a bare sed/echo. A plain edit is a change to a TRACKED file, so a git branch switch / fresh checkout / rebuild RESETS it and the app breaks again; persistConfigPatch re-applies it automatically after every checkout, so branches and rebuilds inherit it. (Env fixes → setEnv; tracked-file config fixes → persistConfigPatch.)
 
@@ -1875,8 +1883,11 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
     let up = false;
     let buildFailed = false;
     if (compiled && manifest.buildCmd) {
-      plog(projectId, userId, `Building (recorded): ${manifest.buildCmd}`);
-      const br = await runDetachedPolled(projectId, userId, workspaceId, manifest.buildCmd, 1_200_000, { stallMs: 240_000, workDir: runDir });
+      // Localize any hardcoded /data/project paths in the recorded build to THIS run
+      // dir, so a branch worktree build acts on the worktree (not on main's files).
+      const buildCmd = localizeCmd(manifest.buildCmd, runDir);
+      plog(projectId, userId, `Building (recorded): ${buildCmd}`);
+      const br = await runDetachedPolled(projectId, userId, workspaceId, buildCmd, 1_200_000, { stallMs: 240_000, workDir: runDir });
       if (br.exitCode !== 0) {
         buildFailed = true;
         plog(projectId, userId, `Recorded build failed (exit ${br.exitCode}) — handing to the AI driver to investigate`, { level: "error", detail: br.output.slice(-1200) });
