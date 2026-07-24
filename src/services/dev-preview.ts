@@ -455,11 +455,17 @@ async function warnBrokenAssets(projectId: string, userId: string, workspaceId: 
  * time so the user sees the build/run progress (and any failure) instead of a blank
  * screen. Returns true as soon as the port serves, false at the deadline.
  */
+// The app has explicitly announced it's serving. Kestrel (.NET), most Node
+// frameworks, uvicorn, etc. print one of these once the socket is bound — a far
+// more reliable "up" signal than a single curl that can race a slow cold-start.
+const LISTENING_BANNER = /Now listening on|Application started|Started .* in \d|Listening on|listening on port|running on (?:http|port)|server started|started server on|Local:\s+http/i;
+
 async function waitForAppUp(projectId: string, userId: string, workspaceId: string, port: number, logFile: string, maxMs: number): Promise<boolean> {
   const start = Date.now();
   const deadline = start + maxMs;
   let off = 0;
   let lastMsgAt = start;
+  let sawBanner = false;
   while (Date.now() < deadline) {
     throwIfCancelled(projectId);
     const r = await sh(workspaceId, `tail -c +${off + 1} ${logFile} 2>/dev/null`, 15_000).catch(() => ({ output: "" }));
@@ -468,16 +474,45 @@ async function waitForAppUp(projectId: string, userId: string, workspaceId: stri
       off += Buffer.byteLength(out, "utf8");
       plog(projectId, userId, out.trim().split("\n").slice(-1)[0]!.slice(0, 200), { detail: out.trim().slice(-1200) });
       lastMsgAt = Date.now();
+      if (LISTENING_BANNER.test(out)) sawBanner = true;
     } else if (Date.now() - lastMsgAt > 12_000) {
       // Heartbeat so a silent build (e.g. a hung restore that prints nothing) still
       // shows liveness + elapsed time instead of a frozen spinner.
       plog(projectId, userId, `…waiting for the app on port ${port} (${Math.round((Date.now() - start) / 1000)}s, no output yet)`);
       lastMsgAt = Date.now();
     }
-    if (await checkServer(workspaceId, port, 1)) return true;
+    // If the app SAID it's listening, give the port a couple more tries — a slow
+    // cold-start (dotnet JIT / EF model build) can bind a few seconds after the
+    // banner. This kills the false-negative "did not come up" on a live app.
+    if (await checkServer(workspaceId, port, sawBanner ? 3 : 1)) return true;
     await sleep(6000);
   }
+  // Deadline hit. Last-chance rescue: if the log shows the app announced it's
+  // listening, trust one final generous port check before declaring failure.
+  const tailR = await sh(workspaceId, `tail -c 4000 ${logFile} 2>/dev/null`, 15_000).catch(() => ({ output: "" }));
+  if (sawBanner || LISTENING_BANNER.test(tailR.output || "")) {
+    plog(projectId, userId, `App logged it's listening on port ${port} but the readiness window elapsed — doing a final check…`);
+    if (await checkServer(workspaceId, port, 5)) return true;
+  }
   return false;
+}
+
+/**
+ * The port(s) the app ACTUALLY bound, parsed from its own startup banner in
+ * preview.log — e.g. Kestrel's `Now listening on: http://0.0.0.0:5123` or a Node
+ * framework's `Local: http://localhost:3000`. Used to diagnose (and self-heal)
+ * the "app is running but the expected port is dead" case: a .NET app whose
+ * appsettings `Kestrel:Endpoints`/`applicationUrl` overrides ASPNETCORE_URLS and
+ * binds a different port than we told it to. Returns distinct ports in log order.
+ */
+async function detectBoundPorts(workspaceId: string, logFile: string): Promise<number[]> {
+  const r = await sh(workspaceId, `grep -aoiE '(now listening on|listening on|local:|running on)[^0-9]*https?://[^ ]*:[0-9]+' ${logFile} 2>/dev/null | tail -20`, 15_000).catch(() => ({ output: "" }));
+  const ports: number[] = [];
+  for (const m of (r.output || "").matchAll(/:(\d{2,5})(?:\D|$)/g)) {
+    const p = parseInt(m[1]!, 10);
+    if (p > 0 && p < 65536 && !ports.includes(p)) ports.push(p);
+  }
+  return ports;
 }
 
 async function startApp(workspaceId: string, manifest: PreviewManifest): Promise<boolean> {
@@ -1564,26 +1599,40 @@ fi`, 240_000);
 
     // 6. Confirm the app is actually serving on its port (reality check).
     plog(projectId, userId, `Verifying the app responds on 127.0.0.1:${manifest.port}…`);
+    // SELF-HEAL (same as restartPreview): if the app is up but bound a DIFFERENT
+    // port than requested (a .NET appsettings Kestrel/applicationUrl override of
+    // ASPNETCORE_URLS), expose the port it actually announced in its log.
+    let effectivePort = manifest.port;
     if (!up) {
+      const bound = await detectBoundPorts(workspaceId, `${PROJECT_DIR}/preview.log`);
+      const alt = bound.find((p) => p !== manifest.port && ![80, 443].includes(p));
+      if (alt && await checkServer(workspaceId, alt, 2)) {
+        effectivePort = alt; up = true;
+        plog(projectId, userId, `App bound port ${alt} (not ${manifest.port}) — appsettings/code overrode ASPNETCORE_URLS. Exposing ${alt} instead.`);
+      }
+    }
+    if (!up) {
+      const bound = await detectBoundPorts(workspaceId, `${PROJECT_DIR}/preview.log`);
       const log = await sh(workspaceId, `tail -40 ${PROJECT_DIR}/preview.log 2>/dev/null`, 20_000);
       const detail = (log.output || "").trim() || "(no log output captured)";
-      plog(projectId, userId, `The app did not respond on port ${manifest.port}`, { level: "error", detail });
-      return failed(projectId, userId, `The app did not come up on port ${manifest.port}.\n\n${detail.slice(-1000)}`);
+      const portNote = bound.length ? ` The app's log says it's listening on port ${bound.join(", ")}, not ${manifest.port} — it's binding a port from appsettings (Kestrel:Endpoints/applicationUrl) or code (UseUrls) that overrides ASPNETCORE_URLS. Point it at ${manifest.port}.` : "";
+      plog(projectId, userId, `The app did not respond on port ${manifest.port}${bound.length ? ` (it bound ${bound.join(", ")})` : ""}`, { level: "error", detail });
+      return failed(projectId, userId, `The app did not come up on port ${manifest.port}.${portNote}\n\n${detail.slice(-1000)}`);
     }
     plog(projectId, userId, "App is responding ✓");
 
     // 7. Expose the app's OWN port publicly. The app is CONFIRMED up, so a
     // transient Mags "job not found" here must NOT throw away a working preview —
     // retry the exposure (the VM name just needs a moment to re-resolve).
-    plog(projectId, userId, `Exposing port ${manifest.port} as a public URL…`);
+    plog(projectId, userId, `Exposing port ${effectivePort} as a public URL…`);
     const alias = existing?.stableAlias || randomAlias();
     let previewUrl = "";
     let exposeErr = "";
     for (let attempt = 1; attempt <= 5; attempt++) {
       try {
-        await enableHttpAccess(workspaceId, manifest.port);
+        await enableHttpAccess(workspaceId, effectivePort);
         try { previewUrl = await setStableUrl(alias, workspaceId); }
-        catch { previewUrl = await enableHttpAccess(workspaceId, manifest.port); }
+        catch { previewUrl = await enableHttpAccess(workspaceId, effectivePort); }
         if (previewUrl) break;
       } catch (e) {
         exposeErr = (e as Error).message ?? String(e);
@@ -1592,14 +1641,15 @@ fi`, 240_000);
       }
     }
     if (!previewUrl) {
-      return failed(projectId, userId, `The app is running on port ${manifest.port}, but exposing the public URL failed: ${exposeErr}. Try again.`);
+      return failed(projectId, userId, `The app is running on port ${effectivePort}, but exposing the public URL failed: ${exposeErr}. Try again.`);
     }
 
     await db.update(projectEnvironments).set({ stableAlias: alias, updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
     plog(projectId, userId, `Preview live: ${previewUrl}`);
-    await setPreview(projectId, userId, { previewStatus: "running", appUrl: previewUrl, appPort: manifest.port, previewError: null }, "Preview is live");
+    await setPreview(projectId, userId, { previewStatus: "running", appUrl: previewUrl, appPort: effectivePort, previewError: null }, "Preview is live");
     // Post-run verification (URL + assets + DB) → publish the launch summary to chat.
-    const v = await verifyPreview(projectId, userId, workspaceId, manifest, branch || "(default)").catch(() => null);
+    const vManifest = effectivePort === manifest.port ? manifest : { ...manifest, port: effectivePort };
+    const v = await verifyPreview(projectId, userId, workspaceId, vManifest, branch || "(default)").catch(() => null);
     if (v) await publishSummary(userId, opts.conversationId, `${v.summary}\n\n🔗 ${previewUrl}`).catch(() => {});
     return { previewUrl };
   } catch (err) {
@@ -2040,7 +2090,27 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
     if (!buildFailed) {
       plog(projectId, userId, `Starting the app from ${branchLabel}…`);
       await runDetachedPolled(projectId, userId, workspaceId, appStartCommand(manifest, runDir), 30_000);
-      up = await waitForAppUp(projectId, userId, workspaceId, manifest.port, `${runDir}/preview.log`, ticketId ? 90_000 : 60_000);
+      up = await waitForAppUp(projectId, userId, workspaceId, manifest.port, `${runDir}/preview.log`, ticketId ? 120_000 : 90_000);
+    }
+
+    // The port we'll actually expose. Normally manifest.port, but see the
+    // port-mismatch self-heal below (a .NET app that ignores ASPNETCORE_URLS).
+    let effectivePort = manifest.port;
+
+    // SELF-HEAL: the app may be RUNNING but on a different port than we asked for
+    // — e.g. a .NET app whose appsettings `Kestrel:Endpoints`/`applicationUrl`
+    // overrides ASPNETCORE_URLS, so it binds (say) 5123 while the proxy on 5000
+    // sees nothing ("app is up in the logs, but the URL errors out"). Read the
+    // port the app ITSELF announced; if it's different and reachable, expose THAT
+    // instead of failing. Generic — works whatever set the port (config or code).
+    if (!up) {
+      const bound = await detectBoundPorts(workspaceId, `${runDir}/preview.log`);
+      const alt = bound.find((p) => p !== manifest.port && ![80, 443].includes(p));
+      if (alt && await checkServer(workspaceId, alt, 2)) {
+        effectivePort = alt;
+        up = true;
+        plog(projectId, userId, `App bound port ${alt} (not ${manifest.port}) — likely an appsettings Kestrel/applicationUrl override of ASPNETCORE_URLS. Exposing ${alt} instead.`, { level: "info" });
+      }
     }
 
     // Only if the recorded build/run didn't bring it up → hand off to the driver to
@@ -2056,20 +2126,23 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
     }
     if (!up) {
       await setStep("run", "failed");
+      const bound = await detectBoundPorts(workspaceId, `${runDir}/preview.log`);
+      const portNote = bound.length ? `\n\nThe app's log says it's listening on port ${bound.join(", ")} — but the preview expects ${manifest.port}. It's probably binding a port from appsettings (Kestrel:Endpoints/applicationUrl) or code (UseUrls) that overrides ASPNETCORE_URLS=…:${manifest.port}. Point it at ${manifest.port}.` : "";
       const tail = await sh(workspaceId, `tail -40 ${runDir}/preview.log 2>/dev/null`, 20_000).catch(() => ({ output: "" }));
-      plog(projectId, userId, `The app did not come up on port ${manifest.port}`, { level: "error", detail: (tail.output || "(no output — the app may have failed to build)").slice(-1500) });
-      return failed(projectId, userId, `The app did not come back up on port ${manifest.port}.\n\n${(tail.output || "").slice(-800)}`);
+      plog(projectId, userId, `The app did not come up on port ${manifest.port}${bound.length ? ` (it bound ${bound.join(", ")})` : ""}`, { level: "error", detail: (tail.output || "(no output — the app may have failed to build)").slice(-1500) });
+      return failed(projectId, userId, `The app did not come back up on port ${manifest.port}.${portNote}\n\n${(tail.output || "").slice(-800)}`);
     }
     await setStep("run", "done");
-    plog(projectId, userId, `App running ✓ (${branchLabel})`);
-    // Re-expose (idempotent) and mark running.
-    await enableHttpAccess(workspaceId, manifest.port).catch(() => {});
+    plog(projectId, userId, `App running ✓ (${branchLabel}${effectivePort !== manifest.port ? ` on port ${effectivePort}` : ""})`);
+    // Re-expose (idempotent) and mark running — on the port the app actually bound.
+    await enableHttpAccess(workspaceId, effectivePort).catch(() => {});
     const alias = row.stableAlias || randomAlias();
     let previewUrl = row.appUrl || "";
     try { previewUrl = await setStableUrl(alias, workspaceId); } catch { /* keep existing */ }
-    await setPreview(projectId, userId, { previewStatus: "running", appUrl: previewUrl, appPort: manifest.port, previewError: null, previewBranch: branchLabel }, "Preview is live");
+    await setPreview(projectId, userId, { previewStatus: "running", appUrl: previewUrl, appPort: effectivePort, previewError: null, previewBranch: branchLabel }, "Preview is live");
     // Post-run verification (URL + assets + DB) → publish the launch summary to chat.
-    const v = await verifyPreview(projectId, userId, workspaceId, manifest, branchLabel).catch(() => null);
+    const vManifest = effectivePort === manifest.port ? manifest : { ...manifest, port: effectivePort };
+    const v = await verifyPreview(projectId, userId, workspaceId, vManifest, branchLabel).catch(() => null);
     if (v) await publishSummary(userId, opts.conversationId, `${v.summary}\n\n🔗 ${previewUrl}`).catch(() => {});
     return { previewUrl };
   } catch (err) {
