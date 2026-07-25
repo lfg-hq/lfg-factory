@@ -27,9 +27,10 @@ import { broadcastInstantStatus } from "../../services/instant-app.ts";
 
 export const cliRouter = new Hono();
 
-// Last Pi action label logged per ticket — used to collapse Pi's repeated re-echoes
-// of the same tool call into one Actions-log row (across POST batches).
-const _lastPiLabel = new Map<string, string>();
+// The still-growing Pi label per ticket, held between POST batches so a message
+// streamed across several POSTs is logged ONCE (flushed when a different label
+// arrives or the run signals done) instead of once per batch.
+const _piPending = new Map<string, string>();
 
 // ── Auth middleware ───────────────────────────────────────────────────
 
@@ -468,22 +469,36 @@ cliRouter.post("/output", async (c) => {
     // word at a time. Exact-dedup misses these (each label differs). Collapse:
     // emit a label only when the NEXT one does NOT extend it (i.e. it's final),
     // then also drop exact repeats across POST batches (via _lastPiLabel).
-    let prev = _lastPiLabel.get(ticket_id) ?? "";
     const labels: string[] = [];
     for (const line of rawText.split("\n")) {
       try { const l = describePiLine(line); if (l) labels.push(l); } catch { /* skip a bad line */ }
     }
     const norm = (s: string) => s.replace(/…+$/, "").trimEnd();
+    // 1) Within-batch: collapse a growing-prefix run to its final (longest) label.
+    const collapsed: string[] = [];
     for (let i = 0; i < labels.length; i++) {
       const cur = labels[i]!;
       const next = labels[i + 1];
-      // A partial superseded by the next (longer) chunk of the same stream → skip.
-      if (next && norm(next).startsWith(norm(cur))) continue;
-      if (cur !== prev) { await addLog(ticket_id, cur, "command", ownerId); logged++; prev = cur; }
+      if (next && norm(next).startsWith(norm(cur))) continue; // superseded by the next chunk
+      collapsed.push(cur);
     }
-    _lastPiLabel.set(ticket_id, prev);
+    // 2) ACROSS batches: the same streamed message (esp. a long assistant summary)
+    // arrives split over several POSTs, so within-batch collapse can't catch it.
+    // Hold the growing label as "pending" and only emit it when a DIFFERENT label
+    // arrives (or on `done`) — so one message logs once, not once per POST.
+    let pending = _piPending.get(ticket_id) ?? "";
+    for (const cur of collapsed) {
+      if (pending && (norm(cur).startsWith(norm(pending)) || norm(pending).startsWith(norm(cur)))) {
+        if (norm(cur).length >= norm(pending).length) pending = cur; // same stream → keep longest
+        continue;
+      }
+      if (pending) { await addLog(ticket_id, pending, "command", ownerId); logged++; }
+      pending = cur;
+    }
+    if (done && pending) { await addLog(ticket_id, pending, "command", ownerId); logged++; pending = ""; }
+    if (pending) _piPending.set(ticket_id, pending); else _piPending.delete(ticket_id);
     // Truly opaque non-JSON output (stderr) — surface it rather than drop it.
-    if (logged === 0) {
+    if (labels.length === 0) {
       const plain = rawText.trim();
       if (plain && !plain.startsWith("{")) await addLog(ticket_id, plain.slice(0, 1000), "cli_error", ownerId);
     }
