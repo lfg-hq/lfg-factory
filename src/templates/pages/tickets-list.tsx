@@ -768,32 +768,40 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
   ).replace(/<\//g, "<\\/"))};
   const ticketMap = Object.fromEntries(TICKET_DATA.map(t => [t.id, t]));
 
+  // Render the drawer's Details header from a ticket object (ticketMap entry OR a
+  // freshly-fetched live row). Kept separate so a click still opens the drawer
+  // even when the local ticketMap is stale/missing the ticket (was: silent no-op
+  // = "card not clickable").
+  function renderDrawerDetails(t) {
+    if (!t) return;
+    var key = t.ticketKey || t.ticket_key || ('TKT-' + (t.index != null ? t.index : ''));
+    var status = t.status || 'open';
+    var priority = t.priority || 'Medium';
+    document.getElementById('drawer-title').textContent = key + ': ' + (t.name || 'Ticket');
+    const sb = document.getElementById('drawer-status');
+    sb.textContent = status.replace(/_/g, ' ');
+    sb.className = 'detail-label status-label status-' + status;
+    const pb = document.getElementById('drawer-priority');
+    pb.textContent = priority;
+    pb.className = 'detail-label priority-label priority-' + priority.toLowerCase();
+    var _descEl = document.getElementById('drawer-description');
+    if (t.description && typeof marked !== 'undefined') { _descEl.innerHTML = marked.parse(t.description); }
+    else { _descEl.textContent = t.description || 'No description provided.'; }
+    document.getElementById('drawer-created').textContent = t.createdAt || t.created_at || '';
+    document.getElementById('drawer-updated').textContent = t.updatedAt || t.updated_at || '';
+  }
+
   function openTicketDrawer(ticketId) {
     _lastLogCount = 0;
     _lastLogContent = '';
     _logsFirstLoad = true;
     _currentTicketId = ticketId;
     const t = ticketMap[ticketId];
-    if (!t) return;
-
-    document.getElementById('drawer-title').textContent = (t.ticketKey || ('TKT-' + t.index)) + ': ' + t.name;
-
-    const sb = document.getElementById('drawer-status');
-    sb.textContent = t.status.replace(/_/g, ' ');
-    sb.className = 'detail-label status-label status-' + t.status;
-
-    const pb = document.getElementById('drawer-priority');
-    pb.textContent = t.priority;
-    pb.className = 'detail-label priority-label priority-' + t.priority.toLowerCase();
-
-    var _descEl = document.getElementById('drawer-description');
-    if (t.description && typeof marked !== 'undefined') {
-      _descEl.innerHTML = marked.parse(t.description);
-    } else {
-      _descEl.textContent = t.description || 'No description provided.';
-    }
-    document.getElementById('drawer-created').textContent = t.createdAt;
-    document.getElementById('drawer-updated').textContent = t.updatedAt;
+    // Render from the local map if we have it; otherwise open with a placeholder
+    // and let the live fetch below fill it in — NEVER silently return (that reads
+    // as "the card isn't clickable").
+    if (t) renderDrawerDetails(t);
+    else document.getElementById('drawer-title').textContent = 'Loading…';
 
     // Pre-clear log area
     const actionsArea = document.getElementById('actions-log-area');
@@ -810,8 +818,13 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       .then(function(r) { return r.json(); })
       .then(function(resp) {
         var live = resp && resp.ticket ? resp.ticket : resp;
+        if (!live || (!live.id && !live.name)) return; // nothing to show
+        // Cache + (re)render details from the authoritative live row — this is what
+        // makes the drawer open even when ticketMap was stale/missing the ticket.
+        ticketMap[ticketId] = Object.assign({}, ticketMap[ticketId] || {}, live);
+        renderDrawerDetails(ticketMap[ticketId]);
         var qs = live.queueStatus || live.queue_status || '';
-        var st = live.status || t.status;
+        var st = live.status || (t && t.status) || 'open';
         var isActive = qs === 'queued' || qs === 'executing';
         // Persistent build-status banner (survives refresh — from the ticket row).
         updateTicketStatusBanner(live);
