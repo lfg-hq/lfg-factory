@@ -138,7 +138,9 @@ git config --global --add safe.directory "${projectDir}" 2>/dev/null || true
 
 # Self-heal: a restored / freshly-built VM may have no .git at all (exit 128 on the
 # first git command). Re-initialize and line up on the existing remote so push works.
-if [ ! -d .git ]; then
+# Use -e (exists) NOT -d (dir): in a git WORKTREE, .git is a FILE pointing at the
+# real gitdir — treating it as "missing" and running git init CORRUPTS the worktree.
+if [ ! -e .git ]; then
   echo "NO_GIT_REPO: initializing and reconciling with origin"
   git init -q
   git remote add origin "${authUrl}" 2>/dev/null || git remote set-url origin "${authUrl}"
@@ -231,7 +233,19 @@ echo "COMMIT_SHA:$SHA"
       );
       return { sha: headResult.output.trim(), branch: featureBranch };
     }
-    throw new Error(`Commit/push failed:\n${result.output}`);
+    // exit 128 with empty output = the script's captured stderr was lost (the shell
+    // died before `exec 2>&1`, or git failed at a layer we didn't capture). Run a
+    // plain diagnostic so the REAL cause is surfaced instead of a blind "failed".
+    let diag = result.output.trim();
+    if (!diag) {
+      const d = await execOnWorkspace(
+        workspaceId,
+        `cd "${projectDir}" 2>&1 || echo "NO_DIR ${projectDir}"; echo "--- pwd ---"; pwd 2>&1; echo "--- .git ---"; ls -la .git 2>&1 | head -5; echo "--- status ---"; git status 2>&1 | head -8; echo "--- remote ---"; git remote -v 2>&1; echo "--- head ---"; git rev-parse --abbrev-ref HEAD 2>&1`,
+        { timeout: 30_000 }
+      ).catch((e) => ({ output: `diagnostic exec failed: ${(e as Error).message}`, exitCode: 1 }));
+      diag = `(no output from commit script — exit ${result.exitCode}). Diagnostics:\n${d.output.slice(0, 1200)}`;
+    }
+    throw new Error(`Commit/push failed:\n${diag}`);
   }
 
   console.log(`[git] commitAndPush: committed and pushed sha=${shaMatch[1]} to ${featureBranch}`);
