@@ -1484,7 +1484,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       html += '<div style="grid-column:1/-1;margin-top:.25rem;padding:.6rem .75rem;border-radius:8px;'
         + 'background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.3);color:#fca5a5;font-size:.8rem;line-height:1.45;">'
         + '<i class="fas fa-triangle-exclamation" style="margin-right:.4rem;"></i>'
-        + '<strong>Changes were not pushed to git.</strong> The repo isn\'t connected or its token expired, so the work is only in the build sandbox. '
+        + '<strong>Changes were not pushed to git.</strong> The repo is not connected or its token expired, so the work is only in the build sandbox. '
         + '<a href="/settings" style="color:#fca5a5;text-decoration:underline;">Reconnect the repository in Settings</a>, then rebuild.'
         + '</div>';
     }
