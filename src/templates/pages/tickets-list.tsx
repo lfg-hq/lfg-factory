@@ -1157,6 +1157,25 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
 
   var _logsFirstLoad = true;
   var _agentThinking = false;
+
+  // Scroll the Actions log to the latest (bottom). The actual overflow element
+  // depends on the height chain — it can be #actions-log-area OR its .drawer-body
+  // ancestor — so scroll BOTH. Retry across frames + timers because the tab may
+  // have just become visible (display change) and log rows / markdown render async,
+  // so scrollHeight isn't final on the first frame.
+  function scrollActionsBottom() {
+    var area = document.getElementById('actions-log-area');
+    if (!area) return;
+    var body = area.closest('.drawer-body');
+    var go = function() {
+      area.scrollTop = area.scrollHeight;
+      if (body) body.scrollTop = body.scrollHeight;
+    };
+    requestAnimationFrame(function() { requestAnimationFrame(go); });
+    setTimeout(go, 60);
+    setTimeout(go, 250);
+  }
+
   async function loadExecutionLogs() {
     if (!_currentTicketId) return;
     try {
@@ -1199,12 +1218,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
         area.appendChild(thinkEl);
       }
 
-      if (shouldScroll) {
-        requestAnimationFrame(function() {
-          var scrollParent = area /* the .execution-logs-container is the real overflow scroller */;
-          scrollParent.scrollTop = scrollParent.scrollHeight;
-        });
-      }
+      if (shouldScroll) scrollActionsBottom();
       _logsFirstLoad = false;
     } catch(e) { console.error('loadExecutionLogs', e); }
   }
@@ -1247,8 +1261,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       '<span class="agent-thinking-dots">Thinking...</span>' +
       '</div>';
     area.appendChild(el);
-    var scrollParent = area /* the .execution-logs-container is the real overflow scroller */;
-    requestAnimationFrame(function() { scrollParent.scrollTop = scrollParent.scrollHeight; });
+    scrollActionsBottom();
   }
 
   function hideThinkingIndicator() {
@@ -1797,16 +1810,10 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       if (placeholder) area.innerHTML = '';
 
       var idx = area.children.length;
-      var scrollParent = area /* the .execution-logs-container is the real overflow scroller */;
-      var wasAtBottom = !area.children.length || (scrollParent.scrollHeight - scrollParent.scrollTop - scrollParent.clientHeight < 120);
+      var wasAtBottom = !area.children.length || (area.scrollHeight - area.scrollTop - area.clientHeight < 120);
       area.appendChild(renderLogEntry(log, 'live-' + idx));
 
-      if (wasAtBottom) {
-        requestAnimationFrame(function() {
-          var scrollParent = area /* the .execution-logs-container is the real overflow scroller */;
-          scrollParent.scrollTop = scrollParent.scrollHeight;
-        });
-      }
+      if (wasAtBottom) scrollActionsBottom();
       _lastLogCount = area.children.length;
       _lastLogContent = '';
     }
