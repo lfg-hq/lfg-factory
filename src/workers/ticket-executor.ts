@@ -17,7 +17,7 @@
  */
 
 import { db } from "../config/db.ts";
-import { projectTickets, projectTodoLists, ticketStages } from "../db/schema/tickets.ts";
+import { projectTickets, projectTodoLists, ticketStages, ticketLogs } from "../db/schema/tickets.ts";
 import { projects, projectEnvironmentVariables } from "../db/schema/projects.ts";
 import { projectEnvironments } from "../db/schema/project-environments.ts";
 import { profiles, githubTokens, applicationState, llmApiKeys } from "../db/schema/users.ts";
@@ -134,7 +134,7 @@ import { matchKnowledgeForPrompt } from "../ai/knowledge/matcher.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { logActivity } from "../services/activity-log.ts";
 import { ACTIVITY_TYPES } from "../db/schema/activities.ts";
-import { eq, and } from "drizzle-orm";
+import { eq, and, desc, inArray } from "drizzle-orm";
 
 /** Find a stage by name for a project and move the ticket to it. */
 async function moveTicketToStage(ticketId: string, projectId: string, stageName: string): Promise<string | null> {
@@ -1174,6 +1174,25 @@ async function executeTicketChat(
       .from(projectEnvironmentVariables)
       .where(and(eq(projectEnvironmentVariables.projectId, project!.id), eq(projectEnvironmentVariables.hasValue, true)));
     for (const r of piEnvRows) piEnvVars[r.key] = decrypt(r.encryptedValue);
+    // Give Pi the FULL context so a follow-up isn't blind: the requirements
+    // (acceptance criteria + notes), what was already built (branch/commit/status),
+    // and the recent conversation so it continues rather than restarts.
+    const ac = ((ticket.acceptanceCriteria as string[] | null) ?? []).filter(Boolean);
+    const acBlock = ac.length ? `\n## Acceptance criteria (must all still hold)\n${ac.map((c, i) => `${i + 1}. ${c}`).join("\n")}\n` : "";
+    const notesBlock = ticket.notes?.trim() ? `\n## Notes / rules to honor\n${ticket.notes.trim()}\n` : "";
+    const built = ticket.githubBranch || ticket.githubCommitSha;
+    const statusBlock = built
+      ? `\n## Current status of this job\nThis ticket was ALREADY built and its code is in the working tree (branch ${ticket.githubBranch ?? "?"}${ticket.githubCommitSha ? `, last commit ${ticket.githubCommitSha.slice(0, 7)}` : ""}). You are ITERATING on that existing implementation — build on it, don't start over.\n`
+      : `\n## Current status of this job\nThis ticket has not been built yet — implement it from the current repo state.\n`;
+    // Recent conversation (last few user asks + agent replies) for continuity.
+    const recent = await db.select({ t: ticketLogs.logType, m: ticketLogs.command })
+      .from(ticketLogs)
+      .where(and(eq(ticketLogs.ticketId, ticketId), inArray(ticketLogs.logType, ["user_message", "ai_response"])))
+      .orderBy(desc(ticketLogs.createdAt)).limit(8);
+    const convo = recent.reverse().filter((r) => (r.m ?? "").trim() && (r.m ?? "").trim() !== message.trim());
+    const convoBlock = convo.length
+      ? `\n## Recent conversation (oldest first)\n${convo.map((r) => `${r.t === "user_message" ? "User" : "Agent"}: ${(r.m ?? "").slice(0, 400)}`).join("\n")}\n`
+      : "";
     const piPrompt = `You are continuing work on an existing ticket in the repository at /data/${projectDirName}.
 
 ## Ticket
@@ -1181,12 +1200,13 @@ ${ticket.name}
 
 ## Description
 ${ticket.description ?? ""}
-
-## New instruction from the user
+${acBlock}${notesBlock}${statusBlock}${convoBlock}
+## New instruction from the user (do this now)
 ${message}
 
 ## Instructions
 - The repo is already cloned and set up at /data/${projectDirName}; explore it and reuse existing patterns.
+- Honor the acceptance criteria and notes above; do NOT regress work already done.
 - Do exactly what the user's new instruction asks; keep the change focused.
 - Do NOT run 'git commit', 'git push', or switch branches — commit/push is handled automatically.
 - Before finishing, make sure the project still builds/compiles.`;
