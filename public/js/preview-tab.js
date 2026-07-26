@@ -304,7 +304,23 @@
     if (IN_PROGRESS.includes(status)) {
       currentView = "progress";
       setSub(STEP_LABEL[status] || "Working…");
-      renderActions(btn("Cancel", { action: "stop", icon: "fa-stop" }));
+      // Show the branch selector DURING setup/sync too — switching branches while a
+      // build runs shouldn't require waiting for it to finish. Selecting a branch
+      // supersedes the current run (doRunBranch → restart on the chosen branch).
+      syncBranchFromState(state);
+      const pOpts = branches.map((b) => `<option value="${esc(b.id)}"${b.id === branchId ? " selected" : ""}>${esc(b.label)}</option>`).join("");
+      const pBranchSel = branches.length > 1 ? `<select data-branch title="Switch branch (supersedes the current build)" style="padding:6px 8px;border-radius:6px;font-size:12.5px;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);max-width:200px;">${pOpts}</select>` : "";
+      renderActions(pBranchSel + btn("Cancel", { action: "stop", icon: "fa-stop" }));
+      // Branch list may not be loaded yet during an early setup phase — fetch it and
+      // drop the selector in without disturbing the progress log.
+      loadBranches().then(() => {
+        if (currentView !== "progress") return;
+        syncBranchFromState(current);
+        const opts2 = branches.map((b) => `<option value="${esc(b.id)}"${b.id === branchId ? " selected" : ""}>${esc(b.label)}</option>`).join("");
+        const sel = document.querySelector("#preview-actions [data-branch]");
+        if (sel) { sel.innerHTML = opts2; }
+        else if (branches.length > 1) renderActions(`<select data-branch title="Switch branch (supersedes the current build)" style="padding:6px 8px;border-radius:6px;font-size:12.5px;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);max-width:200px;">${opts2}</select>` + btn("Cancel", { action: "stop", icon: "fa-stop" }));
+      });
       body.innerHTML = `
         <div style="height:100%;display:flex;flex-direction:column;gap:10px;padding:16px 20px;">
           <div style="display:flex;align-items:center;gap:12px;">
@@ -657,8 +673,13 @@
   }
 
   // Switch which branch the preview runs (default or a ticket's worktree).
-  function doRunBranch(id) {
+  async function doRunBranch(id) {
     branchId = id || "default";
+    // If a build/sync is in flight, cancel it first so we don't race two runs —
+    // then start the chosen branch. (Selecting a branch supersedes the current one.)
+    if (currentView === "progress") {
+      try { await api("/stop", { method: "POST" }); } catch (_) {}
+    }
     doRestart();
   }
 
