@@ -16,8 +16,11 @@ COPY . .
 # Final runtime image
 FROM base AS runner
 
-# Install curl for health checks
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+# curl for health checks; nodejs because the preview screenshot runs
+# scripts/screenshot-worker.mjs via `spawn("node", …)` — Playwright hangs under
+# Bun, so we drive the remote CDP browser with Node. Without node here the
+# screenshot feature fails with "spawn node ENOENT" in production.
+RUN apt-get update && apt-get install -y --no-install-recommends curl nodejs && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
 RUN addgroup --system --gid 1001 bunjs && \
