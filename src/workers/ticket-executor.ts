@@ -1236,6 +1236,11 @@ ${message}
         // → "changes done but no commit / status / merge". A pure Q&A turn (no
         // edits → !didWork) skips this and just leaves the answer in the log.
         await finalizeTicketChat(ticketId, ownerId, project!, ticket, workspaceId, message);
+      } else {
+        // Pi answered without changing code (Q&A). Surface its reply so the client's
+        // "Thinking…" indicator resolves and the user sees the response.
+        const tail = (piResult.tail || "").trim();
+        await addLog(ticketId, tail ? tail.slice(-1500) : "Done — no code changes were needed.", "ai_response", ownerId);
       }
     } catch (err) {
       await addLog(ticketId, `Pi chat error: ${(err as Error).message}`, "cli_error", ownerId);

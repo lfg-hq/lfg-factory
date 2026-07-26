@@ -911,7 +911,10 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       _lastLogCount = 0;
       _lastLogContent = '';
       _logsFirstLoad = true;
-      loadExecutionLogs();
+      // Await the fetch+render, THEN scroll to the latest — the pane just became
+      // visible and rows render after the async load, so scroll only lands once
+      // the content is actually there.
+      loadExecutionLogs().then(function() { scrollActionsBottom(); });
       // Logs come via WebSocket (ticket_log events) — no polling needed
     }
     if (tabId === 'tasks')   loadTasks();
@@ -1276,7 +1279,15 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     var msg = input.value.trim();
     if (!msg || !_currentTicketId) return;
     input.value = '';
-    // Show thinking indicator
+    // Optimistically render YOUR message immediately, BEFORE the thinking bubble,
+    // so it always appears first (don't wait for the server round-trip / poll).
+    var area = document.getElementById('actions-log-area');
+    if (area) {
+      var ph = area.querySelector('.log-placeholder');
+      if (ph) area.innerHTML = '';
+      area.appendChild(renderLogEntry({ type: 'user_message', message: msg, createdAt: new Date().toISOString() }, 'you-' + Date.now()));
+    }
+    // Then show thinking indicator (appended after your message).
     showThinkingIndicator();
     try {
       var resp = await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + _currentTicketId + '/chat', {
