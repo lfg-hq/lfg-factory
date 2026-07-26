@@ -1060,8 +1060,9 @@ Before implementing, fix the git issue:
         updatedAt: new Date(),
       })
       .where(eq(projectTickets.id, ticketId));
-    await addLog(ticketId, "Ticket implementation complete!", "command", ownerId);
-    broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId });
+    const cliSummary = `✅ **Ticket complete** — moved to In Review.\n\n- Branch: \`${featureBranch}\`\n\nOpen the **Git** tab to review the diff, or the **Preview** tab to run this branch.`;
+    await addLog(ticketId, cliSummary, "ai_response", ownerId);
+    broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId, mergeStatus: "merged" });
   } else {
     const reason = commitFailed
       ? "the changes were built but were NOT pushed to git (commit/push failed or GitHub not connected) — fix the cause and rebuild"
@@ -2083,6 +2084,8 @@ git branch --show-current
   const durationMs = Date.now() - startTime;
 
   let commitFailed = false;
+  let completedSha = "";   // captured for the final completion summary
+  let mergedOk = false;
   // Build succeeded but we have NO way to push (no repo linked or the token
   // expired/was revoked). Silently skipping the push here used to mark the ticket
   // "In Review" anyway — and for an isolated build the VM is then destroyed, so
@@ -2106,6 +2109,7 @@ git branch --show-current
         tokenUser: pushAuth.tokenUser,
       });
 
+      completedSha = sha;
       // "pushed" clears any prior "not_pushed" flag even if the merge below fails.
       await db.update(projectTickets).set({ githubBranch: featureBranch, githubCommitSha: sha, githubMergeStatus: "pushed", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
 
@@ -2129,6 +2133,7 @@ git branch --show-current
           githubToken: pushAuth.token,
           tokenUser: pushAuth.tokenUser,
         });
+        mergedOk = true;
         await db.update(projectTickets).set({ githubMergeStatus: "merged", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
         await addLog(ticketId, `Merged to lfg-agent (${mergeSha.slice(0, 7)})`, "command", ownerId);
       } catch (mergeErr) {
@@ -2152,8 +2157,15 @@ git branch --show-current
       lastExecutionAt: new Date(),
       updatedAt: new Date(),
     }).where(eq(projectTickets.id, ticketId));
-    await addLog(ticketId, "Ticket implementation complete!", "command", ownerId);
-    broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId });
+    // A clear, agent-style completion summary (green ai_response bubble) so the
+    // user gets an explicit "here's what got done" message, not just a buried log.
+    const summary = `✅ **Ticket complete** — moved to In Review.\n\n` +
+      `- Branch: \`${featureBranch}\`\n` +
+      (completedSha ? `- Commit: \`${completedSha.slice(0, 7)}\`\n` : "") +
+      (mergedOk ? `- Merged to \`lfg-agent\` ✓\n` : (completedSha ? `- Pushed (merge to lfg-agent pending/failed — see logs)\n` : "")) +
+      `\nOpen the **Git** tab to review the diff, or the **Preview** tab to run this branch.`;
+    await addLog(ticketId, summary, "ai_response", ownerId);
+    broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId, mergeStatus: mergedOk ? "merged" : "pushed" });
   } else {
     const reason = commitFailed
       ? "the changes were built but were NOT pushed (commit/push failed or no repo/token) — fix the cause and rebuild; the build sandbox is kept so the work isn't lost"
