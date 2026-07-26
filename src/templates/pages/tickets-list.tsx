@@ -581,7 +581,12 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       <div id="actions-log-area" class="execution-logs-container"></div>
       <!-- Chat input (fixed to bottom) -->
       <div class="logs-chat-container">
+        <div id="actions-attach-chip" style="display:none;align-items:center;gap:.4rem;margin:0 0 .4rem 0;font-size:.75rem;color:var(--text-secondary,#9ca3af);"></div>
         <div class="logs-chat-field">
+          <input id="actions-file-input" type="file" style="display:none;" onchange="uploadTicketFile(this.files&&this.files[0])" />
+          <button onclick="document.getElementById('actions-file-input').click()" class="logs-chat-send-btn" title="Attach a file for the agent" style="background:transparent;">
+            <i class="fas fa-paperclip" style="font-size:.72rem;"></i>
+          </button>
           <input id="actions-chat-input" type="text" placeholder="Send a message to the agent..."
             onkeydown="if(event.key==='Enter'){sendTicketChatMsg();}" />
           <button onclick="sendTicketChatMsg()" class="logs-chat-send-btn" title="Send message">
@@ -1274,11 +1279,42 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     if (el) el.remove();
   }
 
+  // The file attached to the NEXT chat message (uploaded into the ticket sandbox).
+  var _pendingUpload = null;
+  window.uploadTicketFile = async function(file) {
+    if (!file || !_currentTicketId) return;
+    var chip = document.getElementById('actions-attach-chip');
+    if (chip) { chip.style.display = 'flex'; chip.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading ' + escHtml(file.name) + '…'; }
+    try {
+      var fd = new FormData(); fd.append('file', file);
+      var r = await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + _currentTicketId + '/chat/upload', { method: 'POST', body: fd });
+      var j = await r.json();
+      if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+      _pendingUpload = { path: j.path, name: file.name };
+      if (chip) chip.innerHTML = '<i class="fas fa-paperclip"></i> ' + escHtml(file.name) + ' <span style="cursor:pointer;color:var(--text-secondary);" onclick="clearTicketUpload()">✕</span>';
+    } catch (e) {
+      if (chip) { chip.style.display = 'none'; }
+      if (typeof toast === 'function') toast('Upload failed: ' + e.message); else alert('Upload failed: ' + e.message);
+    }
+    var fi = document.getElementById('actions-file-input'); if (fi) fi.value = '';
+  };
+  window.clearTicketUpload = function() {
+    _pendingUpload = null;
+    var chip = document.getElementById('actions-attach-chip');
+    if (chip) { chip.style.display = 'none'; chip.innerHTML = ''; }
+  };
+
   async function sendTicketChatMsg() {
     var input = document.getElementById('actions-chat-input');
     var msg = input.value.trim();
-    if (!msg || !_currentTicketId) return;
+    // Allow sending with just an attachment (no text).
+    if ((!msg && !_pendingUpload) || !_currentTicketId) return;
     input.value = '';
+    // Fold the uploaded file path into the message so the agent knows where it is.
+    if (_pendingUpload) {
+      msg = (msg ? msg + '\n\n' : '') + 'I uploaded a file to ' + _pendingUpload.path + ' (original name: ' + _pendingUpload.name + '). Use it as needed.';
+      clearTicketUpload();
+    }
     // Optimistically render YOUR message immediately, BEFORE the thinking bubble,
     // so it always appears first (don't wait for the server round-trip / poll).
     var area = document.getElementById('actions-log-area');

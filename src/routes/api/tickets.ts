@@ -549,6 +549,47 @@ ticketsApi.post("/:projectId/tickets/:ticketId/chat", async (c) => {
   return c.json({ ok: true });
 });
 
+// ── POST /:projectId/tickets/:ticketId/chat/upload ──────────────────
+// Upload a file INTO the ticket's sandbox so the agent (Pi) can read it, then
+// reference the returned path in a chat message. Writes to /data/uploads/<name>.
+ticketsApi.post("/:projectId/tickets/:ticketId/chat/upload", async (c) => {
+  const user = c.get("user");
+  const { projectId, ticketId } = c.req.param();
+  const access = await getProjectAccess(projectId, user.id);
+  if (!access) return c.json({ error: "Not found" }, 404);
+
+  const body = await c.req.parseBody();
+  const file = body["file"] as File | undefined;
+  if (!file) return c.json({ error: "No file provided" }, 400);
+  if (file.size > 25 * 1024 * 1024) return c.json({ error: "File too large (max 25 MB)." }, 400);
+
+  // The ticket must have a live sandbox to receive the file.
+  const [sb] = await db.select({ ws: sandboxes.magsWorkspaceId })
+    .from(sandboxes).where(eq(sandboxes.ticketId, ticketId!)).limit(1);
+  if (!sb?.ws) return c.json({ error: "No active sandbox for this ticket — build it first, then attach files." }, 400);
+
+  const safeName = (file.name || "file").replace(/[^\w.\-]+/g, "_").slice(0, 80) || "file";
+  const destPath = `/data/uploads/${crypto.randomUUID().slice(0, 8)}-${safeName}`;
+  const b64 = Buffer.from(await file.arrayBuffer()).toString("base64");
+  const tmp = `/tmp/lfg-upload-${crypto.randomUUID().slice(0, 8)}.b64`;
+  try {
+    const { execOnWorkspace } = await import("../../services/mags.ts");
+    // A whole-file base64 as one shell arg overflows ARG_MAX (~2 MB), so append it
+    // in chunks (base64 is shell-safe: only [A-Za-z0-9+/=]), then decode once.
+    await execOnWorkspace(sb.ws, `mkdir -p /data/uploads; : > '${tmp}'`, { timeout: 30_000 });
+    const CHUNK = 120_000; // ~120 KB/arg, well under ARG_MAX
+    for (let i = 0; i < b64.length; i += CHUNK) {
+      await execOnWorkspace(sb.ws, `printf '%s' '${b64.slice(i, i + CHUNK)}' >> '${tmp}'`, { timeout: 30_000 });
+    }
+    const r = await execOnWorkspace(sb.ws, `base64 -d '${tmp}' > '${destPath}' && rm -f '${tmp}' && echo WROTE $(wc -c < '${destPath}')`, { timeout: 60_000 });
+    if (!/WROTE/.test(r.output)) return c.json({ error: `Could not write the file to the sandbox: ${r.output.slice(0, 200)}` }, 500);
+  } catch (e) {
+    await import("../../services/mags.ts").then(({ execOnWorkspace }) => execOnWorkspace(sb.ws!, `rm -f '${tmp}'`, { timeout: 15_000 })).catch(() => {});
+    return c.json({ error: `Upload failed: ${(e as Error).message}` }, 500);
+  }
+  return c.json({ path: destPath, name: file.name, size: file.size });
+});
+
 // ── POST /:projectId/tickets/:ticketId/queue ────────────────────────
 // Queue a ticket for execution
 
