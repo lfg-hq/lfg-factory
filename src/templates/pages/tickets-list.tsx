@@ -1312,7 +1312,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     input.value = '';
     // Fold the uploaded file path into the message so the agent knows where it is.
     if (_pendingUpload) {
-      msg = (msg ? msg + '\n\n' : '') + 'I uploaded a file to ' + _pendingUpload.path + ' (original name: ' + _pendingUpload.name + '). Use it as needed.';
+      var _nl2 = String.fromCharCode(10) + String.fromCharCode(10);
+      msg = (msg ? msg + _nl2 : '') + 'I uploaded a file to ' + _pendingUpload.path + ' (original name: ' + _pendingUpload.name + '). Use it as needed.';
       clearTicketUpload();
     }
     // Optimistically render YOUR message immediately, BEFORE the thinking bubble,
