@@ -180,6 +180,16 @@ async function loadRunInfo(internalProjectId: string): Promise<{ installCmd?: st
   } catch { return null; }
 }
 
+/** The project's mandatory directives (app_profile) as a prompt block, or "". */
+async function directivesBlock(projectId: string): Promise<string> {
+  try {
+    const { loadAppProfile } = await import("../services/app-profile.ts");
+    const d = (await loadAppProfile(projectId))?.profile.directives ?? [];
+    if (!d.length) return "";
+    return `\n## MANDATORY DIRECTIVES — always enforce (fixing a violation is part of the task)\n${d.map((x, i) => `${i + 1}. ${x}`).join("\n")}\n`;
+  } catch { return ""; }
+}
+
 function buildPiTicketPrompt(args: {
   ticket: { name: string; description: string | null; notes?: string | null; acceptanceCriteria?: string[] | null };
   techStack?: { language?: string; framework?: string; packageManager?: string; port?: number } | null;
@@ -188,6 +198,8 @@ function buildPiTicketPrompt(args: {
   prescaffolded?: boolean;
   /** How to build/run this project (from the preview setup manifest, if any). */
   runInfo?: { installCmd?: string; buildCmd?: string; runCmd?: string; port?: number } | null;
+  /** Project mandatory directives (app_profile) — must always be enforced. */
+  directives?: string;
 }): string {
   const t = args.ticket;
   const ac = (t.acceptanceCriteria ?? []).map((c, i) => `${i + 1}. ${c}`).join("\n") || "Not specified.";
@@ -225,10 +237,10 @@ ${ac}
 
 ## Tech stack
 ${stack}
-${runBlock}
+${runBlock}${args.directives ?? ""}
 ## Instructions
 - Explore the project first; reuse existing patterns, dependencies, and files.
-- Implement the ticket end to end so every acceptance criterion is met.
+- Implement the ticket end to end so every acceptance criterion is met.${args.directives ? "\n- The MANDATORY DIRECTIVES above are non-negotiable — verify your change satisfies every one before finishing." : ""}
 - Make the app runnable: bind the dev server to 0.0.0.0 on port ${port}.
 - Do NOT run 'git commit', 'git push', or switch git branches — commit/push/merge is handled automatically after you finish.
 - Before finishing, make sure the project builds/compiles.`;
@@ -1194,6 +1206,7 @@ async function executeTicketChat(
     const convoBlock = convo.length
       ? `\n## Recent conversation (oldest first)\n${convo.map((r) => `${r.t === "user_message" ? "User" : "Agent"}: ${(r.m ?? "").slice(0, 400)}`).join("\n")}\n`
       : "";
+    const dirBlock = await directivesBlock(project!.id);
     const piPrompt = `You are continuing work on an existing ticket in the repository at /data/${projectDirName}.
 
 ## Ticket
@@ -1201,13 +1214,13 @@ ${ticket.name}
 
 ## Description
 ${ticket.description ?? ""}
-${acBlock}${notesBlock}${statusBlock}${convoBlock}
+${acBlock}${notesBlock}${statusBlock}${convoBlock}${dirBlock}
 ## New instruction from the user (do this now)
 ${message}
 
 ## Instructions
 - The repo is already cloned and set up at /data/${projectDirName}; explore it and reuse existing patterns.
-- Honor the acceptance criteria and notes above; do NOT regress work already done.
+- Honor the acceptance criteria, notes, and MANDATORY DIRECTIVES above; do NOT regress work already done.
 - Do exactly what the user's new instruction asks; keep the change focused.
 - Do NOT run 'git commit', 'git push', or switch branches — commit/push is handled automatically.
 - Before finishing, make sure the project still builds/compiles.`;
@@ -1966,6 +1979,7 @@ git branch --show-current
       projectDir,
       prescaffolded,
       runInfo: await loadRunInfo(project.id),
+      directives: await directivesBlock(project.id),
     });
     try {
       // Resolve (or mint) the CLI API key that authenticates the VM→server webhook.
