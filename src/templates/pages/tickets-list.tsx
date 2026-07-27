@@ -1285,18 +1285,26 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     if (!file || !_currentTicketId) return;
     var chip = document.getElementById('actions-attach-chip');
     if (chip) { chip.style.display = 'flex'; chip.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading ' + escHtml(file.name) + '…'; }
+    // Never hang forever — abort after 90s and surface a clear error.
+    var ctrl = new AbortController();
+    var to = setTimeout(function() { ctrl.abort(); }, 90000);
     try {
       var fd = new FormData(); fd.append('file', file);
-      var r = await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + _currentTicketId + '/chat/upload', { method: 'POST', body: fd });
+      var r = await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + _currentTicketId + '/chat/upload', { method: 'POST', body: fd, signal: ctrl.signal });
       var j = await r.json();
       if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
-      _pendingUpload = { path: j.path, name: file.name };
-      if (chip) chip.innerHTML = '<i class="fas fa-paperclip"></i> ' + escHtml(file.name) + ' <span style="cursor:pointer;color:var(--text-secondary);" onclick="clearTicketUpload()">✕</span>';
+      _pendingUpload = { path: j.path, url: j.url, name: file.name, isImage: j.isImage, inSandbox: j.inSandbox };
+      var thumb = (j.isImage && j.url) ? '<img src="' + j.url + '" style="height:26px;width:26px;object-fit:cover;border-radius:4px;" />' : '<i class="fas fa-paperclip"></i>';
+      var note = j.inSandbox ? '' : ' (attached — the agent gets it on the next build)';
+      if (chip) chip.innerHTML = thumb + ' <span>' + escHtml(file.name) + escHtml(note) + '</span> <span style="cursor:pointer;color:var(--text-secondary);margin-left:.3rem;" onclick="clearTicketUpload()">✕</span>';
     } catch (e) {
       if (chip) { chip.style.display = 'none'; }
-      if (typeof toast === 'function') toast('Upload failed: ' + e.message); else alert('Upload failed: ' + e.message);
+      var m = (e && e.name === 'AbortError') ? 'timed out (file too large or sandbox unreachable)' : (e && e.message) || 'error';
+      if (typeof toast === 'function') toast('Upload failed: ' + m); else alert('Upload failed: ' + m);
+    } finally {
+      clearTimeout(to);
+      var fi = document.getElementById('actions-file-input'); if (fi) fi.value = '';
     }
-    var fi = document.getElementById('actions-file-input'); if (fi) fi.value = '';
   };
   window.clearTicketUpload = function() {
     _pendingUpload = null;
@@ -1310,10 +1318,15 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     // Allow sending with just an attachment (no text).
     if ((!msg && !_pendingUpload) || !_currentTicketId) return;
     input.value = '';
-    // Fold the uploaded file path into the message so the agent knows where it is.
+    // Fold the uploaded file reference into the message so the agent can find it.
+    var _upload = null;
     if (_pendingUpload) {
+      _upload = _pendingUpload;
       var _nl2 = String.fromCharCode(10) + String.fromCharCode(10);
-      msg = (msg ? msg + _nl2 : '') + 'I uploaded a file to ' + _pendingUpload.path + ' (original name: ' + _pendingUpload.name + '). Use it as needed.';
+      var ref = _upload.path
+        ? 'I uploaded a file to ' + _upload.path + ' (original name: ' + _upload.name + '). Use it as needed.'
+        : 'I attached a file (' + _upload.name + ') available at ' + _upload.url + '. It will be placed in the sandbox on the next build.';
+      msg = (msg ? msg + _nl2 : '') + ref;
       clearTicketUpload();
     }
     // Optimistically render YOUR message immediately, BEFORE the thinking bubble,
@@ -1323,6 +1336,13 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       var ph = area.querySelector('.log-placeholder');
       if (ph) area.innerHTML = '';
       area.appendChild(renderLogEntry({ type: 'user_message', message: msg, createdAt: new Date().toISOString() }, 'you-' + Date.now()));
+      // Show the uploaded image inline in the thread.
+      if (_upload && _upload.isImage && _upload.url) {
+        var imgEl = document.createElement('div');
+        imgEl.className = 'log-entry log-user';
+        imgEl.innerHTML = '<a href="' + _upload.url + '" target="_blank" rel="noopener"><img src="' + _upload.url + '" alt="' + escHtml(_upload.name) + '" style="max-width:220px;max-height:180px;border-radius:8px;border:1px solid var(--border-color,#2a2a2a);" /></a>';
+        area.appendChild(imgEl);
+      }
     }
     // Then show thinking indicator (appended after your message).
     showThinkingIndicator();

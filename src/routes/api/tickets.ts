@@ -550,8 +550,10 @@ ticketsApi.post("/:projectId/tickets/:ticketId/chat", async (c) => {
 });
 
 // ── POST /:projectId/tickets/:ticketId/chat/upload ──────────────────
-// Upload a file INTO the ticket's sandbox so the agent (Pi) can read it, then
-// reference the returned path in a chat message. Writes to /data/uploads/<name>.
+// Upload a file for the ticket agent. FAST + reliable: store to S3 once (not a
+// slow chunked base64 stream over dozens of VM round-trips), return a render URL
+// for the chat, and — if the ticket has a live sandbox — pull it into the VM at
+// /data/uploads/<name> with a SINGLE curl so the agent can read it.
 ticketsApi.post("/:projectId/tickets/:ticketId/chat/upload", async (c) => {
   const user = c.get("user");
   const { projectId, ticketId } = c.req.param();
@@ -563,31 +565,38 @@ ticketsApi.post("/:projectId/tickets/:ticketId/chat/upload", async (c) => {
   if (!file) return c.json({ error: "No file provided" }, 400);
   if (file.size > 25 * 1024 * 1024) return c.json({ error: "File too large (max 25 MB)." }, 400);
 
-  // The ticket must have a live sandbox to receive the file.
-  const [sb] = await db.select({ ws: sandboxes.magsWorkspaceId })
-    .from(sandboxes).where(eq(sandboxes.ticketId, ticketId!)).limit(1);
-  if (!sb?.ws) return c.json({ error: "No active sandbox for this ticket — build it first, then attach files." }, 400);
+  const { isS3Enabled, buildS3Key, uploadBinary, getPresignedGetUrl, guessContentType } = await import("../../services/s3.ts");
+  if (!isS3Enabled) return c.json({ error: "File storage (S3) isn't configured." }, 503);
 
   const safeName = (file.name || "file").replace(/[^\w.\-]+/g, "_").slice(0, 80) || "file";
-  const destPath = `/data/uploads/${crypto.randomUUID().slice(0, 8)}-${safeName}`;
-  const b64 = Buffer.from(await file.arrayBuffer()).toString("base64");
-  const tmp = `/tmp/lfg-upload-${crypto.randomUUID().slice(0, 8)}.b64`;
+  const contentType = file.type || guessContentType(file.name);
+  const isImage = /^image\//.test(contentType);
+  const buf = Buffer.from(await file.arrayBuffer());
+
+  // 1) Store to S3 (one call) + a durable presigned URL for rendering / VM pull.
+  let url = "";
   try {
-    const { execOnWorkspace } = await import("../../services/mags.ts");
-    // A whole-file base64 as one shell arg overflows ARG_MAX (~2 MB), so append it
-    // in chunks (base64 is shell-safe: only [A-Za-z0-9+/=]), then decode once.
-    await execOnWorkspace(sb.ws, `mkdir -p /data/uploads; : > '${tmp}'`, { timeout: 30_000 });
-    const CHUNK = 120_000; // ~120 KB/arg, well under ARG_MAX
-    for (let i = 0; i < b64.length; i += CHUNK) {
-      await execOnWorkspace(sb.ws, `printf '%s' '${b64.slice(i, i + CHUNK)}' >> '${tmp}'`, { timeout: 30_000 });
-    }
-    const r = await execOnWorkspace(sb.ws, `base64 -d '${tmp}' > '${destPath}' && rm -f '${tmp}' && echo WROTE $(wc -c < '${destPath}')`, { timeout: 60_000 });
-    if (!/WROTE/.test(r.output)) return c.json({ error: `Could not write the file to the sandbox: ${r.output.slice(0, 200)}` }, 500);
+    const key = buildS3Key(projectId, "ticket-uploads", `${crypto.randomUUID().slice(0, 8)}-${safeName}`);
+    await uploadBinary(key, buf, contentType);
+    url = await getPresignedGetUrl(key, 7 * 24 * 3600);
   } catch (e) {
-    await import("../../services/mags.ts").then(({ execOnWorkspace }) => execOnWorkspace(sb.ws!, `rm -f '${tmp}'`, { timeout: 15_000 })).catch(() => {});
     return c.json({ error: `Upload failed: ${(e as Error).message}` }, 500);
   }
-  return c.json({ path: destPath, name: file.name, size: file.size });
+
+  // 2) If a live sandbox exists, pull the file in with ONE curl (fast, no chunking).
+  let vmPath: string | null = null;
+  const [sb] = await db.select({ ws: sandboxes.magsWorkspaceId })
+    .from(sandboxes).where(eq(sandboxes.ticketId, ticketId!)).limit(1);
+  if (sb?.ws) {
+    const destPath = `/data/uploads/${crypto.randomUUID().slice(0, 8)}-${safeName}`;
+    try {
+      const { execOnWorkspace } = await import("../../services/mags.ts");
+      const r = await execOnWorkspace(sb.ws, `mkdir -p /data/uploads && curl -fsSL -o '${destPath}' "${url}" && echo GOT $(wc -c < '${destPath}')`, { timeout: 60_000 });
+      if (/GOT/.test(r.output)) vmPath = destPath;
+    } catch { /* sandbox unreachable — still return the S3 url for rendering */ }
+  }
+
+  return c.json({ url, path: vmPath, name: file.name, isImage, inSandbox: !!vmPath });
 });
 
 // ── POST /:projectId/tickets/:ticketId/queue ────────────────────────
