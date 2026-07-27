@@ -1490,12 +1490,14 @@ async function finalizeTicketChat(
     await db.update(projectTickets).set({ githubBranch: featureBranch, githubCommitSha: sha, githubMergeStatus: "pushed", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
     await addLog(ticketId, `Committed + pushed ${sha.slice(0, 7)} to ${featureBranch}.`, "command", ownerId);
 
+    let mergedOk = false;
     try {
       await addLog(ticketId, "Merging to lfg-agent…", "command", ownerId);
       const { sha: mergeSha } = await mergeToLfgAgent({
         workspaceId, projectDir, featureBranch,
         repoUrl: auth.repoUrl, githubToken: auth.token, tokenUser: auth.tokenUser,
       });
+      mergedOk = true;
       await db.update(projectTickets).set({ githubMergeStatus: "merged", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
       await addLog(ticketId, `Merged to lfg-agent (${mergeSha.slice(0, 7)}).`, "command", ownerId);
     } catch (mergeErr) {
@@ -1506,7 +1508,10 @@ async function finalizeTicketChat(
     // survive a refresh (the durable ticket row now reflects the outcome).
     const reviewStageId = await moveTicketToStage(ticketId, project.id, "In Review");
     await db.update(projectTickets).set({ status: "review", queueStatus: "none", lastExecutionAt: new Date(), updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
-    broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId });
+    // Clear agent-style summary so the chat ends with an explicit "what I did".
+    const done = `✅ **Update applied.**\n\n- Branch: \`${featureBranch}\`\n- Commit: \`${sha.slice(0, 7)}\`\n${mergedOk ? "- Merged to `lfg-agent` ✓\n" : ""}\nRe-run the **Preview** to see the change, or open the **Git** tab for the diff.`;
+    await addLog(ticketId, done, "ai_response", ownerId);
+    broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId, mergeStatus: mergedOk ? "merged" : "pushed" });
   } catch (err) {
     await addLog(ticketId, `Commit/push FAILED — chat changes were NOT saved to the remote: ${(err as Error).message?.slice(0, 300)}`, "cli_error", ownerId);
   }
