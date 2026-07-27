@@ -209,14 +209,14 @@ export function ChatPage({
         <!-- Preview Tab — run the connected project live in its sandbox -->
         <div class="tab-pane" id="preview">
           <div id="preview-root" data-project-id="${projectId}" style="height:100%;display:flex;flex-direction:column;">
-            <div class="preview-header" style="padding:16px 20px;border-bottom:1px solid var(--border-color,#2a2a2a);display:flex;align-items:center;justify-content:space-between;gap:12px;">
-              <div style="display:flex;flex-direction:column;gap:2px;min-width:0;">
-                <h3 style="color:var(--text-color,#e2e8f0);margin:0;font-size:16px;font-weight:600;">Preview</h3>
-                <span id="preview-substatus" style="color:var(--text-secondary,#9ca3af);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Loading…</span>
+            <div class="preview-header" style="padding:14px 20px;border-bottom:1px solid var(--border-color,#2a2a2a);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+              <div style="display:flex;flex-direction:column;gap:2px;min-width:90px;flex:0 1 auto;">
+                <h3 style="color:var(--text-color,#e2e8f0);margin:0;font-size:16px;font-weight:600;white-space:nowrap;">Preview</h3>
+                <span id="preview-substatus" style="color:var(--text-secondary,#9ca3af);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px;">Loading…</span>
               </div>
-              <div style="display:flex;gap:8px;align-items:center;">
-                <button id="preview-plan-btn" style="padding:7px 14px;border-radius:6px;cursor:pointer;font-size:13px;display:inline-flex;align-items:center;gap:6px;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);"><i class="fas fa-list-check"></i>Profile</button>
-                <div id="preview-actions" style="display:flex;gap:8px;align-items:center;"></div>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;flex:1 1 auto;">
+                <button id="preview-plan-btn" style="padding:7px 12px;border-radius:6px;cursor:pointer;font-size:13px;display:inline-flex;align-items:center;gap:6px;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);white-space:nowrap;flex:none;"><i class="fas fa-list-check"></i>Profile</button>
+                <div id="preview-actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;"></div>
               </div>
             </div>
             <div id="preview-body" style="flex:1;min-height:0;position:relative;overflow:hidden;">
