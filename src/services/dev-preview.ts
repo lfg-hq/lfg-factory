@@ -383,9 +383,10 @@ echo "CHECKED:$CHECKED"
  * connections intact. Builds a chat-ready launch summary and an overall verdict.
  * Assets are skipped when the page is a 5xx (a code/data error, not an asset issue).
  */
-async function verifyPreview(projectId: string, userId: string, workspaceId: string, manifest: PreviewManifest, branchLabel: string): Promise<{ summary: string; overall: "ok" | "degraded" | "error" }> {
+async function verifyPreview(projectId: string, userId: string, workspaceId: string, manifest: PreviewManifest, branchLabel: string): Promise<{ summary: string; overall: "ok" | "degraded" | "error"; broken: string[] }> {
   const port = manifest.port;
   plog(projectId, userId, "Verifying the preview (URL, assets, databases)…");
+  let brokenAssets: string[] = [];
 
   // 1. URL
   const code = await httpStatus(workspaceId, port).catch(() => 0);
@@ -401,6 +402,7 @@ async function verifyPreview(projectId: string, userId: string, workspaceId: str
   let assetsBad = false;
   if (urlOk) {
     const a = await checkAssets(workspaceId, port).catch(() => ({ checked: 0, missing: [], mixed: [] }));
+    brokenAssets = a.missing;
     if (!a.checked) assetLine = "➖ **Assets** — none found on the homepage";
     else if (!a.missing.length && !a.mixed.length) assetLine = `✅ **Assets** — ${a.checked} images/CSS/JS all load`;
     else { assetsBad = true; assetLine = `⚠️ **Assets** — ${a.mixed.length} mixed-content + ${a.missing.length} missing of ${a.checked}${a.mixed.length ? " (mixed-content = the HTTPS proxy needs ForwardedHeaders/base-url)" : ""}`; }
@@ -426,7 +428,41 @@ async function verifyPreview(projectId: string, userId: string, workspaceId: str
 
   const summary = `🚀 **Preview launch summary** — branch: \`${branchLabel === "(default)" ? "main" : branchLabel}\`\n\n${urlLine}\n${assetLine}\n${dbLine}\n\n${verdict}`;
   plog(projectId, userId, `Verification: ${overall}`, overall === "ok" ? undefined : { level: "error", detail: summary.replace(/\*\*/g, "") });
-  return { summary, overall };
+  return { summary, overall, broken: brokenAssets };
+}
+
+/**
+ * Self-heal broken assets WITHOUT hardcoding a fix. If the preview audit found
+ * 404 assets AND the project has mandatory directives (i.e. the user opted into
+ * enforcement — e.g. "assets are case-sensitive on .NET"), hand the broken list
+ * to the preview AGENT and let IT investigate the real filenames and fix the
+ * references (or rename files), rebuild, and verify. Runs at most ONCE per preview
+ * so it can't loop. Returns the re-verified summary if it changed anything.
+ */
+async function healBrokenAssets(
+  projectId: string, userId: string, conversationId: string | null | undefined,
+  workspaceId: string, manifest: PreviewManifest, branchLabel: string, broken: string[],
+): Promise<{ summary: string } | null> {
+  if (!broken.length) return null;
+  const directives = (await loadAppProfile(projectId).catch(() => null))?.profile.directives ?? [];
+  if (!directives.length) return null; // enforcement is opt-in via directives
+
+  plog(projectId, userId, `Assets broken (${broken.length}) — handing to the agent to fix per your directives…`);
+  const list = broken.slice(0, 15).map((u) => `- ${u}`).join("\n");
+  const instruction = `The running app has BROKEN assets — these URLs return 404 on the homepage:\n${list}\n\n` +
+    `Your MANDATORY DIRECTIVES (which you MUST satisfy) include rules about assets. The most common cause is a case mismatch between the reference and the real filename (this stack is case-sensitive). For EACH broken asset: find the actual file on disk (search case-insensitively under the web root), then fix the REFERENCE in the source (.cshtml/.css/.js/layout) to match the real filename EXACTLY — or rename the file if that's clearly correct. Do not touch unrelated code. ` +
+    `If a rebuild is needed for the change to take effect, rebuild and restart the app. Then re-fetch each formerly-broken URL and confirm it now returns 200. Report exactly which references you fixed.`;
+
+  try {
+    const res = await runPreviewChat({ projectId, publicProjectId: pub(projectId), userId, conversationId: conversationId ?? null, instruction });
+    plog(projectId, userId, `Asset self-heal: ${res.status}`, res.reply ? { detail: res.reply.slice(0, 800) } : undefined);
+    // Re-verify so the summary reflects reality after the fix.
+    const again = await verifyPreview(projectId, userId, workspaceId, manifest, branchLabel).catch(() => null);
+    if (again) return { summary: again.summary };
+  } catch (e) {
+    plog(projectId, userId, `Asset self-heal failed: ${(e as Error).message}`, { level: "error" });
+  }
+  return null;
 }
 
 /** Post the launch summary into the main chat (persist if a conversation is known). */
@@ -1651,6 +1687,11 @@ fi`, 240_000);
     const vManifest = effectivePort === manifest.port ? manifest : { ...manifest, port: effectivePort };
     const v = await verifyPreview(projectId, userId, workspaceId, vManifest, branch || "(default)").catch(() => null);
     if (v) await publishSummary(userId, opts.conversationId, `${v.summary}\n\n🔗 ${previewUrl}`).catch(() => {});
+    // Self-heal broken assets via the agent (opt-in through directives), then re-summarize.
+    if (v?.broken?.length) {
+      const healed = await healBrokenAssets(projectId, userId, opts.conversationId, workspaceId, vManifest, branch || "(default)", v.broken).catch(() => null);
+      if (healed) await publishSummary(userId, opts.conversationId, `${healed.summary}\n\n🔗 ${previewUrl}`).catch(() => {});
+    }
     return { previewUrl };
   } catch (err) {
     const msg = (err as Error).message ?? String(err);
@@ -2151,6 +2192,11 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
     const vManifest = effectivePort === manifest.port ? manifest : { ...manifest, port: effectivePort };
     const v = await verifyPreview(projectId, userId, workspaceId, vManifest, branchLabel).catch(() => null);
     if (v) await publishSummary(userId, opts.conversationId, `${v.summary}\n\n🔗 ${previewUrl}`).catch(() => {});
+    // Self-heal broken assets via the agent (opt-in through directives), then re-summarize.
+    if (v?.broken?.length) {
+      const healed = await healBrokenAssets(projectId, userId, opts.conversationId, workspaceId, vManifest, branchLabel, v.broken).catch(() => null);
+      if (healed) await publishSummary(userId, opts.conversationId, `${healed.summary}\n\n🔗 ${previewUrl}`).catch(() => {});
+    }
     return { previewUrl };
   } catch (err) {
     return failed(projectId, userId, (err as Error).message ?? String(err));
