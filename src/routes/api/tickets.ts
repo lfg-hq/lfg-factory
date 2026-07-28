@@ -2,7 +2,8 @@ import { Hono } from "hono";
 import { requireAuth } from "../../auth/middleware.ts";
 import { db } from "../../config/db.ts";
 import { projects } from "../../db/schema/projects.ts";
-import { ticketStages, projectTickets, ticketLogs, projectTodoLists, ticketMergeHistory } from "../../db/schema/tickets.ts";
+import { ticketStages, projectTickets, ticketLogs, projectTodoLists, ticketMergeHistory, ticketAddenda } from "../../db/schema/tickets.ts";
+import { like, or } from "drizzle-orm";
 import { githubTokens } from "../../db/schema/users.ts";
 import { sandboxes } from "../../db/schema/sandbox.ts";
 import { conversations } from "../../db/schema/chat.ts";
@@ -982,5 +983,90 @@ function getProjectRepo(project: { repoOwner?: string | null; repoName?: string 
   const url = project.repoUrl ?? project.stack ?? "";
   return url.match(/https?:\/\/github\.com\/([^/]+)\/([^/.]+)/);
 }
+
+// ── GET /:projectId/tickets/mentions?q= ── @ticket autocomplete ──────
+// Search tickets by key/name for the chat @ticket picker.
+ticketsApi.get("/:projectId/tickets/mentions", async (c) => {
+  const user = c.get("user");
+  const { projectId } = c.req.param();
+  const access = await getProjectAccess(projectId!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  const q = (c.req.query("q") || "").trim();
+
+  const rows = await db
+    .select({ id: projectTickets.id, key: projectTickets.ticketKey, name: projectTickets.name, status: projectTickets.status, branch: projectTickets.githubBranch })
+    .from(projectTickets)
+    .where(and(
+      eq(projectTickets.projectId, access.project.id),
+      q ? or(like(projectTickets.ticketKey, `%${q}%`), like(projectTickets.name, `%${q}%`)) : undefined,
+    ))
+    .orderBy(desc(projectTickets.updatedAt))
+    .limit(20);
+
+  return c.json({
+    tickets: rows.map((r) => ({
+      id: r.id,
+      ticketKey: r.key || "",
+      name: r.name,
+      status: r.status,
+      branch: r.branch || `feature/ticket-${r.id}`,
+      label: `${r.key ? r.key + " — " : ""}${r.name}`.slice(0, 70),
+    })),
+  });
+});
+
+// ── Ticket Addenda (follow-up change requests) ──────────────────────
+// Resolve + authorize the ticket for an addendum request; returns null on failure.
+async function addendumTicket(c: any): Promise<{ id: string } | null> {
+  const user = c.get("user");
+  const { projectId, ticketId } = c.req.param();
+  const access = await getProjectAccess(projectId, user.id);
+  if (!access) return null;
+  const [t] = await db.select({ id: projectTickets.id }).from(projectTickets)
+    .where(and(eq(projectTickets.id, ticketId), eq(projectTickets.projectId, access.project.id))).limit(1);
+  return t ?? null;
+}
+
+ticketsApi.get("/:projectId/tickets/:ticketId/addenda", async (c) => {
+  const t = await addendumTicket(c);
+  if (!t) return c.json({ error: "Not found" }, 404);
+  const addenda = await db.select().from(ticketAddenda)
+    .where(eq(ticketAddenda.ticketId, t.id)).orderBy(desc(ticketAddenda.createdAt));
+  return c.json({ addenda });
+});
+
+ticketsApi.post("/:projectId/tickets/:ticketId/addenda", async (c) => {
+  const user = c.get("user");
+  const t = await addendumTicket(c);
+  if (!t) return c.json({ error: "Not found" }, 404);
+  const body = await c.req.json<{ description?: string }>().catch(() => ({} as { description?: string }));
+  if (!body.description?.trim()) return c.json({ error: "description is required" }, 400);
+  const [addendum] = await db.insert(ticketAddenda).values({
+    ticketId: t.id, createdById: user.id, description: body.description.trim(), status: "pending",
+  }).returning();
+  return c.json({ addendum }, 201);
+});
+
+ticketsApi.patch("/:projectId/tickets/:ticketId/addenda/:addendumId", async (c) => {
+  const t = await addendumTicket(c);
+  if (!t) return c.json({ error: "Not found" }, 404);
+  const { addendumId } = c.req.param();
+  const body = await c.req.json<{ status?: string; description?: string }>().catch(() => ({} as { status?: string; description?: string }));
+  const [updated] = await db.update(ticketAddenda).set({
+    status: body.status ?? undefined,
+    description: body.description?.trim() || undefined,
+    resolvedAt: body.status === "resolved" ? new Date() : (body.status === "pending" ? null : undefined),
+  }).where(and(eq(ticketAddenda.id, addendumId!), eq(ticketAddenda.ticketId, t.id))).returning();
+  if (!updated) return c.json({ error: "Addendum not found" }, 404);
+  return c.json({ addendum: updated });
+});
+
+ticketsApi.delete("/:projectId/tickets/:ticketId/addenda/:addendumId", async (c) => {
+  const t = await addendumTicket(c);
+  if (!t) return c.json({ error: "Not found" }, 404);
+  const { addendumId } = c.req.param();
+  await db.delete(ticketAddenda).where(and(eq(ticketAddenda.id, addendumId!), eq(ticketAddenda.ticketId, t.id)));
+  return c.json({ ok: true });
+});
 
 export default ticketsApi;

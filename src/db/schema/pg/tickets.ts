@@ -184,3 +184,28 @@ export const projectTicketAttachments = pgTable(
   },
   (t) => [index("pta_ticket_idx").on(t.ticketId)]
 );
+
+// Follow-up change requests on an already-built ticket. A build picks up all
+// PENDING addenda (plus the ticket + history) so it iterates instead of restarting.
+export const ticketAddenda = pgTable(
+  "ticket_addendum",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    ticketId: text("ticket_id")
+      .notNull()
+      .references(() => projectTickets.id, { onDelete: "cascade" }),
+    createdById: text("created_by_id").references(() => users.id, { onDelete: "set null" }),
+    description: text("description").notNull(),
+    status: text("status").notNull().default("pending"), // pending | resolved
+    buildIncludedAt: timestamp("build_included_at", { mode: "date" }),
+    buildTicketId: text("build_ticket_id"),
+    createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),
+    resolvedAt: timestamp("resolved_at", { mode: "date" }),
+  },
+  (t) => [
+    index("ta_ticket_idx").on(t.ticketId),
+    index("ta_ticket_status_idx").on(t.ticketId, t.status),
+  ]
+);

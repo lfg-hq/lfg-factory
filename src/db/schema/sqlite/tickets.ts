@@ -226,3 +226,27 @@ export const projectTicketAttachments = sqliteTable(
   },
   (t) => [index("pta_ticket_idx").on(t.ticketId)]
 );
+
+// Follow-up change requests on an already-built ticket (see pg schema).
+export const ticketAddenda = sqliteTable(
+  "ticket_addendum",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    ticketId: text("ticket_id")
+      .notNull()
+      .references(() => projectTickets.id, { onDelete: "cascade" }),
+    createdById: text("created_by_id").references(() => users.id, { onDelete: "set null" }),
+    description: text("description").notNull(),
+    status: text("status").notNull().default("pending"),
+    buildIncludedAt: integer("build_included_at", { mode: "timestamp" }),
+    buildTicketId: text("build_ticket_id"),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
+    resolvedAt: integer("resolved_at", { mode: "timestamp" }),
+  },
+  (t) => [
+    index("ta_ticket_idx").on(t.ticketId),
+    index("ta_ticket_status_idx").on(t.ticketId, t.status),
+  ]
+);

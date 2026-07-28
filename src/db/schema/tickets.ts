@@ -10,3 +10,4 @@ export const ticketMergeHistory = m.ticketMergeHistory;
 export const projectTodoLists = m.projectTodoLists;
 export const ticketLogs = m.ticketLogs;
 export const projectTicketAttachments = m.projectTicketAttachments;
+export const ticketAddenda = m.ticketAddenda;
