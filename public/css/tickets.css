@@ -3944,3 +3944,60 @@
     background: rgba(139, 92, 246, 0.08);
     border-color: rgba(139, 92, 246, 0.2);
 }
+
+/* ── Ticket description (markdown) — readable code blocks + spacing ───────── */
+#drawer-description {
+    line-height: 1.6;
+    font-size: 14px;
+    word-wrap: break-word;
+    overflow-wrap: anywhere;
+}
+#drawer-description h1,
+#drawer-description h2,
+#drawer-description h3,
+#drawer-description h4 {
+    margin: 20px 0 8px;
+    line-height: 1.3;
+}
+#drawer-description h1:first-child,
+#drawer-description h2:first-child,
+#drawer-description h3:first-child { margin-top: 0; }
+#drawer-description p { margin: 8px 0; }
+#drawer-description ul,
+#drawer-description ol { margin: 8px 0; padding-left: 22px; }
+#drawer-description li { margin: 3px 0; }
+#drawer-description hr {
+    border: none;
+    border-top: 1px solid rgba(127, 127, 127, 0.25);
+    margin: 18px 0;
+}
+/* Fenced code blocks: distinct card, horizontal scroll (never clip long lines) */
+#drawer-description pre {
+    border: 1px solid rgba(127, 127, 127, 0.28) !important;
+    border-radius: 8px !important;
+    padding: 12px 14px !important;
+    margin: 12px 0 !important;
+    overflow-x: auto !important;
+    max-width: 100%;
+    font-size: 12.5px;
+    line-height: 1.55;
+    -webkit-overflow-scrolling: touch;
+}
+#drawer-description pre code {
+    white-space: pre;         /* scroll long lines instead of wrapping */
+    display: block;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+/* Inline code: subtle accent chip, wraps so it never overflows the panel */
+#drawer-description :not(pre) > code {
+    background: rgba(124, 58, 237, 0.10);
+    color: #7c3aed;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.86em;
+    word-break: break-word;
+}
+[data-theme="light"] #drawer-description :not(pre) > code { color: #6d28d9; }
+#drawer-description table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; display: block; overflow-x: auto; }
+#drawer-description th,
+#drawer-description td { border: 1px solid rgba(127, 127, 127, 0.25); padding: 6px 10px; text-align: left; }
