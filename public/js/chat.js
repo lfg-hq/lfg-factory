@@ -4074,14 +4074,28 @@ document.addEventListener('DOMContentLoaded', () => {
             },
         };
 
-        // Fallback: auto-generate a label from camelCase/snake_case function name
+        // Fallback: auto-generate a label from the function name.
         const details = functionDetails[functionName];
         if (details) return details;
+
+        // Composio tools are UPPER_SNAKE (e.g. COMPOSIO_MULTI_EXECUTE_TOOL,
+        // GMAIL_SEND_EMAIL, SLACK_SEND_MESSAGE). The camelCase splitter below would
+        // put a space before EVERY letter ("C o m p o s i o…"), so handle these
+        // explicitly: strip a COMPOSIO_ prefix, words come from the underscores.
+        if (/^[A-Z0-9]+(_[A-Z0-9]+)+$/.test(functionName)) {
+            if (functionName === 'COMPOSIO_MULTI_EXECUTE_TOOL' || functionName === 'COMPOSIO_EXECUTE_TOOL') {
+                return { label: 'Using connected tools', icon: 'fa-plug', color: '#38bdf8' };
+            }
+            const words = functionName.replace(/^COMPOSIO_/, '').split('_');
+            const cLabel = words.join(' ').toLowerCase().replace(/^./, c => c.toUpperCase());
+            return { label: cLabel, icon: 'fa-plug', color: '#38bdf8' };
+        }
 
         const label = functionName
             .replace(/([A-Z])/g, ' $1')
             .replace(/_/g, ' ')
             .replace(/^\s+/, '')
+            .replace(/\s+/g, ' ')
             .toLowerCase()
             .replace(/^./, c => c.toUpperCase());
         return { label, icon: 'fa-cog', color: '#94a3b8' };
