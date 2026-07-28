@@ -135,7 +135,13 @@ async function resolveBuilderModelKey(ownerId: string): Promise<string> {
   const [sel] = await db.select({ m: modelSelections.selectedModel }).from(modelSelections).where(eq(modelSelections.userId, ownerId)).limit(1);
   return sel?.m || DEFAULT_MODEL_KEY;
 }
-import { startPiCli, streamPiToCompletion, isPiSupportedProvider } from "../services/pi-cli.ts";
+import { startPiCli, streamPiToCompletion, isPiSupportedProvider, extractPiProgress } from "../services/pi-cli.ts";
+
+/** Pi's final "here's what I did" summary from its output tail (or ""). */
+function piWorkSummary(tail: string | undefined): string {
+  const s = extractPiProgress(tail || "", 1200) || "";
+  return s.replace(/^Agent:\s*/, "").trim();
+}
 import { getBuildProfile, detectProjectType } from "../services/instant-profiles.ts";
 import { generateText, stepCountIs } from "ai";
 import { addLog } from "../services/ticket-logs.ts";
@@ -1351,7 +1357,7 @@ ${message}
         // the status never moves, and nothing is on the remote. This was missing
         // → "changes done but no commit / status / merge". A pure Q&A turn (no
         // edits → !didWork) skips this and just leaves the answer in the log.
-        await finalizeTicketChat(ticketId, ownerId, project!, ticket, workspaceId, message);
+        await finalizeTicketChat(ticketId, ownerId, project!, ticket, workspaceId, message, piWorkSummary(piResult.tail));
       } else {
         // Pi answered without changing code (Q&A). Surface its reply so the client's
         // "Thinking…" indicator resolves and the user sees the response.
@@ -1584,6 +1590,7 @@ async function finalizeTicketChat(
   ticket: { id: string; name: string; githubBranch: string | null },
   workspaceId: string,
   message: string,
+  workSummary = "",
 ): Promise<void> {
   const projectDir = `${WORKING_DIR}/project`;
   const featureBranch = ticket.githubBranch ?? `feature/ticket-${ticketId}`;
@@ -1624,7 +1631,9 @@ async function finalizeTicketChat(
     const reviewStageId = await moveTicketToStage(ticketId, project.id, "In Review");
     await db.update(projectTickets).set({ status: "review", queueStatus: "none", lastExecutionAt: new Date(), updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
     // Clear agent-style summary so the chat ends with an explicit "what I did".
-    const done = `✅ **Update applied.**\n\n- Branch: \`${featureBranch}\`\n- Commit: \`${sha.slice(0, 7)}\`\n${mergedOk ? "- Merged to `lfg-agent` ✓\n" : ""}\nRe-run the **Preview** to see the change, or open the **Git** tab for the diff.`;
+    const done = `✅ **Update applied.**\n\n` +
+      (workSummary ? `**What I did:**\n${workSummary}\n\n` : "") +
+      `- Branch: \`${featureBranch}\`\n- Commit: \`${sha.slice(0, 7)}\`\n${mergedOk ? "- Merged to `lfg-agent` ✓\n" : ""}\nRe-run the **Preview** to see the change, or open the **Git** tab for the diff.`;
     await addLog(ticketId, done, "ai_response", ownerId);
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId, mergeStatus: mergedOk ? "merged" : "pushed" });
   } catch (err) {
@@ -2049,6 +2058,7 @@ git branch --show-current
   console.log(`[ticket-executor-api] Using model: ${modelKey}`);
 
   let implementationStatus = "failed" as "complete" | "failed";
+  let workSummary = ""; // Pi's "here's what I did" summary, for the completion message
 
   // Provider/native model id for the Pi in-sandbox coding agent (provider up top).
   const piModelId = getProviderModel(modelKey) ?? modelKey;
@@ -2124,6 +2134,7 @@ git branch --show-current
       const piOk = (piResult.exitCode === null || piResult.exitCode === 0) && !piResult.fatalError && piResult.didWork;
       if (piOk) {
         implementationStatus = "complete";
+        workSummary = piWorkSummary(piResult.tail);
       } else {
         const reason = piResult.fatalError
           ?? (piResult.exitCode ? `exit code ${piResult.exitCode}` : (!piResult.didWork ? "no changes were made" : "unknown error"));
@@ -2281,6 +2292,7 @@ git branch --show-current
     // A clear, agent-style completion summary (green ai_response bubble) so the
     // user gets an explicit "here's what got done" message, not just a buried log.
     const summary = `✅ **Ticket complete** — moved to In Review.\n\n` +
+      (workSummary ? `**What I did:**\n${workSummary}\n\n` : "") +
       `- Branch: \`${featureBranch}\`\n` +
       (completedSha ? `- Commit: \`${completedSha.slice(0, 7)}\`\n` : "") +
       (mergedOk ? `- Merged to \`lfg-agent\` ✓\n` : (completedSha ? `- Pushed (merge to lfg-agent pending/failed — see logs)\n` : "")) +
