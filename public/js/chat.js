@@ -244,6 +244,20 @@ document.addEventListener('DOMContentLoaded', () => {
     let mentionStartIndex = -1;
     let selectedMentionIndex = 0;
     let mentionFiles = [];
+    let mentionMode = 'file';   // 'file' | 'ticket' | 'menu'
+    let mentionTickets = [];
+    let mentionMenuItems = [];  // top-level @ menu (Files / Ticket / Preview)
+    // The active item list for the current mode (keyboard nav + selection).
+    function activeMentionList() {
+        return mentionMode === 'ticket' ? mentionTickets
+            : mentionMode === 'menu' ? mentionMenuItems
+            : mentionFiles;
+    }
+    function selectActiveMention(item) {
+        if (mentionMode === 'ticket') return selectMentionTicket(item);
+        if (mentionMode === 'menu') return selectMentionMenu(item);
+        return selectMentionFile(item);
+    }
 
     // Auto-resize the text area based on content
     chatInput.addEventListener('input', function(e) {
@@ -254,15 +268,26 @@ document.addEventListener('DOMContentLoaded', () => {
         const cursorPosition = this.selectionStart;
         const textBeforeCursor = this.value.substring(0, cursorPosition);
         
-        // Look for @file pattern
-        const atFileMatch = textBeforeCursor.match(/@file(\S*)$/);
-        
-        // Check if we should show mention dropdown
-        if (atFileMatch) {
-            // Found @file pattern at the end of text before cursor
-            const searchQuery = atFileMatch[1]; // Text after @file
+        // @-mention detection. Order matters: complete triggers (@ticket/@file)
+        // win over the bare-@ menu (whose partial could be a prefix of them).
+        const atTicketMatch = textBeforeCursor.match(/@ticket(\S*)$/i);
+        const atFileMatch = textBeforeCursor.match(/@file(\S*)$/i);
+        // Bare @ or a short partial that's a prefix of a known source → menu.
+        const atMenuMatch = textBeforeCursor.match(/(^|\s)@([a-z]{0,6})$/i);
+        const menuPartialOk = atMenuMatch && ['file', 'ticket', 'preview'].some(function(s){ return s.indexOf((atMenuMatch[2] || '').toLowerCase()) === 0; });
+
+        if (atTicketMatch) {
+            mentionMode = 'ticket';
+            mentionStartIndex = textBeforeCursor.length - atTicketMatch[0].length;
+            showTicketDropdown(atTicketMatch[1]);
+        } else if (atFileMatch) {
+            mentionMode = 'file';
             mentionStartIndex = textBeforeCursor.length - atFileMatch[0].length;
-            showMentionDropdown(searchQuery);
+            showMentionDropdown(atFileMatch[1]);
+        } else if (menuPartialOk) {
+            mentionMode = 'menu';
+            mentionStartIndex = textBeforeCursor.length - ('@' + (atMenuMatch[2] || '')).length;
+            showAtMenu((atMenuMatch[2] || '').toLowerCase());
         } else {
             hideMentionDropdown();
         }
@@ -274,7 +299,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (mentionDropdown && mentionDropdown.style.display !== 'none') {
             if (e.key === 'ArrowDown') {
                 e.preventDefault();
-                selectedMentionIndex = Math.min(selectedMentionIndex + 1, mentionFiles.length - 1);
+                selectedMentionIndex = Math.min(selectedMentionIndex + 1, activeMentionList().length - 1);
                 updateMentionSelection();
                 return;
             } else if (e.key === 'ArrowUp') {
@@ -284,8 +309,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             } else if (e.key === 'Enter' || e.key === 'Tab') {
                 e.preventDefault();
-                if (mentionFiles.length > 0) {
-                    selectMentionFile(mentionFiles[selectedMentionIndex]);
+                var _list = activeMentionList();
+                if (_list.length > 0) {
+                    selectActiveMention(_list[selectedMentionIndex]);
                 }
                 return;
             } else if (e.key === 'Escape') {
@@ -3194,6 +3220,13 @@ document.addEventListener('DOMContentLoaded', () => {
             window.mentionedFiles = {};
         }
 
+        // Add mentioned tickets (@ticket:KEY) — the server injects each ticket's
+        // context and switches the Preview to the first ticket's branch.
+        if (window.mentionedTickets && Object.keys(window.mentionedTickets).length > 0) {
+            messageData.mentioned_tickets = Object.values(window.mentionedTickets);
+            window.mentionedTickets = {};
+        }
+
         // Add current design canvas ID if available
         if (window.currentDesignCanvasId) {
             messageData.canvas_id = window.currentDesignCanvasId;
@@ -5402,8 +5435,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     // @ Mention Helper Functions
-    function showMentionDropdown(searchQuery) {
-        // Create dropdown if it doesn't exist
+    // Create + position the shared dropdown element near the input.
+    function ensureMentionDropdown() {
         if (!mentionDropdown) {
             mentionDropdown = document.createElement('div');
             mentionDropdown.className = 'mention-dropdown';
@@ -5420,24 +5453,115 @@ document.addEventListener('DOMContentLoaded', () => {
             `;
             document.body.appendChild(mentionDropdown);
         }
-        
-        // Position the dropdown near the cursor
         const inputRect = chatInput.getBoundingClientRect();
-        const inputStyle = window.getComputedStyle(chatInput);
-        const lineHeight = parseInt(inputStyle.lineHeight);
-        
-        // Calculate approximate position based on cursor
         mentionDropdown.style.left = inputRect.left + 'px';
         mentionDropdown.style.bottom = (window.innerHeight - inputRect.top + 5) + 'px';
-        
-        // Fetch files from API
+    }
+
+    function showMentionDropdown(searchQuery) {
+        ensureMentionDropdown();
         fetchMentionFiles(searchQuery);
+    }
+
+    // @ticket picker — fetch tickets and render.
+    function showTicketDropdown(searchQuery) {
+        ensureMentionDropdown();
+        fetchMentionTickets(searchQuery);
+    }
+
+    async function fetchMentionTickets(searchQuery) {
+        if (!currentProjectId) return;
+        try {
+            const url = `/api/projects/${currentProjectId}/tickets/mentions?q=${encodeURIComponent(searchQuery || '')}`;
+            const response = await fetch(url, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+            if (!response.ok) throw new Error('HTTP ' + response.status);
+            const data = await response.json();
+            mentionTickets = data.tickets || [];
+            selectedMentionIndex = 0;
+            renderMentionList(mentionTickets, function(t){
+                return '<div style="font-weight:500;color:#e0e0e0;">' + escapeHtmlSafe(t.label) + '</div>'
+                    + '<div style="font-size:12px;color:#999;">' + escapeHtmlSafe(t.branch) + ' • ' + escapeHtmlSafe(t.status || '') + '</div>';
+            });
+        } catch (error) {
+            console.error('Error fetching mention tickets:', error);
+            hideMentionDropdown();
+        }
+    }
+
+    // Top-level @ menu: Files / Ticket / Preview (filtered by the typed partial).
+    function showAtMenu(partial) {
+        ensureMentionDropdown();
+        const all = [
+            { key: 'file',    icon: '📄', title: 'Files',   desc: 'Reference a project file' },
+            { key: 'ticket',  icon: '🎫', title: 'Ticket',  desc: 'Ask about a ticket (loads its branch)' },
+            { key: 'preview', icon: '🖥', title: 'Preview', desc: 'Control the live preview (@preview)' },
+        ];
+        mentionMenuItems = all.filter(function(m){ return m.key.indexOf(partial || '') === 0 || (partial || '') === ''; });
+        if (!mentionMenuItems.length) { hideMentionDropdown(); return; }
+        selectedMentionIndex = 0;
+        renderMentionList(mentionMenuItems, function(m){
+            return '<div style="font-weight:500;color:#e0e0e0;">' + m.icon + ' ' + m.title + '</div>'
+                + '<div style="font-size:12px;color:#999;">' + m.desc + '</div>';
+        });
+    }
+
+    // Generic renderer used by ticket + menu modes (files keep updateMentionDropdown).
+    function renderMentionList(items, itemHtml) {
+        if (!mentionDropdown || !items.length) { hideMentionDropdown(); return; }
+        mentionDropdown.innerHTML = '';
+        items.forEach(function(it, index){
+            const el = document.createElement('div');
+            el.className = 'mention-item';
+            el.style.cssText = 'padding:8px 12px;cursor:pointer;border-bottom:1px solid #333;' + (index === selectedMentionIndex ? 'background-color:#2a2a2a;' : '');
+            el.innerHTML = itemHtml(it);
+            el.addEventListener('click', function(){ selectActiveMention(it); });
+            el.addEventListener('mouseenter', function(){ selectedMentionIndex = index; updateMentionSelection(); });
+            mentionDropdown.appendChild(el);
+        });
+        mentionDropdown.style.display = 'block';
+    }
+
+    function escapeHtmlSafe(s) {
+        return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; });
+    }
+
+    // Selecting a top-level menu item → replace the partial with the real trigger.
+    function selectMentionMenu(item) {
+        const cursorPosition = chatInput.selectionStart;
+        const before = chatInput.value.substring(0, mentionStartIndex);
+        const after = chatInput.value.substring(cursorPosition);
+        const trigger = item.key === 'file' ? '@file' : item.key === 'ticket' ? '@ticket' : '@preview ';
+        chatInput.value = before + trigger + after;
+        const pos = before.length + trigger.length;
+        chatInput.setSelectionRange(pos, pos);
+        hideMentionDropdown();
+        chatInput.focus();
+        chatInput.dispatchEvent(new Event('input')); // re-trigger → opens file/ticket picker
+    }
+
+    // Selecting a ticket → insert a token + stash it for the send payload.
+    function selectMentionTicket(t) {
+        if (!t) return;
+        const cursorPosition = chatInput.selectionStart;
+        const before = chatInput.value.substring(0, mentionStartIndex);
+        const after = chatInput.value.substring(cursorPosition);
+        const token = '@ticket:' + (t.ticketKey || t.id);
+        chatInput.value = before + token + ' ' + after;
+        const pos = before.length + token.length + 1;
+        chatInput.setSelectionRange(pos, pos);
+        if (!window.mentionedTickets) window.mentionedTickets = {};
+        window.mentionedTickets[t.ticketKey || t.id] = { id: t.id, key: t.ticketKey || '', name: t.name, branch: t.branch };
+        hideMentionDropdown();
+        chatInput.focus();
+        chatInput.dispatchEvent(new Event('input'));
     }
     
     function hideMentionDropdown() {
         if (mentionDropdown) {
             mentionDropdown.style.display = 'none';
             mentionFiles = [];
+            mentionTickets = [];
+            mentionMenuItems = [];
             selectedMentionIndex = 0;
         }
     }

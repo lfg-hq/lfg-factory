@@ -6,8 +6,8 @@ import { messages, conversations, modelSelections, agentRoles, chatFiles } from 
 import { llmApiKeys } from "../db/schema/users.ts";
 import { projects } from "../db/schema/projects.ts";
 import { projectFiles } from "../db/schema/documents.ts";
-import { projectTickets } from "../db/schema/tickets.ts";
-import { eq, desc } from "drizzle-orm";
+import { projectTickets, ticketLogs, ticketAddenda } from "../db/schema/tickets.ts";
+import { eq, and, desc, inArray } from "drizzle-orm";
 import { getModel, getModelWithSearch, getProviderName, getLiteModel, DEFAULT_MODEL_KEY } from "./provider.ts";
 import { withCaching } from "./prompt-cache.ts";
 import { toolsProduct, toolsTurbo } from "./tools/index.ts";
@@ -132,6 +132,8 @@ export interface StreamRequest {
   instantMode?: boolean;
   userRole?: string;
   file?: { id?: string; name?: string; type?: string; size?: number } | null;
+  /** Tickets referenced via @ticket — their context is injected into the model. */
+  mentionedTickets?: Array<{ id: string; key?: string; name?: string; branch?: string }>;
   abortController: AbortController;
 }
 
@@ -143,6 +145,39 @@ const VISION_NATIVE = new Set(["anthropic", "openai", "google"]);
 const VISION_MODEL: Record<string, string> = {
   openai: "gpt-5.6-luna", google: "gemini_2.5_flash_lite", anthropic: "claude_4.5_haiku",
 };
+
+/**
+ * Build a system-context block describing the @ticket-referenced tickets: each
+ * ticket's spec, git branch, acceptance criteria, pending addenda, and a short
+ * "what's been done" history — so the chat model answers in the ticket's context.
+ */
+async function buildTicketMentionContext(ticketIds: string[]): Promise<string> {
+  const ids = [...new Set(ticketIds.filter(Boolean))].slice(0, 4);
+  if (!ids.length) return "";
+  const tickets = await db.select().from(projectTickets).where(inArray(projectTickets.id, ids)).catch(() => []);
+  if (!tickets.length) return "";
+  const parts: string[] = [];
+  for (const t of tickets) {
+    const branch = t.githubBranch || `feature/ticket-${t.id}`;
+    const ac = (t.acceptanceCriteria as string[] | null) ?? [];
+    const [addenda, done] = await Promise.all([
+      db.select({ d: ticketAddenda.description }).from(ticketAddenda)
+        .where(and(eq(ticketAddenda.ticketId, t.id), eq(ticketAddenda.status, "pending"))).catch(() => []),
+      db.select({ m: ticketLogs.command }).from(ticketLogs)
+        .where(and(eq(ticketLogs.ticketId, t.id), eq(ticketLogs.logType, "ai_response")))
+        .orderBy(desc(ticketLogs.createdAt)).limit(2).catch(() => []),
+    ]);
+    parts.push(
+      `### ${t.ticketKey ? t.ticketKey + " — " : ""}${t.name}\n` +
+      `- Status: ${t.status} · Branch: \`${branch}\` (the Preview has been switched to this branch)\n` +
+      (t.description ? `- Spec: ${String(t.description).replace(/\s+/g, " ").slice(0, 1200)}\n` : "") +
+      (ac.length ? `- Acceptance criteria: ${ac.map((c) => `(${c})`).join(" ")}\n` : "") +
+      (addenda.length ? `- Pending change requests: ${addenda.map((a) => a.d).join(" | ")}\n` : "") +
+      (done.length ? `- Recently done: ${done.map((x) => (x.m ?? "").replace(/\s+/g, " ").slice(0, 200)).join(" || ")}\n` : "")
+    );
+  }
+  return `The user is asking about the following ticket(s). Answer in this context; the live Preview is showing the first ticket's branch.\n\n${parts.join("\n")}`;
+}
 
 /** Describe an image using whatever vision-capable key the user has. Returns the
  *  text description, or null if no vision model is available / it fails. */
@@ -235,6 +270,12 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
         content: m.content,
       });
     }
+  }
+
+  // ── 3b. @ticket context — inject each referenced ticket's spec/branch/history ──
+  if (req.mentionedTickets?.length) {
+    const block = await buildTicketMentionContext(req.mentionedTickets.map((t) => t.id));
+    if (block) contextMessages.push({ role: "system", content: block });
   }
 
   // ── 4. Resolve model & API keys ──────────────────────────────────────────────

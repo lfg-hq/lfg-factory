@@ -10,7 +10,7 @@ import { handleStream } from "../ai/stream-handler.ts";
 import { db } from "../config/db.ts";
 import { messages, conversations } from "../db/schema/chat.ts";
 import { eq, asc, desc } from "drizzle-orm";
-import { runPreviewChat } from "../services/dev-preview.ts";
+import { runPreviewChat, restartPreview } from "../services/dev-preview.ts";
 import { getProjectAccess } from "../auth/project-access.ts";
 
 const HEARTBEAT_INTERVAL_MS = 20_000;
@@ -101,6 +101,7 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
 
   if (msg.type === "message") {
     const { message, conversation_id, project_id, turbo_mode, instant_mode, user_role, file, file_data } = msg;
+    const mentionedTickets = (msg as { mentioned_tickets?: Array<{ id: string; key?: string; name?: string; branch?: string }> }).mentioned_tickets;
     const resolvedFile = file_data ?? file;
     const normalizedMessage = message?.trim()
       ? message
@@ -140,6 +141,17 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
       if (/^\s*@preview\b/i.test(normalizedMessage) && conn.projectId) {
         await handlePreviewChat(ws, conn, normalizedMessage);
       } else {
+        // @ticket:… referenced → switch the Preview to the FIRST ticket's branch
+        // (fire-and-forget; context is injected in the stream handler).
+        if (mentionedTickets?.length && conn.projectId) {
+          const first = mentionedTickets[0];
+          getProjectAccess(conn.projectId, conn.userId).then((access) => {
+            if (access && first?.id) {
+              restartPreview(access.project.id, { userId: conn.userId, ticketId: first.id, conversationId: conn.conversationId ?? null })
+                .catch((e) => console.warn("[chat-handler] @ticket branch switch failed:", (e as Error).message));
+            }
+          }).catch(() => {});
+        }
         const result = await handleStream({
           ws,
           userId: conn.userId,
@@ -150,6 +162,7 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
           instantMode: instant_mode,
           userRole: user_role,
           file: resolvedFile,
+          mentionedTickets,
           abortController: conn.abortController,
         });
 
