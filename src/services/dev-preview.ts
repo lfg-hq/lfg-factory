@@ -454,7 +454,7 @@ async function healBrokenAssets(
     `If a rebuild is needed for the change to take effect, rebuild and restart the app. Then re-fetch each formerly-broken URL and confirm it now returns 200. Report exactly which references you fixed.`;
 
   try {
-    const res = await runPreviewChat({ projectId, publicProjectId: pub(projectId), userId, conversationId: conversationId ?? null, instruction });
+    const res = await runPreviewChat({ projectId, publicProjectId: pub(projectId), userId, conversationId: conversationId ?? null, instruction, noCommit: true });
     plog(projectId, userId, `Asset self-heal: ${res.status}`, res.reply ? { detail: res.reply.slice(0, 800) } : undefined);
     // Re-verify so the summary reflects reality after the fix.
     const again = await verifyPreview(projectId, userId, workspaceId, manifest, branchLabel).catch(() => null);
@@ -1170,8 +1170,12 @@ export async function runPreviewChat(opts: {
   conversationId: string | null;
   instruction: string;
   abortSignal?: AbortSignal;
+  /** Auto-invoked flows (e.g. asset self-heal) set this so the agent fixes the
+   *  LIVE preview but NEVER git commit/push — auto-committing to the user's branch
+   *  is a surprise they explicitly don't want. */
+  noCommit?: boolean;
 }): Promise<{ reply: string; status: "ok" | "error" | "stuck" }> {
-  const { projectId, publicProjectId, userId, instruction, abortSignal } = opts;
+  const { projectId, publicProjectId, userId, instruction, abortSignal, noCommit } = opts;
   publicIdCache.set(projectId, publicProjectId); // WS routing for plog
 
   const driver = await resolveDriverModel(userId);
@@ -1307,7 +1311,9 @@ export async function runPreviewChat(opts: {
   const system = `You are the LFG **Preview agent** for this project. You have FULL shell control of the project's LIVE Alpine sandbox (musl, apk, OpenRC/rc-service, busybox — Docker is available) via the \`run\` tool: one command per call, run detached + polled so long commands are fine. You are working in **${branchNote}** at ${workDir}; its .env is sourced before every command; the toolchain + /data caches are already on PATH.
 
 CODE CHANGES: ${canEditCode
-    ? `You ARE previewing a ticket's isolated feature branch (worktree at ${workDir}), so you MAY edit the app's SOURCE CODE here to fulfil the request (e.g. fix a .cshtml/CSS/JS UI issue). After editing: rebuild if it's a compiled stack (${manifest?.buildCmd || "the project's build command"}), restart the app (see below), verify with curl, and then COMMIT so the change persists on the branch: \`cd ${workDir} && git add -A && git commit -m "preview: <what you changed>" && git push 2>&1 || true\`. Tell the user in your reply exactly which files you changed.`
+    ? (noCommit
+      ? `You ARE previewing a ticket's isolated feature branch (worktree at ${workDir}), so you MAY edit the app's SOURCE CODE here to fix the issue so the LIVE preview renders correctly. After editing: rebuild if it's a compiled stack (${manifest?.buildCmd || "the project's build command"}), restart the app (see below), and verify with curl. **DO NOT run git commit, git push, git merge, or git checkout of another branch** — this fix is for the live preview only; the user decides whether to persist it. In your reply, list exactly which files you changed so they can persist it if they want.`
+      : `You ARE previewing a ticket's isolated feature branch (worktree at ${workDir}), so you MAY edit the app's SOURCE CODE here to fulfil the request (e.g. fix a .cshtml/CSS/JS UI issue). After editing: rebuild if it's a compiled stack (${manifest?.buildCmd || "the project's build command"}), restart the app (see below), verify with curl, and then COMMIT so the change persists on the branch: \`cd ${workDir} && git add -A && git commit -m "preview: <what you changed>" && git push 2>&1 || true\`. Tell the user in your reply exactly which files you changed.`)
     : `You are previewing the DEFAULT branch (${PROJECT_DIR}). Do NOT edit application SOURCE CODE here — code changes belong in a ticket/build, not on main. If the user asks for a code/UI change, say so in your reply and suggest they create/rebuild a ticket, or preview the ticket's branch (pick it in the branch selector) and ask again there.`}
 
 ${manifest ? `App: ${manifest.stack || `${manifest.runtime}/${manifest.framework}`}. Run command: \`${runCmd || "(unknown)"}\`. Port: ${port}. Databases: ${manifest.databases.length ? manifest.databases.map((d) => `${d.engine} (127.0.0.1, connection in .env as ${d.connectionEnvVar})`).join(", ") : "none"}.` : "This preview has not been fully set up yet — the app may not be running."}
