@@ -17,7 +17,7 @@
  */
 
 import { db } from "../config/db.ts";
-import { projectTickets, projectTodoLists, ticketStages, ticketLogs } from "../db/schema/tickets.ts";
+import { projectTickets, projectTodoLists, ticketStages, ticketLogs, ticketAddenda } from "../db/schema/tickets.ts";
 import { projects, projectEnvironmentVariables } from "../db/schema/projects.ts";
 import { projectEnvironments } from "../db/schema/project-environments.ts";
 import { profiles, githubTokens, applicationState, llmApiKeys } from "../db/schema/users.ts";
@@ -149,7 +149,7 @@ import { matchKnowledgeForPrompt } from "../ai/knowledge/matcher.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { logActivity } from "../services/activity-log.ts";
 import { ACTIVITY_TYPES } from "../db/schema/activities.ts";
-import { eq, and, desc, inArray } from "drizzle-orm";
+import { eq, and, asc, desc, inArray } from "drizzle-orm";
 
 /** Find a stage by name for a project and move the ticket to it. */
 async function moveTicketToStage(ticketId: string, projectId: string, stageName: string): Promise<string | null> {
@@ -195,6 +195,40 @@ async function loadRunInfo(internalProjectId: string): Promise<{ installCmd?: st
   } catch { return null; }
 }
 
+/**
+ * A prompt block with the ticket's PENDING addenda (new change requests) + a short
+ * history of what was already done — so a (re)build iterates instead of restarting.
+ * Returns the block text and the pending addendum ids (to mark resolved after a
+ * successful build).
+ */
+async function ticketAddendaContext(ticketId: string): Promise<{ block: string; pendingIds: string[] }> {
+  const pending = await db.select({ id: ticketAddenda.id, description: ticketAddenda.description })
+    .from(ticketAddenda)
+    .where(and(eq(ticketAddenda.ticketId, ticketId), eq(ticketAddenda.status, "pending")))
+    .orderBy(asc(ticketAddenda.createdAt));
+  const done = await db.select({ m: ticketLogs.command, at: ticketLogs.createdAt })
+    .from(ticketLogs)
+    .where(and(eq(ticketLogs.ticketId, ticketId), eq(ticketLogs.logType, "ai_response")))
+    .orderBy(desc(ticketLogs.createdAt)).limit(4);
+  let block = "";
+  if (pending.length) {
+    block += `\n## Addenda — NEW changes requested since the last build (address ALL of these)\n${pending.map((a, i) => `${i + 1}. ${a.description}`).join("\n")}\n`;
+  }
+  if (done.length) {
+    block += `\n## Already done on this ticket (build on it — do NOT redo)\n${done.reverse().map((d) => `- ${(d.m ?? "").replace(/\s+/g, " ").slice(0, 240)}`).join("\n")}\n`;
+  }
+  return { block, pendingIds: pending.map((p) => p.id) };
+}
+
+/** Mark a ticket's pending addenda resolved after a successful (re)build. */
+async function resolveTicketAddenda(ticketId: string, pendingIds: string[]): Promise<void> {
+  if (!pendingIds.length) return;
+  await db.update(ticketAddenda)
+    .set({ status: "resolved", buildIncludedAt: new Date(), buildTicketId: ticketId, resolvedAt: new Date() })
+    .where(and(eq(ticketAddenda.ticketId, ticketId), inArray(ticketAddenda.id, pendingIds)))
+    .catch(() => {});
+}
+
 /** The project's mandatory directives (app_profile) as a prompt block, or "". */
 async function directivesBlock(projectId: string): Promise<string> {
   try {
@@ -215,6 +249,8 @@ function buildPiTicketPrompt(args: {
   runInfo?: { installCmd?: string; buildCmd?: string; runCmd?: string; port?: number } | null;
   /** Project mandatory directives (app_profile) — must always be enforced. */
   directives?: string;
+  /** Pending addenda + "already done" history block (see ticketAddendaContext). */
+  addenda?: string;
 }): string {
   const t = args.ticket;
   const ac = (t.acceptanceCriteria ?? []).map((c, i) => `${i + 1}. ${c}`).join("\n") || "Not specified.";
@@ -252,10 +288,10 @@ ${ac}
 
 ## Tech stack
 ${stack}
-${runBlock}${args.directives ?? ""}
+${runBlock}${args.addenda ?? ""}${args.directives ?? ""}
 ## Instructions
 - Explore the project first; reuse existing patterns, dependencies, and files.
-- Implement the ticket end to end so every acceptance criterion is met.${args.directives ? "\n- The MANDATORY DIRECTIVES above are non-negotiable — verify your change satisfies every one before finishing." : ""}
+- Implement the ticket end to end so every acceptance criterion is met.${args.addenda ? "\n- If Addenda are listed above, they are the PRIMARY task this run — address every one, building on what was already done." : ""}${args.directives ? "\n- The MANDATORY DIRECTIVES above are non-negotiable — verify your change satisfies every one before finishing." : ""}
 - Make the app runnable: bind the dev server to 0.0.0.0 on port ${port}.
 - Do NOT run 'git commit', 'git push', or switch git branches — commit/push/merge is handled automatically after you finish.
 - Before finishing, make sure the project builds/compiles.`;
@@ -834,6 +870,7 @@ Before implementing, fix the git issue:
   const existingSessionId = sandbox.cliSessionId ?? undefined;
 
   let prompt: string;
+  let cliAddendaCtx: { block: string; pendingIds: string[] } = { block: "", pendingIds: [] };
   if (existingSessionId) {
     console.log(`[ticket-executor] Resuming session ${existingSessionId.slice(0, 20)}...`);
     await addLog(ticketId, "Resuming existing Claude session...", "command", ownerId);
@@ -880,6 +917,9 @@ Before implementing, fix the git issue:
       })),
       envVars: projectEnvRows.map((r) => ({ key: r.key, description: r.description ?? "" })),
     });
+    // Pending addenda + "already done" history (marked resolved after a good push).
+    cliAddendaCtx = await ticketAddendaContext(ticketId);
+    prompt += cliAddendaCtx.block;
 
     // Inject relevant knowledge base patterns into the prompt
     const knowledgeSection = matchKnowledgeForPrompt(
@@ -1089,6 +1129,7 @@ Before implementing, fix the git issue:
       .where(eq(projectTickets.id, ticketId));
     const cliSummary = `✅ **Ticket complete** — moved to In Review.\n\n- Branch: \`${featureBranch}\`\n\nOpen the **Git** tab to review the diff, or the **Preview** tab to run this branch.`;
     await addLog(ticketId, cliSummary, "ai_response", ownerId);
+    await resolveTicketAddenda(ticketId, cliAddendaCtx.pendingIds);
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId, mergeStatus: "merged" });
   } else {
     const reason = commitFailed
@@ -1315,6 +1356,7 @@ async function executeTicketChat(
       ? `\n## Recent conversation (oldest first)\n${convo.map((r) => `${r.t === "user_message" ? "User" : "Agent"}: ${(r.m ?? "").slice(0, 400)}`).join("\n")}\n`
       : "";
     const dirBlock = await directivesBlock(project!.id);
+    const addBlock = (await ticketAddendaContext(ticketId)).block; // pending addenda + history (context)
     const piPrompt = `You are continuing work on an existing ticket in the repository at /data/${projectDirName}.
 
 ## Ticket
@@ -1322,7 +1364,7 @@ ${ticket.name}
 
 ## Description
 ${ticket.description ?? ""}
-${acBlock}${notesBlock}${statusBlock}${convoBlock}${dirBlock}
+${acBlock}${notesBlock}${statusBlock}${convoBlock}${addBlock}${dirBlock}
 ## New instruction from the user (do this now)
 ${message}
 
@@ -2011,6 +2053,10 @@ git branch --show-current
 
   const savedTechStack = sandboxRow.techStack as { language?: string; framework?: string; packageManager?: string; startCommand?: string; buildCommand?: string; port?: number; } | null;
 
+  // Pending addenda (new change requests) + "already done" history — a rebuild
+  // addresses these, and they're marked resolved after a successful push.
+  const addendaCtx = await ticketAddendaContext(ticketId);
+
   const systemPrompt = buildApiBuilderPrompt({
     ticket: {
       id: ticket.id,
@@ -2033,7 +2079,7 @@ git branch --show-current
     cliApiKey: "", // Not used in API mode
     tasks: tasks.map(t => ({ id: t.id, description: t.description, status: t.status })),
     envVars: projectEnvRows.map(r => ({ key: r.key, description: r.description ?? "" })),
-  });
+  }) + addendaCtx.block; // append addenda + history (fallback/agent path)
 
   const projectDir = `${WORKING_DIR}/${projectDirName}`;
 
@@ -2092,6 +2138,7 @@ git branch --show-current
       prescaffolded,
       runInfo: await loadRunInfo(project.id),
       directives: await directivesBlock(project.id),
+      addenda: addendaCtx.block,
     });
     try {
       // Resolve (or mint) the CLI API key that authenticates the VM→server webhook.
@@ -2298,6 +2345,8 @@ git branch --show-current
       (mergedOk ? `- Merged to \`lfg-agent\` ✓\n` : (completedSha ? `- Pushed (merge to lfg-agent pending/failed — see logs)\n` : "")) +
       `\nOpen the **Git** tab to review the diff, or the **Preview** tab to run this branch.`;
     await addLog(ticketId, summary, "ai_response", ownerId);
+    // The build addressed the pending addenda → mark them resolved.
+    await resolveTicketAddenda(ticketId, addendaCtx.pendingIds);
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId, mergeStatus: mergedOk ? "merged" : "pushed" });
   } else {
     const reason = commitFailed
