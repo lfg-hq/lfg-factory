@@ -133,8 +133,12 @@ exec 2>&1
 cd "${projectDir}"
 
 # Some VMs restore /data/project owned by a different uid than the pusher; without
-# this git aborts with "detected dubious ownership" (exit 128, message on stderr).
+# this git aborts with "detected dubious ownership" (exit 128, message on stderr,
+# which some exec channels swallow → the '0-char, exit 128' failure). Mark BOTH the
+# project dir AND everything ('*') safe — a worktree's real gitdir lives elsewhere,
+# so marking only projectDir misses it and git still aborts.
 git config --global --add safe.directory "${projectDir}" 2>/dev/null || true
+git config --global --add safe.directory '*' 2>/dev/null || true
 
 # Self-heal: a restored / freshly-built VM may have no .git at all (exit 128 on the
 # first git command). Re-initialize and line up on the existing remote so push works.
@@ -272,8 +276,11 @@ export async function mergeToLfgAgent(opts: {
 
   const script = `
 set -e
+exec 2>&1
 cd "${projectDir}"
 
+git config --global --add safe.directory "${projectDir}" 2>/dev/null || true
+git config --global --add safe.directory '*' 2>/dev/null || true
 git config user.email "ai@lfg.dev"
 git config user.name "LFG AI"
 git remote set-url origin "${authUrl}" 2>/dev/null || true
