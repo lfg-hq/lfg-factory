@@ -984,9 +984,12 @@ function getProjectRepo(project: { repoOwner?: string | null; repoName?: string 
   return url.match(/https?:\/\/github\.com\/([^/]+)\/([^/.]+)/);
 }
 
-// ── GET /:projectId/tickets/mentions?q= ── @ticket autocomplete ──────
-// Search tickets by key/name for the chat @ticket picker.
-ticketsApi.get("/:projectId/tickets/mentions", async (c) => {
+// ── GET /:projectId/ticket-mentions?q= ── @ticket autocomplete ──────
+// Search tickets by key/name for the chat @ticket picker. NOTE the distinct path
+// ("ticket-mentions", not "tickets/mentions") so it can't be shadowed by the
+// earlier GET /:projectId/tickets/:ticketId route (which would match ":ticketId"
+// = "mentions" and 404).
+ticketsApi.get("/:projectId/ticket-mentions", async (c) => {
   const user = c.get("user");
   const { projectId } = c.req.param();
   const access = await getProjectAccess(projectId!, user.id);

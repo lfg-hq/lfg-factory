@@ -5472,7 +5472,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function fetchMentionTickets(searchQuery) {
         if (!currentProjectId) return;
         try {
-            const url = `/api/projects/${currentProjectId}/tickets/mentions?q=${encodeURIComponent(searchQuery || '')}`;
+            const url = `/api/projects/${currentProjectId}/ticket-mentions?q=${encodeURIComponent(searchQuery || '')}`;
             const response = await fetch(url, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
             if (!response.ok) throw new Error('HTTP ' + response.status);
             const data = await response.json();
