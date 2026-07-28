@@ -4001,3 +4001,45 @@
 #drawer-description table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; display: block; overflow-x: auto; }
 #drawer-description th,
 #drawer-description td { border: 1px solid rgba(127, 127, 127, 0.25); padding: 6px 10px; text-align: left; }
+
+/* ── Actions log: distinguish agent ACTIONS from their OUTPUT ─────────────── */
+.log-entry.log-cmd .log-row-ico {
+    font-size: 0.62rem;
+    color: rgba(127, 127, 127, 0.55);
+    flex-shrink: 0;
+    width: 0.85rem;
+    text-align: center;
+}
+/* Output rows: muted + slightly indented so they read as results, not commands */
+.log-entry.log-output { opacity: 0.72; }
+.log-entry.log-output .log-cmd-header { padding-left: 1.6rem; }
+.log-entry.log-output .log-output-ico { color: rgba(127, 127, 127, 0.4); }
+.log-out-tag {
+    flex-shrink: 0;
+    font-size: 0.58rem;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: rgba(127, 127, 127, 0.75);
+    background: rgba(127, 127, 127, 0.12);
+    border: 1px solid rgba(127, 127, 127, 0.22);
+    border-radius: 4px;
+    padding: 0 5px;
+    line-height: 1.6;
+}
+.log-entry.log-cmd .log-cmd-text.log-output-text {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.8rem;
+}
+/* Green completion summary: render markdown cleanly (bold/code/lists) */
+.log-entry.log-agent .log-agent-content.markdown-content { padding: 2px 0 0; }
+.log-entry.log-agent .log-agent-content.markdown-content p { margin: 6px 0; }
+.log-entry.log-agent .log-agent-content.markdown-content ul { margin: 6px 0; padding-left: 20px; }
+.log-entry.log-agent .log-agent-content.markdown-content li { margin: 2px 0; }
+.log-entry.log-agent .log-agent-content.markdown-content code {
+    background: rgba(127, 127, 127, 0.15);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.86em;
+    word-break: break-word;
+}
+.log-entry.log-agent .log-agent-content.markdown-content strong { font-weight: 700; }

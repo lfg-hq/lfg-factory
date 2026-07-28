@@ -1079,14 +1079,16 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     el.className = 'log-entry';
 
     if (type === 'ai_response') {
-      // Agent — green left border, always expanded
+      // Agent — green left border, always expanded. Render markdown (the summary
+      // uses bold, inline code, and lists) instead of showing raw markdown syntax.
       el.className += ' log-agent';
+      var agentHtml = (typeof marked !== 'undefined') ? marked.parse(msg) : escHtml(msg).split(String.fromCharCode(10)).join('<br>');
       el.innerHTML =
         '<div class="log-agent-header">' +
           '<span class="log-agent-label">Agent</span>' +
           '<span class="log-time">' + ts + '</span>' +
         '</div>' +
-        '<div class="log-agent-content">' + escHtml(msg) + '</div>';
+        '<div class="log-agent-content markdown-content">' + agentHtml + '</div>';
 
     } else if (type === 'user_message') {
       // User — purple left border
@@ -1139,13 +1141,28 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
         optionsHtml;
 
     } else {
-      // Command / system — show description, expand for details (like Django)
-      el.className += ' log-cmd';
+      // Command / system row. The agent stream mixes ACTIONS ("Running…",
+      // "Reading…") with their OUTPUT (grep/file content). They arrive as the same
+      // log type, so distinguish them heuristically: an action starts with a verb;
+      // everything else is treated as output and rendered muted with an "output"
+      // tag + a terminal icon, so the two are no longer indistinguishable.
+      // Detect ACTION rows without a regex literal (backslash escapes get mangled
+      // inside this .tsx template literal): starts with '$ ' or a known verb.
+      var _actionVerbs = ['Running','Reading','Editing','Writing','Creating','Searching','Listing','Merging','Merged','Committing','Committed','Pushed','Pushing','Building','Build','Installing','Started','Starting','Cloning','Fetching','Continuing','Spinning','Restarting','Setting up','Verifying'];
+      var isAction = msg.charAt(0) === '$' || _actionVerbs.some(function(v){ return msg.indexOf(v) === 0; });
       var desc = describeCmd(msg, explanation);
+      el.className += isAction ? ' log-cmd' : ' log-cmd log-output';
+      var iconHtml = isAction
+        ? '<i class="fas fa-terminal log-row-ico"></i>'
+        : '<i class="fas fa-angle-right log-row-ico log-output-ico"></i>';
+      var label = isAction
+        ? '<span class="log-cmd-text">' + escHtml(desc) + '</span>'
+        : '<span class="log-out-tag">output</span><span class="log-cmd-text log-output-text">' + escHtml(desc) + '</span>';
       el.innerHTML =
         '<div class="log-cmd-header">' +
+          iconHtml +
           '<i id="' + rowId + '-chev" class="fas fa-chevron-right log-chev"></i>' +
-          '<span class="log-cmd-text">' + escHtml(desc) + '</span>' +
+          label +
           '<span class="log-time">' + ts + '</span>' +
         '</div>' +
         '<div id="' + rowId + '" class="log-cmd-body">' + escHtml(msg) + '</div>';
