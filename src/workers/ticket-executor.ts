@@ -100,13 +100,22 @@ async function resolveRepoAuth(
  * worktree is kept alive through In-Review so the user can preview/test the branch.
  */
 export async function cleanupTicketWorktree(ticketId: string): Promise<void> {
-  const [sb] = await db.select().from(sandboxes).where(eq(sandboxes.ticketId, ticketId)).limit(1);
-  if (!sb) return;
-  if (sb.magsWorkspaceId && sb.workspaceType === "ticket-worktree") {
-    const dir = `wt-ticket-${ticketId.slice(0, 12)}`;
-    await execOnWorkspace(sb.magsWorkspaceId, `cd ${WORKING_DIR}/project 2>/dev/null && git worktree remove --force ${WORKING_DIR}/${dir} 2>/dev/null; rm -rf ${WORKING_DIR}/${dir} 2>/dev/null; git worktree prune 2>/dev/null; echo cleaned`, { timeout: 60_000 }).catch(() => {});
+  const rows = await db.select().from(sandboxes).where(eq(sandboxes.ticketId, ticketId));
+  for (const sb of rows) {
+    if (!sb.magsWorkspaceId) continue;
+    const isPreview = sb.magsWorkspaceId.startsWith("pv-");
+    if (sb.workspaceType === "ticket-worktree" && isPreview) {
+      // A worktree lives inside the always-on preview VM — remove the worktree,
+      // never the VM.
+      const dir = `wt-ticket-${ticketId.slice(0, 12)}`;
+      await execOnWorkspace(sb.magsWorkspaceId, `cd ${WORKING_DIR}/project 2>/dev/null && git worktree remove --force ${WORKING_DIR}/${dir} 2>/dev/null; rm -rf ${WORKING_DIR}/${dir} 2>/dev/null; git worktree prune 2>/dev/null; echo cleaned`, { timeout: 60_000 }).catch(() => {});
+    } else if (!isPreview) {
+      // A DEDICATED isolated VM (ticket-chat / ticket build) — destroy it so the
+      // warm chat sandbox doesn't linger after the ticket is done.
+      await deleteWorkspace(sb.magsWorkspaceId).catch(() => {});
+    }
   }
-  await db.delete(sandboxes).where(eq(sandboxes.id, sb.id)).catch(() => {});
+  await db.delete(sandboxes).where(eq(sandboxes.ticketId, ticketId)).catch(() => {});
 }
 
 /**
@@ -1104,6 +1113,93 @@ Before implementing, fix the git issue:
   }
 }
 
+/**
+ * A DEDICATED isolated sandbox for ticket CHAT — a fresh VM cloned to the ticket's
+ * branch, REUSED across chat messages (warm) but NEVER the shared preview VM. This
+ * keeps chat commits clean: the preview VM accumulates run-enabling config hacks on
+ * /data/project that a `git add -A` there would sweep into the branch. Reuses a live
+ * "ticket-chat" sandbox; otherwise provisions + clones. Torn down when the ticket is
+ * approved/Done (cleanupTicketWorktree), kept warm meanwhile for fast follow-ups.
+ */
+async function ensureIsolatedChatSandbox(
+  ticket: { id: string; projectId: string; githubBranch: string | null },
+  project: { id: string; repoOwner: string | null; repoName: string | null; repoUrl: string | null; repoProvider?: string | null; stack?: string | null },
+  ownerId: string,
+): Promise<{ workspaceId: string } | { error: string }> {
+  const projectDirName = "project";
+  const featureBranch = ticket.githubBranch ?? `feature/ticket-${ticket.id}`;
+
+  // 1) Reuse a live dedicated chat sandbox if we have one (warm follow-ups).
+  const [existing] = await db.select().from(sandboxes)
+    .where(and(eq(sandboxes.ticketId, ticket.id), eq(sandboxes.workspaceType, "ticket-chat"))).limit(1);
+  if (existing?.magsWorkspaceId && !existing.magsWorkspaceId.startsWith("pv-")) {
+    try {
+      // Alive? AND re-sync to the latest pushed commit — a build or a prior chat may
+      // have pushed since this warm VM was last used, so don't work on stale code.
+      const sync = await execOnWorkspace(existing.magsWorkspaceId,
+        `cd ${WORKING_DIR}/${projectDirName} 2>/dev/null && git config --global --add safe.directory '*' 2>/dev/null; git fetch origin 2>&1 | tail -1; git checkout -B ${featureBranch} origin/${featureBranch} 2>/dev/null || git checkout ${featureBranch} 2>/dev/null; git reset --hard origin/${featureBranch} 2>/dev/null; git clean -fd 2>/dev/null; echo READY`,
+        { timeout: 90_000 });
+      if (sync.output.includes("READY")) return { workspaceId: existing.magsWorkspaceId };
+    } catch { /* dead — reprovision below */ }
+    await db.delete(sandboxes).where(eq(sandboxes.id, existing.id)).catch(() => {});
+  }
+
+  const auth = await resolveRepoAuth(project, ownerId);
+  if (!auth) return { error: "No repository/credentials configured — connect the repo in Settings, then chat with the agent." };
+
+  // 2) Provision a fresh isolated VM (same call + rootfs the build uses).
+  await addLog(ticket.id, "Spinning up a clean isolated sandbox for this chat…", "command", ownerId);
+  let workspaceId: string;
+  try {
+    const workspaceName = `chat-${ticket.id.slice(0, 8)}-${crypto.randomUUID().slice(0, 8)}`;
+    const { workspaceId: wsId, jobId } = await newWorkspaceV2(workspaceName, {
+      vcpus: 4,
+      memoryMb: parseInt(process.env.INSTANT_MEM_GB || "4", 10) * 1024,
+      diskGb: parseInt(process.env.INSTANT_DISK_GB || "8", 10),
+      rootfsType: process.env.PREVIEW_ROOTFS || "pi",
+    });
+    workspaceId = wsId;
+    await sleep(8_000);
+    await db.insert(sandboxes).values({
+      projectId: ticket.projectId, userId: ownerId, ticketId: ticket.id,
+      magsWorkspaceId: wsId, magsJobId: jobId, workspaceType: "ticket-chat", status: "ready",
+    });
+  } catch (e) {
+    return { error: `Could not create a sandbox: ${(e as Error).message}` };
+  }
+
+  // 3) Certs + clone + checkout the ticket's branch (fresh, clean state).
+  await ensureVmCerts(workspaceId);
+  const cloneScript = `
+cd ${WORKING_DIR}
+echo CLONING
+rm -rf ${projectDirName}
+git clone "${auth.authUrl}" ${projectDirName} 2>&1
+cd ${projectDirName} 2>/dev/null || { echo GIT_CLONE_FAILED; exit 1; }
+[ -d .git ] || { echo GIT_CLONE_FAILED; exit 1; }
+git config --global --add safe.directory '*' 2>/dev/null || true
+git config user.email "ai@lfg.dev"; git config user.name "LFG AI"
+if git rev-parse --verify origin/${featureBranch} 2>/dev/null; then
+  git checkout -B ${featureBranch} origin/${featureBranch} 2>&1
+elif git rev-parse --verify origin/lfg-agent 2>/dev/null; then
+  git checkout -B ${featureBranch} origin/lfg-agent 2>&1
+else
+  DEF=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || echo main)
+  git checkout -B ${featureBranch} origin/$DEF 2>&1 || git checkout -B ${featureBranch} 2>&1
+fi
+[ -d .git ] && echo GIT_SETUP_COMPLETE || echo GIT_SETUP_FAILED
+`.trim();
+  const b64 = Buffer.from(cloneScript).toString("base64");
+  const r = await execOnWorkspace(workspaceId, `echo ${b64} | base64 -d | sh`, { timeout: 300_000 })
+    .catch((e) => ({ output: `EXEC_FAILED: ${(e as Error).message}` }));
+  if (!r.output.includes("GIT_SETUP_COMPLETE")) {
+    await deleteWorkspace(workspaceId).catch(() => {});
+    await db.delete(sandboxes).where(and(eq(sandboxes.ticketId, ticket.id), eq(sandboxes.workspaceType, "ticket-chat"))).catch(() => {});
+    return { error: `Couldn't clone the repo into the chat sandbox: ${r.output.slice(-300)}` };
+  }
+  return { workspaceId };
+}
+
 // ── Chat Resume Executor ──────────────────────────────────────────────
 
 async function executeTicketChat(
@@ -1145,13 +1241,19 @@ async function executeTicketChat(
     console.log(`[ticket-executor] Auto-generated CLI API key for chat user ${ownerId}`);
   }
 
-  const sandbox = await findExistingSandbox(ticketId);
-  if (!sandbox?.magsWorkspaceId) {
-    await addLog(ticketId, "No active workspace for this ticket. Please build the ticket first.", "command", ownerId);
+  // Chat runs in a DEDICATED isolated sandbox (fresh clone of the branch), REUSED
+  // across messages but NEVER the shared preview VM — so a chat commit can't sweep
+  // the preview's run-enabling config hacks into the branch.
+  const chatSb = await ensureIsolatedChatSandbox(
+    { id: ticket.id, projectId: ticket.projectId, githubBranch: ticket.githubBranch },
+    project!, ownerId,
+  );
+  if ("error" in chatSb) {
+    await addLog(ticketId, chatSb.error, "cli_error", ownerId);
     return;
   }
-
-  const workspaceId = sandbox.magsWorkspaceId;
+  const sandbox = { magsWorkspaceId: chatSb.workspaceId, cliSessionId: null as string | null };
+  const workspaceId = chatSb.workspaceId;
   const projectDirName = "project";
   let sessionId = sandbox.cliSessionId ?? undefined;
 
