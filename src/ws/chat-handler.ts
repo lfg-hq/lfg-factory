@@ -10,7 +10,7 @@ import { handleStream } from "../ai/stream-handler.ts";
 import { db } from "../config/db.ts";
 import { messages, conversations } from "../db/schema/chat.ts";
 import { eq, asc, desc } from "drizzle-orm";
-import { runPreviewChat, restartPreview } from "../services/dev-preview.ts";
+import { runPreviewChat, restartPreview, getPreviewState } from "../services/dev-preview.ts";
 import { getProjectAccess } from "../auth/project-access.ts";
 
 const HEARTBEAT_INTERVAL_MS = 20_000;
@@ -141,12 +141,19 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
       if (/^\s*@preview\b/i.test(normalizedMessage) && conn.projectId) {
         await handlePreviewChat(ws, conn, normalizedMessage);
       } else {
-        // @ticket:… referenced → switch the Preview to the FIRST ticket's branch
-        // (fire-and-forget; context is injected in the stream handler).
+        // @ticket:… referenced → switch the Preview to the FIRST ticket's branch,
+        // but ONLY if a preview is already LIVE and on a DIFFERENT branch. Asking a
+        // QUESTION about the ticket you're already previewing must NOT rebuild it
+        // (and a question shouldn't boot a preview from scratch). Fire-and-forget.
         if (mentionedTickets?.length && conn.projectId) {
           const first = mentionedTickets[0];
-          getProjectAccess(conn.projectId, conn.userId).then((access) => {
-            if (access && first?.id) {
+          getProjectAccess(conn.projectId, conn.userId).then(async (access) => {
+            if (!access || !first?.id) return;
+            const target = first.branch || `feature/ticket-${first.id}`;
+            const st = await getPreviewState(access.project.id).catch(() => null);
+            const isLive = st && (st.previewStatus === "running" || st.previewStatus === "starting");
+            const alreadyOn = st && st.branch && (st.branch === target);
+            if (isLive && !alreadyOn) {
               restartPreview(access.project.id, { userId: conn.userId, ticketId: first.id, conversationId: conn.conversationId ?? null })
                 .catch((e) => console.warn("[chat-handler] @ticket branch switch failed:", (e as Error).message));
             }
