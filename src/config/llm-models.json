@@ -83,14 +83,14 @@
     },
     "kimi": {
       "label": "Kimi",
-      "default_model": "kimi_k2.5",
-      "lite_model": "kimi_k2.5",
+      "default_model": "kimi_k3",
+      "lite_model": "kimi_k3",
       "caching": "auto",
       "models": [
         {
-          "key": "kimi_k2.5",
-          "label": "Kimi K2.5",
-          "provider_model": "kimi-k2.5",
+          "key": "kimi_k3",
+          "label": "Kimi K3",
+          "provider_model": "kimi-k3",
           "requires_pro": true,
           "tier": "pro"
         }
