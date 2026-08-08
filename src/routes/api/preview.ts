@@ -119,7 +119,7 @@ previewApi.post("/:projectId/preview/detect", async (c) => {
   const access = await getProjectAccess(c.req.param("projectId")!, user.id);
   if (!access) return c.json({ error: "Project not found" }, 404);
   try {
-    const manifest = await detectManifest(access.project.id);
+    const manifest = await detectManifest(access.project.id, user.id);
     await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() }).where(eq(projectEnvironments.projectId, access.project.id));
     return c.json({ manifest });
   } catch (e) {

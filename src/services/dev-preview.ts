@@ -26,7 +26,7 @@ import { decryptSecret, encryptSecret } from "../utils/crypto.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { enableHttpAccess, execOnWorkspace, setStableUrl, startBrowserSession, stopWorkspace } from "./mags.ts";
 import { ensureProjectSandbox, ensureEngine, ensureDocker, envWorkspaceId, checkEngineHealth, type EngineHandle } from "./project-sandbox.ts";
-import { probeAppProfile, saveAppProfile, loadAppProfile, deriveManifestFromProfile, missingSecrets, secretsNoticeMessage, applyProfileCorrection, recordProfileLearning, recordDirective, recordConfigPatch, buildConfigPatchScript, profileNotes, type AppProfile } from "./app-profile.ts";
+import { probeAppProfile, saveAppProfile, loadAppProfile, deriveManifestFromProfile, missingSecrets, secretsNoticeMessage, applyProfileCorrection, recordProfileLearning, recordDirective, recordConfigPatch, buildConfigPatchScript, profileNotes, resolveUserModel, type AppProfile } from "./app-profile.ts";
 import { isS3Enabled, buildS3Key, uploadBinary, getPresignedGetUrl } from "./s3.ts";
 import { messages } from "../db/schema/chat.ts";
 import { projectTickets } from "../db/schema/tickets.ts";
@@ -214,13 +214,13 @@ echo "=== README setup ==="; head -c 2500 README.md 2>/dev/null; head -c 1500 RE
 }
 
 /** Detect (or re-detect) the setup manifest. Merges project custom overrides. */
-export async function detectManifest(projectId: string): Promise<PreviewManifest> {
+export async function detectManifest(projectId: string, userId: string): Promise<PreviewManifest> {
   const [project] = await db.select().from(projects).where(eq(projects.id, projectId));
   if (!project) throw new Error("project not found");
   const workspaceId = await envWorkspaceId(projectId);
   const fingerprint = await gatherFingerprint(workspaceId);
 
-  const model = getModel(DEFAULT_MODEL_KEY, undefined, { allowEnvFallback: true });
+  const model = await resolveUserModel(userId);
   const { object } = await generateObject({
     model,
     schema: manifestSchema,
@@ -1515,6 +1515,7 @@ fi`, 240_000);
       try {
         profile = await probeAppProfile({
           workspaceId,
+          userId,
           onLog: (l, d) => plog(projectId, userId, l, d ? { detail: d } : undefined),
           abortSignal: pac.signal,
         });
@@ -1562,7 +1563,7 @@ fi`, 240_000);
     // preview still functions.
     if (!manifest) {
       plog(projectId, userId, "Probe produced no profile — falling back to quick detection…");
-      manifest = await detectManifest(projectId);
+      manifest = await detectManifest(projectId, userId);
       await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
       plog(projectId, userId, `Plan: ${manifest.stack || manifest.runtime}`);
     }
@@ -1759,6 +1760,7 @@ export async function reprobeProfile(projectId: string, userId: string): Promise
   const prior = await loadAppProfile(projectId);
   const profile = await probeAppProfile({
     workspaceId,
+    userId,
     onLog: (l, d) => plog(projectId, userId, l, d ? { detail: d } : undefined),
   });
   if (!profile) {

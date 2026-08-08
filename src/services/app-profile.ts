@@ -21,9 +21,36 @@ import { eq, and } from "drizzle-orm";
 import { db } from "../config/db.ts";
 import { appProfiles } from "../db/schema/app-profile.ts";
 import { projectEnvironmentVariables } from "../db/schema/projects.ts";
+import { modelSelections } from "../db/schema/chat.ts";
+import { llmApiKeys } from "../db/schema/users.ts";
 import { getModel, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
 import { execOnWorkspace } from "./mags.ts";
+import type { LanguageModel } from "ai";
 import type { PreviewManifest } from "./dev-preview.ts";
+
+/**
+ * Resolve the LLM the user picked in chat (with their own keys) for setup/probe work.
+ * Preview setup must use the SAME model the user selected — not a hardcoded default on
+ * the server's env key (which broke setup when the server's OpenAI key was invalid,
+ * even though the user had a valid Kimi/other key). Falls back to the default model +
+ * env only when the user has no selection/keys.
+ */
+export async function resolveUserModel(userId: string): Promise<LanguageModel> {
+  const [sel] = await db.select().from(modelSelections).where(eq(modelSelections.userId, userId));
+  const [keys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, userId));
+  const modelKey = sel?.selectedModel ?? DEFAULT_MODEL_KEY;
+  const userApiKeys = keys
+    ? {
+        anthropic: keys.anthropicApiKey ?? undefined,
+        openai: keys.openaiApiKey ?? undefined,
+        google: keys.googleApiKey ?? undefined,
+        kimi: keys.kimiApiKey ?? undefined,
+        deepseek: keys.deepseekApiKey ?? undefined,
+        glm: keys.glmApiKey ?? undefined,
+      }
+    : undefined;
+  return getModel(modelKey, userApiKeys, { allowEnvFallback: true });
+}
 
 const PROJECT_DIR = "/data/project";
 
@@ -125,11 +152,12 @@ INVESTIGATION TIPS: list the tree first; cat the solution/csproj/appsettings/doc
  */
 export async function probeAppProfile(opts: {
   workspaceId: string;
+  userId: string;
   workDir?: string;
   onLog?: (line: string, detail?: string) => void;
   abortSignal?: AbortSignal;
 }): Promise<AppProfile | null> {
-  const { workspaceId, workDir = PROJECT_DIR, onLog, abortSignal } = opts;
+  const { workspaceId, userId, workDir = PROJECT_DIR, onLog, abortSignal } = opts;
   const log = (l: string, d?: string) => { try { onLog?.(l, d); } catch { /* noop */ } };
   let profile: AppProfile | null = null;
 
@@ -174,7 +202,7 @@ export async function probeAppProfile(opts: {
   };
 
   log("Probing the codebase (deep read → run profile)…");
-  const model = getModel(DEFAULT_MODEL_KEY, undefined, { allowEnvFallback: true });
+  const model = await resolveUserModel(userId);
   try {
     await generateText({
       model,
