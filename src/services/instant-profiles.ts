@@ -11,15 +11,27 @@
  *  - webapp  (default) — Next.js + shadcn/ui + drizzle/SQLite. Ported verbatim.
  *  - landing — Next.js + shadcn/ui + framer-motion, marketing-section prompt.
  *  - game    — Vite + TypeScript + three.js, game-loop prompt, no shadcn/DB.
+ *  - python  — Flask + Jinja templates + stdlib sqlite3, single-process HTML app.
+ *
+ * SINGLE-STACK RULE: a build VM exposes exactly ONE url/port (8080) served by ONE
+ * process. A profile is therefore a single stack end-to-end — never a JS frontend
+ * paired with a separate Python backend. "python" means the WHOLE app is Python
+ * (server-rendered HTML), not a Python API bolted onto Next.js.
  */
 
 import type { DesignTokens } from "../config/design-tokens/index.ts";
 
-export type ProjectType = "webapp" | "landing" | "game";
+export type ProjectType = "webapp" | "landing" | "game" | "python";
 
 export interface ScaffoldStep {
   message: string; // broadcast to the user while it runs
   script: string; // shell script (run via execOnWorkspace)
+  /**
+   * Run this step DETACHED + polled instead of one blocking exec. Set for steps
+   * that can stay silent >100s (big pip/apt installs) — a single long-held HTTP
+   * request is killed by Cloudflare with `error code: 524` before it finishes.
+   */
+  slow?: boolean;
 }
 
 export interface BuildPromptParams {
@@ -65,6 +77,12 @@ const GAME_RE =
   /\b(game|gameplay|three\.?js|3d|webgl|player|level|score|physics|shooter|platformer|puzzle|arcade|maze|enemy|sprite|fps|rpg|tower defense|endless runner)\b/i;
 const LANDING_RE =
   /\b(landing page|landing site|marketing site|marketing page|home ?page|hero section|waitlist|coming soon|splash page|product page|one[- ]pager|brand site)\b/i;
+// Python is chosen when the app's CORE work needs the Python ecosystem (data/ML/
+// scientific/document libs, or an explicit Python framework). Kept conservative so a
+// generic "dashboard" or "tool" still defaults to the Next.js webapp stack — the
+// orchestrator's explicit project_type is the primary signal; this is the fallback.
+const PYTHON_RE =
+  /\b(python|flask|django|fastapi|streamlit|gradio|jupyter|notebook|pandas|numpy|scikit[- ]?learn|sklearn|scipy|pytorch|tensorflow|keras|matplotlib|seaborn|plotly|opencv|spacy|nltk|transformers|docling|pypdf|pdfplumber|beautifulsoup|scrapy|selenium|sqlalchemy)\b/i;
 
 /**
  * Resolve the project type. An explicit value (from the orchestrator's
@@ -72,10 +90,11 @@ const LANDING_RE =
  * to a keyword heuristic over the requirements.
  */
 export function detectProjectType(requirements: string, explicit?: string | null): ProjectType {
-  if (explicit === "webapp" || explicit === "landing" || explicit === "game") return explicit;
+  if (explicit === "webapp" || explicit === "landing" || explicit === "game" || explicit === "python") return explicit;
   const r = requirements || "";
   if (GAME_RE.test(r)) return "game";
   if (LANDING_RE.test(r)) return "landing";
+  if (PYTHON_RE.test(r)) return "python";
   return "webapp";
 }
 
@@ -557,10 +576,233 @@ ${rules}`;
   },
 };
 
+// ── python profile (Flask + Jinja + stdlib sqlite3, single process) ────────
+//
+// ONE stack, ONE process, ONE port. Flask serves server-rendered Jinja templates
+// (templates/) and static assets (static/) on 0.0.0.0:8080 — no Next.js, no node,
+// no separate frontend. Persistence is Python's stdlib sqlite3 (no server, no extra
+// install). Heavier libs (docling, pandas, etc.) are pip-installed by the agent into
+// the venv as the app needs them.
+
+const PYTHON_ENV = [
+  // The venv's bin is first so `python`/`pip` resolve to the project interpreter.
+  "export PATH=/data/project/.venv/bin:/usr/local/bin:/usr/bin:/bin:$PATH",
+  // pip cache on /data (big disk), not root (~1.9GB) — avoids ENOSPC on install.
+  "export PIP_CACHE_DIR=/data/.pip-cache",
+  "mkdir -p /data/.pip-cache",
+].join("\n");
+
+const PYTHON_STARTUP_COMMAND =
+  `cd /data/project && if [ -f app.py ] && [ -x .venv/bin/python ]; then fuser -k 8080/tcp 2>/dev/null; pkill -9 -f 'python.*app.py' 2>/dev/null; sleep 1; nohup .venv/bin/python app.py > dev.log 2>&1 & fi`;
+
+const PYTHON_SERVER_RULES = `## Rules
+- The app is a SINGLE Python (Flask) process. There is NO Next.js, NO node, NO separate
+  frontend — Flask renders the HTML (Jinja templates in templates/) and serves static
+  assets from static/. Everything runs in ONE process on ONE port.
+- Flask MUST listen on 0.0.0.0:8080. Start it with nohup, redirecting output to dev.log:
+  \`nohup .venv/bin/python app.py > dev.log 2>&1 &\`. app.py must end with
+  \`app.run(host="0.0.0.0", port=8080)\`.
+- Use the venv at /data/project/.venv. Install packages with \`.venv/bin/pip install <pkg>\`
+  (never global pip). Install exactly what the requirements ask for; do NOT silently swap a
+  requested library for a lighter substitute.
+- **CPU-only torch is already pre-installed** in the venv. \`torch\` is a CPU build (no CUDA).
+  When you \`pip install docling\` (or any ML lib), torch is ALREADY satisfied, so it will
+  NOT re-download it. NEVER run \`pip install torch\` or \`pip install --upgrade torch\` — the
+  default/CUDA wheel pulls ~4GB of useless nvidia_* packages that fail on this CPU sandbox
+  and break the build. If you must install another torch-adjacent package, keep the CPU
+  torch (the venv's pip.conf already points at the CPU index).
+- For SYSTEM packages use \`apt-get install -y <pkg>\` on Debian (or \`apk add <pkg>\` on Alpine).
+- Database: use Python's stdlib \`sqlite3\` with a file at /data/project/app.db. Do NOT use
+  Postgres or any hosted DB. Create tables on startup if missing.
+- Do NOT create nested project directories. Do NOT use sudo.
+- Do NOT use the TodoWrite tool. Do NOT run diagnostic commands (python -V, pip -V, ls).
+  The environment is configured correctly.
+- MINIMIZE tool calls. Combine related file writes. If a pip install fails, retry ONCE
+  (installing build deps if needed: \`apt-get install -y build-essential python3-dev\` on
+  Debian, or \`apk add build-base python3-dev\` on Alpine).`;
+
+const PYTHON_MEMORY_RULES = `## Server management
+This sandbox has LIMITED memory (~2GB). Flask is light — no build step is needed.
+
+### Start/restart sequence (use this EVERY time you (re)start the server):
+\`\`\`bash
+pkill -9 -f "app.py" 2>/dev/null; pkill -9 -f "flask" 2>/dev/null; sleep 1
+cd /data/project
+nohup .venv/bin/python app.py > dev.log 2>&1 &
+\`\`\`
+- The app serves on 0.0.0.0:8080. Do NOT change the port.
+- If it won't come up, check dev.log (tail -50 dev.log) for the real error (usually a
+  missing pip package or a Python traceback).`;
+
+function pythonDesignSection(tokens: DesignTokens): string {
+  const heading = tokens.typography.headingFont;
+  const body = tokens.typography.bodyFont;
+  const fontsParam = [heading, body]
+    .filter((f, i, a) => a.indexOf(f) === i)
+    .map((f) => `family=${f.replace(/\s+/g, "+")}:wght@400;500;600;700`)
+    .join("&");
+  return `
+## Design System (authoritative: design-tokens.css)
+The design tokens are already in /data/project as \`design-tokens.css\` (CSS custom
+properties) and \`tokens.json\` (raw values). Wire them into the HTML:
+1. Copy the stylesheet into static: \`cp design-tokens.css static/design-tokens.css\`.
+2. In your base Jinja template's <head>, load the fonts and tokens:
+   \`\`\`html
+   <link rel="preconnect" href="https://fonts.googleapis.com">
+   <link href="https://fonts.googleapis.com/css2?${fontsParam}&display=swap" rel="stylesheet">
+   <link rel="stylesheet" href="{{ url_for('static', filename='design-tokens.css') }}">
+   \`\`\`
+3. Use the CSS variables for ALL colors/spacing: \`hsl(var(--primary))\`,
+   \`hsl(var(--background))\`, \`hsl(var(--border))\`, etc. Do NOT invent colors.
+
+### Palette: ${tokens.meta.paletteName} | Fonts: ${heading} / ${body} | Style: ${tokens.meta.styleProfileName}
+- Primary: ${tokens.colors.primary} | Background: ${tokens.colors.background} | Text: ${tokens.colors.text}
+- Heading font: ${heading} | Body font: ${body} | Border radius: ${tokens.style.borderRadius.default}
+
+### Craft bar
+- Every page must look like a polished product, not a Bootstrap default. Use generous
+  whitespace, a clear typographic hierarchy, and the palette consistently.
+- Interactive elements (buttons, links, inputs) get hover + focus states with smooth
+  transitions. Cards get subtle shadows. Never leave an empty state blank — add a CTA.
+- Ship plain, dependency-free CSS (you may add a little vanilla JS for interactivity).
+  Do NOT pull in Tailwind, Bootstrap, or a JS framework — this is server-rendered HTML.
+`;
+}
+
+const pythonProfile: BuildProfile = {
+  type: "python",
+  startupCommand: PYTHON_STARTUP_COMMAND,
+  scaffoldSteps: [
+    {
+      message: "Setting up Python environment...",
+      slow: true, // apt install python3-venv + pip upgrade can exceed the 524 window
+      script: `
+${PYTHON_ENV}
+# Ensure python3 + pip + venv across BOTH bases: Mags 'python' type is Debian/glibc
+# (apt, python usually preinstalled — Docling/torch install from manylinux wheels here),
+# while pi/claude are Alpine/musl (apk). Use whichever package manager exists; no-op when
+# the tools are already present.
+PKG=""
+command -v apt-get >/dev/null 2>&1 && PKG=apt
+[ -z "$PKG" ] && command -v apk >/dev/null 2>&1 && PKG=apk
+if ! command -v python3 >/dev/null 2>&1; then
+  [ "$PKG" = apt ] && (apt-get update -y >/dev/null 2>&1; apt-get install -y python3 python3-venv python3-pip >/dev/null 2>&1)
+  [ "$PKG" = apk ] && apk add --no-cache python3 py3-pip >/dev/null 2>&1
+fi
+# Debian ships venv as a SEPARATE package (python3-venv); install it if venv is missing.
+if ! python3 -m venv --help >/dev/null 2>&1; then
+  [ "$PKG" = apt ] && apt-get install -y python3-venv python3-pip >/dev/null 2>&1
+  [ "$PKG" = apk ] && apk add --no-cache py3-pip >/dev/null 2>&1
+fi
+mkdir -p /data/project
+cd /data/project
+rm -rf /data/project/* /data/project/.venv 2>/dev/null; true
+
+# Isolated venv (avoids PEP 668 "externally-managed-environment").
+python3 -m venv /data/project/.venv 2>&1
+/data/project/.venv/bin/pip install --upgrade pip 2>&1
+`.trim(),
+    },
+    {
+      message: "Installing Flask + CPU PyTorch (skips the 4GB CUDA download)...",
+      slow: true, // ~200MB torch wheel — far exceeds Cloudflare's ~100s 524 window
+      script: `
+${PYTHON_ENV}
+cd /data/project
+PIP=/data/project/.venv/bin/pip
+$PIP install flask 2>&1
+
+# CRITICAL: pre-install CPU-ONLY torch. Docling (and most ML libs) depend on torch, and the
+# DEFAULT torch wheel drags in ~4GB of NVIDIA CUDA packages (cublas 423MB, cudnn 366MB,
+# nccl, triton, cusparselt…) that are USELESS on this CPU-only sandbox and fail flakily
+# mid-download (killing the whole install). Installing the CPU build FIRST (~200MB, zero
+# nvidia_* deps) means a later \`pip install docling\` finds torch already satisfied and
+# skips the entire CUDA stack. Best-effort — a plain-Python app that never imports torch
+# is unaffected (it's just a cached wheel).
+$PIP install --index-url https://download.pytorch.org/whl/cpu torch 2>&1 || \
+  echo "[scaffold] CPU torch pre-install failed (non-fatal) — a docling install may fall back to the CUDA wheel"
+# Make the CPU index the default extra index for the venv, so ANY later torch-adjacent
+# install also prefers CPU wheels. pip auto-reads \$VIRTUAL_ENV/pip.conf.
+printf '[global]\\nextra-index-url = https://download.pytorch.org/whl/cpu\\n' > /data/project/.venv/pip.conf 2>/dev/null || true
+
+mkdir -p templates static
+`.trim(),
+    },
+  ],
+  // Flask has no single global stylesheet to append to (design tokens are copied into
+  // static/ by the agent per the design section), so no post-scaffold CSS append.
+  globalCssPath: undefined,
+  buildPrompt({ appName, requirements, feedback, shouldContinue, tokens, specSection, apiKeySection }) {
+    const designSystem = pythonDesignSection(tokens);
+
+    if (shouldContinue) {
+      return `The user wants changes to the running Python (Flask) app.
+
+## Feedback / New Requirements
+${feedback}
+
+## CRITICAL: Working Directory
+- Your working directory is /data/project — ALL files are here (app.py, templates/,
+  static/, .venv/). NEVER cd elsewhere.
+
+${specSection}
+${designSystem}
+${PYTHON_MEMORY_RULES}
+
+## Instructions
+1. ${PYTHON_ENV}
+2. Apply the requested changes (edit app.py / templates/ / static/, pip-install any new
+   deps into the venv).
+3. Restart the server using the sequence above. Ensure it serves on 0.0.0.0:8080.
+
+${PYTHON_SERVER_RULES}`;
+    }
+
+    return `You are building a SINGLE-STACK Python web application inside a cloud sandbox.
+The ENTIRE app is Python (Flask) serving server-rendered HTML — there is NO Next.js and
+NO separate frontend. One process, one port (8080), one url.
+
+## App: ${appName}
+
+## Requirements
+${requirements}
+
+${specSection}
+${designSystem}
+${apiKeySection}
+
+## CRITICAL: Working Directory
+- Your CWD is /data/project — ALL work happens here. NEVER cd elsewhere.
+- A Python venv is already at /data/project/.venv with Flask installed.
+
+${PYTHON_MEMORY_RULES}
+
+## Project Setup (ALREADY DONE — do NOT repeat)
+- Python 3 + venv at /data/project/.venv (Flask installed)
+- Empty templates/ and static/ directories
+
+## Your Task
+1. ${PYTHON_ENV}
+2. Build the app:
+   - \`app.py\` — the Flask app with all routes, ending in \`app.run(host="0.0.0.0", port=8080)\`.
+   - \`templates/\` — Jinja2 templates (a base layout + per-page templates).
+   - \`static/\` — CSS/JS/assets (copy design-tokens.css here per the design section).
+   - Persist data with stdlib \`sqlite3\` in /data/project/app.db; create tables on startup.
+   - pip-install any extra libraries the requirements need: \`.venv/bin/pip install <pkg>\`.
+3. Write a real README.md: app name, what it does, tech stack (Python + Flask + SQLite),
+   how to run (\`.venv/bin/python app.py\`). NOT a generic placeholder.
+4. Start the server: nohup .venv/bin/python app.py > dev.log 2>&1 &
+5. Verify: sleep 3 && curl -s http://localhost:8080/ || tail -50 dev.log
+
+${PYTHON_SERVER_RULES}`;
+  },
+};
+
 const PROFILES: Record<ProjectType, BuildProfile> = {
   webapp: webappProfile,
   landing: landingProfile,
   game: gameProfile,
+  python: pythonProfile,
 };
 
 export function getBuildProfile(type: ProjectType): BuildProfile {

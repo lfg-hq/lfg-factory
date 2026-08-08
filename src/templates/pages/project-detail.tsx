@@ -87,6 +87,7 @@ export function ProjectDetailPage({
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" type="image/x-icon" href="/public/images/favicon.ico" />
   <title>${project.name} — LFG</title>
   <script>(function(){if(localStorage.getItem('sidebarMinimized')==='true'){document.documentElement.classList.add('sidebar-minimized-preload');}})()</script>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
@@ -528,7 +529,7 @@ export function ProjectDetailPage({
               function iconFor(t){ return t==='assigned'?'fa-user-check':(t==='mentioned'?'fa-at':(t==='review_requested'?'fa-paper-plane':'fa-comment')); }
               function ibEmpty(msg){ return '<div style="color:var(--text-secondary);font-size:0.875rem;padding:1rem;border:1px dashed var(--border-color);border-radius:var(--radius);text-align:center;">'+msg+'</div>'; }
               var IB_SENT = [], IB_RECV = [];
-              // "Jitin Pillai" / "jitin@x.com" -> "@jitin" for a compact tagged handle.
+              // e.g. "Ada Lovelace" / "ada@example.com" -> "@ada" for a compact tagged handle.
               function atHandle(name, email){
                 var h = ((name||'').trim().split(/\s+/)[0]) || ((email||'').split('@')[0]) || 'user';
                 return '@' + h.toLowerCase();

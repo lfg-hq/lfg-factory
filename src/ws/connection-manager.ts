@@ -81,6 +81,37 @@ export function broadcastToUser(userId: string, data: WSOutgoing | object): void
   }
 }
 
+/**
+ * Send a message ONLY to the user's connections bound to a specific conversation.
+ * This scopes instant-app build/notification traffic to the tab that owns it, so with
+ * several instant apps open at once one app's messages don't leak into another's chat.
+ * Broadcast listeners still receive everything (they filter themselves).
+ */
+export function broadcastToConversation(userId: string, conversationId: string, data: WSOutgoing | object): void {
+  const set = connectionsByUser.get(userId);
+  if (set) {
+    const text = JSON.stringify(data);
+    for (const conn of set) {
+      if (conn.conversationId !== conversationId) continue; // scope: only the owning tab(s)
+      try {
+        conn.ws.send(text);
+      } catch {
+        // Connection may have closed — cleaned up on disconnect
+      }
+    }
+  }
+  const listeners = broadcastListeners.get(userId);
+  if (listeners) {
+    for (const listener of listeners) {
+      try {
+        listener(data);
+      } catch {
+        // ignore listener errors
+      }
+    }
+  }
+}
+
 /** Send to a single ws connection */
 export function send(ws: ServerWebSocket<WsData>, data: WSOutgoing | object): void {
   try {

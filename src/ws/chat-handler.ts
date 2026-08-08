@@ -100,13 +100,17 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
   }
 
   if (msg.type === "message") {
-    const { message, conversation_id, project_id, turbo_mode, instant_mode, user_role, file, file_data } = msg;
+    const { message, conversation_id, project_id, turbo_mode, instant_mode, user_role, file, file_data, files } = msg;
     const mentionedTickets = (msg as { mentioned_tickets?: Array<{ id: string; key?: string; name?: string; branch?: string }> }).mentioned_tickets;
-    const resolvedFile = file_data ?? file;
+    // Multiple attachments: prefer the `files` array; fall back to the single file_data/file.
+    const resolvedFiles = (files && files.length ? files : ([file_data ?? file].filter(Boolean) as NonNullable<typeof file_data>[]));
+    const resolvedFile = resolvedFiles[0];
     const normalizedMessage = message?.trim()
       ? message
-      : resolvedFile?.name
-        ? `[Shared a file: ${resolvedFile.name}]`
+      : resolvedFiles.length
+        ? (resolvedFiles.length === 1
+            ? `[Shared a file: ${resolvedFiles[0]!.name}]`
+            : `[Shared ${resolvedFiles.length} files: ${resolvedFiles.map((f) => f!.name).join(", ")}]`)
         : "";
 
     if (!normalizedMessage.trim()) {
@@ -169,6 +173,7 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
           instantMode: instant_mode,
           userRole: user_role,
           file: resolvedFile,
+          files: resolvedFiles,
           mentionedTickets,
           abortController: conn.abortController,
         });

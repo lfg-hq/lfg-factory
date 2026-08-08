@@ -32,7 +32,7 @@ import { modelSelections } from "../db/schema/chat.ts";
 import { llmApiKeys } from "../db/schema/users.ts";
 import { getModel, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
 import { execOnWorkspace, startBrowserSession, stopWorkspace } from "./mags.ts";
-import { broadcastToUser } from "../ws/connection-manager.ts";
+import { broadcastToUser, broadcastToConversation } from "../ws/connection-manager.ts";
 
 // ── Tunables ─────────────────────────────────────────────────────────────────
 const CONFIG = {
@@ -43,7 +43,37 @@ const CONFIG = {
   settleMs: 1200,
   viewport: { width: 1280, height: 800 },
   screenshotQuality: 72,
+  // Warm-up: a reaped/sleeping VM serves a 503 "Starting your application… waking up"
+  // placeholder for the first several seconds. Poll the app until it's actually serving
+  // the real page before testing, so QA doesn't score the placeholder as a failure.
+  warmupAttempts: parseInt(process.env.INSTANT_TEST_WARMUP_ATTEMPTS || "18", 10), // ×5s ≈ 90s
+  warmupDelayMs: parseInt(process.env.INSTANT_TEST_WARMUP_DELAY_MS || "5000", 10),
 };
+
+/** The "VM waking up" placeholder our preview proxy returns while a sandbox cold-starts. */
+const WAKING_PLACEHOLDER_RE = /Starting your application|Your VM is waking up|waking up/i;
+
+/**
+ * Poll the app root until it's genuinely serving (HTTP < 400 and NOT the cold-start
+ * placeholder), so QA scores the real app rather than the "waking up" page. Best-effort:
+ * returns true once ready, false if it never warmed up within the budget (QA still runs).
+ */
+async function warmUpApp(base: string, onWait?: (attempt: number, total: number) => void): Promise<boolean> {
+  for (let attempt = 1; attempt <= CONFIG.warmupAttempts; attempt++) {
+    try {
+      const res = await fetch(base, { redirect: "follow", signal: AbortSignal.timeout(10_000) });
+      const body = await res.text().catch(() => "");
+      if (res.status < 400 && !WAKING_PLACEHOLDER_RE.test(body)) return true;
+    } catch {
+      // network hiccup / VM not up yet — keep waiting
+    }
+    if (attempt < CONFIG.warmupAttempts) {
+      onWait?.(attempt, CONFIG.warmupAttempts);
+      await new Promise((r) => setTimeout(r, CONFIG.warmupDelayMs));
+    }
+  }
+  return false;
+}
 
 export interface InstantTestOptions {
   appId: string;       // public app id — WS routing + uploads path
@@ -106,6 +136,17 @@ export async function testInstantApp(opts: InstantTestOptions): Promise<void> {
 
 async function runTest(opts: InstantTestOptions): Promise<void> {
   const base = opts.previewUrl.replace(/\/+$/, "");
+
+  // Wait for the app to actually be serving (not the "VM waking up" 503 placeholder)
+  // before testing — otherwise QA scores the cold-start page as a failure.
+  broadcast(opts, "testing", `Waking ${opts.appName} and waiting for it to be ready…`);
+  const ready = await warmUpApp(base, (a, total) => {
+    if (a % 3 === 0) broadcast(opts, "testing", `Waiting for ${opts.appName} to start… (${a * CONFIG.warmupDelayMs / 1000}s)`);
+  });
+  if (!ready) {
+    console.warn(`[instant-tester] [${opts.appId}] app never left the cold-start placeholder within warm-up budget — testing anyway`);
+  }
+
   const routes = (await enumerateRoutes(opts.buildWorkspaceId)).slice(0, CONFIG.maxScreens);
   console.log(`[instant-tester] [${opts.appId}] testing ${routes.length} screen(s): ${routes.join(", ")}`);
   broadcast(opts, "testing", `Testing ${opts.appName} — ${routes.length} screen${routes.length === 1 ? "" : "s"}…`);
@@ -326,7 +367,7 @@ function broadcast(
   message: string,
   extra?: Record<string, unknown>
 ): void {
-  broadcastToUser(opts.userId, {
+  const payload = {
     type: "ai_chunk",
     chunk: "",
     is_final: false,
@@ -338,5 +379,8 @@ function broadcast(
     app_name: opts.appName,
     message,
     ...(extra ?? {}),
-  });
+  };
+  // Scope to the owning conversation so QA results don't surface in other open apps.
+  if (opts.conversationId) broadcastToConversation(opts.userId, opts.conversationId, payload);
+  else broadcastToUser(opts.userId, payload);
 }

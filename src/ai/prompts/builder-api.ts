@@ -102,5 +102,6 @@ ${envVars?.length ? envVars.map(v => `- ${v.key}: ${v.description || "(no descri
 - Keep commands concise — avoid huge multi-line heredocs in sshCommand. Use writeFile instead.
 - Use \`askUser\` sparingly — only for decisions that significantly affect implementation (e.g. auth method, database choice). Do not ask about trivial details.
 - Always call \`reportStatus\` when done. This is how the platform knows you finished.
+- Preview-mode auth (auto-demo): if this ticket touches auth/middleware, let a request with cookie \`lfg_preview_session\` == env \`LFG_PREVIEW_SECRET\` (or env \`LFG_PREVIEW_MODE=1\`) auto-authenticate as a seeded "Preview User" so the post-build recorder can demo protected pages. Gate it so it is inert without that env/secret (never a real prod bypass). Otherwise no action needed.
 `;
 }

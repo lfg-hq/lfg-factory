@@ -145,6 +145,7 @@ function piWorkSummary(tail: string | undefined): string {
 import { getBuildProfile, detectProjectType } from "../services/instant-profiles.ts";
 import { generateText, stepCountIs } from "ai";
 import { addLog } from "../services/ticket-logs.ts";
+import { generateTicketDemo } from "../services/ticket-demo.ts";
 import { matchKnowledgeForPrompt } from "../ai/knowledge/matcher.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { logActivity } from "../services/activity-log.ts";
@@ -1131,6 +1132,8 @@ Before implementing, fix the git issue:
     await addLog(ticketId, cliSummary, "ai_response", ownerId);
     await resolveTicketAddenda(ticketId, cliAddendaCtx.pendingIds);
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId, mergeStatus: "merged" });
+    // Auto-record a demo of the completed feature for the Preview tab (fire-and-forget).
+    void generateTicketDemo(ticketId, { ownerId, projectId: project.id });
   } else {
     const reason = commitFailed
       ? "the changes were built but were NOT pushed to git (commit/push failed or GitHub not connected) — fix the cause and rebuild"
@@ -1678,6 +1681,8 @@ async function finalizeTicketChat(
       `- Branch: \`${featureBranch}\`\n- Commit: \`${sha.slice(0, 7)}\`\n${mergedOk ? "- Merged to `lfg-agent` ✓\n" : ""}\nRe-run the **Preview** to see the change, or open the **Git** tab for the diff.`;
     await addLog(ticketId, done, "ai_response", ownerId);
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId, mergeStatus: mergedOk ? "merged" : "pushed" });
+    // Auto-record a demo of the applied change for the Preview tab (fire-and-forget).
+    void generateTicketDemo(ticketId, { ownerId, projectId: project.id });
   } catch (err) {
     await addLog(ticketId, `Commit/push FAILED — chat changes were NOT saved to the remote: ${(err as Error).message?.slice(0, 300)}`, "cli_error", ownerId);
   }
@@ -2348,6 +2353,8 @@ git branch --show-current
     // The build addressed the pending addenda → mark them resolved.
     await resolveTicketAddenda(ticketId, addendaCtx.pendingIds);
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId, mergeStatus: mergedOk ? "merged" : "pushed" });
+    // Auto-record a demo of the completed feature for the Preview tab (fire-and-forget).
+    void generateTicketDemo(ticketId, { ownerId, projectId: project.id });
   } else {
     const reason = commitFailed
       ? "the changes were built but were NOT pushed (commit/push failed or no repo/token) — fix the cause and rebuild; the build sandbox is kept so the work isn't lost"

@@ -43,10 +43,27 @@ async function testOne(ctx, cfg, route, index) {
     await cdp.send("Security.setIgnoreCertificateErrors", { ignore: true });
   } catch { /* best-effort; some CDP targets don't expose Security */ }
   try {
+    // A reaped/sleeping VM serves a 503 "Starting your application… waking up"
+    // placeholder for the first several seconds. Don't score that as a failure — wait
+    // and retry so QA tests the REAL app once it's serving.
+    const WAKING_RE = /Starting your application|Your VM is waking up|waking up/i;
+    const MAX_WAKE_RETRIES = Math.max(cfg.navRetries, 5);
     let resp = null;
-    for (let a = 0; a < cfg.navRetries; a++) {
-      try { resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: cfg.navTimeoutMs }); break; }
-      catch (e) { if (a === cfg.navRetries - 1) throw e; await page.waitForTimeout(2000); }
+    for (let a = 0; a < MAX_WAKE_RETRIES; a++) {
+      try {
+        resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: cfg.navTimeoutMs });
+      } catch (e) {
+        if (a === MAX_WAKE_RETRIES - 1) throw e;
+        await page.waitForTimeout(2500);
+        continue;
+      }
+      const st = resp?.status() ?? 0;
+      let waking = st === 503;
+      if (!waking) {
+        try { waking = WAKING_RE.test((await page.evaluate(() => (document.body && document.body.innerText) || "")) || ""); } catch { /* ignore */ }
+      }
+      if (waking && a < MAX_WAKE_RETRIES - 1) { await page.waitForTimeout(4000); continue; } // still cold — wait & retry
+      break;
     }
     httpStatus = resp?.status() ?? null;
     await page.waitForTimeout(cfg.settleMs);

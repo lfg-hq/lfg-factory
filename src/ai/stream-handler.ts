@@ -20,7 +20,7 @@ import { getInstantSystemPrompt } from "./prompts/instant.ts";
 import { getAgentSystemPrompt } from "./prompts/agent.ts";
 import { getAgentByConversation } from "../services/agent-manager.ts";
 import { createAgentTools } from "./tools/agent-tools.ts";
-import { broadcastToUser } from "../ws/connection-manager.ts";
+import { broadcastToUser, getConnection } from "../ws/connection-manager.ts";
 import { getComposioTools, listConnectors } from "../services/composio-manager.ts";
 import { downloadBinary } from "../services/s3.ts";
 import type { ServerWebSocket } from "bun";
@@ -132,6 +132,8 @@ export interface StreamRequest {
   instantMode?: boolean;
   userRole?: string;
   file?: { id?: string; name?: string; type?: string; size?: number } | null;
+  /** All attachments on this message (multi-file). `file` is kept as the first, for compat. */
+  files?: Array<{ id?: string; name?: string; type?: string; size?: number }>;
   /** Tickets referenced via @ticket — their context is injected into the model. */
   mentionedTickets?: Array<{ id: string; key?: string; name?: string; branch?: string }>;
   abortController: AbortController;
@@ -231,6 +233,13 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
     // Notify client of new conversation
     ws.send(JSON.stringify({ type: "conversation_created", conversationId: convId }));
   }
+
+  // Bind THIS connection to the conversation as early as possible so conversation-scoped
+  // broadcasts (instant build status/notifications) that fire during this turn reach the
+  // owning tab — and ONLY the owning tab. Without this, a brand-new instant tab isn't
+  // bound yet when its first build broadcasts, and the messages leak to other tabs.
+  const _conn = getConnection(ws);
+  if (_conn) _conn.conversationId = convId;
 
   // ── 1b. Detect agent conversation ────────────────────────────────────────────
   const agentRecord = convId ? await getAgentByConversation(convId) : null;
@@ -335,25 +344,27 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
   // Vision-native models (Claude/GPT/Gemini) get the image directly. Text-only
   // models (DeepSeek's hosted API is text-only) can't view images, so we run a
   // vision pre-pass with the user's vision key and feed DeepSeek the description.
-  const imgFile = req.file && (req.file.type || "").startsWith("image/") && req.file.id ? req.file : null;
-  if (imgFile) {
-    let bytes: Uint8Array | null = null;
-    try {
-      const [cf] = await db.select().from(chatFiles).where(eq(chatFiles.id, imgFile.id!));
-      if (cf?.filePath?.startsWith("s3:")) {
-        const { body } = await downloadBinary(cf.filePath.slice(3));
-        bytes = new Uint8Array(body);
-      } else if (cf?.filePath) {
-        bytes = new Uint8Array(await fs.readFile(path.resolve(cf.filePath)));
-      }
-    } catch (e) { console.warn(`[stream] could not read uploaded image:`, (e as Error).message?.slice(0, 120)); }
+  const allFiles = (req.files && req.files.length ? req.files : (req.file ? [req.file] : []));
+  const imgFiles = allFiles.filter((f) => (f.type || "").startsWith("image/") && f.id);
 
-    // Persist the image on the message so it renders in history after a reload.
-    if (userMsgRow?.id) {
-      await db.update(messages)
-        .set({ contentIfFile: [{ id: imgFile.id, name: imgFile.name, type: imgFile.type, url: `/api/files/${imgFile.id}` }] })
-        .where(eq(messages.id, userMsgRow.id)).catch(() => {});
-    }
+  // Persist ALL attachments on the message so they render in history after a reload.
+  if (userMsgRow?.id && allFiles.length) {
+    await db.update(messages)
+      .set({ contentIfFile: allFiles.filter((f) => f.id).map((f) => ({ id: f.id, name: f.name, type: f.type, url: `/api/files/${f.id}` })) })
+      .where(eq(messages.id, userMsgRow.id)).catch(() => {});
+  }
+
+  if (imgFiles.length) {
+    const readBytes = async (id: string): Promise<Uint8Array | null> => {
+      try {
+        const [cf] = await db.select().from(chatFiles).where(eq(chatFiles.id, id));
+        if (cf?.filePath?.startsWith("s3:")) { const { body } = await downloadBinary(cf.filePath.slice(3)); return new Uint8Array(body); }
+        if (cf?.filePath) return new Uint8Array(await fs.readFile(path.resolve(cf.filePath)));
+      } catch (e) { console.warn(`[stream] could not read uploaded image:`, (e as Error).message?.slice(0, 120)); }
+      return null;
+    };
+    const images = (await Promise.all(imgFiles.map(async (f) => ({ f, bytes: await readBytes(f.id!) }))))
+      .filter((x): x is { f: typeof imgFiles[number]; bytes: Uint8Array } => !!x.bytes);
 
     const setLastUser = (content: any) => {
       for (let i = contextMessages.length - 1; i >= 0; i--) {
@@ -361,16 +372,20 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
       }
     };
     const providerName = getProviderName(modelKey);
-    if (bytes && providerName && VISION_NATIVE.has(providerName)) {
-      setLastUser([{ type: "text", text: userMessage }, { type: "image", image: bytes, mediaType: imgFile.type }]);
-    } else if (bytes) {
-      ws.send(JSON.stringify({ type: "ai_chunk", chunk: "", is_final: false, is_notification: true, notification_type: "status", message: "Analyzing image…" }));
-      const desc = await analyzeImage(bytes, imgFile.type || "image/png", userApiKeys);
-      if (desc) {
-        setLastUser(`${userMessage}\n\n[Attached image "${imgFile.name}". The current model can't view images, so here is a vision model's description of it — treat it as ground truth:\n\n${desc}]`);
-      } else {
-        setLastUser(`${userMessage}\n\n[The user attached an image "${imgFile.name}", but the selected model can't view images and no vision-capable key (OpenAI / Google / Anthropic) is configured. Tell them to add one in Settings → LLM Keys or switch to a vision model — do NOT guess what the image shows.]`);
+    if (images.length && providerName && VISION_NATIVE.has(providerName)) {
+      // Vision-native models: attach every image directly to the last user message.
+      setLastUser([{ type: "text", text: userMessage }, ...images.map((x) => ({ type: "image", image: x.bytes, mediaType: x.f.type }))]);
+    } else if (images.length) {
+      // Text-only model: describe each image via the vision pre-pass and inject the text.
+      ws.send(JSON.stringify({ type: "ai_chunk", chunk: "", is_final: false, is_notification: true, notification_type: "status", message: images.length > 1 ? `Analyzing ${images.length} images…` : "Analyzing image…" }));
+      const descs: string[] = [];
+      for (const x of images) {
+        const desc = await analyzeImage(x.bytes, x.f.type || "image/png", userApiKeys);
+        descs.push(desc
+          ? `[Attached image "${x.f.name}". The current model can't view images — here is a vision model's description, treat it as ground truth:\n\n${desc}]`
+          : `[The user attached an image "${x.f.name}", but the selected model can't view images and no vision-capable key (OpenAI / Google / Anthropic) is configured. Tell them to add one in Settings → LLM Keys or switch to a vision model — do NOT guess what the image shows.]`);
       }
+      setLastUser(`${userMessage}\n\n${descs.join("\n\n")}`);
     }
   }
 
@@ -496,6 +511,46 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
     lastFlush = Date.now();
   };
 
+  // Incremental persistence: checkpoint the assistant message to the DB AS it
+  // streams (isPartial=true), then finalize (isPartial=false) when the turn ends.
+  // Previously the reply was written only ONCE at the very end, so a refresh — or a
+  // dropped socket — mid-response lost the whole message even though the client had
+  // already rendered it. We upsert a SINGLE row (no duplicates); the final save is
+  // authoritative. All writes are best-effort and never throw into the stream loop.
+  let assistantMsgId: string | null = null;
+  let checkpointInFlight = false;
+  let checkpointPromise: Promise<void> | null = null;
+  let lastCheckpoint = 0;
+  const CHECKPOINT_MS = 2500;
+  const persistAssistant = async (
+    content: string,
+    opts: { steps?: any[] | null; final?: boolean } = {},
+  ): Promise<void> => {
+    const final = opts.final ?? false;
+    if (!content && !final) return; // nothing meaningful to save yet
+    try {
+      if (assistantMsgId) {
+        await db.update(messages).set({
+          content,
+          isPartial: !final,
+          lastUpdated: new Date(),
+          ...(opts.steps !== undefined ? { toolSteps: opts.steps } : {}),
+        }).where(eq(messages.id, assistantMsgId));
+      } else {
+        const [row] = await db.insert(messages).values({
+          conversationId: convId,
+          role: "assistant",
+          content,
+          isPartial: !final,
+          toolSteps: opts.steps ?? null,
+        }).returning({ id: messages.id });
+        assistantMsgId = row?.id ?? null;
+      }
+    } catch (err) {
+      console.warn("[stream-handler] assistant checkpoint failed:", (err as Error).message);
+    }
+  };
+
   // Apply provider-appropriate prompt caching. For Anthropic this attaches
   // explicit cache_control breakpoints on the system prompt (caches system +
   // tools) and the last message (caches the growing history prefix). For every
@@ -560,6 +615,13 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
           chunkBuffer += event.text;
           const now = Date.now();
           if (chunkBuffer.length >= FLUSH_CHARS || now - lastFlush >= FLUSH_MS) flush();
+          // Throttled DB checkpoint so a refresh mid-stream keeps the partial reply
+          // instead of losing it. Fire-and-forget; a full-content write is last-write-wins.
+          if (!checkpointInFlight && now - lastCheckpoint >= CHECKPOINT_MS) {
+            checkpointInFlight = true;
+            lastCheckpoint = now;
+            checkpointPromise = persistAssistant(stripCitations(fullResponse)).finally(() => { checkpointInFlight = false; });
+          }
           break;
         }
 
@@ -818,14 +880,13 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
     console.warn("[stream-handler] failed to capture response.messages:", (err as Error).message);
   }
 
-  if (finalContent) {
-    await db.insert(messages).values({
-      conversationId: convId,
-      role: "assistant",
-      content: finalContent,
-      toolSteps: savedSteps,
-    });
-  }
+  // Wait for any in-flight checkpoint to settle so assistantMsgId is set before we
+  // finalize — otherwise the final upsert could insert a SECOND row (a duplicate).
+  if (checkpointPromise) await checkpointPromise.catch(() => {});
+  // Finalize the (possibly already-checkpointed) assistant row: authoritative content,
+  // tool steps, and isPartial=false. Upserts the same row created during streaming, so
+  // there's exactly one message — no duplicate, and nothing lost if the stream was cut off.
+  await persistAssistant(finalContent, { steps: savedSteps, final: true });
 
   // ── 8. Send final signal ─────────────────────────────────────────────────────
   ws.send(JSON.stringify({

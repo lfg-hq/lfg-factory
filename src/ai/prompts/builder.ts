@@ -148,6 +148,17 @@ ${envVars?.length ? envVars.map(v => `- ${v.key}: ${v.description || "(no descri
 5. DO NOT commit changes - that will be handled automatically
 6. When done, call the status API to mark complete (or failed)
 
+## PREVIEW MODE (auto-demo auth bypass)
+After a ticket completes, an automated recorder opens the app to capture a demo. If the
+app requires login (e.g. Google OAuth), it can't record protected pages. To support this,
+the app should treat a preview session as authenticated ONLY inside the sandbox:
+- If the request has a cookie named \`lfg_preview_session\` equal to the env var
+  \`LFG_PREVIEW_SECRET\` (default "lfg-preview-mode"), OR env \`LFG_PREVIEW_MODE=1\` is set,
+  auto-authenticate the request as a seeded "Preview User" and SKIP the OAuth redirect.
+- This must be gated so it is inert in production (only when that env/secret is present),
+  never a real auth bypass. If your ticket touches auth/middleware, add this small guard;
+  otherwise no action is needed.
+
 ## COMPLETION
 
 IMPORTANT: After implementing, you MUST call the status API to mark the ticket as complete or failed.

@@ -245,6 +245,39 @@ export function selectPalette(pref: PalettePreference): ColorPalette {
   return weightedRandomPick(palettes, scores, 5);
 }
 
+// Explicit light/dark phrasing a user or plan is likely to use. Ordered so a clear
+// "light UI" intent isn't clobbered by an incidental "dark" elsewhere in the spec.
+const LIGHT_PHRASES = [
+  "light dashboard", "light ui", "light-themed", "light themed", "light theme",
+  "light mode", "light colored", "light-colored", "light and", "clean light",
+  "bright and", "white background", "on a light", "minimal light",
+];
+const DARK_PHRASES = [
+  "dark dashboard", "dark ui", "dark-themed", "dark themed", "dark theme",
+  "dark mode", "dark professional", "midnight", "night mode", "on a dark", "moody dark",
+];
+
+/**
+ * Infer a light/dark preference from free text (requirements + plan summary/sections)
+ * when the orchestrator didn't pass an explicit `brightness`. This makes the light/dark
+ * choice deterministic instead of depending on the model remembering to set the flag —
+ * a user who answered "clean light dashboard" reliably gets a light palette.
+ *
+ * Returns undefined when the text gives no clear signal (or is contradictory), so the
+ * caller falls back to mood-based scoring.
+ */
+export function inferBrightness(text: string | undefined | null): "light" | "dark" | undefined {
+  const lower = (text ?? "").toLowerCase();
+  if (!lower.trim()) return undefined;
+  const light = LIGHT_PHRASES.some((p) => lower.includes(p)) || /\blight\b/.test(lower);
+  const dark =
+    DARK_PHRASES.some((p) => lower.includes(p)) ||
+    (/\bdark\b/.test(lower) && !/dark mode toggle|light\/dark|light or dark/.test(lower));
+  if (light && !dark) return "light";
+  if (dark && !light) return "dark";
+  return undefined; // no signal, or both present (ambiguous) → let mood scoring decide
+}
+
 export function composeDesignTokens(requirements: string, _appName: string, overrides?: DesignOverrides): DesignTokens {
   // Font/style use explicit ids directly; palette uses preference-based selectPalette.
   const explicitFont = overrides?.fontPairingId ? getFontPairingById(overrides.fontPairingId) : undefined;
@@ -301,16 +334,35 @@ export function composeDesignTokens(requirements: string, _appName: string, over
   };
 
   const issues = validateTokens(tokens);
+  // Only READABILITY failures (WCAG contrast) or schema errors disqualify a palette.
+  // A "differentiation" nit — primary≈destructive (a delete-button color) or
+  // surface≈background — is cosmetic and must NOT collapse a mood-matched palette to
+  // the hardcoded dark default. That collapse is exactly why "playful & colorful"
+  // kept landing on dark Midnight Indigo: violet-dream scored highest but got rejected
+  // over its red destructive vs purple primary, then fell back to palettes[0] (dark).
+  const fatal = issues.filter((i) => i.type === "contrast" || i.type === "scale");
+  if (fatal.length > 0) {
+    // Even the last-resort fallback must respect the chosen brightness — never return a
+    // dark palette for a light request. Derive it from the (correctly brightness-picked)
+    // palette we were about to use.
+    const isDark = relativeLuminance(palette.colors.background) < 0.2;
+    console.warn(`[design-tokens] fatal validation issues, using ${isDark ? "dark" : "light"} fallback:`, fatal);
+    return composeDefaultTokens(isDark);
+  }
   if (issues.length > 0) {
-    console.warn(`[design-tokens] Validation issues found, using fallback:`, issues);
-    return composeDefaultTokens();
+    console.warn(`[design-tokens] minor design-token issues (accepted, palette kept):`, issues);
   }
 
   return tokens;
 }
 
-function composeDefaultTokens(): DesignTokens {
-  const p = palettes[0]!;
+function composeDefaultTokens(isDark?: boolean): DesignTokens {
+  // Pick a brightness-matching default so a light request never falls back to a dark
+  // palette (and vice-versa). Only when brightness is unknown do we use palettes[0].
+  const p =
+    isDark === undefined
+      ? palettes[0]!
+      : palettes.find((pl) => (relativeLuminance(pl.colors.background) < 0.2) === isDark) ?? palettes[0]!;
   const f = fontPairings[0]!;
   const s = styleProfiles[1]!;
   return {

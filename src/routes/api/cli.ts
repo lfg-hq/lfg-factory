@@ -25,7 +25,7 @@ import { addLog, formatToolUse } from "../../services/ticket-logs.ts";
 import { describePiTool, describePiLine } from "../../services/pi-cli.ts";
 import { broadcastInstantStatus } from "../../services/instant-app.ts";
 
-export const cliRouter = new Hono();
+export const cliRouter = new Hono<{ Variables: { cliUserId: string } }>();
 
 // The still-growing Pi label per ticket, held between POST batches so a message
 // streamed across several POSTs is logged ONCE (flushed when a different label
@@ -42,7 +42,7 @@ cliRouter.use("*", async (c, next) => {
 
   // Look up the profile that owns this key
   const [profile] = await db
-    .select()
+    .select({ userId: profiles.userId })
     .from(profiles)
     .where(eq(profiles.cliApiKey, apiKey))
     .limit(1);
@@ -51,8 +51,27 @@ cliRouter.use("*", async (c, next) => {
     return c.json({ error: "Invalid API key" }, 401);
   }
 
+  // Scope every request to the key's owner so handlers can enforce that the
+  // body-supplied ticket_id/app_id actually belongs to this user (prevents IDOR:
+  // a valid key must not be able to read/mutate another user's tickets by id).
+  c.set("cliUserId", profile.userId);
+
   await next();
 });
+
+// Ownership guard: resolve ticket → project → owner and confirm it matches the
+// authenticated CLI user. Returns false for both "not found" and "not yours" so
+// we never leak the existence of another user's ticket.
+async function ticketOwnedBy(ticketId: string, userId: string): Promise<boolean> {
+  if (!ticketId || !userId) return false;
+  const [row] = await db
+    .select({ ownerId: projects.ownerId })
+    .from(projectTickets)
+    .innerJoin(projects, eq(projectTickets.projectId, projects.id))
+    .where(eq(projectTickets.id, ticketId))
+    .limit(1);
+  return !!row && row.ownerId === userId;
+}
 
 // ── POST /api/v1/cli/tasks/create/ ────────────────────────────────────
 
@@ -68,6 +87,9 @@ cliRouter.post("/tasks/create", async (c) => {
   const { ticket_id, tasks } = body;
   if (!ticket_id || !Array.isArray(tasks) || tasks.length === 0) {
     return c.json({ error: "ticket_id and tasks array required" }, 400);
+  }
+  if (!(await ticketOwnedBy(ticket_id, c.get("cliUserId")))) {
+    return c.json({ error: "Ticket not found" }, 404);
   }
 
   // Get max existing order
@@ -117,6 +139,9 @@ cliRouter.post("/tasks/bulk", async (c) => {
   if (!ticket_id || !Array.isArray(tasks)) {
     return c.json({ error: "ticket_id and tasks required" }, 400);
   }
+  if (!(await ticketOwnedBy(ticket_id, c.get("cliUserId")))) {
+    return c.json({ error: "Ticket not found" }, 404);
+  }
 
   const updated: string[] = [];
   for (const task of tasks) {
@@ -156,6 +181,9 @@ cliRouter.post("/status", async (c) => {
   const { ticket_id, status, message } = body;
   if (!ticket_id || !status) {
     return c.json({ error: "ticket_id and status required" }, 400);
+  }
+  if (!(await ticketOwnedBy(ticket_id, c.get("cliUserId")))) {
+    return c.json({ error: "Ticket not found" }, 404);
   }
 
   // Map CLI status to ticket status
@@ -209,6 +237,9 @@ cliRouter.post("/tech-stack", async (c) => {
   const { ticket_id, ...stackFields } = body;
   if (!ticket_id) {
     return c.json({ error: "ticket_id required" }, 400);
+  }
+  if (!(await ticketOwnedBy(ticket_id, c.get("cliUserId")))) {
+    return c.json({ error: "Ticket not found" }, 404);
   }
 
   // Get the ticket to find its sandbox
@@ -264,6 +295,9 @@ cliRouter.post("/request-input", async (c) => {
   const { ticket_id, question, options } = body;
   if (!ticket_id || !question) {
     return c.json({ error: "ticket_id and question required" }, 400);
+  }
+  if (!(await ticketOwnedBy(ticket_id, c.get("cliUserId")))) {
+    return c.json({ error: "Ticket not found" }, 404);
   }
 
   // Look up ticket owner for WS broadcast
@@ -340,6 +374,9 @@ cliRouter.post("/ticket-chat", async (c) => {
   if (!ticket_id || !message) {
     return c.json({ error: "ticket_id and message required" }, 400);
   }
+  if (!(await ticketOwnedBy(ticket_id, c.get("cliUserId")))) {
+    return c.json({ error: "Ticket not found" }, 404);
+  }
 
   await db.insert(ticketLogs).values({
     ticketId: ticket_id,
@@ -373,6 +410,9 @@ cliRouter.post("/output", async (c) => {
   const { ticket_id, data, done, exit_code } = body;
   if (!ticket_id || (data == null && !done)) {
     return c.json({ error: "ticket_id and data required" }, 400);
+  }
+  if (!(await ticketOwnedBy(ticket_id, c.get("cliUserId")))) {
+    return c.json({ error: "Ticket not found" }, 404);
   }
 
   // Look up ticket owner (userId) for WS broadcasting

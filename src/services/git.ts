@@ -57,6 +57,20 @@ export interface GitMergeResult {
   mergeCommitSha?: string;
 }
 
+// ── Input validation ──────────────────────────────────────────────────
+// These values are string-interpolated into shell scripts run inside the
+// sandbox. They originate server-side today, but validate defensively so a
+// future caller that lets a user influence a branch/dir name can't turn it
+// into shell injection. Reject anything outside a conservative allow-list.
+const SAFE_REF = /^[A-Za-z0-9._\-/]+$/;      // git branch/ref names
+const SAFE_PATH = /^[A-Za-z0-9._\-/ ]+$/;    // filesystem paths
+
+function assertSafe(value: string, pattern: RegExp, label: string): void {
+  if (!value || !pattern.test(value) || value.includes("..")) {
+    throw new Error(`Unsafe ${label}: ${JSON.stringify(value)}`);
+  }
+}
+
 // ── Setup ─────────────────────────────────────────────────────────────
 
 /**
@@ -64,6 +78,9 @@ export interface GitMergeResult {
  */
 export async function setupRepo(opts: GitSetupOptions): Promise<void> {
   const { workspaceId, repoUrl, branch, featureBranch, projectDir, githubToken } = opts;
+  assertSafe(branch, SAFE_REF, "base branch");
+  assertSafe(featureBranch, SAFE_REF, "feature branch");
+  assertSafe(projectDir, SAFE_PATH, "project directory");
 
   // Build authenticated URL if token provided
   const authUrl = githubToken
@@ -112,6 +129,43 @@ echo "GIT_SETUP_OK"
 /**
  * Stage all changes, commit, and push to origin.
  */
+// Library/build/cache dirs + runtime state that must NEVER be committed. Committing
+// .venv/node_modules bloats the push (hundreds of MB → gateway 524 timeouts); committing
+// a LIVE binary SQLite DB (app.db, with -wal/-shm sidecars written while the app runs)
+// causes binary churn, lock/corruption errors, and push exit-128 failures. DBs are
+// runtime state, not source — they don't belong in git. Covers every instant stack.
+const LFG_GITIGNORE = [
+  "node_modules/", ".next/", "out/", "dist/", "build/", ".turbo/", ".svelte-kit/", ".vite/",
+  ".venv/", "venv/", "env/", ".Python", "__pycache__/", "*.py[cod]", "*.egg-info/",
+  ".pytest_cache/", ".mypy_cache/", ".ruff_cache/", ".ipynb_checkpoints/",
+  ".cache/", ".parcel-cache/", "coverage/", ".nyc_output/",
+  // Runtime database files (SQLite + its WAL/SHM/journal sidecars).
+  "*.db", "*.sqlite", "*.sqlite3", "*.db-wal", "*.db-shm", "*.db-journal", "*.sqlite-wal", "*.sqlite-shm",
+  ".lfg/", "dev.log", "build.log", "npm-debug.log*", "yarn-error.log",
+  ".env", ".env.*", "!.env.example", ".DS_Store", "Thumbs.db",
+].join("\n");
+const LFG_GITIGNORE_B64 = Buffer.from(LFG_GITIGNORE).toString("base64");
+
+// Shell: merge LFG_GITIGNORE into .gitignore (dedup, keep the user's existing entries) and
+// untrack any library/build dirs a PRIOR build may have already committed — so the next
+// push both stops adding them AND removes them from the repo. Must run BEFORE `git add -A`.
+const ENSURE_GITIGNORE_SH = `
+# Clear a stale index.lock left by a killed/interrupted prior git process (a common cause
+# of "fatal: Unable to create '.git/index.lock'" → exit 128 on the next commit).
+rm -f .git/index.lock 2>/dev/null || true
+touch .gitignore
+echo '${LFG_GITIGNORE_B64}' | base64 -d | while IFS= read -r gi_line; do
+  if [ -n "$gi_line" ]; then
+    grep -qxF "$gi_line" .gitignore 2>/dev/null || echo "$gi_line" >> .gitignore
+  fi
+done
+for gi_d in node_modules .next out dist build .turbo .venv venv env __pycache__ .pytest_cache .mypy_cache .ruff_cache .cache .parcel-cache; do
+  git rm -r --cached --quiet "$gi_d" 2>/dev/null || true
+done
+# Untrack any DB files a prior build committed (they now match .gitignore), anywhere in the tree.
+git ls-files -z 2>/dev/null | grep -zE '\\.(db|sqlite|sqlite3)(-wal|-shm|-journal)?$' | xargs -0 -r git rm --cached --quiet 2>/dev/null || true
+`;
+
 export async function commitAndPush(opts: GitCommitOptions): Promise<GitCommitResult> {
   const { workspaceId, projectDir, commitMessage, featureBranch, repoUrl, githubToken } = opts;
   const tokenUser = opts.tokenUser ?? "x-access-token"; // GitHub default; "oauth2" for GitLab
@@ -159,10 +213,9 @@ fi
 git config user.email "${authorEmail}"
 git config user.name "${authorName}"
 
-# Ensure .lfg/ logs are not committed
-if ! grep -q '.lfg/' .gitignore 2>/dev/null; then
-  echo ".lfg/" >> .gitignore
-fi
+# Ensure a comprehensive .gitignore (library/build/cache dirs never committed) and
+# untrack any that a prior build already committed — BEFORE staging.
+${ENSURE_GITIGNORE_SH}
 
 # Ensure we're on the feature branch (create if needed)
 CURRENT=$(git branch --show-current 2>/dev/null || echo "")
@@ -511,8 +564,9 @@ git config user.email "ai@lfg.dev"
 git config user.name "LFG AI"
 git remote add origin "${authUrl}" 2>/dev/null || git remote set-url origin "${authUrl}"
 
-# Ensure .lfg/ logs are excluded
-echo ".lfg/" >> .gitignore 2>/dev/null || true
+# Comprehensive .gitignore so library/build/cache dirs (node_modules/.venv/...) are never
+# committed — must run BEFORE the first git add.
+${ENSURE_GITIGNORE_SH}
 
 # Only add a placeholder README if the agent didn't write one (don't clobber it).
 [ -f README.md ] || echo "# Project created by LFG" > README.md

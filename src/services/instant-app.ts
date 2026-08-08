@@ -6,9 +6,19 @@ import { instantApps } from "../db/schema/instant.ts";
 import { messages, modelSelections } from "../db/schema/chat.ts";
 import { sandboxes } from "../db/schema/sandbox.ts";
 import { githubTokens, profiles } from "../db/schema/users.ts";
-import { broadcastToUser } from "../ws/connection-manager.ts";
+import { broadcastToUser, broadcastToConversation } from "../ws/connection-manager.ts";
+
+/**
+ * Deliver an instant notification ONLY to the tab(s) bound to this conversation, so
+ * with several instant apps open at once one app's build messages don't leak into
+ * another's chat. Falls back to a user-wide broadcast when no conversation is known.
+ */
+function broadcastInstant(userId: string, conversationId: string | null | undefined, data: object): void {
+  if (conversationId) broadcastToConversation(userId, conversationId, data);
+  else broadcastToUser(userId, data);
+}
 import { getModel, getProviderName, getProviderModel } from "../ai/provider.ts";
-import { enableHttpAccess, execOnWorkspace, findJob, newWorkspace, stopWorkspace, deleteWorkspace, normalizeMagsAppUrl, setStableUrl } from "./mags.ts";
+import { enableHttpAccess, execOnWorkspace, findJob, newWorkspace, newWorkspaceV2, stopWorkspace, deleteWorkspace, normalizeMagsAppUrl, setStableUrl, type MagsExecResult } from "./mags.ts";
 import { testInstantApp, type ScreenResult } from "./instant-tester.ts";
 import { createGitHubRepo, initAndPushRepo, commitAndPush, cloneRepo } from "./git.ts";
 import {
@@ -31,6 +41,7 @@ import {
   resolvePaletteId,
   resolveFontPairingId,
   resolveStyleProfileId,
+  inferBrightness,
   type DesignTokens,
 } from "../config/design-tokens/index.ts";
 import {
@@ -40,7 +51,7 @@ import {
   getInstantBuilderSystemPrompt,
   type AgentBuilderSelection,
 } from "./instant-builder-agent.ts";
-import { startPiCli, streamPiToCompletion, isPiSupportedProvider } from "./pi-cli.ts";
+import { startPiCli, streamPiToCompletion, isPiSupportedProvider, probeBuildActivity } from "./pi-cli.ts";
 import { detectProjectType, getBuildProfile, type ProjectType } from "./instant-profiles.ts";
 
 // Non-Anthropic builds default to the in-sandbox Pi coding agent. Set
@@ -50,6 +61,12 @@ const USE_PI_IN_SANDBOX = (process.env.INSTANT_NONANTHROPIC_BUILDER ?? "pi") !==
 // Build on the big /data volume (7.8GB via diskGb), not /root (1.9GB) — avoids ENOSPC.
 const PROJECT_DIR = "project"; // relative name; CLI runners resolve under /data
 const CLAUDE_PROJECT_DIR = "/data/project";
+// Build-phase markers live OUTSIDE the project dir so they SURVIVE a scaffold's
+// `rm -rf /data/project/*`. They make scaffolding idempotent/resumable across ANY
+// stack: a retry skips already-completed steps instead of nuking work and re-running
+// slow installs. (scaffold.inprogress = started; scaffold.done = finished; step_<i>.ok
+// = that step completed.)
+const LFG_MARKER_DIR = "/data/.lfg";
 
 // Mags sandbox type that ships the Next.js webapp scaffold (+ node_modules + Pi)
 // pre-baked — `mags new <name> --type lfg-instant-boiler`. Booting from it lets a
@@ -62,6 +79,40 @@ const BOILERPLATE_PROJECT_TYPES = new Set(["webapp"]);
 const BUILD_TIMEOUT_MS = 45 * 60 * 1000;
 const POLL_INTERVAL_MS = 5_000;
 const activeBuilds = new Set<string>();
+// Internal app ids (instantApps.id) whose build the user asked to stop. The build
+// loop polls this and tears down promptly (kills the in-VM agent, skips GitHub sync,
+// marks the app "stopped"). Cleared in runInstantBuild's finally.
+const cancelledBuilds = new Set<string>();
+// Thrown internally when the user stops a build; the catch maps it to a "stopped" status.
+const BUILD_CANCELLED_MARKER = "__BUILD_STOPPED_BY_USER__";
+
+/**
+ * Request cancellation of an in-progress build. Best-effort: the running build loop
+ * notices within one poll (~5s), kills the in-VM coding agent, and marks the app
+ * "stopped". No-op (cancelled:false) when no build is active for the app.
+ */
+export async function cancelInstantBuild(input: { userId: string; appId: string }): Promise<{ cancelled: boolean; reason?: string }> {
+  const [app] = await db
+    .select()
+    .from(instantApps)
+    .where(and(eq(instantApps.userId, input.userId), eq(instantApps.appId, input.appId)))
+    .limit(1);
+  if (!app) return { cancelled: false, reason: "App not found" };
+  if (!activeBuilds.has(app.id)) return { cancelled: false, reason: "No build is currently running" };
+
+  cancelledBuilds.add(app.id);
+  console.log(`[instant] [${app.id}] cancel requested by user`);
+  // Immediate feedback — the loop will follow with the terminal "stopped" status.
+  await broadcastInstantStatus({
+    userId: app.userId,
+    conversationId: app.conversationId,
+    appId: app.appId,
+    appName: app.name,
+    status: "building",
+    message: "Stopping the build…",
+  });
+  return { cancelled: true };
+}
 
 export interface DesignChoices {
   paletteId?: string;
@@ -246,7 +297,7 @@ export async function broadcastInstantStatus(params: {
   const { userId, conversationId, appId, status, message, previewUrl, appName, errorType } = params;
 
   const isRunning = status === "running";
-  broadcastToUser(userId, {
+  broadcastInstant(userId, conversationId, {
     type: "ai_chunk",
     chunk: "",
     is_final: false,
@@ -396,7 +447,7 @@ async function broadcastEnvVarRequest(params: {
     app_id: params.appId,
   };
 
-  broadcastToUser(params.userId, {
+  broadcastInstant(params.userId, params.conversationId, {
     type: "ai_chunk",
     chunk: "",
     is_final: false,
@@ -548,10 +599,30 @@ async function ensureSandboxForApp(appId: string, buildProjectType?: string, bui
       return null;
     });
     if (job && job.status === "running") {
-      console.log(`[instant] [${appId}] ensureSandbox: reusing running VM`);
-      return { app: row.app, sandbox: row.sandbox, freshVm: false, prescaffolded: false };
-    }
-    if (job && job.status === "sleeping") {
+      // A "running" VM can still be DEGRADED — reused across many builds until its exec
+      // channel is broken (commands return empty, processes die → "Pi produced no files"),
+      // OR its outbound network dies (the coding agent then can't reach the model API →
+      // "Connection error", and pip downloads fail). Don't blindly trust the status: probe
+      // that (a) exec works, (b) the filesystem works, AND (c) the VM can reach the
+      // internet (DNS + a TLS connect). If any fail, the VM is toast — replace it.
+      const probe = await execOnWorkspace(
+        wsId,
+        "echo __VM_OK__; touch /data/.lfg_health 2>/dev/null && echo __FS_OK__; " +
+          "(curl -sm 8 -o /dev/null https://api.deepseek.com 2>/dev/null || curl -sm 8 -o /dev/null https://1.1.1.1 2>/dev/null) && echo __NET_OK__ || echo __NET_BAD__",
+        { timeout: 30_000 },
+      ).then((r) => r.output ?? "").catch((e) => {
+        console.warn(`[instant] [${appId}] ensureSandbox: health probe failed: ${(e as Error).message?.slice(0, 120)}`);
+        return "";
+      });
+      const execFsOk = probe.includes("__VM_OK__") && probe.includes("__FS_OK__");
+      const netOk = probe.includes("__NET_OK__"); // false on __NET_BAD__ or a dead exec
+      if (execFsOk && netOk) {
+        console.log(`[instant] [${appId}] ensureSandbox: reusing running VM (health OK)`);
+        return { app: row.app, sandbox: row.sandbox, freshVm: false, prescaffolded: false };
+      }
+      console.log(`[instant] [${appId}] VM '${wsId}' unhealthy (exec/fs=${execFsOk}, net=${netOk}) — replacing with a fresh VM`);
+      // fall through to delete + provision fresh
+    } else if (job && job.status === "sleeping") {
       // A sleeping (frozen) VM must be woken to exec into it. Wake can fail
       // ("job failed to wake (status: error)"). Probe it FIRST with a trivial exec —
       // if it doesn't wake, treat it as dead and provision fresh instead of letting
@@ -594,7 +665,13 @@ async function ensureSandboxForApp(appId: string, buildProjectType?: string, bui
   // the Pi path (where the boilerplate ships) + the webapp stack it contains.
   const hasRepo = !!(row.app.metadata as Record<string, unknown> | null)?.githubRepoUrl;
   const useBoilerplate = !hasRepo && baseRootfs === "pi" && BOILERPLATE_PROJECT_TYPES.has(projectType);
-  const rootfsType = useBoilerplate ? INSTANT_BOILERPLATE_ROOTFS : baseRootfs;
+  // Python projects boot the Mags `python` type (--type python): a glibc base with
+  // Python preinstalled, so heavy/native deps (Docling, torch, pandas…) install from
+  // manylinux wheels instead of failing to compile on the Alpine/musl pi/claude rootfs.
+  // The in-VM coding agent (Pi) bootstraps its own node here. Overridable for testing.
+  const rootfsType = projectType === "python"
+    ? (process.env.INSTANT_PYTHON_ROOTFS || "python")
+    : useBoilerplate ? INSTANT_BOILERPLATE_ROOTFS : baseRootfs;
   console.log(`[instant] [${appId}] ensureSandbox: creating new VM '${workspaceName}' (type=${projectType}, rootfs=${rootfsType}${useBoilerplate ? ", pre-scaffolded boilerplate" : ""})...`);
   const vmStart = Date.now();
   // NO-SYNC (no workspace_id) → ZERO JuiceFS/S3 storage cost. The big /data volume is
@@ -602,20 +679,38 @@ async function ensureSandboxForApp(appId: string, buildProjectType?: string, bui
   // a no-sync VM with diskGb:8 mounts /data at 7.8GB. (workspace_id only adds the
   // separate /workspace JuiceFS sync, which we don't need — code lives on GitHub, so a
   // reaped VM just re-clones/re-scaffolds.)
-  const { jobId, workspaceId } = await newWorkspace(workspaceName, {
-    startupCommand,
-    rootfsType,
-    noSync: true,
-    idleMinutes: 120,
-    // Mags defaults to 2GB root — too small. The 8GB volume mounts at /data, where
-    // the project is built (see WORKING_DIR=/data). Override via INSTANT_DISK_GB.
-    diskGb: parseInt(process.env.INSTANT_DISK_GB || "8", 10),
-    // RAM: default 4GB (the floor for Pi + a concurrent Next build — 1-2GB OOM-killed it).
-    // Delivered via the env passthrough in newWorkspace (__MAGS_ROOTFS_TYPE + __MAGS_MEM_GB),
-    // which also lands on the good node-22 + Pi-preinstalled base rootfs. Verified live.
-    // Override with INSTANT_MEM_GB.
-    memGb: parseInt(process.env.INSTANT_MEM_GB || "4", 10),
-  });
+  const diskGb = parseInt(process.env.INSTANT_DISK_GB || "8", 10);
+  // Python needs a BIG box: verbose models (DeepSeek/Kimi) accumulate a large context,
+  // and Pi's node heap sizes to VM RAM — a 4GB box OOMs Pi's heap (exit 134). The SDK's
+  // __MAGS_MEM_GB only honors 2/4, so real 8GB comes from the v2 API (top-level
+  // memory_mb/vcpus). It COLD-BOOTS (~15s vs the ~5s snapshot tier), so it needs the
+  // longer VM-start timeout. Non-python stacks keep the fast 4GB snapshot path.
+  const pythonBigVm = projectType === "python" && (process.env.INSTANT_PYTHON_BIG_VM ?? "1") !== "0";
+  const { jobId, workspaceId } = pythonBigVm
+    ? await newWorkspaceV2(workspaceName, {
+        rootfsType,
+        noSync: true,
+        startupCommand,
+        diskGb,
+        vcpus: parseInt(process.env.INSTANT_PYTHON_VCPUS || "4", 10),
+        memoryMb: parseInt(process.env.INSTANT_PYTHON_MEM_MB || "8192", 10),
+        // CRITICAL: no_sleep. A build has no HTTP traffic on the app port for
+        // many minutes, so Mags idle-reaps the VM mid-build → 'sleeping'. These
+        // v2 cold-boot VMs then FAIL TO WAKE (status: error), killing the build.
+        // Keep it alive for its whole life; it's freed explicitly on app delete.
+        // Override with INSTANT_PYTHON_KEEP_ALIVE=0 to fall back to sleep-on-idle.
+        keepAlive: (process.env.INSTANT_PYTHON_KEEP_ALIVE ?? "1") !== "0",
+      })
+    : await newWorkspace(workspaceName, {
+        startupCommand,
+        rootfsType,
+        noSync: true,
+        idleMinutes: 120,
+        // Mags defaults to 2GB root — too small. The 8GB volume mounts at /data.
+        diskGb,
+        // RAM via __MAGS_MEM_GB (SDK path honors only 2/4). Override with INSTANT_MEM_GB.
+        memGb: parseInt(process.env.INSTANT_MEM_GB || "4", 10),
+      });
   console.log(`[instant] [${appId}] ensureSandbox: VM ready in ${Date.now() - vmStart}ms (workspaceId=${workspaceId})`);
 
   const [sandbox] = await db
@@ -668,17 +763,30 @@ async function checkLocalServer(workspaceId: string, retries = 5): Promise<boole
  * fixes the "built successfully but preview shows 500" failures.
  */
 async function ensureDevServerRunning(workspaceId: string, projectType: string): Promise<boolean> {
-  if (await checkLocalServer(workspaceId, 1)) return true; // already up — leave it
   const isVite = projectType === "game";
-  const startInner = isVite
-    ? "npm run dev -- --host 0.0.0.0 --port 8080"
-    : "npm start --hostname 0.0.0.0 -p 8080";
+  const isPython = projectType === "python";
+  // ALWAYS kill every matching server first and start exactly ONE — the coding agent
+  // often starts the app several times during a build, leaving duplicate processes
+  // fighting over :8080 ("Address already in use"). Converging to a single fresh
+  // instance guarantees one app is running (and fixes "built ok but 500").
+  const killCmd = isPython
+    ? "pkill -9 -f 'python.*app.py' 2>/dev/null; pkill -9 -f 'flask run' 2>/dev/null; pkill -9 -f gunicorn 2>/dev/null"
+    : isVite
+      ? "pkill -9 -f vite 2>/dev/null; pkill -9 -f 'node .*vite' 2>/dev/null"
+      : "pkill -9 -f 'next start' 2>/dev/null; pkill -9 -f 'next-server' 2>/dev/null";
+  const startInner = isPython
+    ? ".venv/bin/python app.py"
+    : isVite
+      ? "npm run dev -- --host 0.0.0.0 --port 8080"
+      : "npm start --hostname 0.0.0.0 -p 8080";
+  const buildStep = isPython || isVite ? "" : "[ -d .next ] || npm run build > build.log 2>&1";
   const script = `
-export PATH=/root/node/current/bin:/root/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:$PATH
+export PATH=/data/project/.venv/bin:/root/node/current/bin:/root/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:$PATH
 export NODE_OPTIONS="--max-old-space-size=1536"
 cd /data/project || exit 1
-pkill -9 -f 'next start' 2>/dev/null; pkill -9 -f 'next-server' 2>/dev/null; pkill -9 -f vite 2>/dev/null; sleep 1
-${isVite ? "" : "[ -d .next ] || npm run build > build.log 2>&1"}
+# Free :8080 no matter what holds it, then remove any strays by name.
+fuser -k 8080/tcp 2>/dev/null; ${killCmd}; sleep 1
+${buildStep}
 CMD="cd /data/project && exec ${startInner}"
 if command -v setsid >/dev/null 2>&1; then
   setsid sh -c "$CMD" </dev/null > dev.log 2>&1 &
@@ -735,6 +843,171 @@ async function validatePublicUrl(
     }
   }
   return { ok: false, statusCode: 0, error: "All retries exhausted" };
+}
+
+// Notable Python libraries a user might explicitly request → their import module name.
+// Used to VERIFY the built app actually has what was asked for (e.g. "use Docling"),
+// so a silent fallback (Docling → pypdf) when a heavy/native dep can't install on the
+// musl sandbox is surfaced honestly instead of hidden. Curated to well-known libs so we
+// never false-warn on an incidental word in the requirements.
+const NOTABLE_PY_LIBS: Record<string, string> = {
+  docling: "docling",
+  torch: "torch", pytorch: "torch",
+  tensorflow: "tensorflow", keras: "keras",
+  transformers: "transformers",
+  spacy: "spacy", nltk: "nltk",
+  pandas: "pandas", numpy: "numpy", scipy: "scipy",
+  "scikit-learn": "sklearn", sklearn: "sklearn",
+  opencv: "cv2",
+  matplotlib: "matplotlib", seaborn: "seaborn", plotly: "plotly",
+  pypdf: "pypdf", pdfplumber: "pdfplumber", pymupdf: "fitz",
+  beautifulsoup: "bs4", scrapy: "scrapy", sqlalchemy: "sqlalchemy",
+};
+
+/**
+ * After a Python build, verify the libraries the user explicitly named actually installed
+ * & import in the venv. Returns the requested-but-missing library names — so a silent
+ * fallback can be reported honestly rather than passed off as "done".
+ */
+async function verifyRequestedPythonLibs(workspaceId: string, requirements: string): Promise<string[]> {
+  const req = (requirements || "").toLowerCase();
+  const wanted: Array<[string, string]> = [];
+  const seenMods = new Set<string>();
+  for (const [key, mod] of Object.entries(NOTABLE_PY_LIBS)) {
+    if (req.includes(key) && !seenMods.has(mod)) { wanted.push([key, mod]); seenMods.add(mod); }
+  }
+  if (!wanted.length) return [];
+  const mods = wanted.map(([, m]) => m).join(",");
+  // find_spec checks importability WITHOUT importing (no heavy init / side effects).
+  const pyCode = `import importlib.util as u; mods="${mods}".split(","); print("MISSING:"+",".join([m for m in mods if u.find_spec(m) is None]))`;
+  const shell = `cd ${CLAUDE_PROJECT_DIR} 2>/dev/null; .venv/bin/python -c '${pyCode}'`;
+  const b64 = Buffer.from(shell).toString("base64");
+  const out = await execOnWorkspace(workspaceId, `echo ${b64} | base64 -d | bash`, { timeout: 30_000 })
+    .then((r) => r.output || "")
+    .catch(() => "");
+  const m = out.match(/MISSING:([^\n]*)/);
+  const missingMods = m?.[1] ? m[1].split(",").map((s) => s.trim()).filter(Boolean) : [];
+  // Map the missing import-names back to the user-facing library names they asked for.
+  return wanted.filter(([, mod]) => missingMods.includes(mod)).map(([key]) => key);
+}
+
+// Transient Mags/gateway failures (Cloudflare 5xx, exec timeouts, socket resets) are
+// common on a slow git push through the VM — retry a couple of times before giving up so
+// the GitHub backup actually lands (a missing backup = "refresh lost my changes" when the
+// VM is later reaped and restored from a stale repo).
+const TRANSIENT_ERR_RE = /error code: 52\d|\b52[0-4]\b|timed out|timeout|etimedout|econnreset|econnrefused|socket hang up|network/i;
+async function retryTransient<T>(fn: () => Promise<T>, label: string, appId: string, attempts = 3): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 1; i <= attempts; i++) {
+    try { return await fn(); }
+    catch (e) {
+      lastErr = e;
+      const msg = String((e as Error).message ?? e);
+      if (i >= attempts || !TRANSIENT_ERR_RE.test(msg)) throw e;
+      console.warn(`[instant] [${appId}] ${label} transient failure (attempt ${i}/${attempts}): ${msg.slice(0, 120)} — retrying`);
+      await sleep(3000 * i);
+    }
+  }
+  throw lastErr;
+}
+
+/**
+ * Run a slow scaffold step DETACHED inside the VM and poll for completion.
+ *
+ * Why: a single blocking `execOnWorkspace` holds ONE HTTP request open for the
+ * whole command. Cloudflare sits in front of the Mags API and kills any request
+ * that stays silent for ~100s with `error code: 524` — so a >100s install (e.g.
+ * the ~200MB CPU-torch wheel) dies at the socket long before our local timeout.
+ * Instead we launch the script with nohup (writes its own log + exit-code marker)
+ * and poll with SHORT (~15s) exec calls that just read the marker/log tail. Each
+ * poll is a fresh, fast request → never trips the 524 window, no matter how long
+ * the install actually takes. Same pattern as streamPiToCompletion.
+ */
+async function runDetachedStep(
+  workspaceId: string,
+  script: string,
+  stepIndex: number,
+  opts: { appId: string; deadlineMs?: number } = { appId: "" },
+): Promise<{ exitCode: number; output: string; stderr?: string }> {
+  const deadlineMs = opts.deadlineMs ?? 20 * 60 * 1000; // 20 min hard cap
+  const dir = `${LFG_MARKER_DIR}/steps`;
+  const sh = `${dir}/step_${stepIndex}.sh`;
+  const log = `${dir}/step_${stepIndex}.log`;
+  const exit = `${dir}/step_${stepIndex}.exit`;
+  const scriptB64 = Buffer.from(script).toString("base64");
+
+  // Write the script + launch it detached. `setsid`/`nohup` + `&` so it outlives
+  // this short exec; the exit code lands in a marker file on completion.
+  const launch =
+    `mkdir -p ${dir}; ` +
+    `echo '${scriptB64}' | base64 -d > ${sh}; ` +
+    `rm -f ${log} ${exit}; ` +
+    `nohup sh -c 'sh ${sh} > ${log} 2>&1; echo $? > ${exit}' >/dev/null 2>&1 & ` +
+    `echo __LAUNCHED__`;
+  await retryTransient(
+    () => execOnWorkspace(workspaceId, launch, { timeout: 20_000 }),
+    `detached step ${stepIndex} launch`,
+    opts.appId,
+  );
+
+  const start = Date.now();
+  const pollEvery = 8_000;
+  while (Date.now() - start < deadlineMs) {
+    await sleep(pollEvery);
+    // One short request: report exit code if finished, else stream a tail so the
+    // build log shows progress. `error code: 52x` on a poll is itself transient.
+    const probe = await retryTransient(
+      () =>
+        execOnWorkspace(
+          workspaceId,
+          `if test -f ${exit}; then echo "__EXIT__=$(cat ${exit})"; fi; tail -c 800 ${log} 2>/dev/null`,
+          { timeout: 20_000 },
+        ),
+      `detached step ${stepIndex} poll`,
+      opts.appId,
+    ).catch((e) => ({ output: `__POLL_ERR__ ${String((e as Error).message).slice(0, 80)}`, exitCode: 0 } as MagsExecResult));
+
+    const out = probe.output ?? "";
+    const m = out.match(/__EXIT__=(\d+)/);
+    if (m) {
+      const code = parseInt(m[1]!, 10);
+      const logTail = out.replace(/__EXIT__=\d+\s*/, "");
+      return { exitCode: code, output: logTail };
+    }
+  }
+  // Deadline blown — treat as failure but leave the marker absent so a resume re-runs it.
+  return { exitCode: 124, output: `detached step ${stepIndex} exceeded ${Math.round(deadlineMs / 1000)}s deadline` };
+}
+
+/**
+ * Prompt for a RESUMED Pi run after a resource-limit death (OOM / tool-call runaway).
+ * The prior run left real work on /data/project, so we tell Pi to CONTINUE — inspect
+ * what exists, finish only what's missing, and (critically) STOP the behaviour that
+ * usually caused the death: re-running the heavy, memory-hungry pipeline over and over
+ * to "verify" it. One light check is enough.
+ */
+function buildPiResumePrompt(originalPrompt: string, projectType: string): string {
+  const heavyLibNote =
+    projectType === "python"
+      ? `\n- This is a Python app. Loading ML libs (torch / docling / transformers) into a subprocess uses 2-3GB RAM. Do NOT repeatedly import them or re-run the full parse pipeline to "test" — that is what ran the box out of memory. Trust the code; verify at most ONCE with a single small request, then stop.`
+      : "";
+  return `You are RESUMING an interrupted build — you are NOT starting over.
+
+The previous run made real progress but was killed by a resource limit (it ran out of memory or looped on too many steps). All of its work is already saved in the project directory (/data/project). Your job is to FINISH it, efficiently.
+
+Do this, in order:
+1. First look at what already exists: list the project files and read the main entry point (app.py / package.json and the primary source files). Do NOT recreate files that are already there.
+2. Identify what is actually incomplete or broken and fix ONLY that.
+3. Make sure the app starts and serves on port 8080. Start it ONCE and confirm it responds. If it already runs, leave it.
+4. Then STOP. Do not keep re-testing, re-installing, or refactoring working code.
+
+Rules to avoid another death:
+- Be decisive and minimal. Every extra step spends the limited budget that killed the last run.
+- Do NOT reinstall dependencies that are already installed. Check first (a quick import or \`pip show\`), install only if missing.${heavyLibNote}
+- Do NOT loop: if a check passes once, move on.
+
+Original requirements (for reference only — most of this is likely already built):
+${originalPrompt}`;
 }
 
 async function runInstantBuild(appId: string, feedback?: string, designChoices?: DesignChoices, buildModelKey?: string, buildProjectType?: string, designChange?: boolean) {
@@ -825,7 +1098,22 @@ async function runInstantBuild(appId: string, feedback?: string, designChoices?:
       designChoices ?? proposal?.designChoices,
       designChange ?? false,
     );
-    const tokens = composeDesignTokens(app.requirements ?? "", appName, effectiveDesignChoices);
+    // Keep the build's light/dark consistent with the approved design: infer brightness
+    // from the requirements + approved plan so recomposing can't flip an approved light
+    // palette back to dark (or vice-versa) off an incidental keyword in the requirements.
+    const buildBrightness = inferBrightness(
+      [
+        app.requirements,
+        proposal?.summary,
+        ...((proposal?.sections ?? []).map((s) => `${s.title} ${s.description}`)),
+      ]
+        .filter(Boolean)
+        .join(" \n "),
+    );
+    const tokens = composeDesignTokens(app.requirements ?? "", appName, {
+      ...(effectiveDesignChoices ?? {}),
+      ...(buildBrightness ? { brightness: buildBrightness } : {}),
+    });
 
     // Build/refresh the durable spec (source of truth across builds + iterations).
     const existingSpec = existingMeta.spec as InstantSpec | undefined;
@@ -901,19 +1189,29 @@ async function runInstantBuild(appId: string, feedback?: string, designChoices?:
       .limit(1))[0]?.accessToken;
     const repoUrl = (existingMeta.githubRepoUrl as string | undefined) ?? undefined;
 
-    // Does the project already exist on this VM's disk?
-    let projectExists = false;
+    // Stack-agnostic resume detection (replaces the Next-only package.json check):
+    //  - projectHasContent: the project dir is non-empty (any stack — Next/Python/game).
+    //  - scaffoldPartial:   a PRIOR scaffold started but never finished (markers say so),
+    //    so we should RESUME it (skipping completed steps) rather than reuse-as-is.
+    let projectHasContent = false;
+    let scaffoldPartial = false;
     if (!initial.freshVm) {
-      projectExists = await execOnWorkspace(workspaceId, `test -f ${CLAUDE_PROJECT_DIR}/package.json && echo YES || echo NO`, { timeout: 20_000 })
-        .then((r) => r.output.includes("YES"))
-        .catch(() => false);
+      const probe = await execOnWorkspace(
+        workspaceId,
+        `test -n "$(ls -A ${CLAUDE_PROJECT_DIR} 2>/dev/null)" && echo HAS || echo EMPTY; ` +
+          `if test -f ${LFG_MARKER_DIR}/scaffold.inprogress && ! test -f ${LFG_MARKER_DIR}/scaffold.done; then echo PARTIAL; fi`,
+        { timeout: 20_000 },
+      ).then((r) => r.output).catch(() => "");
+      projectHasContent = /\bHAS\b/.test(probe);
+      scaffoldPartial = /\bPARTIAL\b/.test(probe);
     }
 
     let setupMode: "reuse" | "clone" | "scaffold";
-    if (projectExists) setupMode = "reuse";
-    else if (repoUrl && ghToken) setupMode = "clone";
-    else setupMode = "scaffold";
-    console.log(`[instant] [${appId}] setup mode = ${setupMode} (freshVm=${initial.freshVm}, projectExists=${projectExists}, hasRepo=${!!repoUrl})`);
+    if (scaffoldPartial) setupMode = "scaffold";        // resume an interrupted scaffold (skips done steps, no rm)
+    else if (projectHasContent) setupMode = "reuse";    // fully built (or legacy) → iterate in place
+    else if (repoUrl && ghToken) setupMode = "clone";   // reaped VM → restore from GitHub
+    else setupMode = "scaffold";                         // brand-new build
+    console.log(`[instant] [${appId}] setup mode = ${setupMode} (freshVm=${initial.freshVm}, hasContent=${projectHasContent}, scaffoldPartial=${scaffoldPartial}, hasRepo=${!!repoUrl})`);
 
     // Restore from GitHub when resuming a reaped/empty sandbox.
     if (setupMode === "clone") {
@@ -924,6 +1222,24 @@ async function runInstantBuild(appId: string, feedback?: string, designChoices?:
       const cloned = await cloneRepo({ workspaceId, projectDir: CLAUDE_PROJECT_DIR, repoUrl: repoUrl!, githubToken: ghToken! });
       if (!cloned) {
         console.warn(`[instant] [${appId}] clone failed — falling back to scaffold`);
+        setupMode = "scaffold";
+      }
+    }
+
+    // INCOMPLETE-project guard: a reuse/clone assumes the app is fully built and tells the
+    // agent "just run it, don't write code". But a restored repo can be incomplete (e.g. an
+    // earlier push failed before app.py was committed → only helper files exist). If the
+    // stack's ENTRY POINT is missing, the project is NOT complete — fall back to a full
+    // build so the agent regenerates the missing app instead of crashing on "no such file".
+    if (setupMode === "reuse" || setupMode === "clone") {
+      const entryPoint = projectType === "python" ? "app.py" : "package.json";
+      const hasEntry = await execOnWorkspace(
+        workspaceId,
+        `test -f ${CLAUDE_PROJECT_DIR}/${entryPoint} && echo YES || echo NO`,
+        { timeout: 20_000 },
+      ).then((r) => r.output.includes("YES")).catch(() => false);
+      if (!hasEntry) {
+        console.warn(`[instant] [${appId}] ${setupMode} project missing entry point (${entryPoint}) — incomplete, doing a full build`);
         setupMode = "scaffold";
       }
     }
@@ -978,8 +1294,23 @@ async function runInstantBuild(appId: string, feedback?: string, designChoices?:
       }
       if (needScaffold) {
         // Profile-driven scaffold (webapp → Next.js+shadcn, landing → +framer-motion,
-        // game → Vite+three.js). Each step runs server-side before the agent starts.
-        for (const step of profile.scaffoldSteps) {
+        // game → Vite+three.js, python → venv+Flask). Idempotent + resumable: mark the
+        // phase in-progress and read which steps a prior run already finished, so a build
+        // resumed after a mid-scaffold interruption SKIPS completed steps instead of
+        // re-nuking the project and re-running a slow install. Universal across stacks.
+        const doneSteps = await execOnWorkspace(
+          workspaceId,
+          `mkdir -p ${LFG_MARKER_DIR}; rm -f ${LFG_MARKER_DIR}/scaffold.done; touch ${LFG_MARKER_DIR}/scaffold.inprogress; ls ${LFG_MARKER_DIR}/ 2>/dev/null`,
+          { timeout: 20_000 },
+        ).then((r) => new Set(r.output.match(/step_\d+\.ok/g) ?? [])).catch(() => new Set<string>());
+
+        for (let i = 0; i < profile.scaffoldSteps.length; i++) {
+          const step = profile.scaffoldSteps[i]!;
+          const marker = `step_${i}.ok`;
+          if (doneSteps.has(marker)) {
+            console.log(`[instant] [${appId}] scaffold step ${i} already complete — skipping (${step.message})`);
+            continue;
+          }
           await broadcastInstantStatus({
             userId: app.userId,
             conversationId: app.conversationId,
@@ -988,16 +1319,30 @@ async function runInstantBuild(appId: string, feedback?: string, designChoices?:
             status: "building",
             message: step.message,
           });
-          const stepB64 = Buffer.from(step.script).toString("base64");
-          console.log(`[instant] [${appId}] scaffold step: ${step.message}`);
-          const stepResult = await execOnWorkspace(workspaceId, `echo '${stepB64}' | base64 -d | sh`, { timeout: 180_000 });
-          console.log(`[instant] [${appId}] scaffold step done, exit=${stepResult.exitCode}`);
+          console.log(`[instant] [${appId}] scaffold step ${i}: ${step.message}${step.slow ? " (detached)" : ""}`);
+          // Slow steps (big pip/apt installs) run detached + polled so a >100s
+          // command never trips Cloudflare's ~100s 524 on a single held request.
+          const stepResult = step.slow
+            ? await runDetachedStep(workspaceId, step.script, i, { appId })
+            : await execOnWorkspace(
+                workspaceId,
+                `echo '${Buffer.from(step.script).toString("base64")}' | base64 -d | sh`,
+                { timeout: 180_000 },
+              );
+          console.log(`[instant] [${appId}] scaffold step ${i} done, exit=${stepResult.exitCode}`);
           if (stepResult.exitCode !== 0) {
             // Surface the failure output (tail) so a failing npm install / shadcn is diagnosable.
             const out = `${stepResult.output ?? ""}${stepResult.stderr ? `\n[stderr] ${stepResult.stderr}` : ""}`;
-            console.warn(`[instant] [${appId}] scaffold step FAILED (exit=${stepResult.exitCode}) — last output:\n${out.slice(-1500)}`);
+            console.warn(`[instant] [${appId}] scaffold step ${i} FAILED (exit=${stepResult.exitCode}) — last output:\n${out.slice(-1500)}`);
+          } else {
+            // Only a fully-successful step earns its marker → a failed step re-runs on resume.
+            await execOnWorkspace(workspaceId, `touch ${LFG_MARKER_DIR}/${marker}`, { timeout: 15_000 }).catch(() => {});
           }
         }
+        // Scaffolding phase finished (the coding agent takes over from here). If the VM
+        // dies mid-scaffold before this runs, scaffold.done is absent → the next build
+        // resumes the scaffold instead of restarting it.
+        await execOnWorkspace(workspaceId, `touch ${LFG_MARKER_DIR}/scaffold.done; rm -f ${LFG_MARKER_DIR}/scaffold.inprogress`, { timeout: 15_000 }).catch(() => {});
         console.log(`[instant] [${appId}] server-side pre-scaffolding complete (${projectType})`);
       }
 
@@ -1096,6 +1441,27 @@ Do NOT use TodoWrite. Do NOT edit source files. Just install (if needed), build,
         : `Building ${appName}...`,
     });
 
+    // Free the VM before launching the coding agent. A REUSED sandbox accumulates stray
+    // processes across builds (old Flask/Vite/Next dev servers, zombie pi/node from failed
+    // runs), eating RAM until a fresh Pi run gets silently OOM-killed by the cgroup limit
+    // → "Pi produced no files (no tool calls)" with an empty output file. Kill known strays
+    // (NOT our own exec/node) and drop caches so the agent has headroom. Best-effort.
+    if (!initial.freshVm) {
+      // FREE /tmp FIRST — on these VMs /tmp is a RAM tmpfs, and after many builds it fills
+      // with leftover pi_* files, which then silently swallows Pi's output writes (the root
+      // cause of endless "Pi produced no files"). Lead with the rm (short, runs even when
+      // /tmp is full), then kill stray app/build processes to reclaim RAM. Report df+free.
+      const cleanup =
+        "rm -rf /tmp/pi_* /tmp/node22.tar.gz /tmp/*.jsonl /tmp/*.log 2>/dev/null; " +
+        "pkill -9 -f 'python.*app.py' 2>/dev/null; pkill -9 -f 'flask run' 2>/dev/null; " +
+        "pkill -9 -f gunicorn 2>/dev/null; pkill -9 -f 'next start' 2>/dev/null; " +
+        "pkill -9 -f 'next-server' 2>/dev/null; pkill -9 -f vite 2>/dev/null; " +
+        "pkill -9 -f pi-coding-agent 2>/dev/null; sync 2>/dev/null; " +
+        "df -h /tmp 2>/dev/null | tail -1; free -m 2>/dev/null | head -2; true";
+      const out = await execOnWorkspace(workspaceId, cleanup, { timeout: 30_000 }).then((r) => r.output?.trim() ?? "").catch(() => "");
+      console.log(`[instant] [${appId}] pre-build cleanup done — /tmp + mem after:\n${out}`);
+    }
+
     // Claude Code resumes via session id; the SSH agent has no session concept.
     let sessionId = sandbox.cliSessionId ?? undefined;
 
@@ -1139,46 +1505,86 @@ Do NOT use TodoWrite. Do NOT edit source files. Just install (if needed), build,
           .onConflictDoUpdate({ target: profiles.userId, set: { cliApiKey, updatedAt: new Date() } });
       }
       const forward = { apiUrl: forwardApiUrl, apiKey: cliApiKey, appId: app.appId };
-      const pi = await startPiCli({
-        workspaceId,
-        prompt,
-        projectDir: PROJECT_DIR,
-        provider: piProvider,
-        modelId: piModelId,
-        apiKey,
-        envVars: (app.envVars as Record<string, string> | null) ?? {},
-        forward,
-      });
+      // Resume loop: a weak model (Flash) on a heavy task can run out of memory or hit
+      // the tool-call budget WITH real work already on disk. Rather than throwing that
+      // work away, restart Pi to CONTINUE from the current project state. Each attempt
+      // gets a fresh tool-call budget; we clean up leftover procs + free RAM between
+      // attempts so an OOM doesn't immediately recur. Only RESUMABLE failures loop
+      // (see pi-cli `resumable`); auth/quota/stall failures fall straight through.
+      const maxAttempts = parseInt(process.env.INSTANT_PI_MAX_ATTEMPTS || "3", 10);
+      let piResult!: Awaited<ReturnType<typeof streamPiToCompletion>>;
       let lastPiBroadcast = 0;
-      const piResult = await streamPiToCompletion({
-        workspaceId,
-        outputFile: pi.outputFile,
-        backgroundPid: pi.backgroundPid,
-        timeoutMs: BUILD_TIMEOUT_MS,
-        onProgress: (msg) => {
-          const now = Date.now();
-          if (now - lastPiBroadcast < 5_000) return;
-          lastPiBroadcast = now;
-          void broadcastInstantStatus({
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const isResume = attempt > 1;
+        if (isResume) {
+          // Free the VM before restarting: kill the OOM leftovers (a half-loaded torch/
+          // docling subprocess can hold GBs) and drop caches so the next run starts clean.
+          await execOnWorkspace(
+            workspaceId,
+            `pkill -9 -f 'python|pip|torch|docling|node .*forward' 2>/dev/null; sync; echo 1 > /proc/sys/vm/drop_caches 2>/dev/null; free -m | head -2; true`,
+            { timeout: 25_000 },
+          ).catch(() => {});
+          await broadcastInstantStatus({
             userId: app.userId,
             conversationId: app.conversationId,
             appId: app.appId,
             appName,
             status: "building",
-            message: msg,
+            message: `Build hit a resource limit — resuming where it left off (attempt ${attempt}/${maxAttempts})…`,
           });
-        },
-      });
-      console.log(`[instant] [${appId}] Pi build done in ${Date.now() - t1}ms, exitCode=${piResult.exitCode}, fatal=${piResult.fatalError ? "yes" : "no"}, didWork=${piResult.didWork}, toolCalls=${piResult.toolCalls}`);
+          console.log(`[instant] [${appId}] Pi RESUME attempt ${attempt}/${maxAttempts} (prev: ${piResult.oomKilled ? "OOM" : "runaway"}, toolCalls=${piResult.toolCalls})`);
+        }
+        const pi = await startPiCli({
+          workspaceId,
+          prompt: isResume ? buildPiResumePrompt(prompt, projectType) : prompt,
+          projectDir: PROJECT_DIR,
+          provider: piProvider,
+          modelId: piModelId,
+          apiKey,
+          envVars: (app.envVars as Record<string, string> | null) ?? {},
+          forward,
+        });
+        piResult = await streamPiToCompletion({
+          workspaceId,
+          outputFile: pi.outputFile,
+          backgroundPid: pi.backgroundPid,
+          timeoutMs: BUILD_TIMEOUT_MS,
+          shouldCancel: () => cancelledBuilds.has(appId),
+          onProgress: (msg) => {
+            const now = Date.now();
+            if (now - lastPiBroadcast < 5_000) return;
+            lastPiBroadcast = now;
+            void broadcastInstantStatus({
+              userId: app.userId,
+              conversationId: app.conversationId,
+              appId: app.appId,
+              appName,
+              status: "building",
+              message: msg,
+            });
+          },
+        });
+        console.log(`[instant] [${appId}] Pi build done in ${Date.now() - t1}ms (attempt ${attempt}/${maxAttempts}), exitCode=${piResult.exitCode}, fatal=${piResult.fatalError ? "yes" : "no"}, didWork=${piResult.didWork}, toolCalls=${piResult.toolCalls}, resumable=${piResult.resumable}`);
+        // Clean finish, or a failure we can't fix by restarting → stop looping.
+        if (!piResult.resumable || attempt >= maxAttempts) break;
+        // Resumable (OOM / runaway) with work on disk → loop and continue the build.
+        console.warn(`[instant] [${appId}] Pi ${piResult.oomKilled ? "OOM-killed" : "ran away"} with work present — will resume (attempt ${attempt} of ${maxAttempts}).`);
+      }
       if (piResult.exitCode !== null && piResult.exitCode !== 0) {
         console.error(`[instant] [${appId}] Pi output tail:\n${piResult.tail.slice(-2500)}`);
         throw new Error(`Pi build failed with exit code ${piResult.exitCode}`);
       }
       // Pi exits 0 even on an API auth/quota failure — streamPiToCompletion detects
-      // that VM-side (only when the agent produced ZERO successful output).
-      if (piResult.fatalError) {
+      // that VM-side (only when the agent produced ZERO successful output). A resumable
+      // failure that survived all attempts still carries a fatalError; but if the project
+      // is actually up we'd rather validate the URL than hard-fail — so treat a resumable
+      // fatal as non-fatal here and let the URL check below be the source of truth.
+      if (piResult.fatalError && !piResult.resumable) {
         console.error(`[instant] [${appId}] Pi output tail:\n${piResult.tail.slice(-2500)}`);
         throw new Error(`Pi build failed: ${piResult.fatalError}`);
+      }
+      if (piResult.fatalError && piResult.resumable) {
+        console.warn(`[instant] [${appId}] Pi exhausted ${maxAttempts} resume attempts (${piResult.fatalError}) — proceeding to URL validation with whatever was built.`);
       }
       // Pi made ZERO tool calls → it wrote no files. Do NOT claim success (which would
       // sync an empty project to GitHub). Surface the output so we can see why.
@@ -1237,18 +1643,34 @@ Do NOT use TodoWrite. Do NOT edit source files. Just install (if needed), build,
       let completed = false;
       let lastProgressAt = 0;
       let consecutivePollErrors = 0;
+      // Blind-window resilience: a flaky control-plane (exec timeouts) must not kill a
+      // build that's still alive in the VM — verify liveness before giving up.
+      let cliBlindSince = 0;
+      const CLI_BLIND_LIMIT_MS = 5 * 60_000;
       const deadline = Date.now() + BUILD_TIMEOUT_MS;
 
       while (Date.now() < deadline && !completed) {
         await sleep(POLL_INTERVAL_MS);
+        if (cancelledBuilds.has(appId)) throw new Error(BUILD_CANCELLED_MARKER);
         let poll: Awaited<ReturnType<typeof pollOutput>>;
         try {
           poll = await pollOutput(workspaceId, cli.outputFile, offset, cli.backgroundPid);
           consecutivePollErrors = 0;
+          cliBlindSince = 0;
         } catch (pollErr) {
           consecutivePollErrors++;
-          console.warn(`[instant] Poll error (${consecutivePollErrors}/5):`, (pollErr as Error).message?.slice(0, 120));
-          if (consecutivePollErrors >= 5) throw pollErr; // give up after 5 consecutive failures
+          const emsg = (pollErr as Error).message?.slice(0, 120);
+          console.warn(`[instant] Poll error (${consecutivePollErrors}):`, emsg);
+          if (consecutivePollErrors >= 2) {
+            const job = await findJob(workspaceId).catch(() => null);
+            const vmAlive = !!job && (job.status === "running" || job.status === "sleeping");
+            if (!vmAlive) throw new Error(`build VM is no longer running (status: ${job?.status ?? "unknown"}) — ${emsg}`);
+            if (cliBlindSince === 0) cliBlindSince = Date.now();
+            if (Date.now() - cliBlindSince > CLI_BLIND_LIMIT_MS) {
+              throw new Error(`lost contact with a LIVE build VM for ${Math.round((Date.now() - cliBlindSince) / 60000)}min — giving up. Last error: ${emsg}`);
+            }
+            await sleep(POLL_INTERVAL_MS); // back off; the VM is alive, just slow to answer
+          }
           continue; // transient error — retry next interval
         }
         offset = poll.newOffset;
@@ -1305,9 +1727,33 @@ Do NOT use TodoWrite. Do NOT edit source files. Just install (if needed), build,
       }
     }
 
+    // User asked to stop mid-build → tear down here, BEFORE starting the server, minting
+    // a URL, or pushing to GitHub. The catch below turns this into a clean "stopped".
+    if (cancelledBuilds.has(appId)) throw new Error(BUILD_CANCELLED_MARKER);
+
     // Make sure the dev server is actually running and SURVIVES (the agent's own
     // background start often gets reaped → "built ok but 500"). Restart it robustly.
     await ensureDevServerRunning(workspaceId, projectType);
+
+    // Honesty check (Python): if the user explicitly asked for libraries that couldn't be
+    // installed here (heavy/native ML deps have no musl wheels on this sandbox), say so
+    // plainly instead of letting the agent's silent fallback pass as "done".
+    if (projectType === "python") {
+      const missingLibs = await verifyRequestedPythonLibs(workspaceId, app.requirements ?? "").catch(() => [] as string[]);
+      if (missingLibs.length) {
+        console.warn(`[instant] [${appId}] requested Python libs NOT installed: ${missingLibs.join(", ")}`);
+        const libs = missingLibs.join(", ");
+        const plural = missingLibs.length > 1;
+        await broadcastInstantStatus({
+          userId: app.userId,
+          conversationId: app.conversationId,
+          appId: app.appId,
+          appName,
+          status: "building",
+          message: `⚠️ Requested ${plural ? "libraries" : "library"} ${libs} could NOT be installed in the sandbox (heavy/native deps have no musl wheels here), so the app was built WITHOUT ${plural ? "them" : "it"} — it uses lighter fallbacks. Running ${libs} needs a glibc/Debian environment.`,
+        });
+      }
+    }
 
     // STABLE URL: point a per-app subdomain alias at the CURRENT VM. Each VM gets its
     // own random subdomain, so without an alias the URL would change on every
@@ -1496,7 +1942,11 @@ Then wait 3 seconds and verify with: curl -s http://localhost:8080/ || true`;
       }
     }
 
-    const finalStatus = "running";
+    // Confirm the URL before declaring the app done. If the server never came up on
+    // :8080 (isLive=false, after checkLocalServer's retries ≈ 15–24s), the app is NOT
+    // working — do NOT mark it "running" (that's how a crashed/incomplete build showed
+    // as live). Mark "error" so the user sees the truth and can retry.
+    const finalStatus = isLive ? "running" : "error";
     await db
       .update(instantApps)
       .set({
@@ -1530,15 +1980,16 @@ Then wait 3 seconds and verify with: curl -s http://localhost:8080/ || true`;
       isLive && publicUrlValid
         ? `${appName} is live!`
         : isLive && !publicUrlValid
-          ? `${appName} is running but the public URL may have issues — try refreshing the preview.`
-          : `${appName} built successfully. Server may still be starting — try refreshing the preview.`;
+          ? `${appName} is running but the public URL is still warming up — refresh the preview in a few seconds.`
+          : `${appName} did NOT come up — the server isn't responding on port 8080, so the build looks incomplete or crashed on startup. Check the Logs tab; say "retry" to rebuild.`;
 
     await broadcastInstantStatus({
       userId: app.userId,
       conversationId: app.conversationId,
       appId: app.appId,
       appName,
-      status: "running",
+      // Only "running" once the server is actually confirmed up; otherwise surface "error".
+      status: finalStatus,
       message: statusMessage,
       previewUrl,
     });
@@ -1569,7 +2020,13 @@ Then wait 3 seconds and verify with: curl -s http://localhost:8080/ || true`;
     }
 
     // ── Auto-sync to GitHub if user has a connected GitHub account ──
+    // Only back up a CONFIRMED-WORKING build. Pushing a broken/incomplete build would
+    // overwrite a good backup and make the next restore boot a broken app.
+    if (!isLive) {
+      console.log(`[instant] [${appId}] server not up — skipping GitHub auto-sync (won't overwrite a good backup with a broken build)`);
+    }
     try {
+      if (!isLive) throw new Error("__SKIP_SYNC_SERVER_DOWN__");
       console.log(`[instant] [${appId}] Checking for GitHub token to auto-sync...`);
       const [ghToken] = await db
         .select({ accessToken: githubTokens.accessToken })
@@ -1605,25 +2062,25 @@ Then wait 3 seconds and verify with: curl -s http://localhost:8080/ || true`;
         if (repo.created) {
           // Fresh repo — init and push to main
           console.log(`[instant] [${appId}] Fresh repo — running initAndPushRepo to ${repo.cloneUrl}...`);
-          await initAndPushRepo({
+          await retryTransient(() => initAndPushRepo({
             workspaceId,
             projectDir: CLAUDE_PROJECT_DIR,
             repoUrl: repo.cloneUrl,
             branch: "main",
             githubToken: ghToken.accessToken,
-          });
+          }), "initAndPushRepo", appId);
           console.log(`[instant] [${appId}] initAndPushRepo completed successfully`);
         } else {
           // Existing repo — commit and push to main
           console.log(`[instant] [${appId}] Existing repo — running commitAndPush to ${repo.cloneUrl}...`);
-          const commitResult = await commitAndPush({
+          const commitResult = await retryTransient(() => commitAndPush({
             workspaceId,
             projectDir: CLAUDE_PROJECT_DIR,
             commitMessage: `Update ${app.name} via LFG Instant Mode`,
             featureBranch: "main",
             repoUrl: repo.cloneUrl,
             githubToken: ghToken.accessToken,
-          });
+          }), "commitAndPush", appId);
           console.log(`[instant] [${appId}] commitAndPush completed: sha=${commitResult.sha} branch=${commitResult.branch}`);
         }
 
@@ -1655,28 +2112,67 @@ Then wait 3 seconds and verify with: curl -s http://localhost:8080/ || true`;
         });
       }
     } catch (syncErr) {
-      // Don't fail the build if GitHub sync fails
+      // Deliberate skip (server not up) → no warning; we intentionally don't back up a
+      // broken build over a good one.
+      if (String(syncErr).includes("__SKIP_SYNC_SERVER_DOWN__")) {
+        // no-op
+      } else {
+      // Don't fail the build if GitHub sync fails — the app is built and running. But do
+      // NOT leave it silent: a failed push means the app ISN'T backed up, so if the VM is
+      // reaped a restore would clone an empty repo. Tell the user so they can re-export.
       console.error(`[instant] [${appId}] Auto-sync to GitHub FAILED for ${appName}:`, String(syncErr));
       console.error(`[instant] [${appId}] Sync error details:`, (syncErr as Error).stack?.slice(0, 500));
+      await broadcastInstantStatus({
+        userId: app.userId,
+        conversationId: app.conversationId,
+        appId: app.appId,
+        appName,
+        status: "running",
+        message: `⚠️ ${appName} is live, but the GitHub backup didn't complete (${String(syncErr).replace(/^Error:\s*/i, "").slice(0, 120)}). Your app still works — say "export to GitHub" to retry the backup (needed to restore the app if the sandbox is reaped).`,
+        previewUrl,
+      }).catch(() => {});
+      }
     }
   } catch (error) {
+    // User-initiated stop → clean terminal "stopped", not a red build error.
+    if (cancelledBuilds.has(appId) || String(error).includes(BUILD_CANCELLED_MARKER)) {
+      console.log(`[instant] [${appId}] build stopped by user after ${Date.now() - buildStart}ms`);
+      const [app] = await db.select().from(instantApps).where(eq(instantApps.id, appId)).limit(1);
+      if (app) {
+        await db
+          .update(instantApps)
+          .set({ status: "stopped", updatedAt: new Date() })
+          .where(eq(instantApps.id, app.id));
+        await broadcastInstantStatus({
+          userId: app.userId,
+          conversationId: app.conversationId,
+          appId: app.appId,
+          appName: app.name,
+          status: "stopped",
+          message: "Build stopped. You can edit the plan and build again whenever you're ready.",
+        });
+      }
+      return;
+    }
     console.error(`[instant] [${appId}] BUILD FAILED after ${Date.now() - buildStart}ms — ${String(error)}`);
     const [app] = await db.select().from(instantApps).where(eq(instantApps.id, appId)).limit(1);
     if (app) {
-      // Detect credential errors — tell user to reconnect Claude Code
-      const errMsg = String(error).toLowerCase();
-      const isCredError =
-        errMsg.includes("no credentials") ||
-        errMsg.includes("credentials.json") ||
-        errMsg.includes("reconnect") ||
-        errMsg.includes("not logged in") ||
-        errMsg.includes("authentication") ||
-        errMsg.includes("oauth token") ||
-        errMsg.includes("expired");
+      const raw = String(error);
+      // PRECISE auth classification. Generic substrings like "authentication"/"expired"
+      // match countless non-auth failures (a provider hiccup, TLS "certificate expired",
+      // npm token text, a stall, app code) — mislabeling those as "your key was rejected"
+      // sends the user to fix a key that demonstrably works in chat. Only flag a real
+      // provider rejection (HTTP 401/403, invalid/expired API key, no quota).
+      const apiKeyRejected =
+        /\b(401|403)\b|unauthorized|invalid[\s_-]*api[\s_-]*key|invalid_api_key|invalid[\s_-]*authentication|authentication[\s_-]*(error|failed)|invalid[\s_-]*token|expired[\s_-]*(api[\s_-]*key|token|credential)|insufficient[\s_-]*(balance|credit|quota)|permission[\s_-]*denied/i.test(
+          raw,
+        );
+      // OAuth (Claude Code) session problems — distinct from an API-key rejection.
+      const oauthProblem = /no credentials|credentials\.json|not logged in|reconnect|oauth token|session (expired|invalid)/i.test(raw);
+      const isCredError = apiKeyRejected || oauthProblem;
 
-      // Only flip the OAuth "connected" flag for OAuth-mode credential failures.
-      // In API-key / agent mode, a credential error means a bad/expired LLM key.
-      if (isCredError && buildAuthMode !== "apiKey" && buildAuthMode !== "agent") {
+      // Only flip the OAuth "connected" flag for an actual OAuth-mode session failure.
+      if (oauthProblem && buildAuthMode !== "apiKey" && buildAuthMode !== "agent") {
         await markClaudeDisconnected(app.userId).catch(() => {});
       }
 
@@ -1686,11 +2182,32 @@ Then wait 3 seconds and verify with: curl -s http://localhost:8080/ || true`;
           status: "error",
           metadata: {
             ...((app.metadata as Record<string, unknown> | null) ?? {}),
-            error: String(error),
+            error: raw,
           },
           updatedAt: new Date(),
         })
         .where(eq(instantApps.id, app.id));
+
+      // Trimmed real error so a non-auth failure is diagnosable instead of hidden behind
+      // a wrong "key rejected" message.
+      const detail = raw.replace(/^Error:\s*/i, "").slice(0, 300);
+      // A NETWORK failure reaching the model API (0 tokens, "Connection error") is the
+      // sandbox's egress dying — not auth, not the model. The VM's next reuse is health-
+      // checked for egress and replaced if dead, so a plain retry usually lands a good VM.
+      const networkError = /connection error|econnreset|econnrefused|etimedout|socket hang up|network|getaddrinfo|dns/i.test(raw)
+        && !apiKeyRejected;
+      let message: string;
+      if (apiKeyRejected && buildAuthMode === "apiKey") {
+        message = `Your Anthropic API key was rejected by the provider. Check it in Settings → LLM Keys, or connect Claude Code. (${detail})`;
+      } else if (apiKeyRejected && buildAuthMode === "agent") {
+        message = `The build's LLM call was rejected by the provider (DeepSeek/Kimi). This is the in-sandbox build path, not chat — check the key/credits in Settings → LLM Keys, or connect Claude Code. (${detail})`;
+      } else if (oauthProblem) {
+        message = "Claude Code isn't connected (or the session expired). Reconnect it in Settings to build apps.";
+      } else if (networkError) {
+        message = `The sandbox couldn't reach the model API — a network error inside the VM (not your key or the model). This VM's egress is flaky. Say "retry" to rebuild on a health-checked (and if needed, fresh) VM. (${detail})`;
+      } else {
+        message = `Error building ${app.name}: ${detail}`;
+      }
 
       await broadcastInstantStatus({
         userId: app.userId,
@@ -1698,13 +2215,7 @@ Then wait 3 seconds and verify with: curl -s http://localhost:8080/ || true`;
         appId: app.appId,
         appName: app.name,
         status: "error",
-        message: isCredError
-          ? buildAuthMode === "apiKey"
-            ? "Your Anthropic API key was rejected. Check it in Settings → LLM Keys, or connect Claude Code."
-            : buildAuthMode === "agent"
-              ? "Your LLM key (DeepSeek/Kimi) was rejected. Check it in Settings → LLM Keys, or connect Claude Code."
-              : "Claude Code is not connected. Please connect it in Settings to build apps."
-          : `Error building ${app.name}: ${String(error)}`,
+        message,
         errorType: isCredError ? "no_credentials" : undefined,
       });
     }
@@ -1715,6 +2226,7 @@ Then wait 3 seconds and verify with: curl -s http://localhost:8080/ || true`;
       await saveCredentialsFromVm(buildWorkspaceId, buildUserId).catch(() => {});
     }
     activeBuilds.delete(appId);
+    cancelledBuilds.delete(appId);
   }
 }
 
@@ -1722,6 +2234,7 @@ const STACK_LABEL: Record<string, string> = {
   webapp: "Next.js + shadcn/ui + SQLite",
   landing: "Next.js + framer-motion",
   game: "Vite + three.js",
+  python: "Python (Flask) + HTML + SQLite",
 };
 
 export interface ProposePlanInput {
@@ -1815,7 +2328,7 @@ export async function proposePlan(input: ProposePlanInput) {
     stack: STACK_LABEL[projectType] ?? "",
     change_log: changeLog,
   };
-  broadcastToUser(input.userId, {
+  broadcastInstant(input.userId, input.conversationId, {
     type: "ai_chunk",
     chunk: "",
     is_final: false,
@@ -1870,9 +2383,22 @@ export async function proposeInstantDesign(input: ProposeDesignInput) {
   const existingMeta = (existing?.metadata as Record<string, unknown> | null) ?? {};
   const effectiveChoices = resolveEffectiveDesignChoices(existingMeta, input.designChoices, input.designChange ?? false);
   // brightness (a hard light/dark preference) is honored by selectPalette inside compose.
+  // The model SHOULD pass `brightness`, but non-Anthropic models often omit it — so when
+  // it's absent, infer light/dark from the requirements + the approved plan (summary +
+  // sections, e.g. a "Clean Light Dashboard" section). Without this, an omitted flag lets
+  // a dark `palette_id` hint win even though the user explicitly asked for a light UI.
+  const priorPlan = existingMeta.proposal as InstantProposal | undefined;
+  const brightnessSignal = [
+    input.requirements,
+    input.summary ?? priorPlan?.summary,
+    ...(input.sections ?? priorPlan?.sections ?? []).map((s) => `${s.title} ${s.description}`),
+  ]
+    .filter(Boolean)
+    .join(" \n ");
+  const effectiveBrightness = input.brightness ?? inferBrightness(brightnessSignal);
   const tokens = composeDesignTokens(input.requirements, normalizedName, {
     ...(effectiveChoices ?? {}),
-    brightness: input.brightness,
+    brightness: effectiveBrightness,
   });
   // Persist the ACTUALLY-SELECTED design (resolved from the composed tokens) — not the
   // model's raw pick, which selectPalette may have overridden to honor brightness. This
@@ -1961,7 +2487,7 @@ export async function proposeInstantDesign(input: ProposeDesignInput) {
     style: tokens.meta.styleProfileName,
   };
 
-  broadcastToUser(input.userId, {
+  broadcastInstant(input.userId, input.conversationId, {
     type: "ai_chunk",
     chunk: "",
     is_final: false,
@@ -2184,12 +2710,18 @@ export async function getInstantAppStatus(params: {
   // it's allowed to re-probe.)
   const buildInFlight = status === "building" && !params.restartServer;
   if (buildInFlight) {
+    // Truthful liveness so the orchestrator stops guessing: a heavy install/compile is
+    // SLOW, not stalled — blindly rebuilding just re-runs the slow step and can loop.
+    const act = await probeBuildActivity(sandbox.magsWorkspaceId).catch(() => ({ busy: false, proc: "", recentWrite: false }));
+    const detail = act.busy
+      ? `It is ACTIVELY building${act.proc ? ` (running \`${act.proc.split(/\s+/)[0]?.split("/").pop() ?? "build"}\`)` : (act.recentWrite ? " (files changing on disk)" : "")} — heavy dependencies can take several minutes. Do NOT rebuild; it is progressing. Just tell the user it's still working.`
+      : `No build activity is visible on the sandbox right now — it may be between steps, or genuinely stalled. Do NOT rebuild on a single check; if it's still idle after another check ~1 min later, it's likely stalled and worth retrying.`;
     return {
       appId: app.appId,
       appName: app.name,
       status,
       previewUrl: "",
-      message: `${app.name} is still building — not live yet. Do not tell the user it's ready; wait for the build to finish.`,
+      message: `${app.name} is still building — not live yet. Do not tell the user it's ready. ${detail}`,
     };
   }
 
@@ -2292,7 +2824,8 @@ export async function getInstantAppForConversation(userId: string, conversationI
 export async function askInstantSandboxQuestion(params: {
   userId: string;
   conversationId: string;
-  question: string;
+  /** A read-only shell command to run in the project dir (e.g. `cat parser_engine.py`). */
+  command: string;
 }) {
   const [row] = await db
     .select({ app: instantApps, sandbox: sandboxes })
@@ -2317,10 +2850,25 @@ export async function askInstantSandboxQuestion(params: {
     return { answer: "Sandbox VM is not currently running. The app needs to be rebuilt before sandbox inspection is available." };
   }
 
-  // Lightweight sandbox introspection fallback.
-  const cmd = `cd /data/project && (ls -la && echo "\\nQuestion: ${params.question.replace(/"/g, '\\"')}" )`;
-  const result = await execOnWorkspace(row.sandbox.magsWorkspaceId, cmd, { timeout: 30_000 });
-  return { answer: result.output.slice(0, 4000) };
+  // Actually RUN the requested inspection command in the project dir (previously this
+  // ignored the input and only ran `ls -la`, so the agent could never read a file). The
+  // command is base64-wrapped to avoid any quoting/escaping issues.
+  const command = (params.command || "").trim() || "ls -la";
+  const script = `cd ${CLAUDE_PROJECT_DIR} 2>/dev/null || cd /data/project; ${command}`;
+  const b64 = Buffer.from(script).toString("base64");
+  const result = await execOnWorkspace(
+    row.sandbox.magsWorkspaceId,
+    `echo ${b64} | base64 -d | bash`,
+    { timeout: 30_000 },
+  ).catch((e) => ({ output: "", stderr: `exec failed: ${(e as Error).message?.slice(0, 200)}`, exitCode: -1 }));
+
+  const stdout = (result.output ?? "").trim();
+  const stderr = (result.stderr ?? "").trim();
+  // Prefer stdout (the file contents / listing). Surface stderr only when there's no
+  // stdout (e.g. `cat` on a missing path) so the agent sees the real error, not silence.
+  const body = stdout || stderr || "(command produced no output)";
+  const answer = `$ ${command}\n${body}`.slice(0, 12000);
+  return { answer };
 }
 
 // ── Swap Theme ──────────────────────────────────────────────────────
@@ -2565,10 +3113,26 @@ export async function getInstantAppArchive(params: {
   if (!row.sandbox?.magsWorkspaceId) return { success: false, message: "No workspace available." };
 
   try {
-    // Create tarball excluding node_modules and .next
+    // The project lives at /data/project (NOT /root/project — that path doesn't exist,
+    // which is why downloads produced an empty/failed archive). Exclude heavy/generated
+    // dirs across stacks (node_modules/.next for Next, .venv/__pycache__/*.pyc for Python,
+    // .git) so the archive is SOURCE-ONLY and small enough to return inline.
     const tarCmd =
-      `cd /root && tar czf /tmp/app-export.tar.gz --exclude='node_modules' --exclude='.next' --exclude='.git' project/`;
-    await execOnWorkspace(row.sandbox.magsWorkspaceId, tarCmd, { timeout: 60_000 });
+      `cd /data && tar czf /tmp/app-export.tar.gz ` +
+      `--exclude='node_modules' --exclude='.next' --exclude='.git' ` +
+      `--exclude='.venv' --exclude='__pycache__' --exclude='*.pyc' --exclude='dev.log' ` +
+      `project/ && wc -c < /tmp/app-export.tar.gz`;
+    const tarRes = await execOnWorkspace(row.sandbox.magsWorkspaceId, tarCmd, { timeout: 60_000 });
+    const size = parseInt((tarRes.output || "").trim().split(/\s+/).pop() || "0", 10);
+    if (!size) {
+      return { success: false, message: "Nothing to archive — the project directory is empty or missing on the sandbox." };
+    }
+    // The exec API caps output (~4MB) and base64 inflates ~33%, so bail above ~3MB and
+    // point the user at the GitHub export (which streams the full repo) instead of
+    // returning a silently-truncated, corrupt tarball.
+    if (size > 3_000_000) {
+      return { success: false, message: `The code archive is ${(size / 1e6).toFixed(1)}MB — too large to download inline. Use "Open GitHub repo" (or export to GitHub) to get the full code.` };
+    }
 
     // Read the tarball as base64
     const b64Result = await execOnWorkspace(
@@ -2578,7 +3142,7 @@ export async function getInstantAppArchive(params: {
     );
 
     const data = Buffer.from(b64Result.output.trim(), "base64");
-    const filename = `${row.app.name || "instant-app"}.tar.gz`;
+    const filename = `${(row.app.name || "instant-app").replace(/[^a-zA-Z0-9._-]/g, "-")}.tar.gz`;
 
     return { success: true, data, filename, message: "Archive ready." };
   } catch (err) {

@@ -31,7 +31,7 @@ export function createInstantTools(ctx: InstantToolContext) {
         z.object({
           name: z.string().describe("Short app name in kebab-case"),
           requirements: z.string().describe("Detailed requirements doc with features/data/pages/UI"),
-          project_type: z.enum(["webapp", "landing", "game"]).optional(),
+          project_type: z.enum(["webapp", "landing", "game", "python"]).optional(),
           summary: z.string().describe("Two or three sentences: the product + its architecture/stack"),
           sections: z
             .array(z.object({ title: z.string(), description: z.string() }))
@@ -69,7 +69,7 @@ export function createInstantTools(ctx: InstantToolContext) {
         z.object({
           name: z.string().describe("Short app name in kebab-case"),
           requirements: z.string().describe("Detailed requirements doc with features/data/pages/UI"),
-          project_type: z.enum(["webapp", "landing", "game"]).optional(),
+          project_type: z.enum(["webapp", "landing", "game", "python"]).optional(),
           brightness: z
             .enum(["light", "dark"])
             .optional()
@@ -119,10 +119,10 @@ export function createInstantTools(ctx: InstantToolContext) {
           name: z.string().describe("Short app name in kebab-case"),
           requirements: z.string().describe("Detailed requirements doc with features/data/pages/UI"),
           project_type: z
-            .enum(["webapp", "landing", "game"])
+            .enum(["webapp", "landing", "game", "python"])
             .optional()
             .describe(
-              "The kind of project, which selects the build stack: 'webapp' (default) for full-stack apps/dashboards/tools (Next.js + shadcn + SQLite); 'landing' for marketing/landing pages (Next.js + framer-motion, design-heavy); 'game' for browser games (Vite + three.js). Choose based on what the user is building."
+              "The kind of project, which selects the build stack (ONE stack only — the VM exposes a single url/port, so never mix stacks): 'webapp' (default) for full-stack apps/dashboards/tools (Next.js + shadcn + SQLite); 'landing' for marketing/landing pages (Next.js + framer-motion); 'game' for browser games (Vite + three.js); 'python' when the core work needs the Python ecosystem (Docling/PDF parsing, pandas/ML, scraping, or an explicit Python/Flask/FastAPI/Django request) — a single Flask app that server-renders HTML with stdlib sqlite3 (NO Next.js frontend alongside it). Choose based on what the user is building."
             ),
           env_vars: z.record(z.string(), z.string()).optional(),
           palette_id: z.string().optional().describe("Design palette ID. Options: midnight-indigo (dark/tech/professional), forest-emerald (natural/health/calm), sunset-amber (warm/energetic/creative), ocean-cyan (fresh/trustworthy/clean), rose-blush (elegant/feminine/luxury), slate-minimal (clean/professional/neutral), violet-dream (creative/vibrant/playful), sand-earth (warm/rustic/organic), neon-dark (bold/futuristic/gaming), coral-light (friendly/warm/approachable)"),
@@ -168,7 +168,7 @@ export function createInstantTools(ctx: InstantToolContext) {
 
     retry_build: tool({
       description:
-        "Retry/rebuild the existing app for this conversation using its ALREADY-SAVED requirements and design. Use this whenever a build fails, the sandbox is in a bad state, or the user says 'retry' / 'continue' / 'try again'. The full plan is persisted server-side — do NOT re-ask the user what to build or re-describe the app. Takes no arguments.",
+        "Retry/resume the existing app's BUILD from its ALREADY-SAVED requirements and design. Use ONLY when the BUILD failed — the app is in an ERROR state or the sandbox is dead — or the user says 'retry the build' / 'try again'. Takes no arguments; the plan is persisted server-side so do NOT re-ask what to build. Resume is automatic (reuses the sandbox, skips completed setup steps). NEVER call this to fix a GitHub push/export failure (use export_to_github) and NEVER call it when the app is already LIVE/RUNNING — a rebuild there just discards a working app. Don't call it because a build is 'taking a while': first call get_instant_app_status — if it's ACTIVELY building, leave it alone; only retry when it errored or shows NO activity across two checks ~1 min apart.",
       inputSchema: zodSchema(z.object({})),
       execute: async () => {
         const result = await retryInstantBuild({
@@ -177,7 +177,7 @@ export function createInstantTools(ctx: InstantToolContext) {
           modelKey: ctx.modelKey,
         });
         return result.started
-          ? { message_to_agent: `Rebuilding ${result.appName} from its saved requirements${result.reason ? ` (${result.reason})` : ""}. Tell the user it's retrying — do NOT ask them to re-describe the app.` }
+          ? { message_to_agent: `Resuming ${result.appName} from its saved plan (completed setup steps are skipped, so slow installs aren't repeated)${result.reason ? ` — ${result.reason}` : ""}. Tell the user it's retrying — do NOT ask them to re-describe the app.` }
           : { message_to_agent: result.reason ?? "Could not retry." };
       },
     }),
@@ -253,17 +253,19 @@ export function createInstantTools(ctx: InstantToolContext) {
 
     ask_sandbox: tool({
       description:
-        "Ask a question about the current sandbox environment for debugging or project inspection.",
+        "Inspect the running app's sandbox by executing a READ-ONLY shell command in the project dir (/data/project) and getting its real output. Use this to actually READ files and verify what the built code does — do NOT guess. Examples: `cat parser_engine.py`, `grep -rn docling .`, `ls -la`, `tail -80 dev.log`, `.venv/bin/pip show docling`, `sed -n '1,120p' app.py`. Returns stdout (or the error if the command fails). Read-only: do not modify or delete files.",
       inputSchema: zodSchema(
         z.object({
-          question: z.string(),
+          command: z
+            .string()
+            .describe("A read-only shell command to run in /data/project, e.g. \"cat parser_engine.py\" or \"grep -rn 'docling' .\". To read a specific file, cat/sed it."),
         })
       ),
-      execute: async ({ question }) => {
+      execute: async ({ command }) => {
         const result = await askInstantSandboxQuestion({
           userId: ctx.userId,
           conversationId: ctx.conversationId,
-          question,
+          command,
         });
         return {
           message_to_agent: result.answer,
@@ -273,7 +275,7 @@ export function createInstantTools(ctx: InstantToolContext) {
 
     export_to_github: tool({
       description:
-        "Export the instant app's code to a GitHub repository. Use when the user wants to save their code to GitHub. Requires GitHub to be connected in Settings.",
+        "Push/export the instant app's code to its GitHub repository. Use whenever the user says push, commit, export to GitHub, save the code, or sync — this is the ONLY tool for that; do NOT smoke-test, run QA, or rebuild. Requires GitHub connected in Settings. If it fails or times out (e.g. HTTP 524 gateway timeout), the app is still fine — just call export_to_github again to retry the push. NEVER call retry_build for a push failure.",
       inputSchema: zodSchema(
         z.object({
           app_id: z.string().describe("The public app_id of the instant app to export"),

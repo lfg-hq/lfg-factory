@@ -44,6 +44,7 @@ function renderDesignPanel(d: NonNullable<InstantAppSummary["design"]>): string 
     webapp: "Next.js + shadcn/ui + SQLite",
     landing: "Next.js + framer-motion",
     game: "Vite + three.js",
+    python: "Python (Flask) + HTML + SQLite",
   };
   const stack = d.projectType ? stackLabel[d.projectType] ?? d.projectType : "";
   // A dropdown switches between the Plan and Design views (kept on separate screens).
@@ -106,6 +107,7 @@ export function InstantPage({
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" type="image/x-icon" href="/public/images/favicon.ico" />
   <title>Instant Mode${projectName ? ` - ${projectName}` : ""} - LFG</title>
   <script>(function(){if(localStorage.getItem('sidebarMinimized')==='true'){document.documentElement.classList.add('sidebar-minimized-preload');}})()</script>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
@@ -402,6 +404,9 @@ export function InstantPage({
             </div>
             <p id="building-message" class="building-command-text">Provisioning workspace...</p>
             <p class="snake-hint">Click the board to play with arrow keys</p>
+            <button id="stop-build-btn" class="stop-build-btn" type="button" style="display:none;">
+              <i class="fas fa-stop"></i> Stop build
+            </button>
           </div>
 
           <iframe

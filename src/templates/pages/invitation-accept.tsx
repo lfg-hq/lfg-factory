@@ -33,6 +33,7 @@ export function InvitationAcceptPage({
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" type="image/x-icon" href="/public/images/favicon.ico" />
   <title>Accept Invitation — LFG</title>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />

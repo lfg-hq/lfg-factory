@@ -14,7 +14,7 @@
  *  4. Poll the JSONL output file with byte offset + alive check until the exit marker.
  */
 
-import { execOnWorkspace } from "./mags.ts";
+import { execOnWorkspace, findJob } from "./mags.ts";
 
 async function execLite(workspaceId: string, script: string, timeout = 15_000) {
   const b64 = Buffer.from(script).toString("base64");
@@ -23,7 +23,7 @@ async function execLite(workspaceId: string, script: string, timeout = 15_000) {
 
 // Project lives on the big /data volume (7.8GB), not /root (1.9GB) — avoids ENOSPC.
 const WORKING_DIR = "/data";
-const POLL_INTERVAL_MS = 5_000;
+const POLL_INTERVAL_MS = parseInt(process.env.INSTANT_PI_POLL_MS || "10000", 10);
 
 /** A full model entry for a Pi custom (OpenAI-compatible) provider's models.json. */
 interface PiModelDef {
@@ -70,10 +70,15 @@ const DEEPSEEK_MODELS: PiModelDef[] = [
   },
 ];
 
+// NOTE: `id` MUST match the registry's provider_model for the Kimi model key in
+// src/config/llm-models.json (currently "kimi-k3"). Pi is launched with
+// `--model <provider_model>`, and that id must exist in this custom provider's
+// models.json — otherwise Pi can't resolve the model and the run fails (surfacing
+// as a misleading "LLM key rejected"). Keep these in sync when bumping the model.
 const KIMI_MODELS: PiModelDef[] = [
   {
-    id: "kimi-k2.5",
-    name: "Kimi K2.5",
+    id: "kimi-k3",
+    name: "Kimi K3",
     contextWindow: 256000,
     maxTokens: 32000,
     input: ["text"],
@@ -150,6 +155,41 @@ export function isPiSupportedProvider(provider: string): boolean {
   return provider in PI_PROVIDERS;
 }
 
+// Stack-agnostic set of "the build is genuinely working" subprocesses: package
+// installers, compilers, and build tools across ecosystems. If any of these is alive,
+// a long-running step (npm ci, pip install, cargo build, native compile…) is PROGRESS,
+// not a stall — no matter which stack. Kept free of regex backslashes on purpose so it
+// embeds cleanly in the shell status script. (grep -Ei, so case-insensitive.)
+const BUILD_PROC_RE =
+  "pip|uv |poetry|conda|npm|yarn|pnpm|node-gyp|cargo|rustc|go build|go install|gcc|cc1|clang|make|cmake|ninja|maturin|bundle install|gem install|apk|apt|dpkg|next build|create-next-app|shadcn|prisma|setup.py|python -m pip";
+
+/**
+ * Point-in-time liveness probe for an in-flight build — used to tell "slow but working"
+ * from "genuinely stalled" without any stack-specific knowledge. `busy` is true when a
+ * build subprocess is running OR the project changed on disk in the last few minutes.
+ * Stack-agnostic; cheap; safe on a dead VM (resolves to not-busy).
+ */
+export async function probeBuildActivity(
+  workspaceId: string,
+  projectDir = "/data/project",
+): Promise<{ busy: boolean; proc: string; recentWrite: boolean }> {
+  const script = `PROC=$(for c in /proc/[0-9]*/cmdline; do tr '\\0' ' ' < "$c" 2>/dev/null; echo; done | grep -Ei '${BUILD_PROC_RE}' | grep -viE 'grep| pi | /pi | tee | node .*forward' | head -1 | cut -c1-60)
+RW=$(find ${projectDir} -type f -mmin -3 2>/dev/null | head -1)
+printf 'PROC=%s\\n' "$PROC"
+printf 'RW=%s\\n' "$RW"`;
+  const out = await execLite(workspaceId, script).then((r) => r.output || "").catch(() => "");
+  const proc = (out.match(/PROC=(.*)/)?.[1] ?? "").trim();
+  const recentWrite = /RW=\S/.test(out);
+  return { busy: proc.length > 0 || recentWrite, proc, recentWrite };
+}
+
+/** Compact elapsed-time label, e.g. "45s" or "2m 05s". */
+function fmtElapsed(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  const m = Math.floor(s / 60);
+  return m > 0 ? `${m}m ${String(s % 60).padStart(2, "0")}s` : `${s}s`;
+}
+
 function sleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
@@ -162,11 +202,17 @@ export async function startPiCli(opts: PiRunOptions): Promise<PiRunResult> {
   if (!cfg) throw new Error(`Pi runner: unsupported provider '${opts.provider}'`);
 
   const ts = Date.now();
-  const outputFile = opts.outputFile ?? `/tmp/pi_output_${ts}.jsonl`;
-  const promptFile = `/tmp/pi_prompt_${ts}.txt`;
-  const envFile = `/tmp/pi_env_${ts}.sh`;
-  const runnerScript = `/tmp/pi_runner_${ts}.sh`;
-  const forwarderFile = `/tmp/pi_forward_${ts}.js`;
+  // Pi's working files live on the big /data disk, NOT /tmp. On these VMs /tmp is a
+  // RAM-backed tmpfs (~2GB) — after many builds it fills with leftover pi_* files, and
+  // then Pi's `> /tmp/pi_output` write SILENTLY FAILS (no space), leaving an empty output
+  // and a runner that never starts → "Pi produced no files (no tool calls)" forever.
+  // /data is a real 8GB disk that we also clean per build.
+  const PI_DIR = "/data/.pi";
+  const outputFile = opts.outputFile ?? `${PI_DIR}/pi_output_${ts}.jsonl`;
+  const promptFile = `${PI_DIR}/pi_prompt_${ts}.txt`;
+  const envFile = `${PI_DIR}/pi_env_${ts}.sh`;
+  const runnerScript = `${PI_DIR}/pi_runner_${ts}.sh`;
+  const forwarderFile = `${PI_DIR}/pi_forward_${ts}.js`;
   const projectDirName = opts.projectDir.replace(/^\/(root|data)\//, "").replace(/^\//, "");
 
   // Env file: provider key + app env vars + (when forwarding) the LFG callback coords.
@@ -260,13 +306,32 @@ process.stdin.on('end',async()=>{ clearInterval(timer); if(buf.trim()) batch.pus
   // Native providers (openai, google, anthropic) need none.
   let modelsJsonInject = "";
   if (cfg.custom) {
+    // Pi resolves `--model <opts.modelId>` against THIS list. If the registry's
+    // provider_model has moved ahead of the hardcoded defs (e.g. kimi-k2.5 → kimi-k3),
+    // synthesize a matching entry (cloning a known def's shape) so Pi can still resolve
+    // the model instead of failing with a misleading auth error. Self-healing across
+    // model bumps; the hardcoded list stays the source of per-model tuning.
+    const models = cfg.custom.models.some((m) => m.id === opts.modelId)
+      ? cfg.custom.models
+      : [
+          { ...(cfg.custom.models[0] as PiModelDef), id: opts.modelId, name: opts.modelId },
+          ...cfg.custom.models,
+        ];
+    if (models !== cfg.custom.models) {
+      console.warn(`[pi-cli] model '${opts.modelId}' not in ${cfg.piName} models.json — injecting a synthesized entry (update KIMI_MODELS/DEEPSEEK_MODELS/GLM_MODELS to match the registry)`);
+    }
     const modelsJson = {
       providers: {
         [cfg.piName]: {
           baseUrl: cfg.custom.baseUrl,
           api: cfg.custom.api,
-          apiKey: `$${cfg.envVar}`,
-          models: cfg.custom.models,
+          // Embed the REAL key, not a "$MOONSHOT_API_KEY" placeholder. Pi does NOT expand
+          // env-var references inside models.json, so the placeholder was sent verbatim as
+          // the bearer token → "401 Invalid Authentication" even though the exact same key
+          // works in chat. models.json lives at /root/.pi/agent on a single-tenant VM and
+          // the key is already written to the env file, so embedding it is no less safe.
+          apiKey: opts.apiKey,
+          models,
         },
       },
     };
@@ -286,9 +351,20 @@ echo '${modelsB64}' | base64 -d > /root/.pi/agent/models.json`;
 
   // Runner script — runs as root inside the VM.
   // pi installs into a global prefix on the big /data disk (root is only 1.9GB).
-  const piInstallLog = `/tmp/pi_install_${ts}.log`;
+  const piInstallLog = `${PI_DIR}/pi_install_${ts}.log`;
+  // Hard cap for Pi's V8 heap. A Python build runs memory-heavy subprocesses
+  // (torch/docling load 2-3GB of models) ALONGSIDE node — if node's heap is sized
+  // to the full RAM (8GB → 7GB), node RSS + the subprocess blow past the cgroup →
+  // kernel OOM-kill (exit 137). Capping node leaves headroom for those subprocesses;
+  // 4GB still fits a long Flash context (~2.8GB). Doesn't regress node-only 4GB
+  // builds (4096-1024=3072, already under the cap).
+  const heapMaxMb = parseInt(process.env.INSTANT_PI_HEAP_MAX_MB || "4096", 10);
   const runnerContent = `#!/bin/bash
 export HOME=/root
+# Write an immediate start marker so an EARLY death (killed during env/node/pi setup,
+# before the diagnostics below) still leaves evidence instead of an empty output file.
+echo "[pi-runner] START model=${cfg.piName}/${opts.modelId} $(date -u +%H:%M:%S)" >> ${outputFile}
+free -m 2>/dev/null | head -2 >> ${outputFile} || true
 # The "pi" rootfs ships node 22 + pi PREINSTALLED, but on the LOGIN/interactive PATH
 # (nvm / ~/.bashrc / profile.d) which a non-login exec shell does NOT inherit — so a
 # hardcoded PATH resolves \`node\` to an OLD system node ("too old") and can't find
@@ -313,7 +389,20 @@ mkdir -p /data/.npm-global /data/.npm-cache
 export PATH=/data/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:\$PATH
 export npm_config_cache=/data/.npm-cache
 export NPM_CONFIG_CACHE=/data/.npm-cache
-export NODE_OPTIONS="--max-old-space-size=1536"
+# Size Pi's V8 heap to the VM's ACTUAL RAM (leave ~1GB for the OS), not a fixed 1.5GB.
+# A long build (many tool calls) accumulates a large in-memory context and OOMs a small
+# heap ("Reached heap limit … JavaScript heap out of memory", exit 134). Self-tuning so a
+# bigger box (e.g. the 8GB python VM) automatically gets a bigger heap.
+PI_MEM_MB=$(free -m 2>/dev/null | awk '/^Mem:/{print $2}')
+PI_HEAP=$(( \${PI_MEM_MB:-4096} - 1024 ))
+# HARD CAP so node leaves RAM for memory-heavy build subprocesses (torch/docling
+# load 2-3GB of models). Without this, node balloons to ~7GB on the 8GB box and a
+# concurrent docling import tips total RSS past the cgroup → kernel OOM (exit 137).
+PI_HEAP_MAX=${heapMaxMb}
+[ "\$PI_HEAP" -gt "\$PI_HEAP_MAX" ] && PI_HEAP=\$PI_HEAP_MAX
+[ "\$PI_HEAP" -lt 1536 ] && PI_HEAP=1536
+export NODE_OPTIONS="--max-old-space-size=\$PI_HEAP"
+echo "[pi-runner] node heap cap = \${PI_HEAP}MB (RAM \${PI_MEM_MB:-?}MB, max \${PI_HEAP_MAX}MB)" >> ${outputFile}
 source ${envFile}
 # RE-ASSERT the toolchain PATH AFTER sourcing envFile — sourcing it can (and did)
 # overwrite PATH with a persisted value that lacks /usr/bin, hiding node 22 + pi.
@@ -355,8 +444,8 @@ ensure_node() {
     fi
     echo "[pi-runner] fetching \$NURL" >> ${outputFile}
     mkdir -p "\$NODE_DIR"
-    curl -fsSL --retry 3 --retry-delay 2 "\$NURL" -o /tmp/node22.tar.gz \\
-      && tar -xzf /tmp/node22.tar.gz -C "\$NODE_DIR" --strip-components=1
+    curl -fsSL --retry 3 --retry-delay 2 "\$NURL" -o /data/node22.tar.gz \\
+      && tar -xzf /data/node22.tar.gz -C "\$NODE_DIR" --strip-components=1
   fi
   if "\$NODE_DIR/bin/node" -v >/dev/null 2>&1; then
     export PATH="\$NODE_DIR/bin:\$PATH"
@@ -400,9 +489,9 @@ fi
 # server console, so every build records exactly what node/pi it ran on.
 echo "___PI_VERSIONS node=\$(node -v 2>/dev/null) pi=\$(pi --version 2>/dev/null)" >> ${outputFile}
 
-# The provider key is exported in this shell (via the sourced env file), so the
-# "\$${cfg.envVar}" reference in models.json resolves at runtime. --mode json streams
-# events; matches the documented activation:
+# The provider key is embedded directly in models.json (Pi does not expand env-var
+# references there), and ${cfg.envVar} is also exported here for any code that reads it.
+# --mode json streams events; matches the documented activation:
 #   pi -p --provider deepseek --model deepseek-v4-pro "<prompt>"
 # Append (>>), not truncate (>), so the confirmation line above is preserved.
 ${piLaunch}
@@ -419,6 +508,12 @@ echo "___PI_EXIT_CODE=\$PI_EXIT" >> ${outputFile}
 
   const startCmd = `export HOME=/root
 export PATH=/root/node/current/bin:/root/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:\$PATH
+# Pi's dir on the real disk; make it + drop OUR old files here (older than 30 min) so it
+# never accumulates. Also purge leftover pi_* from /tmp (a RAM tmpfs) to reclaim the RAM
+# a prior version leaked there — that full tmpfs is what silently ate Pi's output writes.
+mkdir -p ${PI_DIR}
+find ${PI_DIR} -maxdepth 1 -name 'pi_*' -mmin +30 -delete 2>/dev/null || true
+rm -f /tmp/pi_* /tmp/node22.tar.gz 2>/dev/null || true
 echo '${promptB64}' | base64 -d > ${promptFile}
 echo '${envB64}' | base64 -d > ${envFile}
 ${modelsJsonInject}
@@ -661,11 +756,19 @@ export async function streamPiToCompletion(params: {
   backgroundPid?: string;
   timeoutMs: number;
   onProgress?: (message: string) => void;
+  /** Polled each cycle; when it returns true the run is torn down (in-VM agent killed)
+   *  and streaming stops promptly so the caller can mark the build stopped. */
+  shouldCancel?: () => boolean;
   /** Max chars of a command/text surfaced per progress line. Default 90 (compact
    *  UI); pass a large value to log the FULL command (e.g. dev-preview). */
   progressMaxLen?: number;
-}): Promise<{ exitCode: number | null; fatalError: string | null; didWork: boolean; toolCalls: number; tail: string }> {
-  const { workspaceId, outputFile, backgroundPid, timeoutMs, onProgress, progressMaxLen = 90 } = params;
+  /** Runaway guard: abort once this many tool-call EVENTS (tool_use+tool_result+toolName)
+   *  accumulate. A weak model with no step limit can loop for 40+ min / 180+ calls until
+   *  it OOMs. 0 disables. */
+  maxToolCalls?: number;
+}): Promise<{ exitCode: number | null; fatalError: string | null; didWork: boolean; toolCalls: number; tail: string; resumable: boolean; oomKilled: boolean }> {
+  const { workspaceId, outputFile, backgroundPid, timeoutMs, onProgress, shouldCancel, progressMaxLen = 90 } = params;
+  const maxTC = params.maxToolCalls ?? parseInt(process.env.INSTANT_PI_MAX_TOOLCALLS || "300", 10);
   const f = JSON.stringify(outputFile);
   // Install log shares the timestamp suffix (set in startPiCli) — derive it so the
   // final analysis can surface it if Pi produced nothing.
@@ -673,7 +776,18 @@ export async function streamPiToCompletion(params: {
   const aliveCheck = backgroundPid ? `kill -0 ${backgroundPid} 2>/dev/null && echo yes || echo no` : `echo unknown`;
 
   let consecutiveErrors = 0;
+  // Losing the ability to POLL the VM (transient Mags/exec timeouts) is NOT the build
+  // failing. A build that has been alive and working for minutes must survive a flaky
+  // control-plane. We verify the VM is actually alive before giving up, and only abort
+  // if it's genuinely dead OR we've been unable to reach a LIVE VM for this long.
+  const BLIND_LIMIT_MS = 5 * 60_000;
+  let blindSince = 0;
   let lastProgressAt = 0;
+  let lastEmittedProgress: string | null = null;
+  // When a SINGLE activity line persists (e.g. a multi-minute `pip install docling`),
+  // re-emit it with an elapsed-time suffix on this cadence so the UI keeps showing
+  // liveness instead of freezing on the same message.
+  const HEARTBEAT_MS = 20_000;
   let polls = 0;
   let loggedVersions = false;
   // Stall guard: if the SAME progress line persists this many polls with nothing
@@ -685,34 +799,94 @@ export async function streamPiToCompletion(params: {
   let lastStallSig: string | null = null;
   let stallCount = 0;
   let stalled = false;
+  let runaway = false; // exceeded the tool-call budget (stuck in a loop, not converging)
   const startedAt = Date.now();
   const deadline = startedAt + timeoutMs;
 
   while (Date.now() < deadline) {
     await sleep(POLL_INTERVAL_MS);
+
+    // User asked to stop the build → kill the in-VM Pi process (and any child it
+    // spawned, e.g. a long pip install) and stop streaming. Best-effort; the caller
+    // marks the app "stopped" regardless.
+    if (shouldCancel?.()) {
+      console.log(`[pi-cli] cancel requested — killing Pi in workspace ${workspaceId}`);
+      if (backgroundPid) {
+        await execLite(workspaceId, `pkill -9 -P ${backgroundPid} 2>/dev/null; kill -9 ${backgroundPid} 2>/dev/null; pkill -9 -f 'pip install' 2>/dev/null; true`).catch(() => {});
+      } else {
+        await execLite(workspaceId, `pkill -9 -f '\\bpi\\b' 2>/dev/null; pkill -9 -f 'pip install' 2>/dev/null; true`).catch(() => {});
+      }
+      break;
+    }
     // Lightweight status: alive + done marker + last 4KB tail only (NOT the full file).
     const statusScript = `F=${f}
 AL=$(${aliveCheck})
 DN=$(grep -q ___PI_EXIT_CODE "$F" 2>/dev/null && echo yes || echo no)
+TC=$(grep -oE '"type":"(tool_use|tool_call|tool_result)"|"toolName":' "$F" 2>/dev/null | wc -l | tr -d ' ')
 TL=$(tail -c 4000 "$F" 2>/dev/null | base64 | tr -d '\\n')
-printf 'PISTAT AL=%s DN=%s\\n' "$AL" "$DN"
+PROC=$(for c in /proc/[0-9]*/cmdline; do tr '\\0' ' ' < "$c" 2>/dev/null; echo; done | grep -Ei '${BUILD_PROC_RE}' | grep -viE 'grep| pi | /pi | tee | node .*forward' | head -1 | cut -c1-60 | base64 | tr -d '\\n')
+printf 'PISTAT AL=%s DN=%s TC=%s\\n' "$AL" "$DN" "\${TC:-0}"
+printf 'PROC=%s\\n' "$PROC"
 printf 'TL=%s\\n' "$TL"`;
     let out = "";
     try {
-      const res = await execLite(workspaceId, statusScript);
+      // 30s (not the 15s default): a busy VM under a heavy build can be slow to answer a
+      // control-plane exec — a short timeout turns load into a false "build failed".
+      const res = await execLite(workspaceId, statusScript, 30_000);
       out = res.output || "";
       consecutiveErrors = 0;
+      blindSince = 0;
     } catch (err) {
       consecutiveErrors++;
-      console.warn(`[pi-cli] poll error (${consecutiveErrors}/5):`, (err as Error).message?.slice(0, 120));
-      if (consecutiveErrors >= 5) throw err;
+      const emsg = (err as Error).message?.slice(0, 120);
+      console.warn(`[pi-cli] poll error (${consecutiveErrors}):`, emsg);
+      // After a couple of failures, check whether the VM is actually dead vs. just slow.
+      if (consecutiveErrors >= 2) {
+        const job = await findJob(workspaceId).catch(() => null);
+        const vmAlive = !!job && (job.status === "running" || job.status === "sleeping");
+        if (!vmAlive) {
+          throw new Error(`build VM is no longer running (status: ${job?.status ?? "unknown"}) — ${emsg}`);
+        }
+        // VM is alive — the control-plane is just flaky. Keep waiting (with backoff) up to
+        // a blind-window cap, rather than aborting a build that's still running in the VM.
+        if (blindSince === 0) blindSince = Date.now();
+        const blindMs = Date.now() - blindSince;
+        if (blindMs > BLIND_LIMIT_MS) {
+          throw new Error(`lost contact with a LIVE build VM for ${Math.round(blindMs / 60000)}min (exec kept timing out) — giving up. Last error: ${emsg}`);
+        }
+        console.warn(`[pi-cli] VM '${workspaceId}' still alive — poll flaky for ${Math.round(blindMs / 1000)}s, continuing (cap ${BLIND_LIMIT_MS / 60000}min)`);
+        await sleep(POLL_INTERVAL_MS); // extra backoff on top of the loop's sleep
+      }
       continue;
     }
 
     const alive = /\bAL=yes\b/.test(out) || /\bAL=unknown\b/.test(out);
     const done = /\bDN=yes\b/.test(out);
+
+    // Runaway guard: a weak model with no step limit can loop for 40+ min / 180+ tool
+    // calls until it OOMs. If the tool-call budget is exceeded before it finishes, kill
+    // Pi and fail with a clear "stuck in a loop" message (the caller can retry / suggest a
+    // stronger model) instead of letting it burn to the timeout or crash on OOM.
+    const tcNow = parseInt(out.match(/\bTC=(\d+)/)?.[1] ?? "0", 10);
+    if (maxTC > 0 && tcNow >= maxTC && !done) {
+      console.warn(`[pi-cli] runaway — ${tcNow} tool-call events (budget ${maxTC}) without finishing; killing Pi.`);
+      if (backgroundPid) {
+        await execLite(workspaceId, `pkill -9 -P ${backgroundPid} 2>/dev/null; kill -9 ${backgroundPid} 2>/dev/null; true`).catch(() => {});
+      } else {
+        await execLite(workspaceId, `pkill -9 -f pi-coding-agent 2>/dev/null; true`).catch(() => {});
+      }
+      runaway = true;
+      break;
+    }
+
     const tlMatch = out.match(/TL=([A-Za-z0-9+/=]*)/);
     const tail = tlMatch?.[1] ? Buffer.from(tlMatch[1], "base64").toString("utf8") : "";
+    // Liveness: is a real build subprocess (installer/compiler) running right now? If so
+    // the agent is WORKING through a slow step — not stalled — regardless of stack.
+    const procMatch = out.match(/PROC=([A-Za-z0-9+/=]*)/);
+    const busyProc = procMatch?.[1] ? Buffer.from(procMatch[1], "base64").toString("utf8").trim() : "";
+    const busy = busyProc.length > 0;
+    const procShort = busy ? (busyProc.split(/\s+/)[0]?.split("/").pop() || "").slice(0, 20) : "";
 
     // Surface the pre-launch node+pi confirmation to the server console, once.
     if (!loggedVersions) {
@@ -730,12 +904,14 @@ printf 'TL=%s\\n' "$TL"`;
 
     const progress = tail ? extractPiProgress(tail, progressMaxLen) : null;
 
-    // Stall detection: the same progress line repeating with nothing new.
+    // Stall detection: the same progress line repeating AND nothing running underneath.
+    // A live build subprocess (busy) resets the counter — a 15-min `pip install` or
+    // `npm ci` is slow, not stalled, so it must never trip this.
     if (progress) {
-      if (progress === lastStallSig) {
+      if (progress === lastStallSig && !busy) {
         if (++stallCount >= STALL_LIMIT) {
           stalled = true;
-          console.warn(`[pi-cli] agent stalled — "${progress.slice(0, 80)}" repeated ${stallCount}× (~${Math.round((stallCount * POLL_INTERVAL_MS) / 60000)}min) with no progress; aborting.`);
+          console.warn(`[pi-cli] agent stalled — "${progress.slice(0, 80)}" repeated ${stallCount}× (~${Math.round((stallCount * POLL_INTERVAL_MS) / 60000)}min) with no live build process; aborting.`);
           break;
         }
       } else {
@@ -744,9 +920,23 @@ printf 'TL=%s\\n' "$TL"`;
       }
     }
 
-    if (progress && onProgress && Date.now() - lastProgressAt > 5_000) {
-      lastProgressAt = Date.now();
-      onProgress(progress);
+    if (onProgress) {
+      const now = Date.now();
+      if (progress && progress !== lastEmittedProgress && now - lastProgressAt > 5_000) {
+        // A new activity line — surface it right away (throttled to 5s).
+        lastEmittedProgress = progress;
+        lastProgressAt = now;
+        onProgress(progress);
+      } else if (lastEmittedProgress && alive && now - lastProgressAt > HEARTBEAT_MS) {
+        // Same op still running after a while (e.g. a multi-minute `pip install docling`
+        // or `npm ci`) — emit a heartbeat with elapsed time (and the live subprocess, when
+        // known) so the UI shows the build is alive instead of freezing. The " — still
+        // working" suffix lets the client refresh the current step in place (no line spam).
+        lastProgressAt = now;
+        const base = progress ?? lastEmittedProgress;
+        const suffix = procShort ? `${fmtElapsed(now - startedAt)}, ${procShort} running` : fmtElapsed(now - startedAt);
+        onProgress(`${base} — still working (${suffix})`);
+      }
     }
 
     // Done marker present (runner writes it as its last action) → finished.
@@ -759,6 +949,7 @@ printf 'TL=%s\\n' "$TL"`;
   // work (any tool call), tool-call count, and the tail.
   let exitCode: number | null = null;
   let fatalError: string | null = null;
+  let oomKilled = false;
   let toolCalls = 0;
   let tail = "";
   let didWork = false;
@@ -814,7 +1005,7 @@ printf 'TL=%s\\n' "$TL"`;
         mem ? `Memory (MB):\n${mem}` : "",
         inst ? `npm install log tail:\n${inst}` : "",
       ].filter(Boolean).join("\n");
-      if (oom) fatalError = fatalError ?? "Pi process was OOM-killed (out of memory) — see diagnostics.";
+      if (oom) { oomKilled = true; fatalError = fatalError ?? "Pi process was OOM-killed (out of memory) — see diagnostics."; }
       tail = `${diag}\n\n── output file tail (${tail ? "below" : "EMPTY"}) ──\n${tail}`;
     }
 
@@ -833,6 +1024,17 @@ printf 'TL=%s\\n' "$TL"`;
   if (stalled && !fatalError) {
     fatalError = "agent stalled — repeated the same action for several minutes without progress";
   }
+  // Runaway: hit the tool-call budget without finishing → stuck in a loop.
+  if (runaway && !fatalError) {
+    fatalError = `agent runaway — made ${toolCalls}+ tool calls without finishing (likely looping). Retry, or switch to a stronger model (e.g. DeepSeek V4 Pro / Kimi K3).`;
+  }
 
-  return { exitCode, fatalError, didWork, toolCalls, tail };
+  // Resumable = the run was cut short by a RESOURCE limit (ran out of memory, or hit
+  // the tool-call budget mid-flight) while it was actually producing work — the project
+  // files persist on /data, so restarting Pi to continue is worthwhile. NOT resumable:
+  // an auth/quota fatal (didWork=false — restarting won't fix a bad key) or a stall
+  // (it was looping with no progress — a resume just stalls again).
+  const resumable = didWork && (oomKilled || runaway) && !stalled;
+
+  return { exitCode, fatalError, didWork, toolCalls, tail, resumable, oomKilled };
 }

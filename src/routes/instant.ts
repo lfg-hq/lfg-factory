@@ -123,6 +123,28 @@ instant.get("/instant/app/:appId", async (c) => {
   console.log("[instant] GET /instant/app/:appId - appId:", appId, "userId:", user.id);
   const settings = await getUserChatSettings(user.id);
 
+  // Look up the app by owner+appId REGARDLESS of project. An app created inside a project
+  // used to 404 here because of an isNull(projectId) filter — the standalone URL simply
+  // couldn't see project-scoped apps. If it belongs to a project, redirect to its
+  // canonical project-scoped URL (which carries the project context the page needs).
+  const [ownedApp] = await db
+    .select({ id: instantApps.id, appId: instantApps.appId, projectId: instantApps.projectId, conversationId: instantApps.conversationId })
+    .from(instantApps)
+    .where(and(eq(instantApps.userId, user.id), eq(instantApps.appId, appId)))
+    .limit(1);
+
+  console.log("[instant] currentApp found:", !!ownedApp, "conversationId:", ownedApp?.conversationId);
+  if (!ownedApp) return c.text("Instant app not found", 404);
+
+  if (ownedApp.projectId) {
+    const [proj] = await db
+      .select({ pub: projects.projectId })
+      .from(projects)
+      .where(eq(projects.id, ownedApp.projectId))
+      .limit(1);
+    if (proj?.pub) return c.redirect(`/instant/project/${proj.pub}/app/${appId}`);
+  }
+
   const [currentApp, apps] = await Promise.all([
     db
       .select()
@@ -137,7 +159,6 @@ instant.get("/instant/app/:appId", async (c) => {
       .orderBy(desc(instantApps.createdAt)),
   ]);
 
-  console.log("[instant] currentApp found:", !!currentApp, "conversationId:", currentApp?.conversationId);
   if (!currentApp) return c.text("Instant app not found", 404);
 
   return c.html(

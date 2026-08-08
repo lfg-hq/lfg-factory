@@ -7,6 +7,7 @@ import { projects } from "../../db/schema/projects.ts";
 import { sandboxes } from "../../db/schema/sandbox.ts";
 import { execOnWorkspace } from "../../services/mags.ts";
 import {
+  cancelInstantBuild,
   deleteInstantApp,
   exportInstantAppToGitHub,
   getInstantAppArchive,
@@ -151,6 +152,15 @@ instantApi.post("/apps/:appId/restore", async (c) => {
   return c.json({ status: "ok", message: "Restore started" });
 });
 
+// ── Stop an in-progress build ─────────────────────────────────────
+instantApi.post("/apps/:appId/cancel", async (c) => {
+  const user = c.get("user");
+  const { appId } = c.req.param();
+  const result = await cancelInstantBuild({ userId: user.id, appId });
+  if (!result.cancelled) return c.json({ error: result.reason ?? "Nothing to stop" }, 400);
+  return c.json({ status: "ok", message: "Stopping the build" });
+});
+
 // ── Delete app (stop VM + remove records) ─────────────────────────
 instantApi.delete("/apps/:appId", async (c) => {
   const user = c.get("user");
@@ -288,6 +298,19 @@ instantApi.post("/:projectId/apps/:appId/restore", async (c) => {
   const result = await retryInstantBuild({ userId: user.id, conversationId: row.app.conversationId });
   if (!result.started) return c.json({ error: result.reason ?? "Could not restore" }, 400);
   return c.json({ status: "ok", message: "Restore started" });
+});
+
+// ── Project-scoped: Stop an in-progress build ─────────────────────
+instantApi.post("/:projectId/apps/:appId/cancel", async (c) => {
+  const user = c.get("user");
+  const { projectId, appId } = c.req.param();
+  const project = await resolveProjectForUser(user.id, projectId);
+  if (!project) return c.json({ error: "Project not found" }, 404);
+  const row = await getAppForUser(user.id, appId, project.id);
+  if (!row) return c.json({ error: "Not found" }, 404);
+  const result = await cancelInstantBuild({ userId: user.id, appId });
+  if (!result.cancelled) return c.json({ error: result.reason ?? "Nothing to stop" }, 400);
+  return c.json({ status: "ok", message: "Stopping the build" });
 });
 
 // ── Project-scoped: Delete ────────────────────────────────────────

@@ -11,6 +11,7 @@ export type WSIncoming =
       user_role?: string;
       file?: { id?: string; name?: string; type?: string; size?: number };
       file_data?: { id?: string; name?: string; type?: string; size?: number };
+      files?: Array<{ id?: string; name?: string; type?: string; size?: number }>;
     }
   | { type: "stop_generation"; conversation_id?: string }
   | { type: "heartbeat_ack" }

@@ -17,6 +17,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const previewPlaceholder = document.getElementById('preview-placeholder');
     const previewBuilding = document.getElementById('preview-building');
     const buildingMessage = document.getElementById('building-message');
+    const stopBuildBtn = document.getElementById('stop-build-btn');
     const previewUrlBar = document.getElementById('preview-url-bar');
     const previewUrlText = document.getElementById('preview-url-text');
     const previewOpenBtn = document.getElementById('preview-open-btn');
@@ -37,17 +38,34 @@ document.addEventListener('DOMContentLoaded', () => {
     let streamBusy = false;
     let buildBusy = false;
     function updateSendBtn() {
-        const busy = streamBusy || buildBusy;
-        sendBtn.classList.toggle('busy', busy);
-        sendBtn.disabled = false; // stay clickable so the user can stop
-        sendBtn.title = busy ? 'Stop' : 'Send';
+        // The send button reflects CHAT streaming only — a background build must NOT
+        // hijack it, so the user can always type & send questions while building.
+        sendBtn.classList.toggle('busy', streamBusy);
+        sendBtn.disabled = false; // stay clickable so the user can stop a chat reply
+        sendBtn.title = streamBusy ? 'Stop' : 'Send';
         const icon = sendBtn.querySelector('i');
-        if (icon) icon.className = busy ? 'fas fa-stop' : 'fas fa-paper-plane';
+        if (icon) icon.className = streamBusy ? 'fas fa-stop' : 'fas fa-paper-plane';
+        // Build control is a SEPARATE button in the preview overlay — shown while a
+        // build is running so the user can stop it without touching the composer.
+        if (stopBuildBtn) stopBuildBtn.style.display = buildBusy ? '' : 'none';
     }
     function stopGeneration() {
         if (socket && socket.readyState === WebSocket.OPEN) {
             socket.send(JSON.stringify({ type: 'stop_generation' }));
         }
+    }
+    // Statuses that mean "a build is actively running" → the send button shows the
+    // stop state. Everything else (running/ready/error/draft/gathering) is idle.
+    const BUILDING_STATUSES = ['building', 'provisioning', 'scaffolding', 'installing', 'restoring', 'queued', 'starting'];
+    function isBuildingStatus(status) {
+        return BUILDING_STATUSES.indexOf(status) !== -1;
+    }
+    // Seed the button from the app's status on load: if the page is opened or refreshed
+    // mid-build, show the in-progress/stop state immediately instead of waiting for the
+    // next (sparse) live status notification.
+    if (isBuildingStatus(config.currentAppStatus)) {
+        buildBusy = true;
+        updateSendBtn();
     }
 
     // ---- WebSocket ----
@@ -146,7 +164,26 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        // A tool call interrupted the stream → make the NEXT text start a new paragraph,
+        // so text from different agent steps doesn't run together ("...setup.Let me...").
+        if (isStreaming && data.function_name) pendingTextBreak = true;
+
+        // Tool-start (early) notifications → contextual "working" indicator during the gap
+        // between the assistant's text and the resulting card/build appearing.
+        var WORKING_LABELS = {
+            propose_plan: 'Working on the plan',
+            propose_design: 'Designing',
+            create_instant_app: 'Setting up the build',
+            retry_build: 'Resuming the build',
+            swap_theme: 'Updating the theme',
+        };
+        if (WORKING_LABELS[ntype]) {
+            showTypingIndicator(WORKING_LABELS[ntype]);
+            return;
+        }
+
         if (ntype === 'instant_app_building' || ntype === 'instant_app_status') {
+            removeTypingIndicator(); // the build notice supersedes any "working" indicator
             const status = data.instant_app_status || 'building';
             const message = data.message || 'Building...';
 
@@ -218,11 +255,27 @@ document.addEventListener('DOMContentLoaded', () => {
                 showActionsIfReady();
                 buildBusy = false;
                 updateSendBtn();
+            } else if (status === 'stopped') {
+                // User stopped the build — terminal, non-error. Reset the composer/preview.
+                if (buildingMessage) buildingMessage.style.color = '';
+                setPreviewState('placeholder');
+                setStatus('stopped', 'Stopped');
+                showActionsIfReady();
+                buildBusy = false;
+                resetStopBuildBtn();
+                updateSendBtn();
+                // Reflect the terminal state in the header/sidebar/switcher badges.
+                document.querySelectorAll('.instant-app-status-badge, .sidebar-app-item.active .sidebar-app-status, .instant-switcher-item.active .switcher-item-status').forEach(function(badgeEl) {
+                    var base = badgeEl.className.split(' ')[0];
+                    badgeEl.className = base + ' stopped';
+                    badgeEl.textContent = 'stopped';
+                });
             } else {
                 if (buildingMessage) buildingMessage.style.color = '';
                 setPreviewState('building', message);
                 setStatus(status, 'Building');
-                buildBusy = status !== 'running';
+                // Busy for any in-progress build status; idle once it's running/ready.
+                buildBusy = status !== 'running' && status !== 'ready';
                 updateSendBtn();
             }
             appendBuildNotice(message, status, data.error_type);
@@ -250,6 +303,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (ntype === 'plan_proposal' || ntype === 'design_proposal') {
+            removeTypingIndicator(); // the card supersedes the "working on the plan/design" indicator
             const proposal = data.data || data;
             // Adopt the draft app's URL so a refresh reloads the conversation (and
             // re-renders this proposal from history). Without this, the proposal is
@@ -514,7 +568,7 @@ document.addEventListener('DOMContentLoaded', () => {
             .replace(/'/g, '&#039;');
     }
 
-    function addMessageToChat(role, content) {
+    function addMessageToChat(role, content, attachments) {
         clearWelcome();
 
         // Create message element — same structure as chat.js
@@ -530,6 +584,18 @@ document.addEventListener('DOMContentLoaded', () => {
             contentDiv.innerHTML = marked.parse(content);
         } else {
             contentDiv.innerHTML = escapeHtml(content);
+        }
+
+        // Render attachments (image thumbnails + file chips) so the user sees what they sent.
+        if (attachments && attachments.length) {
+            const att = document.createElement('div');
+            att.className = 'message-attachments';
+            att.innerHTML = attachments.map((f) => {
+                const isImg = (f.type || '').startsWith('image/') && f.id;
+                if (isImg) return '<a href="/api/files/' + f.id + '" target="_blank" rel="noopener"><img src="/api/files/' + f.id + '" alt="' + escapeHtml(f.name || '') + '" class="message-attachment-img"></a>';
+                return '<span class="message-attachment-file"><i class="fas fa-paperclip"></i> ' + escapeHtml(f.name || 'file') + '</span>';
+            }).join('');
+            contentDiv.appendChild(att);
         }
 
         // Create copy button
@@ -574,6 +640,22 @@ document.addEventListener('DOMContentLoaded', () => {
         const ghMatch = /synced to GitHub:\s*(https?:\/\/\S+)/i.exec(message || '');
         if (ghMatch) { config.githubRepoUrl = ghMatch[1]; if (typeof updateGithubBtn === 'function') updateGithubBtn(); }
 
+        // Heartbeat for a long-running step ("<op> — still working (2m 05s)") — refresh
+        // the CURRENT build notice in place with the live elapsed time instead of stacking
+        // a new line every 20s. Keeps long installs (e.g. Docling) visibly alive.
+        if (status !== 'running' && status !== 'error' && / — still working \(/.test(message || '')) {
+            var buildingNotices = messageContainer.querySelectorAll('.instant-build-notice.notice-building');
+            var lastNotice = buildingNotices.length ? buildingNotices[buildingNotices.length - 1] : null;
+            if (lastNotice) {
+                var textSpan = lastNotice.querySelector('span');
+                if (textSpan) textSpan.textContent = message;
+                lastBuildNoticeMsg = message;
+                scrollToBottom();
+                return;
+            }
+            // No existing building line to refresh → fall through and append one.
+        }
+
         // Dedupe consecutive identical transient notices — the orchestrator polls
         // get_instant_app_status repeatedly, each re-emitting "<app> status: building".
         if (status !== 'running' && status !== 'error' && message === lastBuildNoticeMsg) return;
@@ -585,7 +667,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (isStreaming) pendingTextBreak = true;
 
         // When a terminal status arrives, resolve all prior spinning notices
-        if (status === 'running' || status === 'error') {
+        if (status === 'running' || status === 'error' || status === 'stopped') {
             messageContainer.querySelectorAll('.instant-build-notice.notice-building').forEach(prev => {
                 prev.classList.remove('notice-building');
                 prev.classList.add('notice-past');
@@ -598,11 +680,12 @@ document.addEventListener('DOMContentLoaded', () => {
         el.className = 'instant-build-notice';
         if (status === 'error') el.classList.add('notice-error');
         else if (status === 'running') el.classList.add('notice-done');
-        else if (status === 'done') el.classList.add('notice-past');
+        else if (status === 'done' || status === 'stopped') el.classList.add('notice-past');
         else el.classList.add('notice-building');
 
         const icon = status === 'error' ? '<i class="fas fa-times-circle" style="font-size:10px"></i>'
                    : status === 'running' ? '<i class="fas fa-check-circle" style="font-size:10px"></i>'
+                   : status === 'stopped' ? '<i class="fas fa-stop-circle" style="font-size:10px"></i>'
                    : '<i class="fas fa-circle" style="font-size:5px;opacity:0.4;margin:0 2px"></i>';
 
         let content;
@@ -704,13 +787,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ---- Typing Indicator ----
 
-    function showTypingIndicator() {
+    function showTypingIndicator(label) {
         removeTypingIndicator();
         const indicator = document.createElement('div');
         indicator.className = 'typing-indicator';
         indicator.id = 'typing-indicator';
         indicator.innerHTML =
-            '<span class="typing-indicator-label">Thinking</span>' +
+            '<span class="typing-indicator-label">' + escapeHtml(label || 'Thinking') + '</span>' +
             '<span class="typing-indicator-dot"></span>' +
             '<span class="typing-indicator-dot"></span>' +
             '<span class="typing-indicator-dot"></span>';
@@ -763,18 +846,27 @@ document.addEventListener('DOMContentLoaded', () => {
             });
     }
 
+    // The FAIL reason: prefer the LLM's plain-English explainer, else the mechanical
+    // observation, else a clear fallback — so a failed screen ALWAYS says why.
+    function qaReason(s) {
+        if (s.explainer) return s.explainer;
+        if (s.observation) return s.observation;
+        return s.ok ? '' : 'Failed the automated health check — see the screenshot for what rendered.';
+    }
     function renderQaScreen(s) {
         s = s || {};
         var ok = !!s.ok;
-        var color = ok ? '#34d399' : '#f87171';
-        return '<div style="border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:10px;margin-bottom:10px;background:rgba(255,255,255,0.02);">'
+        var color = ok ? '#16a34a' : '#dc2626'; // readable on BOTH light and dark themes
+        var reason = qaReason(s);
+        var obs = (s.explainer && s.observation) ? s.observation : '';
+        return '<div style="border:1px solid var(--border-color,rgba(0,0,0,0.1));border-radius:8px;padding:10px;margin-bottom:10px;background:var(--bg-subtle,rgba(127,127,127,0.04));">'
             + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:0.85rem;">'
-            + '<code style="color:#cbd5e1;">' + escapeHtml(s.route || '/') + '</code>'
+            + '<code style="color:var(--text-primary,#cbd5e1);">' + escapeHtml(s.route || '/') + '</code>'
             + '<span style="font-weight:700;color:' + color + ';">' + (ok ? 'PASS' : 'FAIL') + '</span>'
-            + (s.httpStatus ? '<span style="opacity:.45;margin-left:auto;">HTTP ' + s.httpStatus + '</span>' : '')
+            + (s.httpStatus ? '<span style="opacity:.55;margin-left:auto;color:var(--text-secondary);">HTTP ' + s.httpStatus + '</span>' : '')
             + '</div>'
-            + (s.explainer ? '<div style="font-size:0.82rem;color:rgba(255,255,255,0.85);margin-bottom:4px;line-height:1.45;">' + escapeHtml(s.explainer) + '</div>' : '')
-            + (s.observation ? '<div style="font-size:0.73rem;color:rgba(255,255,255,0.45);margin-bottom:6px;line-height:1.4;">' + escapeHtml(s.observation) + '</div>' : '')
+            + (reason ? '<div style="font-size:0.82rem;color:var(--text-primary,#e5e7eb);margin-bottom:4px;line-height:1.45;">' + escapeHtml(reason) + '</div>' : '')
+            + (obs ? '<div style="font-size:0.73rem;color:var(--text-secondary,#9ca3af);margin-bottom:6px;line-height:1.4;">' + escapeHtml(obs) + '</div>' : '')
             + (s.screenshotUrl
                 ? '<a href="' + escapeHtml(s.screenshotUrl) + '" target="_blank" rel="noopener"><img src="' + escapeHtml(s.screenshotUrl) + '" loading="lazy" style="width:100%;border-radius:6px;border:1px solid rgba(255,255,255,0.08);display:block;"></a>'
                 : '<div style="opacity:.5;font-size:0.8rem;">No screenshot captured</div>')
@@ -808,19 +900,23 @@ document.addEventListener('DOMContentLoaded', () => {
     var _qaCard = null, _qaRows = null;
 
     function renderQaChatRow(s) {
-        var color = s.ok ? '#34d399' : '#f87171';
+        var ok = !!s.ok;
+        var color = ok ? '#16a34a' : '#dc2626'; // readable on BOTH light and dark themes
+        var reason = qaReason(s);
+        var obs = (s.explainer && s.observation) ? s.observation : '';
         var img = s.screenshotUrl
-            ? '<a href="' + escapeHtml(s.screenshotUrl) + '" target="_blank" rel="noopener"><img src="' + escapeHtml(s.screenshotUrl) + '" loading="lazy" style="width:120px;height:80px;object-fit:cover;object-position:top;border-radius:6px;border:1px solid rgba(255,255,255,0.08);display:block;flex-shrink:0;"></a>'
-            : '<div style="width:120px;height:80px;border-radius:6px;background:rgba(255,255,255,0.04);display:flex;align-items:center;justify-content:center;opacity:.4;font-size:0.7rem;flex-shrink:0;">no shot</div>';
-        return '<div style="display:flex;gap:10px;padding:10px 0;border-top:1px solid rgba(255,255,255,0.06);">'
+            ? '<a href="' + escapeHtml(s.screenshotUrl) + '" target="_blank" rel="noopener"><img src="' + escapeHtml(s.screenshotUrl) + '" loading="lazy" style="width:120px;height:80px;object-fit:cover;object-position:top;border-radius:6px;border:1px solid var(--border-color,rgba(0,0,0,0.08));display:block;flex-shrink:0;"></a>'
+            : '<div style="width:120px;height:80px;border-radius:6px;background:var(--bg-subtle,rgba(127,127,127,0.06));display:flex;align-items:center;justify-content:center;opacity:.5;font-size:0.7rem;flex-shrink:0;">no shot</div>';
+        return '<div style="display:flex;gap:10px;padding:10px 0;border-top:1px solid var(--border-color,rgba(0,0,0,0.08));">'
             + img
             + '<div style="min-width:0;flex:1;">'
             + '<div style="display:flex;align-items:center;gap:8px;font-size:0.82rem;">'
-            + '<code style="color:#cbd5e1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(s.route || '/') + '</code>'
-            + '<span style="font-weight:700;color:' + color + ';margin-left:auto;">' + (s.ok ? 'PASS' : 'FAIL') + '</span>'
+            + '<code style="color:var(--text-primary,#cbd5e1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(s.route || '/') + '</code>'
+            + (s.httpStatus ? '<span style="opacity:.55;font-size:0.72rem;color:var(--text-secondary);">HTTP ' + s.httpStatus + '</span>' : '')
+            + '<span style="font-weight:700;color:' + color + ';margin-left:auto;">' + (ok ? 'PASS' : 'FAIL') + '</span>'
             + '</div>'
-            + (s.explainer ? '<div style="font-size:0.8rem;color:rgba(255,255,255,0.85);margin-top:4px;line-height:1.45;">' + escapeHtml(s.explainer) + '</div>' : '')
-            + (s.observation ? '<div style="font-size:0.71rem;color:rgba(255,255,255,0.42);margin-top:3px;line-height:1.4;">' + escapeHtml(s.observation) + '</div>' : '')
+            + (reason ? '<div style="font-size:0.8rem;color:var(--text-primary,#e5e7eb);margin-top:4px;line-height:1.45;">' + escapeHtml(reason) + '</div>' : '')
+            + (obs ? '<div style="font-size:0.71rem;color:var(--text-secondary,#9ca3af);margin-top:3px;line-height:1.4;">' + escapeHtml(obs) + '</div>' : '')
             + '</div></div>';
     }
 
@@ -987,11 +1083,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     window.sendMessage = sendMessage;
     function sendMessage(text) {
-        if (!text.trim() && !window.instantAttachedFile) return;
+        const attached = (window.instantAttachedFiles || []).filter((f) => !f.uploading);
+        if (!text.trim() && !attached.length) return;
         if (!socket || socket.readyState !== WebSocket.OPEN) return;
 
-        const displayText = text || `Attached file: ${window.instantAttachedFile?.name || ''}`;
-        addMessageToChat('user', displayText);
+        const displayText = text || (attached.length === 1
+            ? `Attached file: ${attached[0].name}`
+            : `Attached ${attached.length} files: ${attached.map((f) => f.name).join(', ')}`);
+        addMessageToChat('user', displayText, attached.map((f) => ({ id: f.id, name: f.name, type: f.type })));
         showTypingIndicator();
         streamBusy = true;
         updateSendBtn();
@@ -1003,30 +1102,58 @@ document.addEventListener('DOMContentLoaded', () => {
             instant_mode: true,
         };
         if (projectId) payload.project_id = projectId;
-        if (window.instantAttachedFile) {
-            payload.file_data = {
-                name: window.instantAttachedFile.name,
-                type: window.instantAttachedFile.type,
-                size: window.instantAttachedFile.size,
-            };
-            if (window.instantAttachedFile.id) payload.file_data.id = window.instantAttachedFile.id;
-            window.instantAttachedFile = null;
-            const indicator = document.querySelector('.instant-file-attachment');
-            if (indicator) indicator.remove();
+        if (attached.length) {
+            payload.files = attached.map((f) => ({ id: f.id || undefined, name: f.name, type: f.type, size: f.size }));
+            payload.file_data = payload.files[0]; // back-compat: single-file fields
+            window.instantAttachedFiles = [];
+            renderAttachedFiles();
         }
         socket.send(JSON.stringify(payload));
     }
 
     chatForm.addEventListener('submit', (e) => {
         e.preventDefault();
-        // While the agent is working, the button is a Stop button.
-        if (streamBusy || buildBusy) { stopGeneration(); return; }
+        // Only a mid-stream CHAT reply turns the button into Stop. A running build does
+        // NOT block the composer — the user can keep asking questions while it builds.
+        if (streamBusy) { stopGeneration(); return; }
         const text = chatInput.value.trim();
-        if (!text && !window.instantAttachedFile) return;
+        if (!text && !(window.instantAttachedFiles || []).some((f) => !f.uploading)) return;
         chatInput.value = '';
         chatInput.style.height = 'auto';
         sendMessage(text);
     });
+
+    // ---- Stop build ----
+    function resetStopBuildBtn() {
+        if (!stopBuildBtn) return;
+        stopBuildBtn.disabled = false;
+        stopBuildBtn.innerHTML = '<i class="fas fa-stop"></i> Stop build';
+    }
+    if (stopBuildBtn) {
+        stopBuildBtn.addEventListener('click', async () => {
+            const base = getAppApiBase();
+            if (!base) return;
+            stopBuildBtn.disabled = true;
+            stopBuildBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Stopping…';
+            try {
+                const res = await fetch(base + '/cancel', {
+                    method: 'POST',
+                    headers: { 'X-CSRFToken': getCsrfToken(), 'X-Requested-With': 'XMLHttpRequest' },
+                });
+                if (!res.ok) {
+                    // Build likely already finished/failed — restore the button; the WS
+                    // status will settle the UI. No scary error for a race.
+                    const j = await res.json().catch(() => ({}));
+                    console.warn('[Instant] stop build:', j.error || res.status);
+                    resetStopBuildBtn();
+                }
+                // On success, the WS 'stopped' status hides the button + resets state.
+            } catch (e) {
+                console.warn('[Instant] stop build error:', e);
+                resetStopBuildBtn();
+            }
+        });
+    }
 
     // ---- File Upload ----
     const fileUploadBtn = document.getElementById('file-upload-btn');
@@ -1051,62 +1178,61 @@ document.addEventListener('DOMContentLoaded', () => {
         return resp.json();
     }
 
-    function renderAttachedFileIndicator(fileInfo) {
-        const existing = document.querySelector('.instant-file-attachment');
-        if (existing) existing.remove();
+    // Multiple attachments: an array of files, each shown as a removable chip.
+    window.instantAttachedFiles = window.instantAttachedFiles || [];
 
-        const indicator = document.createElement('div');
-        indicator.className = 'instant-file-attachment uploaded';
-        indicator.innerHTML = `
-            <i class="fas fa-paperclip"></i>
-            <span>${escapeHtml(fileInfo.name)}</span>
-            <button type="button" class="instant-file-remove" title="Remove"><i class="fas fa-times"></i></button>
-        `;
-
+    function renderAttachedFiles() {
         const inputWrapper = document.querySelector('.input-wrapper');
-        inputWrapper.insertBefore(indicator, inputWrapper.firstChild);
-        indicator.querySelector('.instant-file-remove').addEventListener('click', () => {
-            window.instantAttachedFile = null;
-            indicator.remove();
+        if (!inputWrapper) return;
+        let wrap = inputWrapper.querySelector('.instant-file-attachments');
+        const files = window.instantAttachedFiles;
+        if (!files.length) { if (wrap) wrap.remove(); return; }
+        if (!wrap) {
+            wrap = document.createElement('div');
+            wrap.className = 'instant-file-attachments';
+            inputWrapper.insertBefore(wrap, inputWrapper.firstChild);
+        }
+        wrap.innerHTML = files.map((f, i) =>
+            '<div class="instant-file-attachment ' + (f.uploading ? 'uploading' : 'uploaded') + '">'
+            + '<i class="fas ' + (f.uploading ? 'fa-sync fa-spin' : 'fa-paperclip') + '"></i>'
+            + '<span>' + escapeHtml(f.name) + (f.uploading ? '…' : '') + '</span>'
+            + (f.uploading ? '' : '<button type="button" class="instant-file-remove" title="Remove" data-idx="' + i + '"><i class="fas fa-times"></i></button>')
+            + '</div>'
+        ).join('');
+        wrap.querySelectorAll('.instant-file-remove').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                window.instantAttachedFiles.splice(parseInt(btn.getAttribute('data-idx'), 10), 1);
+                renderAttachedFiles();
+            });
         });
+    }
+    // Back-compat shim for other code paths (paste/drop) that expect a single setter.
+    function addAttachedFile(fileInfo) {
+        window.instantAttachedFiles.push(fileInfo);
+        renderAttachedFiles();
     }
 
     if (fileUploadBtn && fileUploadInput) {
         fileUploadBtn.addEventListener('click', () => fileUploadInput.click());
 
         fileUploadInput.addEventListener('change', async (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
+            const files = Array.from(e.target.files || []);
             fileUploadInput.value = '';
+            if (!files.length) return;
 
-            // Remove existing indicator
-            const existing = document.querySelector('.instant-file-attachment');
-            if (existing) existing.remove();
-
-            // Show uploading indicator
-            const indicator = document.createElement('div');
-            indicator.className = 'instant-file-attachment uploading';
-            indicator.innerHTML = `<i class="fas fa-sync fa-spin"></i><span>Uploading ${escapeHtml(file.name)}...</span>`;
-            const inputWrapper = document.querySelector('.input-wrapper');
-            inputWrapper.insertBefore(indicator, inputWrapper.firstChild);
-
-            // Upload via REST API
-            try {
-                const data = await uploadFileToServer(file);
-
-                window.instantAttachedFile = {
-                    file, name: file.name, type: file.type, size: file.size,
-                    id: data.id || null,
-                };
-
-                indicator.remove();
-                renderAttachedFileIndicator(window.instantAttachedFile);
-            } catch (err) {
-                console.error('[Instant] File upload error:', err);
-                // Still allow attaching without server-side upload
-                window.instantAttachedFile = { file, name: file.name, type: file.type, size: file.size };
-                indicator.remove();
-                renderAttachedFileIndicator(window.instantAttachedFile);
+            for (const file of files) {
+                // Show an "uploading" chip for this file, then swap to uploaded.
+                const placeholder = { file, name: file.name, type: file.type, size: file.size, id: null, uploading: true };
+                window.instantAttachedFiles.push(placeholder);
+                renderAttachedFiles();
+                try {
+                    const data = await uploadFileToServer(file);
+                    placeholder.id = data.id || null;
+                } catch (err) {
+                    console.error('[Instant] File upload error:', err); // still attach (id stays null)
+                }
+                placeholder.uploading = false;
+                renderAttachedFiles();
             }
         });
     }
@@ -1232,8 +1358,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             chatInput.dispatchEvent(new Event('input'));
                             chatInput.focus();
                         } else {
-                            window.instantAttachedFile = attachment;
-                            renderAttachedFileIndicator(attachment);
+                            addAttachedFile(attachment);
                         }
                     } catch (error) {
                         console.warn('[Instant] Audio transcription failed:', error);
@@ -1445,8 +1570,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 } catch (_) { /* not JSON — render as normal text */ }
             }
 
-            // Regular user/assistant/system messages
-            addMessageToChat(msg.role, content);
+            // Regular user/assistant/system messages (with any persisted attachments)
+            addMessageToChat(msg.role, content, msg.content_if_file || undefined);
         });
 
         return { previewUrl: lastPreviewUrl, appName: lastAppName };

@@ -43,6 +43,7 @@ export function AgentsListPage({ user, agents }: AgentsListPageProps) {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" type="image/x-icon" href="/public/images/favicon.ico" />
   <title>Agents — LFG</title>
   <script>(function(){if(localStorage.getItem('sidebarMinimized')==='true'){document.documentElement.classList.add('sidebar-minimized-preload');}})()</script>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />

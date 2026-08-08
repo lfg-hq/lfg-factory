@@ -700,6 +700,30 @@ ticketsApi.post("/:projectId/tickets/:ticketId/preview", async (c) => {
   }
 });
 
+// ── POST /:projectId/tickets/:ticketId/demo ─────────────────────────
+// (Re)generate the auto-demo recording for this ticket and surface it in Preview.
+ticketsApi.post("/:projectId/tickets/:ticketId/demo", async (c) => {
+  const user = c.get("user");
+  const { projectId, ticketId } = c.req.param();
+
+  const access = await getProjectAccess(projectId!, user.id);
+  if (!access) return c.json({ error: "Not found" }, 404);
+  const project = access.project;
+
+  const [sandbox] = await db
+    .select()
+    .from(sandboxes)
+    .where(and(eq(sandboxes.ticketId, ticketId!), eq(sandboxes.workspaceType, "ticket")))
+    .limit(1);
+  if (!sandbox?.magsWorkspaceId) return c.json({ error: "No sandbox for this ticket — build it first." }, 400);
+
+  const { generateTicketDemo } = await import("../../services/ticket-demo.ts");
+  // Fire-and-forget: the client listens for the `ticket_demo` ws event and reloads
+  // the recording when it's ready.
+  void generateTicketDemo(ticketId!, { ownerId: project.ownerId, projectId: project.id });
+  return c.json({ ok: true, status: "running" });
+});
+
 // ── GET /:projectId/tickets/:ticketId/server-logs ────────────────────
 // Poll live dev server logs from the VM
 ticketsApi.get("/:projectId/tickets/:ticketId/server-logs", async (c) => {

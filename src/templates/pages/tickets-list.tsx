@@ -63,6 +63,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" type="image/x-icon" href="/public/images/favicon.ico" />
   <title>${project.name} Tickets — LFG</title>
   <script>(function(){if(localStorage.getItem('sidebarMinimized')==='true'){document.documentElement.classList.add('sidebar-minimized-preload');}})()</script>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
@@ -632,7 +633,11 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
         <a id="preview-open-link" href="#" target="_blank" class="preview-btn preview-btn--action" style="text-decoration:none;display:none;" title="Open in new tab">
           <i class="fas fa-external-link-alt"></i>
         </a>
+        <button onclick="regenerateDemo()" class="preview-btn preview-btn--action" title="Regenerate feature demo recording">
+          <i class="fas fa-film"></i>
+        </button>
       </div>
+      <div id="preview-demo" class="preview-demo" style="display:none;padding:12px 14px;overflow:auto;border-bottom:1px solid var(--border,#e5e7eb);"></div>
       <iframe id="preview-iframe" src="about:blank" class="preview-iframe"></iframe>
     </div>
 
@@ -844,6 +849,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
         // makes the drawer open even when ticketMap was stale/missing the ticket.
         ticketMap[ticketId] = Object.assign({}, ticketMap[ticketId] || {}, live);
         renderDrawerDetails(ticketMap[ticketId]);
+        renderTicketDemo(ticketMap[ticketId]);
         var qs = live.queueStatus || live.queue_status || '';
         var st = live.status || (t && t.status) || 'open';
         var isActive = qs === 'queued' || qs === 'executing';
@@ -947,7 +953,66 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       document.getElementById('server-logs-area').innerHTML = '';
       refreshServerLogs();
     }
-    if (tabId === 'preview') loadSandboxInfo();
+    if (tabId === 'preview') { loadSandboxInfo(); renderTicketDemo(ticketMap[_currentTicketId] || {}); }
+  }
+
+  // ── Feature demo (auto-recorded on ticket completion) ──────────────────────
+  function _demoEsc(s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+  function renderTicketDemo(ticket) {
+    var box = document.getElementById('preview-demo');
+    if (!box) return;
+    var demo = ticket && ticket.details ? ticket.details.previewDemo : null;
+    if (!demo) { box.style.display = 'none'; box.innerHTML = ''; return; }
+    box.style.display = 'block';
+    var when = demo.generatedAt ? new Date(demo.generatedAt).toLocaleString() : '';
+    var head = '<div style="display:flex;align-items:center;justify-content:space-between;margin:0 0 8px;">'
+      + '<strong style="font-size:13px;">Feature demo</strong>'
+      + '<span style="font-size:11px;color:#888;">' + _demoEsc(when) + '</span></div>';
+    var body = '';
+    if (demo.status === 'running') {
+      body = '<div style="padding:10px 0;color:#888;font-size:13px;"><i class="fas fa-spinner fa-spin"></i> Recording demo…</div>';
+    } else if (demo.status === 'auth_gated') {
+      body = '<div style="padding:10px 0;color:#b45309;font-size:13px;">' + _demoEsc(demo.summary || 'App is behind Google sign-in — rebuild to enable full-demo recording.') + '</div>';
+    } else if (demo.status === 'error') {
+      body = '<div style="padding:10px 0;color:#b91c1c;font-size:13px;">' + _demoEsc(demo.summary || 'Demo could not be generated.') + '</div>';
+    } else if (demo.kind === 'frontend' && demo.videoUrl) {
+      body = (demo.summary ? '<div style="font-size:12px;color:#666;margin-bottom:6px;">' + _demoEsc(demo.summary) + '</div>' : '')
+        + '<video controls playsinline style="width:100%;border-radius:8px;background:#000;max-height:420px;" src="' + _demoEsc(demo.videoUrl) + '"></video>';
+    } else if (demo.kind === 'api' && demo.transcript && demo.transcript.length) {
+      var rows = '';
+      for (var i = 0; i < demo.transcript.length; i++) {
+        var t = demo.transcript[i];
+        rows += '<div style="margin-bottom:10px;">'
+          + '<div style="color:#7ee787;"><span style="color:#8b949e;">$</span> curl ' + _demoEsc(t.command)
+          + (t.status ? '  <span style="color:#8b949e;">[' + _demoEsc(t.status) + ']</span>' : '') + '</div>'
+          + (t.note ? '<div style="color:#8b949e;font-size:11px;margin:2px 0;"># ' + _demoEsc(t.note) + '</div>' : '')
+          + '<pre style="margin:4px 0 0;white-space:pre-wrap;color:#c9d1d9;">' + _demoEsc(t.output) + '</pre></div>';
+      }
+      body = (demo.summary ? '<div style="font-size:12px;color:#666;margin-bottom:6px;">' + _demoEsc(demo.summary) + '</div>' : '')
+        + '<div style="background:#0d1117;border-radius:8px;padding:12px;font-family:ui-monospace,Menlo,monospace;font-size:12px;line-height:1.5;overflow:auto;max-height:420px;">' + rows + '</div>';
+    } else {
+      body = '<div style="padding:10px 0;color:#888;font-size:13px;">No demo yet.</div>';
+    }
+    box.innerHTML = head + body;
+  }
+  function regenerateDemo() {
+    if (!_currentTicketId) return;
+    var box = document.getElementById('preview-demo');
+    if (box) { box.style.display = 'block'; box.innerHTML = '<div style="padding:10px 0;color:#888;font-size:13px;"><i class="fas fa-spinner fa-spin"></i> Recording demo…</div>'; }
+    fetch('/api/projects/' + PROJECT_ID + '/tickets/' + _currentTicketId + '/demo', { method: 'POST' }).catch(function() {});
+  }
+  function refreshTicketDemo() {
+    if (!_currentTicketId) return;
+    fetch('/api/projects/' + PROJECT_ID + '/tickets/' + _currentTicketId)
+      .then(function(r) { return r.json(); })
+      .then(function(resp) {
+        var live = resp && resp.ticket ? resp.ticket : resp;
+        if (!live) return;
+        ticketMap[_currentTicketId] = Object.assign({}, ticketMap[_currentTicketId] || {}, live);
+        renderTicketDemo(ticketMap[_currentTicketId]);
+      }).catch(function() {});
   }
 
   // ── Build Ticket ─────────────────────────────────────────────────
@@ -1943,6 +2008,13 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
             appendLiveLog(msg.log);
           } else if (msg.type === 'ticket_status') {
             handleTicketStatus(msg);
+          } else if (msg.type === 'ticket_demo' && msg.ticketId === _currentTicketId) {
+            if (msg.status === 'running') {
+              var _db = document.getElementById('preview-demo');
+              if (_db) { _db.style.display = 'block'; _db.innerHTML = '<div style="padding:10px 0;color:#888;font-size:13px;"><i class="fas fa-spinner fa-spin"></i> Recording demo…</div>'; }
+            } else {
+              refreshTicketDemo();
+            }
           }
         } catch(e) {}
       };
