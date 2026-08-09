@@ -214,17 +214,80 @@ echo "=== README setup ==="; head -c 2500 README.md 2>/dev/null; head -c 1500 RE
 }
 
 /** Detect (or re-detect) the setup manifest. Merges project custom overrides. */
+/** The exact JSON shape we want back — spelled out for models that don't do native
+ *  structured output, so they don't return e.g. envVars as an object or drop a field. */
+const MANIFEST_SHAPE = `{
+  "stack": "string", "runtime": "string", "framework": "string",
+  "toolchain": ["string"], "installCmd": "string", "buildCmd": "string",
+  "startupProject": "string", "runCmd": "string", "port": 3000,
+  "databases": [{ "engine": "postgres|mysql|redis|mssql", "connectionEnvVar": "string", "connectionFormat": "url|dotnet-npgsql|dotnet-mysql|dotnet-sqlserver|keyvalue" }],
+  "migrations": ["string"], "sqlScripts": ["string"], "seedCmd": "string",
+  "envVars": [{ "key": "string", "required": true, "description": "string" }]
+}`;
+
+/** Coerce a model's loosely-shaped JSON toward the manifest schema before strict Zod
+ *  validation — weak models drop required fields or return arrays as objects. This fixes
+ *  the common deviations (envVars object→array, missing connectionEnvVar, string port,
+ *  bad enum) so an otherwise-good plan isn't rejected over a formatting nit. */
+function coerceManifest(raw: any): unknown {
+  const o = raw && typeof raw === "object" ? raw : {};
+  const str = (v: any, d = "") => (typeof v === "string" ? v : v == null ? d : String(v));
+  const strArr = (v: any) => (Array.isArray(v) ? v.map((x) => str(x)).filter(Boolean) : []);
+
+  let envVars: any[] = [];
+  if (Array.isArray(o.envVars)) {
+    envVars = o.envVars.map((e: any) =>
+      typeof e === "string"
+        ? { key: e, required: false, description: "" }
+        : { key: str(e?.key), required: !!e?.required, description: str(e?.description) },
+    );
+  } else if (o.envVars && typeof o.envVars === "object") {
+    envVars = Object.entries(o.envVars).map(([key, v]: [string, any]) => ({
+      key,
+      required: v && typeof v === "object" ? !!v.required : false,
+      description: v && typeof v === "object" ? str(v.description) : str(v),
+    }));
+  }
+  envVars = envVars.filter((e) => e.key);
+
+  const VALID_ENGINES = ["postgres", "mysql", "redis", "mssql"];
+  const databases = (Array.isArray(o.databases) ? o.databases : [])
+    .map((d: any) => ({
+      engine: VALID_ENGINES.includes(d?.engine) ? d.engine : undefined,
+      connectionEnvVar: str(d?.connectionEnvVar, "DATABASE_URL"),
+      connectionFormat: (CONN_FORMATS as readonly string[]).includes(d?.connectionFormat) ? d.connectionFormat : "url",
+    }))
+    .filter((d: any) => d.engine);
+
+  return {
+    stack: str(o.stack),
+    runtime: str(o.runtime),
+    framework: str(o.framework),
+    toolchain: strArr(o.toolchain),
+    installCmd: str(o.installCmd),
+    buildCmd: str(o.buildCmd),
+    startupProject: str(o.startupProject),
+    runCmd: str(o.runCmd),
+    port: typeof o.port === "number" ? o.port : parseInt(str(o.port), 10) || DEFAULT_PORT,
+    databases,
+    migrations: strArr(o.migrations),
+    sqlScripts: strArr(o.sqlScripts),
+    seedCmd: str(o.seedCmd),
+    envVars,
+  };
+}
+
 /**
  * Fallback for models without reliable native structured output (Kimi/DeepSeek/GLM):
- * ask for a JSON object as TEXT and validate it against the manifest schema. Kimi K3
- * returns clean JSON in `content` (reasoning is a separate field), and this avoids the
- * AI SDK's generateObject structured-output negotiation that Moonshot rejects. Retries
- * once with a stricter nudge if the first reply isn't valid JSON.
+ * ask for a JSON object as TEXT, then coerce + validate it against the manifest schema.
+ * Kimi K3 returns clean JSON in `content` (reasoning is a separate field), and this
+ * avoids the AI SDK's generateObject negotiation that Moonshot rejects. Retries once.
  */
 async function generateManifestFromJson(model: LanguageModel, basePrompt: string) {
   const jsonPrompt =
     basePrompt +
-    `\n\nOUTPUT FORMAT: reply with ONLY a single JSON object with the fields described above — no markdown, no code fences, no commentary. Include every field; use [] or "" where empty.`;
+    `\n\nOUTPUT FORMAT: reply with ONLY a single JSON object — no markdown, no code fences, no commentary — matching EXACTLY this shape (types matter):\n${MANIFEST_SHAPE}\n` +
+    `Rules: "envVars" is an ARRAY of objects (never an object map). Every "databases" entry MUST include "connectionEnvVar". Use [] for empty arrays and "" for empty strings. "port" is a number.`;
   let lastErr: unknown;
   for (let attempt = 1; attempt <= 2; attempt++) {
     const { text } = await generateText({
@@ -232,12 +295,12 @@ async function generateManifestFromJson(model: LanguageModel, basePrompt: string
       prompt:
         attempt === 1
           ? jsonPrompt
-          : jsonPrompt + `\n\n(Your previous reply was not valid JSON. Return ONLY the JSON object — nothing before or after it.)`,
+          : jsonPrompt + `\n\n(Your previous reply did not match. Return ONLY the JSON object in the exact shape above — nothing before or after it.)`,
     });
     const m = text.match(/\{[\s\S]*\}/); // strip any stray prose/fences around the object
     if (m) {
       try {
-        return manifestSchema.parse(JSON.parse(m[0]));
+        return manifestSchema.parse(coerceManifest(JSON.parse(m[0])));
       } catch (e) {
         lastErr = e;
       }
