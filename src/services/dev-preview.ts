@@ -13,7 +13,7 @@
  * The DB provisioning uses the validated recipes in ./project-sandbox.ts.
  */
 import { z } from "zod";
-import { generateObject, generateText, stepCountIs, tool, zodSchema } from "ai";
+import { generateObject, generateText, stepCountIs, tool, zodSchema, type LanguageModel } from "ai";
 import { and, eq, isNotNull, or } from "drizzle-orm";
 import { db } from "../config/db.ts";
 import { projects, projectEnvironmentVariables } from "../db/schema/projects.ts";
@@ -214,17 +214,48 @@ echo "=== README setup ==="; head -c 2500 README.md 2>/dev/null; head -c 1500 RE
 }
 
 /** Detect (or re-detect) the setup manifest. Merges project custom overrides. */
+/**
+ * Fallback for models without reliable native structured output (Kimi/DeepSeek/GLM):
+ * ask for a JSON object as TEXT and validate it against the manifest schema. Kimi K3
+ * returns clean JSON in `content` (reasoning is a separate field), and this avoids the
+ * AI SDK's generateObject structured-output negotiation that Moonshot rejects. Retries
+ * once with a stricter nudge if the first reply isn't valid JSON.
+ */
+async function generateManifestFromJson(model: LanguageModel, basePrompt: string) {
+  const jsonPrompt =
+    basePrompt +
+    `\n\nOUTPUT FORMAT: reply with ONLY a single JSON object with the fields described above — no markdown, no code fences, no commentary. Include every field; use [] or "" where empty.`;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const { text } = await generateText({
+      model,
+      prompt:
+        attempt === 1
+          ? jsonPrompt
+          : jsonPrompt + `\n\n(Your previous reply was not valid JSON. Return ONLY the JSON object — nothing before or after it.)`,
+    });
+    const m = text.match(/\{[\s\S]*\}/); // strip any stray prose/fences around the object
+    if (m) {
+      try {
+        return manifestSchema.parse(JSON.parse(m[0]));
+      } catch (e) {
+        lastErr = e;
+      }
+    } else {
+      lastErr = new Error("no JSON object in model output");
+    }
+  }
+  throw new Error(`could not parse a valid manifest from the model: ${(lastErr as Error)?.message ?? "unknown"}`);
+}
+
 export async function detectManifest(projectId: string, userId: string): Promise<PreviewManifest> {
   const [project] = await db.select().from(projects).where(eq(projects.id, projectId));
   if (!project) throw new Error("project not found");
   const workspaceId = await envWorkspaceId(projectId);
   const fingerprint = await gatherFingerprint(workspaceId);
 
-  const model = await resolveUserModel(userId);
-  const { object } = await generateObject({
-    model,
-    schema: manifestSchema,
-    prompt: `You are a senior build engineer preparing a SETUP PLAN to run this EXISTING repository inside a fresh sandbox so a developer can preview it live. You have a full read of the codebase below (solution/project files, appsettings, docker-compose, ORM config, SQL scripts, env examples, README). Produce a COMPLETE, concrete plan — everything needed to get this specific app serving HTTP. Do NOT be vague; do NOT assume; base every field on what the code actually shows.
+  const { model, supportsStructured } = await resolveUserModel(userId);
+  const promptText = `You are a senior build engineer preparing a SETUP PLAN to run this EXISTING repository inside a fresh sandbox so a developer can preview it live. You have a full read of the codebase below (solution/project files, appsettings, docker-compose, ORM config, SQL scripts, env examples, README). Produce a COMPLETE, concrete plan — everything needed to get this specific app serving HTTP. Do NOT be vague; do NOT assume; base every field on what the code actually shows.
 
 ENVIRONMENT: the sandbox is ALPINE LINUX (musl libc, apk package manager, OpenRC, busybox). Every command MUST be Alpine-compatible: use \`apk add --no-cache <pkg>\` (NEVER apt/apt-get/yum/dnf), start system services with \`rc-service <svc> start\` (NEVER systemctl), and note that glibc-only prebuilt binaries may need \`apk add gcompat\`. Docker is ALREADY installed and running (use it for SQL Server). Package names are Alpine's (e.g. dotnet8-sdk, nodejs, npm, python3, py3-pip, postgresql-client).
 
@@ -240,8 +271,14 @@ Work out and fill in:
 - seedCmd / envVars — any other seed step / real external config (API keys) the app needs. EXCLUDE the DB connection vars (handled above).
 
 Full codebase read:
-${fingerprint}`,
-  });
+${fingerprint}`;
+  // Native structured output (generateObject) is reliable on anthropic/openai/google.
+  // Kimi/DeepSeek/GLM negotiate it poorly ("response did not match schema"), so for those
+  // we ask for JSON text and parse it against the same schema (K3 returns clean JSON in
+  // `content` — reasoning is a separate field, so a plain parse works).
+  const object = supportsStructured
+    ? (await generateObject({ model, schema: manifestSchema, prompt: promptText })).object
+    : await generateManifestFromJson(model, promptText);
 
   // Project-level manual overrides win (customInstallCmd/customDevCmd/customDefaultPort).
   const manifest: PreviewManifest = {
@@ -1509,23 +1546,31 @@ fi`, 240_000);
       }
     }
     if (!profile) {
-      const prior = await loadAppProfile(projectId); // carry learnings across a re-probe
-      const pac = new AbortController();
-      const pw = setInterval(() => { if (isCancelled(projectId)) pac.abort(); }, 1000);
-      try {
-        profile = await probeAppProfile({
-          workspaceId,
-          userId,
-          onLog: (l, d) => plog(projectId, userId, l, d ? { detail: d } : undefined),
-          abortSignal: pac.signal,
-        });
-      } finally { clearInterval(pw); }
-      if (profile) {
-        // A re-probe rewrites the plan but must NOT forget hard-won run learnings.
-        if (prior?.profile.learnings?.length) {
-          profile.learnings = [...prior.profile.learnings, ...(profile.learnings ?? [])].slice(-40);
+      const { supportsStructured } = await resolveUserModel(userId);
+      if (!supportsStructured) {
+        // Kimi/DeepSeek/GLM don't reliably converge on the multi-step agentic tool-probe
+        // (it can spin for minutes without ever finalizing a profile). Skip it and let the
+        // single-shot quick detection below build the manifest instead.
+        plog(projectId, userId, "Selected model isn't a strong agentic tool-caller — using quick detection instead of the deep probe.");
+      } else {
+        const prior = await loadAppProfile(projectId); // carry learnings across a re-probe
+        const pac = new AbortController();
+        const pw = setInterval(() => { if (isCancelled(projectId)) pac.abort(); }, 1000);
+        try {
+          profile = await probeAppProfile({
+            workspaceId,
+            userId,
+            onLog: (l, d) => plog(projectId, userId, l, d ? { detail: d } : undefined),
+            abortSignal: pac.signal,
+          });
+        } finally { clearInterval(pw); }
+        if (profile) {
+          // A re-probe rewrites the plan but must NOT forget hard-won run learnings.
+          if (prior?.profile.learnings?.length) {
+            profile.learnings = [...prior.profile.learnings, ...(profile.learnings ?? [])].slice(-40);
+          }
+          await saveAppProfile(projectId, profile);
         }
-        await saveAppProfile(projectId, profile);
       }
     }
     throwIfCancelled(projectId);

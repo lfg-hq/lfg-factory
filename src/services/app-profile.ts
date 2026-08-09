@@ -23,19 +23,30 @@ import { appProfiles } from "../db/schema/app-profile.ts";
 import { projectEnvironmentVariables } from "../db/schema/projects.ts";
 import { modelSelections } from "../db/schema/chat.ts";
 import { llmApiKeys } from "../db/schema/users.ts";
-import { getModel, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
+import { getModel, getProviderName, DEFAULT_MODEL_KEY, type ProviderName } from "../ai/provider.ts";
 import { execOnWorkspace } from "./mags.ts";
 import type { LanguageModel } from "ai";
 import type { PreviewManifest } from "./dev-preview.ts";
+
+/** Providers whose native structured-output (generateObject) + agentic tool-calling are
+ *  reliable. Kimi/DeepSeek/GLM negotiate generateObject poorly (→ "response did not match
+ *  schema") and don't converge on multi-step tool loops, so setup uses a JSON-text +
+ *  manual-parse path and skips the tool-probe for them. */
+export function providerSupportsStructured(provider: ProviderName | null): boolean {
+  return !!provider && ["anthropic", "openai", "google"].includes(provider);
+}
 
 /**
  * Resolve the LLM the user picked in chat (with their own keys) for setup/probe work.
  * Preview setup must use the SAME model the user selected — not a hardcoded default on
  * the server's env key (which broke setup when the server's OpenAI key was invalid,
  * even though the user had a valid Kimi/other key). Falls back to the default model +
- * env only when the user has no selection/keys.
+ * env only when the user has no selection/keys. Also reports whether the model can do
+ * native structured output / agentic tool-calling, so callers pick the right strategy.
  */
-export async function resolveUserModel(userId: string): Promise<LanguageModel> {
+export async function resolveUserModel(
+  userId: string,
+): Promise<{ model: LanguageModel; modelKey: string; provider: ProviderName | null; supportsStructured: boolean }> {
   const [sel] = await db.select().from(modelSelections).where(eq(modelSelections.userId, userId));
   const [keys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, userId));
   const modelKey = sel?.selectedModel ?? DEFAULT_MODEL_KEY;
@@ -49,7 +60,13 @@ export async function resolveUserModel(userId: string): Promise<LanguageModel> {
         glm: keys.glmApiKey ?? undefined,
       }
     : undefined;
-  return getModel(modelKey, userApiKeys, { allowEnvFallback: true });
+  const provider = getProviderName(modelKey);
+  return {
+    model: getModel(modelKey, userApiKeys, { allowEnvFallback: true }),
+    modelKey,
+    provider,
+    supportsStructured: providerSupportsStructured(provider),
+  };
 }
 
 const PROJECT_DIR = "/data/project";
@@ -202,7 +219,7 @@ export async function probeAppProfile(opts: {
   };
 
   log("Probing the codebase (deep read → run profile)…");
-  const model = await resolveUserModel(userId);
+  const { model } = await resolveUserModel(userId);
   try {
     await generateText({
       model,
