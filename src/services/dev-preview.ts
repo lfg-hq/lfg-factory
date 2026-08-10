@@ -213,6 +213,52 @@ echo "=== README setup ==="; head -c 2500 README.md 2>/dev/null; head -c 1500 RE
   return output.slice(0, 24_000);
 }
 
+// Runtime/system vars the sandbox sets itself — never surface these as "app env".
+const ENV_DENYLIST = new Set([
+  "PORT", "HOST", "HOSTNAME", "PATH", "HOME", "PWD", "USER", "SHELL", "LANG", "LC_ALL", "TERM",
+  "TMPDIR", "TMP", "TEMP", "NODE_ENV", "NODE_OPTIONS", "RAILS_ENV", "FLASK_ENV", "DJANGO_SETTINGS_MODULE",
+  "PYTHONUNBUFFERED", "PYTHONPATH", "PYTHONDONTWRITEBYTECODE", "ASPNETCORE_URLS", "ASPNETCORE_ENVIRONMENT",
+  "ASPNETCORE_FORWARDEDHEADERS_ENABLED", "DOTNET_RUNNING_IN_CONTAINER", "DOTNET_CLI_TELEMETRY_OPTOUT",
+  "CI", "VERCEL", "NUGET_PACKAGES", "GOPATH", "GOCACHE", "GEM_HOME", "BUNDLE_PATH",
+]);
+
+/**
+ * Deterministically scan the cloned repo for env-var READS (process.env.X, os.Getenv,
+ * import.meta.env.X, ENV["X"], os.environ, .env.example keys, …) so setup never MISSES a
+ * variable the app actually references just because the LLM detection didn't list it
+ * (e.g. SENDGRID_API_KEY). Returns the UPPER_SNAKE keys found, minus runtime/system noise.
+ * Best-effort — returns [] on any failure.
+ */
+async function grepEnvKeys(workspaceId: string): Promise<string[]> {
+  const script = `
+cd ${PROJECT_DIR} 2>/dev/null || exit 0
+# Alpine's default grep is busybox (no --exclude-dir); install GNU grep so the scan works.
+apk add --no-cache grep >/dev/null 2>&1 || true
+{
+grep -rhoE --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=vendor --exclude-dir=dist --exclude-dir=build --exclude-dir=.next --exclude-dir=target \\
+  -e 'process\\.env\\.[A-Za-z_][A-Za-z0-9_]*' \\
+  -e 'process\\.env\\[.[A-Za-z_][A-Za-z0-9_]*' \\
+  -e 'import\\.meta\\.env\\.[A-Za-z_][A-Za-z0-9_]*' \\
+  -e '[gG]etenv\\(.[A-Za-z_][A-Za-z0-9_]*' \\
+  -e 'LookupEnv\\(.[A-Za-z_][A-Za-z0-9_]*' \\
+  -e 'environ\\[.[A-Za-z_][A-Za-z0-9_]*' \\
+  -e 'environ\\.get\\(.[A-Za-z_][A-Za-z0-9_]*' \\
+  -e 'ENV\\[.[A-Za-z_][A-Za-z0-9_]*' \\
+  . 2>/dev/null
+grep -rhoE '^[A-Za-z_][A-Za-z0-9_]*' .env.example .env.sample .env.template 2>/dev/null
+} | head -5000
+`.trim();
+  const { output } = await sh(workspaceId, script, 45_000).catch(() => ({ output: "" }));
+  const keys = new Set<string>();
+  for (const line of (output || "").split("\n")) {
+    const m = line.trim().match(/[A-Za-z_][A-Za-z0-9_]*$/); // trailing identifier = the env name
+    if (!m) continue;
+    const k = m[0];
+    if (/^[A-Z][A-Z0-9_]{2,}$/.test(k) && !ENV_DENYLIST.has(k)) keys.add(k);
+  }
+  return [...keys];
+}
+
 /** Detect (or re-detect) the setup manifest. Merges project custom overrides. */
 /** The exact JSON shape we want back — spelled out for models that don't do native
  *  structured output, so they don't return e.g. envVars as an object or drop a field. */
@@ -1676,6 +1722,16 @@ fi`, 240_000);
       ...(manifest.envVars ?? []).map((e) => ({ key: e.key, required: e.required, description: e.description })),
       ...((profile?.secretsRequired ?? []).map((s) => ({ key: s.key, required: true, description: s.description }))),
     ];
+    // Deterministic backfill: grep the repo for env READS so we don't miss a var the app
+    // references but the LLM detection skipped (e.g. SENDGRID_API_KEY). DB connection vars
+    // are handled by provisioning, so exclude them here.
+    const grepped = await grepEnvKeys(workspaceId).catch(() => [] as string[]);
+    const dbVars = new Set(manifest.databases.map((d) => d.connectionEnvVar));
+    const known = new Set(detectedEnv.map((e) => e.key));
+    for (const k of grepped) {
+      if (known.has(k) || dbVars.has(k)) continue;
+      detectedEnv.push({ key: k, required: false, description: "Referenced in the codebase." });
+    }
     const envSync = await syncDetectedEnv(projectId, userId, detectedEnv).catch(() => null);
     if (envSync?.generated.length) {
       plog(projectId, userId, `Generated ${envSync.generated.length} app secret(s): ${envSync.generated.join(", ")}`);
