@@ -1078,6 +1078,7 @@ export function ProjectDetailPage({
               <input id="env-new-value" class="env-input" placeholder="value" style="flex:1;min-width:180px;" />
               <input id="env-new-desc" class="env-input" placeholder="description (optional)" style="flex:1;min-width:160px;" />
               <button id="env-add-btn" class="env-mini" style="padding:7px 14px;">＋ Add</button>
+              <label class="env-mini" style="padding:7px 14px;cursor:pointer;" title="Bulk-import KEY=VALUE lines from a .env file">⬆ Upload .env<input id="env-file" type="file" accept=".env,.txt,text/plain" style="display:none;" /></label>
             </div>
             <div id="env-list" style="border:1px solid var(--border-color);border-radius:var(--radius-lg);overflow:hidden;"></div>
           </div>
@@ -1126,6 +1127,20 @@ export function ProjectDetailPage({
                   document.getElementById('env-new-desc').value='';
                   load();
                 });
+              });
+              var fileEl = document.getElementById('env-file');
+              if (fileEl) fileEl.addEventListener('change', function(){
+                var f = fileEl.files && fileEl.files[0];
+                if (!f) return;
+                var reader = new FileReader();
+                reader.onload = function(){
+                  api('/env-vars/bulk', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ text: String(reader.result || '') }) }).then(function(d){
+                    fileEl.value = '';
+                    if (d && d.count != null) { try { document.getElementById('env-count').textContent = d.count + ' imported…'; } catch(e){} }
+                    load();
+                  }).catch(function(){});
+                };
+                reader.readAsText(f);
               });
               var dbSel = document.getElementById('env-db-mode');
               dbSel.addEventListener('change', function(){

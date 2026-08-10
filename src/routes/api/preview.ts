@@ -14,7 +14,7 @@ import { db } from "../../config/db.ts";
 import { projectEnvironments } from "../../db/schema/project-environments.ts";
 import { projects, projectEnvironmentVariables } from "../../db/schema/projects.ts";
 import { encryptSecret } from "../../utils/crypto.ts";
-import { getPreviewState, setupPreview, restartPreview, stopPreview, detectManifest, manifestSchema, capturePreviewScreenshot, getPreviewBranches, reprobeProfile } from "../../services/dev-preview.ts";
+import { getPreviewState, setupPreview, restartPreview, stopPreview, detectManifest, manifestSchema, capturePreviewScreenshot, getPreviewBranches, reprobeProfile, getAppRuntimeLog } from "../../services/dev-preview.ts";
 import { loadAppProfile, saveAppProfile, appProfileSchema } from "../../services/app-profile.ts";
 import type { auth } from "../../auth/index.ts";
 
@@ -116,6 +116,61 @@ previewApi.get("/:projectId/env-vars", async (c) => {
       description: e.description ?? "",
     })),
   });
+});
+
+// Bulk import (e.g. an uploaded .env): upsert many at once. Body: { text: "<.env>" } or
+// { vars: [{key,value,description?,isSecret?}] }. Only overwrites values that are given.
+previewApi.post("/:projectId/env-vars/bulk", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId")!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  const body = await c.req.json().catch(() => ({} as any));
+  let entries: { key: string; value: string; description?: string; isSecret?: boolean }[] = [];
+  if (typeof body.text === "string") {
+    // Parse .env text: KEY=VALUE lines, skip comments/blanks, strip `export ` + quotes.
+    for (const raw of body.text.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line || line.startsWith("#")) continue;
+      const eq = line.indexOf("=");
+      if (eq < 0) continue;
+      const key = line.slice(0, eq).replace(/^export\s+/, "").trim();
+      let value = line.slice(eq + 1).trim().replace(/^["']|["']$/g, "");
+      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) entries.push({ key, value });
+    }
+  } else if (Array.isArray(body.vars)) {
+    entries = body.vars.filter((v: any) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(v?.key ?? ""));
+  }
+  if (!entries.length) return c.json({ error: "No valid KEY=VALUE entries found." }, 400);
+  let count = 0;
+  for (const e of entries) {
+    const hasValue = typeof e.value === "string" && e.value.length > 0;
+    await db
+      .insert(projectEnvironmentVariables)
+      .values({
+        projectId: access.project.id,
+        key: e.key,
+        encryptedValue: hasValue ? encryptSecret(String(e.value)) : "",
+        isSecret: e.isSecret !== false,
+        isRequired: false,
+        hasValue,
+        description: String(e.description ?? ""),
+        createdById: user.id,
+      })
+      .onConflictDoUpdate({
+        target: [projectEnvironmentVariables.projectId, projectEnvironmentVariables.key],
+        set: { ...(hasValue ? { encryptedValue: encryptSecret(String(e.value)), hasValue: true } : {}), updatedAt: new Date() },
+      });
+    count++;
+  }
+  return c.json({ ok: true, count });
+});
+
+// Live app runtime log (the running app's own stdout — auth/email/errors), tailed on demand.
+previewApi.get("/:projectId/preview/app-logs", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId")!, user.id);
+  if (!access) return c.json({ error: "Not found" }, 404);
+  return c.json({ log: await getAppRuntimeLog(access.project.id) });
 });
 
 // Create or update by key (upsert on the (projectId, key) unique index).

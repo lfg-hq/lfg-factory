@@ -288,6 +288,26 @@ async function reapplyEnv(projectId: string, userId: string, workspaceId: string
   plog(projectId, userId, "Re-applied environment variables from your settings.");
 }
 
+/**
+ * Tail the RUNNING app's own stdout/stderr (preview.log in the VM) — the app's live
+ * runtime output (auth errors, email attempts, request logs), distinct from LFG's setup
+ * driver log. Picks the most-recently-written preview.log (default checkout or a ticket
+ * worktree). Best-effort — returns "" if the sandbox/log isn't reachable.
+ */
+export async function getAppRuntimeLog(projectId: string, lines = 500): Promise<string> {
+  try {
+    const workspaceId = await envWorkspaceId(projectId);
+    const { output } = await sh(
+      workspaceId,
+      `f=$(ls -t ${PROJECT_DIR}/preview.log /data/*/preview.log 2>/dev/null | head -1); [ -n "$f" ] && tail -n ${lines} "$f" 2>/dev/null || echo "(no app log yet — the app may not have started, or hasn't printed anything)"`,
+      20_000,
+    );
+    return output || "";
+  } catch {
+    return "";
+  }
+}
+
 /** Detect (or re-detect) the setup manifest. Merges project custom overrides. */
 /** The exact JSON shape we want back — spelled out for models that don't do native
  *  structured output, so they don't return e.g. envVars as an object or drop a field. */

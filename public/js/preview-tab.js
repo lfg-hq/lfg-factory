@@ -19,6 +19,8 @@
   let current = null; // last known state
   let loadedOnce = false;
   let logText = ""; // accumulated setup log
+  let appLogText = ""; // the RUNNING app's own runtime log (preview.log), fetched on demand
+  let appLogTimer = null; // auto-refresh poll while the App-logs tab is open
   let manifest = null; // the setup plan (derived from the profile)
   let profileData = null; // the App Profile — the detailed "how to run this app" plan
   let stepsData = null; // checkpoint runbook steps
@@ -57,11 +59,17 @@
   }
 
   function btn(label, opts = {}) {
+    const base = "height:32px;padding:0 12px;border-radius:7px;cursor:pointer;font-size:12.5px;display:inline-flex;align-items:center;justify-content:center;gap:7px;font-weight:500;white-space:nowrap;transition:background .12s,border-color .12s;";
     const style = opts.primary
-      ? "background:#7c3aed;color:#fff;border:none;"
-      : "background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);";
-    return `<button data-action="${opts.action}" style="padding:7px 14px;border-radius:6px;cursor:pointer;font-size:13px;display:inline-flex;align-items:center;gap:6px;${style}">${opts.icon ? `<i class="fas ${opts.icon}"></i>` : ""}${esc(label)}</button>`;
+      ? "background:#7c3aed;color:#fff;border:1px solid #7c3aed;"
+      : opts.danger
+        ? "background:transparent;color:#f87171;border:1px solid var(--border-color,#333);"
+        : "background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);";
+    const pad = opts.iconOnly ? "padding:0 9px;" : "";
+    return `<button data-action="${opts.action}" title="${esc(opts.title || label)}" style="${base}${style}${pad}">${opts.icon ? `<i class="fas ${opts.icon}"></i>` : ""}${opts.iconOnly ? "" : esc(label)}</button>`;
   }
+  // A thin vertical divider between button groups in the toolbar.
+  function tbDiv() { return `<span style="width:1px;height:20px;background:var(--border-color,#333);margin:0 3px;flex:none;"></span>`; }
 
   function renderActions(html) {
     const el = $("preview-actions");
@@ -85,10 +93,34 @@
   // visible pane(s) in place so no view is rebuilt (keeps the iframe mounted). ──
   function segInner() {
     const seg = (id, label) => `<button data-ptab="${id}" style="padding:5px 14px;border-radius:7px;cursor:pointer;font-size:12.5px;border:1px solid var(--border-color,#333);background:${progressTab === id ? "#7c3aed" : "var(--border-color,#2a2a2a)"};color:${progressTab === id ? "#fff" : "var(--text-color,#e2e8f0)"};">${label}</button>`;
-    return seg("logs", "Logs") + seg("steps", "Steps");
+    return seg("logs", "Setup") + seg("applogs", "App logs") + seg("steps", "Steps");
   }
   function segButtons() { return `<div data-ptab-header style="display:flex;gap:4px;flex:none;">${segInner()}</div>`; }
-  function activePane() { return progressTab === "steps" ? stepsPanel(true) : logPanel(true); }
+  function activePane() {
+    if (progressTab === "steps") return stepsPanel(true);
+    if (progressTab === "applogs") return appLogPanel();
+    return logPanel(true);
+  }
+
+  // Live runtime log of the RUNNING app (its own stdout — auth/email/errors), separate
+  // from LFG's setup log. Fetched on demand + auto-refreshed while this tab is open.
+  function appLogPanel() {
+    return `<div style="position:relative;flex:1;min-height:0;display:flex;flex-direction:column;">
+      <button data-action="refreshapplog" title="Refresh" style="position:absolute;top:8px;right:10px;z-index:2;padding:5px 10px;font-size:12px;border-radius:6px;cursor:pointer;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);display:inline-flex;align-items:center;gap:5px;"><i class="fas fa-rotate-right"></i><span>Refresh</span></button>
+      <pre id="app-log" style="flex:1;min-height:0;margin:0;overflow:auto;text-align:left;background:var(--background-surface,#141414);border:1px solid var(--border-color,#2a2a2a);border-radius:8px;padding:12px 14px;font-size:12px;line-height:1.55;color:var(--text-color,#cbd5e1);white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${esc(appLogText || "Loading the app's runtime log…")}</pre>
+    </div>`;
+  }
+  async function loadAppLog() {
+    try {
+      const r = await api("/preview/app-logs");
+      const j = await r.json();
+      appLogText = (j && j.log) || "(no output)";
+    } catch (_) { appLogText = "Could not load the app log."; }
+    const el = $("app-log");
+    if (el) { el.textContent = appLogText; el.scrollTop = el.scrollHeight; }
+  }
+  function startAppPoll() { stopAppPoll(); appLogTimer = setInterval(loadAppLog, 4000); }
+  function stopAppPoll() { if (appLogTimer) { clearInterval(appLogTimer); appLogTimer = null; } }
   function refreshPanes() {
     document.querySelectorAll("[data-ptab-header]").forEach((h) => { h.innerHTML = segInner(); });
     document.querySelectorAll("[data-pane]").forEach((p) => { p.innerHTML = activePane(); });
@@ -341,13 +373,15 @@
       setSub("Live" + (state.branch ? ` · ${state.branch}` : ""));
       syncBranchFromState(state); // reflect the actually-running branch
       const opts = branches.map((b) => `<option value="${esc(b.id)}"${b.id === branchId ? " selected" : ""}>${esc(b.label)}</option>`).join("");
-      const branchSel = `<select data-branch title="Run a ticket's branch or the default" style="padding:6px 8px;border-radius:6px;font-size:12.5px;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);max-width:200px;">${opts}</select>`;
+      const branchSel = `<select data-branch title="Run a ticket's branch or the default" style="height:32px;padding:0 10px;border-radius:7px;font-size:12.5px;background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);max-width:180px;cursor:pointer;">${opts}</select>`;
       renderActions(
         branchSel +
-        btn("Screenshot", { action: "screenshot", icon: "fa-camera" }) +
-        btn("Logs", { action: "togglelog", icon: "fa-terminal" }) +
+        tbDiv() +
+        btn("Screenshot", { action: "screenshot", icon: "fa-camera", iconOnly: true, title: "Screenshot to chat" }) +
+        btn("Logs", { action: "togglelog", icon: "fa-terminal", iconOnly: true, title: "Logs (setup + app)" }) +
+        tbDiv() +
         btn("Restart", { action: "restart", icon: "fa-power-off" }) +
-        btn("Stop", { action: "stop", icon: "fa-stop" })
+        btn("Stop", { action: "stop", icon: "fa-stop", danger: true })
       );
       mountBrowser(body, state.previewUrl);
       // Refresh the branch list (ticket worktrees may have appeared), re-sync to the
@@ -468,7 +502,7 @@
     const body = $("preview-body");
     if (!body) return;
     const existing = document.getElementById("preview-log-overlay");
-    if (existing) { existing.remove(); return; }
+    if (existing) { existing.remove(); stopAppPoll(); return; }
     const overlay = document.createElement("div");
     overlay.id = "preview-log-overlay";
     overlay.style.cssText = "position:absolute;inset:0;padding:16px 20px;background:var(--bg-color,#0f0f0f);display:flex;flex-direction:column;gap:10px;z-index:5;";
@@ -686,7 +720,12 @@
   function onActionClick(e) {
     // Logs | Steps toggle (present in progress, running-overlay, and error views).
     const pt = e.target.closest("[data-ptab]");
-    if (pt) { progressTab = pt.getAttribute("data-ptab"); refreshPanes(); return; }
+    if (pt) {
+      progressTab = pt.getAttribute("data-ptab");
+      refreshPanes();
+      if (progressTab === "applogs") { loadAppLog(); startAppPoll(); } else { stopAppPoll(); }
+      return;
+    }
     const b = e.target.closest("[data-action]");
     if (!b) return;
     const action = b.getAttribute("data-action");
@@ -695,6 +734,7 @@
     else if (action === "rundefault") { branchId = "default"; doRestart(); } // back to main (fast path)
     else if (action === "stop") doStop();
     else if (action === "togglelog") toggleLog();
+    else if (action === "refreshapplog") loadAppLog();
     else if (action === "copylog") copyLog();
     else if (action === "screenshot") takeScreenshot(b);
     else if (action === "closeplan") togglePlan();

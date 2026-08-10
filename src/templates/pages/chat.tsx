@@ -215,9 +215,9 @@ export function ChatPage({
                 <h3 style="color:var(--text-color,#e2e8f0);margin:0;font-size:16px;font-weight:600;white-space:nowrap;">Preview</h3>
                 <span id="preview-substatus" style="color:var(--text-secondary,#9ca3af);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px;">Loading…</span>
               </div>
-              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;flex:1 1 auto;">
-                <button id="preview-plan-btn" style="padding:7px 12px;border-radius:6px;cursor:pointer;font-size:13px;display:inline-flex;align-items:center;gap:6px;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);white-space:nowrap;flex:none;"><i class="fas fa-list-check"></i>Profile</button>
-                <div id="preview-actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end;"></div>
+              <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end;flex:1 1 auto;">
+                <button id="preview-plan-btn" title="Profile — how this app runs" style="height:32px;padding:0 12px;border-radius:7px;cursor:pointer;font-size:12.5px;display:inline-flex;align-items:center;gap:7px;font-weight:500;background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);white-space:nowrap;flex:none;"><i class="fas fa-list-check"></i>Profile</button>
+                <div id="preview-actions" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end;"></div>
               </div>
             </div>
             <div id="preview-body" style="flex:1;min-height:0;position:relative;overflow:hidden;">
