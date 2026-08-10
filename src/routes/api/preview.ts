@@ -7,12 +7,13 @@
  *   PUT    /api/projects/:projectId/preview/manifest   → save an edited manifest
  */
 import { Hono } from "hono";
-import { eq } from "drizzle-orm";
+import { eq, and, asc } from "drizzle-orm";
 import { requireAuth } from "../../auth/middleware.ts";
 import { getProjectAccess } from "../../auth/project-access.ts";
 import { db } from "../../config/db.ts";
 import { projectEnvironments } from "../../db/schema/project-environments.ts";
-import { projects } from "../../db/schema/projects.ts";
+import { projects, projectEnvironmentVariables } from "../../db/schema/projects.ts";
+import { encryptSecret } from "../../utils/crypto.ts";
 import { getPreviewState, setupPreview, restartPreview, stopPreview, detectManifest, manifestSchema, capturePreviewScreenshot, getPreviewBranches, reprobeProfile } from "../../services/dev-preview.ts";
 import { loadAppProfile, saveAppProfile, appProfileSchema } from "../../services/app-profile.ts";
 import type { auth } from "../../auth/index.ts";
@@ -71,10 +72,11 @@ previewApi.get("/:projectId/preview/build-settings", async (c) => {
   const user = c.get("user");
   const access = await getProjectAccess(c.req.param("projectId")!, user.id);
   if (!access) return c.json({ error: "Project not found" }, 404);
-  const p = access.project as { ticketBuildIsolation?: string; previewBranchMode?: string };
+  const p = access.project as { ticketBuildIsolation?: string; previewBranchMode?: string; dbMode?: string };
   return c.json({
     ticketBuildIsolation: p.ticketBuildIsolation ?? "isolated",
     previewBranchMode: p.previewBranchMode ?? "worktree",
+    dbMode: p.dbMode ?? "auto",
   });
 });
 
@@ -86,10 +88,98 @@ previewApi.post("/:projectId/preview/build-settings", async (c) => {
   const patch: Record<string, unknown> = {};
   if (body.ticketBuildIsolation === "isolated" || body.ticketBuildIsolation === "shared") patch.ticketBuildIsolation = body.ticketBuildIsolation;
   if (body.previewBranchMode === "worktree" || body.previewBranchMode === "checkout") patch.previewBranchMode = body.previewBranchMode;
+  if (body.dbMode === "auto" || body.dbMode === "new" || body.dbMode === "provided") patch.dbMode = body.dbMode;
   if (!Object.keys(patch).length) return c.json({ error: "Nothing valid to update" }, 400);
   patch.updatedAt = new Date();
   await db.update(projects).set(patch).where(eq(projects.id, access.project.id));
   return c.json({ ok: true, ...patch });
+});
+
+// ── Environment variables CRUD ───────────────────────────────────────
+// Values are never returned (secret or not); the UI only needs metadata + masking.
+previewApi.get("/:projectId/env-vars", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId")!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  const rows = await db
+    .select()
+    .from(projectEnvironmentVariables)
+    .where(eq(projectEnvironmentVariables.projectId, access.project.id))
+    .orderBy(asc(projectEnvironmentVariables.key));
+  return c.json({
+    envVars: rows.map((e) => ({
+      id: e.id,
+      key: e.key,
+      isSecret: e.isSecret,
+      isRequired: e.isRequired,
+      hasValue: e.hasValue,
+      description: e.description ?? "",
+    })),
+  });
+});
+
+// Create or update by key (upsert on the (projectId, key) unique index).
+previewApi.post("/:projectId/env-vars", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId")!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  const body = await c.req.json().catch(() => ({} as any));
+  const key = String(body.key ?? "").trim();
+  if (!key || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return c.json({ error: "Invalid env var name" }, 400);
+  const hasValue = typeof body.value === "string" && body.value.length > 0;
+  const isSecret = body.isSecret !== false; // default secret
+  await db
+    .insert(projectEnvironmentVariables)
+    .values({
+      projectId: access.project.id,
+      key,
+      encryptedValue: hasValue ? encryptSecret(String(body.value)) : "",
+      isSecret,
+      isRequired: !!body.isRequired,
+      hasValue,
+      description: String(body.description ?? ""),
+      createdById: user.id,
+    })
+    .onConflictDoUpdate({
+      target: [projectEnvironmentVariables.projectId, projectEnvironmentVariables.key],
+      set: {
+        // Only overwrite the stored value when a new one is provided (blank = keep).
+        ...(hasValue ? { encryptedValue: encryptSecret(String(body.value)), hasValue: true } : {}),
+        isSecret,
+        ...(body.description !== undefined ? { description: String(body.description) } : {}),
+        updatedAt: new Date(),
+      },
+    });
+  return c.json({ ok: true });
+});
+
+previewApi.patch("/:projectId/env-vars/:id", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId")!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  const body = await c.req.json().catch(() => ({} as any));
+  const patch: Record<string, unknown> = { updatedAt: new Date() };
+  if (typeof body.value === "string" && body.value.length > 0) {
+    patch.encryptedValue = encryptSecret(body.value);
+    patch.hasValue = true;
+  }
+  if (body.description !== undefined) patch.description = String(body.description);
+  if (body.isSecret !== undefined) patch.isSecret = !!body.isSecret;
+  await db
+    .update(projectEnvironmentVariables)
+    .set(patch)
+    .where(and(eq(projectEnvironmentVariables.id, c.req.param("id")!), eq(projectEnvironmentVariables.projectId, access.project.id)));
+  return c.json({ ok: true });
+});
+
+previewApi.delete("/:projectId/env-vars/:id", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId")!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  await db
+    .delete(projectEnvironmentVariables)
+    .where(and(eq(projectEnvironmentVariables.id, c.req.param("id")!), eq(projectEnvironmentVariables.projectId, access.project.id)));
+  return c.json({ ok: true });
 });
 
 previewApi.post("/:projectId/preview/stop", async (c) => {

@@ -1047,43 +1047,94 @@ export function ProjectDetailPage({
         ` : ""}
 
         ${activeTab === "environment" ? html`
+          <style>
+            .env-table { width:100%; border-collapse:collapse; }
+            .env-table th { padding:0.6rem 1rem; text-align:left; font-size:0.72rem; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.05em; background:var(--card-bg); border-bottom:1px solid var(--border-color); }
+            .env-table td { padding:0.6rem 1rem; font-size:0.85rem; color:var(--text-secondary); border-bottom:1px solid var(--border-color); }
+            .env-key { font-family:monospace; color:var(--text-color); }
+            .env-badge { font-size:0.65rem; background:var(--danger-color); color:#fff; border-radius:4px; padding:1px 6px; text-transform:uppercase; letter-spacing:0.03em; }
+            .env-mini { background:var(--card-bg); border:1px solid var(--border-color); color:var(--text-secondary); border-radius:6px; padding:3px 9px; font-size:0.72rem; cursor:pointer; }
+            .env-mini:hover { border-color:var(--text-secondary); color:var(--text-color); }
+            .env-empty { text-align:center; padding:3rem; color:var(--text-secondary); border:1px dashed var(--border-color); border-radius:var(--radius-lg); }
+            .env-input { background:var(--input-bg,var(--card-bg)); border:1px solid var(--border-color); color:var(--text-color); border-radius:7px; padding:7px 10px; font-size:0.82rem; }
+          </style>
           <div>
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem;">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;margin-bottom:1rem;flex-wrap:wrap;">
               <div>
                 <h2 style="font-size:1.1rem;font-weight:600;color:var(--text-color);margin:0;">Environment Variables</h2>
-                <p style="font-size:0.8125rem;color:var(--text-secondary);margin:0.25rem 0 0;">${envVars.length} variable${envVars.length !== 1 ? "s" : ""}</p>
+                <p id="env-count" style="font-size:0.8125rem;color:var(--text-secondary);margin:0.25rem 0 0;">Loading…</p>
+              </div>
+              <div style="display:flex;align-items:center;gap:0.5rem;">
+                <label style="font-size:0.72rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.04em;">Database</label>
+                <select id="env-db-mode" class="env-input" title="Auto: use your DATABASE_URL if set, else provision. Always new: fresh DB each run. Use my DB: never provision.">
+                  <option value="auto">Auto (agent decides)</option>
+                  <option value="new">Always provision new</option>
+                  <option value="provided">Use my DB</option>
+                </select>
               </div>
             </div>
-            ${envVars.length === 0 ? html`
-              <div style="text-align:center;padding:3rem;color:var(--text-secondary);border:1px dashed var(--border-color);border-radius:var(--radius-lg);">
-                <i class="fas fa-key" style="font-size:2rem;opacity:0.3;display:block;margin-bottom:0.75rem;"></i>
-                <p style="margin:0;">No environment variables. Ask the AI to set them up.</p>
-              </div>
-            ` : html`
-              <div style="border:1px solid var(--border-color);border-radius:var(--radius-lg);overflow:hidden;">
-                <table style="width:100%;border-collapse:collapse;">
-                  <thead>
-                    <tr style="background:var(--card-bg);border-bottom:1px solid var(--border-color);">
-                      <th style="padding:0.75rem 1rem;text-align:left;font-size:0.75rem;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em;">Key</th>
-                      <th style="padding:0.75rem 1rem;text-align:left;font-size:0.75rem;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em;">Value</th>
-                      <th style="padding:0.75rem 1rem;text-align:left;font-size:0.75rem;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em;">Description</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    ${envVars.map((ev, i) => html`
-                      <tr style="border-bottom:${i < envVars.length - 1 ? "1px solid var(--border-color)" : "none"};">
-                        <td style="padding:0.75rem 1rem;font-family:monospace;font-size:0.875rem;color:var(--text-color);">${ev.key}</td>
-                        <td style="padding:0.75rem 1rem;font-size:0.875rem;color:var(--text-secondary);">
-                          ${ev.hasValue ? html`<em>${ev.isSecret ? "••••••••" : "set"}</em>` : html`<em style="color:var(--danger-color);">not set</em>`}
-                        </td>
-                        <td style="padding:0.75rem 1rem;font-size:0.8125rem;color:var(--text-secondary);">${ev.description ?? ""}</td>
-                      </tr>
-                    `)}
-                  </tbody>
-                </table>
-              </div>
-            `}
+            <div style="display:flex;gap:0.5rem;margin-bottom:1rem;flex-wrap:wrap;align-items:center;">
+              <input id="env-new-key" class="env-input" placeholder="KEY" style="width:200px;" />
+              <input id="env-new-value" class="env-input" placeholder="value" style="flex:1;min-width:180px;" />
+              <input id="env-new-desc" class="env-input" placeholder="description (optional)" style="flex:1;min-width:160px;" />
+              <button id="env-add-btn" class="env-mini" style="padding:7px 14px;">＋ Add</button>
+            </div>
+            <div id="env-list" style="border:1px solid var(--border-color);border-radius:var(--radius-lg);overflow:hidden;"></div>
           </div>
+          <script>
+            (function(){
+              var PID = document.body.getAttribute('data-project-id');
+              function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+              function api(path, opts){ return fetch('/api/projects/'+PID+path, opts).then(function(r){ return r.json(); }); }
+              function render(vars){
+                document.getElementById('env-count').textContent = vars.length + (vars.length===1?' variable':' variables');
+                var list = document.getElementById('env-list');
+                if(!vars.length){ list.style.border='none'; list.innerHTML = '<div class="env-empty">No variables yet. Add one above, or run a preview — it auto-detects what the app needs.</div>'; return; }
+                list.style.border='';
+                var rows = '';
+                for(var i=0;i<vars.length;i++){
+                  var v = vars[i];
+                  var val = v.hasValue ? (v.isSecret ? '<em>••••••••</em>' : '<em>set</em>') : ('<em style="color:var(--danger-color)">not set</em>' + (v.isRequired ? ' <span class="env-badge">needed</span>' : ''));
+                  rows += '<tr><td class="env-key">'+esc(v.key)+'</td><td>'+val+'</td><td>'+esc(v.description)+'</td>'
+                    + '<td style="text-align:right;white-space:nowrap"><button class="env-mini env-set" data-id="'+esc(v.id)+'" data-key="'+esc(v.key)+'">Set value</button> '
+                    + '<button class="env-mini env-del" data-id="'+esc(v.id)+'" data-key="'+esc(v.key)+'">Delete</button></td></tr>';
+                }
+                list.innerHTML = '<table class="env-table"><thead><tr><th>Key</th><th>Value</th><th>Description</th><th></th></tr></thead><tbody>'+rows+'</tbody></table>';
+                var sets = list.querySelectorAll('.env-set');
+                for(var a=0;a<sets.length;a++){ sets[a].addEventListener('click', function(){ setValue(this.getAttribute('data-id'), this.getAttribute('data-key')); }); }
+                var dels = list.querySelectorAll('.env-del');
+                for(var b=0;b<dels.length;b++){ dels[b].addEventListener('click', function(){ delVar(this.getAttribute('data-id'), this.getAttribute('data-key')); }); }
+              }
+              function load(){ api('/env-vars').then(function(d){ render((d&&d.envVars)||[]); }).catch(function(){}); }
+              function setValue(id, key){
+                var val = prompt('New value for '+key+':');
+                if(val===null) return;
+                api('/env-vars/'+id, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ value: val }) }).then(load);
+              }
+              function delVar(id, key){
+                if(!confirm('Delete '+key+'?')) return;
+                api('/env-vars/'+id, { method:'DELETE' }).then(load);
+              }
+              document.getElementById('env-add-btn').addEventListener('click', function(){
+                var key = (document.getElementById('env-new-key').value||'').trim();
+                if(!key){ return; }
+                var value = document.getElementById('env-new-value').value||'';
+                var desc = document.getElementById('env-new-desc').value||'';
+                api('/env-vars', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ key: key, value: value, description: desc }) }).then(function(){
+                  document.getElementById('env-new-key').value='';
+                  document.getElementById('env-new-value').value='';
+                  document.getElementById('env-new-desc').value='';
+                  load();
+                });
+              });
+              var dbSel = document.getElementById('env-db-mode');
+              dbSel.addEventListener('change', function(){
+                api('/preview/build-settings', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ dbMode: dbSel.value }) }).catch(function(){});
+              });
+              api('/preview/build-settings').then(function(d){ if(d&&d.dbMode) dbSel.value = d.dbMode; }).catch(function(){});
+              load();
+            })();
+          </script>
         ` : ""}
 
         ${activeTab === "instant" ? html`

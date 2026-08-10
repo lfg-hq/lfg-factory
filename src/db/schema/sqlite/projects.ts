@@ -58,6 +58,10 @@ export const projects = sqliteTable(
     // "worktree" = separate worktree dir; "checkout" = switch the main checkout to
     // the branch after stashing (no extra dirs).
     previewBranchMode: text("preview_branch_mode").notNull().default("worktree"),
+    // Preview DB strategy: "auto" = use the user's provided connection var if set, else
+    // provision a fresh container; "new" = always provision fresh; "provided" = never
+    // provision, always use the user-set connection var.
+    dbMode: text("db_mode").notNull().default("auto"),
 
     createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
     updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),

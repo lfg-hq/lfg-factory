@@ -26,7 +26,7 @@ import { decryptSecret, encryptSecret } from "../utils/crypto.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { enableHttpAccess, execOnWorkspace, setStableUrl, startBrowserSession, stopWorkspace } from "./mags.ts";
 import { ensureProjectSandbox, ensureEngine, ensureDocker, envWorkspaceId, checkEngineHealth, type EngineHandle } from "./project-sandbox.ts";
-import { probeAppProfile, saveAppProfile, loadAppProfile, deriveManifestFromProfile, missingSecrets, secretsNoticeMessage, applyProfileCorrection, recordProfileLearning, recordDirective, recordConfigPatch, buildConfigPatchScript, profileNotes, resolveUserModel, type AppProfile } from "./app-profile.ts";
+import { probeAppProfile, saveAppProfile, loadAppProfile, deriveManifestFromProfile, syncDetectedEnv, applyProfileCorrection, recordProfileLearning, recordDirective, recordConfigPatch, buildConfigPatchScript, profileNotes, resolveUserModel, type AppProfile } from "./app-profile.ts";
 import { isS3Enabled, buildS3Key, uploadBinary, getPresignedGetUrl } from "./s3.ts";
 import { messages } from "../db/schema/chat.ts";
 import { projectTickets } from "../db/schema/tickets.ts";
@@ -1656,15 +1656,6 @@ fi`, 240_000);
         ].filter(Boolean).join("\n"),
       });
 
-      // OPTIONAL secrets — NON-blocking. The app runs with its checked-in/default
-      // config, so we NEVER stop the run for these; we just note (once) which
-      // external credentials the user MAY add for full functionality and CONTINUE.
-      // The user can add them in env settings and Restart whenever they want.
-      const missing = await missingSecrets(projectId, profile);
-      if (missing.length) {
-        await publishSummary(userId, opts.conversationId, secretsNoticeMessage(missing)).catch(() => {});
-        plog(projectId, userId, `Note: ${missing.length} optional secret(s) not set (${missing.map((m) => m.key).join(", ")}) — continuing; add them + Restart for full functionality.`);
-      }
     }
 
     // Fallback: the probe produced nothing (rare) — use the lighter detection so
@@ -1677,14 +1668,59 @@ fi`, 240_000);
     }
     await prep("plan", "done");
 
+    // Persist the env the detected app needs into the Environment tab: auto-generate
+    // self-contained secrets (session/JWT/…), placeholder the external keys the user
+    // must provide (SendGrid/Stripe/…). NON-blocking — the app runs regardless; the
+    // user fills the placeholders and Restarts for full functionality.
+    const detectedEnv = [
+      ...(manifest.envVars ?? []).map((e) => ({ key: e.key, required: e.required, description: e.description })),
+      ...((profile?.secretsRequired ?? []).map((s) => ({ key: s.key, required: true, description: s.description }))),
+    ];
+    const envSync = await syncDetectedEnv(projectId, userId, detectedEnv).catch(() => null);
+    if (envSync?.generated.length) {
+      plog(projectId, userId, `Generated ${envSync.generated.length} app secret(s): ${envSync.generated.join(", ")}`);
+    }
+    if (envSync?.needsInput.length) {
+      plog(projectId, userId, `${envSync.needsInput.length} external key(s) needed — set them in the Environment tab, then Restart: ${envSync.needsInput.map((n) => n.key).join(", ")}`);
+      await publishSummary(
+        userId,
+        opts.conversationId,
+        `🔑 **Set these in the Environment tab, then Restart** for full functionality:\n` +
+          envSync.needsInput.map((n) => `- \`${n.key}\`${n.description ? ` — ${n.description}` : ""}`).join("\n"),
+      ).catch(() => {});
+    }
+
     // 3. Provision the DBs the plan calls for, and inject each connection string
     // into the EXACT env var the app reads it from (per the plan).
     await prep("db", manifest.databases.length ? "running" : "done");
     const provisioned: Record<string, string> = {};
     const engineHandles: EngineHandle[] = [];
     if (manifest.databases.length) {
+      // DB strategy (Environment tab): auto = use the user's connection var if set,
+      // else provision; new = always provision; provided = never provision, use the
+      // user's var (notice if it's missing).
+      const [projRow] = await db.select({ dbMode: projects.dbMode }).from(projects).where(eq(projects.id, projectId)).limit(1);
+      const dbMode = projRow?.dbMode ?? "auto";
+      const providedKeys = new Set(
+        (await db.select({ key: projectEnvironmentVariables.key })
+          .from(projectEnvironmentVariables)
+          .where(and(eq(projectEnvironmentVariables.projectId, projectId), eq(projectEnvironmentVariables.hasValue, true))))
+          .map((r) => r.key),
+      );
       await setPreview(projectId, userId, { previewStatus: "provisioning" }, `Provisioning ${manifest.databases.map((d) => d.engine).join(", ")}…`);
       for (const dbSpec of manifest.databases) {
+        const userProvided = providedKeys.has(dbSpec.connectionEnvVar);
+        const useProvided = dbMode === "provided" || (dbMode === "auto" && userProvided);
+        if (useProvided) {
+          if (userProvided) {
+            // The stored var is injected into .env by writeEnvFile — don't provision.
+            plog(projectId, userId, `Using your provided ${dbSpec.connectionEnvVar} — skipping ${dbSpec.engine} provisioning.`);
+          } else {
+            plog(projectId, userId, `DB mode is "Use my DB" but ${dbSpec.connectionEnvVar} isn't set — set it in the Environment tab + Restart.`, { level: "error" });
+            await publishSummary(userId, opts.conversationId, `⚠️ **DB mode is "Use my DB"** but \`${dbSpec.connectionEnvVar}\` isn't set. Add it in the Environment tab and Restart — or switch DB mode to "Always provision".`).catch(() => {});
+          }
+          continue;
+        }
         plog(projectId, userId, `Provisioning ${dbSpec.engine} → ${dbSpec.connectionEnvVar}…`);
         const h = await ensureEngine(projectId, dbSpec.engine);
         engineHandles.push(h);

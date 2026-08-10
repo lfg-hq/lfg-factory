@@ -25,6 +25,8 @@ import { modelSelections } from "../db/schema/chat.ts";
 import { llmApiKeys } from "../db/schema/users.ts";
 import { getModel, getProviderName, DEFAULT_MODEL_KEY, type ProviderName } from "../ai/provider.ts";
 import { execOnWorkspace } from "./mags.ts";
+import { encryptSecret } from "../utils/crypto.ts";
+import { randomBytes } from "node:crypto";
 import type { LanguageModel } from "ai";
 import type { PreviewManifest } from "./dev-preview.ts";
 
@@ -315,6 +317,70 @@ export function deriveManifestFromProfile(profile: AppProfile): PreviewManifest 
  * Which required secrets are NOT yet provided for this project. A secret counts
  * as provided if a project env var with the same key exists and has a value.
  */
+// Self-contained secrets we can safely AUTO-GENERATE (the app just needs a random
+// value — a session/JWT/CSRF signing key). Never matches an external-service key.
+const SAFE_SECRET_RE = /(SESSION|JWT|SECRET_KEY|APP_KEY|APP_SECRET|ENCRYPTION|COOKIE|CSRF|NEXTAUTH_SECRET|AUTH_SECRET|TOKEN_SECRET|SIGNING)/i;
+// Credentials issued by an external service — we can NEVER invent these; the user
+// must paste them. Takes precedence over SAFE_SECRET_RE.
+const EXTERNAL_KEY_RE = /(SENDGRID|STRIPE|OPENAI|ANTHROPIC|TWILIO|MAILGUN|POSTMARK|RESEND|SMTP|AWS|S3|GITHUB|GOOGLE|OAUTH|CLIENT_SECRET|CLIENT_ID|ACCESS_KEY|SECRET_ACCESS|API_KEY|APIKEY|WEBHOOK|DSN|CLOUDINARY|SUPABASE|FIREBASE)/i;
+
+/**
+ * Persist the env the detected app needs into the project's Environment tab, so the
+ * user can see + fill what's required and it gets applied on setup/restart. For each
+ * detected key WITHOUT a user-set value:
+ *  - self-contained secrets (session/JWT/…) → auto-generate a random value;
+ *  - external-service keys (SendGrid/Stripe/…) → create an empty "needed" placeholder.
+ * Never clobbers a value the user already set. Returns what was generated vs. still
+ * needs input, so the caller can post a notice.
+ */
+export async function syncDetectedEnv(
+  projectId: string,
+  createdById: string | null,
+  needed: { key: string; required?: boolean; description?: string }[],
+): Promise<{ generated: string[]; needsInput: { key: string; description: string }[] }> {
+  const generated: string[] = [];
+  const needsInput: { key: string; description: string }[] = [];
+  if (!needed.length) return { generated, needsInput };
+
+  const existing = await db
+    .select({ key: projectEnvironmentVariables.key, hasValue: projectEnvironmentVariables.hasValue })
+    .from(projectEnvironmentVariables)
+    .where(eq(projectEnvironmentVariables.projectId, projectId));
+  const existingMap = new Map(existing.map((e) => [e.key, e.hasValue]));
+
+  const seen = new Set<string>();
+  for (const v of needed) {
+    const key = (v.key || "").trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    if (existingMap.get(key) === true) continue; // user already provided a value — leave it
+
+    const desc = v.description ?? "";
+    const isExternal = EXTERNAL_KEY_RE.test(key);
+    if (!isExternal && SAFE_SECRET_RE.test(key)) {
+      // Auto-generate a strong random value and store it.
+      const value = randomBytes(48).toString("base64url");
+      await db
+        .insert(projectEnvironmentVariables)
+        .values({ projectId, key, encryptedValue: encryptSecret(value), isSecret: true, isRequired: !!v.required, hasValue: true, description: desc || "auto-generated secret", createdById })
+        .onConflictDoUpdate({
+          target: [projectEnvironmentVariables.projectId, projectEnvironmentVariables.key],
+          set: { encryptedValue: encryptSecret(value), hasValue: true, isSecret: true, updatedAt: new Date() },
+        });
+      generated.push(key);
+    } else {
+      // External / unknown → empty placeholder the user fills in (don't overwrite an
+      // existing empty row, just ensure it exists so the Environment tab lists it).
+      await db
+        .insert(projectEnvironmentVariables)
+        .values({ projectId, key, encryptedValue: "", isSecret: true, isRequired: !!v.required, hasValue: false, description: desc, createdById })
+        .onConflictDoNothing({ target: [projectEnvironmentVariables.projectId, projectEnvironmentVariables.key] });
+      needsInput.push({ key, description: desc });
+    }
+  }
+  return { generated, needsInput };
+}
+
 export async function missingSecrets(projectId: string, profile: AppProfile): Promise<RequiredSecret[]> {
   if (!profile.secretsRequired.length) return [];
   const rows = await db.select({ key: projectEnvironmentVariables.key, hasValue: projectEnvironmentVariables.hasValue })

@@ -52,6 +52,10 @@ export const projects = pgTable(
     // single main checkout to the branch after stashing local changes (no extra
     // dirs — the workstation stays tidy).
     previewBranchMode: text("preview_branch_mode").notNull().default("worktree"),
+    // Preview DB strategy: "auto" = use the user's provided connection var if set, else
+    // provision a fresh container; "new" = always provision fresh; "provided" = never
+    // provision, always use the user-set connection var.
+    dbMode: text("db_mode").notNull().default("auto"),
     createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),
     updatedAt: timestamp("updated_at", { mode: "date" }).notNull().default(sql`now()`),
   },
