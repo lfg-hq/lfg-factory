@@ -113,9 +113,15 @@
   async function loadAppLog() {
     try {
       const r = await api("/preview/app-logs");
-      const j = await r.json();
-      appLogText = (j && j.log) || "(no output)";
-    } catch (_) { appLogText = "Could not load the app log."; }
+      if (!r.ok) {
+        appLogText = r.status === 404
+          ? "App-log endpoint not found (HTTP 404) — the server needs a redeploy to pick up this feature."
+          : "App log unavailable (HTTP " + r.status + ").";
+      } else {
+        const j = await r.json();
+        appLogText = (j && j.log) || "(no output yet — the app hasn't printed anything, or the preview isn't running)";
+      }
+    } catch (e) { appLogText = "Could not reach the app-log endpoint (" + ((e && e.message) || "network error") + ")."; }
     const el = $("app-log");
     if (el) { el.textContent = appLogText; el.scrollTop = el.scrollHeight; }
   }
