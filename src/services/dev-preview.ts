@@ -259,6 +259,35 @@ grep -rhoE '^[A-Za-z_][A-Za-z0-9_]*' .env.example .env.sample .env.template 2>/d
   return [...keys];
 }
 
+/**
+ * Regenerate the app's .env from the CURRENT stored project env vars (+ reused DB
+ * connections, honoring dbMode). Called on RESTART so keys the user just edited in the
+ * Environment tab actually reach the app — writeEnvFile alone runs only in full setup.
+ * ensureEngine is idempotent, so reusing an already-up DB is fast. Writes to the main
+ * checkout's .env; the caller copies it into a worktree runDir if needed.
+ */
+async function reapplyEnv(projectId: string, userId: string, workspaceId: string, manifest: PreviewManifest): Promise<void> {
+  const provisioned: Record<string, string> = {};
+  if (manifest.databases.length) {
+    const [projRow] = await db.select({ dbMode: projects.dbMode }).from(projects).where(eq(projects.id, projectId)).limit(1);
+    const dbMode = projRow?.dbMode ?? "auto";
+    const providedKeys = new Set(
+      (await db.select({ key: projectEnvironmentVariables.key })
+        .from(projectEnvironmentVariables)
+        .where(and(eq(projectEnvironmentVariables.projectId, projectId), eq(projectEnvironmentVariables.hasValue, true))))
+        .map((r) => r.key),
+    );
+    for (const dbSpec of manifest.databases) {
+      const userProvided = providedKeys.has(dbSpec.connectionEnvVar);
+      if (dbMode === "provided" || (dbMode === "auto" && userProvided)) continue; // stored var wins
+      const h = await ensureEngine(projectId, dbSpec.engine).catch(() => null);
+      if (h) provisioned[dbSpec.connectionEnvVar] = formatConnection(dbSpec, h);
+    }
+  }
+  await writeEnvFile(workspaceId, projectId, manifest, provisioned);
+  plog(projectId, userId, "Re-applied environment variables from your settings.");
+}
+
 /** Detect (or re-detect) the setup manifest. Merges project custom overrides. */
 /** The exact JSON shape we want back — spelled out for models that don't do native
  *  structured output, so they don't return e.g. envVars as an object or drop a field. */
@@ -2317,6 +2346,11 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
       const patchScript = buildConfigPatchScript(savedProfile.profile.configPatches, runDir);
       if (patchScript) { await sh(workspaceId, patchScript, 60_000).catch(() => {}); plog(projectId, userId, `Re-applied ${savedProfile.profile.configPatches.length} saved config patch(es) to ${runDir === PROJECT_DIR ? "the checkout" : "the worktree"}`); }
     }
+
+    // Re-apply env from current settings so keys edited in the Environment tab take
+    // effect on Restart (restart otherwise reuses the .env from the last full setup).
+    await reapplyEnv(projectId, userId, workspaceId, manifest).catch((e) => plog(projectId, userId, `Env re-apply skipped: ${(e as Error).message?.slice(0, 120)}`, { level: "error" }));
+    if (runDir !== PROJECT_DIR) await sh(workspaceId, `cp ${PROJECT_DIR}/.env ${runDir}/.env 2>/dev/null || true`, 15_000).catch(() => {});
 
     await setStep("run", "running");
     const startingMsg = ticketId ? `Starting the preview on ${branchLabel}…` : "Restarting the app…";
