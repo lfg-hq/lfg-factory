@@ -112,7 +112,7 @@
   }
   async function loadAppLog() {
     try {
-      const r = await api("/preview/app-logs");
+      const r = await api("/app-logs");
       if (!r.ok) {
         appLogText = r.status === 404
           ? "App-log endpoint not found (HTTP 404) — the server needs a redeploy to pick up this feature."
