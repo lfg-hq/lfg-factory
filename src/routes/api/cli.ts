@@ -21,7 +21,7 @@ import { instantApps } from "../../db/schema/instant.ts";
 import { eq, and } from "drizzle-orm";
 import { emit } from "../../events/bus.ts";
 import { parseJsonlEvents, extractSessionId, isStreamComplete } from "../../services/claude-cli.ts";
-import { addLog, formatToolUse } from "../../services/ticket-logs.ts";
+import { addLog, attachLogOutput, formatToolUse } from "../../services/ticket-logs.ts";
 import { describePiTool, describePiLine } from "../../services/pi-cli.ts";
 import { broadcastInstantStatus } from "../../services/instant-app.ts";
 
@@ -31,6 +31,11 @@ export const cliRouter = new Hono<{ Variables: { cliUserId: string } }>();
 // streamed across several POSTs is logged ONCE (flushed when a different label
 // arrives or the run signals done) instead of once per batch.
 const _piPending = new Map<string, string>();
+
+// tool_use.id → the command log row it created, held between POST batches so a
+// tool_result arriving in a LATER batch can be folded into its command's row
+// (`${ticketId}:${toolUseId}` → logId). Bounded: entries are deleted on match.
+const _toolUseLog = new Map<string, string>();
 
 // ── Auth middleware ───────────────────────────────────────────────────
 
@@ -469,7 +474,10 @@ cliRouter.post("/output", async (c) => {
               await addLog(ticket_id, block.text, "ai_response", ownerId); logged++;
             } else if (block.type === "tool_use" && block.name) {
               const toolMsg = formatToolUse(block.name, block.input ?? {});
-              await addLog(ticket_id, toolMsg, "command", ownerId); logged++;
+              const logId = await addLog(ticket_id, toolMsg, "command", ownerId); logged++;
+              // Remember which row this tool_use created so its tool_result (below,
+              // possibly in a later POST) folds into THIS row instead of a new one.
+              if (block.id && logId) _toolUseLog.set(ticket_id + ":" + block.id, logId);
             }
           }
         } else if (ev.type === "user") {
@@ -481,7 +489,15 @@ cliRouter.post("/output", async (c) => {
                 : Array.isArray(block.content)
                   ? block.content.map((b: any) => b.text ?? "").join("\n")
                   : "";
-              if (text.length > 50) {
+              // Fold the output into its command's row (paired by tool_use_id) —
+              // one collapsible command→output entry, no second disconnected line.
+              const key = ticket_id + ":" + (block.tool_use_id ?? "");
+              const cmdLogId = block.tool_use_id ? _toolUseLog.get(key) : undefined;
+              if (cmdLogId) {
+                await attachLogOutput(cmdLogId, text, ticket_id, ownerId); logged++;
+                _toolUseLog.delete(key);
+              } else if (text.length > 50) {
+                // No correlation (missing id) → fall back to a standalone row.
                 await addLog(ticket_id, text.slice(0, 500), "command", ownerId); logged++;
               }
             }

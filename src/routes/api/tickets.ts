@@ -385,6 +385,7 @@ ticketsApi.get("/:projectId/tickets/:ticketId/logs", async (c) => {
     type: l.logType,
     message: l.command,
     explanation: l.explanation,
+    output: l.output,        // paired tool_result output (command+output render as one row)
     createdAt: l.createdAt,
   })));
 });

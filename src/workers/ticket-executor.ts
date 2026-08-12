@@ -479,6 +479,15 @@ const cancelledTickets = new Set<string>();
  *  npm/pip) and unblock the executor's wait. Best-effort, safe to call anytime. */
 export async function requestTicketStop(ticketId: string, projectId?: string): Promise<void> {
   cancelledTickets.add(ticketId);
+  // Durable, cross-process cancel signal: the build loop may run in a DIFFERENT
+  // process than this HTTP handler, so the in-memory Set alone isn't enough. Mark
+  // the ticket 'stopping' in the DB; stoppedByUser() re-reads this so the executor
+  // bails cleanly even when it never saw the in-memory flag.
+  await db
+    .update(projectTickets)
+    .set({ queueStatus: "stopping", updatedAt: new Date() })
+    .where(eq(projectTickets.id, ticketId))
+    .catch(() => {});
   try {
     const [sb] = await db
       .select({ ws: sandboxes.magsWorkspaceId })
@@ -486,9 +495,14 @@ export async function requestTicketStop(ticketId: string, projectId?: string): P
       .where(and(eq(sandboxes.ticketId, ticketId), eq(sandboxes.workspaceType, "ticket")))
       .limit(1);
     if (sb?.ws) {
+      // Kill the detached agent IN the VM — this is what actually stops a build the
+      // loop can't reach cross-process. busybox pkill has no \b/ERE, so match with
+      // plain substrings (pkill never matches its own pid). Cover the Pi node agent
+      // (pi-coding-agent), its invocation (`pi -p`, `mode json`), Claude, and any
+      // long child install so nothing keeps writing/committing after "Stop".
       await execOnWorkspace(
         sb.ws,
-        "pkill -9 -f 'claude|pi-coding-agent|\\bpi\\b' 2>/dev/null; pkill -9 -f 'apk add|go build|npm|pip install|dotnet' 2>/dev/null; true",
+        "pkill -9 -f pi-coding-agent 2>/dev/null; pkill -9 -f 'mode json' 2>/dev/null; pkill -9 -f 'pi -p' 2>/dev/null; pkill -9 -f claude 2>/dev/null; pkill -9 -f 'pip install' 2>/dev/null; pkill -9 -f 'go build' 2>/dev/null; pkill -9 -f 'npm install' 2>/dev/null; pkill -9 -f 'apk add' 2>/dev/null; true",
         { timeout: 25_000 },
       ).catch(() => {});
     }
@@ -502,7 +516,19 @@ export async function requestTicketStop(ticketId: string, projectId?: string): P
 /** If the user cancelled this ticket, do the "stopped" bookkeeping and return true so
  *  the caller bails out (skipping the normal complete/failed handling). */
 async function stoppedByUser(ticketId: string, ownerId: string): Promise<boolean> {
-  if (!cancelledTickets.has(ticketId)) return false;
+  let cancelled = cancelledTickets.has(ticketId);
+  if (!cancelled) {
+    // Cross-process: the stop request may have landed in another process, leaving
+    // only the durable DB flag. Honour it so the executor still bails cleanly.
+    const [t] = await db
+      .select({ q: projectTickets.queueStatus })
+      .from(projectTickets)
+      .where(eq(projectTickets.id, ticketId))
+      .limit(1)
+      .catch(() => [] as { q: string | null }[]);
+    cancelled = t?.q === "stopping";
+  }
+  if (!cancelled) return false;
   cancelledTickets.delete(ticketId);
   await addLog(ticketId, "⏹ Build stopped by you.", "command", ownerId).catch(() => {});
   await db
@@ -2511,9 +2537,10 @@ git branch --show-current
     // Auto-record a demo of the completed feature for the Preview tab (fire-and-forget).
     void generateTicketDemo(ticketId, { ownerId, projectId: project.id });
   } else {
+    const _lastErr = commitFailed ? "" : await lastErrorSnippet(ticketId);
     const reason = commitFailed
       ? "the changes were built but were NOT pushed (commit/push failed or no repo/token) — fix the cause and rebuild; the build sandbox is kept so the work isn't lost"
-      : "Implementation did not complete";
+      : `the agent finished without reporting completion${_lastErr ? ` — last error: ${_lastErr}` : ""}`;
     // Persist a durable "not_pushed" merge state so the Git tab flags it (red)
     // even after refresh — not just a transient Actions-log line.
     if (commitFailed) await db.update(projectTickets).set({ githubMergeStatus: "not_pushed", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId)).catch(() => {});
@@ -2634,7 +2661,17 @@ async function markTicketFailed(ticketId: string, reason: string, userId?: strin
     })
     .where(eq(projectTickets.id, ticketId));
 
+  // Concise machine line the failure banner scrapes for its reason.
   await addLog(ticketId, `Execution failed: ${reason}`, "command", userId);
+
+  // Rich agent-style failure explanation (red-ish ai_response bubble), mirroring
+  // the success summary — so the user sees WHAT went wrong and HOW to proceed,
+  // not just a buried "Execution failed" log line.
+  const failMsg =
+    `❌ **Build failed** — I couldn't finish this ticket.\n\n` +
+    `**What went wrong:** ${reason}\n\n` +
+    `**How to proceed:** open the **Actions** log above and find the failing step, then either adjust the ticket and press **Build Ticket** again, or reply here with guidance and I'll retry. Your branch and build sandbox are preserved, so nothing is lost.`;
+  await addLog(ticketId, failMsg, "ai_response", userId);
 
   // Emit execution_finished so the handler chain continues (auto-queue next ticket).
   // Only emit when the caller hasn't already triggered this event (e.g., early failures

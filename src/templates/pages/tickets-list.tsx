@@ -862,10 +862,11 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
         updateTicketStatusBanner(live);
         loadAddenda(); // updates the Addenda tab badge with the pending count
         var buildBtn = document.getElementById('drawer-build-btn');
-        buildBtn.disabled = isActive;
-        buildBtn.innerHTML = isActive
-          ? '<i class="fas fa-spinner fa-spin"></i> Building…'
-          : '<i class="fas fa-bolt"></i> Build Ticket';
+        // While a build is running you can't start another — hide Build entirely and
+        // show only Stop (cleaner than a disabled "Building…" button).
+        buildBtn.disabled = false;
+        buildBtn.style.display = isActive ? 'none' : '';
+        buildBtn.innerHTML = '<i class="fas fa-bolt"></i> Build Ticket';
         var stopBtn = document.getElementById('drawer-stop-btn');
         if (stopBtn) stopBtn.style.display = isActive ? '' : 'none';
         // If executing, switch to Actions tab so user sees live logs
@@ -1028,6 +1029,10 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     const btn = document.getElementById('drawer-build-btn');
     btn.disabled = true;
     btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Queuing…';
+    // Clear any stale outcome banner from a previous run the moment we (re)build.
+    var _bb = document.getElementById('actions-bottom-banner');
+    if (_bb) { _bb.style.display = 'none'; _bb.innerHTML = ''; }
+    _lastFailureReason = '';
     try {
       const res = await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + _currentTicketId + '/queue', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }
@@ -1039,7 +1044,10 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
         btn.innerHTML = '<i class="fas fa-bolt"></i> Build Ticket';
         return;
       }
-      btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Building…';
+      // Queued — hide Build, reveal Stop (you can't build while building).
+      btn.disabled = false;
+      btn.style.display = 'none';
+      btn.innerHTML = '<i class="fas fa-bolt"></i> Build Ticket';
       var stopBtn = document.getElementById('drawer-stop-btn');
       if (stopBtn) stopBtn.style.display = '';
       // Switch to Actions tab so user sees logs immediately
@@ -1063,7 +1071,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     } catch(e) { /* best-effort */ }
     if (stopBtn) { stopBtn.disabled = false; stopBtn.innerHTML = '<i class="fas fa-stop"></i> Stop'; stopBtn.style.display = 'none'; }
     var b = document.getElementById('drawer-build-btn');
-    if (b) { b.disabled = false; b.innerHTML = '<i class="fas fa-bolt"></i> Build Ticket'; }
+    if (b) { b.disabled = false; b.style.display = ''; b.innerHTML = '<i class="fas fa-bolt"></i> Build Ticket'; }
   }
 
   // ── Actions tab: execution logs + agent chat ─────────────────────
@@ -1153,7 +1161,9 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     if (qs !== 'queued' && qs !== 'executing') {
       hideThinkingIndicator();
       var btn = document.getElementById('drawer-build-btn');
-      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-bolt"></i> Build Ticket'; }
+      if (btn) { btn.disabled = false; btn.style.display = ''; btn.innerHTML = '<i class="fas fa-bolt"></i> Build Ticket'; }
+      var sbtn = document.getElementById('drawer-stop-btn');
+      if (sbtn) sbtn.style.display = 'none';
     }
   }
 
@@ -1209,9 +1219,10 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     el.className = 'log-entry';
 
     if (type === 'ai_response') {
-      // Agent — green left border, always expanded. Render markdown (the summary
-      // uses bold, inline code, and lists) instead of showing raw markdown syntax.
-      el.className += ' log-agent';
+      // Agent — coloured left border (green for success, red for a failure
+      // explanation), always expanded. Render markdown (bold, inline code, lists).
+      var isFailMsg = msg.charAt(0) === '❌' || msg.indexOf('Build failed') === 0;
+      el.className += isFailMsg ? ' log-agent log-agent-fail' : ' log-agent';
       var agentHtml = (typeof marked !== 'undefined') ? marked.parse(msg) : escHtml(msg).split(String.fromCharCode(10)).join('<br>');
       el.innerHTML =
         '<div class="log-agent-header">' +
@@ -1271,15 +1282,20 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
         optionsHtml;
 
     } else {
-      // Command / system row. The agent stream mixes ACTIONS ("Running…",
-      // "Reading…") with their OUTPUT (grep/file content). They arrive as the same
-      // log type, so distinguish them heuristically: an action starts with a verb;
-      // everything else is treated as output and rendered muted with an "output"
-      // tag + a terminal icon, so the two are no longer indistinguishable.
-      // Detect ACTION rows without a regex literal (backslash escapes get mangled
-      // inside this .tsx template literal): starts with '$ ' or a known verb.
+      // Command / system row. Preferred: a paired row that carries its OWN output
+      // (row.output, folded from the agent's tool_result via tool_use_id) — render
+      // ONE collapsible: the command as the header, its output as the body. Tag the
+      // row with its log id so a tool_result arriving LIVE (later) can attach here.
+      // Fallback (un-paired rows, e.g. the Pi stream): the old action-vs-output
+      // heuristic — an action starts with '$ ' or a known verb; anything else is
+      // treated as muted output. (No regex literal — backslashes get mangled in
+      // this .tsx template.)
+      var out = (row.output || '');
+      var hasOut = out.length > 0;
+      if (row.id) el.setAttribute('data-log-id', row.id);
       var _actionVerbs = ['Running','Reading','Editing','Writing','Creating','Searching','Listing','Merging','Merged','Committing','Committed','Pushed','Pushing','Building','Build','Installing','Started','Starting','Cloning','Fetching','Continuing','Spinning','Restarting','Setting up','Verifying'];
-      var isAction = msg.charAt(0) === '$' || _actionVerbs.some(function(v){ return msg.indexOf(v) === 0; });
+      // Emoji-prefixed tool labels (📄 Read, ✏️ Write, 🔍 Grep…) are actions too.
+      var isAction = hasOut || msg.charAt(0) === '$' || msg.charCodeAt(0) > 255 || _actionVerbs.some(function(v){ return msg.indexOf(v) === 0; });
       var desc = describeCmd(msg, explanation);
       el.className += isAction ? ' log-cmd' : ' log-cmd log-output';
       var iconHtml = isAction
@@ -1288,6 +1304,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       var label = isAction
         ? '<span class="log-cmd-text">' + escHtml(desc) + '</span>'
         : '<span class="log-out-tag">output</span><span class="log-cmd-text log-output-text">' + escHtml(desc) + '</span>';
+      // Body = the paired output when present (the whole point), else the full msg.
+      var bodyText = hasOut ? out : msg;
       el.innerHTML =
         '<div class="log-cmd-header">' +
           iconHtml +
@@ -1295,7 +1313,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
           label +
           '<span class="log-time">' + ts + '</span>' +
         '</div>' +
-        '<div id="' + rowId + '" class="log-cmd-body">' + escHtml(msg) + '</div>';
+        '<div id="' + rowId + '" class="log-cmd-body">' + escHtml(bodyText) + '</div>';
       el.querySelector('.log-cmd-header').onclick = function() { toggleCmd(rowId); };
     }
     return el;
@@ -2172,6 +2190,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
           if (msg.type === 'ticket_log' && msg.ticketId === _currentTicketId) {
             console.log('[ws] live log:', msg.log.type, msg.log.message?.slice(0, 80));
             appendLiveLog(msg.log);
+          } else if (msg.type === 'ticket_log_output' && msg.ticketId === _currentTicketId) {
+            attachOutputToRow(msg.logId, msg.output);
           } else if (msg.type === 'ticket_status') {
             handleTicketStatus(msg);
           } else if (msg.type === 'ticket_demo' && msg.ticketId === _currentTicketId) {
@@ -2193,6 +2213,20 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       ws.onerror = function() {
         // onclose will fire after onerror
       };
+    }
+
+    // A tool_result arrived for a command already on screen — fold its output into
+    // that command's collapsible body instead of adding a second, orphan row.
+    function attachOutputToRow(logId, output) {
+      if (!logId) return;
+      var row = document.querySelector('[data-log-id="' + logId + '"]');
+      if (!row) return;
+      var body = row.querySelector('.log-cmd-body');
+      if (body) body.textContent = output || '';
+      row.classList.remove('log-output');
+      row.classList.add('log-cmd');
+      var chev = row.querySelector('.log-chev');
+      if (chev) chev.style.display = '';
     }
 
     function appendLiveLog(log) {
