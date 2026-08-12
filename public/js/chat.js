@@ -1374,8 +1374,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     errorMsg.textContent = data.message;
                     messageContainer.appendChild(errorMsg);
                     scrollToBottom();
-                    
-                    // In case of error, restore UI
+
+                    // In case of error, FULLY restore UI — otherwise the "Thinking…"
+                    // indicator (and the streaming lock) stay stuck forever when the
+                    // server aborts a hung generation. Remove every typing indicator and
+                    // reset the streaming flag so the next message actually sends.
+                    document.querySelectorAll('.typing-indicator').forEach(function(el){ el.remove(); });
+                    isStreaming = false;
                     chatInput.disabled = false;
                     hideStopButton();
                     break;

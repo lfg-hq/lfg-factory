@@ -139,6 +139,23 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
     conn.stopRequested = false;
     conn.abortController = new AbortController();
 
+    // Watchdog: if the model stream HANGS (provider stops responding with no output),
+    // handleStream never returns → the finally never runs → isStreaming stays true →
+    // every subsequent message is silently dropped and the client's "Thinking…" hangs
+    // forever. Abort the hung generation and tell the client so it can recover. 4 min is
+    // well beyond a normal (even long) reply. Configurable via CHAT_STREAM_TIMEOUT_MIN.
+    const watchdogMs = parseInt(process.env.CHAT_STREAM_TIMEOUT_MIN || "4", 10) * 60_000;
+    let watchdogFired = false;
+    const watchdog = setTimeout(() => {
+      watchdogFired = true;
+      console.warn("[chat-handler] stream watchdog fired — aborting a hung generation");
+      try { conn.abortController?.abort(); } catch { /* best-effort */ }
+      // Reset the guard immediately so a hung provider can't wedge the connection even if
+      // the abort doesn't unblock the underlying socket.
+      conn.isStreaming = false;
+      send(ws, { type: "error", message: "The assistant stopped responding — please try again." });
+    }, watchdogMs);
+
     try {
       // "@preview …" → route to the interactive Preview agent (full control of the
       // project's live sandbox) instead of the normal chat model.
@@ -182,7 +199,8 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
         conn.conversationId = result.conversationId;
       }
     } finally {
-      conn.isStreaming = false;
+      clearTimeout(watchdog);
+      if (!watchdogFired) conn.isStreaming = false;
       conn.abortController = undefined;
     }
   }

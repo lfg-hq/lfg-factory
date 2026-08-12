@@ -111,6 +111,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (type === 'heartbeat') return;
 
+        // Chat-level error (e.g. the server's watchdog aborted a hung generation).
+        // Without this the "Thinking…" indicator + streaming lock stayed stuck forever
+        // and every further message was silently dropped. Clear it all and recover.
+        if (type === 'error') {
+            streamBusy = false;
+            updateSendBtn();
+            finishStreaming();
+            if (data.message) addMessageToChat('assistant', data.message);
+            scrollToBottom();
+            return;
+        }
+
         // Chat history load
         if (type === 'chat_history') {
             if (historyLoaded) return; // Don't re-render on WS reconnect
