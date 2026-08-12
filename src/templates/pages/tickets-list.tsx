@@ -583,6 +583,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       </div>
       <!-- Log rows -->
       <div id="actions-log-area" class="execution-logs-container"></div>
+      <!-- Outcome banner (failure reason / success) — pinned ABOVE the chat input -->
+      <div id="actions-bottom-banner" style="display:none;padding:.6rem 1rem;font-size:.82rem;font-weight:600;flex-shrink:0;border-top:1px solid rgba(255,255,255,.06);"></div>
       <!-- Chat input (fixed to bottom) -->
       <div class="logs-chat-container">
         <div id="actions-attach-chip" style="display:none;align-items:center;gap:.4rem;margin:0 0 .4rem 0;font-size:.75rem;color:var(--text-secondary,#9ca3af);"></div>
@@ -1083,26 +1085,33 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
   }
 
   function updateTicketStatusBanner(fields) {
-    var el = document.getElementById('ticket-status-banner');
-    if (!el) return;
+    var topEl = document.getElementById('ticket-status-banner');
+    var botEl = document.getElementById('actions-bottom-banner');
     var qs = (fields.queueStatus || fields.queue_status || '').toLowerCase();
     var st = (fields.status || '').toLowerCase();
     var merge = (fields.githubMergeStatus || fields.github_merge_status || fields.mergeStatus || '').toLowerCase();
+    // b.where: 'top' = live status (spinner) at the top; 'bottom' = the OUTCOME
+    // (failure reason / success), pinned above the chat input like a result.
     var b = null;
     if (qs === 'executing' || qs === 'queued') {
-      b = { bg: 'rgba(59,130,246,.12)', fg: '#93c5fd', icon: 'fa-spinner fa-spin', text: qs === 'queued' ? 'Queued — waiting to build…' : 'Building this ticket…' };
+      b = { bg: 'rgba(59,130,246,.12)', fg: '#93c5fd', icon: 'fa-spinner fa-spin', where: 'top', text: qs === 'queued' ? 'Queued — waiting to build…' : 'Building this ticket…' };
     } else if (merge === 'not_pushed') {
-      b = { bg: 'rgba(248,113,113,.12)', fg: '#fca5a5', icon: 'fa-triangle-exclamation', text: 'Built but NOT pushed to git — reconnect the repo in Settings, then rebuild.' };
+      b = { bg: 'rgba(248,113,113,.12)', fg: '#fca5a5', icon: 'fa-triangle-exclamation', where: 'bottom', text: 'Built but NOT pushed to git — reconnect the repo in Settings, then rebuild.' };
     } else if (st === 'failed' || qs === 'failed') {
       var reason = (fields && fields.reason) || _findFailureReasonFromLogs();
-      b = { bg: 'rgba(239,68,68,.12)', fg: '#fca5a5', icon: 'fa-circle-exclamation',
-            text: reason ? ('Build failed — ' + reason) : 'Build failed — check the logs below and rebuild.' };
+      b = { bg: 'rgba(239,68,68,.14)', fg: '#fca5a5', icon: 'fa-circle-exclamation', where: 'bottom',
+            text: reason ? ('Build failed — ' + reason) : 'Build failed — check the logs above and rebuild.' };
     } else if (merge === 'merged' || st === 'done' || st === 'completed' || st === 'merged') {
-      b = { bg: 'rgba(16,185,129,.12)', fg: '#6ee7b7', icon: 'fa-circle-check', text: 'Build complete' + (merge === 'merged' ? ' — merged to lfg-agent.' : ' — ready for review.') };
+      b = { bg: 'rgba(16,185,129,.12)', fg: '#6ee7b7', icon: 'fa-circle-check', where: 'bottom', text: 'Build complete' + (merge === 'merged' ? ' — merged to lfg-agent.' : ' — ready for review.') };
     } else if (st === 'in_review' || st === 'review') {
-      b = { bg: 'rgba(16,185,129,.12)', fg: '#6ee7b7', icon: 'fa-circle-check', text: 'Build complete — in review.' };
+      b = { bg: 'rgba(16,185,129,.12)', fg: '#6ee7b7', icon: 'fa-circle-check', where: 'bottom', text: 'Build complete — in review.' };
     }
-    if (!b) { el.style.display = 'none'; el.innerHTML = ''; return; }
+    // Reset both, then fill the target one.
+    if (topEl) { topEl.style.display = 'none'; topEl.innerHTML = ''; }
+    if (botEl) { botEl.style.display = 'none'; botEl.innerHTML = ''; }
+    if (!b) return;
+    var el = b.where === 'bottom' ? botEl : topEl;
+    if (!el) return;
     el.style.display = 'block';
     el.style.background = b.bg;
     el.style.color = b.fg;
