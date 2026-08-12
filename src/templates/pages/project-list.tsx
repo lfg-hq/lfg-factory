@@ -395,6 +395,9 @@ export function ProjectListPage({ user, projects, projectStats = {}, instantApps
                           <i class="fas fa-external-link-alt"></i> Preview
                         </a>
                       ` : ""}
+                      <button type="button" class="project-action-button" data-delete-app="${app.appId}" data-app-name="${app.name}" style="color:#f87171;border-color:rgba(248,113,113,.3);background:transparent;cursor:pointer;">
+                        <i class="fas fa-trash"></i> Delete
+                      </button>
                     </div>
                   </div>
                 `;
@@ -545,6 +548,20 @@ export function ProjectListPage({ user, projects, projectStats = {}, instantApps
         this.style.border = '1px solid var(--primary-color)';
         this.style.background = 'rgba(139,92,246,0.1)';
       });
+    });
+    // Delete an instant app (data-attr + delegated listener — no inline onclick).
+    document.addEventListener('click', function(e) {
+      var btn = e.target.closest && e.target.closest('[data-delete-app]');
+      if (!btn) return;
+      e.preventDefault();
+      var appId = btn.getAttribute('data-delete-app');
+      var name = btn.getAttribute('data-app-name') || 'this app';
+      if (!confirm('Delete "' + name + '"? This stops its sandbox and permanently removes the app.')) return;
+      btn.disabled = true;
+      fetch('/api/instant/apps/' + appId, { method: 'DELETE', credentials: 'same-origin' })
+        .then(function(r){ return r.json().catch(function(){ return {}; }); })
+        .then(function(d){ if (d && d.error) { alert(d.error); btn.disabled = false; } else { window.location.reload(); } })
+        .catch(function(){ btn.disabled = false; alert('Failed to delete the app.'); });
     });
   </script>
 </body>
