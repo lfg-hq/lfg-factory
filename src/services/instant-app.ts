@@ -735,6 +735,27 @@ async function ensureSandboxForApp(appId: string, buildProjectType?: string, bui
   return { app: row.app, sandbox: sandbox!, freshVm: true, prescaffolded: useBoilerplate };
 }
 
+/**
+ * Force the app's global stylesheet to carry the current LFG design tokens (the palette
+ * CSS vars). Idempotent + guarded by markers: strip any prior LFG block, then append the
+ * fresh one LAST so it overrides the boilerplate's default :root. Called before AND after
+ * the build agent so a reused VM, a rebuild, or an agent that rewrote globals.css can
+ * never drop the palette (which showed as a grayscale app). Reads /data/project/
+ * design-tokens.css, which is (re)written every build.
+ */
+async function injectDesignTokensCss(workspaceId: string, globalCssPath: string | undefined): Promise<void> {
+  if (!globalCssPath) return;
+  const cssPath = `/data/project/${globalCssPath}`;
+  const injectSh = `CSS=${JSON.stringify(cssPath)}
+if [ -f "$CSS" ] && [ -f /data/project/design-tokens.css ]; then
+  sed -i '/LFG_DESIGN_TOKENS_START/,/LFG_DESIGN_TOKENS_END/d' "$CSS" 2>/dev/null || true
+  { echo "/* LFG_DESIGN_TOKENS_START */"; cat /data/project/design-tokens.css; echo "/* LFG_DESIGN_TOKENS_END */"; } >> "$CSS"
+fi`;
+  const injB64 = Buffer.from(injectSh).toString("base64");
+  await execOnWorkspace(workspaceId, `echo '${injB64}' | base64 -d | sh`)
+    .catch((e) => console.warn(`[instant] design-token inject failed: ${(e as Error).message?.slice(0, 120)}`));
+}
+
 async function checkLocalServer(workspaceId: string, retries = 5): Promise<boolean> {
   for (let attempt = 0; attempt < retries; attempt++) {
     if (attempt > 0) await sleep(3_000); // wait between retries
@@ -1395,14 +1416,14 @@ async function runInstantBuild(appId: string, feedback?: string, designChoices?:
     const specB64 = Buffer.from(buildSpecMarkdown(spec)).toString("base64");
     await execOnWorkspace(workspaceId, `echo '${specB64}' | base64 -d > /data/project/PROJECT_SPEC.md`);
 
-    // On a fresh scaffold, append the design tokens to the global stylesheet (once).
-    if (isNewBuild && profile.globalCssPath) {
-      const cssPath = `/data/project/${profile.globalCssPath}`;
-      await execOnWorkspace(
-        workspaceId,
-        `if [ -f ${JSON.stringify(cssPath)} ]; then cat /data/project/design-tokens.css >> ${JSON.stringify(cssPath)}; fi`
-      ).catch((e) => console.warn(`[instant] [${appId}] globals.css append failed: ${(e as Error).message?.slice(0, 120)}`));
-    }
+    // Inject the design tokens into the global stylesheet on EVERY build (not just the
+    // first) and IDEMPOTENTLY. This is the core reason palettes "didn't apply": the
+    // append was gated on isNewBuild, so a REUSED VM / rebuild never got the current
+    // tokens re-added → the app fell back to the boilerplate's neutral defaults
+    // (grayscale). See injectDesignTokensCss (guarded by markers, appended LAST so it
+    // overrides the boilerplate's default :root vars). We ALSO re-inject after the build
+    // agent runs (below), in case the agent rewrote globals.css.
+    await injectDesignTokensCss(workspaceId, profile.globalCssPath);
     console.log(`[instant] [${appId}] tokens.json + design-tokens.css + PROJECT_SPEC.md injected post-scaffold (palette=${tokens.meta.paletteName}, decisions=${spec.decisions.length})`);
 
     const specSection = `
