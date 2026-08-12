@@ -174,6 +174,14 @@ and reported as "timed out" — do NOT just retry it (that spins a pointless loo
   \`\`\`
   Never re-issue the same long \`apk add\`/\`build\` command over and over — detach + poll once.
 
+## WHEN SOMETHING FAILS — DIAGNOSE, DON'T GIVE UP
+Do NOT abandon the ticket on the first error. When a command fails, times out, or the
+output is unexpected: READ the actual error, inspect the relevant file/logs/state, form
+a hypothesis, FIX it, and RE-TRY. Try alternative approaches before concluding you're
+blocked. Only mark the ticket FAILED after you've genuinely tried to recover — and when
+you do, the failure message MUST state the SPECIFIC cause (the real error text / exactly
+what blocked you and why), NEVER a vague "implementation did not complete".
+
 ## COMPLETION
 
 IMPORTANT: After implementing, you MUST call the status API to mark the ticket as complete or failed.

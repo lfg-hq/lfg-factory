@@ -790,6 +790,13 @@
     overflow: hidden;
 }
 
+/* Actions tab: body must NOT scroll — the .execution-logs-container scrolls internally
+   so the status banner + branch row stay pinned at the top. */
+.drawer-body:has(#tab-actions.active) {
+    padding: 0;
+    overflow: hidden;
+}
+
 .drawer-body:has(#tab-preview.active) {
     padding: 0;
     overflow: hidden;

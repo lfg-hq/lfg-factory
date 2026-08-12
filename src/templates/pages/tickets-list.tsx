@@ -210,7 +210,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     }
     /* Tab panes — not in tickets.css */
     .drawer-tab-content { display: none !important; }
-    .drawer-tab-content.active { display: flex !important; flex-direction: column; flex: 1; }
+    .drawer-tab-content.active { display: flex !important; flex-direction: column; flex: 1; min-height: 0; }
     #tab-actions.active { padding: 0; position: relative; }
     #tab-preview.active { padding: 0; flex: 1; min-height: 0; overflow: hidden; }
     .placeholder-pane { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-secondary); opacity: 0.4; gap: 0.75rem; }
@@ -482,7 +482,6 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     </div>
     <div class="drawer-header-right">
       <div class="drawer-actions">
-        <button class="drawer-server-btn" onclick="restartPreview()"><i class="fas fa-redo"></i> Restart Server</button>
         <button class="drawer-execute-btn" id="drawer-build-btn" onclick="buildCurrentTicket()">
           <i class="fas fa-bolt"></i> Build Ticket
         </button>
@@ -1065,6 +1064,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
   // ── Actions tab: execution logs + agent chat ─────────────────────
   let _lastLogCount = 0;
   let _lastLogContent = '';
+  let _lastFailureReason = ''; // clean failure reason captured from the "Execution failed:" log row
 
   /**
    * Render a persistent build-status banner in the Actions view from the ticket's
@@ -1076,16 +1076,10 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
   // "Execution failed: <reason>" / "Pi build failed …" / "Command timed out …"), so the
   // banner can explain WHY instead of just "Build failed". Returns '' if none found.
   function _findFailureReasonFromLogs() {
-    var area = document.getElementById('actions-log-area');
-    if (!area) return '';
-    var txt = area.textContent || '';
-    // Uses '.' (excludes newlines) + .trim() instead of backslash escapes, which the
-    // server template literal would mangle in this inline script.
-    var m = txt.match(/Execution failed:(.{2,200})/g);
-    if (m && m.length) return m[m.length - 1].replace(/^Execution failed:/, '').trim();
-    var m2 = txt.match(/(Pi build failed.{0,160}|Build failed:.{0,160}|Command timed out.{0,80}|did not complete.{0,80})/g);
-    if (m2 && m2.length) return m2[m2.length - 1].trim();
-    return '';
+    // Captured cleanly from the log row during render (renderLogEntry), not scraped from
+    // mashed-together DOM text. Cap length to keep the banner one line.
+    var r = (_lastFailureReason || '').trim();
+    return r.length > 180 ? r.slice(0, 177) + '…' : r;
   }
 
   function updateTicketStatusBanner(fields) {
@@ -1192,6 +1186,9 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
 
   function renderLogEntry(row, idx) {
     var msg = (row.message || '').trim();
+    // Capture the clean failure reason from the log ROW (not scraped DOM text) so the
+    // banner shows a readable message instead of a mash of rows + timestamps.
+    if (msg.indexOf('Execution failed:') === 0) _lastFailureReason = msg.slice(17).trim();
     var explanation = (row.explanation || '').trim();
     var ts = fmtLogTime(row.createdAt);
     var type = row.type || 'command';
