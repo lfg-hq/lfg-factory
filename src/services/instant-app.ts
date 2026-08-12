@@ -1827,7 +1827,8 @@ Do NOT use TodoWrite. Do NOT edit source files. Just install (if needed), build,
     }
 
     // Process-aware wait: don't declare "did NOT come up" while it's still compiling.
-    const isLive = await waitForLocalServer(workspaceId, 90_000);
+    // `let` so the post-fix re-check can flip it to true when the agent gets it serving.
+    let isLive = await waitForLocalServer(workspaceId, 90_000);
 
     // ── Validate Public URL & Auto-Fix ─────────────────────────────
     let publicUrlValid = false;
@@ -1836,9 +1837,12 @@ Do NOT use TodoWrite. Do NOT edit source files. Just install (if needed), build,
       const validation = await validatePublicUrl(previewUrl);
       publicUrlValid = validation.ok;
 
-      if (!validation.ok && (sessionId || useAgentBuilder)) {
+      // Fix whenever the app isn't confirmed serving — the LOCAL server being down
+      // (isLive false) is just as much a "not up" as a bad public URL. The agent has
+      // full shell access, so it should iterate on the real error, not give up.
+      if ((!validation.ok || !isLive) && (sessionId || useAgentBuilder)) {
         console.log(
-          `[instant] Public URL validation failed (HTTP ${validation.statusCode}): ${validation.error}`
+          `[instant] Not serving yet (local=${isLive}, publicHTTP=${validation.statusCode}) — handing to the agent to diagnose + fix`
         );
 
         await broadcastInstantStatus({
@@ -1847,22 +1851,25 @@ Do NOT use TodoWrite. Do NOT edit source files. Just install (if needed), build,
           appId: app.appId,
           appName,
           status: "building",
-          message: `Public URL returned an error — diagnosing and fixing...`,
+          message: `App isn't serving yet — diagnosing and fixing in the sandbox...`,
         });
 
-        const fixPrompt = `The app was built and the server started, but the public URL returned an error:
-URL: ${previewUrl}
-HTTP Status: ${validation.statusCode}
-Response body (truncated):
-${validation.body ?? "(no body)"}
+        const fixPrompt = `The app built, but it is NOT serving correctly on 0.0.0.0:8080 yet:
+  Public URL: ${previewUrl}
+  Local curl to http://localhost:8080/ : ${isLive ? "responded" : "did NOT respond"}
+  Public HTTP status: ${validation.statusCode}
+  Response body (truncated): ${validation.body ?? "(no body)"}
 
-Please diagnose and fix this issue. Check dev.log for server errors:
-  cat /data/project/dev.log | tail -50
+You have FULL shell access to this sandbox. DO NOT give up, and DO NOT ask the user to retry — get it serving yourself, iterating until it works. Make targeted fixes; do NOT rebuild the app from scratch.
 
-After fixing, rebuild and restart the server:
-  cd /data/project && npm run build && (pkill -f 'next start' 2>/dev/null || true) && nohup npm start --hostname 0.0.0.0 -p 8080 > dev.log 2>&1 &
-
-Then wait 3 seconds and verify with: curl -s http://localhost:8080/ || true`;
+Loop until the server responds:
+1. Read the REAL error: \`cat /data/project/dev.log | tail -80\` (and build.log if it exists). Identify the actual cause — a runtime crash, a bad import, a wrong host/port, a missing dep, a build error, etc.
+2. Make the SPECIFIC fix in the code/config for that error.
+3. Rebuild + restart exactly ONE detached instance:
+   cd /data/project && npm run build > build.log 2>&1 && (fuser -k 8080/tcp 2>/dev/null; pkill -f 'next start' 2>/dev/null; true) && sleep 1 && setsid npm start --hostname 0.0.0.0 -p 8080 > dev.log 2>&1 &
+4. Verify: \`sleep 4 && curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/\` — any code 200–599 means it is UP.
+5. If it is STILL not up, go back to step 1 with the NEW dev.log error and try again. REPEAT until curl returns a real HTTP code.
+Only stop when it is genuinely serving, or (after exhausting real fixes) explain the exact blocker in one line.`;
 
         if (usePi && agentBuild) {
           // Re-run Pi in the sandbox with the fix prompt (max 1 auto-fix attempt)
@@ -1979,18 +1986,21 @@ Then wait 3 seconds and verify with: curl -s http://localhost:8080/ || true`;
           }
         }
 
-        // Re-validate after fix attempt
-        await sleep(5_000);
-        console.log(`[instant] Re-validating public URL after fix attempt: ${previewUrl}`);
+        // Re-check after the fix — the LOCAL server first (source of truth), then the
+        // public URL. Without re-checking isLive, a SUCCESSFUL fix still declared
+        // "error" because isLive was computed BEFORE the fix ran. Give it time to come up.
+        await sleep(3_000);
+        isLive = await waitForLocalServer(workspaceId, 90_000);
+        console.log(`[instant] Re-validating after fix attempt (local=${isLive}): ${previewUrl}`);
         const revalidation = await validatePublicUrl(previewUrl);
         publicUrlValid = revalidation.ok;
 
-        if (!revalidation.ok) {
+        if (!isLive || !revalidation.ok) {
           console.log(
-            `[instant] Re-validation still failed (HTTP ${revalidation.statusCode}): ${revalidation.error}`
+            `[instant] Still not fully healthy after fix (local=${isLive}, HTTP ${revalidation.statusCode}): ${revalidation.error}`
           );
         } else {
-          console.log(`[instant] Fix successful — public URL is now healthy`);
+          console.log(`[instant] Fix successful — app is now serving`);
         }
       } else if (validation.ok) {
         console.log(`[instant] Public URL validated successfully`);
