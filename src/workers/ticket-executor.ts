@@ -167,6 +167,7 @@ async function lastErrorSnippet(ticketId: string, tail?: string): Promise<string
 }
 import { getBuildProfile, detectProjectType } from "../services/instant-profiles.ts";
 import { generateText, stepCountIs } from "ai";
+import { resolveUserModel } from "../services/app-profile.ts";
 import { addLog } from "../services/ticket-logs.ts";
 import { generateTicketDemo } from "../services/ticket-demo.ts";
 import { matchKnowledgeForPrompt } from "../ai/knowledge/matcher.ts";
@@ -189,6 +190,77 @@ async function moveTicketToStage(ticketId: string, projectId: string, stageName:
 }
 
 const CALLBACK_BASE_URL = process.env.APP_URL ?? "http://localhost:3000";
+
+/**
+ * Seed 3–7 implementation subtasks up-front so the Tasks tab is populated the
+ * instant a build starts — regardless of whether the (often weaker) build agent
+ * remembers to call the optional createTasks tool, and regardless of whether the
+ * build later fails. The agent's own createTasks is idempotent (dedupes by
+ * description), so it reuses these instead of duplicating.
+ *
+ * Best-effort: any failure here is swallowed so it never blocks a build.
+ */
+async function seedTasksIfEmpty(
+  ticket: { id: string; name: string; description: string | null; acceptanceCriteria?: unknown },
+  ownerId: string,
+): Promise<void> {
+  try {
+    const acceptanceCriteria: string[] = Array.isArray(ticket.acceptanceCriteria)
+      ? ticket.acceptanceCriteria.filter((c): c is string => typeof c === "string")
+      : [];
+    const existing = await db
+      .select({ id: projectTodoLists.id })
+      .from(projectTodoLists)
+      .where(eq(projectTodoLists.ticketId, ticket.id));
+    if (existing.length > 0) return; // agent/user already created tasks
+
+    let descriptions: string[] = [];
+
+    // Primary: ask the user's model to decompose the ticket. Use plain text +
+    // JSON parse (not generateObject) so weak models (Kimi/DeepSeek/GLM) that
+    // reject structured-output negotiation still work.
+    try {
+      const { model } = await resolveUserModel(ownerId);
+      const ac = acceptanceCriteria.map((c, i) => `${i + 1}. ${c}`).join("\n");
+      const prompt =
+        "Break this software ticket into 3 to 7 concrete implementation steps a developer would follow, in order.\n\n" +
+        "Ticket: " + ticket.name + "\n\n" +
+        "Description:\n" + (ticket.description ?? "(none)") + "\n\n" +
+        (ac ? "Acceptance criteria:\n" + ac + "\n\n" : "") +
+        "Reply with ONLY a JSON array of short step strings, e.g. [\"Add the X model\", \"Wire the Y endpoint\"]. No prose, no code fences.";
+      const { text } = await generateText({ model, prompt });
+      const start = text.indexOf("[");
+      const end = text.lastIndexOf("]");
+      if (start !== -1 && end > start) {
+        const parsed = JSON.parse(text.slice(start, end + 1));
+        if (Array.isArray(parsed)) {
+          descriptions = parsed
+            .map((x) => (typeof x === "string" ? x : typeof x?.description === "string" ? x.description : ""))
+            .map((s) => s.trim())
+            .filter(Boolean)
+            .slice(0, 7);
+        }
+      }
+    } catch (err) {
+      console.warn(`[ticket-executor] task seeding via model failed for ${ticket.id}:`, err);
+    }
+
+    // Fallback: one task per acceptance criterion.
+    if (descriptions.length === 0) {
+      descriptions = acceptanceCriteria.map((c) => c.trim()).filter(Boolean).slice(0, 7);
+    }
+    if (descriptions.length === 0) return; // nothing to seed — leave it to the agent
+
+    const rows = await db
+      .insert(projectTodoLists)
+      .values(descriptions.map((description, i) => ({ ticketId: ticket.id, description, status: "pending", order: i })))
+      .returning({ id: projectTodoLists.id });
+    emit({ type: "ticket.tasks_updated", ticketId: ticket.id, taskIds: rows.map((r) => r.id) });
+    console.log(`[ticket-executor] Seeded ${rows.length} subtasks for ticket ${ticket.id}`);
+  } catch (err) {
+    console.warn(`[ticket-executor] seedTasksIfEmpty failed for ${ticket.id}:`, err);
+  }
+}
 
 // API-mode ticket builds run the Pi in-sandbox coding agent (model-agnostic,
 // same as instant mode) by default. Set TICKET_BUILDER=agent to force the
@@ -611,6 +683,10 @@ async function executeTicket(ticketId: string): Promise<void> {
     console.warn(`[ticket-executor] ⚠️ No GitHub token for user ${ownerId} — code won't be persisted!`);
     await addLog(ticketId, "⚠️ GitHub not connected — code will NOT be saved to a repository. Connect GitHub in Settings to persist your work.", "command", ownerId);
   }
+
+  // Seed subtasks up-front (idempotent) so the Tasks tab is populated the moment
+  // the build starts, even if the agent skips createTasks or the build fails.
+  await seedTasksIfEmpty(ticket, ownerId);
 
   // Load tasks
   const tasks = await db

@@ -71,7 +71,7 @@ async function importPlaywright() {
     return await import("playwright");
   } catch (error) {
     fail(
-      "Missing the `playwright` package. Install it in /Users/jitinpillai/Projects/LFG/Node with `bun add -d playwright && bunx playwright install chromium` or `npm i -D playwright && npx playwright install chromium`."
+      "Missing the `playwright` package. Install it in the project root with `bun add -d playwright && bunx playwright install chromium` or `npm i -D playwright && npx playwright install chromium`."
     );
   }
 }

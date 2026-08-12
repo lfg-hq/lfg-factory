@@ -1,4 +1,5 @@
 import { html } from "hono/html";
+import { ModelStrip } from "../components/model-strip.tsx";
 import type { BlogPost } from "../../utils/blog.ts";
 
 /**
@@ -222,7 +223,7 @@ export const LandingPage = ({ posts = [], turnstileSiteKey = "" }: { posts?: Blo
 
           <div class="flex items-center gap-4 ml-2">
             <a href="https://github.com/lfg-hq/lfg" target="_blank" rel="noopener noreferrer" class="text-slate-500 hover:text-slate-900 transition-colors">
-              <i data-lucide="github" class="w-5 h-5"></i>
+<svg viewBox="0 0 24 24" fill="currentColor" class="w-5 h-5" aria-hidden="true"><path d="M12 .5C5.73.5.5 5.73.5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.8 0c2.21-1.49 3.18-1.18 3.18-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.41-2.69 5.39-5.25 5.67.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5Z"/></svg>
             </a>
             <button id="theme-toggle" onclick="toggleTheme()" class="text-slate-500 hover:text-slate-900 transition-colors" title="Toggle theme" aria-label="Toggle dark mode">
               <i data-lucide="moon" class="w-5 h-5"></i>
@@ -272,11 +273,15 @@ export const LandingPage = ({ posts = [], turnstileSiteKey = "" }: { posts?: Blo
                             LFG is an AI-native software factory. We use our custom built AI agent to research, plan, build, and ship production software, with engineers as quality control. Faster delivery, lower cost, real products.
                         </p>
 
-                        <div class="mt-8 animate-fade-up">
-                            <a href="#hero-form" class="px-7 py-3 rounded-full bg-slate-900 text-white font-semibold hover:bg-slate-800 transition-colors inline-flex items-center gap-2">
+                        <div class="mt-8 flex flex-col sm:flex-row gap-3 animate-fade-up">
+                            <a href="#hero-form" class="px-7 py-3 rounded-full bg-slate-900 text-white font-semibold hover:bg-slate-800 transition-colors inline-flex items-center justify-center gap-2">
                                 Access Agent <i data-lucide="arrow-right" class="w-4 h-4"></i>
                             </a>
+                            <a href="/agent/" class="px-7 py-3 rounded-full border border-slate-300 bg-white text-slate-800 font-semibold hover:border-brand-400 hover:text-brand-700 transition-colors inline-flex items-center justify-center gap-2">
+                                <i data-lucide="rocket" class="w-4 h-4"></i> Set up your own agent
+                            </a>
                         </div>
+                        <p class="mt-3 text-xs text-slate-500 animate-fade-up">Open source &middot; self-host with Docker &middot; bring your own model &amp; API key</p>
 
                         <div class="mt-8 grid sm:grid-cols-3 gap-4 text-sm animate-fade-up">
                             <div class="rounded-xl border border-slate-200 bg-white/80 p-3">
@@ -583,6 +588,16 @@ export const LandingPage = ({ posts = [], turnstileSiteKey = "" }: { posts?: Blo
         </section>
 
         <!-- ==================== BLOG ==================== -->
+        <!-- ==================== MODELS ==================== -->
+        <section class="py-14 bg-slate-50 border-t border-slate-100">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+                <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">Model-agnostic</p>
+                <h3 class="font-display font-bold text-2xl md:text-3xl text-slate-900 mb-6">Works with every major model</h3>
+                ${ ModelStrip() }
+                <p class="text-slate-500 text-sm mt-6 max-w-2xl mx-auto">Bring your own API key and switch models per task — Anthropic, OpenAI, Google, xAI, DeepSeek, Moonshot and Z.ai.</p>
+            </div>
+        </section>
+
         <section id="blog" class="py-20 bg-white border-t border-slate-100">
             <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                 <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-10">

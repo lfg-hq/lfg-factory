@@ -29,6 +29,7 @@ export {
   resolveFontPairingId,
   resolveStyleProfileId,
   selectPalette,
+  inferBrightness,
   recomposeTokens,
 } from "./compose.ts";
 

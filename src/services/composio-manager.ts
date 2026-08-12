@@ -286,7 +286,22 @@ export async function getComposioTools(
     });
     return tools ?? {};
   } catch (err) {
-    console.error("[connectors] Failed to fetch tools:", err);
+    // Composio being unreachable (ConnectionRefused / timeout to backend.composio.dev)
+    // must NOT break the chat turn — degrade to zero tools. Log a concise one-liner
+    // instead of the full SDK stack trace (it's a transient network condition, and the
+    // caller already treats {} as "no connectors this turn").
+    const e = err as { message?: string; code?: string };
+    const isConn =
+      e?.code === "ConnectionRefused" ||
+      e?.code === "FailedToOpenSocket" ||
+      /connect|ECONNREFUSED|timeout|network|fetch failed/i.test(e?.message ?? "");
+    if (isConn) {
+      console.warn(
+        `[connectors] Composio unreachable — continuing without connector tools (${e?.code ?? e?.message ?? "connection error"})`
+      );
+    } else {
+      console.error("[connectors] Failed to fetch tools:", e?.message ?? err);
+    }
     return {};
   }
 }

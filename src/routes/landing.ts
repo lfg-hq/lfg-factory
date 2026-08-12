@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { LandingPage } from "../templates/pages/landing.tsx";
 import { AgentPage } from "../templates/pages/agent.tsx";
+import { SelfHostPage } from "../templates/pages/self-host.tsx";
 import { ServicesPage } from "../templates/pages/services.tsx";
 import { PortfolioPage } from "../templates/pages/portfolio.tsx";
 import { FactoryPage } from "../templates/pages/factory.tsx";
@@ -105,6 +106,9 @@ landing.get("/apps/", (c) => c.redirect("/apps"));
 
 landing.get("/agent", (c) => c.redirect("/agent/"));
 landing.get("/agent/", (c) => c.html(AgentPage()));
+
+landing.get("/self-host", (c) => c.redirect("/self-host/"));
+landing.get("/self-host/", (c) => c.html(SelfHostPage()));
 
 landing.get("/services", (c) => c.redirect("/services/"));
 landing.get("/services/", (c) => c.html(ServicesPage()));

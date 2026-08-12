@@ -25,7 +25,16 @@ function deriveKey(raw: string): Buffer {
 
 export function encryptSecret(plaintext: string): string {
   if (!env.ENCRYPTION_KEY) {
-    console.warn("[crypto] ENCRYPTION_KEY not set — storing secret with base64 fallback. Set ENCRYPTION_KEY in production.");
+    // Never store secrets reversibly in production — a missing key there is a
+    // misconfiguration, not a dev convenience. Hard-fail so API keys/tokens are
+    // never written to the DB as plaintext-equivalent base64.
+    if (env.NODE_ENV === "production") {
+      throw new Error(
+        "ENCRYPTION_KEY is not set. Refusing to store secrets without encryption in production. " +
+          "Set ENCRYPTION_KEY to a 32+ character random string (e.g. `openssl rand -hex 32`)."
+      );
+    }
+    console.warn("[crypto] ENCRYPTION_KEY not set — storing secret with base64 fallback (dev only). Set ENCRYPTION_KEY in production.");
     return `plain:${Buffer.from(plaintext, "utf8").toString("base64")}`;
   }
 

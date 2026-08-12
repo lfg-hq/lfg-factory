@@ -1,0 +1,38 @@
+# Dependencies (reinstalled inside the image)
+node_modules
+
+# Secrets — never bake env files into an image layer
+.env
+.env.*
+!example.env
+.kamal/secrets
+config/deploy.yml
+
+# Local data / user uploads (mounted as volumes at runtime)
+data
+uploads
+*.db
+*.sqlite
+*.sqlite3
+
+# Build output & caches
+out
+dist
+coverage
+*.tsbuildinfo
+.cache
+.eslintcache
+
+# VCS & editor
+.git
+.gitignore
+.idea
+.vscode
+.DS_Store
+
+# Agent / local tooling
+.claude
+CLAUDE.md
+claude.status
+screenshots
+*.log

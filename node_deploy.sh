@@ -35,7 +35,7 @@ done
 
 # Ensure persistent data/upload directories exist on the server
 echo ">>> Ensuring remote directories exist..."
-ssh root@5.161.59.97 "mkdir -p /root/lfg-node/data /root/lfg-node/uploads"
+ssh "root@${DEPLOY_SERVER:?Set DEPLOY_SERVER to your server host/IP}" "mkdir -p /root/lfg-node/data /root/lfg-node/uploads"
 
 CMD="${1:-deploy}"
 

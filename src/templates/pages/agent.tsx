@@ -1,5 +1,6 @@
 import { html } from "hono/html";
 import { Nav, Footer } from "../components/nav.tsx";
+import { ModelStrip } from "../components/model-strip.tsx";
 
 export const AgentPage = () => html`
 <!DOCTYPE html>
@@ -70,13 +71,13 @@ export const AgentPage = () => html`
                 <div class="text-center max-w-4xl mx-auto">
                     <div class="inline-flex items-center gap-2 px-4 py-2 rounded-full glass shadow-sm mb-8 animate-fade-up">
                         <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-                        <span class="text-xs font-bold text-slate-600 uppercase tracking-wider">Your AI product manager</span>
+                        <span class="text-xs font-bold text-slate-600 uppercase tracking-wider">Your AI software factory</span>
                     </div>
                     <h1 class="font-display font-semibold text-3xl sm:text-4xl md:text-5xl lg:text-6xl leading-[1.1] tracking-tight text-slate-900 animate-fade-up" style="animation-delay: 0.1s">
-                        Your AI product manager that helps your team <span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-pink-500">build</span>
+                        Your AI software factory that plans, builds, and <span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-pink-500">ships</span>
                     </h1>
-                    <p class="text-lg sm:text-xl text-slate-600 mt-7 max-w-2xl mx-auto leading-relaxed animate-fade-up" style="animation-delay: 0.2s">
-                        LFG Agent is your AI product manager. It analyzes requirements, creates PRDs and technical plans, generates prioritized tickets, and orchestrates Claude Code sessions to build your product. You stay in control.
+                    <p class="text-base sm:text-lg text-slate-600 mt-7 max-w-2xl mx-auto leading-relaxed animate-fade-up" style="animation-delay: 0.2s">
+                        LFG Agent is a full software factory. It writes your product and technical docs, generates prioritized tickets, orchestrates Claude Code sessions, and handles delivery — so your team stays focused on what matters.
                     </p>
                     <div class="mt-10 flex flex-wrap items-center justify-center gap-4 animate-fade-up" style="animation-delay: 0.3s">
                         <a href="/auth/register" class="px-8 py-3.5 rounded-full bg-brand-600 text-white font-semibold hover:bg-brand-700 transition-all inline-flex items-center gap-2 shadow-lg shadow-brand-600/25">
@@ -265,7 +266,7 @@ export const AgentPage = () => html`
                     <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">From idea to working product</h2>
                     <p class="text-slate-600 text-lg mt-4">You describe what you need. LFG Agent handles every step. You review and approve.</p>
                 </div>
-                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-0 items-stretch">
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-5 lg:gap-8 items-stretch">
                     <div class="pipeline-step relative flex flex-col" style="animation-delay: 0s">
                         <article class="step-card bg-white rounded-xl p-6 border border-slate-200 shadow-sm flex-1">
                             <div class="w-10 h-10 rounded-lg bg-brand-100 text-brand-700 flex items-center justify-center mb-4"><i data-lucide="message-square-text" class="w-5 h-5"></i></div>
@@ -273,7 +274,7 @@ export const AgentPage = () => html`
                             <h3 class="font-display font-bold text-lg mb-2">Describe your idea</h3>
                             <p class="text-sm text-slate-600">Share what you need in plain English. A product concept, a feature set, a whole system.</p>
                         </article>
-                        <div class="hidden lg:flex items-center justify-center absolute -right-3 top-1/2 -translate-y-1/2 z-10 w-6 h-6 rounded-full bg-white border border-slate-200 shadow-sm text-brand-500"><i data-lucide="chevron-right" class="w-3.5 h-3.5"></i></div>
+                        <div class="hidden lg:flex items-center justify-center absolute -right-[30px] top-11 -translate-y-1/2 z-20 w-7 h-7 rounded-full bg-brand-600 text-white shadow-md ring-2 ring-white"><i data-lucide="arrow-right" class="w-4 h-4"></i></div>
                     </div>
                     <div class="pipeline-step relative flex flex-col" style="animation-delay: 0.1s">
                         <article class="step-card bg-white rounded-xl p-6 border border-slate-200 shadow-sm flex-1">
@@ -282,7 +283,7 @@ export const AgentPage = () => html`
                             <h3 class="font-display font-bold text-lg mb-2">PRD &amp; plan</h3>
                             <p class="text-sm text-slate-600">Agent generates a full PRD, technical architecture, and implementation plan you can review and iterate on.</p>
                         </article>
-                        <div class="hidden lg:flex items-center justify-center absolute -right-3 top-1/2 -translate-y-1/2 z-10 w-6 h-6 rounded-full bg-white border border-slate-200 shadow-sm text-brand-500"><i data-lucide="chevron-right" class="w-3.5 h-3.5"></i></div>
+                        <div class="hidden lg:flex items-center justify-center absolute -right-[30px] top-11 -translate-y-1/2 z-20 w-7 h-7 rounded-full bg-brand-600 text-white shadow-md ring-2 ring-white"><i data-lucide="arrow-right" class="w-4 h-4"></i></div>
                     </div>
                     <div class="pipeline-step relative flex flex-col" style="animation-delay: 0.2s">
                         <article class="step-card bg-white rounded-xl p-6 border border-slate-200 shadow-sm flex-1">
@@ -291,7 +292,7 @@ export const AgentPage = () => html`
                             <h3 class="font-display font-bold text-lg mb-2">Tickets created</h3>
                             <p class="text-sm text-slate-600">The plan is broken into prioritized tickets with user stories. Each is scoped and queued for execution.</p>
                         </article>
-                        <div class="hidden lg:flex items-center justify-center absolute -right-3 top-1/2 -translate-y-1/2 z-10 w-6 h-6 rounded-full bg-white border border-slate-200 shadow-sm text-brand-500"><i data-lucide="chevron-right" class="w-3.5 h-3.5"></i></div>
+                        <div class="hidden lg:flex items-center justify-center absolute -right-[30px] top-11 -translate-y-1/2 z-20 w-7 h-7 rounded-full bg-brand-600 text-white shadow-md ring-2 ring-white"><i data-lucide="arrow-right" class="w-4 h-4"></i></div>
                     </div>
                     <div class="pipeline-step relative flex flex-col" style="animation-delay: 0.3s">
                         <article class="step-card bg-white rounded-xl p-6 border border-slate-200 shadow-sm flex-1">
@@ -300,7 +301,7 @@ export const AgentPage = () => html`
                             <h3 class="font-display font-bold text-lg mb-2">Code &amp; test</h3>
                             <p class="text-sm text-slate-600">Claude Code executes each ticket in a sandbox. You can watch, course-correct, or let it run autonomously.</p>
                         </article>
-                        <div class="hidden lg:flex items-center justify-center absolute -right-3 top-1/2 -translate-y-1/2 z-10 w-6 h-6 rounded-full bg-white border border-slate-200 shadow-sm text-brand-500"><i data-lucide="chevron-right" class="w-3.5 h-3.5"></i></div>
+                        <div class="hidden lg:flex items-center justify-center absolute -right-[30px] top-11 -translate-y-1/2 z-20 w-7 h-7 rounded-full bg-brand-600 text-white shadow-md ring-2 ring-white"><i data-lucide="arrow-right" class="w-4 h-4"></i></div>
                     </div>
                     <div class="pipeline-step relative flex flex-col" style="animation-delay: 0.4s">
                         <article class="step-card bg-white rounded-xl p-6 border border-brand-200 shadow-sm bg-brand-50 flex-1">
@@ -339,6 +340,19 @@ export const AgentPage = () => html`
             </div>
         </section>
 
+        <!-- MODELS -->
+        <section class="py-20 bg-white border-t border-slate-100">
+            <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+                <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">Model-agnostic</p>
+                <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">Runs on any model you want</h2>
+                <p class="text-slate-600 text-lg mt-4 max-w-2xl mx-auto">The LFG agent isn't locked to one provider. Point it at the frontier model of your choice, bring your own API key, and switch per task, cost, or capability.</p>
+                <div class="mt-8">
+                    ${ ModelStrip() }
+                </div>
+                <p class="text-slate-500 text-sm mt-6">Anthropic &middot; OpenAI &middot; Google &middot; xAI &middot; DeepSeek &middot; Moonshot &middot; Z.ai</p>
+            </div>
+        </section>
+
         <!-- OPEN SOURCE -->
         <section class="py-16 bg-slate-50 border-t border-slate-100">
             <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -362,16 +376,16 @@ export const AgentPage = () => html`
                     <div class="p-6 text-slate-300 overflow-x-auto">
 <pre id="command-block">
 # Clone the repository
-git clone https://github.com/lfg-hq/lfg.git
+git clone https://github.com/lfg-hq/lfg.git && cd lfg
 
-# Install dependencies
-pip install -r requirements.txt
+# Install dependencies (Bun)
+bun install
 
-# Run migrations
-python manage.py migrate
+# Configure your environment
+cp example.env .env   # set BETTER_AUTH_SECRET + an AI provider key
 
-# Start server
-uvicorn LFG.asgi:application --host 0.0.0.0 --port 8000
+# Start the app (runs migrations, then serves on :3000)
+bun run dev
 </pre>
                     </div>
                 </div>
@@ -399,12 +413,12 @@ uvicorn LFG.asgi:application --host 0.0.0.0 --port 8000
                 <div>
                     <h4 class="font-bold text-white mb-4 uppercase text-xs tracking-wider">Community</h4>
                     <ul class="space-y-3 text-sm text-slate-400">
-                        <li><a href="https://github.com/lfg-hq/lfg" target="_blank" rel="noopener noreferrer" class="hover:text-brand-400 transition-colors flex items-center gap-2"><i data-lucide="github" class="w-4 h-4"></i> GitHub</a></li>
+                        <li><a href="https://github.com/lfg-hq/lfg" target="_blank" rel="noopener noreferrer" class="hover:text-brand-400 transition-colors flex items-center gap-2"><svg viewBox="0 0 24 24" fill="currentColor" class="w-4 h-4" aria-hidden="true"><path d="M12 .5C5.73.5.5 5.73.5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.8 0c2.21-1.49 3.18-1.18 3.18-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.41-2.69 5.39-5.25 5.67.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5Z"/></svg> GitHub</a></li>
                         <li><a href="/auth/login" class="hover:text-brand-400 transition-colors flex items-center gap-2"><i data-lucide="rocket" class="w-4 h-4"></i> Platform</a></li>
                     </ul>
                 </div>
             </div>
-            <div class="border-t border-slate-800 pt-8 text-center text-sm text-slate-500">&copy; 2026 LFG Inc. Open Source Apache 2.0.</div>
+            <div class="border-t border-slate-800 pt-8 text-center text-sm text-slate-500">&copy; 2026 LFG. Open source, MIT licensed.</div>
         </div>
     </footer>
 

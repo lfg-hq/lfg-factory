@@ -1,0 +1,123 @@
+# LFG Node App — Kamal 2 deploy config (TEMPLATE)
+#
+# Copy this to config/deploy.yml and fill in your own values.
+#   cp config/deploy.yml.example config/deploy.yml
+# The real config/deploy.yml is gitignored so your server IPs / registry stay private.
+#
+# Secrets are read from .kamal/secrets (which pulls from your environment).
+service: lfg-node
+image: your-dockerhub-username/lfg-node
+
+ssh:
+  user: root
+
+servers:
+  web:
+    hosts:
+      - YOUR_SERVER_IP
+    labels:
+      traefik.enable: true
+      traefik.http.routers.lfg-node.rule: Host(`your-domain.com`)
+      traefik.http.routers.lfg-node.entrypoints: websecure
+      traefik.http.routers.lfg-node.tls.certresolver: dashboardresolver
+      traefik.http.services.lfg-node.loadbalancer.server.port: 8000
+      traefik.http.routers.lfg-node-http.rule: Host(`your-domain.com`)
+      traefik.http.routers.lfg-node-http.entrypoints: web
+      traefik.http.routers.lfg-node-http.middlewares: redirect-to-https@docker
+    options:
+      expose: 8000
+      health-cmd: "curl -f http://localhost:8000/health"
+      health-interval: 10s
+      health-timeout: 5s
+      health-retries: 6
+      volume:
+        - "/root/lfg-node/data:/app/data"
+        - "/root/lfg-node/uploads:/app/uploads"
+    proxy: false
+
+env:
+  clear:
+    PORT: "8000"
+    NODE_ENV: production
+    DATABASE_DRIVER: postgresql
+  secret:
+    - BETTER_AUTH_SECRET
+    - BETTER_AUTH_URL
+    - DATABASE_DRIVER
+    - POSTGRES_HOST
+    - POSTGRES_PORT
+    - POSTGRES_DB
+    - POSTGRES_USER
+    - POSTGRES_PASSWORD
+    - GOOGLE_CLIENT_ID
+    - GOOGLE_CLIENT_SECRET
+    - GITHUB_CLIENT_ID
+    - GITHUB_CLIENT_SECRET
+    - ANTHROPIC_API_KEY
+    - OPENAI_API_KEY
+    - GOOGLE_AI_API_KEY
+    - SENDGRID_API_KEY
+    - EMAIL_FROM
+    - ENCRYPTION_KEY
+    - GROK_API_KEY
+    - MAGPIE_API_KEY
+    - MAGS_API_TOKEN
+    - AWS_ACCESS_KEY_ID
+    - AWS_SECRET_ACCESS_KEY
+    - AWS_S3_BUCKET_NAME
+    - AWS_S3_REGION
+    - TURNSTILE_SITE_KEY
+    - TURNSTILE_SECRET_KEY
+    - APP_URL
+    - FILE_STORAGE_TYPE
+    - POSTGRES_PROVISIONING_PASSWORD
+
+registry:
+  server: docker.io
+  username:
+    - DOCKER_REGISTRY_TOKEN
+  password:
+    - KAMAL_REGISTRY_PASSWORD
+
+builder:
+  arch: amd64
+  context: .
+  dockerfile: Dockerfile
+
+accessories:
+  postgres_db:
+    image: postgres:16-alpine
+    service: postgres_db
+    port: 5432
+    env:
+      clear:
+        POSTGRES_DB: lfg_prod
+      secret:
+        - POSTGRES_USER
+        - POSTGRES_PASSWORD
+    directories:
+      - /root/postgres_data:/var/lib/postgresql/data
+    labels:
+      traefik.enable: false
+    roles:
+      - web
+
+  traefik:
+    image: traefik:v2.10
+    service: traefik
+    port: 443
+    options:
+      volume:
+        - "/var/run/docker.sock:/var/run/docker.sock"
+    directories:
+      - "./letsencrypt/dashboard:/letsencrypt/dashboard"
+    cmd: "--api.insecure=true --entrypoints.websecure.address=:443 --entrypoints.traefik.address=:8080 --providers.docker=true --providers.docker.exposedbydefault=false --entryPoints.web.http.redirections.entryPoint.scheme=https --certificatesResolvers.dashboardresolver.acme.email=you@example.com --certificatesResolvers.dashboardresolver.acme.storage=/letsencrypt/dashboard/acme.json --certificatesResolvers.dashboardresolver.acme.tlschallenge=true"
+    labels:
+      traefik.enable: true
+      traefik.http.routers.traefik.rule: Host(`YOUR_SERVER_IP`)
+      traefik.http.routers.traefik.service: api@internal
+      traefik.http.routers.traefik.entrypoints: traefik
+      traefik.http.routers.catchall.rule: HostRegexp(`{any:.*}`)
+      traefik.http.routers.catchall.entrypoints: web
+    roles:
+      - web

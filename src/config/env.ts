@@ -51,11 +51,40 @@ const envSchema = z.object({
   AWS_SECRET_ACCESS_KEY: z.string().optional().default(""),
   AWS_S3_REGION: z.string().optional().default("us-east-1"),
 
-  // PostgreSQL provisioning (shared dev server for user DBs)
-  POSTGRES_PROVISIONING_HOST: z.string().optional().default("135.181.37.208"),
-  POSTGRES_PROVISIONING_PORT: z.string().optional().default("5433").transform((v) => parseInt(v, 10)),
-  POSTGRES_PROVISIONING_USER: z.string().optional().default("lfg_admin"),
+  // PostgreSQL provisioning (optional: a separate server used to spin up
+  // per-user Postgres DBs). Leave HOST empty to disable this feature.
+  POSTGRES_PROVISIONING_HOST: z.string().optional().default(""),
+  POSTGRES_PROVISIONING_PORT: z.string().optional().default("5432").transform((v) => parseInt(v, 10)),
+  POSTGRES_PROVISIONING_USER: z.string().optional().default("postgres"),
   POSTGRES_PROVISIONING_PASSWORD: z.string().optional().default(""),
+
+  // ── Sandbox / code-execution backend ────────────────────────────────
+  // Where Instant-app builds and ticket execution run their coding agents.
+  //   "mags"   → Magpie Cloud Firecracker micro-VMs (hosted; needs MAGS_API_TOKEN)
+  //   "docker" → local Docker containers (self-hosted; needs Docker installed)
+  SANDBOX_BACKEND: z.enum(["mags", "docker"]).optional().default("mags"),
+  // Prebuilt sandbox image (node + python + claude-code + pi). Build & push it
+  // once from Dockerfile.sandbox (see scripts/build-sandbox-image.sh), then set
+  // this to your tag, e.g. "youruser/lfg-sandbox:latest". Required for docker backend.
+  SANDBOX_IMAGE: z.string().optional().default("lfg-sandbox:latest"),
+  // Docker network mode for sandboxes.
+  //   "bridge" (default) → each container is isolated; its internal app port is
+  //     published to a UNIQUE auto-assigned host port (no cross-app collisions,
+  //     works on macOS + Linux). Recommended.
+  //   "host" → container shares the host network and binds the app port directly
+  //     (Linux only; apps must use distinct ports, and 8080 must be free).
+  SANDBOX_DOCKER_NETWORK: z.string().optional().default("bridge"),
+  // The port an app listens on INSIDE its container (the Instant scaffold uses
+  // 8080). In bridge mode this is published to a random free host port.
+  SANDBOX_APP_PORT: z.string().optional().default("8080").transform((v) => parseInt(v, 10)),
+  // Base URL the LFG host uses to reach a running app's (mapped) port.
+  SANDBOX_PREVIEW_HOST: z.string().optional().default("http://localhost"),
+  // Headless-Chromium image used for QA/browser sessions on the docker backend.
+  SANDBOX_BROWSER_IMAGE: z.string().optional().default("zenika/alpine-chrome:latest"),
+
+  // Local filesystem storage dir (used when FILE_STORAGE_TYPE=local for binary
+  // uploads). Must be writable by the process. Text content still lives in the DB.
+  LOCAL_STORAGE_DIR: z.string().optional().default("./data/uploads"),
 
   // Composio (integration platform — composio.dev)
   COMPOSIO_API_KEY: z.string().optional().default(""),

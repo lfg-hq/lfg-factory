@@ -59,6 +59,15 @@ app.use("/public/*", async (c, next) => {
 });
 app.use("/public/*", serveStatic({ root: "./" }));
 app.use("/uploads/*", serveStatic({ root: "./" }));
+// Local file storage (FILE_STORAGE_TYPE=local): serve binaries written under
+// LOCAL_STORAGE_DIR back at /storage/<key> so getPresignedGetUrl() works off-S3.
+app.use(
+  "/storage/*",
+  serveStatic({
+    root: env.LOCAL_STORAGE_DIR,
+    rewriteRequestPath: (p) => p.replace(/^\/storage/, ""),
+  })
+);
 
 // Root favicon — browsers request /favicon.ico regardless of <link> tags.
 app.get("/favicon.ico", serveStatic({ path: "./public/favicon.ico" }));

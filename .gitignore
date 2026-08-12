@@ -15,9 +15,10 @@ logs
 _.log
 report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
-# dotenv environment variable files
+# dotenv environment variable files (example.env is the tracked template)
 .env
 .env.*
+!example.env
 
 # caches
 .eslintcache
@@ -35,3 +36,23 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 *.sqlite
 *.sqlite3
 data/*.db
+
+# Local file storage & user uploads (runtime data — never commit)
+data
+uploads
+screenshots
+
+# Databases (redundant safety alongside the patterns above)
+*.sqlite
+*.sqlite-journal
+*.db-journal
+
+# Local agent tooling / session artifacts
+.claude
+CLAUDE.md
+claude.status
+
+# Kamal deploy config — real config stays local (has your server IPs / registry).
+# Templates config/deploy.yml.example and .kamal/secrets.example are tracked.
+config/deploy.yml
+.kamal/secrets

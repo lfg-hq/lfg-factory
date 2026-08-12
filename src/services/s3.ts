@@ -14,7 +14,36 @@ import {
   DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { promises as fs } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { env } from "../config/env.ts";
+
+// ── Local filesystem storage (FILE_STORAGE_TYPE=local) ────────────────
+// When S3 is not enabled, binary uploads are written under LOCAL_STORAGE_DIR
+// (default ./data/uploads — must be writable by the process) and served back
+// over HTTP at /storage/<key> (see the route mounted in src/index.ts).
+
+const LOCAL_DIR = resolve(env.LOCAL_STORAGE_DIR);
+
+/** Absolute on-disk path for a storage key, guarded against path traversal. */
+function localPath(key: string): string {
+  const p = resolve(join(LOCAL_DIR, key));
+  if (p !== LOCAL_DIR && !p.startsWith(LOCAL_DIR + "/")) {
+    throw new Error("Invalid storage key (path traversal)");
+  }
+  return p;
+}
+
+async function localWrite(key: string, body: Buffer | Uint8Array | string): Promise<void> {
+  const p = localPath(key);
+  await fs.mkdir(dirname(p), { recursive: true });
+  await fs.writeFile(p, body as any);
+}
+
+function localPublicUrl(key: string): string {
+  const base = (env.APP_URL || env.BETTER_AUTH_URL || "").replace(/\/+$/, "");
+  return `${base}/storage/${key.split("/").map(encodeURIComponent).join("/")}`;
+}
 
 // ── Client (lazy-initialised so non-S3 deployments pay no cost) ───────
 
@@ -50,6 +79,7 @@ export function buildS3Key(projectId: string, fileType: string, name: string): s
 // ── Upload ────────────────────────────────────────────────────────────
 
 export async function uploadFile(key: string, content: string): Promise<void> {
+  if (!isS3Enabled) return localWrite(key, content);
   await getClient().send(
     new PutObjectCommand({
       Bucket: env.AWS_S3_BUCKET_NAME,
@@ -69,6 +99,7 @@ export async function uploadBinary(
   body: Buffer | Uint8Array,
   contentType: string
 ): Promise<void> {
+  if (!isS3Enabled) return localWrite(key, body);
   await getClient().send(
     new PutObjectCommand({
       Bucket: env.AWS_S3_BUCKET_NAME,
@@ -82,6 +113,7 @@ export async function uploadBinary(
 // ── Download ──────────────────────────────────────────────────────────
 
 export async function downloadFile(key: string): Promise<string> {
+  if (!isS3Enabled) return fs.readFile(localPath(key), "utf-8").catch(() => "");
   const res = await getClient().send(
     new GetObjectCommand({
       Bucket: env.AWS_S3_BUCKET_NAME,
@@ -104,6 +136,10 @@ export async function downloadFile(key: string): Promise<string> {
 export async function downloadBinary(
   key: string
 ): Promise<{ body: Buffer; contentType: string | null }> {
+  if (!isS3Enabled) {
+    const body = await fs.readFile(localPath(key)).catch(() => Buffer.alloc(0));
+    return { body, contentType: guessContentType(key) };
+  }
   const res = await getClient().send(
     new GetObjectCommand({
       Bucket: env.AWS_S3_BUCKET_NAME,
@@ -161,6 +197,8 @@ export async function getPresignedGetUrl(
   key: string,
   expiresInSec = 600
 ): Promise<string> {
+  // Local mode: no signing — serve via the /storage/<key> HTTP route instead.
+  if (!isS3Enabled) return localPublicUrl(key);
   // Cast: s3-request-presigner bundles its own @smithy/types; the duplicate
   // makes TS think the S3Client/Command types are incompatible at the
   // structural level. They're runtime-compatible.
@@ -174,6 +212,10 @@ export async function getPresignedGetUrl(
 // ── Delete ────────────────────────────────────────────────────────────
 
 export async function deleteFile(key: string): Promise<void> {
+  if (!isS3Enabled) {
+    await fs.rm(localPath(key), { force: true });
+    return;
+  }
   await getClient().send(
     new DeleteObjectCommand({
       Bucket: env.AWS_S3_BUCKET_NAME,
