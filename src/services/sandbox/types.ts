@@ -74,6 +74,8 @@ export interface SandboxBackend {
   enableHttpAccess(nameOrId: string, port?: number): Promise<string>;
   setStableUrl(subdomain: string, workspaceId: string): Promise<string>;
   stopWorkspace(nameOrId: string): Promise<void>;
+  /** Toggle auto-sleep at runtime (no-op on backends without a sleep concept). */
+  setNoSleep(nameOrId: string, noSleep: boolean): Promise<void>;
   startBrowserSession(opts?: { name?: string; timeout?: number }): Promise<BrowserSession>;
   deleteWorkspace(name: string): Promise<void>;
   getJobStatus(nameOrId: string): Promise<JobStatus>;

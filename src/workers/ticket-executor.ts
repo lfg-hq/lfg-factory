@@ -25,10 +25,10 @@ import { sandboxes } from "../db/schema/sandbox.ts";
 import { decrypt } from "../ai/tools/env-tools.ts";
 import { bus, emit } from "../events/bus.ts";
 import {
-  newWorkspace,
   newWorkspaceV2,
   execOnWorkspace,
   deleteWorkspace,
+  setNoSleep,
 } from "../services/mags.ts";
 import {
   startClaudeCli,
@@ -319,6 +319,20 @@ async function killPiInVm(workspaceId: string, backgroundPid?: string): Promise<
 // auto-resumed from the persisted repo before we give up and ask the user.
 const MAX_BUILD_RESUMES = 2;
 
+// Ticket build VMs are persistent + noSync + no_sleep. no_sleep is pinned ON while
+// actively working (so Mags can't idle-sleep a live build → "lost contact") and
+// turned OFF at build/chat end so the VM idle-sleeps to save cost; the next request
+// wakes it and resumes from the persisted /data. NEVER toggle the always-on preview
+// VM ("pv-…"), which is keepAlive by design.
+async function wakeTicketVm(workspaceId: string | null | undefined): Promise<void> {
+  if (!workspaceId || workspaceId.startsWith("pv-")) return;
+  await setNoSleep(workspaceId, true).catch((e) => console.warn(`[ticket-executor] pin-awake (no_sleep=true) failed for ${workspaceId}:`, (e as Error).message));
+}
+async function sleepTicketVm(workspaceId: string | null | undefined): Promise<void> {
+  if (!workspaceId || workspaceId.startsWith("pv-")) return;
+  await setNoSleep(workspaceId, false).catch((e) => console.warn(`[ticket-executor] allow-sleep (no_sleep=false) failed for ${workspaceId}:`, (e as Error).message));
+}
+
 // API-mode ticket builds run the Pi in-sandbox coding agent (model-agnostic,
 // same as instant mode) by default. Set TICKET_BUILDER=agent to force the
 // legacy in-process generateText loop instead.
@@ -593,6 +607,15 @@ async function stoppedByUser(ticketId: string, ownerId: string): Promise<boolean
     .set({ status: "open", queueStatus: "none", updatedAt: new Date() })
     .where(eq(projectTickets.id, ticketId))
     .catch(() => {});
+  // A user-stop short-circuits the normal end-of-build sleep, so let the VM idle-sleep
+  // here too (it was pinned awake for the run). Look up the dedicated ticket VM.
+  const [sb] = await db
+    .select({ ws: sandboxes.magsWorkspaceId })
+    .from(sandboxes)
+    .where(and(eq(sandboxes.ticketId, ticketId), inArray(sandboxes.workspaceType, ["ticket", "ticket-chat"])))
+    .limit(1)
+    .catch(() => [] as { ws: string | null }[]);
+  await sleepTicketVm(sb?.ws ?? null);
   broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "stopped", queueStatus: "none" });
   return true;
 }
@@ -848,7 +871,16 @@ async function executeTicket(ticketId: string): Promise<void> {
     await addLog(ticketId, "Creating VM workspace...", "command", ownerId);
     console.log(`[ticket-executor] Creating new workspace: ${workspaceName}`);
 
-    const { jobId, workspaceId: wsId } = await newWorkspace(workspaceName, { diskGb: parseInt(process.env.INSTANT_DISK_GB || "8", 10) });
+    // Ticket build VM: persistent (v2 always) + noSync (no S3 mirror) + keepAlive
+    // (no_sleep=true) so Mags can't idle-sleep a live build. Toggled off at build end.
+    const { jobId, workspaceId: wsId } = await newWorkspaceV2(workspaceName, {
+      vcpus: 4,
+      memoryMb: parseInt(process.env.INSTANT_MEM_GB || "4", 10) * 1024,
+      diskGb: parseInt(process.env.INSTANT_DISK_GB || "8", 10),
+      keepAlive: true,
+      noSync: true,
+      rootfsType: "claude",
+    });
     workspaceId = wsId;
 
     // Wait for VM to boot
@@ -1202,6 +1234,9 @@ Before implementing, fix the git issue:
   console.log(`[ticket-executor] Step 6: Starting Claude CLI`);
   await addLog(ticketId, "Starting Claude Code CLI...", "command", ownerId);
 
+  // Pin the VM awake for the whole build (see wakeTicketVm).
+  await wakeTicketVm(workspaceId);
+
   let cliResult;
   try {
     cliResult = await startClaudeCli({
@@ -1412,6 +1447,10 @@ Before implementing, fix the git issue:
       });
     }
   }
+
+  // Build done — let the dedicated VM idle-sleep (kept warm for resume; destroyed on
+  // approval→Done). Never touches the always-on preview VM.
+  await sleepTicketVm(workspaceId);
 }
 
 /**
@@ -1457,6 +1496,8 @@ async function ensureIsolatedChatSandbox(
       vcpus: 4,
       memoryMb: parseInt(process.env.INSTANT_MEM_GB || "4", 10) * 1024,
       diskGb: parseInt(process.env.INSTANT_DISK_GB || "8", 10),
+      keepAlive: true, // no_sleep while working (toggled off at chat end)
+      noSync: true,    // ticket sandbox — no S3 mirror
       rootfsType: process.env.PREVIEW_ROOTFS || "pi",
     });
     workspaceId = wsId;
@@ -1555,6 +1596,8 @@ async function executeTicketChat(
   }
   const sandbox = { magsWorkspaceId: chatSb.workspaceId, cliSessionId: null as string | null };
   const workspaceId = chatSb.workspaceId;
+  // New user request → pin the (possibly slept) chat VM awake for the duration.
+  await wakeTicketVm(workspaceId);
   const projectDirName = "project";
   let sessionId = sandbox.cliSessionId ?? undefined;
 
@@ -1876,6 +1919,9 @@ ${message}
       metadata: { workspaceId },
     });
   }
+
+  // Chat turn done — let the dedicated chat VM idle-sleep until the next request.
+  await sleepTicketVm(workspaceId);
 }
 
 /**
@@ -2099,6 +2145,8 @@ async function executeTicketApi(ticketId: string): Promise<void> {
       vcpus: 4,
       memoryMb: parseInt(process.env.INSTANT_MEM_GB || "4", 10) * 1024,
       diskGb: parseInt(process.env.INSTANT_DISK_GB || "8", 10),
+      keepAlive: true, // no_sleep while building (toggled off at build end)
+      noSync: true,    // ticket sandbox — no S3 mirror
       // Empty projects → the pre-scaffolded boilerplate rootfs; everything else →
       // the "pi" rootfs (node 22 + Pi preinstalled), same base as the preview VM.
       rootfsType: useBoilerplate ? BOILERPLATE_ROOTFS : (process.env.PREVIEW_ROOTFS || "pi"),
@@ -2384,6 +2432,10 @@ git branch --show-current
         glm: userKeys?.glmApiKey,
       } as Record<string, string | null | undefined>)[provider]
     : undefined;
+  // Pin the VM awake for the whole build (wakes a reused/slept VM too) so Mags can't
+  // idle-sleep a live build → "lost contact". Turned back off at build end.
+  await wakeTicketVm(workspaceId);
+
   const usePi = USE_PI_TICKET_BUILDER && !!provider && isPiSupportedProvider(provider) && !!providerApiKey;
 
   if (usePi && provider && providerApiKey) {
@@ -2658,18 +2710,16 @@ git branch --show-current
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "failed", queueStatus: "none", mergeStatus: commitFailed ? "not_pushed" : undefined });
   }
 
-  // ISOLATED build: the throwaway pi VM has done its job — the branch is on the
-  // remote (on success) and the logs are persisted. Destroy it so it can't
-  // accumulate cost or disrupt anything; previewing the ticket reconstructs the
-  // branch worktree in the always-on preview VM from the remote.
-  // SAFETY: only ever destroy a DEDICATED throwaway build VM — never the always-on
-  // preview VM ("pv-…"). Reusing a worktree here would be a bug, but guard anyway.
-  // NEVER destroy it when the push failed — the ONLY copy of the work lives in this
-  // VM, so keep it alive for a retry instead of throwing the changes away.
-  if (isolatedBuild && !useWorktree && workspaceId && !workspaceId.startsWith("pv-") && !commitFailed) {
-    await addLog(ticketId, "Isolated build finished — destroying the throwaway build sandbox…", "command", ownerId);
-    await deleteWorkspace(workspaceId).catch((e) => console.warn(`[ticket-executor-api] destroy build VM failed:`, e));
-    await db.update(sandboxes).set({ status: "destroyed", updatedAt: new Date() }).where(eq(sandboxes.ticketId, ticketId)).catch(() => {});
+  // ISOLATED build: the dedicated VM is KEPT (not destroyed here) and allowed to
+  // idle-sleep — its /data persists, so the next request wakes it and resumes from
+  // where it left off. It's destroyed only when the ticket is approved and moved to
+  // Done (cleanupTicketWorktree). We sleep on BOTH success and failure so a finished
+  // (or failed-but-kept) VM never burns compute sitting idle.
+  // SAFETY: never touch the always-on preview VM ("pv-…"), which is keepAlive by design.
+  if (isolatedBuild && !useWorktree && workspaceId && !workspaceId.startsWith("pv-")) {
+    await addLog(ticketId, "Build finished — sandbox will sleep when idle (kept warm for resume; removed when the ticket is approved).", "command", ownerId);
+    await sleepTicketVm(workspaceId);
+    await db.update(sandboxes).set({ status: "sleeping", updatedAt: new Date() }).where(eq(sandboxes.ticketId, ticketId)).catch(() => {});
   }
   // SHARED build: the ticket's git worktree + sandbox row are intentionally KEPT.
   // They are cleaned up only when the ticket is approved and moved to Done (via

@@ -278,6 +278,21 @@ export async function stopWorkspace(nameOrId: string): Promise<void> {
 }
 
 /**
+ * Toggle a VM's auto-sleep at runtime (PATCH /api/v2/mags-jobs/{id}).
+ * noSleep=true  → never idle-sleep (pin awake while actively working)
+ * noSleep=false → re-enable idle-sleep (let it pause when idle to save cost)
+ * Requires the VM to be persistent (it always is for us). Accepts a job/request id
+ * or a workspace name (resolved via findJob).
+ */
+export async function setNoSleep(nameOrId: string, noSleep: boolean): Promise<void> {
+  const client = getClient();
+  const jobId = nameOrId.includes("-") && nameOrId.length >= 32
+    ? nameOrId
+    : (await findJob(nameOrId))?.jobId ?? nameOrId;
+  await client.updateJob(jobId, { noSleep });
+}
+
+/**
  * Start an ephemeral Chromium browser session and return its CDP WebSocket endpoint.
  */
 export async function startBrowserSession(opts?: {

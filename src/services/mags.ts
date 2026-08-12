@@ -32,6 +32,7 @@ export const findJob = backend.findJob;
 export const enableHttpAccess = backend.enableHttpAccess;
 export const setStableUrl = backend.setStableUrl;
 export const stopWorkspace = backend.stopWorkspace;
+export const setNoSleep = backend.setNoSleep;
 export const startBrowserSession = backend.startBrowserSession;
 export const deleteWorkspace = backend.deleteWorkspace;
 export const getJobStatus = backend.getJobStatus;

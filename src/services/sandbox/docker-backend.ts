@@ -285,6 +285,11 @@ export async function stopWorkspace(nameOrId: string): Promise<void> {
   await runDocker(["stop", cname], { timeout: 30_000 }).catch(() => {});
 }
 
+/** No sleep/idle concept for local Docker containers — no-op. */
+export async function setNoSleep(_nameOrId: string, _noSleep: boolean): Promise<void> {
+  /* intentionally a no-op */
+}
+
 export async function deleteWorkspace(name: string): Promise<void> {
   const cname = containerName(name);
   _urlByWorkspace.delete(baseName(name));
