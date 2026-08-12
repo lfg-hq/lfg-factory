@@ -142,6 +142,29 @@ function piWorkSummary(tail: string | undefined): string {
   const s = extractPiProgress(tail || "", 1200) || "";
   return s.replace(/^Agent:\s*/, "").trim();
 }
+
+/** Concrete failure detail for the banner when the agent itself is unhelpful ("did not
+ *  complete"): the most recent error log, else the last meaningful line the agent
+ *  printed. Kept short + single-line. Best-effort → "" on any failure. */
+async function lastErrorSnippet(ticketId: string, tail?: string): Promise<string> {
+  try {
+    const [errLog] = await db
+      .select({ m: ticketLogs.command })
+      .from(ticketLogs)
+      .where(and(eq(ticketLogs.ticketId, ticketId), eq(ticketLogs.logType, "cli_error")))
+      .orderBy(desc(ticketLogs.createdAt))
+      .limit(1);
+    let snip = (errLog?.m ?? "").trim();
+    if (!snip && tail) {
+      const lines = tail.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("{") && !l.startsWith("["));
+      snip = lines.length ? lines[lines.length - 1]! : "";
+    }
+    snip = snip.replace(/\s+/g, " ").trim();
+    return snip.length > 240 ? snip.slice(0, 237) + "…" : snip;
+  } catch {
+    return "";
+  }
+}
 import { getBuildProfile, detectProjectType } from "../services/instant-profiles.ts";
 import { generateText, stepCountIs } from "ai";
 import { addLog } from "../services/ticket-logs.ts";
@@ -1182,9 +1205,10 @@ Before implementing, fix the git issue:
     // Auto-record a demo of the completed feature for the Preview tab (fire-and-forget).
     void generateTicketDemo(ticketId, { ownerId, projectId: project.id });
   } else {
+    const _detail = commitFailed ? "" : await lastErrorSnippet(ticketId);
     const reason = commitFailed
       ? "the changes were built but were NOT pushed to git (commit/push failed or GitHub not connected) — fix the cause and rebuild"
-      : "Implementation did not complete";
+      : (_detail ? `did not complete — ${_detail}` : "Implementation did not complete (the agent stopped without a specific error)");
     if (commitFailed) await db.update(projectTickets).set({ githubMergeStatus: "not_pushed", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId)).catch(() => {});
     await markTicketFailed(ticketId, reason, ownerId, { emitEvent: false });
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "failed", queueStatus: "none", mergeStatus: commitFailed ? "not_pushed" : undefined });
@@ -1443,7 +1467,9 @@ ${message}
       if (await stoppedByUser(ticketId, ownerId)) return;
       const piOk = (piResult.exitCode === null || piResult.exitCode === 0) && !piResult.fatalError;
       if (!piOk) {
-        const reason = piResult.fatalError ?? (piResult.exitCode ? `exit code ${piResult.exitCode}` : "unknown error");
+        const _piDetail = piResult.fatalError ? "" : await lastErrorSnippet(ticketId, piResult.tail);
+        const _piBase = piResult.fatalError ?? (piResult.exitCode ? `exit code ${piResult.exitCode}` : "the agent stopped without finishing");
+        const reason = _piDetail ? `${_piBase} — ${_piDetail}` : _piBase;
         await addLog(ticketId, `Pi chat failed: ${reason}`, "cli_error", ownerId);
       } else if (piResult.didWork) {
         // FINALIZE (same as a build): a chat that CHANGES CODE must COMMIT + PUSH +
@@ -2239,13 +2265,15 @@ git branch --show-current
         implementationStatus = "complete";
         workSummary = piWorkSummary(piResult.tail);
       } else {
-        const reason = piResult.fatalError
-          ?? (piResult.exitCode ? `exit code ${piResult.exitCode}` : (!piResult.didWork ? "no changes were made" : "unknown error"));
-        await addLog(ticketId, `Pi build failed: ${reason}`, "command", ownerId);
+        const _piDetail2 = piResult.fatalError ? "" : await lastErrorSnippet(ticketId, piResult.tail);
+        const _piBase2 = piResult.fatalError
+          ?? (piResult.exitCode ? `exit code ${piResult.exitCode}` : (!piResult.didWork ? "no changes were made" : "the agent stopped without finishing"));
+        const reason = _piDetail2 ? `${_piBase2} — ${_piDetail2}` : _piBase2;
+        await addLog(ticketId, `Pi build failed: ${reason}`, "cli_error", ownerId);
         console.error(`[ticket-executor-api] Pi failed (${reason}). Output tail:\n${piResult.tail.slice(-2000)}`);
       }
     } catch (err) {
-      await addLog(ticketId, `Pi build error: ${(err as Error).message}`, "command", ownerId);
+      await addLog(ticketId, `Pi build error: ${(err as Error).message}`, "cli_error", ownerId);
       console.error(`[ticket-executor-api] Pi error:`, err);
     }
 
