@@ -210,7 +210,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     }
     /* Tab panes — not in tickets.css */
     .drawer-tab-content { display: none !important; }
-    .drawer-tab-content.active { display: flex !important; flex-direction: column; flex: 1; min-height: 0; }
+    .drawer-tab-content.active { display: flex !important; flex-direction: column; flex: 1; }
     #tab-actions.active { padding: 0; position: relative; }
     #tab-preview.active { padding: 0; flex: 1; min-height: 0; overflow: hidden; }
     .placeholder-pane { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-secondary); opacity: 0.4; gap: 0.75rem; }
@@ -572,8 +572,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     <div class="drawer-tab-content" id="tab-actions">
       <!-- Build status banner (persists across refresh — derived from ticket state) -->
       <div id="ticket-status-banner" style="display:none;padding:.6rem 1rem;font-size:.82rem;font-weight:600;flex-shrink:0;border-bottom:1px solid rgba(255,255,255,.06);"></div>
-      <!-- Git branch banner (hidden by default) -->
-      <div id="actions-git-banner" style="display:none;padding:.5rem 1rem;background:rgba(139,92,246,.06);border-bottom:1px solid rgba(139,92,246,.12);flex-shrink:0;">
+      <!-- Git branch banner — sticky at the top of the scrolling log -->
+      <div id="actions-git-banner" style="display:none;position:sticky;top:0;z-index:6;padding:.5rem 1rem;background:#17141d;border-bottom:1px solid rgba(139,92,246,.18);flex-shrink:0;">
         <div style="display:flex;align-items:center;gap:.5rem;font-size:.8rem;">
           <i class="fas fa-code-branch" style="color:#a78bfa;font-size:.75rem;"></i>
           <code id="actions-git-branch" style="color:#c4b5fd;font-size:.8rem;">—</code>
@@ -583,10 +583,10 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       </div>
       <!-- Log rows -->
       <div id="actions-log-area" class="execution-logs-container"></div>
-      <!-- Outcome banner (failure reason / success) — pinned ABOVE the chat input -->
-      <div id="actions-bottom-banner" style="display:none;padding:.6rem 1rem;font-size:.82rem;font-weight:600;flex-shrink:0;border-top:1px solid rgba(255,255,255,.06);"></div>
       <!-- Chat input (fixed to bottom) -->
       <div class="logs-chat-container">
+        <!-- Outcome banner (failure reason / success) — pinned above the chat input -->
+        <div id="actions-bottom-banner" style="display:none;margin:-.75rem -1rem .6rem;padding:.55rem 1rem;font-size:.8rem;font-weight:600;border-bottom:1px solid rgba(255,255,255,.06);"></div>
         <div id="actions-attach-chip" style="display:none;align-items:center;gap:.4rem;margin:0 0 .4rem 0;font-size:.75rem;color:var(--text-secondary,#9ca3af);"></div>
         <div class="logs-chat-field">
           <input id="actions-file-input" type="file" style="display:none;" onchange="uploadTicketFile(this.files&&this.files[0])" />
