@@ -1473,17 +1473,36 @@ async function ensureIsolatedChatSandbox(
   const projectDirName = "project";
   const featureBranch = ticket.githubBranch ?? `feature/ticket-${ticket.id}`;
 
-  // 1) Reuse a live dedicated chat sandbox if we have one (warm follow-ups).
-  const [existing] = await db.select().from(sandboxes)
-    .where(and(eq(sandboxes.ticketId, ticket.id), eq(sandboxes.workspaceType, "ticket-chat"))).limit(1);
-  if (existing?.magsWorkspaceId && !existing.magsWorkspaceId.startsWith("pv-")) {
+  // 1) SAME TICKET → SAME SANDBOX. Reuse the ticket's existing dedicated VM — the
+  //    BUILD VM ("ticket") or a prior chat VM ("ticket-chat"), whichever exists. The
+  //    build VM now persists (sleeps between runs), so chat just continues in it — no
+  //    reason for a second VM. We only ever avoid the shared preview VM ("pv-…"),
+  //    whose config hacks would pollute a chat's `git add -A`.
+  const existingRows = await db.select().from(sandboxes)
+    .where(and(
+      eq(sandboxes.ticketId, ticket.id),
+      inArray(sandboxes.workspaceType, ["ticket", "ticket-chat"]),
+    ))
+    .orderBy(desc(sandboxes.updatedAt));
+  const existing = existingRows.find((r) => r.magsWorkspaceId && !r.magsWorkspaceId.startsWith("pv-"));
+  if (existing?.magsWorkspaceId) {
     try {
-      // Alive? AND re-sync to the latest pushed commit — a build or a prior chat may
-      // have pushed since this warm VM was last used, so don't work on stale code.
+      // Wake it (the build VM idle-sleeps after a run) AND re-sync to the latest pushed
+      // commit — a build or a prior chat may have pushed since it was last used.
+      await wakeTicketVm(existing.magsWorkspaceId);
       const sync = await execOnWorkspace(existing.magsWorkspaceId,
         `cd ${WORKING_DIR}/${projectDirName} 2>/dev/null && git config --global --add safe.directory '*' 2>/dev/null; git fetch origin 2>&1 | tail -1; git checkout -B ${featureBranch} origin/${featureBranch} 2>/dev/null || git checkout ${featureBranch} 2>/dev/null; git reset --hard origin/${featureBranch} 2>/dev/null; git clean -fd 2>/dev/null; echo READY`,
         { timeout: 90_000 });
-      if (sync.output.includes("READY")) return { workspaceId: existing.magsWorkspaceId };
+      if (sync.output.includes("READY")) {
+        // Drop any REDUNDANT dedicated rows for this ticket so we converge on one.
+        for (const r of existingRows) {
+          if (r.id !== existing.id && r.magsWorkspaceId && !r.magsWorkspaceId.startsWith("pv-")) {
+            await deleteWorkspace(r.magsWorkspaceId).catch(() => {});
+            await db.delete(sandboxes).where(eq(sandboxes.id, r.id)).catch(() => {});
+          }
+        }
+        return { workspaceId: existing.magsWorkspaceId };
+      }
     } catch { /* dead — reprovision below */ }
     await db.delete(sandboxes).where(eq(sandboxes.id, existing.id)).catch(() => {});
   }
@@ -2094,16 +2113,32 @@ async function executeTicketApi(ticketId: string): Promise<void> {
   const useBoilerplate = isEmptyProject && !!githubToken && !!provider && provider !== "anthropic";
   let prescaffolded = false;
 
-  // ── Setup workspace (shared logic) ──────────────────────────────────
+  // ── Setup workspace ─────────────────────────────────────────────────
+  // SAME TICKET → SAME SANDBOX. Reuse the ticket's ONE dedicated VM — its build
+  // "ticket" VM or a prior "ticket-chat" VM (chat and build share it now) — and delete
+  // any redundant duplicates so a ticket never accumulates more than one. A "pv-…" /
+  // worktree row is the SHARED preview VM and must NEVER be reused for an isolated
+  // build (we'd build inside it, then try to destroy it).
   console.log(`[ticket-executor-api] Setting up workspace`);
   let sandboxRow = await findExistingSandbox(ticketId);
-  // In ISOLATED mode, NEVER reuse a shared-preview worktree row (it points at the
-  // always-on preview VM, "pv-…"). Reusing it would run the build IN the preview VM
-  // and then try to DESTROY it. Drop such a row so a dedicated throwaway VM is
-  // provisioned below, and the preview VM is never touched.
-  if (isolatedBuild && sandboxRow && (sandboxRow.workspaceType !== "ticket" || (sandboxRow.magsWorkspaceId ?? "").startsWith("pv-"))) {
-    await db.delete(sandboxes).where(eq(sandboxes.id, sandboxRow.id)).catch(() => {});
-    sandboxRow = null;
+  if (isolatedBuild) {
+    const rows = await db.select().from(sandboxes)
+      .where(and(eq(sandboxes.ticketId, ticketId), inArray(sandboxes.workspaceType, ["ticket", "ticket-chat"])))
+      .orderBy(desc(sandboxes.updatedAt));
+    const dedicated = rows.filter((r) => r.magsWorkspaceId && !r.magsWorkspaceId.startsWith("pv-"));
+    sandboxRow = dedicated[0] ?? null;
+    // Converge on ONE: destroy + drop every OTHER dedicated VM, plus any shared-preview/
+    // worktree rows for this ticket (their branch work is already on the remote).
+    for (const r of rows) {
+      if (sandboxRow && r.id === sandboxRow.id) continue;
+      if (r.magsWorkspaceId && !r.magsWorkspaceId.startsWith("pv-")) await deleteWorkspace(r.magsWorkspaceId).catch(() => {});
+      await db.delete(sandboxes).where(eq(sandboxes.id, r.id)).catch(() => {});
+    }
+    // Canonicalize a reused chat VM to the build type so it's the single "ticket" row.
+    if (sandboxRow && sandboxRow.workspaceType !== "ticket") {
+      await db.update(sandboxes).set({ workspaceType: "ticket", updatedAt: new Date() }).where(eq(sandboxes.id, sandboxRow.id)).catch(() => {});
+      sandboxRow = { ...sandboxRow, workspaceType: "ticket" };
+    }
   }
   let workspaceId = sandboxRow?.magsWorkspaceId ?? null;
 
@@ -2771,11 +2806,14 @@ async function findExistingSandbox(ticketId: string) {
   // Match the ticket's sandbox regardless of workspaceType — worktree runs store
   // "ticket-worktree", so restricting to "ticket" meant retries never found the
   // existing row and re-inserted (→ unique-constraint clash on the shared
-  // preview workspace).
+  // preview workspace). Order by most-recent so a ticket with more than one row
+  // (legacy build + chat) deterministically resolves to the same sandbox instead of
+  // an arbitrary LIMIT 1 (which could orphan the other VM).
   const result = await db
     .select()
     .from(sandboxes)
     .where(eq(sandboxes.ticketId, ticketId))
+    .orderBy(desc(sandboxes.updatedAt))
     .limit(1);
   return result[0] ?? null;
 }
