@@ -31,8 +31,10 @@ export {
   selectPalette,
   inferBrightness,
   recomposeTokens,
+  composeTokensFromSelection,
+  getPaletteSwatchOptions,
 } from "./compose.ts";
 
-export type { PalettePreference } from "./compose.ts";
+export type { PalettePreference, ColorRole } from "./compose.ts";
 
 export type { ValidationIssue, DesignOverrides } from "./compose.ts";

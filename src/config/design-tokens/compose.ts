@@ -660,3 +660,105 @@ export function recomposeTokens(
 
   return tokens;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Color-selection tool: compose full tokens from a base palette + per-role picks.
+// The user picks a curated base palette, then overrides individual roles (primary/
+// accent/secondary/background/text) from a provided swatch set. We derive the
+// dependent tokens (foreground via WCAG contrast, hover via a lightness shift) so an
+// override stays coherent and readable.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function rgbToHex(r: number, g: number, b: number): string {
+  const h = (n: number) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, "0");
+  return `#${h(r)}${h(g)}${h(b)}`;
+}
+/** Linear mix of two hex colors (ratio 0 = a, 1 = b). */
+function mixHex(a: string, b: string, ratio: number): string {
+  const [ar, ag, ab] = hexToRgb(a);
+  const [br, bg, bb] = hexToRgb(b);
+  const t = Math.max(0, Math.min(1, ratio));
+  return rgbToHex(ar + (br - ar) * t, ag + (bg - ag) * t, ab + (bb - ab) * t);
+}
+const darkenHex = (hex: string, r: number) => mixHex(hex, "#000000", r);
+const lightenHex = (hex: string, r: number) => mixHex(hex, "#ffffff", r);
+/** Pick the most readable foreground (near-white or near-black) for a background. */
+function pickForeground(bg: string): string {
+  const light = "#ffffff", dark = "#111114";
+  return contrastRatio(bg, light) >= contrastRatio(bg, dark) ? light : dark;
+}
+const isValidHex = (s: string | undefined): s is string => !!s && /^#[0-9a-fA-F]{6}$/.test(s);
+
+export type ColorRole = "primary" | "accent" | "secondary" | "background" | "text";
+
+/**
+ * The provided swatch options per role — the distinct, curated colors used across the
+ * built-in palettes (so a user only ever picks harmonious, real palette colors).
+ */
+export function getPaletteSwatchOptions(): Record<ColorRole, string[]> {
+  const uniq = (arr: string[]) => Array.from(new Set(arr.map((c) => c.toLowerCase())));
+  return {
+    primary: uniq(palettes.map((p) => p.colors.primary)),
+    accent: uniq(palettes.map((p) => p.colors.accent)),
+    secondary: uniq(palettes.map((p) => p.colors.secondary)),
+    background: uniq(palettes.map((p) => p.colors.background)),
+    text: uniq(palettes.map((p) => p.colors.text)),
+  };
+}
+
+/**
+ * Compose full DesignTokens from a base palette + per-role color overrides. Unspecified
+ * roles keep the base palette's value. Dependent tokens (foreground/hover/muted/surface)
+ * are re-derived from each override so the result stays coherent + accessible.
+ */
+export function composeTokensFromSelection(
+  baseId: string,
+  overrides: Partial<Record<ColorRole, string>>,
+  fontPairingId?: string,
+  styleProfileId?: string,
+  existingTokens?: DesignTokens,
+): DesignTokens | null {
+  const base = recomposeTokens(baseId, fontPairingId, styleProfileId, existingTokens) ?? composeDefaultTokens();
+  const c = { ...base.colors };
+
+  if (isValidHex(overrides.primary)) {
+    c.primary = overrides.primary;
+    c.primaryForeground = pickForeground(c.primary);
+    c.primaryHover = relativeLuminance(c.primary) > 0.5 ? darkenHex(c.primary, 0.12) : lightenHex(c.primary, 0.1);
+    c.ring = c.primary;
+  }
+  if (isValidHex(overrides.accent)) {
+    c.accent = overrides.accent;
+    c.accentForeground = pickForeground(c.accent);
+  }
+  if (isValidHex(overrides.secondary)) {
+    c.secondary = overrides.secondary;
+    c.secondaryForeground = pickForeground(c.secondary);
+  }
+  if (isValidHex(overrides.background)) {
+    const bg = overrides.background;
+    const dark = relativeLuminance(bg) < 0.4;
+    c.background = bg;
+    c.surface = dark ? lightenHex(bg, 0.05) : darkenHex(bg, 0.03);
+    c.surfaceHover = dark ? lightenHex(bg, 0.1) : darkenHex(bg, 0.06);
+    c.card = c.surface;
+    c.popover = c.surface;
+    c.muted = dark ? lightenHex(bg, 0.08) : darkenHex(bg, 0.05);
+    c.input = dark ? lightenHex(bg, 0.14) : darkenHex(bg, 0.09);
+  }
+  if (isValidHex(overrides.text)) {
+    c.text = overrides.text;
+    c.cardForeground = c.text;
+    c.popoverForeground = c.text;
+    c.textMuted = mixHex(c.text, c.background, 0.45);
+    c.mutedForeground = c.textMuted;
+  }
+
+  const tokens: DesignTokens = {
+    ...base,
+    meta: { ...base.meta, generatedAt: base.meta.generatedAt },
+    colors: c,
+  };
+  const parsed = DesignTokensSchema.safeParse(tokens);
+  return parsed.success ? parsed.data : tokens;
+}
