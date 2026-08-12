@@ -813,7 +813,7 @@ export async function streamPiToCompletion(params: {
   maxToolCalls?: number;
   /** Ticket id — lets the loop use webhook output as proof-of-life (see noteBuildActivity). */
   ticketId?: string;
-}): Promise<{ exitCode: number | null; fatalError: string | null; didWork: boolean; toolCalls: number; tail: string; resumable: boolean; oomKilled: boolean }> {
+}): Promise<{ exitCode: number | null; fatalError: string | null; didWork: boolean; toolCalls: number; tail: string; resumable: boolean; oomKilled: boolean; lostContact: boolean }> {
   const { workspaceId, outputFile, backgroundPid, timeoutMs, onProgress, shouldCancel, progressMaxLen = 90, ticketId } = params;
   const maxTC = params.maxToolCalls ?? parseInt(process.env.INSTANT_PI_MAX_TOOLCALLS || "300", 10);
   const f = JSON.stringify(outputFile);
@@ -1108,5 +1108,5 @@ printf 'TL=%s\\n' "$TL"`;
   // bad key) or a stall (it was looping with no progress — a resume just stalls again).
   const resumable = didWork && (oomKilled || runaway || lostContact) && !stalled;
 
-  return { exitCode, fatalError, didWork, toolCalls, tail, resumable, oomKilled };
+  return { exitCode, fatalError, didWork, toolCalls, tail, resumable, oomKilled, lostContact };
 }

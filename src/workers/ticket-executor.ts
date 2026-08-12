@@ -318,6 +318,10 @@ async function killPiInVm(workspaceId: string, backgroundPid?: string): Promise<
 // How many times a build that stalled/lost-contact/OOM'd (but did real work) is
 // auto-resumed from the persisted repo before we give up and ask the user.
 const MAX_BUILD_RESUMES = 2;
+// A "lost contact / poll timeout" is INFRA, not a build failure — the VM restores and
+// the work is safe on /data, so we retry it far more generously than a real cut-short.
+// It's self-limiting anyway: if the VM is genuinely gone, the relaunch itself fails fast.
+const MAX_INFRA_RESUMES = 6;
 
 // Ticket build VMs are persistent + noSync + no_sleep. no_sleep is pinned ON while
 // actively working (so Mags can't idle-sleep a live build → "lost contact") and
@@ -2511,11 +2515,15 @@ git branch --show-current
       // server polling the VM. Exactly one channel writes logs (no duplicates).
       const webhookReachable = !!cliApiKey && !/localhost|127\.0\.0\.1|\/\/0\.0\.0\.0/.test(CALLBACK_BASE_URL);
 
-      // Resume loop: if Pi does real work but is cut short (lost VM contact, OOM, or
-      // runaway) we kill the stuck process and RELAUNCH it against the persisted repo
-      // (the working tree at /data/<dir> is the checkpoint — no thread id needed) with
-      // a "continue, don't restart" preface. Up to MAX_BUILD_RESUMES, then we give up.
-      let attempt = 0;
+      // Resume loop: if Pi does real work but is cut short we kill the stuck process and
+      // RELAUNCH it against the persisted repo (the working tree at /data/<dir> is the
+      // checkpoint — no thread id needed) with a "continue, don't restart" preface. A
+      // transient LOST-CONTACT/timeout is infra (not a build failure) so it retries
+      // generously (MAX_INFRA_RESUMES); a real cut-short (OOM/runaway) gets the small
+      // MAX_BUILD_RESUMES. Only after exhausting the relevant budget do we give up.
+      let attempt = 0;       // total resumes (drives the "continue" preface + settle)
+      let infraResumes = 0;  // lost-contact / poll-timeout (transient) — generous budget
+      let workResumes = 0;   // OOM / runaway (did work, cut short) — small budget
       while (true) {
         const isResume = attempt > 0;
         const runPrompt = isResume
@@ -2560,11 +2568,18 @@ git branch --show-current
           ?? (piResult.exitCode ? `exit code ${piResult.exitCode}` : (!piResult.didWork ? "no changes were made" : "the agent stopped without finishing"));
         const reason = _piDetail2 ? `${_piBase2} — ${_piDetail2}` : _piBase2;
 
-        // Cut short but it did real work → kill the stuck process and resume.
-        if (piResult.resumable && attempt < MAX_BUILD_RESUMES) {
+        // Cut short but it did real work → kill the stuck process and resume. A transient
+        // lost-contact is NOT a failure (VM restores, /data is safe) → retry generously.
+        const isInfra = piResult.lostContact;
+        const cap = isInfra ? MAX_INFRA_RESUMES : MAX_BUILD_RESUMES;
+        const used = isInfra ? infraResumes : workResumes;
+        if (piResult.resumable && used < cap) {
           attempt++;
+          if (isInfra) infraResumes++; else workResumes++;
           await killPiInVm(workspaceId, pi.backgroundPid);
-          await addLog(ticketId, `⟳ Build didn't finish (${reason}) — resuming where it left off (attempt ${attempt} of ${MAX_BUILD_RESUMES})…`, "command", ownerId);
+          await addLog(ticketId, isInfra
+            ? `⟳ Lost contact with the build VM (transient — your work is safe on /data). Reconnecting and continuing (retry ${infraResumes} of ${MAX_INFRA_RESUMES})…`
+            : `⟳ Build didn't finish (${reason}) — resuming where it left off (attempt ${workResumes} of ${MAX_BUILD_RESUMES})…`, "command", ownerId);
           await sleep(2500); // let the VM settle after the kill
           continue;
         }
