@@ -2036,6 +2036,10 @@ async function finalizeTicketChat(
       (workSummary ? `**What I did:**\n${workSummary}\n\n` : "") +
       `- Branch: \`${featureBranch}\`\n- Commit: \`${sha.slice(0, 7)}\`\n${mergedOk ? "- Merged to `lfg-agent` ✓\n" : ""}\nRe-run the **Preview** to see the change, or open the **Git** tab for the diff.`;
     await addLog(ticketId, done, "ai_response", ownerId);
+    // A chat/update turn that COMMITS is a completion too — flip the subtasks done
+    // (the build success paths do this; the chat finalize was missing it, so tasks
+    // stayed pending after an "Update applied").
+    await markBuildTasksComplete(ticketId);
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId, mergeStatus: mergedOk ? "merged" : "pushed" });
     // Auto-record a demo of the applied change for the Preview tab (fire-and-forget).
     void generateTicketDemo(ticketId, { ownerId, projectId: project.id });
