@@ -756,6 +756,37 @@ async function checkLocalServer(workspaceId: string, retries = 5): Promise<boole
 }
 
 /**
+ * Wait for the app to answer on :8080, giving a STILL-COMPILING server time. A cold
+ * Next.js build (esp. heavy deps like @base-ui) routinely takes a minute+, and the
+ * short fixed-retry window declared "did NOT come up" while the server was literally
+ * still starting. So poll up to maxMs — but bail EARLY if no dev-server/build process
+ * is alive for a few cycles (a genuinely dead server must not cost the whole window).
+ */
+async function waitForLocalServer(workspaceId: string, maxMs = 150_000): Promise<boolean> {
+  const deadline = Date.now() + maxMs;
+  let deadStreak = 0;
+  while (Date.now() < deadline) {
+    if (await checkLocalServer(workspaceId, 1)) return true;
+    // Not up yet — is a server/build process still working? If so, keep waiting.
+    let busy = false;
+    try {
+      const proc = await execOnWorkspace(
+        workspaceId,
+        "ps -eo args 2>/dev/null | grep -iE 'next|vite|node .*(dev|start|build)|npm (run )?(dev|start|build)|python .*app\\.py|flask|gunicorn|webpack|esbuild|\\btsc\\b' | grep -v grep | head -1",
+        { timeout: 10_000 }
+      );
+      busy = !!(proc.output || "").trim();
+    } catch {
+      busy = true; // poll flaky — assume still working, keep waiting
+    }
+    if (busy) deadStreak = 0;
+    else if (++deadStreak >= 3) return false; // ~12s with no process alive → truly dead
+    await sleep(3_000);
+  }
+  return checkLocalServer(workspaceId, 1);
+}
+
+/**
  * Reliably (re)start the dev server so it SURVIVES the exec teardown. The build
  * agent's own `nohup npm start &` often dies because Mags kills the exec's process
  * group when the RPC ends — so we restart it server-side with `setsid` (a NEW
@@ -799,7 +830,9 @@ echo SERVER_LAUNCHED
   await execOnWorkspace(workspaceId, `echo ${b64} | base64 -d | bash`, { timeout: 180_000 }).catch((e) =>
     console.warn(`[instant] ensureDevServerRunning launch failed: ${(e as Error).message?.slice(0, 120)}`)
   );
-  return checkLocalServer(workspaceId, 8); // poll up to ~24s for it to come up
+  // Wait for it to come up — a cold Next.js build+start can take a minute+, so give it
+  // real time (bails early if nothing is actually starting) instead of a fixed ~24s.
+  return waitForLocalServer(workspaceId, 120_000);
 }
 
 async function validatePublicUrl(
@@ -1772,7 +1805,8 @@ Do NOT use TodoWrite. Do NOT edit source files. Just install (if needed), build,
       previewUrl = await enableHttpAccess(workspaceId, 8080).catch(() => normalizeMagsAppUrl(app.previewUrl ?? sandbox.previewUrl ?? ""));
     }
 
-    const isLive = await checkLocalServer(workspaceId);
+    // Process-aware wait: don't declare "did NOT come up" while it's still compiling.
+    const isLive = await waitForLocalServer(workspaceId, 90_000);
 
     // ── Validate Public URL & Auto-Fix ─────────────────────────────
     let publicUrlValid = false;
