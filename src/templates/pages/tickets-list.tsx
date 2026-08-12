@@ -2192,6 +2192,10 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
             appendLiveLog(msg.log);
           } else if (msg.type === 'ticket_log_output' && msg.ticketId === _currentTicketId) {
             attachOutputToRow(msg.logId, msg.output);
+          } else if (msg.type === 'tasks_updated' && msg.ticketId === _currentTicketId) {
+            // Subtasks changed during the build (seeded / status updated) — refresh
+            // the Tasks tab live so progress shows as it happens.
+            loadTasks();
           } else if (msg.type === 'ticket_status') {
             handleTicketStatus(msg);
           } else if (msg.type === 'ticket_demo' && msg.ticketId === _currentTicketId) {

@@ -651,6 +651,25 @@ export async function startTicketWorker() {
     }
   });
 
+  // Push subtask changes to the browser LIVE so the Tasks tab reflects progress as
+  // the agent works — covers every source (seeding, the createTasks/updateTaskStatus
+  // tools, and the CLI /tasks callbacks) since they all emit this one event.
+  bus.on("ticket.tasks_updated", async (event) => {
+    const ticketId = event.payload?.ticketId as string | undefined;
+    if (!ticketId) return;
+    try {
+      const [row] = await db
+        .select({ owner: projects.ownerId })
+        .from(projectTickets)
+        .innerJoin(projects, eq(projects.id, projectTickets.projectId))
+        .where(eq(projectTickets.id, ticketId))
+        .limit(1);
+      if (row?.owner) broadcastToUser(row.owner, { type: "tasks_updated", ticketId });
+    } catch (err) {
+      console.warn(`[ticket-executor] tasks_updated broadcast failed for ${ticketId}:`, err);
+    }
+  });
+
   console.log("[ticket-executor] Worker started");
 }
 
@@ -1914,6 +1933,10 @@ async function executeTicketApi(ticketId: string): Promise<void> {
     console.warn(`[ticket-executor-api] No GitHub token for user ${ownerId}`);
     await addLog(ticketId, "No GitHub token — code will NOT be saved to a repository.", "command", ownerId);
   }
+
+  // Seed subtasks up-front (idempotent) so the Tasks tab is populated the moment
+  // the build starts — this is the Pi/DeepSeek/Kimi path, the common one.
+  await seedTasksIfEmpty(ticket, ownerId);
 
   const tasks = await db.select().from(projectTodoLists).where(eq(projectTodoLists.ticketId, ticketId));
 
