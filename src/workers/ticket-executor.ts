@@ -174,7 +174,7 @@ import { matchKnowledgeForPrompt } from "../ai/knowledge/matcher.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { logActivity } from "../services/activity-log.ts";
 import { ACTIVITY_TYPES } from "../db/schema/activities.ts";
-import { eq, and, asc, desc, inArray } from "drizzle-orm";
+import { eq, and, asc, desc, inArray, ne } from "drizzle-orm";
 
 /** Find a stage by name for a project and move the ticket to it. */
 async function moveTicketToStage(ticketId: string, projectId: string, stageName: string): Promise<string | null> {
@@ -259,6 +259,50 @@ async function seedTasksIfEmpty(
     console.log(`[ticket-executor] Seeded ${rows.length} subtasks for ticket ${ticket.id}`);
   } catch (err) {
     console.warn(`[ticket-executor] seedTasksIfEmpty failed for ${ticket.id}:`, err);
+  }
+}
+
+/**
+ * Mark the FIRST subtask in_progress when a build starts (so the Tasks tab shows
+ * motion even on the Pi path, which doesn't self-report per step). No-op if a task
+ * is already in_progress/done, or there are no tasks. Best-effort.
+ */
+async function markBuildTasksStarted(ticketId: string): Promise<void> {
+  try {
+    const rows = await db
+      .select({ id: projectTodoLists.id, status: projectTodoLists.status })
+      .from(projectTodoLists)
+      .where(eq(projectTodoLists.ticketId, ticketId))
+      .orderBy(projectTodoLists.order);
+    if (!rows.length) return;
+    if (rows.some((r) => r.status === "in_progress" || r.status === "success")) return;
+    const first = rows.find((r) => r.status === "pending") ?? rows[0]!;
+    await db.update(projectTodoLists).set({ status: "in_progress" }).where(eq(projectTodoLists.id, first.id));
+    emit({ type: "ticket.tasks_updated", ticketId, taskIds: [first.id] });
+  } catch (err) {
+    console.warn(`[ticket-executor] markBuildTasksStarted failed for ${ticketId}:`, err);
+  }
+}
+
+/**
+ * On a SUCCESSFUL build, flip every not-yet-done subtask to done. Coarse (all at
+ * once at the end) but truthful — the ticket's acceptance criteria were met. On
+ * failure we DON'T call this, so the tab shows how far it got. Best-effort.
+ */
+async function markBuildTasksComplete(ticketId: string): Promise<void> {
+  try {
+    const rows = await db
+      .select({ id: projectTodoLists.id })
+      .from(projectTodoLists)
+      .where(and(eq(projectTodoLists.ticketId, ticketId), ne(projectTodoLists.status, "success")));
+    if (!rows.length) return;
+    await db
+      .update(projectTodoLists)
+      .set({ status: "success" })
+      .where(and(eq(projectTodoLists.ticketId, ticketId), ne(projectTodoLists.status, "success")));
+    emit({ type: "ticket.tasks_updated", ticketId, taskIds: rows.map((r) => r.id) });
+  } catch (err) {
+    console.warn(`[ticket-executor] markBuildTasksComplete failed for ${ticketId}:`, err);
   }
 }
 
@@ -732,6 +776,7 @@ async function executeTicket(ticketId: string): Promise<void> {
   // Seed subtasks up-front (idempotent) so the Tasks tab is populated the moment
   // the build starts, even if the agent skips createTasks or the build fails.
   await seedTasksIfEmpty(ticket, ownerId);
+  await markBuildTasksStarted(ticketId);
 
   // Load tasks
   const tasks = await db
@@ -1321,6 +1366,7 @@ Before implementing, fix the git issue:
       .where(eq(projectTickets.id, ticketId));
     const cliSummary = `✅ **Ticket complete** — moved to In Review.\n\n- Branch: \`${featureBranch}\`\n\nOpen the **Git** tab to review the diff, or the **Preview** tab to run this branch.`;
     await addLog(ticketId, cliSummary, "ai_response", ownerId);
+    await markBuildTasksComplete(ticketId);
     await resolveTicketAddenda(ticketId, cliAddendaCtx.pendingIds);
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId, mergeStatus: "merged" });
     // Auto-record a demo of the completed feature for the Preview tab (fire-and-forget).
@@ -1937,6 +1983,7 @@ async function executeTicketApi(ticketId: string): Promise<void> {
   // Seed subtasks up-front (idempotent) so the Tasks tab is populated the moment
   // the build starts — this is the Pi/DeepSeek/Kimi path, the common one.
   await seedTasksIfEmpty(ticket, ownerId);
+  await markBuildTasksStarted(ticketId);
 
   const tasks = await db.select().from(projectTodoLists).where(eq(projectTodoLists.ticketId, ticketId));
 
@@ -2554,6 +2601,7 @@ git branch --show-current
       (mergedOk ? `- Merged to \`lfg-agent\` ✓\n` : (completedSha ? `- Pushed (merge to lfg-agent pending/failed — see logs)\n` : "")) +
       `\nOpen the **Git** tab to review the diff, or the **Preview** tab to run this branch.`;
     await addLog(ticketId, summary, "ai_response", ownerId);
+    await markBuildTasksComplete(ticketId);
     // The build addressed the pending addenda → mark them resolved.
     await resolveTicketAddenda(ticketId, addendaCtx.pendingIds);
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId, mergeStatus: mergedOk ? "merged" : "pushed" });
