@@ -318,6 +318,25 @@ async function killPiInVm(workspaceId: string, backgroundPid?: string): Promise<
 // How many times a build that stalled/lost-contact/OOM'd (but did real work) is
 // auto-resumed from the persisted repo before we give up and ask the user.
 const MAX_BUILD_RESUMES = 2;
+
+/**
+ * The working tree is the SOURCE OF TRUTH for "did the agent do work" — not the log
+ * heuristic (didWork) or the reportStatus signal, which weak agents (Kimi/Pi) routinely
+ * skip, causing a real, edited build to be thrown away as "no changes were made". Returns
+ * true if there are uncommitted SOURCE changes, ignoring runtime junk (DBs, logs).
+ */
+async function gitWorkingTreeHasChanges(workspaceId: string, projectDirName: string): Promise<boolean> {
+  try {
+    const r = await execOnWorkspace(
+      workspaceId,
+      `cd ${WORKING_DIR}/${projectDirName} 2>/dev/null && git config --global --add safe.directory '*' 2>/dev/null; git status --porcelain 2>/dev/null | grep -viE '\\.(db|sqlite|sqlite3|log)(-wal|-shm|-journal)?$|(^|/)(data/app\\.db|dev\\.log|build\\.log)$' | head -5`,
+      { timeout: 30_000 },
+    );
+    return !!(r.output || "").trim();
+  } catch {
+    return false;
+  }
+}
 // A "lost contact / poll timeout" is INFRA, not a build failure — the VM restores and
 // the work is safe on /data, so we retry it far more generously than a real cut-short.
 // It's self-limiting anyway: if the VM is genuinely gone, the relaunch itself fails fast.
@@ -2557,7 +2576,18 @@ git branch --show-current
           },
         });
         if (await stoppedByUser(ticketId, ownerId)) return;
-        const piOk = (piResult.exitCode === null || piResult.exitCode === 0) && !piResult.fatalError && piResult.didWork;
+        // Git-truth rescue: if the run wasn't cut short by a real problem (no fatalError:
+        // no stall/lost-contact/OOM) but the log heuristic says "didWork=false", the agent
+        // very likely finished the edits and just never signalled completion (common with
+        // Kimi/Pi) — or it ran to the 30-min stop mid-verification. Trust the WORKING TREE:
+        // if it has real changes, treat the build as complete and commit them, instead of
+        // discarding real work as "no changes were made".
+        let rescuedByGit = false;
+        if (!piResult.fatalError && !piResult.didWork) {
+          rescuedByGit = await gitWorkingTreeHasChanges(workspaceId, projectDirName);
+          if (rescuedByGit) await addLog(ticketId, "Agent didn't send a completion signal, but the working tree has real changes — committing them.", "command", ownerId);
+        }
+        const piOk = (piResult.exitCode === null || piResult.exitCode === 0) && !piResult.fatalError && (piResult.didWork || rescuedByGit);
         if (piOk) {
           implementationStatus = "complete";
           workSummary = piWorkSummary(piResult.tail);
