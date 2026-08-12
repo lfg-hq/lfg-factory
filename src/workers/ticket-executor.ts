@@ -373,6 +373,52 @@ const CHAT_MAX_WAIT_DURATION_MS = 10 * 60 * 1000; // 10 minutes
 // Projects live on the big /data volume (7.8GB), not /root (1.9GB) — avoids ENOSPC.
 const WORKING_DIR = "/data";
 
+// ── Stop-a-running-build ─────────────────────────────────────────────────────
+// Tickets the user asked to stop mid-execution. The Pi path checks this via
+// shouldCancel (kills Pi in-VM); the Claude CLI path is stopped by killing its
+// in-VM process, which makes waitForCompletion resolve. After the agent returns the
+// main loop calls stoppedByUser() and bails out cleanly instead of failing.
+const cancelledTickets = new Set<string>();
+
+/** Stop a running ticket build: kill the in-VM agent (+ any slow child like apk/go/
+ *  npm/pip) and unblock the executor's wait. Best-effort, safe to call anytime. */
+export async function requestTicketStop(ticketId: string, projectId?: string): Promise<void> {
+  cancelledTickets.add(ticketId);
+  try {
+    const [sb] = await db
+      .select({ ws: sandboxes.magsWorkspaceId })
+      .from(sandboxes)
+      .where(and(eq(sandboxes.ticketId, ticketId), eq(sandboxes.workspaceType, "ticket")))
+      .limit(1);
+    if (sb?.ws) {
+      await execOnWorkspace(
+        sb.ws,
+        "pkill -9 -f 'claude|pi-coding-agent|\\bpi\\b' 2>/dev/null; pkill -9 -f 'apk add|go build|npm|pip install|dotnet' 2>/dev/null; true",
+        { timeout: 25_000 },
+      ).catch(() => {});
+    }
+  } catch {
+    /* best-effort */
+  }
+  // Unblock the Claude-path waiter (Pi returns on its own via shouldCancel).
+  emit({ type: "ticket.execution_finished", ticketId, status: "failed", exitCode: 130, projectId });
+}
+
+/** If the user cancelled this ticket, do the "stopped" bookkeeping and return true so
+ *  the caller bails out (skipping the normal complete/failed handling). */
+async function stoppedByUser(ticketId: string, ownerId: string): Promise<boolean> {
+  if (!cancelledTickets.has(ticketId)) return false;
+  cancelledTickets.delete(ticketId);
+  await addLog(ticketId, "⏹ Build stopped by you.", "command", ownerId).catch(() => {});
+  await db
+    .update(projectTickets)
+    .set({ status: "open", queueStatus: "none", updatedAt: new Date() })
+    .where(eq(projectTickets.id, ticketId))
+    .catch(() => {});
+  broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "stopped", queueStatus: "none" });
+  return true;
+}
+
 // Concurrency guard: only one ticket per project at a time
 const executingProjects = new Set<string>();
 // Per-ticket in-flight guard. Prevents the same ticket from executing twice
@@ -995,6 +1041,7 @@ Before implementing, fix the git issue:
   console.log(`[ticket-executor] Waiting for VM to push output via callback API...`);
 
   const waitResult = await waitForCompletion(ticketId, MAX_WAIT_DURATION_MS);
+  if (await stoppedByUser(ticketId, ownerId)) return;
 
   // The CLI exit code is NOT the source of truth for implementation status.
   // The agent explicitly calls POST /api/v1/cli/status to report completion,
@@ -1387,11 +1434,13 @@ ${message}
       let lastPiLog = 0;
       const piResult = await streamPiToCompletion({
         workspaceId, outputFile: pi.outputFile, backgroundPid: pi.backgroundPid, timeoutMs: 30 * 60 * 1000,
+        shouldCancel: () => cancelledTickets.has(ticketId),
         onProgress: webhookReachable ? undefined : (msg) => {
           const now = Date.now(); if (now - lastPiLog < 4_000) return; lastPiLog = now;
           void addLog(ticketId, msg, "command", ownerId).catch(() => {});
         },
       });
+      if (await stoppedByUser(ticketId, ownerId)) return;
       const piOk = (piResult.exitCode === null || piResult.exitCode === 0) && !piResult.fatalError;
       if (!piOk) {
         const reason = piResult.fatalError ?? (piResult.exitCode ? `exit code ${piResult.exitCode}` : "unknown error");
@@ -2175,6 +2224,7 @@ git branch --show-current
         outputFile: pi.outputFile,
         backgroundPid: pi.backgroundPid,
         timeoutMs: 30 * 60 * 1000,
+        shouldCancel: () => cancelledTickets.has(ticketId),
         // Webhook active → poll is completion-only. Otherwise poll → logs.
         onProgress: webhookReachable ? undefined : (msg) => {
           const now = Date.now();
@@ -2183,6 +2233,7 @@ git branch --show-current
           void addLog(ticketId, msg, "command", ownerId).catch(() => {});
         },
       });
+      if (await stoppedByUser(ticketId, ownerId)) return;
       const piOk = (piResult.exitCode === null || piResult.exitCode === 0) && !piResult.fatalError && piResult.didWork;
       if (piOk) {
         implementationStatus = "complete";

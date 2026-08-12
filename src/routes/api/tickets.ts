@@ -700,6 +700,18 @@ ticketsApi.post("/:projectId/tickets/:ticketId/preview", async (c) => {
   }
 });
 
+// ── POST /:projectId/tickets/:ticketId/stop ─────────────────────────
+// Stop a running ticket build mid-execution (kills the in-VM Claude/Pi agent).
+ticketsApi.post("/:projectId/tickets/:ticketId/stop", async (c) => {
+  const user = c.get("user");
+  const { projectId, ticketId } = c.req.param();
+  const access = await getProjectAccess(projectId!, user.id);
+  if (!access) return c.json({ error: "Not found" }, 404);
+  const { requestTicketStop } = await import("../../workers/ticket-executor.ts");
+  await requestTicketStop(ticketId!, access.project.id);
+  return c.json({ ok: true });
+});
+
 // ── POST /:projectId/tickets/:ticketId/demo ─────────────────────────
 // (Re)generate the auto-demo recording for this ticket and surface it in Preview.
 ticketsApi.post("/:projectId/tickets/:ticketId/demo", async (c) => {

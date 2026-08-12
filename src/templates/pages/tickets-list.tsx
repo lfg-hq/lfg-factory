@@ -486,6 +486,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
         <button class="drawer-execute-btn" id="drawer-build-btn" onclick="buildCurrentTicket()">
           <i class="fas fa-bolt"></i> Build Ticket
         </button>
+        <button class="drawer-server-btn" id="drawer-stop-btn" onclick="stopCurrentTicket()" style="display:none;color:#f87171;border-color:#5a2a30;"><i class="fas fa-stop"></i> Stop</button>
         <div class="drawer-more-menu">
           <button class="drawer-more-btn" onclick="toggleDrawerMore()">
             <i class="fas fa-ellipsis-v"></i>
@@ -861,6 +862,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
         buildBtn.innerHTML = isActive
           ? '<i class="fas fa-spinner fa-spin"></i> Building…'
           : '<i class="fas fa-bolt"></i> Build Ticket';
+        var stopBtn = document.getElementById('drawer-stop-btn');
+        if (stopBtn) stopBtn.style.display = isActive ? '' : 'none';
         // If executing, switch to Actions tab so user sees live logs
         if (isActive) {
           switchDrawerTab('actions', document.querySelector('.drawer-tab[data-tab="actions"]'));
@@ -1033,6 +1036,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
         return;
       }
       btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Building…';
+      var stopBtn = document.getElementById('drawer-stop-btn');
+      if (stopBtn) stopBtn.style.display = '';
       // Switch to Actions tab so user sees logs immediately
       switchDrawerTab('actions', document.querySelector('.drawer-tab[data-tab="actions"]'));
     } catch(e) {
@@ -1040,6 +1045,21 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       btn.innerHTML = '<i class="fas fa-bolt"></i> Build Ticket';
       alert('Failed to queue ticket: ' + e.message);
     }
+  }
+
+  // ── Stop a running build ─────────────────────────────────────────
+  async function stopCurrentTicket() {
+    if (!_currentTicketId) return;
+    var stopBtn = document.getElementById('drawer-stop-btn');
+    if (stopBtn) { stopBtn.disabled = true; stopBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Stopping…'; }
+    try {
+      await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + _currentTicketId + '/stop', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }
+      });
+    } catch(e) { /* best-effort */ }
+    if (stopBtn) { stopBtn.disabled = false; stopBtn.innerHTML = '<i class="fas fa-stop"></i> Stop'; stopBtn.style.display = 'none'; }
+    var b = document.getElementById('drawer-build-btn');
+    if (b) { b.disabled = false; b.innerHTML = '<i class="fas fa-bolt"></i> Build Ticket'; }
   }
 
   // ── Actions tab: execution logs + agent chat ─────────────────────
