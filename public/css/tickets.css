@@ -3925,6 +3925,49 @@
     background: rgba(139, 92, 246, 0.25);
 }
 
+/* Open-in-editor dropdown (Git tab) */
+.oie-dropdown {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    min-width: 190px;
+    background: #17141d;
+    border: 1px solid rgba(139, 92, 246, 0.28);
+    border-radius: 10px;
+    padding: 4px;
+    z-index: 50;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+}
+.oie-dropdown.open { display: block; }
+.oie-item {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    width: 100%;
+    padding: 0.5rem 0.7rem;
+    background: transparent;
+    border: none;
+    border-radius: 7px;
+    color: #e2e8f0;
+    font-size: 0.8rem;
+    text-align: left;
+    cursor: pointer;
+}
+.oie-item:hover { background: rgba(139, 92, 246, 0.16); }
+.oie-item i { width: 15px; text-align: center; color: #a78bfa; }
+.oie-sep {
+    height: 1px;
+    margin: 4px 6px;
+    background: rgba(255, 255, 255, 0.08);
+}
+[data-theme="light"] .oie-dropdown {
+    background: #ffffff;
+    border-color: #e2e8f0;
+}
+[data-theme="light"] .oie-item { color: #1e293b; }
+[data-theme="light"] .oie-item:hover { background: rgba(139, 92, 246, 0.1); }
+
 /* Light mode — Tasks */
 [data-theme="light"] .task-item {
     background: #f8fafc;

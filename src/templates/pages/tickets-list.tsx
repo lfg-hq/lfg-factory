@@ -1715,6 +1715,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
 
   // ── Git tab ──────────────────────────────────────────────────────
   var _gitStatusColors = { pending:'#6b7280', pr_open:'#3b82f6', pushed:'#3b82f6', merged:'#34d399', failed:'#f87171', not_pushed:'#f87171' };
+  var _gitRepo = null;   // { provider, cloneUrl, webUrl, webIdeUrl, hasRepo } for the ticket's project
+  var _gitBranch = '';   // this ticket's feature branch
   var _gitStatusLabels = { not_pushed:'Not pushed', pushed:'Pushed (not merged)' };
 
   async function loadGitInfo() {
@@ -1728,6 +1730,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     const ticket = resp.ticket;
 
     const branch = ticket.githubBranch || ticket.github_branch || '';
+    _gitRepo = resp.repo || null;
+    _gitBranch = branch;
     const sha = ticket.githubCommitSha || ticket.github_commit_sha || '';
     const shortSha = sha ? sha.slice(0, 7) : '';
     const mergeStatus = ticket.githubMergeStatus || ticket.github_merge_status || '';
@@ -1779,9 +1783,25 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     }
 
     // Actions
-    html += '<div style="display:flex;gap:0.5rem;margin-top:0.25rem;flex-wrap:wrap;">';
+    html += '<div style="display:flex;gap:0.5rem;margin-top:0.25rem;flex-wrap:wrap;align-items:center;">';
     html += '<button onclick="pushToGithub()" id="git-push-btn" class="git-action-btn">'
       + '<i class="fas fa-cloud-upload-alt"></i> Push & Merge to lfg-agent</button>';
+
+    // Open in editor menu (only when we have a real repo to clone).
+    if (_gitRepo && _gitRepo.hasRepo && _gitRepo.cloneUrl) {
+      html += '<div class="oie-menu" style="position:relative;display:inline-block;">'
+        + '<button type="button" id="oie-btn" class="git-action-btn">'
+        + '<i class="fas fa-code"></i> Open in editor <i class="fas fa-caret-down" style="margin-left:2px;"></i></button>'
+        + '<div id="oie-dropdown" class="oie-dropdown">'
+        + '<button type="button" class="oie-item" data-oie="cursor"><i class="fas fa-i-cursor"></i> Cursor</button>'
+        + '<button type="button" class="oie-item" data-oie="vscode"><i class="fas fa-code"></i> VS Code</button>'
+        + '<button type="button" class="oie-item" data-oie="windsurf"><i class="fas fa-wind"></i> Windsurf</button>'
+        + '<button type="button" class="oie-item" data-oie="antigravity"><i class="fas fa-rocket"></i> Antigravity</button>'
+        + '<div class="oie-sep"></div>'
+        + '<button type="button" class="oie-item" data-oie="copy"><i class="fas fa-terminal"></i> Copy clone command</button>'
+        + (_gitRepo.webIdeUrl ? '<button type="button" class="oie-item" data-oie="web"><i class="fas fa-globe"></i> Open in Web IDE</button>' : '')
+        + '</div></div>';
+    }
     html += '</div>';
 
     html += '</div>'; // /git-info-grid
@@ -1975,6 +1995,80 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     _lastLogContent = '';
     _lastFailureReason = '';
   }
+
+  // ── Open in editor (Git tab) ─────────────────────────────────────
+  var _gitToastTimer = null;
+  function _oieLabel(k) {
+    if (k === 'vscode') return 'VS Code';
+    if (k === 'windsurf') return 'Windsurf';
+    if (k === 'antigravity') return 'Antigravity';
+    return 'Cursor';
+  }
+  function _copyText(t) {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(t); return; }
+    } catch(e) {}
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      document.execCommand('copy'); ta.remove();
+    } catch(e) {}
+  }
+  function _gitToast(msg) {
+    var t = document.getElementById('_git-toast');
+    if (!t) {
+      t = document.createElement('div'); t.id = '_git-toast';
+      t.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:99999;background:#1f2937;color:#e5e7eb;padding:10px 16px;border-radius:8px;font-size:13px;line-height:1.4;box-shadow:0 4px 20px rgba(0,0,0,.4);border:1px solid rgba(139,92,246,.45);max-width:80vw;text-align:center;opacity:0;transition:opacity .2s ease;';
+      document.body.appendChild(t);
+    }
+    t.textContent = msg; t.style.opacity = '1';
+    clearTimeout(_gitToastTimer);
+    _gitToastTimer = setTimeout(function(){ t.style.opacity = '0'; }, 3600);
+  }
+  function openInEditor(kind) {
+    document.getElementById('oie-dropdown')?.classList.remove('open');
+    if (!_gitRepo || !_gitRepo.cloneUrl) return;
+    var url = _gitRepo.cloneUrl;
+    var branch = _gitBranch || '';
+    var dir = _gitRepo.name || 'repo';
+    if (kind === 'web') {
+      if (_gitRepo.webIdeUrl) window.open(_gitRepo.webIdeUrl, '_blank');
+      return;
+    }
+    if (kind === 'copy') {
+      var cmd = branch
+        ? 'git clone -b ' + branch + ' ' + url + ' ' + dir + ' && cd ' + dir
+        : 'git clone ' + url + ' ' + dir + ' && cd ' + dir;
+      _copyText(cmd);
+      _gitToast('Clone command copied — paste it in your terminal');
+      return;
+    }
+    // Editor deep-link clone. Deep links can't carry a branch, so copy the
+    // checkout command to the clipboard for a one-paste follow-up.
+    var deeplink = kind + '://vscode.git/clone?url=' + encodeURIComponent(url);
+    if (branch) _copyText('git fetch origin ' + branch + ' && git checkout ' + branch);
+    var a = document.createElement('a');
+    a.href = deeplink; a.style.display = 'none';
+    document.body.appendChild(a); a.click();
+    setTimeout(function(){ a.remove(); }, 0);
+    _gitToast(branch
+      ? 'Opening ' + _oieLabel(kind) + ' — branch checkout copied, paste in its terminal after clone'
+      : 'Opening ' + _oieLabel(kind) + '…');
+  }
+  document.addEventListener('click', function(e) {
+    if (!e.target || !e.target.closest) return;
+    if (e.target.closest('#oie-btn')) {
+      e.preventDefault();
+      document.getElementById('oie-dropdown')?.classList.toggle('open');
+      return;
+    }
+    var item = e.target.closest('.oie-item');
+    if (item) { e.preventDefault(); openInEditor(item.getAttribute('data-oie')); return; }
+    if (!e.target.closest('.oie-menu')) {
+      document.getElementById('oie-dropdown')?.classList.remove('open');
+    }
+  });
 
   async function deleteCurrentTicket() {
     if (!_currentTicketId) return;

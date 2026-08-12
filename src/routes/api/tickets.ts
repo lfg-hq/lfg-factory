@@ -131,8 +131,38 @@ ticketsApi.get("/:projectId/tickets/:ticketId", async (c) => {
     .orderBy(desc(ticketLogs.createdAt))
     .limit(50);
 
-  return c.json({ ticket, logs });
+  // Repo info for the client's "Open in editor" menu. Plain https clone URL
+  // (NO token — the developer's local git authenticates normally) + a web-IDE
+  // deep link that can open the exact branch in one click.
+  const repo = buildRepoLinks(project, ticket.githubBranch ?? null);
+
+  return c.json({ ticket, logs, repo });
 });
+
+/** Build the clone URL / host / web-IDE link the "Open in editor" menu needs. */
+function buildRepoLinks(
+  project: { repoUrl?: string | null; repoProvider?: string | null; repoOwner?: string | null; repoName?: string | null; repoBranch?: string | null },
+  branch: string | null,
+) {
+  const provider = (project.repoProvider === "gitlab" ? "gitlab" : "github") as "github" | "gitlab";
+  const host = provider === "gitlab" ? "gitlab.com" : "github.com";
+  const owner = project.repoOwner ?? "";
+  const name = (project.repoName ?? "").replace(/\.git$/, "");
+  const hasRepo = !!(owner && name);
+  // Prefer the stored repoUrl; otherwise reconstruct from owner/name.
+  const baseUrl = (project.repoUrl && /^https?:\/\//.test(project.repoUrl))
+    ? project.repoUrl.replace(/\.git$/, "").replace(/\/$/, "")
+    : hasRepo ? `https://${host}/${owner}/${name}` : "";
+  const cloneUrl = baseUrl ? baseUrl + ".git" : "";
+  const ref = branch || project.repoBranch || "";
+  let webIdeUrl = "";
+  if (baseUrl && ref) {
+    webIdeUrl = provider === "gitlab"
+      ? `https://${host}/-/ide/project/${owner}/${name}/edit/${encodeURIComponent(ref)}/-/`
+      : `https://github.dev/${owner}/${name}/tree/${encodeURIComponent(ref)}`;
+  }
+  return { provider, host, owner, name, cloneUrl, webUrl: baseUrl, webIdeUrl, hasRepo };
+}
 
 // ── PATCH /api/projects/:projectId/tickets/:ticketId ─────────────────
 ticketsApi.patch("/:projectId/tickets/:ticketId", async (c) => {
