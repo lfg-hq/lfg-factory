@@ -220,6 +220,10 @@ const ENV_DENYLIST = new Set([
   "PYTHONUNBUFFERED", "PYTHONPATH", "PYTHONDONTWRITEBYTECODE", "ASPNETCORE_URLS", "ASPNETCORE_ENVIRONMENT",
   "ASPNETCORE_FORWARDEDHEADERS_ENABLED", "DOTNET_RUNNING_IN_CONTAINER", "DOTNET_CLI_TELEMETRY_OPTOUT",
   "CI", "VERCEL", "NUGET_PACKAGES", "GOPATH", "GOCACHE", "GEM_HOME", "BUNDLE_PATH",
+  // Toolchain cache/install dirs — must stay on /data (never let a stored value send them to /root).
+  "GOMODCACHE", "GOENV", "GOTMPDIR", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME",
+  "UV_CACHE_DIR", "CARGO_HOME", "RUSTUP_HOME", "PLAYWRIGHT_BROWSERS_PATH", "PIP_CACHE_DIR",
+  "COMPOSER_CACHE_DIR", "npm_config_cache", "NPM_CONFIG_CACHE", "DOTNET_CLI_HOME",
 ]);
 
 /**
@@ -484,12 +488,19 @@ async function writeEnvFile(workspaceId: string, projectId: string, manifest: Pr
   // restores (NuGet can be GBs) survive restart and don't fill the 1.9GB root.
   const vars: Record<string, string> = {
     PORT: String(port), HOST: "0.0.0.0",
-    // Temp dirs on /data too — MSBuild/dotnet write scratch to $TMPDIR, and the
-    // 1.9GB root fills up ("No space left on device") if it stays on /tmp.
+    // EVERY toolchain cache/download on /data, never the tiny root fs — MSBuild/dotnet,
+    // Go (modules + build cache + TOOLCHAIN downloads), pip/uv/cargo/npm, and generic
+    // XDG caches all default to $HOME=/root and fill / ("No space left on device").
     TMPDIR: "/data/tmp", TMP: "/data/tmp", TEMP: "/data/tmp",
     NUGET_PACKAGES: "/data/.nuget", DOTNET_CLI_HOME: "/data/.dotnet",
     npm_config_cache: "/data/.npm-cache", PIP_CACHE_DIR: "/data/.pip-cache",
     GOPATH: "/data/go", COMPOSER_CACHE_DIR: "/data/.composer",
+    GOMODCACHE: "/data/go/pkg/mod", GOCACHE: "/data/.cache/go-build",
+    GOENV: "/data/.config/go/env", GOTMPDIR: "/data/tmp",
+    XDG_CACHE_HOME: "/data/.cache", XDG_DATA_HOME: "/data/.local/share",
+    XDG_CONFIG_HOME: "/data/.config", UV_CACHE_DIR: "/data/.cache/uv",
+    CARGO_HOME: "/data/.cargo", RUSTUP_HOME: "/data/.rustup",
+    PLAYWRIGHT_BROWSERS_PATH: "/data/.cache/ms-playwright",
   };
   if (runtime.includes("dotnet") || framework.includes("dotnet") || framework.includes("asp")) {
     vars.ASPNETCORE_URLS = `http://0.0.0.0:${port}`;

@@ -16,6 +16,7 @@ import { db } from "../config/db.ts";
 import { profiles, llmApiKeys } from "../db/schema/users.ts";
 import { env } from "../config/env.ts";
 import { execOnWorkspace } from "./mags.ts";
+import { DATA_TOOLCHAIN_ENV } from "./pi-cli.ts";
 import { eq } from "drizzle-orm";
 
 export interface ClaudeRunOptions {
@@ -220,8 +221,8 @@ export async function startClaudeCli(
   const runnerContent = `#!/bin/bash
 export HOME=/root
 export PATH=/root/node/current/bin:/root/.npm-global/bin:\$PATH
-export npm_config_cache=/tmp/npm-cache
-export NPM_CONFIG_CACHE=/tmp/npm-cache
+# ALL toolchain caches/installs live on /data, never the tiny root fs or /tmp.
+${DATA_TOOLCHAIN_ENV}
 ${opts.anthropicApiKey ? `export ANTHROPIC_API_KEY="${opts.anthropicApiKey}"` : "# (using Claude Code OAuth credentials)"}
 source ${envFile}
 cd ${WORKING_DIR}/${projectDirName}
@@ -514,8 +515,8 @@ export async function startClaudeCliChat(
   const runnerContent = `#!/bin/bash
 export HOME=/root
 export PATH=/root/node/current/bin:/root/.npm-global/bin:\$PATH
-export npm_config_cache=/tmp/npm-cache
-export NPM_CONFIG_CACHE=/tmp/npm-cache
+# ALL toolchain caches/installs live on /data, never the tiny root fs or /tmp.
+${DATA_TOOLCHAIN_ENV}
 source ${envFile}
 cd ${WORKING_DIR}/${projectDirName}
 

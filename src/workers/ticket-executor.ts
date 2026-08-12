@@ -456,6 +456,10 @@ ${ac}
 ## Tech stack
 ${stack}
 ${runBlock}${args.addenda ?? ""}${args.directives ?? ""}
+## Sandbox environment
+- This is an **Alpine Linux** sandbox. Install system packages with **\`apk add\`** ONLY — apt/apt-get/yum/dnf/brew do NOT exist here. You are root; do NOT use \`sudo\`.
+- **ALL work must live on \`/data\`** (an ~8GB volume). The root filesystem \`/\` is tiny (~2.9GB) and fills up fast. The project is at **\`/data/project\`**. Every toolchain cache/download is ALREADY redirected to /data for you (GOPATH/GOMODCACHE/GOCACHE + Go toolchain downloads, pip/uv/cargo/npm caches, XDG caches, TMPDIR). Do NOT install into \`/root\` or \`/tmp\`, and do NOT point any cache/install/toolchain dir back at the root fs — if you need a new cache/output dir, put it under \`/data\`. If a build ever reports "no space left on device", it's because something wrote to \`/\`; move it under \`/data\`.
+
 ## Instructions
 - Explore the project first; reuse existing patterns, dependencies, and files.
 - Implement the ticket end to end so every acceptance criterion is met.${args.addenda ? "\n- If Addenda are listed above, they are the PRIMARY task this run — address every one, building on what was already done." : ""}${args.directives ? "\n- The MANDATORY DIRECTIVES above are non-negotiable — verify your change satisfies every one before finishing." : ""}

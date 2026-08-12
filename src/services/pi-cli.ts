@@ -163,6 +163,36 @@ export function isPiSupportedProvider(provider: string): boolean {
 const BUILD_PROC_RE =
   "pip|uv |poetry|conda|npm|yarn|pnpm|node-gyp|cargo|rustc|go build|go install|gcc|cc1|clang|make|cmake|ninja|maturin|bundle install|gem install|apk|apt|dpkg|next build|create-next-app|shadcn|prisma|setup.py|python -m pip";
 
+/**
+ * Redirect EVERY toolchain's cache/download/install dir to the big /data volume
+ * (~8GB) instead of the tiny root fs (~2.9GB). HOME must stay /root (nvm/pi live
+ * there), so we can't just move HOME — we point each toolchain explicitly. Without
+ * this, Go's module + TOOLCHAIN downloads, pip/cargo/uv caches, playwright browsers,
+ * and generic XDG caches land under /root and fill / to 98% → "disk full" build
+ * failures. Shared verbatim by the Pi and Claude runners so they never drift.
+ * Pure bash exports — no backticks / ${} / runtime shell vars — safe to interpolate.
+ */
+export const DATA_TOOLCHAIN_ENV = [
+  "export GOPATH=/data/go",
+  "export GOMODCACHE=/data/go/pkg/mod",
+  "export GOCACHE=/data/.cache/go-build",
+  "export GOENV=/data/.config/go/env",
+  "export GOTMPDIR=/data/tmp",
+  "export XDG_CACHE_HOME=/data/.cache",
+  "export XDG_DATA_HOME=/data/.local/share",
+  "export XDG_CONFIG_HOME=/data/.config",
+  "export PIP_CACHE_DIR=/data/.cache/pip",
+  "export UV_CACHE_DIR=/data/.cache/uv",
+  "export CARGO_HOME=/data/.cargo",
+  "export RUSTUP_HOME=/data/.rustup",
+  "export PNPM_HOME=/data/.pnpm-store",
+  "export PLAYWRIGHT_BROWSERS_PATH=/data/.cache/ms-playwright",
+  "export npm_config_cache=/data/.npm-cache",
+  "export NPM_CONFIG_CACHE=/data/.npm-cache",
+  "export TMPDIR=/data/tmp",
+  "mkdir -p /data/tmp /data/.cache /data/go/pkg/mod /data/.cargo /data/.rustup /data/.config/go /data/.local/share /data/.npm-cache 2>/dev/null || true",
+].join("\n");
+
 // Last time the VM pushed build output to us via the webhook (POST /api/v1/cli/output),
 // per ticket. A recent push is INDEPENDENT proof the VM is alive AND producing work —
 // so streamPiToCompletion won't give up on poll-exec timeouts while output is flowing.
@@ -402,8 +432,8 @@ mkdir -p /data/.npm-global /data/.npm-cache
 # BEFORE any legacy /root/node/current/bin — that dir held an OLD node 20.15.1 that
 # was SHADOWING /usr/bin/node (v22) → the whole "node too old" + reinstall-pi loop.
 export PATH=/data/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:\$PATH
-export npm_config_cache=/data/.npm-cache
-export NPM_CONFIG_CACHE=/data/.npm-cache
+# ALL toolchain caches/installs live on /data, never the tiny root fs (see DATA_TOOLCHAIN_ENV).
+${DATA_TOOLCHAIN_ENV}
 # Size Pi's V8 heap to the VM's ACTUAL RAM (leave ~1GB for the OS), not a fixed 1.5GB.
 # A long build (many tool calls) accumulates a large in-memory context and OOMs a small
 # heap ("Reached heap limit … JavaScript heap out of memory", exit 134). Self-tuning so a
