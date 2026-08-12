@@ -103,5 +103,6 @@ ${envVars?.length ? envVars.map(v => `- ${v.key}: ${v.description || "(no descri
 - Use \`askUser\` sparingly — only for decisions that significantly affect implementation (e.g. auth method, database choice). Do not ask about trivial details.
 - Always call \`reportStatus\` when done. This is how the platform knows you finished.
 - Preview-mode auth (auto-demo): if this ticket touches auth/middleware, let a request with cookie \`lfg_preview_session\` == env \`LFG_PREVIEW_SECRET\` (or env \`LFG_PREVIEW_MODE=1\`) auto-authenticate as a seeded "Preview User" so the post-build recorder can demo protected pages. Gate it so it is inert without that env/secret (never a real prod bypass). Otherwise no action needed.
+- SLOW COMMANDS: every command has a ~30s timeout — a command that times out is KILLED, do NOT retry it in a loop. For Go, build with \`CGO_ENABLED=0\` first (no C toolchain needed). If a toolchain/large install IS required (\`apk add gcc musl-dev\`, big \`go build\`/\`npm ci\`/\`pip install\`), run it DETACHED and poll for a done-marker (e.g. \`nohup sh -c 'apk add --no-cache gcc musl-dev >/tmp/inst.log 2>&1; echo DONE_$? >>/tmp/inst.log' & \` then poll \`/tmp/inst.log\` for \`DONE_\`), never re-issue the same long command repeatedly.
 `;
 }

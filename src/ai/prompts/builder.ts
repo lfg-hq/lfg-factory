@@ -159,6 +159,21 @@ the app should treat a preview session as authenticated ONLY inside the sandbox:
   never a real auth bypass. If your ticket touches auth/middleware, add this small guard;
   otherwise no action is needed.
 
+## SLOW COMMANDS / TOOLCHAIN INSTALLS (do NOT loop)
+Every command you run has a ~30-second timeout. A command that takes longer is KILLED
+and reported as "timed out" — do NOT just retry it (that spins a pointless loop).
+- **Go apps:** build with \`CGO_ENABLED=0\` FIRST (a pure-Go static binary needs no C
+  toolchain). Only if the build genuinely fails for a cgo dependency do you need gcc.
+- **If a toolchain/large package IS required** (\`apk add gcc musl-dev\`, \`go build\` of a
+  huge module, a big \`npm ci\`/\`pip install\`): it will exceed 30s. Run it **DETACHED and
+  poll for completion** instead of inline, e.g.:
+  \`\`\`
+  nohup sh -c 'apk add --no-cache gcc musl-dev > /tmp/inst.log 2>&1; echo DONE_$? >> /tmp/inst.log' >/dev/null 2>&1 &
+  # then poll every few seconds until the marker appears:
+  for i in $(seq 1 60); do grep -q DONE_ /tmp/inst.log && break; sleep 5; done; tail -5 /tmp/inst.log
+  \`\`\`
+  Never re-issue the same long \`apk add\`/\`build\` command over and over — detach + poll once.
+
 ## COMPLETION
 
 IMPORTANT: After implementing, you MUST call the status API to mark the ticket as complete or failed.

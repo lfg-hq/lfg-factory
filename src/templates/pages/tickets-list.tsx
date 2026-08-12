@@ -1072,6 +1072,22 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
    * whether the last build completed, failed, or is running. Called on drawer open
    * (from the fetched ticket) and on every WS status update.
    */
+  // Pull the real failure reason out of the rendered Actions log (the executor logs
+  // "Execution failed: <reason>" / "Pi build failed …" / "Command timed out …"), so the
+  // banner can explain WHY instead of just "Build failed". Returns '' if none found.
+  function _findFailureReasonFromLogs() {
+    var area = document.getElementById('actions-log-area');
+    if (!area) return '';
+    var txt = area.textContent || '';
+    // Uses '.' (excludes newlines) + .trim() instead of backslash escapes, which the
+    // server template literal would mangle in this inline script.
+    var m = txt.match(/Execution failed:(.{2,200})/g);
+    if (m && m.length) return m[m.length - 1].replace(/^Execution failed:/, '').trim();
+    var m2 = txt.match(/(Pi build failed.{0,160}|Build failed:.{0,160}|Command timed out.{0,80}|did not complete.{0,80})/g);
+    if (m2 && m2.length) return m2[m2.length - 1].trim();
+    return '';
+  }
+
   function updateTicketStatusBanner(fields) {
     var el = document.getElementById('ticket-status-banner');
     if (!el) return;
@@ -1084,7 +1100,9 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     } else if (merge === 'not_pushed') {
       b = { bg: 'rgba(248,113,113,.12)', fg: '#fca5a5', icon: 'fa-triangle-exclamation', text: 'Built but NOT pushed to git — reconnect the repo in Settings, then rebuild.' };
     } else if (st === 'failed' || qs === 'failed') {
-      b = { bg: 'rgba(239,68,68,.12)', fg: '#fca5a5', icon: 'fa-circle-exclamation', text: 'Build failed — check the logs below and rebuild.' };
+      var reason = (fields && fields.reason) || _findFailureReasonFromLogs();
+      b = { bg: 'rgba(239,68,68,.12)', fg: '#fca5a5', icon: 'fa-circle-exclamation',
+            text: reason ? ('Build failed — ' + reason) : 'Build failed — check the logs below and rebuild.' };
     } else if (merge === 'merged' || st === 'done' || st === 'completed' || st === 'merged') {
       b = { bg: 'rgba(16,185,129,.12)', fg: '#6ee7b7', icon: 'fa-circle-check', text: 'Build complete' + (merge === 'merged' ? ' — merged to lfg-agent.' : ' — ready for review.') };
     } else if (st === 'in_review' || st === 'review') {
@@ -1333,6 +1351,9 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       rows.forEach(function(row, idx) {
         area.appendChild(renderLogEntry(row, idx));
       });
+
+      // Logs are now in the DOM — refresh the banner so a failed build shows its reason.
+      if (ticketMap[_currentTicketId]) updateTicketStatusBanner(ticketMap[_currentTicketId]);
 
       // Re-add thinking indicator if agent is still processing
       if (_agentThinking && !document.getElementById('agent-thinking')) {

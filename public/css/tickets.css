@@ -519,33 +519,31 @@
 .drawer-actions {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.4rem;
 }
 
 .drawer-server-btn {
-    padding: 0.2rem 0.65rem;
-    border-radius: 999px;
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    background: rgba(255, 255, 255, 0.04);
+    height: 32px;
+    padding: 0 0.7rem;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: transparent;
     color: var(--text-secondary);
-    font-size: 0.7rem;
+    font-size: 0.78rem;
     font-weight: 500;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 0.3rem;
-    min-height: 1.65rem;
+    gap: 0.4rem;
     line-height: 1;
-    transition: all 0.2s ease;
-    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.25);
+    transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
 
 .drawer-server-btn:hover:not(:disabled) {
     color: var(--text-primary);
-    border-color: rgba(255, 255, 255, 0.3);
-    background: rgba(255, 255, 255, 0.08);
-    transform: translateY(-1px);
+    border-color: rgba(255, 255, 255, 0.28);
+    background: rgba(255, 255, 255, 0.06);
 }
 
 .drawer-server-btn:disabled {
@@ -581,26 +579,25 @@
 }
 
 .drawer-execute-btn {
-    padding: 0.35rem 0.75rem;
+    height: 32px;
+    padding: 0 0.85rem;
     background: linear-gradient(135deg, var(--primary-color), #8b5cf6);
     color: white;
     border: none;
-    border-radius: 999px;
-    font-size: 0.75rem;
+    border-radius: 8px;
+    font-size: 0.78rem;
     font-weight: 600;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
-    gap: 0.35rem;
-    min-height: 1.85rem;
+    gap: 0.4rem;
     line-height: 1;
-    transition: all 0.2s ease;
-    box-shadow: 0 8px 18px rgba(139, 92, 246, 0.3);
+    transition: filter 0.12s ease;
+    box-shadow: 0 2px 8px rgba(139, 92, 246, 0.25);
 }
 
 .drawer-execute-btn:hover:not(:disabled) {
-    background: linear-gradient(135deg, var(--primary-hover), #a855f7);
-    transform: translateY(-1px);
+    filter: brightness(1.08);
 }
 
 .drawer-execute-btn:disabled {
@@ -631,18 +628,18 @@
 }
 
 .drawer-more-btn {
-    width: 28px;
-    height: 28px;
-    border-radius: 6px;
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    background: rgba(255, 255, 255, 0.04);
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: transparent;
     color: var(--text-secondary);
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
     font-size: 0.8rem;
-    transition: all 0.2s ease;
+    transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
 
 .drawer-more-btn:hover {
@@ -757,20 +754,20 @@
 }
 
 .drawer-close {
-    background: none;
-    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.14);
     color: var(--text-secondary);
-    font-size: 0.9rem;
+    font-size: 0.85rem;
     cursor: pointer;
-    width: 1.75rem;
-    height: 1.75rem;
-    border-radius: 50%;
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
     padding: 0;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     line-height: 1;
-    transition: all 0.2s ease;
+    transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
 }
 
 .drawer-close:hover {
@@ -1297,6 +1294,7 @@
 /* ── Execution Logs Container ────────────────────────────────── */
 .execution-logs-container {
     flex: 1;
+    min-height: 0; /* let it scroll INTERNALLY so the status banner + branch stay pinned */
     overflow-y: auto;
     padding-bottom: 70px;
 }
