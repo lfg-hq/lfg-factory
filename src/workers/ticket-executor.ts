@@ -319,6 +319,14 @@ async function killPiInVm(workspaceId: string, backgroundPid?: string): Promise<
 // auto-resumed from the persisted repo before we give up and ask the user.
 const MAX_BUILD_RESUMES = 2;
 
+// Absolute SAFETY ceiling on a single build run — NOT the real stop signal. The real,
+// progress-based decision lives in streamPiToCompletion: it kills a NON-progressing build
+// via stall detection (~7.5 min of the same action with nothing running) and a LOOPING one
+// via the tool-call budget (runaway). So a build that keeps making varied progress should
+// be allowed to run long; this ceiling just backstops a truly runaway process. 30 min was
+// too low (it guillotined legitimately-long, still-working builds). Configurable.
+const BUILD_TIMEOUT_MS = parseInt(process.env.TICKET_BUILD_TIMEOUT_MIN || "60", 10) * 60_000;
+
 /**
  * The working tree is the SOURCE OF TRUTH for "did the agent do work" — not the log
  * heuristic (didWork) or the reportStatus signal, which weak agents (Kimi/Pi) routinely
@@ -1726,7 +1734,7 @@ ${message}
       });
       let lastPiLog = 0;
       const piResult = await streamPiToCompletion({
-        workspaceId, outputFile: pi.outputFile, backgroundPid: pi.backgroundPid, timeoutMs: 30 * 60 * 1000,
+        workspaceId, outputFile: pi.outputFile, backgroundPid: pi.backgroundPid, timeoutMs: BUILD_TIMEOUT_MS,
         ticketId, // webhook output = proof-of-life
         shouldCancel: () => cancelledTickets.has(ticketId),
         onProgress: webhookReachable ? undefined : (msg) => {
@@ -2564,7 +2572,7 @@ git branch --show-current
           workspaceId,
           outputFile: pi.outputFile,
           backgroundPid: pi.backgroundPid,
-          timeoutMs: 30 * 60 * 1000,
+          timeoutMs: BUILD_TIMEOUT_MS,
           ticketId, // webhook output = proof-of-life (don't fail a live, streaming build)
           shouldCancel: () => cancelledTickets.has(ticketId),
           // Webhook active → poll is completion-only. Otherwise poll → logs.
@@ -2629,7 +2637,7 @@ git branch --show-current
 
   // ── Run generateText with tools (fallback / TICKET_BUILDER=agent) ────
   const abortController = new AbortController();
-  const abortTimeout = setTimeout(() => abortController.abort(), 30 * 60 * 1000); // 30 min
+  const abortTimeout = setTimeout(() => abortController.abort(), BUILD_TIMEOUT_MS);
 
   try {
     const result = await generateText({
