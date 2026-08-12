@@ -494,6 +494,9 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
             <button class="drawer-more-item" onclick="shareCurrentTicket()">
               <i class="fas fa-share-nodes"></i> Share Ticket
             </button>
+            <button class="drawer-more-item" onclick="clearTicketLogs()">
+              <i class="fas fa-eraser"></i> Clear run logs
+            </button>
             <button class="drawer-more-item drawer-more-item--danger" onclick="deleteCurrentTicket()">
               <i class="fas fa-trash"></i> Delete Ticket
             </button>
@@ -1960,6 +1963,19 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     openShareModal('ticket', _currentTicketId, PROJECT_ID);
   }
 
+  async function clearTicketLogs() {
+    if (!_currentTicketId) return;
+    document.getElementById('drawer-more-dropdown')?.classList.remove('open');
+    if (!confirm('Clear all run logs for this ticket? (Git/build state is untouched.)')) return;
+    try {
+      await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + _currentTicketId + '/logs', { method: 'DELETE' });
+    } catch(e) {}
+    var area = document.getElementById('actions-log-area');
+    if (area) area.innerHTML = '';
+    _lastLogContent = '';
+    _lastFailureReason = '';
+  }
+
   async function deleteCurrentTicket() {
     if (!_currentTicketId) return;
     if (!confirm('Delete this ticket?')) return;
@@ -2011,10 +2027,16 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     });
   });
 
-  // Drawer resize
+  // Drawer resize (remembers width in localStorage)
   (function() {
     const handle = document.getElementById('drawer-resize-handle');
     const drawer = document.getElementById('ticket-drawer');
+    const KEY = 'ticketDrawerWidth';
+    // Restore a saved width (clamped to the current viewport).
+    var saved = parseInt(localStorage.getItem(KEY) || '', 10);
+    if (saved && !isNaN(saved)) {
+      drawer.style.width = Math.max(400, Math.min(window.innerWidth * 0.95, saved)) + 'px';
+    }
     let resizing = false, startX = 0, startW = 0;
     handle.addEventListener('mousedown', e => {
       resizing = true; startX = e.clientX; startW = drawer.offsetWidth;
@@ -2027,7 +2049,10 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       drawer.style.width = newW + 'px';
     });
     document.addEventListener('mouseup', () => {
-      if (resizing) { resizing = false; drawer.classList.remove('resizing'); document.body.style.userSelect = ''; }
+      if (resizing) {
+        resizing = false; drawer.classList.remove('resizing'); document.body.style.userSelect = '';
+        try { localStorage.setItem(KEY, String(drawer.offsetWidth)); } catch(e) {}
+      }
     });
   })();
 

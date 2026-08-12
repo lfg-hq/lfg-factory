@@ -791,6 +791,12 @@
 }
 
 
+/* Actions tab: no body padding, so the sticky branch banner sits flush under the tabs
+   (removes the gap). Do NOT set overflow:hidden — the body is the scroller here. */
+.drawer-body:has(#tab-actions.active) {
+    padding: 0;
+}
+
 .drawer-body:has(#tab-preview.active) {
     padding: 0;
     overflow: hidden;

@@ -700,6 +700,23 @@ ticketsApi.post("/:projectId/tickets/:ticketId/preview", async (c) => {
   }
 });
 
+// ── DELETE /:projectId/tickets/:ticketId/logs ───────────────────────
+// Clear this ticket's run/action logs only (does not touch git/build state).
+ticketsApi.delete("/:projectId/tickets/:ticketId/logs", async (c) => {
+  const user = c.get("user");
+  const { projectId, ticketId } = c.req.param();
+  const access = await getProjectAccess(projectId!, user.id);
+  if (!access) return c.json({ error: "Not found" }, 404);
+  const [t] = await db
+    .select({ id: projectTickets.id })
+    .from(projectTickets)
+    .where(and(eq(projectTickets.id, ticketId!), eq(projectTickets.projectId, access.project.id)))
+    .limit(1);
+  if (!t) return c.json({ error: "Ticket not found" }, 404);
+  await db.delete(ticketLogs).where(eq(ticketLogs.ticketId, ticketId!));
+  return c.json({ ok: true });
+});
+
 // ── POST /:projectId/tickets/:ticketId/stop ─────────────────────────
 // Stop a running ticket build mid-execution (kills the in-VM Claude/Pi agent).
 ticketsApi.post("/:projectId/tickets/:ticketId/stop", async (c) => {
