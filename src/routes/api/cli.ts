@@ -22,7 +22,7 @@ import { eq, and } from "drizzle-orm";
 import { emit } from "../../events/bus.ts";
 import { parseJsonlEvents, extractSessionId, isStreamComplete } from "../../services/claude-cli.ts";
 import { addLog, attachLogOutput, formatToolUse } from "../../services/ticket-logs.ts";
-import { describePiTool, describePiLine } from "../../services/pi-cli.ts";
+import { describePiTool, describePiLine, noteBuildActivity } from "../../services/pi-cli.ts";
 import { broadcastInstantStatus } from "../../services/instant-app.ts";
 
 export const cliRouter = new Hono<{ Variables: { cliUserId: string } }>();
@@ -419,6 +419,10 @@ cliRouter.post("/output", async (c) => {
   if (!(await ticketOwnedBy(ticket_id, c.get("cliUserId")))) {
     return c.json({ error: "Ticket not found" }, 404);
   }
+
+  // Proof-of-life: the VM just delivered build output, so it's alive AND producing
+  // work — streamPiToCompletion uses this so a flaky poll exec never fails a live build.
+  noteBuildActivity(ticket_id);
 
   // Look up ticket owner (userId) for WS broadcasting
   const [ticket] = await db

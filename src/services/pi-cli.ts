@@ -163,6 +163,21 @@ export function isPiSupportedProvider(provider: string): boolean {
 const BUILD_PROC_RE =
   "pip|uv |poetry|conda|npm|yarn|pnpm|node-gyp|cargo|rustc|go build|go install|gcc|cc1|clang|make|cmake|ninja|maturin|bundle install|gem install|apk|apt|dpkg|next build|create-next-app|shadcn|prisma|setup.py|python -m pip";
 
+// Last time the VM pushed build output to us via the webhook (POST /api/v1/cli/output),
+// per ticket. A recent push is INDEPENDENT proof the VM is alive AND producing work —
+// so streamPiToCompletion won't give up on poll-exec timeouts while output is flowing.
+const _lastBuildActivity = new Map<string, number>();
+/** Called by the /output webhook when the VM delivers build output for a ticket. */
+export function noteBuildActivity(ticketId: string): void {
+  if (ticketId) _lastBuildActivity.set(ticketId, Date.now());
+}
+/** ms since the last webhook output for this ticket, or Infinity if never/unknown. */
+function buildActivityAge(ticketId?: string): number {
+  if (!ticketId) return Infinity;
+  const t = _lastBuildActivity.get(ticketId);
+  return t ? Date.now() - t : Infinity;
+}
+
 /**
  * Point-in-time liveness probe for an in-flight build — used to tell "slow but working"
  * from "genuinely stalled" without any stack-specific knowledge. `busy` is true when a
@@ -766,8 +781,10 @@ export async function streamPiToCompletion(params: {
    *  accumulate. A weak model with no step limit can loop for 40+ min / 180+ calls until
    *  it OOMs. 0 disables. */
   maxToolCalls?: number;
+  /** Ticket id — lets the loop use webhook output as proof-of-life (see noteBuildActivity). */
+  ticketId?: string;
 }): Promise<{ exitCode: number | null; fatalError: string | null; didWork: boolean; toolCalls: number; tail: string; resumable: boolean; oomKilled: boolean }> {
-  const { workspaceId, outputFile, backgroundPid, timeoutMs, onProgress, shouldCancel, progressMaxLen = 90 } = params;
+  const { workspaceId, outputFile, backgroundPid, timeoutMs, onProgress, shouldCancel, progressMaxLen = 90, ticketId } = params;
   const maxTC = params.maxToolCalls ?? parseInt(process.env.INSTANT_PI_MAX_TOOLCALLS || "300", 10);
   const f = JSON.stringify(outputFile);
   // Install log shares the timestamp suffix (set in startPiCli) — derive it so the
@@ -781,6 +798,9 @@ export async function streamPiToCompletion(params: {
   // control-plane. We verify the VM is actually alive before giving up, and only abort
   // if it's genuinely dead OR we've been unable to reach a LIVE VM for this long.
   const BLIND_LIMIT_MS = 5 * 60_000;
+  // If the VM pushed output via the webhook within this window, it's provably alive
+  // and working — poll-exec timeouts must not count against the blind limit.
+  const WEBHOOK_ALIVE_MS = 90_000;
   let blindSince = 0;
   let lastProgressAt = 0;
   let lastEmittedProgress: string | null = null;
@@ -800,6 +820,8 @@ export async function streamPiToCompletion(params: {
   let stallCount = 0;
   let stalled = false;
   let runaway = false; // exceeded the tool-call budget (stuck in a loop, not converging)
+  let lostContact = false; // VM alive but unreachable to polls too long — resumable, not a hard fail
+  let lostContactMsg = "";
   const startedAt = Date.now();
   const deadline = startedAt + timeoutMs;
 
@@ -847,12 +869,28 @@ printf 'TL=%s\\n' "$TL"`;
         if (!vmAlive) {
           throw new Error(`build VM is no longer running (status: ${job?.status ?? "unknown"}) — ${emsg}`);
         }
+        // The VM pushed output via the webhook very recently → it's alive AND
+        // producing work, independent of our (flaky) poll exec. Reset the blind
+        // window and keep going — never abort a build that's still streaming.
+        if (buildActivityAge(ticketId) < WEBHOOK_ALIVE_MS) {
+          blindSince = 0;
+          console.warn(`[pi-cli] VM '${workspaceId}' poll flaky but webhook delivered output ${Math.round(buildActivityAge(ticketId) / 1000)}s ago — build is live, continuing`);
+          await sleep(POLL_INTERVAL_MS);
+          continue;
+        }
         // VM is alive — the control-plane is just flaky. Keep waiting (with backoff) up to
         // a blind-window cap, rather than aborting a build that's still running in the VM.
         if (blindSince === 0) blindSince = Date.now();
         const blindMs = Date.now() - blindSince;
         if (blindMs > BLIND_LIMIT_MS) {
-          throw new Error(`lost contact with a LIVE build VM for ${Math.round(blindMs / 60000)}min (exec kept timing out) — giving up. Last error: ${emsg}`);
+          // Alive but unreachable to polls too long. Do NOT hard-fail — stop
+          // streaming and let the caller resume from the persisted repo (resumable
+          // if real work was done). The process may still be running; the caller
+          // kills it before resuming.
+          lostContact = true;
+          lostContactMsg = `lost contact with a live build VM for ${Math.round(blindMs / 60000)}min (poll exec kept timing out). Last error: ${emsg}`;
+          console.warn(`[pi-cli] ${lostContactMsg} — stopping stream; caller may resume`);
+          break;
         }
         console.warn(`[pi-cli] VM '${workspaceId}' still alive — poll flaky for ${Math.round(blindMs / 1000)}s, continuing (cap ${BLIND_LIMIT_MS / 60000}min)`);
         await sleep(POLL_INTERVAL_MS); // extra backoff on top of the loop's sleep
@@ -1028,13 +1066,17 @@ printf 'TL=%s\\n' "$TL"`;
   if (runaway && !fatalError) {
     fatalError = `agent runaway — made ${toolCalls}+ tool calls without finishing (likely looping). Retry, or switch to a stronger model (e.g. DeepSeek V4 Pro / Kimi K3).`;
   }
+  // Lost contact: VM alive but unreachable to polls too long → resume from the repo.
+  if (lostContact && !fatalError) {
+    fatalError = lostContactMsg || "lost contact with a live build VM (poll exec kept timing out)";
+  }
 
-  // Resumable = the run was cut short by a RESOURCE limit (ran out of memory, or hit
-  // the tool-call budget mid-flight) while it was actually producing work — the project
-  // files persist on /data, so restarting Pi to continue is worthwhile. NOT resumable:
-  // an auth/quota fatal (didWork=false — restarting won't fix a bad key) or a stall
-  // (it was looping with no progress — a resume just stalls again).
-  const resumable = didWork && (oomKilled || runaway) && !stalled;
+  // Resumable = the run was cut short by a RESOURCE limit (OOM, tool-call budget) or we
+  // LOST CONTACT with a live VM, while it was actually producing work — the project files
+  // persist on /data, so killing the stuck process and restarting Pi to continue is
+  // worthwhile. NOT resumable: an auth/quota fatal (didWork=false — restarting won't fix a
+  // bad key) or a stall (it was looping with no progress — a resume just stalls again).
+  const resumable = didWork && (oomKilled || runaway || lostContact) && !stalled;
 
   return { exitCode, fatalError, didWork, toolCalls, tail, resumable, oomKilled };
 }

@@ -306,6 +306,19 @@ async function markBuildTasksComplete(ticketId: string): Promise<void> {
   }
 }
 
+/** Kill any lingering Pi process in the VM before a resume (frees a thrashing VM's
+ *  RAM so the relaunch has room). Best-effort, busybox-safe. */
+async function killPiInVm(workspaceId: string, backgroundPid?: string): Promise<void> {
+  const kill = backgroundPid
+    ? `pkill -9 -P ${backgroundPid} 2>/dev/null; kill -9 ${backgroundPid} 2>/dev/null; pkill -9 -f pi-coding-agent 2>/dev/null; pkill -9 -f 'mode json' 2>/dev/null; true`
+    : `pkill -9 -f pi-coding-agent 2>/dev/null; pkill -9 -f 'mode json' 2>/dev/null; pkill -9 -f 'pi -p' 2>/dev/null; true`;
+  await execOnWorkspace(workspaceId, kill, { timeout: 20_000 }).catch(() => {});
+}
+
+// How many times a build that stalled/lost-contact/OOM'd (but did real work) is
+// auto-resumed from the persisted repo before we give up and ask the user.
+const MAX_BUILD_RESUMES = 2;
+
 // API-mode ticket builds run the Pi in-sandbox coding agent (model-agnostic,
 // same as instant mode) by default. Set TICKET_BUILDER=agent to force the
 // legacy in-process generateText loop instead.
@@ -1625,6 +1638,7 @@ ${message}
       let lastPiLog = 0;
       const piResult = await streamPiToCompletion({
         workspaceId, outputFile: pi.outputFile, backgroundPid: pi.backgroundPid, timeoutMs: 30 * 60 * 1000,
+        ticketId, // webhook output = proof-of-life
         shouldCancel: () => cancelledTickets.has(ticketId),
         onProgress: webhookReachable ? undefined : (msg) => {
           const now = Date.now(); if (now - lastPiLog < 4_000) return; lastPiLog = now;
@@ -2405,44 +2419,69 @@ git branch --show-current
       // In local dev (localhost APP_URL) the VM can't reach us → fall back to the
       // server polling the VM. Exactly one channel writes logs (no duplicates).
       const webhookReachable = !!cliApiKey && !/localhost|127\.0\.0\.1|\/\/0\.0\.0\.0/.test(CALLBACK_BASE_URL);
-      const pi = await startPiCli({
-        workspaceId,
-        prompt: piPrompt,
-        projectDir: projectDirName,
-        provider,
-        modelId: piModelId,
-        apiKey: providerApiKey,
-        envVars: piEnvVars,
-        forward: webhookReachable ? { apiUrl: CALLBACK_BASE_URL, apiKey: cliApiKey, mode: "ticket" as const, ticketId } : undefined,
-      });
-      if (webhookReachable) await addLog(ticketId, "Streaming build logs via webhook…", "command", ownerId);
-      let lastPiLog = 0;
-      const piResult = await streamPiToCompletion({
-        workspaceId,
-        outputFile: pi.outputFile,
-        backgroundPid: pi.backgroundPid,
-        timeoutMs: 30 * 60 * 1000,
-        shouldCancel: () => cancelledTickets.has(ticketId),
-        // Webhook active → poll is completion-only. Otherwise poll → logs.
-        onProgress: webhookReachable ? undefined : (msg) => {
-          const now = Date.now();
-          if (now - lastPiLog < 4_000) return;
-          lastPiLog = now;
-          void addLog(ticketId, msg, "command", ownerId).catch(() => {});
-        },
-      });
-      if (await stoppedByUser(ticketId, ownerId)) return;
-      const piOk = (piResult.exitCode === null || piResult.exitCode === 0) && !piResult.fatalError && piResult.didWork;
-      if (piOk) {
-        implementationStatus = "complete";
-        workSummary = piWorkSummary(piResult.tail);
-      } else {
+
+      // Resume loop: if Pi does real work but is cut short (lost VM contact, OOM, or
+      // runaway) we kill the stuck process and RELAUNCH it against the persisted repo
+      // (the working tree at /data/<dir> is the checkpoint — no thread id needed) with
+      // a "continue, don't restart" preface. Up to MAX_BUILD_RESUMES, then we give up.
+      let attempt = 0;
+      while (true) {
+        const isResume = attempt > 0;
+        const runPrompt = isResume
+          ? `⚠️ RESUMING an interrupted build. Your previous run did real work but was stopped mid-way — that work-in-progress is ALREADY in the repository at /data/${projectDirName}. Do NOT start over: run \`git status\`, inspect what already exists, and CONTINUE from there to finish the ticket below.\n\n${piPrompt}`
+          : piPrompt;
+        const pi = await startPiCli({
+          workspaceId,
+          prompt: runPrompt,
+          projectDir: projectDirName,
+          provider,
+          modelId: piModelId,
+          apiKey: providerApiKey,
+          envVars: piEnvVars,
+          forward: webhookReachable ? { apiUrl: CALLBACK_BASE_URL, apiKey: cliApiKey, mode: "ticket" as const, ticketId } : undefined,
+        });
+        if (webhookReachable && !isResume) await addLog(ticketId, "Streaming build logs via webhook…", "command", ownerId);
+        let lastPiLog = 0;
+        const piResult = await streamPiToCompletion({
+          workspaceId,
+          outputFile: pi.outputFile,
+          backgroundPid: pi.backgroundPid,
+          timeoutMs: 30 * 60 * 1000,
+          ticketId, // webhook output = proof-of-life (don't fail a live, streaming build)
+          shouldCancel: () => cancelledTickets.has(ticketId),
+          // Webhook active → poll is completion-only. Otherwise poll → logs.
+          onProgress: webhookReachable ? undefined : (msg) => {
+            const now = Date.now();
+            if (now - lastPiLog < 4_000) return;
+            lastPiLog = now;
+            void addLog(ticketId, msg, "command", ownerId).catch(() => {});
+          },
+        });
+        if (await stoppedByUser(ticketId, ownerId)) return;
+        const piOk = (piResult.exitCode === null || piResult.exitCode === 0) && !piResult.fatalError && piResult.didWork;
+        if (piOk) {
+          implementationStatus = "complete";
+          workSummary = piWorkSummary(piResult.tail);
+          break;
+        }
         const _piDetail2 = piResult.fatalError ? "" : await lastErrorSnippet(ticketId, piResult.tail);
         const _piBase2 = piResult.fatalError
           ?? (piResult.exitCode ? `exit code ${piResult.exitCode}` : (!piResult.didWork ? "no changes were made" : "the agent stopped without finishing"));
         const reason = _piDetail2 ? `${_piBase2} — ${_piDetail2}` : _piBase2;
-        await addLog(ticketId, `Pi build failed: ${reason}`, "cli_error", ownerId);
-        console.error(`[ticket-executor-api] Pi failed (${reason}). Output tail:\n${piResult.tail.slice(-2000)}`);
+
+        // Cut short but it did real work → kill the stuck process and resume.
+        if (piResult.resumable && attempt < MAX_BUILD_RESUMES) {
+          attempt++;
+          await killPiInVm(workspaceId, pi.backgroundPid);
+          await addLog(ticketId, `⟳ Build didn't finish (${reason}) — resuming where it left off (attempt ${attempt} of ${MAX_BUILD_RESUMES})…`, "command", ownerId);
+          await sleep(2500); // let the VM settle after the kill
+          continue;
+        }
+
+        const finalReason = attempt > 0 ? `${reason} (still unfinished after ${attempt} auto-resume${attempt > 1 ? "s" : ""})` : reason;
+        await addLog(ticketId, `Pi build failed: ${finalReason}`, "cli_error", ownerId);
+        console.error(`[ticket-executor-api] Pi failed (${finalReason}). Output tail:\n${piResult.tail.slice(-2000)}`);
+        break;
       }
     } catch (err) {
       await addLog(ticketId, `Pi build error: ${(err as Error).message}`, "cli_error", ownerId);
