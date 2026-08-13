@@ -837,43 +837,61 @@ async function ticketWorkspace(ticketId: string): Promise<string | null> {
 }
 
 // ── GET /:projectId/tickets/:ticketId/pi-output ─────────────────────
-// Download the RAW Pi JSONL stream (/data/.pi/pi_output_*.jsonl) from the ticket's
-// sandbox — gzipped (it can be tens of MB). Files are auto-cleaned ~30min after a run.
+// Download the RAW Pi JSONL stream. Prefers the DURABLE S3 backup (written at run end,
+// survives VM reap); falls back to the live sandbox /data/.pi if a build is in flight.
 ticketsApi.get("/:projectId/tickets/:ticketId/pi-output", async (c) => {
   const user = c.get("user");
   const { projectId, ticketId } = c.req.param();
   const access = await getProjectAccess(projectId, user.id);
   if (!access) return c.json({ error: "Not found" }, 404);
+  const filename = `pi_output_${ticketId!.slice(0, 8)}.jsonl.gz`;
+  // 1) Durable S3 copy.
+  try {
+    const { downloadBinary } = await import("../../services/s3.ts");
+    const { body } = await downloadBinary(`pi-artifacts/${ticketId}/output.jsonl.gz`);
+    if (body && body.length > 0) {
+      return c.body(new Uint8Array(body), 200, { "Content-Type": "application/gzip", "Content-Disposition": `attachment; filename="${filename}"` });
+    }
+  } catch { /* not backed up yet — try the live VM */ }
+  // 2) Live sandbox (build in flight / within ~30min).
   const ws = await ticketWorkspace(ticketId!);
-  if (!ws) return c.json({ error: "No sandbox for this ticket (it may have been cleaned up)." }, 404);
+  if (!ws) return c.json({ error: "No S3 backup and no live sandbox for this ticket." }, 404);
   const { execOnWorkspace } = await import("../../services/mags.ts");
-  const script = `f=$(ls -t /data/.pi/pi_output_*.jsonl 2>/dev/null | head -1); if [ -n "$f" ]; then gzip -c "$f" | base64 | tr -d '\\n'; else echo NO_FILE; fi`;
+  const script = `fs=$(ls -tr /data/.pi/pi_output_*.jsonl 2>/dev/null); if [ -n "$fs" ]; then cat $fs | gzip -c | base64 | tr -d '\\n'; else echo NO_FILE; fi`;
   const r = await execOnWorkspace(ws, script, { timeout: 90_000 }).catch(() => ({ output: "" } as { output: string }));
   const out = (r.output || "").trim();
-  if (!out || out === "NO_FILE") return c.json({ error: "No Pi output file found. Pi's files are auto-deleted ~30min after a build — download during or right after a run." }, 404);
+  if (!out || out === "NO_FILE") return c.json({ error: "No Pi output found (no S3 backup and the sandbox's /data/.pi is empty/cleaned)." }, 404);
   return c.body(Buffer.from(out, "base64"), 200, {
     "Content-Type": "application/gzip",
-    "Content-Disposition": `attachment; filename="pi_output_${ticketId!.slice(0, 8)}.jsonl.gz"`,
+    "Content-Disposition": `attachment; filename="${filename}"`,
   });
 });
 
 // ── GET /:projectId/tickets/:ticketId/pi-prompt ─────────────────────
-// Download the exact composite prompt we sent Pi (/data/.pi/pi_prompt_*.txt).
+// Download the exact composite prompt. Prefers the durable S3 backup; falls back to VM.
 ticketsApi.get("/:projectId/tickets/:ticketId/pi-prompt", async (c) => {
   const user = c.get("user");
   const { projectId, ticketId } = c.req.param();
   const access = await getProjectAccess(projectId, user.id);
   if (!access) return c.json({ error: "Not found" }, 404);
+  const filename = `pi_prompt_${ticketId!.slice(0, 8)}.txt`;
+  try {
+    const { downloadFile } = await import("../../services/s3.ts");
+    const text = await downloadFile(`pi-artifacts/${ticketId}/prompt.txt`);
+    if (text && text.trim()) {
+      return c.body(text, 200, { "Content-Type": "text/plain; charset=utf-8", "Content-Disposition": `attachment; filename="${filename}"` });
+    }
+  } catch { /* not backed up yet — try the live VM */ }
   const ws = await ticketWorkspace(ticketId!);
-  if (!ws) return c.json({ error: "No sandbox for this ticket (it may have been cleaned up)." }, 404);
+  if (!ws) return c.json({ error: "No S3 backup and no live sandbox for this ticket." }, 404);
   const { execOnWorkspace } = await import("../../services/mags.ts");
   const script = `f=$(ls -t /data/.pi/pi_prompt_*.txt 2>/dev/null | head -1); if [ -n "$f" ]; then cat "$f"; else echo NO_FILE; fi`;
   const r = await execOnWorkspace(ws, script, { timeout: 30_000 }).catch(() => ({ output: "" } as { output: string }));
   const out = r.output || "";
-  if (!out.trim() || out.trim() === "NO_FILE") return c.json({ error: "No Pi prompt file found. Pi's files are auto-deleted ~30min after a build — download during or right after a run." }, 404);
+  if (!out.trim() || out.trim() === "NO_FILE") return c.json({ error: "No Pi prompt found (no S3 backup and the sandbox's /data/.pi is empty/cleaned)." }, 404);
   return c.body(out, 200, {
     "Content-Type": "text/plain; charset=utf-8",
-    "Content-Disposition": `attachment; filename="pi_prompt_${ticketId!.slice(0, 8)}.txt"`,
+    "Content-Disposition": `attachment; filename="${filename}"`,
   });
 });
 

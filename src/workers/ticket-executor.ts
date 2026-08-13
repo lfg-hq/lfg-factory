@@ -329,6 +329,40 @@ async function ensureBuildToolchain(workspaceId: string, language: string | unde
     .catch((e) => console.warn(`[ticket-executor] toolchain prep failed for ${lang}:`, (e as Error).message?.slice(0, 120)));
 }
 
+/**
+ * Persist Pi's run artifacts to S3 BEFORE the VM is reaped — the raw JSONL stream
+ * (all runs concatenated, since resumes create new files) + the exact composite prompt.
+ * Keyed by ticket so the download endpoints can serve them long after the sandbox is
+ * gone (Pi's /data/.pi files are auto-cleaned ~30min after a run). Best-effort.
+ */
+async function backupPiArtifacts(ticketId: string, workspaceId: string | null | undefined): Promise<void> {
+  if (!workspaceId) return;
+  try {
+    const { uploadBinary, uploadFile } = await import("../services/s3.ts");
+    const outRes = await execOnWorkspace(
+      workspaceId,
+      `fs=$(ls -tr /data/.pi/pi_output_*.jsonl 2>/dev/null); if [ -n "$fs" ]; then cat $fs | gzip -c | base64 | tr -d '\\n'; else echo NONE; fi`,
+      { timeout: 120_000 },
+    ).catch(() => ({ output: "" } as { output: string }));
+    const out = (outRes.output || "").trim();
+    if (out && out !== "NONE") {
+      await uploadBinary(`pi-artifacts/${ticketId}/output.jsonl.gz`, Buffer.from(out, "base64"), "application/gzip");
+    }
+    const pRes = await execOnWorkspace(
+      workspaceId,
+      `f=$(ls -t /data/.pi/pi_prompt_*.txt 2>/dev/null | head -1); if [ -n "$f" ]; then cat "$f"; else echo NONE; fi`,
+      { timeout: 30_000 },
+    ).catch(() => ({ output: "" } as { output: string }));
+    const prompt = pRes.output || "";
+    if (prompt.trim() && prompt.trim() !== "NONE") {
+      await uploadFile(`pi-artifacts/${ticketId}/prompt.txt`, prompt);
+    }
+    console.log(`[ticket-executor] backed up Pi artifacts for ${ticketId} to S3`);
+  } catch (err) {
+    console.warn(`[ticket-executor] backupPiArtifacts failed for ${ticketId}:`, (err as Error).message?.slice(0, 120));
+  }
+}
+
 /** Kill any lingering Pi process in the VM before a resume (frees a thrashing VM's
  *  RAM so the relaunch has room). Best-effort, busybox-safe. */
 async function killPiInVm(workspaceId: string, backgroundPid?: string): Promise<void> {
@@ -2663,6 +2697,9 @@ git branch --show-current
       await addLog(ticketId, `Pi build error: ${(err as Error).message}`, "cli_error", ownerId);
       console.error(`[ticket-executor-api] Pi error:`, err);
     }
+    // Persist Pi's raw output + prompt to S3 while the VM is still alive — it's reaped/
+    // slept soon, and /data/.pi auto-cleans, so this is the durable copy for later review.
+    await backupPiArtifacts(ticketId, workspaceId);
 
   } else {
   await addLog(ticketId, `Starting AI execution (${modelKey})...`, "command", ownerId);
