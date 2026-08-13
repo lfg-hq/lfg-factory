@@ -490,9 +490,11 @@ ${runBlock}${args.addenda ?? ""}${args.directives ?? ""}
 ## Sandbox environment
 - This is an **Alpine Linux** sandbox. Install system packages with **\`apk add\`** ONLY — apt/apt-get/yum/dnf/brew do NOT exist here. You are root; do NOT use \`sudo\`.
 - **ALL work must live on \`/data\`** (an ~8GB volume). The root filesystem \`/\` is tiny (~2.9GB) and fills up fast. The project is at **\`/data/project\`**. Every toolchain cache/download is ALREADY redirected to /data for you (GOPATH/GOMODCACHE/GOCACHE + Go toolchain downloads, pip/uv/cargo/npm caches, XDG caches, TMPDIR). Do NOT install into \`/root\` or \`/tmp\`, and do NOT point any cache/install/toolchain dir back at the root fs — if you need a new cache/output dir, put it under \`/data\`. If a build ever reports "no space left on device", it's because something wrote to \`/\`; move it under \`/data\`.
+- **\`grep\` here is BusyBox, not GNU** — it does NOT support \`--include\`, \`--exclude\`, or \`-P\` (PCRE). Use \`grep -rn PATTERN <dir>\` and filter by extension with a pipe (e.g. \`grep -rln PATTERN internal | grep '\\.go$'\`). Do NOT retry \`--include\`/\`-P\` — they will always fail; switch syntax on the first error.
 
 ## Instructions
 - Explore the project first; reuse existing patterns, dependencies, and files.
+- **Trust the ticket + PRD as the source of truth for facts.** For DOCUMENTATION / marketing / copy / content tickets especially: the ticket already states which features exist, their limits, prices, etc. — do NOT audit the whole codebase to re-verify every claim (that wastes most of the run). At most do a couple of TARGETED checks only where the ticket is ambiguous or self-contradictory. Spend your effort writing/implementing, not exhaustively grepping to confirm things the ticket already told you.
 - Implement the ticket end to end so every acceptance criterion is met.${args.addenda ? "\n- If Addenda are listed above, they are the PRIMARY task this run — address every one, building on what was already done." : ""}${args.directives ? "\n- The MANDATORY DIRECTIVES above are non-negotiable — verify your change satisfies every one before finishing." : ""}
 - Make the app runnable: bind the dev server to 0.0.0.0 on port ${port}.
 - Do NOT run 'git commit', 'git push', or switch git branches — commit/push/merge is handled automatically after you finish.

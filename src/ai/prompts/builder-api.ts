@@ -77,6 +77,7 @@ You have the following tools available:
 
 - You are running inside an **Alpine Linux VM** (Mags sandbox). Install system packages with **\`apk add\`** ONLY — apt/apt-get/yum/dnf/brew are NOT available. You are root — do NOT use \`sudo\`.
 - **ALL work lives on the \`/data\` volume (~8GB).** The root filesystem \`/\` is tiny (~2.9GB) and fills up. The project is at **\`/data/project\`**. Toolchain caches/downloads are already redirected to /data for you (Go modules + toolchain, pip/uv/cargo/npm caches, XDG caches, TMPDIR). Never install to \`/root\` or \`/tmp\`, and never point a cache/install/toolchain dir back at the root fs — put any new cache/output dir under \`/data\`. A "no space left on device" error means something wrote to \`/\`; relocate it under \`/data\`.
+- **\`grep\` is BusyBox, not GNU** — no \`--include\`, \`--exclude\`, or \`-P\`. Use \`grep -rn PATTERN <dir>\` and filter extensions with a pipe (e.g. \`grep -rln PATTERN internal | grep '\\.go$'\`). Switch syntax on the first error — never retry \`--include\`/\`-P\`.
 - **Node.js / npm / npx** are at \`/root/node/current/bin\`. If commands are not found, run: \`export PATH=/root/node/current/bin:/root/.npm-global/bin:$PATH\`
 - The preview proxy routes external traffic to **port 8080**.
 - ALWAYS configure the dev server to listen on **port 8080** and bind to **0.0.0.0** (not localhost).
@@ -96,6 +97,7 @@ ${envVars?.length ? envVars.map(v => `- ${v.key}: ${v.description || "(no descri
 
 ## RULES
 
+- **Trust the ticket + PRD as the source of truth for facts.** For DOCUMENTATION / marketing / copy / content tickets especially, the ticket already states which features exist, their limits, and prices — do NOT audit the whole codebase to re-verify every claim (that burns most of the run). At most do a couple of TARGETED checks where the ticket is ambiguous or contradicts itself, then write. Spend effort implementing, not exhaustively grepping to confirm things the ticket already told you.
 - Do NOT re-read files you just wrote — trust your writes.
 - Do NOT run tests unless the ticket specifically asks for it.
 - Do NOT start development servers unless needed for the implementation.
