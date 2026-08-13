@@ -904,9 +904,11 @@ export function ProjectDetailPage({
           </div>
           <script src="/public/js/marked.min.js"></script>
           <script src="/public/js/markdown-config.js"></script>
-          <!-- jsPDF + html2canvas — power "Download → PDF" (renders tables/code faithfully) -->
-          <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-          <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+          <!-- jsPDF + html2canvas — power "Download → PDF" (renders tables/code faithfully).
+               SELF-HOSTED (was cdnjs): a blocked/slow CDN left window.jspdf undefined →
+               "PDF generation library not loaded". Same-origin can't be blocked. -->
+          <script src="/public/js/jspdf.umd.min.js"></script>
+          <script src="/public/js/html2canvas.min.js"></script>
           <script src="/public/js/artifacts-loader.js"></script>
           <script src="/public/js/document-comments.js"></script>
           <script>
