@@ -105,7 +105,7 @@ export const askUser = tool({
 
 export const confirmAction = tool({
   description:
-    "Ask the user to approve or reject a specific action BEFORE you take it, rendered as a blocking Yes/No popup card. Use this EVERY time before you create or overwrite a document (PRD, Technical Analysis, Design Language) or create tickets — the user must click Yes before you call streamDocumentContent / createTickets. This is NOT for open-ended choices (use askUser for those) — it's strictly for a go/no-go permission gate. After calling it, STOP and wait — do not call the action tool in the same turn.",
+    "Ask the user to approve or reject a specific action BEFORE you take it, rendered as a blocking Yes/No popup card. Use this before you PROACTIVELY create or overwrite a document (PRD, Technical Analysis, Design Language) or create tickets that the user has NOT explicitly asked for — the go/no-go gate is for creations YOU are initiating. Do NOT use it when the user already gave an explicit command to perform the action (e.g. 'write this to a doc', 'save it', 'create the tickets') — their instruction IS the approval, so call streamDocumentContent / createTickets directly instead of re-asking. This is NOT for open-ended choices (use askUser for those). After calling it, STOP and wait — do not call the action tool in the same turn.",
   inputSchema: zodSchema(
     z.object({
       title: z
