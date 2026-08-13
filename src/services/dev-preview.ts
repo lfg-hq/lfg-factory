@@ -1050,10 +1050,30 @@ async function executeRunbook(
  *  toolchain + NuGet cache live on the shared /data volume, so a worktree run gets
  *  the SAME environment the main-branch run used (`dir` selects which checkout). */
 function envPrefix(dir: string = PROJECT_DIR): string {
-  return `export PATH="/data/.dotnet:/data/.dotnet/tools:/root/.dotnet/tools:/usr/local/bin:/usr/bin:/bin:/sbin:$PATH"; ` +
+  return `mkdir -p /data/.apk-cache; ln -sf /data/.apk-cache /etc/apk/cache 2>/dev/null || true; ` +
+    `export PATH="/data/.dotnet:/data/.dotnet/tools:/root/.dotnet/tools:/usr/local/bin:/usr/bin:/bin:/sbin:$PATH"; ` +
     `export DOTNET_ROOT=/data/.dotnet DOTNET_CLI_HOME=/data/.dotnet NUGET_PACKAGES=/data/.nuget ` +
     `DOTNET_NOLOGO=1 DOTNET_CLI_TELEMETRY_OPTOUT=1 TMPDIR=/data/tmp; mkdir -p /data/tmp; ` +
     `cd ${dir} 2>/dev/null; set -a; [ -f ./.env ] && . ./.env; set +a; `;
+}
+
+/** apk-installed toolchain (gcc, musl-dev, the language SDK) lives on the EPHEMERAL root
+ *  fs — NOT /data — so a VM sleep/respawn between the main run and a branch run drops it,
+ *  and the recorded build then dies with "gcc not found" and bounces to the AI driver
+ *  (+ a slow network re-download). Re-assert JUST the apk steps before the build: it's
+ *  idempotent (instant no-op when already present) and, with the persistent /data apk
+ *  cache (envPrefix), restores them offline + fast when the root fs was reset. We skip
+ *  non-apk toolchain steps (e.g. curl → /data/.dotnet) since those install to /data and
+ *  already persist — re-running them would needlessly re-download. This is how a branch
+ *  preview reliably inherits main's warmth. */
+async function ensureApkToolchain(projectId: string, userId: string, workspaceId: string, manifest: PreviewManifest, runDir: string): Promise<void> {
+  const apkSteps = (manifest.toolchain || []).filter((c) => /\bapk\s+add\b/.test(c));
+  if (!apkSteps.length) return;
+  for (const raw of apkSteps) {
+    // Drop --no-cache so the reinstall can pull from the persistent /data package cache.
+    const cmd = raw.replace(/\s--no-cache\b/g, "");
+    await runDetachedPolled(projectId, userId, workspaceId, cmd, 600_000, { stallMs: 180_000, workDir: runDir }).catch(() => {});
+  }
 }
 
 function buildDriverSystemPrompt(manifest: PreviewManifest, engines: EngineHandle[], workDir: string = PROJECT_DIR, configNotes: string[] = [], directives: string[] = []): string {
@@ -2406,6 +2426,10 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
     let up = false;
     let buildFailed = false;
     if (compiled && manifest.buildCmd) {
+      // Make sure the apk toolchain (gcc/musl-dev/SDK) is present BEFORE the recorded
+      // build — a root-fs reset between the main run and this branch run drops it, and
+      // the build would otherwise fail "gcc not found" and bounce to the driver.
+      await ensureApkToolchain(projectId, userId, workspaceId, manifest, runDir);
       // Localize any hardcoded /data/project paths in the recorded build to THIS run
       // dir, so a branch worktree build acts on the worktree (not on main's files).
       const buildCmd = localizeCmd(manifest.buildCmd, runDir);
