@@ -575,7 +575,10 @@
     width: 100%;
     min-height: 50px; /* Increased height */
     max-height: 250px;
-    padding-bottom: 20px;
+    /* Reserve space for the absolutely-positioned toolbar row (.left-actions /
+       .input-actions sit at bottom:4px, ~36px tall). Without enough bottom padding
+       the last typed line slid UNDER the toolbar. */
+    padding-bottom: 46px;
     /* transition: all 0.3s ease; */
     border: none;
     /* Hide scrollbar but maintain scrolling functionality */
@@ -583,9 +586,12 @@
     -ms-overflow-style: none; /* IE and Edge */
     overflow-y: auto;
     outline: none;
-    /* Gradient taper at bottom */
-    -webkit-mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
-    mask-image: linear-gradient(to bottom, black 80%, transparent 100%);
+    /* Fixed-pixel taper aligned to the reserved padding: the fade now covers ONLY the
+       empty toolbar strip (12–44px from the bottom), so the active text line stays fully
+       opaque instead of being faded out. (Was a proportional `black 80%` that blurred
+       the bottom 20% of whatever text was there.) */
+    -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 44px), transparent calc(100% - 12px));
+    mask-image: linear-gradient(to bottom, black calc(100% - 44px), transparent calc(100% - 12px));
 }
 
 #chat-input-box {
