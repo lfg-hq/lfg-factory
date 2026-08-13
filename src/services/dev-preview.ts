@@ -1076,6 +1076,81 @@ async function ensureApkToolchain(projectId: string, userId: string, workspaceId
   }
 }
 
+// ── Read-only preview inspection (for the normal product/Analyst chat agent) ──
+// The chat agent can READ code but has no window into the LIVE sandbox — so it can't see
+// a real DB migration error, a 500, or which DB the app actually connects to. This tool
+// gives it a strictly READ-ONLY exec into the project's preview VM to gather real
+// evidence. Anything that mutates (rebuild, restart, migrations, writes, mutating SQL)
+// stays behind @preview.
+const PREVIEW_READONLY_BINS = new Set([
+  "curl", "wget", "cat", "head", "tail", "ls", "grep", "egrep", "fgrep", "rg", "find",
+  "wc", "stat", "file", "ps", "df", "du", "free", "env", "printenv", "echo", "pwd",
+  "whoami", "hostname", "date", "which", "command", "sort", "uniq", "cut", "tr", "jq",
+  "nl", "xxd", "docker", "psql", "mysql", "sqlite3", "sqlcmd", "netstat", "ss",
+  "nslookup", "dig", "uname", "id", "awk", "sed", "true", "test",
+]);
+const PREVIEW_MUTATING_SQL = /\b(DROP|DELETE|UPDATE|INSERT|ALTER|TRUNCATE|GRANT|REVOKE|REPLACE|MERGE|VACUUM|REINDEX|CLUSTER)\b/i;
+
+/** Classify a shell command as read-only-safe for autonomous preview inspection. Errs
+ *  toward refusal: every pipeline segment must lead with an allow-listed read-only tool,
+ *  and known write escapes (redirection, sed -i, find -delete/-exec, curl write methods,
+ *  mutating SQL, write docker subcommands) are rejected. */
+function classifyReadonlyPreviewCmd(cmd: string): { ok: boolean; reason?: string } {
+  const c = (cmd || "").trim();
+  if (!c) return { ok: false, reason: "empty command" };
+  // File write redirection (allow only 2>&1 and >/dev/null style discards).
+  const redir = c.replace(/2>&1/g, "").replace(/[0-9]?>\s*\/dev\/null/g, "").replace(/&>\s*\/dev\/null/g, "");
+  if (/>/.test(redir)) return { ok: false, reason: "output redirection to a file is not allowed (read-only)" };
+  if (/`|\$\(/.test(c)) return { ok: false, reason: "command substitution is not allowed" };
+  if (PREVIEW_MUTATING_SQL.test(c)) return { ok: false, reason: "a mutating SQL keyword was detected — inspection is read-only (use @preview to run migrations/writes)" };
+  if (/\bsed\b[^|;&]*\s-\w*i/.test(c)) return { ok: false, reason: "sed -i (in-place edit) is not allowed" };
+  if (/\bfind\b[^|;&]*\s-(delete|exec|execdir|ok)\b/.test(c)) return { ok: false, reason: "find -delete/-exec is not allowed" };
+  if (/\b(curl|wget)\b[^|;&]*(-X\s*(POST|PUT|DELETE|PATCH)|--data|--data-raw|\s-d\s|--upload-file|\s-T\s|\s-F\s|--form)/i.test(c)) return { ok: false, reason: "curl/wget write or upload is not allowed — GET only" };
+  const segments = c.split(/\s*(?:\|\||&&|;|\||\n)\s*/).map((s) => s.trim()).filter(Boolean);
+  for (const seg of segments) {
+    const tokens = seg.split(/\s+/).filter((t) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)); // drop leading FOO=bar
+    const bin = (tokens[0] || "").replace(/^.*\//, ""); // basename
+    if (!PREVIEW_READONLY_BINS.has(bin)) return { ok: false, reason: `'${bin || seg}' is not an allowed read-only command` };
+    if (bin === "docker" && /^docker\s+(?!ps\b|logs\b|images\b|inspect\b|top\b|stats\b|version\b|info\b|exec\b)/.test(seg)) {
+      return { ok: false, reason: "only read-only docker subcommands (ps/logs/images/inspect/top/stats) — or docker exec for a read-only DB query — are allowed" };
+    }
+  }
+  return { ok: true };
+}
+
+/** Build the read-only `inspectPreview` tool bound to a project. Returns {} if there's no
+ *  project context (standalone chat), so it's safe to spread unconditionally. */
+export function createPreviewInspectTool(params: { projectId?: string }): Record<string, unknown> {
+  const { projectId } = params;
+  return {
+    inspectPreview: tool({
+      description:
+        "READ-ONLY window into this project's LIVE preview sandbox — use it to DIAGNOSE runtime issues you cannot see from source alone (a database migration error, a 500, why an asset 404s, which DB the app really connects to). Runs ONE read-only shell command on the preview VM and returns its output. Gather REAL evidence instead of guessing: curl the app (GET only), tail the app log, `docker logs`, or inspect the DB schema with read-only SQL (SELECT / \\dt / \\d / information_schema). You CANNOT mutate — no writes, rebuilds, restarts, migrations, or mutating SQL; those stay behind `@preview`. If a fix needs running, report the finding and tell the user to run `@preview`. Only works when a preview sandbox exists for this project.",
+      inputSchema: zodSchema(z.object({
+        command: z.string().describe("One read-only shell command, e.g. `curl -s -i http://localhost:8080/`, `tail -n 100 /data/project/preview.log`, `docker logs --tail 100 postgres`, `docker exec postgres psql -U app -d app -c '\\dt'`, `grep -rn \"func.*Migrate\" internal/database`."),
+        reason: z.string().optional().describe("One line: what you're trying to find out."),
+      })),
+      execute: async ({ command }: { command: string; reason?: string }) => {
+        if (!projectId) return { error: "inspectPreview only works inside a project chat (no project context here)." };
+        const check = classifyReadonlyPreviewCmd(command);
+        if (!check.ok) return { error: `Refused (read-only inspection): ${check.reason}. To change/fix/restart the preview, use @preview instead.` };
+        let workspaceId: string;
+        try { workspaceId = await envWorkspaceId(projectId); }
+        catch { return { error: "No preview sandbox exists for this project yet. Ask the user to start a preview (Run default branch), then inspection will work." }; }
+        try {
+          const res = await sh(workspaceId, `${envPrefix()}${command}`, 45_000);
+          const output = (res.output || "").slice(-6000).trim();
+          return { exitCode: res.exitCode, output: output || "(no output)" };
+        } catch (e) {
+          const msg = (e as Error).message || String(e);
+          if (/no VM associated|not found|unreachable/i.test(msg)) return { error: "The preview sandbox isn't running right now — ask the user to start/restart the preview, then I can inspect it." };
+          return { error: `Inspect failed: ${msg.slice(0, 200)}` };
+        }
+      },
+    }),
+  };
+}
+
 function buildDriverSystemPrompt(manifest: PreviewManifest, engines: EngineHandle[], workDir: string = PROJECT_DIR, configNotes: string[] = [], directives: string[] = []): string {
   const port = manifest.port;
   const isBranch = workDir !== PROJECT_DIR;

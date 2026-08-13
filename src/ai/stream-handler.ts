@@ -23,6 +23,7 @@ import { createAgentTools, createWebResearchTools } from "./tools/agent-tools.ts
 import { broadcastToUser, getConnection } from "../ws/connection-manager.ts";
 import { getComposioTools, listConnectors } from "../services/composio-manager.ts";
 import { downloadBinary } from "../services/s3.ts";
+import { createPreviewInspectTool } from "../services/dev-preview.ts";
 import type { ServerWebSocket } from "bun";
 import type { WsData } from "../ws/types.ts";
 
@@ -442,6 +443,14 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
     // The Exa webSearch/readUrl are provider-agnostic — add them so every model can
     // research. (createAgentTools only ran for custom Agents, so product chat missed it.)
     tools = { ...tools, ...createWebResearchTools() };
+  }
+
+  // Read-only window into the LIVE preview sandbox so the product/Analyst agent can
+  // DIAGNOSE runtime issues (DB migration errors, 500s) with real evidence instead of
+  // guessing from source. Mutations stay behind @preview. Needs the PUBLIC projectId
+  // (that's what projectEnvironments.projectId stores). Not for instant/agent chats.
+  if (!instantMode && !agentRecord && projectId) {
+    tools = { ...tools, ...createPreviewInspectTool({ projectId }) };
   }
 
   // Add agent-specific tools (sandbox, memory, self-config).
