@@ -1635,8 +1635,20 @@ Do NOT use TodoWrite. Do NOT edit source files. Just install (if needed), build,
         console.warn(`[instant] [${appId}] Pi ${piResult.oomKilled ? "OOM-killed" : "ran away"} with work present — will resume (attempt ${attempt} of ${maxAttempts}).`);
       }
       if (piResult.exitCode !== null && piResult.exitCode !== 0) {
-        console.error(`[instant] [${appId}] Pi output tail:\n${piResult.tail.slice(-2500)}`);
-        throw new Error(`Pi build failed with exit code ${piResult.exitCode}`);
+        // A non-zero exit with NO work → genuine early failure, hard-fail.
+        if (!piResult.didWork) {
+          console.error(`[instant] [${appId}] Pi output tail:\n${piResult.tail.slice(-2500)}`);
+          throw new Error(`Pi build failed with exit code ${piResult.exitCode}`);
+        }
+        // Non-zero exit but the agent DID real work (e.g. it hit its OWN step/turn budget
+        // mid-command, or its last shell command returned non-zero). This is NOT an OOM and
+        // NOT necessarily a broken app — the code may compile & serve fine. Do NOT hard-fail:
+        // proceed to ensureDevServerRunning + URL validation + the auto-fix loop, which is
+        // the real source of truth (same policy as a resumable fatalError just below). The
+        // old `throw` here nuked builds that were actually fine the moment Pi exited 1.
+        console.warn(
+          `[instant] [${appId}] Pi exited ${piResult.exitCode} but did work (${piResult.toolCalls} tool calls) — proceeding to URL validation instead of hard-failing.\nTail:\n${piResult.tail.slice(-1500)}`
+        );
       }
       // Pi exits 0 even on an API auth/quota failure — streamPiToCompletion detects
       // that VM-side (only when the agent produced ZERO successful output). A resumable
