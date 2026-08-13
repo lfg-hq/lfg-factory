@@ -1355,11 +1355,21 @@ async function driveSandbox(
     clearInterval(watch);
   }
 
-  // Trust reality, not the model's word: confirm the port actually serves.
-  if (await checkServer(workspaceId, port, 8)) return true;
+  // An EXPLICIT failure is authoritative — do NOT let a stale process mask it. On the
+  // ONE shared preview VM, an old build (e.g. main's server from a prior run, or a
+  // different branch) is often still bound to :${port}. If the driver reported it
+  // CANNOT bring THIS run up (source change needed, or the exec channel is dead —
+  // every command returned exit -1), a 200 from that lingering process is NOT this
+  // build serving. Returning true here silently served the WRONG/old page under this
+  // run's summary ("App running ✓" on a branch that never actually built). Trust the
+  // explicit failed over a port that merely answers.
   if (finished?.status === "failed") {
     plog(projectId, userId, "App could not be brought up", { level: "error", detail: finished.detail });
+    return false;
   }
+  // Otherwise trust reality over the model's word: confirm the port actually serves
+  // (covers the case where the model forgot to call finish but the app is genuinely up).
+  if (await checkServer(workspaceId, port, 8)) return true;
   return false;
 }
 
@@ -2404,6 +2414,15 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
       if (br.exitCode !== 0) {
         buildFailed = true;
         plog(projectId, userId, `Recorded build failed (exit ${br.exitCode}) — handing to the AI driver to investigate`, { level: "error", detail: br.output.slice(-1200) });
+        // The (re)build failed → we will NOT start a fresh process below. On this ONE
+        // shared preview VM, a STALE process from a prior run/branch (e.g. main's
+        // server, which embeds its OWN templates) is usually still bound to :${port}.
+        // Kill it now so a lingering 200 can't get mis-detected as "App running ✓" and
+        // silently serve the OLD page under THIS branch's summary. If recovery succeeds
+        // the driver restarts it cleanly; if not, :${port} stays empty and we honestly
+        // report failure. (No-op if the exec channel itself is down — driveSandbox's
+        // explicit-failed guard covers that case.)
+        await sh(workspaceId, `fuser -k ${manifest.port}/tcp 2>/dev/null; pkill -f ':${manifest.port}' 2>/dev/null; sleep 1; true`, 20_000).catch(() => {});
       } else {
         plog(projectId, userId, "Build ✓");
       }
