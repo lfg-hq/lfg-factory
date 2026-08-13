@@ -334,10 +334,10 @@ export function ChatPage({
   </script>
   <script src="/public/js/marked.min.js"></script>
   <script src="/public/js/markdown-config.js"></script>
-  {/* jsPDF + html2canvas power the Docs "Download → PDF" export (artifacts-loader.js).
-      These were ONLY included on project-detail.tsx, so on the chat page window.jspdf was
-      never defined → "PDF generation library not loaded". Self-hosted, loaded BEFORE
-      artifacts-loader.js so the export always has them. */}
+  <!-- jsPDF + html2canvas power the Docs "Download -> PDF" export (artifacts-loader.js).
+       These were ONLY included on project-detail.tsx, so on the chat page window.jspdf was
+       never defined ("PDF generation library not loaded"). Self-hosted, loaded BEFORE
+       artifacts-loader.js so the export always has them. -->
   <script src="/public/js/jspdf.umd.min.js"></script>
   <script src="/public/js/html2canvas.min.js"></script>
   <script src="/public/js/artifacts-loader.js"></script>
