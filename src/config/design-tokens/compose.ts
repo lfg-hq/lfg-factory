@@ -210,6 +210,10 @@ export interface DesignOverrides {
   styleProfileId?: string;
   /** Hard light/dark constraint from the user. Overrides a conflicting paletteId. */
   brightness?: "light" | "dark";
+  /** Colors the user EXPLICITLY named (e.g. ["orange","black"] or hex). Honored as the
+   *  real palette colors — the first tints primary/accent, "black"/"white" set brightness.
+   *  This is why "make it orange" now actually yields orange instead of a mood-guess. */
+  colorHints?: string[];
 }
 
 export interface PalettePreference {
@@ -332,6 +336,10 @@ export function composeDesignTokens(requirements: string, _appName: string, over
       hoverLift: styleProfile.hoverLift,
     },
   };
+
+  // Honor the colors the user explicitly named (e.g. "orange", "black and yellow") —
+  // override primary/accent onto the mood-picked palette, re-deriving readable variants.
+  applyColorHints(tokens, overrides?.colorHints);
 
   const issues = validateTokens(tokens);
   // Only READABILITY failures (WCAG contrast) or schema errors disqualify a palette.
@@ -761,4 +769,49 @@ export function composeTokensFromSelection(
   };
   const parsed = DesignTokensSchema.safeParse(tokens);
   return parsed.success ? parsed.data : tokens;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Explicit color requests — honor the actual colors the user names.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Common color WORDS → a good vivid hex, so "orange" / "yellow" become real palette
+// colors instead of a mood-guess. Brightness words (black/white/dark/light) are handled
+// by selectPalette, not here (they set the background, not the primary hue).
+const NAMED_COLOR_HEX: Record<string, string> = {
+  red: "#ef4444", crimson: "#dc2626", scarlet: "#e11d48",
+  orange: "#f97316", tangerine: "#fb923c", amber: "#f59e0b",
+  yellow: "#eab308", gold: "#f5b301", mustard: "#d4a017",
+  lime: "#84cc16", green: "#22c55e", emerald: "#10b981", mint: "#34d399",
+  teal: "#14b8a6", cyan: "#06b6d4", turquoise: "#1abc9c", aqua: "#22d3ee",
+  sky: "#0ea5e9", blue: "#3b82f6", navy: "#1e40af", indigo: "#6366f1", cobalt: "#2563eb",
+  violet: "#8b5cf6", purple: "#a855f7", lavender: "#b39ddb", magenta: "#d6249f", fuchsia: "#d946ef",
+  pink: "#ec4899", rose: "#f43f5e", coral: "#ff6b6b", salmon: "#fb7185",
+  brown: "#92400e", tan: "#d2a679", beige: "#e8dcc0",
+};
+
+/** Resolve a color hint (hex or a known name) to a hex, or null if it's not a real hue
+ *  (e.g. "black"/"white"/"dark"/"light" — those drive brightness, not the primary color). */
+export function colorHintToHex(hint: string): string | null {
+  const h = (hint || "").trim().toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(h)) return h;
+  if (/^#[0-9a-f]{3}$/.test(h)) return `#${h[1]}${h[1]}${h[2]}${h[2]}${h[3]}${h[3]}`;
+  return NAMED_COLOR_HEX[h] ?? null;
+}
+
+/** Force the user's explicitly-named colors onto the tokens: the first hue → primary,
+ *  the second → accent, re-deriving foreground/hover/ring so they stay readable. */
+export function applyColorHints(tokens: DesignTokens, hints: string[] | undefined): void {
+  if (!hints?.length) return;
+  const hues = hints.map(colorHintToHex).filter((h): h is string => !!h);
+  if (!hues.length) return;
+  const primary = hues[0]!;
+  const accent = hues[1] ?? primary;
+  tokens.colors.primary = primary;
+  tokens.colors.primaryForeground = pickForeground(primary);
+  tokens.colors.primaryHover = relativeLuminance(primary) > 0.5 ? darkenHex(primary, 0.12) : lightenHex(primary, 0.1);
+  tokens.colors.ring = primary;
+  tokens.colors.accent = accent;
+  tokens.colors.accentForeground = pickForeground(accent);
+  tokens.meta.paletteName = `${tokens.meta.paletteName} · custom`;
 }

@@ -82,6 +82,12 @@ export function createInstantTools(ctx: InstantToolContext) {
             .describe("Preferred palette id (a HINT). It's honored only if it fits `brightness`; otherwise a matching-brightness palette is chosen for you."),
           font_pairing_id: z.string().optional(),
           style_profile_id: z.string().optional(),
+          color_hints: z
+            .array(z.string())
+            .optional()
+            .describe(
+              "The EXACT colors the user named, in the order they said them (e.g. ['orange','black'] or ['#f97316','#111111']). WHENEVER the user mentions specific colors, ALWAYS pass them here — they become the app's real primary/accent. Do NOT try to encode a requested color via palette_id (there may be no matching named palette); color_hints is how an explicit 'make it orange' is honored."
+            ),
           design_change: z
             .boolean()
             .optional()
@@ -91,7 +97,7 @@ export function createInstantTools(ctx: InstantToolContext) {
             ),
         })
       ),
-      execute: async ({ name, requirements, project_type, brightness, palette_id, font_pairing_id, style_profile_id, design_change }) => {
+      execute: async ({ name, requirements, project_type, brightness, palette_id, font_pairing_id, style_profile_id, color_hints, design_change }) => {
         const result = await proposeInstantDesign({
           userId: ctx.userId,
           projectId: ctx.projectId,
@@ -101,6 +107,7 @@ export function createInstantTools(ctx: InstantToolContext) {
           projectType: project_type,
           designChange: design_change,
           brightness,
+          colorHints: color_hints,
           designChoices: (palette_id || font_pairing_id || style_profile_id)
             ? { paletteId: palette_id, fontPairingId: font_pairing_id, styleProfileId: style_profile_id }
             : undefined,

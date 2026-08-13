@@ -1167,6 +1167,9 @@ async function runInstantBuild(appId: string, feedback?: string, designChoices?:
     const tokens = composeDesignTokens(app.requirements ?? "", appName, {
       ...(effectiveDesignChoices ?? {}),
       ...(buildBrightness ? { brightness: buildBrightness } : {}),
+      // The user's explicitly-approved colors (orange/yellow/…) — persisted on the app
+      // at proposal time — so the BUILT app is actually those colors, not a mood-guess.
+      colorHints: existingMeta.colorHints as string[] | undefined,
     });
 
     // Build/refresh the durable spec (source of truth across builds + iterations).
@@ -2419,6 +2422,9 @@ export interface ProposeDesignInput {
   designChange?: boolean;
   /** The user's stated light/dark preference — a HARD constraint on palette selection. */
   brightness?: "light" | "dark";
+  /** Colors the user explicitly named (e.g. ["orange","black"]) — honored as the real
+   *  palette colors instead of a mood-guess. */
+  colorHints?: string[];
   summary?: string;
   sections?: ProposalSection[];
 }
@@ -2461,9 +2467,16 @@ export async function proposeInstantDesign(input: ProposeDesignInput) {
     .filter(Boolean)
     .join(" \n ");
   const effectiveBrightness = input.brightness ?? inferBrightness(brightnessSignal);
+  // Honor explicitly-named colors — but only on a real (re)design, not an ADDITION that
+  // reuses the current look. Carry prior hints forward so a later "add a page" keeps them.
+  const priorColorHints = (existingMeta.colorHints as string[] | undefined) ?? undefined;
+  const effectiveColorHints = (input.designChange ?? false) || !effectiveChoices
+    ? (input.colorHints ?? priorColorHints)
+    : priorColorHints;
   const tokens = composeDesignTokens(input.requirements, normalizedName, {
     ...(effectiveChoices ?? {}),
     brightness: effectiveBrightness,
+    colorHints: effectiveColorHints,
   });
   // Persist the ACTUALLY-SELECTED design (resolved from the composed tokens) — not the
   // model's raw pick, which selectPalette may have overridden to honor brightness. This
@@ -2501,6 +2514,9 @@ export async function proposeInstantDesign(input: ProposeDesignInput) {
           proposal,
           proposalHistory: [...priorHistory, { ...proposal, at: new Date().toISOString() }].slice(-20),
           projectType,
+          // Explicitly-requested colors → carried into the BUILD too (runInstantBuild
+          // re-composes tokens), so the approved orange/yellow actually gets built.
+          colorHints: effectiveColorHints,
           // PROPOSAL-only preview tokens — kept SEPARATE from `designTokens` (the
           // applied/built design). Writing `designTokens` here would silently change
           // the running app's design before the user approves anything.
@@ -2521,7 +2537,7 @@ export async function proposeInstantDesign(input: ProposeDesignInput) {
         projectId: input.projectId ?? null,
         userId: input.userId,
         conversationId: input.conversationId,
-        metadata: { proposal, proposalHistory: [{ ...proposal, at: new Date().toISOString() }], projectType, proposalTokens: tokens },
+        metadata: { proposal, proposalHistory: [{ ...proposal, at: new Date().toISOString() }], projectType, proposalTokens: tokens, colorHints: effectiveColorHints },
       })
       .returning();
     appId = app!.appId;
