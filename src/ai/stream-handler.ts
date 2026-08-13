@@ -139,14 +139,10 @@ export interface StreamRequest {
   abortController: AbortController;
 }
 
-// Providers whose configured models can view images directly (multimodal).
+// Providers whose configured models can view images directly (multimodal) — these get
+// the image attached natively; text-only models (DeepSeek/Kimi/GLM) go through the
+// Google-only vision pre-pass (analyzeImage) instead.
 const VISION_NATIVE = new Set(["anthropic", "openai", "google"]);
-// A cheap/fast vision model per provider, used to describe an image for a
-// text-only model (DeepSeek's hosted API is text-only) — the "vision model
-// first, reasoning model second" pattern.
-const VISION_MODEL: Record<string, string> = {
-  openai: "gpt-5.6-luna", google: "gemini_2.5_flash_lite", anthropic: "claude_4.5_haiku",
-};
 
 /**
  * Build a system-context block describing the @ticket-referenced tickets: each
@@ -181,35 +177,28 @@ async function buildTicketMentionContext(ticketIds: string[]): Promise<string> {
   return `The user is asking about the following ticket(s). Answer in this context; the live Preview is showing the first ticket's branch.\n\n${parts.join("\n")}`;
 }
 
-/** Describe an image using whatever vision-capable key the user has. Returns the
- *  text description, or null if no vision model is available / it fails. */
+/** Describe an image using GOOGLE (Gemini) ONLY — the cheapest vision option and, per
+ *  product decision, the only provider we use for the text-only-model image pre-pass.
+ *  Uses the user's Google key if present, else the server env key. Returns the text
+ *  description, or null if no key is configured / it fails. */
 async function analyzeImage(bytes: Uint8Array, mediaType: string, userApiKeys: any): Promise<string | null> {
-  // Google FIRST: it's the cheapest vision model and uses a STABLE Gemini id (the others
-  // route through the registry, whose Google entry is a preview a key may lack access to).
-  // Then openai/anthropic as fallbacks. Use the user's vision key if present, else the
-  // SERVER env key (allowEnvFallback). getModel throws only if NEITHER exists → catch +
-  // try the next; this is what makes the text-only (DeepSeek/Kimi) pre-pass work.
-  for (const provider of ["google", "openai", "anthropic"]) {
-    try {
-      const model = provider === "google"
-        ? getGoogleVisionModel(userApiKeys, { allowEnvFallback: true })
-        : getModel(VISION_MODEL[provider]!, userApiKeys, { allowEnvFallback: true });
-      const { text } = await generateText({
-        model,
-        messages: [{
-          role: "user",
-          content: [
-            { type: "text", text: "Describe this screenshot/image in precise detail for another AI that CANNOT see it. Extract ALL visible text verbatim, name the page/section, describe the UI layout and any data, charts, errors, or code. Be factual — do not guess." },
-            { type: "image", image: bytes, mediaType },
-          ],
-        }],
-        maxOutputTokens: 1000,
-      });
-      const out = text?.trim() || null;
-      if (out) { console.log(`[vision] described image via ${provider} (${out.length} chars)`); return out; }
-    } catch (e) {
-      console.warn(`[vision] ${provider} describe failed:`, (e as Error).message?.slice(0, 120));
-    }
+  try {
+    const model = getGoogleVisionModel(userApiKeys, { allowEnvFallback: true });
+    const { text } = await generateText({
+      model,
+      messages: [{
+        role: "user",
+        content: [
+          { type: "text", text: "Describe this screenshot/image in precise detail for another AI that CANNOT see it. Extract ALL visible text verbatim, name the page/section, describe the UI layout and any data, charts, errors, or code. Be factual — do not guess." },
+          { type: "image", image: bytes, mediaType },
+        ],
+      }],
+      maxOutputTokens: 1000,
+    });
+    const out = text?.trim() || null;
+    if (out) { console.log(`[vision] described image via google (${out.length} chars)`); return out; }
+  } catch (e) {
+    console.warn(`[vision] google describe failed:`, (e as Error).message?.slice(0, 200));
   }
   return null;
 }
@@ -386,7 +375,7 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
         const desc = await analyzeImage(x.bytes, x.f.type || "image/png", userApiKeys);
         descs.push(desc
           ? `[Attached image "${x.f.name}". The current model can't view images — here is a vision model's description, treat it as ground truth:\n\n${desc}]`
-          : `[The user attached an image "${x.f.name}", but the selected model can't view images and no vision-capable key (OpenAI / Google / Anthropic) is configured. Tell them to add one in Settings → LLM Keys or switch to a vision model — do NOT guess what the image shows.]`);
+          : `[The user attached an image "${x.f.name}", but the selected model can't view images and the Google (Gemini) vision pre-pass couldn't run — the Google AI key is missing or was rejected. Tell them to add a valid Google key in Settings → LLM Keys (or switch to a vision-native model) — do NOT guess what the image shows.]`);
       }
       setLastUser(`${userMessage}\n\n${descs.join("\n\n")}`);
     }

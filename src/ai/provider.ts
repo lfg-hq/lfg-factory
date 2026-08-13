@@ -251,7 +251,10 @@ export function getGoogleVisionModel(
   const apiKey = userApiKeys?.google || (allowEnvFallback ? env.GOOGLE_AI_API_KEY : "");
   if (!apiKey) throw new Error("No Google AI API key configured. Please add your API key in Settings → LLM Keys to use this model.");
   const google = createGoogleGenerativeAI({ apiKey, fetch: llmFetch });
-  return google("gemini-2.5-flash-lite");
+  // gemini-3.5-flash-lite by default: low-latency, cheapest multimodal Gemini (Text/Image/
+  // Video/Audio/PDF), current-gen (2.5-flash-lite was deprecated for new keys). Overridable
+  // via GEMINI_VISION_MODEL so a future deprecation is a config change, not a code change.
+  return google(env.GEMINI_VISION_MODEL || "gemini-3.5-flash-lite");
 }
 
 /** Get the provider name for a given model key */

@@ -33,6 +33,10 @@ const envSchema = z.object({
   ANTHROPIC_API_KEY: z.string().optional().default(""),
   OPENAI_API_KEY: z.string().optional().default(""),
   GOOGLE_AI_API_KEY: z.string().optional().default(""),
+  // Gemini model used for the text-only-model vision pre-pass (image → text). Overridable
+  // via env so a Google model deprecation can be fixed WITHOUT a code change. Must be a
+  // multimodal Gemini your key can access (verify: GET /v1beta/models?key=…).
+  GEMINI_VISION_MODEL: z.string().optional().default("gemini-3.5-flash-lite"),
   DEEPSEEK_API_KEY: z.string().optional().default(""),
   EXA_API_KEY: z.string().optional().default(""),
 
