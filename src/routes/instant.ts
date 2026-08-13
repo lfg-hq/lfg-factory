@@ -127,23 +127,28 @@ instant.get("/instant/app/:appId", async (c) => {
   // used to 404 here because of an isNull(projectId) filter — the standalone URL simply
   // couldn't see project-scoped apps. If it belongs to a project, redirect to its
   // canonical project-scoped URL (which carries the project context the page needs).
-  const [ownedApp] = await db
-    .select({ id: instantApps.id, appId: instantApps.appId, projectId: instantApps.projectId, conversationId: instantApps.conversationId })
+  // Look up by appId REGARDLESS of owner. A PROJECT-scoped app is redirected to its
+  // project URL, where access is granted to any project member (owner OR guest) — so a
+  // guest with project access no longer 404s here. Standalone apps stay owner-only.
+  const [anyApp] = await db
+    .select({ id: instantApps.id, appId: instantApps.appId, projectId: instantApps.projectId, conversationId: instantApps.conversationId, userId: instantApps.userId })
     .from(instantApps)
-    .where(and(eq(instantApps.userId, user.id), eq(instantApps.appId, appId)))
+    .where(eq(instantApps.appId, appId))
     .limit(1);
 
-  console.log("[instant] currentApp found:", !!ownedApp, "conversationId:", ownedApp?.conversationId);
-  if (!ownedApp) return c.text("Instant app not found", 404);
-
-  if (ownedApp.projectId) {
+  if (anyApp?.projectId) {
     const [proj] = await db
       .select({ pub: projects.projectId })
       .from(projects)
-      .where(eq(projects.id, ownedApp.projectId))
+      .where(eq(projects.id, anyApp.projectId))
       .limit(1);
     if (proj?.pub) return c.redirect(`/instant/project/${proj.pub}/app/${appId}`);
   }
+
+  // Standalone (no project) → owner-only.
+  const ownedApp = anyApp && anyApp.userId === user.id ? anyApp : null;
+  console.log("[instant] currentApp found:", !!ownedApp, "conversationId:", ownedApp?.conversationId);
+  if (!ownedApp) return c.text("Instant app not found", 404);
 
   const [currentApp, apps] = await Promise.all([
     db
@@ -186,10 +191,12 @@ instant.get("/instant/project/:projectId", async (c) => {
   if (!project) return c.text("Project not found", 404);
 
   const settings = await getUserChatSettings(user.id);
+  // Scope by PROJECT (access already granted by getProjectForUser) — NOT by creator, so
+  // guests/collaborators see the project's instant apps too.
   const apps = await db
     .select()
     .from(instantApps)
-    .where(and(eq(instantApps.userId, user.id), eq(instantApps.projectId, project.id)))
+    .where(eq(instantApps.projectId, project.id))
     .orderBy(desc(instantApps.createdAt));
 
   return c.html(
@@ -219,17 +226,19 @@ instant.get("/instant/project/:projectId/app/:appId", async (c) => {
   if (!project) return c.text("Project not found", 404);
 
   const settings = await getUserChatSettings(user.id);
+  // Scope by PROJECT (access already granted by getProjectForUser), NOT by creator — so a
+  // guest with project access can open the project's instant apps instead of 404ing.
   const [currentApp, apps] = await Promise.all([
     db
       .select()
       .from(instantApps)
-      .where(and(eq(instantApps.userId, user.id), eq(instantApps.projectId, project.id), eq(instantApps.appId, appId)))
+      .where(and(eq(instantApps.projectId, project.id), eq(instantApps.appId, appId)))
       .limit(1)
       .then((rows) => rows[0] ?? null),
     db
       .select()
       .from(instantApps)
-      .where(and(eq(instantApps.userId, user.id), eq(instantApps.projectId, project.id)))
+      .where(eq(instantApps.projectId, project.id))
       .orderBy(desc(instantApps.createdAt)),
   ]);
 

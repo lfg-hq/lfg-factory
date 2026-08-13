@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { and, desc, eq } from "drizzle-orm";
 import { requireAuth } from "../../auth/middleware.ts";
+import { getProjectAccess } from "../../auth/project-access.ts";
 import { db } from "../../config/db.ts";
 import { instantApps } from "../../db/schema/instant.ts";
 import { projects } from "../../db/schema/projects.ts";
@@ -26,18 +27,19 @@ type AuthEnv = {
 const instantApi = new Hono<AuthEnv>();
 instantApi.use("*", requireAuth);
 
+// Resolve a project by PROJECT ACCESS (membership), not ownership — so guests /
+// collaborators can use the project's instant apps, not only the owner.
 async function resolveProjectForUser(userId: string, publicProjectId: string) {
-  const [project] = await db
-    .select({ id: projects.id, projectId: projects.projectId })
-    .from(projects)
-    .where(and(eq(projects.projectId, publicProjectId), eq(projects.ownerId, userId)))
-    .limit(1);
-  return project ?? null;
+  const access = await getProjectAccess(publicProjectId, userId);
+  return access ? { id: access.project.id, projectId: access.project.projectId } : null;
 }
 
 async function getAppForUser(userId: string, appId: string, internalProjectId?: string) {
-  const predicates = [eq(instantApps.userId, userId), eq(instantApps.appId, appId)];
-  if (internalProjectId) predicates.push(eq(instantApps.projectId, internalProjectId));
+  // Project-scoped: gate on PROJECT (the caller already checked project access via
+  // resolveProjectForUser), so any member can reach it. Standalone: owner-only.
+  const predicates = internalProjectId
+    ? [eq(instantApps.appId, appId), eq(instantApps.projectId, internalProjectId)]
+    : [eq(instantApps.appId, appId), eq(instantApps.userId, userId)];
 
   const [row] = await db
     .select({ app: instantApps, sandbox: sandboxes })
@@ -211,7 +213,7 @@ instantApi.get("/:projectId/apps", async (c) => {
   const apps = await db
     .select()
     .from(instantApps)
-    .where(and(eq(instantApps.userId, user.id), eq(instantApps.projectId, project.id)))
+    .where(eq(instantApps.projectId, project.id))
     .orderBy(desc(instantApps.createdAt));
 
   return c.json({

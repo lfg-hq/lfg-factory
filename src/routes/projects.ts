@@ -151,7 +151,13 @@ projectsRouter.get("/projects", async (c) => {
     })
     .from(instantApps)
     .leftJoin(projects, eq(instantApps.projectId, projects.id))
-    .where(eq(instantApps.userId, user.id))
+    // The user's OWN apps + every app in a project they have access to (so guests/
+    // collaborators see the project's instant apps, not just ones they created).
+    .where(
+      projInternalIds.length
+        ? or(eq(instantApps.userId, user.id), inArray(instantApps.projectId, projInternalIds))
+        : eq(instantApps.userId, user.id),
+    )
     .orderBy(desc(instantApps.createdAt));
 
   // Fetch agents for the user
@@ -270,8 +276,10 @@ projectsRouter.get("/projects/:projectId", async (c) => {
     db.select().from(projectEnvironmentVariables)
       .where(eq(projectEnvironmentVariables.projectId, project.id))
       .orderBy(asc(projectEnvironmentVariables.key)),
+    // Scope by PROJECT (the user already has access to this project), NOT by creator —
+    // so guests/collaborators see the project's instant apps too.
     db.select().from(instantApps)
-      .where(and(eq(instantApps.userId, user.id), eq(instantApps.projectId, project.id)))
+      .where(eq(instantApps.projectId, project.id))
       .orderBy(desc(instantApps.createdAt)),
   ]);
 
