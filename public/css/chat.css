@@ -926,6 +926,42 @@
     text-overflow: ellipsis;
 }
 
+/* Multi-attach: hold up to MAX_ATTACHMENTS chips in a wrapping row just above the box.
+   The chips are position:absolute by default (single-file legacy) — inside this
+   container they flow statically so they don't stack on top of each other. */
+.input-file-attachments {
+    position: absolute;
+    bottom: 100%;
+    left: 10px;
+    right: 10px;
+    margin-bottom: 6px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    z-index: 10;
+}
+.input-file-attachments .input-file-attachment {
+    position: static;
+    top: auto;
+    left: auto;
+    max-width: 220px;
+}
+.input-file-attachments .input-file-attachment span {
+    max-width: 150px;
+}
+.input-file-attachment .remove-file-btn {
+    background: none;
+    border: none;
+    color: var(--text-color, #e0e0e0);
+    cursor: pointer;
+    padding: 0 2px;
+    margin-left: 2px;
+    display: inline-flex;
+    align-items: center;
+    font-size: 0.75rem;
+}
+.input-file-attachment .remove-file-btn:hover { color: #ef4444; }
+
 #remove-file-btn {
     background: none;
     border: none;

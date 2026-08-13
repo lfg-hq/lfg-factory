@@ -461,216 +461,132 @@ document.addEventListener('DOMContentLoaded', () => {
             fileUploadInput.click();
         });
         
-        fileUploadInput.addEventListener('change', (e) => {
-            const file = e.target.files[0];
-            if (file) {
-                console.log('%c FILE SELECTED', 'background: #44f; color: white; font-weight: bold;');
-                console.log('User selected file:', file.name, 'type:', file.type, 'size:', file.size);
-                
-                // Create a notification about the selected file
-                const fileInfo = document.createElement('div');
-                fileInfo.className = 'file-info';
-                fileInfo.textContent = `Selected file: ${file.name}`;
-                
-                // Show the selected file notification temporarily
-                const inputWrapper = document.querySelector('.input-wrapper');
-                inputWrapper.appendChild(fileInfo);
-                
-                // Simple animation to show file is ready
-                setTimeout(() => {
-                    fileInfo.classList.add('show');
-                }, 10);
-                
-                // Get current conversation ID - first check currentConversationId, then URL
-                let conversationId = currentConversationId;
-                if (!conversationId) {
-                    // Try to get it from URL
-                    const urlParams = new URLSearchParams(window.location.search);
-                    if (urlParams.has('conversation_id')) {
-                        conversationId = urlParams.get('conversation_id');
-                        console.log('Found conversation ID in URL:', conversationId);
-                        // Update current conversation ID
-                        currentConversationId = conversationId;
-                    }
-                }
-                
-                // File will be stored in this object until message is sent
-                const fileData = {
-                    file: file,
-                    name: file.name,
-                    type: file.type,
-                    size: file.size
-                };
-                
-                // Add a visual indicator in the input area
-                const fileAttachmentIndicator = document.createElement('div');
-                fileAttachmentIndicator.className = 'input-file-attachment';
-                
-                // Remove any existing indicators
-                const existingIndicator = document.querySelector('.input-file-attachment');
-                if (existingIndicator) {
-                    existingIndicator.remove();
-                }
-                
-                // IMPORTANT CHANGE: Always try to upload immediately, even without conversationId
-                // Show uploading status in the file attachment indicator
-                fileAttachmentIndicator.classList.add('uploading');
-                fileAttachmentIndicator.innerHTML = `
-                    <i class="fas fa-sync fa-spin"></i>
-                    <span>Uploading ${file.name}...</span>
-                `;
-                
-                // Add the indicator to the input area
-                inputWrapper.appendChild(fileAttachmentIndicator);
-                
-                // If no conversation exists yet, create one first via API
-                const uploadFile = async () => {
-                    try {
-                        // Check if we need to create a conversation first
-                        if (!conversationId) {
-                            console.log('%c CREATING NEW CONVERSATION', 'background: #f90; color: white; font-weight: bold;');
-                            
-                            // Get CSRF token
-                            const csrfToken = getCsrfToken();
-                            
-                            // Create a new conversation
-                            const createResponse = await fetch('/api/conversations/', {
-                                method: 'POST',
-                                headers: {
-                                    'Content-Type': 'application/json',
-                                    'X-CSRFToken': csrfToken,
-                                    'X-Requested-With': 'XMLHttpRequest'
-                                },
-                                body: JSON.stringify({
-                                    project_id: currentProjectId || null
-                                })
-                            });
-                            
-                            if (!createResponse.ok) {
-                                throw new Error('Failed to create conversation');
-                            }
-                            
-                            const conversationData = await createResponse.json();
-                            conversationId = conversationData.id;
+        // ── Multi-file attachments (up to MAX_ATTACHMENTS) ──
+        // window.attachedFiles is the source of truth (an array of entries, each with
+        // its own chip + in-flight upload promise). window.attachedFile is kept as a
+        // synced alias to attachedFiles[0] so the older single-file code paths (submit/
+        // enter guards) keep working unchanged.
+        window.MAX_ATTACHMENTS = window.MAX_ATTACHMENTS || 4;
+        window.attachedFiles = window.attachedFiles || [];
+        window.syncPrimaryAttachedFile = function () {
+            window.attachedFile = window.attachedFiles[0] || null;
+        };
+
+        // The chips render in a flex row ABOVE the input box (position handled in CSS).
+        function getAttachmentChipsContainer() {
+            const inputWrapper = document.querySelector('.input-wrapper');
+            let c = document.querySelector('.input-file-attachments');
+            if (!c && inputWrapper) {
+                c = document.createElement('div');
+                c.className = 'input-file-attachments';
+                inputWrapper.appendChild(c);
+            }
+            return c;
+        }
+        function removeAttachmentChipsContainerIfEmpty() {
+            const c = document.querySelector('.input-file-attachments');
+            if (c && !c.children.length) c.remove();
+        }
+
+        // Attach ONE file: render its chip, upload it, track it in window.attachedFiles.
+        window.attachFileToComposer = function attachFileToComposer(file) {
+            if (!file) return;
+            if (window.attachedFiles.length >= window.MAX_ATTACHMENTS) {
+                alert('You can attach up to ' + window.MAX_ATTACHMENTS + ' files.');
+                return;
+            }
+            console.log('User selected file:', file.name, 'type:', file.type, 'size:', file.size);
+
+            const container = getAttachmentChipsContainer();
+            const chip = document.createElement('div');
+            chip.className = 'input-file-attachment uploading';
+            chip.innerHTML = '<i class="fas fa-sync fa-spin"></i><span>Uploading ' + file.name + '…</span>';
+            if (container) container.appendChild(chip);
+
+            const entry = { file: file, name: file.name, type: file.type, size: file.size, id: null, uploading: true, chip: chip };
+            window.attachedFiles.push(entry);
+            window.syncPrimaryAttachedFile();
+
+            const removeEntry = () => {
+                const i = window.attachedFiles.indexOf(entry);
+                if (i >= 0) window.attachedFiles.splice(i, 1);
+                chip.remove();
+                window.syncPrimaryAttachedFile();
+                removeAttachmentChipsContainerIfEmpty();
+            };
+            const renderChip = (stateCls, iconCls, label) => {
+                chip.className = 'input-file-attachment ' + stateCls;
+                chip.innerHTML = '<i class="' + iconCls + '"></i><span>' + label + '</span>' +
+                    '<button type="button" class="remove-file-btn" title="Remove file"><i class="fas fa-times"></i></button>';
+                const btn = chip.querySelector('.remove-file-btn');
+                if (btn) btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); removeEntry(); });
+            };
+
+            const uploadFile = async () => {
+                try {
+                    let conversationId = currentConversationId;
+                    if (!conversationId) {
+                        const urlParams = new URLSearchParams(window.location.search);
+                        if (urlParams.has('conversation_id')) {
+                            conversationId = urlParams.get('conversation_id');
                             currentConversationId = conversationId;
-                            
-                            console.log('Created new conversation with ID:', conversationId);
-                            
-                            // Update URL with conversation ID
-                            const url = new URL(window.location);
-                            url.searchParams.set('conversation_id', conversationId);
-                            window.history.pushState({}, '', url);
-                        }
-                        
-                        // Now upload the file with the conversation ID
-                        console.log('%c UPLOADING FILE IMMEDIATELY', 'background: #f50; color: white; font-weight: bold;');
-                        console.log('Using conversation ID for upload:', conversationId);
-                        
-                        const fileResponse = await uploadFileToServer(file, conversationId);
-                        console.log('File uploaded immediately after selection, file_id:', fileResponse.id);
-                        
-                        // Update the indicator to show success
-                        fileAttachmentIndicator.classList.remove('uploading');
-                        fileAttachmentIndicator.classList.add('uploaded');
-                        fileAttachmentIndicator.innerHTML = `
-                            <i class="fas fa-check-circle"></i>
-                            <span>${file.name}</span>
-                            <button type="button" id="remove-file-btn" title="Remove file">
-                                <i class="fas fa-times"></i>
-                            </button>
-                        `;
-                        
-                        // Store the file with the file_id in a global variable
-                        window.attachedFile = {
-                            file: file,
-                            name: file.name,
-                            type: file.type,
-                            size: file.size,
-                            id: fileResponse.id
-                        };
-                        
-                        console.log('Updated window.attachedFile with file_id:', window.attachedFile);
-                        
-                        // Add event listener to remove button
-                        const removeFileBtn = document.getElementById('remove-file-btn');
-                        if (removeFileBtn) {
-                            removeFileBtn.addEventListener('click', (e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                window.attachedFile = null;
-                                fileAttachmentIndicator.remove();
-                            });
-                        }
-                    } catch (error) {
-                        console.error('%c FILE UPLOAD ERROR', 'background: #f00; color: white; font-weight: bold;');
-                        console.error('Error details:', error);
-                        
-                        // Update the indicator to show error
-                        fileAttachmentIndicator.classList.remove('uploading');
-                        fileAttachmentIndicator.classList.add('error');
-                        fileAttachmentIndicator.innerHTML = `
-                            <i class="fas fa-exclamation-circle"></i>
-                            <span>Error: ${file.name}</span>
-                            <button type="button" id="remove-file-btn" title="Remove file">
-                                <i class="fas fa-times"></i>
-                            </button>
-                        `;
-                        
-                        // Still store the file in a global variable, but without file_id
-                        window.attachedFile = fileData;
-                        
-                        // Add event listener to remove button
-                        const removeFileBtn = document.getElementById('remove-file-btn');
-                        if (removeFileBtn) {
-                            removeFileBtn.addEventListener('click', (e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                window.attachedFile = null;
-                                fileAttachmentIndicator.remove();
-                            });
                         }
                     }
-                };
-                
-                // Track the file + the in-flight upload promise on
-                // window.attachedFile BEFORE it resolves. This way sendMessage
-                // can detect that an upload is in progress and await it
-                // instead of sending the message without the file context.
-                window.attachedFile = {
-                    file: file,
-                    name: file.name,
-                    type: file.type,
-                    size: file.size,
-                    id: null,
-                    uploading: true,
-                };
-                const uploadPromise = uploadFile().finally(() => {
-                    if (window.attachedFile && window.attachedFile.file === file) {
-                        window.attachedFile.uploading = false;
+                    // Create a conversation first if none exists yet.
+                    if (!conversationId) {
+                        const csrfToken = getCsrfToken();
+                        const createResponse = await fetch('/api/conversations/', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken, 'X-Requested-With': 'XMLHttpRequest' },
+                            body: JSON.stringify({ project_id: currentProjectId || null })
+                        });
+                        if (!createResponse.ok) throw new Error('Failed to create conversation');
+                        const conversationData = await createResponse.json();
+                        conversationId = conversationData.id;
+                        currentConversationId = conversationId;
+                        const url = new URL(window.location);
+                        url.searchParams.set('conversation_id', conversationId);
+                        window.history.pushState({}, '', url);
                     }
-                    // Re-enable send button once upload settles
+                    const fileResponse = await uploadFileToServer(file, conversationId);
+                    entry.id = fileResponse.id;
+                    renderChip('uploaded', 'fas fa-check-circle', file.name);
+                } catch (error) {
+                    console.error('File upload error:', error);
+                    renderChip('error', 'fas fa-exclamation-circle', 'Error: ' + file.name);
+                }
+            };
+
+            entry.uploadPromise = uploadFile().finally(() => {
+                entry.uploading = false;
+                // Re-enable send once ALL uploads settle.
+                if (!window.attachedFiles.some((f) => f.uploading)) {
                     const sendBtn = document.querySelector('.send-message-btn, .send-button, [type="submit"]');
                     if (sendBtn) sendBtn.disabled = false;
-                });
-                window.attachedFile.uploadPromise = uploadPromise;
+                }
+            });
 
-                // Disable send button while upload is in flight so a fast
-                // user can't fire the message before the file lands.
-                const sendBtnNow = document.querySelector('.send-message-btn, .send-button, [type="submit"]');
-                if (sendBtnNow) sendBtnNow.disabled = true;
-                
-                // Focus on the input so the user can type their message
-                chatInput.focus();
-                
-                // Clear the file input to allow uploading the same file again
+            // Disable send while any upload is in flight so a fast user can't fire before
+            // the file lands.
+            const sendBtnNow = document.querySelector('.send-message-btn, .send-button, [type="submit"]');
+            if (sendBtnNow) sendBtnNow.disabled = true;
+        };
+
+        fileUploadInput.addEventListener('change', (e) => {
+            const picked = Array.from(e.target.files || []);
+            const slots = window.MAX_ATTACHMENTS - window.attachedFiles.length;
+            if (slots <= 0) {
+                alert('You can attach up to ' + window.MAX_ATTACHMENTS + ' files.');
                 fileUploadInput.value = '';
-                
-                // Remove the notification after a short delay
-                setTimeout(() => {
-                    fileInfo.classList.remove('show');
-                    setTimeout(() => fileInfo.remove(), 300);
-                }, 3000);
+                return;
             }
+            picked.slice(0, slots).forEach((f) => window.attachFileToComposer(f));
+            if (picked.length > slots) {
+                alert('Only ' + slots + ' more file(s) could be added (max ' + window.MAX_ATTACHMENTS + ').');
+            }
+            // Clear the input so selecting the same file again still fires `change`.
+            fileUploadInput.value = '';
+            chatInput.focus();
         });
 
         // ── Drag & drop upload ──
@@ -699,12 +615,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
                 e.preventDefault();
                 dragDepth = 0; showOverlay(false);
-                const file = e.dataTransfer.files[0];
+                // Route ALL dropped files through the same multi-attach flow (up to the max).
                 try {
-                    const dt = new DataTransfer();
-                    dt.items.add(file);
-                    fileUploadInput.files = dt.files;
-                    fileUploadInput.dispatchEvent(new Event('change', { bubbles: true }));
+                    Array.from(e.dataTransfer.files).forEach((f) => window.attachFileToComposer && window.attachFileToComposer(f));
                 } catch (err) {
                     console.error('drop upload failed:', err);
                 }
@@ -2944,8 +2857,8 @@ document.addEventListener('DOMContentLoaded', () => {
     async function sendMessage(message) {
         console.log('sendMessage: Starting to send message:', message);
 
-        // Check if we have a message or an attached file
-        if (!message && !window.attachedFile) {
+        // Check if we have a message or any attached file(s)
+        if (!message && !(window.attachedFiles && window.attachedFiles.length)) {
             console.log('No message or file to send');
             return;
         }
@@ -2959,43 +2872,32 @@ document.addEventListener('DOMContentLoaded', () => {
             setTimeout(() => { try { window.PreviewTab && window.PreviewTab.showLogs && window.PreviewTab.showLogs(); } catch (_) {} }, 400);
         }
 
-        // Optimistically render the user bubble RIGHT NOW so they see their
-        // message immediately, even if we're about to wait for an in-flight
-        // upload. Without this the bubble vanishes between click and upload-
-        // settle, which feels like the message got lost. Mark the
-        // attachedFile so the downstream send-paths know NOT to re-render.
+        // Snapshot the attached files up front (composer state is cleared below, so a
+        // second click can't double-send). Each entry may still be uploading; we wait
+        // for all of them so the WS payload carries every file's id.
+        const attachments = (window.attachedFiles || []).slice();
+        const buildFilesData = () => attachments.map((a) => {
+            const fd = { name: a.name, type: a.type, size: a.size };
+            if (a.id) fd.id = a.id;
+            // Image → show it inline immediately (local object URL).
+            if ((a.type || '').startsWith('image/') && a.file) fd.previewUrl = URL.createObjectURL(a.file);
+            return fd;
+        });
+
+        // Optimistically render the user bubble RIGHT NOW (with ALL attachment chips) so
+        // it doesn't vanish between click and upload-settle.
         let alreadyRenderedBubble = false;
-        if (window.attachedFile && window.attachedFile.uploading) {
-            const optimisticFileData = {
-                name: window.attachedFile.name,
-                type: window.attachedFile.type,
-                size: window.attachedFile.size,
-                // Image → show it inline immediately (local object URL).
-                previewUrl: (window.attachedFile.type || '').startsWith('image/') && window.attachedFile.file
-                    ? URL.createObjectURL(window.attachedFile.file) : undefined,
-            };
-            addMessageToChat('user', message, optimisticFileData);
-            window.attachedFile.bubbleRendered = true;
+        if (attachments.length) {
+            addMessageToChat('user', message, buildFilesData());
             alreadyRenderedBubble = true;
         }
 
-        // If there's an attached file whose upload is still in flight, wait
-        // for it. Otherwise the WS payload goes out before we know the file's
-        // id / sandbox path, and the LLM sees the message with no file context.
-        if (window.attachedFile && window.attachedFile.uploading && window.attachedFile.uploadPromise) {
-            console.log('[sendMessage] file upload in progress — waiting for it to finish before sending');
-            const indicator = document.querySelector('.input-file-attachment');
-            if (indicator) {
-                const span = indicator.querySelector('span');
-                if (span) span.textContent = `Waiting for ${window.attachedFile.name} to finish uploading…`;
-            }
-            try {
-                await window.attachedFile.uploadPromise;
-                console.log('[sendMessage] upload settled — proceeding with send');
-            } catch (err) {
-                console.error('[sendMessage] upload failed:', err);
-                // Continue anyway — the message will be sent without file_id
-            }
+        // Wait for any uploads still in flight (otherwise the WS payload goes out before
+        // we know each file's id and the LLM sees the message with no file context).
+        const pendingUploads = attachments.filter((a) => a.uploading && a.uploadPromise);
+        if (pendingUploads.length) {
+            console.log('[sendMessage] waiting for ' + pendingUploads.length + ' upload(s) to finish before sending');
+            try { await Promise.allSettled(pendingUploads.map((a) => a.uploadPromise)); } catch (_) {}
         }
 
         // Reset stop requested flag
@@ -3023,126 +2925,29 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         console.log('Selected role:', userRole);
         
-        // Get file data from the attached file (which may already have a file_id if it was uploaded)
-        let fileData = null;
-        if (window.attachedFile) {
-            console.log('Attached file found:', window.attachedFile);
-            fileData = {
-                name: window.attachedFile.name,
-                type: window.attachedFile.type,
-                size: window.attachedFile.size
-            };
+        // Build the final files payload (ids now resolved after the wait) and clear the
+        // composer's attachment state + chips.
+        const filesData = buildFilesData();
+        window.attachedFiles = [];
+        if (window.syncPrimaryAttachedFile) window.syncPrimaryAttachedFile();
+        const chipsContainer = document.querySelector('.input-file-attachments');
+        if (chipsContainer) chipsContainer.remove();
 
-            // If the file was already uploaded, it will have an id
-            if (window.attachedFile.id) {
-                fileData.id = window.attachedFile.id;
-            }
-            // Image → render an inline thumbnail in the user bubble (local URL).
-            if ((window.attachedFile.type || '').startsWith('image/') && window.attachedFile.file) {
-                fileData.previewUrl = URL.createObjectURL(window.attachedFile.file);
-            }
+        // Render the user bubble if we didn't already do it optimistically.
+        if (!alreadyRenderedBubble) {
+            addMessageToChat('user', message, filesData.length ? filesData : null, userRole);
         }
-        
-        // Store a reference to the attached file and clear the global reference
-        const attachedFile = window.attachedFile;
-        window.attachedFile = null;
-        
-        // Clear the file attachment indicator
-        const fileAttachmentIndicator = document.querySelector('.input-file-attachment');
-        if (fileAttachmentIndicator) {
-            fileAttachmentIndicator.remove();
-        }
-        
-        // If there's an attached file that hasn't been uploaded yet, upload it first
-        if (attachedFile && attachedFile.file && !attachedFile.id) {
-            // Show typing indicator (shows we're doing something)
-            const typingIndicator = document.createElement('div');
-            typingIndicator.className = 'typing-indicator';
-            typingIndicator.innerHTML = '<span></span><span></span><span></span>';
-            messageContainer.appendChild(typingIndicator);
-            console.log('sendMessage: Added typing indicator for file upload');
-            
-            // Disable input while uploading file and waiting for response
-            chatInput.disabled = true;
-            
-            // Check for conversation ID - first in currentConversationId, then in URL
-            let conversationId = currentConversationId;
-            if (!conversationId) {
-                // Try to get it from URL
-                const urlParams = new URLSearchParams(window.location.search);
-                if (urlParams.has('conversation_id')) {
-                    conversationId = urlParams.get('conversation_id');
-                    console.log('Found conversation ID in URL:', conversationId);
-                    // Update current conversation ID
-                    currentConversationId = conversationId;
-                }
-            }
-            
-            if (conversationId) {
-                // If we have a conversation ID from anywhere, upload file first
-                console.log('Uploading file to conversation:', conversationId);
-                uploadFileToServer(attachedFile.file, conversationId)
-                    .then(fileResponse => {
-                        console.log('File uploaded successfully before message, file_id:', fileResponse.id);
 
-                        // Now add the file_id to the file data
-                        fileData.id = fileResponse.id;
-
-                        // Skip re-render if we already rendered optimistically above
-                        if (!alreadyRenderedBubble) {
-                            addMessageToChat('user', message, fileData, userRole);
-                        }
-
-                        // sendMessageToServer handles the agent-mode file-context
-                        // append (works for both upload-on-attach and
-                        // upload-on-send paths). Just pass message through.
-                        sendMessageToServer(message, fileData);
-                    })
-                    .catch(error => {
-                        console.error('Error uploading file before message:', error);
-
-                        // If file upload failed, still send the message without file_id
-                        if (!alreadyRenderedBubble) {
-                            addMessageToChat('user', message, fileData, userRole);
-                        }
-                        sendMessageToServer(message, fileData);
-
-                        // Re-enable input
-                        chatInput.disabled = false;
-                    });
-            } else {
-                // If we still don't have a conversation ID, just send the message with file data
-                console.log('No conversation ID found. Sending message with file data.');
-
-                if (!alreadyRenderedBubble) {
-                    addMessageToChat('user', message, fileData, userRole);
-                }
-
-                // For simplicity, we'll just send message without file_id
-                // The server will need to handle creating both conversation and file
-                sendMessageToServer(message, fileData);
-
-                // Remove typing indicator for file upload
-                const typingIndicator = document.querySelector('.typing-indicator');
-                if (typingIndicator) {
-                    typingIndicator.remove();
-                }
-            }
-        } else {
-            // Either no file is attached, or the file was already uploaded and has a file_id
-
-            // Add user message to chat with file data (including file_id if available)
-            if (!alreadyRenderedBubble) {
-                addMessageToChat('user', message, fileData, userRole);
-            }
-            
-            // Proceed with standard message sending
-            sendMessageToServer(message, fileData);
-        }
+        // Send with all attachments (uploads that errored simply have no id; the backend
+        // ignores those and describes/attaches the ones that uploaded).
+        sendMessageToServer(message, filesData);
     }
     
     // Function to handle the actual WebSocket message sending
-    function sendMessageToServer(message, fileData = null) {
+    function sendMessageToServer(message, filesData = null) {
+        // Accept either an array of files (multi-attach) or a single object (legacy).
+        const filesArr = Array.isArray(filesData) ? filesData.filter(Boolean) : (filesData ? [filesData] : []);
+        const fileData = filesArr[0] || null; // primary — legacy single-file references below
         // Show typing indicator if not already present
         if (!document.querySelector('.typing-indicator')) {
             const typingIndicator = document.createElement('div');
@@ -3187,14 +2992,17 @@ document.addEventListener('DOMContentLoaded', () => {
         // hooking here right before the WS send instead of inside an upload
         // .then() that only the upload-on-send path takes.
         let outgoingMessage = message;
-        if (window.__AGENT_MODE__ && fileData && fileData.name) {
-            const note =
-                `[Attached file: ${fileData.name}` +
-                ` — available in the workspace at /root/data/${fileData.name}` +
-                ` and downloadable from the Data Room.` +
-                ` Read it directly with pandas / openpyxl / etc.]`;
+        if (window.__AGENT_MODE__ && filesArr.length) {
+            const note = filesArr.length === 1
+                ? `[Attached file: ${filesArr[0].name}` +
+                  ` — available in the workspace at /root/data/${filesArr[0].name}` +
+                  ` and downloadable from the Data Room.` +
+                  ` Read it directly with pandas / openpyxl / etc.]`
+                : `[Attached ${filesArr.length} files: ${filesArr.map((f) => f.name).join(', ')}` +
+                  ` — each available in the workspace at /root/data/<name> and downloadable from the Data Room.` +
+                  ` Read them directly with pandas / openpyxl / etc.]`;
             outgoingMessage = (message || "").trim() + (message ? "\n\n" : "") + note;
-            console.log('[agent-mode] appended file-context note to WS payload for', fileData.name);
+            console.log('[agent-mode] appended file-context note to WS payload for', filesArr.map((f) => f.name).join(', '));
         }
 
         // Prepare message data
@@ -3213,8 +3021,10 @@ document.addEventListener('DOMContentLoaded', () => {
             messageData.project_id = currentProjectId;
         }
         
-        // Add file data if provided
-        if (fileData) {
+        // Add file data if provided. Send the full `files` array (backend prefers it) plus
+        // the single `file` for backward compatibility.
+        if (filesArr.length) {
+            messageData.files = filesArr;
             messageData.file = fileData;
         }
         
@@ -3613,36 +3423,44 @@ document.addEventListener('DOMContentLoaded', () => {
             contentDiv.innerHTML = escapedContent;
 
             
-            // Add file attachment indicator if fileData is provided
-            if (fileData) {
-                // Check if it's an audio indicator
-                if (fileData.audioIndicator) {
-                    // For audio messages, replace the entire content
-                    contentDiv.innerHTML = '';
-                    contentDiv.appendChild(fileData.audioIndicator);
-                } else if (fileData.type && fileData.type.startsWith('image/') && (fileData.previewUrl || fileData.url)) {
+            // Add file attachment indicator(s) if fileData is provided. fileData may be a
+            // single object (legacy / audio) OR an array (multi-attach, up to 4).
+            const renderOneFile = (fd) => {
+                if (!fd) return;
+                if (fd.type && fd.type.startsWith('image/') && (fd.previewUrl || fd.url)) {
                     // Image → render an inline thumbnail (like the preview screenshot).
-                    const src = fileData.previewUrl || fileData.url;
+                    const src = fd.previewUrl || fd.url;
                     const link = document.createElement('a');
-                    link.href = fileData.url || src;
+                    link.href = fd.url || src;
                     link.target = '_blank';
                     link.rel = 'noopener';
                     const img = document.createElement('img');
                     img.src = src;
-                    img.alt = fileData.name || 'image';
+                    img.alt = fd.name || 'image';
                     link.appendChild(img);
                     contentDiv.appendChild(document.createElement('br'));
                     contentDiv.appendChild(link);
-                } else if (fileData.name) {
+                } else if (fd.name) {
                     const fileAttachment = document.createElement('div');
                     fileAttachment.className = 'file-attachment';
                     fileAttachment.innerHTML = `
                         <i class="fas fa-paperclip"></i>
-                        <span class="file-name">${fileData.name}</span>
-                        <span class="file-type">${fileData.type}</span>
+                        <span class="file-name">${fd.name}</span>
+                        <span class="file-type">${fd.type}</span>
                     `;
                     contentDiv.appendChild(document.createElement('br'));
                     contentDiv.appendChild(fileAttachment);
+                }
+            };
+            if (fileData) {
+                if (Array.isArray(fileData)) {
+                    fileData.forEach(renderOneFile);
+                } else if (fileData.audioIndicator) {
+                    // For audio messages, replace the entire content
+                    contentDiv.innerHTML = '';
+                    contentDiv.appendChild(fileData.audioIndicator);
+                } else {
+                    renderOneFile(fileData);
                 }
             }
         }
