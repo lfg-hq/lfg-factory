@@ -306,6 +306,29 @@ async function markBuildTasksComplete(ticketId: string): Promise<void> {
   }
 }
 
+/**
+ * Install the LANGUAGE TOOLCHAIN server-side BEFORE the agent runs — the preview already
+ * detected the stack, so a Go/Rust build shouldn't waste minutes mid-run discovering
+ * "X isn't installed" and installing it itself (the isolated build VM is a fresh rootfs
+ * that does NOT inherit the preview VM's toolchain). Go/Rust aren't in the base rootfs;
+ * Node/Python/PHP usually are. Env matches DATA_TOOLCHAIN_ENV so the agent reads the same
+ * GOENV (GOTOOLCHAIN=auto → fetches the exact go.mod version, cached on /data). Best-effort.
+ */
+async function ensureBuildToolchain(workspaceId: string, language: string | undefined, ticketId: string, ownerId: string): Promise<void> {
+  const lang = (language || "").toLowerCase();
+  let install = "";
+  if (/\bgo\b|golang/.test(lang)) {
+    install = "command -v go >/dev/null 2>&1 || apk add --no-cache go gcc musl-dev >/dev/null 2>&1; go env -w GOTOOLCHAIN=auto 2>/dev/null || true; go version 2>/dev/null || echo TOOLCHAIN_FAILED";
+  } else if (/rust|cargo/.test(lang)) {
+    install = "command -v cargo >/dev/null 2>&1 || apk add --no-cache rust cargo gcc musl-dev >/dev/null 2>&1; cargo --version 2>/dev/null || echo TOOLCHAIN_FAILED";
+  }
+  if (!install) return; // node/python/etc. ship in the rootfs — nothing to pre-install
+  await addLog(ticketId, `Preparing the ${lang} toolchain (so the agent doesn't install it mid-build)…`, "command", ownerId).catch(() => {});
+  const env = "export GOENV=/data/.config/go/env GOPATH=/data/go GOMODCACHE=/data/go/pkg/mod GOCACHE=/data/.cache/go-build GOTOOLCHAIN=auto CARGO_HOME=/data/.cargo RUSTUP_HOME=/data/.rustup; mkdir -p /data/.config/go /data/go/pkg/mod /data/.cache /data/.cargo 2>/dev/null || true;";
+  await execOnWorkspace(workspaceId, `${env} ${install}`, { timeout: 240_000 })
+    .catch((e) => console.warn(`[ticket-executor] toolchain prep failed for ${lang}:`, (e as Error).message?.slice(0, 120)));
+}
+
 /** Kill any lingering Pi process in the VM before a resume (frees a thrashing VM's
  *  RAM so the relaunch has room). Best-effort, busybox-safe. */
 async function killPiInVm(workspaceId: string, backgroundPid?: string): Promise<void> {
@@ -2511,6 +2534,9 @@ git branch --show-current
   // Pin the VM awake for the whole build (wakes a reused/slept VM too) so Mags can't
   // idle-sleep a live build → "lost contact". Turned back off at build end.
   await wakeTicketVm(workspaceId);
+  // Install the detected toolchain (Go/Rust) up-front so the agent doesn't burn minutes
+  // discovering + installing it mid-build.
+  await ensureBuildToolchain(workspaceId, savedTechStack?.language, ticketId, ownerId);
 
   const usePi = USE_PI_TICKET_BUILDER && !!provider && isPiSupportedProvider(provider) && !!providerApiKey;
 
