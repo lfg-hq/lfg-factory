@@ -275,7 +275,12 @@ export async function startPiCli(opts: PiRunOptions): Promise<PiRunResult> {
           ...(opts.forward.ticketId ? [`export LFG_TICKET_ID=${JSON.stringify(opts.forward.ticketId)}`] : []),
         ]
       : []),
-    ...Object.entries(opts.envVars ?? {}).filter(([k]) => !PI_UNSAFE_ENV.has(k)).map(([k, v]) => `export ${k}=${JSON.stringify(v)}`),
+    // Skip machine-unsafe keys AND any value that is still ENCRYPTED ("gcm:…") — an
+    // undecrypted secret must never reach the shell (it leaked in once as a bogus
+    // GOTOOLCHAIN="gcm:…" that broke `go`). Better to leave the var unset than corrupt it.
+    ...Object.entries(opts.envVars ?? {})
+      .filter(([k, v]) => !PI_UNSAFE_ENV.has(k) && !(typeof v === "string" && v.startsWith("gcm:")))
+      .map(([k, v]) => `export ${k}=${JSON.stringify(v)}`),
   ].join("\n");
 
   // In-VM forwarder: reads Pi's --mode json stream on stdin, extracts each tool call
@@ -872,9 +877,11 @@ export async function streamPiToCompletion(params: {
     }
     // Lightweight status: alive + done marker + last 4KB tail only (NOT the full file).
     const statusScript = `F=${f}
+SZ=$(wc -c < "$F" 2>/dev/null || echo 0)
+if [ "\${SZ:-0}" -gt 314572800 ]; then tail -c 52428800 "$F" > "$F.trim" 2>/dev/null && cat "$F.trim" > "$F" 2>/dev/null; rm -f "$F.trim" 2>/dev/null; fi
 AL=$(${aliveCheck})
 DN=$(grep -q ___PI_EXIT_CODE "$F" 2>/dev/null && echo yes || echo no)
-TC=$(grep -oE '"type":"(tool_use|tool_call|tool_result)"|"toolName":' "$F" 2>/dev/null | wc -l | tr -d ' ')
+TC=$(grep -oE '"id":"[^"]+"' "$F" 2>/dev/null | sort -u | wc -l | tr -d ' ')
 TL=$(tail -c 4000 "$F" 2>/dev/null | base64 | tr -d '\\n')
 PROC=$(for c in /proc/[0-9]*/cmdline; do tr '\\0' ' ' < "$c" 2>/dev/null; echo; done | grep -Ei '${BUILD_PROC_RE}' | grep -viE 'grep| pi | /pi | tee | node .*forward' | head -1 | cut -c1-60 | base64 | tr -d '\\n')
 printf 'PISTAT AL=%s DN=%s TC=%s\\n' "$AL" "$DN" "\${TC:-0}"
@@ -1033,7 +1040,7 @@ printf 'TL=%s\\n' "$TL"`;
     const analysisScript = `F=${f}
 EXIT=$(grep -o '___PI_EXIT_CODE=[0-9]\\{1,\\}' "$F" 2>/dev/null | tail -1 | grep -o '[0-9]\\{1,\\}')
 SUC=$(grep -qE '"stopReason":"(tool_use|stop|end_turn|tool_calls|length|max_tokens)"' "$F" 2>/dev/null && echo yes || echo no)
-TC=$(grep -oE '"type":"(tool_use|tool_call|tool_result)"|"toolName":' "$F" 2>/dev/null | wc -l | tr -d ' ')
+TC=$(grep -oE '"id":"[^"]+"' "$F" 2>/dev/null | sort -u | wc -l | tr -d ' ')
 ERR=$(grep -o '"errorMessage":"[^"]*"' "$F" 2>/dev/null | tail -1 | base64 | tr -d '\\n')
 TL=$(tail -c 262144 "$F" 2>/dev/null | base64 | tr -d '\\n')
 OOM=$(dmesg 2>/dev/null | grep -iE 'out of memory|oom-kill|killed process' | tail -3 | base64 | tr -d '\\n')
