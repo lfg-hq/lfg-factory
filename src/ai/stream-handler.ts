@@ -369,14 +369,17 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
       setLastUser([{ type: "text", text: userMessage }, ...images.map((x) => ({ type: "image", image: x.bytes, mediaType: x.f.type }))]);
     } else if (images.length) {
       // Text-only model: describe each image via the vision pre-pass and inject the text.
+      // Run ALL describes CONCURRENTLY — a sequential await-in-loop made N images take N×
+      // the Gemini latency (two full-screen screenshots stalled "Thinking…" for ~2 min
+      // before the model even started). Promise.all preserves order, so descriptions stay
+      // aligned with their images.
       ws.send(JSON.stringify({ type: "ai_chunk", chunk: "", is_final: false, is_notification: true, notification_type: "status", message: images.length > 1 ? `Analyzing ${images.length} images…` : "Analyzing image…" }));
-      const descs: string[] = [];
-      for (const x of images) {
+      const descs = await Promise.all(images.map(async (x) => {
         const desc = await analyzeImage(x.bytes, x.f.type || "image/png", userApiKeys);
-        descs.push(desc
+        return desc
           ? `[Attached image "${x.f.name}". The current model can't view images — here is a vision model's description, treat it as ground truth:\n\n${desc}]`
-          : `[The user attached an image "${x.f.name}", but the selected model can't view images and the Google (Gemini) vision pre-pass couldn't run — the Google AI key is missing or was rejected. Tell them to add a valid Google key in Settings → LLM Keys (or switch to a vision-native model) — do NOT guess what the image shows.]`);
-      }
+          : `[The user attached an image "${x.f.name}", but the selected model can't view images and the Google (Gemini) vision pre-pass couldn't run — the Google AI key is missing or was rejected. Tell them to add a valid Google key in Settings → LLM Keys (or switch to a vision-native model) — do NOT guess what the image shows.]`;
+      }));
       setLastUser(`${userMessage}\n\n${descs.join("\n\n")}`);
     }
   }
