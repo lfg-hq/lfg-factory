@@ -142,19 +142,28 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
     // Watchdog: if the model stream HANGS (provider stops responding with no output),
     // handleStream never returns → the finally never runs → isStreaming stays true →
     // every subsequent message is silently dropped and the client's "Thinking…" hangs
-    // forever. Abort the hung generation and tell the client so it can recover. 4 min is
-    // well beyond a normal (even long) reply. Configurable via CHAT_STREAM_TIMEOUT_MIN.
-    const watchdogMs = parseInt(process.env.CHAT_STREAM_TIMEOUT_MIN || "4", 10) * 60_000;
+    // forever. Abort it and tell the client so it can recover.
+    //
+    // IDLE, not fixed-wall-clock: a long-but-ACTIVE agentic run (e.g. mapping a whole
+    // feature = many codebase queries) legitimately runs past a few minutes while
+    // streaming tool calls the whole time. A fixed timer killed those mid-work. So we
+    // fire only after CHAT_STREAM_IDLE_TIMEOUT_MIN with NO output — onActivity (passed to
+    // handleStream) bumps lastActivity on every stream event.
+    const idleMs = parseInt(process.env.CHAT_STREAM_IDLE_TIMEOUT_MIN || process.env.CHAT_STREAM_TIMEOUT_MIN || "4", 10) * 60_000;
     let watchdogFired = false;
-    const watchdog = setTimeout(() => {
+    let lastActivity = Date.now();
+    const bumpActivity = () => { lastActivity = Date.now(); };
+    const watchdog = setInterval(() => {
+      if (Date.now() - lastActivity < idleMs) return; // still producing output — let it run
       watchdogFired = true;
-      console.warn("[chat-handler] stream watchdog fired — aborting a hung generation");
+      console.warn(`[chat-handler] stream watchdog fired — no output for ${Math.round(idleMs / 1000)}s, aborting a hung generation`);
       try { conn.abortController?.abort(); } catch { /* best-effort */ }
       // Reset the guard immediately so a hung provider can't wedge the connection even if
       // the abort doesn't unblock the underlying socket.
       conn.isStreaming = false;
       send(ws, { type: "error", message: "The assistant stopped responding — please try again." });
-    }, watchdogMs);
+      clearInterval(watchdog);
+    }, 15_000);
 
     try {
       // "@preview …" → route to the interactive Preview agent (full control of the
@@ -193,13 +202,14 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
           files: resolvedFiles,
           mentionedTickets,
           abortController: conn.abortController,
+          onActivity: bumpActivity,
         });
 
         // Update connection with resolved conversationId
         conn.conversationId = result.conversationId;
       }
     } finally {
-      clearTimeout(watchdog);
+      clearInterval(watchdog);
       if (!watchdogFired) conn.isStreaming = false;
       conn.abortController = undefined;
     }

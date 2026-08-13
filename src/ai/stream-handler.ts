@@ -137,6 +137,10 @@ export interface StreamRequest {
   /** Tickets referenced via @ticket — their context is injected into the model. */
   mentionedTickets?: Array<{ id: string; key?: string; name?: string; branch?: string }>;
   abortController: AbortController;
+  /** Called on every stream event (chunk / tool call / step) — lets the caller's
+   *  watchdog treat this as an IDLE timer (fires only when the model truly goes
+   *  silent) instead of killing a long-but-active agentic run at a fixed wall clock. */
+  onActivity?: () => void;
 }
 
 // Providers whose configured models can view images directly (multimodal) — these get
@@ -602,6 +606,10 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
 
     for await (const event of result.fullStream) {
       if (abortController.signal.aborted) break;
+      // Proof-of-life for the caller's idle watchdog: every event (text delta, tool
+      // call/step) counts as activity, so a long agentic run (many codebase queries)
+      // isn't mistaken for a hang and aborted mid-work.
+      req.onActivity?.();
 
       switch (event.type) {
 
