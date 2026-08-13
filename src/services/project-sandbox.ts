@@ -191,7 +191,26 @@ export async function ensureProjectSandbox(projectId: string): Promise<{ workspa
   // Resolve the workspace by NAME (findJob), not getJobStatus — the name is
   // long/dashed and getJobStatus would misread it as a request_id.
   const job = await findJob(workspaceId).catch(() => null);
-  const alive = job?.status === "running";
+  let alive = job?.status === "running";
+
+  // PHANTOM-VM guard: Mags can reap the underlying microVM (OOM, disk-full, host
+  // eviction) while leaving the JOB record reporting "running". We'd then "reuse" a VM
+  // that isn't there and every exec fails with "no VM associated with this job" (Docker
+  // won't start, `git fetch` dies → "Could not fetch the repo"). So when the job claims
+  // running, actually PROBE it; if the probe fails, treat it as dead, clear the zombie
+  // job, and fall through to respawn (the persistent /data reattaches).
+  if (alive) {
+    const probe = await execOnWorkspace(workspaceId, "echo __vm_alive__", { timeout: 15_000 })
+      .then((r) => ({ ok: /__vm_alive__/.test(r?.output || ""), detail: r?.output || "" }))
+      .catch((e) => ({ ok: false, detail: (e as Error)?.message || String(e) }));
+    if (!probe.ok) {
+      console.warn(`[project-sandbox] Job ${workspaceId} reports running but exec failed (phantom VM — reaped microVM + zombie job): ${probe.detail.slice(0, 120)}. Forcing respawn.`);
+      alive = false;
+      await stopWorkspace(workspaceId).catch(() => {}); // clear the zombie job before recreate (persistent disk reattaches)
+      await sleep(2000);
+    }
+  }
+
   const recreated = !alive && !!existing?.workspaceId; // had a VM before, it wasn't running → respawn (data persists)
   if (alive) {
     console.log(`[project-sandbox] REUSING running sandbox VM ${workspaceId} for project ${projectId}`);
