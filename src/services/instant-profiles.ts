@@ -131,6 +131,12 @@ Key values for quick reference:
    the default shadcn theme.
 4. For custom components, use the CSS variables: \`hsl(var(--primary))\`, \`hsl(var(--background))\`, etc.
 5. DO NOT invent your own colors. Always reference the token values or CSS variables.
+6. The LFG_DESIGN_TOKENS block in globals.css already ships a correct Tailwind v4
+   \`@theme inline\` mapping (colors are wrapped in hsl()). Color utilities like
+   \`bg-primary\`, \`text-foreground\`, \`bg-accent\`, \`border-border\` ARE wired and valid.
+   Do NOT remove or rewrite that block, and do NOT add a second @theme block that maps
+   \`--color-*: var(--*)\` WITHOUT hsl() — that resolves to invalid colors and makes the
+   app fall back to white/black. Just USE the utilities; don't re-plumb the theme.
 
 ### Mandatory Design Rules
 - EVERY interactive element (buttons, links, cards, inputs) MUST have hover

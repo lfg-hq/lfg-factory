@@ -533,6 +533,43 @@ export function generateTokensCss(tokens: DesignTokens): string {
     --hover-lift: ${tokens.style.hoverLift};
   }
 }
+
+/*
+ * Tailwind v4 @theme mapping. CRITICAL: the tokens above are shadcn-style RAW HSL
+ * triplets ("0 72% 51%"), which are only valid when wrapped in hsl(). A vanilla
+ * create-next-app v4 scaffold maps "--color-primary: var(--primary)" WITHOUT the
+ * hsl() wrap, so every color utility (bg-primary, text-foreground, ...) resolves to
+ * an invalid value, the browser drops it, and the app falls back to white/black —
+ * i.e. "the palette wasn't applied". Because this block is appended LAST, Tailwind
+ * merges it and these hsl()-wrapped mappings win, so the utilities become valid.
+ * (In Tailwind v3 the @theme at-rule is ignored, so this is harmless there.)
+ */
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-success: hsl(var(--success));
+  --color-warning: hsl(var(--warning));
+  --radius: var(--radius);
+  --font-heading: var(--font-heading);
+  --font-body: var(--font-body);
+  --font-mono: var(--font-mono);
+}
 `;
 }
 

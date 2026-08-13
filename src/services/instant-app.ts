@@ -746,10 +746,17 @@ async function ensureSandboxForApp(appId: string, buildProjectType?: string, bui
 async function injectDesignTokensCss(workspaceId: string, globalCssPath: string | undefined): Promise<void> {
   if (!globalCssPath) return;
   const cssPath = `/data/project/${globalCssPath}`;
+  // If we actually CHANGE globals.css (agent rewrote it, or first injection), we MUST
+  // invalidate .next — otherwise ensureDevServerRunning's `[ -d .next ] || npm run build`
+  // serves the stale, broken-CSS bundle and the palette still "isn't applied". When the
+  // block is already correct (unchanged), keep .next so the build stays fast.
   const injectSh = `CSS=${JSON.stringify(cssPath)}
 if [ -f "$CSS" ] && [ -f /data/project/design-tokens.css ]; then
+  BEFORE=$(md5sum "$CSS" 2>/dev/null | cut -d' ' -f1)
   sed -i '/LFG_DESIGN_TOKENS_START/,/LFG_DESIGN_TOKENS_END/d' "$CSS" 2>/dev/null || true
   { echo "/* LFG_DESIGN_TOKENS_START */"; cat /data/project/design-tokens.css; echo "/* LFG_DESIGN_TOKENS_END */"; } >> "$CSS"
+  AFTER=$(md5sum "$CSS" 2>/dev/null | cut -d' ' -f1)
+  if [ "$BEFORE" != "$AFTER" ]; then rm -rf /data/project/.next 2>/dev/null || true; fi
 fi`;
   const injB64 = Buffer.from(injectSh).toString("base64");
   await execOnWorkspace(workspaceId, `echo '${injB64}' | base64 -d | sh`)
@@ -1787,6 +1794,16 @@ Do NOT use TodoWrite. Do NOT edit source files. Just install (if needed), build,
     // User asked to stop mid-build → tear down here, BEFORE starting the server, minting
     // a URL, or pushing to GitHub. The catch below turns this into a clean "stopped".
     if (cancelledBuilds.has(appId)) throw new Error(BUILD_CANCELLED_MARKER);
+
+    // Re-inject the design tokens AFTER the agent ran. The agent routinely rewrites
+    // globals.css (adds shadcn @theme blocks, reorders vars, or drops our block), which
+    // is the #1 cause of "the palette wasn't applied": our tokens.json values are there
+    // but the stylesheet no longer references them, or the Tailwind v4 @theme mapping
+    // resolves raw HSL triplets WITHOUT hsl() → invalid → white/black fallback.
+    // generateTokensCss now emits its own hsl()-wrapped @theme inline block; re-appending
+    // it here (idempotent, marker-guarded, LAST) guarantees it wins over whatever the
+    // agent wrote, BEFORE ensureDevServerRunning compiles the CSS.
+    await injectDesignTokensCss(workspaceId, profile.globalCssPath);
 
     // Make sure the dev server is actually running and SURVIVES (the agent's own
     // background start often gets reaped → "built ok but 500"). Restart it robustly.
