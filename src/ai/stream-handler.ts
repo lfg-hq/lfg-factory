@@ -8,7 +8,7 @@ import { projects } from "../db/schema/projects.ts";
 import { projectFiles } from "../db/schema/documents.ts";
 import { projectTickets, ticketLogs, ticketAddenda } from "../db/schema/tickets.ts";
 import { eq, and, desc, inArray } from "drizzle-orm";
-import { getModel, getModelWithSearch, getProviderName, getLiteModel, DEFAULT_MODEL_KEY } from "./provider.ts";
+import { getModel, getModelWithSearch, getProviderName, getLiteModel, getGoogleVisionModel, DEFAULT_MODEL_KEY } from "./provider.ts";
 import { withCaching } from "./prompt-cache.ts";
 import { toolsProduct, toolsTurbo } from "./tools/index.ts";
 import { createInstantTools } from "./tools/instant-tools.ts";
@@ -184,13 +184,16 @@ async function buildTicketMentionContext(ticketIds: string[]): Promise<string> {
 /** Describe an image using whatever vision-capable key the user has. Returns the
  *  text description, or null if no vision model is available / it fails. */
 async function analyzeImage(bytes: Uint8Array, mediaType: string, userApiKeys: any): Promise<string | null> {
-  for (const provider of ["openai", "google", "anthropic"]) {
-    // Use the user's vision key if they have one, else fall back to the SERVER's
-    // env key (allowEnvFallback). getModel throws only if NEITHER exists for this
-    // provider → catch + try the next. This is what makes the DeepSeek (text-only)
-    // vision pre-pass work on prod where the user has no personal vision key.
+  // Google FIRST: it's the cheapest vision model and uses a STABLE Gemini id (the others
+  // route through the registry, whose Google entry is a preview a key may lack access to).
+  // Then openai/anthropic as fallbacks. Use the user's vision key if present, else the
+  // SERVER env key (allowEnvFallback). getModel throws only if NEITHER exists → catch +
+  // try the next; this is what makes the text-only (DeepSeek/Kimi) pre-pass work.
+  for (const provider of ["google", "openai", "anthropic"]) {
     try {
-      const model = getModel(VISION_MODEL[provider]!, userApiKeys, { allowEnvFallback: true });
+      const model = provider === "google"
+        ? getGoogleVisionModel(userApiKeys, { allowEnvFallback: true })
+        : getModel(VISION_MODEL[provider]!, userApiKeys, { allowEnvFallback: true });
       const { text } = await generateText({
         model,
         messages: [{

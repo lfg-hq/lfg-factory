@@ -75,6 +75,7 @@ env:
     - TICKET_DEMO
     - LFG_PREVIEW_COOKIE_NAME
     - LFG_PREVIEW_SECRET
+    - GOOGLE_AI_API_KEY
 
 registry:
   server: docker.io

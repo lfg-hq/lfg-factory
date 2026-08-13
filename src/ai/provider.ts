@@ -236,6 +236,24 @@ export function getModel(
   }
 }
 
+/**
+ * Cheap, STABLE Gemini model for the text-only-model vision pre-pass (image → text).
+ * Deliberately NOT the user-facing registry entry: every registered Google model points
+ * at a PREVIEW id (e.g. gemini_2.5_flash_lite → models/gemini-3.1-flash-lite-preview) that
+ * a given API key may not be allowlisted for — which would fail the describe with a
+ * model-not-found even when the key is perfectly valid. gemini-2.5-flash-lite is GA,
+ * multimodal, and the cheapest option, so it's the reliable choice for the pre-pass.
+ */
+export function getGoogleVisionModel(
+  userApiKeys?: { google?: string },
+  { allowEnvFallback = false }: { allowEnvFallback?: boolean } = {}
+): LanguageModel {
+  const apiKey = userApiKeys?.google || (allowEnvFallback ? env.GOOGLE_AI_API_KEY : "");
+  if (!apiKey) throw new Error("No Google AI API key configured. Please add your API key in Settings → LLM Keys to use this model.");
+  const google = createGoogleGenerativeAI({ apiKey, fetch: llmFetch });
+  return google("gemini-2.5-flash-lite");
+}
+
 /** Get the provider name for a given model key */
 export function getProviderName(modelKey: string): ProviderName | null {
   return modelIndex.get(resolveModelKey(modelKey))?.provider ?? null;
