@@ -671,10 +671,12 @@ async function healBrokenAssets(
   return null;
 }
 
-/** Post the launch summary into the main chat (persist if a conversation is known). */
-async function publishSummary(userId: string, conversationId: string | null | undefined, content: string): Promise<void> {
+/** Post the launch summary into the main chat (persist if a conversation is known).
+ *  MUST carry conversation_id + project_id so the client can scope it to the right chat —
+ *  without them a Kitereach summary leaked into whatever project's chat was open. */
+async function publishSummary(userId: string, conversationId: string | null | undefined, content: string, publicProjectId?: string): Promise<void> {
   if (conversationId) await db.insert(messages).values({ conversationId, role: "assistant", content }).catch(() => {});
-  broadcastToUser(userId, { type: "message", sender: "assistant", message: content, conversation_id: conversationId ?? undefined });
+  broadcastToUser(userId, { type: "message", sender: "assistant", message: content, conversation_id: conversationId ?? undefined, project_id: publicProjectId });
 }
 
 /** Run the asset check and log a clear warning listing any broken/mixed-content assets. */
@@ -1943,6 +1945,7 @@ fi`, 240_000);
         opts.conversationId,
         `🔑 **Set these in the Environment tab, then Restart** for full functionality:\n` +
           envSync.needsInput.map((n) => `- \`${n.key}\`${n.description ? ` — ${n.description}` : ""}`).join("\n"),
+        pub(projectId),
       ).catch(() => {});
     }
 
@@ -1973,7 +1976,7 @@ fi`, 240_000);
             plog(projectId, userId, `Using your provided ${dbSpec.connectionEnvVar} — skipping ${dbSpec.engine} provisioning.`);
           } else {
             plog(projectId, userId, `DB mode is "Use my DB" but ${dbSpec.connectionEnvVar} isn't set — set it in the Environment tab + Restart.`, { level: "error" });
-            await publishSummary(userId, opts.conversationId, `⚠️ **DB mode is "Use my DB"** but \`${dbSpec.connectionEnvVar}\` isn't set. Add it in the Environment tab and Restart — or switch DB mode to "Always provision".`).catch(() => {});
+            await publishSummary(userId, opts.conversationId, `⚠️ **DB mode is "Use my DB"** but \`${dbSpec.connectionEnvVar}\` isn't set. Add it in the Environment tab and Restart — or switch DB mode to "Always provision".`, pub(projectId)).catch(() => {});
           }
           continue;
         }
@@ -2093,11 +2096,11 @@ fi`, 240_000);
     // Post-run verification (URL + assets + DB) → publish the launch summary to chat.
     const vManifest = effectivePort === manifest.port ? manifest : { ...manifest, port: effectivePort };
     const v = await verifyPreview(projectId, userId, workspaceId, vManifest, branch || "(default)").catch(() => null);
-    if (v) await publishSummary(userId, opts.conversationId, `${v.summary}\n\n🔗 ${previewUrl}`).catch(() => {});
+    if (v) await publishSummary(userId, opts.conversationId, `${v.summary}\n\n🔗 ${previewUrl}`, pub(projectId)).catch(() => {});
     // Self-heal broken assets via the agent (opt-in through directives), then re-summarize.
     if (v?.broken?.length) {
       const healed = await healBrokenAssets(projectId, userId, opts.conversationId, workspaceId, vManifest, branch || "(default)", v.broken).catch(() => null);
-      if (healed) await publishSummary(userId, opts.conversationId, `${healed.summary}\n\n🔗 ${previewUrl}`).catch(() => {});
+      if (healed) await publishSummary(userId, opts.conversationId, `${healed.summary}\n\n🔗 ${previewUrl}`, pub(projectId)).catch(() => {});
     }
     return { previewUrl };
   } catch (err) {
@@ -2483,21 +2486,36 @@ test -e "${runDir}/.git" && echo "WT_OK $(git -C "${runDir}" log -1 --oneline 2>
         await sh(workspaceId, `cp ${PROJECT_DIR}/.env ${runDir}/.env 2>/dev/null || true; echo env`, 20_000);
       }
     } else {
-      // Default branch. In CHECKOUT mode the main checkout may currently be on a
-      // ticket branch (from a prior branch preview) — switch it back to the default.
-      if (checkoutMode) {
-        plog(projectId, userId, "Ensuring the main checkout is on the default branch…");
-        await sh(workspaceId, `
-cd ${PROJECT_DIR} 2>/dev/null || exit 0
+      // Default branch — ALWAYS fetch + hard-sync the main checkout to the LATEST pushed
+      // default branch before building, so switching back to default (or a restart) picks
+      // up new commits instead of rebuilding a stale checkout (the ticket/worktree path
+      // already hard-syncs; default lagged behind). Local uncommitted changes are stashed
+      // first (recoverable), then we reset to origin; saved config patches + env are
+      // re-applied below, exactly like the worktree path.
+      const authRes = await resolveAuthedRepoUrl(projectId).catch(() => null);
+      const authUrl = authRes && "authUrl" in authRes ? authRes.authUrl : null;
+      await setPreview(projectId, userId, { previewStatus: "starting", previewBranch: "(default)" }, "Pulling the latest default branch…");
+      plog(projectId, userId, "Syncing the default branch to the latest pushed commit…");
+      const sync = await sh(workspaceId, `
+cd ${PROJECT_DIR} 2>/dev/null || { echo NO_MAIN; exit 0; }
+${authUrl ? `git remote set-url origin "${authUrl}" 2>/dev/null` : ""}
 fuser -k ${manifest.port}/tcp 2>/dev/null; pkill -f ':${manifest.port}' 2>/dev/null; sleep 1
 git stash push -m lfg-preview-autostash 2>&1 | tail -1
+git fetch --no-tags --force origin 2>&1 | tail -2
 git remote set-head origin -a >/dev/null 2>&1
 DEF=$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null | sed 's@^origin/@@'); [ -z "$DEF" ] && DEF=main
-git checkout "$DEF" 2>&1 | tail -2 || git checkout master 2>&1 | tail -2
-echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
-`, 120_000);
+git checkout -B "$DEF" "origin/$DEF" 2>&1 | tail -2 || git checkout "$DEF" 2>&1 | tail -2
+git reset --hard "origin/$DEF" 2>&1 | tail -1
+git clean -fd 2>&1 | tail -1
+rm -rf ${PROJECT_DIR}/bin ${PROJECT_DIR}/obj ${PROJECT_DIR}/*/bin ${PROJECT_DIR}/*/obj ${PROJECT_DIR}/*/*/bin ${PROJECT_DIR}/*/*/obj 2>/dev/null || true
+echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) $(git log -1 --oneline 2>/dev/null)"
+`, 240_000);
+      if (sync.output.includes("NO_MAIN")) {
+        plog(projectId, userId, "No base checkout yet — the full setup will clone it.");
+      } else {
+        const head = sync.output.match(/HEAD=(.+)/)?.[1]?.trim();
+        plog(projectId, userId, `Default branch synced to latest ✓${head ? ` (${head})` : ""}`);
       }
-      plog(projectId, userId, "Restarting the app server (default branch)…");
     }
     await setStep("locate", "done");
 
@@ -2619,11 +2637,11 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
     // Post-run verification (URL + assets + DB) → publish the launch summary to chat.
     const vManifest = effectivePort === manifest.port ? manifest : { ...manifest, port: effectivePort };
     const v = await verifyPreview(projectId, userId, workspaceId, vManifest, branchLabel).catch(() => null);
-    if (v) await publishSummary(userId, opts.conversationId, `${v.summary}\n\n🔗 ${previewUrl}`).catch(() => {});
+    if (v) await publishSummary(userId, opts.conversationId, `${v.summary}\n\n🔗 ${previewUrl}`, pub(projectId)).catch(() => {});
     // Self-heal broken assets via the agent (opt-in through directives), then re-summarize.
     if (v?.broken?.length) {
       const healed = await healBrokenAssets(projectId, userId, opts.conversationId, workspaceId, vManifest, branchLabel, v.broken).catch(() => null);
-      if (healed) await publishSummary(userId, opts.conversationId, `${healed.summary}\n\n🔗 ${previewUrl}`).catch(() => {});
+      if (healed) await publishSummary(userId, opts.conversationId, `${healed.summary}\n\n🔗 ${previewUrl}`, pub(projectId)).catch(() => {});
     }
     return { previewUrl };
   } catch (err) {

@@ -1178,6 +1178,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     break;
 
                 case 'message':
+                    // Scope guard: a complete message (e.g. a preview launch summary) is
+                    // broadcast to ALL of the user's connections. Only render it if it
+                    // belongs to THIS project/conversation — otherwise a preview summary
+                    // for another project (e.g. Kitereach) leaked into the open chat.
+                    if (data.project_id && currentProjectId && data.project_id !== currentProjectId) break;
+                    if (data.conversation_id && currentConversationId && data.conversation_id !== currentConversationId) break;
                     // Handle complete message
                     addMessageToChat(data.sender, data.message);
                     scrollToBottom(true); // Force scroll for complete messages
