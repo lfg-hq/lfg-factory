@@ -1051,9 +1051,15 @@ async function executeRunbook(
  *  the SAME environment the main-branch run used (`dir` selects which checkout). */
 function envPrefix(dir: string = PROJECT_DIR): string {
   return `mkdir -p /data/.apk-cache; ln -sf /data/.apk-cache /etc/apk/cache 2>/dev/null || true; ` +
-    `export PATH="/data/.dotnet:/data/.dotnet/tools:/root/.dotnet/tools:/usr/local/bin:/usr/bin:/bin:/sbin:$PATH"; ` +
+    // Go + .NET toolchains and ALL their caches live on the PERSISTENT /data volume (NOT
+    // the ephemeral root fs), so `go`/`dotnet` and the module/build caches survive a VM
+    // sleep/respawn and branch previews don't hit "go: not found". /data/go-toolchain is
+    // installed by ensureGoToolchainOnData.
+    `export PATH="/data/go-toolchain/bin:/data/go/bin:/data/.dotnet:/data/.dotnet/tools:/root/.dotnet/tools:/usr/local/bin:/usr/bin:/bin:/sbin:$PATH"; ` +
     `export DOTNET_ROOT=/data/.dotnet DOTNET_CLI_HOME=/data/.dotnet NUGET_PACKAGES=/data/.nuget ` +
-    `DOTNET_NOLOGO=1 DOTNET_CLI_TELEMETRY_OPTOUT=1 TMPDIR=/data/tmp; mkdir -p /data/tmp; ` +
+    `DOTNET_NOLOGO=1 DOTNET_CLI_TELEMETRY_OPTOUT=1 ` +
+    `GOROOT=/data/go-toolchain GOPATH=/data/go GOMODCACHE=/data/go/pkg/mod GOCACHE=/data/.cache/go-build GOENV=/data/.config/go/env GOTOOLCHAIN=auto ` +
+    `TMPDIR=/data/tmp; mkdir -p /data/tmp /data/go /data/.cache/go-build /data/.config/go; ` +
     `cd ${dir} 2>/dev/null; set -a; [ -f ./.env ] && . ./.env; set +a; `;
 }
 
@@ -1067,13 +1073,42 @@ function envPrefix(dir: string = PROJECT_DIR): string {
  *  already persist — re-running them would needlessly re-download. This is how a branch
  *  preview reliably inherits main's warmth. */
 async function ensureApkToolchain(projectId: string, userId: string, workspaceId: string, manifest: PreviewManifest, runDir: string): Promise<void> {
-  const apkSteps = (manifest.toolchain || []).filter((c) => /\bapk\s+add\b/.test(c));
-  if (!apkSteps.length) return;
-  for (const raw of apkSteps) {
-    // Drop --no-cache so the reinstall can pull from the persistent /data package cache.
-    const cmd = raw.replace(/\s--no-cache\b/g, "");
+  const apkSteps = (manifest.toolchain || []).filter((c) => /\bapk\s+add\b/.test(c))
+    // Go itself goes on /data via ensureGoToolchainOnData (NOT apk → root fs). Strip a
+    // bare `go` package from any apk step so we don't reinstall it to the ephemeral fs;
+    // keep the C toolchain (gcc/musl-dev) which apk owns.
+    .map((c) => c.replace(/\s--no-cache\b/g, "").replace(/(\bapk\s+add\b[^\n]*?)\bgo\b/g, "$1").replace(/\s{2,}/g, " ").trim())
+    .filter((c) => /\bapk\s+add\b\s+\S/.test(c)); // drop steps that became just "apk add"
+  for (const cmd of apkSteps) {
     await runDetachedPolled(projectId, userId, workspaceId, cmd, 600_000, { stallMs: 180_000, workDir: runDir }).catch(() => {});
   }
+}
+
+/** Install the Go toolchain onto the PERSISTENT /data volume (NOT apk → ephemeral root
+ *  fs), so `go` survives a VM sleep/respawn and branch previews never hit "go: not
+ *  found". The official linux-amd64 tarball's binaries are statically linked and run on
+ *  Alpine/musl. Version comes from go.mod (GOTOOLCHAIN=auto then fetches a newer one to
+ *  /data if the module needs it). No-op for non-Go apps or when already installed. */
+async function ensureGoToolchainOnData(projectId: string, userId: string, workspaceId: string, manifest: PreviewManifest, runDir: string): Promise<void> {
+  const isGo = /\bgo(lang)?\b/i.test(`${manifest.runtime} ${manifest.stack} ${manifest.framework}`)
+    || /\bgo\s+(build|run|mod|install)\b/i.test(manifest.buildCmd || "")
+    || (manifest.toolchain || []).some((c) => /\bapk\s+add\b[^\n]*\bgo\b/.test(c));
+  if (!isGo) return;
+  // Static, idempotent installer: default to a recent Go, override from go.mod, extract to
+  // /data/go-toolchain. GOTOOLCHAIN=auto (envPrefix) then pulls the exact version go.mod
+  // wants into /data/go/pkg/mod if it differs — also persistent.
+  const script =
+    `if [ ! -x /data/go-toolchain/bin/go ]; then ` +
+    `GOVER=$(grep -oE '^go [0-9]+(\\.[0-9]+){1,2}' ${runDir}/go.mod 2>/dev/null | awk '{print $2}'); ` +
+    `[ -z "$GOVER" ] && GOVER=1.24.0; ` +
+    `case "$GOVER" in *.*.*) : ;; *) GOVER="$GOVER.0" ;; esac; ` +
+    `mkdir -p /data/tmp /data/go-toolchain; ` +
+    `echo "Installing Go $GOVER to /data/go-toolchain (persistent)..."; ` +
+    `curl -sSL "https://go.dev/dl/go$GOVER.linux-amd64.tar.gz" -o /data/tmp/go.tgz && ` +
+    `tar -xzf /data/tmp/go.tgz -C /data/go-toolchain --strip-components=1 && rm -f /data/tmp/go.tgz; ` +
+    `fi; ` +
+    `/data/go-toolchain/bin/go version 2>&1 | head -1 || echo GO_TOOLCHAIN_MISSING`;
+  await runDetachedPolled(projectId, userId, workspaceId, script, 600_000, { stallMs: 240_000, workDir: runDir }).catch(() => {});
 }
 
 // ── Read-only preview inspection (for the normal product/Analyst chat agent) ──
@@ -2501,9 +2536,11 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
     let up = false;
     let buildFailed = false;
     if (compiled && manifest.buildCmd) {
-      // Make sure the apk toolchain (gcc/musl-dev/SDK) is present BEFORE the recorded
-      // build — a root-fs reset between the main run and this branch run drops it, and
-      // the build would otherwise fail "gcc not found" and bounce to the driver.
+      // Make sure the toolchain is present BEFORE the recorded build — a root-fs reset
+      // between the main run and this branch run drops apk-installed tools, and the build
+      // would otherwise fail "go/gcc not found" and bounce to the driver. Go is installed
+      // to PERSISTENT /data; gcc/musl-dev come back from the /data apk cache.
+      await ensureGoToolchainOnData(projectId, userId, workspaceId, manifest, runDir);
       await ensureApkToolchain(projectId, userId, workspaceId, manifest, runDir);
       // Localize any hardcoded /data/project paths in the recorded build to THIS run
       // dir, so a branch worktree build acts on the worktree (not on main's files).
