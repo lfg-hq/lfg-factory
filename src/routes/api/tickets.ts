@@ -825,6 +825,58 @@ ticketsApi.get("/:projectId/tickets/:ticketId/git/diff", async (c) => {
   return c.json(await getTicketDiff(access.project.id, ticketId, base));
 });
 
+/** Resolve the ticket's dedicated sandbox VM (most recent), or null. */
+async function ticketWorkspace(ticketId: string): Promise<string | null> {
+  const [sb] = await db
+    .select({ ws: sandboxes.magsWorkspaceId })
+    .from(sandboxes)
+    .where(eq(sandboxes.ticketId, ticketId))
+    .orderBy(desc(sandboxes.updatedAt))
+    .limit(1);
+  return sb?.ws && !sb.ws.startsWith("pv-") ? sb.ws : (sb?.ws ?? null);
+}
+
+// ── GET /:projectId/tickets/:ticketId/pi-output ─────────────────────
+// Download the RAW Pi JSONL stream (/data/.pi/pi_output_*.jsonl) from the ticket's
+// sandbox — gzipped (it can be tens of MB). Files are auto-cleaned ~30min after a run.
+ticketsApi.get("/:projectId/tickets/:ticketId/pi-output", async (c) => {
+  const user = c.get("user");
+  const { projectId, ticketId } = c.req.param();
+  const access = await getProjectAccess(projectId, user.id);
+  if (!access) return c.json({ error: "Not found" }, 404);
+  const ws = await ticketWorkspace(ticketId!);
+  if (!ws) return c.json({ error: "No sandbox for this ticket (it may have been cleaned up)." }, 404);
+  const { execOnWorkspace } = await import("../../services/mags.ts");
+  const script = `f=$(ls -t /data/.pi/pi_output_*.jsonl 2>/dev/null | head -1); if [ -n "$f" ]; then gzip -c "$f" | base64 | tr -d '\\n'; else echo NO_FILE; fi`;
+  const r = await execOnWorkspace(ws, script, { timeout: 90_000 }).catch(() => ({ output: "" } as { output: string }));
+  const out = (r.output || "").trim();
+  if (!out || out === "NO_FILE") return c.json({ error: "No Pi output file found. Pi's files are auto-deleted ~30min after a build — download during or right after a run." }, 404);
+  return c.body(Buffer.from(out, "base64"), 200, {
+    "Content-Type": "application/gzip",
+    "Content-Disposition": `attachment; filename="pi_output_${ticketId!.slice(0, 8)}.jsonl.gz"`,
+  });
+});
+
+// ── GET /:projectId/tickets/:ticketId/pi-prompt ─────────────────────
+// Download the exact composite prompt we sent Pi (/data/.pi/pi_prompt_*.txt).
+ticketsApi.get("/:projectId/tickets/:ticketId/pi-prompt", async (c) => {
+  const user = c.get("user");
+  const { projectId, ticketId } = c.req.param();
+  const access = await getProjectAccess(projectId, user.id);
+  if (!access) return c.json({ error: "Not found" }, 404);
+  const ws = await ticketWorkspace(ticketId!);
+  if (!ws) return c.json({ error: "No sandbox for this ticket (it may have been cleaned up)." }, 404);
+  const { execOnWorkspace } = await import("../../services/mags.ts");
+  const script = `f=$(ls -t /data/.pi/pi_prompt_*.txt 2>/dev/null | head -1); if [ -n "$f" ]; then cat "$f"; else echo NO_FILE; fi`;
+  const r = await execOnWorkspace(ws, script, { timeout: 30_000 }).catch(() => ({ output: "" } as { output: string }));
+  const out = r.output || "";
+  if (!out.trim() || out.trim() === "NO_FILE") return c.json({ error: "No Pi prompt file found. Pi's files are auto-deleted ~30min after a build — download during or right after a run." }, 404);
+  return c.body(out, 200, {
+    "Content-Type": "text/plain; charset=utf-8",
+    "Content-Disposition": `attachment; filename="pi_prompt_${ticketId!.slice(0, 8)}.txt"`,
+  });
+});
+
 // ── POST /:projectId/tickets/:ticketId/git/create-pr ────────────────
 // Create a GitHub PR for the ticket's feature branch
 

@@ -497,6 +497,12 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
             <button class="drawer-more-item" onclick="clearTicketLogs()">
               <i class="fas fa-eraser"></i> Clear run logs
             </button>
+            <button class="drawer-more-item" onclick="downloadPiOutput()">
+              <i class="fas fa-download"></i> Download Pi output (.jsonl.gz)
+            </button>
+            <button class="drawer-more-item" onclick="downloadPiPrompt()">
+              <i class="fas fa-download"></i> Download prompt sent to Pi
+            </button>
             <button class="drawer-more-item drawer-more-item--danger" onclick="deleteCurrentTicket()">
               <i class="fas fa-trash"></i> Delete Ticket
             </button>
@@ -1995,6 +2001,19 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       document.getElementById('drawer-more-dropdown')?.classList.remove('open');
     }
   });
+
+  // Download the raw Pi JSONL stream / the exact composite prompt from the ticket's
+  // sandbox (Pi's files live at /data/.pi and are auto-cleaned ~30min after a run).
+  function downloadPiOutput() {
+    document.getElementById('drawer-more-dropdown')?.classList.remove('open');
+    if (!_currentTicketId) return;
+    window.open('/api/projects/' + PROJECT_ID + '/tickets/' + _currentTicketId + '/pi-output', '_blank');
+  }
+  function downloadPiPrompt() {
+    document.getElementById('drawer-more-dropdown')?.classList.remove('open');
+    if (!_currentTicketId) return;
+    window.open('/api/projects/' + PROJECT_ID + '/tickets/' + _currentTicketId + '/pi-prompt', '_blank');
+  }
 
   function shareCurrentTicket() {
     if (!_currentTicketId) return;
