@@ -114,8 +114,9 @@
       btn.className = "comment-float-btn";
       btn.innerHTML = '<i class="fas fa-comment"></i> Comment';
       btn.style.position = "fixed";
-      btn.style.left = rect.left + rect.width / 2 - 50 + "px";
-      btn.style.top = rect.top - 40 + "px";
+      btn.style.left = Math.max(10, Math.min(rect.left + rect.width / 2 - 50, window.innerWidth - 110)) + "px";
+      // Prefer above the selection; if that's off the top of the viewport, drop below it.
+      btn.style.top = (rect.top - 40 >= 10 ? rect.top - 40 : rect.bottom + 8) + "px";
       btn.style.zIndex = "9999";
 
       btn.addEventListener("click", function () {
@@ -164,6 +165,25 @@
       '</div>';
 
     document.body.appendChild(popover);
+
+    // Keep the popover fully within the viewport. It's position:fixed at the selection's
+    // bottom edge — a selection near the bottom of the page put it BELOW the fold, and
+    // since it's fixed you can't scroll to it. Measure after append, then flip it ABOVE
+    // the selection (or clamp) so it's always reachable. Also clamp horizontally.
+    (function clampIntoViewport() {
+      var margin = 10;
+      var pr = popover.getBoundingClientRect();
+      var vw = window.innerWidth, vh = window.innerHeight;
+      var top = rect.bottom + 8;
+      if (top + pr.height + margin > vh) {
+        var above = rect.top - pr.height - 8;
+        top = above >= margin ? above : Math.max(margin, vh - pr.height - margin);
+      }
+      var left = Math.max(margin, rect.left);
+      if (left + pr.width + margin > vw) left = Math.max(margin, vw - pr.width - margin);
+      popover.style.top = top + "px";
+      popover.style.left = left + "px";
+    })();
 
     var textarea = document.getElementById("comment-input-text");
     textarea.focus();
