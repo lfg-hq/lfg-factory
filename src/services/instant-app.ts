@@ -426,7 +426,7 @@ async function handleQaIssues(params: {
     `Make the data actually load (use mock/seed data if no external API/key is available — never leave it ` +
     `showing an error state). Do NOT rewrite or re-scaffold the whole app; make the smallest change that fixes the error. ` +
     `Then rebuild and restart:\n` +
-    `  cd /data/project && npm run build && (pkill -f 'next start' 2>/dev/null || true) && nohup npm start --hostname 0.0.0.0 -p 8080 > dev.log 2>&1 &\n` +
+    `  cd /data/project && npm run build && (pkill -f 'next start' 2>/dev/null || true) && nohup npm start -- -H 0.0.0.0 -p 8080 > dev.log 2>&1 &\n` +
     `Then wait 3 seconds and verify with: curl -s http://localhost:8080/ || true`;
 
   void runInstantBuild(appDbId, fixPrompt);
@@ -830,7 +830,7 @@ async function ensureDevServerRunning(workspaceId: string, projectType: string):
     ? ".venv/bin/python app.py"
     : isVite
       ? "npm run dev -- --host 0.0.0.0 --port 8080"
-      : "npm start --hostname 0.0.0.0 -p 8080";
+      : "npm start -- -H 0.0.0.0 -p 8080";
   const buildStep = isPython || isVite ? "" : "[ -d .next ] || npm run build > build.log 2>&1";
   const script = `
 export PATH=/data/project/.venv/bin:/root/node/current/bin:/root/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:$PATH
@@ -1473,7 +1473,7 @@ Your ONLY job: get it running on 0.0.0.0:8080.
 2. cd /data/project
 3. If there is no node_modules, run: npm install
 4. Build + start using the project's scripts, bound to 0.0.0.0:8080, detached with nohup → dev.log
-   (Next.js: npm run build && nohup npm start --hostname 0.0.0.0 -p 8080 > dev.log 2>&1 & ;
+   (Next.js: npm run build && nohup npm start -- -H 0.0.0.0 -p 8080 > dev.log 2>&1 & ;
     Vite: nohup npm run dev -- --host 0.0.0.0 --port 8080 > dev.log 2>&1 &)
 5. Verify: sleep 3 && curl -s http://localhost:8080/ || true
 Do NOT use TodoWrite. Do NOT edit source files. Just install (if needed), build, and start.`
@@ -1869,7 +1869,7 @@ Loop until the server responds:
 1. Read the REAL error: \`cat /data/project/dev.log | tail -80\` (and build.log if it exists). Identify the actual cause — a runtime crash, a bad import, a wrong host/port, a missing dep, a build error, etc.
 2. Make the SPECIFIC fix in the code/config for that error.
 3. Rebuild + restart exactly ONE detached instance:
-   cd /data/project && npm run build > build.log 2>&1 && (fuser -k 8080/tcp 2>/dev/null; pkill -f 'next start' 2>/dev/null; true) && sleep 1 && setsid npm start --hostname 0.0.0.0 -p 8080 > dev.log 2>&1 &
+   cd /data/project && npm run build > build.log 2>&1 && (fuser -k 8080/tcp 2>/dev/null; pkill -f 'next start' 2>/dev/null; true) && sleep 1 && setsid npm start -- -H 0.0.0.0 -p 8080 > dev.log 2>&1 &
 4. Verify: \`sleep 4 && curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/\` — any code 200–599 means it is UP.
 5. If it is STILL not up, go back to step 1 with the NEW dev.log error and try again. REPEAT until curl returns a real HTTP code.
 Only stop when it is genuinely serving, or (after exhausting real fixes) explain the exact blocker in one line.`;
@@ -2808,7 +2808,7 @@ export async function getInstantAppStatus(params: {
 
   if (params.restartServer) {
     const rebuildCmd =
-      "cd /data/project && (pkill -f 'next start' 2>/dev/null || true) && npm run build && nohup npm start --hostname 0.0.0.0 -p 8080 > dev.log 2>&1 &";
+      "cd /data/project && (pkill -f 'next start' 2>/dev/null || true) && npm run build && nohup npm start -- -H 0.0.0.0 -p 8080 > dev.log 2>&1 &";
     await execOnWorkspace(sandbox.magsWorkspaceId, rebuildCmd, { timeout: 180_000 });
     await sleep(3_000);
   }

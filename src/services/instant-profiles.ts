@@ -165,7 +165,7 @@ This sandbox has LIMITED memory (~2GB). Builds WILL get OOM-killed if you are no
 pkill -9 -f "next" 2>/dev/null; pkill -9 -f "node" 2>/dev/null; sleep 1
 rm -rf .next
 export NODE_OPTIONS="--max-old-space-size=1536"
-npm run build 2>&1 && nohup npm start --hostname 0.0.0.0 -p 8080 > dev.log 2>&1 &
+npm run build 2>&1 && nohup npm start -- -H 0.0.0.0 -p 8080 > dev.log 2>&1 &
 \`\`\`
 
 ### If the build gets killed (OOM):
@@ -256,7 +256,7 @@ ${PURGE_NPM_CACHE}
 }
 
 const NEXT_STARTUP_COMMAND =
-  `cd /data/project && ${PATH_PREAMBLE} && if [ -f package.json ]; then nohup npm start --hostname 0.0.0.0 -p 8080 > dev.log 2>&1 & fi`;
+  `cd /data/project && ${PATH_PREAMBLE} && if [ -f package.json ]; then nohup npm start -- -H 0.0.0.0 -p 8080 > dev.log 2>&1 & fi`;
 
 // ── webapp profile (default — verbatim parity with the original pipeline) ──
 
