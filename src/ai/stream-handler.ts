@@ -19,7 +19,7 @@ import { normalizeAskUserQuestions } from "./tools/misc-tools.ts";
 import { getInstantSystemPrompt } from "./prompts/instant.ts";
 import { getAgentSystemPrompt } from "./prompts/agent.ts";
 import { getAgentByConversation } from "../services/agent-manager.ts";
-import { createAgentTools } from "./tools/agent-tools.ts";
+import { createAgentTools, createWebResearchTools } from "./tools/agent-tools.ts";
 import { broadcastToUser, getConnection } from "../ws/connection-manager.ts";
 import { getComposioTools, listConnectors } from "../services/composio-manager.ts";
 import { downloadBinary } from "../services/s3.ts";
@@ -434,9 +434,15 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
     tools = { ...tools, ...composioTools };
   }
 
-  // Add web search tools based on the active provider
+  // Add web search tools based on the active provider (Anthropic/OpenAI/Google native).
   if (Object.keys(searchTools).length > 0) {
     tools = { ...tools, ...searchTools };
+  } else if (!instantMode) {
+    // Provider-native search is EMPTY for DeepSeek/Kimi/GLM. Without a fallback, the
+    // product/analyst chat on those models had NO web search and (correctly) said so.
+    // The Exa webSearch/readUrl are provider-agnostic — add them so every model can
+    // research. (createAgentTools only ran for custom Agents, so product chat missed it.)
+    tools = { ...tools, ...createWebResearchTools() };
   }
 
   // Add agent-specific tools (sandbox, memory, self-config).
