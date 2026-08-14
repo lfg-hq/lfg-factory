@@ -169,7 +169,7 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
       // "@preview …" → route to the interactive Preview agent (full control of the
       // project's live sandbox) instead of the normal chat model.
       if (/^\s*@preview\b/i.test(normalizedMessage) && conn.projectId) {
-        await handlePreviewChat(ws, conn, normalizedMessage, resolvedFiles);
+        await handlePreviewChat(ws, conn, normalizedMessage, resolvedFiles, bumpActivity);
       } else {
         // @ticket:… referenced → switch the Preview to the FIRST ticket's branch,
         // but ONLY if a preview is already LIVE and on a DIFFERENT branch. Asking a
@@ -222,7 +222,7 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
  * streams into the Preview tab log; a concise summary comes back inline in chat.
  * Ends with an is_final ai_chunk so the chat input re-enables like a normal reply.
  */
-async function handlePreviewChat(ws: ServerWebSocket<WsData>, conn: WsConnection, rawMessage: string, files?: Array<{ id?: string; name?: string; type?: string; size?: number }>): Promise<void> {
+async function handlePreviewChat(ws: ServerWebSocket<WsData>, conn: WsConnection, rawMessage: string, files?: Array<{ id?: string; name?: string; type?: string; size?: number }>, onActivity?: () => void): Promise<void> {
   const userId = conn.userId;
   const publicProjectId = conn.projectId as string;
   const conversationId = conn.conversationId ?? null;
@@ -264,6 +264,7 @@ async function handlePreviewChat(ws: ServerWebSocket<WsData>, conn: WsConnection
       conversationId,
       instruction,
       abortSignal: conn.abortController?.signal,
+      onActivity,
     });
     // Colour-coded status banner: green = ok, red = error, yellow = stuck.
     const badge = status === "ok" ? "🟢 **Preview agent — done**" : status === "error" ? "🔴 **Preview agent — failed**" : "🟡 **Preview agent — needs attention**";

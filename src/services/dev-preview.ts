@@ -1266,7 +1266,7 @@ RULES:
  */
 async function runDetachedPolled(
   projectId: string, userId: string, workspaceId: string, command: string, maxMs: number,
-  opts?: { stallMs?: number; workDir?: string },
+  opts?: { stallMs?: number; workDir?: string; onActivity?: () => void },
 ): Promise<{ exitCode: number; output: string }> {
   const id = `r${Date.now().toString(36)}${Math.floor(Math.random() * 1e7).toString(36)}`;
   const dir = "/data/.run";
@@ -1295,6 +1295,7 @@ async function runDetachedPolled(
   let lastGrowthAt = Date.now();
   while (Date.now() < deadline) {
     await sleep(interval);
+    opts?.onActivity?.(); // keep the caller's idle watchdog alive during a long command
     interval = Math.min(interval + 2000, 15000); // back off: 3s,5s,7s…15s
     // Cancelled → kill the detached command's process tree and bail.
     if (isCancelled(projectId)) {
@@ -1522,6 +1523,10 @@ export async function runPreviewChat(opts: {
    *  LIVE preview but NEVER git commit/push — auto-committing to the user's branch
    *  is a surprise they explicitly don't want. */
   noCommit?: boolean;
+  /** Bumped on every step so the caller's idle watchdog treats a long-but-active
+   *  @preview session (many commands) as alive, not hung. Without it the watchdog
+   *  killed long preview runs with "The assistant stopped responding". */
+  onActivity?: () => void;
 }): Promise<{ reply: string; status: "ok" | "error" | "stuck" }> {
   const { projectId, publicProjectId, userId, instruction, abortSignal, noCommit } = opts;
   publicIdCache.set(projectId, publicProjectId); // WS routing for plog
@@ -1592,9 +1597,10 @@ export async function runPreviewChat(opts: {
         timeoutSec: z.number().optional().describe("Seconds to wait before returning control (default 600, max 1800)."),
       })),
       execute: async ({ command, timeoutSec }: { command: string; timeoutSec?: number }) => {
+        opts.onActivity?.(); // proof-of-life for the caller's idle watchdog (each command = alive)
         const maxMs = Math.min(Math.max(timeoutSec ?? 600, 10), 1800) * 1000;
         plog(projectId, userId, `$ ${command}`);
-        const r = await runDetachedPolled(projectId, userId, workspaceId, command, maxMs, { stallMs: 240_000, workDir });
+        const r = await runDetachedPolled(projectId, userId, workspaceId, command, maxMs, { stallMs: 240_000, workDir, onActivity: opts.onActivity });
         plog(projectId, userId, `  → exit ${r.exitCode}`, r.output ? { detail: r.output.slice(-1800), level: r.exitCode === 0 ? "info" : "error" } : undefined);
         return { exitCode: r.exitCode, output: r.output.slice(-6000) || "(no output)" };
       },
@@ -1712,7 +1718,7 @@ PERSIST YOUR FIXES (critical — otherwise they're lost and branches don't get t
 RULES: source-code edits follow the CODE CHANGES policy above (allowed only on a ticket branch). Installing tools/deps, editing ./.env and config is fine when asked. Verify with real commands — never claim success without checking. When finished, ALWAYS call \`reply\` with status (ok/error/stuck) + a short summary of what you found/did (and whether you persisted/committed it). Never print secrets.`;
 
   try {
-    await generateText({ model: driver.model, tools, stopWhen: stepCountIs(40), system, prompt: agentPrompt, abortSignal });
+    await generateText({ model: driver.model, tools, stopWhen: stepCountIs(40), system, prompt: agentPrompt, abortSignal, onStepFinish: () => opts.onActivity?.() });
   } catch (e) {
     const msg = (e as Error).message || String(e);
     if (abortSignal?.aborted || /abort/i.test(msg)) return { reply: reply || "Stopped.", status: "stuck" };
