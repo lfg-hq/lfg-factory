@@ -71,6 +71,34 @@
   // A thin vertical divider between button groups in the toolbar.
   function tbDiv() { return `<span style="width:1px;height:20px;background:var(--border-color,#333);margin:0 3px;flex:none;"></span>`; }
 
+  // --- Multi-app service switcher ---------------------------------------------
+  // Which app's URL the iframe currently shows (null → primary). Persists across
+  // renders within a session so a re-render (branch sync etc.) doesn't snap back.
+  let activeService = null;
+  // The named service the iframe should point at, given the latest state.
+  function activeSvc(state) {
+    const svcs = (state && state.services) || [];
+    if (!svcs.length) return null;
+    return svcs.find((s) => s.name === activeService && s.url) || svcs.find((s) => s.primary) || svcs[0];
+  }
+  // Inline chips for the toolbar: one per app. Clickable when it has a live URL
+  // (switches the iframe); companions carry an ON/OFF toggle. "" for single-app.
+  function serviceChips(state) {
+    const svcs = (state && state.services) || [];
+    if (svcs.length < 2) return "";
+    const active = activeSvc(state);
+    const chips = svcs.map((s) => {
+      const isActive = active && s.name === active.name;
+      const clickable = !!s.url;
+      const chip = `padding:0 10px;height:32px;border-radius:7px;font-size:12px;cursor:${clickable ? "pointer" : "default"};border:1px solid ${isActive ? "#7c3aed" : "var(--border-color,#333)"};background:${isActive ? "rgba(124,58,237,.14)" : "transparent"};color:${clickable ? "var(--text-color,#cbd5e1)" : "var(--text-secondary,#9ca3af)"};display:inline-flex;align-items:center;gap:7px;font-weight:500;white-space:nowrap;`;
+      const toggle = s.primary
+        ? ""
+        : `<span data-action="svctoggle:${esc(s.name)}:${s.enabled ? "0" : "1"}" title="${s.enabled ? "Turn this app off" : "Turn this app on"}" style="font-size:10px;font-weight:600;padding:1px 6px;border-radius:5px;letter-spacing:.5px;background:${s.enabled ? "rgba(16,185,129,.18)" : "rgba(148,163,184,.15)"};color:${s.enabled ? "#10b981" : "#94a3b8"};cursor:pointer;">${s.enabled ? "ON" : "OFF"}</span>`;
+      return `<button ${clickable ? `data-action="svc:${esc(s.name)}"` : ""} title="${esc(s.name)}${s.port ? " · :" + s.port : ""}" style="${chip}"><span>${esc(s.name)}</span>${toggle}</button>`;
+    }).join("");
+    return chips + tbDiv();
+  }
+
   function renderActions(html) {
     const el = $("preview-actions");
     if (el) el.innerHTML = html || "";
@@ -381,6 +409,7 @@
       const opts = branches.map((b) => `<option value="${esc(b.id)}"${b.id === branchId ? " selected" : ""}>${esc(b.label)}</option>`).join("");
       const branchSel = `<select data-branch title="Run a ticket's branch or the default" style="height:32px;padding:0 10px;border-radius:7px;font-size:12.5px;background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);max-width:180px;cursor:pointer;">${opts}</select>`;
       renderActions(
+        serviceChips(state) +
         branchSel +
         tbDiv() +
         btn("Screenshot", { action: "screenshot", icon: "fa-camera", iconOnly: true, title: "Screenshot to chat" }) +
@@ -389,7 +418,8 @@
         btn("Restart", { action: "restart", icon: "fa-power-off" }) +
         btn("Stop", { action: "stop", icon: "fa-stop", danger: true })
       );
-      mountBrowser(body, state.previewUrl);
+      // Multi-app: show the selected app's URL (falls back to the primary appUrl).
+      mountBrowser(body, (activeSvc(state) && activeSvc(state).url) || state.previewUrl);
       // Refresh the branch list (ticket worktrees may have appeared), re-sync to the
       // running branch, and update the selector in place — without remounting the iframe.
       loadBranches().then(() => {
@@ -752,6 +782,35 @@
       if (w) { const open = w.style.display !== "none"; w.style.display = open ? "none" : "block"; if (b) b.textContent = (open ? "▸" : "▾") + " Edit as JSON (advanced)"; }
     }
     else if (action === "open" && current && current.previewUrl) window.open(current.previewUrl, "_blank");
+    else if (action.indexOf("svc:") === 0) switchService(action.slice(4));
+    else if (action.indexOf("svctoggle:") === 0) {
+      const parts = action.slice("svctoggle:".length).split(":");
+      toggleService(parts[0], parts[1] === "1");
+    }
+  }
+
+  // Point the iframe at another app's live URL. render() mounts activeSvc()'s URL
+  // and repaints the chips; mountBrowser no-ops if the URL is unchanged.
+  function switchService(name) {
+    const svc = (current && current.services || []).find((s) => s.name === name);
+    if (!svc || !svc.url) return;
+    activeService = name;
+    if (current) render(current);
+  }
+
+  // Turn a companion app ON/OFF. The backend persists the choice, kills the port
+  // on OFF, and restarts the enabled set; state reloads via the restart flow.
+  async function toggleService(name, enabled) {
+    toast((enabled ? "Starting " : "Stopping ") + name + "…");
+    try {
+      const r = await api("/services", { method: "POST", body: JSON.stringify({ name, enabled }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+      if (!enabled && activeService === name) activeService = null; // don't strand the iframe on a dead app
+      load(); // pull fresh state (restart is async; the WS/poll will keep it current)
+    } catch (e) {
+      toast("Couldn't toggle " + name + ": " + e.message);
+    }
   }
 
   async function takeScreenshot(btn) {
@@ -808,6 +867,12 @@
       render({ previewStatus: nextStatus, previewUrl: (current && current.previewUrl) || null, error: data.error || null, branch: (current && current.branch) || null });
       managePolling(nextStatus);
       if (data.message) setSub(data.message);
+    },
+    // A companion app came up / went down → pull authoritative state (which carries
+    // the full services[] with each app's URL) and repaint the switcher chips.
+    onServices(data) {
+      if (forOther(data)) return;
+      load();
     },
     onLog(data) {
       if (!data || !data.line || forOther(data)) return;

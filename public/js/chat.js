@@ -1110,6 +1110,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (window.PreviewTab && window.PreviewTab.onProfile) window.PreviewTab.onProfile(data);
                 return;
             }
+            if (data.type === 'preview_services') {
+                if (window.PreviewTab && window.PreviewTab.onServices) window.PreviewTab.onServices(data);
+                return;
+            }
             
             // Reduced logging — only log non-chunk message types
             if (data.type !== 'ai_chunk' && data.type !== 'heartbeat') {
