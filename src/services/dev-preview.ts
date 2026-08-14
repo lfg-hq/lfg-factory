@@ -1753,13 +1753,45 @@ function ticketWorktreeDir(ticketId: string): string { return `/data/wt-ticket-$
 /** Resolve a token-embedded clone URL for the project's repo (GitHub or GitLab),
  *  with a FRESH token — so a `git fetch` works even if the remote's baked-in token
  *  from the original clone has since expired. Used to reconstruct a ticket worktree. */
+/** Self-heal a missing project→repo link. The build creates the GitHub repo but the
+ *  project row's repoUrl can end up unset (a persistence gap) — so preview reports "no
+ *  repository" even though the repo exists on GitHub. We look up the repo by the SAME
+ *  derived name the build used (createGitHubRepo's sanitizer) and, if it EXISTS, back-fill
+ *  the project. READ-ONLY — never creates a repo (so a genuinely-unbuilt project still
+ *  reports "no repo" instead of getting an empty one). Returns the repoUrl or "". */
+async function recoverProjectRepoLink(project: { id: string; ownerId: string; name: string; providedName?: string | null; repoProvider?: string | null }): Promise<string> {
+  if ((project.repoProvider || "github").toLowerCase() === "gitlab") return ""; // GitLab isn't auto-created this way
+  const [t] = await db.select().from(githubTokens).where(eq(githubTokens.userId, project.ownerId)).limit(1);
+  const githubToken = t?.accessToken || "";
+  if (!githubToken) return "";
+  // Same sanitizer createGitHubRepo uses, so we resolve the exact repo the build made.
+  const sanitized = (project.providedName || project.name || "").toLowerCase().replace(/[\s_]+/g, "-").replace(/[^a-z0-9-]/g, "");
+  if (!sanitized) return "";
+  const headers = { Authorization: `Bearer ${githubToken}`, Accept: "application/vnd.github+json", "User-Agent": "lfg-preview" };
+  try {
+    const userResp = await fetch("https://api.github.com/user", { headers });
+    if (!userResp.ok) return "";
+    const { login } = (await userResp.json()) as { login: string };
+    const repoResp = await fetch(`https://api.github.com/repos/${login}/${sanitized}`, { headers });
+    if (!repoResp.ok) return ""; // repo doesn't exist → genuinely no repo, do NOT create one
+    const repo = (await repoResp.json()) as { html_url: string; name: string; owner: { login: string } };
+    await db.update(projects).set({ repoUrl: repo.html_url, repoOwner: repo.owner.login, repoName: repo.name, updatedAt: new Date() }).where(eq(projects.id, project.id)).catch(() => {});
+    console.log(`[preview] recovered repo link for project ${project.id} → ${repo.owner.login}/${repo.name}`);
+    return repo.html_url;
+  } catch (e) {
+    console.warn(`[preview] repo-link recovery failed: ${(e as Error).message?.slice(0, 140)}`);
+    return "";
+  }
+}
+
 async function resolveAuthedRepoUrl(projectId: string): Promise<{ authUrl: string; provider: string } | { error: string }> {
   const [project] = await db.select().from(projects).where(eq(projects.id, projectId));
   if (!project) return { error: "project not found" };
   const columnProvider = (project.repoProvider || "github").toLowerCase();
-  const repoUrl = project.repoUrl || (project.repoOwner && project.repoName
+  let repoUrl = project.repoUrl || (project.repoOwner && project.repoName
     ? `https://${columnProvider === "gitlab" ? "gitlab.com" : "github.com"}/${project.repoOwner}/${project.repoName}.git`
     : "");
+  if (!repoUrl) repoUrl = await recoverProjectRepoLink(project); // build may have created the repo but not linked it
   if (!repoUrl) return { error: "This project has no repository yet — build a ticket first (that creates the repo + branch), then preview." };
   const provider = /gitlab\.com|\/gitlab\b/i.test(repoUrl) ? "gitlab" : /github\.com/i.test(repoUrl) ? "github" : columnProvider;
   let token = "";
@@ -1820,9 +1852,15 @@ export async function setupPreview(projectId: string, opts: SetupOptions): Promi
     // Prefer the URL host as the source of truth (dual-provider app) and fall
     // back to the stored repoProvider column when there's no explicit URL.
     const columnProvider = (project.repoProvider || "github").toLowerCase();
-    const repoUrl = project.repoUrl || (project.repoOwner && project.repoName
+    let repoUrl = project.repoUrl || (project.repoOwner && project.repoName
       ? `https://${columnProvider === "gitlab" ? "gitlab.com" : "github.com"}/${project.repoOwner}/${project.repoName}.git`
       : "");
+    // The build may have created the GitHub repo but not persisted the link back to the
+    // project — recover it (idempotent) so preview works instead of "no repository".
+    if (!repoUrl) {
+      repoUrl = await recoverProjectRepoLink(project);
+      if (repoUrl) { project.repoUrl = repoUrl; plog(projectId, userId, "Recovered the GitHub repo link for this project — continuing…"); }
+    }
     if (!repoUrl) return failed(projectId, userId, "This project has no repository yet, so there's nothing to preview. The repo is created when you build your FIRST ticket — that scaffolds the app, creates the Git repo, and pushes the branch. Build a ticket (\"start building\" / the Build button), then preview that ticket's branch from its Preview tab. (\"Run default branch\" only works once code exists on the default branch.)");
     const provider = /gitlab\.com|\/gitlab\b/i.test(repoUrl) ? "gitlab" : /github\.com/i.test(repoUrl) ? "github" : columnProvider;
 
