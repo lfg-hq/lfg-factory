@@ -932,6 +932,62 @@ async function exposeService(
   return { name: service.name, url, port: service.port, ok };
 }
 
+/** Write/replace a single var in the live sandbox .env (so a sibling app picks it up on
+ *  its next start). Value is quote-escaped for `set -a; . ./.env` sourcing. */
+async function writeLiveEnvVar(workspaceId: string, key: string, value: string): Promise<void> {
+  const line = `${key}="${value.replace(/(["\\$`])/g, "\\$1")}"`;
+  const b64 = Buffer.from(line).toString("base64");
+  await sh(workspaceId, `cd ${PROJECT_DIR} && (grep -v '^${key}=' .env 2>/dev/null > .env.tmp || true); echo ${b64} | base64 -d >> .env.tmp; mv .env.tmp .env; echo OK`, 20_000);
+}
+
+/** Inject <NAME>_BASE_URL for a companion so sibling apps that read a base URL from config
+ *  reach the PREVIEW URL, not prod. Respects a value the user set themselves; persists it
+ *  (survives restarts) and writes it to the live .env now. */
+async function persistServiceBaseUrl(projectId: string, workspaceId: string, name: string, url: string): Promise<void> {
+  const key = `${name.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_BASE_URL`;
+  const [existing] = await db.select().from(projectEnvironmentVariables)
+    .where(and(eq(projectEnvironmentVariables.projectId, projectId), eq(projectEnvironmentVariables.key, key))).limit(1);
+  if (existing?.hasValue) {
+    // User override wins — but make sure the current value is in the live .env.
+    const cur = (() => { try { return decryptSecret(existing.encryptedValue); } catch { return url; } })();
+    await writeLiveEnvVar(workspaceId, key, cur).catch(() => {});
+    return;
+  }
+  await db.insert(projectEnvironmentVariables)
+    .values({ projectId, key, encryptedValue: encryptSecret(url), isSecret: false, hasValue: true, description: `Preview base URL for the ${name} app (auto-injected)` })
+    .onConflictDoUpdate({ target: [projectEnvironmentVariables.projectId, projectEnvironmentVariables.key], set: { encryptedValue: encryptSecret(url), hasValue: true, updatedAt: new Date() } });
+  await writeLiveEnvVar(workspaceId, key, url).catch(() => {});
+}
+
+/** After the primary is live, bring up every ENABLED companion + expose each on its own
+ *  subdomain, inject its <NAME>_BASE_URL, broadcast the service list for the Preview
+ *  switcher, and return a chat-summary snippet. No-op for single-app previews. */
+async function runEnabledCompanions(
+  projectId: string, userId: string, workspaceId: string,
+  manifest: PreviewManifest, runDir: string, baseAlias: string, primaryUrl: string,
+): Promise<string> {
+  const svcs = manifest.services || [];
+  if (svcs.length < 2) return "";
+  const primary = svcs.find((s) => s.primary) || svcs[0];
+  if (!primary) return "";
+  const companions = svcs.filter((s) => s !== primary && s.enabled);
+  const out: Array<{ name: string; url: string; port: number; ok: boolean; primary: boolean }> = [
+    { name: primary.name, url: primaryUrl, port: primary.port, ok: true, primary: true },
+  ];
+  for (const c of companions) {
+    const r = await exposeService(projectId, userId, workspaceId, c, runDir, baseAlias);
+    out.push({ ...r, primary: false });
+    if (r.url) await persistServiceBaseUrl(projectId, workspaceId, c.name, r.url).catch(() => {});
+  }
+  // Live list for the Preview tab switcher (every service + whether it's enabled/up).
+  broadcastToUser(userId, { type: "preview_services", projectId: pub(projectId), services: svcs.map((s) => {
+    const r = out.find((o) => o.name === s.name);
+    return { name: s.name, port: s.port, primary: !!s.primary, enabled: !!s.primary || !!s.enabled, url: r?.url || "", up: r?.ok ?? false };
+  }) });
+  const lines = out.filter((r) => r.url).map((r) => `- ${r.primary ? `**${r.name}** (primary)` : r.name}: ${r.url}${r.ok ? "" : " ⚠️ not up"}`);
+  return companions.length ? `\n\n**Apps in this preview:**\n${lines.join("\n")}` : "";
+}
+
 /**
  * Deterministic RULE (not a fixed find/replace): rewrite EVERY SQL Server
  * connection string in EVERY appsettings*.json under `dir` (all modules — Web,
@@ -2243,14 +2299,16 @@ fi`, 240_000);
     await db.update(projectEnvironments).set({ stableAlias: alias, updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
     plog(projectId, userId, `Preview live: ${previewUrl}`);
     await setPreview(projectId, userId, { previewStatus: "running", appUrl: previewUrl, appPort: effectivePort, previewError: null }, "Preview is live");
+    // Multi-app: bring up any ENABLED companion services on their own subdomains.
+    const companionSummary = await runEnabledCompanions(projectId, userId, workspaceId, manifest, PROJECT_DIR, alias, previewUrl).catch(() => "");
     // Post-run verification (URL + assets + DB) → publish the launch summary to chat.
     const vManifest = effectivePort === manifest.port ? manifest : { ...manifest, port: effectivePort };
     const v = await verifyPreview(projectId, userId, workspaceId, vManifest, branch || "(default)").catch(() => null);
-    if (v) await publishSummary(userId, opts.conversationId, `${v.summary}\n\n🔗 ${previewUrl}`, pub(projectId)).catch(() => {});
+    if (v) await publishSummary(userId, opts.conversationId, `${v.summary}\n\n🔗 ${previewUrl}${companionSummary}`, pub(projectId)).catch(() => {});
     // Self-heal broken assets via the agent (opt-in through directives), then re-summarize.
     if (v?.broken?.length) {
       const healed = await healBrokenAssets(projectId, userId, opts.conversationId, workspaceId, vManifest, branch || "(default)", v.broken).catch(() => null);
-      if (healed) await publishSummary(userId, opts.conversationId, `${healed.summary}\n\n🔗 ${previewUrl}`, pub(projectId)).catch(() => {});
+      if (healed) await publishSummary(userId, opts.conversationId, `${healed.summary}\n\n🔗 ${previewUrl}${companionSummary}`, pub(projectId)).catch(() => {});
     }
     return { previewUrl };
   } catch (err) {
@@ -2790,14 +2848,17 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) $(git log -1 --oneline
     let previewUrl = row.appUrl || "";
     try { previewUrl = await setStableUrl(alias, workspaceId); } catch { /* keep existing */ }
     await setPreview(projectId, userId, { previewStatus: "running", appUrl: previewUrl, appPort: effectivePort, previewError: null, previewBranch: branchLabel }, "Preview is live");
+    // Multi-app: bring up any ENABLED companion services on their own subdomains (in the
+    // SAME run dir — a ticket worktree or the main checkout).
+    const companionSummary = await runEnabledCompanions(projectId, userId, workspaceId, manifest, runDir, alias, previewUrl).catch(() => "");
     // Post-run verification (URL + assets + DB) → publish the launch summary to chat.
     const vManifest = effectivePort === manifest.port ? manifest : { ...manifest, port: effectivePort };
     const v = await verifyPreview(projectId, userId, workspaceId, vManifest, branchLabel).catch(() => null);
-    if (v) await publishSummary(userId, opts.conversationId, `${v.summary}\n\n🔗 ${previewUrl}`, pub(projectId)).catch(() => {});
+    if (v) await publishSummary(userId, opts.conversationId, `${v.summary}\n\n🔗 ${previewUrl}${companionSummary}`, pub(projectId)).catch(() => {});
     // Self-heal broken assets via the agent (opt-in through directives), then re-summarize.
     if (v?.broken?.length) {
       const healed = await healBrokenAssets(projectId, userId, opts.conversationId, workspaceId, vManifest, branchLabel, v.broken).catch(() => null);
-      if (healed) await publishSummary(userId, opts.conversationId, `${healed.summary}\n\n🔗 ${previewUrl}`, pub(projectId)).catch(() => {});
+      if (healed) await publishSummary(userId, opts.conversationId, `${healed.summary}\n\n🔗 ${previewUrl}${companionSummary}`, pub(projectId)).catch(() => {});
     }
     return { previewUrl };
   } catch (err) {
