@@ -186,7 +186,7 @@ async function buildTicketMentionContext(ticketIds: string[]): Promise<string> {
  *  product decision, the only provider we use for the text-only-model image pre-pass.
  *  Uses the user's Google key if present, else the server env key. Returns the text
  *  description, or null if no key is configured / it fails. */
-async function analyzeImage(bytes: Uint8Array, mediaType: string, userApiKeys: any): Promise<string | null> {
+export async function analyzeImage(bytes: Uint8Array, mediaType: string, userApiKeys: any): Promise<string | null> {
   try {
     const model = getGoogleVisionModel(userApiKeys, { allowEnvFallback: true });
     const { text } = await generateText({
@@ -206,6 +206,33 @@ async function analyzeImage(bytes: Uint8Array, mediaType: string, userApiKeys: a
     console.warn(`[vision] google describe failed:`, (e as Error).message?.slice(0, 200));
   }
   return null;
+}
+
+/** Read an uploaded chat file's raw bytes (S3 or local disk). */
+export async function readImageBytes(fileId: string): Promise<Uint8Array | null> {
+  try {
+    const [cf] = await db.select().from(chatFiles).where(eq(chatFiles.id, fileId));
+    if (cf?.filePath?.startsWith("s3:")) { const { body } = await downloadBinary(cf.filePath.slice(3)); return new Uint8Array(body); }
+    if (cf?.filePath) return new Uint8Array(await fs.readFile(path.resolve(cf.filePath)));
+  } catch (e) { console.warn(`[vision] could not read uploaded image:`, (e as Error).message?.slice(0, 120)); }
+  return null;
+}
+
+/** Describe any IMAGE attachments as text via the Gemini pre-pass, so a text-only agent
+ *  (e.g. the @preview shell agent) can "see" a screenshot. Returns "" if none/failed. */
+export async function describeAttachedImages(
+  files: Array<{ id?: string; name?: string; type?: string }> | undefined,
+  userApiKeys?: any,
+): Promise<string> {
+  const imgs = (files || []).filter((f) => f.id && (f.type || "").startsWith("image/"));
+  if (!imgs.length) return "";
+  const parts = await Promise.all(imgs.map(async (f) => {
+    const bytes = await readImageBytes(f.id!);
+    if (!bytes) return "";
+    const desc = await analyzeImage(bytes, f.type || "image/png", userApiKeys);
+    return desc ? `[Attached image "${f.name || f.id}" — a vision model's description of it, treat as ground truth:\n${desc}]` : "";
+  }));
+  return parts.filter(Boolean).join("\n\n");
 }
 
 export async function handleStream(req: StreamRequest): Promise<{ conversationId: string }> {

@@ -6,7 +6,7 @@ import {
   getConnection,
   send,
 } from "./connection-manager.ts";
-import { handleStream } from "../ai/stream-handler.ts";
+import { handleStream, describeAttachedImages } from "../ai/stream-handler.ts";
 import { db } from "../config/db.ts";
 import { messages, conversations } from "../db/schema/chat.ts";
 import { eq, asc, desc } from "drizzle-orm";
@@ -169,7 +169,7 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
       // "@preview …" → route to the interactive Preview agent (full control of the
       // project's live sandbox) instead of the normal chat model.
       if (/^\s*@preview\b/i.test(normalizedMessage) && conn.projectId) {
-        await handlePreviewChat(ws, conn, normalizedMessage);
+        await handlePreviewChat(ws, conn, normalizedMessage, resolvedFiles);
       } else {
         // @ticket:… referenced → switch the Preview to the FIRST ticket's branch,
         // but ONLY if a preview is already LIVE and on a DIFFERENT branch. Asking a
@@ -222,11 +222,20 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
  * streams into the Preview tab log; a concise summary comes back inline in chat.
  * Ends with an is_final ai_chunk so the chat input re-enables like a normal reply.
  */
-async function handlePreviewChat(ws: ServerWebSocket<WsData>, conn: WsConnection, rawMessage: string): Promise<void> {
+async function handlePreviewChat(ws: ServerWebSocket<WsData>, conn: WsConnection, rawMessage: string, files?: Array<{ id?: string; name?: string; type?: string; size?: number }>): Promise<void> {
   const userId = conn.userId;
   const publicProjectId = conn.projectId as string;
   const conversationId = conn.conversationId ?? null;
-  const instruction = rawMessage.replace(/^\s*@preview\b[:\s]*/i, "").trim();
+  let instruction = rawMessage.replace(/^\s*@preview\b[:\s]*/i, "").trim();
+
+  // The preview agent is a text/shell agent — it can't view images. Run the Gemini vision
+  // pre-pass over any screenshot the user attached and inject the description, so "@preview
+  // fix this error" + a screenshot of the error actually gives the agent the error text.
+  const imageFiles = (files || []).filter((f) => f.id && (f.type || "").startsWith("image/"));
+  if (imageFiles.length) {
+    const desc = await describeAttachedImages(imageFiles).catch(() => "");
+    if (desc) instruction = `${instruction}\n\n${desc}`.trim();
+  }
 
   // Persist the user's message (normal chat persists it server-side too).
   if (conversationId) {

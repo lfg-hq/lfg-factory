@@ -1760,7 +1760,7 @@ async function resolveAuthedRepoUrl(projectId: string): Promise<{ authUrl: strin
   const repoUrl = project.repoUrl || (project.repoOwner && project.repoName
     ? `https://${columnProvider === "gitlab" ? "gitlab.com" : "github.com"}/${project.repoOwner}/${project.repoName}.git`
     : "");
-  if (!repoUrl) return { error: "This project has no connected repository." };
+  if (!repoUrl) return { error: "This project has no repository yet — build a ticket first (that creates the repo + branch), then preview." };
   const provider = /gitlab\.com|\/gitlab\b/i.test(repoUrl) ? "gitlab" : /github\.com/i.test(repoUrl) ? "github" : columnProvider;
   let token = "";
   if (provider === "gitlab") {
@@ -1823,7 +1823,7 @@ export async function setupPreview(projectId: string, opts: SetupOptions): Promi
     const repoUrl = project.repoUrl || (project.repoOwner && project.repoName
       ? `https://${columnProvider === "gitlab" ? "gitlab.com" : "github.com"}/${project.repoOwner}/${project.repoName}.git`
       : "");
-    if (!repoUrl) return failed(projectId, userId, "This project has no connected repository to preview.");
+    if (!repoUrl) return failed(projectId, userId, "This project has no repository yet, so there's nothing to preview. The repo is created when you build your FIRST ticket — that scaffolds the app, creates the Git repo, and pushes the branch. Build a ticket (\"start building\" / the Build button), then preview that ticket's branch from its Preview tab. (\"Run default branch\" only works once code exists on the default branch.)");
     const provider = /gitlab\.com|\/gitlab\b/i.test(repoUrl) ? "gitlab" : /github\.com/i.test(repoUrl) ? "github" : columnProvider;
 
     let token = "";
