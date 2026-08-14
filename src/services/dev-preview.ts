@@ -2646,7 +2646,13 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) $(git log -1 --oneline
       // dir, so a branch worktree build acts on the worktree (not on main's files).
       const buildCmd = localizeCmd(manifest.buildCmd, runDir);
       plog(projectId, userId, `Building (recorded): ${buildCmd}`);
-      const br = await runDetachedPolled(projectId, userId, workspaceId, buildCmd, 1_200_000, { stallMs: 240_000, workDir: runDir });
+      // The recorded build is a TRUSTED, known-good command — and a large compiled build
+      // (.NET Release, Razor view compilation, Java/Gradle) legitimately produces NO
+      // console output for many minutes during restore/compile. The old 240s stall guard
+      // KILLED it (exit -4) on every restart, which handed control to the AI driver → a
+      // full ~30-min re-investigation instead of a fast replay. Give it a much longer
+      // stall window (15 min) + a bigger ceiling (30 min); maxMs still bounds a true hang.
+      const br = await runDetachedPolled(projectId, userId, workspaceId, buildCmd, 1_800_000, { stallMs: 900_000, workDir: runDir });
       if (br.exitCode !== 0) {
         buildFailed = true;
         plog(projectId, userId, `Recorded build failed (exit ${br.exitCode}) — handing to the AI driver to investigate`, { level: "error", detail: br.output.slice(-1200) });
