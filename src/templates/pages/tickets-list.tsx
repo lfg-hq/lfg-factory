@@ -34,6 +34,10 @@ interface TicketsListPageProps {
   stages: TicketStage[];
   tickets: Ticket[];
   executionMode?: ExecutionModeConfig;
+  /** When set (a ticketId), render DRAWER-ONLY for the chat's embedded ticket sidebar —
+   *  the body carries `embed-drawer` from the SERVER so the nav + kanban are hidden before
+   *  first paint (no grid flash). */
+  embed?: string;
 }
 
 const PRIORITY_COLOR: Record<string, string> = {
@@ -42,7 +46,7 @@ const PRIORITY_COLOR: Record<string, string> = {
   Low: "#6b7280",
 };
 
-export function TicketsListPage({ user, project, stages, tickets, executionMode }: TicketsListPageProps) {
+export function TicketsListPage({ user, project, stages, tickets, executionMode, embed }: TicketsListPageProps) {
   const isApiMode = executionMode ? !executionMode.claudeCodeEnabled : true;
   const avatarLetter = (user.name?.[0] ?? user.email?.[0] ?? "?").toUpperCase();
 
@@ -275,7 +279,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     body.embed-drawer .drawer-resize-handle { display: none !important; }
   </style>
 </head>
-<body data-user-id="${user.id}" data-project-id="${project.projectId}">
+<body data-user-id="${user.id}" data-project-id="${project.projectId}"${embed ? ' class="embed-drawer"' : ""}>
 
 <div class="app-container">
   <!-- Sidebar -->

@@ -350,17 +350,39 @@ document.addEventListener('DOMContentLoaded', function() {
             if (!document.getElementById('lfg-ticket-sidebar-style')) {
                 var st = document.createElement('style');
                 st.id = 'lfg-ticket-sidebar-style';
-                st.textContent = '#lfg-ticket-sidebar{position:fixed;top:0;right:0;height:100vh;width:820px;max-width:100vw;z-index:10050;background:var(--card-bg,#0d0d0d);box-shadow:-4px 0 24px rgba(0,0,0,0.4);transform:translateX(100%);transition:transform .28s ease;display:flex;flex-direction:column;}#lfg-ticket-sidebar.active{transform:translateX(0);}#lfg-ticket-sidebar iframe{flex:1;border:0;width:100%;height:100%;background:var(--card-bg,#0d0d0d);}#lfg-ticket-sidebar-close{position:absolute;top:12px;left:-42px;width:34px;height:34px;border-radius:9px;border:none;background:var(--card-bg,#0d0d0d);color:var(--text-color,#e0e0e0);cursor:pointer;font-size:18px;line-height:1;box-shadow:-2px 2px 10px rgba(0,0,0,.35);}';
+                st.textContent = '#lfg-ticket-sidebar{position:fixed;top:0;right:0;height:100vh;width:820px;max-width:96vw;min-width:420px;z-index:10050;background:var(--card-bg,#0d0d0d);box-shadow:-4px 0 24px rgba(0,0,0,0.4);transform:translateX(100%);transition:transform .28s ease;display:flex;flex-direction:column;}#lfg-ticket-sidebar.active{transform:translateX(0);}#lfg-ticket-sidebar.resizing{transition:none;user-select:none;}#lfg-ticket-sidebar iframe{flex:1;border:0;width:100%;height:100%;background:var(--card-bg,#0d0d0d);}#lfg-ticket-sidebar.resizing iframe{pointer-events:none;}#lfg-ticket-sidebar-close{position:absolute;top:12px;left:-42px;width:34px;height:34px;border-radius:9px;border:none;background:var(--card-bg,#0d0d0d);color:var(--text-color,#e0e0e0);cursor:pointer;font-size:18px;line-height:1;box-shadow:-2px 2px 10px rgba(0,0,0,.35);}#lfg-ticket-sidebar-resize{position:absolute;top:0;left:-3px;width:8px;height:100%;cursor:ew-resize;z-index:2;}#lfg-ticket-sidebar-resize:hover{background:rgba(124,58,237,.35);}#lfg-ticket-sidebar:not(.active){pointer-events:none;}#lfg-ticket-sidebar:not(.active) #lfg-ticket-sidebar-close,#lfg-ticket-sidebar:not(.active) #lfg-ticket-sidebar-resize{display:none;}';
                 document.head.appendChild(st);
             }
             var panel = document.getElementById('lfg-ticket-sidebar');
             if (!panel) {
                 panel = document.createElement('div');
                 panel.id = 'lfg-ticket-sidebar';
-                panel.innerHTML = '<button id="lfg-ticket-sidebar-close" title="Close ticket">&times;</button><iframe id="lfg-ticket-sidebar-frame" title="Ticket"></iframe>';
+                panel.innerHTML = '<div id="lfg-ticket-sidebar-resize" title="Drag to resize"></div><button id="lfg-ticket-sidebar-close" title="Close ticket">&times;</button><iframe id="lfg-ticket-sidebar-frame" title="Ticket"></iframe>';
                 document.body.appendChild(panel);
                 panel.querySelector('#lfg-ticket-sidebar-close').addEventListener('click', function() { panel.classList.remove('active'); });
                 document.addEventListener('keydown', function(e) { if (e.key === 'Escape' && panel.classList.contains('active')) panel.classList.remove('active'); });
+                // Drag the left edge to resize the sidebar width (persisted for the session).
+                (function() {
+                    var handle = panel.querySelector('#lfg-ticket-sidebar-resize');
+                    var startX = 0, startW = 0, dragging = false;
+                    var saved = parseInt(sessionStorage.getItem('lfg_ticket_sidebar_w') || '', 10);
+                    if (saved && saved > 300) panel.style.width = Math.min(saved, Math.round(window.innerWidth * 0.96)) + 'px';
+                    handle.addEventListener('mousedown', function(e) {
+                        dragging = true; startX = e.clientX; startW = panel.getBoundingClientRect().width;
+                        panel.classList.add('resizing'); e.preventDefault();
+                    });
+                    document.addEventListener('mousemove', function(e) {
+                        if (!dragging) return;
+                        var w = startW + (startX - e.clientX); // drag left = wider
+                        w = Math.max(420, Math.min(w, Math.round(window.innerWidth * 0.96)));
+                        panel.style.width = w + 'px';
+                    });
+                    document.addEventListener('mouseup', function() {
+                        if (!dragging) return;
+                        dragging = false; panel.classList.remove('resizing');
+                        sessionStorage.setItem('lfg_ticket_sidebar_w', String(Math.round(panel.getBoundingClientRect().width)));
+                    });
+                })();
             }
             panel.querySelector('#lfg-ticket-sidebar-frame').src = '/projects/' + encodeURIComponent(pid) + '/tickets?embed=' + encodeURIComponent(ticketId);
             requestAnimationFrame(function() { panel.classList.add('active'); });

@@ -489,6 +489,9 @@ projectsRouter.get("/projects/:projectId/tickets", async (c) => {
       },
       stages: stageRows,
       tickets: ticketRows,
+      // Drawer-only render for the chat's ticket sidebar (?embed=<ticketId>): skips the
+      // nav + kanban so the grid never flashes before the ticket details.
+      embed: c.req.query("embed") ?? undefined,
       executionMode: {
         claudeCodeEnabled: appState?.claudeCodeEnabled ?? false,
         builderModelKey: appState?.builderModelKey ?? "claude_4.5_sonnet",
