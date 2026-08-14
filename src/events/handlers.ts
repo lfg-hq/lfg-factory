@@ -55,7 +55,7 @@ async function autoQueueNextTicket(projectId: string, completedTicketId: string)
   if (!nextTicket) {
     // No more open tickets — check if any failed
     const [project] = await db
-      .select({ ownerId: projects.ownerId, name: projects.name })
+      .select({ ownerId: projects.ownerId, name: projects.name, publicProjectId: projects.projectId })
       .from(projects)
       .where(eq(projects.id, projectId))
       .limit(1);
@@ -89,6 +89,7 @@ async function autoQueueNextTicket(projectId: string, completedTicketId: string)
       broadcastToUser(project.ownerId, {
         type: "batch_complete",
         projectId,
+        publicProjectId: project.publicProjectId,
         status: "partial",
         failedCount,
         message: `Build chain finished for "${project.name}" but ${failedCount} ticket(s) failed: ${failedNames}. Check the ticket logs for details — you can retry them from the dashboard.`,
@@ -105,6 +106,7 @@ async function autoQueueNextTicket(projectId: string, completedTicketId: string)
       broadcastToUser(project.ownerId, {
         type: "batch_complete",
         projectId,
+        publicProjectId: project.publicProjectId,
         status: "success",
         message: `All tickets for "${project.name}" have been built successfully! Review them in the dashboard.`,
       });
@@ -171,13 +173,17 @@ export function registerEventHandlers(): void {
     if (!projectId) return;
     const name = await getTicketName(ticketId);
 
-    // Look up project owner for chat notifications
+    // Look up project owner + PUBLIC projectId for chat notifications. The public id is
+    // what the chat client knows (currentProjectId), so include it so the client can scope
+    // the card to the right project — otherwise a ticket-failed card leaked into whatever
+    // project's chat was open.
     const [project] = await db
-      .select({ ownerId: projects.ownerId })
+      .select({ ownerId: projects.ownerId, publicProjectId: projects.projectId })
       .from(projects)
       .where(eq(projects.id, projectId))
       .limit(1);
     const ownerId = project?.ownerId;
+    const publicProjectId = project?.publicProjectId;
 
     if (status === "complete") {
       const durationStr = durationMs ? ` in ${Math.round(durationMs / 1000)}s` : "";
@@ -197,6 +203,7 @@ export function registerEventHandlers(): void {
           type: "ticket_finished",
           ticketId,
           projectId,
+          publicProjectId,
           status: "complete",
           message: `Ticket "${name}" completed successfully${durationStr}.`,
         });
@@ -218,6 +225,7 @@ export function registerEventHandlers(): void {
           type: "ticket_finished",
           ticketId,
           projectId,
+          publicProjectId,
           status: "failed",
           message: `Ticket "${name}" failed (exit code ${exitCode ?? "unknown"}). The build chain will continue with the next ticket.`,
         });

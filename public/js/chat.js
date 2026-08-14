@@ -1312,6 +1312,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     break;
 
                 case 'ticket_finished':
+                    // Scope guard: ticket cards broadcast to ALL of the user's connections.
+                    // Only render for the project whose chat is open — otherwise another
+                    // project's "Ticket Failed" card leaked into this conversation.
+                    if (data.publicProjectId && currentProjectId && data.publicProjectId !== currentProjectId) break;
                     // Individual ticket completed or failed
                     const ticketMsg = document.createElement('div');
                     const isFailure = data.status === 'failed';
@@ -1324,6 +1328,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     break;
 
                 case 'batch_complete':
+                    // Scope guard (see ticket_finished) — don't leak another project's
+                    // build-chain summary into this conversation.
+                    if (data.publicProjectId && currentProjectId && data.publicProjectId !== currentProjectId) break;
                     // All tickets in a project have finished executing
                     const batchMsg = document.createElement('div');
                     const hasFails = data.status === 'partial';
