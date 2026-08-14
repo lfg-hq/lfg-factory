@@ -14,7 +14,7 @@
  */
 import { z } from "zod";
 import { generateObject, generateText, stepCountIs, tool, zodSchema, type LanguageModel } from "ai";
-import { and, eq, isNotNull, or } from "drizzle-orm";
+import { and, desc, eq, isNotNull, or } from "drizzle-orm";
 import { db } from "../config/db.ts";
 import { projects, projectEnvironmentVariables } from "../db/schema/projects.ts";
 import { projectEnvironments } from "../db/schema/project-environments.ts";
@@ -1559,6 +1559,29 @@ export async function runPreviewChat(opts: {
 
   plog(projectId, userId, `@preview (${branchNote}): ${instruction}`);
 
+  // Load the recent conversation so the agent can resolve references like "do THAT small
+  // change", "fix it", "the case-mismatch above" — @preview previously saw ONLY the
+  // current message and kept replying "the original request isn't in my context".
+  let historyContext = "";
+  if (opts.conversationId) {
+    const recent = await db.select({ role: messages.role, content: messages.content })
+      .from(messages)
+      .where(eq(messages.conversationId, opts.conversationId))
+      .orderBy(desc(messages.createdAt))
+      .limit(16)
+      .catch(() => [] as { role: string; content: string }[]);
+    // Chronological, drop the just-persisted current @preview message (it IS the instruction).
+    const ordered = recent.reverse().filter((m) => (m.content || "").trim());
+    const priorMsgs = ordered.slice(0, -1);
+    if (priorMsgs.length) {
+      const lines = priorMsgs
+        .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${(m.content || "").replace(/\s+/g, " ").slice(0, 1000)}`)
+        .join("\n");
+      historyContext = `## Recent conversation (context — the user's request below may refer to THIS)\n${lines}\n\n## The user's @preview request (act on this)\n`;
+    }
+  }
+  const agentPrompt = historyContext + instruction;
+
   let reply = "";
   let replyStatus: "ok" | "error" | "stuck" = "ok";
   const tools = {
@@ -1689,7 +1712,7 @@ PERSIST YOUR FIXES (critical — otherwise they're lost and branches don't get t
 RULES: source-code edits follow the CODE CHANGES policy above (allowed only on a ticket branch). Installing tools/deps, editing ./.env and config is fine when asked. Verify with real commands — never claim success without checking. When finished, ALWAYS call \`reply\` with status (ok/error/stuck) + a short summary of what you found/did (and whether you persisted/committed it). Never print secrets.`;
 
   try {
-    await generateText({ model: driver.model, tools, stopWhen: stepCountIs(40), system, prompt: instruction, abortSignal });
+    await generateText({ model: driver.model, tools, stopWhen: stepCountIs(40), system, prompt: agentPrompt, abortSignal });
   } catch (e) {
     const msg = (e as Error).message || String(e);
     if (abortSignal?.aborted || /abort/i.test(msg)) return { reply: reply || "Stopped.", status: "stuck" };
