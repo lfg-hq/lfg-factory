@@ -2335,16 +2335,28 @@ async function failed(projectId: string, userId: string, error: string): Promise
 /** Current preview state for the Preview tab. */
 export async function getPreviewState(projectId: string) {
   const row = await getEnv(projectId);
-  if (!row) return { previewStatus: "idle" as PreviewStatus, previewUrl: null, manifest: null, error: null, branch: null, log: "", steps: [], setupComplete: false };
+  if (!row) return { previewStatus: "idle" as PreviewStatus, previewUrl: null, manifest: null, error: null, branch: null, log: "", steps: [], setupComplete: false, services: [] };
+  const manifest = row.setupManifest ? (JSON.parse(row.setupManifest) as PreviewManifest) : null;
+  // Multi-app: the service list + each service's URL for the Preview switcher. Primary →
+  // the main appUrl; an enabled companion → its derived subdomain (baseAlias-<name>).
+  const appDomain = process.env.MAGS_APP_DOMAIN || "app.lfg.run";
+  const services = (manifest?.services || []).map((s) => ({
+    name: s.name,
+    port: s.port,
+    primary: !!s.primary,
+    enabled: !!s.primary || !!s.enabled,
+    url: s.primary ? (row.appUrl ?? "") : (s.enabled && row.stableAlias ? `https://${row.stableAlias}-${s.name}.${appDomain}` : ""),
+  }));
   return {
     previewStatus: (row.previewStatus as PreviewStatus) ?? "idle",
     previewUrl: row.appUrl ?? null,
-    manifest: row.setupManifest ? JSON.parse(row.setupManifest) : null,
+    manifest,
     error: row.previewError ?? null,
     branch: row.previewBranch ?? null,
     log: logBuffers.get(projectId) ?? row.setupLog ?? "",
     steps: row.setupSteps ? (JSON.parse(row.setupSteps) as RunStep[]) : [],
     setupComplete: row.setupComplete === 1,
+    services,
   };
 }
 
@@ -2564,6 +2576,31 @@ git diff "$BASE"..."$HEAD" 2>/dev/null | head -c 300000
  * feature branch) instead of the default /data/project checkout — so you can
  * preview individual tickets. The DB creds/.env are shared (same sandbox).
  */
+/** Toggle a companion service on/off. Persists `enabled` on the profile (survives manifest
+ *  re-derivation) + the derived manifest, kills its port when turning OFF, then triggers a
+ *  restart so the enabled set comes up. Returns the current service list for the UI. */
+export async function setServiceEnabled(projectId: string, userId: string, name: string, enabled: boolean): Promise<{ ok: boolean; error?: string; services?: unknown[] }> {
+  const loaded = await loadAppProfile(projectId);
+  if (!loaded?.profile.services?.length) return { ok: false, error: "This preview has no multi-app services detected." };
+  const profile = loaded.profile;
+  const svc = profile.services!.find((s) => s.name === name);
+  if (!svc) return { ok: false, error: `Unknown service "${name}".` };
+  if (svc.primary) return { ok: false, error: "The primary app is always on — it can't be toggled." };
+  svc.enabled = enabled;
+  await saveAppProfile(projectId, profile);
+  const manifest = deriveManifestFromProfile(profile);
+  await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
+  if (!enabled) {
+    // Turning OFF → stop the companion's process now (a restart won't kill it).
+    const workspaceId = await envWorkspaceId(projectId).catch(() => null);
+    if (workspaceId) await sh(workspaceId, `fuser -k ${svc.port}/tcp 2>/dev/null; pkill -f ':${svc.port}' 2>/dev/null; echo OK`, 15_000).catch(() => {});
+  }
+  // Restart re-runs the primary (fast recorded path) + the now-enabled companions.
+  restartPreview(projectId, { userId }).catch((e) => console.error("[preview] service-toggle restart failed:", e));
+  const services = (manifest.services || []).map((s) => ({ name: s.name, port: s.port, primary: !!s.primary, enabled: !!s.enabled }));
+  return { ok: true, services };
+}
+
 export async function restartPreview(projectId: string, opts: SetupOptions): Promise<{ previewUrl: string } | { error: string }> {
   const { userId, ticketId } = opts;
   const row = await getEnv(projectId);

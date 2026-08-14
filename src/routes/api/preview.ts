@@ -14,7 +14,7 @@ import { db } from "../../config/db.ts";
 import { projectEnvironments } from "../../db/schema/project-environments.ts";
 import { projects, projectEnvironmentVariables } from "../../db/schema/projects.ts";
 import { encryptSecret } from "../../utils/crypto.ts";
-import { getPreviewState, setupPreview, restartPreview, stopPreview, detectManifest, manifestSchema, capturePreviewScreenshot, getPreviewBranches, reprobeProfile, getAppRuntimeLog } from "../../services/dev-preview.ts";
+import { getPreviewState, setupPreview, restartPreview, stopPreview, detectManifest, manifestSchema, capturePreviewScreenshot, getPreviewBranches, reprobeProfile, getAppRuntimeLog, setServiceEnabled } from "../../services/dev-preview.ts";
 import { loadAppProfile, saveAppProfile, appProfileSchema } from "../../services/app-profile.ts";
 import type { auth } from "../../auth/index.ts";
 
@@ -57,6 +57,18 @@ previewApi.post("/:projectId/preview/restart", async (c) => {
   const conversationId = typeof body.conversationId === "string" ? body.conversationId : null;
   restartPreview(access.project.id, { userId: user.id, ticketId, conversationId }).catch((e) => console.error("[preview] restart failed:", e));
   return c.json({ ok: true, status: "starting" }, 202);
+});
+
+// Multi-app: toggle a companion service on/off (persists + restarts the enabled set).
+previewApi.post("/:projectId/preview/services", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId")!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  const body = await c.req.json().catch(() => ({} as any));
+  const name = String(body.name ?? "").trim();
+  if (!name) return c.json({ error: "Missing service name" }, 400);
+  const res = await setServiceEnabled(access.project.id, user.id, name, body.enabled !== false);
+  return res.ok ? c.json(res, 202) : c.json(res, 400);
 });
 
 // List the branches that can be previewed: default + each ticket with a live worktree.

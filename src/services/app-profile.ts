@@ -95,6 +95,7 @@ export const appProfileSchema = z.object({
     buildCmd: z.string().optional().describe("Build step for THIS app if not covered by the shared buildCmd. '' when shared."),
     port: z.number().describe("This app's real port."),
     primary: z.boolean().optional().describe("true for the MAIN app (default preview URL, always runs). Exactly ONE primary."),
+    enabled: z.boolean().optional().describe("Whether a companion runs. Leave unset — the user toggles companions on/off; the primary always runs."),
   })).optional().describe("MULTIPLE separately-runnable web apps in ONE repo (monorepo — e.g. a public site + an admin portal on different ports, each with its own .csproj referencing Microsoft.NET.Sdk.Web / its own dev script). Populate ONLY when there are 2+ such apps; OMIT for a normal single-app repo. Skip class libraries. Mark the most public one primary; the top-level runCmd/port should equal the primary."),
   buildQuirks: z.array(z.string()).describe("Known build gotchas / required flags discovered from the code, e.g. 'needs DOTNET_SYSTEM_NET_DISABLEIPV6=1 or NuGet restore hangs', 'run `dotnet ef` with -v since it hides build errors'. [] if none."),
   // ── Databases ──
@@ -313,7 +314,7 @@ export function deriveManifestFromProfile(profile: AppProfile): PreviewManifest 
     port: profile.port,
     // Multi-app: carry services[] only when it names 2+ apps; companions default off.
     services: (profile.services && profile.services.length >= 2)
-      ? profile.services.map((s, i) => ({ ...s, primary: !!s.primary || (i === 0 && !profile.services!.some((x) => x.primary)), enabled: !!s.primary }))
+      ? profile.services.map((s, i) => ({ ...s, primary: !!s.primary || (i === 0 && !profile.services!.some((x) => x.primary)), enabled: s.enabled ?? !!s.primary }))
       : undefined,
     databases: profile.databases,
     migrations,
