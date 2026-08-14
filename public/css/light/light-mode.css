@@ -420,6 +420,15 @@ body[data-theme="light"] {
     background-color: rgba(124, 58, 237, 0.08) !important;
 }
 
+[data-theme="light"] .tab-overflow-btn {
+    color: #64748b !important;
+}
+
+[data-theme="light"] .tab-overflow-btn:hover,
+[data-theme="light"] .tab-overflow.holds-active .tab-overflow-btn {
+    color: #7c3aed !important;
+}
+
 [data-theme="light"] .tab-content,
 [data-theme="light"] .tab-pane {
     background-color: #ffffff !important;

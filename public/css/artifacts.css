@@ -4469,3 +4469,306 @@ body.ticket-modal-open {
     height: 100%;
     position: relative;
 }
+
+/* ── Tab bar overflow ─────────────────────────────────────────────────────
+   When the artifacts panel is too narrow for every tab, the ones that don't
+   fit collapse into the ⋯ menu instead of scrolling out of reach.
+   Driven by public/js/tab-overflow.js. */
+/* This bar collapses instead of scrolling, so it must NOT clip — the base
+   .artifacts-tabs rule sets overflow-x:auto, which would cut off the ⋯ menu. */
+.artifacts-tabs-managed {
+    overflow: visible;
+}
+
+.artifacts-tabs-list {
+    display: flex;
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.artifacts-tabs-list .tab-button.tab-hidden {
+    display: none;
+}
+
+/* Only the tab list may shrink — the ⋯ and the collapse arrow keep their size. */
+.artifacts-tabs .panel-arrow-right {
+    flex: none;
+}
+
+.tab-overflow {
+    position: relative;
+    flex: none;
+    display: none;
+}
+
+.tab-overflow.has-items {
+    display: block;
+}
+
+.tab-overflow-btn {
+    padding: 12px 12px;
+    border: none;
+    background: none;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    color: #94a3b8;
+    transition: color 0.2s ease;
+}
+
+.tab-overflow-btn:hover {
+    color: #e2e8f0;
+}
+
+/* The active tab lives inside the menu → keep the ⋯ looking selected. */
+.tab-overflow.holds-active .tab-overflow-btn {
+    color: #e2e8f0;
+}
+
+.tab-overflow-menu {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    z-index: 60;
+    min-width: 168px;
+    padding: 6px;
+    background: var(--card-bg, #1a1a1a);
+    border: 1px solid var(--border-color, #333);
+    border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+
+.tab-overflow-menu[hidden] {
+    display: none;
+}
+
+.tab-overflow-item {
+    display: block;
+    width: 100%;
+    padding: 8px 12px;
+    text-align: left;
+    white-space: nowrap;
+    border: none;
+    border-radius: 7px;
+    background: none;
+    color: var(--text-secondary, #94a3b8);
+    font-size: 13.5px;
+    cursor: pointer;
+}
+
+.tab-overflow-item:hover {
+    background: var(--card-bg-hover, #2a2a2a);
+    color: var(--text-primary, #e2e8f0);
+}
+
+.tab-overflow-item.active {
+    color: var(--text-primary, #e2e8f0);
+    font-weight: 600;
+}
+
+/* ── Env tab ──────────────────────────────────────────────────────────────
+   Values are write-only (the API never returns them), so rows show only
+   whether a key has a value. Driven by public/js/env-tab.js. */
+#env.tab-pane {
+    padding: 0;
+    overflow: hidden;
+}
+
+.env-panel {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.env-panel-head {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-color, #2a2a2a);
+    flex: none;
+}
+
+.env-head-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.env-title {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary, #e2e8f0);
+}
+
+.env-sub {
+    margin-top: 3px;
+    font-size: 12.5px;
+    color: var(--text-secondary, #94a3b8);
+}
+
+.env-head-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: none;
+}
+
+.env-add-row {
+    display: flex;
+    gap: 6px;
+    margin-top: 14px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+.env-input {
+    flex: 1 1 150px;
+    min-width: 0;
+    padding: 7px 10px;
+    font-size: 12.5px;
+    color: var(--text-primary, #e2e8f0);
+    background: var(--input-bg, #1a1a1a);
+    border: 1px solid var(--border-color, #333);
+    border-radius: 7px;
+}
+
+.env-input:focus {
+    outline: none;
+    border-color: var(--primary-color, #7c3aed);
+}
+
+.env-input-key {
+    flex: 0 1 150px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.env-mini {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 12px;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--text-secondary, #94a3b8);
+    background: transparent;
+    border: 1px solid var(--border-color, #333);
+    border-radius: 7px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: border-color 0.12s ease, color 0.12s ease;
+}
+
+.env-mini:hover {
+    color: var(--text-primary, #e2e8f0);
+    border-color: var(--text-secondary, #94a3b8);
+}
+
+.env-mini-primary {
+    color: #fff;
+    background: #7c3aed;
+    border-color: #7c3aed;
+}
+
+.env-mini-primary:hover {
+    color: #fff;
+    border-color: #7c3aed;
+}
+
+.env-mini-danger {
+    color: #f87171;
+}
+
+.env-msg {
+    margin-top: 10px;
+    font-size: 12.5px;
+    color: #f87171;
+}
+
+.env-msg.ok {
+    color: #10b981;
+}
+
+.env-list {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+}
+
+.env-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.env-table th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: 8px 20px;
+    text-align: left;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-secondary, #94a3b8);
+    background: var(--card-bg, #1a1a1a);
+    border-bottom: 1px solid var(--border-color, #2a2a2a);
+}
+
+.env-table td {
+    padding: 9px 20px;
+    font-size: 12.5px;
+    color: var(--text-secondary, #94a3b8);
+    border-bottom: 1px solid var(--border-color, #2a2a2a);
+    vertical-align: middle;
+}
+
+.env-table tr:hover td {
+    background: var(--card-bg-alt, rgba(30, 30, 30, 0.8));
+}
+
+.env-key {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--text-primary, #e2e8f0);
+    word-break: break-all;
+}
+
+.env-unset {
+    color: #f87171;
+    font-style: italic;
+}
+
+.env-badge {
+    margin-left: 6px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    background: rgba(239, 68, 68, 0.15);
+    color: #f87171;
+}
+
+.env-actions {
+    text-align: right;
+    white-space: nowrap;
+}
+
+.env-actions .env-mini {
+    padding: 4px 9px;
+    font-size: 11.5px;
+}
+
+.env-empty {
+    padding: 48px 32px;
+    text-align: center;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-secondary, #94a3b8);
+}
+
+/* Narrow panel: drop the description column so key + state stay readable. */
+.env-panel.is-narrow .env-col-desc {
+    display: none;
+}

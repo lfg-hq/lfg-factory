@@ -68,6 +68,14 @@ export const manifestSchema = z.object({
   startupProject: z.string().describe("For a multi-project solution, the WEB/entry project to actually run (e.g. 'Cohire.Web' — the one referencing an ASP.NET Core / web SDK). '' for single-project apps."),
   runCmd: z.string().describe("Command to START the app in the FOREGROUND on `port`, bound to 0.0.0.0. Use the startup project — e.g. 'dotnet run --project Cohire.Web --urls http://0.0.0.0:5000', 'python manage.py runserver 0.0.0.0:8000', 'npm start'."),
   port: z.number().describe("The app's real port, detected from the codebase (launchSettings/appsettings, run scripts, docker-compose, framework default). This exact port is exposed publicly."),
+  services: z.array(z.object({
+    name: z.string().describe("Short slug for this app, e.g. 'web', 'admin', 'api'. Used for its subdomain (preview-<hash>-<name>) and env var (<NAME>_BASE_URL)."),
+    runCmd: z.string().describe("Command to START this app in the FOREGROUND on ITS port, bound to 0.0.0.0."),
+    buildCmd: z.string().optional().describe("Build step for THIS app if not covered by the shared buildCmd (e.g. a distinct .csproj). '' when the shared build already produces it."),
+    port: z.number().describe("This app's real port (from launchSettings/appsettings/run scripts)."),
+    primary: z.boolean().optional().describe("true for the MAIN app — it gets the default preview URL and always runs. Exactly ONE service is primary."),
+    enabled: z.boolean().optional().describe("Companions default false (off); the user toggles them on. The primary is always run regardless."),
+  })).optional().describe("MULTIPLE runnable apps in ONE repo (monorepo — e.g. a public site + an admin portal that run on different ports). Populate this ONLY when the repo genuinely has 2+ separately-runnable web apps; OMIT it for a normal single-app repo (runCmd/port cover that). Skip class libraries. The primary runs by default; each companion is toggled on and gets its own subdomain bound to its port."),
   databases: z.array(z.object({
     engine: z.enum(["postgres", "mysql", "redis", "mssql"]).describe("The DB engine to provision — use the app's REAL engine. 'mssql' = Microsoft SQL Server (run via Docker) — pick it for EF Core SqlServer / T-SQL apps. Do NOT downgrade SQL Server to postgres; they are not wire-compatible."),
     connectionEnvVar: z.string().describe("The EXACT env var / .NET config key the app reads its connection from. ASP.NET Core with appsettings ConnectionStrings:DefaultConnection → 'ConnectionStrings__DefaultConnection'. Rails/Node/Django with a URL → 'DATABASE_URL'. Redis → 'REDIS_URL'."),
@@ -84,6 +92,7 @@ export const manifestSchema = z.object({
 });
 export type PreviewManifest = z.infer<typeof manifestSchema>;
 type PlannedDb = PreviewManifest["databases"][number];
+export type ServiceSpec = NonNullable<PreviewManifest["services"]>[number];
 
 // ── Small helpers ────────────────────────────────────────────────────────
 async function sh(workspaceId: string, script: string, timeout = 180_000): Promise<{ output: string; exitCode: number }> {
@@ -358,6 +367,25 @@ function coerceManifest(raw: any): unknown {
     }))
     .filter((d: any) => d.engine);
 
+  // services[] — only kept when it names 2+ runnable apps (a single "service" is just the
+  // normal single-app path, so we drop it). name → a safe subdomain slug; exactly one primary.
+  const slug = (s: string) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24);
+  let services = (Array.isArray(o.services) ? o.services : [])
+    .map((s: any) => ({
+      name: slug(str(s?.name)),
+      runCmd: str(s?.runCmd),
+      buildCmd: str(s?.buildCmd) || undefined,
+      port: typeof s?.port === "number" ? s.port : parseInt(str(s?.port), 10) || 0,
+      primary: !!s?.primary,
+      enabled: s?.enabled === undefined ? undefined : !!s.enabled,
+    }))
+    .filter((s: any) => s.name && s.runCmd && s.port);
+  if (services.length < 2) {
+    services = undefined; // single (or zero) app → the plain runCmd/port path
+  } else if (!services.some((s: any) => s.primary)) {
+    services[0].primary = true; // guarantee exactly one primary
+  }
+
   return {
     stack: str(o.stack),
     runtime: str(o.runtime),
@@ -368,6 +396,7 @@ function coerceManifest(raw: any): unknown {
     startupProject: str(o.startupProject),
     runCmd: str(o.runCmd),
     port: typeof o.port === "number" ? o.port : parseInt(str(o.port), 10) || DEFAULT_PORT,
+    services,
     databases,
     migrations: strArr(o.migrations),
     sqlScripts: strArr(o.sqlScripts),
@@ -862,6 +891,45 @@ function appStartCommand(manifest: PreviewManifest, dir: string = PROJECT_DIR): 
   // lets the shell apply the assignments correctly; setsid already detaches it.
   return `fuser -k ${port}/tcp 2>/dev/null; pkill -f ':${port}' 2>/dev/null; sleep 1; ` +
     `setsid sh -c 'cd ${dir}; set -a; . ./.env 2>/dev/null; set +a; ${runCmd}' </dev/null > ${dir}/preview.log 2>&1 & echo STARTED`;
+}
+
+/** Start command for a COMPANION service on its own port, logging to its own file
+ *  (preview-<name>.log) so the Preview switcher can show per-service logs. Same detached
+ *  shape as the primary. */
+function serviceStartCommand(service: ServiceSpec, dir: string = PROJECT_DIR): string {
+  const runCmd = localizeCmd(service.runCmd, dir).replace(/'/g, `'\\''`);
+  return `fuser -k ${service.port}/tcp 2>/dev/null; pkill -f ':${service.port}' 2>/dev/null; sleep 1; ` +
+    `setsid sh -c 'cd ${dir}; set -a; . ./.env 2>/dev/null; set +a; ${runCmd}' </dev/null > ${dir}/preview-${service.name}.log 2>&1 & echo STARTED`;
+}
+
+/** Bring up ONE companion service: build (only if it has its own buildCmd — the shared
+ *  build usually produced its DLL already), start it on its port, expose that port on its
+ *  OWN subdomain (baseAlias-<name>, bound to the port via Mags per-alias port), and
+ *  health-check. Returns its public URL, or "" if it didn't come up. */
+async function exposeService(
+  projectId: string, userId: string, workspaceId: string,
+  service: ServiceSpec, runDir: string, baseAlias: string,
+): Promise<{ name: string; url: string; port: number; ok: boolean }> {
+  if (service.buildCmd) {
+    plog(projectId, userId, `Building companion "${service.name}": ${service.buildCmd}`);
+    const bc = localizeCmd(service.buildCmd, runDir);
+    const br = await runDetachedPolled(projectId, userId, workspaceId, bc, 1_800_000, { stallMs: 900_000, workDir: runDir })
+      .catch(() => ({ exitCode: -1, output: "" }));
+    if (br.exitCode !== 0) plog(projectId, userId, `Companion "${service.name}" build failed (exit ${br.exitCode})`, { level: "error", detail: br.output.slice(-800) });
+  }
+  plog(projectId, userId, `Starting companion "${service.name}" on :${service.port}…`);
+  await runDetachedPolled(projectId, userId, workspaceId, serviceStartCommand(service, runDir), 30_000);
+  const ok = await waitForAppUp(projectId, userId, workspaceId, service.port, `${runDir}/preview-${service.name}.log`, 120_000);
+  let url = "";
+  if (ok) {
+    await enableHttpAccess(workspaceId, service.port).catch(() => {});
+    try { url = await setStableUrl(`${baseAlias}-${service.name}`, workspaceId, service.port); }
+    catch (e) { plog(projectId, userId, `Companion "${service.name}" URL alias failed: ${(e as Error).message?.slice(0, 100)}`, { level: "error" }); }
+    plog(projectId, userId, `Companion "${service.name}" is live${url ? ` at ${url}` : ""} ✓`);
+  } else {
+    plog(projectId, userId, `Companion "${service.name}" did not come up on :${service.port}`, { level: "error" });
+  }
+  return { name: service.name, url, port: service.port, ok };
 }
 
 /**

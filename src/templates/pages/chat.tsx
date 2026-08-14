@@ -184,12 +184,19 @@ export function ChatPage({
     <div class="resize-handle" id="resize-handle"></div>
     <div class="artifacts-accent-bar"></div>
 
-    <!-- Tabs Navigation -->
-    <div class="artifacts-tabs" style="display:flex;justify-content:space-between;align-items:center;">
-      <div style="display:flex;">
+    <!-- Tabs Navigation — tabs that don't fit collapse into the ⋯ menu (tab-overflow.js) -->
+    <div class="artifacts-tabs artifacts-tabs-managed" style="display:flex;justify-content:space-between;align-items:center;">
+      <div class="artifacts-tabs-list" id="artifacts-tabs-list">
         <button class="tab-button active" data-tab="filebrowser">Docs</button>
         <button class="tab-button" data-tab="checklist">Task List</button>
         <button class="tab-button" data-tab="preview">Preview</button>
+        <button class="tab-button" data-tab="env">Env</button>
+      </div>
+      <div class="tab-overflow" id="tab-overflow">
+        <button class="tab-overflow-btn" id="tab-overflow-btn" title="More tabs" aria-haspopup="true" aria-expanded="false">
+          <i class="fas fa-ellipsis"></i>
+        </button>
+        <div class="tab-overflow-menu" id="tab-overflow-menu" hidden></div>
       </div>
       <button class="panel-arrow-right" id="artifacts-toggle" style="margin-left:auto;padding:8px;background:none;border:none;color:#ccc;cursor:pointer;">
         <i class="fas fa-chevron-right"></i>
@@ -217,12 +224,43 @@ export function ChatPage({
               </div>
               <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end;flex:1 1 auto;">
                 <button id="preview-plan-btn" title="Profile — how this app runs" style="height:32px;padding:0 12px;border-radius:7px;cursor:pointer;font-size:12.5px;display:inline-flex;align-items:center;gap:7px;font-weight:500;background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);white-space:nowrap;flex:none;"><i class="fas fa-list-check"></i>Profile</button>
+                <button id="preview-env-btn" title="Environment variables this preview runs with" style="height:32px;padding:0 12px;border-radius:7px;cursor:pointer;font-size:12.5px;display:inline-flex;align-items:center;gap:7px;font-weight:500;background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);white-space:nowrap;flex:none;"><i class="fas fa-key"></i>Env<span id="preview-env-count" style="display:none;font-size:11.5px;padding:1px 6px;border-radius:999px;background:var(--border-color,#2a2a2a);color:var(--text-secondary,#9ca3af);"></span></button>
                 <div id="preview-actions" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end;"></div>
               </div>
             </div>
             <div id="preview-body" style="flex:1;min-height:0;position:relative;overflow:hidden;">
               <!-- states rendered by preview-tab.js -->
             </div>
+          </div>
+        </div>
+
+        <!-- Env Tab — the project's environment variables. Values are write-only:
+             the API never returns them, so the list only shows whether a key is set. -->
+        <div class="tab-pane" id="env">
+          <div class="env-panel" id="env-root" data-project-id="${projectId}">
+            <div class="env-panel-head">
+              <div class="env-head-row">
+                <div style="min-width:0;">
+                  <h3 class="env-title">Environment Variables</h3>
+                  <div class="env-sub" id="env-count">Loading…</div>
+                </div>
+                <div class="env-head-actions">
+                  <label class="env-mini" title="Bulk-import KEY=VALUE lines from a .env file">
+                    <i class="fas fa-arrow-up-from-bracket"></i> Upload .env
+                    <input id="env-file" type="file" accept=".env,.txt,text/plain" hidden />
+                  </label>
+                  <button id="env-refresh" class="env-mini" title="Refresh"><i class="fas fa-rotate-right"></i></button>
+                </div>
+              </div>
+              <div class="env-add-row">
+                <input id="env-new-key" class="env-input env-input-key" placeholder="KEY" spellcheck="false" />
+                <input id="env-new-value" class="env-input" placeholder="value" spellcheck="false" />
+                <input id="env-new-desc" class="env-input" placeholder="description (optional)" />
+                <button id="env-add-btn" class="env-mini env-mini-primary">Add</button>
+              </div>
+              <div class="env-msg" id="env-msg" hidden></div>
+            </div>
+            <div class="env-list" id="env-list"></div>
           </div>
         </div>
 
@@ -344,6 +382,8 @@ export function ChatPage({
   <script src="/public/js/document-comments.js"></script>
   <script src="/public/js/artifacts.js"></script>
   <script src="/public/js/preview-tab.js"></script>
+  <script src="/public/js/env-tab.js"></script>
+  <script src="/public/js/tab-overflow.js"></script>
   <script src="/public/js/sidebar.js"></script>
   <script src="/public/js/custom-dropdown.js"></script>
   <script src="/public/js/chat.js"></script>
