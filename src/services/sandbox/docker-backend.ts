@@ -274,7 +274,7 @@ export async function enableHttpAccess(nameOrId: string, port = env.SANDBOX_APP_
   return url;
 }
 
-export async function setStableUrl(_subdomain: string, workspaceId: string): Promise<string> {
+export async function setStableUrl(_subdomain: string, workspaceId: string, _port?: number): Promise<string> {
   // No separate alias system in localhost mode — the app's URL is already stable
   // for the life of the container. Return the last-enabled URL if we have it.
   return _urlByWorkspace.get(baseName(workspaceId)) ?? previewHostBase();

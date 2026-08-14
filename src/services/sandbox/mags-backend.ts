@@ -262,9 +262,13 @@ export async function enableHttpAccess(
 export async function setStableUrl(
   subdomain: string,
   workspaceId: string,
+  port?: number,
 ): Promise<string> {
   const appDomain = process.env.MAGS_APP_DOMAIN || "app.lfg.run";
-  await magsApi("POST", `/api/v2/mags-url-aliases`, { subdomain, workspace_id: workspaceId, domain: appDomain })
+  // `port` (Mags-supported) binds THIS subdomain to a specific VM port, so one VM can
+  // serve several apps on distinct subdomains (e.g. app-x → :8080, admin-x → :5187).
+  // Omit it → defaults to the job's primary port, exactly as before.
+  await magsApi("POST", `/api/v2/mags-url-aliases`, { subdomain, workspace_id: workspaceId, domain: appDomain, ...(port ? { port } : {}) })
     .catch((e) => { if (!/exist|conflict|already/i.test((e as Error).message)) throw e; });
   return `https://${subdomain}.${appDomain}`;
 }

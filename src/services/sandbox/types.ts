@@ -72,7 +72,7 @@ export interface SandboxBackend {
   ): Promise<SandboxExecResult>;
   findJob(nameOrId: string): Promise<JobInfo | null>;
   enableHttpAccess(nameOrId: string, port?: number): Promise<string>;
-  setStableUrl(subdomain: string, workspaceId: string): Promise<string>;
+  setStableUrl(subdomain: string, workspaceId: string, port?: number): Promise<string>;
   stopWorkspace(nameOrId: string): Promise<void>;
   /** Toggle auto-sleep at runtime (no-op on backends without a sleep concept). */
   setNoSleep(nameOrId: string, noSleep: boolean): Promise<void>;
