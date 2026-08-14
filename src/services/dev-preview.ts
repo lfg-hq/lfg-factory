@@ -1506,6 +1506,35 @@ async function driveSandbox(
   return false;
 }
 
+/** Summarize what the preview agent did from its recent command log — used when it ends
+ *  WITHOUT calling `reply`, and (with interrupted=true) when it's PAUSED by a watchdog/Stop
+ *  instead of dying silently. On interruption the message explains where it got to and
+ *  invites the user to say "continue" (the next @preview inherits this history + prior
+ *  actions, so it resumes rather than restarts). */
+async function summarizePreviewRun(model: LanguageModel, instruction: string, projectId: string, interrupted: boolean): Promise<{ reply: string; status: "ok" | "error" | "stuck" }> {
+  const rawTail = (logBuffers.get(projectId) || "").slice(-9000);
+  if (!rawTail.trim()) {
+    return { reply: interrupted
+      ? "I was working on the preview but **paused before finishing** (it was taking a while). Nothing was left broken. Reply **\"continue\"** and I'll pick up from where I left off."
+      : "I investigated but couldn't produce a clean summary — open the Preview tab logs for the details.", status: "stuck" };
+  }
+  try {
+    const { object } = await generateObject({
+      model,
+      schema: zodSchema(z.object({
+        status: z.enum(["ok", "error", "stuck"]).describe("ok = fixed/verified; error = can't run; stuck = paused/needs the user or a genuine code-data bug"),
+        summary: z.string().describe("2-5 sentences, markdown ok. What was being done, what was found, and the next step (or, if paused, that the user can say \"continue\"). Do NOT paste raw SQL/console output."),
+      })),
+      prompt: `You are the LFG Preview agent. You were ${interrupted ? "PAUSED (it was taking too long) while working on" : "asked to do"} "${instruction}" on the live sandbox${interrupted ? ", so you did NOT finish yet" : " but didn't leave a summary"}. From the commands you ran and THEIR OUTPUTS below, write a concise, coherent chat reply for the user: what you were doing and what you found so far. ${interrupted ? "Then clearly say you PAUSED and that they can reply \"continue\" to resume from here — and mention any caveat (a step still pending, something half-applied). Do NOT claim it's done." : "Give the root cause and the recommended next step. If the schema is fine but the app's own code queries a column/table that doesn't exist, say clearly it's an application/repo bug (name the exact column/table) that needs a code or migration fix — not something the preview can fix."}\n\nRecent commands + outputs:\n${rawTail}`,
+    });
+    return { reply: object.summary, status: object.status };
+  } catch {
+    return { reply: interrupted
+      ? "I **paused mid-task** (it was taking a while) — nothing left broken. Reply **\"continue\"** and I'll resume from where I stopped."
+      : "I investigated but couldn't produce a clean summary — open the Preview tab logs for the details.", status: "stuck" };
+  }
+}
+
 // ── Interactive preview agent (@preview in chat) ──────────────────────────────
 // Full shell control of the project's LIVE sandbox, driven by a chat request
 // ("@preview restart the app", "@preview why is postgres failing?"). Same `run`
@@ -1721,32 +1750,18 @@ RULES: source-code edits follow the CODE CHANGES policy above (allowed only on a
     await generateText({ model: driver.model, tools, stopWhen: stepCountIs(40), system, prompt: agentPrompt, abortSignal, onStepFinish: () => opts.onActivity?.() });
   } catch (e) {
     const msg = (e as Error).message || String(e);
-    if (abortSignal?.aborted || /abort/i.test(msg)) return { reply: reply || "Stopped.", status: "stuck" };
+    // Paused (watchdog idle-timeout or user Stop) → don't die silently with "Stopped.".
+    // Summarize what it was doing so far and invite "continue" (it resumes from here).
+    if (abortSignal?.aborted || /abort/i.test(msg)) {
+      return reply ? { reply, status: replyStatus } : await summarizePreviewRun(driver.model, instruction, projectId, true);
+    }
     plog(projectId, userId, `Preview agent error: ${msg}`, { level: "error" });
     return { reply: reply || `I ran into an error: ${msg.slice(0, 300)}`, status: "error" };
   }
   if (reply) return { reply, status: replyStatus };
-  // Fallback: the agent ended WITHOUT calling reply. Do NOT dump raw log lines
-  // (that's the incoherent "here's the last SQL output" mess) — instead do one
-  // quick summarize pass over what it actually ran, so the chat gets a coherent,
-  // human answer with the finding + next step.
-  // Use the RAW recent log (commands AND their outputs) so the summarizer can see
-  // the actual findings — e.g. the SQL results proving a column is missing.
-  const rawTail = (logBuffers.get(projectId) || "").slice(-9000);
-  if (rawTail.trim()) {
-    try {
-      const { object } = await generateObject({
-        model: driver.model,
-        schema: zodSchema(z.object({
-          status: z.enum(["ok", "error", "stuck"]).describe("ok = fixed/verified; error = can't run; stuck = needs the user or is a genuine code/data bug"),
-          summary: z.string().describe("2-5 sentences, markdown ok. The finding, the ROOT CAUSE, and the recommended next step. Do NOT paste raw SQL/console output."),
-        })),
-        prompt: `You are the LFG Preview agent. You just investigated "${instruction}" on the live sandbox but didn't leave a summary. From the commands you ran and THEIR OUTPUTS below, write a concise, coherent chat reply for the user: what you found, the root cause, and what to do next. If the schema is fine but the app's own code queries a column/table that doesn't exist, say clearly it's an application/repo bug (name the exact column/table) that needs a code or migration fix — not something the preview can fix.\n\nRecent commands + outputs:\n${rawTail}`,
-      });
-      return { reply: object.summary, status: object.status };
-    } catch { /* fall through to the plain message */ }
-  }
-  return { reply: "I investigated but couldn't produce a clean summary — open the Preview tab logs for the details.", status: "stuck" };
+  // Fallback: the agent ended WITHOUT calling reply → summarize what it actually ran so
+  // the chat gets a coherent answer with the finding + next step (not raw log lines).
+  return await summarizePreviewRun(driver.model, instruction, projectId, false);
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────

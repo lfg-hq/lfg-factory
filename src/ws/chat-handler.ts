@@ -149,7 +149,14 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
     // streaming tool calls the whole time. A fixed timer killed those mid-work. So we
     // fire only after CHAT_STREAM_IDLE_TIMEOUT_MIN with NO output — onActivity (passed to
     // handleStream) bumps lastActivity on every stream event.
-    const idleMs = parseInt(process.env.CHAT_STREAM_IDLE_TIMEOUT_MIN || process.env.CHAT_STREAM_TIMEOUT_MIN || "4", 10) * 60_000;
+    // @preview is an interactive shell agent doing real work (build/scan/fix). It's more
+    // forgiving on idle, and — crucially — when the watchdog DOES fire, we don't spam a
+    // generic "stopped responding" toast: aborting makes runPreviewChat emit a graceful,
+    // RESUMABLE summary ("here's where I got to — reply 'continue'"), which is the message
+    // the user should see instead of a bare kill.
+    const isPreviewCmd = /^\s*@preview\b/i.test(normalizedMessage) && !!conn.projectId;
+    const idleMs = parseInt(process.env.CHAT_STREAM_IDLE_TIMEOUT_MIN || process.env.CHAT_STREAM_TIMEOUT_MIN || "4", 10) * 60_000
+      * (isPreviewCmd ? 2 : 1);
     let watchdogFired = false;
     let lastActivity = Date.now();
     const bumpActivity = () => { lastActivity = Date.now(); };
@@ -161,7 +168,9 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
       // Reset the guard immediately so a hung provider can't wedge the connection even if
       // the abort doesn't unblock the underlying socket.
       conn.isStreaming = false;
-      send(ws, { type: "error", message: "The assistant stopped responding — please try again." });
+      // For @preview the aborted run produces its OWN graceful "paused — reply continue"
+      // message; a second generic error toast would just be noise, so skip it there.
+      if (!isPreviewCmd) send(ws, { type: "error", message: "The assistant stopped responding — please try again." });
       clearInterval(watchdog);
     }, 15_000);
 
