@@ -582,12 +582,12 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       <!-- Build status banner (persists across refresh — derived from ticket state) -->
       <div id="ticket-status-banner" style="display:none;padding:.6rem 1rem;font-size:.82rem;font-weight:600;flex-shrink:0;border-bottom:1px solid rgba(255,255,255,.06);"></div>
       <!-- Git branch banner — sticky at the top of the scrolling log -->
-      <div id="actions-git-banner" style="display:none;position:sticky;top:0;z-index:6;padding:.5rem 1rem;background:#17141d;border-bottom:1px solid rgba(139,92,246,.18);flex-shrink:0;">
+      <div id="actions-git-banner" style="display:none;position:sticky;top:0;z-index:6;padding:.5rem 1rem;background:var(--card-bg, #17141d);border-bottom:1px solid var(--border-color, rgba(139,92,246,.18));flex-shrink:0;">
         <div style="display:flex;align-items:center;gap:.5rem;font-size:.8rem;">
-          <i class="fas fa-code-branch" style="color:#a78bfa;font-size:.75rem;"></i>
-          <code id="actions-git-branch" style="color:#c4b5fd;font-size:.8rem;">—</code>
-          <span style="color:rgba(255,255,255,.25);margin:0 .25rem;">·</span>
-          <code id="actions-git-sha" style="color:rgba(255,255,255,.35);font-size:.75rem;">—</code>
+          <i class="fas fa-code-branch" style="color:var(--primary-color, #a78bfa);font-size:.75rem;"></i>
+          <code id="actions-git-branch" style="color:var(--text-color);background:transparent;font-size:.8rem;">—</code>
+          <span style="color:var(--text-secondary);margin:0 .25rem;">·</span>
+          <code id="actions-git-sha" style="color:var(--text-secondary);background:transparent;font-size:.75rem;">—</code>
         </div>
       </div>
       <!-- Log rows -->

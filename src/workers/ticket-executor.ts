@@ -849,6 +849,18 @@ export async function startTicketWorker() {
 
 // ── Main Executor ─────────────────────────────────────────────────────
 
+/** Branch name for a ticket: `feature/<key>-<title-slug>` (e.g.
+ *  `feature/cal-4-retell-voice-agent-provisioning`) — readable instead of the old
+ *  `feature/ticket-<uuid>`. Falls back to the uuid form when the ticket has no key. Only
+ *  used as the FALLBACK when `githubBranch` is unset, and persisted on first build — so
+ *  already-built tickets keep their existing branch (backward-compatible). */
+function ticketBranchName(ticket: { ticketKey?: string | null; name?: string | null; id: string }): string {
+  const slug = (s: string) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  const key = slug(ticket.ticketKey || "");
+  const title = slug(ticket.name || "").slice(0, 40).replace(/-+$/g, "");
+  return key ? `feature/${key}${title ? `-${title}` : ""}` : `feature/ticket-${ticket.id}`;
+}
+
 async function executeTicket(ticketId: string): Promise<void> {
   const startTime = Date.now();
 
@@ -925,7 +937,7 @@ async function executeTicket(ticketId: string): Promise<void> {
   const projectDirName = "project"; // Default, matching Django stack_config
 
   // Feature branch name matching Django
-  const featureBranch = `feature/ticket-${ticketId}`;
+  const featureBranch = ticket.githubBranch ?? ticketBranchName(ticket);
 
   // ── Step 2: Find or create sandbox ─────────────────────────────────
   console.log(`[ticket-executor] Step 2: Setting up workspace`);
@@ -1561,7 +1573,7 @@ async function ensureIsolatedChatSandbox(
   ownerId: string,
 ): Promise<{ workspaceId: string } | { error: string }> {
   const projectDirName = "project";
-  const featureBranch = ticket.githubBranch ?? `feature/ticket-${ticket.id}`;
+  const featureBranch = ticket.githubBranch ?? ticketBranchName(ticket);
 
   // 1) SAME TICKET → SAME SANDBOX. Reuse the ticket's existing dedicated VM — the
   //    BUILD VM ("ticket") or a prior chat VM ("ticket-chat"), whichever exists. The
@@ -1971,7 +1983,7 @@ ${message}
     }
 
     if (chatGhOwner && chatGhRepo && githubToken) {
-      const featureBranch = ticket.githubBranch ?? `feature/ticket-${ticketId}`;
+      const featureBranch = ticket.githubBranch ?? ticketBranchName(ticket);
       try {
         await addLog(ticketId, "Checking for code changes...", "command", ownerId);
         const { sha } = await commitAndPush({
@@ -2053,7 +2065,7 @@ async function finalizeTicketChat(
   workSummary = "",
 ): Promise<void> {
   const projectDir = `${WORKING_DIR}/project`;
-  const featureBranch = ticket.githubBranch ?? `feature/ticket-${ticketId}`;
+  const featureBranch = ticket.githubBranch ?? ticketBranchName(ticket);
   const auth = await resolveRepoAuth(project, ownerId);
   if (!auth) {
     await addLog(ticketId, "Changes made, but no git remote/token is configured — they stay in the sandbox. Connect the repo to persist chat edits.", "cli_error", ownerId);
@@ -2169,7 +2181,7 @@ async function executeTicketApi(ticketId: string): Promise<void> {
   await db.update(projectTickets).set({ status: "in_progress", queueStatus: "executing", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
 
   let projectDirName = "project";
-  const featureBranch = `feature/ticket-${ticketId}`;
+  const featureBranch = ticket.githubBranch ?? ticketBranchName(ticket);
 
   // ── Reuse the project's always-on PREVIEW sandbox via a git WORKTREE ──
   // If the project has a running preview env (env-<projectId> with the repo at
@@ -3085,7 +3097,7 @@ async function recoverUnpushedTickets() {
       console.log(`[ticket-executor] Recovery: pushing unpushed ticket "${ticket.name}" (${ticket.id})`);
 
       const workspaceId = sandbox.magsWorkspaceId;
-      const featureBranch = ticket.githubBranch ?? `feature/ticket-${ticket.id}`;
+      const featureBranch = ticket.githubBranch ?? ticketBranchName(ticket);
       const projectDirName = "project";
 
       // The build VM is ephemeral — after a server restart / VM sleep it may be
