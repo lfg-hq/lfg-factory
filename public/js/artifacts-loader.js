@@ -340,6 +340,31 @@ document.addEventListener('DOMContentLoaded', function() {
         },
         _ticketModalElements: null,
         _ticketModalHelpers: null,
+        // Open the FULL rich ticket view (Details/Actions/Tasks/Preview/Git/Addenda/Server
+        // Logs — the same drawer as the Tickets page) as a right-side SIDEBAR, embedded via
+        // an iframe in "embed" mode. Replaces the old centered ticket popup so the view is
+        // consistent and users can hop between the chat and the ticket without a modal.
+        openTicketSidebar: function(ticketId) {
+            var pid = window.currentProjectId || (this.ticketModalState && this.ticketModalState.projectId);
+            if (!pid || !ticketId) return;
+            if (!document.getElementById('lfg-ticket-sidebar-style')) {
+                var st = document.createElement('style');
+                st.id = 'lfg-ticket-sidebar-style';
+                st.textContent = '#lfg-ticket-sidebar{position:fixed;top:0;right:0;height:100vh;width:820px;max-width:100vw;z-index:10050;background:var(--card-bg,#0d0d0d);box-shadow:-4px 0 24px rgba(0,0,0,0.4);transform:translateX(100%);transition:transform .28s ease;display:flex;flex-direction:column;}#lfg-ticket-sidebar.active{transform:translateX(0);}#lfg-ticket-sidebar iframe{flex:1;border:0;width:100%;height:100%;background:var(--card-bg,#0d0d0d);}#lfg-ticket-sidebar-close{position:absolute;top:12px;left:-42px;width:34px;height:34px;border-radius:9px;border:none;background:var(--card-bg,#0d0d0d);color:var(--text-color,#e0e0e0);cursor:pointer;font-size:18px;line-height:1;box-shadow:-2px 2px 10px rgba(0,0,0,.35);}';
+                document.head.appendChild(st);
+            }
+            var panel = document.getElementById('lfg-ticket-sidebar');
+            if (!panel) {
+                panel = document.createElement('div');
+                panel.id = 'lfg-ticket-sidebar';
+                panel.innerHTML = '<button id="lfg-ticket-sidebar-close" title="Close ticket">&times;</button><iframe id="lfg-ticket-sidebar-frame" title="Ticket"></iframe>';
+                document.body.appendChild(panel);
+                panel.querySelector('#lfg-ticket-sidebar-close').addEventListener('click', function() { panel.classList.remove('active'); });
+                document.addEventListener('keydown', function(e) { if (e.key === 'Escape' && panel.classList.contains('active')) panel.classList.remove('active'); });
+            }
+            panel.querySelector('#lfg-ticket-sidebar-frame').src = '/projects/' + encodeURIComponent(pid) + '/tickets?embed=' + encodeURIComponent(ticketId);
+            requestAnimationFrame(function() { panel.classList.add('active'); });
+        },
         getTicketModalHelpers: function() {
             if (this._ticketModalHelpers) {
                 return this._ticketModalHelpers;
@@ -989,9 +1014,15 @@ document.addEventListener('DOMContentLoaded', function() {
                     return modalState.list[modalState.index];
                 },
                 open(list, index) {
-                    ensureModal();
-                    modalState.list = Array.isArray(list) ? list.slice() : [];
-                    this.openAtIndex(index);
+                    // NEW: open the rich ticket DRAWER as a right-side sidebar (same view as
+                    // the Tickets page) instead of the centered popup. Old modal code kept
+                    // (commented) for reference / rollback.
+                    var _t = Array.isArray(list) ? list[index] : null;
+                    if (_t && _t.id) { self.openTicketSidebar(_t.id); return; }
+                    // --- OLD POPUP (disabled) ---
+                    // ensureModal();
+                    // modalState.list = Array.isArray(list) ? list.slice() : [];
+                    // this.openAtIndex(index);
                 },
                 openAtIndex(index) {
                     ensureModal();

@@ -257,6 +257,22 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
       font-size: 0.75rem;
       color: rgba(255,255,255,0.35);
     }
+    /* Embedded drawer mode (?embed=&lt;ticketId&gt;): render ONLY the ticket drawer,
+       full-frame, so the chat page can show the SAME rich ticket view inside a right-side
+       iframe sidebar (instead of the old popup). Hides the nav + board + the drawer's own
+       close/resize (the chat sidebar owns closing). */
+    body.embed-drawer { overflow: hidden; }
+    body.embed-drawer .sidebar,
+    body.embed-drawer .tickets-page { display: none !important; }
+    body.embed-drawer #ticket-drawer {
+      width: 100% !important;
+      max-width: 100% !important;
+      transform: none !important;
+      box-shadow: none !important;
+      z-index: 1 !important;
+    }
+    body.embed-drawer .drawer-close,
+    body.embed-drawer .drawer-resize-handle { display: none !important; }
   </style>
 </head>
 <body data-user-id="${user.id}" data-project-id="${project.projectId}">
@@ -774,8 +790,18 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode 
     if (!menu) { var d = document.getElementById('build-settings-dropdown'); if (d) d.classList.remove('open'); }
   });
 
-  // Restore drawer state from sessionStorage on page load
+  // Embedded mode: /projects/:id/tickets?embed=<ticketId> renders ONLY the drawer for
+  // that ticket (see .embed-drawer CSS), so the chat page can show the SAME view in a
+  // right-side iframe sidebar. Takes precedence over the sessionStorage restore.
+  var EMBED_TICKET = new URLSearchParams(window.location.search).get('embed');
+  if (EMBED_TICKET) {
+    document.body.classList.add('embed-drawer');
+    setTimeout(function() { openTicketDrawer(EMBED_TICKET); }, 0);
+  }
+
+  // Restore drawer state from sessionStorage on page load (skipped in embed mode)
   (function restoreDrawer() {
+    if (EMBED_TICKET) return;
     var saved = sessionStorage.getItem('lfg_drawer_ticket_' + PROJECT_ID);
     if (saved) {
       // Defer so DOM is ready and ticketMap is populated
