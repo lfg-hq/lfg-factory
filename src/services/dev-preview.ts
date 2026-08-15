@@ -348,6 +348,30 @@ async function connectionReachable(workspaceId: string, conn: string, fallbackPo
 }
 
 /**
+ * Decide whether to use a user-provided connection var (skip provisioning) vs provision
+ * our own. Rule:
+ *   • explicit "Use my DB" (provided) → respect the user's var.
+ *   • auto + var points at LOCALHOST → NEVER trust it: it's a placeholder for the DB we
+ *     own, and its creds are often blank/stale (→ SASL "client password must be a
+ *     string" or "role app does not exist"). Provision ours and inject the real string.
+ *   • auto + var points at an EXTERNAL host → hit it (TCP) to confirm it's reachable; if
+ *     so it's the user's real DB → use it, else provision a local one.
+ */
+async function shouldUseProvidedDb(workspaceId: string, projectId: string, userId: string, dbSpec: PlannedDb, providedVal: string, dbMode: string): Promise<boolean> {
+  if (!providedVal) {
+    if (dbMode === "provided") plog(projectId, userId, `DB mode is "Use my DB" but ${dbSpec.connectionEnvVar} isn't set — set it in the Environment tab + Restart, or switch to auto.`, { level: "error" });
+    return false;
+  }
+  if (dbMode === "provided") { plog(projectId, userId, `${dbSpec.engine}: using your provided ${dbSpec.connectionEnvVar} (Use-my-DB mode).`); return true; }
+  const hp = parseHostPort(providedVal);
+  const isLocal = !!hp && /^(localhost|127\.0\.0\.1|::1|0\.0\.0\.0)$/i.test(hp.host);
+  if (isLocal) { plog(projectId, userId, `${dbSpec.engine}: your ${dbSpec.connectionEnvVar} points at localhost — provisioning our own local DB and injecting its connection (ignoring the placeholder creds).`); return false; }
+  const reachable = await connectionReachable(workspaceId, providedVal, ENGINES[dbSpec.engine].port).catch(() => false);
+  plog(projectId, userId, `${dbSpec.engine}: probing your external ${dbSpec.connectionEnvVar} → ${reachable ? "reachable, using it (not provisioning)" : "NOT reachable, provisioning a local one"}.`);
+  return reachable;
+}
+
+/**
  * Reconcile a manifest's `databases` before provisioning — the reliability layer behind
  * "the preview identifies the services and keeps them running". Unions:
  *   • STICKY — every engine already provisioned (projectDatabases row), so a flaky
@@ -398,16 +422,7 @@ async function reapplyEnv(projectId: string, userId: string, workspaceId: string
     );
     for (const dbSpec of manifest.databases) {
       const providedVal = providedVals.get(dbSpec.connectionEnvVar) || "";
-      // Only treat a provided connection as "bring-your-own DB" (skip provisioning) if it
-      // actually points at a REACHABLE database — hit it to confirm. A stored DATABASE_URL
-      // that just points at 127.0.0.1:5432 with nothing listening is a placeholder for the
-      // local DB we're meant to provide, NOT an external DB.
-      let useProvided = false;
-      if (providedVal && (dbMode === "provided" || dbMode === "auto")) {
-        useProvided = await connectionReachable(workspaceId, providedVal, ENGINES[dbSpec.engine].port).catch(() => false);
-        plog(projectId, userId, `${dbSpec.engine}: probing your ${dbSpec.connectionEnvVar} → ${useProvided ? "reachable, using it (not provisioning)" : "NOT reachable, will provision a local one"}.`);
-        if (dbMode === "provided" && !useProvided) plog(projectId, userId, `(DB mode is "Use my DB" but ${dbSpec.connectionEnvVar} isn't reachable — provisioning a local ${dbSpec.engine} so the app runs.)`, { level: "error" });
-      }
+      const useProvided = await shouldUseProvidedDb(workspaceId, projectId, userId, dbSpec, providedVal, dbMode);
       if (useProvided) continue;
       plog(projectId, userId, `Starting ${dbSpec.engine} (docker) — pulling image + creating the container if needed…`);
       const h = await ensureEngine(projectId, dbSpec.engine).catch((e) => { plog(projectId, userId, `Could not start ${dbSpec.engine}: ${(e as Error).message?.slice(0, 200)}`, { level: "error" }); return null; });
@@ -436,6 +451,44 @@ export async function getAppRuntimeLog(projectId: string, lines = 500): Promise<
   } catch {
     return "";
   }
+}
+
+/** Logs of each provisioned DB container (docker logs) — shown alongside the app log. */
+export async function getDbLogs(projectId: string, lines = 200): Promise<Array<{ engine: string; log: string }>> {
+  const workspaceId = await envWorkspaceId(projectId).catch(() => null);
+  if (!workspaceId) return [];
+  const engines = await db.select({ engine: projectDatabases.engine }).from(projectDatabases).where(eq(projectDatabases.projectId, projectId));
+  const out: Array<{ engine: string; log: string }> = [];
+  for (const { engine } of engines) {
+    const container = ENGINES[engine as DbEngine]?.container;
+    if (!container) continue;
+    const r = await sh(workspaceId, `docker logs --tail ${lines} ${container} 2>&1 | tail -n ${lines}`, 20_000).catch(() => ({ output: "" }));
+    out.push({ engine, log: (r.output || "").trim() || "(no output)" });
+  }
+  return out;
+}
+
+/**
+ * Reset a provisioned database: remove its container + wipe its data dir so the next
+ * run re-inits a FRESH cluster with our creds (migrations reseed). Then restart the
+ * preview so it comes back up + re-migrates. `engine` optional → reset all.
+ */
+export async function resetDatabase(projectId: string, userId: string, engine?: string): Promise<{ ok: boolean; error?: string; reset: string[] }> {
+  const workspaceId = await envWorkspaceId(projectId).catch(() => null);
+  if (!workspaceId) return { ok: false, error: "No sandbox for this project yet.", reset: [] };
+  const rows = await db.select({ engine: projectDatabases.engine }).from(projectDatabases).where(eq(projectDatabases.projectId, projectId));
+  const targets = (engine ? rows.filter((r) => r.engine === engine) : rows).map((r) => r.engine as DbEngine);
+  if (!targets.length) return { ok: false, error: "No provisioned database to reset.", reset: [] };
+  await loadPublicId(projectId);
+  for (const e of targets) {
+    const spec = ENGINES[e];
+    if (!spec) continue;
+    plog(projectId, userId, `Resetting ${e} — removing the container and wiping ${spec.dataDir}…`, { level: "error" });
+    await sh(workspaceId, `docker rm -f ${spec.container} 2>/dev/null; rm -rf ${spec.dataDir}/* ${spec.dataDir}/.[!.]* 2>/dev/null; echo reset_${e}`, 60_000).catch(() => {});
+  }
+  // Restart re-provisions (fresh initdb with our creds) + re-runs migrations to reseed.
+  restartPreview(projectId, { userId }).catch((e) => console.error("[preview] reset-db restart failed:", e));
+  return { ok: true, reset: targets };
 }
 
 /** Detect (or re-detect) the setup manifest. Merges project custom overrides. */
@@ -2391,18 +2444,10 @@ fi`, 240_000);
       await setPreview(projectId, userId, { previewStatus: "provisioning" }, `Provisioning ${manifest.databases.map((d) => d.engine).join(", ")}…`);
       for (const dbSpec of manifest.databases) {
         const providedVal = providedVals.get(dbSpec.connectionEnvVar) || "";
-        // Skip provisioning only if the provided connection actually HITS a reachable DB.
-        let useProvided = false;
-        if (providedVal && (dbMode === "provided" || dbMode === "auto")) {
-          useProvided = await connectionReachable(workspaceId, providedVal, ENGINES[dbSpec.engine].port).catch(() => false);
-          plog(projectId, userId, `${dbSpec.engine}: probing your ${dbSpec.connectionEnvVar} → ${useProvided ? "reachable, using it (not provisioning)" : "NOT reachable, will provision a local one"}.`);
-        }
         if (dbMode === "provided" && !providedVal) {
-          plog(projectId, userId, `DB mode is "Use my DB" but ${dbSpec.connectionEnvVar} isn't set — set it in the Environment tab + Restart.`, { level: "error" });
           await publishSummary(userId, opts.conversationId, `⚠️ **DB mode is "Use my DB"** but \`${dbSpec.connectionEnvVar}\` isn't set. Add it in the Environment tab and Restart — or switch DB mode to "Always provision".`, pub(projectId)).catch(() => {});
-          continue;
         }
-        if (useProvided) continue;
+        if (await shouldUseProvidedDb(workspaceId, projectId, userId, dbSpec, providedVal, dbMode)) continue;
         plog(projectId, userId, `Provisioning ${dbSpec.engine} → ${dbSpec.connectionEnvVar}…`);
         const h = await ensureEngine(projectId, dbSpec.engine);
         engineHandles.push(h);

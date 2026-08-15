@@ -20,6 +20,7 @@
   let loadedOnce = false;
   let logText = ""; // accumulated setup log
   let appLogText = ""; // the RUNNING app's own runtime log (preview.log), fetched on demand
+  let dbLogs = []; // [{engine, log}] — each provisioned DB's docker log, shown under App logs
   let appLogTimer = null; // auto-refresh poll while the App-logs tab is open
   let manifest = null; // the setup plan (derived from the profile)
   let profileData = null; // the App Profile — the detailed "how to run this app" plan
@@ -133,11 +134,25 @@
 
   // Live runtime log of the RUNNING app (its own stdout — auth/email/errors), separate
   // from LFG's setup log. Fetched on demand + auto-refreshed while this tab is open.
+  // App logs = the app's own runtime output PLUS each provisioned DB's docker log,
+  // sectioned. A "Reset DB" button wipes + reseeds a broken/foreign database.
   function appLogPanel() {
     return `<div style="position:relative;flex:1;min-height:0;display:flex;flex-direction:column;">
-      <button data-action="refreshapplog" title="Refresh" style="position:absolute;top:8px;right:10px;z-index:2;padding:5px 10px;font-size:12px;border-radius:6px;cursor:pointer;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);display:inline-flex;align-items:center;gap:5px;"><i class="fas fa-rotate-right"></i><span>Refresh</span></button>
-      <pre id="app-log" style="flex:1;min-height:0;margin:0;overflow:auto;text-align:left;background:var(--background-surface,#141414);border:1px solid var(--border-color,#2a2a2a);border-radius:8px;padding:12px 14px;font-size:12px;line-height:1.55;color:var(--text-color,#cbd5e1);white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${esc(appLogText || "Loading the app's runtime log…")}</pre>
+      <div style="position:absolute;top:8px;right:10px;z-index:2;display:flex;gap:6px;">
+        <button data-action="resetdb" title="Wipe the database + reseed (fixes a broken/foreign DB)" style="padding:5px 10px;font-size:12px;border-radius:6px;cursor:pointer;background:transparent;color:#f87171;border:1px solid var(--border-color,#333);display:inline-flex;align-items:center;gap:5px;"><i class="fas fa-database"></i><span>Reset DB</span></button>
+        <button data-action="refreshapplog" title="Refresh" style="padding:5px 10px;font-size:12px;border-radius:6px;cursor:pointer;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);display:inline-flex;align-items:center;gap:5px;"><i class="fas fa-rotate-right"></i><span>Refresh</span></button>
+      </div>
+      <div id="app-log-wrap" style="flex:1;min-height:0;overflow:auto;text-align:left;background:var(--background-surface,#141414);border:1px solid var(--border-color,#2a2a2a);border-radius:8px;padding:12px 14px;">${appLogsInner()}</div>
     </div>`;
+  }
+  function appLogsInner() {
+    const sec = (title, bodyText, color) => `<div style="margin:0 0 16px;">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:${color};margin:0 0 5px;font-weight:700;display:flex;align-items:center;gap:6px;"><i class="fas fa-circle" style="font-size:6px;"></i>${esc(title)}</div>
+      <pre style="margin:0;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.5;color:var(--text-color,#cbd5e1);">${esc(bodyText || "(no output)")}</pre>
+    </div>`;
+    let html = sec("App", appLogText || "Loading the app's runtime log…", "#a78bfa");
+    for (const d of dbLogs) html += sec((d.engine || "database") + " · database", d.log, "#34d399");
+    return html;
   }
   async function loadAppLog() {
     try {
@@ -146,13 +161,26 @@
         appLogText = r.status === 404
           ? "App-log endpoint not found (HTTP 404) — the server needs a redeploy to pick up this feature."
           : "App log unavailable (HTTP " + r.status + ").";
+        dbLogs = [];
       } else {
         const j = await r.json();
         appLogText = (j && j.log) || "(no output yet — the app hasn't printed anything, or the preview isn't running)";
+        dbLogs = (j && Array.isArray(j.dbs)) ? j.dbs : [];
       }
-    } catch (e) { appLogText = "Could not reach the app-log endpoint (" + ((e && e.message) || "network error") + ")."; }
-    const el = $("app-log");
-    if (el) { el.textContent = appLogText; el.scrollTop = el.scrollHeight; }
+    } catch (e) { appLogText = "Could not reach the app-log endpoint (" + ((e && e.message) || "network error") + ")."; dbLogs = []; }
+    const wrap = $("app-log-wrap");
+    if (wrap) { const atBottom = wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 80; wrap.innerHTML = appLogsInner(); if (atBottom) wrap.scrollTop = wrap.scrollHeight; }
+  }
+  async function doResetDb() {
+    if (!confirm("Reset the database? This WIPES all preview data and re-initializes a fresh database, then restarts the preview (your migrations reseed the schema). This can't be undone.")) return;
+    toast("Resetting the database…");
+    try {
+      const r = await api("/reset-db", { method: "POST", body: JSON.stringify({}) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+      toast("Database reset — restarting the preview…");
+      load();
+    } catch (e) { toast("Reset failed: " + e.message); }
   }
   function startAppPoll() { stopAppPoll(); appLogTimer = setInterval(loadAppLog, 4000); }
   function stopAppPoll() { if (appLogTimer) { clearInterval(appLogTimer); appLogTimer = null; } }
@@ -540,6 +568,8 @@
     if (!body) return;
     const existing = document.getElementById("preview-log-overlay");
     if (existing) { existing.remove(); stopAppPoll(); return; }
+    // App is up → default to App logs (its runtime + DB logs), not the setup log.
+    if (currentView === "running") progressTab = "applogs";
     const overlay = document.createElement("div");
     overlay.id = "preview-log-overlay";
     overlay.style.cssText = "position:absolute;inset:0;padding:16px 20px;background:var(--bg-color,#0f0f0f);display:flex;flex-direction:column;gap:10px;z-index:5;";
@@ -551,7 +581,8 @@
       </div>
       <div data-pane style="flex:1;min-height:0;display:flex;flex-direction:column;">${activePane()}</div>`;
     body.appendChild(overlay);
-    if (progressTab === "logs") scrollLog();
+    if (progressTab === "applogs") { loadAppLog(); startAppPoll(); }
+    else if (progressTab === "logs") scrollLog();
   }
 
   // ── Profile panel — the detailed, persisted "how to run this app" plan ──
@@ -796,6 +827,7 @@
     else if (action === "stop") doStop();
     else if (action === "togglelog") toggleLog();
     else if (action === "refreshapplog") loadAppLog();
+    else if (action === "resetdb") doResetDb();
     else if (action === "copylog") copyLog();
     else if (action === "screenshot") takeScreenshot(b);
     else if (action === "closeplan") togglePlan();

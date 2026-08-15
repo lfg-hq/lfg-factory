@@ -28,6 +28,8 @@ export interface EngineSpec {
   port: number;
   defaultDb: string;
   username: string;
+  /** Host data dir on /data (persists across VM restarts) — wiped on a DB reset. */
+  dataDir: string;
   /** Idempotent bring-up: run the official image (or start it) + wait for ready. */
   bringup: (pw: string) => string;
   connectionString: (c: { port: number; db: string; user: string; pw: string }) => string;
@@ -91,7 +93,7 @@ echo "--- ${o.name} container logs ---"; docker logs --tail 25 ${o.name} 2>&1; e
 
 export const ENGINES: Record<DbEngine, EngineSpec> = {
   postgres: {
-    container: "postgres", port: 5432, defaultDb: "app", username: "app",
+    container: "postgres", port: 5432, defaultDb: "app", username: "app", dataDir: "/data/pgdata",
     // The postgres image creates the role+db from POSTGRES_* on first init and
     // allows password auth over TCP by default — no manual initdb/pg_hba needed.
     bringup: (pw) => dockerBringup({
@@ -109,7 +111,7 @@ export const ENGINES: Record<DbEngine, EngineSpec> = {
     connectionString: (c) => `postgresql://${c.user}:${c.pw}@127.0.0.1:${c.port}/${c.db}`,
   },
   mysql: {
-    container: "mysql", port: 3306, defaultDb: "app", username: "app",
+    container: "mysql", port: 3306, defaultDb: "app", username: "app", dataDir: "/data/mysqldata",
     // mysql_native_password for broad driver compatibility (.NET/Node/PHP mysql
     // clients). Image creates app db+user from MYSQL_* on first init.
     bringup: (pw) => dockerBringup({
@@ -125,7 +127,7 @@ export const ENGINES: Record<DbEngine, EngineSpec> = {
     connectionString: (c) => `mysql://${c.user}:${c.pw}@127.0.0.1:${c.port}/${c.db}`,
   },
   redis: {
-    container: "redis", port: 6379, defaultDb: "0", username: "default",
+    container: "redis", port: 6379, defaultDb: "0", username: "default", dataDir: "/data/redisdata",
     bringup: (pw) => dockerBringup({
       name: "redis", image: "redis:7-alpine", port: 6379,
       volume: "/data/redisdata:/data",
@@ -136,7 +138,7 @@ export const ENGINES: Record<DbEngine, EngineSpec> = {
     connectionString: (c) => `redis://${c.user}:${c.pw}@127.0.0.1:${c.port}`,
   },
   mssql: {
-    container: "mssql", port: 1433, defaultDb: "app", username: "sa",
+    container: "mssql", port: 1433, defaultDb: "app", username: "sa", dataDir: "/data/db-mssql",
     // Readiness from the container log (sqlcmd isn't reliably on PATH inside the
     // image at first boot); the SA login is what apps use.
     bringup: (pw) => `mkdir -p /data/db-mssql && chmod 777 /data/db-mssql

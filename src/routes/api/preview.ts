@@ -14,7 +14,7 @@ import { db } from "../../config/db.ts";
 import { projectEnvironments } from "../../db/schema/project-environments.ts";
 import { projects, projectEnvironmentVariables } from "../../db/schema/projects.ts";
 import { encryptSecret, decryptSecret } from "../../utils/crypto.ts";
-import { getPreviewState, setupPreview, restartPreview, stopPreview, detectManifest, manifestSchema, capturePreviewScreenshot, getPreviewBranches, reprobeProfile, getAppRuntimeLog, setServiceEnabled } from "../../services/dev-preview.ts";
+import { getPreviewState, setupPreview, restartPreview, stopPreview, detectManifest, manifestSchema, capturePreviewScreenshot, getPreviewBranches, reprobeProfile, getAppRuntimeLog, getDbLogs, resetDatabase, setServiceEnabled } from "../../services/dev-preview.ts";
 import { loadAppProfile, saveAppProfile, appProfileSchema } from "../../services/app-profile.ts";
 import type { auth } from "../../auth/index.ts";
 
@@ -202,12 +202,23 @@ previewApi.post("/:projectId/env-vars/bulk", async (c) => {
   return c.json({ ok: true, count });
 });
 
-// Live app runtime log (the running app's own stdout — auth/email/errors), tailed on demand.
+// Live app runtime log (the running app's own stdout) + each provisioned DB's log.
 previewApi.get("/:projectId/preview/app-logs", async (c) => {
   const user = c.get("user");
   const access = await getProjectAccess(c.req.param("projectId")!, user.id);
   if (!access) return c.json({ error: "Not found" }, 404);
-  return c.json({ log: await getAppRuntimeLog(access.project.id) });
+  const [log, dbs] = await Promise.all([getAppRuntimeLog(access.project.id), getDbLogs(access.project.id)]);
+  return c.json({ log, dbs });
+});
+
+// Reset a provisioned database (wipe its data → fresh cluster + reseed on restart).
+previewApi.post("/:projectId/preview/reset-db", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId")!, user.id);
+  if (!access) return c.json({ error: "Not found" }, 404);
+  const body = await c.req.json().catch(() => ({} as any));
+  const res = await resetDatabase(access.project.id, user.id, typeof body.engine === "string" ? body.engine : undefined);
+  return c.json(res, res.ok ? 202 : 400);
 });
 
 // Create or update by key (upsert on the (projectId, key) unique index).
