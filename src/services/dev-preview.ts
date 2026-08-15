@@ -338,12 +338,14 @@ async function reconcileDatabases(projectId: string, userId: string, manifest: P
   const before = have.size;
   const sticky = (await db.select({ engine: projectDatabases.engine }).from(projectDatabases).where(eq(projectDatabases.projectId, projectId))).map((r) => r.engine as DbEngine);
   const signals = await detectDbSignals(projectId, dir).catch(() => [] as DbEngine[]);
+  // Always report what the DB check saw — so "why don't I see it checking DBs?" is answered.
+  plog(projectId, userId, `Checking databases — plan lists: [${manifest.databases.map((d) => d.engine).join(", ") || "none"}], already provisioned: [${sticky.join(", ") || "none"}], detected in code: [${signals.join(", ") || "none"}].`);
   const defEnvVar: Record<DbEngine, string> = { postgres: "DATABASE_URL", mysql: "DATABASE_URL", redis: "REDIS_URL", mssql: "ConnectionStrings__DefaultConnection" };
   const defFmt: Record<DbEngine, PlannedDb["connectionFormat"]> = { postgres: "url", mysql: "url", redis: "keyvalue", mssql: "dotnet-sqlserver" };
   for (const e of new Set([...sticky, ...signals])) {
     if (have.has(e)) continue;
     have.set(e, { engine: e, connectionEnvVar: defEnvVar[e], connectionFormat: defFmt[e] });
-    plog(projectId, userId, `Detected a required ${e} database not in the plan (${sticky.includes(e) ? "already provisioned" : "from the code"}) — provisioning it → ${defEnvVar[e]}.`);
+    plog(projectId, userId, `→ adding ${e} to the plan (${sticky.includes(e) ? "already provisioned" : "detected in code"}) — will provision it → ${defEnvVar[e]}.`);
   }
   if (have.size === before) return manifest;
   const reconciled = { ...manifest, databases: [...have.values()] };
@@ -371,13 +373,14 @@ async function reapplyEnv(projectId: string, userId: string, workspaceId: string
     );
     for (const dbSpec of manifest.databases) {
       const userProvided = providedKeys.has(dbSpec.connectionEnvVar);
-      if (dbMode === "provided" || (dbMode === "auto" && userProvided)) continue; // stored var wins
-      const h = await ensureEngine(projectId, dbSpec.engine).catch(() => null);
-      if (h) provisioned[dbSpec.connectionEnvVar] = formatConnection(dbSpec, h);
+      if (dbMode === "provided" || (dbMode === "auto" && userProvided)) { plog(projectId, userId, `${dbSpec.engine}: using your provided ${dbSpec.connectionEnvVar} (not provisioning).`); continue; } // stored var wins
+      plog(projectId, userId, `Starting ${dbSpec.engine} (docker) — pulling image + creating the container if needed…`);
+      const h = await ensureEngine(projectId, dbSpec.engine).catch((e) => { plog(projectId, userId, `Could not start ${dbSpec.engine}: ${(e as Error).message?.slice(0, 200)}`, { level: "error" }); return null; });
+      if (h) { provisioned[dbSpec.connectionEnvVar] = formatConnection(dbSpec, h); plog(projectId, userId, `${dbSpec.engine} running ✓ (127.0.0.1:${h.port}) → ${dbSpec.connectionEnvVar} injected.`); }
     }
   }
   await writeEnvFile(workspaceId, projectId, manifest, provisioned);
-  plog(projectId, userId, "Re-applied environment variables from your settings.");
+  plog(projectId, userId, `Re-applied environment variables from your settings${Object.keys(provisioned).length ? ` (+${Object.keys(provisioned).length} DB connection var(s))` : ""}.`);
 }
 
 /**
