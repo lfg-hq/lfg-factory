@@ -3094,6 +3094,10 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) $(git log -1 --oneline
     // Re-expose (idempotent) and mark running — on the port the app actually bound.
     await enableHttpAccess(workspaceId, effectivePort).catch(() => {});
     const alias = row.stableAlias || randomAlias();
+    // PERSIST a freshly-minted alias (setupPreview does; restart previously didn't) so
+    // the preview URL stays STABLE across restarts — otherwise each restart could mint a
+    // new subdomain, leaving old URLs pointing at a stale binding.
+    if (!row.stableAlias) await db.update(projectEnvironments).set({ stableAlias: alias, updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId)).catch(() => {});
     let previewUrl = row.appUrl || "";
     try { previewUrl = await setStableUrl(alias, workspaceId); } catch { /* keep existing */ }
     await setPreview(projectId, userId, { previewStatus: "running", appUrl: previewUrl, appPort: effectivePort, previewError: null, previewBranch: branchLabel }, "Preview is live");
