@@ -2968,6 +2968,14 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) $(git log -1 --oneline
     }
     await setStep("locate", "done");
 
+    // Bring EVERY provisioned DB engine back up before the app starts. ensureEngine is
+    // idempotent (fast if already running) — critical after a VM respawn, where the
+    // fresh micro-VM has no running containers yet, so a Postgres/MySQL/Redis app would
+    // otherwise get ECONNREFUSED on 127.0.0.1:<port>. (Previously only MSSQL was
+    // restarted here, so non-MSSQL DBs silently stayed down after a respawn.)
+    for (const dbSpec of manifest.databases || []) {
+      await ensureEngine(projectId, dbSpec.engine).catch((e) => plog(projectId, userId, `Could not (re)start ${dbSpec.engine}: ${(e as Error).message}`, { level: "error" }));
+    }
     // Deterministic RULE: repoint every non-local SQL connection in the run dir's
     // appsettings*.json (Web, Admin, …) to the provisioned local MSSQL, so a fresh
     // branch checkout doesn't crash on a hardcoded dead host (e.g. Admin still
