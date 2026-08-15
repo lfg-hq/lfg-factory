@@ -25,7 +25,7 @@ import { getModel, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
 import { decryptSecret, encryptSecret } from "../utils/crypto.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { enableHttpAccess, execOnWorkspace, setStableUrl, startBrowserSession, stopWorkspace } from "./mags.ts";
-import { ensureProjectSandbox, restartProjectSandbox, ensureEngine, ensureDocker, envWorkspaceId, checkEngineHealth, type EngineHandle } from "./project-sandbox.ts";
+import { ensureProjectSandbox, ensureEngine, ensureDocker, envWorkspaceId, checkEngineHealth, type EngineHandle } from "./project-sandbox.ts";
 import { probeAppProfile, saveAppProfile, loadAppProfile, deriveManifestFromProfile, syncDetectedEnv, applyProfileCorrection, recordProfileLearning, recordDirective, recordConfigPatch, buildConfigPatchScript, profileNotes, resolveUserModel, type AppProfile } from "./app-profile.ts";
 import { isS3Enabled, buildS3Key, uploadBinary, getPresignedGetUrl } from "./s3.ts";
 import { messages } from "../db/schema/chat.ts";
@@ -2767,7 +2767,7 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
   const releaseRun = await acquirePreviewRun(projectId);
   try {
     const { recreated } = await ensureProjectSandbox(projectId);
-    let workspaceId = await envWorkspaceId(projectId); // `let`: may be re-resolved after a VM reboot on SIGSEGV
+    const workspaceId = await envWorkspaceId(projectId);
 
     // The VM had stopped and was respawned — but the workspace is persistent, so its
     // /data (repo clone, toolchain, DB volumes, ticket worktrees) is REATTACHED, not
@@ -2830,10 +2830,14 @@ git remote set-url origin "${auth.authUrl}" 2>/dev/null
 # Explicit destination refspec so refs/remotes/origin/${remoteBranch} is created even
 # for slashed branch names / narrowed clones — otherwise 'git worktree add origin/<b>'
 # below can't resolve the ref (branch is on GitHub but origin/<b> is empty locally).
-# SHALLOW (--depth=1) + single-threaded: the build only needs the tip commit, and a
-# full-history download is what segfaults git-remote-https (signal 11) on this small
-# Alpine/musl VM — under memory pressure musl aborts with SIGSEGV, not a clean OOM.
-git -c pack.threads=1 fetch --no-tags --force --depth=1 origin "+refs/heads/${remoteBranch}:refs/remotes/origin/${remoteBranch}" 2>&1 | tail -3
+# Reclaim page cache first (safe: frees memory WITHOUT touching any running process /
+# other previews on this sandbox) to relieve pressure before the transfer.
+sync 2>/dev/null; echo 1 > /proc/sys/vm/drop_caches 2>/dev/null || true
+# SHALLOW (--depth=1) + single-threaded + HTTP/1.1: the build only needs the tip
+# commit, and a reproducible git-remote-https SIGSEGV during transfer is usually an
+# HTTP/2 (nghttp2) crash — forcing HTTP/1.1 sidesteps it; the shallow/1-thread flags
+# keep the memory footprint tiny on this small Alpine/musl VM.
+git -c http.version=HTTP/1.1 -c pack.threads=1 fetch --no-tags --force --depth=1 origin "+refs/heads/${remoteBranch}:refs/remotes/origin/${remoteBranch}" 2>&1 | tail -3
 # Free the branch from ANY checkout that still claims it, else 'git worktree add -B'
 # fails "cannot force update the branch ... checked out at <path>". This is the usual
 # reason ONE ticket branch won't prepare while the others do: a stale worktree (or the
@@ -2856,7 +2860,7 @@ done
 git worktree prune 2>/dev/null
 if [ -e "${runDir}/.git" ]; then
   # Existing worktree → hard-reset to the LATEST pushed commit (picks up new changes).
-  git -C "${runDir}" -c pack.threads=1 fetch --no-tags --force --depth=1 origin "+refs/heads/${remoteBranch}:refs/remotes/origin/${remoteBranch}" 2>&1 | tail -1
+  git -C "${runDir}" -c http.version=HTTP/1.1 -c pack.threads=1 fetch --no-tags --force --depth=1 origin "+refs/heads/${remoteBranch}:refs/remotes/origin/${remoteBranch}" 2>&1 | tail -1
   git -C "${runDir}" reset --hard "origin/${remoteBranch}" 2>&1 | tail -2
   git -C "${runDir}" clean -fd 2>&1 | tail -1
 else
@@ -2871,7 +2875,7 @@ else
     git worktree prune 2>/dev/null
     rm -rf "${runDir}" 2>/dev/null
     echo "retrying: re-fetch (shallow) + worktree add…"
-    git -c pack.threads=1 fetch --no-tags --force --depth=1 origin "+refs/heads/${remoteBranch}:refs/remotes/origin/${remoteBranch}" 2>&1 | tail -3
+    git -c http.version=HTTP/1.1 -c pack.threads=1 fetch --no-tags --force --depth=1 origin "+refs/heads/${remoteBranch}:refs/remotes/origin/${remoteBranch}" 2>&1 | tail -3
     git worktree add -f -B "${remoteBranch}" "${runDir}" "origin/${remoteBranch}" 2>&1 | tail -4
   fi
 fi
@@ -2885,24 +2889,17 @@ echo "cleaned build output (bin/obj) so Razor views recompile"
 test -e "${runDir}/.git" && echo "WT_OK $(git -C "${runDir}" log -1 --oneline 2>/dev/null)" || echo WT_FAIL
 `;
         let prep = await sh(workspaceId, prepScript, 240_000);
-        // A `git-remote-https died of signal 11` (SIGSEGV) means the VM's runtime is
-        // POISONED — after the earlier OOM cascade, fresh fetches segfault while
-        // already-local branches work. An `echo` liveness probe passes on such a VM, so
-        // ensureProjectSandbox won't respawn it. Detect the signature, REBOOT the VM
-        // (kills it → respawns with clean RAM; the persistent /data reattaches), and
-        // retry the prep once on the fresh VM.
-        const vmPoisoned = (out: string) => /died of signal 11|remote helper 'https' aborted|Segmentation fault|signal 9/i.test(out) && !out.includes("WT_OK");
-        if (vmPoisoned(prep.output)) {
-          plog(projectId, userId, "The sandbox VM looks degraded (git crashed with SIGSEGV) — rebooting it with fresh memory and retrying…", { level: "error" });
-          await setPreview(projectId, userId, { previewStatus: "starting", previewBranch: remoteBranch }, "Rebooting the sandbox (fresh memory)…");
-          try {
-            ({ workspaceId } = await restartProjectSandbox(projectId));
-            await ensureDocker(projectId).catch(() => {});
-            plog(projectId, userId, "Sandbox rebooted ✓ — retrying the worktree prep on the fresh VM.");
-            prep = await sh(workspaceId, prepScript, 240_000);
-          } catch (e) {
-            plog(projectId, userId, `Sandbox reboot failed: ${(e as Error).message}`, { level: "error" });
-          }
+        // A `git-remote-https died of signal 11` (SIGSEGV) means the FETCH crashed —
+        // the prep already forces HTTP/1.1 + shallow to avoid the usual causes. If it
+        // still crashes, retry ONCE after reclaiming page cache. We deliberately do NOT
+        // reboot or wipe the VM: other work (e.g. another branch's live preview) runs
+        // on this same sandbox and must not be disturbed. drop_caches frees memory
+        // without touching any process; we only reap the crashed (already-dead) helper.
+        const vmSegfault = (out: string) => /died of signal 11|remote helper 'https' aborted|Segmentation fault/i.test(out) && !out.includes("WT_OK");
+        if (vmSegfault(prep.output)) {
+          plog(projectId, userId, "The fetch crashed (git SIGSEGV) — reclaiming memory and retrying (without touching anything else on the sandbox)…", { level: "error" });
+          await sh(workspaceId, "sync 2>/dev/null; echo 1 > /proc/sys/vm/drop_caches 2>/dev/null; pkill -9 -f 'git-remote-http' 2>/dev/null; sleep 2; true", 20_000).catch(() => {});
+          prep = await sh(workspaceId, prepScript, 240_000);
         }
         if (prep.output.includes("NO_MAIN")) {
           await setStep("locate", "failed");
@@ -2913,7 +2910,7 @@ test -e "${runDir}/.git" && echo "WT_OK $(git -C "${runDir}" log -1 --oneline 2>
           // Log the real git output too — the banner clips it, and the actual reason
           // ("cannot force update the branch … checked out at …", auth, etc.) lives here.
           plog(projectId, userId, `Worktree prep failed for ${remoteBranch}:\n${prep.output.slice(-800)}`, { level: "error" });
-          const hint = vmPoisoned(prep.output) ? " The VM's git keeps segfaulting even after a reboot — its disk clone may be corrupt; use Re-setup to re-clone from scratch." : "";
+          const hint = vmSegfault(prep.output) ? " git keeps crashing (SIGSEGV) — the sandbox is out of memory. Free it by stopping another running preview on this project, then retry. (Not auto-rebooting the VM — other work is running there.)" : "";
           return failed(projectId, userId, `Couldn't prepare the ticket branch \`${remoteBranch}\`.${hint}\n\n${prep.output.slice(-600)}`);
         }
         const headLine = prep.output.match(/WT_OK\s+(.+)/)?.[1]?.trim();
