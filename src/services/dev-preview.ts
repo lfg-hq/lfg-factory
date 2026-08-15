@@ -2976,6 +2976,30 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) $(git log -1 --oneline
     for (const dbSpec of manifest.databases || []) {
       await ensureEngine(projectId, dbSpec.engine).catch((e) => plog(projectId, userId, `Could not (re)start ${dbSpec.engine}: ${(e as Error).message}`, { level: "error" }));
     }
+    // SELF-HEAL orphaned DBs: an engine whose data already lives on the VM but that the
+    // CURRENT manifest no longer lists. The manifest's DB detection can drop a database
+    // between re-probes (→ "Databases — none provisioned"), and the block above only
+    // starts engines IN the manifest — so /data/pgdata sits there with no server and the
+    // app gets ECONNREFUSED 127.0.0.1:5432 even though the data exists. Detect the data
+    // dir, (re)start the engine (idempotent; reuses the stored password), and set the
+    // conventional URL var so the app can reach it.
+    const inManifest = new Set((manifest.databases || []).map((d) => d.engine));
+    const ORPHAN_ENGINES: Array<{ engine: "postgres" | "mysql"; dir: string; envVar: string; scheme: string }> = [
+      { engine: "postgres", dir: "/data/pgdata", envVar: "DATABASE_URL", scheme: "postgresql" },
+      { engine: "mysql", dir: "/data/mysqldata", envVar: "DATABASE_URL", scheme: "mysql" },
+    ];
+    for (const oc of ORPHAN_ENGINES) {
+      if (inManifest.has(oc.engine)) continue;
+      const found = await sh(workspaceId, `test -d ${oc.dir} && echo FOUND || echo NO`, 15_000).catch(() => ({ output: "NO" }));
+      if (!found.output.includes("FOUND")) continue;
+      plog(projectId, userId, `Found orphaned ${oc.engine} data (${oc.dir}) not in the manifest — starting it so the app can connect…`);
+      const h = await ensureEngine(projectId, oc.engine).catch((e) => { plog(projectId, userId, `Orphaned ${oc.engine} recovery failed: ${(e as Error).message}`, { level: "error" }); return null; });
+      if (!h) continue;
+      // Make sure the app points at the recovered DB for THIS run (uses the same stored
+      // password ensureEngine baked into the container, so creds match /data/pgdata).
+      await writeLiveEnvVar(workspaceId, oc.envVar, `${oc.scheme}://${h.username}:${h.password}@127.0.0.1:${h.port}/${h.dbName}`).catch(() => {});
+      plog(projectId, userId, `Recovered ${oc.engine} ✓ — running at 127.0.0.1:${h.port}, ${oc.envVar} set. (To make this permanent, add it in the Environment tab / re-run setup so it lands in the manifest.)`);
+    }
     // Deterministic RULE: repoint every non-local SQL connection in the run dir's
     // appsettings*.json (Web, Admin, …) to the provisioned local MSSQL, so a fresh
     // branch checkout doesn't crash on a hardcoded dead host (e.g. Admin still
