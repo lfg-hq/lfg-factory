@@ -2889,16 +2889,27 @@ echo "cleaned build output (bin/obj) so Razor views recompile"
 test -e "${runDir}/.git" && echo "WT_OK $(git -C "${runDir}" log -1 --oneline 2>/dev/null)" || echo WT_FAIL
 `;
         let prep = await sh(workspaceId, prepScript, 240_000);
-        // A `git-remote-https died of signal 11` (SIGSEGV) means the FETCH crashed —
-        // the prep already forces HTTP/1.1 + shallow to avoid the usual causes. If it
-        // still crashes, retry ONCE after reclaiming page cache. We deliberately do NOT
-        // reboot or wipe the VM: other work (e.g. another branch's live preview) runs
-        // on this same sandbox and must not be disturbed. drop_caches frees memory
-        // without touching any process; we only reap the crashed (already-dead) helper.
-        const vmSegfault = (out: string) => /died of signal 11|remote helper 'https' aborted|Segmentation fault/i.test(out) && !out.includes("WT_OK");
-        if (vmSegfault(prep.output)) {
-          plog(projectId, userId, "The fetch crashed (git SIGSEGV) — reclaiming memory and retrying (without touching anything else on the sandbox)…", { level: "error" });
-          await sh(workspaceId, "sync 2>/dev/null; echo 1 > /proc/sys/vm/drop_caches 2>/dev/null; pkill -9 -f 'git-remote-http' 2>/dev/null; sleep 2; true", 20_000).catch(() => {});
+        // git faults come in two flavours here, both from resource exhaustion on the VM
+        // (never a reboot — other previews run on this same sandbox):
+        //   • SIGSEGV (signal 11): out of RAM (musl aborts). HTTP/1.1 + shallow avoid the
+        //     usual triggers; reclaiming page cache relieves the rest.
+        //   • SIGBUS ("Bus error"): git mmap()s objects/index — SIGBUS means the mmap
+        //     can't be backed, i.e. /data is OUT OF DISK. Reclaim disk before retrying.
+        // Cleanup is SCOPED so it can't disturb other work: git gc on the shared clone,
+        // package-manager caches (re-downloadable), THIS ticket's own stale worktree, and
+        // pruned (already-removed) worktrees — never another branch's live worktree.
+        const vmFault = (out: string) => /died of signal 11|remote helper 'https' aborted|Segmentation fault|Bus error|SIGBUS/i.test(out) && !out.includes("WT_OK");
+        if (vmFault(prep.output)) {
+          const disk = await sh(workspaceId, "df -h /data 2>/dev/null | tail -1; echo '---'; du -sh /data/tmp 2>/dev/null", 20_000).catch(() => ({ output: "" }));
+          plog(projectId, userId, `git crashed (out of memory/disk). Reclaiming space and retrying — nothing else on the sandbox is touched.\n${(disk.output || "").trim()}`, { level: "error" });
+          await sh(workspaceId, `
+sync 2>/dev/null; echo 1 > /proc/sys/vm/drop_caches 2>/dev/null || true   # free page cache (safe)
+pkill -9 -f 'git-remote-http' 2>/dev/null || true                        # reap the crashed helper only
+git -C ${PROJECT_DIR} gc --prune=now --quiet 2>/dev/null || true          # compact the shared clone
+rm -rf /root/.npm/_cacache ~/.npm/_cacache /root/.cache/yarn 2>/dev/null || true  # re-downloadable caches
+git -C ${PROJECT_DIR} worktree prune 2>/dev/null || true                  # drop already-removed worktrees
+rm -rf "${runDir}" 2>/dev/null || true                                    # this ticket's own stale worktree
+sleep 2; df -h /data 2>/dev/null | tail -1`, 60_000).catch(() => {});
           prep = await sh(workspaceId, prepScript, 240_000);
         }
         if (prep.output.includes("NO_MAIN")) {
@@ -2907,10 +2918,11 @@ test -e "${runDir}/.git" && echo "WT_OK $(git -C "${runDir}" log -1 --oneline 2>
         }
         if (!prep.output.includes("WT_OK")) {
           await setStep("locate", "failed");
-          // Log the real git output too — the banner clips it, and the actual reason
-          // ("cannot force update the branch … checked out at …", auth, etc.) lives here.
-          plog(projectId, userId, `Worktree prep failed for ${remoteBranch}:\n${prep.output.slice(-800)}`, { level: "error" });
-          const hint = vmSegfault(prep.output) ? " git keeps crashing (SIGSEGV) — the sandbox is out of memory. Free it by stopping another running preview on this project, then retry. (Not auto-rebooting the VM — other work is running there.)" : "";
+          // Log the real git output + disk state — the banner clips it, and the actual
+          // reason ("cannot force update … checked out at …", Bus error, auth) lives here.
+          const df = await sh(workspaceId, "df -h /data 2>/dev/null | tail -1", 15_000).catch(() => ({ output: "" }));
+          plog(projectId, userId, `Worktree prep failed for ${remoteBranch}:\n${prep.output.slice(-800)}\n[disk] ${(df.output || "").trim()}`, { level: "error" });
+          const hint = vmFault(prep.output) ? ` git keeps crashing — the sandbox is out of ${/Bus error|SIGBUS/i.test(prep.output) ? "DISK" : "memory"}. Free it by stopping another running preview on this project (or Re-setup to reclaim), then retry. Sandbox disk: ${(df.output || "").trim() || "unknown"}. (Not auto-rebooting the VM — other work is running there.)` : "";
           return failed(projectId, userId, `Couldn't prepare the ticket branch \`${remoteBranch}\`.${hint}\n\n${prep.output.slice(-600)}`);
         }
         const headLine = prep.output.match(/WT_OK\s+(.+)/)?.[1]?.trim();
