@@ -261,6 +261,28 @@ export async function ensureProjectSandbox(projectId: string): Promise<{ workspa
   return { workspaceId, created: !alive, recreated };
 }
 
+/**
+ * Force a FRESH VM boot for the project, keeping the persistent /data disk (repo
+ * clone, toolchain, DB volumes, worktrees reattach). Use when the VM is reachable
+ * but its runtime is degraded — e.g. after an OOM cascade `git-remote-https` starts
+ * segfaulting (signal 11) on every fresh fetch. A phantom-guard `echo` probe passes
+ * on such a VM, so we can't rely on ensureProjectSandbox's liveness check; this kills
+ * the VM outright and respawns it (clean RAM) with the same workspace/disk.
+ */
+export async function restartProjectSandbox(projectId: string): Promise<{ workspaceId: string }> {
+  const [existing] = await db.select().from(projectEnvironments).where(eq(projectEnvironments.projectId, projectId));
+  if (existing?.workspaceId) {
+    // stopWorkspace (NOT deleteWorkspace) kills the VM but preserves its persistent
+    // disk — the fresh VM reattaches the same /data on respawn.
+    await stopWorkspace(existing.workspaceId).catch(() => {});
+    await db.update(projectEnvironments).set({ status: "stopped", updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId)).catch(() => {});
+    await sleep(3000); // let Mags settle the job to a non-running state before respawn
+  }
+  // ensureProjectSandbox now sees it as not-running → respawns a fresh VM (same name).
+  const { workspaceId } = await ensureProjectSandbox(projectId);
+  return { workspaceId };
+}
+
 /** Run a command inside the project's sandbox. */
 export async function execInEnv(projectId: string, cmd: string, timeoutMs = 110_000): Promise<{ output: string; exitCode: number }> {
   const workspaceId = await envWorkspaceId(projectId);

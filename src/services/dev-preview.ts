@@ -25,7 +25,7 @@ import { getModel, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
 import { decryptSecret, encryptSecret } from "../utils/crypto.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { enableHttpAccess, execOnWorkspace, setStableUrl, startBrowserSession, stopWorkspace } from "./mags.ts";
-import { ensureProjectSandbox, ensureEngine, ensureDocker, envWorkspaceId, checkEngineHealth, type EngineHandle } from "./project-sandbox.ts";
+import { ensureProjectSandbox, restartProjectSandbox, ensureEngine, ensureDocker, envWorkspaceId, checkEngineHealth, type EngineHandle } from "./project-sandbox.ts";
 import { probeAppProfile, saveAppProfile, loadAppProfile, deriveManifestFromProfile, syncDetectedEnv, applyProfileCorrection, recordProfileLearning, recordDirective, recordConfigPatch, buildConfigPatchScript, profileNotes, resolveUserModel, type AppProfile } from "./app-profile.ts";
 import { isS3Enabled, buildS3Key, uploadBinary, getPresignedGetUrl } from "./s3.ts";
 import { messages } from "../db/schema/chat.ts";
@@ -2767,7 +2767,7 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
   const releaseRun = await acquirePreviewRun(projectId);
   try {
     const { recreated } = await ensureProjectSandbox(projectId);
-    const workspaceId = await envWorkspaceId(projectId);
+    let workspaceId = await envWorkspaceId(projectId); // `let`: may be re-resolved after a VM reboot on SIGSEGV
 
     // The VM had stopped and was respawned — but the workspace is persistent, so its
     // /data (repo clone, toolchain, DB volumes, ticket worktrees) is REATTACHED, not
@@ -2824,7 +2824,7 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
         // build ran in the preview VM and switched it) — that blocks `git worktree add`.
         await setPreview(projectId, userId, { previewStatus: "starting", previewBranch: remoteBranch }, `Syncing ${remoteBranch} to the latest commit…`);
         plog(projectId, userId, `Preparing worktree for ${remoteBranch} (fetch + sync to the latest pushed commit)…`);
-        const prep = await sh(workspaceId, `
+        const prepScript = `
 cd ${PROJECT_DIR} 2>/dev/null || { echo NO_MAIN; exit 0; }
 git remote set-url origin "${auth.authUrl}" 2>/dev/null
 # Explicit destination refspec so refs/remotes/origin/${remoteBranch} is created even
@@ -2883,7 +2883,27 @@ fi
 rm -rf ${runDir}/bin ${runDir}/obj ${runDir}/*/bin ${runDir}/*/obj ${runDir}/*/*/bin ${runDir}/*/*/obj 2>/dev/null || true
 echo "cleaned build output (bin/obj) so Razor views recompile"
 test -e "${runDir}/.git" && echo "WT_OK $(git -C "${runDir}" log -1 --oneline 2>/dev/null)" || echo WT_FAIL
-`, 240_000);
+`;
+        let prep = await sh(workspaceId, prepScript, 240_000);
+        // A `git-remote-https died of signal 11` (SIGSEGV) means the VM's runtime is
+        // POISONED — after the earlier OOM cascade, fresh fetches segfault while
+        // already-local branches work. An `echo` liveness probe passes on such a VM, so
+        // ensureProjectSandbox won't respawn it. Detect the signature, REBOOT the VM
+        // (kills it → respawns with clean RAM; the persistent /data reattaches), and
+        // retry the prep once on the fresh VM.
+        const vmPoisoned = (out: string) => /died of signal 11|remote helper 'https' aborted|Segmentation fault|signal 9/i.test(out) && !out.includes("WT_OK");
+        if (vmPoisoned(prep.output)) {
+          plog(projectId, userId, "The sandbox VM looks degraded (git crashed with SIGSEGV) — rebooting it with fresh memory and retrying…", { level: "error" });
+          await setPreview(projectId, userId, { previewStatus: "starting", previewBranch: remoteBranch }, "Rebooting the sandbox (fresh memory)…");
+          try {
+            ({ workspaceId } = await restartProjectSandbox(projectId));
+            await ensureDocker(projectId).catch(() => {});
+            plog(projectId, userId, "Sandbox rebooted ✓ — retrying the worktree prep on the fresh VM.");
+            prep = await sh(workspaceId, prepScript, 240_000);
+          } catch (e) {
+            plog(projectId, userId, `Sandbox reboot failed: ${(e as Error).message}`, { level: "error" });
+          }
+        }
         if (prep.output.includes("NO_MAIN")) {
           await setStep("locate", "failed");
           return failed(projectId, userId, `The base checkout isn't set up on this sandbox yet — run the default-branch preview once, then preview this ticket.`);
@@ -2893,7 +2913,8 @@ test -e "${runDir}/.git" && echo "WT_OK $(git -C "${runDir}" log -1 --oneline 2>
           // Log the real git output too — the banner clips it, and the actual reason
           // ("cannot force update the branch … checked out at …", auth, etc.) lives here.
           plog(projectId, userId, `Worktree prep failed for ${remoteBranch}:\n${prep.output.slice(-800)}`, { level: "error" });
-          return failed(projectId, userId, `Couldn't prepare the ticket branch \`${remoteBranch}\`.\n\n${prep.output.slice(-600)}`);
+          const hint = vmPoisoned(prep.output) ? " The VM's git keeps segfaulting even after a reboot — its disk clone may be corrupt; use Re-setup to re-clone from scratch." : "";
+          return failed(projectId, userId, `Couldn't prepare the ticket branch \`${remoteBranch}\`.${hint}\n\n${prep.output.slice(-600)}`);
         }
         const headLine = prep.output.match(/WT_OK\s+(.+)/)?.[1]?.trim();
         plog(projectId, userId, `Worktree ready on ${remoteBranch} ✓ (HEAD: ${headLine || "synced to origin"})`);
