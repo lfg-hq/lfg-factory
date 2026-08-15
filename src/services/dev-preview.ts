@@ -196,6 +196,28 @@ function isCancelled(projectId: string): boolean { return cancelledProjects.has(
 /** Throws a sentinel if the run was cancelled — callers let it bubble to the catch. */
 function throwIfCancelled(projectId: string) { if (cancelledProjects.has(projectId)) throw new Error("__CANCELLED__"); }
 
+// ── Serialize preview runs per project ──────────────────────────────────────
+// setup/restart both build + run heavy things (git clone/fetch, npm/dotnet build,
+// Docker) INSIDE one microVM. If a second run starts while the first is still
+// churning — which is exactly what rapid branch-switching + Cancel + re-click does —
+// the two clones/builds run concurrently and exhaust the VM's memory: `git-remote-
+// https died of signal 11` (segfault/OOM) and Docker fails to start. Cancelling only
+// flips a flag; it can't recall an already-dispatched execOnWorkspace. So a NEW run
+// must signal the current one to abort, WAIT for it to actually unwind, and only then
+// take over. The cancel flag is cleared for the new run ONLY after the old one has
+// released — otherwise the new run's clear revives the run it just cancelled.
+const previewRunLocks = new Map<string, Promise<void>>();
+async function acquirePreviewRun(projectId: string): Promise<() => void> {
+  cancelledProjects.add(projectId);                 // tell the in-flight run (if any) to abort
+  const prev = previewRunLocks.get(projectId);
+  if (prev) { try { await prev; } catch { /* prior run's own failure is its problem */ } }
+  cancelledProjects.delete(projectId);              // fresh flag for OUR run
+  let release!: () => void;
+  const mine = new Promise<void>((r) => { release = r; });
+  previewRunLocks.set(projectId, mine);
+  return () => { release(); if (previewRunLocks.get(projectId) === mine) previewRunLocks.delete(projectId); };
+}
+
 // ── Analyze: read the ACTUAL codebase (not a shallow fingerprint) so the plan
 // knows the real DB, connection config, versions, schema scripts, and — for
 // multi-project solutions — the entry project. ──────────────────────────────
@@ -2052,8 +2074,11 @@ export async function setupPreview(projectId: string, opts: SetupOptions): Promi
   if (project.projectId) publicIdCache.set(projectId, project.projectId); // for WS routing
   const branch = opts.branch || ""; // "" → use the repo's default branch
 
+  // Serialize: cancel + wait out any run already using this project's VM so two
+  // clones/builds never overlap (→ OOM/segfault). Clears the cancel flag for us.
+  const releaseRun = await acquirePreviewRun(projectId);
+
   resetLog(projectId);
-  cancelledProjects.delete(projectId); // fresh run
   // Pipeline steps (infra prelude) — surfaced in the Steps view as they progress.
   const prelude = buildPrelude();
   const prep = async (id: string, status: RunStep["status"]) => {
@@ -2412,6 +2437,7 @@ fi`, 240_000);
     return failed(projectId, userId, msg);
   } finally {
     cancelledProjects.delete(projectId);
+    releaseRun(); // let a queued run (branch switch) proceed on the now-free VM
   }
 }
 
@@ -2735,6 +2761,10 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
     await persistSteps(projectId, userId, steps);
   };
 
+  // Serialize: cancel + wait out any run already using this project's VM before we
+  // touch its git worktrees / start a build (acquired AFTER the setupPreview
+  // delegation above so we don't deadlock waiting on our own lock).
+  const releaseRun = await acquirePreviewRun(projectId);
   try {
     const { recreated } = await ensureProjectSandbox(projectId);
     const workspaceId = await envWorkspaceId(projectId);
@@ -3010,7 +3040,15 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) $(git log -1 --oneline
     }
     return { previewUrl };
   } catch (err) {
-    return failed(projectId, userId, (err as Error).message ?? String(err));
+    const msg = (err as Error).message ?? String(err);
+    if (msg === "__CANCELLED__" || isCancelled(projectId)) {
+      await setPreview(projectId, userId, { previewStatus: "stopped", appUrl: null, previewError: null }, "Preview stopped").catch(() => {});
+      return { error: "cancelled" };
+    }
+    return failed(projectId, userId, msg);
+  } finally {
+    cancelledProjects.delete(projectId);
+    releaseRun(); // let a queued run (branch switch) proceed on the now-free VM
   }
 }
 
@@ -3028,6 +3066,9 @@ export async function stopPreview(projectId: string, userId: string): Promise<vo
     ?? (row?.setupManifest ? (JSON.parse(row.setupManifest) as PreviewManifest).port : undefined)
     ?? DEFAULT_PORT;
   // Kill the app port + any lingering build/install processes started for this run.
-  await sh(workspaceId, `fuser -k ${port}/tcp 2>/dev/null; pkill -f ':${port}' 2>/dev/null; pkill -f 'dotnet' 2>/dev/null; pkill -f 'npm ' 2>/dev/null; echo stopped`, 30_000).catch(() => {});
+  // Include git (clone/fetch + the git-remote-https helper): a cancelled run's clone
+  // keeps churning otherwise and, overlapped with the next run's clone, OOMs the VM
+  // ('git-remote-https died of signal 11'). npm/dotnet/node builds too.
+  await sh(workspaceId, `fuser -k ${port}/tcp 2>/dev/null; pkill -f ':${port}' 2>/dev/null; pkill -f 'dotnet' 2>/dev/null; pkill -f 'npm ' 2>/dev/null; pkill -f 'git-remote-http' 2>/dev/null; pkill -f 'git clone' 2>/dev/null; pkill -f 'git fetch' 2>/dev/null; echo stopped`, 30_000).catch(() => {});
   await setPreview(projectId, userId, { previewStatus: "stopped", appUrl: null }, "Preview stopped");
 }
