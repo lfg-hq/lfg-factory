@@ -136,6 +136,7 @@ async function resolveBuilderModelKey(ownerId: string): Promise<string> {
   return sel?.m || DEFAULT_MODEL_KEY;
 }
 import { startPiCli, streamPiToCompletion, isPiSupportedProvider, extractPiProgress } from "../services/pi-cli.ts";
+import { getOpenAICodexAccessToken, hasOpenAICodexCredentials } from "../services/openai-codex-auth.ts";
 
 /** Pi's final "here's what I did" summary from its output tail (or ""). */
 function piWorkSummary(tail: string | undefined): string {
@@ -1729,7 +1730,8 @@ async function executeTicketChat(
   // ── Route to Pi for non-Claude models (mirror the BUILD path) ───────────
   // The chat used to be hardcoded to Claude Code — a DeepSeek/OpenAI/GLM user
   // got "No valid Claude credentials" even though their ticket built with Pi.
-  // Same routing as the builder: a Pi-supported provider with a key → Pi.
+  // Same routing as the builder: a Pi-supported provider with an API key or a
+  // short-lived OpenAI Codex subscription bearer → Pi.
   const chatModelKey = await resolveBuilderModelKey(ownerId);
   const chatProvider = getProviderName(chatModelKey);
   const [chatUserKeys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, ownerId)).limit(1);
@@ -1743,10 +1745,20 @@ async function executeTicketChat(
         glm: chatUserKeys?.glmApiKey,
       } as Record<string, string | null | undefined>)[chatProvider]
     : undefined;
+  const chatUsesOpenAICodex = chatProvider === "openai"
+    && !!profile?.openaiCodexAuthenticated
+    && !!profile.openaiCodexCredentials;
+  const chatOAuthToken = chatUsesOpenAICodex
+    ? await getOpenAICodexAccessToken(ownerId).catch(async (error) => {
+        await addLog(ticketId, `OpenAI Codex session error: ${(error as Error).message}`, "cli_error", ownerId);
+        return undefined;
+      })
+    : undefined;
+  if (chatUsesOpenAICodex && !chatOAuthToken && !chatProviderKey) return;
   const chatUsePi = USE_PI_TICKET_BUILDER && !!chatProvider && chatProvider !== "anthropic"
-    && isPiSupportedProvider(chatProvider) && !!chatProviderKey;
+    && isPiSupportedProvider(chatProvider) && !!(chatProviderKey || chatOAuthToken);
 
-  if (chatUsePi && chatProvider && chatProviderKey) {
+  if (chatUsePi && chatProvider && (chatProviderKey || chatOAuthToken)) {
     const piModelId = getProviderModel(chatModelKey) ?? chatModelKey;
     await addLog(ticketId, `Continuing with Pi (${chatProvider}/${piModelId})…`, "command", ownerId);
     const piEnvVars: Record<string, string> = {
@@ -1800,7 +1812,8 @@ ${message}
       const webhookReachable = !!cliApiKey && !/localhost|127\.0\.0\.1|\/\/0\.0\.0\.0/.test(CALLBACK_BASE_URL);
       const pi = await startPiCli({
         workspaceId, prompt: piPrompt, projectDir: projectDirName,
-        provider: chatProvider, modelId: piModelId, apiKey: chatProviderKey, envVars: piEnvVars,
+        provider: chatProvider, modelId: piModelId, apiKey: chatProviderKey ?? undefined,
+        oauthAccessToken: chatOAuthToken, envVars: piEnvVars,
         forward: webhookReachable ? { apiUrl: CALLBACK_BASE_URL, apiKey: cliApiKey, mode: "ticket" as const, ticketId } : undefined,
       });
       let lastPiLog = 0;
@@ -2550,16 +2563,6 @@ git branch --show-current
     projectDir,
   });
 
-  // ── Model resolved early (appState/modelKey/userKeys/provider up top) ──
-  const model = getModel(modelKey, {
-    anthropic: userKeys?.anthropicApiKey ?? undefined,
-    openai: userKeys?.openaiApiKey ?? undefined,
-    google: userKeys?.googleApiKey ?? undefined,
-    kimi: userKeys?.kimiApiKey ?? undefined,
-    deepseek: userKeys?.deepseekApiKey ?? undefined,
-    glm: userKeys?.glmApiKey ?? undefined,
-  });
-
   console.log(`[ticket-executor-api] Using model: ${modelKey}`);
 
   let implementationStatus = "failed" as "complete" | "failed";
@@ -2577,6 +2580,7 @@ git branch --show-current
         glm: userKeys?.glmApiKey,
       } as Record<string, string | null | undefined>)[provider]
     : undefined;
+  const useOpenAICodex = provider === "openai" && await hasOpenAICodexCredentials(ownerId);
   // Pin the VM awake for the whole build (wakes a reused/slept VM too) so Mags can't
   // idle-sleep a live build → "lost contact". Turned back off at build end.
   await wakeTicketVm(workspaceId);
@@ -2584,9 +2588,10 @@ git branch --show-current
   // discovering + installing it mid-build.
   await ensureBuildToolchain(workspaceId, savedTechStack?.language, ticketId, ownerId);
 
-  const usePi = USE_PI_TICKET_BUILDER && !!provider && isPiSupportedProvider(provider) && !!providerApiKey;
+  const usePi = USE_PI_TICKET_BUILDER && !!provider && isPiSupportedProvider(provider)
+    && !!(providerApiKey || useOpenAICodex);
 
-  if (usePi && provider && providerApiKey) {
+  if (usePi && provider && (providerApiKey || useOpenAICodex)) {
     // ── Pi coding agent inside the VM (model-agnostic, robust) ──────────
     await addLog(ticketId, `Starting Pi build (${provider}/${piModelId})...`, "command", ownerId);
     console.log(`[ticket-executor-api] Using Pi in-sandbox agent: ${provider}/${piModelId}`);
@@ -2640,7 +2645,8 @@ git branch --show-current
           projectDir: projectDirName,
           provider,
           modelId: piModelId,
-          apiKey: providerApiKey,
+          apiKey: providerApiKey ?? undefined,
+          oauthAccessToken: useOpenAICodex ? await getOpenAICodexAccessToken(ownerId) : undefined,
           envVars: piEnvVars,
           forward: webhookReachable ? { apiUrl: CALLBACK_BASE_URL, apiKey: cliApiKey, mode: "ticket" as const, ticketId } : undefined,
         });
@@ -2715,6 +2721,15 @@ git branch --show-current
 
   } else {
   await addLog(ticketId, `Starting AI execution (${modelKey})...`, "command", ownerId);
+
+  const model = getModel(modelKey, {
+    anthropic: userKeys?.anthropicApiKey ?? undefined,
+    openai: userKeys?.openaiApiKey ?? undefined,
+    google: userKeys?.googleApiKey ?? undefined,
+    kimi: userKeys?.kimiApiKey ?? undefined,
+    deepseek: userKeys?.deepseekApiKey ?? undefined,
+    glm: userKeys?.glmApiKey ?? undefined,
+  });
 
   // ── Run generateText with tools (fallback / TICKET_BUILDER=agent) ────
   const abortController = new AbortController();

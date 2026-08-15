@@ -7,7 +7,7 @@
  * tools that execute over the Mags VM via SSH (`execOnWorkspace`).
  *
  * Used when the user has no Claude Code OAuth connection and no Anthropic key,
- * but does have a non-Anthropic LLM key (DeepSeek / Kimi).
+ * but does have a non-Anthropic build credential (OpenAI Codex / DeepSeek / Kimi).
  */
 
 import { generateText, stepCountIs, tool, zodSchema } from "ai";
@@ -15,8 +15,9 @@ import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { db } from "../config/db.ts";
 import { llmApiKeys } from "../db/schema/users.ts";
-import { getModel, getProviderName } from "../ai/provider.ts";
+import { getLiteModelKeyFor, getModel, getProviderName } from "../ai/provider.ts";
 import { execOnWorkspace } from "./mags.ts";
+import { hasOpenAICodexCredentials } from "./openai-codex-auth.ts";
 
 export interface UserApiKeys {
   anthropic?: string;
@@ -31,6 +32,7 @@ export interface AgentBuilderSelection {
   modelKey: string;
   provider: string;
   userApiKeys: UserApiKeys;
+  subscriptionAuth?: "openai-codex";
 }
 
 export interface AgentBuildOptions {
@@ -59,8 +61,9 @@ const RUN_COMMAND_DEFAULT_TIMEOUT = 120_000;
 const RUN_COMMAND_MAX_TIMEOUT = 420_000;
 
 /**
- * Decide which non-Anthropic model to drive the SSH builder with.
- * Priority: DeepSeek → Kimi. Returns null if the user has neither key.
+ * Decide which non-Anthropic model to drive the sandbox builder with.
+ * A deliberately connected OpenAI Codex subscription wins, followed by API-key
+ * providers. Returns null when the user has no usable build credential.
  */
 export async function resolveAgentBuilder(
   userId: string
@@ -78,24 +81,30 @@ export async function resolveAgentBuilder(
     .where(eq(llmApiKeys.userId, userId))
     .limit(1);
 
-  if (!keys) return null;
-
   const userApiKeys: UserApiKeys = {
-    openai: keys.openai ?? undefined,
-    anthropic: keys.anthropic ?? undefined,
-    google: keys.google ?? undefined,
-    kimi: keys.kimi ?? undefined,
-    deepseek: keys.deepseek ?? undefined,
-    glm: keys.glm ?? undefined,
+    openai: keys?.openai ?? undefined,
+    anthropic: keys?.anthropic ?? undefined,
+    google: keys?.google ?? undefined,
+    kimi: keys?.kimi ?? undefined,
+    deepseek: keys?.deepseek ?? undefined,
+    glm: keys?.glm ?? undefined,
   };
 
-  if (keys.deepseek) {
+  if (await hasOpenAICodexCredentials(userId)) {
+    return {
+      modelKey: getLiteModelKeyFor("openai") ?? "gpt-5.6-luna",
+      provider: "openai",
+      userApiKeys,
+      subscriptionAuth: "openai-codex",
+    };
+  }
+  if (keys?.deepseek) {
     return { modelKey: "deepseek_v4_pro", provider: "deepseek", userApiKeys };
   }
-  if (keys.kimi) {
+  if (keys?.kimi) {
     return { modelKey: "kimi_k2.5", provider: "kimi", userApiKeys };
   }
-  if (keys.glm) {
+  if (keys?.glm) {
     return { modelKey: "glm_5.2", provider: "glm", userApiKeys };
   }
   return null;
@@ -127,16 +136,18 @@ export async function resolveAgentBuilderForModel(
     .where(eq(llmApiKeys.userId, userId))
     .limit(1);
 
-  if (!keys) return null;
-
   const userApiKeys: UserApiKeys = {
-    openai: keys.openai ?? undefined,
-    anthropic: keys.anthropic ?? undefined,
-    google: keys.google ?? undefined,
-    kimi: keys.kimi ?? undefined,
-    deepseek: keys.deepseek ?? undefined,
-    glm: keys.glm ?? undefined,
+    openai: keys?.openai ?? undefined,
+    anthropic: keys?.anthropic ?? undefined,
+    google: keys?.google ?? undefined,
+    kimi: keys?.kimi ?? undefined,
+    deepseek: keys?.deepseek ?? undefined,
+    glm: keys?.glm ?? undefined,
   };
+
+  if (provider === "openai" && await hasOpenAICodexCredentials(userId)) {
+    return { modelKey, provider, userApiKeys, subscriptionAuth: "openai-codex" };
+  }
 
   // The user must have a valid key for the selected model's provider.
   const providerKey = userApiKeys[provider as keyof UserApiKeys];

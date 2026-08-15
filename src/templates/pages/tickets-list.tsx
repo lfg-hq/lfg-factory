@@ -651,25 +651,26 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       </div>
     </div>
 
-    <!-- Preview tab -->
+    <!-- Preview tab — the SAME component as the main chat Preview panel (preview-tab.js),
+         driven by the SAME /api/projects/:id/preview data model. No bespoke preview / no
+         iframe-embed: switchDrawerTab('preview') calls PreviewTab.open(ticketId). -->
     <div class="drawer-tab-content" id="tab-preview">
-      <div id="preview-toolbar" class="preview-toolbar">
-        <span id="preview-url-label" class="preview-url-label">Not started</span>
-        <button id="preview-start-btn" onclick="startPreview()" class="preview-btn preview-btn--start">
-          <i class="fas fa-play"></i> Start
-        </button>
-        <button onclick="restartPreview()" class="preview-btn preview-btn--action" title="Restart server">
-          <i class="fas fa-redo"></i>
-        </button>
-        <a id="preview-open-link" href="#" target="_blank" class="preview-btn preview-btn--action" style="text-decoration:none;display:none;" title="Open in new tab">
-          <i class="fas fa-external-link-alt"></i>
-        </a>
-        <button onclick="regenerateDemo()" class="preview-btn preview-btn--action" title="Regenerate feature demo recording">
-          <i class="fas fa-film"></i>
-        </button>
+      <div id="preview-root" data-project-id="${project.projectId}" style="height:100%;display:flex;flex-direction:column;">
+        <div class="preview-header" style="padding:14px 20px;border-bottom:1px solid var(--border-color,#2a2a2a);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+          <div style="display:flex;flex-direction:column;gap:2px;min-width:90px;flex:0 1 auto;">
+            <h3 style="color:var(--text-color,#e2e8f0);margin:0;font-size:16px;font-weight:600;white-space:nowrap;">Preview</h3>
+            <span id="preview-substatus" style="color:var(--text-secondary,#9ca3af);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px;">Loading…</span>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end;flex:1 1 auto;">
+            <button id="preview-plan-btn" title="Profile — how this app runs" style="height:32px;padding:0 12px;border-radius:7px;cursor:pointer;font-size:12.5px;display:inline-flex;align-items:center;gap:7px;font-weight:500;background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);white-space:nowrap;flex:none;"><i class="fas fa-list-check"></i>Profile</button>
+            <button id="preview-env-btn" title="Environment variables this preview runs with" style="height:32px;padding:0 12px;border-radius:7px;cursor:pointer;font-size:12.5px;display:inline-flex;align-items:center;gap:7px;font-weight:500;background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);white-space:nowrap;flex:none;"><i class="fas fa-key"></i>Env<span id="preview-env-count" style="display:none;font-size:11.5px;padding:1px 6px;border-radius:999px;background:var(--border-color,#2a2a2a);color:var(--text-secondary,#9ca3af);"></span></button>
+            <div id="preview-actions" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end;"></div>
+          </div>
+        </div>
+        <div id="preview-body" style="flex:1;min-height:0;position:relative;overflow:hidden;">
+          <!-- states rendered by preview-tab.js -->
+        </div>
       </div>
-      <div id="preview-demo" class="preview-demo" style="display:none;padding:12px 14px;overflow:auto;border-bottom:1px solid var(--border,#e5e7eb);"></div>
-      <iframe id="preview-iframe" src="about:blank" class="preview-iframe"></iframe>
     </div>
 
     <!-- Git tab -->
@@ -706,6 +707,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
 
 <script src="/public/js/sidebar.js"></script>
 <script src="/public/js/sharing.js"></script>
+<!-- Shared preview component — the SAME one the main chat Preview panel uses. -->
+<script src="/public/js/preview-tab.js"></script>
 <script>
   const PROJECT_ID = document.body.dataset.projectId;
   let _currentTicketId = null;
@@ -890,7 +893,6 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
         // makes the drawer open even when ticketMap was stale/missing the ticket.
         ticketMap[ticketId] = Object.assign({}, ticketMap[ticketId] || {}, live);
         renderDrawerDetails(ticketMap[ticketId]);
-        renderTicketDemo(ticketMap[ticketId]);
         var qs = live.queueStatus || live.queue_status || '';
         var st = live.status || (t && t.status) || 'open';
         var isActive = qs === 'queued' || qs === 'executing';
@@ -997,66 +999,12 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       document.getElementById('server-logs-area').innerHTML = '';
       refreshServerLogs();
     }
-    if (tabId === 'preview') { loadSandboxInfo(); renderTicketDemo(ticketMap[_currentTicketId] || {}); }
-  }
-
-  // ── Feature demo (auto-recorded on ticket completion) ──────────────────────
-  function _demoEsc(s) {
-    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  }
-  function renderTicketDemo(ticket) {
-    var box = document.getElementById('preview-demo');
-    if (!box) return;
-    var demo = ticket && ticket.details ? ticket.details.previewDemo : null;
-    if (!demo) { box.style.display = 'none'; box.innerHTML = ''; return; }
-    box.style.display = 'block';
-    var when = demo.generatedAt ? new Date(demo.generatedAt).toLocaleString() : '';
-    var head = '<div style="display:flex;align-items:center;justify-content:space-between;margin:0 0 8px;">'
-      + '<strong style="font-size:13px;">Feature demo</strong>'
-      + '<span style="font-size:11px;color:#888;">' + _demoEsc(when) + '</span></div>';
-    var body = '';
-    if (demo.status === 'running') {
-      body = '<div style="padding:10px 0;color:#888;font-size:13px;"><i class="fas fa-spinner fa-spin"></i> Recording demo…</div>';
-    } else if (demo.status === 'auth_gated') {
-      body = '<div style="padding:10px 0;color:#b45309;font-size:13px;">' + _demoEsc(demo.summary || 'App is behind Google sign-in — rebuild to enable full-demo recording.') + '</div>';
-    } else if (demo.status === 'error') {
-      body = '<div style="padding:10px 0;color:#b91c1c;font-size:13px;">' + _demoEsc(demo.summary || 'Demo could not be generated.') + '</div>';
-    } else if (demo.kind === 'frontend' && demo.videoUrl) {
-      body = (demo.summary ? '<div style="font-size:12px;color:#666;margin-bottom:6px;">' + _demoEsc(demo.summary) + '</div>' : '')
-        + '<video controls playsinline style="width:100%;border-radius:8px;background:#000;max-height:420px;" src="' + _demoEsc(demo.videoUrl) + '"></video>';
-    } else if (demo.kind === 'api' && demo.transcript && demo.transcript.length) {
-      var rows = '';
-      for (var i = 0; i < demo.transcript.length; i++) {
-        var t = demo.transcript[i];
-        rows += '<div style="margin-bottom:10px;">'
-          + '<div style="color:#7ee787;"><span style="color:#8b949e;">$</span> curl ' + _demoEsc(t.command)
-          + (t.status ? '  <span style="color:#8b949e;">[' + _demoEsc(t.status) + ']</span>' : '') + '</div>'
-          + (t.note ? '<div style="color:#8b949e;font-size:11px;margin:2px 0;"># ' + _demoEsc(t.note) + '</div>' : '')
-          + '<pre style="margin:4px 0 0;white-space:pre-wrap;color:#c9d1d9;">' + _demoEsc(t.output) + '</pre></div>';
-      }
-      body = (demo.summary ? '<div style="font-size:12px;color:#666;margin-bottom:6px;">' + _demoEsc(demo.summary) + '</div>' : '')
-        + '<div style="background:#0d1117;border-radius:8px;padding:12px;font-family:ui-monospace,Menlo,monospace;font-size:12px;line-height:1.5;overflow:auto;max-height:420px;">' + rows + '</div>';
-    } else {
-      body = '<div style="padding:10px 0;color:#888;font-size:13px;">No demo yet.</div>';
+    if (tabId === 'preview') {
+      // Same preview component + data model as the main chat panel; default it to
+      // this ticket's branch. PreviewTab self-mounts on #preview-root and talks to
+      // /api/projects/:id/preview.
+      if (window.PreviewTab && window.PreviewTab.open) window.PreviewTab.open(_currentTicketId);
     }
-    box.innerHTML = head + body;
-  }
-  function regenerateDemo() {
-    if (!_currentTicketId) return;
-    var box = document.getElementById('preview-demo');
-    if (box) { box.style.display = 'block'; box.innerHTML = '<div style="padding:10px 0;color:#888;font-size:13px;"><i class="fas fa-spinner fa-spin"></i> Recording demo…</div>'; }
-    fetch('/api/projects/' + PROJECT_ID + '/tickets/' + _currentTicketId + '/demo', { method: 'POST' }).catch(function() {});
-  }
-  function refreshTicketDemo() {
-    if (!_currentTicketId) return;
-    fetch('/api/projects/' + PROJECT_ID + '/tickets/' + _currentTicketId)
-      .then(function(r) { return r.json(); })
-      .then(function(resp) {
-        var live = resp && resp.ticket ? resp.ticket : resp;
-        if (!live) return;
-        ticketMap[_currentTicketId] = Object.assign({}, ticketMap[_currentTicketId] || {}, live);
-        renderTicketDemo(ticketMap[_currentTicketId]);
-      }).catch(function() {});
   }
 
   // ── Build Ticket ─────────────────────────────────────────────────
@@ -1712,60 +1660,10 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
   }
 
   // ── Preview tab ──────────────────────────────────────────────────
-  async function loadSandboxInfo() {
-    if (!_currentTicketId) return;
-    try {
-      const res = await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + _currentTicketId + '/sandbox');
-      if (!res.ok) return;
-      const sb = await res.json();
-      if (!sb) return;
-      const label = document.getElementById('preview-url-label');
-      const link = document.getElementById('preview-open-link');
-      const iframe = document.getElementById('preview-iframe');
-      if (sb.previewUrl) {
-        label.textContent = sb.previewUrl;
-        link.href = sb.previewUrl;
-        link.style.display = 'inline-flex';
-        iframe.src = sb.previewUrl;
-      }
-    } catch(e) { console.error('loadSandboxInfo', e); }
-  }
-
-  async function startPreview() {
-    if (!_currentTicketId) return;
-    const btn = document.getElementById('preview-start-btn');
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Starting…';
-    btn.disabled = true;
-    try {
-      const res = await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + _currentTicketId + '/preview', {
-        method: 'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ action: 'start' })
-      });
-      const data = await res.json();
-      if (data.error) {
-        console.error('startPreview error:', data.error);
-        alert('Preview failed: ' + data.error);
-      } else if (data.previewUrl) {
-        document.getElementById('preview-url-label').textContent = data.previewUrl;
-        const link = document.getElementById('preview-open-link');
-        link.href = data.previewUrl; link.style.display = 'inline-flex';
-        document.getElementById('preview-iframe').src = data.previewUrl;
-      }
-    } catch(e) { console.error('startPreview', e); }
-    btn.innerHTML = '<i class="fas fa-play"></i> Start';
-    btn.disabled = false;
-  }
-
-  async function restartPreview() {
-    if (!_currentTicketId) return;
-    try {
-      await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + _currentTicketId + '/preview', {
-        method: 'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ action: 'restart' })
-      });
-      setTimeout(loadSandboxInfo, 4000);
-    } catch(e) { console.error('restartPreview', e); }
-  }
+  // The Preview tab now uses the shared PreviewTab component (preview-tab.js) against
+  // the same /api/projects/:id/preview data model as the main chat panel. Opening the
+  // tab is wired in switchDrawerTab('preview') → PreviewTab.open(ticketId). The old
+  // bespoke start/restart/sandbox-info + feature-demo recorder were removed.
 
   // ── Git tab ──────────────────────────────────────────────────────
   var _gitStatusColors = { pending:'#6b7280', pr_open:'#3b82f6', pushed:'#3b82f6', merged:'#34d399', failed:'#f87171', not_pushed:'#f87171' };
@@ -2247,13 +2145,16 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
             loadTasks();
           } else if (msg.type === 'ticket_status') {
             handleTicketStatus(msg);
-          } else if (msg.type === 'ticket_demo' && msg.ticketId === _currentTicketId) {
-            if (msg.status === 'running') {
-              var _db = document.getElementById('preview-demo');
-              if (_db) { _db.style.display = 'block'; _db.innerHTML = '<div style="padding:10px 0;color:#888;font-size:13px;"><i class="fas fa-spinner fa-spin"></i> Recording demo…</div>'; }
-            } else {
-              refreshTicketDemo();
-            }
+          } else if (msg.type === 'preview_status') {
+            if (window.PreviewTab && window.PreviewTab.onStatus) window.PreviewTab.onStatus(msg);
+          } else if (msg.type === 'preview_log') {
+            if (window.PreviewTab && window.PreviewTab.onLog) window.PreviewTab.onLog(msg);
+          } else if (msg.type === 'preview_steps') {
+            if (window.PreviewTab && window.PreviewTab.onSteps) window.PreviewTab.onSteps(msg);
+          } else if (msg.type === 'preview_profile') {
+            if (window.PreviewTab && window.PreviewTab.onProfile) window.PreviewTab.onProfile(msg);
+          } else if (msg.type === 'preview_services') {
+            if (window.PreviewTab && window.PreviewTab.onServices) window.PreviewTab.onServices(msg);
           }
         } catch(e) {}
       };

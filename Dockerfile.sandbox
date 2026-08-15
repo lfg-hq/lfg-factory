@@ -18,10 +18,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Coding agents used by ticket execution + Instant builds.
 #   @anthropic-ai/claude-code → provides the `claude` binary (Anthropic models)
-#   @mariozechner/pi-coding-agent → provides the `pi` binary (OpenAI/Gemini/DeepSeek/Kimi/GLM…)
+#   @earendil-works/pi-coding-agent → provides `pi`, including OpenAI Codex OAuth auth commands
 RUN npm install -g \
       @anthropic-ai/claude-code \
-      @mariozechner/pi-coding-agent \
+      @earendil-works/pi-coding-agent \
     && npm cache clean --force
 
 # Workspace the app clones projects into (matches WORKING_DIR conventions).

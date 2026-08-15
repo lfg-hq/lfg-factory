@@ -52,6 +52,7 @@ import {
   type AgentBuilderSelection,
 } from "./instant-builder-agent.ts";
 import { startPiCli, streamPiToCompletion, isPiSupportedProvider, probeBuildActivity } from "./pi-cli.ts";
+import { getOpenAICodexAccessToken } from "./openai-codex-auth.ts";
 import { detectProjectType, getBuildProfile, type ProjectType } from "./instant-profiles.ts";
 
 // Non-Anthropic builds default to the in-sandbox Pi coding agent. Set
@@ -1078,6 +1079,7 @@ async function runInstantBuild(appId: string, feedback?: string, designChoices?:
   let buildWorkspaceId: string | null = null;
   let buildUserId: string | null = null;
   let buildAuthMode: "oauth" | "apiKey" | "agent" | null = null;
+  let buildUsedOpenAICodex = false;
   const buildStart = Date.now();
 
   try {
@@ -1115,7 +1117,7 @@ async function runInstantBuild(appId: string, feedback?: string, designChoices?:
       // User explicitly selected a non-Anthropic model — use the SSH agent with it.
       agentBuild = await resolveAgentBuilderForModel(app.userId, buildModelKey!);
       if (!agentBuild) {
-        throw new Error(`No ${selectedProvider} API key found for the selected model. Add it in Settings → LLM Keys, or pick a model you have a key for.`);
+        throw new Error(`No ${selectedProvider} authentication found for the selected model. Add an API key, connect OpenAI Codex for OpenAI sandbox builds, or pick another model.`);
       }
       buildAuthMode = "agent";
       console.log(`[instant] [${appId}] using SSH builder agent for selected model=${agentBuild.modelKey} (provider=${selectedProvider})`);
@@ -1148,6 +1150,7 @@ async function runInstantBuild(appId: string, feedback?: string, designChoices?:
     }
     const isOAuth = buildAuthMode === "oauth";
     const useAgentBuilder = buildAuthMode === "agent";
+    buildUsedOpenAICodex = agentBuild?.subscriptionAuth === "openai-codex";
 
     // Compose design tokens from requirements. If the build was approved via the
     // design proposal card, prefer the design choices the user approved.
@@ -1317,7 +1320,7 @@ async function runInstantBuild(appId: string, feedback?: string, designChoices?:
     // model + key. Skipped (not failed) otherwise; it's a best-effort convenience step.
     let apiAnalysis: ApiKeyAnalysis | null = null;
     const analysisProvider = agentBuild?.provider ?? getProviderName(buildModelKey ?? "") ?? "anthropic";
-    const analysisSupportsStructured = ["anthropic", "openai", "google"].includes(analysisProvider);
+    const analysisSupportsStructured = ["anthropic", "openai", "google"].includes(analysisProvider) && !agentBuild?.subscriptionAuth;
     if (isNewBuild && analysisSupportsStructured) {
       try {
         const analysisModel = agentBuild
@@ -1531,12 +1534,16 @@ Do NOT use TodoWrite. Do NOT edit source files. Just install (if needed), build,
 
     const piProvider = agentBuild?.provider ?? "";
     const usePi = useAgentBuilder && !!agentBuild && USE_PI_IN_SANDBOX && isPiSupportedProvider(piProvider);
+    if (agentBuild?.subscriptionAuth && !usePi && !agentBuild.userApiKeys.openai) {
+      throw new Error("OpenAI Codex subscription authentication requires the in-sandbox Pi builder. Remove INSTANT_NONANTHROPIC_BUILDER=agent or add an OpenAI API key.");
+    }
+    const useOpenAICodex = usePi && agentBuild?.subscriptionAuth === "openai-codex";
 
     if (usePi && agentBuild) {
       // ── In-sandbox Pi coding agent (user-selected model + their key) ──
       const piModelId = getProviderModel(agentBuild.modelKey) ?? agentBuild.modelKey;
       const apiKey = agentBuild.userApiKeys[piProvider as keyof typeof agentBuild.userApiKeys];
-      if (!apiKey) {
+      if (!apiKey && !useOpenAICodex) {
         throw new Error(`No ${piProvider} API key found for the selected model. Add it in Settings → LLM Keys.`);
       }
       const t1 = Date.now();
@@ -1605,6 +1612,7 @@ Do NOT use TodoWrite. Do NOT edit source files. Just install (if needed), build,
           provider: piProvider,
           modelId: piModelId,
           apiKey,
+          oauthAccessToken: useOpenAICodex ? await getOpenAICodexAccessToken(app.userId) : undefined,
           envVars: (app.envVars as Record<string, string> | null) ?? {},
           forward,
         });
@@ -1907,7 +1915,7 @@ Only stop when it is genuinely serving, or (after exhausting real fixes) explain
           // Re-run Pi in the sandbox with the fix prompt (max 1 auto-fix attempt)
           const fixModelId = getProviderModel(agentBuild.modelKey) ?? agentBuild.modelKey;
           const fixApiKey = agentBuild.userApiKeys[piProvider as keyof typeof agentBuild.userApiKeys];
-          if (fixApiKey) {
+          if (fixApiKey || useOpenAICodex) {
             const fixPi = await startPiCli({
               workspaceId,
               prompt: fixPrompt,
@@ -1915,6 +1923,7 @@ Only stop when it is genuinely serving, or (after exhausting real fixes) explain
               provider: piProvider,
               modelId: fixModelId,
               apiKey: fixApiKey,
+              oauthAccessToken: useOpenAICodex ? await getOpenAICodexAccessToken(app.userId) : undefined,
               envVars: (app.envVars as Record<string, string> | null) ?? {},
             });
             let lastFixBroadcast = 0;
@@ -2266,7 +2275,8 @@ Only stop when it is genuinely serving, or (after exhausting real fixes) explain
         );
       // OAuth (Claude Code) session problems — distinct from an API-key rejection.
       const oauthProblem = /no credentials|credentials\.json|not logged in|reconnect|oauth token|session (expired|invalid)/i.test(raw);
-      const isCredError = apiKeyRejected || oauthProblem;
+      const openAICodexProblem = buildUsedOpenAICodex && (apiKeyRejected || /openai codex|reconnect/i.test(raw));
+      const isCredError = apiKeyRejected || oauthProblem || openAICodexProblem;
 
       // Only flip the OAuth "connected" flag for an actual OAuth-mode session failure.
       if (oauthProblem && buildAuthMode !== "apiKey" && buildAuthMode !== "agent") {
@@ -2294,7 +2304,9 @@ Only stop when it is genuinely serving, or (after exhausting real fixes) explain
       const networkError = /connection error|econnreset|econnrefused|etimedout|socket hang up|network|getaddrinfo|dns/i.test(raw)
         && !apiKeyRejected;
       let message: string;
-      if (apiKeyRejected && buildAuthMode === "apiKey") {
+      if (openAICodexProblem) {
+        message = "Your OpenAI Codex subscription session is unavailable or expired. Reconnect OpenAI in Settings → Integrations, then retry the build.";
+      } else if (apiKeyRejected && buildAuthMode === "apiKey") {
         message = `Your Anthropic API key was rejected by the provider. Check it in Settings → LLM Keys, or connect Claude Code. (${detail})`;
       } else if (apiKeyRejected && buildAuthMode === "agent") {
         message = `The build's LLM call was rejected by the provider (DeepSeek/Kimi). This is the in-sandbox build path, not chat — check the key/credits in Settings → LLM Keys, or connect Claude Code. (${detail})`;

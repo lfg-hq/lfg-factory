@@ -28,6 +28,7 @@
   let progressTab = "logs"; // during setup: "logs" | "steps"
   let branches = [{ id: "default", label: "Default branch", ticketId: null }]; // previewable branches
   let branchId = "default"; // which branch is currently being previewed
+  let preferTicket = null; // when opened from a ticket drawer: default the selector to this ticket's branch
 
   // ── In-app browser (tabbed) ──
   let bTabs = [];        // [{ id, url, history:[urls], hi }]
@@ -746,7 +747,12 @@
     // No branch recorded yet (the run is still being set up) → keep whatever the
     // user picked. Resetting here is what made the selector say "Default branch"
     // while a ticket branch was building.
-    if (!sb) return;
+    if (!sb) {
+      // Opened from a ticket drawer → default the selector to that ticket's branch
+      // so the first Restart/Run targets it (a running branch below overrides this).
+      if (preferTicket) { const pm = branches.find((b) => b.id === preferTicket || b.ticketId === preferTicket); if (pm) branchId = pm.id; }
+      return;
+    }
     if (sb === "(default)") { branchId = "default"; return; }
     const m = branches.find((b) => b.branch === sb);
     if (m) { branchId = m.id; return; }
@@ -927,6 +933,14 @@
       renderProfileBody();
       const msg = document.getElementById("preview-plan-msg");
       if (msg) { msg.textContent = "Re-probe complete ✓ — profile updated."; msg.style.color = "#10b981"; }
+    },
+    // Explicitly (re)load the preview. Used where there's no `.tab-button[data-tab=preview]`
+    // to hook (e.g. the ticket drawer opens this same component via switchDrawerTab).
+    // Pass a ticketId to default the branch selector to that ticket's branch.
+    open(ticketId) {
+      loadedOnce = true;
+      preferTicket = ticketId || null;
+      loadBranches().then(load); // populate branches first so the ticket branch can be preselected
     },
   };
 

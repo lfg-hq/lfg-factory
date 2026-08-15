@@ -84,6 +84,14 @@ export const profiles = sqliteTable("profile", {
   claudeCodeS3Key: text("claude_code_s3_key"),
   claudeCodeCredentials: text("claude_code_credentials"),
   claudeCodeCredentialsUpdatedAt: integer("claude_code_credentials_updated_at", { mode: "timestamp" }),
+
+  // ChatGPT-backed OpenAI Codex credentials used only by the Pi sandbox builder.
+  // The JSON credential is encrypted by src/utils/crypto.ts before persistence.
+  openaiCodexAuthenticated: integer("openai_codex_authenticated", { mode: "boolean" })
+    .notNull()
+    .default(false),
+  openaiCodexCredentials: text("openai_codex_credentials"),
+  openaiCodexCredentialsUpdatedAt: integer("openai_codex_credentials_updated_at", { mode: "timestamp" }),
   cliApiKey: text("cli_api_key").unique(),
 
   // Organization context

@@ -17,6 +17,10 @@ interface SettingsPageProps {
     hasCredentials: boolean;
     cliApiKey: string | null;
   };
+  openaiCodex?: {
+    available: boolean;
+    connected: boolean;
+  };
   github?: {
     connected: boolean;
     username: string | null;
@@ -42,7 +46,7 @@ interface SettingsPageProps {
   success?: string;
 }
 
-export function SettingsPage({ user, apiKeys, claudeCode, github, gitlab, telegram, composio, activeSection = "llm-keys", error, success }: SettingsPageProps) {
+export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, gitlab, telegram, composio, activeSection = "llm-keys", error, success }: SettingsPageProps) {
   const avatarLetter = (user.name?.[0] ?? user.email?.[0] ?? "?").toUpperCase();
 
   return html`<!DOCTYPE html>
@@ -625,6 +629,133 @@ export function SettingsPage({ user, apiKeys, claudeCode, github, gitlab, telegr
             }).catch(() => {});
           }
         </script>
+
+        ${openaiCodex?.available ? html`
+        <!-- OpenAI Codex / ChatGPT subscription card -->
+        <div class="llm-keys-table" style="margin-bottom:1.5rem;">
+          <div class="llm-keys-row" style="border-bottom:1px solid rgba(255,255,255,0.07);padding:1rem 1.375rem;justify-content:space-between;">
+            <h3 style="margin:0;font-size:0.9375rem;font-weight:700;color:var(--text-color,#f0f0f0);display:flex;align-items:center;gap:.5rem;">
+              <span style="width:19px;height:19px;border-radius:50%;background:#fff;color:#111;display:inline-flex;align-items:center;justify-content:center;font-size:.65rem;font-weight:900;">AI</span>
+              OpenAI Codex for sandbox builds
+            </h3>
+            ${openaiCodex?.connected ? html`
+              <span style="font-size:.75rem;padding:.25rem .625rem;background:rgba(52,211,153,.1);color:#34d399;border:1px solid rgba(52,211,153,.25);border-radius:20px;">
+                <i class="fas fa-check-circle" style="margin-right:.25rem;"></i>Connected
+              </span>
+            ` : html`
+              <span style="font-size:.75rem;padding:.25rem .625rem;background:rgba(255,255,255,.06);color:rgba(255,255,255,.4);border:1px solid rgba(255,255,255,.1);border-radius:20px;">Not connected</span>
+            `}
+          </div>
+          <div class="llm-keys-row" style="flex-direction:column;align-items:stretch;gap:1rem;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;">
+              <div style="max-width:680px;">
+                <div class="byok-label">ChatGPT subscription</div>
+                <div class="byok-desc">
+                  ${openaiCodex?.connected
+                    ? "OpenAI-model ticket and Instant builds use your connected Codex entitlement through Pi."
+                    : "Connect an eligible ChatGPT account to use its Codex entitlement for OpenAI-model ticket and Instant builds."}
+                  Normal LFG chat continues to use your OpenAI API key and API billing.
+                </div>
+              </div>
+              ${openaiCodex?.connected ? html`
+                <button id="oc-disconnect-btn" onclick="openAICodexDisconnect()" class="llm-btn-remove"
+                  style="border-radius:7px;border:1px solid rgba(239,68,68,0.3);padding:.45rem .875rem;">
+                  <i class="fas fa-unlink"></i>&nbsp; Disconnect
+                </button>
+              ` : html`
+                <button id="oc-connect-btn" onclick="openAICodexStart()" class="llm-btn-save" style="border-radius:7px;padding:.45rem .875rem;">
+                  <i class="fas fa-plug"></i>&nbsp; Connect OpenAI
+                </button>
+              `}
+            </div>
+
+            <div id="oc-flow-panel" style="display:none;border-top:1px solid var(--border-color, rgba(255,255,255,.07));padding-top:1rem;">
+              <div id="oc-loading" style="display:flex;align-items:center;gap:.75rem;color:var(--text-secondary);font-size:.875rem;">
+                <div class="cc-spinner"></div><span>Preparing a secure sign-in session…</span>
+              </div>
+              <div id="oc-device" style="display:none;">
+                <p style="margin:0 0 .75rem;color:var(--text-secondary);font-size:.875rem;">Open the OpenAI device page, enter this one-time code, and finish signing in:</p>
+                <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;">
+                  <a id="oc-device-link" href="https://auth.openai.com/codex/device" target="_blank" rel="noopener" class="llm-btn-save" style="text-decoration:none;border-radius:7px;padding:.5rem .875rem;">Open OpenAI sign-in</a>
+                  <button id="oc-user-code" onclick="copyOpenAICodexCode()" style="font-family:monospace;font-size:1rem;letter-spacing:.12em;padding:.45rem .8rem;border-radius:7px;border:1px solid rgba(139,92,246,.35);background:rgba(139,92,246,.1);color:#c4b5fd;cursor:pointer;"></button>
+                  <span id="oc-status" style="font-size:.8125rem;color:var(--text-secondary);">Waiting for authorization…</span>
+                </div>
+              </div>
+              <div id="oc-error" style="display:none;color:#f87171;font-size:.875rem;"></div>
+            </div>
+          </div>
+        </div>
+
+        <script>
+          let openAICodexPollTimer = null;
+
+          function showOpenAICodexError(message) {
+            document.getElementById('oc-loading').style.display = 'none';
+            document.getElementById('oc-device').style.display = 'none';
+            const error = document.getElementById('oc-error');
+            error.textContent = message || 'OpenAI sign-in failed.';
+            error.style.display = 'block';
+          }
+
+          async function openAICodexStart() {
+            const btn = document.getElementById('oc-connect-btn');
+            if (btn) { btn.disabled = true; btn.textContent = 'Preparing…'; }
+            document.getElementById('oc-flow-panel').style.display = 'block';
+            document.getElementById('oc-loading').style.display = 'flex';
+            document.getElementById('oc-device').style.display = 'none';
+            document.getElementById('oc-error').style.display = 'none';
+            try {
+              const response = await fetch('/api/v1/openai-codex-auth/start', { method: 'POST' });
+              const data = await response.json();
+              if (data.status === 'already_authenticated') { location.reload(); return; }
+              if (data.status !== 'pending' || !data.verificationUri || !data.userCode) {
+                showOpenAICodexError(data.error || 'Could not start OpenAI sign-in.');
+                return;
+              }
+              document.getElementById('oc-loading').style.display = 'none';
+              document.getElementById('oc-device').style.display = 'block';
+              document.getElementById('oc-device-link').href = data.verificationUri;
+              document.getElementById('oc-user-code').textContent = data.userCode;
+              openAICodexPollTimer = setInterval(openAICodexPoll, 2000);
+              window.open(data.verificationUri, '_blank', 'noopener');
+            } catch (error) {
+              showOpenAICodexError('Network error: ' + error.message);
+            } finally {
+              if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-plug"></i>&nbsp; Connect OpenAI'; }
+            }
+          }
+
+          async function openAICodexPoll() {
+            try {
+              const response = await fetch('/api/v1/openai-codex-auth/status');
+              const data = await response.json();
+              if (data.authenticated) {
+                clearInterval(openAICodexPollTimer);
+                document.getElementById('oc-status').textContent = 'Connected. Reloading…';
+                document.getElementById('oc-status').style.color = '#34d399';
+                setTimeout(() => location.reload(), 700);
+              } else if (!data.pending && data.error) {
+                clearInterval(openAICodexPollTimer);
+                showOpenAICodexError(data.error);
+              }
+            } catch (_) {}
+          }
+
+          function copyOpenAICodexCode() {
+            const code = document.getElementById('oc-user-code').textContent;
+            navigator.clipboard.writeText(code).catch(() => {});
+          }
+
+          async function openAICodexDisconnect() {
+            if (!confirm('Disconnect OpenAI Codex? Stored subscription credentials will be removed.')) return;
+            const btn = document.getElementById('oc-disconnect-btn');
+            if (btn) { btn.disabled = true; btn.textContent = 'Disconnecting…'; }
+            const response = await fetch('/api/v1/openai-codex-auth/disconnect', { method: 'POST' });
+            if (response.ok) location.reload();
+            else if (btn) { btn.disabled = false; btn.textContent = 'Disconnect'; }
+          }
+        </script>
+        ` : ""}
 
         <!-- Source Control (GitHub + GitLab) -->
         <div class="llm-keys-table">

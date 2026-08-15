@@ -24,6 +24,7 @@ async function execLite(workspaceId: string, script: string, timeout = 15_000) {
 // Project lives on the big /data volume (7.8GB), not /root (1.9GB) — avoids ENOSPC.
 const WORKING_DIR = "/data";
 const POLL_INTERVAL_MS = parseInt(process.env.INSTANT_PI_POLL_MS || "10000", 10);
+const PI_PACKAGE = process.env.PI_CODING_AGENT_PACKAGE || "@earendil-works/pi-coding-agent";
 
 /** A full model entry for a Pi custom (OpenAI-compatible) provider's models.json. */
 interface PiModelDef {
@@ -136,7 +137,9 @@ export interface PiRunOptions {
   projectDir: string; // relative to /root, e.g. "project"
   provider: string; // LFG provider name (deepseek/kimi/openai/google/anthropic)
   modelId: string; // provider-native model id, e.g. "deepseek-v4-pro"
-  apiKey: string; // the user's key for that provider
+  apiKey?: string; // the user's API key for that provider
+  /** Short-lived OpenAI Codex bearer token. Never persisted in the general env file. */
+  oauthAccessToken?: string;
   envVars?: Record<string, string>; // app env vars to expose to the build
   outputFile?: string;
   /** When set, an in-VM forwarder streams Pi's JSONL to LFG in real time (webhook
@@ -243,8 +246,15 @@ function sleep(ms: number) {
  * Launch Pi in the VM (non-blocking, background). Returns the output file + pid.
  */
 export async function startPiCli(opts: PiRunOptions): Promise<PiRunResult> {
-  const cfg = PI_PROVIDERS[opts.provider];
-  if (!cfg) throw new Error(`Pi runner: unsupported provider '${opts.provider}'`);
+  const baseCfg = PI_PROVIDERS[opts.provider];
+  if (!baseCfg) throw new Error(`Pi runner: unsupported provider '${opts.provider}'`);
+  if (!opts.apiKey && !opts.oauthAccessToken) throw new Error("Pi runner: an API key or OAuth access token is required");
+  if (opts.oauthAccessToken && opts.provider !== "openai") {
+    throw new Error("Pi runner: OpenAI Codex OAuth can only be used with the OpenAI provider");
+  }
+  const cfg = opts.oauthAccessToken
+    ? { ...baseCfg, piName: "openai-codex" }
+    : baseCfg;
 
   const ts = Date.now();
   // Pi's working files live on the big /data disk, NOT /tmp. On these VMs /tmp is a
@@ -256,6 +266,7 @@ export async function startPiCli(opts: PiRunOptions): Promise<PiRunResult> {
   const outputFile = opts.outputFile ?? `${PI_DIR}/pi_output_${ts}.jsonl`;
   const promptFile = `${PI_DIR}/pi_prompt_${ts}.txt`;
   const envFile = `${PI_DIR}/pi_env_${ts}.sh`;
+  const oauthTokenFile = `${PI_DIR}/pi_oauth_${ts}.token`;
   const runnerScript = `${PI_DIR}/pi_runner_${ts}.sh`;
   const forwarderFile = `${PI_DIR}/pi_forward_${ts}.js`;
   const projectDirName = opts.projectDir.replace(/^\/(root|data)\//, "").replace(/^\//, "");
@@ -266,7 +277,7 @@ export async function startPiCli(opts: PiRunOptions): Promise<PiRunResult> {
   // `node`/`pi` "not found" → the reinstall/127 loop.
   const PI_UNSAFE_ENV = new Set(["PATH", "HOME", "PWD", "OLDPWD", "SHELL", "USER", "LOGNAME", "TERM", "HOSTNAME", "SHLVL", "_", "LD_LIBRARY_PATH", "LD_PRELOAD"]);
   const envExports = [
-    `export ${cfg.envVar}=${JSON.stringify(opts.apiKey)}`,
+    ...(opts.apiKey ? [`export ${cfg.envVar}=${JSON.stringify(opts.apiKey)}`] : []),
     ...(opts.forward
       ? [
           `export LFG_API_URL=${JSON.stringify(opts.forward.apiUrl)}`,
@@ -356,6 +367,7 @@ process.stdin.on('end',async()=>{ clearInterval(timer); if(buf.trim()) batch.pus
   // Native providers (openai, google, anthropic) need none.
   let modelsJsonInject = "";
   if (cfg.custom) {
+    if (!opts.apiKey) throw new Error(`Pi runner: ${opts.provider} requires an API key`);
     // Pi resolves `--model <opts.modelId>` against THIS list. If the registry's
     // provider_model has moved ahead of the hardcoded defs (e.g. kimi-k2.5 → kimi-k3),
     // synthesize a matching entry (cloning a known def's shape) so Pi can still resolve
@@ -394,7 +406,7 @@ echo '${modelsB64}' | base64 -d > /root/.pi/agent/models.json`;
   // Pi launch line. When forwarding, pipe the JSON stream through tee (→ outputFile, so
   // the completion/analysis poll still works) AND the forwarder (→ live ops). Use bash
   // PIPESTATUS[0] to recover Pi's real exit code from the pipeline.
-  const piRun = `pi -p --provider ${cfg.piName} --model ${opts.modelId} --mode json "$(cat ${promptFile})"`;
+  const piRun = `pi -p --provider ${cfg.piName} --model ${opts.modelId} --mode json "\${PI_AUTH_ARGS[@]}" "$(cat ${promptFile})"`;
   const piLaunch = opts.forward
     ? `${piRun} 2>&1 | tee -a ${outputFile} | node ${forwarderFile}\nPI_EXIT=\${PIPESTATUS[0]}`
     : `${piRun} >> ${outputFile} 2>&1\nPI_EXIT=\$?`;
@@ -411,6 +423,8 @@ echo '${modelsB64}' | base64 -d > /root/.pi/agent/models.json`;
   const heapMaxMb = parseInt(process.env.INSTANT_PI_HEAP_MAX_MB || "4096", 10);
   const runnerContent = `#!/bin/bash
 export HOME=/root
+umask 077
+trap 'rm -f ${oauthTokenFile}' EXIT
 # Write an immediate start marker so an EARLY death (killed during env/node/pi setup,
 # before the diagnostics below) still leaves evidence instead of an empty output file.
 echo "[pi-runner] START model=${cfg.piName}/${opts.modelId} $(date -u +%H:%M:%S)" >> ${outputFile}
@@ -514,15 +528,17 @@ ensure_node
 # file exists — because a partial/interrupted install leaves a corrupt cli.js that
 # bash tries to run as a script (→ exit 127). Reinstall cleanly and re-verify; only
 # proceed once pi works.
-PI_PKG="@mariozechner/pi-coding-agent"
+PI_PKG="${PI_PACKAGE}"
 ensure_pi() {
-  pi --version >/dev/null 2>&1 && return 0
+  if pi --version >/dev/null 2>&1; then
+    ${opts.oauthAccessToken ? "pi auth --help >/dev/null 2>&1 && return 0" : "return 0"}
+  fi
   echo "[pi-runner] installing \$PI_PKG..." >> ${outputFile}
   npm i -g "\$PI_PKG" > ${piInstallLog} 2>&1
   pi --version >/dev/null 2>&1 && return 0
   # Clean + retry once (clears any corrupt partial install / cache).
   echo "[pi-runner] first install did not yield a working pi — cleaning + retrying..." >> ${outputFile}
-  rm -rf /data/.npm-global/lib/node_modules/@mariozechner /data/.npm-global/bin/pi 2>/dev/null
+  rm -rf /data/.npm-global/lib/node_modules/@mariozechner /data/.npm-global/lib/node_modules/@earendil-works /data/.npm-global/bin/pi 2>/dev/null
   npm cache clean --force >/dev/null 2>&1
   npm i -g "\$PI_PKG" >> ${piInstallLog} 2>&1
   pi --version >/dev/null 2>&1
@@ -539,18 +555,31 @@ fi
 # server console, so every build records exactly what node/pi it ran on.
 echo "___PI_VERSIONS node=\$(node -v 2>/dev/null) pi=\$(pi --version 2>/dev/null)" >> ${outputFile}
 
+# OAuth builds receive only a short-lived bearer. Read it into a non-exported shell
+# variable and unlink the transfer file before Pi starts, so project subprocesses and
+# the coding agent's shell tools cannot read it from disk or their environment.
+PI_AUTH_ARGS=()
+if [ -s ${oauthTokenFile} ]; then
+  IFS= read -r PI_OAUTH_TOKEN < ${oauthTokenFile}
+  rm -f ${oauthTokenFile}
+  PI_AUTH_ARGS=(--api-key "\$PI_OAUTH_TOKEN")
+fi
+
 # The provider key is embedded directly in models.json (Pi does not expand env-var
 # references there), and ${cfg.envVar} is also exported here for any code that reads it.
 # --mode json streams events; matches the documented activation:
 #   pi -p --provider deepseek --model deepseek-v4-pro "<prompt>"
 # Append (>>), not truncate (>), so the confirmation line above is preserved.
 ${piLaunch}
+unset PI_OAUTH_TOKEN
+rm -f ${oauthTokenFile}
 echo "" >> ${outputFile}
 echo "___PI_EXIT_CODE=\$PI_EXIT" >> ${outputFile}
 `;
 
   const promptB64 = Buffer.from(opts.prompt).toString("base64");
   const envB64 = Buffer.from(envExports).toString("base64");
+  const oauthTokenB64 = opts.oauthAccessToken ? Buffer.from(opts.oauthAccessToken).toString("base64") : "";
   const runnerB64 = Buffer.from(runnerContent).toString("base64");
   const forwarderInject = opts.forward
     ? `echo '${Buffer.from(forwarderScript).toString("base64")}' | base64 -d > ${forwarderFile}`
@@ -566,6 +595,7 @@ find ${PI_DIR} -maxdepth 1 -name 'pi_*' -mmin +30 -delete 2>/dev/null || true
 rm -f /tmp/pi_* /tmp/node22.tar.gz 2>/dev/null || true
 echo '${promptB64}' | base64 -d > ${promptFile}
 echo '${envB64}' | base64 -d > ${envFile}
+${opts.oauthAccessToken ? `echo '${oauthTokenB64}' | base64 -d > ${oauthTokenFile}; chmod 600 ${oauthTokenFile}` : `rm -f ${oauthTokenFile}`}
 ${modelsJsonInject}
 ${forwarderInject}
 echo '${runnerB64}' | base64 -d > ${runnerScript}
