@@ -2831,14 +2831,25 @@ git remote set-url origin "${auth.authUrl}" 2>/dev/null
 # for slashed branch names / narrowed clones — otherwise 'git worktree add origin/<b>'
 # below can't resolve the ref (branch is on GitHub but origin/<b> is empty locally).
 git fetch --no-tags --force origin "+refs/heads/${remoteBranch}:refs/remotes/origin/${remoteBranch}" 2>&1 | tail -3
-# If the MAIN checkout is on the target branch (inverted/corrupted), move it back to
-# the default branch so the branch is free to own in a worktree.
+# Free the branch from ANY checkout that still claims it, else 'git worktree add -B'
+# fails "cannot force update the branch ... checked out at <path>". This is the usual
+# reason ONE ticket branch won't prepare while the others do: a stale worktree (or the
+# main checkout) left over from an earlier FAILED run still owns the branch.
+# 1) MAIN checkout is on the branch (inverted layout) → move it to the default branch
+#    (detach as a fallback — the app runs from the worktree, not main).
 CUR=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
 if [ "$CUR" = "${remoteBranch}" ]; then
   git remote set-head origin -a >/dev/null 2>&1
   DEF=$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null | sed 's@^origin/@@'); [ -z "$DEF" ] && DEF=main
-  git checkout -f "$DEF" 2>&1 | tail -1 || true
+  git checkout -f "$DEF" 2>&1 | tail -1 || git checkout -f --detach 2>&1 | tail -1 || true
 fi
+# 2) ANOTHER worktree holds the branch → remove it (prune only drops MISSING dirs; a
+#    stale-but-present worktree keeps the branch locked). Skip the dir we'll reuse.
+git worktree prune 2>/dev/null
+OTHER_WT=$(git worktree list --porcelain 2>/dev/null | awk -v b="refs/heads/${remoteBranch}" '$1=="worktree"{p=$2} $1=="branch" && $2==b {print p}')
+for w in $OTHER_WT; do
+  if [ "$w" != "${runDir}" ]; then git worktree remove --force "$w" 2>&1 | tail -1 || rm -rf "$w"; fi
+done
 git worktree prune 2>/dev/null
 if [ -e "${runDir}/.git" ]; then
   # Existing worktree → hard-reset to the LATEST pushed commit (picks up new changes).
@@ -2848,6 +2859,14 @@ if [ -e "${runDir}/.git" ]; then
 else
   rm -rf "${runDir}" 2>/dev/null
   git worktree add -f -B "${remoteBranch}" "${runDir}" "origin/${remoteBranch}" 2>&1 | tail -4
+  if [ ! -e "${runDir}/.git" ]; then
+    # Last resort: the local branch ref may be locked/corrupt — drop it and retry fresh.
+    git branch -D "${remoteBranch}" 2>/dev/null || true
+    git worktree prune 2>/dev/null
+    rm -rf "${runDir}" 2>/dev/null
+    echo "retrying worktree add after dropping local branch ref…"
+    git worktree add -f -B "${remoteBranch}" "${runDir}" "origin/${remoteBranch}" 2>&1 | tail -4
+  fi
 fi
 # CRITICAL: remove stale build output. In Release, ASP.NET compiles .cshtml Razor
 # views INTO <App>.Views.dll at BUILD time — an incremental build can keep serving
@@ -2864,7 +2883,10 @@ test -e "${runDir}/.git" && echo "WT_OK $(git -C "${runDir}" log -1 --oneline 2>
         }
         if (!prep.output.includes("WT_OK")) {
           await setStep("locate", "failed");
-          return failed(projectId, userId, `Couldn't prepare the ticket branch \`${remoteBranch}\` — is it pushed? Rebuild the ticket to (re)create it.\n\n${prep.output.slice(-600)}`);
+          // Log the real git output too — the banner clips it, and the actual reason
+          // ("cannot force update the branch … checked out at …", auth, etc.) lives here.
+          plog(projectId, userId, `Worktree prep failed for ${remoteBranch}:\n${prep.output.slice(-800)}`, { level: "error" });
+          return failed(projectId, userId, `Couldn't prepare the ticket branch \`${remoteBranch}\`.\n\n${prep.output.slice(-600)}`);
         }
         const headLine = prep.output.match(/WT_OK\s+(.+)/)?.[1]?.trim();
         plog(projectId, userId, `Worktree ready on ${remoteBranch} ✓ (HEAD: ${headLine || "synced to origin"})`);
