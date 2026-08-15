@@ -374,7 +374,7 @@
       // build runs shouldn't require waiting for it to finish. Selecting a branch
       // supersedes the current run (doRunBranch → restart on the chosen branch).
       syncBranchFromState(state);
-      const pOpts = branches.map((b) => `<option value="${esc(b.id)}"${b.id === branchId ? " selected" : ""}>${esc(b.label)}</option>`).join("");
+      const pOpts = branchOptions();
       const pBranchSel = branches.length > 1 ? `<select data-branch title="Switch branch (supersedes the current build)" style="padding:6px 8px;border-radius:6px;font-size:12.5px;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);max-width:200px;">${pOpts}</select>` : "";
       renderActions(pBranchSel + btn("Cancel", { action: "stop", icon: "fa-stop" }));
       // Branch list may not be loaded yet during an early setup phase — fetch it and
@@ -382,7 +382,7 @@
       loadBranches().then(() => {
         if (currentView !== "progress") return;
         syncBranchFromState(current);
-        const opts2 = branches.map((b) => `<option value="${esc(b.id)}"${b.id === branchId ? " selected" : ""}>${esc(b.label)}</option>`).join("");
+        const opts2 = branchOptions();
         const sel = document.querySelector("#preview-actions [data-branch]");
         if (sel) { sel.innerHTML = opts2; }
         else if (branches.length > 1) renderActions(`<select data-branch title="Switch branch (supersedes the current build)" style="padding:6px 8px;border-radius:6px;font-size:12.5px;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);max-width:200px;">${opts2}</select>` + btn("Cancel", { action: "stop", icon: "fa-stop" }));
@@ -406,7 +406,7 @@
       currentView = "running";
       setSub("Live" + (state.branch ? ` · ${state.branch}` : ""));
       syncBranchFromState(state); // reflect the actually-running branch
-      const opts = branches.map((b) => `<option value="${esc(b.id)}"${b.id === branchId ? " selected" : ""}>${esc(b.label)}</option>`).join("");
+      const opts = branchOptions();
       const branchSel = `<select data-branch title="Run a ticket's branch or the default" style="height:32px;padding:0 10px;border-radius:7px;font-size:12.5px;background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);max-width:180px;cursor:pointer;">${opts}</select>`;
       renderActions(
         serviceChips(state) +
@@ -425,7 +425,7 @@
       loadBranches().then(() => {
         syncBranchFromState(current);
         const sel = document.querySelector("#preview-actions [data-branch]");
-        if (sel) sel.innerHTML = branches.map((b) => `<option value="${esc(b.id)}"${b.id === branchId ? " selected" : ""}>${esc(b.label)}</option>`).join("");
+        if (sel) sel.innerHTML = branchOptions();
       });
       return;
     }
@@ -434,13 +434,13 @@
       currentView = "error";
       setSub("Failed");
       syncBranchFromState(state);
-      const eopts = branches.map((b) => `<option value="${esc(b.id)}"${b.id === branchId ? " selected" : ""}>${esc(b.label)}</option>`).join("");
+      const eopts = branchOptions();
       const eBranchSel = branches.length > 1 ? `<select data-branch title="Run a branch" style="padding:6px 8px;border-radius:6px;font-size:12.5px;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);max-width:200px;">${eopts}</select>` : "";
       // "Run default branch" (fast restart of main — the known-good state) is the
       // clear way back after a ticket-branch attempt failed. Re-setup rebuilds from
       // scratch; the dropdown re-runs a specific ticket.
       const eActions = () => (branches.length > 1
-        ? `<select data-branch title="Run a branch" style="padding:6px 8px;border-radius:6px;font-size:12.5px;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);max-width:200px;">${branches.map((b) => `<option value="${esc(b.id)}"${b.id === branchId ? " selected" : ""}>${esc(b.label)}</option>`).join("")}</select>`
+        ? `<select data-branch title="Run a branch" style="padding:6px 8px;border-radius:6px;font-size:12.5px;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);max-width:200px;">${branchOptions()}</select>`
         : "")
         + btn("Run default branch", { action: "rundefault", primary: true, icon: "fa-house" })
         + btn("Re-setup", { action: "setup", icon: "fa-rotate" });
@@ -707,13 +707,26 @@
   // Restart = restart the app SERVER (fast: reuses install/build). Different from
   // "reload" (which just refreshes the current page in the in-app browser).
   async function doRestart() {
-    const ticketId = branchId && branchId !== "default" ? branchId : null;
+    // The API restarts by TICKET id, so map the selection back through the list
+    // (synthetic "branch:<name>" entries carry the ticket id when we could infer it).
+    const entry = branches.find((b) => b.id === branchId);
+    const ticketId = branchId && branchId !== "default" ? (entry ? entry.ticketId : branchId) : null;
     setSub(ticketId ? "Running branch…" : "Restarting the app…");
     logText = "";
     render({ previewStatus: "starting" });
     managePolling("starting");
     try { await api("/restart", { method: "POST", body: JSON.stringify({ ticketId, conversationId: window.currentConversationId || null }) }); }
     catch (e) { render({ previewStatus: "error", error: "Restart failed: " + e.message }); }
+  }
+
+  // Options for the branch <select>. An entry with no ticketId other than
+  // "default" is one we discovered from the running state but can't re-launch
+  // (the API restarts by ticket id) — show it, selected, but not pickable.
+  function branchOptions() {
+    return branches.map((b) => {
+      const runnable = b.id === "default" || !!b.ticketId;
+      return `<option value="${esc(b.id)}"${b.id === branchId ? " selected" : ""}${runnable ? "" : " disabled"}>${esc(b.label)}</option>`;
+    }).join("");
   }
 
   // Fetch the previewable branches (default + ticket worktrees) for the selector.
@@ -730,16 +743,22 @@
   // instead of resetting to "Default branch".
   function syncBranchFromState(state) {
     const sb = (state && state.branch) || "";
-    if (!sb || sb === "(default)") { branchId = "default"; return; }
+    // No branch recorded yet (the run is still being set up) → keep whatever the
+    // user picked. Resetting here is what made the selector say "Default branch"
+    // while a ticket branch was building.
+    if (!sb) return;
+    if (sb === "(default)") { branchId = "default"; return; }
     const m = branches.find((b) => b.branch === sb);
     if (m) { branchId = m.id; return; }
-    // App is running a ticket branch not yet in the loaded list — add it so the
-    // selector can show it as selected.
+    // Running a branch the list doesn't know about. Match the ticket id out of
+    // the conventional name if that ticket IS listed, otherwise show the raw
+    // branch — never fall through to "default", which would misreport what's
+    // actually running.
     const tm = sb.match(/^feature\/ticket-(.+)$/);
-    if (tm) {
-      if (!branches.find((b) => b.branch === sb)) branches.push({ id: tm[1], label: sb, ticketId: tm[1], branch: sb });
-      branchId = tm[1];
-    }
+    if (tm && branches.find((b) => b.id === tm[1])) { branchId = tm[1]; return; }
+    const synthetic = "branch:" + sb;
+    if (!branches.find((b) => b.id === synthetic)) branches.push({ id: synthetic, label: sb, ticketId: tm ? tm[1] : null, branch: sb });
+    branchId = synthetic;
   }
 
   // Switch which branch the preview runs (default or a ticket's worktree).

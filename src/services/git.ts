@@ -262,10 +262,25 @@ git commit -m "$COMMIT_MSG"
 # Set remote with auth token
 git remote set-url origin "${authUrl}" 2>/dev/null || true
 
-# Push
-git push origin ${featureBranch} --force-with-lease 2>&1 || git push origin ${featureBranch} 2>&1
+# Push. These AI feature branches are owned by the build, so on a REBUILD (where the
+# VM's remote-tracking ref is stale) a plain push is rejected non-fast-forward and
+# force-with-lease can bail with "stale info" — fall back to a plain --force so the
+# branch reliably lands. Capture the output; do NOT trust the exit code alone.
+PUSH_OUT=$(git push origin ${featureBranch} --force-with-lease 2>&1) \
+  || PUSH_OUT=$(git push origin ${featureBranch} 2>&1) \
+  || PUSH_OUT=$(git push origin ${featureBranch} --force 2>&1)
+echo "$PUSH_OUT"
 
 SHA=$(git rev-parse HEAD)
+
+# VERIFY the push actually landed: a swallowed push failure otherwise reports
+# "Committed + pushed" while origin never received the branch — which then breaks
+# the Git tab ("branch not found") and the ticket preview ("is it pushed?").
+REMOTE_SHA=$(git ls-remote --heads origin ${featureBranch} 2>/dev/null | awk '{print $1}')
+if [ "$REMOTE_SHA" != "$SHA" ]; then
+  echo "PUSH_FAILED: origin/${featureBranch} is at '\${REMOTE_SHA:-<absent>}', expected $SHA"
+  exit 1
+fi
 echo "COMMIT_SHA:$SHA"
 `;
 

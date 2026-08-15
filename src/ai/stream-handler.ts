@@ -474,10 +474,12 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
 
   // Read-only window into the LIVE preview sandbox so the product/Analyst agent can
   // DIAGNOSE runtime issues (DB migration errors, 500s) with real evidence instead of
-  // guessing from source. Mutations stay behind @preview. Needs the PUBLIC projectId
-  // (that's what projectEnvironments.projectId stores). Not for instant/agent chats.
-  if (!instantMode && !agentRecord && projectId) {
-    tools = { ...tools, ...createPreviewInspectTool({ projectId }) };
+  // guessing from source. Mutations stay behind @preview. Needs the INTERNAL id:
+  // projectEnvironments.projectId is a FK to projects.id, not the public projectId —
+  // passing the public one made every lookup miss, so the agent always reported "no
+  // preview sandbox exists" even with a healthy running preview. Not for instant/agent chats.
+  if (!instantMode && !agentRecord && internalProjectId) {
+    tools = { ...tools, ...createPreviewInspectTool({ projectId: internalProjectId }) };
   }
 
   // Add agent-specific tools (sandbox, memory, self-config).

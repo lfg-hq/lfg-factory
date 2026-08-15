@@ -13,7 +13,7 @@ import { getProjectAccess } from "../../auth/project-access.ts";
 import { db } from "../../config/db.ts";
 import { projectEnvironments } from "../../db/schema/project-environments.ts";
 import { projects, projectEnvironmentVariables } from "../../db/schema/projects.ts";
-import { encryptSecret } from "../../utils/crypto.ts";
+import { encryptSecret, decryptSecret } from "../../utils/crypto.ts";
 import { getPreviewState, setupPreview, restartPreview, stopPreview, detectManifest, manifestSchema, capturePreviewScreenshot, getPreviewBranches, reprobeProfile, getAppRuntimeLog, setServiceEnabled } from "../../services/dev-preview.ts";
 import { loadAppProfile, saveAppProfile, appProfileSchema } from "../../services/app-profile.ts";
 import type { auth } from "../../auth/index.ts";
@@ -108,7 +108,8 @@ previewApi.post("/:projectId/preview/build-settings", async (c) => {
 });
 
 // ── Environment variables CRUD ───────────────────────────────────────
-// Values are never returned (secret or not); the UI only needs metadata + masking.
+// The LIST never carries values — the UI only needs metadata + masking. To read
+// a value back, ask for it one key at a time (see /env-vars/:id/value below).
 previewApi.get("/:projectId/env-vars", async (c) => {
   const user = c.get("user");
   const access = await getProjectAccess(c.req.param("projectId")!, user.id);
@@ -128,6 +129,30 @@ previewApi.get("/:projectId/env-vars", async (c) => {
       description: e.description ?? "",
     })),
   });
+});
+
+// Reveal ONE stored value. Deliberately per-key and never part of the list
+// response, so secrets aren't sprayed into every page load — you ask for the one
+// you want to look at. Same project-access check as the rest of this router.
+previewApi.get("/:projectId/env-vars/:id/value", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId")!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  const [row] = await db
+    .select()
+    .from(projectEnvironmentVariables)
+    .where(and(
+      eq(projectEnvironmentVariables.id, c.req.param("id")!),
+      eq(projectEnvironmentVariables.projectId, access.project.id),
+    ));
+  if (!row) return c.json({ error: "Not found" }, 404);
+  if (!row.hasValue || !row.encryptedValue) return c.json({ key: row.key, value: "" });
+  try {
+    return c.json({ key: row.key, value: decryptSecret(row.encryptedValue) });
+  } catch (e) {
+    // Wrong/rotated ENCRYPTION_KEY, or a legacy blob we can't read.
+    return c.json({ error: "Stored value can't be decrypted: " + ((e as Error).message || "unknown") }, 409);
+  }
 });
 
 // Bulk import (e.g. an uploaded .env): upsert many at once. Body: { text: "<.env>" } or

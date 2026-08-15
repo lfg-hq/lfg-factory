@@ -1251,12 +1251,49 @@ const PREVIEW_READONLY_BINS = new Set([
   "nslookup", "dig", "uname", "id", "awk", "sed", "true", "test",
 ]);
 const PREVIEW_MUTATING_SQL = /\b(DROP|DELETE|UPDATE|INSERT|ALTER|TRUNCATE|GRANT|REVOKE|REPLACE|MERGE|VACUUM|REINDEX|CLUSTER)\b/i;
+// git subcommands that only READ. Without these the agent can't answer "which
+// branch is this worktree on / what changed" — the first question of nearly every
+// branch bug. Subcommands with both read and write modes are narrowed below.
+const GIT_READONLY_SUB = new Set([
+  "status", "log", "diff", "show", "branch", "worktree", "rev-parse", "ls-files",
+  "ls-tree", "ls-remote", "describe", "remote", "config", "blame", "shortlog",
+  "cat-file", "name-rev", "for-each-ref", "show-ref", "symbolic-ref", "count-objects",
+]);
+// Switching what a checkout points at. Permitted ONLY in a ticket worktree — never
+// in /data/project, which is the checkout the running preview is serving.
+const GIT_SWITCH_SUB = new Set(["fetch", "checkout", "switch", "restore"]);
+
+/** Which checkout on the sandbox a preview action should operate on: the ticket
+ *  worktree for the branch currently being previewed, else the default checkout.
+ *  Resolves the branch → ticket by BOTH the feature/ticket-<id> convention and the
+ *  ticket's recorded githubBranch (custom branch names are the common case), then
+ *  verifies the worktree actually exists on the VM. */
+async function resolvePreviewWorkDir(projectId: string, workspaceId: string): Promise<{ dir: string; note: string }> {
+  const [row] = await db.select({ b: projectEnvironments.previewBranch }).from(projectEnvironments).where(eq(projectEnvironments.projectId, projectId));
+  const branch = row?.b || "";
+  if (!branch || branch === "(default)") return { dir: PROJECT_DIR, note: "the default branch" };
+
+  let ticketId = branch.match(/^feature\/ticket-(.+)$/)?.[1] ?? null;
+  if (!ticketId) {
+    const [tk] = await db.select({ id: projectTickets.id })
+      .from(projectTickets)
+      .where(and(eq(projectTickets.projectId, projectId), eq(projectTickets.githubBranch, branch)));
+    ticketId = tk?.id ?? null;
+  }
+  if (!ticketId) return { dir: PROJECT_DIR, note: "the default branch" };
+
+  const wt = ticketWorktreeDir(ticketId);
+  const chk = await sh(workspaceId, `test -d ${wt} && test -e ${wt}/.git && echo OK || echo NO`, 20_000).catch(() => ({ output: "NO" } as { output: string }));
+  return chk.output.includes("OK")
+    ? { dir: wt, note: `ticket branch ${branch} (worktree)` }
+    : { dir: PROJECT_DIR, note: "the default branch" };
+}
 
 /** Classify a shell command as read-only-safe for autonomous preview inspection. Errs
  *  toward refusal: every pipeline segment must lead with an allow-listed read-only tool,
  *  and known write escapes (redirection, sed -i, find -delete/-exec, curl write methods,
  *  mutating SQL, write docker subcommands) are rejected. */
-function classifyReadonlyPreviewCmd(cmd: string): { ok: boolean; reason?: string } {
+function classifyReadonlyPreviewCmd(cmd: string, opts: { allowBranchSwitch?: boolean } = {}): { ok: boolean; reason?: string } {
   const c = (cmd || "").trim();
   if (!c) return { ok: false, reason: "empty command" };
   // File write redirection (allow only 2>&1 and >/dev/null style discards).
@@ -1271,12 +1308,51 @@ function classifyReadonlyPreviewCmd(cmd: string): { ok: boolean; reason?: string
   for (const seg of segments) {
     const tokens = seg.split(/\s+/).filter((t) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)); // drop leading FOO=bar
     const bin = (tokens[0] || "").replace(/^.*\//, ""); // basename
+    if (bin === "git") {
+      const g = gitCheck(seg, !!opts.allowBranchSwitch);
+      if (!g.ok) return g;
+      continue;
+    }
     if (!PREVIEW_READONLY_BINS.has(bin)) return { ok: false, reason: `'${bin || seg}' is not an allowed read-only command` };
     if (bin === "docker" && /^docker\s+(?!ps\b|logs\b|images\b|inspect\b|top\b|stats\b|version\b|info\b|exec\b)/.test(seg)) {
       return { ok: false, reason: "only read-only docker subcommands (ps/logs/images/inspect/top/stats) — or docker exec for a read-only DB query — are allowed" };
     }
   }
   return { ok: true };
+}
+
+/** Narrow a single `git ...` segment. Read-only subcommands always pass; the
+ *  branch-moving ones (fetch/checkout/switch/restore) only when the target dir is
+ *  a ticket worktree, never the checkout the live preview is serving. */
+function gitCheck(seg: string, allowBranchSwitch: boolean): { ok: boolean; reason?: string } {
+  // Skip global options (`git -C dir`, `git --no-pager`) to find the subcommand.
+  const toks = seg.split(/\s+/).slice(1);
+  let i = 0;
+  while (i < toks.length && toks[i]!.startsWith("-")) i += toks[i] === "-C" || toks[i] === "-c" ? 2 : 1;
+  const sub = toks[i] ?? "";
+  const rest = toks.slice(i + 1).join(" ");
+
+  if (GIT_READONLY_SUB.has(sub)) {
+    // These have write modes too — allow only the reading form.
+    if (sub === "worktree" && !/^\s*list\b/.test(rest)) return { ok: false, reason: "only `git worktree list` is allowed" };
+    if (sub === "remote" && rest && !/^\s*(-v|--verbose|show\b|get-url\b)/.test(rest)) return { ok: false, reason: "only `git remote -v` / `git remote show` are allowed" };
+    if (sub === "config" && !/(^|\s)(--get|--get-all|--list|-l)(\s|$)/.test(rest)) return { ok: false, reason: "only reading git config (--get/--list) is allowed" };
+    if (sub === "branch" && /(^|\s)(-d|-D|-m|-M|--delete|--move|--set-upstream)/.test(rest)) return { ok: false, reason: "`git branch` may only list, not create/delete/rename" };
+    if (sub === "restore") return { ok: false, reason: "`git restore` discards work — not allowed" };
+    return { ok: true };
+  }
+  if (GIT_SWITCH_SUB.has(sub)) {
+    if (!allowBranchSwitch) {
+      return { ok: false, reason: `\`git ${sub}\` changes what the checkout points at, which would disturb the running preview — only allowed inside a ticket worktree (pass workdir: "ticket:<id>")` };
+    }
+    // Even in a worktree, don't let a "switch" throw away uncommitted work.
+    if (/(^|\s)(-f|--force|--hard|--discard-changes)(\s|$)/.test(rest)) return { ok: false, reason: `forced \`git ${sub}\` is not allowed` };
+    if (sub === "restore") return { ok: false, reason: "`git restore` discards work — not allowed" };
+    // `git checkout [ref] -- <path>` reverts files rather than moving the branch.
+    if (/(^|\s)--(\s|$)/.test(rest)) return { ok: false, reason: `\`git ${sub} -- <path>\` reverts files — only whole-branch switching is allowed` };
+    return { ok: true };
+  }
+  return { ok: false, reason: `\`git ${sub || "(none)"}\` is not an allowed subcommand — inspection is read-only apart from fetch/checkout/switch inside a ticket worktree` };
 }
 
 /** Build the read-only `inspectPreview` tool bound to a project. Returns {} if there's no
@@ -1286,22 +1362,39 @@ export function createPreviewInspectTool(params: { projectId?: string }): Record
   return {
     inspectPreview: tool({
       description:
-        "READ-ONLY window into this project's LIVE preview sandbox — use it to DIAGNOSE runtime issues you cannot see from source alone (a database migration error, a 500, why an asset 404s, which DB the app really connects to). Runs ONE read-only shell command on the preview VM and returns its output. Gather REAL evidence instead of guessing: curl the app (GET only), tail the app log, `docker logs`, or inspect the DB schema with read-only SQL (SELECT / \\dt / \\d / information_schema). You CANNOT mutate — no writes, rebuilds, restarts, migrations, or mutating SQL; those stay behind `@preview`. If a fix needs running, report the finding and tell the user to run `@preview`. Only works when a preview sandbox exists for this project.",
+        "READ-ONLY window into this project's LIVE preview sandbox — use it to DIAGNOSE runtime issues you cannot see from source alone (a database migration error, a 500, why an asset 404s, which DB the app really connects to). Runs ONE shell command on the preview VM and returns its output. Gather REAL evidence instead of guessing: curl the app (GET only), tail the app log, `docker logs`, inspect the DB schema with read-only SQL (SELECT / \\dt / \\d / information_schema), or use read-only git (`git status`, `git log`, `git diff`, `git worktree list`) to see what a checkout actually contains. By DEFAULT it runs in whatever checkout the preview is currently serving — a ticket's worktree when a ticket branch is live — so what you inspect matches what the user is looking at; pass `workdir` to inspect the main checkout or another ticket's worktree instead. You CANNOT mutate — no writes, rebuilds, restarts, migrations, or mutating SQL; those stay behind `@preview`. One exception: inside a ticket worktree you may `git fetch` / `git checkout` / `git switch` to look at another branch. If a fix needs running, report the finding and tell the user to run `@preview`. Only works when a preview sandbox exists for this project.",
       inputSchema: zodSchema(z.object({
-        command: z.string().describe("One read-only shell command, e.g. `curl -s -i http://localhost:8080/`, `tail -n 100 /data/project/preview.log`, `docker logs --tail 100 postgres`, `docker exec postgres psql -U app -d app -c '\\dt'`, `grep -rn \"func.*Migrate\" internal/database`."),
+        command: z.string().describe("One shell command, e.g. `curl -s -i http://localhost:8080/`, `tail -n 100 preview.log`, `docker logs --tail 100 postgres`, `docker exec postgres psql -U app -d app -c '\\dt'`, `git log --oneline -5`, `grep -rn \"func.*Migrate\" internal/database`."),
+        workdir: z.string().optional().describe("Which checkout to run in: \"preview\" (default) = the one the preview is currently serving; \"main\" = the default-branch checkout (/data/project); \"ticket:<ticketId>\" = that ticket's worktree; or an absolute path under /data."),
         reason: z.string().optional().describe("One line: what you're trying to find out."),
       })),
-      execute: async ({ command }: { command: string; reason?: string }) => {
+      execute: async ({ command, workdir }: { command: string; workdir?: string; reason?: string }) => {
         if (!projectId) return { error: "inspectPreview only works inside a project chat (no project context here)." };
-        const check = classifyReadonlyPreviewCmd(command);
-        if (!check.ok) return { error: `Refused (read-only inspection): ${check.reason}. To change/fix/restart the preview, use @preview instead.` };
         let workspaceId: string;
         try { workspaceId = await envWorkspaceId(projectId); }
         catch { return { error: "No preview sandbox exists for this project yet. Ask the user to start a preview (Run default branch), then inspection will work." }; }
+
+        // Resolve the checkout BEFORE classifying: branch switching is allowed
+        // only once we know we're in a worktree, not the checkout the live
+        // preview is serving.
+        let dir: string;
+        let note: string;
+        const w = (workdir || "preview").trim();
+        if (w === "main") { dir = PROJECT_DIR; note = "the default checkout"; }
+        else if (w.startsWith("ticket:")) { const t = w.slice(7).trim(); dir = ticketWorktreeDir(t); note = `the worktree for ticket ${t}`; }
+        else if (w.startsWith("/")) {
+          if (!/^\/data\/[\w./-]*$/.test(w)) return { error: 'workdir must be "preview", "main", "ticket:<id>", or an absolute path under /data.' };
+          dir = w; note = w;
+        } else {
+          ({ dir, note } = await resolvePreviewWorkDir(projectId, workspaceId));
+        }
+
+        const check = classifyReadonlyPreviewCmd(command, { allowBranchSwitch: dir !== PROJECT_DIR });
+        if (!check.ok) return { error: `Refused (read-only inspection): ${check.reason}. To change/fix/restart the preview, use @preview instead.` };
         try {
-          const res = await sh(workspaceId, `${envPrefix()}${command}`, 45_000);
+          const res = await sh(workspaceId, `${envPrefix(dir)}${command}`, 45_000);
           const output = (res.output || "").slice(-6000).trim();
-          return { exitCode: res.exitCode, output: output || "(no output)" };
+          return { workdir: dir, ran_in: note, exitCode: res.exitCode, output: output || "(no output)" };
         } catch (e) {
           const msg = (e as Error).message || String(e);
           if (/no VM associated|not found|unreachable/i.test(msg)) return { error: "The preview sandbox isn't running right now — ask the user to start/restart the preview, then I can inspect it." };
@@ -1706,14 +1799,10 @@ export async function runPreviewChat(opts: {
   // Operate on whatever branch is CURRENTLY being previewed — a ticket's git
   // worktree if a branch is live, else main's /data/project. Otherwise @preview
   // would act on main while you're looking at a ticket branch.
-  let workDir = PROJECT_DIR;
-  let branchNote = "the default branch";
-  const tm = (row?.previewBranch || "").match(/^feature\/ticket-(.+)$/);
-  if (tm?.[1]) {
-    const wt = ticketWorktreeDir(tm[1]);
-    const chk = await sh(workspaceId, `test -d ${wt} && test -e ${wt}/.git && echo OK || echo NO`, 20_000);
-    if (chk.output.includes("OK")) { workDir = wt; branchNote = `ticket branch ${row!.previewBranch} (worktree)`; }
-  }
+  // Resolves the branch → worktree by BOTH the feature/ticket-<id> convention and
+  // the ticket's recorded githubBranch, so a custom branch name doesn't silently
+  // send @preview at main.
+  const { dir: workDir, note: branchNote } = await resolvePreviewWorkDir(projectId, workspaceId);
 
   plog(projectId, userId, `@preview (${branchNote}): ${instruction}`);
 
@@ -2480,12 +2569,16 @@ export async function getPreviewBranches(projectId: string): Promise<Array<{ id:
 
   // 1) Ticket worktrees are recorded as sandbox rows (workspaceType
   // "ticket-worktree") pointing at this project's preview workspace.
+  // The branch MUST be resolved the same way the runner resolves it
+  // (githubBranch, else the feature/ticket-<id> convention) — otherwise the
+  // selector can't match the branch the preview reports as running and falls
+  // back to showing "Default branch" while a ticket branch is building.
   const wtRows = await db
-    .select({ ticketId: sandboxes.ticketId, name: projectTickets.name, key: projectTickets.ticketKey })
+    .select({ ticketId: sandboxes.ticketId, name: projectTickets.name, key: projectTickets.ticketKey, branch: projectTickets.githubBranch })
     .from(sandboxes)
     .leftJoin(projectTickets, eq(sandboxes.ticketId, projectTickets.id))
     .where(and(eq(sandboxes.projectId, projectId), eq(sandboxes.workspaceType, "ticket-worktree")));
-  for (const r of wtRows) if (r.ticketId) add(r.ticketId, r.name, r.key, `feature/ticket-${r.ticketId}`);
+  for (const r of wtRows) if (r.ticketId) add(r.ticketId, r.name, r.key, r.branch || `feature/ticket-${r.ticketId}`);
 
   // 2) Tickets that were built + pushed (isolated builds destroy their VM, so
   // there's no worktree row — but the branch exists on the remote).
@@ -2530,14 +2623,18 @@ export async function getTicketDiff(projectId: string, ticketId: string, base: s
 cd ${PROJECT_DIR} 2>/dev/null || { echo "NO_REPO"; exit 1; }
 [ -e .git ] || { echo "NO_REPO"; exit 1; }
 ${authUrl ? `git remote set-url origin "${authUrl}" 2>/dev/null || true` : ""}
-git fetch --no-tags origin "${head}" "${b}" >/dev/null 2>&1 || true
+# Explicit destination refspecs so refs/remotes/origin/<branch> is ALWAYS created —
+# a bare 'git fetch origin <branch>' only updates FETCH_HEAD and relies on the clone's
+# fetch refspec for the remote-tracking ref, which fails for slashed branch names /
+# narrowed clones (branch exists on GitHub but 'git rev-parse origin/<branch>' is empty).
+FETCH_ERR=$(git fetch --no-tags --force origin "+refs/heads/${head}:refs/remotes/origin/${head}" "+refs/heads/${b}:refs/remotes/origin/${b}" 2>&1) || true
 git fetch origin --prune >/dev/null 2>&1 || true
 echo "===BRANCHES==="
 git for-each-ref --format='%(refname:short)' refs/remotes/origin 2>/dev/null | sed 's#^origin/##' | grep -v '^HEAD$' | sort -u
 echo "===REFS==="
 BASE=$(git rev-parse --verify -q origin/${b} >/dev/null 2>&1 && echo origin/${b} || echo ${b})
 HEAD=$(git rev-parse --verify -q origin/${head} >/dev/null 2>&1 && echo origin/${head} || echo ${head})
-git rev-parse --verify -q "$HEAD" >/dev/null 2>&1 || { echo "NO_HEAD"; exit 0; }
+git rev-parse --verify -q "$HEAD" >/dev/null 2>&1 || { echo "NO_HEAD"; echo "FETCH_ERR:$FETCH_ERR"; exit 0; }
 echo "===COMMITS==="
 git log --format='%h|%ct|%s' "$BASE".."$HEAD" 2>/dev/null | head -100
 echo "===NUMSTAT==="
@@ -2556,7 +2653,18 @@ git diff "$BASE"..."$HEAD" 2>/dev/null | head -c 300000
     return (next < 0 ? rest : rest.slice(0, next)).trim();
   };
   const branches = sect("BRANCHES").split("\n").map((s) => s.trim()).filter(Boolean);
-  if (output.includes("NO_HEAD")) return { branches, base: b, head, files: [], diff: "", commits: [], error: `Branch ${head} not found — rebuild the ticket to create/push it.` };
+  if (output.includes("NO_HEAD")) {
+    const fetchErr = output.match(/FETCH_ERR:([\s\S]*?)(?:\n===|$)/)?.[1]?.trim();
+    // Distinguish "the branch really isn't on the remote" from "we couldn't fetch it"
+    // (auth/network) — the latter is misdiagnosed as "rebuild the ticket".
+    const authish = fetchErr && /Authentication|denied|403|401|could not read|fatal: repository|not found/i.test(fetchErr);
+    return {
+      branches, base: b, head, files: [], diff: "", commits: [],
+      error: authish
+        ? `Couldn't fetch \`${head}\` from the remote (auth/network). ${fetchErr!.slice(0, 200)}`
+        : `Branch ${head} not found on the remote — rebuild the ticket to create/push it.`,
+    };
+  }
   const commits = sect("COMMITS").split("\n").filter(Boolean).map((l) => {
     const [sha, ct, ...rest] = l.split("|");
     return { sha: (sha || "").trim(), when: parseInt(ct || "0", 10) || 0, subject: rest.join("|").trim() };
@@ -2667,7 +2775,7 @@ cd ${PROJECT_DIR} 2>/dev/null || { echo NO_MAIN; exit 0; }
 git remote set-url origin "${auth.authUrl}" 2>/dev/null
 fuser -k ${manifest.port}/tcp 2>/dev/null; pkill -f ':${manifest.port}' 2>/dev/null; sleep 1
 git stash push -m lfg-preview-autostash 2>&1 | tail -1
-git fetch --no-tags origin "${remoteBranch}" 2>&1 | tail -3
+git fetch --no-tags --force origin "+refs/heads/${remoteBranch}:refs/remotes/origin/${remoteBranch}" 2>&1 | tail -3
 git checkout -B "${remoteBranch}" "origin/${remoteBranch}" 2>&1 | tail -3
 # Nuke stale build output so Release recompiles the Razor views (see worktree path).
 rm -rf ${PROJECT_DIR}/bin ${PROJECT_DIR}/obj ${PROJECT_DIR}/*/bin ${PROJECT_DIR}/*/obj ${PROJECT_DIR}/*/*/bin ${PROJECT_DIR}/*/*/obj 2>/dev/null || true
@@ -2689,7 +2797,10 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
         const prep = await sh(workspaceId, `
 cd ${PROJECT_DIR} 2>/dev/null || { echo NO_MAIN; exit 0; }
 git remote set-url origin "${auth.authUrl}" 2>/dev/null
-git fetch --no-tags --force origin "${remoteBranch}" 2>&1 | tail -3
+# Explicit destination refspec so refs/remotes/origin/${remoteBranch} is created even
+# for slashed branch names / narrowed clones — otherwise 'git worktree add origin/<b>'
+# below can't resolve the ref (branch is on GitHub but origin/<b> is empty locally).
+git fetch --no-tags --force origin "+refs/heads/${remoteBranch}:refs/remotes/origin/${remoteBranch}" 2>&1 | tail -3
 # If the MAIN checkout is on the target branch (inverted/corrupted), move it back to
 # the default branch so the branch is free to own in a worktree.
 CUR=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
@@ -2701,7 +2812,7 @@ fi
 git worktree prune 2>/dev/null
 if [ -e "${runDir}/.git" ]; then
   # Existing worktree → hard-reset to the LATEST pushed commit (picks up new changes).
-  git -C "${runDir}" fetch --no-tags --force origin "${remoteBranch}" 2>&1 | tail -1
+  git -C "${runDir}" fetch --no-tags --force origin "+refs/heads/${remoteBranch}:refs/remotes/origin/${remoteBranch}" 2>&1 | tail -1
   git -C "${runDir}" reset --hard "origin/${remoteBranch}" 2>&1 | tail -2
   git -C "${runDir}" clean -fd 2>&1 | tail -1
 else

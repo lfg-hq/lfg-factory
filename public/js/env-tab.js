@@ -16,6 +16,7 @@
   let vars = [];
   let editingId = null;   // row whose value is being edited
   let confirmingId = null; // row awaiting delete confirmation
+  const revealed = new Map(); // id → the plaintext value, once fetched on demand
 
   const $ = (id) => document.getElementById(id);
   const esc = (s) =>
@@ -47,8 +48,13 @@
     if (editingId === v.id) {
       return '<input class="env-input" data-edit-input type="password" placeholder="new value" autocomplete="new-password" style="width:100%;" />';
     }
-    if (v.hasValue) return v.isSecret ? '<span style="letter-spacing:2px;">••••••••</span>' : "<em>set</em>";
-    return '<span class="env-unset">not set</span>' + (v.isRequired ? '<span class="env-badge">needed</span>' : "");
+    if (!v.hasValue) {
+      return '<span class="env-unset">not set</span>' + (v.isRequired ? '<span class="env-badge">needed</span>' : "");
+    }
+    if (revealed.has(v.id)) {
+      return '<span class="env-value">' + esc(revealed.get(v.id)) + "</span>";
+    }
+    return '<span style="letter-spacing:2px;">••••••••</span>';
   }
 
   function actionsCell(v) {
@@ -60,7 +66,14 @@
       return '<button class="env-mini env-mini-danger" data-act="delete" data-id="' + esc(v.id) + '">Confirm</button> ' +
         '<button class="env-mini" data-act="cancel">Cancel</button>';
     }
-    return '<button class="env-mini" data-act="edit" data-id="' + esc(v.id) + '">' + (v.hasValue ? "Change" : "Set value") + "</button> " +
+    const shown = revealed.has(v.id);
+    // Reveal/copy only make sense once there's something stored to read back.
+    const peek = v.hasValue
+      ? '<button class="env-mini env-icon" data-act="' + (shown ? "hide" : "reveal") + '" data-id="' + esc(v.id) + '" title="' + (shown ? "Hide value" : "Show value") + '"><i class="fas fa-' + (shown ? "eye-slash" : "eye") + '"></i></button> ' +
+        '<button class="env-mini env-icon" data-act="copy" data-id="' + esc(v.id) + '" title="Copy value"><i class="fas fa-copy"></i></button> '
+      : "";
+    return peek +
+      '<button class="env-mini" data-act="edit" data-id="' + esc(v.id) + '">' + (v.hasValue ? "Change" : "Set value") + "</button> " +
       '<button class="env-mini env-mini-danger" data-act="confirm-delete" data-id="' + esc(v.id) + '">Delete</button>';
   }
 
@@ -100,6 +113,14 @@
 
     const input = list.querySelector("[data-edit-input]");
     if (input) input.focus();
+
+    const toggle = $("env-reveal-all");
+    if (toggle) {
+      const withValue = vars.filter((v) => v.hasValue);
+      const allShown = withValue.length > 0 && withValue.every((v) => revealed.has(v.id));
+      toggle.disabled = !withValue.length;
+      toggle.innerHTML = '<i class="fas fa-' + (allShown ? "eye-slash" : "eye") + '"></i> ' + (allShown ? "Hide values" : "Show values");
+    }
   }
 
   // The preview toolbar's Env button carries the count so you can see at a
@@ -132,9 +153,53 @@
     try {
       await api("/" + id, { method: "PATCH", body: JSON.stringify({ value }) });
       editingId = null;
+      revealed.delete(id); // the cached plaintext is now stale
       await load();
     } catch (e) {
       msg(e.message || "Could not save that value.");
+    }
+  }
+
+  // Values are fetched one at a time (the list response never carries them).
+  async function fetchValue(id) {
+    if (revealed.has(id)) return revealed.get(id);
+    const d = await api("/" + id + "/value");
+    revealed.set(id, (d && d.value) || "");
+    return revealed.get(id);
+  }
+
+  async function reveal(id) {
+    msg("");
+    try { await fetchValue(id); render(); }
+    catch (e) { msg(e.message || "Could not read that value."); }
+  }
+
+  async function copyValue(id) {
+    msg("");
+    try {
+      const value = await fetchValue(id);
+      await navigator.clipboard.writeText(value);
+      msg("Value copied to the clipboard.", true);
+    } catch (e) {
+      msg(e.message || "Could not copy that value.");
+    }
+  }
+
+  // Header toggle: reveal every stored value at once, or mask them all again.
+  async function toggleRevealAll() {
+    const withValue = vars.filter((v) => v.hasValue);
+    if (withValue.length && withValue.every((v) => revealed.has(v.id))) {
+      revealed.clear();
+      render();
+      return;
+    }
+    msg("");
+    try {
+      await Promise.all(withValue.map((v) => fetchValue(v.id)));
+      render();
+    } catch (e) {
+      msg(e.message || "Could not read the stored values.");
+      render();
     }
   }
 
@@ -143,6 +208,7 @@
     try {
       await api("/" + id, { method: "DELETE" });
       confirmingId = null;
+      revealed.delete(id);
       await load();
     } catch (e) {
       msg(e.message || "Could not delete that variable.");
@@ -202,6 +268,7 @@
     projectId = root.getAttribute("data-project-id");
 
     $("env-add-btn")?.addEventListener("click", add);
+    $("env-reveal-all")?.addEventListener("click", toggleRevealAll);
     $("env-refresh")?.addEventListener("click", () => { msg(""); load(); });
     $("env-file")?.addEventListener("change", (e) => {
       const f = e.target.files && e.target.files[0];
@@ -223,6 +290,9 @@
       else if (act === "save") saveValue(id);
       else if (act === "confirm-delete") { confirmingId = id; editingId = null; msg(""); render(); }
       else if (act === "delete") remove(id);
+      else if (act === "reveal") reveal(id);
+      else if (act === "hide") { revealed.delete(id); render(); }
+      else if (act === "copy") copyValue(id);
     });
     list?.addEventListener("keydown", (e) => {
       if (!e.target.hasAttribute?.("data-edit-input")) return;

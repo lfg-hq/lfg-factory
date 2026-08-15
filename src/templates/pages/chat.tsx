@@ -245,6 +245,7 @@ export function ChatPage({
                   <div class="env-sub" id="env-count">Loading…</div>
                 </div>
                 <div class="env-head-actions">
+                  <button id="env-reveal-all" class="env-mini" title="Show every stored value"><i class="fas fa-eye"></i> Show values</button>
                   <label class="env-mini" title="Bulk-import KEY=VALUE lines from a .env file">
                     <i class="fas fa-arrow-up-from-bracket"></i> Upload .env
                     <input id="env-file" type="file" accept=".env,.txt,text/plain" hidden />

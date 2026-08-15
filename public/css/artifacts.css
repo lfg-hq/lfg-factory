@@ -4739,6 +4739,23 @@ body.ticket-modal-open {
     font-style: italic;
 }
 
+/* A revealed value — monospace, wraps rather than blowing out the column. */
+.env-value {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--text-primary, #e2e8f0);
+    word-break: break-all;
+    user-select: all;
+}
+
+.env-mini:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.env-actions .env-mini.env-icon {
+    padding: 4px 8px;
+}
+
 .env-badge {
     margin-left: 6px;
     padding: 1px 6px;
