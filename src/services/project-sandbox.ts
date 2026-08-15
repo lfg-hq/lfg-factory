@@ -51,9 +51,12 @@ function dockerBringup(o: {
   cmd?: string;         // args appended after the image (e.g. redis-server ...)
   readyProbe: string;   // a `docker exec <name> …` command
   readyGrep: string;    // string that must appear in the probe's output when ready
+  authProbe?: string;   // a `docker exec …` that exits 0 ONLY if OUR credentials work
 }): string {
   const envFlags = (o.env ?? []).map((e) => `-e ${e}`).join(" ");
-  return `mkdir -p ${o.volume.split(":")[0]} 2>/dev/null || true
+  const dataDir = o.volume.split(":")[0];
+  const runCmd = `docker run -d --name ${o.name} --restart unless-stopped ${envFlags} -p 127.0.0.1:${o.port}:${o.port} -v ${o.volume} ${o.image} ${o.cmd ?? ""}`;
+  return `mkdir -p ${dataDir} 2>/dev/null || true
 for i in $(seq 1 40); do docker info >/dev/null 2>&1 && break; sleep 3; done
 docker info >/dev/null 2>&1 || { echo "docker daemon unavailable"; echo ENGINE_ERROR; exit 1; }
 if docker ps -a --format '{{.Names}}' | grep -qx ${o.name}; then
@@ -62,9 +65,27 @@ else
   # Free the port from any leftover NATIVE daemon (older sandboxes ran these
   # engines natively) so the container's port publish doesn't collide.
   fuser -k ${o.port}/tcp >/dev/null 2>&1 || true; sleep 1
-  docker run -d --name ${o.name} --restart unless-stopped ${envFlags} -p 127.0.0.1:${o.port}:${o.port} -v ${o.volume} ${o.image} ${o.cmd ?? ""} >/dev/null 2>&1
+  ${runCmd} >/dev/null 2>&1
 fi
-for i in $(seq 1 90); do ${o.readyProbe} 2>/dev/null | grep -q "${o.readyGrep}" && { echo ENGINE_READY; exit 0; }; sleep 3; done
+# Wait until the server accepts connections.
+for i in $(seq 1 90); do ${o.readyProbe} 2>/dev/null | grep -q "${o.readyGrep}" && break; sleep 3; done
+${o.authProbe ? `
+# Verify OUR credentials actually work. A data dir created OUTSIDE our provisioning
+# makes the image "Skipping initialization", so our POSTGRES_/MYSQL_ USER+PASSWORD are
+# IGNORED and every app query dies with FATAL: role "app" does not exist. If our creds
+# are rejected, the cluster isn't ours — wipe the data dir + re-init a fresh one with
+# our creds (preview data is disposable; migrations reseed the schema).
+AUTH_OK=""
+for i in $(seq 1 12); do ${o.authProbe} >/dev/null 2>&1 && { AUTH_OK=1; break; }; sleep 2; done
+if [ -z "$AUTH_OK" ]; then
+  echo "existing ${o.name} cluster rejects our credentials (foreign/legacy data dir) — reinitializing a fresh one"
+  docker rm -f ${o.name} >/dev/null 2>&1 || true
+  rm -rf ${dataDir}/* ${dataDir}/.[!.]* 2>/dev/null || true
+  fuser -k ${o.port}/tcp >/dev/null 2>&1 || true; sleep 1
+  ${runCmd} >/dev/null 2>&1
+  for i in $(seq 1 90); do ${o.readyProbe} 2>/dev/null | grep -q "${o.readyGrep}" && break; sleep 3; done
+fi` : ""}
+${o.readyProbe} 2>/dev/null | grep -q "${o.readyGrep}" && { echo ENGINE_READY; exit 0; }
 echo "--- ${o.name} container logs ---"; docker logs --tail 25 ${o.name} 2>&1; echo ENGINE_ERROR`;
 }
 
@@ -81,6 +102,9 @@ export const ENGINES: Record<DbEngine, EngineSpec> = {
       env: [`POSTGRES_DB=app`, `POSTGRES_USER=app`, `POSTGRES_PASSWORD=${pw}`],
       readyProbe: `docker exec postgres pg_isready -U app -d app`,
       readyGrep: "accepting connections",
+      // pg_isready doesn't authenticate — a REAL query as our role catches a foreign
+      // cluster (role "app" does not exist) so it gets re-initialized fresh.
+      authProbe: `docker exec -e PGPASSWORD='${pw}' postgres psql -U app -d app -tAc 'select 1'`,
     }),
     connectionString: (c) => `postgresql://${c.user}:${c.pw}@127.0.0.1:${c.port}/${c.db}`,
   },
@@ -95,6 +119,8 @@ export const ENGINES: Record<DbEngine, EngineSpec> = {
       cmd: "--default-authentication-plugin=mysql_native_password",
       readyProbe: `docker exec mysql mysqladmin ping -uroot -p${pw}`,
       readyGrep: "alive",
+      // Real query as our app user — catches a foreign cluster (unknown user) → reinit.
+      authProbe: `docker exec mysql mysql -uapp -p'${pw}' app -e 'select 1'`,
     }),
     connectionString: (c) => `mysql://${c.user}:${c.pw}@127.0.0.1:${c.port}/${c.db}`,
   },
