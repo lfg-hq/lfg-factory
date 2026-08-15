@@ -26,7 +26,7 @@ import { getModel, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
 import { decryptSecret, encryptSecret } from "../utils/crypto.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { enableHttpAccess, execOnWorkspace, setStableUrl, startBrowserSession, stopWorkspace } from "./mags.ts";
-import { ensureProjectSandbox, ensureEngine, ensureDocker, envWorkspaceId, checkEngineHealth, type EngineHandle, type DbEngine } from "./project-sandbox.ts";
+import { ensureProjectSandbox, ensureEngine, ensureDocker, envWorkspaceId, checkEngineHealth, ENGINES, type EngineHandle, type DbEngine } from "./project-sandbox.ts";
 import { probeAppProfile, saveAppProfile, loadAppProfile, deriveManifestFromProfile, syncDetectedEnv, applyProfileCorrection, recordProfileLearning, recordDirective, recordConfigPatch, buildConfigPatchScript, profileNotes, resolveUserModel, type AppProfile } from "./app-profile.ts";
 import { isS3Enabled, buildS3Key, uploadBinary, getPresignedGetUrl } from "./s3.ts";
 import { messages } from "../db/schema/chat.ts";
@@ -322,6 +322,31 @@ async function detectDbSignals(projectId: string, dir = PROJECT_DIR): Promise<Db
   return engines;
 }
 
+/** Pull host+port out of a connection string (URL form or .NET keyword form). */
+function parseHostPort(conn: string): { host: string; port: string } | null {
+  const url = conn.match(/\/\/(?:[^@/]*@)?([^:/?]+):(\d+)/); // scheme://user:pw@host:port/db
+  if (url) return { host: url[1]!, port: url[2]! };
+  const host = conn.match(/(?:Host|Server|Data Source)\s*=\s*([^;,]+)/i)?.[1]?.trim();
+  const port = conn.match(/Port\s*=\s*(\d+)/i)?.[1] || conn.match(/(?:Server|Data Source)\s*=\s*[^;,]+,\s*(\d+)/i)?.[1];
+  if (host) return { host: host.replace(/^tcp:/i, ""), port: port || "" };
+  return null;
+}
+
+/**
+ * Actually HIT the DB the connection string points at (TCP connect) to decide whether
+ * it's a real, reachable database. Used to tell "user brought their own (reachable)
+ * DB → don't provision" apart from "this is a localhost placeholder with nothing
+ * listening → we must provision" — a stored DATABASE_URL existing is NOT proof a DB is
+ * there. Returns true only if something is actually accepting connections on host:port.
+ */
+async function connectionReachable(workspaceId: string, conn: string, fallbackPort: number): Promise<boolean> {
+  const hp = parseHostPort(conn);
+  if (!hp) return false; // unparseable → treat as not reachable → provision
+  const host = hp.host, port = hp.port || String(fallbackPort);
+  const r = await sh(workspaceId, `(nc -z -w 3 ${host} ${port} 2>/dev/null && echo OPEN) || (timeout 3 sh -c ': < /dev/tcp/${host}/${port}' 2>/dev/null && echo OPEN) || echo CLOSED`, 15_000).catch(() => ({ output: "CLOSED" }));
+  return (r.output || "").includes("OPEN");
+}
+
 /**
  * Reconcile a manifest's `databases` before provisioning — the reliability layer behind
  * "the preview identifies the services and keeps them running". Unions:
@@ -365,15 +390,25 @@ async function reapplyEnv(projectId: string, userId: string, workspaceId: string
   if (manifest.databases.length) {
     const [projRow] = await db.select({ dbMode: projects.dbMode }).from(projects).where(eq(projects.id, projectId)).limit(1);
     const dbMode = projRow?.dbMode ?? "auto";
-    const providedKeys = new Set(
-      (await db.select({ key: projectEnvironmentVariables.key })
+    const providedVals = new Map(
+      (await db.select({ key: projectEnvironmentVariables.key, v: projectEnvironmentVariables.encryptedValue })
         .from(projectEnvironmentVariables)
         .where(and(eq(projectEnvironmentVariables.projectId, projectId), eq(projectEnvironmentVariables.hasValue, true))))
-        .map((r) => r.key),
+        .map((r) => { let val = ""; try { val = decryptSecret(r.v); } catch { /* unreadable */ } return [r.key, val] as const; }),
     );
     for (const dbSpec of manifest.databases) {
-      const userProvided = providedKeys.has(dbSpec.connectionEnvVar);
-      if (dbMode === "provided" || (dbMode === "auto" && userProvided)) { plog(projectId, userId, `${dbSpec.engine}: using your provided ${dbSpec.connectionEnvVar} (not provisioning).`); continue; } // stored var wins
+      const providedVal = providedVals.get(dbSpec.connectionEnvVar) || "";
+      // Only treat a provided connection as "bring-your-own DB" (skip provisioning) if it
+      // actually points at a REACHABLE database — hit it to confirm. A stored DATABASE_URL
+      // that just points at 127.0.0.1:5432 with nothing listening is a placeholder for the
+      // local DB we're meant to provide, NOT an external DB.
+      let useProvided = false;
+      if (providedVal && (dbMode === "provided" || dbMode === "auto")) {
+        useProvided = await connectionReachable(workspaceId, providedVal, ENGINES[dbSpec.engine].port).catch(() => false);
+        plog(projectId, userId, `${dbSpec.engine}: probing your ${dbSpec.connectionEnvVar} → ${useProvided ? "reachable, using it (not provisioning)" : "NOT reachable, will provision a local one"}.`);
+        if (dbMode === "provided" && !useProvided) plog(projectId, userId, `(DB mode is "Use my DB" but ${dbSpec.connectionEnvVar} isn't reachable — provisioning a local ${dbSpec.engine} so the app runs.)`, { level: "error" });
+      }
+      if (useProvided) continue;
       plog(projectId, userId, `Starting ${dbSpec.engine} (docker) — pulling image + creating the container if needed…`);
       const h = await ensureEngine(projectId, dbSpec.engine).catch((e) => { plog(projectId, userId, `Could not start ${dbSpec.engine}: ${(e as Error).message?.slice(0, 200)}`, { level: "error" }); return null; });
       if (h) { provisioned[dbSpec.connectionEnvVar] = formatConnection(dbSpec, h); plog(projectId, userId, `${dbSpec.engine} running ✓ (127.0.0.1:${h.port}) → ${dbSpec.connectionEnvVar} injected.`); }
@@ -622,12 +657,15 @@ async function writeEnvFile(workspaceId: string, projectId: string, manifest: Pr
     // content (broken images) and redirects bounce. No app code change needed.
     vars.ASPNETCORE_FORWARDEDHEADERS_ENABLED = "true";
   }
-  Object.assign(vars, provisioned);
   for (const v of stored) {
     if (!v.hasValue) continue;
     if (UNSAFE_ENV_KEYS.has(v.key)) continue; // never let a persisted PATH etc. clobber envPrefix's PATH
     try { vars[v.key] = decryptSecret(v.encryptedValue); } catch { /* skip unreadable */ }
   }
+  // Provisioned DB connection strings WIN over a stored value — when we provisioned a
+  // local DB it's because the stored one was a placeholder / unreachable, so our fresh
+  // connection (matching creds) must override it. Applied last on purpose.
+  Object.assign(vars, provisioned);
   // Always double-quote (values like .NET connection strings contain ';', spaces,
   // '=' — which break `set -a; . ./.env` sourcing if unquoted). Escape ", \, $, `.
   const body = Object.entries(vars)
@@ -2344,26 +2382,27 @@ fi`, 240_000);
       // user's var (notice if it's missing).
       const [projRow] = await db.select({ dbMode: projects.dbMode }).from(projects).where(eq(projects.id, projectId)).limit(1);
       const dbMode = projRow?.dbMode ?? "auto";
-      const providedKeys = new Set(
-        (await db.select({ key: projectEnvironmentVariables.key })
+      const providedVals = new Map(
+        (await db.select({ key: projectEnvironmentVariables.key, v: projectEnvironmentVariables.encryptedValue })
           .from(projectEnvironmentVariables)
           .where(and(eq(projectEnvironmentVariables.projectId, projectId), eq(projectEnvironmentVariables.hasValue, true))))
-          .map((r) => r.key),
+          .map((r) => { let val = ""; try { val = decryptSecret(r.v); } catch { /* unreadable */ } return [r.key, val] as const; }),
       );
       await setPreview(projectId, userId, { previewStatus: "provisioning" }, `Provisioning ${manifest.databases.map((d) => d.engine).join(", ")}…`);
       for (const dbSpec of manifest.databases) {
-        const userProvided = providedKeys.has(dbSpec.connectionEnvVar);
-        const useProvided = dbMode === "provided" || (dbMode === "auto" && userProvided);
-        if (useProvided) {
-          if (userProvided) {
-            // The stored var is injected into .env by writeEnvFile — don't provision.
-            plog(projectId, userId, `Using your provided ${dbSpec.connectionEnvVar} — skipping ${dbSpec.engine} provisioning.`);
-          } else {
-            plog(projectId, userId, `DB mode is "Use my DB" but ${dbSpec.connectionEnvVar} isn't set — set it in the Environment tab + Restart.`, { level: "error" });
-            await publishSummary(userId, opts.conversationId, `⚠️ **DB mode is "Use my DB"** but \`${dbSpec.connectionEnvVar}\` isn't set. Add it in the Environment tab and Restart — or switch DB mode to "Always provision".`, pub(projectId)).catch(() => {});
-          }
+        const providedVal = providedVals.get(dbSpec.connectionEnvVar) || "";
+        // Skip provisioning only if the provided connection actually HITS a reachable DB.
+        let useProvided = false;
+        if (providedVal && (dbMode === "provided" || dbMode === "auto")) {
+          useProvided = await connectionReachable(workspaceId, providedVal, ENGINES[dbSpec.engine].port).catch(() => false);
+          plog(projectId, userId, `${dbSpec.engine}: probing your ${dbSpec.connectionEnvVar} → ${useProvided ? "reachable, using it (not provisioning)" : "NOT reachable, will provision a local one"}.`);
+        }
+        if (dbMode === "provided" && !providedVal) {
+          plog(projectId, userId, `DB mode is "Use my DB" but ${dbSpec.connectionEnvVar} isn't set — set it in the Environment tab + Restart.`, { level: "error" });
+          await publishSummary(userId, opts.conversationId, `⚠️ **DB mode is "Use my DB"** but \`${dbSpec.connectionEnvVar}\` isn't set. Add it in the Environment tab and Restart — or switch DB mode to "Always provision".`, pub(projectId)).catch(() => {});
           continue;
         }
+        if (useProvided) continue;
         plog(projectId, userId, `Provisioning ${dbSpec.engine} → ${dbSpec.connectionEnvVar}…`);
         const h = await ensureEngine(projectId, dbSpec.engine);
         engineHandles.push(h);
