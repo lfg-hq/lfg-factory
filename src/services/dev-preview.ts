@@ -2987,6 +2987,14 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) $(git log -1 --oneline
           .catch((e) => plog(projectId, userId, `Could not (re)start ${engine}: ${(e as Error).message}`, { level: "error" }));
       }
     }
+    // Safety net: also (re)start any DB container that EXISTS on this project's VM but
+    // isn't tracked in projectDatabases (e.g. a ticket build ran its own `docker run
+    // postgres` / drizzle push, so there's data + a container but no row for us to
+    // ensureEngine). `docker start` is a no-op if it's already running or absent, and
+    // touches no env. Per-project VM, so these containers are all this project's.
+    const dbStart = await sh(workspaceId, `for c in postgres mysql redis mssql; do docker start "$c" >/dev/null 2>&1 && echo "started:$c"; done; echo DONE`, 90_000).catch(() => ({ output: "" }));
+    const started = (dbStart.output || "").match(/started:(\w+)/g);
+    if (started?.length) plog(projectId, userId, `Started existing DB container(s): ${started.map((s) => s.split(":")[1]).join(", ")}`);
     // Deterministic RULE: repoint every non-local SQL connection in the run dir's
     // appsettings*.json (Web, Admin, …) to the provisioned local MSSQL, so a fresh
     // branch checkout doesn't crash on a hardcoded dead host (e.g. Admin still
