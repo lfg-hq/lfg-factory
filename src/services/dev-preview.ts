@@ -323,6 +323,35 @@ async function detectDbSignals(projectId: string, dir = PROJECT_DIR): Promise<Db
 }
 
 /**
+ * Reconcile a manifest's `databases` before provisioning — the reliability layer behind
+ * "the preview identifies the services and keeps them running". Unions:
+ *   • STICKY — every engine already provisioned (projectDatabases row), so a flaky
+ *     re-probe can never un-provision a DB the app depends on.
+ *   • SIGNALS — engines with strong deterministic declarations in the repo the LLM plan
+ *     missed (detectDbSignals).
+ * Returns a manifest whose `databases` the normal provisioning path (setup or reapplyEnv
+ * on restart) will bring up via ensureEngine + inject the connection var for. Persists
+ * the reconciled manifest so it sticks.
+ */
+async function reconcileDatabases(projectId: string, userId: string, manifest: PreviewManifest, dir = PROJECT_DIR): Promise<PreviewManifest> {
+  const have = new Map<DbEngine, PlannedDb>(manifest.databases.map((d) => [d.engine, d]));
+  const before = have.size;
+  const sticky = (await db.select({ engine: projectDatabases.engine }).from(projectDatabases).where(eq(projectDatabases.projectId, projectId))).map((r) => r.engine as DbEngine);
+  const signals = await detectDbSignals(projectId, dir).catch(() => [] as DbEngine[]);
+  const defEnvVar: Record<DbEngine, string> = { postgres: "DATABASE_URL", mysql: "DATABASE_URL", redis: "REDIS_URL", mssql: "ConnectionStrings__DefaultConnection" };
+  const defFmt: Record<DbEngine, PlannedDb["connectionFormat"]> = { postgres: "url", mysql: "url", redis: "keyvalue", mssql: "dotnet-sqlserver" };
+  for (const e of new Set([...sticky, ...signals])) {
+    if (have.has(e)) continue;
+    have.set(e, { engine: e, connectionEnvVar: defEnvVar[e], connectionFormat: defFmt[e] });
+    plog(projectId, userId, `Detected a required ${e} database not in the plan (${sticky.includes(e) ? "already provisioned" : "from the code"}) — provisioning it → ${defEnvVar[e]}.`);
+  }
+  if (have.size === before) return manifest;
+  const reconciled = { ...manifest, databases: [...have.values()] };
+  await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(reconciled), updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId)).catch(() => {});
+  return reconciled;
+}
+
+/**
  * Regenerate the app's .env from the CURRENT stored project env vars (+ reused DB
  * connections, honoring dbMode). Called on RESTART so keys the user just edited in the
  * Environment tab actually reach the app — writeEnvFile alone runs only in full setup.
@@ -2297,29 +2326,9 @@ fi`, 240_000);
       ).catch(() => {});
     }
 
-    // RECONCILE the plan's databases before provisioning — the LLM plan is fallible, so
-    // the "agent detects + provisions" contract needs two backstops:
-    //   • STICKY: every engine we've ALREADY provisioned (projectDatabases row) stays —
-    //     a flaky re-probe must never un-provision a DB the app depends on.
-    //   • SIGNALS: engines with strong deterministic declarations in the repo (ORM
-    //     config, drivers, compose, appsettings) the plan may have missed.
-    // Both get provisioned via ensureEngine below (recorded + auto-recreated on restart).
-    {
-      const have = new Map<DbEngine, PlannedDb>(manifest.databases.map((d) => [d.engine, d]));
-      const sticky = (await db.select({ engine: projectDatabases.engine }).from(projectDatabases).where(eq(projectDatabases.projectId, projectId))).map((r) => r.engine as DbEngine);
-      const signals = await detectDbSignals(projectId).catch(() => [] as DbEngine[]);
-      const defEnvVar: Record<DbEngine, string> = { postgres: "DATABASE_URL", mysql: "DATABASE_URL", redis: "REDIS_URL", mssql: "ConnectionStrings__DefaultConnection" };
-      const defFmt: Record<DbEngine, PlannedDb["connectionFormat"]> = { postgres: "url", mysql: "url", redis: "keyvalue", mssql: "dotnet-sqlserver" };
-      for (const e of [...new Set([...sticky, ...signals])]) {
-        if (have.has(e)) continue;
-        have.set(e, { engine: e, connectionEnvVar: defEnvVar[e], connectionFormat: defFmt[e] });
-        plog(projectId, userId, `Detected a required ${e} database the plan omitted (${sticky.includes(e) ? "already provisioned" : "from the code"}) — provisioning it → ${defEnvVar[e]}.`);
-      }
-      if (have.size !== manifest.databases.length) {
-        manifest = { ...manifest, databases: [...have.values()] };
-        await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId)).catch(() => {});
-      }
-    }
+    // Reliability backstop: union already-provisioned + code-signalled DBs into the plan
+    // so the "agent detects + provisions" contract holds even when the LLM plan omits one.
+    manifest = await reconcileDatabases(projectId, userId, manifest);
 
     // 3. Provision the DBs the plan calls for, and inject each connection string
     // into the EXACT env var the app reads it from (per the plan).
@@ -2795,7 +2804,7 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
     if (ticketId) return { error: "Set up the preview first, then you can run a ticket's branch." };
     return setupPreview(projectId, opts);
   }
-  const manifest = JSON.parse(row.setupManifest) as PreviewManifest;
+  let manifest = JSON.parse(row.setupManifest) as PreviewManifest; // may gain DBs via reconcile below
   const savedProfile = await loadAppProfile(projectId);
   const configNotes = savedProfile ? profileNotes(savedProfile.profile) : [];
   resetLog(projectId);
@@ -3019,6 +3028,12 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) $(git log -1 --oneline
       }
     }
     await setStep("locate", "done");
+
+    // Reconcile DBs on RESTART too (not just Re-setup): union already-provisioned engines
+    // + engines the code signals, so a plain Restart also provisions a database the app
+    // needs. reapplyEnv() below then brings each up via ensureEngine AND writes the
+    // connection var into .env — so a NEWLY-provisioned DB is both started and reachable.
+    manifest = await reconcileDatabases(projectId, userId, manifest, runDir);
 
     // (Re)start EVERY database service we've provisioned for this project. The source of
     // truth is projectDatabases — the list of engines WE actually created (each with its
