@@ -2830,7 +2830,10 @@ git remote set-url origin "${auth.authUrl}" 2>/dev/null
 # Explicit destination refspec so refs/remotes/origin/${remoteBranch} is created even
 # for slashed branch names / narrowed clones — otherwise 'git worktree add origin/<b>'
 # below can't resolve the ref (branch is on GitHub but origin/<b> is empty locally).
-git fetch --no-tags --force origin "+refs/heads/${remoteBranch}:refs/remotes/origin/${remoteBranch}" 2>&1 | tail -3
+# SHALLOW (--depth=1) + single-threaded: the build only needs the tip commit, and a
+# full-history download is what segfaults git-remote-https (signal 11) on this small
+# Alpine/musl VM — under memory pressure musl aborts with SIGSEGV, not a clean OOM.
+git -c pack.threads=1 fetch --no-tags --force --depth=1 origin "+refs/heads/${remoteBranch}:refs/remotes/origin/${remoteBranch}" 2>&1 | tail -3
 # Free the branch from ANY checkout that still claims it, else 'git worktree add -B'
 # fails "cannot force update the branch ... checked out at <path>". This is the usual
 # reason ONE ticket branch won't prepare while the others do: a stale worktree (or the
@@ -2853,18 +2856,22 @@ done
 git worktree prune 2>/dev/null
 if [ -e "${runDir}/.git" ]; then
   # Existing worktree → hard-reset to the LATEST pushed commit (picks up new changes).
-  git -C "${runDir}" fetch --no-tags --force origin "+refs/heads/${remoteBranch}:refs/remotes/origin/${remoteBranch}" 2>&1 | tail -1
+  git -C "${runDir}" -c pack.threads=1 fetch --no-tags --force --depth=1 origin "+refs/heads/${remoteBranch}:refs/remotes/origin/${remoteBranch}" 2>&1 | tail -1
   git -C "${runDir}" reset --hard "origin/${remoteBranch}" 2>&1 | tail -2
   git -C "${runDir}" clean -fd 2>&1 | tail -1
 else
   rm -rf "${runDir}" 2>/dev/null
   git worktree add -f -B "${remoteBranch}" "${runDir}" "origin/${remoteBranch}" 2>&1 | tail -4
   if [ ! -e "${runDir}/.git" ]; then
-    # Last resort: the local branch ref may be locked/corrupt — drop it and retry fresh.
+    # 'invalid reference: origin/<b>' means the fetch above didn't land the ref (it can
+    # segfault under memory pressure). Delete the worktree + local branch and RE-FETCH
+    # shallow before retrying the add — re-adding alone can't help if origin/<b> is
+    # still missing. (This is the "delete the worktree and start again" recovery.)
     git branch -D "${remoteBranch}" 2>/dev/null || true
     git worktree prune 2>/dev/null
     rm -rf "${runDir}" 2>/dev/null
-    echo "retrying worktree add after dropping local branch ref…"
+    echo "retrying: re-fetch (shallow) + worktree add…"
+    git -c pack.threads=1 fetch --no-tags --force --depth=1 origin "+refs/heads/${remoteBranch}:refs/remotes/origin/${remoteBranch}" 2>&1 | tail -3
     git worktree add -f -B "${remoteBranch}" "${runDir}" "origin/${remoteBranch}" 2>&1 | tail -4
   fi
 fi
