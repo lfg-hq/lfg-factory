@@ -2890,26 +2890,30 @@ test -e "${runDir}/.git" && echo "WT_OK $(git -C "${runDir}" log -1 --oneline 2>
 `;
         let prep = await sh(workspaceId, prepScript, 240_000);
         // git faults come in two flavours here, both from resource exhaustion on the VM
-        // (never a reboot — other previews run on this same sandbox):
+        // (never a reboot — the VM keeps running):
         //   • SIGSEGV (signal 11): out of RAM (musl aborts). HTTP/1.1 + shallow avoid the
         //     usual triggers; reclaiming page cache relieves the rest.
         //   • SIGBUS ("Bus error"): git mmap()s objects/index — SIGBUS means the mmap
-        //     can't be backed, i.e. /data is OUT OF DISK. Reclaim disk before retrying.
-        // Cleanup is SCOPED so it can't disturb other work: git gc on the shared clone,
-        // package-manager caches (re-downloadable), THIS ticket's own stale worktree, and
-        // pruned (already-removed) worktrees — never another branch's live worktree.
+        //     can't be backed, i.e. /data is OUT OF DISK.
+        // Policy (per user): ticket worktrees are DISPOSABLE. On a resource fault, wipe
+        // ALL of them (each carries a heavy node_modules/.next) — the biggest reclaim —
+        // then re-create only the branch being asked for on retry. Another branch's live
+        // preview keeps serving from RAM until its next file read; that's an accepted
+        // trade for making the requested branch runnable.
         const vmFault = (out: string) => /died of signal 11|remote helper 'https' aborted|Segmentation fault|Bus error|SIGBUS/i.test(out) && !out.includes("WT_OK");
         if (vmFault(prep.output)) {
-          const disk = await sh(workspaceId, "df -h /data 2>/dev/null | tail -1; echo '---'; du -sh /data/tmp 2>/dev/null", 20_000).catch(() => ({ output: "" }));
-          plog(projectId, userId, `git crashed (out of memory/disk). Reclaiming space and retrying — nothing else on the sandbox is touched.\n${(disk.output || "").trim()}`, { level: "error" });
+          const disk = await sh(workspaceId, "df -h /data 2>/dev/null | tail -1; echo '---'; du -sh /data/wt-ticket-* 2>/dev/null | tail -20", 20_000).catch(() => ({ output: "" }));
+          plog(projectId, userId, `git crashed (out of memory/disk). Clearing ALL ticket worktrees to reclaim space, then re-running ${remoteBranch}.\n${(disk.output || "").trim()}`, { level: "error" });
           await sh(workspaceId, `
 sync 2>/dev/null; echo 1 > /proc/sys/vm/drop_caches 2>/dev/null || true   # free page cache (safe)
 pkill -9 -f 'git-remote-http' 2>/dev/null || true                        # reap the crashed helper only
+# Wipe EVERY ticket worktree (disposable) — unregister then hard-remove the dirs.
+git -C ${PROJECT_DIR} worktree list --porcelain 2>/dev/null | awk '$1=="worktree"{print $2}' | grep -v "^${PROJECT_DIR}$" | while read w; do git -C ${PROJECT_DIR} worktree remove --force "$w" 2>/dev/null || rm -rf "$w"; done
+rm -rf /data/wt-ticket-* 2>/dev/null || true                             # catch any unregistered leftovers
+git -C ${PROJECT_DIR} worktree prune 2>/dev/null || true
 git -C ${PROJECT_DIR} gc --prune=now --quiet 2>/dev/null || true          # compact the shared clone
 rm -rf /root/.npm/_cacache ~/.npm/_cacache /root/.cache/yarn 2>/dev/null || true  # re-downloadable caches
-git -C ${PROJECT_DIR} worktree prune 2>/dev/null || true                  # drop already-removed worktrees
-rm -rf "${runDir}" 2>/dev/null || true                                    # this ticket's own stale worktree
-sleep 2; df -h /data 2>/dev/null | tail -1`, 60_000).catch(() => {});
+sleep 2; df -h /data 2>/dev/null | tail -1`, 120_000).catch(() => {});
           prep = await sh(workspaceId, prepScript, 240_000);
         }
         if (prep.output.includes("NO_MAIN")) {
@@ -2922,7 +2926,7 @@ sleep 2; df -h /data 2>/dev/null | tail -1`, 60_000).catch(() => {});
           // reason ("cannot force update … checked out at …", Bus error, auth) lives here.
           const df = await sh(workspaceId, "df -h /data 2>/dev/null | tail -1", 15_000).catch(() => ({ output: "" }));
           plog(projectId, userId, `Worktree prep failed for ${remoteBranch}:\n${prep.output.slice(-800)}\n[disk] ${(df.output || "").trim()}`, { level: "error" });
-          const hint = vmFault(prep.output) ? ` git keeps crashing — the sandbox is out of ${/Bus error|SIGBUS/i.test(prep.output) ? "DISK" : "memory"}. Free it by stopping another running preview on this project (or Re-setup to reclaim), then retry. Sandbox disk: ${(df.output || "").trim() || "unknown"}. (Not auto-rebooting the VM — other work is running there.)` : "";
+          const hint = vmFault(prep.output) ? ` git keeps crashing — the sandbox is out of ${/Bus error|SIGBUS/i.test(prep.output) ? "DISK" : "memory"} even after clearing all ticket worktrees. The sandbox likely needs a bigger disk. Sandbox disk: ${(df.output || "").trim() || "unknown"}.` : "";
           return failed(projectId, userId, `Couldn't prepare the ticket branch \`${remoteBranch}\`.${hint}\n\n${prep.output.slice(-600)}`);
         }
         const headLine = prep.output.match(/WT_OK\s+(.+)/)?.[1]?.trim();
