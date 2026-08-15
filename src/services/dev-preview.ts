@@ -296,6 +296,33 @@ grep -rhoE '^[A-Za-z_][A-Za-z0-9_]*' .env.example .env.sample .env.template 2>/d
 }
 
 /**
+ * Deterministic DB-engine detection — a backstop for the LLM plan, which sometimes
+ * omits a database the app clearly needs (→ "none provisioned" and the app then gets
+ * ECONNREFUSED). Reads the strong, unambiguous declaration files (ORM config, package
+ * manifests, docker-compose, .env examples) and infers the engines from them. Returns
+ * the engines found; the caller unions these into the manifest so they get provisioned.
+ */
+async function detectDbSignals(projectId: string, dir = PROJECT_DIR): Promise<DbEngine[]> {
+  const workspaceId = await envWorkspaceId(projectId).catch(() => null);
+  if (!workspaceId) return [];
+  // Concatenate the declaration files (lower-cased) and pattern-match. Bounded output.
+  const script = `cd ${dir} 2>/dev/null || exit 0
+{ cat package.json requirements.txt pyproject.toml Gemfile go.mod 2>/dev/null;
+  cat drizzle.config.* prisma/schema.prisma 2>/dev/null;
+  cat docker-compose*.y*ml compose*.y*ml 2>/dev/null;
+  cat .env .env.example .env.sample .env.template appsettings*.json 2>/dev/null;
+} 2>/dev/null | tr 'A-Z' 'a-z' | head -c 200000`;
+  const { output } = await sh(workspaceId, script, 20_000).catch(() => ({ output: "" }));
+  const o = output || "";
+  const engines: DbEngine[] = [];
+  if (/"pg"|"postgres"|node-postgres|psycopg|pgx|postgresql:\/\/|postgres:\/\/|dialect:\s*["']?postgres|provider\s*=\s*"postgresql"|image:\s*["']?postgres|\bpostgres_(db|user|password)\b/.test(o)) engines.push("postgres");
+  if (/"mysql2?"|mysql:\/\/|dialect:\s*["']?mysql|provider\s*=\s*"mysql"|image:\s*["']?mysql|\bmysql_(database|user|root_password)\b/.test(o)) engines.push("mysql");
+  if (/"ioredis"|"redis"|redis:\/\/|image:\s*["']?redis|\bredis_url\b/.test(o)) engines.push("redis");
+  if (/microsoft\.data\.sqlclient|system\.data\.sqlclient|server=.*(sql|mssql)|image:\s*["']?mcr\.microsoft\.com\/mssql/.test(o)) engines.push("mssql");
+  return engines;
+}
+
+/**
  * Regenerate the app's .env from the CURRENT stored project env vars (+ reused DB
  * connections, honoring dbMode). Called on RESTART so keys the user just edited in the
  * Environment tab actually reach the app — writeEnvFile alone runs only in full setup.
@@ -2268,6 +2295,30 @@ fi`, 240_000);
           envSync.needsInput.map((n) => `- \`${n.key}\`${n.description ? ` — ${n.description}` : ""}`).join("\n"),
         pub(projectId),
       ).catch(() => {});
+    }
+
+    // RECONCILE the plan's databases before provisioning — the LLM plan is fallible, so
+    // the "agent detects + provisions" contract needs two backstops:
+    //   • STICKY: every engine we've ALREADY provisioned (projectDatabases row) stays —
+    //     a flaky re-probe must never un-provision a DB the app depends on.
+    //   • SIGNALS: engines with strong deterministic declarations in the repo (ORM
+    //     config, drivers, compose, appsettings) the plan may have missed.
+    // Both get provisioned via ensureEngine below (recorded + auto-recreated on restart).
+    {
+      const have = new Map<DbEngine, PlannedDb>(manifest.databases.map((d) => [d.engine, d]));
+      const sticky = (await db.select({ engine: projectDatabases.engine }).from(projectDatabases).where(eq(projectDatabases.projectId, projectId))).map((r) => r.engine as DbEngine);
+      const signals = await detectDbSignals(projectId).catch(() => [] as DbEngine[]);
+      const defEnvVar: Record<DbEngine, string> = { postgres: "DATABASE_URL", mysql: "DATABASE_URL", redis: "REDIS_URL", mssql: "ConnectionStrings__DefaultConnection" };
+      const defFmt: Record<DbEngine, PlannedDb["connectionFormat"]> = { postgres: "url", mysql: "url", redis: "keyvalue", mssql: "dotnet-sqlserver" };
+      for (const e of [...new Set([...sticky, ...signals])]) {
+        if (have.has(e)) continue;
+        have.set(e, { engine: e, connectionEnvVar: defEnvVar[e], connectionFormat: defFmt[e] });
+        plog(projectId, userId, `Detected a required ${e} database the plan omitted (${sticky.includes(e) ? "already provisioned" : "from the code"}) — provisioning it → ${defEnvVar[e]}.`);
+      }
+      if (have.size !== manifest.databases.length) {
+        manifest = { ...manifest, databases: [...have.values()] };
+        await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId)).catch(() => {});
+      }
     }
 
     // 3. Provision the DBs the plan calls for, and inject each connection string
