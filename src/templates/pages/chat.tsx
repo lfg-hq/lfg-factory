@@ -224,7 +224,7 @@ export function ChatPage({
               </div>
               <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end;flex:1 1 auto;">
                 <button id="preview-plan-btn" title="Profile — how this app runs" style="height:32px;padding:0 12px;border-radius:7px;cursor:pointer;font-size:12.5px;display:inline-flex;align-items:center;gap:7px;font-weight:500;background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);white-space:nowrap;flex:none;"><i class="fas fa-list-check"></i>Profile</button>
-                <button id="preview-env-btn" title="Environment variables this preview runs with" style="height:32px;padding:0 12px;border-radius:7px;cursor:pointer;font-size:12.5px;display:inline-flex;align-items:center;gap:7px;font-weight:500;background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);white-space:nowrap;flex:none;"><i class="fas fa-key"></i>Env<span id="preview-env-count" style="display:none;font-size:11.5px;padding:1px 6px;border-radius:999px;background:var(--border-color,#2a2a2a);color:var(--text-secondary,#9ca3af);"></span></button>
+                <!-- Env button removed here: the top-level "Env" tab already covers it. -->
                 <div id="preview-actions" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end;"></div>
               </div>
             </div>
