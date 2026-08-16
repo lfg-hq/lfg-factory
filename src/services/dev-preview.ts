@@ -434,6 +434,39 @@ async function reapplyEnv(projectId: string, userId: string, workspaceId: string
 }
 
 /**
+ * Apply the DB schema on restart (migrations + seed). Setup runs these in its pipeline,
+ * but a plain restart didn't — so after a FRESH DB (re)init the schema is empty and the
+ * app 500s with 'relation "user" does not exist'. Idempotent commands (drizzle push /
+ * migrate, prisma migrate deploy, CREATE IF NOT EXISTS) make this safe to run every time.
+ * Falls back to a sensible ORM default when the plan gave no migration command. Runs in
+ * runDir with .env sourced (DATABASE_URL) via envPrefix.
+ */
+async function runSchemaSetup(projectId: string, userId: string, workspaceId: string, manifest: PreviewManifest, runDir: string): Promise<void> {
+  if (!(manifest.databases || []).length) return; // no DB → nothing to migrate
+  let migrations = [...(manifest.migrations || [])];
+  if (!migrations.length) {
+    // The plan didn't give a migration command — infer one from the ORM in the repo.
+    const probe = await sh(workspaceId, `cd ${runDir} 2>/dev/null; ls drizzle.config.* 2>/dev/null; ls prisma/schema.prisma 2>/dev/null`, 15_000).catch(() => ({ output: "" }));
+    const o = probe.output || "";
+    if (/drizzle\.config/.test(o)) migrations = ["npx --yes drizzle-kit migrate 2>/dev/null || npx --yes drizzle-kit push --force 2>/dev/null || npx --yes drizzle-kit push"];
+    else if (/schema\.prisma/.test(o)) migrations = ["npx --yes prisma migrate deploy || npx --yes prisma db push --accept-data-loss"];
+  }
+  if (!migrations.length && !manifest.seedCmd) return;
+  plog(projectId, userId, "Applying the database schema (migrations)…");
+  for (const cmd of migrations) {
+    const c = localizeCmd(cmd, runDir);
+    plog(projectId, userId, `migrate: ${c}`);
+    const r = await runDetachedPolled(projectId, userId, workspaceId, c, 600_000, { stallMs: 180_000, workDir: runDir }).catch(() => ({ exitCode: 1, output: "" }));
+    plog(projectId, userId, r.exitCode === 0 ? `migrate ok ✓` : `migrate exited ${r.exitCode} (continuing — the app may still self-migrate)`, r.exitCode === 0 ? undefined : { level: "error", detail: (r.output || "").slice(-700) });
+  }
+  if (manifest.seedCmd) {
+    const c = localizeCmd(manifest.seedCmd, runDir);
+    plog(projectId, userId, `seed: ${c}`);
+    await runDetachedPolled(projectId, userId, workspaceId, c, 600_000, { stallMs: 180_000, workDir: runDir }).catch(() => {});
+  }
+}
+
+/**
  * Tail the RUNNING app's own stdout/stderr (preview.log in the VM) — the app's live
  * runtime output (auth errors, email attempts, request logs), distinct from LFG's setup
  * driver log. Picks the most-recently-written preview.log (default checkout or a ticket
@@ -3217,6 +3250,10 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) $(git log -1 --oneline
       }
     }
     if (!buildFailed) {
+      // Apply DB migrations now — deps are installed (build ran) and the DB is up, so the
+      // schema exists BEFORE the app starts (otherwise a fresh cluster → 'relation "user"
+      // does not exist'). Idempotent, so it's a no-op when the schema already matches.
+      await runSchemaSetup(projectId, userId, workspaceId, manifest, runDir).catch((e) => plog(projectId, userId, `Migration step skipped: ${(e as Error).message?.slice(0, 120)}`, { level: "error" }));
       plog(projectId, userId, `Starting the app from ${branchLabel}…`);
       await runDetachedPolled(projectId, userId, workspaceId, appStartCommand(manifest, runDir), 30_000);
       up = await waitForAppUp(projectId, userId, workspaceId, manifest.port, `${runDir}/preview.log`, ticketId ? 120_000 : 90_000);

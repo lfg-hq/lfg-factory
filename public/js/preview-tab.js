@@ -139,7 +139,7 @@
   function appLogPanel() {
     return `<div style="position:relative;flex:1;min-height:0;display:flex;flex-direction:column;">
       <div style="position:absolute;top:8px;right:10px;z-index:2;display:flex;gap:6px;">
-        <button data-action="resetdb" title="Wipe the database + reseed (fixes a broken/foreign DB)" style="padding:5px 10px;font-size:12px;border-radius:6px;cursor:pointer;background:transparent;color:#f87171;border:1px solid var(--border-color,#333);display:inline-flex;align-items:center;gap:5px;"><i class="fas fa-database"></i><span>Reset DB</span></button>
+        <button data-action="resetdb" title="Wipe the database + reseed (fixes a broken/foreign DB)" style="padding:6px 12px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;background:#dc2626;color:#fff;border:1px solid #dc2626;box-shadow:0 1px 4px rgba(0,0,0,.3);display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-rotate-left"></i><span>Reset DB</span></button>
         <button data-action="refreshapplog" title="Refresh" style="padding:5px 10px;font-size:12px;border-radius:6px;cursor:pointer;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);display:inline-flex;align-items:center;gap:5px;"><i class="fas fa-rotate-right"></i><span>Refresh</span></button>
       </div>
       <div id="app-log-wrap" style="flex:1;min-height:0;overflow:auto;text-align:left;background:var(--background-surface,#141414);border:1px solid var(--border-color,#2a2a2a);border-radius:8px;padding:12px 14px;">${appLogsInner()}</div>
