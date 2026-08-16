@@ -103,10 +103,28 @@
     // The 3s poll picks up the agent's streamed response + the thinking row gets replaced.
   }
 
-  function startPoll() { stopPoll(); timer = setInterval(loadLog, 3000); }
+  // Live updates arrive over the chat page's existing WebSocket (chat.js routes the
+  // per-user ticket_log/ticket_log_output/ticket_status events here). The interval is
+  // just a slow safety net in case a socket message is missed.
+  function onWs(msg) {
+    if (!msg || !ticketId) return;
+    if (msg.ticketId && msg.ticketId !== ticketId) return;
+    if (msg.type === "ticket_log" && msg.log) {
+      const area = $("ta-log");
+      if (!area) return;
+      const th = $("ta-thinking"); if (th) th.remove();
+      const empty = area.querySelector("[data-empty]"); if (empty) area.innerHTML = "";
+      const atBottom = area.scrollHeight - area.scrollTop - area.clientHeight < 120;
+      area.insertAdjacentHTML("beforeend", renderRow(msg.log));
+      if (atBottom) area.scrollTop = area.scrollHeight;
+    } else if (msg.type === "ticket_log_output" || msg.type === "ticket_status") {
+      loadLog(); // authoritative refresh (folds tool output into its row / updates status)
+    }
+  }
+  function startPoll() { stopPoll(); timer = setInterval(loadLog, 12000); } // WS is primary; this is a backstop
   function stopPoll() { if (timer) { clearInterval(timer); timer = null; } }
 
-  window.TicketAgentChat = { open, close, send };
+  window.TicketAgentChat = { open, close, send, onWs };
 
   function wire() {
     $("ta-exit")?.addEventListener("click", close);

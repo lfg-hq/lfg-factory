@@ -446,9 +446,14 @@
       syncBranchFromState(state); // reflect the actually-running branch
       const opts = branchOptions();
       const branchSel = `<select data-branch title="Run a ticket's branch or the default" style="height:32px;padding:0 10px;border-radius:7px;font-size:12.5px;background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);max-width:180px;cursor:pointer;">${opts}</select>`;
+      // When previewing a TICKET's branch, offer "Chat with ticket" — its agent chat opens
+      // in the left panel while this preview stays on the right.
+      const tEntry = branches.find((b) => b.id === branchId);
+      const ticketChatBtn = (tEntry && tEntry.ticketId) ? btn("Chat with ticket", { action: "tickchat", icon: "fa-comments", title: "Chat with this ticket's agent — this preview stays on the right" }) : "";
       renderActions(
         serviceChips(state) +
         branchSel +
+        (ticketChatBtn ? tbDiv() + ticketChatBtn : "") +
         tbDiv() +
         btn("Screenshot", { action: "screenshot", icon: "fa-camera", iconOnly: true, title: "Screenshot to chat" }) +
         btn("Logs", { action: "togglelog", icon: "fa-terminal", iconOnly: true, title: "Logs (setup + app)" }) +
@@ -847,6 +852,10 @@
     const action = b.getAttribute("data-action");
     if (action === "setup") doSetup(false);
     else if (action === "startbranch") { const sel = document.querySelector("#preview-body [data-branch]"); doRunBranch(sel ? sel.value : "default"); }
+    else if (action === "tickchat") {
+      const e = branches.find((x) => x.id === branchId);
+      if (e && e.ticketId && window.TicketAgentChat) { const p = (e.label || "").split(" — "); window.TicketAgentChat.open(e.ticketId, p[0] || "", p.slice(1).join(" — ") || e.label || ""); }
+    }
     else if (action === "restart") doRestart();
     else if (action === "rundefault") { branchId = "default"; doRestart(); } // back to main (fast path)
     else if (action === "stop") doStop();

@@ -1114,6 +1114,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (window.PreviewTab && window.PreviewTab.onServices) window.PreviewTab.onServices(data);
                 return;
             }
+            // "Chat with ticket" live updates (native left panel).
+            if (data.type === 'ticket_log' || data.type === 'ticket_log_output' || data.type === 'ticket_status') {
+                if (window.TicketAgentChat && window.TicketAgentChat.onWs) window.TicketAgentChat.onWs(data);
+                return;
+            }
             
             // Reduced logging — only log non-chunk message types
             if (data.type !== 'ai_chunk' && data.type !== 'heartbeat') {
