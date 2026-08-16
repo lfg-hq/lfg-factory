@@ -939,11 +939,15 @@
     const orig = label ? label.textContent : "";
     if (label) label.textContent = "Capturing…";
     if (btn) btn.style.pointerEvents = "none";
+    // If the ticket chat is open, send the screenshot THERE (attach it for the ticket
+    // agent) instead of posting it into the main conversation.
+    const toTicket = !!(window.TicketAgentChat && window.TicketAgentChat.isOpen && window.TicketAgentChat.isOpen());
     try {
-      const r = await api("/screenshot", { method: "POST", body: JSON.stringify({ conversationId: window.currentConversationId || null }) });
+      const r = await api("/screenshot", { method: "POST", body: JSON.stringify({ conversationId: window.currentConversationId || null, toTicket }) });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
-      toast("Screenshot saved to chat");
+      if (toTicket && j.url) { window.TicketAgentChat.attachScreenshot(j.url); toast("Screenshot attached to the ticket chat"); }
+      else toast("Screenshot saved to chat");
     } catch (e) {
       toast("Screenshot failed: " + e.message);
     } finally {

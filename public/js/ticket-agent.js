@@ -20,6 +20,7 @@
   const $ = (id) => document.getElementById(id);
   const panel = () => $("ticket-agent-panel");
   let fitObs = null;
+  let prevArtWidth = null; // preview-overlay width to restore when the ticket chat closes
 
   // The preview panel (#artifacts-panel) is a FIXED slide-over on the right, so the popup
   // must stop at its LEFT edge (else it hides behind the preview + its ✕ is unreachable).
@@ -49,10 +50,13 @@
       if (tabBtn) tabBtn.click();
       if (window.PreviewTab && window.PreviewTab.open) window.PreviewTab.open(id);
     } catch (_) {}
+    // 50-50 split: give the preview overlay half the width so the ticket chat gets the
+    // other half (otherwise, with a narrow preview, the popup sprawls across the screen).
+    const art = document.getElementById("artifacts-panel");
+    if (art) { if (prevArtWidth === null) prevArtWidth = art.style.width || ""; art.style.width = "50vw"; }
     // Fit to the visible chat area (left of the preview overlay), and keep it fitted as the
     // preview is toggled (class) or its width dragged (style).
     setTimeout(fitToChatArea, 60);
-    const art = document.getElementById("artifacts-panel");
     if (art && !fitObs) { fitObs = new MutationObserver(fitToChatArea); fitObs.observe(art, { attributes: true, attributeFilter: ["class", "style"] }); }
     window.addEventListener("resize", fitToChatArea);
     const input = $("ta-input");
@@ -65,6 +69,8 @@
     stopPoll();
     if (fitObs) { fitObs.disconnect(); fitObs = null; }
     window.removeEventListener("resize", fitToChatArea);
+    const art = document.getElementById("artifacts-panel");
+    if (art && prevArtWidth !== null) { art.style.width = prevArtWidth; prevArtWidth = null; } // restore the preview width
     ticketId = null;
   }
 
@@ -136,6 +142,16 @@
     showAttachChip();
   }
 
+  // Is the ticket chat currently open? (so the camera can route a screenshot here.)
+  function isOpen() { const p = panel(); return !!ticketId && !!p && p.style.display !== "none"; }
+  // Attach a captured preview screenshot as a pending image on the ticket chat.
+  function attachScreenshot(url) {
+    if (!url) return;
+    pendingUpload = { path: null, url, name: "preview-screenshot.png", isImage: true };
+    showAttachChip();
+    const input = $("ta-input"); if (input) input.focus();
+  }
+
   async function send() {
     const input = $("ta-input");
     if (!input) return;
@@ -191,7 +207,7 @@
   function startPoll() { stopPoll(); timer = setInterval(loadLog, 12000); } // WS is primary; this is a backstop
   function stopPoll() { if (timer) { clearInterval(timer); timer = null; } }
 
-  window.TicketAgentChat = { open, close, send, onWs };
+  window.TicketAgentChat = { open, close, send, onWs, isOpen, attachScreenshot };
 
   function wire() {
     $("ta-exit")?.addEventListener("click", close);

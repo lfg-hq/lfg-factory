@@ -301,7 +301,8 @@ previewApi.post("/:projectId/preview/screenshot", async (c) => {
   if (!access) return c.json({ error: "Project not found" }, 404);
   const body = await c.req.json().catch(() => ({}));
   const conversationId = typeof body.conversationId === "string" ? body.conversationId : null;
-  const result = await capturePreviewScreenshot(access.project.id, user.id, publicProjectId, conversationId);
+  const toTicket = body.toTicket === true; // route to the ticket chat → don't post to the conversation
+  const result = await capturePreviewScreenshot(access.project.id, user.id, publicProjectId, toTicket ? null : conversationId, { postToChat: !toTicket });
   if ("error" in result) return c.json(result, 400);
   return c.json(result);
 });

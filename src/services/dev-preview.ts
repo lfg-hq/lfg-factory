@@ -2725,6 +2725,7 @@ export async function reprobeProfile(projectId: string, userId: string): Promise
  */
 export async function capturePreviewScreenshot(
   projectId: string, userId: string, publicProjectId: string, conversationId: string | null,
+  opts: { postToChat?: boolean } = {},
 ): Promise<{ url: string } | { error: string }> {
   const row = await getEnv(projectId);
   const previewUrl = row?.appUrl;
@@ -2769,8 +2770,9 @@ export async function capturePreviewScreenshot(
   await uploadBinary(key, Buffer.from(dataB64, "base64"), "image/png");
   const url = await getPresignedGetUrl(key, 7 * 24 * 3600);
 
-  // 3. Post it into the chat conversation as a markdown image.
-  if (conversationId) {
+  // 3. Post it into the chat conversation as a markdown image — UNLESS the caller is
+  // routing it elsewhere (e.g. the ticket chat), in which case just return the url.
+  if (opts.postToChat !== false && conversationId) {
     const when = new Date().toISOString().slice(0, 16).replace("T", " ");
     const content = `📸 **Preview screenshot** — captured ${when}\n\n[![Preview screenshot](${url})](${url})`;
     await db.insert(messages).values({ conversationId, role: "assistant", content });
