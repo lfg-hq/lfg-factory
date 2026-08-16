@@ -3034,6 +3034,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                         priority: item.priority || 'Medium',
                                         createdAt: item.created_at,
                                         updatedAt: item.updated_at,
+                                        attachments: item.attachments || [],
                                     });
                                 } else {
                                     const idx = currentItems ? currentItems.findIndex(x => String(x.id) === String(id)) : -1;

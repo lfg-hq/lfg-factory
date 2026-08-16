@@ -17,7 +17,7 @@
  */
 
 import { db } from "../config/db.ts";
-import { projectTickets, projectTodoLists, ticketStages, ticketLogs, ticketAddenda } from "../db/schema/tickets.ts";
+import { projectTickets, projectTodoLists, ticketStages, ticketLogs, ticketAddenda, projectTicketAttachments } from "../db/schema/tickets.ts";
 import { projects, projectEnvironmentVariables } from "../db/schema/projects.ts";
 import { projectEnvironments } from "../db/schema/project-environments.ts";
 import { profiles, githubTokens, applicationState, llmApiKeys } from "../db/schema/users.ts";
@@ -507,9 +507,15 @@ function buildPiTicketPrompt(args: {
   directives?: string;
   /** Pending addenda + "already done" history block (see ticketAddendaContext). */
   addenda?: string;
+  /** Screenshots/images the user attached to this ticket, as absolute fetchable URLs. */
+  attachments?: Array<{ url: string; name?: string }>;
 }): string {
   const t = args.ticket;
   const ac = (t.acceptanceCriteria ?? []).map((c, i) => `${i + 1}. ${c}`).join("\n") || "Not specified.";
+  const attBlock = (args.attachments && args.attachments.length)
+    ? `\n## Attached screenshots\nThe user attached ${args.attachments.length} image(s) to this ticket — the description above reflects them. If you can view images, fetch them:\n` +
+      args.attachments.map((a) => `- ${a.name || "image"}: ${a.url}`).join("\n") + "\n"
+    : "";
   const port = args.runInfo?.port ?? args.techStack?.port ?? 8080;
   const runBlock = args.runInfo && (args.runInfo.installCmd || args.runInfo.buildCmd || args.runInfo.runCmd)
     ? `\n## How to build & run this project\n` +
@@ -541,7 +547,7 @@ ${t.notes ? `\n## Notes\n${t.notes}` : ""}
 
 ## Acceptance Criteria
 ${ac}
-
+${attBlock}
 ## Tech stack
 ${stack}
 ${runBlock}${args.addenda ?? ""}${args.directives ?? ""}
@@ -2597,6 +2603,12 @@ git branch --show-current
     console.log(`[ticket-executor-api] Using Pi in-sandbox agent: ${provider}/${piModelId}`);
     const piEnvVars: Record<string, string> = {};
     for (const r of projectEnvRows) piEnvVars[r.key] = decrypt(r.encryptedValue);
+    // Screenshots the user attached to this ticket → absolute URLs the agent can fetch.
+    const ticketAttRows = await db.select().from(projectTicketAttachments)
+      .where(eq(projectTicketAttachments.ticketId, ticketId)).catch(() => []);
+    const ticketAttachments = ticketAttRows
+      .filter((a) => !a.fileType || /^image\//.test(a.fileType))
+      .map((a) => ({ url: /^https?:\/\//.test(a.filePath) ? a.filePath : `${CALLBACK_BASE_URL}${a.filePath}`, name: a.originalFilename ?? "image" }));
     const piPrompt = buildPiTicketPrompt({
       ticket: {
         name: ticket.name,
@@ -2610,6 +2622,7 @@ git branch --show-current
       runInfo: await loadRunInfo(project.id),
       directives: await directivesBlock(project.id),
       addenda: addendaCtx.block,
+      attachments: ticketAttachments,
     });
     try {
       // Resolve (or mint) the CLI API key that authenticates the VM→server webhook.

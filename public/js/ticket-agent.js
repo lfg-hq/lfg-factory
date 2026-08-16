@@ -92,6 +92,8 @@
     const prColor = /high|urgent/.test(pr) ? ["rgba(239,68,68,.14)", "#f87171"] : /low/.test(pr) ? ["rgba(59,130,246,.14)", "#60a5fa"] : ["rgba(245,158,11,.16)", "#fbbf24"];
     const created = meta.createdAt ? new Date(meta.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "";
     const desc = String(meta.description || "").trim();
+    const atts = Array.isArray(meta.attachments) ? meta.attachments : [];
+    const imgAtts = atts.filter((a) => a && a.url && (!a.type || /^image\//.test(a.type) || /\.(png|jpe?g|gif|webp)$/i.test(a.url)));
     el.innerHTML =
       `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">` +
         pill(meta.status || "open", "rgba(124,58,237,.14)", "#a78bfa") +
@@ -99,6 +101,9 @@
         (created ? `<span style="font-size:11px;color:var(--text-secondary,#9ca3af);">Created ${esc(created)}</span>` : "") +
       `</div>` +
       (desc ? `<div class="markdown-content" style="margin-top:9px;font-size:12.5px;color:var(--text-secondary,#b6bdc9);line-height:1.55;max-height:140px;overflow:auto;border-left:2px solid var(--border-color,#2a2a2a);padding-left:11px;">${md(desc)}</div>` : "") +
+      (imgAtts.length ? `<div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;">` +
+        imgAtts.map((a) => `<a href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.name || "attachment")}"><img src="${esc(a.url)}" loading="lazy" style="max-width:150px;max-height:120px;border-radius:8px;border:1px solid var(--border-color,#2a2a2a);display:block;"></a>`).join("") +
+      `</div>` : "") +
       `<div style="margin-top:11px;border-bottom:1px solid var(--border-color,#2a2a2a);"></div>`;
   }
 

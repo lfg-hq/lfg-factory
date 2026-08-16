@@ -395,10 +395,16 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
         if (contextMessages[i].role === "user") { contextMessages[i] = { role: "user", content }; return; }
       }
     };
+    // So a model can ATTACH an image to a ticket (createTickets attachmentImageIds), the
+    // image id must travel with it — for text-only models it rides alongside the Gemini
+    // description; for vision-native models it's a short note next to the image.
+    const idNote = images.length
+      ? `\n\n[Attached image ids you can pass to tools like createTickets(attachmentImageIds): ${images.map((x) => `"${x.f.name || x.f.id}" → imageId: ${x.f.id}`).join("; ")}]`
+      : "";
     const providerName = getProviderName(modelKey);
     if (images.length && providerName && VISION_NATIVE.has(providerName)) {
       // Vision-native models: attach every image directly to the last user message.
-      setLastUser([{ type: "text", text: userMessage }, ...images.map((x) => ({ type: "image", image: x.bytes, mediaType: x.f.type }))]);
+      setLastUser([{ type: "text", text: userMessage + idNote }, ...images.map((x) => ({ type: "image", image: x.bytes, mediaType: x.f.type }))]);
     } else if (images.length) {
       // Text-only model: describe each image via the vision pre-pass and inject the text.
       // Run ALL describes CONCURRENTLY — a sequential await-in-loop made N images take N×
@@ -408,11 +414,13 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
       ws.send(JSON.stringify({ type: "ai_chunk", chunk: "", is_final: false, is_notification: true, notification_type: "status", message: images.length > 1 ? `Analyzing ${images.length} images…` : "Analyzing image…" }));
       const descs = await Promise.all(images.map(async (x) => {
         const desc = await analyzeImage(x.bytes, x.f.type || "image/png", userApiKeys);
+        // Keep the imageId next to the description so the model can attach the REAL image
+        // (not just the prose) to a ticket via createTickets(attachmentImageIds).
         return desc
-          ? `[Attached image "${x.f.name}". The current model can't view images — here is a vision model's description, treat it as ground truth:\n\n${desc}]`
-          : `[The user attached an image "${x.f.name}", but the selected model can't view images and the Google (Gemini) vision pre-pass couldn't run — the Google AI key is missing or was rejected. Tell them to add a valid Google key in Settings → LLM Keys (or switch to a vision-native model) — do NOT guess what the image shows.]`;
+          ? `[Attached image "${x.f.name}" (imageId: ${x.f.id}). The current model can't view images — here is a vision model's description, treat it as ground truth:\n\n${desc}]`
+          : `[The user attached an image "${x.f.name}" (imageId: ${x.f.id}), but the selected model can't view images and the Google (Gemini) vision pre-pass couldn't run — the Google AI key is missing or was rejected. Tell them to add a valid Google key in Settings → LLM Keys (or switch to a vision-native model) — do NOT guess what the image shows.]`;
       }));
-      setLastUser(`${userMessage}\n\n${descs.join("\n\n")}`);
+      setLastUser(`${userMessage}\n\n${descs.join("\n\n")}${idNote}`);
     }
   }
 

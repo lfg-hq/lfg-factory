@@ -6,9 +6,11 @@ import {
   ticketStages,
   ticketLogs,
   projectTodoLists,
+  projectTicketAttachments,
 } from "../../db/schema/tickets.ts";
 import { projects } from "../../db/schema/projects.ts";
-import { eq, and } from "drizzle-orm";
+import { chatFiles } from "../../db/schema/chat.ts";
+import { eq, and, inArray } from "drizzle-orm";
 import { nextTicketKey } from "../../utils/ticket-keys.ts";
 import {
   emitTicketCreated,
@@ -24,7 +26,7 @@ export function setTicketWsBroadcast(fn: (userId: string, data: object) => void)
 }
 
 export const createTickets = tool({
-  description: "Create one or more development tickets. Only call when the user explicitly asks to build/create tickets.",
+  description: "Create one or more development tickets. Only call when the user explicitly asks to build/create tickets. If the user attached an image/screenshot this turn (its imageId is given alongside the vision description), and a ticket is ABOUT that image (a bug/design shown in it), pass that imageId in the ticket's `attachmentImageIds` so the screenshot is attached to the ticket for the coding agent to see.",
   inputSchema: zodSchema(z.object({
     projectId: z.string(),
     userId: z.string().describe("User ID for real-time ticket streaming"),
@@ -47,6 +49,11 @@ export const createTickets = tool({
       stageId: z.string().optional(),
       sourceDocumentId: z.string().optional(),
       notes: z.string().optional(),
+      attachmentImageIds: z.array(z.string()).optional().describe(
+        "Image/file ids of attachments the user provided THIS turn to attach to this ticket. " +
+        "Use ONLY ids surfaced in the message as (imageId: <id>). Include when the ticket is about a " +
+        "screenshot/image the user shared, so the coding agent gets the actual image."
+      ),
     })),
   })),
   execute: async ({ projectId, userId, tickets }) => {
@@ -81,6 +88,22 @@ export const createTickets = tool({
         sourceDocumentId: t.sourceDocumentId ?? null,
         notes: t.notes ?? "",
       }).returning();
+
+      // Attach any images the user shared this turn (referenced by id) to the ticket, so
+      // the coding agent — and the ticket view — get the actual screenshot, not just prose.
+      const attachIds = [...new Set((t.attachmentImageIds || []).filter(Boolean))];
+      if (attachIds.length) {
+        const files = await db.select().from(chatFiles).where(inArray(chatFiles.id, attachIds)).catch(() => []);
+        if (files.length) {
+          await db.insert(projectTicketAttachments).values(files.map((f) => ({
+            ticketId: row!.id,
+            filePath: `/api/files/${f.id}`, // servable URL (the chat file endpoint)
+            originalFilename: f.originalFilename ?? "attachment",
+            fileType: f.fileType ?? "",
+            fileSize: f.fileSize ?? 0,
+          }))).catch((e) => console.warn("[createTickets] attach failed:", (e as Error).message?.slice(0, 120)));
+        }
+      }
 
       emitTicketCreated({ projectId, ticketId: row!.id, ticketName: row!.name, priority: row!.priority, stageId: row!.stageId });
 

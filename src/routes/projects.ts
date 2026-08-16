@@ -10,7 +10,7 @@ import {
 import { users } from "../db/schema/users.ts";
 import { projectFiles, projectFileVersions } from "../db/schema/documents.ts";
 import { conversations } from "../db/schema/chat.ts";
-import { ticketStages, projectTickets } from "../db/schema/tickets.ts";
+import { ticketStages, projectTickets, projectTicketAttachments } from "../db/schema/tickets.ts";
 import { cleanupTicketWorktree } from "../workers/ticket-executor.ts";
 import { applicationState, githubTokens, gitlabTokens } from "../db/schema/users.ts";
 import { instantApps } from "../db/schema/instant.ts";
@@ -583,6 +583,16 @@ projectsRouter.get("/projects/:projectId/api/checklist", async (c) => {
 
   const stageMap = Object.fromEntries(stageRows.map((s) => [s.id, s.name]));
 
+  // Attachments (screenshots the AI attached to a ticket) — grouped by ticket for rendering.
+  const ticketIds = ticketRows.map((t) => t.id);
+  const attRows = ticketIds.length
+    ? await db.select().from(projectTicketAttachments).where(inArray(projectTicketAttachments.ticketId, ticketIds)).catch(() => [])
+    : [];
+  const attByTicket: Record<string, Array<{ url: string; name: string; type: string }>> = {};
+  for (const a of attRows) {
+    (attByTicket[a.ticketId] ||= []).push({ url: a.filePath, name: a.originalFilename ?? "attachment", type: a.fileType ?? "" });
+  }
+
   const tickets = ticketRows.map((t) => ({
     id: t.id,
     ticket_key: t.ticketKey,
@@ -596,6 +606,7 @@ projectsRouter.get("/projects/:projectId/api/checklist", async (c) => {
     queue_status: t.queueStatus,
     created_at: t.createdAt,
     updated_at: t.updatedAt,
+    attachments: attByTicket[t.id] ?? [],
   }));
 
   return c.json({ tickets });
