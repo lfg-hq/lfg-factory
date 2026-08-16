@@ -2885,7 +2885,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                     <div class="card-header">
                                         <div class="card-status" style="display: flex; align-items: center; gap: 8px;">
                                             <input type="checkbox" class="ticket-select-checkbox" data-ticket-id="${item.id}" style="display: none; width: 14px; height: 14px; accent-color: #8b5cf6; cursor: pointer; flex-shrink: 0;" onclick="event.stopPropagation();">
-                                            <h3 class="card-title">${modalHelpers.escapeHtml(item.name || 'Untitled Item')}</h3>
+                                            <h3 class="card-title">${(item.ticketKey || item.ticket_key) ? `<span class="ticket-key" style="display:inline-block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;font-weight:700;color:#8b5cf6;background:rgba(139,92,246,0.12);border:1px solid rgba(139,92,246,0.25);border-radius:5px;padding:1px 6px;margin-right:8px;vertical-align:middle;">${modalHelpers.escapeHtml(item.ticketKey || item.ticket_key)}</span>` : ''}${modalHelpers.escapeHtml(item.name || 'Untitled Item')}</h3>
                                         </div>
                                         <div class="card-badges">
                                             <span class="priority-badge ${priorityClass} ${isStatusHighlighted ? 'filter-active' : ''}">${modalHelpers.escapeHtml(item.priority || 'Medium')}</span>
