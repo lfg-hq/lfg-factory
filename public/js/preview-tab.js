@@ -21,6 +21,7 @@
   let logText = ""; // accumulated setup log
   let appLogText = ""; // the RUNNING app's own runtime log (preview.log), fetched on demand
   let dbLogs = []; // [{engine, log}] — each provisioned DB's docker log, shown under App logs
+  let appLogView = "app"; // which App-logs sub-tab is shown: "app" | "<engine>"
   let appLogTimer = null; // auto-refresh poll while the App-logs tab is open
   let manifest = null; // the setup plan (derived from the profile)
   let profileData = null; // the App Profile — the detailed "how to run this app" plan
@@ -132,27 +133,35 @@
     return logPanel(true);
   }
 
-  // Live runtime log of the RUNNING app (its own stdout — auth/email/errors), separate
-  // from LFG's setup log. Fetched on demand + auto-refreshed while this tab is open.
-  // App logs = the app's own runtime output PLUS each provisioned DB's docker log,
-  // sectioned. A "Reset DB" button wipes + reseeds a broken/foreign database.
+  // App logs = the app's own runtime output + each provisioned DB's docker log, chosen
+  // via a SWITCHER (App / Postgres / …) — one log at a time, not stacked. A "Reset DB"
+  // button wipes + reseeds a broken/foreign database.
   function appLogPanel() {
-    return `<div style="position:relative;flex:1;min-height:0;display:flex;flex-direction:column;">
-      <div style="position:absolute;top:8px;right:10px;z-index:2;display:flex;gap:6px;">
-        <button data-action="resetdb" title="Wipe the database + reseed (fixes a broken/foreign DB)" style="padding:6px 12px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;background:#dc2626;color:#fff;border:1px solid #dc2626;box-shadow:0 1px 4px rgba(0,0,0,.3);display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-rotate-left"></i><span>Reset DB</span></button>
-        <button data-action="refreshapplog" title="Refresh" style="padding:5px 10px;font-size:12px;border-radius:6px;cursor:pointer;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);display:inline-flex;align-items:center;gap:5px;"><i class="fas fa-rotate-right"></i><span>Refresh</span></button>
+    return `<div style="position:relative;flex:1;min-height:0;display:flex;flex-direction:column;gap:8px;">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <div id="applog-tabs" style="display:flex;gap:5px;flex:1;flex-wrap:wrap;min-width:0;">${appLogTabs()}</div>
+        <button data-action="resetdb" title="Wipe the database + reseed (fixes a broken/foreign DB)" style="flex:none;padding:6px 12px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;background:#dc2626;color:#fff;border:1px solid #dc2626;box-shadow:0 1px 4px rgba(0,0,0,.3);display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-rotate-left"></i><span>Reset DB</span></button>
+        <button data-action="refreshapplog" title="Refresh" style="flex:none;padding:6px 10px;font-size:12px;border-radius:6px;cursor:pointer;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);display:inline-flex;align-items:center;gap:5px;"><i class="fas fa-rotate-right"></i><span>Refresh</span></button>
       </div>
-      <div id="app-log-wrap" style="flex:1;min-height:0;overflow:auto;text-align:left;background:var(--background-surface,#141414);border:1px solid var(--border-color,#2a2a2a);border-radius:8px;padding:12px 14px;">${appLogsInner()}</div>
+      <pre id="app-log" style="flex:1;min-height:0;margin:0;overflow:auto;text-align:left;background:var(--background-surface,#141414);border:1px solid var(--border-color,#2a2a2a);border-radius:8px;padding:12px 14px;font-size:12px;line-height:1.55;color:var(--text-color,#cbd5e1);white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${esc(appLogBody())}</pre>
     </div>`;
   }
-  function appLogsInner() {
-    const sec = (title, bodyText, color) => `<div style="margin:0 0 16px;">
-      <div style="font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:${color};margin:0 0 5px;font-weight:700;display:flex;align-items:center;gap:6px;"><i class="fas fa-circle" style="font-size:6px;"></i>${esc(title)}</div>
-      <pre style="margin:0;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.5;color:var(--text-color,#cbd5e1);">${esc(bodyText || "(no output)")}</pre>
-    </div>`;
-    let html = sec("App", appLogText || "Loading the app's runtime log…", "#a78bfa");
-    for (const d of dbLogs) html += sec((d.engine || "database") + " · database", d.log, "#34d399");
+  function appLogTabs() {
+    const tab = (id, label, color) => `<button data-action="alog:${id}" style="padding:4px 12px;border-radius:7px;cursor:pointer;font-size:12px;white-space:nowrap;border:1px solid ${appLogView === id ? color : "var(--border-color,#333)"};background:${appLogView === id ? color : "var(--border-color,#2a2a2a)"};color:${appLogView === id ? "#fff" : "var(--text-color,#e2e8f0)"};font-weight:${appLogView === id ? "600" : "400"};">${esc(label)}</button>`;
+    const cap = (s) => (s || "db").charAt(0).toUpperCase() + (s || "db").slice(1);
+    let html = tab("app", "App", "#7c3aed");
+    for (const d of dbLogs) html += tab(d.engine, cap(d.engine), "#059669");
     return html;
+  }
+  function appLogBody() {
+    if (appLogView === "app") return appLogText || "Loading the app's runtime log…";
+    const d = dbLogs.find((x) => x.engine === appLogView);
+    return d ? d.log : "(no log for this database)";
+  }
+  function paintAppLog(keepScroll) {
+    const tabs = $("applog-tabs"); if (tabs) tabs.innerHTML = appLogTabs();
+    const el = $("app-log");
+    if (el) { const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80; el.textContent = appLogBody(); if (!keepScroll || atBottom) el.scrollTop = el.scrollHeight; }
   }
   async function loadAppLog() {
     try {
@@ -168,8 +177,8 @@
         dbLogs = (j && Array.isArray(j.dbs)) ? j.dbs : [];
       }
     } catch (e) { appLogText = "Could not reach the app-log endpoint (" + ((e && e.message) || "network error") + ")."; dbLogs = []; }
-    const wrap = $("app-log-wrap");
-    if (wrap) { const atBottom = wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 80; wrap.innerHTML = appLogsInner(); if (atBottom) wrap.scrollTop = wrap.scrollHeight; }
+    if (appLogView !== "app" && !dbLogs.some((d) => d.engine === appLogView)) appLogView = "app"; // selected DB vanished
+    paintAppLog(true);
   }
   async function doResetDb() {
     if (!confirm("Reset the database? This WIPES all preview data and re-initializes a fresh database, then restarts the preview (your migrations reseed the schema). This can't be undone.")) return;
@@ -828,6 +837,7 @@
     else if (action === "togglelog") toggleLog();
     else if (action === "refreshapplog") loadAppLog();
     else if (action === "resetdb") doResetDb();
+    else if (action.indexOf("alog:") === 0) { appLogView = action.slice(5); paintAppLog(false); }
     else if (action === "copylog") copyLog();
     else if (action === "screenshot") takeScreenshot(b);
     else if (action === "closeplan") togglePlan();
