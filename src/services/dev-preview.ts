@@ -2737,7 +2737,12 @@ export async function capturePreviewScreenshot(
   try {
     session = await startBrowserSession({ timeout: 120_000 });
     dataB64 = await new Promise<string>((resolve, reject) => {
-      const child = spawn("node", [`${process.cwd()}/scripts/screenshot-worker.mjs`], { stdio: ["pipe", "pipe", "inherit"] });
+      // NODE_TLS_REJECT_UNAUTHORIZED=0: the CDP endpoint is an internal Mags browser
+      // session over wss:// whose cert chain isn't in Node's trust store — connectOverCDP
+      // otherwise fails the TLS handshake with "unable to get local issuer certificate"
+      // (which surfaced as a 400 on the screenshot button). Setting IgnoreCertificateErrors
+      // inside the worker is too late — it runs after the socket connects.
+      const child = spawn("node", [`${process.cwd()}/scripts/screenshot-worker.mjs`], { stdio: ["pipe", "pipe", "inherit"], env: { ...process.env, NODE_TLS_REJECT_UNAUTHORIZED: "0" } });
       let buf = ""; let err: string | null = null;
       child.stdout.on("data", (d: Buffer) => {
         buf += d.toString(); let nl: number;

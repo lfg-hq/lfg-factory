@@ -257,16 +257,16 @@ export function ChatPage({
         <!-- Preview Tab — run the connected project live in its sandbox -->
         <div class="tab-pane" id="preview">
           <div id="preview-root" data-project-id="${projectId}" style="height:100%;display:flex;flex-direction:column;">
-            <div class="preview-header" style="padding:14px 20px;border-bottom:1px solid var(--border-color,#2a2a2a);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
-              <div style="display:flex;align-items:center;gap:10px;min-width:90px;flex:0 1 auto;">
-                <div style="display:flex;flex-direction:column;gap:2px;">
+            <div class="preview-header" style="padding:14px 20px;border-bottom:1px solid var(--border-color,#2a2a2a);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:nowrap;">
+              <div style="display:flex;align-items:center;gap:12px;min-width:0;flex:0 1 auto;overflow:hidden;">
+                <div style="display:flex;flex-direction:column;gap:2px;min-width:0;">
                   <h3 style="color:var(--text-color,#e2e8f0);margin:0;font-size:16px;font-weight:600;white-space:nowrap;">Preview</h3>
-                  <span id="preview-substatus" style="color:var(--text-secondary,#9ca3af);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;">Loading…</span>
+                  <span id="preview-substatus" style="color:var(--text-secondary,#9ca3af);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px;">Loading…</span>
                 </div>
                 <!-- Far-left slot: "Chat with ticket" is rendered here by preview-tab.js -->
-                <div id="preview-left-actions" style="display:flex;gap:6px;align-items:center;"></div>
+                <div id="preview-left-actions" style="display:flex;gap:6px;align-items:center;flex:none;"></div>
               </div>
-              <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end;flex:1 1 auto;">
+              <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end;flex:0 1 auto;min-width:0;">
                 <!-- Profile moved into the ⋮ overflow menu (rendered by preview-tab.js). -->
                 <button id="preview-plan-btn" style="display:none;"></button>
                 <div id="preview-actions" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end;"></div>
