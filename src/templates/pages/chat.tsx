@@ -47,6 +47,15 @@ export function ChatPage({
     #ta-log .ta-out { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; color:var(--text-color,#cbd5e1); background:var(--background-surface,#141414); border:1px solid var(--border-color,#2a2a2a); border-radius:6px; padding:8px 10px; white-space:pre-wrap; word-break:break-word; max-height:220px; overflow:auto; }
     #ta-log .ta-thinking { align-self:flex-start; color:var(--text-secondary,#9ca3af); font-size:12.5px; padding:4px 2px; }
     #ta-log .markdown-content p { margin:.3em 0; }
+    #ta-log .ta-agent-fail { border-left-color:#f87171; }
+    #ta-log .ta-error { align-self:flex-start; max-width:92%; background:rgba(248,113,113,.08); border:1px solid rgba(248,113,113,.28); color:#fca5a5; padding:8px 12px; border-radius:8px; font-size:13px; line-height:1.5; }
+    #ta-log .ta-cmdrow { align-self:stretch; }
+    #ta-log .ta-cmd-header { display:flex; align-items:center; gap:8px; cursor:pointer; font-size:12.5px; color:var(--text-color,#cbd5e1); padding:3px 4px; border-radius:6px; }
+    #ta-log .ta-cmd-header:hover { background:var(--border-color,#1f1f1f); }
+    #ta-log .ta-outrow .ta-cmd-header { color:var(--text-secondary,#9ca3af); }
+    #ta-log .ta-cmd-text { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0; }
+    #ta-log .ta-chev { font-size:9px; opacity:.55; transition:transform .12s; flex:none; }
+    #ta-log .ta-cmd-body { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; color:var(--text-color,#cbd5e1); background:var(--background-surface,#141414); border:1px solid var(--border-color,#2a2a2a); border-radius:6px; padding:8px 10px; margin:4px 0 0 20px; white-space:pre-wrap; word-break:break-word; max-height:260px; overflow:auto; }
   </style>
   <script src="/public/js/theme-switcher.js"></script>
 </head>
@@ -162,9 +171,14 @@ export function ChatPage({
           <button id="ta-exit" title="Back to main chat" style="padding:6px 12px;border-radius:7px;cursor:pointer;font-size:12.5px;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-arrow-left"></i>Exit to chat</button>
         </div>
         <div id="ta-log" style="flex:1;min-height:0;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:10px;"></div>
-        <div style="flex:none;padding:12px 16px;border-top:1px solid var(--border-color,#2a2a2a);display:flex;gap:8px;align-items:center;">
-          <input id="ta-input" type="text" placeholder="Send a message to the agent…" style="flex:1;height:40px;padding:0 14px;border-radius:10px;background:var(--card-bg,#161616);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);font-size:13.5px;" />
-          <button id="ta-send" title="Send" style="width:40px;height:40px;border-radius:10px;background:#7c3aed;color:#fff;border:none;cursor:pointer;flex:none;"><i class="fas fa-arrow-up"></i></button>
+        <div style="flex:none;padding:12px 16px;border-top:1px solid var(--border-color,#2a2a2a);display:flex;flex-direction:column;gap:6px;">
+          <div id="ta-attach-chip" style="display:none;font-size:12px;color:var(--text-secondary,#9ca3af);align-items:center;gap:6px;"></div>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <input id="ta-file" type="file" style="display:none;" />
+            <button id="ta-attach" title="Attach a file for the agent" style="width:40px;height:40px;border-radius:10px;background:transparent;color:var(--text-secondary,#9ca3af);border:1px solid var(--border-color,#333);cursor:pointer;flex:none;"><i class="fas fa-paperclip"></i></button>
+            <input id="ta-input" type="text" placeholder="Send a message to the agent…" style="flex:1;height:40px;padding:0 14px;border-radius:10px;background:var(--card-bg,#161616);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);font-size:13.5px;" />
+            <button id="ta-send" title="Send" style="width:40px;height:40px;border-radius:10px;background:#7c3aed;color:#fff;border:none;cursor:pointer;flex:none;"><i class="fas fa-arrow-up"></i></button>
+          </div>
         </div>
       </div>
       <!-- Project Header -->

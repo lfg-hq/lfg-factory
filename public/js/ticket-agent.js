@@ -68,29 +68,76 @@
     if (atBottom) area.scrollTop = area.scrollHeight;
   }
 
+  let rowSeq = 0;
+  const ACTION_RE = /^(Running|Reading|Editing|Writing|Creating|Searching|Listing|Merging|Merged|Committing|Committed|Pushed|Pushing|Building|Build|Installing|Started|Starting|Cloning|Fetching|Restarting|Verifying|Continuing|Spinning|Setting up)/;
   function renderRow(row) {
     const type = row.type || "command";
     const msg = (row.message || "").trim();
     if (type === "user_message") return `<div class="ta-user">${esc(msg)}</div>`;
-    if (type === "ai_response") return `<div class="ta-agent"><div class="ta-agent-label">Agent</div><div class="markdown-content">${md(msg)}</div></div>`;
-    // command / tool output / other → a compact monospace row
-    let html = "";
-    if (msg) html += `<div class="ta-cmd"><i class="fas fa-angle-right" style="opacity:.5;margin-right:6px;"></i>${esc(msg)}</div>`;
-    if (row.output) html += `<div class="ta-out">${esc(String(row.output).slice(0, 4000))}</div>`;
-    return html || "";
+    if (type === "ai_response") {
+      const fail = msg.charAt(0) === "❌" || msg.indexOf("Build failed") === 0;
+      return `<div class="ta-agent${fail ? " ta-agent-fail" : ""}"><div class="ta-agent-label">Agent</div><div class="markdown-content">${md(msg)}</div></div>`;
+    }
+    if (type === "cli_error") return `<div class="ta-error"><i class="fas fa-triangle-exclamation"></i> ${esc(msg)}</div>`;
+    // command / tool row → ONE collapsible: the command as the header, its output as the body.
+    const out = String(row.output || "");
+    const hasOut = out.length > 0;
+    const bodyText = hasOut ? out : msg;
+    const isAction = hasOut || msg.charAt(0) === "$" || msg.charCodeAt(0) > 255 || ACTION_RE.test(msg);
+    const id = "tarow-" + (++rowSeq);
+    const label = esc(msg.length > 160 ? msg.slice(0, 160) + "…" : msg) || "(no output)";
+    return `<div class="ta-cmdrow${isAction ? "" : " ta-outrow"}">
+      <div class="ta-cmd-header" data-ta-toggle="${id}"><i class="fas fa-chevron-right ta-chev"></i><i class="fas ${isAction ? "fa-terminal" : "fa-angle-right"}" style="opacity:.55;font-size:11px;"></i><span class="ta-cmd-text">${label}</span></div>
+      <div id="${id}" class="ta-cmd-body" style="display:none;">${esc(bodyText)}</div>
+    </div>`;
+  }
+
+  // ── File upload (attach a file for the agent) ──────────────────────────────
+  let pendingUpload = null;
+  function showAttachChip() {
+    const chip = $("ta-attach-chip");
+    if (!chip) return;
+    if (!pendingUpload) { chip.style.display = "none"; chip.innerHTML = ""; return; }
+    chip.style.display = "flex";
+    chip.innerHTML = `<i class="fas fa-paperclip"></i><span>${esc(pendingUpload.name)}</span><button data-ta-clearfile title="Remove" style="background:none;border:none;color:var(--text-secondary,#9ca3af);cursor:pointer;padding:0 4px;"><i class="fas fa-times"></i></button>`;
+  }
+  async function uploadFile(file) {
+    if (!file || !ticketId) return;
+    const chip = $("ta-attach-chip");
+    if (chip) { chip.style.display = "flex"; chip.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Uploading ${esc(file.name)}…`; }
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await fetch(`/api/projects/${PID()}/tickets/${ticketId}/chat/upload`, { method: "POST", body: fd, credentials: "same-origin" });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || "upload failed");
+      pendingUpload = { path: j.path, url: j.url, name: file.name, isImage: j.isImage };
+    } catch (e) { pendingUpload = null; }
+    showAttachChip();
   }
 
   async function send() {
     const input = $("ta-input");
     if (!input) return;
-    const msg = input.value.trim();
-    if (!msg || !ticketId) return;
+    let msg = input.value.trim();
+    if ((!msg && !pendingUpload) || !ticketId) return;
     input.value = "";
+    const upload = pendingUpload;
+    if (upload) {
+      const ref = upload.path
+        ? `I uploaded a file to ${upload.path} (original name: ${upload.name}). Use it as needed.`
+        : `I attached a file (${upload.name}) available at ${upload.url}. It will be placed in the sandbox on the next build.`;
+      msg = (msg ? msg + "\n\n" : "") + ref;
+      pendingUpload = null;
+      showAttachChip();
+    }
     const area = $("ta-log");
     if (area) {
       const ph = area.querySelector("[data-empty]");
       if (ph) area.innerHTML = "";
-      area.insertAdjacentHTML("beforeend", `<div class="ta-user">${esc(msg)}</div><div class="ta-thinking" id="ta-thinking"><i class="fas fa-spinner fa-spin"></i> Agent is working…</div>`);
+      let bubble = `<div class="ta-user">${esc(input.value.trim() || (upload ? "(attachment)" : ""))}</div>`;
+      if (upload && upload.isImage && upload.url) bubble += `<div class="ta-user" style="padding:0;background:none;"><a href="${esc(upload.url)}" target="_blank" rel="noopener"><img src="${esc(upload.url)}" alt="${esc(upload.name)}" style="max-width:220px;max-height:180px;border-radius:8px;border:1px solid var(--border-color,#2a2a2a);"></a></div>`;
+      area.insertAdjacentHTML("beforeend", bubble + `<div class="ta-thinking" id="ta-thinking"><i class="fas fa-spinner fa-spin"></i> Agent is working…</div>`);
       area.scrollTop = area.scrollHeight;
     }
     try {
@@ -100,7 +147,7 @@
       });
       if (!r.ok) { const t = $("ta-thinking"); if (t) t.textContent = "Couldn't reach the agent — try again."; }
     } catch (_) { const t = $("ta-thinking"); if (t) t.textContent = "Network error — try again."; }
-    // The 3s poll picks up the agent's streamed response + the thinking row gets replaced.
+    // Live WS updates replace the thinking row with the agent's streamed response.
   }
 
   // Live updates arrive over the chat page's existing WebSocket (chat.js routes the
@@ -130,6 +177,17 @@
     $("ta-exit")?.addEventListener("click", close);
     $("ta-send")?.addEventListener("click", send);
     $("ta-input")?.addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+    $("ta-attach")?.addEventListener("click", () => $("ta-file")?.click());
+    $("ta-file")?.addEventListener("change", (e) => { const f = e.target.files && e.target.files[0]; if (f) uploadFile(f); e.target.value = ""; });
+    // Collapse/expand a command row's output; clear a pending upload.
+    $("ta-log")?.addEventListener("click", (e) => {
+      const h = e.target.closest && e.target.closest("[data-ta-toggle]");
+      if (!h) return;
+      const body = document.getElementById(h.getAttribute("data-ta-toggle"));
+      const chev = h.querySelector(".ta-chev");
+      if (body) { const openNow = body.style.display !== "none"; body.style.display = openNow ? "none" : "block"; if (chev) chev.style.transform = openNow ? "" : "rotate(90deg)"; }
+    });
+    $("ta-attach-chip")?.addEventListener("click", (e) => { if (e.target.closest("[data-ta-clearfile]")) { pendingUpload = null; showAttachChip(); } });
     // Delegated, CAPTURE-phase so a [data-ta-chat] button opens the chat WITHOUT also
     // triggering its board card's own click (which opens the full ticket drawer).
     document.addEventListener("click", (e) => {

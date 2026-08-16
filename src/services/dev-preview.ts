@@ -449,12 +449,21 @@ async function runSchemaSetup(projectId: string, userId: string, workspaceId: st
   const primary = manifest.databases[0]!;
   if (primary.engine === "postgres" || primary.engine === "mysql") {
     const container = ENGINES[primary.engine].container;
-    const q = primary.engine === "postgres"
-      ? `docker exec ${container} psql -U app -d app -tAc "select count(*) from information_schema.tables where table_schema='public'"`
-      : `docker exec ${container} mysql -uapp app -N -e "select count(*) from information_schema.tables where table_schema='app'"`;
-    const r = await sh(workspaceId, `${q} 2>/dev/null | tr -d '[:space:]'`, 20_000).catch(() => ({ output: "" }));
-    const n = parseInt((r.output || "").trim(), 10);
-    if (Number.isFinite(n) && n > 0) { plog(projectId, userId, `Database already has ${n} table(s) — schema present, skipping migrations (won't touch your data).`); return; }
+    let q = "";
+    if (primary.engine === "postgres") {
+      // Local socket → trust auth, no password needed.
+      q = `docker exec ${container} psql -U app -d app -tAc "select count(*) from information_schema.tables where table_schema='public'"`;
+    } else {
+      // MySQL requires auth — use our stored password so the guard works here too.
+      const [row] = await db.select({ pw: projectDatabases.passwordEncrypted }).from(projectDatabases).where(and(eq(projectDatabases.projectId, projectId), eq(projectDatabases.engine, "mysql")));
+      let pw = ""; try { pw = row?.pw ? decryptSecret(row.pw) : ""; } catch { /* unreadable */ }
+      if (pw) q = `docker exec ${container} mysql -uapp -p'${pw}' app -N -e "select count(*) from information_schema.tables where table_schema='app'"`;
+    }
+    if (q) {
+      const r = await sh(workspaceId, `${q} 2>/dev/null | tr -d '[:space:]'`, 20_000).catch(() => ({ output: "" }));
+      const n = parseInt((r.output || "").trim(), 10);
+      if (Number.isFinite(n) && n > 0) { plog(projectId, userId, `Database already has ${n} table(s) — schema present, skipping migrations (won't touch your data).`); return; }
+    }
   }
   let migrations = [...(manifest.migrations || [])];
   if (!migrations.length) {
