@@ -19,6 +19,18 @@
   const md = (s) => (typeof marked !== "undefined" ? marked.parse(s || "") : esc(s).split("\n").join("<br>"));
   const $ = (id) => document.getElementById(id);
   const panel = () => $("ticket-agent-panel");
+  let fitObs = null;
+
+  // The preview panel (#artifacts-panel) is a FIXED slide-over on the right, so the popup
+  // must stop at its LEFT edge (else it hides behind the preview + its ✕ is unreachable).
+  // Recompute the popup's right inset from the overlay's live width.
+  function fitToChatArea() {
+    const p = panel();
+    if (!p || p.style.display === "none") return;
+    const art = document.getElementById("artifacts-panel");
+    const overlayW = (art && art.classList.contains("expanded")) ? Math.max(0, window.innerWidth - art.getBoundingClientRect().left) : 0;
+    p.style.right = (overlayW + 12) + "px";
+  }
 
   function open(id, key, name) {
     ticketId = id;
@@ -37,14 +49,22 @@
       if (tabBtn) tabBtn.click();
       if (window.PreviewTab && window.PreviewTab.open) window.PreviewTab.open(id);
     } catch (_) {}
+    // Fit to the visible chat area (left of the preview overlay), and keep it fitted as the
+    // preview is toggled (class) or its width dragged (style).
+    setTimeout(fitToChatArea, 60);
+    const art = document.getElementById("artifacts-panel");
+    if (art && !fitObs) { fitObs = new MutationObserver(fitToChatArea); fitObs.observe(art, { attributes: true, attributeFilter: ["class", "style"] }); }
+    window.addEventListener("resize", fitToChatArea);
     const input = $("ta-input");
-    if (input) setTimeout(() => input.focus(), 50);
+    if (input) setTimeout(() => input.focus(), 80);
   }
 
   function close() {
     const p = panel();
     if (p) p.style.display = "none";
     stopPoll();
+    if (fitObs) { fitObs.disconnect(); fitObs = null; }
+    window.removeEventListener("resize", fitToChatArea);
     ticketId = null;
   }
 

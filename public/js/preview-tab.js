@@ -106,17 +106,23 @@
     const el = $("preview-actions");
     if (el) el.innerHTML = html || "";
   }
-  // Render "Chat with ticket" into the title-row slot IFF the current branch is a ticket.
-  // Called both on the running render AND after loadBranches resolves (branches aren't
-  // known on the very first render, which is why the button used to appear only after a
-  // tab switch).
-  function renderTicketChatBtn() {
-    const leftEl = $("preview-left-actions");
-    if (!leftEl) return;
+  // The running-view toolbar. "Chat with ticket" (only on a ticket branch) sits right
+  // NEXT TO the branch selector. Re-rendered after loadBranches so it appears on first load.
+  function renderRunningActions() {
+    const st = current || {};
+    const branchSel = `<select data-branch title="Run a ticket's branch or the default" style="height:32px;padding:0 10px;border-radius:7px;font-size:12.5px;background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);max-width:180px;cursor:pointer;">${branchOptions()}</select>`;
     const te = branches.find((b) => b.id === branchId);
-    leftEl.innerHTML = (te && te.ticketId)
-      ? btn("Chat with ticket", { action: "tickchat", icon: "fa-comments", title: "Chat with this ticket's agent — this preview stays on the right" })
-      : "";
+    const chatBtn = (te && te.ticketId) ? btn("Chat with ticket", { action: "tickchat", icon: "fa-comments", title: "Chat with this ticket's agent — this preview stays on the right" }) : "";
+    renderActions(
+      serviceChips(st) +
+      (chatBtn ? chatBtn : "") +
+      branchSel +
+      tbDiv() +
+      btn("Screenshot", { action: "screenshot", icon: "fa-camera", iconOnly: true, title: "Screenshot to chat" }) +
+      btn("Logs", { action: "togglelog", icon: "fa-terminal", iconOnly: true, title: "Logs (setup + app)" }) +
+      tbDiv() +
+      btn("More", { action: "prevmenu", icon: "fa-ellipsis-vertical", iconOnly: true, title: "More — Env Profile, Restart, Stop" })
+    );
   }
 
   // Scrollable live log panel with a Copy button (shared by in-progress + error).
@@ -262,7 +268,11 @@
     const frames = document.getElementById("pv-frames");
     if (frames && window.ResizeObserver) {
       if (_pvResizeObs) _pvResizeObs.disconnect();
-      _pvResizeObs = new ResizeObserver(() => applyDevice());
+      // Coalesce to ONE applyDevice per animation frame — otherwise dragging the panel
+      // fires the observer on every pixel and applyDevice rewrites every iframe's cssText,
+      // which makes the drag laggy.
+      let raf = 0;
+      _pvResizeObs = new ResizeObserver(() => { if (raf) return; raf = requestAnimationFrame(() => { raf = 0; applyDevice(); }); });
       _pvResizeObs.observe(frames);
     }
     strip?.addEventListener("click", onTabStripClick);
@@ -457,30 +467,13 @@
       currentView = "running";
       setSub("Live" + (state.branch ? ` · ${state.branch}` : ""));
       syncBranchFromState(state); // reflect the actually-running branch
-      const opts = branchOptions();
-      const branchSel = `<select data-branch title="Run a ticket's branch or the default" style="height:32px;padding:0 10px;border-radius:7px;font-size:12.5px;background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);max-width:180px;cursor:pointer;">${opts}</select>`;
-      // "Chat with ticket" (only on a TICKET branch) → slot next to the title.
-      renderTicketChatBtn();
-      // Right side: branch, screenshot, logs, then a ⋮ menu (Env Profile / Restart / Stop).
-      renderActions(
-        serviceChips(state) +
-        branchSel +
-        tbDiv() +
-        btn("Screenshot", { action: "screenshot", icon: "fa-camera", iconOnly: true, title: "Screenshot to chat" }) +
-        btn("Logs", { action: "togglelog", icon: "fa-terminal", iconOnly: true, title: "Logs (setup + app)" }) +
-        tbDiv() +
-        btn("More", { action: "prevmenu", icon: "fa-ellipsis-vertical", iconOnly: true, title: "More — Env Profile, Restart, Stop" })
-      );
+      renderRunningActions();
       // Multi-app: show the selected app's URL (falls back to the primary appUrl).
       mountBrowser(body, (activeSvc(state) && activeSvc(state).url) || state.previewUrl);
       // Refresh the branch list (ticket worktrees may have appeared), re-sync to the
-      // running branch, and update the selector in place — without remounting the iframe.
-      loadBranches().then(() => {
-        syncBranchFromState(current);
-        const sel = document.querySelector("#preview-actions [data-branch]");
-        if (sel) sel.innerHTML = branchOptions();
-        renderTicketChatBtn(); // branches now known → the button can appear on first load (not only after a tab switch)
-      });
+      // running branch, then re-render the actions — so "Chat with ticket" appears on the
+      // FIRST load (branches aren't known on the initial render, not only after a tab switch).
+      loadBranches().then(() => { syncBranchFromState(current); renderRunningActions(); });
       return;
     }
 
