@@ -38,6 +38,16 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/polish.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
+  <style>
+    /* "Chat with ticket" log entries */
+    #ta-log .ta-user { align-self:flex-end; max-width:85%; background:#7c3aed; color:#fff; padding:8px 13px; border-radius:12px 12px 3px 12px; font-size:13.5px; line-height:1.5; white-space:pre-wrap; word-break:break-word; }
+    #ta-log .ta-agent { align-self:flex-start; max-width:92%; background:var(--card-bg,#161616); border:1px solid var(--border-color,#2a2a2a); border-left:3px solid #34d399; padding:10px 13px; border-radius:10px; font-size:13.5px; line-height:1.55; }
+    #ta-log .ta-agent-label { font-size:10.5px; text-transform:uppercase; letter-spacing:.5px; color:#34d399; font-weight:700; margin-bottom:4px; }
+    #ta-log .ta-cmd { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; color:var(--text-secondary,#9ca3af); padding:2px 0; }
+    #ta-log .ta-out { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; color:var(--text-color,#cbd5e1); background:var(--background-surface,#141414); border:1px solid var(--border-color,#2a2a2a); border-radius:6px; padding:8px 10px; white-space:pre-wrap; word-break:break-word; max-height:220px; overflow:auto; }
+    #ta-log .ta-thinking { align-self:flex-start; color:var(--text-secondary,#9ca3af); font-size:12.5px; padding:4px 2px; }
+    #ta-log .markdown-content p { margin:.3em 0; }
+  </style>
   <script src="/public/js/theme-switcher.js"></script>
 </head>
 <body
@@ -142,7 +152,21 @@ export function ChatPage({
     </div>
 
     <!-- Main Chat Area -->
-    <div class="chat-container">
+    <div class="chat-container" style="position:relative;">
+      <!-- "Chat with ticket" native left panel (overlays the main chat when active).
+           Right panel keeps the live preview. No iframe. -->
+      <div id="ticket-agent-panel" style="display:none;position:absolute;inset:0;z-index:30;background:var(--bg-color,#0f0f0f);flex-direction:column;">
+        <div style="display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border-color,#2a2a2a);flex:none;">
+          <i class="fas fa-comments" style="color:#a78bfa;"></i>
+          <span id="ta-title" style="font-weight:600;color:var(--text-color,#e2e8f0);font-size:14px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Ticket</span>
+          <button id="ta-exit" title="Back to main chat" style="padding:6px 12px;border-radius:7px;cursor:pointer;font-size:12.5px;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-arrow-left"></i>Exit to chat</button>
+        </div>
+        <div id="ta-log" style="flex:1;min-height:0;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:10px;"></div>
+        <div style="flex:none;padding:12px 16px;border-top:1px solid var(--border-color,#2a2a2a);display:flex;gap:8px;align-items:center;">
+          <input id="ta-input" type="text" placeholder="Send a message to the agent…" style="flex:1;height:40px;padding:0 14px;border-radius:10px;background:var(--card-bg,#161616);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);font-size:13.5px;" />
+          <button id="ta-send" title="Send" style="width:40px;height:40px;border-radius:10px;background:#7c3aed;color:#fff;border:none;cursor:pointer;flex:none;"><i class="fas fa-arrow-up"></i></button>
+        </div>
+      </div>
       <!-- Project Header -->
       <div class="project-header">
         <div class="project-header-content">
@@ -383,6 +407,7 @@ export function ChatPage({
   <script src="/public/js/document-comments.js"></script>
   <script src="/public/js/artifacts.js"></script>
   <script src="/public/js/preview-tab.js"></script>
+  <script src="/public/js/ticket-agent.js"></script>
   <script src="/public/js/env-tab.js"></script>
   <script src="/public/js/tab-overflow.js"></script>
   <script src="/public/js/sidebar.js"></script>
