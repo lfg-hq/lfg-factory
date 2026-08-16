@@ -403,6 +403,7 @@
     current = state;
     const body = $("preview-body");
     if (!body) return;
+    const la = $("preview-left-actions"); if (la) la.innerHTML = ""; // only the running view fills it
     const status = state.previewStatus || "idle";
 
     if (IN_PROGRESS.includes(status)) {
@@ -446,20 +447,19 @@
       syncBranchFromState(state); // reflect the actually-running branch
       const opts = branchOptions();
       const branchSel = `<select data-branch title="Run a ticket's branch or the default" style="height:32px;padding:0 10px;border-radius:7px;font-size:12.5px;background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);max-width:180px;cursor:pointer;">${opts}</select>`;
-      // When previewing a TICKET's branch, offer "Chat with ticket" — its agent chat opens
-      // in the left panel while this preview stays on the right.
+      // "Chat with ticket" (only on a TICKET branch) → far-LEFT slot next to the title.
       const tEntry = branches.find((b) => b.id === branchId);
-      const ticketChatBtn = (tEntry && tEntry.ticketId) ? btn("Chat with ticket", { action: "tickchat", icon: "fa-comments", title: "Chat with this ticket's agent — this preview stays on the right" }) : "";
+      const leftEl = document.getElementById("preview-left-actions");
+      if (leftEl) leftEl.innerHTML = (tEntry && tEntry.ticketId) ? btn("Chat with ticket", { action: "tickchat", icon: "fa-comments", title: "Chat with this ticket's agent — this preview stays on the right" }) : "";
+      // Right side: branch, screenshot, logs, then a ⋮ menu (Env Profile / Restart / Stop).
       renderActions(
         serviceChips(state) +
         branchSel +
-        (ticketChatBtn ? tbDiv() + ticketChatBtn : "") +
         tbDiv() +
         btn("Screenshot", { action: "screenshot", icon: "fa-camera", iconOnly: true, title: "Screenshot to chat" }) +
         btn("Logs", { action: "togglelog", icon: "fa-terminal", iconOnly: true, title: "Logs (setup + app)" }) +
         tbDiv() +
-        btn("Restart", { action: "restart", icon: "fa-power-off" }) +
-        btn("Stop", { action: "stop", icon: "fa-stop", danger: true })
+        btn("More", { action: "prevmenu", icon: "fa-ellipsis-vertical", iconOnly: true, title: "More — Env Profile, Restart, Stop" })
       );
       // Multi-app: show the selected app's URL (falls back to the primary appUrl).
       mountBrowser(body, (activeSvc(state) && activeSvc(state).url) || state.previewUrl);
@@ -592,6 +592,29 @@
   }
 
   // Toggle a log overlay on top of the running iframe.
+  // ⋮ overflow menu (Env Profile / Restart / Stop) anchored under the "More" button.
+  function togglePrevMenu(anchor) {
+    const existing = document.getElementById("preview-more-menu");
+    if (existing) { existing.remove(); return; }
+    const m = document.createElement("div");
+    m.id = "preview-more-menu";
+    m.style.cssText = "position:fixed;z-index:100;min-width:180px;background:var(--card-bg,#161616);border:1px solid var(--border-color,#333);border-radius:10px;box-shadow:0 12px 34px rgba(0,0,0,.45);padding:5px;display:flex;flex-direction:column;gap:2px;";
+    const item = (label, act, icon, danger) => `<button data-menu="${act}" style="text-align:left;padding:9px 11px;border-radius:7px;cursor:pointer;font-size:12.5px;background:transparent;color:${danger ? "#f87171" : "var(--text-color,#e2e8f0)"};border:none;display:flex;align-items:center;gap:10px;"><i class="fas ${icon}" style="width:14px;text-align:center;opacity:.85;"></i>${label}</button>`;
+    m.innerHTML = item("Env Profile", "profile", "fa-list-check") + item("Restart", "restart", "fa-power-off") + item("Stop", "stop", "fa-stop", true);
+    document.body.appendChild(m);
+    const r = anchor.getBoundingClientRect();
+    m.style.top = (r.bottom + 6) + "px";
+    m.style.left = Math.max(8, r.right - m.offsetWidth) + "px";
+    m.addEventListener("mouseover", (e) => { const it = e.target.closest("[data-menu]"); if (it) it.style.background = "var(--border-color,#2a2a2a)"; });
+    m.addEventListener("mouseout", (e) => { const it = e.target.closest("[data-menu]"); if (it) it.style.background = "transparent"; });
+    m.addEventListener("click", (e) => {
+      const it = e.target.closest("[data-menu]"); if (!it) return;
+      const a = it.getAttribute("data-menu"); m.remove();
+      if (a === "profile") togglePlan(); else if (a === "restart") doRestart(); else if (a === "stop") doStop();
+    });
+    setTimeout(() => document.addEventListener("click", function onDoc(ev) { if (!m.contains(ev.target) && ev.target !== anchor && !anchor.contains(ev.target)) { m.remove(); document.removeEventListener("click", onDoc); } }), 0);
+  }
+
   function toggleLog() {
     const body = $("preview-body");
     if (!body) return;
@@ -856,6 +879,8 @@
       const e = branches.find((x) => x.id === branchId);
       if (e && e.ticketId && window.TicketAgentChat) { const p = (e.label || "").split(" — "); window.TicketAgentChat.open(e.ticketId, p[0] || "", p.slice(1).join(" — ") || e.label || ""); }
     }
+    else if (action === "prevmenu") togglePrevMenu(b);
+    else if (action === "profile") togglePlan();
     else if (action === "restart") doRestart();
     else if (action === "rundefault") { branchId = "default"; doRestart(); } // back to main (fast path)
     else if (action === "stop") doStop();
@@ -1026,6 +1051,7 @@
     if (!root) return;
     projectId = root.getAttribute("data-project-id");
     $("preview-actions")?.addEventListener("click", onActionClick);
+    $("preview-left-actions")?.addEventListener("click", onActionClick);
     $("preview-body")?.addEventListener("click", onActionClick);
     // Branch selector (running view) — switch which branch/ticket the preview runs.
     $("preview-actions")?.addEventListener("change", (e) => {

@@ -162,13 +162,15 @@ export function ChatPage({
 
     <!-- Main Chat Area -->
     <div class="chat-container" style="position:relative;">
-      <!-- "Chat with ticket" native left panel (overlays the main chat when active).
-           Right panel keeps the live preview. No iframe. -->
-      <div id="ticket-agent-panel" style="display:none;position:absolute;inset:0;z-index:30;background:var(--bg-color,#0f0f0f);flex-direction:column;">
-        <div style="display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border-color,#2a2a2a);flex:none;">
+      <!-- "Chat with ticket" — a FLOATING layer that sticks to the left over the main
+           chat (not a replacement). Distinct card (shadow + rounded) with a close button;
+           the main chat stays visible at the edges. Right panel keeps the live preview. -->
+      <div id="ticket-agent-panel" style="display:none;position:absolute;top:12px;left:12px;bottom:12px;right:12px;z-index:30;background:var(--card-bg,#141414);border:1px solid var(--border-color,#2a2a2a);border-radius:14px;box-shadow:0 18px 50px rgba(0,0,0,.55);flex-direction:column;overflow:hidden;">
+        <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--border-color,#2a2a2a);flex:none;background:var(--background-surface,#191919);">
           <i class="fas fa-comments" style="color:#a78bfa;"></i>
           <span id="ta-title" style="font-weight:600;color:var(--text-color,#e2e8f0);font-size:14px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Ticket</span>
-          <button id="ta-exit" title="Back to main chat" style="padding:6px 12px;border-radius:7px;cursor:pointer;font-size:12.5px;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-arrow-left"></i>Exit to chat</button>
+          <span style="font-size:11px;color:var(--text-secondary,#9ca3af);background:var(--border-color,#2a2a2a);padding:2px 8px;border-radius:999px;">layer</span>
+          <button id="ta-exit" title="Close this layer (back to main chat)" style="width:30px;height:30px;border-radius:8px;cursor:pointer;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);display:inline-flex;align-items:center;justify-content:center;"><i class="fas fa-times"></i></button>
         </div>
         <div id="ta-log" style="flex:1;min-height:0;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:10px;"></div>
         <div style="flex:none;padding:12px 16px;border-top:1px solid var(--border-color,#2a2a2a);display:flex;flex-direction:column;gap:6px;">
@@ -256,13 +258,17 @@ export function ChatPage({
         <div class="tab-pane" id="preview">
           <div id="preview-root" data-project-id="${projectId}" style="height:100%;display:flex;flex-direction:column;">
             <div class="preview-header" style="padding:14px 20px;border-bottom:1px solid var(--border-color,#2a2a2a);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
-              <div style="display:flex;flex-direction:column;gap:2px;min-width:90px;flex:0 1 auto;">
-                <h3 style="color:var(--text-color,#e2e8f0);margin:0;font-size:16px;font-weight:600;white-space:nowrap;">Preview</h3>
-                <span id="preview-substatus" style="color:var(--text-secondary,#9ca3af);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px;">Loading…</span>
+              <div style="display:flex;align-items:center;gap:10px;min-width:90px;flex:0 1 auto;">
+                <div style="display:flex;flex-direction:column;gap:2px;">
+                  <h3 style="color:var(--text-color,#e2e8f0);margin:0;font-size:16px;font-weight:600;white-space:nowrap;">Preview</h3>
+                  <span id="preview-substatus" style="color:var(--text-secondary,#9ca3af);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px;">Loading…</span>
+                </div>
+                <!-- Far-left slot: "Chat with ticket" is rendered here by preview-tab.js -->
+                <div id="preview-left-actions" style="display:flex;gap:6px;align-items:center;"></div>
               </div>
               <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end;flex:1 1 auto;">
-                <button id="preview-plan-btn" title="Profile — how this app runs" style="height:32px;padding:0 12px;border-radius:7px;cursor:pointer;font-size:12.5px;display:inline-flex;align-items:center;gap:7px;font-weight:500;background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);white-space:nowrap;flex:none;"><i class="fas fa-list-check"></i>Profile</button>
-                <!-- Env button removed here: the top-level "Env" tab already covers it. -->
+                <!-- Profile moved into the ⋮ overflow menu (rendered by preview-tab.js). -->
+                <button id="preview-plan-btn" style="display:none;"></button>
                 <div id="preview-actions" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end;"></div>
               </div>
             </div>
