@@ -5,7 +5,6 @@ import { requireAuth } from "../../auth/middleware.ts";
 import type { auth } from "../../auth/index.ts";
 import {
   disconnectOpenAICodex,
-  isOpenAICodexSubscriptionEnabled,
   pollOpenAICodexAuth,
   startOpenAICodexAuth,
 } from "../../services/openai-codex-auth.ts";
@@ -21,9 +20,6 @@ const openAICodexAuthApi = new Hono<AuthEnv>();
 openAICodexAuthApi.use("*", requireAuth);
 
 openAICodexAuthApi.post("/start", async (c) => {
-  if (!isOpenAICodexSubscriptionEnabled()) {
-    return c.json({ status: "error", error: "OpenAI Codex subscription authentication is not enabled" }, 403);
-  }
   const result = await startOpenAICodexAuth(c.get("user").id);
   return c.json(result, result.status === "error" ? 500 : 200);
 });

@@ -19,14 +19,6 @@ const AUTH_FILE = `${AUTH_DIR}/auth.json`;
 const AUTH_LOG = "/data/openai_codex_auth.log";
 const PI_PACKAGE = process.env.PI_CODING_AGENT_PACKAGE || "@earendil-works/pi-coding-agent";
 
-/**
- * Deliberate rollout gate. OpenAI documents ChatGPT sign-in for Codex clients,
- * but this product should validate its commercial/distribution terms before launch.
- */
-export function isOpenAICodexSubscriptionEnabled(): boolean {
-  return process.env.OPENAI_CODEX_SUBSCRIPTION_ENABLED === "true";
-}
-
 export interface OpenAICodexCredential {
   type: "oauth";
   access: string;
@@ -155,7 +147,6 @@ async function createAuthWorkspace(userId: string): Promise<string> {
 }
 
 export async function hasOpenAICodexCredentials(userId: string): Promise<boolean> {
-  if (!isOpenAICodexSubscriptionEnabled()) return false;
   const [profile] = await db.select({
     authenticated: profiles.openaiCodexAuthenticated,
     credentials: profiles.openaiCodexCredentials,
@@ -165,9 +156,6 @@ export async function hasOpenAICodexCredentials(userId: string): Promise<boolean
 
 export async function startOpenAICodexAuth(userId: string): Promise<OpenAICodexStartResult> {
   try {
-    if (!isOpenAICodexSubscriptionEnabled()) {
-      return { status: "error", error: "OpenAI Codex subscription authentication is not enabled" };
-    }
     if (await hasOpenAICodexCredentials(userId)) {
       return { status: "already_authenticated" };
     }
@@ -212,7 +200,6 @@ printf '2\\n' | node "$PI_AI_CLI" login openai-codex > ${AUTH_LOG} 2>&1
 }
 
 export async function pollOpenAICodexAuth(userId: string): Promise<{ authenticated: boolean; pending: boolean; error?: string }> {
-  if (!isOpenAICodexSubscriptionEnabled()) return { authenticated: false, pending: false };
   if (await hasOpenAICodexCredentials(userId)) return { authenticated: true, pending: false };
   const sandbox = await getAuthSandbox(userId);
   if (!sandbox?.magsWorkspaceId) return { authenticated: false, pending: false };
@@ -251,9 +238,6 @@ async function withUserTokenLock<T>(userId: string, fn: () => Promise<T>): Promi
 }
 
 export async function getOpenAICodexAccessToken(userId: string): Promise<string> {
-  if (!isOpenAICodexSubscriptionEnabled()) {
-    throw new Error("OpenAI Codex subscription authentication is not enabled");
-  }
   return withUserTokenLock(userId, async () => {
     const stored = await getStoredCredential(userId);
     if (!stored) throw new Error("OpenAI Codex is not connected for this user");

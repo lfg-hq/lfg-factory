@@ -2993,7 +2993,34 @@ export async function addService(
   await saveAppProfile(projectId, profile);
   const manifest = deriveManifestFromProfile(profile);
   await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
-  restartPreview(projectId, { userId }).catch((e) => console.error("[preview] add-service restart failed:", e));
+
+  // If the preview is ALREADY running on the default branch, bring the new app up in the
+  // BACKGROUND (detached) so the main app keeps serving — no disruptive full restart. It
+  // starts on its own port + subdomain; the switcher just points at whichever you pick.
+  // Otherwise (not running / a ticket branch), fall back to a restart that includes it.
+  const row = await getEnv(projectId);
+  const onDefault = !row?.previewBranch || row.previewBranch === "(default)";
+  const added = (manifest.services || []).find((s) => s.name === name);
+  if (added && row?.previewStatus === "running" && onDefault && row.stableAlias) {
+    const stableAlias = row.stableAlias, appUrl = row.appUrl ?? "";
+    (async () => {
+      try {
+        await loadPublicId(projectId); // WS routing for plog/broadcast
+        const workspaceId = await envWorkspaceId(projectId);
+        plog(projectId, userId, `Adding app "${name}" in the background — the main app keeps running…`);
+        const r = await exposeService(projectId, userId, workspaceId, added, PROJECT_DIR, stableAlias);
+        if (r.url) await persistServiceBaseUrl(projectId, workspaceId, name, r.url).catch(() => {});
+        const appDomain = process.env.MAGS_APP_DOMAIN || "app.lfg.run";
+        broadcastToUser(userId, { type: "preview_services", projectId: pub(projectId), services: (manifest.services || []).map((s) => ({
+          name: s.name, port: s.port, primary: !!s.primary, enabled: !!s.primary || !!s.enabled,
+          url: s.primary ? appUrl : (s.name === name ? (r.url || "") : (s.enabled ? `https://${stableAlias}-${s.name}.${appDomain}` : "")),
+          up: s.name === name ? r.ok : true,
+        })) });
+      } catch (e) { plog(projectId, userId, `Background start of "${name}" failed: ${(e as Error).message?.slice(0, 160)}`, { level: "error" }); }
+    })();
+  } else {
+    restartPreview(projectId, { userId }).catch((e) => console.error("[preview] add-service restart failed:", e));
+  }
   const services = (manifest.services || []).map((s) => ({ name: s.name, port: s.port, primary: !!s.primary, enabled: !!s.enabled, manual: !!s.manual }));
   return { ok: true, services };
 }

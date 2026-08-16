@@ -18,7 +18,6 @@ interface SettingsPageProps {
     cliApiKey: string | null;
   };
   openaiCodex?: {
-    available: boolean;
     connected: boolean;
   };
   github?: {
@@ -630,7 +629,6 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
           }
         </script>
 
-        ${openaiCodex?.available ? html`
         <!-- OpenAI Codex / ChatGPT subscription card -->
         <div class="llm-keys-table" style="margin-bottom:1.5rem;">
           <div class="llm-keys-row" style="border-bottom:1px solid rgba(255,255,255,0.07);padding:1rem 1.375rem;justify-content:space-between;">
@@ -755,7 +753,6 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
             else if (btn) { btn.disabled = false; btn.textContent = 'Disconnect'; }
           }
         </script>
-        ` : ""}
 
         <!-- Source Control (GitHub + GitLab) -->
         <div class="llm-keys-table">

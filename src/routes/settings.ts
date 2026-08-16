@@ -7,7 +7,6 @@ import { composioToolkits } from "../db/schema/composio.ts";
 import { eq } from "drizzle-orm";
 import { isBotActive } from "../services/telegram.ts";
 import { isComposioConfigured } from "../services/composio-manager.ts";
-import { isOpenAICodexSubscriptionEnabled } from "../services/openai-codex-auth.ts";
 import { SettingsPage } from "../templates/pages/settings.tsx";
 import { env } from "../config/env.ts";
 import type { auth } from "../auth/index.ts";
@@ -81,7 +80,6 @@ settingsRouter.get("/settings", async (c) => {
         cliApiKey: profile.cliApiKey ?? null,
       },
       openaiCodex: {
-        available: isOpenAICodexSubscriptionEnabled(),
         connected: !!profile.openaiCodexAuthenticated && !!profile.openaiCodexCredentials,
       },
       github: {
@@ -230,7 +228,6 @@ settingsRouter.get("/settings/integrations", async (c) => {
         cliApiKey: profile.cliApiKey ?? null,
       },
       openaiCodex: {
-        available: isOpenAICodexSubscriptionEnabled(),
         connected: !!profile.openaiCodexAuthenticated && !!profile.openaiCodexCredentials,
       },
       github: {
