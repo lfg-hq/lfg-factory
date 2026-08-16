@@ -33,6 +33,41 @@
     p.style.right = (overlayW + 12) + "px";
   }
 
+  // The split between the ticket chat (left) and the preview (right) is DRAGGABLE via the
+  // handle on the popup's right edge — dragging widens/narrows both together. The chosen
+  // width persists so you set it once. Defaults to 50-50.
+  const SPLIT_KEY = "lfg_ticket_split_art_w";
+  let resizeWired = false;
+  function preferredArtWidth() {
+    const v = parseInt(localStorage.getItem(SPLIT_KEY) || "", 10);
+    if (v > 0) return Math.max(360, Math.min(window.innerWidth - 360, v)) + "px";
+    return "50vw";
+  }
+  function setupResize() {
+    if (resizeWired) return;
+    const handle = $("ta-resize");
+    if (!handle) return;
+    resizeWired = true;
+    let dragging = false;
+    handle.addEventListener("mousedown", (e) => { dragging = true; e.preventDefault(); document.body.style.userSelect = "none"; });
+    window.addEventListener("mousemove", (e) => {
+      if (!dragging) return;
+      const art = document.getElementById("artifacts-panel");
+      if (!art) return;
+      let w = window.innerWidth - e.clientX;                       // preview width = distance from cursor to the right edge
+      w = Math.max(360, Math.min(window.innerWidth - 360, w));     // keep both panes usable
+      art.style.width = w + "px";
+      fitToChatArea();
+    });
+    window.addEventListener("mouseup", () => {
+      if (!dragging) return;
+      dragging = false;
+      document.body.style.userSelect = "";
+      const art = document.getElementById("artifacts-panel");
+      if (art) localStorage.setItem(SPLIT_KEY, String(Math.round(art.getBoundingClientRect().width)));
+    });
+  }
+
   function open(id, key, name) {
     ticketId = id;
     const p = panel();
@@ -53,7 +88,8 @@
     // 50-50 split: give the preview overlay half the width so the ticket chat gets the
     // other half (otherwise, with a narrow preview, the popup sprawls across the screen).
     const art = document.getElementById("artifacts-panel");
-    if (art) { if (prevArtWidth === null) prevArtWidth = art.style.width || ""; art.style.width = "50vw"; }
+    if (art) { if (prevArtWidth === null) prevArtWidth = art.style.width || ""; art.style.width = preferredArtWidth(); }
+    setupResize();
     // Fit to the visible chat area (left of the preview overlay), and keep it fitted as the
     // preview is toggled (class) or its width dragged (style).
     setTimeout(fitToChatArea, 60);
