@@ -165,7 +165,7 @@ export function ChatPage({
       <!-- "Chat with ticket" — a FLOATING layer that sticks to the left over the main
            chat (not a replacement). Distinct card (shadow + rounded) with a close button;
            the main chat stays visible at the edges. Right panel keeps the live preview. -->
-      <div id="ticket-agent-panel" style="display:none;position:fixed;top:12px;left:12px;bottom:12px;right:12px;z-index:80;background:var(--card-bg,#141414);border:1px solid var(--border-color,#2a2a2a);border-radius:14px;box-shadow:0 18px 50px rgba(0,0,0,.55);flex-direction:column;overflow:hidden;">
+      <div id="ticket-agent-panel" style="display:none;position:absolute;top:12px;left:12px;bottom:12px;right:12px;z-index:80;background:var(--card-bg,#141414);border:1px solid var(--border-color,#2a2a2a);border-radius:14px;box-shadow:0 18px 50px rgba(0,0,0,.55);flex-direction:column;overflow:hidden;">
         <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--border-color,#2a2a2a);flex:none;background:var(--background-surface,#191919);">
           <i class="fas fa-comments" style="color:#a78bfa;"></i>
           <span id="ta-title" style="font-weight:600;color:var(--text-color,#e2e8f0);font-size:14px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Ticket</span>
