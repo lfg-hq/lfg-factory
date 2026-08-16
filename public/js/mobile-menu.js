@@ -20,8 +20,11 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
-    // Close menu when clicking outside
+    // Close menu when clicking outside. Guard: this page may not have the mobile
+    // dropdown (desktop), and this fires on EVERY document click — without the guard it
+    // threw "Cannot read properties of null (reading 'classList')" on every click.
     document.addEventListener('click', function(e) {
+        if (!mobileMenuDropdown) return;
         if (!e.target.closest('#mobile-menu-btn') && !e.target.closest('#mobile-menu-dropdown')) {
             mobileMenuDropdown.classList.remove('show');
         }
