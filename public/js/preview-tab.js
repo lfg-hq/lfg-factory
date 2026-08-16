@@ -504,8 +504,20 @@
     // idle | stopped | anything else → the intro / start screen
     currentView = "idle";
     const stopped = status === "stopped";
+    // Already set up (stopped, not first-run) → let the user CHOOSE which branch to
+    // start right here, instead of forcing default-first-then-switch.
+    const setupDone = !!(state && state.setupComplete);
+    const canPick = setupDone && branches.length > 1;
     setSub(stopped ? "Stopped" : "Not running");
     renderActions("");
+    const opts = branches.map((b) => {
+      const runnable = b.id === "default" || !!b.ticketId;
+      return `<option value="${esc(b.id)}"${b.id === branchId ? " selected" : ""}${runnable ? "" : " disabled"}>${esc(b.label)}</option>`;
+    }).join("");
+    const branchSel = canPick ? `<div style="display:flex;flex-direction:column;gap:6px;align-items:center;margin-top:4px;">
+        <div style="font-size:12px;color:var(--text-secondary,#9ca3af);">Choose which branch to preview</div>
+        <select data-branch style="height:36px;padding:0 12px;border-radius:8px;font-size:13px;background:var(--card-bg,#161616);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);max-width:340px;cursor:pointer;">${opts}</select>
+      </div>` : "";
     body.innerHTML = `
       <div style="height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:32px;text-align:center;color:var(--text-secondary,#9ca3af);">
         <div style="font-size:30px;color:#7c3aed;"><i class="fas fa-play-circle"></i></div>
@@ -514,8 +526,11 @@
           Spins up a sandbox, detects the stack, provisions the databases it needs, seeds data,
           and starts the app — then shows it right here. First run takes a couple of minutes.
         </div>
-        ${btn(stopped ? "Start preview" : "Set up preview", { action: "setup", primary: true, icon: "fa-play" })}
+        ${branchSel}
+        ${btn(canPick ? "Start preview" : (stopped ? "Start preview" : "Set up preview"), { action: setupDone ? "startbranch" : "setup", primary: true, icon: "fa-play" })}
       </div>`;
+    // Populate the branch list (ticket worktrees) so the selector has real options.
+    if (setupDone && branches.length <= 1) loadBranches().then(() => { if (currentView === "idle" && current) render(current); });
   }
 
   async function load() {
@@ -831,6 +846,7 @@
     if (!b) return;
     const action = b.getAttribute("data-action");
     if (action === "setup") doSetup(false);
+    else if (action === "startbranch") { const sel = document.querySelector("#preview-body [data-branch]"); doRunBranch(sel ? sel.value : "default"); }
     else if (action === "restart") doRestart();
     else if (action === "rundefault") { branchId = "default"; doRestart(); } // back to main (fast path)
     else if (action === "stop") doStop();

@@ -443,6 +443,19 @@ async function reapplyEnv(projectId: string, userId: string, workspaceId: string
  */
 async function runSchemaSetup(projectId: string, userId: string, workspaceId: string, manifest: PreviewManifest, runDir: string): Promise<void> {
   if (!(manifest.databases || []).length) return; // no DB → nothing to migrate
+  // GUARD: if the schema is ALREADY present (the DB has tables), do NOT re-run migrations.
+  // Re-running on every branch switch is what broke a working DB — `drizzle-kit push
+  // --force` is destructive. Only migrate a FRESH/empty database.
+  const primary = manifest.databases[0]!;
+  if (primary.engine === "postgres" || primary.engine === "mysql") {
+    const container = ENGINES[primary.engine].container;
+    const q = primary.engine === "postgres"
+      ? `docker exec ${container} psql -U app -d app -tAc "select count(*) from information_schema.tables where table_schema='public'"`
+      : `docker exec ${container} mysql -uapp app -N -e "select count(*) from information_schema.tables where table_schema='app'"`;
+    const r = await sh(workspaceId, `${q} 2>/dev/null | tr -d '[:space:]'`, 20_000).catch(() => ({ output: "" }));
+    const n = parseInt((r.output || "").trim(), 10);
+    if (Number.isFinite(n) && n > 0) { plog(projectId, userId, `Database already has ${n} table(s) — schema present, skipping migrations (won't touch your data).`); return; }
+  }
   let migrations = [...(manifest.migrations || [])];
   if (!migrations.length) {
     // The plan didn't give a migration command — infer one from the ORM in the repo.
