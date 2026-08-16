@@ -1003,14 +1003,23 @@
     }
   }
 
+  // A persistent, centered "working…" overlay (unlike toast, it stays until dismissed).
+  // Screenshot capture spins up a headless browser and can take several seconds — without
+  // this it looks like the UI hung.
+  function busyOverlay(msg) {
+    const o = document.createElement("div");
+    o.style.cssText = "position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.32);backdrop-filter:blur(1px);";
+    o.innerHTML = `<div style="display:flex;align-items:center;gap:12px;background:#141414;color:#fff;padding:16px 22px;border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.5);font-size:14px;"><i class="fas fa-spinner fa-spin" style="color:#a78bfa;"></i><span>${esc(msg)}</span></div>`;
+    document.body.appendChild(o);
+    return { setText: (t) => { const s = o.querySelector("span"); if (s) s.textContent = t; }, done: () => o.remove() };
+  }
+
   async function takeScreenshot(btn) {
-    const label = btn ? btn.querySelector("span") : null;
-    const orig = label ? label.textContent : "";
-    if (label) label.textContent = "Capturing…";
     if (btn) btn.style.pointerEvents = "none";
     // If the ticket chat is open, send the screenshot THERE (attach it for the ticket
     // agent) instead of posting it into the main conversation.
     const toTicket = !!(window.TicketAgentChat && window.TicketAgentChat.isOpen && window.TicketAgentChat.isOpen());
+    const ov = busyOverlay("Capturing screenshot… this can take a few seconds.");
     try {
       const r = await api("/screenshot", { method: "POST", body: JSON.stringify({ conversationId: window.currentConversationId || null, toTicket }) });
       const j = await r.json();
@@ -1020,7 +1029,7 @@
     } catch (e) {
       toast("Screenshot failed: " + e.message);
     } finally {
-      if (label) label.textContent = orig;
+      ov.done();
       if (btn) btn.style.pointerEvents = "";
     }
   }

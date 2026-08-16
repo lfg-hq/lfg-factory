@@ -33,6 +33,17 @@
     p.style.right = (overlayW + 12) + "px";
   }
 
+  // The artifacts (preview) panel's width is COUPLED to .chat-container's padding-right
+  // (artifacts.js reserves that space so the chat reflows to meet the panel). We resize the
+  // panel directly for the split, so we must keep that padding in sync — otherwise the chat
+  // is left with a dead gap ("shrunk/disproportionate") after we close.
+  function syncChatPadding() {
+    const art = document.getElementById("artifacts-panel");
+    const cc = document.querySelector(".chat-container");
+    if (!cc) return;
+    if (art && art.classList.contains("expanded")) cc.style.setProperty("padding-right", Math.round(art.getBoundingClientRect().width) + "px", "important");
+  }
+
   // The split between the ticket chat (left) and the preview (right) is DRAGGABLE via the
   // handle on the popup's right edge — dragging widens/narrows both together. The chosen
   // width persists so you set it once. Defaults to 50-50.
@@ -58,6 +69,7 @@
       w = Math.max(360, Math.min(window.innerWidth - 360, w));     // keep both panes usable
       art.style.width = w + "px";
       fitToChatArea();
+      syncChatPadding();
     });
     window.addEventListener("mouseup", () => {
       if (!dragging) return;
@@ -90,9 +102,10 @@
     const art = document.getElementById("artifacts-panel");
     if (art) { if (prevArtWidth === null) prevArtWidth = art.style.width || ""; art.style.width = preferredArtWidth(); }
     setupResize();
+    syncChatPadding();
     // Fit to the visible chat area (left of the preview overlay), and keep it fitted as the
     // preview is toggled (class) or its width dragged (style).
-    setTimeout(fitToChatArea, 60);
+    setTimeout(() => { fitToChatArea(); syncChatPadding(); }, 60);
     if (art && !fitObs) { fitObs = new MutationObserver(fitToChatArea); fitObs.observe(art, { attributes: true, attributeFilter: ["class", "style"] }); }
     window.addEventListener("resize", fitToChatArea);
     const input = $("ta-input");
@@ -107,6 +120,7 @@
     window.removeEventListener("resize", fitToChatArea);
     const art = document.getElementById("artifacts-panel");
     if (art && prevArtWidth !== null) { art.style.width = prevArtWidth; prevArtWidth = null; } // restore the preview width
+    syncChatPadding(); // reflow the chat to the restored panel width (no dead gap)
     ticketId = null;
   }
 
@@ -135,7 +149,7 @@
   function renderRow(row) {
     const type = row.type || "command";
     const msg = (row.message || "").trim();
-    if (type === "user_message") return `<div class="ta-user">${esc(msg)}</div>`;
+    if (type === "user_message") return `<div class="ta-user">${renderUserMsg(msg)}</div>`;
     if (type === "ai_response") {
       const fail = msg.charAt(0) === "❌" || msg.indexOf("Build failed") === 0;
       return `<div class="ta-agent${fail ? " ta-agent-fail" : ""}"><div class="ta-agent-label">Agent</div><div class="markdown-content">${md(msg)}</div></div>`;
@@ -154,28 +168,47 @@
     </div>`;
   }
 
-  // ── File upload (attach a file for the agent) ──────────────────────────────
-  let pendingUpload = null;
+  // Render a user message: turn any attached image URL into an inline thumbnail and HIDE
+  // the raw (presigned) URL from the text — it renders on reload (fixes "image disappeared
+  // after refresh") and keeps the signed S3 URL out of the visible UI.
+  const IMG_URL_RE = /(https?:\/\/[^\s)]+?\.(?:png|jpe?g|gif|webp))(\?[^\s)]*)?/gi;
+  function renderUserMsg(msg) {
+    const imgs = [];
+    const stripped = String(msg || "").replace(IMG_URL_RE, (m, base, q) => { imgs.push(base + (q || "")); return "🖼️ image"; });
+    let html = esc(stripped);
+    for (const u of imgs) {
+      html += `<div style="padding-top:8px;"><a href="${esc(u)}" target="_blank" rel="noopener"><img src="${esc(u)}" loading="lazy" style="max-width:220px;max-height:180px;border-radius:8px;border:1px solid var(--border-color,#2a2a2a);display:block;"></a></div>`;
+    }
+    return html;
+  }
+
+  // ── File attachments (images/files for the agent) — supports MULTIPLE ───────
+  let pendingUploads = [];
+  let uploading = 0; // in-flight uploads (so the chip shows a spinner)
   function showAttachChip() {
     const chip = $("ta-attach-chip");
     if (!chip) return;
-    if (!pendingUpload) { chip.style.display = "none"; chip.innerHTML = ""; return; }
+    if (!pendingUploads.length && !uploading) { chip.style.display = "none"; chip.innerHTML = ""; return; }
     chip.style.display = "flex";
-    chip.innerHTML = `<i class="fas fa-paperclip"></i><span>${esc(pendingUpload.name)}</span><button data-ta-clearfile title="Remove" style="background:none;border:none;color:var(--text-secondary,#9ca3af);cursor:pointer;padding:0 4px;"><i class="fas fa-times"></i></button>`;
+    chip.style.flexWrap = "wrap";
+    const pills = pendingUploads.map((u, i) =>
+      `<span style="display:inline-flex;align-items:center;gap:5px;background:var(--border-color,#222);padding:2px 6px;border-radius:6px;"><i class="fas ${u.isImage ? "fa-image" : "fa-paperclip"}"></i>${esc(u.name)}<button data-ta-clearfile="${i}" title="Remove" style="background:none;border:none;color:var(--text-secondary,#9ca3af);cursor:pointer;padding:0 2px;"><i class="fas fa-times"></i></button></span>`
+    ).join("");
+    const spin = uploading ? `<span style="display:inline-flex;align-items:center;gap:5px;opacity:.7;"><i class="fas fa-spinner fa-spin"></i> Uploading ${uploading}…</span>` : "";
+    chip.innerHTML = pills + spin;
   }
   async function uploadFile(file) {
     if (!file || !ticketId) return;
-    const chip = $("ta-attach-chip");
-    if (chip) { chip.style.display = "flex"; chip.innerHTML = `<i class="fas fa-spinner fa-spin"></i> Uploading ${esc(file.name)}…`; }
+    uploading++; showAttachChip();
     try {
       const fd = new FormData();
       fd.append("file", file);
       const r = await fetch(`/api/projects/${PID()}/tickets/${ticketId}/chat/upload`, { method: "POST", body: fd, credentials: "same-origin" });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || "upload failed");
-      pendingUpload = { path: j.path, url: j.url, name: file.name, isImage: j.isImage };
-    } catch (e) { pendingUpload = null; }
-    showAttachChip();
+      pendingUploads.push({ path: j.path, url: j.url, name: file.name, isImage: j.isImage });
+    } catch (e) { /* skip this file */ }
+    finally { uploading = Math.max(0, uploading - 1); showAttachChip(); }
   }
 
   // Is the ticket chat currently open? (so the camera can route a screenshot here.)
@@ -183,7 +216,7 @@
   // Attach a captured preview screenshot as a pending image on the ticket chat.
   function attachScreenshot(url) {
     if (!url) return;
-    pendingUpload = { path: null, url, name: "preview-screenshot.png", isImage: true };
+    pendingUploads.push({ path: null, url, name: "preview-screenshot.png", isImage: true });
     showAttachChip();
     const input = $("ta-input"); if (input) input.focus();
   }
@@ -191,24 +224,27 @@
   async function send() {
     const input = $("ta-input");
     if (!input) return;
-    let msg = input.value.trim();
-    if ((!msg && !pendingUpload) || !ticketId) return;
+    const typed = input.value.trim();
+    let msg = typed;
+    const uploads = pendingUploads.slice();
+    if ((!msg && !uploads.length) || !ticketId) return;
     input.value = "";
-    const upload = pendingUpload;
-    if (upload) {
-      const ref = upload.path
-        ? `I uploaded a file to ${upload.path} (original name: ${upload.name}). Use it as needed.`
-        : `I attached a file (${upload.name}) available at ${upload.url}. It will be placed in the sandbox on the next build.`;
-      msg = (msg ? msg + "\n\n" : "") + ref;
-      pendingUpload = null;
+    if (uploads.length) {
+      const refs = uploads.map((u) => u.path
+        ? `I uploaded a file to ${u.path} (original name: ${u.name}). Use it as needed.`
+        : `I attached a file (${u.name}) available at ${u.url}. It will be placed in the sandbox on the next build.`);
+      msg = (msg ? msg + "\n\n" : "") + refs.join("\n");
+      pendingUploads = [];
       showAttachChip();
     }
     const area = $("ta-log");
     if (area) {
       const ph = area.querySelector("[data-empty]");
       if (ph) area.innerHTML = "";
-      let bubble = `<div class="ta-user">${esc(input.value.trim() || (upload ? "(attachment)" : ""))}</div>`;
-      if (upload && upload.isImage && upload.url) bubble += `<div class="ta-user" style="padding:0;background:none;"><a href="${esc(upload.url)}" target="_blank" rel="noopener"><img src="${esc(upload.url)}" alt="${esc(upload.name)}" style="max-width:220px;max-height:180px;border-radius:8px;border:1px solid var(--border-color,#2a2a2a);"></a></div>`;
+      let bubble = `<div class="ta-user">${esc(typed || (uploads.length ? "(attachment)" : ""))}</div>`;
+      const imgs = uploads.filter((u) => u.isImage && u.url);
+      if (imgs.length) bubble += `<div class="ta-user" style="padding:0;background:none;display:flex;flex-wrap:wrap;gap:6px;">` +
+        imgs.map((u) => `<a href="${esc(u.url)}" target="_blank" rel="noopener"><img src="${esc(u.url)}" alt="${esc(u.name)}" style="max-width:160px;max-height:140px;border-radius:8px;border:1px solid var(--border-color,#2a2a2a);display:block;"></a>`).join("") + `</div>`;
       area.insertAdjacentHTML("beforeend", bubble + `<div class="ta-thinking" id="ta-thinking"><i class="fas fa-spinner fa-spin"></i> Agent is working…</div>`);
       area.scrollTop = area.scrollHeight;
     }
@@ -250,7 +286,7 @@
     $("ta-send")?.addEventListener("click", send);
     $("ta-input")?.addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
     $("ta-attach")?.addEventListener("click", () => $("ta-file")?.click());
-    $("ta-file")?.addEventListener("change", (e) => { const f = e.target.files && e.target.files[0]; if (f) uploadFile(f); e.target.value = ""; });
+    $("ta-file")?.addEventListener("change", (e) => { const fs = e.target.files ? Array.from(e.target.files) : []; fs.forEach(uploadFile); e.target.value = ""; });
     // Collapse/expand a command row's output; clear a pending upload.
     $("ta-log")?.addEventListener("click", (e) => {
       const h = e.target.closest && e.target.closest("[data-ta-toggle]");
@@ -259,7 +295,7 @@
       const chev = h.querySelector(".ta-chev");
       if (body) { const openNow = body.style.display !== "none"; body.style.display = openNow ? "none" : "block"; if (chev) chev.style.transform = openNow ? "" : "rotate(90deg)"; }
     });
-    $("ta-attach-chip")?.addEventListener("click", (e) => { if (e.target.closest("[data-ta-clearfile]")) { pendingUpload = null; showAttachChip(); } });
+    $("ta-attach-chip")?.addEventListener("click", (e) => { const c = e.target.closest("[data-ta-clearfile]"); if (c) { const i = parseInt(c.getAttribute("data-ta-clearfile"), 10); if (i >= 0) pendingUploads.splice(i, 1); showAttachChip(); } });
     // Delegated, CAPTURE-phase so a [data-ta-chat] button opens the chat WITHOUT also
     // triggering its board card's own click (which opens the full ticket drawer).
     document.addEventListener("click", (e) => {

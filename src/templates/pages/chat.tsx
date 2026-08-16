@@ -177,8 +177,8 @@ export function ChatPage({
         <div style="flex:none;padding:12px 16px;border-top:1px solid var(--border-color,#2a2a2a);display:flex;flex-direction:column;gap:6px;">
           <div id="ta-attach-chip" style="display:none;font-size:12px;color:var(--text-secondary,#9ca3af);align-items:center;gap:6px;"></div>
           <div style="display:flex;gap:8px;align-items:center;">
-            <input id="ta-file" type="file" style="display:none;" />
-            <button id="ta-attach" title="Attach a file for the agent" style="width:40px;height:40px;border-radius:10px;background:transparent;color:var(--text-secondary,#9ca3af);border:1px solid var(--border-color,#333);cursor:pointer;flex:none;"><i class="fas fa-paperclip"></i></button>
+            <input id="ta-file" type="file" accept="image/*" multiple style="display:none;" />
+            <button id="ta-attach" title="Attach image(s) for the agent — you can pick several" style="width:40px;height:40px;border-radius:10px;background:transparent;color:var(--text-secondary,#9ca3af);border:1px solid var(--border-color,#333);cursor:pointer;flex:none;"><i class="fas fa-paperclip"></i></button>
             <input id="ta-input" type="text" placeholder="Send a message to the agent…" style="flex:1;height:40px;padding:0 14px;border-radius:10px;background:var(--card-bg,#161616);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);font-size:13.5px;" />
             <button id="ta-send" title="Send" style="width:40px;height:40px;border-radius:10px;background:#7c3aed;color:#fff;border:none;cursor:pointer;flex:none;"><i class="fas fa-arrow-up"></i></button>
           </div>
