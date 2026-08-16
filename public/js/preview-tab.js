@@ -992,13 +992,23 @@
       const msg = document.getElementById("preview-plan-msg");
       if (msg) { msg.textContent = "Re-probe complete ✓ — profile updated."; msg.style.color = "#10b981"; }
     },
-    // Explicitly (re)load the preview. Used where there's no `.tab-button[data-tab=preview]`
-    // to hook (e.g. the ticket drawer opens this same component via switchDrawerTab).
-    // Pass a ticketId to default the branch selector to that ticket's branch.
+    // Open the preview scoped to a ticket (ticket drawer → switchDrawerTab). Behaviour:
+    // if the preview is ALREADY running THIS ticket's branch → just render it; otherwise
+    // start that branch through the normal steps (worktree → DB → migrate → run).
     open(ticketId) {
       loadedOnce = true;
       preferTicket = ticketId || null;
-      loadBranches().then(load); // populate branches first so the ticket branch can be preselected
+      loadBranches().then(async () => {
+        await load(); // current running state
+        if (!ticketId) return;
+        const entry = branches.find((b) => b.id === ticketId || b.ticketId === ticketId);
+        const st = current || {};
+        const runningThis = st.previewStatus === "running" && !!st.branch && !!entry && st.branch === entry.branch;
+        if (runningThis) return; // already live on this ticket's branch → render as-is
+        // Not this branch (different branch running, stopped, or idle) → start it. Only if
+        // setup exists (a first-ever run needs full setup, which the idle screen offers).
+        if (st.setupComplete) { branchId = entry ? entry.id : ticketId; doRunBranch(branchId); }
+      });
     },
   };
 
