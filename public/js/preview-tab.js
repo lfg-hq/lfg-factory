@@ -106,6 +106,18 @@
     const el = $("preview-actions");
     if (el) el.innerHTML = html || "";
   }
+  // Render "Chat with ticket" into the title-row slot IFF the current branch is a ticket.
+  // Called both on the running render AND after loadBranches resolves (branches aren't
+  // known on the very first render, which is why the button used to appear only after a
+  // tab switch).
+  function renderTicketChatBtn() {
+    const leftEl = $("preview-left-actions");
+    if (!leftEl) return;
+    const te = branches.find((b) => b.id === branchId);
+    leftEl.innerHTML = (te && te.ticketId)
+      ? btn("Chat with ticket", { action: "tickchat", icon: "fa-comments", title: "Chat with this ticket's agent — this preview stays on the right" })
+      : "";
+  }
 
   // Scrollable live log panel with a Copy button (shared by in-progress + error).
   function logPanel(flex) {
@@ -447,10 +459,8 @@
       syncBranchFromState(state); // reflect the actually-running branch
       const opts = branchOptions();
       const branchSel = `<select data-branch title="Run a ticket's branch or the default" style="height:32px;padding:0 10px;border-radius:7px;font-size:12.5px;background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);max-width:180px;cursor:pointer;">${opts}</select>`;
-      // "Chat with ticket" (only on a TICKET branch) → far-LEFT slot next to the title.
-      const tEntry = branches.find((b) => b.id === branchId);
-      const leftEl = document.getElementById("preview-left-actions");
-      if (leftEl) leftEl.innerHTML = (tEntry && tEntry.ticketId) ? btn("Chat with ticket", { action: "tickchat", icon: "fa-comments", title: "Chat with this ticket's agent — this preview stays on the right" }) : "";
+      // "Chat with ticket" (only on a TICKET branch) → slot next to the title.
+      renderTicketChatBtn();
       // Right side: branch, screenshot, logs, then a ⋮ menu (Env Profile / Restart / Stop).
       renderActions(
         serviceChips(state) +
@@ -469,6 +479,7 @@
         syncBranchFromState(current);
         const sel = document.querySelector("#preview-actions [data-branch]");
         if (sel) sel.innerHTML = branchOptions();
+        renderTicketChatBtn(); // branches now known → the button can appear on first load (not only after a tab switch)
       });
       return;
     }
