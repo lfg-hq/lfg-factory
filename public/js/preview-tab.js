@@ -85,10 +85,13 @@
     return svcs.find((s) => s.name === activeService && s.url) || svcs.find((s) => s.primary) || svcs[0];
   }
   // Inline chips for the toolbar: one per app. Clickable when it has a live URL
-  // (switches the iframe); companions carry an ON/OFF toggle. "" for single-app.
+  // (switches the iframe); companions carry an ON/OFF toggle. For a single-app preview we
+  // still show just the "＋ Add app" button so a monorepo's 2nd app can be added by hand.
   function serviceChips(state) {
     const svcs = (state && state.services) || [];
-    if (svcs.length < 2) return "";
+    // "＋ Add app" — the deterministic path when the probe didn't detect a second app.
+    const addBtn = `<button data-action="svcadd" title="Add another app in this repo (folder + start command + port)" style="height:32px;padding:0 10px;border-radius:7px;font-size:12px;cursor:pointer;border:1px dashed var(--border-color,#444);background:transparent;color:var(--text-secondary,#9ca3af);display:inline-flex;align-items:center;gap:6px;white-space:nowrap;"><i class="fas fa-plus" style="font-size:10px;"></i>Add app</button>`;
+    if (svcs.length < 2) return addBtn + tbDiv();
     const active = activeSvc(state);
     const chips = svcs.map((s) => {
       const isActive = active && s.name === active.name;
@@ -97,9 +100,12 @@
       const toggle = s.primary
         ? ""
         : `<span data-action="svctoggle:${esc(s.name)}:${s.enabled ? "0" : "1"}" title="${s.enabled ? "Turn this app off" : "Turn this app on"}" style="font-size:10px;font-weight:600;padding:1px 6px;border-radius:5px;letter-spacing:.5px;background:${s.enabled ? "rgba(16,185,129,.18)" : "rgba(148,163,184,.15)"};color:${s.enabled ? "#10b981" : "#94a3b8"};cursor:pointer;">${s.enabled ? "ON" : "OFF"}</span>`;
-      return `<button ${clickable ? `data-action="svc:${esc(s.name)}"` : ""} title="${esc(s.name)}${s.port ? " · :" + s.port : ""}" style="${chip}"><span>${esc(s.name)}</span>${toggle}</button>`;
+      // Manually-added apps get a remove (×); a subtle dot marks them as hand-added.
+      const rm = s.manual ? `<span data-action="svcremove:${esc(s.name)}" title="Remove this app" style="font-size:11px;opacity:.6;cursor:pointer;padding-left:1px;">✕</span>` : "";
+      const dot = s.manual ? `<span title="Added manually" style="width:5px;height:5px;border-radius:50%;background:#a78bfa;flex:none;"></span>` : "";
+      return `<button ${clickable ? `data-action="svc:${esc(s.name)}"` : ""} title="${esc(s.name)}${s.port ? " · :" + s.port : ""}${s.dir ? " · " + esc(s.dir) : ""}" style="${chip}">${dot}<span>${esc(s.name)}</span>${toggle}${rm}</button>`;
     }).join("");
-    return chips + tbDiv();
+    return chips + addBtn + tbDiv();
   }
 
   function renderActions(html) {
@@ -908,6 +914,69 @@
       const parts = action.slice("svctoggle:".length).split(":");
       toggleService(parts[0], parts[1] === "1");
     }
+    else if (action === "svcadd") openAddApp(b);
+    else if (action.indexOf("svcremove:") === 0) removeApp(action.slice("svcremove:".length));
+  }
+
+  // Popover form to add another runnable app in the repo (deterministic fallback for
+  // monorepos the probe under-detected): name + folder + start command + port.
+  function openAddApp(anchor) {
+    const existing = document.getElementById("preview-addapp");
+    if (existing) { existing.remove(); return; }
+    const m = document.createElement("div");
+    m.id = "preview-addapp";
+    m.style.cssText = "position:fixed;z-index:100;width:340px;background:var(--card-bg,#161616);border:1px solid var(--border-color,#333);border-radius:12px;box-shadow:0 16px 40px rgba(0,0,0,.5);padding:14px;display:flex;flex-direction:column;gap:9px;";
+    const fld = (id, label, ph, val) => `<label style="display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--text-secondary,#9ca3af);">${label}<input id="${id}" placeholder="${esc(ph)}" value="${esc(val || "")}" style="height:32px;padding:0 9px;border-radius:7px;background:var(--background-surface,#0f0f0f);border:1px solid var(--border-color,#333);color:var(--text-color,#e2e8f0);font-size:12.5px;" /></label>`;
+    m.innerHTML =
+      `<div style="font-weight:600;font-size:13px;color:var(--text-color,#e2e8f0);">Add an app in this repo</div>` +
+      `<div style="font-size:11px;color:var(--text-secondary,#9ca3af);margin-top:-3px;">For a monorepo's second app the probe didn't pick up. It runs alongside the primary on its own subdomain.</div>` +
+      fld("aa-name", "Name", "admin", "") +
+      fld("aa-dir", "Folder (relative to repo root, optional)", "apps/admin", "") +
+      fld("aa-cmd", "Start command", "npm run start -- -p 4000", "") +
+      fld("aa-port", "Port", "4000", "") +
+      `<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:2px;">` +
+      `<button data-aa="cancel" style="height:32px;padding:0 12px;border-radius:7px;cursor:pointer;background:transparent;color:var(--text-secondary,#9ca3af);border:1px solid var(--border-color,#333);font-size:12.5px;">Cancel</button>` +
+      `<button data-aa="save" style="height:32px;padding:0 14px;border-radius:7px;cursor:pointer;background:#7c3aed;color:#fff;border:1px solid #7c3aed;font-size:12.5px;font-weight:500;">Add &amp; run</button>` +
+      `</div>`;
+    document.body.appendChild(m);
+    const r = anchor.getBoundingClientRect();
+    m.style.top = (r.bottom + 6) + "px";
+    m.style.left = Math.max(8, Math.min(r.left, window.innerWidth - m.offsetWidth - 8)) + "px";
+    const nameEl = document.getElementById("aa-name"); if (nameEl) nameEl.focus();
+    m.addEventListener("click", (e) => {
+      const it = e.target.closest("[data-aa]"); if (!it) return;
+      if (it.getAttribute("data-aa") === "cancel") { m.remove(); return; }
+      submitAddApp(m);
+    });
+    setTimeout(() => document.addEventListener("click", function onDoc(ev) { if (!m.contains(ev.target) && ev.target !== anchor && !anchor.contains(ev.target)) { m.remove(); document.removeEventListener("click", onDoc); } }), 0);
+  }
+
+  async function submitAddApp(m) {
+    const v = (id) => (document.getElementById(id) ? document.getElementById(id).value.trim() : "");
+    const payload = { name: v("aa-name"), dir: v("aa-dir"), runCmd: v("aa-cmd"), port: parseInt(v("aa-port"), 10) };
+    if (!payload.name || !payload.runCmd || !payload.port) { toast("Name, start command and port are required."); return; }
+    toast("Adding " + payload.name + "…");
+    try {
+      const r = await api("/services/add", { method: "POST", body: JSON.stringify(payload) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+      m.remove();
+      toast(payload.name + " added — starting it…");
+      load();
+    } catch (e) { toast("Couldn't add app: " + e.message); }
+  }
+
+  async function removeApp(name) {
+    if (!window.confirm(`Remove the "${name}" app from this preview?`)) return;
+    toast("Removing " + name + "…");
+    try {
+      const r = await api("/services/remove", { method: "POST", body: JSON.stringify({ name }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+      if (activeService === name) activeService = null;
+      toast(name + " removed.");
+      load();
+    } catch (e) { toast("Couldn't remove " + name + ": " + e.message); }
   }
 
   // Point the iframe at another app's live URL. render() mounts activeSvc()'s URL

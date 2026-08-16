@@ -96,6 +96,8 @@ export const appProfileSchema = z.object({
     port: z.number().describe("This app's real port."),
     primary: z.boolean().optional().describe("true for the MAIN app (default preview URL, always runs). Exactly ONE primary."),
     enabled: z.boolean().optional().describe("Whether a companion runs. Leave unset — the user toggles companions on/off; the primary always runs."),
+    dir: z.string().optional().describe("Subfolder (relative to the repo root) this app runs from, e.g. 'apps/admin'. Omit for repo-root apps."),
+    manual: z.boolean().optional().describe("true when a user added this app by hand (not auto-detected)."),
   })).optional().describe("MULTIPLE separately-runnable web apps in ONE repo (monorepo — e.g. a public site + an admin portal on different ports, each with its own .csproj referencing Microsoft.NET.Sdk.Web / its own dev script). Populate ONLY when there are 2+ such apps; OMIT for a normal single-app repo. Skip class libraries. Mark the most public one primary; the top-level runCmd/port should equal the primary."),
   buildQuirks: z.array(z.string()).describe("Known build gotchas / required flags discovered from the code, e.g. 'needs DOTNET_SYSTEM_NET_DISABLEIPV6=1 or NuGet restore hangs', 'run `dotnet ef` with -v since it hides build errors'. [] if none."),
   // ── Databases ──

@@ -76,6 +76,8 @@ export const manifestSchema = z.object({
     port: z.number().describe("This app's real port (from launchSettings/appsettings/run scripts)."),
     primary: z.boolean().optional().describe("true for the MAIN app — it gets the default preview URL and always runs. Exactly ONE service is primary."),
     enabled: z.boolean().optional().describe("Companions default false (off); the user toggles them on. The primary is always run regardless."),
+    dir: z.string().optional().describe("Subfolder (relative to the repo root) this app runs from, e.g. 'apps/admin'. Omit when it runs from the repo root."),
+    manual: z.boolean().optional().describe("true when a user added this app by hand (not auto-detected) — so the UI offers Remove."),
   })).optional().describe("MULTIPLE runnable apps in ONE repo (monorepo — e.g. a public site + an admin portal that run on different ports). Populate this ONLY when the repo genuinely has 2+ separately-runnable web apps; OMIT it for a normal single-app repo (runCmd/port cover that). Skip class libraries. The primary runs by default; each companion is toggled on and gets its own subdomain bound to its port."),
   databases: z.array(z.object({
     engine: z.enum(["postgres", "mysql", "redis", "mssql"]).describe("The DB engine to provision — use the app's REAL engine. 'mssql' = Microsoft SQL Server (run via Docker) — pick it for EF Core SqlServer / T-SQL apps. Do NOT downgrade SQL Server to postgres; they are not wire-compatible."),
@@ -1126,8 +1128,10 @@ function appStartCommand(manifest: PreviewManifest, dir: string = PROJECT_DIR): 
  *  shape as the primary. */
 function serviceStartCommand(service: ServiceSpec, dir: string = PROJECT_DIR): string {
   const runCmd = localizeCmd(service.runCmd, dir).replace(/'/g, `'\\''`);
+  // A subfolder app (monorepo): source the ROOT .env, then cd into its dir before starting.
+  const sub = service.dir ? `cd '${service.dir.replace(/'/g, `'\\''`)}' 2>/dev/null || true; ` : "";
   return `fuser -k ${service.port}/tcp 2>/dev/null; pkill -f ':${service.port}' 2>/dev/null; sleep 1; ` +
-    `setsid sh -c 'cd ${dir}; set -a; . ./.env 2>/dev/null; set +a; ${runCmd}' </dev/null > ${dir}/preview-${service.name}.log 2>&1 & echo STARTED`;
+    `setsid sh -c 'cd ${dir}; set -a; . ./.env 2>/dev/null; set +a; ${sub}${runCmd}' </dev/null > ${dir}/preview-${service.name}.log 2>&1 & echo STARTED`;
 }
 
 /** Bring up ONE companion service: build (only if it has its own buildCmd — the shared
@@ -1138,10 +1142,11 @@ async function exposeService(
   projectId: string, userId: string, workspaceId: string,
   service: ServiceSpec, runDir: string, baseAlias: string,
 ): Promise<{ name: string; url: string; port: number; ok: boolean }> {
+  const buildDir = service.dir ? `${runDir}/${service.dir}` : runDir; // subfolder app builds in its own dir
   if (service.buildCmd) {
     plog(projectId, userId, `Building companion "${service.name}": ${service.buildCmd}`);
-    const bc = localizeCmd(service.buildCmd, runDir);
-    const br = await runDetachedPolled(projectId, userId, workspaceId, bc, 1_800_000, { stallMs: 900_000, workDir: runDir })
+    const bc = localizeCmd(service.buildCmd, buildDir);
+    const br = await runDetachedPolled(projectId, userId, workspaceId, bc, 1_800_000, { stallMs: 900_000, workDir: buildDir })
       .catch(() => ({ exitCode: -1, output: "" }));
     if (br.exitCode !== 0) plog(projectId, userId, `Companion "${service.name}" build failed (exit ${br.exitCode})`, { level: "error", detail: br.output.slice(-800) });
   }
@@ -2663,6 +2668,8 @@ export async function getPreviewState(projectId: string) {
     port: s.port,
     primary: !!s.primary,
     enabled: !!s.primary || !!s.enabled,
+    manual: !!s.manual,
+    dir: s.dir ?? "",
     url: s.primary ? (row.appUrl ?? "") : (s.enabled && row.stableAlias ? `https://${row.stableAlias}-${s.name}.${appDomain}` : ""),
   }));
   return {
@@ -2941,7 +2948,74 @@ export async function setServiceEnabled(projectId: string, userId: string, name:
   }
   // Restart re-runs the primary (fast recorded path) + the now-enabled companions.
   restartPreview(projectId, { userId }).catch((e) => console.error("[preview] service-toggle restart failed:", e));
-  const services = (manifest.services || []).map((s) => ({ name: s.name, port: s.port, primary: !!s.primary, enabled: !!s.enabled }));
+  const services = (manifest.services || []).map((s) => ({ name: s.name, port: s.port, primary: !!s.primary, enabled: !!s.enabled, manual: !!s.manual }));
+  return { ok: true, services };
+}
+
+const svcSlug = (s: string) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24);
+
+/**
+ * Manually add a runnable app (companion) — the deterministic fallback when the probe
+ * doesn't detect a monorepo's second app. The user provides name + dir + start command +
+ * port; we add it to the profile's services[] (seeding a primary from the single-app
+ * profile if needed so we end up with 2+), persist, and restart so it comes up on its own
+ * subdomain. Enabled on add (the user asked for it).
+ */
+export async function addService(
+  projectId: string, userId: string,
+  input: { name: string; dir?: string; runCmd: string; buildCmd?: string; port: number },
+): Promise<{ ok: boolean; error?: string; services?: unknown[] }> {
+  const loaded = await loadAppProfile(projectId);
+  if (!loaded) return { ok: false, error: "Set up the preview first, then add an app." };
+  const profile = loaded.profile;
+
+  const name = svcSlug(input.name);
+  if (!name) return { ok: false, error: "A short name (letters/numbers) is required." };
+  const port = Number(input.port);
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) return { ok: false, error: "A valid port (1–65535) is required." };
+  const runCmd = String(input.runCmd || "").trim();
+  if (!runCmd) return { ok: false, error: "A start command is required." };
+  const dir = String(input.dir || "").trim().replace(/^\/+|\/+$/g, "");
+  const buildCmd = String(input.buildCmd || "").trim();
+
+  profile.services = profile.services || [];
+  // Ensure a primary exists so the manifest carries services[] (dropped when < 2). Seed it
+  // from the single-app profile's top-level runCmd/port.
+  if (profile.services.length === 0) {
+    profile.services.push({ name: svcSlug(profile.framework) || "app", runCmd: profile.runCmd, port: profile.port, primary: true, enabled: true });
+  } else if (!profile.services.some((s) => s.primary)) {
+    const first = profile.services[0]!; first.primary = true; first.enabled = true;
+  }
+  if (profile.services.some((s) => s.name === name)) return { ok: false, error: `A service named "${name}" already exists.` };
+  if (profile.services.some((s) => s.port === port)) return { ok: false, error: `Port ${port} is already used by another service.` };
+  profile.services.push({ name, dir: dir || undefined, runCmd, buildCmd: buildCmd || undefined, port, primary: false, enabled: true, manual: true });
+
+  await saveAppProfile(projectId, profile);
+  const manifest = deriveManifestFromProfile(profile);
+  await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
+  restartPreview(projectId, { userId }).catch((e) => console.error("[preview] add-service restart failed:", e));
+  const services = (manifest.services || []).map((s) => ({ name: s.name, port: s.port, primary: !!s.primary, enabled: !!s.enabled, manual: !!s.manual }));
+  return { ok: true, services };
+}
+
+/** Remove a MANUALLY-added companion (auto-detected ones can only be toggled off). Stops
+ *  its process and drops it from the profile; if only the primary remains the preview
+ *  collapses back to single-app. */
+export async function removeService(projectId: string, userId: string, name: string): Promise<{ ok: boolean; error?: string; services?: unknown[] }> {
+  const loaded = await loadAppProfile(projectId);
+  if (!loaded?.profile.services?.length) return { ok: false, error: "This preview has no services." };
+  const profile = loaded.profile;
+  const svc = profile.services!.find((s) => s.name === name);
+  if (!svc) return { ok: false, error: `Unknown service "${name}".` };
+  if (svc.primary) return { ok: false, error: "The primary app can't be removed." };
+  if (!svc.manual) return { ok: false, error: "Only manually-added apps can be removed — auto-detected ones can be toggled off." };
+  const workspaceId = await envWorkspaceId(projectId).catch(() => null);
+  if (workspaceId) await sh(workspaceId, `fuser -k ${svc.port}/tcp 2>/dev/null; pkill -f ':${svc.port}' 2>/dev/null; echo OK`, 15_000).catch(() => {});
+  profile.services = profile.services!.filter((s) => s.name !== name);
+  await saveAppProfile(projectId, profile);
+  const manifest = deriveManifestFromProfile(profile);
+  await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
+  const services = (manifest.services || []).map((s) => ({ name: s.name, port: s.port, primary: !!s.primary, enabled: !!s.enabled, manual: !!s.manual }));
   return { ok: true, services };
 }
 

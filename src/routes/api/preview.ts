@@ -14,7 +14,7 @@ import { db } from "../../config/db.ts";
 import { projectEnvironments } from "../../db/schema/project-environments.ts";
 import { projects, projectEnvironmentVariables } from "../../db/schema/projects.ts";
 import { encryptSecret, decryptSecret } from "../../utils/crypto.ts";
-import { getPreviewState, setupPreview, restartPreview, stopPreview, detectManifest, manifestSchema, capturePreviewScreenshot, getPreviewBranches, reprobeProfile, getAppRuntimeLog, getDbLogs, resetDatabase, setServiceEnabled } from "../../services/dev-preview.ts";
+import { getPreviewState, setupPreview, restartPreview, stopPreview, detectManifest, manifestSchema, capturePreviewScreenshot, getPreviewBranches, reprobeProfile, getAppRuntimeLog, getDbLogs, resetDatabase, setServiceEnabled, addService, removeService } from "../../services/dev-preview.ts";
 import { loadAppProfile, saveAppProfile, appProfileSchema } from "../../services/app-profile.ts";
 import type { auth } from "../../auth/index.ts";
 
@@ -68,6 +68,34 @@ previewApi.post("/:projectId/preview/services", async (c) => {
   const name = String(body.name ?? "").trim();
   if (!name) return c.json({ error: "Missing service name" }, 400);
   const res = await setServiceEnabled(access.project.id, user.id, name, body.enabled !== false);
+  return res.ok ? c.json(res, 202) : c.json(res, 400);
+});
+
+// Multi-app: manually ADD a runnable app (deterministic fallback when the probe missed it).
+previewApi.post("/:projectId/preview/services/add", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId")!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  const body = await c.req.json().catch(() => ({} as any));
+  const res = await addService(access.project.id, user.id, {
+    name: String(body.name ?? ""),
+    dir: typeof body.dir === "string" ? body.dir : "",
+    runCmd: String(body.runCmd ?? ""),
+    buildCmd: typeof body.buildCmd === "string" ? body.buildCmd : "",
+    port: Number(body.port),
+  });
+  return res.ok ? c.json(res, 202) : c.json(res, 400);
+});
+
+// Multi-app: remove a manually-added app.
+previewApi.post("/:projectId/preview/services/remove", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId")!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  const body = await c.req.json().catch(() => ({} as any));
+  const name = String(body.name ?? "").trim();
+  if (!name) return c.json({ error: "Missing service name" }, 400);
+  const res = await removeService(access.project.id, user.id, name);
   return res.ok ? c.json(res, 202) : c.json(res, 400);
 });
 
