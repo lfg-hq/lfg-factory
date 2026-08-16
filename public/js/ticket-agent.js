@@ -80,12 +80,35 @@
     });
   }
 
-  function open(id, key, name) {
+  // A compact ticket-fields header (status / priority / created + description), so clicking
+  // a ticket shows the SAME left panel with its other fields — not a separate right drawer.
+  function renderMeta(meta) {
+    const el = $("ta-meta");
+    if (!el) return;
+    if (!meta) { el.style.display = "none"; el.innerHTML = ""; return; }
+    el.style.display = "block";
+    const pill = (txt, bg, fg) => `<span style="font-size:11px;font-weight:600;padding:2px 9px;border-radius:6px;background:${bg};color:${fg};white-space:nowrap;">${esc(txt)}</span>`;
+    const pr = String(meta.priority || "").toLowerCase();
+    const prColor = /high|urgent/.test(pr) ? ["rgba(239,68,68,.14)", "#f87171"] : /low/.test(pr) ? ["rgba(59,130,246,.14)", "#60a5fa"] : ["rgba(245,158,11,.16)", "#fbbf24"];
+    const created = meta.createdAt ? new Date(meta.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "";
+    const desc = String(meta.description || "").trim();
+    el.innerHTML =
+      `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">` +
+        pill(meta.status || "open", "rgba(124,58,237,.14)", "#a78bfa") +
+        (meta.priority ? pill(meta.priority, prColor[0], prColor[1]) : "") +
+        (created ? `<span style="font-size:11px;color:var(--text-secondary,#9ca3af);">Created ${esc(created)}</span>` : "") +
+      `</div>` +
+      (desc ? `<div class="markdown-content" style="margin-top:9px;font-size:12.5px;color:var(--text-secondary,#b6bdc9);line-height:1.55;max-height:140px;overflow:auto;border-left:2px solid var(--border-color,#2a2a2a);padding-left:11px;">${md(desc)}</div>` : "") +
+      `<div style="margin-top:11px;border-bottom:1px solid var(--border-color,#2a2a2a);"></div>`;
+  }
+
+  function open(id, key, name, meta) {
     ticketId = id;
     const p = panel();
     if (!p) return;
     const title = $("ta-title");
     if (title) title.textContent = (key ? key + " · " : "") + (name || "Ticket");
+    renderMeta(meta);
     p.style.display = "flex";
     const area = $("ta-log");
     if (area) area.innerHTML = '<div style="opacity:.5;padding:24px;text-align:center;">Loading…</div>';
@@ -115,6 +138,7 @@
   function close() {
     const p = panel();
     if (p) p.style.display = "none";
+    renderMeta(null);
     stopPoll();
     if (fitObs) { fitObs.disconnect(); fitObs = null; }
     window.removeEventListener("resize", fitToChatArea);

@@ -2611,6 +2611,75 @@ document.addEventListener('DOMContentLoaded', function() {
                             .checklist-wrapper[data-selection-mode="true"] .card-header {
                                 margin-left: 24px !important;
                             }
+
+                            /* ── Compact, Linear-style ticket rows ─────────────────────── */
+                            .checklist-container { padding: 6px 10px 24px !important; gap: 0 !important; }
+                            .checklist-card.lfg-row {
+                                display: flex !important; align-items: center; gap: 10px;
+                                min-height: 40px; padding: 7px 12px !important; margin: 0 !important;
+                                background: transparent !important; border: none !important;
+                                border-bottom: 1px solid ${isLightTheme ? '#edeff2' : 'rgba(255,255,255,0.055)'} !important;
+                                border-radius: 8px !important; box-shadow: none !important; cursor: pointer;
+                                transition: background .12s ease;
+                            }
+                            .checklist-card.lfg-row::before { display: none !important; }
+                            .checklist-card.lfg-row:hover { background: ${isLightTheme ? '#f5f6f8' : 'rgba(255,255,255,0.035)'} !important; }
+                            .lfg-row-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; box-shadow: 0 0 0 3px ${isLightTheme ? 'rgba(0,0,0,0.02)' : 'rgba(255,255,255,0.02)'}; }
+                            .lfg-row .ticket-key { flex: none; margin: 0 !important; }
+                            .lfg-row-title {
+                                flex: 1 1 auto; min-width: 0; font-size: 13.5px; font-weight: 500; line-height: 1.35;
+                                color: ${isLightTheme ? '#1f2430' : '#e3e8ef'};
+                                white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+                            }
+                            .lfg-row .priority-badge { flex: none; font-size: 9.5px !important; font-weight: 700 !important; letter-spacing: .04em; padding: 2px 7px !important; border-radius: 5px !important; margin: 0 !important; }
+                            .lfg-row-actions { display: none; align-items: center; gap: 1px; flex: none; }
+                            .lfg-row:hover .lfg-row-actions { display: inline-flex; }
+                            .lfg-row .lfg-row-actions .action-btn { width: 26px; height: 26px; border-radius: 6px; border: none; background: transparent; color: ${isLightTheme ? '#98a2b3' : '#7d8797'}; cursor: pointer; font-size: 11px; display: inline-flex; align-items: center; justify-content: center; transition: all .12s; }
+                            .lfg-row .lfg-row-actions .action-btn:hover { background: ${isLightTheme ? '#eceef1' : 'rgba(255,255,255,0.08)'}; color: ${isLightTheme ? '#4b5563' : '#cbd5e1'}; }
+                            .lfg-row .lfg-row-actions .delete-checklist-btn:hover { color: ${isLightTheme ? '#dc2626' : '#f38ba8'}; }
+                            .lfg-row .ticket-select-checkbox { flex: none; }
+
+                            /* Date-created group headers */
+                            .lfg-date-group {
+                                display: flex; align-items: center; gap: 8px;
+                                padding: 16px 12px 6px; font-size: 11px; font-weight: 600;
+                                letter-spacing: .05em; text-transform: uppercase;
+                                color: ${isLightTheme ? '#8a93a2' : '#79828f'};
+                            }
+                            .lfg-date-group:first-child { padding-top: 4px; }
+                            .lfg-date-group .lfg-date-count {
+                                font-weight: 600; font-size: 10.5px; letter-spacing: 0;
+                                color: ${isLightTheme ? '#aab1bd' : '#5c6675'};
+                                background: ${isLightTheme ? '#f1f2f4' : 'rgba(255,255,255,0.05)'};
+                                padding: 1px 7px; border-radius: 999px;
+                            }
+                            .lfg-date-group::after { content: ''; flex: 1; height: 1px; background: ${isLightTheme ? '#edeff2' : 'rgba(255,255,255,0.05)'}; }
+
+                            /* ── Prettier filter controls ──────────────────────────────── */
+                            .checklist-filters .filter-group { display: flex; align-items: center; gap: 6px; }
+                            .checklist-filter-dropdown {
+                                height: 30px !important; min-width: 0 !important; max-width: none !important; width: auto !important;
+                                padding: 0 27px 0 11px !important; border-radius: 8px !important;
+                                font-size: 12.5px !important; font-weight: 500 !important;
+                                background-color: ${isLightTheme ? '#ffffff' : 'rgba(255,255,255,0.04)'} !important;
+                                color: ${isLightTheme ? '#3a4250' : '#cbd5e1'} !important;
+                                border: 1px solid ${isLightTheme ? '#e4e7ec' : 'rgba(255,255,255,0.09)'} !important;
+                                background-image: url("data:image/svg+xml;charset=UTF-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2398a2b3' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E") !important;
+                                background-repeat: no-repeat !important; background-position: right 9px center !important; background-size: 12px !important;
+                                box-shadow: ${isLightTheme ? '0 1px 2px rgba(16,24,40,0.04)' : 'none'} !important;
+                                transition: border-color .12s, background-color .12s !important;
+                            }
+                            .checklist-filter-dropdown:hover { border-color: ${isLightTheme ? '#d0d5dd' : 'rgba(255,255,255,0.17)'} !important; background-color: ${isLightTheme ? '#fcfcfd' : 'rgba(255,255,255,0.06)'} !important; }
+                            .checklist-filter-dropdown:focus { outline: none !important; border-color: #7c3aed !important; box-shadow: 0 0 0 3px rgba(124,58,237,0.14) !important; }
+                            .checklist-filters .clear-filters-btn {
+                                width: 30px !important; height: 30px !important; border-radius: 8px !important;
+                                background: ${isLightTheme ? '#ffffff' : 'rgba(255,255,255,0.04)'} !important;
+                                border: 1px solid ${isLightTheme ? '#e4e7ec' : 'rgba(255,255,255,0.09)'} !important;
+                                color: ${isLightTheme ? '#98a2b3' : '#8892a0'} !important; font-size: 11px !important;
+                                box-shadow: ${isLightTheme ? '0 1px 2px rgba(16,24,40,0.04)' : 'none'} !important;
+                            }
+                            .checklist-filters .clear-filters-btn:hover { transform: none !important; color: ${isLightTheme ? '#dc2626' : '#f38ba8'} !important; border-color: ${isLightTheme ? '#fecaca' : '#5c3a3a'} !important; }
+                            #checklist-actions-dropdown { width: 30px !important; height: 30px !important; border-radius: 8px !important; }
                         </style>
                         <div class="checklist-wrapper" data-selection-mode="false">
                             <div class="checklist-header" style="display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: transparent; border: none;">
@@ -2826,13 +2895,36 @@ document.addEventListener('DOMContentLoaded', function() {
                             return;
                         }
 
-                        // Build checklist HTML with filtered items
+                        // Compact rows grouped by created-date bucket (Linear-style).
+                        const lfgBucket = (ts) => {
+                            const d = new Date(ts); if (isNaN(d)) return 'Undated';
+                            const sod = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+                            const days = Math.round((sod(new Date()) - sod(d)) / 86400000);
+                            if (days <= 0) return 'Today';
+                            if (days === 1) return 'Yesterday';
+                            if (days < 7) return 'Earlier this week';
+                            if (days < 30) return 'Earlier this month';
+                            return d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+                        };
+                        const lfgStatusColor = (s) => {
+                            s = (s || 'open').toLowerCase();
+                            if (/(done|complete|closed|merged)/.test(s)) return '#22c55e';
+                            if (/(progress|building|active|running)/.test(s)) return '#3b82f6';
+                            if (/review/.test(s)) return '#a855f7';
+                            if (/(block|fail)/.test(s)) return '#ef4444';
+                            return isLightTheme ? '#cbd0d8' : '#5b6472';
+                        };
+                        const lfgSorted = [...filteredChecklist].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+                        const lfgCounts = {};
+                        lfgSorted.forEach(it => { const bk = lfgBucket(it.created_at); lfgCounts[bk] = (lfgCounts[bk] || 0) + 1; });
                         let itemsHTML = '';
-                        
-                        filteredChecklist.forEach(item => {
+                        let lfgCurBucket = null;
+
+                        lfgSorted.forEach(item => {
+                            const bk = lfgBucket(item.created_at);
+                            if (bk !== lfgCurBucket) { lfgCurBucket = bk; itemsHTML += `<div class="lfg-date-group">${bk}<span class="lfg-date-count">${lfgCounts[bk]}</span></div>`; }
                             const statusClass = item.status ? item.status.toLowerCase().replace(' ', '-') : 'open';
                             const priorityClass = item.priority ? item.priority.toLowerCase() : 'medium';
-                            const roleClass = item.role ? item.role.toLowerCase() : 'user';
                             
                             // Check if this item matches active filters for highlighting
                             const isStatusHighlighted = filterStatus !== 'all' && (item.status || 'open') === filterStatus;
@@ -2880,59 +2972,19 @@ document.addEventListener('DOMContentLoaded', function() {
                                 `;
                             }
                             
+                            const lfgKey = item.ticketKey || item.ticket_key || '';
                             itemsHTML += `
-                                <div class="checklist-card ${statusClass}" data-id="${item.id}">
-                                    <div class="card-header">
-                                        <div class="card-status" style="display: flex; align-items: center; gap: 8px;">
-                                            <input type="checkbox" class="ticket-select-checkbox" data-ticket-id="${item.id}" style="display: none; width: 14px; height: 14px; accent-color: #8b5cf6; cursor: pointer; flex-shrink: 0;" onclick="event.stopPropagation();">
-                                            <h3 class="card-title">${(item.ticketKey || item.ticket_key) ? `<span class="ticket-key" style="display:inline-block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;font-weight:700;color:#8b5cf6;background:rgba(139,92,246,0.12);border:1px solid rgba(139,92,246,0.25);border-radius:5px;padding:1px 6px;margin-right:8px;vertical-align:middle;">${modalHelpers.escapeHtml(item.ticketKey || item.ticket_key)}</span>` : ''}${modalHelpers.escapeHtml(item.name || 'Untitled Item')}</h3>
-                                        </div>
-                                        <div class="card-badges">
-                                            <button class="ta-chat-btn" data-ta-chat="${item.id}" data-ta-key="${modalHelpers.escapeHtml(item.ticketKey || item.ticket_key || '')}" data-ta-name="${modalHelpers.escapeHtml(item.name || '')}" title="Chat with this ticket's agent — the live preview stays on the right" style="padding:2px 9px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;background:rgba(124,58,237,0.14);color:#a78bfa;border:1px solid rgba(124,58,237,0.28);display:inline-flex;align-items:center;gap:4px;"><i class="fas fa-comments" style="font-size:10px;"></i>Chat</button>
-                                            <span class="priority-badge ${priorityClass} ${isStatusHighlighted ? 'filter-active' : ''}">${modalHelpers.escapeHtml(item.priority || 'Medium')}</span>
-                                            <span class="role-badge ${roleClass} ${isRoleHighlighted ? 'filter-active' : ''}">${modalHelpers.escapeHtml(item.role || 'User')}</span>
-                                        </div>
-                                    </div>
-                                    
-                                    <div class="card-body">
-                                        <div class="card-description">
-                                            ${(() => {
-                                                const summaryText = (item.description || '').trim();
-                                                if (!summaryText) {
-                                                    return 'No description provided.';
-                                                }
-                                                return modalHelpers.escapeHtml(summaryText).replace(/\n/g, '<br>');
-                                            })()}
-                                        </div>
-                                        ${dependenciesHtml}
-                                        ${detailsPreview}
-                                    </div>
-                                    
-                                    <div class="card-footer">
-                                        <div class="card-meta">
-                                            <small class="created-date">
-                                                <i class="fas fa-calendar-plus"></i>
-                                                Created: ${new Date(item.created_at).toLocaleDateString()}
-                                            </small>
-                                            <small class="updated-date">
-                                                <i class="fas fa-calendar-check"></i>
-                                                Updated: ${new Date(item.updated_at).toLocaleDateString()}
-                                            </small>
-                                        </div>
-                                        <div class="card-actions">
-                                            <button class="action-btn view-details-btn" data-item-id="${item.id}" title="View Details">
-                                                <i class="fas fa-eye"></i>
-                                            </button>
-                                            <button class="action-btn edit-btn" onclick="editChecklistItem(${item.id})" title="Edit">
-                                                <i class="fas fa-edit"></i>
-                                            </button>
-                                            <button class="action-btn toggle-btn" onclick="toggleChecklistStatus(${item.id}, '${item.status}')" title="Toggle Status">
-                                                <i class="fas fa-sync-alt"></i>
-                                            </button>
-                                            <button class="action-btn delete-checklist-btn" data-item-id="${item.id}" title="Delete">
-                                                <i class="fas fa-trash"></i>
-                                            </button>
-                                        </div>
+                                <div class="checklist-card ${statusClass} lfg-row" data-id="${item.id}">
+                                    <input type="checkbox" class="ticket-select-checkbox" data-ticket-id="${item.id}" style="display: none; width: 14px; height: 14px; accent-color: #8b5cf6; cursor: pointer;" onclick="event.stopPropagation();">
+                                    <span class="lfg-row-dot" style="background:${lfgStatusColor(item.status)};" title="${modalHelpers.escapeHtml(item.status || 'open')}"></span>
+                                    ${lfgKey ? `<span class="ticket-key" style="display:inline-block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;font-weight:700;color:#8b5cf6;background:rgba(139,92,246,0.12);border:1px solid rgba(139,92,246,0.25);border-radius:5px;padding:1px 6px;">${modalHelpers.escapeHtml(lfgKey)}</span>` : ''}
+                                    <span class="lfg-row-title" title="${modalHelpers.escapeHtml(item.name || 'Untitled Item')}">${modalHelpers.escapeHtml(item.name || 'Untitled Item')}</span>
+                                    <span class="priority-badge ${priorityClass} ${isStatusHighlighted ? 'filter-active' : ''}">${modalHelpers.escapeHtml(item.priority || 'Medium')}</span>
+                                    <div class="lfg-row-actions">
+                                        <button class="action-btn view-details-btn" data-item-id="${item.id}" title="Details"><i class="fas fa-eye"></i></button>
+                                        <button class="action-btn edit-btn" onclick="editChecklistItem(${item.id})" title="Edit"><i class="fas fa-edit"></i></button>
+                                        <button class="action-btn toggle-btn" onclick="toggleChecklistStatus(${item.id}, '${item.status}')" title="Toggle Status"><i class="fas fa-sync-alt"></i></button>
+                                        <button class="action-btn delete-checklist-btn" data-item-id="${item.id}" title="Delete"><i class="fas fa-trash"></i></button>
                                     </div>
                                 </div>
                             `;
@@ -2959,13 +3011,34 @@ document.addEventListener('DOMContentLoaded', function() {
                         const checklistCards = checklistContent.querySelectorAll('.checklist-card');
                         const viewDetailsButtons = checklistContent.querySelectorAll('.view-details-btn');
 
-                        checklistCards.forEach((card, index) => {
+                        checklistCards.forEach((card) => {
                             card.addEventListener('click', function(e) {
                                 if (e.target.closest('.action-btn') || e.target.closest('.ticket-select-checkbox')) {
                                     return;
                                 }
-
-                                modalHelpers.open(currentItems, index);
+                                // In selection mode, a row click toggles its checkbox instead of opening.
+                                const wrap = document.querySelector('.checklist-wrapper');
+                                if (wrap && wrap.getAttribute('data-selection-mode') === 'true') {
+                                    const cb = card.querySelector('.ticket-select-checkbox');
+                                    if (cb) { cb.checked = !cb.checked; cb.dispatchEvent(new Event('change', { bubbles: true })); }
+                                    return;
+                                }
+                                const id = card.getAttribute('data-id');
+                                const item = checklist.find(x => String(x.id) === String(id));
+                                // Open the SAME left-panel ticket view as "Chat with ticket" — now with the
+                                // ticket's fields — instead of the right-side drawer (one consistent view).
+                                if (item && window.TicketAgentChat && window.TicketAgentChat.open) {
+                                    window.TicketAgentChat.open(String(item.id), item.ticketKey || item.ticket_key || '', item.name || '', {
+                                        description: item.description || '',
+                                        status: item.status || 'open',
+                                        priority: item.priority || 'Medium',
+                                        createdAt: item.created_at,
+                                        updatedAt: item.updated_at,
+                                    });
+                                } else {
+                                    const idx = currentItems ? currentItems.findIndex(x => String(x.id) === String(id)) : -1;
+                                    if (idx >= 0) modalHelpers.open(currentItems, idx);
+                                }
                             });
                         });
 
