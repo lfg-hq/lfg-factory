@@ -477,27 +477,26 @@ async function runSchemaSetup(projectId: string, userId: string, workspaceId: st
     // the push fallback so an app with no migration files still gets its schema created.
     const probe = await sh(workspaceId, `cd ${runDir} 2>/dev/null; ls drizzle.config.* 2>/dev/null; ls prisma/schema.prisma 2>/dev/null`, 15_000).catch(() => ({ output: "" }));
     const o = probe.output || "";
-    if (/drizzle\.config/.test(o)) migrations = schemaPresent
-      ? ["npx --yes drizzle-kit migrate"]
-      : ["npx --yes drizzle-kit migrate 2>/dev/null || npx --yes drizzle-kit push --force 2>/dev/null || npx --yes drizzle-kit push"];
-    else if (/schema\.prisma/.test(o)) migrations = schemaPresent
-      ? ["npx --yes prisma migrate deploy"]
-      : ["npx --yes prisma migrate deploy || npx --yes prisma db push --accept-data-loss"];
-  } else if (schemaPresent) {
-    // Recorded migration commands are proper migrations (idempotent) — but if a profile
-    // recorded a DESTRUCTIVE push, don't run it against an existing DB.
-    const before = migrations.length;
-    migrations = migrations.filter((m) => !/push\s+--force|db\s+push|--accept-data-loss/i.test(m));
-    if (migrations.length < before) plog(projectId, userId, "Skipping a destructive push on the existing DB (kept only idempotent migrations).");
+    // On an existing DB, try tracked `migrate` first; if it FAILS (the usual cause is a
+    // migration-journal mismatch — the DB was first created with `push`, which records no
+    // journal, so `migrate` re-applies 0001 → "table already exists" → aborts before the new
+    // migration), fall back to `push --force` to SYNC the DB to the branch's schema (adds the
+    // missing columns). Preview data is disposable and this only runs on migrate FAILURE, not
+    // on every switch. On a FRESH DB the same chain seeds a schema even without migration files.
+    if (/drizzle\.config/.test(o)) migrations = ["npx --yes drizzle-kit migrate 2>&1 || npx --yes drizzle-kit push --force 2>&1"];
+    else if (/schema\.prisma/.test(o)) migrations = ["npx --yes prisma migrate deploy 2>&1 || npx --yes prisma db push --accept-data-loss 2>&1"];
   }
 
   if (!migrations.length && !(manifest.seedCmd && !schemaPresent)) return;
   plog(projectId, userId, schemaPresent ? "Applying any new/pending migrations for this branch…" : "Applying the database schema (migrations)…");
+  // drizzle-kit/prisma emit a spinner as ANSI escapes that garble the log + hide the real
+  // error — strip them so a failure is actually readable.
+  const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "").replace(/\r/g, "\n");
   for (const cmd of migrations) {
     const c = localizeCmd(cmd, runDir);
     plog(projectId, userId, `migrate: ${c}`);
     const r = await runDetachedPolled(projectId, userId, workspaceId, c, 600_000, { stallMs: 180_000, workDir: runDir }).catch(() => ({ exitCode: 1, output: "" }));
-    plog(projectId, userId, r.exitCode === 0 ? `migrate ok ✓` : `migrate exited ${r.exitCode} (continuing — the app may still self-migrate)`, r.exitCode === 0 ? undefined : { level: "error", detail: (r.output || "").slice(-700) });
+    plog(projectId, userId, r.exitCode === 0 ? `migrate ok ✓` : `migrate exited ${r.exitCode} (continuing — the app may still self-migrate)`, r.exitCode === 0 ? undefined : { level: "error", detail: stripAnsi(r.output || "").trim().slice(-1200) });
   }
   // Seed ONLY on a fresh DB — re-seeding an existing DB duplicates rows / clobbers data.
   if (manifest.seedCmd && !schemaPresent) {
