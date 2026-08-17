@@ -3023,7 +3023,17 @@ export async function addService(
     (async () => {
       try {
         await loadPublicId(projectId); // WS routing for plog/broadcast
-        const workspaceId = await envWorkspaceId(projectId);
+        // ensureProjectSandbox (NOT the raw stored id): if the VM was reaped (OOM), its
+        // phantom guard respawns a live one — otherwise we'd start the companion on a dead
+        // VM (the "No VM found" / 500 you saw). If it had to respawn, the PRIMARY is down too,
+        // so fall back to a full restart that brings both up.
+        const sandbox = await ensureProjectSandbox(projectId);
+        if (sandbox.created || sandbox.recreated) {
+          plog(projectId, userId, `The preview VM was down — restarting the whole preview (primary + "${name}")…`);
+          restartPreview(projectId, { userId }).catch((e) => console.error("[preview] add-service respawn restart failed:", e));
+          return;
+        }
+        const workspaceId = sandbox.workspaceId;
         plog(projectId, userId, `Adding app "${name}" in the background — the main app keeps running…`);
         const r = await exposeService(projectId, userId, workspaceId, added, PROJECT_DIR, stableAlias);
         if (r.url) await persistServiceBaseUrl(projectId, workspaceId, name, r.url).catch(() => {});
