@@ -1600,11 +1600,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const typingInd = document.querySelector('.typing-indicator');
             if (typingInd) typingInd.remove();
 
-            // Remove any previous function call indicators
-            removeFunctionCallIndicator();
-
-            // Show pill-style tool call indicator
-            showFunctionCallIndicator(data.function_name);
+            // Show/UPDATE the persistent tool indicator (no remove → no flicker).
+            showFunctionCallIndicator(data.function_name, { investigation: data.investigation });
 
             // Also show the tool progress indicator for long-running extraction functions
             if (['extract_features', 'extract_personas'].includes(data.function_name)) {
@@ -1622,6 +1619,22 @@ document.addEventListener('DOMContentLoaded', () => {
         // Handle orchestrator notifications
         if (data.notification_type && data.notification_type.startsWith('orchestrator_')) {
             handleOrchestratorNotification(data);
+            return;
+        }
+
+        // Specific action of the current tool (args now known) → update the live indicator.
+        if (data.notification_type === 'tool_detail') {
+            // Ensure the indicator exists (in case the detail beats the early notification),
+            // then set its second line.
+            if (!messageContainer.querySelector('.function-call-indicator')) {
+                showFunctionCallIndicator(data.function_name, { investigation: data.investigation, detail: data.detail });
+            } else if (data.investigation) {
+                // Keep the "Gathering information" header; just refresh the detail line.
+                setToolDetail(null, data.detail);
+            } else {
+                showFunctionCallIndicator(data.function_name, { investigation: data.investigation, detail: data.detail });
+            }
+            scrollToBottom();
             return;
         }
 
@@ -3596,31 +3609,61 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     // Function to show a function call indicator
-    function showFunctionCallIndicator(functionName) {
-        // Instantly remove previous pill when replacing with a new one
-        removeFunctionCallIndicator(true);
+    // Read/inspect tools are grouped under a steady "Gathering information…" header so the
+    // indicator stays PUT (no flicker) while the agent investigates; the specific action
+    // (which file / preview command / branch) shows on a second line via tool_detail.
+    const INVESTIGATION_TOOLS = new Set([
+        'queryCodebase', 'inspectPreview', 'getFileContent', 'getFileList',
+        'getRecentActivities', 'getTicketDetails', 'getPendingTickets', 'getProjectContext',
+    ]);
 
-        // Get user-friendly details with icon and color
+    // Persistent status indicator. If one already exists we UPDATE it in place instead of
+    // remove+re-add — that flicker (pill popping on/off between tool calls) is exactly what
+    // made it unreadable. It only clears when the final answer starts streaming.
+    function showFunctionCallIndicator(functionName, opts) {
+        opts = opts || {};
+        const investigation = !!opts.investigation || INVESTIGATION_TOOLS.has(functionName);
         const details = getFunctionDetails(functionName);
+        // For investigation, keep a stable header ("Gathering information…") and put the
+        // tool's own label (e.g. "Inspect preview") on the detail line.
+        const label = investigation ? 'Gathering information' : (details.label || functionName);
+        const icon = investigation ? 'fa-magnifying-glass' : (details.icon || 'fa-cog');
+        const color = investigation ? '#a78bfa' : (details.color || '#94a3b8');
+        const detailText = opts.detail || (investigation ? (details.label || '') : '');
 
-        // Create the indicator element
-        const indicator = document.createElement('div');
-        indicator.className = 'function-call-indicator';
-        indicator.style.setProperty('--tool-color', details.color || '#94a3b8');
-
-        indicator.innerHTML = `
-            <div class="tool-call-pill">
-                <i class="fas ${details.icon || 'fa-cog'} tool-call-icon"></i>
-                <span class="tool-call-label">${details.label || functionName}</span>
-                <span class="tool-call-dots"><span>.</span><span>.</span><span>.</span></span>
-            </div>
-        `;
-
-        // Add to message container
-        messageContainer.appendChild(indicator);
+        let indicator = messageContainer.querySelector('.function-call-indicator');
+        if (!indicator) {
+            indicator = document.createElement('div');
+            indicator.className = 'function-call-indicator';
+            indicator.innerHTML = `
+                <div class="tool-call-pill">
+                    <i class="tool-call-icon"></i>
+                    <span class="tool-call-body">
+                        <span class="tool-call-label"></span>
+                        <span class="tool-call-detail"></span>
+                    </span>
+                    <span class="tool-call-dots"><span>.</span><span>.</span><span>.</span></span>
+                </div>`;
+            messageContainer.appendChild(indicator);
+        }
+        indicator.style.setProperty('--tool-color', color);
+        const iconEl = indicator.querySelector('.tool-call-icon');
+        if (iconEl) iconEl.className = `fas ${icon} tool-call-icon`;
+        const labelEl = indicator.querySelector('.tool-call-label');
+        if (labelEl) labelEl.textContent = label;
+        setToolDetail(indicator, detailText);
         scrollToBottom();
-
         return indicator;
+    }
+
+    // Update just the second line of the live indicator (the specific action).
+    function setToolDetail(indicator, text) {
+        indicator = indicator || messageContainer.querySelector('.function-call-indicator');
+        if (!indicator) return;
+        const el = indicator.querySelector('.tool-call-detail');
+        if (!el) return;
+        el.textContent = text || '';
+        el.style.display = text ? '' : 'none';
     }
     
     // Function to show a function call success message

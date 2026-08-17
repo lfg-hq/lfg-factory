@@ -7,6 +7,7 @@ import { llmApiKeys } from "../db/schema/users.ts";
 import { projects } from "../db/schema/projects.ts";
 import { projectFiles } from "../db/schema/documents.ts";
 import { projectTickets, ticketLogs, ticketAddenda } from "../db/schema/tickets.ts";
+import { projectEnvironments } from "../db/schema/project-environments.ts";
 import { eq, and, desc, inArray } from "drizzle-orm";
 import { getModel, getModelWithSearch, getProviderName, getLiteModel, getGoogleVisionModel, DEFAULT_MODEL_KEY } from "./provider.ts";
 import { withCaching } from "./prompt-cache.ts";
@@ -149,6 +150,47 @@ export interface StreamRequest {
 // Google-only vision pre-pass (analyzeImage) instead.
 const VISION_NATIVE = new Set(["anthropic", "openai", "google"]);
 
+// Read/inspect tools — grouped under a persistent "Gathering information…" status so the
+// user sees ONE steady indicator (not a flicker) with the SPECIFIC action beneath it.
+export const INVESTIGATION_TOOLS = new Set([
+  "queryCodebase", "inspectPreview", "getFileContent", "getFileList",
+  "getRecentActivities", "getTicketDetails", "getPendingTickets", "getProjectContext",
+]);
+
+/** A short, human line describing WHAT a tool call is actually doing, from its args —
+ *  so the status pill can say "Reading src/foo.ts on feature/cal-7" instead of a bare
+ *  "Inspect preview". Returns "" when there's nothing specific to add. */
+export function toolActionDetail(toolName: string, input: unknown): string {
+  const o = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+  const s = (v: unknown) => (typeof v === "string" ? v : "");
+  const clip = (v: string, n = 72) => (v.length > n ? v.slice(0, n).trimEnd() + "…" : v);
+  try {
+    switch (toolName) {
+      case "queryCodebase": {
+        const q = clip(s(o.question), 64);
+        const br = s(o.branch) || (o.ticketId ? `ticket ${clip(s(o.ticketId), 10)}` : "");
+        return `Reading the codebase${br ? ` on ${br}` : ""}${q ? ` — ${q}` : ""}`;
+      }
+      case "inspectPreview": {
+        const reason = clip(s(o.reason), 64);
+        const cmd = clip(s(o.command), 56);
+        const where = s(o.workdir) && s(o.workdir) !== "preview" ? ` [${clip(s(o.workdir), 24)}]` : "";
+        if (reason) return `Inspecting the live preview${where} — ${reason}`;
+        return cmd ? `Inspecting the preview${where}: ${cmd}` : "Inspecting the live preview";
+      }
+      case "getFileContent": return `Reading ${clip(s(o.path) || s(o.filename) || s(o.fileName) || s(o.name) || "a file", 60)}`;
+      case "getFileList": return "Listing the project files";
+      case "getTicketDetails": return "Loading ticket details";
+      case "getRecentActivities": return "Checking recent activity";
+      case "createTickets": {
+        const arr = Array.isArray(o.tickets) ? (o.tickets as unknown[]) : [];
+        return arr.length ? `Creating ${arr.length} ticket${arr.length > 1 ? "s" : ""}` : "";
+      }
+      default: return "";
+    }
+  } catch { return ""; }
+}
+
 /**
  * Build a system-context block describing the @ticket-referenced tickets: each
  * ticket's spec, git branch, acceptance criteria, pending addenda, and a short
@@ -180,6 +222,23 @@ async function buildTicketMentionContext(ticketIds: string[]): Promise<string> {
     );
   }
   return `The user is asking about the following ticket(s). Answer in this context; the live Preview is showing the first ticket's branch.\n\n${parts.join("\n")}`;
+}
+
+/** If the live Preview is serving a ticket's branch, return a system note pinning the
+ *  model to it — so it reads the RIGHT branch for a screenshot/bug question (the preview's
+ *  worktree via inspectPreview, the feature branch via queryCodebase). "" when the preview
+ *  is idle or on the default branch (nothing to disambiguate). */
+async function buildPreviewBranchContext(projectId: string): Promise<string> {
+  const [env] = await db.select({ branch: projectEnvironments.previewBranch, status: projectEnvironments.previewStatus })
+    .from(projectEnvironments).where(eq(projectEnvironments.projectId, projectId)).limit(1).catch(() => [] as any[]);
+  const branch = env?.branch;
+  if (!branch || branch === "(default)" || env?.status !== "running") return "";
+  const [tk] = await db.select({ id: projectTickets.id, key: projectTickets.ticketKey, name: projectTickets.name })
+    .from(projectTickets).where(and(eq(projectTickets.projectId, projectId), eq(projectTickets.githubBranch, branch))).limit(1).catch(() => [] as any[]);
+  const who = tk ? `${tk.key ? tk.key + " — " : ""}${tk.name}` : "";
+  return `The LIVE Preview the user is looking at is currently serving branch \`${branch}\`${who ? ` (ticket ${who})` : ""} — NOT the default branch. When the user's message or a screenshot is about what they see in the preview:\n` +
+    `- inspectPreview already runs in THIS checkout (the branch's worktree), so use it to see the running app.\n` +
+    `- For code questions about it, call queryCodebase with ${tk ? `ticketId "${tk.id}" (or ` : ""}branch \`${branch}\`${tk ? ")" : ""} so you read THIS branch — reading the default branch would show different code and lead you to the wrong conclusion.`;
 }
 
 /** Describe an image using GOOGLE (Gemini) ONLY — the cheapest vision option and, per
@@ -442,6 +501,16 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
       .from(projects)
       .where(eq(projects.projectId, projectId));
     if (proj) internalProjectId = proj.id;
+  }
+
+  // ── Branch awareness — pin the model to the branch the Preview is showing ──────
+  // If the live preview is serving a ticket branch, tell the model so it reads THAT
+  // branch (worktree for the preview, feature branch for the codebase) instead of the
+  // default — otherwise a screenshot/bug question gets answered against the wrong code.
+  // Skipped when @ticket already pinned the context.
+  if (internalProjectId && !req.mentionedTickets?.length) {
+    const branchCtx = await buildPreviewBranchContext(internalProjectId);
+    if (branchCtx) contextMessages.push({ role: "system", content: branchCtx });
   }
 
   // Polymorphic tool bag: composition varies by mode (agent / instant / product).
@@ -712,6 +781,7 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
               early_notification: true,
               notification_type: WEB_SEARCH_TOOLS.has(event.toolName) ? "web_search" : event.toolName,
               function_name: event.toolName,
+              investigation: INVESTIGATION_TOOLS.has(event.toolName),
             }));
           }
           break;
@@ -789,6 +859,18 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
 
         // tool-call fires once args are fully generated; execute() has NOT run yet.
         case "tool-call": {
+          // Surface the SPECIFIC action (from the now-complete args) so the status
+          // indicator reads "Reading src/foo.ts on feature/cal-7", not a bare tool name.
+          if (event.toolName !== "askUser" && event.toolName !== "confirmAction") {
+            const detail = toolActionDetail(event.toolName, (event as Record<string, unknown>).input ?? (event as Record<string, unknown>).args);
+            if (detail) {
+              ws.send(JSON.stringify({
+                type: "ai_chunk", chunk: "", is_final: false, is_notification: true,
+                notification_type: "tool_detail", function_name: event.toolName,
+                investigation: INVESTIGATION_TOOLS.has(event.toolName), detail,
+              }));
+            }
+          }
           if (event.toolName === "askUser") {
             // Try parsed input first (already available on the event), fall back to accumulated raw
             const raw = askUserArgs.get(event.toolCallId) ?? "";

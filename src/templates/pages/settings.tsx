@@ -305,6 +305,19 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
     [data-theme="light"] .cc-code-input { background: #ffffff; border-color: #e2e8f0; color: #1e293b; }
     [data-theme="light"] .cc-code-input:focus { border-color: #a78bfa; }
     [data-theme="light"] .cc-status-badge { background: #f1f5f9 !important; color: #64748b !important; border-color: #e2e8f0 !important; }
+    /* The global light-theme anchor rule otherwise overrides the white text on
+       primary links, producing purple-on-purple for the OpenAI sign-in button. */
+    [data-theme="light"] a.llm-btn-save { color: #ffffff !important; }
+    [data-theme="light"] a.llm-btn-save:hover { color: #ffffff !important; }
+    [data-theme="light"] .oc-user-code {
+      background: #f5f3ff !important;
+      border-color: #8b5cf6 !important;
+      color: #6d28d9 !important;
+    }
+    [data-theme="light"] .oc-prereq {
+      background: #f8fafc !important;
+      border-color: #cbd5e1 !important;
+    }
   </style>
 </head>
 <body data-user-id="${user.id}" data-user-name="${user.name}">
@@ -668,15 +681,37 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
             </div>
 
             <div id="oc-flow-panel" style="display:none;border-top:1px solid var(--border-color, rgba(255,255,255,.07));padding-top:1rem;">
-              <div id="oc-loading" style="display:flex;align-items:center;gap:.75rem;color:var(--text-secondary);font-size:.875rem;">
+              <div id="oc-prereq" class="oc-prereq" style="display:none;padding:.875rem 1rem;border:1px solid rgba(139,92,246,.25);background:rgba(139,92,246,.06);border-radius:9px;">
+                <div style="font-size:.875rem;font-weight:700;color:var(--text-color);margin-bottom:.35rem;">First, allow device-code authorization in ChatGPT</div>
+                <div class="byok-desc" style="margin-bottom:.75rem;">
+                  Open ChatGPT Settings → Security and enable <strong>Device code authorization</strong>.
+                  For a managed ChatGPT workspace, a workspace administrator may need to enable it in workspace permissions.
+                </div>
+                <div style="display:flex;align-items:center;gap:.625rem;flex-wrap:wrap;">
+                  <a href="https://chatgpt.com/#settings/Security" target="_blank" rel="noopener"
+                    style="display:inline-flex;align-items:center;gap:.4rem;padding:.45rem .8rem;border:1px solid rgba(139,92,246,.4);border-radius:7px;color:#8b5cf6;text-decoration:none;font-size:.8125rem;font-weight:600;">
+                    <i class="fas fa-shield-alt"></i> Open ChatGPT Security
+                  </a>
+                  <button onclick="openAICodexBeginAuth()" class="llm-btn-save" style="border-radius:7px;padding:.45rem .8rem;">
+                    I’ve enabled it — continue
+                  </button>
+                  <a href="https://developers.openai.com/codex/auth#preferred-device-code-authentication-beta" target="_blank" rel="noopener"
+                    style="font-size:.78rem;">OpenAI instructions</a>
+                </div>
+              </div>
+              <div id="oc-loading" style="display:none;align-items:center;gap:.75rem;color:var(--text-secondary);font-size:.875rem;">
                 <div class="cc-spinner"></div><span>Preparing a secure sign-in session…</span>
               </div>
               <div id="oc-device" style="display:none;">
                 <p style="margin:0 0 .75rem;color:var(--text-secondary);font-size:.875rem;">Open the OpenAI device page, enter this one-time code, and finish signing in:</p>
                 <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;">
                   <a id="oc-device-link" href="https://auth.openai.com/codex/device" target="_blank" rel="noopener" class="llm-btn-save" style="text-decoration:none;border-radius:7px;padding:.5rem .875rem;">Open OpenAI sign-in</a>
-                  <button id="oc-user-code" onclick="copyOpenAICodexCode()" style="font-family:monospace;font-size:1rem;letter-spacing:.12em;padding:.45rem .8rem;border-radius:7px;border:1px solid rgba(139,92,246,.35);background:rgba(139,92,246,.1);color:#c4b5fd;cursor:pointer;"></button>
+                  <button id="oc-user-code" class="oc-user-code" onclick="copyOpenAICodexCode()" style="font-family:monospace;font-size:1rem;letter-spacing:.12em;padding:.45rem .8rem;border-radius:7px;border:1px solid rgba(139,92,246,.35);background:rgba(139,92,246,.1);color:#c4b5fd;cursor:pointer;"></button>
                   <span id="oc-status" style="font-size:.8125rem;color:var(--text-secondary);">Waiting for authorization…</span>
+                  <button onclick="openAICodexBeginAuth()" style="padding:.4rem .65rem;border:1px solid var(--border-color);border-radius:7px;background:transparent;color:var(--text-secondary);cursor:pointer;font-size:.78rem;">Restart sign-in</button>
+                </div>
+                <div class="byok-desc" style="margin-top:.65rem;">
+                  If OpenAI says device-code authorization is disabled, enable it in ChatGPT Security Settings, then restart this connection.
                 </div>
               </div>
               <div id="oc-error" style="display:none;color:#f87171;font-size:.875rem;"></div>
@@ -688,6 +723,7 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
           let openAICodexPollTimer = null;
 
           function showOpenAICodexError(message) {
+            document.getElementById('oc-prereq').style.display = 'none';
             document.getElementById('oc-loading').style.display = 'none';
             document.getElementById('oc-device').style.display = 'none';
             const error = document.getElementById('oc-error');
@@ -695,10 +731,21 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
             error.style.display = 'block';
           }
 
-          async function openAICodexStart() {
+          function openAICodexStart() {
+            document.getElementById('oc-flow-panel').style.display = 'block';
+            document.getElementById('oc-prereq').style.display = 'block';
+            document.getElementById('oc-loading').style.display = 'none';
+            document.getElementById('oc-device').style.display = 'none';
+            document.getElementById('oc-error').style.display = 'none';
+          }
+
+          async function openAICodexBeginAuth() {
+            if (openAICodexPollTimer) clearInterval(openAICodexPollTimer);
+            openAICodexPollTimer = null;
             const btn = document.getElementById('oc-connect-btn');
             if (btn) { btn.disabled = true; btn.textContent = 'Preparing…'; }
             document.getElementById('oc-flow-panel').style.display = 'block';
+            document.getElementById('oc-prereq').style.display = 'none';
             document.getElementById('oc-loading').style.display = 'flex';
             document.getElementById('oc-device').style.display = 'none';
             document.getElementById('oc-error').style.display = 'none';
