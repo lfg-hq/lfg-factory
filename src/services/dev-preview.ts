@@ -2194,6 +2194,26 @@ export async function runPreviewChat(opts: {
 
   const startHint = `setsid sh -c 'cd ${workDir}; set -a; . ./.env 2>/dev/null; set +a; ${runCmd || "<run command>"}' </dev/null > ${workDir}/preview.log 2>&1 &`;
   const canEditCode = workDir !== PROJECT_DIR; // only on a ticket's isolated branch
+
+  // MULTI-APP (monorepo) awareness: WITHOUT this the agent only knows the PRIMARY's
+  // port/runCmd/log, so a companion-targeted request ("fix the admin") gets mis-executed
+  // against the primary — it curls the primary's port (:5000), greps the primary's
+  // appsettings, and never touches the companion's real failure. List EVERY app with its
+  // OWN port, dir, log file, and exact ISOLATED start command (which strips the primary's
+  // Serilog__* env — the very contamination that 500s a second .NET app) so a request
+  // acts on the RIGHT app + verifies on the RIGHT port.
+  const svcs = manifest?.services ?? [];
+  const servicesBlock = svcs.length > 1
+    ? `\nAPPS IN THIS PREVIEW (monorepo — this repo runs ${svcs.length} separate web apps; a request may target ANY ONE of them — act on THAT app's port/dir/log, NOT the primary's):\n` +
+      svcs.map((s) => {
+        const tag = s.primary ? "PRIMARY, always on" : (s.enabled ? "companion, ON" : "companion, OFF");
+        const where = s.dir ? ` in ${s.dir}/` : "";
+        const log = s.primary ? `${workDir}/preview.log` : `${workDir}/preview-${s.name}.log`;
+        const start = s.primary ? startHint : serviceStartCommand(s, workDir);
+        return `  • "${s.name}" (${tag}) — port ${s.port}${where}; log ${log}\n      run: ${s.runCmd}\n      (re)start DETACHED: ${start}\n      verify: curl -sS -i http://127.0.0.1:${s.port}/`;
+      }).join("\n") +
+      `\nWhen a request names an app (e.g. "fix the admin"), operate on THAT service: (re)start it with ITS start command above (each companion's start command strips the primary's Serilog__* env, so a second .NET app isn't crashed by the first app's logging config), read ITS OWN log file, and verify on ITS OWN port. Do NOT curl the primary's port ${port} to check a companion — that just re-confirms the primary is up.\n`
+    : "";
   const system = `You are the LFG **Preview agent** for this project. You have FULL shell control of the project's LIVE Alpine sandbox (musl, apk, OpenRC/rc-service, busybox — Docker is available) via the \`run\` tool: one command per call, run detached + polled so long commands are fine. You are working in **${branchNote}** at ${workDir}; its .env is sourced before every command; the toolchain + /data caches are already on PATH.
 
 CODE CHANGES: ${canEditCode
@@ -2202,13 +2222,14 @@ CODE CHANGES: ${canEditCode
       : `You ARE previewing a ticket's isolated feature branch (worktree at ${workDir}), so you MAY edit the app's SOURCE CODE here to fulfil the request (e.g. fix a .cshtml/CSS/JS UI issue). After editing: rebuild if it's a compiled stack (${manifest?.buildCmd || "the project's build command"}), restart the app (see below), verify with curl, and then COMMIT so the change persists on the branch: \`cd ${workDir} && git add -A && git commit -m "preview: <what you changed>" && git push 2>&1 || true\`. Tell the user in your reply exactly which files you changed.`)
     : `You are previewing the DEFAULT branch (${PROJECT_DIR}). Do NOT edit application SOURCE CODE here — code changes belong in a ticket/build, not on main. If the user asks for a code/UI change, say so in your reply and suggest they create/rebuild a ticket, or preview the ticket's branch (pick it in the branch selector) and ask again there.`}
 
-${manifest ? `App: ${manifest.stack || `${manifest.runtime}/${manifest.framework}`}. Run command: \`${runCmd || "(unknown)"}\`. Port: ${port}. Databases: ${manifest.databases.length ? manifest.databases.map((d) => `${d.engine} (127.0.0.1, connection in .env as ${d.connectionEnvVar})`).join(", ") : "none"}.` : "This preview has not been fully set up yet — the app may not be running."}
+${manifest ? `${svcs.length > 1 ? "PRIMARY app" : "App"}: ${manifest.stack || `${manifest.runtime}/${manifest.framework}`}. Run command: \`${runCmd || "(unknown)"}\`. Port: ${port}. Databases: ${manifest.databases.length ? manifest.databases.map((d) => `${d.engine} (127.0.0.1, connection in .env as ${d.connectionEnvVar})`).join(", ") : "none"}.` : "This preview has not been fully set up yet — the app may not be running."}
+${servicesBlock}
 ${directives.length ? `\nMANDATORY DIRECTIVES (project rules you MUST honor and, if the request relates to them, verify/enforce):\n${directives.map((d) => `  ▣ ${d}`).join("\n")}\n` : ""}${configNotes.length ? `\nCONFIG QUIRKS (from the probe — RESPECT these; they prevent the exact mistakes that broke past runs, e.g. corrupting a JSONC appsettings.json):\n${configNotes.map((n) => `  ⚠ ${n}`).join("\n")}\n` : ""}
 ${priorActions ? `\nWHAT THE LAST RUN ALREADY DID (the setup/preview agent's most recent COMMANDS + exit codes + decisions — CONTINUE from here; do NOT redo steps that already succeeded, and start from the point it failed/stopped):\n${priorActions}\n` : ""}
 
-The app server (if running) listens on 127.0.0.1:${port}. To (re)start it, launch it DETACHED:
+The ${svcs.length > 1 ? "PRIMARY " : ""}app server (if running) listens on 127.0.0.1:${port}${svcs.length > 1 ? " (companions listen on their OWN ports — see APPS above)" : ""}. To (re)start ${svcs.length > 1 ? "the primary" : "it"}, launch it DETACHED:
   ${startHint}
-then VERIFY for real: \`curl -sS -i http://127.0.0.1:${port}/\` (2xx/3xx/4xx = up; 000/refused/5xx = not up → read ${workDir}/preview.log).
+then VERIFY for real: \`curl -sS -i http://127.0.0.1:${port}/\` (2xx/3xx/4xx = up; 000/refused/5xx = not up → read ${workDir}/preview.log).${svcs.length > 1 ? " For a COMPANION, use its own start command + port + log from the APPS list above." : ""}
 
 SCOPE — do ONLY what the user asked, nothing more:
 - If it's a DIAGNOSTIC question (why/what/check/is-it-working/where): INVESTIGATE with read-only commands (curl, cat, grep, ls, head, docker logs, SQL SELECTs) and REPORT the finding via \`reply\`. Do NOT rebuild, re-restore packages, re-run migrations, re-seed the DB, or restart the app for a diagnostic question — that wastes hours and isn't what was asked. Find the cause, explain it, and suggest the fix.
