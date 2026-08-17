@@ -988,7 +988,7 @@
     if (existing) { existing.remove(); return; }
     const m = document.createElement("div");
     m.id = "preview-addapp";
-    m.style.cssText = "position:fixed;z-index:100;width:340px;background:var(--card-bg,#161616);border:1px solid var(--border-color,#333);border-radius:12px;box-shadow:0 16px 40px rgba(0,0,0,.5);padding:14px;display:flex;flex-direction:column;gap:9px;";
+    m.style.cssText = "position:fixed;z-index:100;width:380px;max-width:92vw;background:var(--card-bg,#161616);border:1px solid var(--border-color,#333);border-radius:12px;box-shadow:0 16px 40px rgba(0,0,0,.5);padding:14px;display:flex;flex-direction:column;gap:9px;max-height:80vh;overflow:auto;";
     const fld = (id, label, ph, val) => `<label style="display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--text-secondary,#9ca3af);">${label}<input id="${id}" placeholder="${esc(ph)}" value="${esc(val || "")}" style="height:32px;padding:0 9px;border-radius:7px;background:var(--background-surface,#0f0f0f);border:1px solid var(--border-color,#333);color:var(--text-color,#e2e8f0);font-size:12.5px;" /></label>`;
     m.innerHTML =
       `<div style="font-weight:600;font-size:13px;color:var(--text-color,#e2e8f0);">Add an app in this repo</div>` +
@@ -997,6 +997,8 @@
       fld("aa-dir", "Folder (relative to repo root, optional)", "apps/admin", "") +
       fld("aa-cmd", "Start command", "npm run start -- -p 4000", "") +
       fld("aa-port", "Port", "4000", "") +
+      `<label style="display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--text-secondary,#9ca3af);">Anything special this app needs? (optional)` +
+        `<textarea id="aa-notes" placeholder="e.g. it uses its OWN database — create it, run its migrations + seed; it needs Redis; set env FOO=bar. The setup agent will handle whatever you describe here." style="min-height:70px;padding:8px 9px;border-radius:7px;background:var(--background-surface,#0f0f0f);border:1px solid var(--border-color,#333);color:var(--text-color,#e2e8f0);font-size:12.5px;line-height:1.45;resize:vertical;font-family:inherit;"></textarea></label>` +
       `<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:2px;">` +
       `<button data-aa="cancel" style="height:32px;padding:0 12px;border-radius:7px;cursor:pointer;background:transparent;color:var(--text-secondary,#9ca3af);border:1px solid var(--border-color,#333);font-size:12.5px;">Cancel</button>` +
       `<button data-aa="save" style="height:32px;padding:0 14px;border-radius:7px;cursor:pointer;background:#7c3aed;color:#fff;border:1px solid #7c3aed;font-size:12.5px;font-weight:500;">Add &amp; run</button>` +
@@ -1016,6 +1018,7 @@
 
   async function submitAddApp(m) {
     const v = (id) => (document.getElementById(id) ? document.getElementById(id).value.trim() : "");
+    const notes = v("aa-notes");
     const payload = { name: v("aa-name"), dir: v("aa-dir"), runCmd: v("aa-cmd"), port: parseInt(v("aa-port"), 10) };
     if (!payload.name || !payload.runCmd || !payload.port) { toast("Name, start command and port are required."); return; }
     toast("Adding " + payload.name + "…");
@@ -1024,8 +1027,21 @@
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
       m.remove();
-      toast(payload.name + " added — starting it…");
       load();
+      // Hand the user's requirements to the setup agent — it provisions DBs, runs migrations,
+      // wires config, etc. from the free-text description (and records what it did).
+      if (notes && window.__sendChatMessage__) {
+        const bind = payload.port ? " on 0.0.0.0:" + payload.port : "";
+        const where = payload.dir ? ` (folder ${payload.dir})` : "";
+        window.__sendChatMessage__(
+          `@preview I just added the "${payload.name}" app${where}${payload.port ? " on port " + payload.port : ""} to this preview.\n\n` +
+          `Requirements for it:\n${notes}\n\n` +
+          `Set it up end-to-end on the running sandbox: provision any databases it needs (CREATE them + run ITS migrations + seed), wire its config/env, then (re)start it${bind} and verify it responds. Record every project-specific fix as a Mandatory Directive so future runs don't need the AI again.`
+        );
+        toast(payload.name + " added — the setup agent is handling your requirements (see the chat).");
+      } else {
+        toast(payload.name + " added — starting it…");
+      }
     } catch (e) { toast("Couldn't add app: " + e.message); }
   }
 
