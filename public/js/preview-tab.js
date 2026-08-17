@@ -122,9 +122,10 @@
   // NEXT TO the branch selector. Re-rendered after loadBranches so it appears on first load.
   function renderRunningActions() {
     const st = current || {};
-    const branchSel = `<select data-branch title="Run a ticket's branch or the default" style="height:32px;padding:0 10px;border-radius:7px;font-size:12.5px;background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);max-width:180px;cursor:pointer;">${branchOptions()}</select>`;
+    const branchSel = `<select data-branch title="Run a ticket's branch or the default" style="height:32px;padding:0 8px;border-radius:7px;font-size:12.5px;background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);max-width:150px;cursor:pointer;">${branchOptions()}</select>`;
     const te = branches.find((b) => b.id === branchId);
-    const chatBtn = (te && te.ticketId) ? btn("Chat with ticket", { action: "tickchat", icon: "fa-comments", title: "Chat with this ticket's agent — this preview stays on the right" }) : "";
+    // "Chat" (short) keeps the toolbar from cramping on a narrow panel; the icon + tooltip make it clear.
+    const chatBtn = (te && te.ticketId) ? btn("Chat", { action: "tickchat", icon: "fa-comments", title: "Chat with this ticket's agent — this preview stays on the right" }) : "";
     renderActions(
       serviceChips(st) +
       (chatBtn ? chatBtn : "") +
