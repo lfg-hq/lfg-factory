@@ -72,6 +72,19 @@
     max-width: 460px;
 }
 
+/* Light mode: the dark-slate pill is a heavy blob on a white chat — soften it to a light
+   surface with dark text, tinted by the tool colour. */
+[data-theme="light"] .tool-call-pill {
+    background: #f3f4f6;
+    border-color: color-mix(in srgb, var(--tool-color, #7c3aed) 28%, transparent);
+    color: #374151;
+    backdrop-filter: none;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+}
+[data-theme="light"] .tool-call-detail {
+    color: #6b7280;
+}
+
 .tool-call-dots {
     display: inline-flex;
     gap: 1px;
