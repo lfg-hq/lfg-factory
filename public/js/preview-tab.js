@@ -623,7 +623,7 @@
     m.id = "preview-more-menu";
     m.style.cssText = "position:fixed;z-index:100;min-width:180px;background:var(--card-bg,#161616);border:1px solid var(--border-color,#333);border-radius:10px;box-shadow:0 12px 34px rgba(0,0,0,.45);padding:5px;display:flex;flex-direction:column;gap:2px;";
     const item = (label, act, icon, danger) => `<button data-menu="${act}" style="text-align:left;padding:9px 11px;border-radius:7px;cursor:pointer;font-size:12.5px;background:transparent;color:${danger ? "#f87171" : "var(--text-color,#e2e8f0)"};border:none;display:flex;align-items:center;gap:10px;"><i class="fas ${icon}" style="width:14px;text-align:center;opacity:.85;"></i>${label}</button>`;
-    m.innerHTML = item("Env Profile", "profile", "fa-list-check") + item("Restart", "restart", "fa-power-off") + item("Stop", "stop", "fa-stop", true);
+    m.innerHTML = item("Env Profile", "profile", "fa-list-check") + item("Restart", "restart", "fa-power-off") + item("Rebuild sandbox", "rebuildvm", "fa-server") + item("Stop", "stop", "fa-stop", true);
     document.body.appendChild(m);
     const r = anchor.getBoundingClientRect();
     m.style.top = (r.bottom + 6) + "px";
@@ -633,7 +633,7 @@
     m.addEventListener("click", (e) => {
       const it = e.target.closest("[data-menu]"); if (!it) return;
       const a = it.getAttribute("data-menu"); m.remove();
-      if (a === "profile") togglePlan(); else if (a === "restart") doRestart(); else if (a === "stop") doStop();
+      if (a === "profile") togglePlan(); else if (a === "restart") doRestart(); else if (a === "rebuildvm") doRebuildVm(); else if (a === "stop") doStop();
     });
     setTimeout(() => document.addEventListener("click", function onDoc(ev) { if (!m.contains(ev.target) && ev.target !== anchor && !anchor.contains(ev.target)) { m.remove(); document.removeEventListener("click", onDoc); } }), 0);
   }
@@ -706,7 +706,7 @@
     return `<div style="margin-bottom:16px;padding:10px 12px;border:1px solid #f59e0b55;background:rgba(245,158,11,0.06);border-radius:8px;">
       <div style="font-size:11px;color:#fbbf24;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">▣ Mandatory directives — always enforced (one per line)</div>
       <div style="font-size:11px;color:var(--text-secondary,#9ca3af);margin-bottom:6px;">Project-specific must-do rules. Every run/preview agent must verify these. The agent also appends here when it solves a blocker.</div>
-      <textarea id="preview-directives" spellcheck="false" placeholder="e.g. All appsettings SQL connections must point at the local MSSQL, not a dev/prod host" style="width:100%;box-sizing:border-box;min-height:90px;background:var(--background-surface,#141414);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#2a2a2a);border-radius:6px;padding:10px;font-size:12px;line-height:1.5;">${esc(val)}</textarea>
+      <textarea id="preview-directives" spellcheck="false" placeholder="e.g. All appsettings SQL connections must point at the local MSSQL, not a dev/prod host" style="width:100%;box-sizing:border-box;min-height:140px;resize:vertical;background:var(--background-surface,#141414);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#2a2a2a);border-radius:6px;padding:10px;font-size:12px;line-height:1.5;">${esc(val)}</textarea>
       <div style="margin-top:6px;">${btn("Save directives", { action: "savedirectives", primary: true, icon: "fa-floppy-disk" })}</div>
     </div>`;
   }
@@ -721,18 +721,19 @@
             <div style="font-size:12px;color:var(--text-secondary,#9ca3af);margin-bottom:6px;">Edit the profile and Save — the next run derives its steps from this.</div>
             <textarea id="preview-plan-json" spellcheck="false" style="width:100%;box-sizing:border-box;min-height:220px;background:var(--background-surface,#141414);color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#2a2a2a);border-radius:8px;padding:12px;font-family:ui-monospace,Menlo,monospace;font-size:12px;">${esc(JSON.stringify(profileData, null, 2))}</textarea>
           </div>
-        </div>
-        <div id="preview-plan-msg" style="font-size:12px;color:var(--text-secondary,#9ca3af);min-height:16px;margin-top:8px;"></div>`;
+        </div>`;
     }
-    return `<div style="color:var(--text-secondary,#9ca3af);font-size:13px;">No profile yet — run <b>Set up preview</b> to probe the codebase, or click <b>Re-probe</b> below (the repo must already be cloned).</div>
-      <div id="preview-plan-msg" style="font-size:12px;color:var(--text-secondary,#9ca3af);min-height:16px;margin-top:8px;"></div>`;
+    return `<div style="color:var(--text-secondary,#9ca3af);font-size:13px;">No profile yet — run <b>Set up preview</b> to probe the codebase, or click <b>Re-probe</b> below (the repo must already be cloned).</div>`;
   }
 
   function renderProfileBody() {
     const el = document.getElementById("preview-plan-body");
     if (el) el.innerHTML = profileBodyHtml();
+    // The status line lives in the pinned footer, not at the end of the scrolling body —
+    // otherwise "Saved ✓" from a mid-panel button lands off-screen and reads as a no-op.
     const foot = document.getElementById("preview-plan-foot");
-    if (foot) foot.innerHTML = `${btn("Re-probe", { action: "reprobe", icon: "fa-rotate" })}${profileData ? btn("Save profile", { action: "saveprofile", primary: true, icon: "fa-floppy-disk" }) : ""}`;
+    if (foot) foot.innerHTML = `${btn("Re-probe", { action: "reprobe", icon: "fa-rotate" })}${profileData ? btn("Save profile", { action: "saveprofile", primary: true, icon: "fa-floppy-disk" }) : ""}` +
+      `<div id="preview-plan-msg" style="flex:1;min-width:0;align-self:center;text-align:right;font-size:12px;color:var(--text-secondary,#9ca3af);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></div>`;
   }
 
   async function togglePlan() {
@@ -742,16 +743,19 @@
     if (existing) { existing.remove(); return; }
     const overlay = document.createElement("div");
     overlay.id = "preview-plan-overlay";
-    overlay.style.cssText = "position:absolute;inset:0;padding:16px 20px;background:var(--bg-color,#0f0f0f);display:flex;flex-direction:column;gap:6px;z-index:6;overflow:auto;";
+    // The PANEL never scrolls — the body does. With overflow on the overlay instead,
+    // the flex:1 body (basis 0) shrank below its content, which then spilled out and
+    // painted over the footer buttons.
+    overlay.style.cssText = "position:absolute;inset:0;padding:16px 20px 0;background:var(--bg-color,#0f0f0f);display:flex;flex-direction:column;z-index:6;overflow:hidden;";
     overlay.innerHTML = `
-      <div style="display:flex;align-items:center;justify-content:space-between;flex:none;">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex:none;padding-bottom:10px;">
         <div style="font-size:14px;color:var(--text-color,#e2e8f0);font-weight:600;">App profile — how this project is set up &amp; run</div>
         <button data-action="closeplan" style="background:none;border:none;color:var(--text-secondary,#9ca3af);cursor:pointer;font-size:16px;"><i class="fas fa-times"></i></button>
       </div>
-      <div id="preview-plan-body" style="flex:1;min-height:0;">
+      <div id="preview-plan-body" style="flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding-right:6px;">
         <div style="color:var(--text-secondary,#9ca3af);font-size:13px;padding:8px 0;">Loading profile…</div>
       </div>
-      <div id="preview-plan-foot" style="display:flex;gap:8px;flex:none;padding-top:6px;"></div>`;
+      <div id="preview-plan-foot" style="display:flex;gap:8px;flex:none;padding:10px 0;margin-top:auto;border-top:1px solid var(--border-color,#2a2a2a);background:var(--bg-color,#0f0f0f);"></div>`;
     body.appendChild(overlay);
     // Fetch the saved profile, then render.
     try {
@@ -824,6 +828,19 @@
     managePolling("starting");
     try { await api("/restart", { method: "POST", body: JSON.stringify({ ticketId, conversationId: window.currentConversationId || null }) }); }
     catch (e) { render({ previewStatus: "error", error: "Restart failed: " + e.message }); }
+  }
+
+  // HARD rebuild: force-kill a stuck/orphaned VM (app still serves but the control plane lost
+  // it → "No VM found" for exec/@preview/logs) and respawn a clean, MANAGEABLE VM. Your data
+  // on /data reattaches; the app + companions restart on the fresh VM.
+  async function doRebuildVm() {
+    if (!confirm("Rebuild the preview sandbox?\n\nUse this when the app still loads but Logs / @preview say \"No VM found\" — it force-restarts the VM (your database + code on /data are preserved) and re-runs the app. Brief downtime.")) return;
+    setSub("Rebuilding the sandbox VM…");
+    logText = "";
+    render({ previewStatus: "starting" });
+    managePolling("starting");
+    try { await api("/rebuild-vm", { method: "POST", body: JSON.stringify({}) }); }
+    catch (e) { render({ previewStatus: "error", error: "Rebuild failed: " + e.message }); }
   }
 
   // Options for the branch <select>. An entry with no ticketId other than

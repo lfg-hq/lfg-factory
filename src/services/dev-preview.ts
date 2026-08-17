@@ -26,7 +26,7 @@ import { getModel, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
 import { decryptSecret, encryptSecret } from "../utils/crypto.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { enableHttpAccess, execOnWorkspace, setStableUrl, startBrowserSession, stopWorkspace } from "./mags.ts";
-import { ensureProjectSandbox, ensureEngine, ensureDocker, envWorkspaceId, checkEngineHealth, ENGINES, type EngineHandle, type DbEngine } from "./project-sandbox.ts";
+import { ensureProjectSandbox, restartProjectSandbox, ensureEngine, ensureDocker, envWorkspaceId, checkEngineHealth, ENGINES, type EngineHandle, type DbEngine } from "./project-sandbox.ts";
 import { probeAppProfile, saveAppProfile, loadAppProfile, deriveManifestFromProfile, syncDetectedEnv, applyProfileCorrection, recordProfileLearning, recordDirective, recordConfigPatch, buildConfigPatchScript, profileNotes, resolveUserModel, type AppProfile } from "./app-profile.ts";
 import { isS3Enabled, buildS3Key, uploadBinary, getPresignedGetUrl } from "./s3.ts";
 import { messages } from "../db/schema/chat.ts";
@@ -3071,6 +3071,28 @@ export async function removeService(projectId: string, userId: string, name: str
   await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
   const services = (manifest.services || []).map((s) => ({ name: s.name, port: s.port, primary: !!s.primary, enabled: !!s.enabled, manual: !!s.manual }));
   return { ok: true, services };
+}
+
+/**
+ * HARD sandbox rebuild — for a STUCK/ORPHANED VM: the app still serves (its microVM + edge
+ * route linger) but the control plane lost the job, so exec/@preview/logs all fail with
+ * "No running or sleeping VM found". ensureProjectSandbox's soft liveness probe can pass on
+ * such a VM, so we force-kill it (stopWorkspace, /data persists) and respawn a clean,
+ * MANAGEABLE VM, then re-run the app (+ enabled companions) on it.
+ */
+export async function rebuildPreviewSandbox(projectId: string, userId: string): Promise<{ ok: true } | { error: string }> {
+  await loadPublicId(projectId);
+  resetLog(projectId);
+  plog(projectId, userId, "Rebuilding the preview sandbox — killing the stuck VM and respawning a fresh one (your data on /data reattaches)…");
+  try {
+    await restartProjectSandbox(projectId); // stopWorkspace + respawn (persistent disk reattaches)
+  } catch (e) {
+    plog(projectId, userId, `Sandbox rebuild failed: ${(e as Error).message?.slice(0, 200)}`, { level: "error" });
+    return { error: (e as Error).message?.slice(0, 200) || "rebuild failed" };
+  }
+  plog(projectId, userId, "Fresh VM is up — restarting the app…");
+  restartPreview(projectId, { userId }).catch((e) => console.error("[preview] rebuild restart failed:", e));
+  return { ok: true };
 }
 
 export async function restartPreview(projectId: string, opts: SetupOptions): Promise<{ previewUrl: string } | { error: string }> {

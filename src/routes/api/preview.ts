@@ -14,7 +14,7 @@ import { db } from "../../config/db.ts";
 import { projectEnvironments } from "../../db/schema/project-environments.ts";
 import { projects, projectEnvironmentVariables } from "../../db/schema/projects.ts";
 import { encryptSecret, decryptSecret } from "../../utils/crypto.ts";
-import { getPreviewState, setupPreview, restartPreview, stopPreview, detectManifest, manifestSchema, capturePreviewScreenshot, getPreviewBranches, reprobeProfile, getAppRuntimeLog, getDbLogs, resetDatabase, setServiceEnabled, addService, removeService } from "../../services/dev-preview.ts";
+import { getPreviewState, setupPreview, restartPreview, stopPreview, detectManifest, manifestSchema, capturePreviewScreenshot, getPreviewBranches, reprobeProfile, getAppRuntimeLog, getDbLogs, resetDatabase, setServiceEnabled, addService, removeService, rebuildPreviewSandbox } from "../../services/dev-preview.ts";
 import { loadAppProfile, saveAppProfile, appProfileSchema } from "../../services/app-profile.ts";
 import type { auth } from "../../auth/index.ts";
 
@@ -56,6 +56,15 @@ previewApi.post("/:projectId/preview/restart", async (c) => {
   const ticketId = typeof body.ticketId === "string" && body.ticketId ? body.ticketId : undefined;
   const conversationId = typeof body.conversationId === "string" ? body.conversationId : null;
   restartPreview(access.project.id, { userId: user.id, ticketId, conversationId }).catch((e) => console.error("[preview] restart failed:", e));
+  return c.json({ ok: true, status: "starting" }, 202);
+});
+
+// HARD sandbox rebuild — force-kill a stuck/orphaned VM and respawn a clean one, then restart.
+previewApi.post("/:projectId/preview/rebuild-vm", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId")!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  rebuildPreviewSandbox(access.project.id, user.id).catch((e) => console.error("[preview] rebuild failed:", e));
   return c.json({ ok: true, status: "starting" }, 202);
 });
 

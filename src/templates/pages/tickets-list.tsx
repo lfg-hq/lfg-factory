@@ -85,9 +85,18 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     /* Layout overrides — not in tickets.css */
     .tickets-page { height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
     .tickets-toolbar {
+      /* One height / radius / type scale for EVERY control in this row. These match
+         .filter-select + .filter-search in tickets.css (34px, --radius-md, 13px), which
+         the exec cluster below used to ignore — it sized itself from padding (27px) with
+         999px pills and 0.68-0.75rem text, so the row read as five unrelated widgets. */
+      --tb-h: 34px;
+      --tb-r: var(--radius-md, 0.5rem);
+      --tb-fs: 0.8125rem;
       display: flex;
       align-items: center;
       gap: 0.75rem;
+      row-gap: 0.5rem;
+      flex-wrap: wrap; /* narrow viewports wrap instead of pushing New Ticket off-screen */
       padding: 0.625rem 1.25rem;
       border-bottom: 1px solid var(--border-color);
       background: var(--background-color, #121212);
@@ -98,11 +107,13 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     .toolbar-btn-new {
       display: inline-flex;
       align-items: center;
+      justify-content: center;
       gap: 0.4rem;
-      padding: 0.4rem 1rem;
-      font-size: 0.8125rem;
+      height: var(--tb-h, 34px);
+      padding: 0 0.95rem;
+      font-size: var(--tb-fs, 0.8125rem);
       font-weight: 600;
-      border-radius: 999px;
+      border-radius: var(--tb-r, 0.5rem);
       border: none;
       background: linear-gradient(135deg, #7c3aed, #8b5cf6);
       /* !important: beats the global [data-theme="light"] a { color:#7c3aed }
@@ -111,17 +122,34 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       cursor: pointer;
       text-decoration: none;
       white-space: nowrap;
-      box-shadow: 0 4px 12px rgba(124,58,237,0.35);
-      transition: opacity 0.2s ease;
+      /* Was 0 4px 12px/.35 — a drop shadow that heavy on a 34px control reads as a
+         floating card, not a button. The CTA already stands out by being the only
+         filled element in the row. */
+      box-shadow: 0 1px 2px rgba(124,58,237,0.30);
+      transition: filter 0.15s ease, box-shadow 0.15s ease;
     }
-    .toolbar-btn-new:hover { opacity: 0.88; }
+    .toolbar-btn-new:hover { filter: brightness(1.08); box-shadow: 0 2px 8px rgba(124,58,237,0.35); }
 
-    /* Execution mode toggle */
+    /* Mode / model / credential are ONE decision (how a ticket build runs), so they sit
+       on a shared tray — which also separates them from the unrelated New Ticket CTA. */
+    .exec-controls { display: flex; align-items: center; min-width: 0; }
+    .exec-controls-row {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      min-width: 0;
+      padding: 0.25rem;
+      border-radius: calc(var(--tb-r, 0.5rem) + 0.25rem);
+      background: rgba(127, 127, 127, 0.09);
+    }
+
+    /* Execution mode toggle — a true segmented control: one bordered box, a hairline
+       between the segments, no per-button pill. */
     .exec-mode-toggle {
       display: inline-flex;
-      align-items: center;
-      gap: 0;
-      border-radius: 999px;
+      align-items: stretch;
+      height: var(--tb-h, 34px);
+      border-radius: var(--tb-r, 0.5rem);
       border: 1px solid var(--border-color);
       background: var(--input-bg);
       overflow: hidden;
@@ -130,42 +158,39 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       display: inline-flex;
       align-items: center;
       gap: 0.35rem;
-      padding: 0.3rem 0.75rem;
-      font-size: 0.75rem;
+      padding: 0 0.75rem;
+      font-size: var(--tb-fs, 0.8125rem);
       font-weight: 500;
       border: none;
       background: transparent;
       color: var(--text-secondary);
       cursor: pointer;
-      transition: all 0.2s ease;
+      transition: background 0.15s ease, color 0.15s ease;
       white-space: nowrap;
     }
+    .exec-mode-btn + .exec-mode-btn { box-shadow: inset 1px 0 0 var(--border-color); }
     .exec-mode-btn.active {
       background: linear-gradient(135deg, #7c3aed, #8b5cf6);
-      color: white;
-      box-shadow: 0 2px 8px rgba(124,58,237,0.3);
+      color: #fff;
+      box-shadow: none; /* the old outer glow bled past the toggle's rounded edge */
     }
-    .exec-mode-btn:hover:not(.active) { background: var(--card-bg-hover); }
+    .exec-mode-btn:hover:not(.active) { background: rgba(124, 58, 237, 0.10); color: var(--text-color); }
 
-    .exec-controls {
-      display: flex;
-      align-items: center;
-    }
-    .exec-controls-row { display: flex; align-items: center; gap: 0.65rem; }
     .exec-auth-badge {
       display: inline-flex;
       align-items: center;
       gap: 0.35rem;
-      min-height: 27px;
-      padding: 0.25rem 0.6rem;
+      height: var(--tb-h, 34px);
+      padding: 0 0.65rem;
       border: 1px solid var(--border-color);
-      border-radius: 999px;
+      border-radius: var(--tb-r, 0.5rem);
       color: var(--text-secondary);
       background: var(--input-bg);
-      font-size: 0.68rem;
+      font-size: var(--tb-fs, 0.8125rem);
       line-height: 1;
       text-decoration: none;
       white-space: nowrap;
+      transition: border-color 0.15s ease, color 0.15s ease;
     }
     .exec-auth-badge.subscription {
       color: #34d399;
@@ -176,26 +201,40 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     [data-theme="light"] .exec-auth-badge.subscription { color: #047857; }
 
     .builder-model-select {
-      padding: 0.3rem 1.7rem 0.3rem 0.6rem; /* extra right pad so the native chevron doesn't overlap the text */
-      font-size: 0.75rem;
-      border-radius: 6px;
+      height: var(--tb-h, 34px);
+      /* Which model will build the ticket is the most important fact in this row, and
+         190px truncated it to "DeepSeek deepseek-…". Wide enough for a full model id. */
+      min-width: 210px;
+      max-width: 260px;
+      padding: 0 1.7rem 0 0.6rem; /* extra right pad so the native chevron clears the text */
+      font-size: var(--tb-fs, 0.8125rem);
+      border-radius: var(--tb-r, 0.5rem);
       border: 1px solid var(--border-color);
       background: var(--input-bg);
       color: var(--text-color);
       cursor: pointer;
-      max-width: 190px;
       text-overflow: ellipsis;
     }
-    .builder-model-select:focus { outline: 1px solid #7c3aed; }
     /* Build & preview settings popover (declutters the toolbar) */
     .build-settings-menu { position: relative; }
     .build-settings-btn {
-      width: 34px; height: 34px; border-radius: 8px;
+      width: var(--tb-h, 34px); height: var(--tb-h, 34px); border-radius: var(--tb-r, 0.5rem);
       border: 1px solid var(--border-color); background: var(--input-bg);
       color: var(--text-secondary); cursor: pointer; display: inline-flex;
       align-items: center; justify-content: center; font-size: 0.85rem;
+      transition: color 0.15s ease, border-color 0.15s ease;
     }
     .build-settings-btn:hover { color: var(--text-color); border-color: #7c3aed; }
+
+    /* Keyboard focus was invisible on every control except the model select. */
+    .toolbar-btn-new:focus-visible,
+    .exec-mode-btn:focus-visible,
+    .exec-auth-badge:focus-visible,
+    .builder-model-select:focus-visible,
+    .build-settings-btn:focus-visible {
+      outline: 2px solid #7c3aed;
+      outline-offset: 2px;
+    }
     .build-settings-dropdown {
       display: none; position: absolute; right: 0; top: calc(100% + 6px);
       z-index: 40; min-width: 240px; padding: 10px 12px; border-radius: 10px;
