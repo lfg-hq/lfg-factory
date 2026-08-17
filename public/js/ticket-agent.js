@@ -266,6 +266,18 @@
     const title = $("ta-title");
     if (title) title.textContent = (key ? key + " · " : "") + (name || "Ticket");
     renderMeta(meta);
+    // Opened without fields (e.g. from the preview's "Chat with ticket") → fetch them so
+    // Details/Edit still work.
+    if (!meta) {
+      fetch(`/projects/${PID()}/api/checklist/${id}`, { credentials: "same-origin" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (!d || !d.ticket || ticketId !== id) return;
+          const t = d.ticket;
+          curMeta = { name: t.name, description: t.description, status: t.status, priority: t.priority, createdAt: t.createdAt, updatedAt: t.updatedAt, attachments: [] };
+          if (!editing) renderMeta(curMeta);
+        }).catch(() => {});
+    }
     p.style.display = "flex";
     const area = $("ta-log");
     if (area) area.innerHTML = '<div style="opacity:.5;padding:24px;text-align:center;">Loading…</div>';
