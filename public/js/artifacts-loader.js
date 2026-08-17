@@ -3000,12 +3000,6 @@ document.addEventListener('DOMContentLoaded', function() {
                                     ${lfgKey ? `<span class="ticket-key" style="display:inline-block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;font-weight:700;color:#8b5cf6;background:rgba(139,92,246,0.12);border:1px solid rgba(139,92,246,0.25);border-radius:5px;padding:1px 6px;">${modalHelpers.escapeHtml(lfgKey)}</span>` : ''}
                                     <span class="lfg-row-title" title="${modalHelpers.escapeHtml(item.name || 'Untitled Item')}">${modalHelpers.escapeHtml(item.name || 'Untitled Item')}</span>
                                     <span class="priority-badge ${priorityClass} ${isStatusHighlighted ? 'filter-active' : ''}">${modalHelpers.escapeHtml(item.priority || 'Medium')}</span>
-                                    <div class="lfg-row-actions">
-                                        <button class="action-btn view-details-btn" data-item-id="${item.id}" title="Details"><i class="fas fa-eye"></i></button>
-                                        <button class="action-btn edit-btn" onclick="editChecklistItem(${item.id})" title="Edit"><i class="fas fa-edit"></i></button>
-                                        <button class="action-btn toggle-btn" onclick="toggleChecklistStatus(${item.id}, '${item.status}')" title="Toggle Status"><i class="fas fa-sync-alt"></i></button>
-                                        <button class="action-btn delete-checklist-btn" data-item-id="${item.id}" title="Delete"><i class="fas fa-trash"></i></button>
-                                    </div>
                                 </div>
                             `;
                         });

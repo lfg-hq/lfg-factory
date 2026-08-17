@@ -22,6 +22,7 @@
   let fitObs = null;
   let prevArtWidth = null; // preview-overlay width to restore when the ticket chat closes
   let curMeta = null;      // last ticket's fields (for the Details tab)
+  let curKey = "";         // ticket key (e.g. CAL-10) for the title
   let activeTab = "details";
   let tasksLoaded = false, gitLoaded = false; // lazy-load Tasks/Git on first view
 
@@ -108,6 +109,88 @@
       (desc ? `<div class="markdown-content" style="margin-top:14px;font-size:13px;color:var(--text-color,#cbd5e1);line-height:1.6;">${md(desc)}</div>` : '<div style="margin-top:14px;opacity:.5;font-size:12.5px;">No description.</div>');
   }
 
+  // ── Ticket actions (Build / Edit / Delete) — on THIS panel, not the list row ──
+  function toast(msg) {
+    const t = document.createElement("div");
+    t.textContent = msg;
+    t.style.cssText = "position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:10001;background:#111;color:#fff;padding:9px 16px;border-radius:8px;font-size:13px;box-shadow:0 4px 16px rgba(0,0,0,.3);";
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 2000);
+  }
+  async function buildTicket() {
+    if (!ticketId) return;
+    const btn = $("ta-build"); if (btn) btn.disabled = true;
+    try {
+      const r = await fetch(`/api/projects/${PID()}/tickets/${ticketId}/queue`, { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: "{}" });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || "failed");
+      toast("Queued for build — watch the Actions tab.");
+      switchTicketTab("actions");
+    } catch (e) { toast("Couldn't queue: " + (e.message || e)); }
+    finally { if (btn) btn.disabled = false; }
+  }
+  async function deleteTicket() {
+    if (!ticketId) return;
+    if (!window.confirm("Delete this ticket? This can't be undone.")) return;
+    try {
+      const r = await fetch(`/api/projects/${PID()}/tickets/${ticketId}`, { method: "DELETE", credentials: "same-origin" });
+      if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || "failed"); }
+      toast("Ticket deleted.");
+      close();
+      // Refresh the Task List so the row disappears.
+      try { if (window.ArtifactsLoader && window.ArtifactsLoader._checklistProjectId) window.ArtifactsLoader.loadChecklist(window.ArtifactsLoader._checklistProjectId); } catch (_) {}
+    } catch (e) { toast("Couldn't delete: " + (e.message || e)); }
+  }
+  // Inline edit — turn the Details pane into an editable form (no separate modal/drawer).
+  let editing = false;
+  function toggleEdit() {
+    if (!curMeta) { toast("No editable fields here."); return; }
+    editing = !editing;
+    switchTicketTab("details");
+    if (editing) renderEditForm(); else renderMeta(curMeta);
+    const eb = $("ta-edit"); if (eb) eb.innerHTML = editing ? '<i class="fas fa-xmark" style="font-size:12px;"></i>Cancel' : '<i class="fas fa-pen" style="font-size:11px;"></i>Edit';
+  }
+  function renderEditForm() {
+    const el = $("ta-pane-details"); if (!el) return;
+    const m = curMeta || {};
+    const opt = (v, cur) => `<option value="${esc(v)}"${String(cur).toLowerCase() === v.toLowerCase() ? " selected" : ""}>${esc(v)}</option>`;
+    const fieldStyle = "width:100%;height:34px;padding:0 10px;border-radius:8px;background:var(--background-surface,#0f0f0f);border:1px solid var(--border-color,#333);color:var(--text-color,#e2e8f0);font-size:13px;";
+    el.innerHTML =
+      `<label style="display:block;font-size:11px;color:var(--text-secondary,#9ca3af);margin-bottom:4px;">Name</label>` +
+      `<input id="ta-edit-name" style="${fieldStyle}margin-bottom:12px;" value="${esc(m.name || "")}" />` +
+      `<div style="display:flex;gap:10px;margin-bottom:12px;">` +
+        `<div style="flex:1;"><label style="display:block;font-size:11px;color:var(--text-secondary,#9ca3af);margin-bottom:4px;">Status</label><select id="ta-edit-status" style="${fieldStyle}">${["open", "in_progress", "review", "done", "blocked"].map((s) => opt(s, m.status || "open")).join("")}</select></div>` +
+        `<div style="flex:1;"><label style="display:block;font-size:11px;color:var(--text-secondary,#9ca3af);margin-bottom:4px;">Priority</label><select id="ta-edit-priority" style="${fieldStyle}">${["High", "Medium", "Low"].map((s) => opt(s, m.priority || "Medium")).join("")}</select></div>` +
+      `</div>` +
+      `<label style="display:block;font-size:11px;color:var(--text-secondary,#9ca3af);margin-bottom:4px;">Description (Markdown)</label>` +
+      `<textarea id="ta-edit-desc" style="${fieldStyle}height:220px;padding:10px;line-height:1.5;resize:vertical;font-family:inherit;">${esc(m.description || "")}</textarea>` +
+      `<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">` +
+        `<button id="ta-edit-save" style="height:34px;padding:0 16px;border-radius:8px;cursor:pointer;background:#7c3aed;color:#fff;border:none;font-size:13px;font-weight:600;">Save</button>` +
+      `</div>`;
+    $("ta-edit-save")?.addEventListener("click", saveEdit);
+  }
+  async function saveEdit() {
+    if (!ticketId) return;
+    const body = {
+      name: ($("ta-edit-name") || {}).value,
+      status: ($("ta-edit-status") || {}).value,
+      priority: ($("ta-edit-priority") || {}).value,
+      description: ($("ta-edit-desc") || {}).value,
+    };
+    const btn = $("ta-edit-save"); if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+    try {
+      const r = await fetch(`/api/projects/${PID()}/tickets/${ticketId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify(body) });
+      if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || "failed"); }
+      curMeta = Object.assign({}, curMeta, body);
+      const title = $("ta-title"); if (title && body.name) title.textContent = (curKey ? curKey + " · " : "") + body.name;
+      editing = false;
+      const eb = $("ta-edit"); if (eb) eb.innerHTML = '<i class="fas fa-pen" style="font-size:11px;"></i>Edit';
+      renderMeta(curMeta);
+      toast("Saved.");
+      try { if (window.ArtifactsLoader && window.ArtifactsLoader._checklistProjectId) window.ArtifactsLoader.loadChecklist(window.ArtifactsLoader._checklistProjectId); } catch (_) {}
+    } catch (e) { toast("Couldn't save: " + (e.message || e)); if (btn) { btn.disabled = false; btn.textContent = "Save"; } }
+  }
+
   // ── Tabs: Details / Actions (agent chat) / Tasks / Git ─────────────────────
   function switchTicketTab(tab) {
     activeTab = tab;
@@ -174,6 +257,9 @@
     opts = opts || {};
     ticketId = id;
     curMeta = meta || null;
+    curKey = key || "";
+    editing = false;
+    const eb0 = $("ta-edit"); if (eb0) eb0.innerHTML = '<i class="fas fa-pen" style="font-size:11px;"></i>Edit';
     tasksLoaded = false; gitLoaded = false;
     const p = panel();
     if (!p) return;
@@ -384,6 +470,9 @@
 
   function wire() {
     $("ta-exit")?.addEventListener("click", close);
+    $("ta-build")?.addEventListener("click", buildTicket);
+    $("ta-edit")?.addEventListener("click", toggleEdit);
+    $("ta-delete")?.addEventListener("click", deleteTicket);
     $("ta-tabs")?.addEventListener("click", (e) => { const b = e.target.closest("[data-ta-tab]"); if (b) switchTicketTab(b.getAttribute("data-ta-tab")); });
     $("ta-send")?.addEventListener("click", send);
     $("ta-input")?.addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });

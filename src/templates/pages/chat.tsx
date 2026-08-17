@@ -173,6 +173,12 @@ export function ChatPage({
           <button id="ta-exit" title="Close this layer (back to main chat)" style="width:30px;height:30px;border-radius:8px;cursor:pointer;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);display:inline-flex;align-items:center;justify-content:center;"><i class="fas fa-times"></i></button>
         </div>
         <div id="ta-resize" title="Drag to resize the split" style="position:absolute;top:0;right:-4px;width:10px;height:100%;cursor:ew-resize;z-index:7;"></div>
+        <div id="ta-actionbar" style="display:flex;align-items:center;gap:8px;padding:9px 14px;flex:none;border-bottom:1px solid var(--border-color,#2a2a2a);background:var(--background-surface,#191919);">
+          <button id="ta-build" title="Queue this ticket for the coding agent to build" style="height:32px;padding:0 14px;border-radius:8px;cursor:pointer;background:#7c3aed;color:#fff;border:none;font-size:12.5px;font-weight:600;display:inline-flex;align-items:center;gap:7px;"><i class="fas fa-play" style="font-size:10px;"></i>Build</button>
+          <button id="ta-edit" title="Edit this ticket" style="height:32px;padding:0 12px;border-radius:8px;cursor:pointer;background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);font-size:12.5px;display:inline-flex;align-items:center;gap:7px;"><i class="fas fa-pen" style="font-size:11px;"></i>Edit</button>
+          <span style="flex:1;"></span>
+          <button id="ta-delete" title="Delete this ticket" style="height:32px;width:34px;border-radius:8px;cursor:pointer;background:transparent;color:#f87171;border:1px solid var(--border-color,#333);font-size:12px;display:inline-flex;align-items:center;justify-content:center;"><i class="fas fa-trash"></i></button>
+        </div>
         <style>
           #ta-tabs { display:flex; gap:2px; padding:0 12px; flex:none; border-bottom:1px solid var(--border-color,#2a2a2a); background:var(--background-surface,#191919); }
           .ta-tab { padding:9px 13px; border:none; background:transparent; color:var(--text-secondary,#9ca3af); font-size:12.5px; font-weight:500; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; display:inline-flex; align-items:center; gap:6px; }
