@@ -496,12 +496,17 @@ async function runSchemaSetup(projectId: string, userId: string, workspaceId: st
  * driver log. Picks the most-recently-written preview.log (default checkout or a ticket
  * worktree). Best-effort — returns "" if the sandbox/log isn't reachable.
  */
-export async function getAppRuntimeLog(projectId: string, lines = 500): Promise<string> {
+export async function getAppRuntimeLog(projectId: string, lines = 500, service?: string): Promise<string> {
   try {
     const workspaceId = await envWorkspaceId(projectId);
+    // A companion app logs to preview-<name>.log; the primary to preview.log.
+    const svc = service && service !== "app" ? service.replace(/[^\w-]/g, "") : "";
+    const glob = svc
+      ? `${PROJECT_DIR}/preview-${svc}.log /data/*/preview-${svc}.log`
+      : `${PROJECT_DIR}/preview.log /data/*/preview.log`;
     const { output } = await sh(
       workspaceId,
-      `f=$(ls -t ${PROJECT_DIR}/preview.log /data/*/preview.log 2>/dev/null | head -1); [ -n "$f" ] && tail -n ${lines} "$f" 2>/dev/null || echo "(no app log yet — the app may not have started, or hasn't printed anything)"`,
+      `f=$(ls -t ${glob} 2>/dev/null | head -1); [ -n "$f" ] && tail -n ${lines} "$f" 2>/dev/null || echo "(no ${svc ? svc + " " : ""}app log yet — the app may not have started, or hasn't printed anything)"`,
       20_000,
     );
     return output || "";

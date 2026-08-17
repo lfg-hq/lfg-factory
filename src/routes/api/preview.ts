@@ -235,7 +235,8 @@ previewApi.get("/:projectId/preview/app-logs", async (c) => {
   const user = c.get("user");
   const access = await getProjectAccess(c.req.param("projectId")!, user.id);
   if (!access) return c.json({ error: "Not found" }, 404);
-  const [log, dbs] = await Promise.all([getAppRuntimeLog(access.project.id), getDbLogs(access.project.id)]);
+  const service = c.req.query("service") || undefined; // a companion app's log (else the primary)
+  const [log, dbs] = await Promise.all([getAppRuntimeLog(access.project.id, 500, service), getDbLogs(access.project.id)]);
   return c.json({ log, dbs });
 });
 

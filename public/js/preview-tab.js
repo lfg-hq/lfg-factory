@@ -177,11 +177,14 @@
     const tab = (id, label, color) => `<button data-action="alog:${id}" style="padding:4px 12px;border-radius:7px;cursor:pointer;font-size:12px;white-space:nowrap;border:1px solid ${appLogView === id ? color : "var(--border-color,#333)"};background:${appLogView === id ? color : "var(--border-color,#2a2a2a)"};color:${appLogView === id ? "#fff" : "var(--text-color,#e2e8f0)"};font-weight:${appLogView === id ? "600" : "400"};">${esc(label)}</button>`;
     const cap = (s) => (s || "db").charAt(0).toUpperCase() + (s || "db").slice(1);
     let html = tab("app", "App", "#7c3aed");
+    // One log tab per enabled companion app (Admin, etc.) — reads its preview-<name>.log.
+    const svcs = (current && current.services) || [];
+    for (const s of svcs) { if (!s.primary && s.enabled) html += tab("svc:" + s.name, cap(s.name), "#7c3aed"); }
     for (const d of dbLogs) html += tab(d.engine, cap(d.engine), "#059669");
     return html;
   }
   function appLogBody() {
-    if (appLogView === "app") return appLogText || "Loading the app's runtime log…";
+    if (appLogView === "app" || appLogView.indexOf("svc:") === 0) return appLogText || "Loading the app's runtime log…";
     const d = dbLogs.find((x) => x.engine === appLogView);
     return d ? d.log : "(no log for this database)";
   }
@@ -192,7 +195,8 @@
   }
   async function loadAppLog() {
     try {
-      const r = await api("/app-logs");
+      const svc = (appLogView && appLogView.indexOf("svc:") === 0) ? appLogView.slice(4) : "";
+      const r = await api("/app-logs" + (svc ? "?service=" + encodeURIComponent(svc) : ""));
       if (!r.ok) {
         appLogText = r.status === 404
           ? "App-log endpoint not found (HTTP 404) — the server needs a redeploy to pick up this feature."
@@ -204,7 +208,7 @@
         dbLogs = (j && Array.isArray(j.dbs)) ? j.dbs : [];
       }
     } catch (e) { appLogText = "Could not reach the app-log endpoint (" + ((e && e.message) || "network error") + ")."; dbLogs = []; }
-    if (appLogView !== "app" && !dbLogs.some((d) => d.engine === appLogView)) appLogView = "app"; // selected DB vanished
+    if (appLogView !== "app" && appLogView.indexOf("svc:") !== 0 && !dbLogs.some((d) => d.engine === appLogView)) appLogView = "app"; // selected DB vanished
     paintAppLog(true);
   }
   async function doResetDb() {
@@ -245,10 +249,13 @@
   // URLs WE load, and a "＋" to open any URL (paste a link) in a new in-app tab.
   const tabById = (id) => bTabs.find((t) => t.id === id);
   function mountBrowser(body, previewUrl) {
-    // Already mounted for this preview → keep the live iframes (don't reload).
+    // Already mounted for this SAME url → keep the live iframes (don't reload).
     if (bBase === previewUrl && document.getElementById("pv-frames")) return;
+    // The base url CHANGED (switched apps, or a new preview) → reset the browser tabs to it.
+    // Without this, switching to a companion kept the primary's tab and never navigated.
+    const changed = bBase !== previewUrl;
     bBase = previewUrl;
-    if (!bTabs.length) { const id = ++bSeq; bTabs = [{ id, url: previewUrl, history: [previewUrl], hi: 0 }]; bActive = id; }
+    if (!bTabs.length || changed) { const id = ++bSeq; bTabs = [{ id, url: previewUrl, history: [previewUrl], hi: 0 }]; bActive = id; }
     body.innerHTML = `
       <div style="height:100%;display:flex;flex-direction:column;background:var(--bg-color,#0f0f0f);">
         <div id="pv-tabstrip" style="display:flex;align-items:center;gap:3px;padding:6px 8px 0;overflow-x:auto;"></div>
@@ -900,7 +907,7 @@
     else if (action === "togglelog") toggleLog();
     else if (action === "refreshapplog") loadAppLog();
     else if (action === "resetdb") doResetDb();
-    else if (action.indexOf("alog:") === 0) { appLogView = action.slice(5); paintAppLog(false); }
+    else if (action.indexOf("alog:") === 0) { appLogView = action.slice(5); if (appLogView === "app" || appLogView.indexOf("svc:") === 0) loadAppLog(); else paintAppLog(false); }
     else if (action === "copylog") copyLog();
     else if (action === "screenshot") takeScreenshot(b);
     else if (action === "closeplan") togglePlan();
