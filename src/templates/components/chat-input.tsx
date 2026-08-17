@@ -5,6 +5,7 @@ export interface ChatInputModelOption {
   providerLabel: string;
   requiresPro?: boolean;
   label?: string;
+  available?: boolean;
 }
 
 export interface ChatInputRoleOption {
@@ -113,13 +114,15 @@ export function ChatInput({
                   <div class="submenu" id="model-submenu">
                     ${Object.entries(groupedModels).map(
                       ([providerLabel, providerModels]) => html`
-                        <div class="submenu-group">${providerLabel}</div>
+                        <div class="submenu-group${providerModels.some((model) => model.available !== false) ? "" : " unavailable"}">${providerLabel}</div>
                         ${providerModels.map(
                           (model) => html`
                             <button
                               type="button"
-                              class="submenu-option${model.key === selectedModelKey ? " selected" : ""}"
+                              class="submenu-option${model.key === selectedModelKey ? " selected" : ""}${model.available === false ? " unavailable" : ""}"
                               data-value="${model.key}"
+                              ${model.available === false ? "disabled" : ""}
+                              title="${model.available === false ? `Add a ${model.providerLabel} API key in Settings to use this model` : ""}"
                             >
                               <span>${model.label ?? model.key}</span>
                               <i class="fas fa-check"></i>

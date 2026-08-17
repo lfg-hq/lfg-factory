@@ -7,7 +7,7 @@ import {
   projectEnvironmentVariables,
   projectInvitations,
 } from "../db/schema/projects.ts";
-import { profiles, users } from "../db/schema/users.ts";
+import { llmApiKeys, profiles, users } from "../db/schema/users.ts";
 import { projectFiles, projectFileVersions } from "../db/schema/documents.ts";
 import { conversations } from "../db/schema/chat.ts";
 import { ticketStages, projectTickets, projectTicketAttachments } from "../db/schema/tickets.ts";
@@ -452,7 +452,7 @@ projectsRouter.get("/projects/:projectId/tickets", async (c) => {
   if (!access) return c.text("Project not found", 404);
   const project = access.project;
 
-  const [stageRows, ticketRows, appStateRows, profileRows] = await Promise.all([
+  const [stageRows, ticketRows, appStateRows, profileRows, llmKeyRows] = await Promise.all([
     db.select().from(ticketStages)
       .where(eq(ticketStages.projectId, project.id))
       .orderBy(asc(ticketStages.order)),
@@ -478,10 +478,21 @@ projectsRouter.get("/projects/:projectId/tickets", async (c) => {
     }).from(profiles)
       .where(eq(profiles.userId, user.id))
       .limit(1),
+    db.select({
+      openai: llmApiKeys.openaiApiKey,
+      anthropic: llmApiKeys.anthropicApiKey,
+      google: llmApiKeys.googleApiKey,
+      kimi: llmApiKeys.kimiApiKey,
+      deepseek: llmApiKeys.deepseekApiKey,
+      glm: llmApiKeys.glmApiKey,
+    }).from(llmApiKeys)
+      .where(eq(llmApiKeys.userId, user.id))
+      .limit(1),
   ]);
 
   const appState = appStateRows[0];
   const profile = profileRows[0];
+  const llmKeys = llmKeyRows[0];
 
   return c.html(
     TicketsListPage({
@@ -500,11 +511,20 @@ projectsRouter.get("/projects/:projectId/tickets", async (c) => {
       // nav + kanban so the grid never flashes before the ticket details.
       embed: c.req.query("embed") ?? undefined,
       executionMode: {
-        claudeCodeEnabled: appState?.claudeCodeEnabled ?? false,
+        claudeCodeEnabled: appState?.claudeCodeEnabled ?? true,
         builderModelKey: appState?.builderModelKey ?? "claude_4.5_sonnet",
+        builderAuthMode: appState?.builderAuthMode === "api_key" ? "api_key" : "subscription",
         models: listModels().map(m => ({ key: m.key, label: `${m.providerLabel} ${m.providerModel.split('/').pop()}`, provider: m.provider })),
         openAICodexConnected: profile?.openAICodexConnected ?? false,
         claudeCodeConnected: profile?.claudeCodeConnected ?? false,
+        apiKeyProviders: {
+          openai: !!llmKeys?.openai,
+          anthropic: !!llmKeys?.anthropic,
+          google: !!llmKeys?.google,
+          kimi: !!llmKeys?.kimi,
+          deepseek: !!llmKeys?.deepseek,
+          glm: !!llmKeys?.glm,
+        },
       },
     })
   );

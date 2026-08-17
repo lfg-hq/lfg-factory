@@ -25,9 +25,11 @@ interface Ticket {
 interface ExecutionModeConfig {
   claudeCodeEnabled: boolean;
   builderModelKey: string;
+  builderAuthMode: "subscription" | "api_key";
   models: Array<{ key: string; label: string; provider: string }>;
   openAICodexConnected: boolean;
   claudeCodeConnected: boolean;
+  apiKeyProviders: Record<string, boolean>;
 }
 
 interface TicketsListPageProps {
@@ -49,8 +51,27 @@ const PRIORITY_COLOR: Record<string, string> = {
 };
 
 export function TicketsListPage({ user, project, stages, tickets, executionMode, embed }: TicketsListPageProps) {
-  const isApiMode = executionMode ? !executionMode.claudeCodeEnabled : true;
   const avatarLetter = (user.name?.[0] ?? user.email?.[0] ?? "?").toUpperCase();
+  const subscriptionProviders = new Set<string>();
+  if (executionMode?.openAICodexConnected) subscriptionProviders.add("openai");
+  if (executionMode?.claudeCodeConnected) subscriptionProviders.add("anthropic");
+  const hasSubscriptions = subscriptionProviders.size > 0;
+  const hasApiKeys = Object.values(executionMode?.apiKeyProviders ?? {}).some(Boolean);
+  const requestedAuthMode = executionMode?.builderAuthMode ?? "subscription";
+  const effectiveAuthMode: "subscription" | "api_key" =
+    requestedAuthMode === "subscription" && hasSubscriptions
+      ? "subscription"
+      : requestedAuthMode === "api_key" && hasApiKeys
+        ? "api_key"
+        : hasSubscriptions ? "subscription" : "api_key";
+  const eligibleBuilderModels = (executionMode?.models ?? []).filter((model) =>
+    effectiveAuthMode === "subscription"
+      ? subscriptionProviders.has(model.provider)
+      : !!executionMode?.apiKeyProviders[model.provider]
+  );
+  const effectiveBuilderModelKey = eligibleBuilderModels.some((model) => model.key === executionMode?.builderModelKey)
+    ? executionMode!.builderModelKey
+    : eligibleBuilderModels[0]?.key ?? "";
 
   // Group tickets by stage — unstaged tickets go into Backlog (first stage)
   const byStage: Record<string, Ticket[]> = {};
@@ -200,6 +221,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     .exec-auth-badge:hover { border-color: #8b5cf6; }
     [data-theme="light"] .exec-auth-badge.subscription { color: #047857; }
 
+    .builder-auth-select,
     .builder-model-select {
       height: var(--tb-h, 34px);
       /* Which model will build the ticket is the most important fact in this row, and
@@ -215,6 +237,9 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       cursor: pointer;
       text-overflow: ellipsis;
     }
+    .builder-auth-select { min-width: 142px; padding: 0 1.7rem 0 0.6rem; }
+    .builder-auth-select:disabled,
+    .builder-model-select:disabled { cursor: not-allowed; opacity: 0.55; }
     /* Build & preview settings popover (declutters the toolbar) */
     .build-settings-menu { position: relative; }
     .build-settings-btn {
@@ -230,6 +255,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     .toolbar-btn-new:focus-visible,
     .exec-mode-btn:focus-visible,
     .exec-auth-badge:focus-visible,
+    .builder-auth-select:focus-visible,
     .builder-model-select:focus-visible,
     .build-settings-btn:focus-visible {
       outline: 2px solid #7c3aed;
@@ -451,20 +477,30 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
         <div class="exec-controls">
           <div class="exec-controls-row">
             <div class="exec-mode-toggle" title="Choose how ticket builds call the selected model">
-              <button class="exec-mode-btn ${isApiMode ? "active" : ""}" id="exec-mode-api" onclick="setExecMode(false)" title="Call the selected model with its API key">
+              <!-- Direct API is intentionally hidden for now; keep the implementation available for a future re-enable.
+              <button class="exec-mode-btn" id="exec-mode-api" onclick="setExecMode(false)" title="Call the selected model with its API key">
                 <i class="fas fa-cloud"></i> Direct API
               </button>
-              <button class="exec-mode-btn ${!isApiMode ? "active" : ""}" id="exec-mode-cli" onclick="setExecMode(true)" title="Run a coding agent in the ticket sandbox">
+              -->
+              <button class="exec-mode-btn active" id="exec-mode-cli" onclick="setExecMode(true)" title="Run a coding agent in the ticket sandbox">
                 <i class="fas fa-terminal"></i> Coding Agent
               </button>
             </div>
-            <select class="builder-model-select" id="builder-model-select"
-              aria-label="Ticket builder model" onchange="setBuilderModel(this.value)">
-              ${executionMode.models.map(m => html`
-                <option value="${m.key}" data-provider="${m.provider}" ${m.key === executionMode.builderModelKey ? "selected" : ""}>${m.label}</option>
-              `)}
+            <select class="builder-auth-select" id="builder-auth-select"
+              aria-label="Coding agent authentication" onchange="setBuilderAuthMode(this.value)"
+              ${!hasSubscriptions && !hasApiKeys ? "disabled" : ""}>
+              ${hasSubscriptions ? html`<option value="subscription" ${effectiveAuthMode === "subscription" ? "selected" : ""}>Use subscription</option>` : ""}
+              ${hasApiKeys ? html`<option value="api_key" ${effectiveAuthMode === "api_key" ? "selected" : ""}>Use API token</option>` : ""}
+              ${!hasSubscriptions && !hasApiKeys ? html`<option value="">No credentials connected</option>` : ""}
             </select>
-            <a class="exec-auth-badge" id="execution-auth-badge" href="/settings/integrations" aria-live="polite"></a>
+            <select class="builder-model-select" id="builder-model-select"
+              aria-label="Ticket builder model" onchange="setBuilderModel(this.value)" ${eligibleBuilderModels.length ? "" : "disabled"}>
+              ${eligibleBuilderModels.map(m => html`
+                <option value="${m.key}" data-provider="${m.provider}" ${m.key === effectiveBuilderModelKey ? "selected" : ""}>${m.label}</option>
+              `)}
+              ${eligibleBuilderModels.length ? "" : html`<option value="">Connect a provider in Settings</option>`}
+            </select>
+            ${!hasSubscriptions && !hasApiKeys ? html`<a class="exec-auth-badge" href="/settings/integrations"><i class="fas fa-plug"></i> Connect provider</a>` : ""}
           </div>
         </div>
       ` : ""}
@@ -786,43 +822,45 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
 <script>
   const PROJECT_ID = document.body.dataset.projectId;
   let _currentTicketId = null;
-  let _codingAgentEnabled = ${!isApiMode ? "true" : "false"};
-  const _openAICodexConnected = ${executionMode?.openAICodexConnected ? "true" : "false"};
-  const _claudeCodeConnected = ${executionMode?.claudeCodeConnected ? "true" : "false"};
+  const _builderModels = ${raw(JSON.stringify(executionMode?.models ?? []).replace(/</g, "\\u003c"))};
+  const _subscriptionProviders = ${raw(JSON.stringify([...subscriptionProviders]))};
+  const _apiKeyProviders = ${raw(JSON.stringify(executionMode?.apiKeyProviders ?? {}))};
+  let _builderAuthMode = '${effectiveAuthMode}';
 
-  // ── Execution Mode Toggle ─────────────────────────────────────────
-  function updateExecutionAuthHint() {
-    var badge = document.getElementById('execution-auth-badge');
+  // ── Coding-agent authentication + eligible model picker ───────────
+  function eligibleBuilderModels(authMode) {
+    return _builderModels.filter(function(model) {
+      return authMode === 'subscription'
+        ? _subscriptionProviders.indexOf(model.provider) !== -1
+        : !!_apiKeyProviders[model.provider];
+    });
+  }
+
+  function renderBuilderModels(preferredKey) {
     var select = document.getElementById('builder-model-select');
-    if (!badge || !select) return;
-    var option = select.options[select.selectedIndex];
-    var provider = option && option.dataset ? option.dataset.provider : '';
-    badge.className = 'exec-auth-badge';
-    if (!_codingAgentEnabled) {
-      badge.innerHTML = '<i class="fas fa-key"></i> API key';
-      badge.title = 'Direct API always uses the selected provider API key.';
-    } else if (provider === 'openai') {
-      if (_openAICodexConnected) {
-        badge.classList.add('subscription');
-        badge.innerHTML = '<i class="fas fa-check-circle"></i> ChatGPT subscription';
-        badge.title = 'Automatically selected for Coding Agent builds with an OpenAI model.';
-      } else {
-        badge.innerHTML = '<i class="fas fa-key"></i> OpenAI API key';
-        badge.title = 'Connect ChatGPT in Settings to use your Codex subscription.';
-      }
-    } else if (provider === 'anthropic') {
-      if (_claudeCodeConnected) {
-        badge.classList.add('subscription');
-        badge.innerHTML = '<i class="fas fa-check-circle"></i> Claude account';
-        badge.title = 'Automatically selected for Coding Agent builds with a Claude model.';
-      } else {
-        badge.innerHTML = '<i class="fas fa-key"></i> Anthropic API key';
-        badge.title = 'Connect Claude Code in Settings to use your Claude account.';
-      }
-    } else {
-      badge.innerHTML = '<i class="fas fa-key"></i> Provider API key';
-      badge.title = 'This provider uses its configured API key in the coding-agent sandbox.';
+    if (!select) return '';
+    var models = eligibleBuilderModels(_builderAuthMode);
+    select.innerHTML = '';
+    select.disabled = models.length === 0;
+    if (!models.length) {
+      var empty = document.createElement('option');
+      empty.value = '';
+      empty.textContent = 'Connect a provider in Settings';
+      select.appendChild(empty);
+      return '';
     }
+    var selectedKey = models.some(function(model) { return model.key === preferredKey; })
+      ? preferredKey
+      : models[0].key;
+    models.forEach(function(model) {
+      var option = document.createElement('option');
+      option.value = model.key;
+      option.dataset.provider = model.provider;
+      option.textContent = model.label;
+      option.selected = model.key === selectedKey;
+      select.appendChild(option);
+    });
+    return selectedKey;
   }
 
   function setExecMode(cliEnabled) {
@@ -834,28 +872,35 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       if (!r.ok) return;
       var apiBtn = document.getElementById('exec-mode-api');
       var cliBtn = document.getElementById('exec-mode-cli');
-      _codingAgentEnabled = cliEnabled;
-      if (cliEnabled) {
-        cliBtn.classList.add('active');
-        apiBtn.classList.remove('active');
-      } else {
-        apiBtn.classList.add('active');
-        cliBtn.classList.remove('active');
-      }
-      updateExecutionAuthHint();
+      if (cliBtn) cliBtn.classList.toggle('active', cliEnabled);
+      if (apiBtn) apiBtn.classList.toggle('active', !cliEnabled);
     });
+  }
+
+  function saveBuilderChoice(authMode, modelKey) {
+    var body = { claudeCodeEnabled: true, builderAuthMode: authMode };
+    if (modelKey) body.builderModelKey = modelKey;
+    return fetch('/api/settings/execution-mode', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+
+  function setBuilderAuthMode(authMode) {
+    _builderAuthMode = authMode;
+    var select = document.getElementById('builder-model-select');
+    var modelKey = renderBuilderModels(select ? select.value : '');
+    saveBuilderChoice(authMode, modelKey);
   }
 
   function setBuilderModel(modelKey) {
-    fetch('/api/settings/execution-mode', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ builderModelKey: modelKey }),
-    });
-    updateExecutionAuthHint();
+    if (modelKey) saveBuilderChoice(_builderAuthMode, modelKey);
   }
 
-  updateExecutionAuthHint();
+  // Direct API is hidden: normalize existing users to Coding Agent and persist any
+  // credential/model fallback selected because a previously saved provider disconnected.
+  saveBuilderChoice(_builderAuthMode, '${effectiveBuilderModelKey}');
 
   // Per-project build/preview settings (ticket build isolation, preview branch mode).
   function setBuildSetting(key, value) {

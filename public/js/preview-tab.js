@@ -1020,8 +1020,18 @@
     const bind = svc.port ? " on 0.0.0.0:" + svc.port : "";
     const where = svc.dir ? ` (folder ${svc.dir})` : "";
     const instr = svc.primary
-      ? `@preview The main app "${name}"${port} isn't working correctly — diagnose and FIX it end to end on the running sandbox: restore/install dependencies, run its database migrations + seed against the local DB, rebuild if needed, then (re)start it${bind} and verify it responds. IMPORTANT: record every project-specific fix you make as a Mandatory Directive (and fold build/install steps into the profile) so future runs don't need the AI again.`
-      : `@preview The "${name}" app${where}${port} isn't serving correctly — diagnose and FIX it end to end on the running sandbox: restore/install ITS dependencies, run ITS OWN database migrations + any seed against the local DB (it may use a separate database/EF context from the main app), then (re)start it${bind} and verify it responds. IMPORTANT: record every project-specific fix as a Mandatory Directive (and fold its install/build/migrate/run into the profile) so future runs don't need the AI again.`;
+      ? `@preview Fix the main app "${name}"${port} — it isn't working correctly.\n\n` +
+        `Do this end-to-end on the running sandbox:\n` +
+        `1. Restore/install its dependencies.\n` +
+        `2. Run its database migrations + seed against the local DB; rebuild if needed.\n` +
+        `3. (Re)start it${bind} and verify it responds.\n\n` +
+        `Then RECORD every project-specific fix as a Mandatory Directive and fold the install/build/migrate/run into the profile — so future runs don't need the AI again.`
+      : `@preview Fix the "${name}" app${where}${port} — it isn't serving correctly.\n\n` +
+        `Do this end-to-end on the running sandbox:\n` +
+        `1. Restore/install ITS dependencies.\n` +
+        `2. Run ITS OWN database migrations + any seed against the local DB (it may use a separate database/EF context from the main app).\n` +
+        `3. (Re)start it${bind} and verify it responds.\n\n` +
+        `Then RECORD every project-specific fix as a Mandatory Directive and fold its install/build/migrate/run into the profile — so future runs don't need the AI again.`;
     if (window.__sendChatMessage__) { window.__sendChatMessage__(instr); toast("Asked the preview agent to fix " + name + " — watch the chat + Setup log."); }
     else toast("Chat isn't ready yet — try again in a moment.");
   }

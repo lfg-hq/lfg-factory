@@ -25,6 +25,10 @@
   let curKey = "";         // ticket key (e.g. CAL-10) for the title
   let activeTab = "details";
   let tasksLoaded = false, gitLoaded = false; // lazy-load Tasks/Git on first view
+  // The opening tab is chosen from whether the ticket HAS activity, but the log count
+  // isn't known until the first fetch returns. Stays true from open() until either that
+  // fetch reconciles the tab or the user picks one themselves (whichever comes first).
+  let autoTabPending = false;
 
   // The preview panel (#artifacts-panel) is a FIXED slide-over on the right, so the popup
   // must stop at its LEFT edge (else it hides behind the preview + its ✕ is unreachable).
@@ -242,6 +246,20 @@
     if (tab === "tasks" && !tasksLoaded) { tasksLoaded = true; loadTasks(); }
     if (tab === "git" && !gitLoaded) { gitLoaded = true; loadGit(); }
   }
+  // Opening tab: Actions when the ticket has activity to read, Details when it doesn't.
+  // The real answer is the log count, which needs a round-trip — so seed from status
+  // (anything past "open" implies a build already ran) to avoid a visible tab jump in
+  // the common case, then applyAutoTab() corrects it once the count actually lands.
+  function seedTab(meta) {
+    const s = String((meta && meta.status) || "open").toLowerCase();
+    return s === "open" ? "details" : "actions";
+  }
+  function applyAutoTab(count) {
+    if (!autoTabPending) return;
+    autoTabPending = false;
+    const want = count > 0 ? "actions" : "details";
+    if (activeTab !== want) switchTicketTab(want);
+  }
   function setTabCount(tab, n) {
     const b = document.querySelector('#ta-tabs .ta-tab[data-ta-tab="' + tab + '"]');
     if (!b) return;
@@ -324,11 +342,13 @@
     p.style.display = "flex";
     const area = $("ta-log");
     if (area) area.innerHTML = '<div style="opacity:.5;padding:24px;text-align:center;">Loading…</div>';
+    // "Chat with ticket" means you came to chat → Actions, no second-guessing. From a
+    // ticket row, open on whichever tab has something to show (see seedTab/applyAutoTab).
+    // Set BEFORE loadLog() so the flag can't be read by its continuation before it exists.
+    autoTabPending = !opts.withPreview;
+    switchTicketTab(opts.withPreview ? "actions" : seedTab(meta));
     loadLog();
     startPoll();
-    // Default tab: Details when opened from a ticket row (fields in hand); Actions when
-    // opened from the preview's "Chat with ticket" button (you came to chat).
-    switchTicketTab(opts.withPreview ? "actions" : "details");
     // Only take over the RIGHT panel with the live preview when explicitly asked (the
     // preview toolbar's "Chat with ticket"). A ticket-row click must NOT hijack the tab.
     if (opts.withPreview) {
@@ -372,8 +392,8 @@
       const r = await fetch(`/api/projects/${PID()}/tickets/${ticketId}/logs`, { credentials: "same-origin" });
       if (!r.ok) return;
       const rows = await r.json();
-      if (Array.isArray(rows)) renderAll(rows);
-    } catch (_) { /* keep last render */ }
+      if (Array.isArray(rows)) { renderAll(rows); applyAutoTab(rows.length); }
+    } catch (_) { /* keep last render — a later poll retries the auto-tab */ }
   }
 
   function renderAll(rows) {
@@ -538,7 +558,9 @@
     $("ta-stop")?.addEventListener("click", stopTicket);
     $("ta-edit")?.addEventListener("click", toggleEdit);
     $("ta-delete")?.addEventListener("click", deleteTicket);
-    $("ta-tabs")?.addEventListener("click", (e) => { const b = e.target.closest("[data-ta-tab]"); if (b) switchTicketTab(b.getAttribute("data-ta-tab")); });
+    // A deliberate tab choice outranks the pending auto-switch — never yank the panel
+    // out from under someone who just clicked Details while the logs were still loading.
+    $("ta-tabs")?.addEventListener("click", (e) => { const b = e.target.closest("[data-ta-tab]"); if (b) { autoTabPending = false; switchTicketTab(b.getAttribute("data-ta-tab")); } });
     $("ta-send")?.addEventListener("click", send);
     $("ta-input")?.addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
     $("ta-attach")?.addEventListener("click", () => $("ta-file")?.click());

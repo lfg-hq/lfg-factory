@@ -135,6 +135,18 @@ async function resolveBuilderModelKey(ownerId: string): Promise<string> {
   const [sel] = await db.select({ m: modelSelections.selectedModel }).from(modelSelections).where(eq(modelSelections.userId, ownerId)).limit(1);
   return sel?.m || DEFAULT_MODEL_KEY;
 }
+
+type BuilderAuthMode = "subscription" | "api_key";
+
+/** Explicit credential source selected beside the Coding Agent model picker. */
+async function resolveBuilderAuthMode(ownerId: string): Promise<BuilderAuthMode> {
+  const [appState] = await db
+    .select({ mode: applicationState.builderAuthMode })
+    .from(applicationState)
+    .where(eq(applicationState.userId, ownerId))
+    .limit(1);
+  return appState?.mode === "api_key" ? "api_key" : "subscription";
+}
 import { startPiCli, streamPiToCompletion, isPiSupportedProvider, extractPiProgress } from "../services/pi-cli.ts";
 import { getOpenAICodexAccessToken, hasOpenAICodexCredentials } from "../services/openai-codex-auth.ts";
 
@@ -909,6 +921,22 @@ async function executeTicket(ticketId: string): Promise<void> {
     .where(eq(profiles.userId, ownerId))
     .limit(1);
 
+  const builderAuthMode = await resolveBuilderAuthMode(ownerId);
+  const [builderKeys] = await db
+    .select({ anthropic: llmApiKeys.anthropicApiKey })
+    .from(llmApiKeys)
+    .where(eq(llmApiKeys.userId, ownerId))
+    .limit(1);
+  const useClaudeSubscription = builderAuthMode === "subscription"
+    && !!profile?.claudeCodeAuthenticated
+    && !!profile.claudeCodeCredentials;
+  // A disconnected subscription falls back to the connected API token for legacy
+  // selections; an explicit API-token selection never injects OAuth credentials.
+  const anthropicApiKey = useClaudeSubscription ? undefined : builderKeys?.anthropic ?? undefined;
+  if (!useClaudeSubscription && !anthropicApiKey) {
+    throw new Error("No connected Claude subscription or Anthropic API token is available for the selected Coding Agent model.");
+  }
+
   const [ghToken] = await db
     .select()
     .from(githubTokens)
@@ -1232,10 +1260,15 @@ echo "BRANCH_CREATED"
   }
 
   // ── Step 4: Refresh + inject credentials ────────────────────────────
-  console.log(`[ticket-executor] Step 4: Refreshing credentials from auth sandbox`);
-  await refreshCredentialsFromAuthSandbox(ownerId);
-  console.log(`[ticket-executor] Step 4: Credentials will be injected by CLI launcher`);
-  await addLog(ticketId, "Injecting Claude credentials...", "command", ownerId);
+  if (useClaudeSubscription) {
+    console.log(`[ticket-executor] Step 4: Refreshing credentials from auth sandbox`);
+    await refreshCredentialsFromAuthSandbox(ownerId);
+    console.log(`[ticket-executor] Step 4: Subscription credentials will be injected by CLI launcher`);
+    await addLog(ticketId, "Injecting Claude subscription credentials...", "command", ownerId);
+  } else {
+    console.log(`[ticket-executor] Step 4: Using connected Anthropic API token`);
+    await addLog(ticketId, "Using connected Anthropic API token...", "command", ownerId);
+  }
 
   await logActivity({
     projectId: project.id,
@@ -1372,6 +1405,7 @@ Before implementing, fix the git issue:
       sessionId: existingSessionId,
       userId: ownerId,
       envVars,
+      anthropicApiKey,
     });
   } catch (err) {
     const msg = `startClaudeCli failed: ${err}`;
@@ -1753,6 +1787,7 @@ async function executeTicketChat(
   // short-lived OpenAI Codex subscription bearer → Pi.
   const chatModelKey = await resolveBuilderModelKey(ownerId);
   const chatProvider = getProviderName(chatModelKey);
+  const chatBuilderAuthMode = await resolveBuilderAuthMode(ownerId);
   const [chatUserKeys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, ownerId)).limit(1);
   const chatProviderKey = chatProvider
     ? ({
@@ -1764,7 +1799,15 @@ async function executeTicketChat(
         glm: chatUserKeys?.glmApiKey,
       } as Record<string, string | null | undefined>)[chatProvider]
     : undefined;
-  const chatUsesOpenAICodex = chatProvider === "openai"
+  const chatUsesClaudeSubscription = chatProvider === "anthropic"
+    && chatBuilderAuthMode === "subscription"
+    && !!profile?.claudeCodeAuthenticated
+    && !!profile.claudeCodeCredentials;
+  const chatAnthropicApiKey = chatProvider === "anthropic" && !chatUsesClaudeSubscription
+    ? chatUserKeys?.anthropicApiKey ?? undefined
+    : undefined;
+  const chatUsesOpenAICodex = chatBuilderAuthMode === "subscription"
+    && chatProvider === "openai"
     && !!profile?.openaiCodexAuthenticated
     && !!profile.openaiCodexCredentials;
   const chatOAuthToken = chatUsesOpenAICodex
@@ -1831,7 +1874,7 @@ ${message}
       const webhookReachable = !!cliApiKey && !/localhost|127\.0\.0\.1|\/\/0\.0\.0\.0/.test(CALLBACK_BASE_URL);
       const pi = await startPiCli({
         workspaceId, prompt: piPrompt, projectDir: projectDirName,
-        provider: chatProvider, modelId: piModelId, apiKey: chatProviderKey ?? undefined,
+        provider: chatProvider, modelId: piModelId, apiKey: chatUsesOpenAICodex ? undefined : chatProviderKey ?? undefined,
         oauthAccessToken: chatOAuthToken, envVars: piEnvVars,
         forward: webhookReachable ? { apiUrl: CALLBACK_BASE_URL, apiKey: cliApiKey, mode: "ticket" as const, ticketId } : undefined,
       });
@@ -1872,8 +1915,9 @@ ${message}
   }
 
   // ── Otherwise: Claude Code path (Anthropic models) ──────────────────────
-  // Refresh credentials from auth sandbox (may have been auto-refreshed)
-  await refreshCredentialsFromAuthSandbox(ownerId);
+  // Refresh/inject OAuth only for the selected subscription source. API-token mode
+  // exports ANTHROPIC_API_KEY into the Claude CLI process instead.
+  if (chatUsesClaudeSubscription) await refreshCredentialsFromAuthSandbox(ownerId);
 
   await logActivity({
     projectId: project!.id,
@@ -1885,21 +1929,22 @@ ${message}
     metadata: { workspaceId },
   });
 
-  // Pre-flight: verify Claude CLI is working
-  console.log(`[ticket-executor] Chat: running pre-flight check on workspace ${workspaceId}`);
-  const preflight = await preflightCheck(workspaceId, ownerId);
-  if (!preflight.ok) {
-    console.error(`[ticket-executor] Chat: pre-flight failed:`, preflight.error);
-    const errorMsg = preflight.error ?? "Claude CLI is not connected. Please connect Claude Code in Settings.";
-    // Mark as disconnected in DB so Settings page shows correct status
-    if (preflight.needsReconnect) {
-      await markClaudeDisconnected(ownerId);
+  if (chatUsesClaudeSubscription) {
+    // Pre-flight: verify Claude CLI OAuth is working
+    console.log(`[ticket-executor] Chat: running pre-flight check on workspace ${workspaceId}`);
+    const preflight = await preflightCheck(workspaceId, ownerId);
+    if (!preflight.ok) {
+      console.error(`[ticket-executor] Chat: pre-flight failed:`, preflight.error);
+      const errorMsg = preflight.error ?? "Claude CLI is not connected. Please connect Claude Code in Settings.";
+      if (preflight.needsReconnect) await markClaudeDisconnected(ownerId);
+      await addLog(ticketId, errorMsg, "cli_error", ownerId);
+      return;
     }
-    // Log as cli_error type so frontend can style it differently
-    await addLog(ticketId, errorMsg, "cli_error", ownerId);
+    console.log(`[ticket-executor] Chat: pre-flight passed`);
+  } else if (!chatAnthropicApiKey) {
+    await addLog(ticketId, "No connected Anthropic API token is available for this Coding Agent model.", "cli_error", ownerId);
     return;
   }
-  console.log(`[ticket-executor] Chat: pre-flight passed`);
 
   const prompt = buildTicketChatPrompt(
     {
@@ -1941,6 +1986,7 @@ ${message}
     sessionId,
     userId: ownerId,
     envVars,
+    anthropicApiKey: chatAnthropicApiKey,
   });
 
   console.log(`[ticket-executor] Chat: CLI started, pid=${chatResult.backgroundPid}, output=${chatResult.outputFile}`);
@@ -1986,6 +2032,7 @@ ${message}
       // no sessionId — fresh session
       userId: ownerId,
       envVars,
+      anthropicApiKey: chatAnthropicApiKey,
     });
 
     console.log(`[ticket-executor] Chat: fresh CLI started, pid=${chatResult.backgroundPid}`);
@@ -2603,7 +2650,9 @@ git branch --show-current
         glm: userKeys?.glmApiKey,
       } as Record<string, string | null | undefined>)[provider]
     : undefined;
-  const useOpenAICodex = useCodingAgent && provider === "openai" && await hasOpenAICodexCredentials(ownerId);
+  const builderAuthMode = await resolveBuilderAuthMode(ownerId);
+  const useOpenAICodex = useCodingAgent && builderAuthMode === "subscription"
+    && provider === "openai" && await hasOpenAICodexCredentials(ownerId);
   // Pin the VM awake for the whole build (wakes a reused/slept VM too) so Mags can't
   // idle-sleep a live build → "lost contact". Turned back off at build end.
   await wakeTicketVm(workspaceId);
@@ -2677,7 +2726,7 @@ git branch --show-current
           projectDir: projectDirName,
           provider,
           modelId: piModelId,
-          apiKey: providerApiKey ?? undefined,
+          apiKey: useOpenAICodex ? undefined : providerApiKey ?? undefined,
           oauthAccessToken: useOpenAICodex ? await getOpenAICodexAccessToken(ownerId) : undefined,
           envVars: piEnvVars,
           forward: webhookReachable ? { apiUrl: CALLBACK_BASE_URL, apiKey: cliApiKey, mode: "ticket" as const, ticketId } : undefined,

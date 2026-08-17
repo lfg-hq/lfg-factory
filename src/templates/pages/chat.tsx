@@ -8,7 +8,7 @@ interface ChatPageProps {
   conversationId?: string;
   modelKey?: string;
   roleKey?: string;
-  models?: Array<{ key: string; providerLabel: string; requiresPro: boolean }>;
+  models?: Array<{ key: string; providerLabel: string; requiresPro: boolean; available?: boolean }>;
 }
 
 export function ChatPage({

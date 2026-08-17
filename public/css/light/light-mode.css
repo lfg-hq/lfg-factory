@@ -2685,6 +2685,17 @@ body[data-theme="light"] {
     background: rgba(124, 58, 237, 0.08) !important;
 }
 
+[data-theme="light"] .submenu-option.unavailable,
+[data-theme="light"] .submenu-option:disabled {
+    color: #94a3b8 !important;
+    opacity: 0.55;
+}
+
+[data-theme="light"] .submenu-option.unavailable:hover,
+[data-theme="light"] .submenu-option:disabled:hover {
+    background: transparent !important;
+}
+
 [data-theme="light"] .submenu-option.selected {
     color: #7c3aed !important;
 }

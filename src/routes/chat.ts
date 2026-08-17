@@ -4,6 +4,7 @@ import { db } from "../config/db.ts";
 import { projects } from "../db/schema/projects.ts";
 import { modelSelections, agentRoles, conversations } from "../db/schema/chat.ts";
 import { instantApps } from "../db/schema/instant.ts";
+import { llmApiKeys } from "../db/schema/users.ts";
 import { eq, and, desc, notExists } from "drizzle-orm";
 import { listModels, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
 import { ChatPage } from "../templates/pages/chat.tsx";
@@ -36,17 +37,36 @@ async function handleChatPage(c: import("hono").Context, conversationId?: string
     return c.text("Project not found", 404);
   }
 
-  const [modelSel, roleRow] = await Promise.all([
+  const [modelSel, roleRow, keyRow] = await Promise.all([
     db.select().from(modelSelections).where(eq(modelSelections.userId, user.id)).then((r) => r[0]),
     db.select().from(agentRoles).where(eq(agentRoles.userId, user.id)).then((r) => r[0]),
+    db.select({
+      openai: llmApiKeys.openaiApiKey,
+      anthropic: llmApiKeys.anthropicApiKey,
+      google: llmApiKeys.googleApiKey,
+      kimi: llmApiKeys.kimiApiKey,
+      deepseek: llmApiKeys.deepseekApiKey,
+      glm: llmApiKeys.glmApiKey,
+    }).from(llmApiKeys).where(eq(llmApiKeys.userId, user.id)).then((r) => r[0]),
   ]);
 
-  const models = listModels().map((m) => ({
-    key: m.key,
-    label: m.label,
-    providerLabel: m.providerLabel,
-    requiresPro: m.requiresPro,
-  }));
+  const connectedProviders: Record<string, boolean> = {
+    openai: !!keyRow?.openai,
+    anthropic: !!keyRow?.anthropic,
+    google: !!keyRow?.google,
+    kimi: !!keyRow?.kimi,
+    deepseek: !!keyRow?.deepseek,
+    glm: !!keyRow?.glm,
+  };
+  const models = listModels()
+    .map((m) => ({
+      key: m.key,
+      label: m.label,
+      providerLabel: m.providerLabel,
+      requiresPro: m.requiresPro,
+      available: !!connectedProviders[m.provider],
+    }))
+    .sort((a, b) => Number(b.available) - Number(a.available));
 
   return c.html(
     ChatPage({

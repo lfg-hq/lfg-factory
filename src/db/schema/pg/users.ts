@@ -133,8 +133,9 @@ export const applicationState = pgTable("application_state", {
   lastSelectedModel: text("last_selected_model").notNull().default("gpt-5.6-luna"),
   lastSelectedRole: text("last_selected_role").notNull().default("product_analyst"),
   turboModeEnabled: boolean("turbo_mode_enabled").notNull().default(false),
-  claudeCodeEnabled: boolean("claude_code_enabled").notNull().default(false),
+  claudeCodeEnabled: boolean("claude_code_enabled").notNull().default(true),
   builderModelKey: text("builder_model_key").default("claude_4.5_sonnet"),
+  builderAuthMode: text("builder_auth_mode").notNull().default("subscription"),
   createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at", { mode: "date" }).notNull().default(sql`now()`),
 });

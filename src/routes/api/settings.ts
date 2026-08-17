@@ -83,14 +83,22 @@ settings.get("/me", async (c) => {
   });
 });
 
-// PATCH /api/settings/execution-mode — toggle CLI/API mode and builder model
+// PATCH /api/settings/execution-mode — coding-agent model + credential source.
+// claudeCodeEnabled remains for backward compatibility while Direct API is hidden.
 settings.patch("/execution-mode", async (c) => {
   const user = c.get("user");
-  const body = await c.req.json<{ claudeCodeEnabled?: boolean; builderModelKey?: string }>();
+  const body = await c.req.json<{
+    claudeCodeEnabled?: boolean;
+    builderModelKey?: string;
+    builderAuthMode?: "subscription" | "api_key";
+  }>();
 
   if (body.builderModelKey) {
     const known = listModels().find((m) => m.key === body.builderModelKey);
     if (!known) return c.json({ error: "Unknown model key" }, 400);
+  }
+  if (body.builderAuthMode && !["subscription", "api_key"].includes(body.builderAuthMode)) {
+    return c.json({ error: "Invalid builder auth mode" }, 400);
   }
 
   // Check if row exists
@@ -105,13 +113,15 @@ settings.patch("/execution-mode", async (c) => {
     const setData: Record<string, unknown> = { updatedAt: new Date() };
     if (typeof body.claudeCodeEnabled === "boolean") setData.claudeCodeEnabled = body.claudeCodeEnabled;
     if (body.builderModelKey) setData.builderModelKey = body.builderModelKey;
+    if (body.builderAuthMode) setData.builderAuthMode = body.builderAuthMode;
     await db.update(applicationState).set(setData).where(eq(applicationState.userId, user.id));
   } else {
     // Insert new row with explicit defaults
     await db.insert(applicationState).values({
       userId: user.id,
-      claudeCodeEnabled: typeof body.claudeCodeEnabled === "boolean" ? body.claudeCodeEnabled : false,
+      claudeCodeEnabled: typeof body.claudeCodeEnabled === "boolean" ? body.claudeCodeEnabled : true,
       builderModelKey: body.builderModelKey ?? "claude_4.5_sonnet",
+      builderAuthMode: body.builderAuthMode ?? "subscription",
     });
   }
 

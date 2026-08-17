@@ -517,6 +517,7 @@ export HOME=/root
 export PATH=/root/node/current/bin:/root/.npm-global/bin:\$PATH
 # ALL toolchain caches/installs live on /data, never the tiny root fs or /tmp.
 ${DATA_TOOLCHAIN_ENV}
+${opts.anthropicApiKey ? `export ANTHROPIC_API_KEY="${opts.anthropicApiKey}"` : "# (using Claude Code OAuth credentials)"}
 source ${envFile}
 cd ${WORKING_DIR}/${projectDirName}
 

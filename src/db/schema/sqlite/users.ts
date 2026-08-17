@@ -162,8 +162,9 @@ export const applicationState = sqliteTable("application_state", {
     .notNull()
     .default("product_analyst"),
   turboModeEnabled: integer("turbo_mode_enabled", { mode: "boolean" }).notNull().default(false),
-  claudeCodeEnabled: integer("claude_code_enabled", { mode: "boolean" }).notNull().default(false),
+  claudeCodeEnabled: integer("claude_code_enabled", { mode: "boolean" }).notNull().default(true),
   builderModelKey: text("builder_model_key").default("claude_4.5_sonnet"),
+  builderAuthMode: text("builder_auth_mode").notNull().default("subscription"),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
 });

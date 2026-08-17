@@ -1677,6 +1677,22 @@ input:checked + .turbo-slider + .turbo-label,
     background: rgba(100, 116, 139, 0.1);
 }
 
+.submenu-group.unavailable {
+    opacity: 0.55;
+}
+
+.submenu-option.unavailable,
+.submenu-option:disabled {
+    color: #64748b;
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.submenu-option.unavailable:hover,
+.submenu-option:disabled:hover {
+    background: transparent;
+}
+
 .submenu-option i {
     color: #60a5fa;
     font-size: 12px;
