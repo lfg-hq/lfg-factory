@@ -5363,14 +5363,15 @@ document.addEventListener('DOMContentLoaded', () => {
             mentionDropdown.className = 'mention-dropdown';
             mentionDropdown.style.cssText = `
                 position: absolute;
-                background: #1a1a1a;
-                border: 1px solid #333;
-                border-radius: 4px;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.5);
-                max-height: 200px;
-                overflow-y: auto;
+                background: var(--card-bg, #1a1a1a);
+                border: 1px solid var(--border-color, #333);
+                border-radius: 10px;
+                box-shadow: 0 8px 28px rgba(16,24,40,0.18);
+                max-height: 220px;
+                overflow: hidden auto;
                 z-index: 1000;
-                min-width: 250px;
+                min-width: 260px;
+                padding: 4px;
             `;
             document.body.appendChild(mentionDropdown);
         }
@@ -5400,8 +5401,8 @@ document.addEventListener('DOMContentLoaded', () => {
             mentionTickets = data.tickets || [];
             selectedMentionIndex = 0;
             renderMentionList(mentionTickets, function(t){
-                return '<div style="font-weight:500;color:#e0e0e0;">' + escapeHtmlSafe(t.label) + '</div>'
-                    + '<div style="font-size:12px;color:#999;">' + escapeHtmlSafe(t.branch) + ' • ' + escapeHtmlSafe(t.status || '') + '</div>';
+                return '<div style="font-weight:500;color:var(--text-color,#e0e0e0);">' + escapeHtmlSafe(t.label) + '</div>'
+                    + '<div style="font-size:12px;color:var(--text-secondary,#999);">' + escapeHtmlSafe(t.branch) + ' • ' + escapeHtmlSafe(t.status || '') + '</div>';
             });
         } catch (error) {
             console.error('Error fetching mention tickets:', error);
@@ -5421,8 +5422,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!mentionMenuItems.length) { hideMentionDropdown(); return; }
         selectedMentionIndex = 0;
         renderMentionList(mentionMenuItems, function(m){
-            return '<div style="font-weight:500;color:#e0e0e0;">' + m.icon + ' ' + m.title + '</div>'
-                + '<div style="font-size:12px;color:#999;">' + m.desc + '</div>';
+            return '<div style="font-weight:500;color:var(--text-color,#e0e0e0);">' + m.icon + ' ' + m.title + '</div>'
+                + '<div style="font-size:12px;color:var(--text-secondary,#999);">' + m.desc + '</div>';
         });
     }
 
@@ -5433,7 +5434,7 @@ document.addEventListener('DOMContentLoaded', () => {
         items.forEach(function(it, index){
             const el = document.createElement('div');
             el.className = 'mention-item';
-            el.style.cssText = 'padding:8px 12px;cursor:pointer;border-bottom:1px solid #333;' + (index === selectedMentionIndex ? 'background-color:#2a2a2a;' : '');
+            el.style.cssText = 'padding:8px 10px;cursor:pointer;border-radius:7px;' + (index === selectedMentionIndex ? 'background-color:rgba(124,58,237,0.14);' : '');
             el.innerHTML = itemHtml(it);
             el.addEventListener('click', function(){ selectActiveMention(it); });
             el.addEventListener('mouseenter', function(){ selectedMentionIndex = index; updateMentionSelection(); });
@@ -5533,15 +5534,15 @@ document.addEventListener('DOMContentLoaded', () => {
             const item = document.createElement('div');
             item.className = 'mention-item';
             item.style.cssText = `
-                padding: 8px 12px;
+                padding: 8px 10px;
                 cursor: pointer;
-                border-bottom: 1px solid #333;
-                ${index === selectedMentionIndex ? 'background-color: #2a2a2a;' : ''}
+                border-radius: 7px;
+                ${index === selectedMentionIndex ? 'background-color: rgba(124,58,237,0.14);' : ''}
             `;
-            
+
             item.innerHTML = `
-                <div style="font-weight: 500; color: #e0e0e0;">${file.name}</div>
-                <div style="font-size: 12px; color: #999;">${file.type} • Updated ${file.updated_at}</div>
+                <div style="font-weight: 500; color: var(--text-color, #e0e0e0);">${file.name}</div>
+                <div style="font-size: 12px; color: var(--text-secondary, #999);">${file.type} • Updated ${file.updated_at}</div>
             `;
             
             item.addEventListener('click', () => selectMentionFile(file));
@@ -5561,7 +5562,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const items = mentionDropdown.querySelectorAll('.mention-item');
         items.forEach((item, index) => {
             if (index === selectedMentionIndex) {
-                item.style.backgroundColor = '#2a2a2a';
+                item.style.backgroundColor = 'rgba(124,58,237,0.14)';
             } else {
                 item.style.backgroundColor = '';
             }
