@@ -445,18 +445,20 @@ async function reapplyEnv(projectId: string, userId: string, workspaceId: string
  */
 async function runSchemaSetup(projectId: string, userId: string, workspaceId: string, manifest: PreviewManifest, runDir: string): Promise<void> {
   if (!(manifest.databases || []).length) return; // no DB → nothing to migrate
-  // GUARD: if the schema is ALREADY present (the DB has tables), do NOT re-run migrations.
-  // Re-running on every branch switch is what broke a working DB — `drizzle-kit push
-  // --force` is destructive. Only migrate a FRESH/empty database.
+  // Is the schema ALREADY present (existing DB) vs fresh/empty? We DON'T skip on "present"
+  // anymore — that's what left a ticket branch's NEW migration unapplied (app 500s on a
+  // missing column). Instead we ALWAYS run idempotent migrations (drizzle-kit migrate /
+  // prisma migrate deploy / ORM migrate → they apply only PENDING migrations, tracked in the
+  // migrations table), and only SKIP the destructive fallbacks (push --force / db push) and
+  // the seed on an existing DB (those would clobber/duplicate data).
+  let schemaPresent = false;
   const primary = manifest.databases[0]!;
   if (primary.engine === "postgres" || primary.engine === "mysql") {
     const container = ENGINES[primary.engine].container;
     let q = "";
     if (primary.engine === "postgres") {
-      // Local socket → trust auth, no password needed.
       q = `docker exec ${container} psql -U app -d app -tAc "select count(*) from information_schema.tables where table_schema='public'"`;
     } else {
-      // MySQL requires auth — use our stored password so the guard works here too.
       const [row] = await db.select({ pw: projectDatabases.passwordEncrypted }).from(projectDatabases).where(and(eq(projectDatabases.projectId, projectId), eq(projectDatabases.engine, "mysql")));
       let pw = ""; try { pw = row?.pw ? decryptSecret(row.pw) : ""; } catch { /* unreadable */ }
       if (pw) q = `docker exec ${container} mysql -uapp -p'${pw}' app -N -e "select count(*) from information_schema.tables where table_schema='app'"`;
@@ -464,26 +466,41 @@ async function runSchemaSetup(projectId: string, userId: string, workspaceId: st
     if (q) {
       const r = await sh(workspaceId, `${q} 2>/dev/null | tr -d '[:space:]'`, 20_000).catch(() => ({ output: "" }));
       const n = parseInt((r.output || "").trim(), 10);
-      if (Number.isFinite(n) && n > 0) { plog(projectId, userId, `Database already has ${n} table(s) — schema present, skipping migrations (won't touch your data).`); return; }
+      if (Number.isFinite(n) && n > 0) schemaPresent = true;
     }
   }
+
   let migrations = [...(manifest.migrations || [])];
   if (!migrations.length) {
     // The plan didn't give a migration command — infer one from the ORM in the repo.
+    // On an EXISTING DB use ONLY the tracked `migrate` (applies pending); on a FRESH DB add
+    // the push fallback so an app with no migration files still gets its schema created.
     const probe = await sh(workspaceId, `cd ${runDir} 2>/dev/null; ls drizzle.config.* 2>/dev/null; ls prisma/schema.prisma 2>/dev/null`, 15_000).catch(() => ({ output: "" }));
     const o = probe.output || "";
-    if (/drizzle\.config/.test(o)) migrations = ["npx --yes drizzle-kit migrate 2>/dev/null || npx --yes drizzle-kit push --force 2>/dev/null || npx --yes drizzle-kit push"];
-    else if (/schema\.prisma/.test(o)) migrations = ["npx --yes prisma migrate deploy || npx --yes prisma db push --accept-data-loss"];
+    if (/drizzle\.config/.test(o)) migrations = schemaPresent
+      ? ["npx --yes drizzle-kit migrate"]
+      : ["npx --yes drizzle-kit migrate 2>/dev/null || npx --yes drizzle-kit push --force 2>/dev/null || npx --yes drizzle-kit push"];
+    else if (/schema\.prisma/.test(o)) migrations = schemaPresent
+      ? ["npx --yes prisma migrate deploy"]
+      : ["npx --yes prisma migrate deploy || npx --yes prisma db push --accept-data-loss"];
+  } else if (schemaPresent) {
+    // Recorded migration commands are proper migrations (idempotent) — but if a profile
+    // recorded a DESTRUCTIVE push, don't run it against an existing DB.
+    const before = migrations.length;
+    migrations = migrations.filter((m) => !/push\s+--force|db\s+push|--accept-data-loss/i.test(m));
+    if (migrations.length < before) plog(projectId, userId, "Skipping a destructive push on the existing DB (kept only idempotent migrations).");
   }
-  if (!migrations.length && !manifest.seedCmd) return;
-  plog(projectId, userId, "Applying the database schema (migrations)…");
+
+  if (!migrations.length && !(manifest.seedCmd && !schemaPresent)) return;
+  plog(projectId, userId, schemaPresent ? "Applying any new/pending migrations for this branch…" : "Applying the database schema (migrations)…");
   for (const cmd of migrations) {
     const c = localizeCmd(cmd, runDir);
     plog(projectId, userId, `migrate: ${c}`);
     const r = await runDetachedPolled(projectId, userId, workspaceId, c, 600_000, { stallMs: 180_000, workDir: runDir }).catch(() => ({ exitCode: 1, output: "" }));
     plog(projectId, userId, r.exitCode === 0 ? `migrate ok ✓` : `migrate exited ${r.exitCode} (continuing — the app may still self-migrate)`, r.exitCode === 0 ? undefined : { level: "error", detail: (r.output || "").slice(-700) });
   }
-  if (manifest.seedCmd) {
+  // Seed ONLY on a fresh DB — re-seeding an existing DB duplicates rows / clobbers data.
+  if (manifest.seedCmd && !schemaPresent) {
     const c = localizeCmd(manifest.seedCmd, runDir);
     plog(projectId, userId, `seed: ${c}`);
     await runDetachedPolled(projectId, userId, workspaceId, c, 600_000, { stallMs: 180_000, workDir: runDir }).catch(() => {});
