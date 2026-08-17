@@ -185,6 +185,17 @@
       try { if (window.ArtifactsLoader && window.ArtifactsLoader._checklistProjectId) window.ArtifactsLoader.loadChecklist(window.ArtifactsLoader._checklistProjectId); } catch (_) {}
     } catch (e) { toast("Couldn't delete: " + (e.message || e)); }
   }
+  // Open this ticket's branch in the right-hand Preview panel — switch to the Preview tab and
+  // let PreviewTab render it (it starts the branch's preview if it isn't already running).
+  function previewTicket() {
+    if (!ticketId) return;
+    try {
+      const tabBtn = document.querySelector('.tab-button[data-tab="preview"]');
+      if (tabBtn) tabBtn.click();
+      if (window.PreviewTab && window.PreviewTab.open) window.PreviewTab.open(ticketId);
+      else toast("Preview panel isn't ready yet — open the Preview tab and try again.");
+    } catch (_) { toast("Couldn't open the preview."); }
+  }
   // Inline edit — turn the Details pane into an editable form (no separate modal/drawer).
   let editing = false;
   function toggleEdit() {
@@ -557,6 +568,7 @@
     $("ta-build")?.addEventListener("click", buildTicket);
     $("ta-stop")?.addEventListener("click", stopTicket);
     $("ta-edit")?.addEventListener("click", toggleEdit);
+    $("ta-preview")?.addEventListener("click", previewTicket);
     $("ta-delete")?.addEventListener("click", deleteTicket);
     // A deliberate tab choice outranks the pending auto-switch — never yank the panel
     // out from under someone who just clicked Details while the logs were still loading.
