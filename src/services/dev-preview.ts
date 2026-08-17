@@ -1156,8 +1156,16 @@ function serviceStartCommand(service: ServiceSpec, dir: string = PROJECT_DIR): s
   const runCmd = localizeCmd(service.runCmd, dir).replace(/'/g, `'\\''`);
   // A subfolder app (monorepo): source the ROOT .env, then cd into its dir before starting.
   const sub = service.dir ? `cd '${service.dir.replace(/'/g, `'\\''`)}' 2>/dev/null || true; ` : "";
+  // COMPANION ENV ISOLATION: a companion sources the PRIMARY's root .env (so it gets the
+  // shared DB connection + user vars), but that .env can carry app-INSTANCE config that
+  // assumes the primary's appsettings shape — e.g. Serilog__WriteTo__1__* injects a sink at
+  // array index 1, which is a valid override for Cohire.Web (its appsettings defines
+  // WriteTo[1].Name) but FATAL for Cohire.Admin (no Serilog section → a nameless sink →
+  // startup crash). Strip Serilog__* after sourcing so a second app is never poisoned by the
+  // first app's logging config. (A companion's own Serilog config lives in its appsettings.)
+  const isolate = `unset $(env | grep "^Serilog__" | cut -d= -f1) 2>/dev/null; `;
   return `fuser -k ${service.port}/tcp 2>/dev/null; pkill -f ':${service.port}' 2>/dev/null; sleep 1; ` +
-    `setsid sh -c 'cd ${dir}; set -a; . ./.env 2>/dev/null; set +a; ${sub}${runCmd}' </dev/null > ${dir}/preview-${service.name}.log 2>&1 & echo STARTED`;
+    `setsid sh -c 'cd ${dir}; set -a; . ./.env 2>/dev/null; set +a; ${isolate}${sub}${runCmd}' </dev/null > ${dir}/preview-${service.name}.log 2>&1 & echo STARTED`;
 }
 
 /** Bring up ONE companion service: build (only if it has its own buildCmd — the shared
