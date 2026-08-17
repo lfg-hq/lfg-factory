@@ -26,6 +26,8 @@ interface ExecutionModeConfig {
   claudeCodeEnabled: boolean;
   builderModelKey: string;
   models: Array<{ key: string; label: string; provider: string }>;
+  openAICodexConnected: boolean;
+  claudeCodeConnected: boolean;
 }
 
 interface TicketsListPageProps {
@@ -147,18 +149,31 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
 
     .exec-controls {
       display: flex;
-      flex-direction: column;
-      align-items: flex-end;
-      gap: 0.25rem;
+      align-items: center;
     }
     .exec-controls-row { display: flex; align-items: center; gap: 0.65rem; }
-    .exec-auth-hint {
-      max-width: 390px;
+    .exec-auth-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      min-height: 27px;
+      padding: 0.25rem 0.6rem;
+      border: 1px solid var(--border-color);
+      border-radius: 999px;
       color: var(--text-secondary);
-      font-size: 0.66rem;
-      line-height: 1.2;
+      background: var(--input-bg);
+      font-size: 0.68rem;
+      line-height: 1;
+      text-decoration: none;
       white-space: nowrap;
     }
+    .exec-auth-badge.subscription {
+      color: #34d399;
+      border-color: rgba(52, 211, 153, 0.35);
+      background: rgba(52, 211, 153, 0.08);
+    }
+    .exec-auth-badge:hover { border-color: #8b5cf6; }
+    [data-theme="light"] .exec-auth-badge.subscription { color: #047857; }
 
     .builder-model-select {
       padding: 0.3rem 1.7rem 0.3rem 0.6rem; /* extra right pad so the native chevron doesn't overlap the text */
@@ -410,8 +425,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
                 <option value="${m.key}" data-provider="${m.provider}" ${m.key === executionMode.builderModelKey ? "selected" : ""}>${m.label}</option>
               `)}
             </select>
+            <a class="exec-auth-badge" id="execution-auth-badge" href="/settings/integrations" aria-live="polite"></a>
           </div>
-          <div class="exec-auth-hint" id="execution-auth-hint" aria-live="polite"></div>
         </div>
       ` : ""}
       <div class="build-settings-menu">
@@ -733,22 +748,41 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
   const PROJECT_ID = document.body.dataset.projectId;
   let _currentTicketId = null;
   let _codingAgentEnabled = ${!isApiMode ? "true" : "false"};
+  const _openAICodexConnected = ${executionMode?.openAICodexConnected ? "true" : "false"};
+  const _claudeCodeConnected = ${executionMode?.claudeCodeConnected ? "true" : "false"};
 
   // ── Execution Mode Toggle ─────────────────────────────────────────
   function updateExecutionAuthHint() {
-    var hint = document.getElementById('execution-auth-hint');
+    var badge = document.getElementById('execution-auth-badge');
     var select = document.getElementById('builder-model-select');
-    if (!hint || !select) return;
+    if (!badge || !select) return;
     var option = select.options[select.selectedIndex];
     var provider = option && option.dataset ? option.dataset.provider : '';
+    badge.className = 'exec-auth-badge';
     if (!_codingAgentEnabled) {
-      hint.textContent = 'Uses the selected provider API key — subscriptions are not used.';
+      badge.innerHTML = '<i class="fas fa-key"></i> API key';
+      badge.title = 'Direct API always uses the selected provider API key.';
     } else if (provider === 'openai') {
-      hint.textContent = 'Uses your connected ChatGPT/Codex subscription when available.';
+      if (_openAICodexConnected) {
+        badge.classList.add('subscription');
+        badge.innerHTML = '<i class="fas fa-check-circle"></i> ChatGPT subscription';
+        badge.title = 'Automatically selected for Coding Agent builds with an OpenAI model.';
+      } else {
+        badge.innerHTML = '<i class="fas fa-key"></i> OpenAI API key';
+        badge.title = 'Connect ChatGPT in Settings to use your Codex subscription.';
+      }
     } else if (provider === 'anthropic') {
-      hint.textContent = 'Uses your connected Claude Code account when available.';
+      if (_claudeCodeConnected) {
+        badge.classList.add('subscription');
+        badge.innerHTML = '<i class="fas fa-check-circle"></i> Claude account';
+        badge.title = 'Automatically selected for Coding Agent builds with a Claude model.';
+      } else {
+        badge.innerHTML = '<i class="fas fa-key"></i> Anthropic API key';
+        badge.title = 'Connect Claude Code in Settings to use your Claude account.';
+      }
     } else {
-      hint.textContent = 'Runs the selected model in the sandbox using its provider API key.';
+      badge.innerHTML = '<i class="fas fa-key"></i> Provider API key';
+      badge.title = 'This provider uses its configured API key in the coding-agent sandbox.';
     }
   }
 
@@ -2116,14 +2150,41 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       col.classList.remove('drag-over');
       const stageId = col.dataset.stageId;
       if (!_dragId || !stageId) return;
+      const card = document.querySelector('.kanban-card[data-ticket-id="' + _dragId + '"]');
+      if (!card) return;
+      const fromCol = card.parentNode;
+      if (fromCol === col) return; // dropped back where it started
+      const id = _dragId;
+      // Optimistic: move the card NOW (no reload). The card sitting in the old column for a
+      // second while we awaited the PATCH + a full reload was the lag.
+      const placeholder = col.querySelector('div[style*="text-align:center"]');
+      if (placeholder) placeholder.remove();
+      col.appendChild(card);
+      const recount = () => document.querySelectorAll('.kanban-column').forEach(function(c) {
+        const body = c.querySelector('.kanban-column-body');
+        const count = c.querySelector('.ticket-count');
+        if (body && count) count.textContent = body.querySelectorAll('.kanban-card').length;
+        // Restore the "No tickets" placeholder if a column emptied out.
+        if (body && !body.querySelector('.kanban-card') && !body.querySelector('div[style*="text-align:center"]')) {
+          const ph = document.createElement('div');
+          ph.style.cssText = 'text-align:center;padding:1.5rem;color:var(--text-secondary);font-size:0.8rem;opacity:0.4;';
+          ph.textContent = 'No tickets';
+          body.appendChild(ph);
+        }
+      });
+      recount();
       try {
-        await fetch('/projects/' + PROJECT_ID + '/api/checklist/' + _dragId + '/stage', {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ stageId })
+        const r = await fetch('/projects/' + PROJECT_ID + '/api/checklist/' + id + '/stage', {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stageId })
         });
-        location.reload();
-      } catch(e) { console.error('Move failed', e); }
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+      } catch(err) {
+        // Revert on failure.
+        const ph2 = fromCol.querySelector('div[style*="text-align:center"]'); if (ph2) ph2.remove();
+        fromCol.appendChild(card);
+        recount();
+        console.error('Move failed', err);
+      }
     });
   });
 

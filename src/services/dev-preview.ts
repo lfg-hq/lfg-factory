@@ -2661,8 +2661,15 @@ export async function getPreviewState(projectId: string) {
   if (!row) return { previewStatus: "idle" as PreviewStatus, previewUrl: null, manifest: null, error: null, branch: null, log: "", steps: [], setupComplete: false, services: [] };
   const manifest = row.setupManifest ? (JSON.parse(row.setupManifest) as PreviewManifest) : null;
   // Multi-app: the service list + each service's URL for the Preview switcher. Primary →
-  // the main appUrl; an enabled companion → its derived subdomain (baseAlias-<name>).
+  // the main appUrl; an enabled companion → its OWN subdomain: insert "-<name>" into the
+  // primary URL's first host label (preview-<alias> → preview-<alias>-<name>). Deriving from
+  // appUrl (always set when running) instead of a separate stableAlias avoids the empty-URL
+  // case where a companion chip wasn't clickable and fell back to showing the primary.
   const appDomain = process.env.MAGS_APP_DOMAIN || "app.lfg.run";
+  const companionUrl = (name: string): string => {
+    if (!row.appUrl) return row.stableAlias ? `https://${row.stableAlias}-${name}.${appDomain}` : "";
+    return row.appUrl.replace(/^(https?:\/\/[^./]+)/, `$1-${name}`).replace(/\/$/, "");
+  };
   const services = (manifest?.services || []).map((s) => ({
     name: s.name,
     port: s.port,
@@ -2670,7 +2677,7 @@ export async function getPreviewState(projectId: string) {
     enabled: !!s.primary || !!s.enabled,
     manual: !!s.manual,
     dir: s.dir ?? "",
-    url: s.primary ? (row.appUrl ?? "") : (s.enabled && row.stableAlias ? `https://${row.stableAlias}-${s.name}.${appDomain}` : ""),
+    url: s.primary ? (row.appUrl ?? "") : ((!!s.primary || !!s.enabled) ? companionUrl(s.name) : ""),
   }));
   return {
     previewStatus: (row.previewStatus as PreviewStatus) ?? "idle",

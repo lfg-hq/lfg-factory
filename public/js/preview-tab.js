@@ -103,7 +103,10 @@
       // Manually-added apps get a remove (×); a subtle dot marks them as hand-added.
       const rm = s.manual ? `<span data-action="svcremove:${esc(s.name)}" title="Remove this app" style="font-size:11px;opacity:.6;cursor:pointer;padding-left:1px;">✕</span>` : "";
       const dot = s.manual ? `<span title="Added manually" style="width:5px;height:5px;border-radius:50%;background:#a78bfa;flex:none;"></span>` : "";
-      return `<button ${clickable ? `data-action="svc:${esc(s.name)}"` : ""} title="${esc(s.name)}${s.port ? " · :" + s.port : ""}${s.dir ? " · " + esc(s.dir) : ""}" style="${chip}">${dot}<span>${esc(s.name)}</span>${toggle}${rm}</button>`;
+      // Open-in-new-tab per app so its URL is reachable/visible even before switching.
+      const openBtn = s.url ? `<span data-action="svcopen:${esc(s.name)}" title="Open ${esc(s.url)} in a new tab" style="font-size:10px;opacity:.6;cursor:pointer;padding-left:1px;"><i class="fas fa-arrow-up-right-from-square"></i></span>` : "";
+      const tip = `${esc(s.name)}${s.port ? " · :" + s.port : ""}${s.dir ? " · " + esc(s.dir) : ""}${s.url ? " · " + esc(s.url) : (s.enabled ? " · (starting…)" : "")}`;
+      return `<button ${clickable ? `data-action="svc:${esc(s.name)}"` : ""} title="${tip}" style="${chip}">${dot}<span>${esc(s.name)}</span>${toggle}${openBtn}${rm}</button>`;
     }).join("");
     return chips + addBtn + tbDiv();
   }
@@ -915,6 +918,7 @@
       toggleService(parts[0], parts[1] === "1");
     }
     else if (action === "svcadd") openAddApp(b);
+    else if (action.indexOf("svcopen:") === 0) { const svc = (current && current.services || []).find((s) => s.name === action.slice("svcopen:".length)); if (svc && svc.url) window.open(svc.url, "_blank"); }
     else if (action.indexOf("svcremove:") === 0) removeApp(action.slice("svcremove:".length));
   }
 

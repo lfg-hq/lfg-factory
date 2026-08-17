@@ -7,7 +7,7 @@ import {
   projectEnvironmentVariables,
   projectInvitations,
 } from "../db/schema/projects.ts";
-import { users } from "../db/schema/users.ts";
+import { profiles, users } from "../db/schema/users.ts";
 import { projectFiles, projectFileVersions } from "../db/schema/documents.ts";
 import { conversations } from "../db/schema/chat.ts";
 import { ticketStages, projectTickets, projectTicketAttachments } from "../db/schema/tickets.ts";
@@ -452,7 +452,7 @@ projectsRouter.get("/projects/:projectId/tickets", async (c) => {
   if (!access) return c.text("Project not found", 404);
   const project = access.project;
 
-  const [stageRows, ticketRows, appStateRows] = await Promise.all([
+  const [stageRows, ticketRows, appStateRows, profileRows] = await Promise.all([
     db.select().from(ticketStages)
       .where(eq(ticketStages.projectId, project.id))
       .orderBy(asc(ticketStages.order)),
@@ -472,9 +472,16 @@ projectsRouter.get("/projects/:projectId/tickets", async (c) => {
     db.select().from(applicationState)
       .where(eq(applicationState.userId, user.id))
       .limit(1),
+    db.select({
+      openAICodexConnected: profiles.openaiCodexAuthenticated,
+      claudeCodeConnected: profiles.claudeCodeAuthenticated,
+    }).from(profiles)
+      .where(eq(profiles.userId, user.id))
+      .limit(1),
   ]);
 
   const appState = appStateRows[0];
+  const profile = profileRows[0];
 
   return c.html(
     TicketsListPage({
@@ -496,6 +503,8 @@ projectsRouter.get("/projects/:projectId/tickets", async (c) => {
         claudeCodeEnabled: appState?.claudeCodeEnabled ?? false,
         builderModelKey: appState?.builderModelKey ?? "claude_4.5_sonnet",
         models: listModels().map(m => ({ key: m.key, label: `${m.providerLabel} ${m.providerModel.split('/').pop()}`, provider: m.provider })),
+        openAICodexConnected: profile?.openAICodexConnected ?? false,
+        claudeCodeConnected: profile?.claudeCodeConnected ?? false,
       },
     })
   );
