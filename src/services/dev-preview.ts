@@ -2971,6 +2971,41 @@ git diff "$BASE"..."$HEAD" 2>/dev/null | head -c 300000
 /** Toggle a companion service on/off. Persists `enabled` on the profile (survives manifest
  *  re-derivation) + the derived manifest, kills its port when turning OFF, then triggers a
  *  restart so the enabled set comes up. Returns the current service list for the UI. */
+/** Bring ONE companion up in the BACKGROUND (detached) on the live sandbox, leaving the
+ *  primary + other companions untouched — so starting/toggling a second app never forces a
+ *  full restart (which would take down the primary too, and re-derive only the enabled set).
+ *  Returns true if it kicked off; false if the caller should fall back to a full restart
+ *  (preview not running, or on a ticket branch). Fire-and-forget for the actual bring-up. */
+async function startCompanionInBackground(projectId: string, userId: string, manifest: PreviewManifest, name: string): Promise<boolean> {
+  const row = await getEnv(projectId);
+  const onDefault = !row?.previewBranch || row.previewBranch === "(default)";
+  const added = (manifest.services || []).find((s) => s.name === name);
+  if (!(added && row?.previewStatus === "running" && onDefault && row.stableAlias)) return false;
+  const stableAlias = row.stableAlias, appUrl = row.appUrl ?? "";
+  (async () => {
+    try {
+      await loadPublicId(projectId); // WS routing for plog/broadcast
+      const sandbox = await ensureProjectSandbox(projectId); // respawn a reaped VM if needed
+      if (sandbox.created || sandbox.recreated) {
+        plog(projectId, userId, `The preview VM was down — restarting the whole preview (primary + "${name}")…`);
+        restartPreview(projectId, { userId }).catch((e) => console.error("[preview] companion respawn restart failed:", e));
+        return;
+      }
+      const workspaceId = sandbox.workspaceId;
+      plog(projectId, userId, `Starting app "${name}" in the background — the main app keeps running…`);
+      const r = await exposeService(projectId, userId, workspaceId, added, PROJECT_DIR, stableAlias);
+      if (r.url) await persistServiceBaseUrl(projectId, workspaceId, name, r.url).catch(() => {});
+      const appDomain = process.env.MAGS_APP_DOMAIN || "app.lfg.run";
+      broadcastToUser(userId, { type: "preview_services", projectId: pub(projectId), services: (manifest.services || []).map((s) => ({
+        name: s.name, port: s.port, primary: !!s.primary, enabled: !!s.primary || !!s.enabled,
+        url: s.primary ? appUrl : (s.name === name ? (r.url || "") : (s.enabled ? `https://${stableAlias}-${s.name}.${appDomain}` : "")),
+        up: s.name === name ? r.ok : true,
+      })) });
+    } catch (e) { plog(projectId, userId, `Background start of "${name}" failed: ${(e as Error).message?.slice(0, 160)}`, { level: "error" }); }
+  })();
+  return true;
+}
+
 export async function setServiceEnabled(projectId: string, userId: string, name: string, enabled: boolean): Promise<{ ok: boolean; error?: string; services?: unknown[] }> {
   const loaded = await loadAppProfile(projectId);
   if (!loaded?.profile.services?.length) return { ok: false, error: "This preview has no multi-app services detected." };
@@ -2982,15 +3017,28 @@ export async function setServiceEnabled(projectId: string, userId: string, name:
   await saveAppProfile(projectId, profile);
   const manifest = deriveManifestFromProfile(profile);
   await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
+
+  const appDomain = process.env.MAGS_APP_DOMAIN || "app.lfg.run";
+  const row0 = await getEnv(projectId);
+  const stableAlias0 = row0?.stableAlias || "";
+  const svcList = () => (manifest.services || []).map((s) => ({
+    name: s.name, port: s.port, primary: !!s.primary, enabled: !!s.enabled, manual: !!s.manual,
+    url: s.primary ? (row0?.appUrl ?? "") : (s.enabled && stableAlias0 ? `https://${stableAlias0}-${s.name}.${appDomain}` : ""),
+  }));
+
   if (!enabled) {
-    // Turning OFF → stop the companion's process now (a restart won't kill it).
+    // OFF → just stop THIS companion's process. Leave the primary + other companions running
+    // (no full restart — that used to take the whole preview down for a single toggle).
     const workspaceId = await envWorkspaceId(projectId).catch(() => null);
     if (workspaceId) await sh(workspaceId, `fuser -k ${svc.port}/tcp 2>/dev/null; pkill -f ':${svc.port}' 2>/dev/null; echo OK`, 15_000).catch(() => {});
+    broadcastToUser(userId, { type: "preview_services", projectId: pub(projectId), services: svcList() });
+    return { ok: true, services: svcList() };
   }
-  // Restart re-runs the primary (fast recorded path) + the now-enabled companions.
-  restartPreview(projectId, { userId }).catch((e) => console.error("[preview] service-toggle restart failed:", e));
-  const services = (manifest.services || []).map((s) => ({ name: s.name, port: s.port, primary: !!s.primary, enabled: !!s.enabled, manual: !!s.manual }));
-  return { ok: true, services };
+  // ON → start JUST this companion in the background (primary stays up). Fall back to a full
+  // restart only when nothing is running / a ticket branch is active.
+  const started = await startCompanionInBackground(projectId, userId, manifest, name);
+  if (!started) restartPreview(projectId, { userId }).catch((e) => console.error("[preview] service-toggle restart failed:", e));
+  return { ok: true, services: svcList() };
 }
 
 const svcSlug = (s: string) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24);
@@ -3035,43 +3083,10 @@ export async function addService(
   const manifest = deriveManifestFromProfile(profile);
   await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
 
-  // If the preview is ALREADY running on the default branch, bring the new app up in the
-  // BACKGROUND (detached) so the main app keeps serving — no disruptive full restart. It
-  // starts on its own port + subdomain; the switcher just points at whichever you pick.
-  // Otherwise (not running / a ticket branch), fall back to a restart that includes it.
-  const row = await getEnv(projectId);
-  const onDefault = !row?.previewBranch || row.previewBranch === "(default)";
-  const added = (manifest.services || []).find((s) => s.name === name);
-  if (added && row?.previewStatus === "running" && onDefault && row.stableAlias) {
-    const stableAlias = row.stableAlias, appUrl = row.appUrl ?? "";
-    (async () => {
-      try {
-        await loadPublicId(projectId); // WS routing for plog/broadcast
-        // ensureProjectSandbox (NOT the raw stored id): if the VM was reaped (OOM), its
-        // phantom guard respawns a live one — otherwise we'd start the companion on a dead
-        // VM (the "No VM found" / 500 you saw). If it had to respawn, the PRIMARY is down too,
-        // so fall back to a full restart that brings both up.
-        const sandbox = await ensureProjectSandbox(projectId);
-        if (sandbox.created || sandbox.recreated) {
-          plog(projectId, userId, `The preview VM was down — restarting the whole preview (primary + "${name}")…`);
-          restartPreview(projectId, { userId }).catch((e) => console.error("[preview] add-service respawn restart failed:", e));
-          return;
-        }
-        const workspaceId = sandbox.workspaceId;
-        plog(projectId, userId, `Adding app "${name}" in the background — the main app keeps running…`);
-        const r = await exposeService(projectId, userId, workspaceId, added, PROJECT_DIR, stableAlias);
-        if (r.url) await persistServiceBaseUrl(projectId, workspaceId, name, r.url).catch(() => {});
-        const appDomain = process.env.MAGS_APP_DOMAIN || "app.lfg.run";
-        broadcastToUser(userId, { type: "preview_services", projectId: pub(projectId), services: (manifest.services || []).map((s) => ({
-          name: s.name, port: s.port, primary: !!s.primary, enabled: !!s.primary || !!s.enabled,
-          url: s.primary ? appUrl : (s.name === name ? (r.url || "") : (s.enabled ? `https://${stableAlias}-${s.name}.${appDomain}` : "")),
-          up: s.name === name ? r.ok : true,
-        })) });
-      } catch (e) { plog(projectId, userId, `Background start of "${name}" failed: ${(e as Error).message?.slice(0, 160)}`, { level: "error" }); }
-    })();
-  } else {
-    restartPreview(projectId, { userId }).catch((e) => console.error("[preview] add-service restart failed:", e));
-  }
+  // Bring the new app up in the BACKGROUND so the main app keeps serving (no full restart);
+  // falls back to a full restart only when nothing is running / a ticket branch is active.
+  const started = await startCompanionInBackground(projectId, userId, manifest, name);
+  if (!started) restartPreview(projectId, { userId }).catch((e) => console.error("[preview] add-service restart failed:", e));
   const services = (manifest.services || []).map((s) => ({ name: s.name, port: s.port, primary: !!s.primary, enabled: !!s.enabled, manual: !!s.manual }));
   return { ok: true, services };
 }
