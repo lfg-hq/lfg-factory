@@ -298,8 +298,25 @@ export async function setStableUrl(
   // `port` (Mags-supported) binds THIS subdomain to a specific VM port, so one VM can
   // serve several apps on distinct subdomains (e.g. app-x → :8080, admin-x → :5187).
   // Omit it → defaults to the job's primary port, exactly as before.
-  await magsApi("POST", `/api/v2/mags-url-aliases`, { subdomain, workspace_id: workspaceId, domain: appDomain, ...(port ? { port } : {}) })
-    .catch((e) => { if (!/exist|conflict|already/i.test((e as Error).message)) throw e; });
+  const body = { subdomain, workspace_id: workspaceId, domain: appDomain, ...(port ? { port } : {}) };
+  const create = () => magsApi("POST", `/api/v2/mags-url-aliases`, body);
+  try {
+    await create();
+  } catch (e) {
+    if (!/exist|conflict|already/i.test((e as Error).message)) throw e;
+    // The alias ALREADY EXISTS — but it may point at the WRONG workspace/port (a stale
+    // registration is exactly why a companion subdomain like <alias>-admin returns a bare
+    // nginx 500 while the app is healthy on its port: the vhost exists but doesn't forward
+    // to :port). Don't just swallow it — RE-POINT it to the correct workspace + port. Update
+    // in place if supported, else delete + recreate. Best-effort (raw REST); a no-op if the
+    // alias was already correct, so it never disturbs the primary URL.
+    try {
+      await magsApi("PUT", `/api/v2/mags-url-aliases/${encodeURIComponent(subdomain)}`, body);
+    } catch {
+      await magsApi("DELETE", `/api/v2/mags-url-aliases/${encodeURIComponent(subdomain)}`).catch(() => {});
+      await create().catch((e2) => console.warn(`[mags] re-register alias ${subdomain} failed: ${(e2 as Error).message?.slice(0, 120)}`));
+    }
+  }
   return `https://${subdomain}.${appDomain}`;
 }
 
