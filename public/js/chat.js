@@ -1584,6 +1584,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Restore send button
                 hideStopButton();
 
+                // Turn complete → clear the persistent "Gathering information" indicator.
+                removeFunctionCallIndicator();
+
                 // Reset the stop requested flag
                 stopRequested = false;
             }
@@ -2440,9 +2443,13 @@ document.addEventListener('DOMContentLoaded', () => {
             // Remove typing indicator if present
             const typingIndicator = document.querySelector('.typing-indicator');
             if (typingIndicator) typingIndicator.remove();
-            // Remove function-call indicator so the message appears cleanly
-            removeFunctionCallIndicator();
+            // Keep the "Gathering information" indicator up DURING the turn — agentic runs
+            // interleave streamed text with tool calls, and removing it on each intermediate
+            // message is what made it flicker on/off. Just move it BELOW the new message so it
+            // stays pinned to the bottom; it's cleared on is_final / stop.
+            const workingInd = messageContainer.querySelector('.function-call-indicator');
             addMessageToChat('assistant', chunk);
+            if (workingInd) messageContainer.appendChild(workingInd);
             currentStreamingEl = getLastAssistantMessage();
         } else {
             // Accumulate raw content and render via marked
@@ -2872,7 +2879,9 @@ document.addEventListener('DOMContentLoaded', () => {
             if (typingIndicator) {
                 typingIndicator.remove();
             }
-            
+            // Clear the persistent "Gathering information" indicator on stop.
+            removeFunctionCallIndicator();
+
             // Add a note that generation was stopped
             const assistantMessage = currentStreamingEl || getLastAssistantMessage();
             if (assistantMessage) {
