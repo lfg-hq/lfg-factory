@@ -169,7 +169,6 @@ export function ChatPage({
         <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--border-color,#2a2a2a);flex:none;background:var(--background-surface,#191919);">
           <i class="fas fa-comments" style="color:#a78bfa;"></i>
           <span id="ta-title" style="font-weight:600;color:var(--text-color,#e2e8f0);font-size:14px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Ticket</span>
-          <span style="font-size:11px;color:var(--text-secondary,#9ca3af);background:var(--border-color,#2a2a2a);padding:2px 8px;border-radius:999px;">layer</span>
           <button id="ta-exit" title="Close this layer (back to main chat)" style="width:30px;height:30px;border-radius:8px;cursor:pointer;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);display:inline-flex;align-items:center;justify-content:center;"><i class="fas fa-times"></i></button>
         </div>
         <div id="ta-resize" title="Drag to resize the split" style="position:absolute;top:0;right:-4px;width:10px;height:100%;cursor:ew-resize;z-index:7;"></div>

@@ -117,17 +117,32 @@
     document.body.appendChild(t);
     setTimeout(() => t.remove(), 2000);
   }
+  // A ticket is "building" while queued/executing or in progress → drives the Build button
+  // spinner (and the Task List row indicator).
+  function isBuilding(m) {
+    m = m || curMeta || {};
+    const q = String(m.queueStatus || m.queue_status || "").toLowerCase();
+    const s = String(m.status || "").toLowerCase();
+    return /^(queued|executing|building|running)$/.test(q) || /^(in_progress|building)$/.test(s);
+  }
+  function setBuildUI() {
+    const b = $("ta-build"); if (!b) return;
+    if (isBuilding()) { b.disabled = true; b.style.opacity = ".9"; b.innerHTML = '<i class="fas fa-spinner fa-spin" style="font-size:10px;"></i>Building…'; }
+    else { b.disabled = false; b.style.opacity = "1"; b.innerHTML = '<i class="fas fa-play" style="font-size:10px;"></i>Build'; }
+  }
   async function buildTicket() {
-    if (!ticketId) return;
-    const btn = $("ta-build"); if (btn) btn.disabled = true;
+    if (!ticketId || isBuilding()) return;
     try {
       const r = await fetch(`/api/projects/${PID()}/tickets/${ticketId}/queue`, { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: "{}" });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || "failed");
+      curMeta = Object.assign({}, curMeta, { queueStatus: "queued", status: "in_progress" }); // optimistic
+      setBuildUI();
+      renderMeta(curMeta);
       toast("Queued for build — watch the Actions tab.");
       switchTicketTab("actions");
-    } catch (e) { toast("Couldn't queue: " + (e.message || e)); }
-    finally { if (btn) btn.disabled = false; }
+      try { if (window.ArtifactsLoader && window.ArtifactsLoader._checklistProjectId) window.ArtifactsLoader.loadChecklist(window.ArtifactsLoader._checklistProjectId); } catch (_) {}
+    } catch (e) { toast("Couldn't queue: " + (e.message || e)); setBuildUI(); }
   }
   async function deleteTicket() {
     if (!ticketId) return;
@@ -261,6 +276,7 @@
     editing = false;
     const eb0 = $("ta-edit"); if (eb0) eb0.innerHTML = '<i class="fas fa-pen" style="font-size:11px;"></i>Edit';
     tasksLoaded = false; gitLoaded = false;
+    setBuildUI();
     const p = panel();
     if (!p) return;
     const title = $("ta-title");
@@ -274,8 +290,9 @@
         .then((d) => {
           if (!d || !d.ticket || ticketId !== id) return;
           const t = d.ticket;
-          curMeta = { name: t.name, description: t.description, status: t.status, priority: t.priority, createdAt: t.createdAt, updatedAt: t.updatedAt, attachments: [] };
+          curMeta = { name: t.name, description: t.description, status: t.status, priority: t.priority, queueStatus: t.queueStatus, createdAt: t.createdAt, updatedAt: t.updatedAt, attachments: [] };
           if (!editing) renderMeta(curMeta);
+          setBuildUI();
         }).catch(() => {});
     }
     p.style.display = "flex";
@@ -471,8 +488,12 @@
       const atBottom = area.scrollHeight - area.scrollTop - area.clientHeight < 120;
       area.insertAdjacentHTML("beforeend", renderRow(msg.log));
       if (atBottom) area.scrollTop = area.scrollHeight;
-    } else if (msg.type === "ticket_log_output" || msg.type === "ticket_status") {
-      loadLog(); // authoritative refresh (folds tool output into its row / updates status)
+    } else if (msg.type === "ticket_status") {
+      curMeta = Object.assign({}, curMeta, { status: msg.status, queueStatus: msg.queueStatus }); // reflect build state
+      setBuildUI();
+      loadLog();
+    } else if (msg.type === "ticket_log_output") {
+      loadLog(); // authoritative refresh (folds tool output into its row)
     }
   }
   function startPoll() { stopPoll(); timer = setInterval(loadLog, 12000); } // WS is primary; this is a backstop

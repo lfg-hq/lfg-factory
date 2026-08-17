@@ -1117,6 +1117,11 @@ document.addEventListener('DOMContentLoaded', () => {
             // "Chat with ticket" live updates (native left panel).
             if (data.type === 'ticket_log' || data.type === 'ticket_log_output' || data.type === 'ticket_status') {
                 if (window.TicketAgentChat && window.TicketAgentChat.onWs) window.TicketAgentChat.onWs(data);
+                // A build state change → refresh the Task List so its row indicator updates
+                // live (spinner on/off), even when the ticket panel is closed.
+                if (data.type === 'ticket_status' && window.ArtifactsLoader && window.ArtifactsLoader._checklistProjectId) {
+                    try { window.ArtifactsLoader.loadChecklist(window.ArtifactsLoader._checklistProjectId); } catch (_) {}
+                }
                 return;
             }
             

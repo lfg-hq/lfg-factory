@@ -939,6 +939,7 @@ async function executeTicket(ticketId: string): Promise<void> {
     .update(projectTickets)
     .set({ status: "in_progress", queueStatus: "executing", updatedAt: new Date() })
     .where(eq(projectTickets.id, ticketId));
+  broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "in_progress", queueStatus: "executing" }); // build started → turn the indicator on
 
   // Project dir name (relative, e.g. "project")
   const projectDirName = "project"; // Default, matching Django stack_config
@@ -2195,6 +2196,7 @@ async function executeTicketApi(ticketId: string, useCodingAgent: boolean): Prom
   // Mark ticket as executing
   await moveTicketToStage(ticketId, project.id, "In Progress");
   await db.update(projectTickets).set({ status: "in_progress", queueStatus: "executing", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
+  broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "in_progress", queueStatus: "executing" }); // build started → turn the indicator on
 
   let projectDirName = "project";
   const featureBranch = ticket.githubBranch ?? ticketBranchName(ticket);

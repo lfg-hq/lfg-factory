@@ -2993,12 +2993,18 @@ document.addEventListener('DOMContentLoaded', function() {
                             }
                             
                             const lfgKey = item.ticketKey || item.ticket_key || '';
+                            const lfgBuilding = /in_progress|building/i.test(item.status || '') || /queued|executing|building|running/i.test(item.queue_status || item.queueStatus || '');
+                            const lfgMarker = lfgBuilding
+                                ? `<i class="fas fa-spinner fa-spin" title="Building…" style="color:#3b82f6;font-size:10px;flex:none;width:8px;text-align:center;"></i>`
+                                : `<span class="lfg-row-dot" style="background:${lfgStatusColor(item.status)};" title="${modalHelpers.escapeHtml(item.status || 'open')}"></span>`;
+                            const lfgBuildChip = lfgBuilding ? `<span style="flex:none;font-size:9.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:2px 7px;border-radius:5px;background:rgba(59,130,246,0.15);color:#60a5fa;">Building</span>` : '';
                             itemsHTML += `
                                 <div class="checklist-card ${statusClass} lfg-row" data-id="${item.id}">
                                     <input type="checkbox" class="ticket-select-checkbox" data-ticket-id="${item.id}" style="display: none; width: 14px; height: 14px; accent-color: #8b5cf6; cursor: pointer;" onclick="event.stopPropagation();">
-                                    <span class="lfg-row-dot" style="background:${lfgStatusColor(item.status)};" title="${modalHelpers.escapeHtml(item.status || 'open')}"></span>
+                                    ${lfgMarker}
                                     ${lfgKey ? `<span class="ticket-key" style="display:inline-block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;font-weight:700;color:#8b5cf6;background:rgba(139,92,246,0.12);border:1px solid rgba(139,92,246,0.25);border-radius:5px;padding:1px 6px;">${modalHelpers.escapeHtml(lfgKey)}</span>` : ''}
                                     <span class="lfg-row-title" title="${modalHelpers.escapeHtml(item.name || 'Untitled Item')}">${modalHelpers.escapeHtml(item.name || 'Untitled Item')}</span>
+                                    ${lfgBuildChip}
                                     <span class="priority-badge ${priorityClass} ${isStatusHighlighted ? 'filter-active' : ''}">${modalHelpers.escapeHtml(item.priority || 'Medium')}</span>
                                 </div>
                             `;
