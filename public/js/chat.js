@@ -3107,6 +3107,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // mid-conversation. Bypasses addMessageToChat (don't render a new user
     // bubble — the original is already there) and bypasses the form path
     // (don't touch the input value). Pure WS send + typing indicator.
+    // Send a VISIBLE chat message programmatically (renders the user bubble, does @preview
+    // routing). Used by the preview panel's per-app "Fix" button.
+    window.__sendChatMessage__ = function (message) {
+        try { return sendMessage(message); } catch (_) {}
+    };
     window.__sendChatMessageSilent__ = function (message) {
         if (!message || typeof message !== 'string') return;
         // Show typing indicator so the user knows something's happening

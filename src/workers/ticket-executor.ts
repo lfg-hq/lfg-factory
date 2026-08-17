@@ -661,23 +661,35 @@ export async function requestTicketStop(ticketId: string, projectId?: string): P
     .where(eq(projectTickets.id, ticketId))
     .catch(() => {});
   try {
-    const [sb] = await db
+    // EVERY VM this ticket can be running an agent in — not just the build VM. A chat
+    // turn runs in the isolated `ticket-chat` sandbox and a worktree run in
+    // `ticket-worktree`, so filtering on "ticket" alone left those agents alive and
+    // "Stop" silently did nothing for a message sent from the ticket chat.
+    const sbs = await db
       .select({ ws: sandboxes.magsWorkspaceId })
       .from(sandboxes)
-      .where(and(eq(sandboxes.ticketId, ticketId), eq(sandboxes.workspaceType, "ticket")))
-      .limit(1);
-    if (sb?.ws) {
-      // Kill the detached agent IN the VM — this is what actually stops a build the
-      // loop can't reach cross-process. busybox pkill has no \b/ERE, so match with
-      // plain substrings (pkill never matches its own pid). Cover the Pi node agent
-      // (pi-coding-agent), its invocation (`pi -p`, `mode json`), Claude, and any
-      // long child install so nothing keeps writing/committing after "Stop".
-      await execOnWorkspace(
-        sb.ws,
-        "pkill -9 -f pi-coding-agent 2>/dev/null; pkill -9 -f 'mode json' 2>/dev/null; pkill -9 -f 'pi -p' 2>/dev/null; pkill -9 -f claude 2>/dev/null; pkill -9 -f 'pip install' 2>/dev/null; pkill -9 -f 'go build' 2>/dev/null; pkill -9 -f 'npm install' 2>/dev/null; pkill -9 -f 'apk add' 2>/dev/null; true",
-        { timeout: 25_000 },
-      ).catch(() => {});
-    }
+      .where(
+        and(
+          eq(sandboxes.ticketId, ticketId),
+          inArray(sandboxes.workspaceType, ["ticket", "ticket-chat", "ticket-worktree"]),
+        ),
+      );
+    // Kill the detached agent IN the VM — this is what actually stops a build the
+    // loop can't reach cross-process. busybox pkill has no \b/ERE, so match with
+    // plain substrings (pkill never matches its own pid). Cover the Pi node agent
+    // (pi-coding-agent), its invocation (`pi -p`, `mode json`), Claude, and any
+    // long child install so nothing keeps writing/committing after "Stop".
+    await Promise.all(
+      sbs
+        .filter((sb) => !!sb.ws)
+        .map((sb) =>
+          execOnWorkspace(
+            sb.ws!,
+            "pkill -9 -f pi-coding-agent 2>/dev/null; pkill -9 -f 'mode json' 2>/dev/null; pkill -9 -f 'pi -p' 2>/dev/null; pkill -9 -f claude 2>/dev/null; pkill -9 -f 'pip install' 2>/dev/null; pkill -9 -f 'go build' 2>/dev/null; pkill -9 -f 'npm install' 2>/dev/null; pkill -9 -f 'apk add' 2>/dev/null; true",
+            { timeout: 25_000 },
+          ).catch(() => {}),
+        ),
+    );
   } catch {
     /* best-effort */
   }
@@ -702,7 +714,7 @@ async function stoppedByUser(ticketId: string, ownerId: string): Promise<boolean
   }
   if (!cancelled) return false;
   cancelledTickets.delete(ticketId);
-  await addLog(ticketId, "⏹ Build stopped by you.", "command", ownerId).catch(() => {});
+  await addLog(ticketId, "⏹ Stopped by you.", "command", ownerId).catch(() => {});
   await db
     .update(projectTickets)
     .set({ status: "open", queueStatus: "none", updatedAt: new Date() })
@@ -1937,6 +1949,11 @@ ${message}
   let waitResult = await waitForCompletion(ticketId, CHAT_MAX_WAIT_DURATION_MS);
   console.log(`[ticket-executor] Chat: wait finished, status=${waitResult.status}, exitCode=${waitResult.exitCode}`);
 
+  // Stop pressed → requestTicketStop unblocks the waiter with a synthetic "failed".
+  // Bail BEFORE the stale-session retry below, otherwise a Stop would immediately
+  // relaunch the agent in a fresh session instead of ending the turn.
+  if (await stoppedByUser(ticketId, ownerId)) return;
+
   // If session resume failed (exit code != 0), check if agent actually succeeded
   // before retrying — the CLI can exit non-zero even after successful work
   if (waitResult.status === "failed") {
@@ -1974,6 +1991,7 @@ ${message}
     console.log(`[ticket-executor] Chat: fresh CLI started, pid=${chatResult.backgroundPid}`);
     waitResult = await waitForCompletion(ticketId, CHAT_MAX_WAIT_DURATION_MS);
     console.log(`[ticket-executor] Chat: fresh wait finished, status=${waitResult.status}, exitCode=${waitResult.exitCode}`);
+    if (await stoppedByUser(ticketId, ownerId)) return;
   }
 
   // ── Commit + push changes made during chat (only if agent succeeded) ─

@@ -125,10 +125,35 @@
     const s = String(m.status || "").toLowerCase();
     return /^(queued|executing|building|running)$/.test(q) || /^(in_progress|building)$/.test(s);
   }
+  // A chat message runs the agent WITHOUT moving queueStatus, so isBuilding() can't
+  // see it. Track that turn locally so "Stop" is offered for a message too — not just
+  // for a queued build. Cleared on the turn's terminal log (ai_response / cli_error).
+  let chatBusy = false;
+  function isBusy() { return chatBusy || isBuilding(); }
   function setBuildUI() {
+    const s = $("ta-stop");
+    if (s) { s.style.display = isBusy() ? "inline-flex" : "none"; s.disabled = false; s.innerHTML = '<i class="fas fa-stop" style="font-size:10px;"></i>Stop'; }
     const b = $("ta-build"); if (!b) return;
     if (isBuilding()) { b.disabled = true; b.style.opacity = ".9"; b.innerHTML = '<i class="fas fa-spinner fa-spin" style="font-size:10px;"></i>Building…'; }
-    else { b.disabled = false; b.style.opacity = "1"; b.innerHTML = '<i class="fas fa-play" style="font-size:10px;"></i>Build'; }
+    else { b.disabled = chatBusy; b.style.opacity = chatBusy ? ".55" : "1"; b.innerHTML = '<i class="fas fa-play" style="font-size:10px;"></i>Build'; }
+  }
+  // Stop whatever the agent is doing right now (build OR the in-flight chat turn).
+  // Same endpoint the Task List drawer uses; it kills the in-VM agent and unblocks
+  // the executor, which then bails cleanly instead of finishing the run.
+  async function stopTicket() {
+    if (!ticketId) return;
+    const s = $("ta-stop");
+    if (s) { s.disabled = true; s.innerHTML = '<i class="fas fa-spinner fa-spin" style="font-size:10px;"></i>Stopping…'; }
+    try {
+      const r = await fetch(`/api/projects/${PID()}/tickets/${ticketId}/stop`, { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin" });
+      if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || "failed"); }
+      chatBusy = false;
+      curMeta = Object.assign({}, curMeta, { queueStatus: "none", status: "open" }); // optimistic
+      const t = $("ta-thinking"); if (t) t.remove(); // the turn is over — drop "Agent is working…"
+      toast("Stopping the agent…");
+    } catch (e) { toast("Couldn't stop: " + (e.message || e)); }
+    setBuildUI();
+    loadLog();
   }
   async function buildTicket() {
     if (!ticketId || isBuilding()) return;
@@ -276,6 +301,7 @@
     editing = false;
     const eb0 = $("ta-edit"); if (eb0) eb0.innerHTML = '<i class="fas fa-pen" style="font-size:11px;"></i>Edit';
     tasksLoaded = false; gitLoaded = false;
+    chatBusy = false; // per-ticket state — a previous ticket's in-flight turn isn't this one's
     setBuildUI();
     const p = panel();
     if (!p) return;
@@ -464,13 +490,14 @@
       area.insertAdjacentHTML("beforeend", bubble + `<div class="ta-thinking" id="ta-thinking"><i class="fas fa-spinner fa-spin"></i> Agent is working…</div>`);
       area.scrollTop = area.scrollHeight;
     }
+    chatBusy = true; setBuildUI(); // reveal Stop — this turn is now running
     try {
       const r = await fetch(`/api/projects/${PID()}/tickets/${ticketId}/chat`, {
         method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin",
         body: JSON.stringify({ message: msg }),
       });
-      if (!r.ok) { const t = $("ta-thinking"); if (t) t.textContent = "Couldn't reach the agent — try again."; }
-    } catch (_) { const t = $("ta-thinking"); if (t) t.textContent = "Network error — try again."; }
+      if (!r.ok) { const t = $("ta-thinking"); if (t) t.textContent = "Couldn't reach the agent — try again."; chatBusy = false; setBuildUI(); }
+    } catch (_) { const t = $("ta-thinking"); if (t) t.textContent = "Network error — try again."; chatBusy = false; setBuildUI(); }
     // Live WS updates replace the thinking row with the agent's streamed response.
   }
 
@@ -488,8 +515,12 @@
       const atBottom = area.scrollHeight - area.scrollTop - area.clientHeight < 120;
       area.insertAdjacentHTML("beforeend", renderRow(msg.log));
       if (atBottom) area.scrollTop = area.scrollHeight;
+      // Terminal row for a chat turn → the agent is done, hide Stop.
+      const lt = msg.log.type || "";
+      if (lt === "ai_response" || lt === "cli_error") { chatBusy = false; setBuildUI(); }
     } else if (msg.type === "ticket_status") {
       curMeta = Object.assign({}, curMeta, { status: msg.status, queueStatus: msg.queueStatus }); // reflect build state
+      if (String(msg.status || "").toLowerCase() === "stopped") chatBusy = false;
       setBuildUI();
       loadLog();
     } else if (msg.type === "ticket_log_output") {
@@ -499,11 +530,12 @@
   function startPoll() { stopPoll(); timer = setInterval(loadLog, 12000); } // WS is primary; this is a backstop
   function stopPoll() { if (timer) { clearInterval(timer); timer = null; } }
 
-  window.TicketAgentChat = { open, close, send, onWs, isOpen, attachScreenshot };
+  window.TicketAgentChat = { open, close, send, onWs, isOpen, attachScreenshot, stop: stopTicket };
 
   function wire() {
     $("ta-exit")?.addEventListener("click", close);
     $("ta-build")?.addEventListener("click", buildTicket);
+    $("ta-stop")?.addEventListener("click", stopTicket);
     $("ta-edit")?.addEventListener("click", toggleEdit);
     $("ta-delete")?.addEventListener("click", deleteTicket);
     $("ta-tabs")?.addEventListener("click", (e) => { const b = e.target.closest("[data-ta-tab]"); if (b) switchTicketTab(b.getAttribute("data-ta-tab")); });

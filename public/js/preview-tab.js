@@ -105,8 +105,11 @@
       const dot = s.manual ? `<span title="Added manually" style="width:5px;height:5px;border-radius:50%;background:#a78bfa;flex:none;"></span>` : "";
       // Open-in-new-tab per app so its URL is reachable/visible even before switching.
       const openBtn = s.url ? `<span data-action="svcopen:${esc(s.name)}" title="Open ${esc(s.url)} in a new tab" style="font-size:10px;opacity:.6;cursor:pointer;padding-left:1px;"><i class="fas fa-arrow-up-right-from-square"></i></span>` : "";
+      // Per-app "Fix" — asks the preview agent to fix THIS app (installs deps, runs migrations,
+      // (re)starts it) and record the fixes so future runs don't need the AI again.
+      const fixBtn = `<span data-action="svcfix:${esc(s.name)}" title="Fix this app — the preview agent installs deps, runs migrations, and (re)starts it, recording the fixes" style="font-size:10px;opacity:.6;cursor:pointer;padding-left:1px;"><i class="fas fa-wrench"></i></span>`;
       const tip = `${esc(s.name)}${s.port ? " · :" + s.port : ""}${s.dir ? " · " + esc(s.dir) : ""}${s.url ? " · " + esc(s.url) : (s.enabled ? " · (starting…)" : "")}`;
-      return `<button ${clickable ? `data-action="svc:${esc(s.name)}"` : ""} title="${tip}" style="${chip}">${dot}<span>${esc(s.name)}</span>${toggle}${openBtn}${rm}</button>`;
+      return `<button ${clickable ? `data-action="svc:${esc(s.name)}"` : ""} title="${tip}" style="${chip}">${dot}<span>${esc(s.name)}</span>${toggle}${openBtn}${fixBtn}${rm}</button>`;
     }).join("");
     return chips + addBtn + tbDiv();
   }
@@ -926,6 +929,7 @@
     }
     else if (action === "svcadd") openAddApp(b);
     else if (action.indexOf("svcopen:") === 0) { const svc = (current && current.services || []).find((s) => s.name === action.slice("svcopen:".length)); if (svc && svc.url) window.open(svc.url, "_blank"); }
+    else if (action.indexOf("svcfix:") === 0) fixApp(action.slice("svcfix:".length));
     else if (action.indexOf("svcremove:") === 0) removeApp(action.slice("svcremove:".length));
   }
 
@@ -988,6 +992,21 @@
       toast(name + " removed.");
       load();
     } catch (e) { toast("Couldn't remove " + name + ": " + e.message); }
+  }
+
+  // "Fix" a specific app: ask the preview agent (@preview) to make THIS app run — install
+  // deps, run its migrations/seed, (re)start it — AND record the fixes as directives so we
+  // don't keep re-invoking the AI. Runs on the live sandbox (it self-heals a reaped VM).
+  function fixApp(name) {
+    const svc = (current && current.services || []).find((s) => s.name === name) || {};
+    const port = svc.port ? " on port " + svc.port : "";
+    const bind = svc.port ? " on 0.0.0.0:" + svc.port : "";
+    const where = svc.dir ? ` (folder ${svc.dir})` : "";
+    const instr = svc.primary
+      ? `@preview The main app "${name}"${port} isn't working correctly — diagnose and FIX it end to end on the running sandbox: restore/install dependencies, run its database migrations + seed against the local DB, rebuild if needed, then (re)start it${bind} and verify it responds. IMPORTANT: record every project-specific fix you make as a Mandatory Directive (and fold build/install steps into the profile) so future runs don't need the AI again.`
+      : `@preview The "${name}" app${where}${port} isn't serving correctly — diagnose and FIX it end to end on the running sandbox: restore/install ITS dependencies, run ITS OWN database migrations + any seed against the local DB (it may use a separate database/EF context from the main app), then (re)start it${bind} and verify it responds. IMPORTANT: record every project-specific fix as a Mandatory Directive (and fold its install/build/migrate/run into the profile) so future runs don't need the AI again.`;
+    if (window.__sendChatMessage__) { window.__sendChatMessage__(instr); toast("Asked the preview agent to fix " + name + " — watch the chat + Setup log."); }
+    else toast("Chat isn't ready yet — try again in a moment.");
   }
 
   // Point the iframe at another app's live URL. render() mounts activeSvc()'s URL
