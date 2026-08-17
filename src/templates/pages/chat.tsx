@@ -251,7 +251,7 @@ export function ChatPage({
     <div class="artifacts-tabs artifacts-tabs-managed" style="display:flex;justify-content:space-between;align-items:center;">
       <div class="artifacts-tabs-list" id="artifacts-tabs-list">
         <button class="tab-button active" data-tab="filebrowser">Docs</button>
-        <button class="tab-button" data-tab="checklist">Task List</button>
+        <button class="tab-button" data-tab="checklist">Tickets</button>
         <button class="tab-button" data-tab="preview">Preview</button>
         <button class="tab-button" data-tab="env">Env</button>
       </div>
@@ -337,21 +337,21 @@ export function ChatPage({
           <div class="filebrowser-container" style="height:92%;display:flex;flex-direction:column;">
             <!-- Browser View -->
             <div id="filebrowser-main" style="height:100%;display:flex;flex-direction:column;">
-              <div class="filebrowser-header" style="padding:20px;border-bottom:1px solid #2a2a2a;">
-                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:15px;">
-                  <h3 style="color:#e2e8f0;margin:0;font-size:18px;font-weight:600;">Documents</h3>
-                  <div style="display:flex;gap:10px;align-items:center;">
-                    <select id="file-type-filter" style="padding:8px 12px;background:#1a1a1a;border:1px solid #333;border-radius:6px;color:#e2e8f0;font-size:13px;">
+              <div class="filebrowser-header" style="padding:16px 20px 14px;border-bottom:1px solid var(--border-color,#2a2a2a);">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;">
+                  <h3 style="color:var(--text-color,#e2e8f0);margin:0;font-size:16px;font-weight:600;">Documents</h3>
+                  <div style="display:flex;gap:8px;align-items:center;">
+                    <select id="file-type-filter" style="height:32px;padding:0 12px;background:var(--card-bg,#161616);border:1px solid var(--border-color,#333);border-radius:8px;color:var(--text-color,#e2e8f0);font-size:12.5px;font-weight:500;cursor:pointer;">
                       <option value="">All Types</option>
                     </select>
-                    <button id="refresh-filebrowser" class="btn btn-sm" style="padding:8px 16px;background:#2a2a2a;color:#e2e8f0;border:1px solid #333;border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:6px;font-size:13px;">
-                      <i class="fas fa-sync-alt"></i> Refresh
+                    <button id="refresh-filebrowser" class="btn btn-sm" style="height:32px;padding:0 13px;background:var(--card-bg,#161616);color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:500;">
+                      <i class="fas fa-rotate-right" style="font-size:11px;"></i> Refresh
                     </button>
                   </div>
                 </div>
                 <div style="position:relative;">
-                  <input type="text" id="file-search" placeholder="Search documents..." style="width:100%;padding:10px 15px 10px 40px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#e2e8f0;font-size:14px;" />
-                  <i class="fas fa-search" style="position:absolute;left:15px;top:50%;transform:translateY(-50%);color:#666;font-size:14px;"></i>
+                  <input type="text" id="file-search" placeholder="Search documents…" style="width:100%;height:38px;box-sizing:border-box;padding:0 14px 0 38px;background:var(--background-surface,#141414);border:1px solid var(--border-color,#333);border-radius:9px;color:var(--text-color,#e2e8f0);font-size:13.5px;" />
+                  <i class="fas fa-magnifying-glass" style="position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--text-secondary,#9ca3af);font-size:13px;"></i>
                 </div>
               </div>
               <div class="filebrowser-content" style="flex:1;overflow-y:auto;">

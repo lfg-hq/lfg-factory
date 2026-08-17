@@ -3933,20 +3933,25 @@ body.ticket-modal-open {
 
 .file-list-item {
     display: grid;
-    grid-template-columns: 40px minmax(0, 1fr) 130px 120px 90px;
-    padding: 8px 16px;
-    border-bottom: 1px solid #2a2a2a;
-    transition: all 0.15s ease;
+    grid-template-columns: 34px minmax(0, 1fr) 130px 120px 90px;
+    padding: 9px 12px;
+    border-bottom: none;
+    border-radius: 8px;
+    margin: 1px 8px;
+    transition: background 0.12s ease;
     cursor: pointer;
     position: relative;
     background: transparent;
     gap: 12px;
     align-items: center;
-    min-height: 44px;
+    min-height: 42px;
 }
 
 .file-list-item:hover {
-    background: rgba(139, 92, 246, 0.05);
+    background: var(--hover-bg, rgba(255, 255, 255, 0.05));
+}
+[data-theme="light"] .file-list-item:hover {
+    background: #f4f5f7;
 }
 
 .file-icon {
@@ -3963,9 +3968,9 @@ body.ticket-modal-open {
 }
 
 #filebrowser .file-list-item .file-name {
-    font-size: 14px !important;
-    font-weight: 400 !important;
-    color: #e2e8f0 !important;
+    font-size: 13.5px !important;
+    font-weight: 500 !important;
+    color: var(--text-color, #e2e8f0) !important;
     overflow: hidden !important;
     text-overflow: ellipsis !important;
     white-space: nowrap !important;
@@ -3997,9 +4002,15 @@ body.ticket-modal-open {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    background: rgba(156, 163, 175, 0.15);
-    color: #e5e7eb;
-    border: 1px solid rgba(156, 163, 175, 0.25);
+    background: rgba(139, 92, 246, 0.12);
+    color: #a78bfa;
+    border: 1px solid rgba(139, 92, 246, 0.22);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+[data-theme="light"] .file-type-badge {
+    background: rgba(139, 92, 246, 0.10);
+    color: #7c3aed;
+    border-color: rgba(139, 92, 246, 0.22);
 }
 
 .file-owner-cell {
