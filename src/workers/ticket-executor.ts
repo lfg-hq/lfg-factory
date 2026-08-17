@@ -779,20 +779,20 @@ export async function startTicketWorker() {
       // guard above prevents the SAME ticket from running twice.
       console.log(`[ticket-executor] API mode — executing ticket ${ticketId}`);
       try {
-        await executeTicketApi(ticketId);
+        await executeTicketApi(ticketId, false);
       } catch (err) {
         console.error(`[ticket-executor] API mode failed for ticket ${ticketId}:`, err);
         await markTicketFailed(ticketId, String(err));
       }
     } else {
       // CLI mode. Claude Code CLI only works with Claude models — route any
-      // non-Anthropic builder model to the Pi in-sandbox agent instead
-      // (executeTicketApi runs Pi). Mirrors the instant-mode routing.
+      // non-Anthropic builder model to the Pi in-sandbox coding agent instead.
+      // Mirrors the instant-mode routing.
       const builderProvider = await getBuilderProvider(projectId);
       if (builderProvider && builderProvider !== "anthropic") {
         console.log(`[ticket-executor] CLI mode + ${builderProvider} — using Pi (Claude Code is Claude-only)`);
         try {
-          await executeTicketApi(ticketId);
+          await executeTicketApi(ticketId, true);
         } catch (err) {
           console.error(`[ticket-executor] Pi (CLI-routed) failed for ticket ${ticketId}:`, err);
           await markTicketFailed(ticketId, String(err));
@@ -2163,11 +2163,8 @@ async function getBuilderProvider(projectId: string | null): Promise<ProviderNam
   return getProviderName(await resolveBuilderModelKey(project.ownerId));
 }
 
-/**
- * Execute a ticket using direct AI API calls (generateText with tools).
- * No Claude CLI credentials needed — calls the AI provider directly.
- */
-async function executeTicketApi(ticketId: string): Promise<void> {
+/** Execute with direct provider tools, or with Pi when Coding Agent mode is requested. */
+async function executeTicketApi(ticketId: string, useCodingAgent: boolean): Promise<void> {
   const startTime = Date.now();
 
   // ── Load data (shared with CLI mode) ────────────────────────────────
@@ -2586,7 +2583,7 @@ git branch --show-current
         glm: userKeys?.glmApiKey,
       } as Record<string, string | null | undefined>)[provider]
     : undefined;
-  const useOpenAICodex = provider === "openai" && await hasOpenAICodexCredentials(ownerId);
+  const useOpenAICodex = useCodingAgent && provider === "openai" && await hasOpenAICodexCredentials(ownerId);
   // Pin the VM awake for the whole build (wakes a reused/slept VM too) so Mags can't
   // idle-sleep a live build → "lost contact". Turned back off at build end.
   await wakeTicketVm(workspaceId);
@@ -2594,7 +2591,9 @@ git branch --show-current
   // discovering + installing it mid-build.
   await ensureBuildToolchain(workspaceId, savedTechStack?.language, ticketId, ownerId);
 
-  const usePi = USE_PI_TICKET_BUILDER && !!provider && isPiSupportedProvider(provider)
+  // Direct API mode must stay on the provider API path. Pi (and therefore a
+  // connected OpenAI Codex subscription) is reserved for Coding Agent mode.
+  const usePi = useCodingAgent && USE_PI_TICKET_BUILDER && !!provider && isPiSupportedProvider(provider)
     && !!(providerApiKey || useOpenAICodex);
 
   if (usePi && provider && (providerApiKey || useOpenAICodex)) {

@@ -887,7 +887,7 @@
     else if (action === "startbranch") { const sel = document.querySelector("#preview-body [data-branch]"); doRunBranch(sel ? sel.value : "default"); }
     else if (action === "tickchat") {
       const e = branches.find((x) => x.id === branchId);
-      if (e && e.ticketId && window.TicketAgentChat) { const p = (e.label || "").split(" — "); window.TicketAgentChat.open(e.ticketId, p[0] || "", p.slice(1).join(" — ") || e.label || ""); }
+      if (e && e.ticketId && window.TicketAgentChat) { const p = (e.label || "").split(" — "); window.TicketAgentChat.open(e.ticketId, p[0] || "", p.slice(1).join(" — ") || e.label || "", null, { withPreview: true }); }
     }
     else if (action === "prevmenu") togglePrevMenu(b);
     else if (action === "profile") togglePlan();

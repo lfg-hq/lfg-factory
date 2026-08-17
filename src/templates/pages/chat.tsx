@@ -173,9 +173,24 @@ export function ChatPage({
           <button id="ta-exit" title="Close this layer (back to main chat)" style="width:30px;height:30px;border-radius:8px;cursor:pointer;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);display:inline-flex;align-items:center;justify-content:center;"><i class="fas fa-times"></i></button>
         </div>
         <div id="ta-resize" title="Drag to resize the split" style="position:absolute;top:0;right:-4px;width:10px;height:100%;cursor:ew-resize;z-index:7;"></div>
-        <div id="ta-meta" style="display:none;flex:none;padding:12px 16px 0;"></div>
-        <div id="ta-log" style="flex:1;min-height:0;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:10px;"></div>
-        <div style="flex:none;padding:12px 16px;border-top:1px solid var(--border-color,#2a2a2a);display:flex;flex-direction:column;gap:6px;">
+        <style>
+          #ta-tabs { display:flex; gap:2px; padding:0 12px; flex:none; border-bottom:1px solid var(--border-color,#2a2a2a); background:var(--background-surface,#191919); }
+          .ta-tab { padding:9px 13px; border:none; background:transparent; color:var(--text-secondary,#9ca3af); font-size:12.5px; font-weight:500; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; display:inline-flex; align-items:center; gap:6px; }
+          .ta-tab:hover { color:var(--text-color,#e2e8f0); }
+          .ta-tab.active { color:#a78bfa; border-bottom-color:#a78bfa; }
+          .ta-tab .ta-tab-count { font-size:10px; font-weight:600; padding:0 6px; border-radius:999px; background:var(--border-color,#2a2a2a); color:var(--text-secondary,#9ca3af); }
+        </style>
+        <div id="ta-tabs">
+          <button class="ta-tab" data-ta-tab="details">Details</button>
+          <button class="ta-tab" data-ta-tab="actions">Actions</button>
+          <button class="ta-tab" data-ta-tab="tasks">Tasks</button>
+          <button class="ta-tab" data-ta-tab="git">Git</button>
+        </div>
+        <div id="ta-pane-details" class="ta-pane" style="flex:1;min-height:0;overflow:auto;padding:16px;display:none;"></div>
+        <div id="ta-log" class="ta-pane" style="flex:1;min-height:0;overflow:auto;padding:16px;display:none;flex-direction:column;gap:10px;"></div>
+        <div id="ta-pane-tasks" class="ta-pane" style="flex:1;min-height:0;overflow:auto;padding:14px 16px;display:none;"></div>
+        <div id="ta-pane-git" class="ta-pane" style="flex:1;min-height:0;overflow:auto;padding:0;display:none;"></div>
+        <div id="ta-input-row" style="flex:none;padding:12px 16px;border-top:1px solid var(--border-color,#2a2a2a);display:flex;flex-direction:column;gap:6px;">
           <div id="ta-attach-chip" style="display:none;font-size:12px;color:var(--text-secondary,#9ca3af);align-items:center;gap:6px;"></div>
           <div style="display:flex;gap:8px;align-items:center;">
             <input id="ta-file" type="file" accept="image/*" multiple style="display:none;" />

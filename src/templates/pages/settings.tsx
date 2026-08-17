@@ -286,6 +286,7 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
       color: var(--text-color, #f0f0f0);
     }
     .cc-code-input:focus { border-color: #a78bfa; box-shadow: 0 0 0 2px rgba(139,92,246,0.15); }
+    .provider-logo-openai { filter: invert(1); }
 
     /* ── Light theme overrides ──────────────────────────── */
     [data-theme="light"] .settings-main { background: var(--body-bg, #f8fafc); }
@@ -304,6 +305,7 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
     [data-theme="light"] .cc-copy-btn:hover { background: #e2e8f0; color: #1e293b; }
     [data-theme="light"] .cc-code-input { background: #ffffff; border-color: #e2e8f0; color: #1e293b; }
     [data-theme="light"] .cc-code-input:focus { border-color: #a78bfa; }
+    [data-theme="light"] .provider-logo-openai { filter: none; }
     [data-theme="light"] .cc-status-badge { background: #f1f5f9 !important; color: #64748b !important; border-color: #e2e8f0 !important; }
     /* The global light-theme anchor rule otherwise overrides the white text on
        primary links, producing purple-on-purple for the OpenAI sign-in button. */
@@ -396,12 +398,24 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
 
       ${activeSection === "integrations" ? html`
 
-        <!-- Claude Code Card -->
+        <!-- Coding agent account connections -->
         <div class="llm-keys-table" style="margin-bottom:1.5rem;">
-          <div class="llm-keys-row" style="border-bottom:1px solid rgba(255,255,255,0.07);padding:1rem 1.375rem;justify-content:space-between;">
+          <div class="llm-keys-row" style="border-bottom:1px solid var(--border-color, rgba(255,255,255,0.07));padding:1rem 1.375rem;justify-content:space-between;">
+            <div>
+              <h3 style="margin:0;font-size:0.9375rem;font-weight:700;color:var(--text-color,#f0f0f0);display:flex;align-items:center;gap:.5rem;">
+                <i class="fas fa-terminal" style="color:#8b5cf6;"></i>
+                Coding agent accounts
+              </h3>
+              <div class="byok-desc" style="margin-top:.25rem;">Used by sandbox ticket builds in Coding Agent mode and by Instant builds.</div>
+            </div>
+            <span style="font-size:.75rem;color:var(--text-secondary);">${Number(Boolean(claudeCode?.hasCredentials && claudeCode?.authenticated)) + Number(Boolean(openaiCodex?.connected))} connected</span>
+          </div>
+
+          <!-- Claude provider -->
+          <div class="llm-keys-row coding-agent-provider-header" style="border-bottom:1px solid var(--border-color, rgba(255,255,255,0.07));padding:1rem 1.375rem;justify-content:space-between;">
             <h3 style="margin:0;font-size:0.9375rem;font-weight:700;color:var(--text-color,#f0f0f0);display:flex;align-items:center;gap:.5rem;">
-              <img src="/public/images/anthropic-logo.png" style="width:18px;height:18px;object-fit:contain;" />
-              Claude Code CLI
+              <img src="/public/images/anthropic-logo.png" alt="" style="width:18px;height:18px;object-fit:contain;" />
+              Claude Code
             </h3>
             ${claudeCode?.hasCredentials && claudeCode?.authenticated ? html`
               <span style="font-size:.75rem;padding:.25rem .625rem;background:rgba(52,211,153,.1);color:#34d399;border:1px solid rgba(52,211,153,.25);border-radius:20px;">
@@ -418,11 +432,11 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
           <div class="llm-keys-row" style="flex-direction:column;align-items:stretch;gap:1rem;">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;">
               <div>
-                <div class="byok-label">Authentication</div>
+                <div class="byok-label">Claude account</div>
                 <div class="byok-desc">
                   ${claudeCode?.hasCredentials && claudeCode?.authenticated
-                    ? "Your Claude credentials are stored. Ticket execution is enabled."
-                    : "Connect your Claude account to enable AI-powered ticket execution."}
+                    ? "Coding Agent builds use this account when you select a Claude model."
+                    : "Connect your Claude account to use Claude models in Coding Agent builds."}
                 </div>
               </div>
               <div style="display:flex;gap:.5rem;flex-shrink:0;">
@@ -523,8 +537,6 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
               </div>
             </div>
           </div>
-
-        </div>
 
         <style>
           .cc-spinner {
@@ -642,19 +654,18 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
           }
         </script>
 
-        <!-- OpenAI Codex / ChatGPT subscription card -->
-        <div class="llm-keys-table" style="margin-bottom:1.5rem;">
-          <div class="llm-keys-row" style="border-bottom:1px solid rgba(255,255,255,0.07);padding:1rem 1.375rem;justify-content:space-between;">
+          <!-- OpenAI provider -->
+          <div class="llm-keys-row coding-agent-provider-header" style="border-top:1px solid var(--border-color, rgba(255,255,255,0.07));border-bottom:1px solid var(--border-color, rgba(255,255,255,0.07));padding:1rem 1.375rem;justify-content:space-between;">
             <h3 style="margin:0;font-size:0.9375rem;font-weight:700;color:var(--text-color,#f0f0f0);display:flex;align-items:center;gap:.5rem;">
-              <span style="width:19px;height:19px;border-radius:50%;background:#fff;color:#111;display:inline-flex;align-items:center;justify-content:center;font-size:.65rem;font-weight:900;">AI</span>
-              OpenAI Codex for sandbox builds
+              <img src="/public/images/models/openai.svg" alt="" class="provider-logo-openai" style="width:19px;height:19px;object-fit:contain;" />
+              OpenAI Codex
             </h3>
             ${openaiCodex?.connected ? html`
               <span style="font-size:.75rem;padding:.25rem .625rem;background:rgba(52,211,153,.1);color:#34d399;border:1px solid rgba(52,211,153,.25);border-radius:20px;">
                 <i class="fas fa-check-circle" style="margin-right:.25rem;"></i>Connected
               </span>
             ` : html`
-              <span style="font-size:.75rem;padding:.25rem .625rem;background:rgba(255,255,255,.06);color:rgba(255,255,255,.4);border:1px solid rgba(255,255,255,.1);border-radius:20px;">Not connected</span>
+              <span class="cc-status-badge" style="font-size:.75rem;padding:.25rem .625rem;background:rgba(255,255,255,.06);color:rgba(255,255,255,.4);border:1px solid rgba(255,255,255,.1);border-radius:20px;">Not connected</span>
             `}
           </div>
           <div class="llm-keys-row" style="flex-direction:column;align-items:stretch;gap:1rem;">
@@ -663,9 +674,9 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
                 <div class="byok-label">ChatGPT subscription</div>
                 <div class="byok-desc">
                   ${openaiCodex?.connected
-                    ? "OpenAI-model ticket and Instant builds use your connected Codex entitlement through Pi."
-                    : "Connect an eligible ChatGPT account to use its Codex entitlement for OpenAI-model ticket and Instant builds."}
-                  Normal LFG chat continues to use your OpenAI API key and API billing.
+                    ? "Coding Agent builds use your connected Codex entitlement when you select an OpenAI model."
+                    : "Connect an eligible ChatGPT account to use its Codex entitlement in Coding Agent builds with an OpenAI model."}
+                  Direct API mode and normal LFG chat continue to use your OpenAI API key and API billing.
                 </div>
               </div>
               ${openaiCodex?.connected ? html`

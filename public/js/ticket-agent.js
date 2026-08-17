@@ -21,6 +21,9 @@
   const panel = () => $("ticket-agent-panel");
   let fitObs = null;
   let prevArtWidth = null; // preview-overlay width to restore when the ticket chat closes
+  let curMeta = null;      // last ticket's fields (for the Details tab)
+  let activeTab = "details";
+  let tasksLoaded = false, gitLoaded = false; // lazy-load Tasks/Git on first view
 
   // The preview panel (#artifacts-panel) is a FIXED slide-over on the right, so the popup
   // must stop at its LEFT edge (else it hides behind the preview + its ✕ is unreachable).
@@ -80,13 +83,12 @@
     });
   }
 
-  // A compact ticket-fields header (status / priority / created + description), so clicking
-  // a ticket shows the SAME left panel with its other fields — not a separate right drawer.
+  // The Details tab: the ticket's fields (status / priority / created, full description,
+  // attachments) — the same info as the old right-side drawer, now in this left panel.
   function renderMeta(meta) {
-    const el = $("ta-meta");
+    const el = $("ta-pane-details");
     if (!el) return;
-    if (!meta) { el.style.display = "none"; el.innerHTML = ""; return; }
-    el.style.display = "block";
+    if (!meta) { el.innerHTML = '<div style="opacity:.5;padding:20px;text-align:center;">No details.</div>'; return; }
     const pill = (txt, bg, fg) => `<span style="font-size:11px;font-weight:600;padding:2px 9px;border-radius:6px;background:${bg};color:${fg};white-space:nowrap;">${esc(txt)}</span>`;
     const pr = String(meta.priority || "").toLowerCase();
     const prColor = /high|urgent/.test(pr) ? ["rgba(239,68,68,.14)", "#f87171"] : /low/.test(pr) ? ["rgba(59,130,246,.14)", "#60a5fa"] : ["rgba(245,158,11,.16)", "#fbbf24"];
@@ -100,15 +102,79 @@
         (meta.priority ? pill(meta.priority, prColor[0], prColor[1]) : "") +
         (created ? `<span style="font-size:11px;color:var(--text-secondary,#9ca3af);">Created ${esc(created)}</span>` : "") +
       `</div>` +
-      (desc ? `<div class="markdown-content" style="margin-top:9px;font-size:12.5px;color:var(--text-secondary,#b6bdc9);line-height:1.55;max-height:140px;overflow:auto;border-left:2px solid var(--border-color,#2a2a2a);padding-left:11px;">${md(desc)}</div>` : "") +
-      (imgAtts.length ? `<div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;">` +
-        imgAtts.map((a) => `<a href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.name || "attachment")}"><img src="${esc(a.url)}" loading="lazy" style="max-width:150px;max-height:120px;border-radius:8px;border:1px solid var(--border-color,#2a2a2a);display:block;"></a>`).join("") +
+      (imgAtts.length ? `<div style="margin-top:12px;display:flex;flex-wrap:wrap;gap:6px;">` +
+        imgAtts.map((a) => `<a href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.name || "attachment")}"><img src="${esc(a.url)}" loading="lazy" style="max-width:180px;max-height:150px;border-radius:8px;border:1px solid var(--border-color,#2a2a2a);display:block;"></a>`).join("") +
       `</div>` : "") +
-      `<div style="margin-top:11px;border-bottom:1px solid var(--border-color,#2a2a2a);"></div>`;
+      (desc ? `<div class="markdown-content" style="margin-top:14px;font-size:13px;color:var(--text-color,#cbd5e1);line-height:1.6;">${md(desc)}</div>` : '<div style="margin-top:14px;opacity:.5;font-size:12.5px;">No description.</div>');
   }
 
-  function open(id, key, name, meta) {
+  // ── Tabs: Details / Actions (agent chat) / Tasks / Git ─────────────────────
+  function switchTicketTab(tab) {
+    activeTab = tab;
+    document.querySelectorAll("#ta-tabs .ta-tab").forEach((b) => b.classList.toggle("active", b.getAttribute("data-ta-tab") === tab));
+    const panes = { details: "ta-pane-details", actions: "ta-log", tasks: "ta-pane-tasks", git: "ta-pane-git" };
+    Object.keys(panes).forEach((k) => { const el = $(panes[k]); if (el) el.style.display = (k === tab) ? (k === "actions" ? "flex" : "block") : "none"; });
+    const inputRow = $("ta-input-row");
+    if (inputRow) inputRow.style.display = tab === "actions" ? "flex" : "none"; // send box only for the agent chat
+    if (tab === "tasks" && !tasksLoaded) { tasksLoaded = true; loadTasks(); }
+    if (tab === "git" && !gitLoaded) { gitLoaded = true; loadGit(); }
+  }
+  function setTabCount(tab, n) {
+    const b = document.querySelector('#ta-tabs .ta-tab[data-ta-tab="' + tab + '"]');
+    if (!b) return;
+    let c = b.querySelector(".ta-tab-count");
+    if (!n) { if (c) c.remove(); return; }
+    if (!c) { c = document.createElement("span"); c.className = "ta-tab-count"; b.appendChild(c); }
+    c.textContent = String(n);
+  }
+
+  async function loadTasks() {
+    const el = $("ta-pane-tasks");
+    if (!el || !ticketId) return;
+    el.innerHTML = '<div style="opacity:.5;padding:20px;text-align:center;">Loading tasks…</div>';
+    try {
+      const r = await fetch(`/api/projects/${PID()}/tickets/${ticketId}/tasks`, { credentials: "same-origin" });
+      const rows = await r.json();
+      if (!Array.isArray(rows) || !rows.length) { el.innerHTML = '<div style="opacity:.55;padding:24px;text-align:center;">No tasks yet.</div>'; setTabCount("tasks", 0); return; }
+      const dot = (s) => { s = (s || "").toLowerCase(); const c = s === "success" ? "#22c55e" : s === "in_progress" ? "#3b82f6" : s === "fail" ? "#ef4444" : "#6b7280"; return `<span style="width:8px;height:8px;border-radius:50%;background:${c};flex:none;margin-top:5px;"></span>`; };
+      el.innerHTML = rows.map((t) => `<div style="display:flex;gap:9px;padding:8px 0;border-bottom:1px solid var(--border-color,#2a2a2a);">${dot(t.status)}<span style="font-size:13px;color:var(--text-color,#cbd5e1);line-height:1.45;${/success/i.test(t.status) ? "opacity:.55;text-decoration:line-through;" : ""}">${esc(t.description || "")}</span></div>`).join("");
+      setTabCount("tasks", rows.length);
+    } catch (e) { el.innerHTML = '<div style="opacity:.55;padding:24px;text-align:center;">Couldn\'t load tasks.</div>'; }
+  }
+
+  function renderDiff(diff) {
+    return String(diff).slice(0, 60000).split("\n").map((ln) => {
+      const e = esc(ln);
+      if (ln.startsWith("+") && !ln.startsWith("+++")) return `<span style="color:#4ade80;">${e}</span>`;
+      if (ln.startsWith("-") && !ln.startsWith("---")) return `<span style="color:#f87171;">${e}</span>`;
+      if (ln.startsWith("@@")) return `<span style="color:#a78bfa;">${e}</span>`;
+      return e;
+    }).join("\n");
+  }
+  async function loadGit() {
+    const el = $("ta-pane-git");
+    if (!el || !ticketId) return;
+    el.innerHTML = '<div style="opacity:.5;padding:20px;text-align:center;">Loading diff…</div>';
+    try {
+      const r = await fetch(`/api/projects/${PID()}/tickets/${ticketId}/git/diff?base=main`, { credentials: "same-origin" });
+      const d = await r.json();
+      if (d.error) { el.innerHTML = `<div style="opacity:.6;padding:24px;text-align:center;line-height:1.5;">${esc(d.error)}</div>`; return; }
+      const files = Array.isArray(d.files) ? d.files : [];
+      const commits = Array.isArray(d.commits) ? d.commits : [];
+      let html = `<div style="padding:12px 16px;border-bottom:1px solid var(--border-color,#2a2a2a);font-size:12px;color:var(--text-secondary,#9ca3af);"><code style="color:#a78bfa;">${esc(d.head || "")}</code> vs <code>${esc(d.base || "main")}</code> · ${files.length} file${files.length !== 1 ? "s" : ""} changed</div>`;
+      if (commits.length) html += `<div style="padding:10px 16px;border-bottom:1px solid var(--border-color,#2a2a2a);">${commits.map((c) => `<div style="font-size:12px;color:var(--text-secondary,#9ca3af);padding:2px 0;"><code style="color:#a78bfa;">${esc((c.sha || "").slice(0, 7))}</code> ${esc(c.subject || "")}</div>`).join("")}</div>`;
+      if (files.length) html += `<div style="padding:8px 16px;">${files.map((f) => `<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;font-family:ui-monospace,monospace;"><span style="color:var(--text-color,#cbd5e1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(f.path)}</span><span style="flex:none;margin-left:10px;"><span style="color:#22c55e;">+${f.added}</span> <span style="color:#ef4444;">-${f.removed}</span></span></div>`).join("")}</div>`;
+      if (d.diff) html += `<pre style="margin:0;padding:12px 16px;font-size:11.5px;line-height:1.5;overflow:auto;white-space:pre;color:var(--text-color,#cbd5e1);border-top:1px solid var(--border-color,#2a2a2a);">${renderDiff(d.diff)}</pre>`;
+      el.innerHTML = html;
+      setTabCount("git", files.length);
+    } catch (e) { el.innerHTML = '<div style="opacity:.55;padding:24px;text-align:center;">Couldn\'t load the diff.</div>'; }
+  }
+
+  function open(id, key, name, meta, opts) {
+    opts = opts || {};
     ticketId = id;
+    curMeta = meta || null;
+    tasksLoaded = false; gitLoaded = false;
     const p = panel();
     if (!p) return;
     const title = $("ta-title");
@@ -119,12 +185,18 @@
     if (area) area.innerHTML = '<div style="opacity:.5;padding:24px;text-align:center;">Loading…</div>';
     loadLog();
     startPoll();
-    // Right panel → the live preview for THIS ticket's branch (render if running, else start).
-    try {
-      const tabBtn = document.querySelector('.tab-button[data-tab="preview"]');
-      if (tabBtn) tabBtn.click();
-      if (window.PreviewTab && window.PreviewTab.open) window.PreviewTab.open(id);
-    } catch (_) {}
+    // Default tab: Details when opened from a ticket row (fields in hand); Actions when
+    // opened from the preview's "Chat with ticket" button (you came to chat).
+    switchTicketTab(opts.withPreview ? "actions" : "details");
+    // Only take over the RIGHT panel with the live preview when explicitly asked (the
+    // preview toolbar's "Chat with ticket"). A ticket-row click must NOT hijack the tab.
+    if (opts.withPreview) {
+      try {
+        const tabBtn = document.querySelector('.tab-button[data-tab="preview"]');
+        if (tabBtn) tabBtn.click();
+        if (window.PreviewTab && window.PreviewTab.open) window.PreviewTab.open(id);
+      } catch (_) {}
+    }
     // 50-50 split: give the preview overlay half the width so the ticket chat gets the
     // other half (otherwise, with a narrow preview, the popup sprawls across the screen).
     const art = document.getElementById("artifacts-panel");
@@ -312,6 +384,7 @@
 
   function wire() {
     $("ta-exit")?.addEventListener("click", close);
+    $("ta-tabs")?.addEventListener("click", (e) => { const b = e.target.closest("[data-ta-tab]"); if (b) switchTicketTab(b.getAttribute("data-ta-tab")); });
     $("ta-send")?.addEventListener("click", send);
     $("ta-input")?.addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
     $("ta-attach")?.addEventListener("click", () => $("ta-file")?.click());

@@ -145,6 +145,21 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     }
     .exec-mode-btn:hover:not(.active) { background: var(--card-bg-hover); }
 
+    .exec-controls {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 0.25rem;
+    }
+    .exec-controls-row { display: flex; align-items: center; gap: 0.65rem; }
+    .exec-auth-hint {
+      max-width: 390px;
+      color: var(--text-secondary);
+      font-size: 0.66rem;
+      line-height: 1.2;
+      white-space: nowrap;
+    }
+
     .builder-model-select {
       padding: 0.3rem 1.7rem 0.3rem 0.6rem; /* extra right pad so the native chevron doesn't overlap the text */
       font-size: 0.75rem;
@@ -379,20 +394,25 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       </select>
       <div class="toolbar-spacer"></div>
       ${executionMode ? html`
-        <div class="exec-mode-toggle" title="Execution mode">
-          <button class="exec-mode-btn ${isApiMode ? "active" : ""}" id="exec-mode-api" onclick="setExecMode(false)">
-            <i class="fas fa-cloud"></i> API
-          </button>
-          <button class="exec-mode-btn ${!isApiMode ? "active" : ""}" id="exec-mode-cli" onclick="setExecMode(true)">
-            <i class="fas fa-terminal"></i> CLI
-          </button>
+        <div class="exec-controls">
+          <div class="exec-controls-row">
+            <div class="exec-mode-toggle" title="Choose how ticket builds call the selected model">
+              <button class="exec-mode-btn ${isApiMode ? "active" : ""}" id="exec-mode-api" onclick="setExecMode(false)" title="Call the selected model with its API key">
+                <i class="fas fa-cloud"></i> Direct API
+              </button>
+              <button class="exec-mode-btn ${!isApiMode ? "active" : ""}" id="exec-mode-cli" onclick="setExecMode(true)" title="Run a coding agent in the ticket sandbox">
+                <i class="fas fa-terminal"></i> Coding Agent
+              </button>
+            </div>
+            <select class="builder-model-select" id="builder-model-select"
+              aria-label="Ticket builder model" onchange="setBuilderModel(this.value)">
+              ${executionMode.models.map(m => html`
+                <option value="${m.key}" data-provider="${m.provider}" ${m.key === executionMode.builderModelKey ? "selected" : ""}>${m.label}</option>
+              `)}
+            </select>
+          </div>
+          <div class="exec-auth-hint" id="execution-auth-hint" aria-live="polite"></div>
         </div>
-        <select class="builder-model-select" id="builder-model-select"
-          onchange="setBuilderModel(this.value)">
-          ${executionMode.models.map(m => html`
-            <option value="${m.key}" ${m.key === executionMode.builderModelKey ? "selected" : ""}>${m.label}</option>
-          `)}
-        </select>
       ` : ""}
       <div class="build-settings-menu">
         <button class="build-settings-btn" onclick="toggleBuildSettings(event)" title="Build & preview settings"><i class="fas fa-sliders-h"></i></button>
@@ -712,8 +732,26 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
 <script>
   const PROJECT_ID = document.body.dataset.projectId;
   let _currentTicketId = null;
+  let _codingAgentEnabled = ${!isApiMode ? "true" : "false"};
 
   // ── Execution Mode Toggle ─────────────────────────────────────────
+  function updateExecutionAuthHint() {
+    var hint = document.getElementById('execution-auth-hint');
+    var select = document.getElementById('builder-model-select');
+    if (!hint || !select) return;
+    var option = select.options[select.selectedIndex];
+    var provider = option && option.dataset ? option.dataset.provider : '';
+    if (!_codingAgentEnabled) {
+      hint.textContent = 'Uses the selected provider API key — subscriptions are not used.';
+    } else if (provider === 'openai') {
+      hint.textContent = 'Uses your connected ChatGPT/Codex subscription when available.';
+    } else if (provider === 'anthropic') {
+      hint.textContent = 'Uses your connected Claude Code account when available.';
+    } else {
+      hint.textContent = 'Runs the selected model in the sandbox using its provider API key.';
+    }
+  }
+
   function setExecMode(cliEnabled) {
     fetch('/api/settings/execution-mode', {
       method: 'PATCH',
@@ -723,8 +761,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       if (!r.ok) return;
       var apiBtn = document.getElementById('exec-mode-api');
       var cliBtn = document.getElementById('exec-mode-cli');
-      // Model selector is shown in BOTH modes: it drives the builder model.
-      // Claude models run via Claude Code CLI; all others run via Pi.
+      _codingAgentEnabled = cliEnabled;
       if (cliEnabled) {
         cliBtn.classList.add('active');
         apiBtn.classList.remove('active');
@@ -732,6 +769,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
         apiBtn.classList.add('active');
         cliBtn.classList.remove('active');
       }
+      updateExecutionAuthHint();
     });
   }
 
@@ -741,7 +779,10 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ builderModelKey: modelKey }),
     });
+    updateExecutionAuthHint();
   }
+
+  updateExecutionAuthHint();
 
   // Per-project build/preview settings (ticket build isolation, preview branch mode).
   function setBuildSetting(key, value) {

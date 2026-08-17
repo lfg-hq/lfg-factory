@@ -2613,25 +2613,26 @@ document.addEventListener('DOMContentLoaded', function() {
                             }
 
                             /* ── Compact, Linear-style ticket rows ─────────────────────── */
-                            .checklist-container { padding: 6px 10px 24px !important; gap: 0 !important; }
+                            .checklist-container { padding: 6px 8px 24px !important; gap: 0 !important; }
                             .checklist-card.lfg-row {
                                 display: flex !important; align-items: center; gap: 10px;
-                                min-height: 40px; padding: 7px 12px !important; margin: 0 !important;
+                                min-height: 42px; padding: 8px 12px !important; margin: 1px 0 !important;
                                 background: transparent !important; border: none !important;
-                                border-bottom: 1px solid ${isLightTheme ? '#edeff2' : 'rgba(255,255,255,0.055)'} !important;
+                                border-bottom: none !important; /* no per-row divider — reads as a broken grid on dark */
                                 border-radius: 8px !important; box-shadow: none !important; cursor: pointer;
+                                animation: none !important; /* base .in-progress pulse fades rows — kill it */
                                 transition: background .12s ease;
                             }
                             .checklist-card.lfg-row::before { display: none !important; }
-                            .checklist-card.lfg-row:hover { background: ${isLightTheme ? '#f5f6f8' : 'rgba(255,255,255,0.035)'} !important; }
-                            .lfg-row-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; box-shadow: 0 0 0 3px ${isLightTheme ? 'rgba(0,0,0,0.02)' : 'rgba(255,255,255,0.02)'}; }
+                            .checklist-card.lfg-row:hover { background: ${isLightTheme ? '#f4f5f7' : 'rgba(255,255,255,0.06)'} !important; }
+                            .lfg-row-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
                             .lfg-row .ticket-key { flex: none; margin: 0 !important; }
-                            .lfg-row-title {
+                            .checklist-card.lfg-row .lfg-row-title {
                                 flex: 1 1 auto; min-width: 0; font-size: 13.5px; font-weight: 500; line-height: 1.35;
-                                color: ${isLightTheme ? '#1f2430' : '#e3e8ef'};
+                                color: ${isLightTheme ? '#1f2430' : '#e8edf4'} !important; opacity: 1 !important;
                                 white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
                             }
-                            .lfg-row .priority-badge { flex: none; font-size: 9.5px !important; font-weight: 700 !important; letter-spacing: .04em; padding: 2px 7px !important; border-radius: 5px !important; margin: 0 !important; }
+                            .checklist-card.lfg-row .priority-badge { flex: none; font-size: 9.5px !important; font-weight: 700 !important; letter-spacing: .04em; padding: 2px 7px !important; border-radius: 5px !important; margin: 0 !important; opacity: 1 !important; text-transform: uppercase !important; }
                             .lfg-row-actions { display: none; align-items: center; gap: 1px; flex: none; }
                             .lfg-row:hover .lfg-row-actions { display: inline-flex; }
                             .lfg-row .lfg-row-actions .action-btn { width: 26px; height: 26px; border-radius: 6px; border: none; background: transparent; color: ${isLightTheme ? '#98a2b3' : '#7d8797'}; cursor: pointer; font-size: 11px; display: inline-flex; align-items: center; justify-content: center; transition: all .12s; }
