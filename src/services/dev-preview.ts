@@ -509,6 +509,11 @@ export async function getAppRuntimeLog(projectId: string, lines = 500, service?:
       `f=$(ls -t ${glob} 2>/dev/null | head -1); [ -n "$f" ] && tail -n ${lines} "$f" 2>/dev/null || echo "(no ${svc ? svc + " " : ""}app log yet — the app may not have started, or hasn't printed anything)"`,
       20_000,
     );
+    // The microVM was reaped (OOM/eviction) while the stored workspace id lingers → the exec
+    // layer returns "no ... VM found". Make it actionable instead of cryptic.
+    if (/no (running|sleeping|associated).*VM|no VM associated/i.test(output || "")) {
+      return "The preview sandbox isn't reachable right now (its VM was reclaimed). Restart the preview (⋮ → Restart) to bring it back, then this log will fill in.";
+    }
     return output || "";
   } catch {
     return "";
