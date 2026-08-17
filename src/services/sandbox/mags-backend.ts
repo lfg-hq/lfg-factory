@@ -165,8 +165,16 @@ export async function newWorkspaceV2(
 }
 
 /**
- * Execute a command on an existing persistent VM via SSH.
- * Retries up to 3 times on transient SSH connection failures.
+ * Execute a command on an existing persistent VM.
+ *
+ * Calls the exec endpoint DIRECTLY with the workspace id — the Mags server resolves
+ * workspace_id → running VM internally (a direct query, no pagination). The SDK's
+ * client.exec() instead did a client-side "find the running VM" pre-lookup that scans only
+ * the 50 most-recent jobs, so it failed for older VMs with "no running or sleeping vm found"
+ * even though the VM was up and serving. Passing workspace_id straight to /exec skips that
+ * broken pre-lookup entirely.
+ *
+ * Response shape: { exit_code, stdout, stderr }. Retries up to 3× on transient failures.
  */
 export async function execOnWorkspace(
   nameOrId: string,
@@ -174,26 +182,48 @@ export async function execOnWorkspace(
   opts: { timeout?: number } = {}
 ): Promise<MagsExecResult> {
   const timeout = opts.timeout ?? 300_000; // 5 min default
-  const client = getClient(timeout + 30_000);
+  const token = process.env.MAGS_API_TOKEN;
+  if (!token) throw new Error("MAGS_API_TOKEN not set");
+  const base = (process.env.MAGS_API_URL || "https://api.magpiecloud.com").replace(/\/+$/, "");
+  const url = `${base}/api/v2/mags-jobs/${encodeURIComponent(nameOrId)}/exec`;
 
   let lastError: Error | null = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0) await sleep(5000);
 
+    const ctrl = new AbortController();
+    const abortTimer = setTimeout(() => ctrl.abort(), timeout + 30_000); // socket timeout > command timeout
     try {
-      const result = await client.exec(nameOrId, command, { timeout });
-      return result as MagsExecResult;
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ command }),
+        signal: ctrl.signal,
+      });
+      const json = (await resp.json().catch(() => ({}))) as { exit_code?: number; stdout?: string; stderr?: string; message?: string; error?: string };
+      if (!resp.ok) {
+        throw new Error(`Mags exec → HTTP ${resp.status} ${(json.message || json.error || JSON.stringify(json)).slice(0, 200)}`);
+      }
+      return {
+        exitCode: typeof json.exit_code === "number" ? json.exit_code : 0,
+        output: json.stdout ?? "",
+        stderr: json.stderr ?? "",
+      };
     } catch (err) {
       lastError = err as Error;
       const msg = (lastError.message ?? "").toLowerCase();
       const transient = msg.includes("no running") || msg.includes("no vm") ||
         msg.includes("connection refused") || msg.includes("ssh") ||
-        msg.includes("not running") || msg.includes("no job found");
+        msg.includes("not running") || msg.includes("no job found") ||
+        msg.includes("http 502") || msg.includes("http 503") || msg.includes("http 504") ||
+        msg.includes("aborted") || msg.includes("fetch failed") || msg.includes("network");
       if (transient) {
         console.log(`[mags] exec attempt ${attempt + 1} failed (${msg.slice(0, 80)}), retrying...`);
         continue;
       }
       throw err;
+    } finally {
+      clearTimeout(abortTimer);
     }
   }
 
