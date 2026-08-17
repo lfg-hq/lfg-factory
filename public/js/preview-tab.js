@@ -623,7 +623,7 @@
     m.id = "preview-more-menu";
     m.style.cssText = "position:fixed;z-index:100;min-width:180px;background:var(--card-bg,#161616);border:1px solid var(--border-color,#333);border-radius:10px;box-shadow:0 12px 34px rgba(0,0,0,.45);padding:5px;display:flex;flex-direction:column;gap:2px;";
     const item = (label, act, icon, danger) => `<button data-menu="${act}" style="text-align:left;padding:9px 11px;border-radius:7px;cursor:pointer;font-size:12.5px;background:transparent;color:${danger ? "#f87171" : "var(--text-color,#e2e8f0)"};border:none;display:flex;align-items:center;gap:10px;"><i class="fas ${icon}" style="width:14px;text-align:center;opacity:.85;"></i>${label}</button>`;
-    m.innerHTML = item("Env Profile", "profile", "fa-list-check") + item("Restart", "restart", "fa-power-off") + item("Rebuild sandbox", "rebuildvm", "fa-server") + item("Stop", "stop", "fa-stop", true);
+    m.innerHTML = item("App routes", "routes", "fa-diagram-project") + item("Env Profile", "profile", "fa-list-check") + item("Restart", "restart", "fa-power-off") + item("Rebuild sandbox", "rebuildvm", "fa-server") + item("Stop", "stop", "fa-stop", true);
     document.body.appendChild(m);
     const r = anchor.getBoundingClientRect();
     m.style.top = (r.bottom + 6) + "px";
@@ -633,9 +633,40 @@
     m.addEventListener("click", (e) => {
       const it = e.target.closest("[data-menu]"); if (!it) return;
       const a = it.getAttribute("data-menu"); m.remove();
-      if (a === "profile") togglePlan(); else if (a === "restart") doRestart(); else if (a === "rebuildvm") doRebuildVm(); else if (a === "stop") doStop();
+      if (a === "routes") showRoutes(anchor); else if (a === "profile") togglePlan(); else if (a === "restart") doRestart(); else if (a === "rebuildvm") doRebuildVm(); else if (a === "stop") doStop();
     });
     setTimeout(() => document.addEventListener("click", function onDoc(ev) { if (!m.contains(ev.target) && ev.target !== anchor && !anchor.contains(ev.target)) { m.remove(); document.removeEventListener("click", onDoc); } }), 0);
+  }
+
+  // "App routes" — surface WHICH public URL maps to WHICH app on WHICH port, so a broken
+  // route (e.g. a companion subdomain 500ing while the app is healthy) is diagnosable at a glance.
+  function showRoutes(anchor) {
+    const existing = document.getElementById("preview-routes");
+    if (existing) { existing.remove(); return; }
+    const svcs = (current && current.services) || [];
+    const m = document.createElement("div");
+    m.id = "preview-routes";
+    m.style.cssText = "position:fixed;z-index:100;width:460px;max-width:92vw;background:var(--card-bg,#161616);border:1px solid var(--border-color,#333);border-radius:12px;box-shadow:0 16px 40px rgba(0,0,0,.5);padding:14px 16px;";
+    const row = (name, port, url, status, color) => `<div style="display:flex;align-items:center;gap:9px;padding:8px 0;border-bottom:1px solid var(--border-color,#2a2a2a);font-size:12.5px;">
+      <span style="font-weight:600;color:var(--text-color,#e2e8f0);min-width:88px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(name)}</span>
+      <span style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text-secondary,#9ca3af);min-width:56px;">:${esc(String(port || "?"))}</span>
+      ${url ? `<a href="${esc(url)}" target="_blank" rel="noopener" title="${esc(url)}" style="flex:1;min-width:0;color:#60a5fa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(String(url).replace(/^https?:\/\//, ""))}</a>` : `<span style="flex:1;color:var(--text-secondary,#9ca3af);">(not exposed)</span>`}
+      <span style="flex:none;font-size:9.5px;font-weight:700;letter-spacing:.03em;padding:2px 7px;border-radius:5px;background:${color}22;color:${color};">${esc(status.toUpperCase())}</span>
+    </div>`;
+    let rows;
+    if (svcs.length) {
+      rows = svcs.map((s) => row(s.name, s.port, s.url, s.primary ? "primary" : (s.enabled ? "on" : "off"), s.primary ? "#a78bfa" : (s.enabled ? "#10b981" : "#94a3b8"))).join("");
+    } else {
+      const url = (current && current.previewUrl) || "";
+      const port = (current && current.manifest && current.manifest.port) || "?";
+      rows = url ? row("app", port, url, "primary", "#a78bfa") : `<div style="padding:10px 0;color:var(--text-secondary,#9ca3af);font-size:12.5px;">No app is running yet.</div>`;
+    }
+    m.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;"><span style="font-weight:600;font-size:13px;color:var(--text-color,#e2e8f0);">App routes — public URL → port</span><span style="font-size:10.5px;color:var(--text-secondary,#9ca3af);">app · port · url · state</span></div>${rows}`;
+    document.body.appendChild(m);
+    const r = anchor.getBoundingClientRect();
+    m.style.top = (r.bottom + 6) + "px";
+    m.style.left = Math.max(8, Math.min(r.right - m.offsetWidth, window.innerWidth - m.offsetWidth - 8)) + "px";
+    setTimeout(() => document.addEventListener("click", function onDoc(ev) { if (!m.contains(ev.target) && !(anchor && anchor.contains(ev.target))) { m.remove(); document.removeEventListener("click", onDoc); } }), 0);
   }
 
   function toggleLog() {
