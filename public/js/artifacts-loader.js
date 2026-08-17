@@ -2507,10 +2507,29 @@ document.addEventListener('DOMContentLoaded', function() {
                 console.warn('[ArtifactsLoader] Checklist tab element not found');
                 return;
             }
-            
-            // Show loading state
-            checklistTab.innerHTML = '<div class="loading-state"><div class="spinner"></div><div>Loading checklist...</div></div>';
-            
+
+            // The Task List bakes light/dark colors into an inline <style> (and some inline
+            // element styles) at render time, so a theme toggle would leave stale, washed-out
+            // colors until a hard refresh. Re-render when <html data-theme> changes. (No
+            // loading flash on re-render — content is only swapped once the fetch resolves.)
+            this._checklistProjectId = projectId;
+            if (!this._checklistThemeObs) {
+                const self = this;
+                this._checklistThemeObs = new MutationObserver(() => {
+                    const tab = document.getElementById('checklist');
+                    if (tab && tab.querySelector('.checklist-wrapper') && self._checklistProjectId) {
+                        self.loadChecklist(self._checklistProjectId);
+                    }
+                });
+                this._checklistThemeObs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+            }
+
+            // Show loading state — but NOT on a re-render (theme toggle) where content already
+            // exists, so switching theme doesn't flash "Loading checklist…".
+            if (!checklistTab.querySelector('.checklist-wrapper')) {
+                checklistTab.innerHTML = '<div class="loading-state"><div class="spinner"></div><div>Loading checklist...</div></div>';
+            }
+
             // Fetch checklist from API
             const checklistUrl = `/projects/${projectId}/api/checklist/`;
             
