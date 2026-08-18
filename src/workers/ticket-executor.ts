@@ -43,6 +43,7 @@ import {
   createGitHubRepo,
   initAndPushRepo,
 } from "../services/git.ts";
+import { resolveGitActor, NO_SHARED_GIT_MESSAGE } from "../services/git-access.ts";
 import {
   buildBuilderPrompt,
   buildTicketChatPrompt,
@@ -803,7 +804,7 @@ export async function startTicketWorker() {
       // guard above prevents the SAME ticket from running twice.
       console.log(`[ticket-executor] API mode — executing ticket ${ticketId}`);
       try {
-        await executeTicketApi(ticketId, false);
+        await executeTicketApi(ticketId, false, event.payload.actorId);
       } catch (err) {
         console.error(`[ticket-executor] API mode failed for ticket ${ticketId}:`, err);
         await markTicketFailed(ticketId, String(err));
@@ -816,7 +817,7 @@ export async function startTicketWorker() {
       if (builderProvider && builderProvider !== "anthropic") {
         console.log(`[ticket-executor] CLI mode + ${builderProvider} — using Pi (Claude Code is Claude-only)`);
         try {
-          await executeTicketApi(ticketId, true);
+          await executeTicketApi(ticketId, true, event.payload.actorId);
         } catch (err) {
           console.error(`[ticket-executor] Pi (CLI-routed) failed for ticket ${ticketId}:`, err);
           await markTicketFailed(ticketId, String(err));
@@ -832,7 +833,7 @@ export async function startTicketWorker() {
         } else {
           if (projectId) executingProjects.add(projectId);
           try {
-            await executeTicket(ticketId);
+            await executeTicket(ticketId, event.payload.actorId);
           } catch (err) {
             console.error(`[ticket-executor] Failed for ticket ${ticketId}:`, err);
             await markTicketFailed(ticketId, String(err));
@@ -848,9 +849,9 @@ export async function startTicketWorker() {
   });
 
   bus.on("ticket.chat_message", async (event) => {
-    const { ticketId, message, sender } = event.payload;
+    const { ticketId, message, sender, actorId } = event.payload;
     try {
-      await executeTicketChat(ticketId, message, sender);
+      await executeTicketChat(ticketId, message, sender, actorId);
     } catch (err) {
       console.error(`[ticket-executor] Chat failed for ticket ${ticketId}:`, err);
     }
@@ -892,7 +893,7 @@ function ticketBranchName(ticket: { ticketKey?: string | null; name?: string | n
   return key ? `feature/${key}${title ? `-${title}` : ""}` : `feature/ticket-${ticket.id}`;
 }
 
-async function executeTicket(ticketId: string): Promise<void> {
+async function executeTicket(ticketId: string, actorId?: string): Promise<void> {
   const startTime = Date.now();
 
   // ── Step 1: Load data ───────────────────────────────────────────────
@@ -937,10 +938,14 @@ async function executeTicket(ticketId: string): Promise<void> {
     throw new Error("No connected Claude subscription or Anthropic API token is available for the selected Coding Agent model.");
   }
 
+  // Fine-grained Git: whose token clones/pushes this build. The actor is whoever
+  // triggered it (fallback: the ticket's assignee). Owner → owner's token; a
+  // collaborator → the owner's token only if shareGitAccess is ON, else their OWN.
+  const { gitUserId, usingOwnCollaboratorToken } = resolveGitActor(project, actorId ?? ticket.assigneeId);
   const [ghToken] = await db
     .select()
     .from(githubTokens)
-    .where(eq(githubTokens.userId, ownerId))
+    .where(eq(githubTokens.userId, gitUserId))
     .limit(1);
 
   const githubToken = ghToken?.accessToken;
@@ -956,10 +961,11 @@ async function executeTicket(ticketId: string): Promise<void> {
     console.log(`[ticket-executor] Auto-generated CLI API key for user ${ownerId}`);
   }
 
-  // Warn if no GitHub — code will be lost on VM restart
+  // Warn if no GitHub — code will be lost on VM restart. When a collaborator is
+  // building without shared access and has no Git of their own, say exactly that.
   if (!githubToken) {
-    console.warn(`[ticket-executor] ⚠️ No GitHub token for user ${ownerId} — code won't be persisted!`);
-    await addLog(ticketId, "⚠️ GitHub not connected — code will NOT be saved to a repository. Connect GitHub in Settings to persist your work.", "command", ownerId);
+    console.warn(`[ticket-executor] ⚠️ No GitHub token for user ${gitUserId} — code won't be persisted!`);
+    await addLog(ticketId, usingOwnCollaboratorToken ? `⚠️ ${NO_SHARED_GIT_MESSAGE}` : "⚠️ GitHub not connected — code will NOT be saved to a repository. Connect GitHub in Settings to persist your work.", "command", ownerId);
   }
 
   // Seed subtasks up-front (idempotent) so the Tasks tab is populated the moment
@@ -1625,6 +1631,10 @@ async function ensureIsolatedChatSandbox(
   ticket: { id: string; projectId: string; githubBranch: string | null },
   project: { id: string; repoOwner: string | null; repoName: string | null; repoUrl: string | null; repoProvider?: string | null; stack?: string | null },
   ownerId: string,
+  // Whose Git token clones the repo here (fine-grained sharing) + whether it's the
+  // collaborator's OWN token, so a missing token yields the right "connect/ask owner" text.
+  gitUserId: string = ownerId,
+  usingOwnGit: boolean = false,
 ): Promise<{ workspaceId: string } | { error: string }> {
   const projectDirName = "project";
   const featureBranch = ticket.githubBranch ?? ticketBranchName(ticket);
@@ -1663,8 +1673,8 @@ async function ensureIsolatedChatSandbox(
     await db.delete(sandboxes).where(eq(sandboxes.id, existing.id)).catch(() => {});
   }
 
-  const auth = await resolveRepoAuth(project, ownerId);
-  if (!auth) return { error: "No repository/credentials configured — connect the repo in Settings, then chat with the agent." };
+  const auth = await resolveRepoAuth(project, gitUserId);
+  if (!auth) return { error: usingOwnGit ? NO_SHARED_GIT_MESSAGE : "No repository/credentials configured — connect the repo in Settings, then chat with the agent." };
 
   // 2) Provision a fresh isolated VM (same call + rootfs the build uses).
   await addLog(ticket.id, "Spinning up a clean isolated sandbox for this chat…", "command", ownerId);
@@ -1726,7 +1736,8 @@ fi
 async function executeTicketChat(
   ticketId: string,
   message: string,
-  sender: string
+  sender: string,
+  actorId?: string, // real userId who sent the chat (sender is a ROLE: "user"/"orchestrator")
 ): Promise<void> {
   const [ticket] = await db
     .select()
@@ -1743,6 +1754,11 @@ async function executeTicketChat(
     .limit(1);
 
   const ownerId = project!.ownerId;
+
+  // Fine-grained Git: the person CHATTING is the actor (fallback: the ticket's assignee).
+  // Owner → owner's token; a collaborator → the owner's token only if shareGitAccess is
+  // ON, else their own. NOTE: `sender` is a role ("user"/"orchestrator"), not a userId.
+  const { gitUserId, usingOwnCollaboratorToken } = resolveGitActor(project!, actorId ?? ticket.assigneeId);
 
   const [profile] = await db
     .select()
@@ -1767,7 +1783,7 @@ async function executeTicketChat(
   // the preview's run-enabling config hacks into the branch.
   const chatSb = await ensureIsolatedChatSandbox(
     { id: ticket.id, projectId: ticket.projectId, githubBranch: ticket.githubBranch },
-    project!, ownerId,
+    project!, ownerId, gitUserId, usingOwnCollaboratorToken,
   );
   if ("error" in chatSb) {
     await addLog(ticketId, chatSb.error, "cli_error", ownerId);
@@ -1901,7 +1917,7 @@ ${message}
         // the status never moves, and nothing is on the remote. This was missing
         // → "changes done but no commit / status / merge". A pure Q&A turn (no
         // edits → !didWork) skips this and just leaves the answer in the log.
-        await finalizeTicketChat(ticketId, ownerId, project!, ticket, workspaceId, message, piWorkSummary(piResult.tail));
+        await finalizeTicketChat(ticketId, ownerId, project!, ticket, workspaceId, message, piWorkSummary(piResult.tail), gitUserId);
       } else {
         // Pi answered without changing code (Q&A). Surface its reply so the client's
         // "Thinking…" indicator resolves and the user sees the response.
@@ -2048,7 +2064,7 @@ ${message}
     const [ghToken] = await db
       .select()
       .from(githubTokens)
-      .where(eq(githubTokens.userId, ownerId))
+      .where(eq(githubTokens.userId, gitUserId))
       .limit(1);
 
     const githubToken = ghToken?.accessToken;
@@ -2148,10 +2164,11 @@ async function finalizeTicketChat(
   workspaceId: string,
   message: string,
   workSummary = "",
+  gitUserId: string = ownerId, // fine-grained Git: whose token commits/pushes this chat's edits
 ): Promise<void> {
   const projectDir = `${WORKING_DIR}/project`;
   const featureBranch = ticket.githubBranch ?? ticketBranchName(ticket);
-  const auth = await resolveRepoAuth(project, ownerId);
+  const auth = await resolveRepoAuth(project, gitUserId);
   if (!auth) {
     await addLog(ticketId, "Changes made, but no git remote/token is configured — they stay in the sandbox. Connect the repo to persist chat edits.", "cli_error", ownerId);
     return;
@@ -2230,7 +2247,7 @@ async function getBuilderProvider(projectId: string | null): Promise<ProviderNam
 }
 
 /** Execute with direct provider tools, or with Pi when Coding Agent mode is requested. */
-async function executeTicketApi(ticketId: string, useCodingAgent: boolean): Promise<void> {
+async function executeTicketApi(ticketId: string, useCodingAgent: boolean, actorId?: string): Promise<void> {
   const startTime = Date.now();
 
   // ── Load data (shared with CLI mode) ────────────────────────────────
@@ -2243,12 +2260,15 @@ async function executeTicketApi(ticketId: string, useCodingAgent: boolean): Prom
 
   const ownerId = project.ownerId;
 
-  const [ghToken] = await db.select().from(githubTokens).where(eq(githubTokens.userId, ownerId)).limit(1);
+  // Fine-grained Git: owner → owner's token; a collaborator → owner's token only if
+  // shareGitAccess is ON, else their OWN connected Git. Actor = trigger (fallback: assignee).
+  const { gitUserId, usingOwnCollaboratorToken } = resolveGitActor(project, actorId ?? ticket.assigneeId);
+  const [ghToken] = await db.select().from(githubTokens).where(eq(githubTokens.userId, gitUserId)).limit(1);
   const githubToken = ghToken?.accessToken;
 
   if (!githubToken) {
-    console.warn(`[ticket-executor-api] No GitHub token for user ${ownerId}`);
-    await addLog(ticketId, "No GitHub token — code will NOT be saved to a repository.", "command", ownerId);
+    console.warn(`[ticket-executor-api] No GitHub token for user ${gitUserId}`);
+    await addLog(ticketId, usingOwnCollaboratorToken ? NO_SHARED_GIT_MESSAGE : "No GitHub token — code will NOT be saved to a repository.", "command", ownerId);
   }
 
   // Seed subtasks up-front (idempotent) so the Tasks tab is populated the moment
@@ -2415,7 +2435,7 @@ async function executeTicketApi(ticketId: string, useCodingAgent: boolean): Prom
 
   // ── Git setup (same as CLI mode) — provider-aware (GitHub OR GitLab) ─
   console.log(`[ticket-executor-api] Setting up git`);
-  const auth = await resolveRepoAuth(project, ownerId);
+  const auth = await resolveRepoAuth(project, gitUserId);
   let githubOwner: string | null = auth?.owner ?? project.repoOwner ?? null;
   let githubRepo: string | null = auth?.repo ?? project.repoName ?? null;
   const repoUrl = auth?.repoUrl ?? project.repoUrl ?? extractRepoUrl(project.stack ?? "");
@@ -3159,6 +3179,7 @@ async function recoverUnpushedTickets() {
         projectId: projectTickets.projectId,
         githubCommitSha: projectTickets.githubCommitSha,
         githubBranch: projectTickets.githubBranch,
+        assigneeId: projectTickets.assigneeId,
       })
       .from(projectTickets)
       .where(
@@ -3188,6 +3209,7 @@ async function recoverUnpushedTickets() {
           ownerId: projects.ownerId,
           repoOwner: projects.repoOwner,
           repoName: projects.repoName,
+          shareGitAccess: projects.shareGitAccess,
         })
         .from(projects)
         .where(eq(projects.id, ticket.projectId))
@@ -3195,10 +3217,13 @@ async function recoverUnpushedTickets() {
 
       if (!project?.repoOwner || !project?.repoName) continue;
 
+      // Fine-grained Git: push the recovered work with the ticket's assignee's effective
+      // token (no trigger actor available in this background sweep; falls back to owner).
+      const { gitUserId } = resolveGitActor(project, ticket.assigneeId);
       const [ghToken] = await db
         .select({ accessToken: githubTokens.accessToken })
         .from(githubTokens)
-        .where(eq(githubTokens.userId, project.ownerId))
+        .where(eq(githubTokens.userId, gitUserId))
         .limit(1);
 
       if (!ghToken?.accessToken) continue;

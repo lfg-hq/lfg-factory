@@ -22,6 +22,7 @@ import { projectDatabases } from "../db/schema/project-databases.ts";
 import { githubTokens, llmApiKeys } from "../db/schema/users.ts";
 import { modelSelections } from "../db/schema/chat.ts";
 import { getValidGitlabToken } from "./gitlab-token.ts";
+import { resolveGitActor } from "./git-access.ts";
 import { getModel, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
 import { decryptSecret, encryptSecret } from "../utils/crypto.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
@@ -2306,7 +2307,7 @@ async function recoverProjectRepoLink(project: { id: string; ownerId: string; na
   }
 }
 
-async function resolveAuthedRepoUrl(projectId: string): Promise<{ authUrl: string; provider: string } | { error: string }> {
+async function resolveAuthedRepoUrl(projectId: string, actingUserId?: string): Promise<{ authUrl: string; provider: string } | { error: string }> {
   const [project] = await db.select().from(projects).where(eq(projects.id, projectId));
   if (!project) return { error: "project not found" };
   const columnProvider = (project.repoProvider || "github").toLowerCase();
@@ -2316,14 +2317,18 @@ async function resolveAuthedRepoUrl(projectId: string): Promise<{ authUrl: strin
   if (!repoUrl) repoUrl = await recoverProjectRepoLink(project); // build may have created the repo but not linked it
   if (!repoUrl) return { error: "This project has no repository yet — build a ticket first (that creates the repo + branch), then preview." };
   const provider = /gitlab\.com|\/gitlab\b/i.test(repoUrl) ? "gitlab" : /github\.com/i.test(repoUrl) ? "github" : columnProvider;
+  // Fine-grained Git: fetch with the acting user's effective token (owner's when they're
+  // the owner or shareGitAccess is ON; else the collaborator's own).
+  const { gitUserId, usingOwnCollaboratorToken } = resolveGitActor(project, actingUserId);
+  const ownHint = usingOwnCollaboratorToken ? " This project doesn't share the owner's Git — connect your own, or ask the owner to enable “Share Git access”." : "";
   let token = "";
   if (provider === "gitlab") {
-    token = (await getValidGitlabToken(project.ownerId)) || "";
-    if (!token) return { error: "No GitLab token — reconnect GitLab in settings." };
+    token = (await getValidGitlabToken(gitUserId)) || "";
+    if (!token) return { error: `No GitLab token — reconnect GitLab in settings.${ownHint}` };
   } else {
-    const [t] = await db.select().from(githubTokens).where(eq(githubTokens.userId, project.ownerId)).limit(1);
+    const [t] = await db.select().from(githubTokens).where(eq(githubTokens.userId, gitUserId)).limit(1);
     token = t?.accessToken || "";
-    if (!token) return { error: "No GitHub token — connect GitHub in settings." };
+    if (!token) return { error: `No GitHub token — connect GitHub in settings.${ownHint}` };
   }
   const cred = provider === "gitlab" ? `oauth2:${token}` : `x-access-token:${token}`;
   return { authUrl: repoUrl.replace(/^https:\/\//, `https://${cred}@`), provider };
@@ -2389,14 +2394,18 @@ export async function setupPreview(projectId: string, opts: SetupOptions): Promi
     if (!repoUrl) return failed(projectId, userId, "This project has no repository yet, so there's nothing to preview. The repo is created when you build your FIRST ticket — that scaffolds the app, creates the Git repo, and pushes the branch. Build a ticket (\"start building\" / the Build button), then preview that ticket's branch from its Preview tab. (\"Run default branch\" only works once code exists on the default branch.)");
     const provider = /gitlab\.com|\/gitlab\b/i.test(repoUrl) ? "gitlab" : /github\.com/i.test(repoUrl) ? "github" : columnProvider;
 
+    // Fine-grained Git: clone with the acting user's effective token (owner's when
+    // they're the owner or shareGitAccess is ON; else the collaborator's own).
+    const { gitUserId, usingOwnCollaboratorToken } = resolveGitActor(project, userId);
+    const ownHint = usingOwnCollaboratorToken ? " This project doesn't share the owner's Git — connect your own under Settings → Integrations, or ask the owner to enable “Share Git access”." : "";
     let token = "";
     if (provider === "gitlab") {
-      token = (await getValidGitlabToken(project.ownerId)) || "";
-      if (!token) return failed(projectId, userId, "No GitLab token — reconnect GitLab in settings to preview this project.");
+      token = (await getValidGitlabToken(gitUserId)) || "";
+      if (!token) return failed(projectId, userId, `No GitLab token — reconnect GitLab in settings to preview this project.${ownHint}`);
     } else {
-      const [ghToken] = await db.select().from(githubTokens).where(eq(githubTokens.userId, project.ownerId)).limit(1);
+      const [ghToken] = await db.select().from(githubTokens).where(eq(githubTokens.userId, gitUserId)).limit(1);
       token = ghToken?.accessToken || "";
-      if (!token) return failed(projectId, userId, "No GitHub token — connect GitHub to preview this project.");
+      if (!token) return failed(projectId, userId, `No GitHub token — connect GitHub to preview this project.${ownHint}`);
     }
     // GitLab OAuth clones auth as oauth2:<token>@; GitHub as x-access-token:<token>@.
     const cred = provider === "gitlab" ? `oauth2:${token}` : `x-access-token:${token}`;
@@ -2921,7 +2930,7 @@ export async function getTicketDiff(projectId: string, ticketId: string, base: s
   // Isolated builds push the branch from a throwaway VM that's since destroyed,
   // so this long-lived preview sandbox has no local copy. Fetch it from the
   // remote first — with auth, since the repo may be private (GitLab/GitHub).
-  const auth = await resolveAuthedRepoUrl(projectId);
+  const auth = await resolveAuthedRepoUrl(projectId); // read-only diff → owner's token
   const authUrl = "error" in auth ? "" : auth.authUrl;
 
   const script = `
@@ -3209,7 +3218,7 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
       const [tk] = await db.select({ gb: projectTickets.githubBranch }).from(projectTickets).where(eq(projectTickets.id, ticketId));
       const remoteBranch = tk?.gb || `feature/ticket-${ticketId}`;
       branchLabel = remoteBranch;
-      const auth = await resolveAuthedRepoUrl(projectId);
+      const auth = await resolveAuthedRepoUrl(projectId, userId);
       if ("error" in auth) { await setStep("locate", "failed"); return failed(projectId, userId, auth.error); }
 
       if (checkoutMode) {
@@ -3361,7 +3370,7 @@ sleep 2; df -h /data 2>/dev/null | tail -1`, 120_000).catch(() => {});
       // already hard-syncs; default lagged behind). Local uncommitted changes are stashed
       // first (recoverable), then we reset to origin; saved config patches + env are
       // re-applied below, exactly like the worktree path.
-      const authRes = await resolveAuthedRepoUrl(projectId).catch(() => null);
+      const authRes = await resolveAuthedRepoUrl(projectId, userId).catch(() => null);
       const authUrl = authRes && "authUrl" in authRes ? authRes.authUrl : null;
       await setPreview(projectId, userId, { previewStatus: "starting", previewBranch: "(default)" }, "Pulling the latest default branch…");
       plog(projectId, userId, "Syncing the default branch to the latest pushed commit…");

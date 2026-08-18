@@ -63,6 +63,10 @@ export const projects = sqliteTable(
     // provision, always use the user-set connection var.
     dbMode: text("db_mode").notNull().default("auto"),
 
+    // When ON, a collaborator's ticket build / preview uses the OWNER's Git token
+    // (scoped to this repo). OFF (default): each collaborator uses their own Git.
+    shareGitAccess: integer("share_git_access", { mode: "boolean" }).notNull().default(false),
+
     createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
     updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
   },

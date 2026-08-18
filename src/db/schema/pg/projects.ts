@@ -56,6 +56,12 @@ export const projects = pgTable(
     // provision a fresh container; "new" = always provision fresh; "provided" = never
     // provision, always use the user-set connection var.
     dbMode: text("db_mode").notNull().default("auto"),
+    // Fine-grained Git sharing. When ON, a COLLABORATOR's ticket build / preview uses
+    // the OWNER's connected Git (GitHub/GitLab) token — scoped to this project's repo —
+    // so teammates can build/push/open PRs/MRs without their own repo access. OFF
+    // (default): each collaborator acts with their OWN connected Git; the owner's
+    // credentials are NEVER used for a collaborator without this explicit opt-in.
+    shareGitAccess: boolean("share_git_access").notNull().default(false),
     createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),
     updatedAt: timestamp("updated_at", { mode: "date" }).notNull().default(sql`now()`),
   },

@@ -121,11 +121,14 @@ previewApi.get("/:projectId/preview/build-settings", async (c) => {
   const user = c.get("user");
   const access = await getProjectAccess(c.req.param("projectId")!, user.id);
   if (!access) return c.json({ error: "Project not found" }, 404);
-  const p = access.project as { ticketBuildIsolation?: string; previewBranchMode?: string; dbMode?: string };
+  const p = access.project as { ticketBuildIsolation?: string; previewBranchMode?: string; dbMode?: string; shareGitAccess?: boolean };
   return c.json({
     ticketBuildIsolation: p.ticketBuildIsolation ?? "isolated",
     previewBranchMode: p.previewBranchMode ?? "worktree",
     dbMode: p.dbMode ?? "auto",
+    shareGitAccess: !!p.shareGitAccess,
+    // Only the owner may toggle credential sharing (it lends out THEIR Git token).
+    canShareGit: access.role === "owner",
   });
 });
 
@@ -138,6 +141,11 @@ previewApi.post("/:projectId/preview/build-settings", async (c) => {
   if (body.ticketBuildIsolation === "isolated" || body.ticketBuildIsolation === "shared") patch.ticketBuildIsolation = body.ticketBuildIsolation;
   if (body.previewBranchMode === "worktree" || body.previewBranchMode === "checkout") patch.previewBranchMode = body.previewBranchMode;
   if (body.dbMode === "auto" || body.dbMode === "new" || body.dbMode === "provided") patch.dbMode = body.dbMode;
+  // Credential sharing lends the OWNER's Git token to collaborators — owner-only.
+  if (typeof body.shareGitAccess === "boolean") {
+    if (access.role !== "owner") return c.json({ error: "Only the project owner can change Git access sharing." }, 403);
+    patch.shareGitAccess = body.shareGitAccess;
+  }
   if (!Object.keys(patch).length) return c.json({ error: "Nothing valid to update" }, 400);
   patch.updatedAt = new Date();
   await db.update(projects).set(patch).where(eq(projects.id, access.project.id));

@@ -575,7 +575,7 @@ ticketsApi.post("/:projectId/tickets/:ticketId/chat", async (c) => {
   } else {
     // Normal chat — dispatch to executor for new/resumed CLI session
     const { bus } = await import("../../events/bus.ts");
-    bus.emit({ type: "ticket.chat_message", payload: { ticketId, message: body.message, sender: "user" } });
+    bus.emit({ type: "ticket.chat_message", payload: { ticketId, message: body.message, sender: "user", actorId: user.id } });
   }
 
   return c.json({ ok: true });
@@ -658,7 +658,7 @@ ticketsApi.post("/:projectId/tickets/:ticketId/queue", async (c) => {
     .where(eq(projectTickets.id, ticketId));
 
   const { bus } = await import("../../events/bus.ts");
-  bus.emit({ type: "ticket.queued", payload: { ticketId, projectId: project.id, notes: body.notes } });
+  bus.emit({ type: "ticket.queued", payload: { ticketId, projectId: project.id, notes: body.notes, actorId: user.id } });
 
   return c.json({ ok: true });
 });

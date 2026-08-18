@@ -62,6 +62,7 @@ export interface TicketQueuedPayload {
   ticketId: string;
   projectId: string;
   notes?: string;
+  actorId?: string; // user who triggered the build (fine-grained Git: whose token to use)
 }
 
 export interface TicketCommentedPayload {
@@ -106,7 +107,7 @@ export type AppEvent =
   | { type: "ticket.commented"; payload: TicketCommentedPayload }
   | { type: "ticket.tasks_updated"; payload: { ticketId: string; taskIds: string[] } }
   | { type: "ticket.input_requested"; payload: { ticketId: string; question: string; options?: string[] } }
-  | { type: "ticket.chat_message"; payload: { ticketId: string; message: string; sender: string } }
+  | { type: "ticket.chat_message"; payload: { ticketId: string; message: string; sender: string; actorId?: string } }
   | { type: "ticket.execution_started"; payload: { ticketId: string; sandboxId: string; projectId?: string } }
   | { type: "ticket.execution_finished"; payload: { ticketId: string; status: "complete" | "failed"; durationMs?: number; exitCode?: number; projectId?: string } }
   | { type: "ticket.needs_attention"; payload: { ticketId: string; reason: string; question?: string } }

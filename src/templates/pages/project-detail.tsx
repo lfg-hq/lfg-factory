@@ -1254,6 +1254,20 @@ export function ProjectDetailPage({
 
               <!-- Pending Invitations (owner only) -->
               ${isOwner ? html`<div id="invitations-list" style="margin-bottom:1rem;"></div>` : ""}
+
+              <!-- Fine-grained Git access sharing (owner only) -->
+              ${isOwner ? html`
+              <div style="margin-top:1.25rem;padding-top:1.25rem;border-top:1px solid var(--border-color);">
+                <label style="display:flex;align-items:flex-start;gap:0.75rem;cursor:pointer;">
+                  <input type="checkbox" id="share-git-toggle" onchange="toggleShareGit(this)" style="margin-top:3px;width:16px;height:16px;flex:none;cursor:pointer;" />
+                  <span>
+                    <span style="display:block;font-size:0.875rem;font-weight:600;color:var(--text-color);">Share my Git access with collaborators</span>
+                    <span style="display:block;font-size:0.8125rem;color:var(--text-secondary);margin-top:2px;line-height:1.45;">When on, collaborators' ticket builds and previews use <strong>your</strong> connected GitHub/GitLab — scoped to this project's repo — so they can build, push, and open PRs/MRs without their own repo access. Off (default): each collaborator uses their own connected Git.</span>
+                    <span id="share-git-status" style="display:block;font-size:0.75rem;color:var(--text-secondary);margin-top:5px;"></span>
+                  </span>
+                </label>
+              </div>
+              ` : ""}
             </div>
 
             ${(isOwner || role === "admin") ? html`
@@ -1530,10 +1544,37 @@ export function ProjectDetailPage({
         .then(function() { loadInvitations(); });
     }
 
+    // Fine-grained Git access sharing (owner-only toggle).
+    function setShareGitStatus(on) {
+      var s = document.getElementById("share-git-status");
+      if (!s) return;
+      s.style.color = "var(--text-secondary)";
+      s.textContent = on ? "On — collaborators build/preview this project with your Git." : "Off — collaborators use their own connected Git.";
+    }
+    function loadShareGit() {
+      var cb = document.getElementById("share-git-toggle");
+      if (!cb) return;
+      fetch("/api/projects/" + projectId + "/preview/build-settings")
+        .then(function(r){ return r.json(); })
+        .then(function(d){ if (!d) return; cb.checked = !!d.shareGitAccess; setShareGitStatus(cb.checked); })
+        .catch(function(){});
+    }
+    function toggleShareGit(el) {
+      el.disabled = true;
+      fetch("/api/projects/" + projectId + "/preview/build-settings", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ shareGitAccess: el.checked }) })
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+          el.disabled = false;
+          if (d && d.error) { el.checked = !el.checked; var s = document.getElementById("share-git-status"); if (s) { s.style.color = "#dc2626"; s.textContent = d.error; } return; }
+          setShareGitStatus(el.checked);
+        })
+        .catch(function(){ el.disabled = false; el.checked = !el.checked; });
+    }
+
     // Load on settings tab
     if ('${activeTab}' === 'settings') {
       loadMembers();
-      if (canManageTeam) loadInvitations();
+      if (canManageTeam) { loadInvitations(); loadShareGit(); }
     }
   </script>
 

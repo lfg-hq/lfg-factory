@@ -62,9 +62,9 @@ type FlatEvent =
   | { type: "ticket.status_changed"; ticketId: string; status: string; message?: string }
   | { type: "ticket.tasks_updated"; ticketId: string; taskIds: string[] }
   | { type: "ticket.input_requested"; ticketId: string; question: string; options?: string[] }
-  | { type: "ticket.chat_message"; ticketId: string; message: string; sender: string }
+  | { type: "ticket.chat_message"; ticketId: string; message: string; sender: string; actorId?: string }
   | { type: "ticket.execution_started"; ticketId: string; sandboxId: string; projectId?: string }
   | { type: "ticket.execution_finished"; ticketId: string; status: "complete" | "failed"; durationMs?: number; exitCode?: number; projectId?: string }
-  | { type: "ticket.queued"; ticketId: string; projectId: string; notes?: string }
+  | { type: "ticket.queued"; ticketId: string; projectId: string; notes?: string; actorId?: string }
   | { type: "ticket.commented"; ticketId: string; projectId: string; message: string; logType: string }
   | { type: "ticket.needs_attention"; ticketId: string; reason: string; question?: string };
