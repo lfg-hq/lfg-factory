@@ -288,38 +288,77 @@ export function ProjectDetailPage({
       <div style="padding:2rem;max-width:1200px;margin:0 auto;">
         ${(activeTab === "home" || activeTab === "inbox") ? html`
           <style>
-            @media (max-width: 900px) { .home-grid { grid-template-columns: 1fr !important; } }
+            @media (max-width: 900px) {
+              .home-grid { grid-template-columns: 1fr !important; }
+              .start-work-options { grid-template-columns: 1fr !important; }
+            }
             .home-card { border:1px solid var(--border-color); border-radius:var(--radius-lg); background:var(--card-bg); padding:1.25rem 1.5rem; }
             .home-sec-title { font-size:0.75rem; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.03em; margin:0 0 0.75rem; }
+            .start-work-card { margin-bottom:1.5rem; padding:1.5rem; border-color:rgba(139,92,246,0.28); background:linear-gradient(135deg,rgba(139,92,246,0.07),rgba(139,92,246,0.015) 50%,var(--card-bg)); }
+            .start-work-eyebrow { display:flex;align-items:center;gap:0.4rem;margin-bottom:0.45rem;color:var(--primary-color);font-size:0.72rem;font-weight:700;text-transform:uppercase;letter-spacing:0.08em; }
+            .start-work-title { margin:0;color:var(--text-color);font-size:1.15rem;font-weight:700; }
+            .start-work-intro { margin:0.4rem 0 0;color:var(--text-secondary);font-size:0.86rem;line-height:1.5; }
+            .start-work-options { display:grid;grid-template-columns:1.25fr 1fr;gap:0.75rem;margin-top:1.15rem; }
+            .start-choice { display:flex;align-items:flex-start;gap:0.9rem;min-width:0;padding:1rem;border:1px solid var(--border-color);border-radius:var(--radius);background:var(--card-bg);text-decoration:none;transition:border-color .15s,background .15s,transform .15s,box-shadow .15s; }
+            .start-choice:hover { transform:translateY(-1px);border-color:rgba(139,92,246,0.5);box-shadow:0 6px 18px rgba(0,0,0,0.08); }
+            .start-choice-primary { border-color:rgba(139,92,246,0.42);background:rgba(139,92,246,0.08); }
+            .start-choice-icon { width:38px;height:38px;border-radius:10px;display:inline-flex;align-items:center;justify-content:center;flex:none;background:rgba(139,92,246,0.14);color:var(--primary-color);font-size:0.95rem; }
+            .start-choice-secondary .start-choice-icon { background:rgba(100,116,139,0.12);color:var(--text-secondary); }
+            .start-choice-body { min-width:0;flex:1; }
+            .start-choice-title { display:block;color:var(--text-color);font-size:0.92rem;font-weight:650; }
+            .start-choice-copy { display:block;margin-top:0.28rem;color:var(--text-secondary);font-size:0.79rem;line-height:1.45; }
+            .start-choice-cta { display:inline-flex;align-items:center;gap:0.35rem;margin-top:0.72rem;color:var(--primary-color);font-size:0.8rem;font-weight:650; }
+            .home-team-actions { display:flex;align-items:center;gap:0.7rem; }
+            .home-team-action { display:inline-flex;align-items:center;gap:0.3rem;padding:0;border:0;background:none;color:var(--primary-color);font:inherit;font-size:0.76rem;text-decoration:none;cursor:pointer; }
           </style>
 
           ${activeTab === "home" ? html`
-          <!-- Summary strip + quick actions -->
-          <div class="home-card" style="margin-bottom:1.5rem;">
-            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1.5rem;flex-wrap:wrap;">
-              <div style="min-width:0;flex:1 1 auto;">
-                <div style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;">
-                  <span style="font-size:1.4rem;">${project.icon}</span>
-                  <h2 style="margin:0;font-size:1.25rem;font-weight:700;color:var(--text-color);">${project.name}</h2>
-                  <span style="font-size:0.72rem;padding:0.15rem 0.5rem;border-radius:9999px;background:${project.status === "active" ? "rgba(34,197,94,0.12)" : "rgba(156,163,175,0.12)"};color:${project.status === "active" ? "#22c55e" : "var(--text-secondary)"};">${project.status}</span>
+          <!-- Project summary -->
+          <div class="home-card" style="margin-bottom:1rem;padding:1rem 1.25rem;">
+            <div style="display:flex;align-items:center;gap:0.75rem;min-width:0;">
+              <span style="font-size:1.35rem;">${project.icon}</span>
+              <div style="min-width:0;flex:1;">
+                <div style="display:flex;align-items:center;gap:0.55rem;flex-wrap:wrap;">
+                  <h2 style="margin:0;font-size:1.08rem;font-weight:700;color:var(--text-color);">${project.name}</h2>
+                  <span style="font-size:0.7rem;padding:0.12rem 0.45rem;border-radius:9999px;background:${project.status === "active" ? "rgba(34,197,94,0.12)" : "rgba(156,163,175,0.12)"};color:${project.status === "active" ? "#22c55e" : "var(--text-secondary)"};">${project.status}</span>
                 </div>
-                ${project.description ? html`<p style="margin:0.6rem 0 0;color:var(--text-secondary);font-size:0.9rem;line-height:1.5;">${project.description}</p>` : ""}
-                <div style="display:flex;gap:1.25rem;flex-wrap:wrap;margin-top:0.85rem;font-size:0.82rem;color:var(--text-secondary);">
-                  <span><i class="fas fa-file-lines" style="margin-right:0.35rem;opacity:0.7;"></i>${docsCount} doc${docsCount === 1 ? "" : "s"}</span>
-                  <span><i class="fas fa-list-check" style="margin-right:0.35rem;opacity:0.7;"></i>${openTicketCount} ticket${openTicketCount === 1 ? "" : "s"}</span>
-                  <span><i class="fas fa-users" style="margin-right:0.35rem;opacity:0.7;"></i>${memberCount} member${memberCount === 1 ? "" : "s"}</span>
-                  ${project.repoUrl ? html`<a href="${project.repoUrl}" target="_blank" style="color:var(--text-secondary);text-decoration:none;"><i class="fab ${project.repoProvider === "gitlab" ? "fa-gitlab" : "fa-github"}" style="margin-right:0.35rem;"></i>${project.repoOwner}/${project.repoName}</a>` : html`<span style="color:var(--text-secondary);opacity:0.8;"><i class="fas fa-code-branch" style="margin-right:0.35rem;"></i>No repo linked</span>`}
+                <div style="display:flex;gap:1.15rem;flex-wrap:wrap;margin-top:0.5rem;font-size:0.78rem;color:var(--text-secondary);">
+                  <span><i class="fas fa-file-lines" style="margin-right:0.32rem;opacity:0.7;"></i>${docsCount} doc${docsCount === 1 ? "" : "s"}</span>
+                  <span><i class="fas fa-list-check" style="margin-right:0.32rem;opacity:0.7;"></i>${openTicketCount} ticket${openTicketCount === 1 ? "" : "s"}</span>
+                  <span><i class="fas fa-users" style="margin-right:0.32rem;opacity:0.7;"></i>${memberCount} member${memberCount === 1 ? "" : "s"}</span>
+                  ${project.repoUrl ? html`<a href="${project.repoUrl}" target="_blank" style="color:var(--text-secondary);text-decoration:none;"><i class="fab ${project.repoProvider === "gitlab" ? "fa-gitlab" : "fa-github"}" style="margin-right:0.32rem;"></i>${project.repoOwner}/${project.repoName}</a>` : html`<span style="opacity:0.8;"><i class="fas fa-code-branch" style="margin-right:0.32rem;"></i>No repo linked</span>`}
                 </div>
               </div>
-              <div style="display:flex;gap:0.5rem;flex-wrap:wrap;flex:0 0 auto;">
-                ${role !== "viewer" ? html`<a href="/chat/project/${project.projectId}" class="btn btn-primary" style="display:inline-flex;align-items:center;gap:0.45rem;font-size:0.85rem;white-space:nowrap;"><i class="fas fa-comments"></i> Start a chat</a>` : ""}
-                ${role !== "viewer" ? html`<a href="/projects/${project.projectId}?tab=tickets" class="btn btn-secondary" style="display:inline-flex;align-items:center;gap:0.45rem;font-size:0.85rem;white-space:nowrap;"><i class="fas fa-plus"></i> New ticket</a>` : ""}
-                <button onclick="openRequestModal()" class="btn btn-secondary" style="display:inline-flex;align-items:center;gap:0.45rem;font-size:0.85rem;white-space:nowrap;"><i class="fas fa-paper-plane"></i> New message</button>
-                ${!project.repoUrl && (isOwner || role === "admin") ? html`<button onclick="showCodebaseModal()" class="btn btn-secondary" style="display:inline-flex;align-items:center;gap:0.45rem;font-size:0.85rem;white-space:nowrap;"><i class="fab fa-github"></i> Connect repo</button>` : ""}
-                ${(isOwner || role === "admin") ? html`<a href="/projects/${project.projectId}?tab=settings" class="btn btn-secondary" style="display:inline-flex;align-items:center;gap:0.45rem;font-size:0.85rem;white-space:nowrap;"><i class="fas fa-user-plus"></i> Invite</a>` : ""}
-              </div>
+              ${!project.repoUrl && (isOwner || role === "admin") ? html`<button onclick="showCodebaseModal()" class="home-team-action" style="flex:none;"><i class="fas fa-link"></i> Connect repo</button>` : ""}
             </div>
           </div>
+
+          ${role !== "viewer" ? html`
+          <!-- Guided work entry point -->
+          <section class="home-card start-work-card" aria-labelledby="start-work-title">
+            <div class="start-work-eyebrow"><i class="fas fa-location-arrow"></i> Start here</div>
+            <h2 class="start-work-title" id="start-work-title">What would you like to work on?</h2>
+            <p class="start-work-intro">Not sure where to begin? Start with a chat. You can turn the result into tickets once the work is clear.</p>
+            <div class="start-work-options">
+              <a href="/chat/project/${project.projectId}?new=1" class="start-choice start-choice-primary">
+                <span class="start-choice-icon"><i class="fas fa-comments"></i></span>
+                <span class="start-choice-body">
+                  <span class="start-choice-title">Describe what you need</span>
+                  <span class="start-choice-copy">Start with an idea, problem, or outcome—even if it is vague. The AI will ask questions, inspect the project, and help shape the work.</span>
+                  <span class="start-choice-cta">Start a chat <i class="fas fa-arrow-right"></i></span>
+                </span>
+              </a>
+              <a href="/projects/${project.projectId}?tab=tickets&create=1" class="start-choice start-choice-secondary">
+                <span class="start-choice-icon"><i class="fas fa-list-check"></i></span>
+                <span class="start-choice-body">
+                  <span class="start-choice-title">Create a ticket directly</span>
+                  <span class="start-choice-copy">Best for a specific task or bug you can already describe. It can still be refined before anything is built.</span>
+                  <span class="start-choice-cta">Create ticket <i class="fas fa-arrow-right"></i></span>
+                </span>
+              </a>
+            </div>
+          </section>
+          ` : ""}
 
           <!-- Two-column: (required actions + activity) | team + pins -->
           <div class="home-grid" style="display:grid;grid-template-columns:1fr 340px;gap:1.5rem;align-items:start;">
@@ -369,7 +408,10 @@ export function ProjectDetailPage({
               <div class="home-card">
                 <div style="display:flex;justify-content:space-between;align-items:center;">
                   <h3 class="home-sec-title" style="margin:0;">Team</h3>
-                  ${(isOwner || role === "admin") ? html`<a href="/projects/${project.projectId}?tab=settings" style="font-size:0.78rem;color:var(--primary-color);text-decoration:none;">Manage</a>` : ""}
+                  <div class="home-team-actions">
+                    ${memberCount > 1 ? html`<button onclick="openRequestModal()" class="home-team-action"><i class="fas fa-paper-plane"></i> Message</button>` : ""}
+                    ${(isOwner || role === "admin") ? html`<a href="/projects/${project.projectId}?tab=settings" class="home-team-action"><i class="fas fa-user-plus"></i> Invite</a>` : ""}
+                  </div>
                 </div>
                 <div id="home-team" style="margin-top:0.6rem;"><div style="color:var(--text-secondary);font-size:0.85rem;">Loading…</div></div>
               </div>
@@ -1044,7 +1086,12 @@ export function ProjectDetailPage({
                 .then(function(r){ return r.json().then(function(d){ return { ok:r.ok, data:d }; }); })
                 .then(function(res){ if(!res.ok){ err.style.display='block'; err.textContent=(res.data&&res.data.error)||'Failed to create ticket'; return; } document.getElementById('ct-name').value=''; document.getElementById('ct-desc').value=''; closeCreateTicket(); loadDashTickets(); });
             }
-            if ('${activeTab}' === 'tickets') { loadDashTickets(); }
+            if ('${activeTab}' === 'tickets') {
+              loadDashTickets();
+              if (new URLSearchParams(window.location.search).get('create') === '1') {
+                requestAnimationFrame(openCreateTicket);
+              }
+            }
           </script>
         ` : ""}
 

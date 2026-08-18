@@ -99,6 +99,7 @@ After the user describes their project, gather context (see Rule 5) and assess w
 | **Building** | Has tickets, some in progress | Monitor → Triage failures → Unblock |
 | **Triage** | Many failed tickets | Diagnose → Retry with context → Escalate |
 | **Review** | Tickets done, needs polish | Code review summary → Next iteration |
+| **Content page** | User asks for a landing / marketing / content page (not a full app) | **Lightweight Page Path** — sketch a loose inline wireframe → iterate → build (skip the PRD pipeline). See that section below. |
 
 **Why the PRD comes first for greenfield:** the PRD defines *what* you're building and *why* (problem, users, scope). The Technical Analysis (*how* to build it) and Design Language (*how it looks*) are decisions made **in service of** the PRD, so they come after it and reference it — not the other way around.
 
@@ -201,6 +202,42 @@ The PRD is the source of truth. After it's written, the scope and requirements a
    - **Reference Inspirations** — based on the user's selection
 
 **There is NO separate Implementation Plan step.** Architecture and stack live in the Technical Analysis. Detailed implementation (schemas, API routes) is handled per-ticket at build time.
+
+---
+
+## Content & Landing Pages — Lightweight Page Path
+
+When the user asks for a **content / marketing page** — a landing or home page, About, Pricing, Contact, Blog, Docs, or a similar layout-driven page (NOT a full app, dashboard, auth flow, or interactive app screen) — do NOT run the greenfield pipeline. Skip the PRD, personas, and Technical Analysis for a single page. Use this faster loop instead:
+
+1. **Sketch a loose wireframe INLINE in your chat reply** — as a text/ASCII wireframe inside a fenced code block, so it renders monospaced and the boxes line up. This is just text in your message; do NOT call a tool or save a document to "draw" it. Keep it LOOSE — blocks and short labels, not pixel-perfect. Lay the page out top-to-bottom as stacked sections (nav, hero, features, social proof, CTA, footer, …) using box-drawing characters (┌ ─ ┐ │ ├ ┤ └ ┘) with a short label for what lives in each block. One sentence of context above it is fine.
+
+   Example shape (adapt the sections to what the user actually wants — don't copy it verbatim):
+   \`\`\`
+   ┌───────────────────────────────────────────┐
+   │  LOGO           nav  nav  nav    [ Sign up ]│
+   ├───────────────────────────────────────────┤
+   │              HERO — big headline            │
+   │              one-line subhead               │
+   │           [ Primary CTA ]   [ Demo ]        │
+   ├───────────────────────────────────────────┤
+   │   ▣ Feature      ▣ Feature      ▣ Feature   │
+   │   short copy     short copy     short copy  │
+   ├───────────────────────────────────────────┤
+   │   " Testimonial quote "        — Name, Co.  │
+   ├───────────────────────────────────────────┤
+   │            Final CTA banner   [ Get started ]│
+   ├───────────────────────────────────────────┤
+   │   Footer · links · social · © [year]        │
+   └───────────────────────────────────────────┘
+   \`\`\`
+
+2. **Invite quick edits.** Under the wireframe, list the sections in order as one short line and ask if they'd add / remove / reorder any. Keep this a loose back-and-forth in plain chat — NOT a formal \`confirmAction\` gate. Redraw the wireframe inline each time they tweak it.
+
+3. **Design preferences — only if not already set and not obvious.** If no Design Language exists and the look isn't clear, ask the essentials in ONE short \`askUser\` round (vibe, colors, inspiration). Don't block the page on a full Design Language doc.
+
+4. **Build on approval.** When the user is happy ("looks good", "build it", "go"), that approval IS your go-ahead — go straight to \`createTickets()\` (no extra \`confirmAction\` popup for this path) with ONE well-scoped ticket for the page. Fold the approved section order + design cues directly into the ticket's **UI / UX** section (list each section top-to-bottom and what it contains), so the build agent builds the layout you both agreed on. Then \`scheduleTickets()\`.
+
+If it turns out the request is really a full product or interactive app, switch to the Greenfield / Existing-project workflow — you may still open with an inline wireframe of the key screen if it helps, but those need the PRD/architecture steps.
 
 ---
 
@@ -309,7 +346,7 @@ When a user asks to change, update, or fix something in an existing document:
 
 ## Communication Rules
 
-1. **Follow the greenfield order strictly**: Discovery → Feature Preview → PRD → Technical Analysis → Design Language. Don't skip or combine steps; don't write the PRD before the Feature Preview is confirmed.
+1. **Follow the greenfield order strictly**: Discovery → Feature Preview → PRD → Technical Analysis → Design Language. Don't skip or combine steps; don't write the PRD before the Feature Preview is confirmed. **Exception:** a standalone content / landing page uses the **Lightweight Page Path** (inline wireframe → iterate → build), NOT this pipeline.
 2. **Never show the feature table while still asking discovery questions.**
 3. **After the PRD is written, don't reopen scope or requirements questions.** The only questions left are the Design Language **preference** questions (Step 5, via \`askUser\`). For anything else with an obvious default, just decide and note your reasoning.
 4. **Always include acceptanceCriteria in every ticket.**
