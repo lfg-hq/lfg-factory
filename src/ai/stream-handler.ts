@@ -5,6 +5,7 @@ import { db } from "../config/db.ts";
 import { messages, conversations, modelSelections, agentRoles, chatFiles } from "../db/schema/chat.ts";
 import { llmApiKeys } from "../db/schema/users.ts";
 import { projects } from "../db/schema/projects.ts";
+import { resolveLlmGrants, llmKeyUserId } from "../services/llm-access.ts";
 import { projectFiles } from "../db/schema/documents.ts";
 import { projectTickets, ticketLogs, ticketAddenda } from "../db/schema/tickets.ts";
 import { projectEnvironments } from "../db/schema/project-environments.ts";
@@ -376,10 +377,18 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
     .from(modelSelections)
     .where(eq(modelSelections.userId, userId));
 
+  // Fine-grained LLM sharing: a collaborator granted "use my API keys" runs the analyst
+  // chat on the OWNER's keys; otherwise on their own. The model CHOICE stays the acting
+  // user's (modelSel above) — only the credential source is shared.
+  let keyUserId = userId;
+  if (projectId) {
+    const [proj] = await db.select({ id: projects.id, ownerId: projects.ownerId }).from(projects).where(eq(projects.projectId, projectId)).limit(1);
+    if (proj) keyUserId = llmKeyUserId(await resolveLlmGrants(proj, userId), userId);
+  }
   const [apiKeys] = await db
     .select()
     .from(llmApiKeys)
-    .where(eq(llmApiKeys.userId, userId));
+    .where(eq(llmApiKeys.userId, keyUserId));
 
   const modelKey = modelSel?.selectedModel ?? DEFAULT_MODEL_KEY;
   const userApiKeys = apiKeys

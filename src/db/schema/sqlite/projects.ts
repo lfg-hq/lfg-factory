@@ -95,6 +95,13 @@ export const projectMembers = sqliteTable(
     canChat: integer("can_chat", { mode: "boolean" }).notNull().default(true),
     canInviteMembers: integer("can_invite_members", { mode: "boolean" }).notNull().default(false),
 
+    // Per-collaborator LLM credential sharing. `canUseOwnerLlmKey` → owner's API keys
+    // (chat + codebase + api-key builds); `canUseOwnerLlmSubscription` → owner's
+    // Claude/ChatGPT subscription for builds. DEFAULT true grandfathers existing members;
+    // new invitees are inserted OFF (opt-in) in routes/invitations.ts.
+    canUseOwnerLlmKey: integer("can_use_owner_llm_key", { mode: "boolean" }).notNull().default(true),
+    canUseOwnerLlmSubscription: integer("can_use_owner_llm_subscription", { mode: "boolean" }).notNull().default(true),
+
     joinedAt: integer("joined_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
     updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
     invitedById: text("invited_by_id").references(() => users.id, {

@@ -216,6 +216,8 @@ invitationsApi.get("/:projectId/members", async (c) => {
       canManageTickets: projectMembers.canManageTickets,
       canChat: projectMembers.canChat,
       canInviteMembers: projectMembers.canInviteMembers,
+      canUseOwnerLlmKey: projectMembers.canUseOwnerLlmKey,
+      canUseOwnerLlmSubscription: projectMembers.canUseOwnerLlmSubscription,
       joinedAt: projectMembers.joinedAt,
       userName: users.name,
       userEmail: users.email,
@@ -238,6 +240,8 @@ invitationsApi.get("/:projectId/members", async (c) => {
   return c.json({
     owner: owner ? { id: owner.id, name: owner.name, email: owner.email, role: "owner" } : null,
     members,
+    // Only the owner may change LLM-credential sharing (it lends out THEIR keys/subscription).
+    canShareLlm: access.role === "owner",
   });
 });
 
@@ -282,6 +286,8 @@ invitationsApi.patch("/:projectId/members/:id", async (c) => {
     canManageTickets: boolean;
     canChat: boolean;
     canInviteMembers: boolean;
+    canUseOwnerLlmKey: boolean;
+    canUseOwnerLlmSubscription: boolean;
   }>>();
 
   const updateData: Record<string, unknown> = { updatedAt: new Date() };
@@ -290,6 +296,12 @@ invitationsApi.patch("/:projectId/members/:id", async (c) => {
   if (body.canManageTickets !== undefined) updateData.canManageTickets = body.canManageTickets;
   if (body.canChat !== undefined) updateData.canChat = body.canChat;
   if (body.canInviteMembers !== undefined) updateData.canInviteMembers = body.canInviteMembers;
+  // LLM-credential sharing lends the OWNER's keys/subscription — owner-only.
+  if (body.canUseOwnerLlmKey !== undefined || body.canUseOwnerLlmSubscription !== undefined) {
+    if (access.role !== "owner") return c.json({ error: "Only the project owner can change LLM access sharing." }, 403);
+    if (body.canUseOwnerLlmKey !== undefined) updateData.canUseOwnerLlmKey = body.canUseOwnerLlmKey;
+    if (body.canUseOwnerLlmSubscription !== undefined) updateData.canUseOwnerLlmSubscription = body.canUseOwnerLlmSubscription;
+  }
 
   const [updated] = await db
     .update(projectMembers)

@@ -86,6 +86,15 @@ export const projectMembers = pgTable(
     canManageTickets: boolean("can_manage_tickets").notNull().default(true),
     canChat: boolean("can_chat").notNull().default(true),
     canInviteMembers: boolean("can_invite_members").notNull().default(false),
+    // Fine-grained LLM credential sharing (per collaborator). When on, this member may
+    // use the OWNER's connected LLM for project work: `canUseOwnerLlmKey` → the owner's
+    // API keys (analyst chat, codebase reads, and builds when the owner builds via API
+    // key); `canUseOwnerLlmSubscription` → the owner's Claude/ChatGPT subscription for
+    // builds/coding-agent. DEFAULT true so PRE-EXISTING members are grandfathered (they
+    // already used the owner's creds); NEW invitees are inserted with these OFF (opt-in)
+    // — see routes/invitations.ts.
+    canUseOwnerLlmKey: boolean("can_use_owner_llm_key").notNull().default(true),
+    canUseOwnerLlmSubscription: boolean("can_use_owner_llm_subscription").notNull().default(true),
     joinedAt: timestamp("joined_at", { mode: "date" }).notNull().default(sql`now()`),
     updatedAt: timestamp("updated_at", { mode: "date" }).notNull().default(sql`now()`),
     invitedById: text("invited_by_id").references(() => users.id, { onDelete: "set null" }),

@@ -17,6 +17,8 @@ import { githubTokens, llmApiKeys } from "../../db/schema/users.ts";
 import { modelSelections } from "../../db/schema/chat.ts";
 import { queryCodebaseInProcess } from "../../services/codebase-query-api.ts";
 import { getValidGitlabToken } from "../../services/gitlab-token.ts";
+import { resolveGitActor } from "../../services/git-access.ts";
+import { resolveLlmGrants, llmKeyUserId } from "../../services/llm-access.ts";
 import { DEFAULT_MODEL_KEY, type UserApiKeys } from "../provider.ts";
 import { eq } from "drizzle-orm";
 
@@ -90,27 +92,35 @@ export const queryCodebase = tool({
       effectiveBranch = tk?.gb || `feature/ticket-${ticketId}`;
     }
 
-    // 2. Load the repo provider's token for the user
+    // Fine-grained sharing: read the repo with the acting user's EFFECTIVE Git token
+    // (owner's when "Share Git access" is on, else their own) and run the lite query on
+    // the effective LLM key (owner's when granted "use my API keys", else their own) —
+    // so a collaborator can explore the codebase using the owner's access when allowed.
+    const gitActor = resolveGitActor(project, userId);
+    const keyUserId = llmKeyUserId(await resolveLlmGrants(project, userId), userId);
+    const ownHint = gitActor.usingOwnCollaboratorToken ? " This project doesn't share the owner's Git — ask the owner to enable “Share Git access”." : "";
+
+    // 2. Load the repo provider's token for the effective Git user
     let accessToken: string | undefined;
     if (provider === "gitlab") {
-      accessToken = (await getValidGitlabToken(userId)) ?? undefined;
+      accessToken = (await getValidGitlabToken(gitActor.gitUserId)) ?? undefined;
       if (!accessToken) {
-        return { error: "No valid GitLab token. Reconnect GitLab in Settings to query the codebase." };
+        return { error: `No valid GitLab token. Reconnect GitLab in Settings to query the codebase.${ownHint}` };
       }
     } else {
       const [ghToken] = await db
         .select()
         .from(githubTokens)
-        .where(eq(githubTokens.userId, userId))
+        .where(eq(githubTokens.userId, gitActor.gitUserId))
         .limit(1);
       accessToken = ghToken?.accessToken;
       if (!accessToken) {
-        return { error: "No GitHub token found. Connect GitHub in Settings to query the codebase." };
+        return { error: `No GitHub token found. Connect GitHub in Settings to query the codebase.${ownHint}` };
       }
     }
 
-    // 3. Resolve the user's selected model + keys (query runs on the lite tier
-    //    of whichever provider the user is on).
+    // 3. Resolve the model (acting user's CHOICE) + keys (effective key user — owner's
+    //    when granted). Query runs on the lite tier of whichever provider is selected.
     const [modelSel] = await db
       .select()
       .from(modelSelections)
@@ -118,7 +128,7 @@ export const queryCodebase = tool({
     const [apiKeys] = await db
       .select()
       .from(llmApiKeys)
-      .where(eq(llmApiKeys.userId, userId));
+      .where(eq(llmApiKeys.userId, keyUserId));
 
     const modelKey = modelSel?.selectedModel ?? DEFAULT_MODEL_KEY;
     const userApiKeys: UserApiKeys | undefined = apiKeys

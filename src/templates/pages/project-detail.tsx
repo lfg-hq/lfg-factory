@@ -1438,9 +1438,20 @@ export function ProjectDetailPage({
               + '<span style="font-size:0.7rem;padding:0.15rem 0.5rem;border-radius:10px;background:rgba(139,92,246,0.1);color:#a78bfa;font-weight:600;text-transform:uppercase;">Owner</span>'
               + '</div>';
           }
+          var canShareLlm = !!data.canShareLlm;
           (data.members || []).forEach(function(m) {
             var roleColor = m.role === 'admin' ? '#3b82f6' : m.role === 'member' ? '#22c55e' : '#6b7280';
-            items += '<div style="display:flex;align-items:center;justify-content:space-between;padding:0.625rem 0;border-bottom:1px solid var(--border-color);">'
+            // Owner-only per-member LLM sharing controls (rendered as a sub-row).
+            var llmRow = canShareLlm ? (
+              '<div style="display:flex;gap:1.25rem;flex-wrap:wrap;padding:0.15rem 0 0.6rem 2.75rem;border-bottom:1px solid var(--border-color);">'
+              + '<label style="display:flex;align-items:center;gap:0.4rem;font-size:0.75rem;color:var(--text-secondary);cursor:pointer;" title="Let this collaborator use YOUR LLM API keys for the analyst chat, codebase reads, and API-key builds.">'
+              + '<input type="checkbox" ' + (m.canUseOwnerLlmKey ? 'checked' : '') + ' onchange="setMemberLlm(\\'' + m.id + '\\',\\'canUseOwnerLlmKey\\',this.checked,this)" style="cursor:pointer;"> Use my API keys</label>'
+              + '<label style="display:flex;align-items:center;gap:0.4rem;font-size:0.75rem;color:var(--text-secondary);cursor:pointer;" title="Let this collaborator use YOUR Claude/ChatGPT subscription for ticket builds (coding agent).">'
+              + '<input type="checkbox" ' + (m.canUseOwnerLlmSubscription ? 'checked' : '') + ' onchange="setMemberLlm(\\'' + m.id + '\\',\\'canUseOwnerLlmSubscription\\',this.checked,this)" style="cursor:pointer;"> Use my subscription</label>'
+              + '</div>'
+            ) : '';
+            var rowBorder = llmRow ? '' : 'border-bottom:1px solid var(--border-color);';
+            items += '<div style="display:flex;align-items:center;justify-content:space-between;padding:0.625rem 0;' + rowBorder + '">'
               + '<div style="display:flex;align-items:center;gap:0.75rem;">'
               + '<div style="width:32px;height:32px;border-radius:50%;background:var(--card-bg);border:1px solid var(--border-color);display:flex;align-items:center;justify-content:center;font-size:0.8rem;font-weight:600;color:var(--text-color);">'
               + (m.userName?.[0] || '?').toUpperCase() + '</div>'
@@ -1449,7 +1460,7 @@ export function ProjectDetailPage({
               + '<div style="display:flex;align-items:center;gap:0.5rem;">'
               + '<span style="font-size:0.7rem;padding:0.15rem 0.5rem;border-radius:10px;background:rgba(' + (m.role === 'admin' ? '59,130,246' : m.role === 'member' ? '34,197,94' : '107,114,128') + ',0.1);color:' + roleColor + ';font-weight:600;text-transform:uppercase;">' + roleLabelFor(m.role) + '</span>'
               + (canManageTeam ? '<button onclick="removeMember(\\'' + m.id + '\\')" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:0.8rem;padding:0.25rem;" title="Remove"><i class="fas fa-times"></i></button>' : '')
-              + '</div></div>';
+              + '</div></div>' + llmRow;
           });
           el.innerHTML = items || '<div style="font-size:0.8125rem;color:var(--text-secondary);padding:0.5rem 0;">No team members yet.</div>';
         });
@@ -1537,6 +1548,19 @@ export function ProjectDetailPage({
       if (!confirm('Remove this member?')) return;
       fetch('/api/projects/' + projectId + '/members/' + memberId, { method: 'DELETE' })
         .then(function() { loadMembers(); });
+    }
+
+    // Owner grants/revokes a collaborator's use of the owner's LLM credentials.
+    function setMemberLlm(memberId, field, value, el) {
+      var body = {}; body[field] = value;
+      if (el) el.disabled = true;
+      fetch('/api/projects/' + projectId + '/members/' + memberId, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          if (el) el.disabled = false;
+          if (d && d.error) { if (el) el.checked = !value; alert(d.error); }
+        })
+        .catch(function() { if (el) { el.disabled = false; el.checked = !value; } });
     }
 
     function revokeInvitation(invId) {

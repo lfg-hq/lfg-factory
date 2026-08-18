@@ -102,6 +102,10 @@ invitationRoutes.post("/invitations/accept/:token", requireAuth as any, async (c
     canManageTickets: !isGuest,
     canChat: invitation.role !== "viewer",
     canInviteMembers: false,
+    // New invitees start WITHOUT access to the owner's LLM creds — the owner opts them
+    // in per person from Settings → Team (grandfather default is for pre-existing rows).
+    canUseOwnerLlmKey: false,
+    canUseOwnerLlmSubscription: false,
     invitedById: invitation.inviterId,
   });
 

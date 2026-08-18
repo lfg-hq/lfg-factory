@@ -44,6 +44,7 @@ import {
   initAndPushRepo,
 } from "../services/git.ts";
 import { resolveGitActor, NO_SHARED_GIT_MESSAGE } from "../services/git-access.ts";
+import { resolveLlmGrants, NO_LLM_ACCESS_MESSAGE } from "../services/llm-access.ts";
 import {
   buildBuilderPrompt,
   buildTicketChatPrompt,
@@ -923,6 +924,19 @@ async function executeTicket(ticketId: string, actorId?: string): Promise<void> 
     .limit(1);
 
   const builderAuthMode = await resolveBuilderAuthMode(ownerId);
+  // Fine-grained LLM: a collaborator may build with the OWNER's LLM only if granted the
+  // access matching how the owner builds (subscription → canUseSub; API key → canUseKey).
+  // Not granted → block (grandfathered/existing members default to granted).
+  {
+    const buildActor = actorId ?? ticket.assigneeId ?? ownerId;
+    if (buildActor !== ownerId) {
+      const g = await resolveLlmGrants(project, buildActor);
+      if (!(builderAuthMode === "subscription" ? g.canUseSub : g.canUseKey)) {
+        await markTicketFailed(ticketId, NO_LLM_ACCESS_MESSAGE, ownerId);
+        return;
+      }
+    }
+  }
   const [builderKeys] = await db
     .select({ anthropic: llmApiKeys.anthropicApiKey })
     .from(llmApiKeys)
@@ -1804,6 +1818,18 @@ async function executeTicketChat(
   const chatModelKey = await resolveBuilderModelKey(ownerId);
   const chatProvider = getProviderName(chatModelKey);
   const chatBuilderAuthMode = await resolveBuilderAuthMode(ownerId);
+  // Fine-grained LLM: gate a collaborator's chat-driven build on the owner's LLM.
+  {
+    const buildActor = actorId ?? ticket.assigneeId ?? ownerId;
+    if (buildActor !== ownerId) {
+      const g = await resolveLlmGrants(project!, buildActor);
+      if (!(chatBuilderAuthMode === "subscription" ? g.canUseSub : g.canUseKey)) {
+        await addLog(ticketId, NO_LLM_ACCESS_MESSAGE, "cli_error", ownerId);
+        await markTicketFailed(ticketId, NO_LLM_ACCESS_MESSAGE, ownerId, { emitEvent: false });
+        return;
+      }
+    }
+  }
   const [chatUserKeys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, ownerId)).limit(1);
   const chatProviderKey = chatProvider
     ? ({
@@ -2671,6 +2697,18 @@ git branch --show-current
       } as Record<string, string | null | undefined>)[provider]
     : undefined;
   const builderAuthMode = await resolveBuilderAuthMode(ownerId);
+  // Fine-grained LLM: gate a collaborator's build on the owner's LLM (subscription →
+  // canUseSub; API key → canUseKey). Not granted → block (existing members are granted).
+  {
+    const buildActor = actorId ?? ticket.assigneeId ?? ownerId;
+    if (buildActor !== ownerId) {
+      const g = await resolveLlmGrants(project, buildActor);
+      if (!(builderAuthMode === "subscription" ? g.canUseSub : g.canUseKey)) {
+        await markTicketFailed(ticketId, NO_LLM_ACCESS_MESSAGE, ownerId);
+        return;
+      }
+    }
+  }
   const useOpenAICodex = useCodingAgent && builderAuthMode === "subscription"
     && provider === "openai" && await hasOpenAICodexCredentials(ownerId);
   // Pin the VM awake for the whole build (wakes a reused/slept VM too) so Mags can't

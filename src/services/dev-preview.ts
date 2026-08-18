@@ -23,6 +23,7 @@ import { githubTokens, llmApiKeys } from "../db/schema/users.ts";
 import { modelSelections } from "../db/schema/chat.ts";
 import { getValidGitlabToken } from "./gitlab-token.ts";
 import { resolveGitActor } from "./git-access.ts";
+import { resolveLlmGrants, llmKeyUserId } from "./llm-access.ts";
 import { getModel, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
 import { decryptSecret, encryptSecret } from "../utils/crypto.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
@@ -1075,10 +1076,17 @@ echo LAUNCHED
 // VM (Pi), which quit early / looped / got guillotined by a blind timeout.
 
 /** The user's chat model for the AI SDK (+ their provider keys). */
-async function resolveDriverModel(userId: string) {
+async function resolveDriverModel(userId: string, projectId?: string) {
   const [sel] = await db.select().from(modelSelections).where(eq(modelSelections.userId, userId));
   const modelKey = sel?.selectedModel ?? DEFAULT_MODEL_KEY;
-  const [keys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, userId));
+  // Fine-grained LLM: a collaborator granted "use my API keys" drives the preview on the
+  // OWNER's keys; else their own. Model CHOICE stays the acting user's (sel above).
+  let keyUserId = userId;
+  if (projectId) {
+    const [proj] = await db.select({ id: projects.id, ownerId: projects.ownerId }).from(projects).where(eq(projects.id, projectId)).limit(1);
+    if (proj) keyUserId = llmKeyUserId(await resolveLlmGrants(proj, userId), userId);
+  }
+  const [keys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, keyUserId));
   const userApiKeys = keys ? {
     anthropic: keys.anthropicApiKey ?? undefined, openai: keys.openaiApiKey ?? undefined,
     google: keys.googleApiKey ?? undefined, kimi: keys.kimiApiKey ?? undefined,
@@ -2045,7 +2053,7 @@ export async function runPreviewChat(opts: {
   const { projectId, publicProjectId, userId, instruction, abortSignal, noCommit } = opts;
   publicIdCache.set(projectId, publicProjectId); // WS routing for plog
 
-  const driver = await resolveDriverModel(userId);
+  const driver = await resolveDriverModel(userId, projectId);
   if (!driver) return { reply: "I can't reach an AI model — add an API key in Settings to use the preview agent.", status: "error" };
 
   let workspaceId: string;
@@ -2605,7 +2613,7 @@ fi`, 240_000);
     // an ordered command list; we run each with a checkpoint, so a restart resumes
     // from the first not-done step. FAST PATH: if setup already completed on a
     // prior run, just (re)start the app directly.
-    const driver = await resolveDriverModel(userId);
+    const driver = await resolveDriverModel(userId, projectId);
     let up = false;
 
     const alreadyRun = existing?.setupComplete === 1 && !!existing?.runCommand;
@@ -3531,7 +3539,7 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) $(git log -1 --oneline
     // investigate (it reuses the warm toolchain/cache/DB + persisted fixes, streams
     // its steps, fixes what's actually broken, and persists new fixes via setEnv).
     if (!up) {
-      const driver = await resolveDriverModel(userId);
+      const driver = await resolveDriverModel(userId, projectId);
       if (driver) {
         plog(projectId, userId, "Recorded build/run didn't bring the app up — handing to the AI driver to investigate…");
         await setPreview(projectId, userId, { previewStatus: "starting", previewBranch: branchLabel }, `Investigating & starting ${branchLabel} (AI driver)…`);
