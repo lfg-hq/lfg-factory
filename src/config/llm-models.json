@@ -37,6 +37,13 @@
       "caching": "auto",
       "models": [
         {
+          "key": "gpt-5.6-sol",
+          "label": "GPT-5.6 Sol",
+          "provider_model": "gpt-5.6-sol",
+          "requires_pro": true,
+          "tier": "pro"
+        },
+        {
           "key": "gpt-5.6-terra",
           "label": "GPT-5.6 Terra",
           "provider_model": "gpt-5.6-terra",
@@ -49,6 +56,13 @@
           "provider_model": "gpt-5.6-luna",
           "requires_pro": false,
           "tier": "lite"
+        },
+        {
+          "key": "gpt-5.3-codex-spark",
+          "label": "GPT-5.3 Codex Spark",
+          "provider_model": "gpt-5.3-codex-spark",
+          "requires_pro": true,
+          "tier": "pro"
         }
       ]
     },

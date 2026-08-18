@@ -48,7 +48,7 @@ export const projectTickets = sqliteTable(
       .references(() => projects.id, { onDelete: "cascade" }),
     ticketKey: text("ticket_key"), // e.g. "PRO-1", "TES-42" — unique per project
     name: text("name").notNull(),
-    status: text("status").notNull().default("open"), // open | in_progress | review | done | failed | blocked
+    status: text("status").notNull().default("open"), // open | in_progress | review | done | failed | blocked | archived
     stageId: text("stage_id").references(() => ticketStages.id, {
       onDelete: "set null",
     }),

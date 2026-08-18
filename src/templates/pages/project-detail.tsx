@@ -985,7 +985,7 @@ export function ProjectDetailPage({
             var tkTickets = [], tkMembers = [];
             function tkEsc(s){ return (s||'').replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
             function tkMemberName(id){ if(!id) return 'Unassigned'; var x = tkMembers.find(function(m){ return m.id===id; }); return x ? (x.name||x.email) : 'Someone'; }
-            function tkPrettyStatus(s){ return ({open:'Open',in_progress:'In Progress',review:'In Review',done:'Done',failed:'Failed',blocked:'Blocked'})[s] || s || 'Open'; }
+            function tkPrettyStatus(s){ return ({open:'Open',in_progress:'In Progress',review:'In Review',done:'Done',failed:'Failed',blocked:'Blocked',archived:'Archived'})[s] || s || 'Open'; }
             function loadDashTickets(){
               Promise.all([
                 fetch('/api/projects/'+TK_PID+'/tickets').then(function(r){return r.json();}),

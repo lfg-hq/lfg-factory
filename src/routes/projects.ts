@@ -17,7 +17,7 @@ import { instantApps } from "../db/schema/instant.ts";
 import { env } from "../config/env.ts";
 import { agents } from "../db/schema/agents.ts";
 import { notifications } from "../db/schema/notifications.ts";
-import { eq, and, desc, asc, notExists, or, sql, inArray, isNull } from "drizzle-orm";
+import { eq, and, desc, asc, notExists, or, sql, inArray, isNull, ne } from "drizzle-orm";
 import { listModels } from "../ai/provider.ts";
 import { saveContent, getContent, deleteContent } from "../services/s3.ts";
 import { getProjectActivities } from "../services/activity-log.ts";
@@ -68,13 +68,74 @@ const DEFAULT_STAGES = [
   { name: "Todo", color: "#3b82f6", order: 1, isDefault: false, isCompleted: false },
   { name: "In Progress", color: "#f59e0b", order: 2, isDefault: false, isCompleted: false },
   { name: "In Review", color: "#8b5cf6", order: 3, isDefault: false, isCompleted: false },
-  { name: "Done", color: "#22c55e", order: 4, isDefault: false, isCompleted: true },
+  { name: "Failed / Blocked", color: "#ef4444", order: 4, isDefault: false, isCompleted: false },
+  { name: "Done", color: "#22c55e", order: 5, isDefault: false, isCompleted: true },
+  { name: "Archive", color: "#64748b", order: 6, isDefault: false, isCompleted: true },
 ];
 
 async function createDefaultStages(projectId: string) {
   await db.insert(ticketStages).values(
     DEFAULT_STAGES.map((s) => ({ ...s, projectId }))
   );
+}
+
+/**
+ * Backfill workflow stages for projects created before a stage was introduced.
+ * Keeping this idempotent lets existing projects gain new lanes without a data
+ * migration, while also normalizing the canonical lane order.
+ */
+async function ensureDefaultStages(projectId: string) {
+  const existing = await db.select().from(ticketStages).where(eq(ticketStages.projectId, projectId));
+  const byName = new Map(existing.map((stage) => [stage.name, stage]));
+  const missing = DEFAULT_STAGES.filter((stage) => !byName.has(stage.name));
+
+  if (missing.length) {
+    await db.insert(ticketStages)
+      .values(missing.map((stage) => ({ ...stage, projectId })))
+      .onConflictDoNothing();
+  }
+
+  await Promise.all(DEFAULT_STAGES.flatMap((stage) => {
+    const row = byName.get(stage.name);
+    if (!row) return [];
+    if (
+      row.order === stage.order &&
+      row.color === stage.color &&
+      row.isDefault === stage.isDefault &&
+      row.isCompleted === stage.isCompleted
+    ) return [];
+    return [db.update(ticketStages).set({
+      order: stage.order,
+      color: stage.color,
+      isDefault: stage.isDefault,
+      isCompleted: stage.isCompleted,
+      updatedAt: new Date(),
+    }).where(eq(ticketStages.id, row.id))];
+  }));
+}
+
+/** Move durable outcome statuses into their matching board lanes. */
+async function syncOutcomeTicketStages(projectId: string) {
+  const rows = await db.select({ id: ticketStages.id, name: ticketStages.name })
+    .from(ticketStages)
+    .where(eq(ticketStages.projectId, projectId));
+  const failureStageId = rows.find((stage) => stage.name === "Failed / Blocked")?.id;
+  const archiveStageId = rows.find((stage) => stage.name === "Archive")?.id;
+
+  if (failureStageId) {
+    await db.update(projectTickets).set({ stageId: failureStageId, updatedAt: new Date() }).where(and(
+      eq(projectTickets.projectId, projectId),
+      or(eq(projectTickets.status, "failed"), eq(projectTickets.status, "blocked")),
+      or(isNull(projectTickets.stageId), ne(projectTickets.stageId, failureStageId)),
+    ));
+  }
+  if (archiveStageId) {
+    await db.update(projectTickets).set({ stageId: archiveStageId, updatedAt: new Date() }).where(and(
+      eq(projectTickets.projectId, projectId),
+      eq(projectTickets.status, "archived"),
+      or(isNull(projectTickets.stageId), ne(projectTickets.stageId, archiveStageId)),
+    ));
+  }
 }
 
 const projectsRouter = new Hono<AuthEnv>();
@@ -254,6 +315,8 @@ projectsRouter.get("/projects/:projectId", async (c) => {
   const access = await getProjectAccess(projectId, user.id);
   if (!access) return c.text("Project not found", 404);
   const project = access.project;
+
+  await ensureDefaultStages(project.id);
 
   const [convRows, stageRows, envRows, instantAppRows] = await Promise.all([
     db.select().from(conversations)
@@ -452,6 +515,9 @@ projectsRouter.get("/projects/:projectId/tickets", async (c) => {
   if (!access) return c.text("Project not found", 404);
   const project = access.project;
 
+  await ensureDefaultStages(project.id);
+  await syncOutcomeTicketStages(project.id);
+
   const [stageRows, ticketRows, appStateRows, profileRows, llmKeyRows] = await Promise.all([
     db.select().from(ticketStages)
       .where(eq(ticketStages.projectId, project.id))
@@ -514,7 +580,7 @@ projectsRouter.get("/projects/:projectId/tickets", async (c) => {
         claudeCodeEnabled: appState?.claudeCodeEnabled ?? true,
         builderModelKey: appState?.builderModelKey ?? "claude_4.5_sonnet",
         builderAuthMode: appState?.builderAuthMode === "api_key" ? "api_key" : "subscription",
-        models: listModels().map(m => ({ key: m.key, label: `${m.providerLabel} ${m.providerModel.split('/').pop()}`, provider: m.provider })),
+        models: listModels().map(m => ({ key: m.key, label: `${m.providerLabel} · ${m.label}`, provider: m.provider })),
         openAICodexConnected: profile?.openAICodexConnected ?? false,
         claudeCodeConnected: profile?.claudeCodeConnected ?? false,
         apiKeyProviders: {
@@ -558,7 +624,31 @@ projectsRouter.patch("/projects/:projectId/api/checklist/:ticketId/stage", async
   try { requirePermission(access, "canManageTickets"); } catch { return c.json({ error: "Forbidden" }, 403); }
   const project = access.project;
 
-  await db.update(projectTickets).set({ stageId, updatedAt: new Date() }).where(
+  const [[stage], [ticket]] = await Promise.all([
+    db.select({ id: ticketStages.id, name: ticketStages.name, isCompleted: ticketStages.isCompleted })
+      .from(ticketStages)
+      .where(and(eq(ticketStages.id, stageId), eq(ticketStages.projectId, project.id)))
+      .limit(1),
+    db.select({ status: projectTickets.status })
+      .from(projectTickets)
+      .where(and(eq(projectTickets.id, ticketId!), eq(projectTickets.projectId, project.id)))
+      .limit(1),
+  ]);
+  if (!stage || !ticket) return c.json({ error: "Ticket or stage not found" }, 404);
+
+  const stageStatus: Record<string, string> = {
+    "Backlog": "open",
+    "Todo": "open",
+    "In Progress": "in_progress",
+    "In Review": "review",
+    "Done": "done",
+    "Archive": "archived",
+  };
+  const status = stage.name === "Failed / Blocked"
+    ? (ticket.status === "failed" ? "failed" : "blocked")
+    : stageStatus[stage.name] ?? ticket.status;
+
+  await db.update(projectTickets).set({ stageId, status, updatedAt: new Date() }).where(
     and(eq(projectTickets.id, ticketId!), eq(projectTickets.projectId, project.id))
   );
 
@@ -566,14 +656,12 @@ projectsRouter.patch("/projects/:projectId/api/checklist/:ticketId/stage", async
   // its build worktree + sandbox row (kept alive through In-Review so the branch
   // could be previewed/tested).
   try {
-    const [stage] = await db.select({ isCompleted: ticketStages.isCompleted, name: ticketStages.name })
-      .from(ticketStages).where(eq(ticketStages.id, stageId)).limit(1);
     if (stage?.isCompleted || /^done$/i.test(stage?.name ?? "")) {
       await cleanupTicketWorktree(ticketId!).catch(() => {});
     }
   } catch { /* best-effort cleanup */ }
 
-  return c.json({ success: true });
+  return c.json({ success: true, status });
 });
 
 // ── GET /projects/:projectId/api/checklist/:ticketId — get single ticket

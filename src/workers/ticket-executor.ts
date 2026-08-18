@@ -3084,6 +3084,10 @@ async function resolveProjectIdForTicket(ticketId: string): Promise<string | nul
 }
 
 async function markTicketFailed(ticketId: string, reason: string, userId?: string, opts?: { emitEvent?: boolean }) {
+  const projectId = await resolveProjectIdForTicket(ticketId);
+  const failureStageId = projectId
+    ? await moveTicketToStage(ticketId, projectId, "Failed / Blocked")
+    : null;
   await db
     .update(projectTickets)
     .set({
@@ -3092,6 +3096,16 @@ async function markTicketFailed(ticketId: string, reason: string, userId?: strin
       updatedAt: new Date(),
     })
     .where(eq(projectTickets.id, ticketId));
+
+  if (userId) {
+    broadcastToUser(userId, {
+      type: "ticket_status",
+      ticketId,
+      status: "failed",
+      queueStatus: "none",
+      stageId: failureStageId,
+    });
+  }
 
   // Concise machine line the failure banner scrapes for its reason.
   await addLog(ticketId, `Execution failed: ${reason}`, "command", userId);
@@ -3109,7 +3123,6 @@ async function markTicketFailed(ticketId: string, reason: string, userId?: strin
   // Only emit when the caller hasn't already triggered this event (e.g., early failures
   // before the CLI starts). Normal-flow failures already have the event from the CLI callback.
   if (opts?.emitEvent !== false) {
-    const projectId = await resolveProjectIdForTicket(ticketId);
     emit({
       type: "ticket.execution_finished",
       ticketId,

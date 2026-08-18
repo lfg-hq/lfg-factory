@@ -174,7 +174,7 @@ export const updateTicket = tool({
   description: "Update the status or stage of a ticket.",
   inputSchema: zodSchema(z.object({
     ticketId: z.string(),
-    status: z.enum(["open", "in_progress", "review", "done", "failed", "blocked"]).optional(),
+    status: z.enum(["open", "in_progress", "review", "done", "failed", "blocked", "archived"]).optional(),
     stageId: z.string().optional(),
     priority: z.enum(["High", "Medium", "Low"]).optional(),
   })),
@@ -223,7 +223,7 @@ export const updateAllTickets = tool({
   inputSchema: zodSchema(z.object({
     updates: z.array(z.object({
       ticketId: z.string(),
-      status: z.enum(["open", "in_progress", "review", "done", "failed", "blocked"]).optional(),
+      status: z.enum(["open", "in_progress", "review", "done", "failed", "blocked", "archived"]).optional(),
       stageId: z.string().optional(),
     })),
   })),

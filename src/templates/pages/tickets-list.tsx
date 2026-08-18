@@ -50,6 +50,16 @@ const PRIORITY_COLOR: Record<string, string> = {
   Low: "#6b7280",
 };
 
+const STAGE_STATUS: Record<string, string> = {
+  "Backlog": "open",
+  "Todo": "open",
+  "In Progress": "in_progress",
+  "In Review": "review",
+  "Failed / Blocked": "blocked",
+  "Done": "done",
+  "Archive": "archived",
+};
+
 export function TicketsListPage({ user, project, stages, tickets, executionMode, embed }: TicketsListPageProps) {
   const avatarLetter = (user.name?.[0] ?? user.email?.[0] ?? "?").toUpperCase();
   const subscriptionProviders = new Set<string>();
@@ -106,32 +116,49 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     /* Layout overrides — not in tickets.css */
     .tickets-page { height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
     .tickets-toolbar {
-      /* One height / radius / type scale for EVERY control in this row. These match
-         .filter-select + .filter-search in tickets.css (34px, --radius-md, 13px), which
-         the exec cluster below used to ignore — it sized itself from padding (27px) with
-         999px pills and 0.68-0.75rem text, so the row read as five unrelated widgets. */
-      --tb-h: 34px;
-      --tb-r: var(--radius-md, 0.5rem);
+      --tb-h: 38px;
+      --tb-r: 0.625rem;
       --tb-fs: 0.8125rem;
       display: flex;
       align-items: center;
-      gap: 0.75rem;
-      row-gap: 0.5rem;
-      flex-wrap: wrap; /* narrow viewports wrap instead of pushing New Ticket off-screen */
-      padding: 0.625rem 1.25rem;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.75rem 1.25rem;
       border-bottom: 1px solid var(--border-color);
-      background: var(--background-color, #121212);
+      background: color-mix(in srgb, var(--background-color, #121212) 94%, var(--card-bg) 6%);
       flex-shrink: 0;
     }
-    .tickets-toolbar .filter-search { min-width: 180px; }
-    .toolbar-spacer { flex: 1; }
+    .toolbar-discovery,
+    .toolbar-actions {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      gap: 0.5rem;
+    }
+    .toolbar-discovery { flex: 1 1 430px; }
+    .toolbar-actions { flex: 0 1 auto; justify-content: flex-end; }
+    .tickets-toolbar .filter-search,
+    .tickets-toolbar .filter-select {
+      height: var(--tb-h);
+      border-color: var(--border-color);
+      background-color: var(--input-bg);
+    }
+    .tickets-toolbar .filter-search { width: min(260px, 28vw); min-width: 190px; }
+    .tickets-toolbar .filter-select { min-width: 126px; }
+    .toolbar-divider {
+      width: 1px;
+      height: 24px;
+      margin: 0 0.125rem;
+      background: var(--border-color);
+      flex: 0 0 auto;
+    }
     .toolbar-btn-new {
       display: inline-flex;
       align-items: center;
       justify-content: center;
       gap: 0.4rem;
       height: var(--tb-h, 34px);
-      padding: 0 0.95rem;
+      padding: 0 1rem;
       font-size: var(--tb-fs, 0.8125rem);
       font-weight: 600;
       border-radius: var(--tb-r, 0.5rem);
@@ -146,22 +173,39 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       /* Was 0 4px 12px/.35 — a drop shadow that heavy on a 34px control reads as a
          floating card, not a button. The CTA already stands out by being the only
          filled element in the row. */
-      box-shadow: 0 1px 2px rgba(124,58,237,0.30);
+      box-shadow: 0 1px 2px rgba(124,58,237,0.24);
       transition: filter 0.15s ease, box-shadow 0.15s ease;
     }
     .toolbar-btn-new:hover { filter: brightness(1.08); box-shadow: 0 2px 8px rgba(124,58,237,0.35); }
 
-    /* Mode / model / credential are ONE decision (how a ticket build runs), so they sit
-       on a shared tray — which also separates them from the unrelated New Ticket CTA. */
     .exec-controls { display: flex; align-items: center; min-width: 0; }
     .exec-controls-row {
       display: flex;
       align-items: center;
-      gap: 0.4rem;
+      gap: 0.35rem;
       min-width: 0;
+      height: calc(var(--tb-h) + 8px);
       padding: 0.25rem;
-      border-radius: calc(var(--tb-r, 0.5rem) + 0.25rem);
-      background: rgba(127, 127, 127, 0.09);
+      border: 1px solid var(--border-color);
+      border-radius: calc(var(--tb-r) + 0.25rem);
+      background: color-mix(in srgb, var(--input-bg) 82%, transparent);
+    }
+    .exec-controls-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      height: var(--tb-h);
+      padding: 0 0.6rem;
+      color: var(--text-secondary);
+      font-size: 0.75rem;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .exec-controls-label i { color: #8b5cf6; font-size: 0.8rem; }
+    .exec-controls-divider {
+      width: 1px;
+      height: 22px;
+      background: var(--border-color);
     }
 
     /* Execution mode toggle — a true segmented control: one bordered box, a hairline
@@ -226,8 +270,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       height: var(--tb-h, 34px);
       /* Which model will build the ticket is the most important fact in this row, and
          190px truncated it to "DeepSeek deepseek-…". Wide enough for a full model id. */
-      min-width: 210px;
-      max-width: 260px;
+      min-width: 190px;
+      max-width: 240px;
       padding: 0 1.7rem 0 0.6rem; /* extra right pad so the native chevron clears the text */
       font-size: var(--tb-fs, 0.8125rem);
       border-radius: var(--tb-r, 0.5rem);
@@ -237,7 +281,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       cursor: pointer;
       text-overflow: ellipsis;
     }
-    .builder-auth-select { min-width: 142px; padding: 0 1.7rem 0 0.6rem; }
+    .builder-auth-select { min-width: 150px; max-width: 170px; padding: 0 1.7rem 0 0.6rem; }
     .builder-auth-select:disabled,
     .builder-model-select:disabled { cursor: not-allowed; opacity: 0.55; }
     /* Build & preview settings popover (declutters the toolbar) */
@@ -306,6 +350,28 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       padding: 1rem 1.25rem;
       display: flex;
       flex-direction: column;
+    }
+    .kanban-column {
+      flex: 1 0 238px;
+      min-width: 238px;
+      max-width: 320px;
+    }
+    @media (max-width: 1180px) {
+      .tickets-toolbar { align-items: stretch; flex-wrap: wrap; }
+      .toolbar-discovery, .toolbar-actions { flex: 1 1 100%; }
+      .toolbar-actions { justify-content: space-between; }
+      .exec-controls { flex: 1; }
+    }
+    @media (max-width: 760px) {
+      .tickets-toolbar { padding: 0.625rem; }
+      .toolbar-discovery, .toolbar-actions { flex-wrap: wrap; }
+      .tickets-toolbar .filter-search { width: 100%; flex: 1 1 100%; }
+      .toolbar-divider { display: none; }
+      .exec-controls { width: 100%; }
+      .exec-controls-row { width: 100%; }
+      .exec-controls-label { display: none; }
+      .exec-controls-divider { display: none; }
+      .builder-auth-select, .builder-model-select { min-width: 0; max-width: none; flex: 1; }
     }
     /* Tab panes — not in tickets.css */
     .drawer-tab-content { display: none !important; }
@@ -456,75 +522,73 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
 
     <!-- Toolbar -->
     <div class="tickets-toolbar">
-      <input class="filter-search" type="text" placeholder="Search tickets..." id="ticket-search" oninput="filterTickets()" />
-      <select class="filter-select" id="filter-status" onchange="filterTickets()">
-        <option value="">All Statuses</option>
-        <option value="open">Open</option>
-        <option value="in_progress">In Progress</option>
-        <option value="review">Review</option>
-        <option value="done">Done</option>
-        <option value="failed">Failed</option>
-        <option value="blocked">Blocked</option>
-      </select>
-      <select class="filter-select" id="filter-priority" onchange="filterTickets()">
-        <option value="">All Priorities</option>
-        <option value="High">High</option>
-        <option value="Medium">Medium</option>
-        <option value="Low">Low</option>
-      </select>
-      <div class="toolbar-spacer"></div>
-      ${executionMode ? html`
-        <div class="exec-controls">
-          <div class="exec-controls-row">
-            <div class="exec-mode-toggle" title="Choose how ticket builds call the selected model">
-              <!-- Direct API is intentionally hidden for now; keep the implementation available for a future re-enable.
-              <button class="exec-mode-btn" id="exec-mode-api" onclick="setExecMode(false)" title="Call the selected model with its API key">
-                <i class="fas fa-cloud"></i> Direct API
-              </button>
-              -->
-              <button class="exec-mode-btn active" id="exec-mode-cli" onclick="setExecMode(true)" title="Run a coding agent in the ticket sandbox">
-                <i class="fas fa-terminal"></i> Coding Agent
-              </button>
+      <div class="toolbar-discovery" aria-label="Find and filter tickets">
+        <input class="filter-search" type="text" placeholder="Search tickets..." aria-label="Search tickets" id="ticket-search" oninput="filterTickets()" />
+        <select class="filter-select" aria-label="Filter by status" id="filter-status" onchange="filterTickets()">
+          <option value="">All statuses</option>
+          <option value="open">Open</option>
+          <option value="in_progress">In Progress</option>
+          <option value="review">Review</option>
+          <option value="done">Done</option>
+          <option value="failed">Failed</option>
+          <option value="blocked">Blocked</option>
+          <option value="archived">Archived</option>
+        </select>
+        <select class="filter-select" aria-label="Filter by priority" id="filter-priority" onchange="filterTickets()">
+          <option value="">All priorities</option>
+          <option value="High">High</option>
+          <option value="Medium">Medium</option>
+          <option value="Low">Low</option>
+        </select>
+      </div>
+      <div class="toolbar-actions">
+        ${executionMode ? html`
+          <div class="exec-controls">
+            <div class="exec-controls-row" title="Defaults used when a ticket build starts">
+              <span class="exec-controls-label"><i class="fas fa-terminal"></i> Build with</span>
+              <span class="exec-controls-divider" aria-hidden="true"></span>
+              <!-- Direct API is intentionally hidden for now; its backend implementation remains available. -->
+              <select class="builder-auth-select" id="builder-auth-select"
+                aria-label="Coding agent authentication" onchange="setBuilderAuthMode(this.value)"
+                ${!hasSubscriptions && !hasApiKeys ? "disabled" : ""}>
+                ${hasSubscriptions ? html`<option value="subscription" ${effectiveAuthMode === "subscription" ? "selected" : ""}>Subscription</option>` : ""}
+                ${hasApiKeys ? html`<option value="api_key" ${effectiveAuthMode === "api_key" ? "selected" : ""}>API token</option>` : ""}
+                ${!hasSubscriptions && !hasApiKeys ? html`<option value="">No credentials</option>` : ""}
+              </select>
+              <select class="builder-model-select" id="builder-model-select"
+                aria-label="Ticket builder model" onchange="setBuilderModel(this.value)" ${eligibleBuilderModels.length ? "" : "disabled"}>
+                ${eligibleBuilderModels.map(m => html`
+                  <option value="${m.key}" data-provider="${m.provider}" ${m.key === effectiveBuilderModelKey ? "selected" : ""}>${m.label}</option>
+                `)}
+                ${eligibleBuilderModels.length ? "" : html`<option value="">Connect a provider in Settings</option>`}
+              </select>
+              ${!hasSubscriptions && !hasApiKeys ? html`<a class="exec-auth-badge" href="/settings/integrations"><i class="fas fa-plug"></i> Connect</a>` : ""}
             </div>
-            <select class="builder-auth-select" id="builder-auth-select"
-              aria-label="Coding agent authentication" onchange="setBuilderAuthMode(this.value)"
-              ${!hasSubscriptions && !hasApiKeys ? "disabled" : ""}>
-              ${hasSubscriptions ? html`<option value="subscription" ${effectiveAuthMode === "subscription" ? "selected" : ""}>Use subscription</option>` : ""}
-              ${hasApiKeys ? html`<option value="api_key" ${effectiveAuthMode === "api_key" ? "selected" : ""}>Use API token</option>` : ""}
-              ${!hasSubscriptions && !hasApiKeys ? html`<option value="">No credentials connected</option>` : ""}
-            </select>
-            <select class="builder-model-select" id="builder-model-select"
-              aria-label="Ticket builder model" onchange="setBuilderModel(this.value)" ${eligibleBuilderModels.length ? "" : "disabled"}>
-              ${eligibleBuilderModels.map(m => html`
-                <option value="${m.key}" data-provider="${m.provider}" ${m.key === effectiveBuilderModelKey ? "selected" : ""}>${m.label}</option>
-              `)}
-              ${eligibleBuilderModels.length ? "" : html`<option value="">Connect a provider in Settings</option>`}
-            </select>
-            ${!hasSubscriptions && !hasApiKeys ? html`<a class="exec-auth-badge" href="/settings/integrations"><i class="fas fa-plug"></i> Connect provider</a>` : ""}
+          </div>
+        ` : ""}
+        <span class="toolbar-divider" aria-hidden="true"></span>
+        <div class="build-settings-menu">
+          <button class="build-settings-btn" onclick="toggleBuildSettings(event)" aria-label="Build and preview settings" title="Build & preview settings"><i class="fas fa-sliders-h"></i></button>
+          <div class="build-settings-dropdown" id="build-settings-dropdown">
+            <div class="bs-title">Build &amp; preview</div>
+            <label class="bs-row"><span>Ticket build</span>
+              <select id="build-isolation-select" onchange="setBuildSetting('ticketBuildIsolation', this.value)">
+                <option value="isolated" ${(project.ticketBuildIsolation ?? "isolated") === "isolated" ? "selected" : ""}>Fresh sandbox (isolated)</option>
+                <option value="shared" ${project.ticketBuildIsolation === "shared" ? "selected" : ""}>Shared preview VM</option>
+              </select>
+            </label>
+            <label class="bs-row"><span>Preview branch</span>
+              <select id="preview-branch-mode-select" onchange="setBuildSetting('previewBranchMode', this.value)">
+                <option value="worktree" ${(project.previewBranchMode ?? "worktree") === "worktree" ? "selected" : ""}>Worktree (separate dir)</option>
+                <option value="checkout" ${project.previewBranchMode === "checkout" ? "selected" : ""}>Switch branch (stash)</option>
+              </select>
+            </label>
           </div>
         </div>
-      ` : ""}
-      <div class="build-settings-menu">
-        <button class="build-settings-btn" onclick="toggleBuildSettings(event)" title="Build & preview settings"><i class="fas fa-sliders-h"></i></button>
-        <div class="build-settings-dropdown" id="build-settings-dropdown">
-          <div class="bs-title">Build &amp; preview</div>
-          <label class="bs-row"><span>Ticket build</span>
-            <select id="build-isolation-select" onchange="setBuildSetting('ticketBuildIsolation', this.value)">
-              <option value="isolated" ${(project.ticketBuildIsolation ?? "isolated") === "isolated" ? "selected" : ""}>Fresh sandbox (isolated)</option>
-              <option value="shared" ${project.ticketBuildIsolation === "shared" ? "selected" : ""}>Shared preview VM</option>
-            </select>
-          </label>
-          <label class="bs-row"><span>Preview branch</span>
-            <select id="preview-branch-mode-select" onchange="setBuildSetting('previewBranchMode', this.value)">
-              <option value="worktree" ${(project.previewBranchMode ?? "worktree") === "worktree" ? "selected" : ""}>Worktree (separate dir)</option>
-              <option value="checkout" ${project.previewBranchMode === "checkout" ? "selected" : ""}>Switch branch (stash)</option>
-            </select>
-          </label>
-        </div>
+        <button type="button" class="toolbar-btn-new" onclick="openCreateTicket()">
+          <i class="fas fa-plus"></i> New Ticket
+        </button>
       </div>
-      <button type="button" class="toolbar-btn-new" onclick="openCreateTicket()">
-        <i class="fas fa-plus"></i> New Ticket
-      </button>
     </div>
 
     <!-- Create-ticket modal -->
@@ -563,7 +627,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
         ${stages.map((stage) => {
           const stageTickets = byStage[stage.id] ?? [];
           return html`
-            <div class="kanban-column" data-stage-id="${stage.id}">
+            <div class="kanban-column" data-stage-id="${stage.id}" data-stage-name="${stage.name}">
               <div class="kanban-column-header" style="border-top-color:${stage.color};">
                 <div class="kanban-column-title">
                   <span class="stage-color-dot" style="background:${stage.color};"></span>
@@ -571,7 +635,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
                   <span class="ticket-count">${stageTickets.length}</span>
                 </div>
               </div>
-              <div class="kanban-column-body" data-stage-id="${stage.id}">
+              <div class="kanban-column-body" data-stage-id="${stage.id}" data-ticket-status="${STAGE_STATUS[stage.name] ?? "open"}">
                 ${stageTickets.length === 0 ? html`
                   <div style="text-align:center;padding:1.5rem;color:var(--text-secondary);font-size:0.8rem;opacity:0.4;">No tickets</div>
                 ` : stageTickets.map((t) => html`
@@ -2239,11 +2303,14 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       const fromCol = card.parentNode;
       if (fromCol === col) return; // dropped back where it started
       const id = _dragId;
+      const previousStatus = card.dataset.status;
+      const nextStatus = col.dataset.ticketStatus || previousStatus;
       // Optimistic: move the card NOW (no reload). The card sitting in the old column for a
       // second while we awaited the PATCH + a full reload was the lag.
       const placeholder = col.querySelector('div[style*="text-align:center"]');
       if (placeholder) placeholder.remove();
       col.appendChild(card);
+      card.dataset.status = nextStatus;
       const recount = () => document.querySelectorAll('.kanban-column').forEach(function(c) {
         const body = c.querySelector('.kanban-column-body');
         const count = c.querySelector('.ticket-count');
@@ -2262,10 +2329,13 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
           method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ stageId })
         });
         if (!r.ok) throw new Error('HTTP ' + r.status);
+        const result = await r.json();
+        if (result.status) card.dataset.status = result.status;
       } catch(err) {
         // Revert on failure.
         const ph2 = fromCol.querySelector('div[style*="text-align:center"]'); if (ph2) ph2.remove();
         fromCol.appendChild(card);
+        card.dataset.status = previousStatus;
         recount();
         console.error('Move failed', err);
       }
