@@ -5,6 +5,7 @@ import { projectFiles, projectFileVersions } from "../../db/schema/documents.ts"
 import { eq } from "drizzle-orm";
 import { emitFileCreated, emitFileUpdated } from "../../events/emitters.ts";
 import { saveContent, getContent } from "../../services/s3.ts";
+import { linkDocsToEpic } from "../../services/epics.ts";
 
 let _wsBroadcast: ((userId: string, data: object) => void) | null = null;
 export function setWsBroadcast(fn: (userId: string, data: object) => void) {
@@ -20,9 +21,9 @@ export const streamDocumentContent = tool({
     "Write any document (PRD, implementation plan, spec, roadmap, etc.) and stream it live to the user's right panel. " +
     "Use fileType='prd' for product requirements, 'implementation' for technical plans, or any descriptive type. " +
     "If a file with the same name+type already exists it will be updated in-place. " +
-    "Pass `epicId` when the doc describes work that is still being built and NOT yet " +
-    "approved — it then belongs to that epic and only folds into the project's master " +
-    "doc when the client approves. Omit it only for genuinely project-wide docs.",
+    "Pass `epicId` when the doc relates to a feature you're building — the doc is LINKED " +
+    "to that epic so the epic shows the full picture. The doc still lives in the project's " +
+    "Docs tab and stays readable and editable; linking never hides or moves it.",
   inputSchema: zodSchema(
     z.object({
       projectId: z.string(),
@@ -33,25 +34,30 @@ export const streamDocumentContent = tool({
         .describe("Document type: prd | implementation | tech_analysis | design_language | spec | roadmap | design | research | other"),
       content: z.string().describe("Full document content in Markdown — written once, streamed live to the user"),
       epicId: z.string().optional().describe(
-        "The epic this doc belongs to (from createEpic). Scopes the doc to that delivery " +
-        "unit so an unapproved spec never leaks into the master doc the client reads."
+        "The epic this doc relates to (from startEpic). Links the doc to that epic so the " +
+        "epic shows its docs alongside its tickets. The doc stays a normal project doc."
       ),
     })
   ),
   execute: async ({ projectId, userId, name, fileType, content, epicId }) => {
     const { s3Key, dbContent } = await saveContent(projectId, fileType, name, content);
-    // "" = project-level master doc. See the epicId column comment in the schema.
-    const scope = epicId ?? "";
 
-    // Upsert: insert or update if (projectId, epicId, name, fileType) already exists
+    // Docs always live at PROJECT scope so they stay visible and editable. An epic
+    // points at them via a link row instead of taking them out of the Docs tab.
     const [file] = await db
       .insert(projectFiles)
-      .values({ projectId, epicId: scope, name, fileType, content: dbContent, s3Key })
+      .values({ projectId, epicId: "", name, fileType, content: dbContent, s3Key })
       .onConflictDoUpdate({
         target: [projectFiles.projectId, projectFiles.epicId, projectFiles.name, projectFiles.fileType],
         set: { content: dbContent, s3Key, updatedAt: new Date() },
       })
       .returning();
+
+    if (epicId) {
+      await linkDocsToEpic(epicId, [file!.id], userId).catch((e) =>
+        console.warn("[streamDocumentContent] epic link failed:", (e as Error).message?.slice(0, 160))
+      );
+    }
 
     emitFileCreated({ projectId, documentId: file!.id, documentType: fileType, name });
 

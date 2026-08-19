@@ -3,6 +3,7 @@ import { epics } from "../db/schema/epics.ts";
 import { projects } from "../db/schema/projects.ts";
 import { projectTickets } from "../db/schema/tickets.ts";
 import { projectFiles } from "../db/schema/documents.ts";
+import { epicDocuments } from "../db/schema/epic-documents.ts";
 import { eq, and, sql, inArray, ne, isNull } from "drizzle-orm";
 import { derivePrefix } from "../utils/ticket-keys.ts";
 import { resolveRepoAuth } from "./repo-auth.ts";
@@ -471,39 +472,83 @@ export async function promoteEpicToMain(
     .set({ status: "merged", mergeCommitSha, mergedAt: new Date(), updatedAt: new Date() })
     .where(eq(epics.id, epicId));
 
-  await promoteEpicDocs(epic);
+  // Docs are LINKED, not owned, so there is nothing to move on approval — they
+  // were always readable in the project's Docs tab.
 
   console.log(`[epics] ${epic.epicKey} merged to ${targetBranch} (${mergeCommitSha.slice(0, 7)})`);
   return { merged: true, prNumber, prUrl };
 }
 
-/** Copy an epic's docs up to project scope, where the client reads them. */
-async function promoteEpicDocs(epic: Epic): Promise<void> {
-  const docs = await db
-    .select()
-    .from(projectFiles)
-    .where(and(eq(projectFiles.projectId, epic.projectId), eq(projectFiles.epicId, epic.id)));
+/**
+ * Docs an epic is built from. Linked, never owned — the doc stays in the project's
+ * Docs tab so it can be read and improved while the epic is in flight.
+ */
+export async function listEpicDocs(epicId: string) {
+  return db
+    .select({
+      id: projectFiles.id,
+      name: projectFiles.name,
+      fileType: projectFiles.fileType,
+      updatedAt: projectFiles.updatedAt,
+      linkedAt: epicDocuments.createdAt,
+    })
+    .from(epicDocuments)
+    .innerJoin(projectFiles, eq(projectFiles.id, epicDocuments.fileId))
+    .where(eq(epicDocuments.epicId, epicId));
+}
 
-  for (const doc of docs) {
-    await db
-      .insert(projectFiles)
-      .values({
-        projectId: epic.projectId,
-        epicId: "",
-        name: doc.name,
-        fileType: doc.fileType,
-        content: doc.content,
-        s3Key: doc.s3Key,
-      })
-      .onConflictDoUpdate({
-        target: [projectFiles.projectId, projectFiles.epicId, projectFiles.name, projectFiles.fileType],
-        set: { content: doc.content, s3Key: doc.s3Key, updatedAt: new Date() },
-      })
-      .catch((e) =>
-        console.warn(`[epics] promoting doc "${doc.name}" failed:`, (e as Error).message?.slice(0, 160))
-      );
+/** Point an epic at project docs. Idempotent — re-linking the same doc is a no-op. */
+export async function linkDocsToEpic(
+  epicId: string,
+  fileIds: string[],
+  linkedById?: string | null
+): Promise<{ linked: number }> {
+  const ids = [...new Set(fileIds.filter(Boolean))];
+  if (!ids.length) return { linked: 0 };
+  const epic = await getEpic(epicId);
+  if (!epic) throw new Error(`Epic not found: ${epicId}`);
+
+  // Only docs from the epic's own project.
+  const valid = await db
+    .select({ id: projectFiles.id })
+    .from(projectFiles)
+    .where(and(eq(projectFiles.projectId, epic.projectId), inArray(projectFiles.id, ids)));
+  if (!valid.length) return { linked: 0 };
+
+  await db
+    .insert(epicDocuments)
+    .values(valid.map((f) => ({ epicId, fileId: f.id, linkedById: linkedById ?? null })))
+    .onConflictDoNothing();
+  return { linked: valid.length };
+}
+
+export async function unlinkDocsFromEpic(epicId: string, fileIds: string[]): Promise<void> {
+  const ids = [...new Set(fileIds.filter(Boolean))];
+  if (!ids.length) return;
+  await db
+    .delete(epicDocuments)
+    .where(and(eq(epicDocuments.epicId, epicId), inArray(epicDocuments.fileId, ids)));
+}
+
+/** Epic links for a set of docs, so a doc list can show which epics use each one. */
+export async function epicLinksForDocs(projectId: string) {
+  const rows = await db
+    .select({
+      fileId: epicDocuments.fileId,
+      epicId: epics.id,
+      epicKey: epics.epicKey,
+      epicName: epics.name,
+      epicStatus: epics.status,
+    })
+    .from(epicDocuments)
+    .innerJoin(epics, eq(epics.id, epicDocuments.epicId))
+    .where(eq(epics.projectId, projectId));
+
+  const byFile: Record<string, Array<{ epicId: string; epicKey: string | null; epicName: string; epicStatus: string }>> = {};
+  for (const r of rows) {
+    (byFile[r.fileId] ||= []).push({ epicId: r.epicId, epicKey: r.epicKey, epicName: r.epicName, epicStatus: r.epicStatus });
   }
-  if (docs.length) console.log(`[epics] ${epic.epicKey}: promoted ${docs.length} doc(s) to project scope`);
+  return byFile;
 }
 
 /**

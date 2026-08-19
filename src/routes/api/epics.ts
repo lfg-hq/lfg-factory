@@ -17,6 +17,9 @@ import {
   listDependentEpics,
   assignTicketsToEpic,
   listUnassignedTickets,
+  listEpicDocs,
+  linkDocsToEpic,
+  unlinkDocsFromEpic,
   LEGACY_ANCHOR_BRANCH,
 } from "../../services/epics.ts";
 import type { auth } from "../../auth/index.ts";
@@ -179,6 +182,35 @@ epicsApi.post("/epics/:epicId/tickets", async (c) => {
   return c.json(result);
 });
 
+// ── POST/DELETE /api/epics/:epicId/docs ──────────────────────────────
+// Point an epic at project docs, or stop pointing at them. Never moves or hides
+// the doc — it stays in the project's Docs tab throughout.
+epicsApi.post("/epics/:epicId/docs", async (c) => {
+  const user = c.get("user");
+  const { epicId } = c.req.param();
+  const loaded = await loadEpic(epicId!, user.id);
+  if (!loaded) return c.json({ error: "Epic not found" }, 404);
+
+  const body = await c.req.json<{ fileIds?: string[] }>();
+  if (!body.fileIds?.length) return c.json({ error: "fileIds is required" }, 400);
+
+  const result = await linkDocsToEpic(epicId!, body.fileIds, user.id);
+  return c.json({ ...result, docs: await listEpicDocs(epicId!) });
+});
+
+epicsApi.delete("/epics/:epicId/docs", async (c) => {
+  const user = c.get("user");
+  const { epicId } = c.req.param();
+  const loaded = await loadEpic(epicId!, user.id);
+  if (!loaded) return c.json({ error: "Epic not found" }, 404);
+
+  const body = await c.req.json<{ fileIds?: string[] }>();
+  if (!body.fileIds?.length) return c.json({ error: "fileIds is required" }, 400);
+
+  await unlinkDocsFromEpic(epicId!, body.fileIds);
+  return c.json({ ok: true, docs: await listEpicDocs(epicId!) });
+});
+
 // ── GET /api/epics/:epicId ───────────────────────────────────────────
 // The whole delivery unit in one payload: intent, docs, tickets, branch,
 // preview, review state, and what (if anything) blocks it from going live.
@@ -196,15 +228,7 @@ epicsApi.get("/epics/:epicId", async (c) => {
       .from(projectTickets)
       .where(eq(projectTickets.epicId, epic.id))
       .orderBy(asc(projectTickets.executionOrder), asc(projectTickets.createdAt)),
-    db
-      .select({
-        id: projectFiles.id,
-        name: projectFiles.name,
-        fileType: projectFiles.fileType,
-        updatedAt: projectFiles.updatedAt,
-      })
-      .from(projectFiles)
-      .where(and(eq(projectFiles.projectId, epic.projectId), eq(projectFiles.epicId, epic.id))),
+    listEpicDocs(epic.id),
     getMergeBlockers(epic),
     listDependentEpics(epic.id),
   ]);

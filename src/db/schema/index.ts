@@ -20,3 +20,5 @@ export * from "./agents.ts";
 export * from "./composio.ts";
 
 export * from "./epics.ts";
+
+export * from "./epic-documents.ts";

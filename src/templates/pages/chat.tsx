@@ -345,6 +345,9 @@ export function ChatPage({
                     <select id="file-type-filter" style="height:32px;padding:0 12px;background:var(--card-bg,#161616);border:1px solid var(--border-color,#333);border-radius:8px;color:var(--text-color,#e2e8f0);font-size:12.5px;font-weight:500;cursor:pointer;">
                       <option value="">All Types</option>
                     </select>
+                    <select id="file-epic-filter" title="Filter documents by epic" style="height:32px;padding:0 12px;background:var(--card-bg,#161616);border:1px solid var(--border-color,#333);border-radius:8px;color:var(--text-color,#e2e8f0);font-size:12.5px;font-weight:500;cursor:pointer;">
+                      <option value="">All Epics</option>
+                    </select>
                     <button id="refresh-filebrowser" class="btn btn-sm" style="height:32px;padding:0 13px;background:var(--card-bg,#161616);color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:500;">
                       <i class="fas fa-rotate-right" style="font-size:11px;"></i> Refresh
                     </button>

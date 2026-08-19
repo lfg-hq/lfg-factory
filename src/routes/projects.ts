@@ -25,6 +25,7 @@ import { ProjectListPage } from "../templates/pages/project-list.tsx";
 import { ProjectDetailPage } from "../templates/pages/project-detail.tsx";
 import { TicketsListPage } from "../templates/pages/tickets-list.tsx";
 import { epics } from "../db/schema/epics.ts";
+import { epicLinksForDocs } from "../services/epics.ts";
 import { getProjectAccess, requirePermission, PermissionError } from "../auth/project-access.ts";
 import type { auth } from "../auth/index.ts";
 
@@ -847,15 +848,35 @@ projectsRouter.get("/projects/:projectId/api/files/browser", async (c) => {
     .where(eq(projectFiles.projectId, project.id))
     .orderBy(desc(projectFiles.updatedAt));
 
+  // Which epics each doc feeds. A doc can serve several epics (the Main PRD
+  // usually does), and it is never removed from this list by being linked.
+  const linksByFile = await epicLinksForDocs(project.id).catch(
+    () => ({} as Awaited<ReturnType<typeof epicLinksForDocs>>)
+  );
+  const epicRows = await db
+    .select({ id: epics.id, epicKey: epics.epicKey, name: epics.name, status: epics.status })
+    .from(epics)
+    .where(eq(epics.projectId, project.id))
+    .catch(() => []);
+
   const files = fileRows.map((f) => ({
     id: f.id,
     name: f.name,
     type: f.fileType,
     updated_at: f.updatedAt,
     created_at: f.createdAt,
+    epics: linksByFile[f.id] ?? [],
   }));
 
-  return c.json({ files, total: files.length, pages: 1, filters: { types: [...new Set(files.map((f) => f.type))] } });
+  return c.json({
+    files,
+    total: files.length,
+    pages: 1,
+    filters: {
+      types: [...new Set(files.map((f) => f.type))],
+      epics: epicRows,
+    },
+  });
 });
 
 // ── Compat: GET /projects/:projectId/api/files/:fileId/content ───────

@@ -2563,6 +2563,20 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
 
                     // Extract unique statuses and roles for filter dropdowns
+                    // Epics present on this project's tickets, for the epic selector.
+                    const epicOptions = (() => {
+                        const seen = new Map();
+                        checklist.forEach(it => {
+                            if (it.epic_id && !seen.has(it.epic_id)) {
+                                seen.set(it.epic_id, {
+                                    id: it.epic_id,
+                                    label: (it.epic_key ? it.epic_key + ' · ' : '') + (it.epic_name || 'Epic'),
+                                });
+                            }
+                        });
+                        return [...seen.values()].sort((a, b) => a.label.localeCompare(b.label));
+                    })();
+
                     const statuses = [...new Set(checklist.map(item => item.status || 'open'))].sort();
                     const roles = [...new Set(checklist.map(item => item.role || 'user'))].sort();
 
@@ -2733,6 +2747,11 @@ document.addEventListener('DOMContentLoaded', function() {
                                                     <option value="current">This Chat Only</option>
                                                 </select>
                                                 ` : ''}
+                                                <select id="epic-filter" class="checklist-filter-dropdown" title="Filter by epic">
+                                                    <option value="all">All Epics</option>
+                                                    ${epicOptions.map(e => `<option value="${e.id}">${e.label}</option>`).join('')}
+                                                    <option value="__none__">No epic</option>
+                                                </select>
                                                 <select id="group-by-filter" class="checklist-filter-dropdown" title="Group tickets by">
                                                     <option value="date">Group by date</option>
                                                     <option value="epic">Group by epic</option>
@@ -2814,6 +2833,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     const fileFilter = document.getElementById('file-filter');
                     const conversationFilter = document.getElementById('conversation-filter');
                     const clearFiltersBtn = document.getElementById('clear-checklist-filters');
+                    const epicFilter = document.getElementById('epic-filter');
                     const groupByFilter = document.getElementById('group-by-filter');
                     // Grouping choice sticks per project — you pick "by epic" once and
                     // the board keeps showing delivery units on every visit.
@@ -2885,8 +2905,16 @@ document.addEventListener('DOMContentLoaded', function() {
                     });
 
                     // Function to render checklist items based on filters
-                    const renderChecklist = (filterStatus = 'all', filterRole = 'all', filterFile = 'all', filterConversation = 'all') => {
+                    const renderChecklist = (filterStatus = 'all', filterRole = 'all', filterFile = 'all', filterConversation = 'all', filterEpic = 'all') => {
                         let filteredChecklist = [...checklist];
+
+                        // Apply epic filter — "__none__" is the backlog of tickets not
+                        // yet folded into any delivery unit.
+                        if (filterEpic === '__none__') {
+                            filteredChecklist = filteredChecklist.filter(item => !item.epic_id);
+                        } else if (filterEpic !== 'all') {
+                            filteredChecklist = filteredChecklist.filter(item => item.epic_id === filterEpic);
+                        }
 
                         // Apply status filter
                         if (filterStatus !== 'all') {
@@ -3568,7 +3596,8 @@ document.addEventListener('DOMContentLoaded', function() {
                         const filterRole = roleFilter ? roleFilter.value : 'all';
                         const filterFile = fileFilter ? fileFilter.value : 'all';
                         const filterConv = conversationFilter ? conversationFilter.value : 'all';
-                        renderChecklist(filterStatus, filterRole, filterFile, filterConv);
+                        const filterEpic = epicFilter ? epicFilter.value : 'all';
+                        renderChecklist(filterStatus, filterRole, filterFile, filterConv, filterEpic);
                     };
 
                     // Attach event listeners for filters
@@ -3581,6 +3610,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
                     if (conversationFilter) {
                         conversationFilter.addEventListener('change', applyAllFilters);
+                    }
+
+                    if (epicFilter) {
+                        epicFilter.addEventListener('change', applyAllFilters);
                     }
 
                     if (groupByFilter) {
@@ -3596,6 +3629,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         roleFilter.value = 'all';
                         if (fileFilter) fileFilter.value = 'all';
                         if (conversationFilter) conversationFilter.value = 'all';
+                        if (epicFilter) epicFilter.value = 'all';
                         // Grouping is a view preference, not a filter — Clear leaves it alone.
                         renderChecklist();
                     });
@@ -6443,6 +6477,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const fileBrowserPagination = document.getElementById('filebrowser-pagination');
             const fileSearch = document.getElementById('file-search');
             const fileTypeFilter = document.getElementById('file-type-filter');
+            const fileEpicFilter = document.getElementById('file-epic-filter');
             const refreshButton = document.getElementById('refresh-filebrowser');
             
             // Viewer elements
@@ -6465,6 +6500,7 @@ document.addEventListener('DOMContentLoaded', function() {
             let currentType = '';
             let currentSort = 'updated_at';
             let currentOrder = 'desc';
+            let currentEpic = '';   // '' = all, '__none__' = docs not linked to any epic
             let searchTimeout = null;
             
             // Function to fetch and display files
@@ -6504,7 +6540,18 @@ document.addEventListener('DOMContentLoaded', function() {
                     if (page === 1 && data.filters && data.filters.types) {
                         updateTypeFilterOptions(data.filters.types);
                     }
-                    
+                    if (page === 1 && data.filters && data.filters.epics) {
+                        updateEpicFilterOptions(data.filters.epics);
+                    }
+
+                    // Docs are LINKED to epics, never moved into them — so filtering
+                    // by epic narrows the view without a doc ever leaving this list.
+                    if (data.files && currentEpic) {
+                        data.files = currentEpic === '__none__'
+                            ? data.files.filter(f => !(f.epics && f.epics.length))
+                            : data.files.filter(f => (f.epics || []).some(e => e.epicId === currentEpic));
+                    }
+
                     if (data.files && data.files.length > 0) {
                         fileBrowserList.style.display = 'block';
                         fileBrowserEmpty.style.display = 'none';
@@ -6518,8 +6565,37 @@ document.addEventListener('DOMContentLoaded', function() {
                         // Clear the list first
                         fileBrowserList.innerHTML = '';
                         
+                        // Group headers, mirroring the ticket list's date/epic buckets, so
+                        // "what belongs to this feature?" reads the same in both tabs.
+                        const docEpicLabel = (f) => {
+                            const es = f.epics || [];
+                            if (!es.length) return 'No epic';
+                            const e = es[0];
+                            return (e.epicKey ? e.epicKey + ' · ' : '') + e.epicName;
+                        };
+                        if (currentEpic === '') {
+                            data.files.sort((a, b) => {
+                                const al = docEpicLabel(a), bl = docEpicLabel(b);
+                                if (al === bl) return 0;
+                                if (al === 'No epic') return 1;
+                                if (bl === 'No epic') return -1;
+                                return al.localeCompare(bl);
+                            });
+                        }
+                        let curDocGroup = null;
+
                         // Create file items with table-like layout
                         data.files.forEach(file => {
+                            if (currentEpic === '') {
+                                const g = docEpicLabel(file);
+                                if (g !== curDocGroup) {
+                                    curDocGroup = g;
+                                    const hdr = document.createElement('div');
+                                    hdr.className = 'lfg-date-group';
+                                    hdr.textContent = g;
+                                    fileBrowserList.appendChild(hdr);
+                                }
+                            }
                             const icon = getFileIcon(file.type);
                             const typeClass = `file-type-${file.type}`;
                             
@@ -6550,6 +6626,14 @@ document.addEventListener('DOMContentLoaded', function() {
                             typeBadge.textContent = displayType;
                             typeBadge.title = displayType;
                             fileType.appendChild(typeBadge);
+                            // A doc can feed several epics (the Main PRD usually does).
+                            (file.epics || []).forEach(e => {
+                                const chip = document.createElement('span');
+                                chip.className = 'lfg-epic-state lfg-epic-' + (e.epicStatus || 'draft');
+                                chip.textContent = e.epicKey || e.epicName;
+                                chip.title = e.epicName + ' — ' + String(e.epicStatus || '').replace('_', ' ');
+                                fileType.appendChild(chip);
+                            });
                             
                             // Create owner cell
                             const fileOwner = document.createElement('div');
@@ -6801,6 +6885,26 @@ document.addEventListener('DOMContentLoaded', function() {
             };
             
             // Update type filter options
+            const updateEpicFilterOptions = (epicList) => {
+                if (!fileEpicFilter) return;
+                const prev = fileEpicFilter.value;
+                let html = '<option value="">All Epics</option>';
+                (epicList || []).forEach(e => {
+                    const label = (e.epicKey ? e.epicKey + ' · ' : '') + e.name;
+                    html += `<option value="${e.id}">${label}</option>`;
+                });
+                html += '<option value="__none__">No epic</option>';
+                fileEpicFilter.innerHTML = html;
+                fileEpicFilter.value = prev || '';
+            };
+
+            if (fileEpicFilter) {
+                fileEpicFilter.addEventListener('change', function() {
+                    currentEpic = this.value;
+                    fetchFiles(1);
+                });
+            }
+
             const updateTypeFilterOptions = (types) => {
                 let html = '<option value="">All Types</option>';
                 Object.keys(types).forEach(type => {
