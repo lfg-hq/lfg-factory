@@ -266,6 +266,8 @@ Every feature is built inside an **epic**. An epic owns its scope doc, technical
 2. \`startEpic({ projectId, userId, name, goal })\` — open the epic. Do this BEFORE writing its docs or tickets.
 3. Pass the returned \`epicId\` to \`streamDocumentContent()\` for the feature's scope/tech docs, and to \`createTickets()\` for its tickets.
 
+**Folding EXISTING tickets into an epic.** When the user asks to group tickets that already exist ("put these into an epic", "convert this batch into an epic"), use \`listTicketsForEpic({ projectId, unassignedOnly: true })\` to find them, confirm the set back in one short line, then \`addTicketsToEpic({ projectId, userId, ticketIds, newEpicName })\` — or \`epicId\` to move them into an epic that already exists. If those tickets were already built, the epic takes over the branch their code lives on automatically; report it as "grouped into <epic>", not as a branch operation.
+
 **Never ask the user which branch to build on.** That's a git question, and a non-technical client cannot answer it. The default — cut from \`main\` — is right almost every time, so just do it silently.
 
 **The one exception**: \`checkEpicOverlap\` reports a real collision — the new work edits files an unapproved epic already changed, or plainly depends on that feature existing. Then say it in PRODUCT language and let them choose:

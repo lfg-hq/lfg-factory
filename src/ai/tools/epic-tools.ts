@@ -4,10 +4,13 @@ import { db } from "../../config/db.ts";
 import { epics } from "../../db/schema/epics.ts";
 import { projectTickets } from "../../db/schema/tickets.ts";
 import { projectFiles } from "../../db/schema/documents.ts";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, isNull, asc } from "drizzle-orm";
 import {
   createEpic,
   listUnapprovedEpics,
+  assignTicketsToEpic,
+  getEpic as getEpicById,
+  LEGACY_ANCHOR_BRANCH,
   UNAPPROVED_STATUSES,
 } from "../../services/epics.ts";
 
@@ -102,6 +105,114 @@ export const checkEpicOverlap = tool({
         goal: e.goal,
       })),
       overlaps,
+    };
+  },
+});
+
+// ── addTicketsToEpic ──────────────────────────────────────────────────────────
+
+export const addTicketsToEpic = tool({
+  description:
+    "Move tickets that ALREADY EXIST into an epic — use when the user says things like " +
+    "'put these tickets into an epic', 'group the JD generator tickets', or 'convert this " +
+    "batch into an epic'. Pass an existing `epicId`, or `newEpicName` to create one. " +
+    "Call `listTicketsForEpic` first if you need the ticket ids. " +
+    "IMPORTANT: a NEW epic wrapped around already-BUILT tickets is cut from the branch " +
+    "their code was merged into, not from main — otherwise its branch wouldn't contain " +
+    "their work. That happens automatically; just don't tell the user it starts from main.",
+  inputSchema: zodSchema(
+    z.object({
+      projectId: z.string(),
+      userId: z.string(),
+      ticketIds: z.array(z.string()).min(1).describe("Ids of the existing tickets to move"),
+      epicId: z.string().optional().describe("Move into THIS existing epic"),
+      newEpicName: z.string().optional().describe("Or create an epic with this name and move them into it"),
+      goal: z.string().optional().describe("One line on what the new epic delivers"),
+    })
+  ),
+  execute: async ({ projectId, userId, ticketIds, epicId, newEpicName, goal }) => {
+    let targetId = epicId;
+
+    if (!targetId) {
+      if (!newEpicName?.trim()) {
+        return { error: "Pass either epicId (an existing epic) or newEpicName (to create one)." };
+      }
+      // Are any of these already built? If so the epic must ADOPT the anchor that
+      // holds their code rather than branch off clean main.
+      const rows = await db
+        .select({ merged: projectTickets.githubMergeStatus })
+        .from(projectTickets)
+        .where(and(eq(projectTickets.projectId, projectId), inArray(projectTickets.id, ticketIds)));
+      const anyBuilt = rows.some((r) => r.merged === "merged");
+
+      const epic = await createEpic({
+        projectId,
+        name: newEpicName.trim(),
+        goal,
+        createdById: userId,
+        baseBranchOverride: anyBuilt ? LEGACY_ANCHOR_BRANCH : null,
+      });
+      targetId = epic.id;
+    }
+
+    const result = await assignTicketsToEpic(targetId, ticketIds);
+    const epic = await getEpicById(targetId);
+    return {
+      moved: result.moved,
+      epicId: targetId,
+      epicKey: epic?.epicKey ?? null,
+      epicName: epic?.name ?? null,
+      branch: epic?.branch ?? null,
+      adoptedExistingWork: epic?.baseBranch === LEGACY_ANCHOR_BRANCH,
+    };
+  },
+});
+
+// ── listTicketsForEpic ────────────────────────────────────────────────────────
+
+export const listTicketsForEpic = tool({
+  description:
+    "List the project's tickets with their current epic (if any), so you can pick ids to " +
+    "move into an epic. Use `unassignedOnly` to see just the tickets that don't belong to " +
+    "an epic yet — that's usually the set the user means by 'these tickets'.",
+  inputSchema: zodSchema(
+    z.object({
+      projectId: z.string(),
+      unassignedOnly: z.boolean().optional(),
+      conversationId: z.string().optional().describe(
+        "Limit to tickets created in this conversation. Note: tickets created before " +
+        "ticket/conversation linking existed have no conversation recorded and won't match."
+      ),
+    })
+  ),
+  execute: async ({ projectId, unassignedOnly, conversationId }) => {
+    const filters = [eq(projectTickets.projectId, projectId)];
+    if (unassignedOnly) filters.push(isNull(projectTickets.epicId));
+    if (conversationId) filters.push(eq(projectTickets.conversationId, conversationId));
+
+    const rows = await db
+      .select({
+        id: projectTickets.id,
+        ticketKey: projectTickets.ticketKey,
+        name: projectTickets.name,
+        status: projectTickets.status,
+        epicId: projectTickets.epicId,
+        mergeStatus: projectTickets.githubMergeStatus,
+        createdAt: projectTickets.createdAt,
+      })
+      .from(projectTickets)
+      .where(and(...filters))
+      .orderBy(asc(projectTickets.createdAt));
+
+    const epicRows = await db.select().from(epics).where(eq(epics.projectId, projectId));
+    const byId = Object.fromEntries(epicRows.map((e) => [e.id, e]));
+
+    return {
+      tickets: rows.map((t) => ({
+        ...t,
+        epicKey: t.epicId ? byId[t.epicId]?.epicKey ?? null : null,
+        epicName: t.epicId ? byId[t.epicId]?.name ?? null : null,
+      })),
     };
   },
 });
