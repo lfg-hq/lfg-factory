@@ -9,6 +9,7 @@ import {
   createEpic,
   listUnapprovedEpics,
   assignTicketsToEpic,
+  linkDocsToEpic,
   getEpic as getEpicById,
   LEGACY_ANCHOR_BRANCH,
   UNAPPROVED_STATUSES,
@@ -111,26 +112,38 @@ export const checkEpicOverlap = tool({
 
 // ── addTicketsToEpic ──────────────────────────────────────────────────────────
 
-export const addTicketsToEpic = tool({
+export const addToEpic = tool({
   description:
-    "Move tickets that ALREADY EXIST into an epic — use when the user says things like " +
-    "'put these tickets into an epic', 'group the JD generator tickets', or 'convert this " +
-    "batch into an epic'. Pass an existing `epicId`, or `newEpicName` to create one. " +
-    "Call `listTicketsForEpic` first if you need the ticket ids. " +
-    "IMPORTANT: a NEW epic wrapped around already-BUILT tickets is cut from the branch " +
+    "Put existing TICKETS and/or DOCS into an epic — use for 'move all docs and tickets " +
+    "into epic X', 'put these tickets in an epic', 'group the JD generator work'. " +
+    "Pass an existing `epicId`, or `newEpicName` to create one. " +
+    "To gather ids: `listTicketsForEpic` for tickets, `getFileList` for docs. " +
+    "When the user says 'all', pass every id you found — don't make them list them. " +
+    "\n\nTwo things behave differently and are worth one clause each when you report back: " +
+    "tickets MOVE into the epic (a ticket belongs to exactly one epic), while docs are " +
+    "LINKED (they stay in the project's Docs tab, stay editable, and one doc can feed " +
+    "several epics — nothing is hidden or taken away). " +
+    "\n\nAlso: a NEW epic wrapped around already-BUILT tickets is cut from the branch " +
     "their code was merged into, not from main — otherwise its branch wouldn't contain " +
-    "their work. That happens automatically; just don't tell the user it starts from main.",
+    "their work. That happens automatically; don't say it starts from main.",
   inputSchema: zodSchema(
     z.object({
       projectId: z.string(),
       userId: z.string(),
-      ticketIds: z.array(z.string()).min(1).describe("Ids of the existing tickets to move"),
-      epicId: z.string().optional().describe("Move into THIS existing epic"),
-      newEpicName: z.string().optional().describe("Or create an epic with this name and move them into it"),
+      ticketIds: z.array(z.string()).optional().describe("Existing tickets to move into the epic"),
+      fileIds: z.array(z.string()).optional().describe("Existing project docs to link to the epic"),
+      epicId: z.string().optional().describe("Use THIS existing epic"),
+      newEpicName: z.string().optional().describe("Or create an epic with this name"),
       goal: z.string().optional().describe("One line on what the new epic delivers"),
     })
   ),
-  execute: async ({ projectId, userId, ticketIds, epicId, newEpicName, goal }) => {
+  execute: async ({ projectId, userId, ticketIds, fileIds, epicId, newEpicName, goal }) => {
+    const tIds = ticketIds ?? [];
+    const fIds = fileIds ?? [];
+    if (!tIds.length && !fIds.length) {
+      return { error: "Pass ticketIds and/or fileIds — there's nothing to add." };
+    }
+
     let targetId = epicId;
 
     if (!targetId) {
@@ -139,10 +152,12 @@ export const addTicketsToEpic = tool({
       }
       // Are any of these already built? If so the epic must ADOPT the anchor that
       // holds their code rather than branch off clean main.
-      const rows = await db
-        .select({ merged: projectTickets.githubMergeStatus })
-        .from(projectTickets)
-        .where(and(eq(projectTickets.projectId, projectId), inArray(projectTickets.id, ticketIds)));
+      const rows = tIds.length
+        ? await db
+            .select({ merged: projectTickets.githubMergeStatus })
+            .from(projectTickets)
+            .where(and(eq(projectTickets.projectId, projectId), inArray(projectTickets.id, tIds)))
+        : [];
       const anyBuilt = rows.some((r) => r.merged === "merged");
 
       const epic = await createEpic({
@@ -155,15 +170,20 @@ export const addTicketsToEpic = tool({
       targetId = epic.id;
     }
 
-    const result = await assignTicketsToEpic(targetId, ticketIds);
+    const moved = tIds.length ? (await assignTicketsToEpic(targetId, tIds)).moved : 0;
+    const linked = fIds.length ? (await linkDocsToEpic(targetId, fIds, userId)).linked : 0;
+
     const epic = await getEpicById(targetId);
     return {
-      moved: result.moved,
+      ticketsMoved: moved,
+      docsLinked: linked,
       epicId: targetId,
       epicKey: epic?.epicKey ?? null,
       epicName: epic?.name ?? null,
       branch: epic?.branch ?? null,
       adoptedExistingWork: epic?.baseBranch === LEGACY_ANCHOR_BRANCH,
+      // Docs were linked, not moved — say so if you mention them.
+      docsRemainInProjectDocs: true,
     };
   },
 });

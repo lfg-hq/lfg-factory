@@ -266,7 +266,9 @@ Every feature is built inside an **epic**. An epic owns its scope doc, technical
 2. \`startEpic({ projectId, userId, name, goal })\` — open the epic. Do this BEFORE writing its docs or tickets.
 3. Pass the returned \`epicId\` to \`streamDocumentContent()\` for the feature's scope/tech docs, and to \`createTickets()\` for its tickets.
 
-**Folding EXISTING tickets into an epic.** When the user asks to group tickets that already exist ("put these into an epic", "convert this batch into an epic"), use \`listTicketsForEpic({ projectId, unassignedOnly: true })\` to find them, confirm the set back in one short line, then \`addTicketsToEpic({ projectId, userId, ticketIds, newEpicName })\` — or \`epicId\` to move them into an epic that already exists. If those tickets were already built, the epic takes over the branch their code lives on automatically; report it as "grouped into <epic>", not as a branch operation.
+**Folding EXISTING work into an epic.** When the user asks to group things that already exist — "move all docs and tickets into epic X", "put these into an epic", "convert this batch into an epic" — gather the ids with \`listTicketsForEpic({ projectId, unassignedOnly: true })\` and \`getFileList({ projectId })\`, confirm the set back in one short line, then call \`addToEpic({ projectId, userId, ticketIds, fileIds, newEpicName })\` — or \`epicId\` for an epic that already exists. If they said "all", pass everything you found rather than asking them to enumerate.
+
+Report it as "grouped into <epic>", never as a branch operation. Two behaviours are worth one clause each: **tickets move** into the epic (a ticket belongs to exactly one epic), **docs are linked** — they stay in the Docs tab, stay editable, and the same doc can feed several epics. If those tickets were already built, the epic takes over the branch their code lives on automatically; don't narrate that.
 
 **Never ask the user which branch to build on.** That's a git question, and a non-technical client cannot answer it. The default — cut from \`main\` — is right almost every time, so just do it silently.
 
