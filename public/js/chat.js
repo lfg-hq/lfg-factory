@@ -4496,12 +4496,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     loadConversation(conversation.id);
                 });
                 
-                // Add delete handler
+                // Add delete handler — absent on a teammate's shared chat.
                 const deleteBtn = conversationItem.querySelector('.delete-conversation');
-                deleteBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    deleteConversation(conversation.id);
-                });
+                if (deleteBtn) {
+                    deleteBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        deleteConversation(conversation.id);
+                    });
+                }
                 
                 conversationList.appendChild(conversationItem);
             });
@@ -4778,14 +4780,24 @@ document.addEventListener('DOMContentLoaded', () => {
         const timestamp = conversation.created_at ? new Date(conversation.created_at) : new Date();
         const timeStr = formatTimestamp(timestamp);
         
-        // Create sleek HTML structure
+        // A teammate's chat (only ever listed when the project shares chat history)
+        // is labelled with its author and is read-only — no delete button, since
+        // only the author may delete their own conversation.
+        const isMine = conversation.is_mine !== false;
+        const author = conversation.author;
+
+        const esc = (v) => String(v == null ? '' : v)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+
         conversationItem.innerHTML = `
-            <div class="conversation-title" title="${conversation.title}">${title}</div>
-            <button class="delete-conversation" title="Delete">
-                <i class="fas fa-trash"></i>
-            </button>
+            <div class="conversation-title" title="${esc(conversation.title)}${isMine ? '' : ' — ' + esc(author)}">${esc(title)}</div>
+            ${isMine
+                ? '<button class="delete-conversation" title="Delete"><i class="fas fa-trash"></i></button>'
+                : '<span class="conversation-author" title="' + esc(author) + "'s chat (read-only)\">" + esc(author) + '</span>'}
         `;
-        
+        if (!isMine) conversationItem.classList.add('conversation-shared');
+
         return conversationItem;
     }
 

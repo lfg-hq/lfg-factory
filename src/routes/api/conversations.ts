@@ -3,7 +3,9 @@ import { requireAuth } from "../../auth/middleware.ts";
 import { db } from "../../config/db.ts";
 import { conversations, messages } from "../../db/schema/chat.ts";
 import { projects } from "../../db/schema/projects.ts";
-import { eq, and } from "drizzle-orm";
+import { users } from "../../db/schema/users.ts";
+import { eq, and, inArray } from "drizzle-orm";
+import { getChatAccess } from "../../services/chat-access.ts";
 import type { auth } from "../../auth/index.ts";
 
 type AuthEnv = {
@@ -25,9 +27,12 @@ conversationsApi.get("/:id", async (c) => {
   const [conv] = await db
     .select()
     .from(conversations)
-    .where(and(eq(conversations.id, id), eq(conversations.userId, user.id)));
+    .where(eq(conversations.id, id));
 
-  if (!conv) return c.json({ error: "Not found" }, 404);
+  const access = conv ? await getChatAccess(id, user.id) : null;
+  if (!conv || !access?.canRead) {
+    return c.json({ error: "Not found" }, 404);
+  }
 
   // Load messages
   const msgs = await db
@@ -35,6 +40,14 @@ conversationsApi.get("/:id", async (c) => {
     .from(messages)
     .where(eq(messages.conversationId, id))
     .orderBy(messages.createdAt);
+
+  // Names for any guest turns (an owner/admin who continued this chat).
+  const guestIds = [...new Set(msgs.map((m) => m.authorId).filter(Boolean))] as string[];
+  const authorNames: Record<string, string> = {};
+  if (guestIds.length) {
+    const rows = await db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, guestIds));
+    for (const r of rows) authorNames[r.id] = r.name;
+  }
 
   // Load project info if linked (conv.projectId stores the URL-based projectId)
   let project = null;
@@ -50,12 +63,19 @@ conversationsApi.get("/:id", async (c) => {
     id: conv.id,
     title: conv.title,
     project,
+    // A teammate's shared chat: readable by any member, continuable only by an
+    // owner/admin — the UI hides the composer when read_only.
+    is_mine: access.isAuthor,
+    read_only: !access.canWrite,
     messages: msgs.map((m) => ({
       id: m.id,
       role: m.role,
       content: m.content,
       content_if_file: m.contentIfFile ?? null,
       created_at: m.createdAt,
+      // Null on every normal message (the conversation's own author). Set when an
+      // owner/admin stepped into this chat, so the UI can label that turn.
+      author: m.authorId ? (authorNames[m.authorId] ?? "Teammate") : null,
     })),
   });
 });

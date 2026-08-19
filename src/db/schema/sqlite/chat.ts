@@ -58,6 +58,10 @@ export const messages = sqliteTable(
       .notNull()
       .references(() => conversations.id, { onDelete: "cascade" }),
     role: text("role").notNull(), // user | assistant | system
+    // Who actually typed this. NULL = the conversation's own author (every legacy
+    // row, and the normal case). Set when an owner/admin continues someone else's
+    // shared chat, so the transcript shows who said what.
+    authorId: text("author_id"),
     content: text("content").notNull(),
     contentIfFile: text("content_if_file", { mode: "json" }).default([]),
     userRole: text("user_role").default("default"),

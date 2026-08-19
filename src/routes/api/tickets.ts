@@ -4,7 +4,7 @@ import { db } from "../../config/db.ts";
 import { projects } from "../../db/schema/projects.ts";
 import { ticketStages, projectTickets, ticketLogs, projectTodoLists, ticketMergeHistory, ticketAddenda } from "../../db/schema/tickets.ts";
 import { like, or } from "drizzle-orm";
-import { githubTokens } from "../../db/schema/users.ts";
+import { githubTokens, users } from "../../db/schema/users.ts";
 import { sandboxes } from "../../db/schema/sandbox.ts";
 import { conversations } from "../../db/schema/chat.ts";
 import { instantApps } from "../../db/schema/instant.ts";
@@ -291,22 +291,37 @@ ticketsApi.patch("/:projectId/tickets/:ticketId/stage", async (c) => {
   return c.json({ ticket: updated });
 });
 
-// ── GET /api/projects/:projectId/conversations/ ──────────────────────
-ticketsApi.get("/:projectId/conversations", async (c) => {
-  const user = c.get("user");
-  const { projectId } = c.req.param();
+/**
+ * Conversations a member may see in a project.
+ *
+ * Default: their own only. A client's chat with the analyst is private to them,
+ * and the owner cannot read it. With `shareChatHistory` on, every active member's
+ * conversations are listed and tagged with their author so it's obvious whose
+ * chat you're opening.
+ *
+ * Instant-app conversations are excluded either way — they're app state, not chat.
+ */
+async function listProjectConversations(
+  project: { id: string; projectId: string; shareChatHistory?: boolean | null },
+  viewerId: string
+) {
+  const shared = !!project.shareChatHistory;
 
-  const access = await getProjectAccess(projectId, user.id);
-  if (!access) return c.json([], 200);
-  const project = access.project;
-
-  // Exclude conversations that belong to instant apps
-  const convRows = await db
-    .select()
+  const rows = await db
+    .select({
+      id: conversations.id,
+      title: conversations.title,
+      createdAt: conversations.createdAt,
+      updatedAt: conversations.updatedAt,
+      userId: conversations.userId,
+      authorName: users.name,
+    })
     .from(conversations)
+    .leftJoin(users, eq(users.id, conversations.userId))
     .where(
       and(
         eq(conversations.projectId, project.projectId),
+        shared ? undefined : eq(conversations.userId, viewerId),
         notExists(
           db.select({ id: instantApps.id }).from(instantApps)
             .where(eq(instantApps.conversationId, conversations.id))
@@ -315,14 +330,32 @@ ticketsApi.get("/:projectId/conversations", async (c) => {
     )
     .orderBy(desc(conversations.updatedAt));
 
-  return c.json(
-    convRows.map((c) => ({
-      id: c.id,
-      title: c.title ?? "Untitled",
-      created_at: c.createdAt,
-      updated_at: c.updatedAt,
-    }))
-  );
+  return rows.map((r) => ({
+    id: r.id,
+    title: r.title ?? "Untitled",
+    created_at: r.createdAt,
+    updated_at: r.updatedAt,
+    is_mine: r.userId === viewerId,
+    // Only meaningful when sharing is on; null for your own chats so the UI
+    // doesn't label every row with your own name.
+    author: r.userId === viewerId ? null : (r.authorName ?? "Teammate"),
+  }));
+}
+
+// ── GET /api/projects/:projectId/conversations/ ──────────────────────
+// A member sees their OWN conversations. Everyone else's are visible only when
+// the project opts in via `shareChatHistory` — before that flag existed this
+// endpoint filtered on projectId alone, so every member's Recents listed every
+// other member's chats (and clicking one dead-ended, because the per-conversation
+// endpoint has always been correctly scoped to the owner).
+ticketsApi.get("/:projectId/conversations", async (c) => {
+  const user = c.get("user");
+  const { projectId } = c.req.param();
+
+  const access = await getProjectAccess(projectId, user.id);
+  if (!access) return c.json([], 200);
+
+  return c.json(await listProjectConversations(access.project, user.id));
 });
 
 // Trailing slash variant
@@ -332,31 +365,8 @@ ticketsApi.get("/:projectId/conversations/", async (c) => {
 
   const access = await getProjectAccess(projectId, user.id);
   if (!access) return c.json([], 200);
-  const project = access.project;
 
-  // Exclude conversations that belong to instant apps
-  const convRows = await db
-    .select()
-    .from(conversations)
-    .where(
-      and(
-        eq(conversations.projectId, project.projectId),
-        notExists(
-          db.select({ id: instantApps.id }).from(instantApps)
-            .where(eq(instantApps.conversationId, conversations.id))
-        )
-      )
-    )
-    .orderBy(desc(conversations.updatedAt));
-
-  return c.json(
-    convRows.map((c) => ({
-      id: c.id,
-      title: c.title ?? "Untitled",
-      created_at: c.createdAt,
-      updated_at: c.updatedAt,
-    }))
-  );
+  return c.json(await listProjectConversations(access.project, user.id));
 });
 
 // ── GET /:projectId/tickets/:ticketId/logs ──────────────────────────
@@ -930,13 +940,17 @@ ticketsApi.post("/:projectId/tickets/:ticketId/git/create-pr", async (c) => {
   const [, repoOwner, repoName] = repoUrl;
 
   const { createPullRequest } = await import("../../services/git.ts");
+  const { resolveTicketAnchor } = await import("../../services/epics.ts");
+  // PR targets the ticket's EPIC branch, not a shared global anchor — so the PR
+  // shows only this delivery unit's changes.
+  const { anchorBranch } = await resolveTicketAnchor(ticket);
 
   try {
     const { prNumber, prUrl } = await createPullRequest({
       repoOwner: repoOwner!,
       repoName: repoName!,
       featureBranch: ticket.githubBranch,
-      targetBranch: "lfg-agent",
+      targetBranch: anchorBranch,
       title: `feat: ${ticket.name}`,
       body: `Automated PR for ticket: ${ticket.name}`,
       githubToken: ghToken.accessToken,
@@ -1098,24 +1112,29 @@ ticketsApi.post("/:projectId/tickets/:ticketId/git/push", async (c) => {
       })
       .where(eq(projectTickets.id, ticketId));
 
-    // Merge feature branch → lfg-agent (direct push)
+    // Merge feature branch → the ticket's epic branch (direct push)
     let mergeStatus = ticket.githubMergeStatus;
+    const { mergeToAnchor } = await import("../../services/git.ts");
+    const { resolveTicketAnchor, maybeSubmitEpicForReview } = await import("../../services/epics.ts");
+    const { anchorBranch, baseBranch } = await resolveTicketAnchor(ticket);
     try {
-      const { mergeToLfgAgent } = await import("../../services/git.ts");
-      const { sha: mergeSha } = await mergeToLfgAgent({
+      await mergeToAnchor({
         workspaceId: sandbox.magsWorkspaceId,
         projectDir: "/data/project",
         featureBranch,
         repoUrl: `https://github.com/${repoOwner}/${repoName}.git`,
         githubToken: ghToken.accessToken,
+        targetBranch: anchorBranch,
+        baseBranch,
       });
       mergeStatus = "merged";
       await db
         .update(projectTickets)
         .set({ githubMergeStatus: "merged", updatedAt: new Date() })
         .where(eq(projectTickets.id, ticketId));
+      await maybeSubmitEpicForReview(ticket.epicId);
     } catch (mergeErr) {
-      console.warn(`[tickets] Merge to lfg-agent failed during push:`, mergeErr);
+      console.warn(`[tickets] Merge to ${anchorBranch} failed during push:`, mergeErr);
     }
 
     return c.json({ sha, branch: featureBranch, mergeStatus });

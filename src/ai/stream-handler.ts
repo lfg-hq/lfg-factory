@@ -2,6 +2,7 @@ import { streamText, stepCountIs, generateText } from "ai";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { db } from "../config/db.ts";
+import { getChatAccess } from "../services/chat-access.ts";
 import { messages, conversations, modelSelections, agentRoles, chatFiles } from "../db/schema/chat.ts";
 import { llmApiKeys } from "../db/schema/users.ts";
 import { projects } from "../db/schema/projects.ts";
@@ -300,12 +301,30 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
 
   // ── 1. Resolve or create conversation ───────────────────────────────────────
   let convId = req.conversationId;
+  // Whether this turn is an owner/admin continuing SOMEONE ELSE's shared chat.
+  // Their messages get attributed so the transcript doesn't silently mix voices.
+  let writingAsGuest = false;
   if (convId) {
     // Verify the conversation actually exists — stale URLs can reference deleted conversations
     const [existing] = await db.select({ id: conversations.id }).from(conversations).where(eq(conversations.id, convId)).limit(1);
     if (!existing) {
       console.log(`[stream] Conversation ${convId} not found in DB, creating new one`);
       convId = undefined;
+    } else {
+      // Existence is NOT permission. Without this, any caller holding a conversation
+      // id could post into it — including across projects they aren't a member of.
+      const access = await getChatAccess(convId, userId);
+      if (!access.canWrite) {
+        console.warn(`[stream] user ${userId} denied write on conversation ${convId}`);
+        ws.send(JSON.stringify({
+          type: "error",
+          error: access.canRead
+            ? "This chat belongs to a teammate. You can read it, but only its author (or a project admin) can continue it."
+            : "You don't have access to this conversation.",
+        }));
+        return { conversationId: convId };
+      }
+      writingAsGuest = access.actingAsGuest;
     }
   }
   if (!convId) {
@@ -333,6 +352,8 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
     conversationId: convId,
     role: "user",
     content: userMessage,
+    // Only stamped when someone OTHER than the conversation's author wrote it.
+    authorId: writingAsGuest ? userId : null,
   }).returning({ id: messages.id });
 
   // ── 3. Load recent history ───────────────────────────────────────────────────
@@ -621,7 +642,7 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
   } else if (instantMode) {
     systemPrompt = getInstantSystemPrompt();
   } else {
-    systemPrompt = getProductSystemPrompt({ userId, projectId: internalProjectId, projectFlags });
+    systemPrompt = getProductSystemPrompt({ userId, projectId: internalProjectId, conversationId: convId, projectFlags });
   }
 
   // ── 6. Stream with AI SDK ────────────────────────────────────────────────────

@@ -121,14 +121,17 @@ previewApi.get("/:projectId/preview/build-settings", async (c) => {
   const user = c.get("user");
   const access = await getProjectAccess(c.req.param("projectId")!, user.id);
   if (!access) return c.json({ error: "Project not found" }, 404);
-  const p = access.project as { ticketBuildIsolation?: string; previewBranchMode?: string; dbMode?: string; shareGitAccess?: boolean };
+  const p = access.project as { ticketBuildIsolation?: string; previewBranchMode?: string; dbMode?: string; shareGitAccess?: boolean; shareChatHistory?: boolean };
   return c.json({
     ticketBuildIsolation: p.ticketBuildIsolation ?? "isolated",
     previewBranchMode: p.previewBranchMode ?? "worktree",
     dbMode: p.dbMode ?? "auto",
     shareGitAccess: !!p.shareGitAccess,
-    // Only the owner may toggle credential sharing (it lends out THEIR Git token).
+    shareChatHistory: !!p.shareChatHistory,
+    // Only the owner may toggle credential sharing (it lends out THEIR Git token)
+    // or chat visibility (it exposes every member's transcripts).
     canShareGit: access.role === "owner",
+    canShareChat: access.role === "owner",
   });
 });
 
@@ -145,6 +148,12 @@ previewApi.post("/:projectId/preview/build-settings", async (c) => {
   if (typeof body.shareGitAccess === "boolean") {
     if (access.role !== "owner") return c.json({ error: "Only the project owner can change Git access sharing." }, 403);
     patch.shareGitAccess = body.shareGitAccess;
+  }
+  // Chat visibility exposes EVERY member's transcripts to every other member —
+  // owner-only, and off unless deliberately turned on.
+  if (typeof body.shareChatHistory === "boolean") {
+    if (access.role !== "owner") return c.json({ error: "Only the project owner can change chat visibility." }, 403);
+    patch.shareChatHistory = body.shareChatHistory;
   }
   if (!Object.keys(patch).length) return c.json({ error: "Nothing valid to update" }, 400);
   patch.updatedAt = new Date();

@@ -8,6 +8,13 @@
 
 import { execOnWorkspace } from "./mags.ts";
 
+/**
+ * The pre-epic global anchor. Every ticket used to branch off it and merge back
+ * into it, which is why unapproved work leaked between features. Kept only so
+ * tickets created before epics existed keep working.
+ */
+export const LEGACY_ANCHOR_BRANCH = "lfg-agent";
+
 export interface GitSetupOptions {
   workspaceId: string;
   repoUrl: string;         // HTTPS with token embedded, or SSH URL
@@ -324,21 +331,36 @@ echo "COMMIT_SHA:$SHA"
   return { sha: shaMatch[1]!, branch: featureBranch };
 }
 
-// ── Merge feature → lfg-agent (direct push, no PR) ──────────────────
+// ── Merge feature → anchor branch (direct push, no PR) ──────────────
 
 /**
- * Merge a feature branch into lfg-agent and push.
+ * Merge a feature branch into its ANCHOR branch and push.
  * Runs on the VM via exec. No GitHub API / PR involved.
+ *
+ * The anchor is the ticket's EPIC branch (`epic/<key>-<slug>`) so a ticket's code
+ * only cascades to the other tickets in the same delivery unit. It falls back to
+ * the legacy global `lfg-agent` for tickets created before epics existed — those
+ * still share one anchor, which is exactly the leakage epics were introduced to
+ * stop, so don't route new work through the fallback.
+ *
+ * `baseBranch` is what the anchor is created FROM if it doesn't exist yet
+ * (an epic branch is materialized lazily on its first ticket merge).
  */
-export async function mergeToLfgAgent(opts: {
+export async function mergeToAnchor(opts: {
   workspaceId: string;
   projectDir: string;
   featureBranch: string;
   repoUrl: string;
   githubToken: string;
   tokenUser?: string;
-}): Promise<{ sha: string }> {
+  /** Anchor to merge into. Defaults to the legacy global anchor. */
+  targetBranch?: string;
+  /** Branch the anchor is cut from when it doesn't exist yet. */
+  baseBranch?: string;
+}): Promise<{ sha: string; files: string[] }> {
   const { workspaceId, projectDir, featureBranch, repoUrl, githubToken } = opts;
+  const targetBranch = opts.targetBranch || LEGACY_ANCHOR_BRANCH;
+  const baseBranch = opts.baseBranch || "main";
   const tokenUser = opts.tokenUser ?? "x-access-token";
   const authUrl = repoUrl.replace("https://", `https://${tokenUser}:${githubToken}@`);
 
@@ -356,25 +378,31 @@ git remote set-url origin "${authUrl}" 2>/dev/null || true
 # Fetch latest
 git fetch origin
 
-# Checkout lfg-agent (create from main if doesn't exist)
-if git rev-parse --verify origin/lfg-agent 2>/dev/null; then
-  git checkout lfg-agent 2>/dev/null || git checkout -b lfg-agent origin/lfg-agent
-  git reset --hard origin/lfg-agent
+# Checkout the anchor (create it from the base branch if it doesn't exist yet)
+if git rev-parse --verify origin/${targetBranch} 2>/dev/null; then
+  git checkout ${targetBranch} 2>/dev/null || git checkout -b ${targetBranch} origin/${targetBranch}
+  git reset --hard origin/${targetBranch}
 else
-  git checkout main 2>/dev/null || git checkout -b main
-  git checkout -b lfg-agent
+  git checkout ${baseBranch} 2>/dev/null || git checkout -b ${baseBranch}
+  git checkout -b ${targetBranch}
 fi
 
-# Merge feature branch into lfg-agent
-git merge ${featureBranch} -m "Merge ${featureBranch} into lfg-agent"
+# What this ticket actually changed, relative to the anchor. Recorded on the epic
+# so a later epic touching the same files can be spotted without asking anyone.
+echo "CHANGED_FILES_START"
+git diff --name-only HEAD...${featureBranch} 2>/dev/null || true
+echo "CHANGED_FILES_END"
 
-# Push lfg-agent
-git push origin lfg-agent 2>&1
+# Merge feature branch into the anchor
+git merge ${featureBranch} -m "Merge ${featureBranch} into ${targetBranch}"
+
+# Push the anchor
+git push origin ${targetBranch} 2>&1
 
 # Switch back to feature branch
 git checkout ${featureBranch} 2>/dev/null || true
 
-SHA=$(git rev-parse lfg-agent)
+SHA=$(git rev-parse ${targetBranch})
 echo "MERGE_SHA:$SHA"
 `;
 
@@ -385,11 +413,20 @@ echo "MERGE_SHA:$SHA"
 
   const shaMatch = result.output.match(/MERGE_SHA:([a-f0-9]{40})/);
   if (!shaMatch) {
-    throw new Error(`Merge to lfg-agent failed:\n${result.output}`);
+    throw new Error(`Merge to ${targetBranch} failed:\n${result.output}`);
   }
 
-  return { sha: shaMatch[1]! };
+  const block = result.output.match(/CHANGED_FILES_START\n([\s\S]*?)CHANGED_FILES_END/);
+  const files = (block?.[1] ?? "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith("+") && !l.includes(" "));
+
+  return { sha: shaMatch[1]!, files };
 }
+
+/** @deprecated Use {@link mergeToAnchor} with an explicit `targetBranch`. */
+export const mergeToLfgAgent = mergeToAnchor;
 
 // ── GitHub API Merge ──────────────────────────────────────────────────
 
@@ -647,6 +684,110 @@ echo CLONE_OK
   const ok = result.output.includes("CLONE_OK");
   console.log(`[git] cloneRepo ${ok ? "OK" : "FAILED"} (exit=${result.exitCode}); tail: ${result.output.slice(-300)}`);
   return ok;
+}
+
+// ── Remote branch refs (no VM needed) ────────────────────────────────
+
+export type RepoProvider = "github" | "gitlab";
+
+interface RemoteRefOptions {
+  provider: RepoProvider;
+  owner: string;
+  repo: string;
+  token: string;
+}
+
+function glProjectPath(owner: string, repo: string): string {
+  return encodeURIComponent(`${owner}/${repo}`);
+}
+
+/**
+ * Resolve a branch's current head SHA over the provider's REST API.
+ * Returns null when the branch doesn't exist (404) — callers treat that as
+ * "nothing to pin yet" rather than an error.
+ */
+export async function getRemoteBranchSha(
+  opts: RemoteRefOptions & { branch: string }
+): Promise<string | null> {
+  const { provider, owner, repo, token, branch } = opts;
+  try {
+    if (provider === "gitlab") {
+      const resp = await fetch(
+        `https://gitlab.com/api/v4/projects/${glProjectPath(owner, repo)}/repository/branches/${encodeURIComponent(branch)}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (!resp.ok) return null;
+      const data = await resp.json() as { commit?: { id?: string } };
+      return data.commit?.id ?? null;
+    }
+    const resp = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/git/ref/heads/${branch}`,
+      { headers: ghHeaders(token) }
+    );
+    if (!resp.ok) return null;
+    const data = await resp.json() as { object?: { sha?: string } };
+    return data.object?.sha ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** The repo's default branch ("main", "master", …). Falls back to "main". */
+export async function getDefaultBranch(opts: RemoteRefOptions): Promise<string> {
+  const { provider, owner, repo, token } = opts;
+  try {
+    if (provider === "gitlab") {
+      const resp = await fetch(
+        `https://gitlab.com/api/v4/projects/${glProjectPath(owner, repo)}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (!resp.ok) return "main";
+      const data = await resp.json() as { default_branch?: string };
+      return data.default_branch || "main";
+    }
+    const resp = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+      headers: ghHeaders(token),
+    });
+    if (!resp.ok) return "main";
+    const data = await resp.json() as { default_branch?: string };
+    return data.default_branch || "main";
+  } catch {
+    return "main";
+  }
+}
+
+/**
+ * Create a branch at `fromSha` over the REST API. Idempotent: if the branch
+ * already exists this resolves to its existing head instead of failing, so a
+ * retried epic kickoff never blows up.
+ */
+export async function createRemoteBranch(
+  opts: RemoteRefOptions & { branch: string; fromSha: string }
+): Promise<{ sha: string; created: boolean }> {
+  const { provider, owner, repo, token, branch, fromSha } = opts;
+
+  const existing = await getRemoteBranchSha({ provider, owner, repo, token, branch });
+  if (existing) return { sha: existing, created: false };
+
+  if (provider === "gitlab") {
+    const resp = await fetch(
+      `https://gitlab.com/api/v4/projects/${glProjectPath(owner, repo)}/repository/branches` +
+        `?branch=${encodeURIComponent(branch)}&ref=${encodeURIComponent(fromSha)}`,
+      { method: "POST", headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!resp.ok) throw new Error(`Failed to create branch ${branch}: ${await resp.text()}`);
+    const data = await resp.json() as { commit?: { id?: string } };
+    return { sha: data.commit?.id ?? fromSha, created: true };
+  }
+
+  const resp = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/refs`, {
+    method: "POST",
+    headers: ghHeaders(token),
+    body: JSON.stringify({ ref: `refs/heads/${branch}`, sha: fromSha }),
+  });
+  if (!resp.ok) throw new Error(`Failed to create branch ${branch}: ${await resp.text()}`);
+  const data = await resp.json() as { object?: { sha?: string } };
+  return { sha: data.object?.sha ?? fromSha, created: true };
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────

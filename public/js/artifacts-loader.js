@@ -2733,6 +2733,10 @@ document.addEventListener('DOMContentLoaded', function() {
                                                     <option value="current">This Chat Only</option>
                                                 </select>
                                                 ` : ''}
+                                                <select id="group-by-filter" class="checklist-filter-dropdown" title="Group tickets by">
+                                                    <option value="date">Group by date</option>
+                                                    <option value="epic">Group by epic</option>
+                                                </select>
                                                 <button id="clear-checklist-filters" class="clear-filters-btn" title="Clear filters">
                                                     <i class="fas fa-times"></i>
                                                 </button>
@@ -2777,6 +2781,11 @@ document.addEventListener('DOMContentLoaded', function() {
                                                 onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='none';">
                                             <i class="fas fa-play"></i> Queue for Build
                                         </button>
+                                        <button id="epic-selected-btn" class="action-bar-btn" style="display: flex; align-items: center; gap: 6px; padding: 8px 16px; background: ${isLightTheme ? '#ede9fe' : '#2e2a3e'}; color: ${isLightTheme ? '#7c3aed' : '#c4b5fd'}; border: 1px solid ${isLightTheme ? '#ddd6fe' : '#413a5c'}; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; transition: all 0.2s ease;"
+                                                onmouseover="this.style.background='${isLightTheme ? '#ddd6fe' : '#3a3450'}';"
+                                                onmouseout="this.style.background='${isLightTheme ? '#ede9fe' : '#2e2a3e'}';">
+                                            <i class="fas fa-layer-group"></i> Move to Epic
+                                        </button>
                                         <button id="delete-selected-btn" class="action-bar-btn" style="display: flex; align-items: center; gap: 6px; padding: 8px 16px; background: ${isLightTheme ? '#fee2e2' : '#3d2a2a'}; color: ${isLightTheme ? '#dc2626' : '#f38ba8'}; border: 1px solid ${isLightTheme ? '#fecaca' : '#5c3a3a'}; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; transition: all 0.2s ease;"
                                                 onmouseover="this.style.background='${isLightTheme ? '#fecaca' : '#4d3a3a'}';"
                                                 onmouseout="this.style.background='${isLightTheme ? '#fee2e2' : '#3d2a2a'}';">
@@ -2805,6 +2814,12 @@ document.addEventListener('DOMContentLoaded', function() {
                     const fileFilter = document.getElementById('file-filter');
                     const conversationFilter = document.getElementById('conversation-filter');
                     const clearFiltersBtn = document.getElementById('clear-checklist-filters');
+                    const groupByFilter = document.getElementById('group-by-filter');
+                    // Grouping choice sticks per project — you pick "by epic" once and
+                    // the board keeps showing delivery units on every visit.
+                    const groupByKey = 'lfgTicketGroupBy:' + projectId;
+                    window.__lfgTicketGroupBy = localStorage.getItem(groupByKey) || 'date';
+                    if (groupByFilter) groupByFilter.value = window.__lfgTicketGroupBy;
 
                     const deleteChecklistItem = (item) => {
                         if (!item) {
@@ -2934,15 +2949,43 @@ document.addEventListener('DOMContentLoaded', function() {
                             if (/(block|fail)/.test(s)) return '#ef4444';
                             return isLightTheme ? '#cbd0d8' : '#5b6472';
                         };
-                        const lfgSorted = [...filteredChecklist].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+                        // Group by DATE (when the ticket appeared) or by EPIC (which
+                        // delivery unit it belongs to). Epic grouping is what makes a
+                        // feature reviewable as one thing instead of a date smear.
+                        const lfgGroupBy = window.__lfgTicketGroupBy || 'date';
+                        const lfgEpicLabel = (it) =>
+                            it.epic_name ? (it.epic_key ? it.epic_key + ' · ' + it.epic_name : it.epic_name)
+                                         : 'No epic';
+                        const lfgKeyOf = (it) => lfgGroupBy === 'epic' ? lfgEpicLabel(it) : lfgBucket(it.created_at);
+
+                        const lfgSorted = [...filteredChecklist].sort((a, b) => {
+                            if (lfgGroupBy === 'epic') {
+                                const ae = lfgEpicLabel(a), be = lfgEpicLabel(b);
+                                // Ungrouped tickets sink to the bottom — they're the
+                                // backlog of work still to be folded into an epic.
+                                if (ae !== be) {
+                                    if (ae === 'No epic') return 1;
+                                    if (be === 'No epic') return -1;
+                                    return ae.localeCompare(be);
+                                }
+                                // Within an epic, build order is the meaningful order.
+                                return new Date(a.created_at) - new Date(b.created_at);
+                            }
+                            return new Date(b.created_at) - new Date(a.created_at);
+                        });
                         const lfgCounts = {};
-                        lfgSorted.forEach(it => { const bk = lfgBucket(it.created_at); lfgCounts[bk] = (lfgCounts[bk] || 0) + 1; });
+                        lfgSorted.forEach(it => { const bk = lfgKeyOf(it); lfgCounts[bk] = (lfgCounts[bk] || 0) + 1; });
                         let itemsHTML = '';
                         let lfgCurBucket = null;
 
                         lfgSorted.forEach(item => {
-                            const bk = lfgBucket(item.created_at);
-                            if (bk !== lfgCurBucket) { lfgCurBucket = bk; itemsHTML += `<div class="lfg-date-group">${bk}<span class="lfg-date-count">${lfgCounts[bk]}</span></div>`; }
+                            const bk = lfgKeyOf(item);
+                            if (bk !== lfgCurBucket) {
+                                lfgCurBucket = bk;
+                                const st = (lfgGroupBy === 'epic' && item.epic_status)
+                                    ? `<span class="lfg-epic-state lfg-epic-${item.epic_status}">${item.epic_status.replace('_', ' ')}</span>` : '';
+                                itemsHTML += `<div class="lfg-date-group">${modalHelpers.escapeHtml(bk)}${st}<span class="lfg-date-count">${lfgCounts[bk]}</span></div>`;
+                            }
                             const statusClass = item.status ? item.status.toLowerCase().replace(' ', '-') : 'open';
                             const priorityClass = item.priority ? item.priority.toLowerCase() : 'medium';
                             
@@ -3184,6 +3227,76 @@ document.addEventListener('DOMContentLoaded', function() {
                         }
 
                         // Queue selected button
+                        // ── Move selected tickets into an epic ──────────────────
+                        // Grouping is retroactive; git is not. Tickets already merged
+                        // under the old global anchor keep the branch they were built
+                        // on, so a NEW epic for them is cut from that anchor — otherwise
+                        // its branch wouldn't contain their code.
+                        const epicSelectedBtn = document.getElementById('epic-selected-btn');
+                        if (epicSelectedBtn) {
+                            epicSelectedBtn.addEventListener('click', async function() {
+                                const selectedIds = Array.from(checklistContent.querySelectorAll('.ticket-select-checkbox:checked'))
+                                    .map(cb => cb.getAttribute('data-ticket-id'))
+                                    .filter(Boolean);
+
+                                if (selectedIds.length === 0) {
+                                    window.showToast('No tickets selected', 'warning');
+                                    return;
+                                }
+
+                                let existing = [];
+                                try {
+                                    const r = await fetch(`/api/projects/${projectId}/epics`);
+                                    const d = await r.json();
+                                    existing = (d && d.epics) || [];
+                                } catch (e) { /* offer creation anyway */ }
+
+                                const options = existing
+                                    .map((e, i) => `${i + 1}. ${e.epicKey || ''} ${e.name} (${e.status})`)
+                                    .join('\n');
+                                const answer = prompt(
+                                    `Move ${selectedIds.length} ticket(s) into an epic.\n\n` +
+                                    (options ? `Existing epics:\n${options}\n\nEnter a number to use one, ` : '') +
+                                    `or type a NEW epic name:`,
+                                    ''
+                                );
+                                if (answer === null || !answer.trim()) return;
+
+                                const pick = parseInt(answer.trim(), 10);
+                                const chosen = (!isNaN(pick) && pick >= 1 && pick <= existing.length)
+                                    ? existing[pick - 1] : null;
+
+                                try {
+                                    let res;
+                                    if (chosen) {
+                                        res = await fetch(`/api/epics/${chosen.id}/tickets`, {
+                                            method: 'POST',
+                                            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
+                                            body: JSON.stringify({ ticketIds: selectedIds })
+                                        });
+                                    } else {
+                                        // A brand-new epic around existing work: adopt the
+                                        // anchor so already-built code lives inside it.
+                                        res = await fetch(`/api/projects/${projectId}/epics/adopt`, {
+                                            method: 'POST',
+                                            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
+                                            body: JSON.stringify({ name: answer.trim(), ticketIds: selectedIds, adoptFrom: 'anchor' })
+                                        });
+                                    }
+                                    const data = await res.json();
+                                    if (!res.ok || data.error) {
+                                        window.showToast(data.error || 'Could not move tickets', 'error');
+                                        return;
+                                    }
+                                    const label = chosen ? (chosen.name) : answer.trim();
+                                    window.showToast(`${data.moved || selectedIds.length} ticket(s) moved into "${label}"`, 'success');
+                                    ArtifactsLoader.loadChecklist(projectId);
+                                } catch (e) {
+                                    window.showToast('Could not move tickets', 'error');
+                                }
+                            });
+                        }
+
                         const queueSelectedBtn = document.getElementById('queue-selected-btn');
                         if (queueSelectedBtn) {
                             queueSelectedBtn.addEventListener('click', function() {
@@ -3470,11 +3583,20 @@ document.addEventListener('DOMContentLoaded', function() {
                         conversationFilter.addEventListener('change', applyAllFilters);
                     }
 
+                    if (groupByFilter) {
+                        groupByFilter.addEventListener('change', function() {
+                            window.__lfgTicketGroupBy = this.value;
+                            try { localStorage.setItem(groupByKey, this.value); } catch (e) {}
+                            applyAllFilters();
+                        });
+                    }
+
                     clearFiltersBtn.addEventListener('click', function() {
                         statusFilter.value = 'all';
                         roleFilter.value = 'all';
                         if (fileFilter) fileFilter.value = 'all';
                         if (conversationFilter) conversationFilter.value = 'all';
+                        // Grouping is a view preference, not a filter — Clear leaves it alone.
                         renderChecklist();
                     });
                     

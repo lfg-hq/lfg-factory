@@ -47,6 +47,10 @@ export const projectTickets = sqliteTable(
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
     ticketKey: text("ticket_key"), // e.g. "PRO-1", "TES-42" — unique per project
+    // The epic (delivery unit) this ticket belongs to. Decides which branch the
+    // ticket is cut from and merged back into. NULL = legacy/loose ticket, which
+    // falls back to the old global `lfg-agent` anchor.
+    epicId: text("epic_id"),
     name: text("name").notNull(),
     status: text("status").notNull().default("open"), // open | in_progress | review | done | failed | blocked | archived
     stageId: text("stage_id").references(() => ticketStages.id, {
@@ -118,6 +122,7 @@ export const projectTickets = sqliteTable(
   },
   (t) => [
     index("pt_project_idx").on(t.projectId),
+    index("pt_epic_idx").on(t.epicId),
     index("pt_stage_idx").on(t.stageId),
     index("pt_conv_idx").on(t.conversationId),
     uniqueIndex("pt_project_key_unique").on(t.projectId, t.ticketKey),

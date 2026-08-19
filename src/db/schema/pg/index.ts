@@ -27,3 +27,5 @@ export * from "./project-databases.ts";
 export * from "./project-environments.ts";
 
 export * from "./app-profile.ts";
+
+export * from "./epics.ts";

@@ -46,6 +46,11 @@ export const projectTickets = pgTable(
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
     ticketKey: text("ticket_key"),
+    // The epic (delivery unit) this ticket belongs to. Decides which branch the
+    // ticket is cut from and merged back into. NULL = legacy/loose ticket, which
+    // falls back to the old global `lfg-agent` anchor. Plain text (not an FK) to
+    // match the existing style of assigneeId / sourceDocumentId in this table.
+    epicId: text("epic_id"),
     name: text("name").notNull(),
     status: text("status").notNull().default("open"),
     stageId: text("stage_id").references(() => ticketStages.id, { onDelete: "set null" }),
@@ -90,6 +95,7 @@ export const projectTickets = pgTable(
   },
   (t) => [
     index("pt_project_idx").on(t.projectId),
+    index("pt_epic_idx").on(t.epicId),
     index("pt_stage_idx").on(t.stageId),
     index("pt_conv_idx").on(t.conversationId),
     uniqueIndex("pt_project_key_unique").on(t.projectId, t.ticketKey),

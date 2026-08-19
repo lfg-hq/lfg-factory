@@ -24,6 +24,7 @@ import { getProjectActivities } from "../services/activity-log.ts";
 import { ProjectListPage } from "../templates/pages/project-list.tsx";
 import { ProjectDetailPage } from "../templates/pages/project-detail.tsx";
 import { TicketsListPage } from "../templates/pages/tickets-list.tsx";
+import { epics } from "../db/schema/epics.ts";
 import { getProjectAccess, requirePermission, PermissionError } from "../auth/project-access.ts";
 import type { auth } from "../auth/index.ts";
 
@@ -693,12 +694,15 @@ projectsRouter.get("/projects/:projectId/api/checklist", async (c) => {
   if (!access) return c.json({ tickets: [] });
   const project = access.project;
 
-  const [stageRows, ticketRows] = await Promise.all([
+  const [stageRows, ticketRows, epicRows] = await Promise.all([
     db.select().from(ticketStages).where(eq(ticketStages.projectId, project.id)).orderBy(asc(ticketStages.order)),
     db.select().from(projectTickets).where(eq(projectTickets.projectId, project.id)).orderBy(asc(projectTickets.createdAt)),
+    db.select().from(epics).where(eq(epics.projectId, project.id)),
   ]);
 
   const stageMap = Object.fromEntries(stageRows.map((s) => [s.id, s.name]));
+  // Epic per ticket, so the list can group by delivery unit instead of by date.
+  const epicMap = Object.fromEntries(epicRows.map((e) => [e.id, e]));
 
   // Attachments (screenshots the AI attached to a ticket) — grouped by ticket for rendering.
   const ticketIds = ticketRows.map((t) => t.id);
@@ -710,7 +714,9 @@ projectsRouter.get("/projects/:projectId/api/checklist", async (c) => {
     (attByTicket[a.ticketId] ||= []).push({ url: a.filePath, name: a.originalFilename ?? "attachment", type: a.fileType ?? "" });
   }
 
-  const tickets = ticketRows.map((t) => ({
+  const tickets = ticketRows.map((t) => {
+    const epic = t.epicId ? epicMap[t.epicId] : null;
+    return {
     id: t.id,
     ticket_key: t.ticketKey,
     name: t.name,
@@ -724,7 +730,13 @@ projectsRouter.get("/projects/:projectId/api/checklist", async (c) => {
     created_at: t.createdAt,
     updated_at: t.updatedAt,
     attachments: attByTicket[t.id] ?? [],
-  }));
+    conversation_id: t.conversationId ?? null,
+    epic_id: t.epicId ?? null,
+    epic_key: epic?.epicKey ?? null,
+    epic_name: epic?.name ?? null,
+    epic_status: epic?.status ?? null,
+    };
+  });
 
   return c.json({ tickets });
 });

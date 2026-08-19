@@ -1054,3 +1054,21 @@
     background: rgba(124, 58, 237, 0.1);
     color: #7c3aed;
 }
+
+/* A teammate's conversation, listed only when the project shares chat history.
+   Read-only: no delete affordance, and the author's name sits where the delete
+   button would be so it's obvious whose chat you're opening. */
+.conversation-item.conversation-shared .conversation-title { opacity: 0.85; }
+.conversation-author {
+  flex: none;
+  font-size: 0.6875rem;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary, rgba(127, 127, 127, 0.12));
+  white-space: nowrap;
+  max-width: 5.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

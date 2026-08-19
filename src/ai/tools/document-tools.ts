@@ -19,7 +19,10 @@ export const streamDocumentContent = tool({
   description:
     "Write any document (PRD, implementation plan, spec, roadmap, etc.) and stream it live to the user's right panel. " +
     "Use fileType='prd' for product requirements, 'implementation' for technical plans, or any descriptive type. " +
-    "If a file with the same name+type already exists it will be updated in-place.",
+    "If a file with the same name+type already exists it will be updated in-place. " +
+    "Pass `epicId` when the doc describes work that is still being built and NOT yet " +
+    "approved — it then belongs to that epic and only folds into the project's master " +
+    "doc when the client approves. Omit it only for genuinely project-wide docs.",
   inputSchema: zodSchema(
     z.object({
       projectId: z.string(),
@@ -29,17 +32,23 @@ export const streamDocumentContent = tool({
         .string()
         .describe("Document type: prd | implementation | tech_analysis | design_language | spec | roadmap | design | research | other"),
       content: z.string().describe("Full document content in Markdown — written once, streamed live to the user"),
+      epicId: z.string().optional().describe(
+        "The epic this doc belongs to (from createEpic). Scopes the doc to that delivery " +
+        "unit so an unapproved spec never leaks into the master doc the client reads."
+      ),
     })
   ),
-  execute: async ({ projectId, userId, name, fileType, content }) => {
+  execute: async ({ projectId, userId, name, fileType, content, epicId }) => {
     const { s3Key, dbContent } = await saveContent(projectId, fileType, name, content);
+    // "" = project-level master doc. See the epicId column comment in the schema.
+    const scope = epicId ?? "";
 
-    // Upsert: insert or update if (projectId, name, fileType) already exists
+    // Upsert: insert or update if (projectId, epicId, name, fileType) already exists
     const [file] = await db
       .insert(projectFiles)
-      .values({ projectId, name, fileType, content: dbContent, s3Key })
+      .values({ projectId, epicId: scope, name, fileType, content: dbContent, s3Key })
       .onConflictDoUpdate({
-        target: [projectFiles.projectId, projectFiles.name, projectFiles.fileType],
+        target: [projectFiles.projectId, projectFiles.epicId, projectFiles.name, projectFiles.fileType],
         set: { content: dbContent, s3Key, updatedAt: new Date() },
       })
       .returning();

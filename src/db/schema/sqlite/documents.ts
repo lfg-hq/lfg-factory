@@ -20,6 +20,13 @@ export const projectFiles = sqliteTable(
     projectId: text("project_id")
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
+    // Which epic owns this doc. "" (the default) = a project-level MASTER doc —
+    // the ratified spec the client reads. A non-empty value scopes the doc to an
+    // epic: its scope/tech-analysis draft, which is only folded into the master
+    // doc when the epic is APPROVED. Docs merge when code merges, so the master
+    // PRD never describes unapproved work. See ../pg/documents.ts for why this is
+    // NOT NULL with an "" sentinel rather than nullable.
+    epicId: text("epic_id").notNull().default(""),
     name: text("name").notNull(),
     fileType: text("file_type").notNull(), // prd | implementation | design | test | other
     content: text("content"),
@@ -29,12 +36,14 @@ export const projectFiles = sqliteTable(
     updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
   },
   (t) => [
-    uniqueIndex("pf_project_name_type_unique").on(
+    uniqueIndex("pf_project_epic_name_type_unique").on(
       t.projectId,
+      t.epicId,
       t.name,
       t.fileType
     ),
     index("pf_project_type_idx").on(t.projectId, t.fileType),
+    index("pf_epic_idx").on(t.epicId),
   ]
 );
 

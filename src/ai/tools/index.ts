@@ -26,6 +26,8 @@ export {
   setTicketWsBroadcast,
 } from "./ticket-tools.ts";
 
+export { startEpic, checkEpicOverlap, getEpicStatus } from "./epic-tools.ts";
+
 export { getProjectEnvVars, registerRequiredEnvVars, setEnvVar, provisionPostgresDb } from "./env-tools.ts";
 
 export {
@@ -52,12 +54,16 @@ import {
   updateTicket, updateTicketDetails, updateAllTickets,
   getNextTicket, scheduleTickets, retryTicket, sendTicketMessage, queueTicketExecution,
 } from "./ticket-tools.ts";
+import { startEpic, checkEpicOverlap, getEpicStatus } from "./epic-tools.ts";
 import { getProjectEnvVars, registerRequiredEnvVars, setEnvVar } from "./env-tools.ts";
 import { broadcastToUser, askUser, confirmAction, lookupTechnologySpecs } from "./misc-tools.ts";
 import { queryCodebase } from "./codebase-tools.ts";
 import { getRecentActivities } from "./activity-tools.ts";
 
 export const toolsProduct = {
+  startEpic,
+  checkEpicOverlap,
+  getEpicStatus,
   getProjectDashboard,
   setProjectStack,
   captureProjectName,

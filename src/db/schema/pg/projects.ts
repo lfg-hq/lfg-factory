@@ -41,6 +41,7 @@ export const projects = pgTable(
     linearProjectId: text("linear_project_id"),
     linearSyncEnabled: boolean("linear_sync_enabled").notNull().default(false),
     ticketCounter: integer("ticket_counter").notNull().default(0),
+    epicCounter: integer("epic_counter").notNull().default(0),
     previewTicketId: text("preview_ticket_id"),
     // How ticket builds run: "isolated" = a fresh throwaway pi VM per ticket
     // (build → commit → push → destroy; the preview VM stays clean), "shared" =
@@ -62,6 +63,13 @@ export const projects = pgTable(
     // (default): each collaborator acts with their OWN connected Git; the owner's
     // credentials are NEVER used for a collaborator without this explicit opt-in.
     shareGitAccess: boolean("share_git_access").notNull().default(false),
+    // Chat visibility across collaborators. OFF (default): each member sees ONLY
+    // their own conversations in this project — a client's chat with the analyst
+    // is private to them, and the owner cannot read it. ON: every active member
+    // can list and open every member's project conversations, each labelled with
+    // its author. Opt-in, because chat transcripts carry candid product thinking
+    // that people don't expect to be shared by default.
+    shareChatHistory: boolean("share_chat_history").notNull().default(false),
     createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),
     updatedAt: timestamp("updated_at", { mode: "date" }).notNull().default(sql`now()`),
   },

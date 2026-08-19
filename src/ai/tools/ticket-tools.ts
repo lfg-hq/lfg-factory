@@ -12,6 +12,7 @@ import { projects } from "../../db/schema/projects.ts";
 import { chatFiles } from "../../db/schema/chat.ts";
 import { eq, and, inArray } from "drizzle-orm";
 import { nextTicketKey } from "../../utils/ticket-keys.ts";
+import { createEpic, getEpic } from "../../services/epics.ts";
 import {
   emitTicketCreated,
   emitTicketUpdated,
@@ -30,6 +31,19 @@ export const createTickets = tool({
   inputSchema: zodSchema(z.object({
     projectId: z.string(),
     userId: z.string().describe("User ID for real-time ticket streaming"),
+    epicId: z.string().optional().describe(
+      "The epic (delivery unit) these tickets belong to — from startEpic. ALWAYS pass this. " +
+      "It decides which branch the tickets are cut from and merged into, keeps the whole " +
+      "feature reviewable as one unit, and stops unapproved work leaking into the next " +
+      "feature. If you didn't open an epic, pass `epicName` instead and one is created."
+    ),
+    epicName: z.string().optional().describe(
+      "Fallback when no epicId: the feature name to open an epic under, e.g. 'Billing rework'."
+    ),
+    conversationId: z.string().optional().describe(
+      "The conversation these tickets were created in — use the conversationId given to you. " +
+      "It's what makes the ticket list's 'This Chat Only' filter work, so always pass it."
+    ),
     tickets: z.array(z.object({
       name: z.string().describe("Ticket title"),
       description: z.string().describe(
@@ -56,7 +70,7 @@ export const createTickets = tool({
       ),
     })),
   })),
-  execute: async ({ projectId, userId, tickets }) => {
+  execute: async ({ projectId, userId, epicId, epicName, conversationId, tickets }) => {
     // Fetch all stages for this project so we can validate stageId
     const allStages = await db.select().from(ticketStages)
       .where(eq(ticketStages.projectId, projectId));
@@ -66,6 +80,25 @@ export const createTickets = tool({
     // Get project name for ticket key generation
     const [proj] = await db.select({ name: projects.name }).from(projects).where(eq(projects.id, projectId));
     const projectName = proj?.name ?? "PRJ";
+
+    // Every batch of tickets belongs to exactly one epic. If the model didn't open
+    // one, open it here rather than letting these tickets fall back to the shared
+    // `lfg-agent` anchor — that fallback is the leak epics exist to close.
+    let resolvedEpicId: string | null = null;
+    if (epicId) {
+      const existing = await getEpic(epicId);
+      if (existing) resolvedEpicId = existing.id;
+    }
+    if (!resolvedEpicId) {
+      const name = epicName?.trim() || tickets[0]?.name?.trim() || "Untitled feature";
+      try {
+        const epic = await createEpic({ projectId, name, createdById: userId, conversationId: conversationId ?? null });
+        resolvedEpicId = epic.id;
+        console.log(`[createTickets] opened epic ${epic.epicKey} "${name}" on ${epic.branch}`);
+      } catch (e) {
+        console.warn(`[createTickets] could not open an epic:`, (e as Error).message?.slice(0, 200));
+      }
+    }
 
     const created: { id: string; name: string }[] = [];
 
@@ -78,6 +111,7 @@ export const createTickets = tool({
 
       const [row] = await db.insert(projectTickets).values({
         projectId,
+        epicId: resolvedEpicId,
         ticketKey,
         name: t.name,
         description: t.description,
@@ -86,6 +120,9 @@ export const createTickets = tool({
         complexity: t.complexity,
         stageId: resolvedStageId,
         sourceDocumentId: t.sourceDocumentId ?? null,
+        // Which chat produced this ticket. Without it the ticket list's
+        // "This Chat Only" filter matches nothing, because the column stays null.
+        conversationId: conversationId ?? null,
         notes: t.notes ?? "",
       }).returning();
 
@@ -127,7 +164,7 @@ export const createTickets = tool({
       created.push({ id: row!.id, name: row!.name });
     }
 
-    return { created: created.length, tickets: created };
+    return { created: created.length, tickets: created, epicId: resolvedEpicId };
   },
 });
 

@@ -1315,6 +1315,20 @@ export function ProjectDetailPage({
                 </label>
               </div>
               ` : ""}
+
+              <!-- Chat visibility across collaborators (owner only) -->
+              ${isOwner ? html`
+              <div style="margin-top:1.25rem;padding-top:1.25rem;border-top:1px solid var(--border-color);">
+                <label style="display:flex;align-items:flex-start;gap:0.75rem;cursor:pointer;">
+                  <input type="checkbox" id="share-chat-toggle" onchange="toggleShareChat(this)" style="margin-top:3px;width:16px;height:16px;flex:none;cursor:pointer;" />
+                  <span>
+                    <span style="display:block;font-size:0.875rem;font-weight:600;color:var(--text-color);">Let collaborators see each other's chats</span>
+                    <span style="display:block;font-size:0.8125rem;color:var(--text-secondary);margin-top:2px;line-height:1.45;">When on, every member can open every other member's AI conversations in this project, labelled with who wrote them (read-only — only the author can reply, rename, or delete). Off (default): each person's chat is private to them, including from you.</span>
+                    <span id="share-chat-status" style="display:block;font-size:0.75rem;color:var(--text-secondary);margin-top:5px;"></span>
+                  </span>
+                </label>
+              </div>
+              ` : ""}
             </div>
 
             ${(isOwner || role === "admin") ? html`
@@ -1642,10 +1656,37 @@ export function ProjectDetailPage({
         .catch(function(){ el.disabled = false; el.checked = !el.checked; });
     }
 
+    // Chat visibility across collaborators (owner-only toggle).
+    function setShareChatStatus(on) {
+      var s = document.getElementById("share-chat-status");
+      if (!s) return;
+      s.style.color = "var(--text-secondary)";
+      s.textContent = on ? "On — members can read each other's chats in this project." : "Off — each member's chat is private to them.";
+    }
+    function loadShareChat() {
+      var cb = document.getElementById("share-chat-toggle");
+      if (!cb) return;
+      fetch("/api/projects/" + projectId + "/preview/build-settings")
+        .then(function(r){ return r.json(); })
+        .then(function(d){ if (!d) return; cb.checked = !!d.shareChatHistory; setShareChatStatus(cb.checked); })
+        .catch(function(){});
+    }
+    function toggleShareChat(el) {
+      el.disabled = true;
+      fetch("/api/projects/" + projectId + "/preview/build-settings", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ shareChatHistory: el.checked }) })
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+          el.disabled = false;
+          if (d && d.error) { el.checked = !el.checked; var s = document.getElementById("share-chat-status"); if (s) { s.style.color = "#dc2626"; s.textContent = d.error; } return; }
+          setShareChatStatus(el.checked);
+        })
+        .catch(function(){ el.disabled = false; el.checked = !el.checked; });
+    }
+
     // Load on settings tab
     if ('${activeTab}' === 'settings') {
       loadMembers();
-      if (canManageTeam) { loadInvitations(); loadShareGit(); }
+      if (canManageTeam) { loadInvitations(); loadShareGit(); loadShareChat(); }
     }
   </script>
 

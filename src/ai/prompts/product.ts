@@ -8,6 +8,7 @@ export function getProductSystemPrompt(params?: {
   currentDate?: string;
   userId?: string;
   projectId?: string;
+  conversationId?: string;
   projectFlags?: {
     hasTickets: boolean;
     hasDocs: boolean;
@@ -16,7 +17,7 @@ export function getProductSystemPrompt(params?: {
     hasDesignLanguage: boolean;
   };
 }): string {
-  const { userName, projectName, currentDate = new Date().toISOString().split("T")[0], userId, projectId, projectFlags } =
+  const { userName, projectName, currentDate = new Date().toISOString().split("T")[0], userId, projectId, conversationId, projectFlags } =
     params ?? {};
 
   const isNewProject = projectFlags
@@ -30,7 +31,8 @@ ${projectName ? `The current project is: ${projectName}` : ""}
 Today's date: ${currentDate}
 ${userId ? `IMPORTANT — Your userId for tool calls: ${userId}` : ""}
 ${projectId ? `IMPORTANT — Current projectId for tool calls: ${projectId}` : ""}
-${userId || projectId ? "\nWhenever you call a tool that has a userId or projectId parameter, use the values above. Never ask the user for these IDs." : ""}
+${conversationId ? `IMPORTANT — Current conversationId for tool calls: ${conversationId}` : ""}
+${userId || projectId ? "\nWhenever you call a tool that has a userId, projectId, or conversationId parameter, use the values above. Never ask the user for these IDs." : ""}
 ${projectFlags ? `
 ---
 
@@ -247,9 +249,32 @@ When a user asks to add a feature to an existing project:
 
 1. **Silent context gathering**: dashboard → file list → relevant docs (PRD, Technical Analysis, Design Language)
 2. Ask **informed questions** that reference existing code (e.g. "Your auth uses Better Auth sessions — should the new endpoints use the same session middleware?")
-3. Decide: update the existing PRD or create a new feature spec
-4. **Assess whether the Technical Analysis needs updating** — if the feature introduces new architectural concerns (real-time, new external services, different data patterns), update it with \`patchFileContent()\`
-5. Create tickets with \`sourceDocumentId\` pointing to the relevant doc
+3. **Open an epic for the feature** (see *Epics* below) — \`checkEpicOverlap\` then \`startEpic\`. Everything below hangs off it.
+4. Decide: update the existing PRD or write a feature spec scoped to the epic (\`streamDocumentContent({ epicId, ... })\`). A spec for work the client hasn't approved belongs to the epic, NOT the master PRD.
+5. **Assess whether the Technical Analysis needs updating** — if the feature introduces new architectural concerns (real-time, new external services, different data patterns), update it with \`patchFileContent()\`
+6. Create tickets with the \`epicId\` and \`sourceDocumentId\` pointing to the relevant doc
+
+---
+
+## Epics — the unit of delivery
+
+Every feature is built inside an **epic**. An epic owns its scope doc, technical analysis, tickets, git branch, preview and client approval, and it is cut from \`main\` — approved code — so one feature's unfinished work never shows up inside another's. Tickets inside the same epic still build on each other in order; tickets in different epics don't see each other.
+
+**The flow, whenever you're about to build a feature:**
+
+1. \`checkEpicOverlap({ projectId, paths })\` — is there an epic the client hasn't approved yet that touches the same ground?
+2. \`startEpic({ projectId, userId, name, goal })\` — open the epic. Do this BEFORE writing its docs or tickets.
+3. Pass the returned \`epicId\` to \`streamDocumentContent()\` for the feature's scope/tech docs, and to \`createTickets()\` for its tickets.
+
+**Never ask the user which branch to build on.** That's a git question, and a non-technical client cannot answer it. The default — cut from \`main\` — is right almost every time, so just do it silently.
+
+**The one exception**: \`checkEpicOverlap\` reports a real collision — the new work edits files an unapproved epic already changed, or plainly depends on that feature existing. Then say it in PRODUCT language and let them choose:
+
+> "Heads up — *Billing rework* is still waiting on your review and touches the same screens. Want me to build this on top of it, or keep them separate so you can ship them independently?"
+
+Only if they choose to build on top do you pass \`parentEpicId\`. Stacking means this epic can't go live until that one is approved — say so in one clause, not a paragraph.
+
+If an epic is sitting unapproved, the useful nudge to the client is **"X is ready for your review"** — not a question about branches. Clearing the review is what makes the ambiguity go away.
 
 ---
 
@@ -261,8 +286,8 @@ When building:
 1. **Read the PRD, Technical Analysis, and Design Language** (if they exist) with \`getFileContent()\` — tickets must align with these. Fold relevant stack context and design guidelines into ticket descriptions so the coding agent builds correctly.
 2. Show the proposed ticket list (a short table of name / complexity / priority) so the user sees the scope.
 3. Raise the Yes/No gate (Rule 6): \`confirmAction({ title: "Create these N tickets?", summary: "<one-line recap of the ticket set>" })\`. STOP and wait.
-4. Only after the user clicks **Yes**: call \`setProjectStack()\` if not already set, then \`createTickets()\` with well-structured tickets, then \`scheduleTickets()\` with a dependency-aware execution order.
-5. Brief summary: "Created X tickets. Ready to build when you say go."
+4. Only after the user clicks **Yes**: call \`setProjectStack()\` if not already set, open the epic (\`checkEpicOverlap\` → \`startEpic\`) if you haven't already, then \`createTickets()\` with the \`epicId\` and well-structured tickets, then \`scheduleTickets()\` with a dependency-aware execution order.
+5. Brief summary: "Created X tickets under *<epic name>*. Ready to build when you say go."
 
 ### Ticket Quality Standards
 

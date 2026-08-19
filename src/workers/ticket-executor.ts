@@ -39,7 +39,7 @@ import {
 } from "../services/claude-cli.ts";
 import {
   commitAndPush,
-  mergeToLfgAgent,
+  mergeToAnchor,
   createGitHubRepo,
   initAndPushRepo,
 } from "../services/git.ts";
@@ -53,48 +53,13 @@ import { buildApiBuilderPrompt } from "../ai/prompts/builder-api.ts";
 import { createBuilderTools } from "../ai/tools/builder-tools.ts";
 import { getModel, getProviderName, getProviderModel, DEFAULT_MODEL_KEY, type ProviderName } from "../ai/provider.ts";
 import { modelSelections } from "../db/schema/chat.ts";
-import { getValidGitlabToken } from "../services/gitlab-token.ts";
-
-interface RepoAuth {
-  provider: "github" | "gitlab";
-  owner: string; repo: string;
-  repoUrl: string;   // https, no creds, ends .git
-  authUrl: string;   // https with embedded credential
-  token: string;
-  tokenUser: string; // "x-access-token" (GitHub) | "oauth2" (GitLab)
-}
-
-/**
- * Resolve the project's repo provider + a correctly-authenticated remote URL.
- * Supports BOTH GitHub (x-access-token) and GitLab (oauth2). Provider is inferred
- * from the repo URL host (dual-provider apps), falling back to repoProvider.
- * Returns null if there's no connected repo or no valid token for its provider.
- */
-async function resolveRepoAuth(
-  project: { repoOwner: string | null; repoName: string | null; repoUrl: string | null; repoProvider?: string | null; stack?: string | null },
-  ownerId: string,
-): Promise<RepoAuth | null> {
-  const columnProvider = (project.repoProvider || "github").toLowerCase();
-  let repoUrl = (project.repoUrl || extractRepoUrl(project.stack ?? "") || "").trim();
-  let owner = project.repoOwner ?? "";
-  let repo = project.repoName ?? "";
-  if ((!owner || !repo) && repoUrl) {
-    const m = repoUrl.match(/(?:github|gitlab)\.com[:/]+([^/]+)\/([^/.]+)/i);
-    if (m) { owner = owner || m[1]!; repo = repo || m[2]!; }
-  }
-  const provider: "github" | "gitlab" = /gitlab\.com|\/gitlab\b/i.test(repoUrl) ? "gitlab"
-    : /github\.com/i.test(repoUrl) ? "github" : (columnProvider === "gitlab" ? "gitlab" : "github");
-  const host = provider === "gitlab" ? "gitlab.com" : "github.com";
-  if (!repoUrl && owner && repo) repoUrl = `https://${host}/${owner}/${repo}.git`;
-  if (!repoUrl || !owner || !repo) return null;
-  repoUrl = repoUrl.replace(/^git@([^:]+):/, "https://$1/").replace(/\/+$/, "").replace(/\.git$/, "") + ".git";
-  const token = provider === "gitlab"
-    ? (await getValidGitlabToken(ownerId)) || ""
-    : (await db.select().from(githubTokens).where(eq(githubTokens.userId, ownerId)).limit(1))[0]?.accessToken || "";
-  if (!token) return null;
-  const tokenUser = provider === "gitlab" ? "oauth2" : "x-access-token";
-  return { provider, owner, repo, repoUrl, authUrl: repoUrl.replace("https://", `https://${tokenUser}:${token}@`), token, tokenUser };
-}
+import { resolveRepoAuth, extractRepoUrl, type RepoAuth } from "../services/repo-auth.ts";
+import {
+  resolveTicketAnchor,
+  markEpicBuilding,
+  maybeSubmitEpicForReview,
+  recordEpicFilesTouched,
+} from "../services/epics.ts";
 
 /**
  * Remove a ticket's git worktree from the shared preview sandbox and drop its
@@ -1007,6 +972,14 @@ async function executeTicket(ticketId: string, actorId?: string): Promise<void> 
   // Feature branch name matching Django
   const featureBranch = ticket.githubBranch ?? ticketBranchName(ticket);
 
+  // The branch this ticket cascades on: its EPIC's branch, so it inherits the
+  // earlier tickets of its own delivery unit and NOTHING from other, unapproved
+  // epics. Legacy tickets with no epic fall back to the global `lfg-agent`.
+  const anchor = await resolveTicketAnchor(ticket);
+  const anchorBranch = anchor.anchorBranch;
+  const anchorBase = anchor.baseBranch;
+  await markEpicBuilding(ticket.epicId);
+
   // ── Step 2: Find or create sandbox ─────────────────────────────────
   console.log(`[ticket-executor] Step 2: Setting up workspace`);
   let sandboxRow = await findExistingSandbox(ticketId);
@@ -1133,16 +1106,19 @@ else
     [ -d ".git" ] || { echo "GIT_CLONE_FAILED"; exit 1; }
 fi
 
-# Ensure lfg-agent branch exists (create from main/default if not)
-if ! git rev-parse --verify origin/lfg-agent 2>/dev/null; then
-    echo "CREATING_LFG_AGENT_BRANCH"
-    DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || echo "main")
-    git checkout "$DEFAULT_BRANCH" 2>/dev/null || git checkout main 2>/dev/null || true
-    git checkout -b lfg-agent
-    git push -u origin lfg-agent 2>&1
+# Ensure the ANCHOR branch exists (the epic's branch, or the legacy global one).
+# It is cut from the epic's recorded base — normally the repo default branch — so
+# a new epic starts from approved code, never from another epic's pending work.
+if ! git rev-parse --verify origin/${anchorBranch} 2>/dev/null; then
+    echo "CREATING_ANCHOR_BRANCH"
+    ANCHOR_BASE="${anchorBase}"
+    git rev-parse --verify origin/$ANCHOR_BASE 2>/dev/null || ANCHOR_BASE=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || echo "main")
+    git checkout "$ANCHOR_BASE" 2>/dev/null || git checkout main 2>/dev/null || true
+    git checkout -b ${anchorBranch}
+    git push -u origin ${anchorBranch} 2>&1
 fi
 
-# Checkout feature branch — always branch from lfg-agent if creating new
+# Checkout feature branch — always branch from the anchor if creating new
 if git rev-parse --verify origin/${featureBranch} 2>/dev/null; then
     echo "FEATURE_BRANCH_EXISTS_REMOTE"
     git checkout ${featureBranch} 2>/dev/null || git checkout -b ${featureBranch} origin/${featureBranch}
@@ -1152,7 +1128,7 @@ elif git rev-parse --verify ${featureBranch} 2>/dev/null; then
     git checkout ${featureBranch}
 else
     echo "CREATING_FEATURE_BRANCH"
-    git checkout origin/lfg-agent 2>/dev/null || git checkout lfg-agent 2>/dev/null || true
+    git checkout origin/${anchorBranch} 2>/dev/null || git checkout ${anchorBranch} 2>/dev/null || true
     git checkout -b ${featureBranch}
 fi
 
@@ -1243,10 +1219,13 @@ git branch --show-current
         githubToken,
       });
 
-      // Create the feature branch from lfg-agent (initAndPushRepo leaves us on lfg-agent)
+      // Fresh repo: cut the anchor (epic) branch from main, then the feature
+      // branch from the anchor. initAndPushRepo leaves us on the legacy anchor,
+      // so step back to main first — an epic must start from approved code.
       const branchScript = `
 cd "${WORKING_DIR}/${projectDirName}"
-git checkout lfg-agent 2>/dev/null || true
+git checkout main 2>/dev/null || true
+git checkout ${anchorBranch} 2>/dev/null || { git checkout -b ${anchorBranch} && git push -u origin ${anchorBranch} 2>&1; }
 git checkout -b ${featureBranch}
 echo "BRANCH_CREATED"
 `.trim();
@@ -1541,16 +1520,21 @@ Before implementing, fix the git issue:
         metadata: { sha, branch: featureBranch, repo: `${githubOwner}/${githubRepo}` },
       });
 
-      // Merge feature branch → lfg-agent (direct push, no PR)
+      // Merge feature branch → the epic's anchor branch (direct push, no PR).
+      // This is the cascade: the NEXT ticket in this epic branches off the anchor
+      // and so inherits this code — and only this epic's code.
       try {
-        await addLog(ticketId, "Merging to lfg-agent...", "command", ownerId);
-        const { sha: mergeSha } = await mergeToLfgAgent({
+        await addLog(ticketId, `Merging to ${anchorBranch}...`, "command", ownerId);
+        const { sha: mergeSha, files: mergedFiles } = await mergeToAnchor({
           workspaceId,
           projectDir: `${WORKING_DIR}/${projectDirName}`,
           featureBranch,
           repoUrl: `https://github.com/${githubOwner}/${githubRepo}.git`,
           githubToken,
+          targetBranch: anchorBranch,
+          baseBranch: anchorBase,
         });
+        await recordEpicFilesTouched(ticket.epicId, mergedFiles);
         await db
           .update(projectTickets)
           .set({
@@ -1558,20 +1542,23 @@ Before implementing, fix the git issue:
             updatedAt: new Date(),
           })
           .where(eq(projectTickets.id, ticketId));
-        await addLog(ticketId, `Merged to lfg-agent (${mergeSha.slice(0, 7)})`, "command", ownerId);
+        await addLog(ticketId, `Merged to ${anchorBranch} (${mergeSha.slice(0, 7)})`, "command", ownerId);
 
         await logActivity({
           projectId: project.id,
           ticketId,
           actorType: "system",
           activityType: ACTIVITY_TYPES.GIT_MERGED,
-          title: `Merged to lfg-agent`,
+          title: `Merged to ${anchorBranch}`,
           description: `Feature branch ${featureBranch} merged (${mergeSha.slice(0, 7)}).`,
-          metadata: { mergeSha, branch: featureBranch },
+          metadata: { mergeSha, branch: featureBranch, anchorBranch, epicId: ticket.epicId ?? null },
         });
+
+        // Last ticket in the epic? Hand the whole unit to the client for review.
+        await maybeSubmitEpicForReview(ticket.epicId);
       } catch (mergeErr) {
-        console.warn(`[ticket-executor] Merge to lfg-agent failed:`, mergeErr);
-        await addLog(ticketId, `Merge to lfg-agent failed: ${mergeErr}`, "command", ownerId);
+        console.warn(`[ticket-executor] Merge to ${anchorBranch} failed:`, mergeErr);
+        await addLog(ticketId, `Merge to ${anchorBranch} failed: ${mergeErr}`, "command", ownerId);
       }
     } catch (err) {
       // A thrown commit/push means the work is NOT on the remote → not a success.
@@ -1642,7 +1629,7 @@ Before implementing, fix the git issue:
  * approved/Done (cleanupTicketWorktree), kept warm meanwhile for fast follow-ups.
  */
 async function ensureIsolatedChatSandbox(
-  ticket: { id: string; projectId: string; githubBranch: string | null },
+  ticket: { id: string; projectId: string; githubBranch: string | null; epicId?: string | null },
   project: { id: string; repoOwner: string | null; repoName: string | null; repoUrl: string | null; repoProvider?: string | null; stack?: string | null },
   ownerId: string,
   // Whose Git token clones the repo here (fine-grained sharing) + whether it's the
@@ -1652,6 +1639,7 @@ async function ensureIsolatedChatSandbox(
 ): Promise<{ workspaceId: string } | { error: string }> {
   const projectDirName = "project";
   const featureBranch = ticket.githubBranch ?? ticketBranchName(ticket);
+  const { anchorBranch } = await resolveTicketAnchor(ticket);
 
   // 1) SAME TICKET → SAME SANDBOX. Reuse the ticket's existing dedicated VM — the
   //    BUILD VM ("ticket") or a prior chat VM ("ticket-chat"), whichever exists. The
@@ -1726,8 +1714,8 @@ git config --global --add safe.directory '*' 2>/dev/null || true
 git config user.email "ai@lfg.dev"; git config user.name "LFG AI"
 if git rev-parse --verify origin/${featureBranch} 2>/dev/null; then
   git checkout -B ${featureBranch} origin/${featureBranch} 2>&1
-elif git rev-parse --verify origin/lfg-agent 2>/dev/null; then
-  git checkout -B ${featureBranch} origin/lfg-agent 2>&1
+elif git rev-parse --verify origin/${anchorBranch} 2>/dev/null; then
+  git checkout -B ${featureBranch} origin/${anchorBranch} 2>&1
 else
   DEF=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || echo main)
   git checkout -B ${featureBranch} origin/$DEF 2>&1 || git checkout -B ${featureBranch} 2>&1
@@ -2111,6 +2099,7 @@ ${message}
 
     if (chatGhOwner && chatGhRepo && githubToken) {
       const featureBranch = ticket.githubBranch ?? ticketBranchName(ticket);
+      const chatAnchor = await resolveTicketAnchor(ticket);
       try {
         await addLog(ticketId, "Checking for code changes...", "command", ownerId);
         const { sha } = await commitAndPush({
@@ -2133,22 +2122,24 @@ ${message}
 
         await addLog(ticketId, `Pushed commit ${sha.slice(0, 7)} to ${featureBranch}`, "command", ownerId);
 
-        // Merge feature branch → lfg-agent (direct push)
+        // Merge feature branch → the epic's anchor branch (direct push)
         try {
-          const { sha: mergeSha } = await mergeToLfgAgent({
+          const { sha: mergeSha } = await mergeToAnchor({
             workspaceId: sandbox.magsWorkspaceId!,
             projectDir: `${WORKING_DIR}/${projectDirName}`,
             featureBranch,
             repoUrl: `https://github.com/${chatGhOwner}/${chatGhRepo}.git`,
             githubToken,
+            targetBranch: chatAnchor.anchorBranch,
+            baseBranch: chatAnchor.baseBranch,
           });
           await db
             .update(projectTickets)
             .set({ githubMergeStatus: "merged", updatedAt: new Date() })
             .where(eq(projectTickets.id, ticketId));
-          await addLog(ticketId, `Merged to lfg-agent (${mergeSha.slice(0, 7)})`, "command", ownerId);
+          await addLog(ticketId, `Merged to ${chatAnchor.anchorBranch} (${mergeSha.slice(0, 7)})`, "command", ownerId);
         } catch (mergeErr) {
-          console.warn(`[ticket-executor] Chat: merge to lfg-agent failed:`, mergeErr);
+          console.warn(`[ticket-executor] Chat: merge to ${chatAnchor.anchorBranch} failed:`, mergeErr);
         }
       } catch (err) {
         // commitAndPush handles NO_CHANGES gracefully, so this is a real error
@@ -2186,7 +2177,7 @@ async function finalizeTicketChat(
   ticketId: string,
   ownerId: string,
   project: { id: string; repoOwner: string | null; repoName: string | null; repoUrl: string | null; repoProvider?: string | null; stack?: string | null },
-  ticket: { id: string; name: string; githubBranch: string | null },
+  ticket: { id: string; name: string; githubBranch: string | null; epicId?: string | null },
   workspaceId: string,
   message: string,
   workSummary = "",
@@ -2194,6 +2185,7 @@ async function finalizeTicketChat(
 ): Promise<void> {
   const projectDir = `${WORKING_DIR}/project`;
   const featureBranch = ticket.githubBranch ?? ticketBranchName(ticket);
+  const { anchorBranch, baseBranch: anchorBase } = await resolveTicketAnchor(ticket);
   const auth = await resolveRepoAuth(project, gitUserId);
   if (!auth) {
     await addLog(ticketId, "Changes made, but no git remote/token is configured — they stay in the sandbox. Connect the repo to persist chat edits.", "cli_error", ownerId);
@@ -2214,16 +2206,17 @@ async function finalizeTicketChat(
 
     let mergedOk = false;
     try {
-      await addLog(ticketId, "Merging to lfg-agent…", "command", ownerId);
-      const { sha: mergeSha } = await mergeToLfgAgent({
+      await addLog(ticketId, `Merging to ${anchorBranch}…`, "command", ownerId);
+      const { sha: mergeSha } = await mergeToAnchor({
         workspaceId, projectDir, featureBranch,
         repoUrl: auth.repoUrl, githubToken: auth.token, tokenUser: auth.tokenUser,
+        targetBranch: anchorBranch, baseBranch: anchorBase,
       });
       mergedOk = true;
       await db.update(projectTickets).set({ githubMergeStatus: "merged", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
-      await addLog(ticketId, `Merged to lfg-agent (${mergeSha.slice(0, 7)}).`, "command", ownerId);
+      await addLog(ticketId, `Merged to ${anchorBranch} (${mergeSha.slice(0, 7)}).`, "command", ownerId);
     } catch (mergeErr) {
-      await addLog(ticketId, `Pushed, but merge to lfg-agent failed: ${(mergeErr as Error).message?.slice(0, 200)}`, "cli_error", ownerId);
+      await addLog(ticketId, `Pushed, but merge to ${anchorBranch} failed: ${(mergeErr as Error).message?.slice(0, 200)}`, "cli_error", ownerId);
     }
 
     // Move to In Review + broadcast so the status banner/kanban update live and
@@ -2233,7 +2226,7 @@ async function finalizeTicketChat(
     // Clear agent-style summary so the chat ends with an explicit "what I did".
     const done = `✅ **Update applied.**\n\n` +
       (workSummary ? `**What I did:**\n${workSummary}\n\n` : "") +
-      `- Branch: \`${featureBranch}\`\n- Commit: \`${sha.slice(0, 7)}\`\n${mergedOk ? "- Merged to `lfg-agent` ✓\n" : ""}\nRe-run the **Preview** to see the change, or open the **Git** tab for the diff.`;
+      `- Branch: \`${featureBranch}\`\n- Commit: \`${sha.slice(0, 7)}\`\n${mergedOk ? `- Merged to \`${anchorBranch}\` ✓\n` : ""}\nRe-run the **Preview** to see the change, or open the **Git** tab for the diff.`;
     await addLog(ticketId, done, "ai_response", ownerId);
     // A chat/update turn that COMMITS is a completion too — flip the subtasks done
     // (the build success paths do this; the chat finalize was missing it, so tasks
@@ -2311,6 +2304,10 @@ async function executeTicketApi(ticketId: string, useCodingAgent: boolean, actor
 
   let projectDirName = "project";
   const featureBranch = ticket.githubBranch ?? ticketBranchName(ticket);
+  // The epic's branch: what this ticket is cut from and merged back into, so the
+  // cascade stops at the delivery unit's edge instead of at `lfg-agent`.
+  const { anchorBranch, baseBranch: anchorBase } = await resolveTicketAnchor(ticket);
+  await markEpicBuilding(ticket.epicId);
 
   // ── Reuse the project's always-on PREVIEW sandbox via a git WORKTREE ──
   // If the project has a running preview env (env-<projectId> with the repo at
@@ -2481,11 +2478,12 @@ cd ${WORKING_DIR}/project || { echo "GIT_SETUP_FAILED_NO_GIT"; exit 1; }
 git config user.email "ai@lfg.dev"; git config user.name "LFG AI"
 git remote set-url origin "${auth.authUrl}" 2>/dev/null || git remote add origin "${auth.authUrl}" 2>/dev/null || true
 git fetch origin 2>&1 || true
-if ! git rev-parse --verify origin/lfg-agent 2>/dev/null; then
-    echo "CREATING_LFG_AGENT_BRANCH"
-    DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || echo "main")
-    git branch lfg-agent origin/$DEFAULT_BRANCH 2>/dev/null || git branch lfg-agent 2>/dev/null || true
-    git push -u origin lfg-agent 2>&1 || true
+if ! git rev-parse --verify origin/${anchorBranch} 2>/dev/null; then
+    echo "CREATING_ANCHOR_BRANCH"
+    ANCHOR_BASE="${anchorBase}"
+    git rev-parse --verify origin/$ANCHOR_BASE 2>/dev/null || ANCHOR_BASE=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || echo "main")
+    git branch ${anchorBranch} origin/$ANCHOR_BASE 2>/dev/null || git branch ${anchorBranch} 2>/dev/null || true
+    git push -u origin ${anchorBranch} 2>&1 || true
 fi
 git worktree remove --force ${WORKING_DIR}/${projectDirName} 2>/dev/null || true
 rm -rf ${WORKING_DIR}/${projectDirName} 2>/dev/null || true
@@ -2493,7 +2491,7 @@ git worktree prune 2>/dev/null || true
 if git rev-parse --verify origin/${featureBranch} 2>/dev/null; then
     git worktree add --force -B ${featureBranch} ${WORKING_DIR}/${projectDirName} origin/${featureBranch} 2>&1
 else
-    git worktree add --force -B ${featureBranch} ${WORKING_DIR}/${projectDirName} origin/lfg-agent 2>&1 || git worktree add --force -B ${featureBranch} ${WORKING_DIR}/${projectDirName} lfg-agent 2>&1
+    git worktree add --force -B ${featureBranch} ${WORKING_DIR}/${projectDirName} origin/${anchorBranch} 2>&1 || git worktree add --force -B ${featureBranch} ${WORKING_DIR}/${projectDirName} ${anchorBranch} 2>&1
 fi
 cd ${WORKING_DIR}/${projectDirName} 2>/dev/null || { echo "GIT_SETUP_FAILED_NO_GIT"; exit 1; }
 git config user.email "ai@lfg.dev"; git config user.name "LFG AI"
@@ -2528,12 +2526,13 @@ else
     [ -d ".git" ] || { echo "GIT_CLONE_FAILED"; exit 1; }
 fi
 
-if ! git rev-parse --verify origin/lfg-agent 2>/dev/null; then
-    echo "CREATING_LFG_AGENT_BRANCH"
-    DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || echo "main")
-    git checkout "$DEFAULT_BRANCH" 2>/dev/null || git checkout main 2>/dev/null || true
-    git checkout -b lfg-agent
-    git push -u origin lfg-agent 2>&1
+if ! git rev-parse --verify origin/${anchorBranch} 2>/dev/null; then
+    echo "CREATING_ANCHOR_BRANCH"
+    ANCHOR_BASE="${anchorBase}"
+    git rev-parse --verify origin/$ANCHOR_BASE 2>/dev/null || ANCHOR_BASE=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || echo "main")
+    git checkout "$ANCHOR_BASE" 2>/dev/null || git checkout main 2>/dev/null || true
+    git checkout -b ${anchorBranch}
+    git push -u origin ${anchorBranch} 2>&1
 fi
 
 if git rev-parse --verify origin/${featureBranch} 2>/dev/null; then
@@ -2545,7 +2544,7 @@ elif git rev-parse --verify ${featureBranch} 2>/dev/null; then
     git checkout ${featureBranch}
 else
     echo "CREATING_FEATURE_BRANCH"
-    git checkout origin/lfg-agent 2>/dev/null || git checkout lfg-agent 2>/dev/null || true
+    git checkout origin/${anchorBranch} 2>/dev/null || git checkout ${anchorBranch} 2>/dev/null || true
     git checkout -b ${featureBranch}
 fi
 
@@ -2598,7 +2597,9 @@ git branch --show-current
       await execOnWorkspace(workspaceId, `mkdir -p "${WORKING_DIR}/${projectDirName}"`, { timeout: 15_000 });
       await initAndPushRepo({ workspaceId, projectDir: `${WORKING_DIR}/${projectDirName}`, repoUrl: repoResult.repoUrl, branch: "main", githubToken });
 
-      const branchScript = `cd "${WORKING_DIR}/${projectDirName}" && git checkout lfg-agent 2>/dev/null || true && git checkout -b ${featureBranch} && echo "BRANCH_CREATED"`;
+      // Fresh repo: step back to main, cut the anchor (epic) branch, then the
+      // feature branch off it — an epic must start from approved code.
+      const branchScript = `cd "${WORKING_DIR}/${projectDirName}" && git checkout main 2>/dev/null || true && { git checkout ${anchorBranch} 2>/dev/null || { git checkout -b ${anchorBranch} && git push -u origin ${anchorBranch} 2>&1; }; } && git checkout -b ${featureBranch} && echo "BRANCH_CREATED"`;
       const branchB64 = Buffer.from(branchScript).toString("base64");
       await execOnWorkspace(workspaceId, `echo ${branchB64} | base64 -d | sh`, { timeout: 30_000 });
 
@@ -2977,20 +2978,25 @@ git branch --show-current
       });
 
       try {
-        await addLog(ticketId, "Merging to lfg-agent...", "command", ownerId);
-        const { sha: mergeSha } = await mergeToLfgAgent({
+        await addLog(ticketId, `Merging to ${anchorBranch}...`, "command", ownerId);
+        const { sha: mergeSha, files: mergedFiles } = await mergeToAnchor({
           workspaceId,
           projectDir,
           featureBranch,
           repoUrl: pushAuth.repoUrl,
           githubToken: pushAuth.token,
           tokenUser: pushAuth.tokenUser,
+          targetBranch: anchorBranch,
+          baseBranch: anchorBase,
         });
+        await recordEpicFilesTouched(ticket.epicId, mergedFiles);
         mergedOk = true;
         await db.update(projectTickets).set({ githubMergeStatus: "merged", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
-        await addLog(ticketId, `Merged to lfg-agent (${mergeSha.slice(0, 7)})`, "command", ownerId);
+        await addLog(ticketId, `Merged to ${anchorBranch} (${mergeSha.slice(0, 7)})`, "command", ownerId);
+        // Last ticket in the epic? Hand the whole unit to the client for review.
+        await maybeSubmitEpicForReview(ticket.epicId);
       } catch (mergeErr) {
-        console.warn(`[ticket-executor-api] Merge to lfg-agent failed:`, mergeErr);
+        console.warn(`[ticket-executor-api] Merge to ${anchorBranch} failed:`, mergeErr);
       }
     } catch (err) {
       // A failed commit/push means the work is NOT saved — do NOT report success.
@@ -3016,7 +3022,7 @@ git branch --show-current
       (workSummary ? `**What I did:**\n${workSummary}\n\n` : "") +
       `- Branch: \`${featureBranch}\`\n` +
       (completedSha ? `- Commit: \`${completedSha.slice(0, 7)}\`\n` : "") +
-      (mergedOk ? `- Merged to \`lfg-agent\` ✓\n` : (completedSha ? `- Pushed (merge to lfg-agent pending/failed — see logs)\n` : "")) +
+      (mergedOk ? `- Merged to \`${anchorBranch}\` ✓\n` : (completedSha ? `- Pushed (merge to ${anchorBranch} pending/failed — see logs)\n` : "")) +
       `\nOpen the **Git** tab to review the diff, or the **Preview** tab to run this branch.`;
     await addLog(ticketId, summary, "ai_response", ownerId);
     await markBuildTasksComplete(ticketId);
@@ -3191,11 +3197,6 @@ async function markTicketFailed(ticketId: string, reason: string, userId?: strin
   }
 }
 
-function extractRepoUrl(stack: string): string | null {
-  const match = stack.match(/https?:\/\/[^\s]+\.git|https?:\/\/github\.com\/[^\s]+/);
-  return match?.[0] ?? null;
-}
-
 function sleep(ms: number) {
   return new Promise<void>((r) => setTimeout(r, ms));
 }
@@ -3218,6 +3219,7 @@ async function recoverUnpushedTickets() {
         githubCommitSha: projectTickets.githubCommitSha,
         githubBranch: projectTickets.githubBranch,
         assigneeId: projectTickets.assigneeId,
+        epicId: projectTickets.epicId, // decides which anchor the recovered work merges into
       })
       .from(projectTickets)
       .where(
@@ -3270,6 +3272,7 @@ async function recoverUnpushedTickets() {
 
       const workspaceId = sandbox.magsWorkspaceId;
       const featureBranch = ticket.githubBranch ?? ticketBranchName(ticket);
+      const recoveryAnchor = await resolveTicketAnchor(ticket);
       const projectDirName = "project";
 
       // The build VM is ephemeral — after a server restart / VM sleep it may be
@@ -3329,12 +3332,14 @@ async function recoverUnpushedTickets() {
 
         // Also attempt merge
         try {
-          const { sha: mergeSha } = await mergeToLfgAgent({
+          const { sha: mergeSha } = await mergeToAnchor({
             workspaceId,
             projectDir: `${WORKING_DIR}/${projectDirName}`,
             featureBranch,
             repoUrl: `https://github.com/${project.repoOwner}/${project.repoName}.git`,
             githubToken: ghToken.accessToken,
+            targetBranch: recoveryAnchor.anchorBranch,
+            baseBranch: recoveryAnchor.baseBranch,
           });
           await db
             .update(projectTickets)
@@ -3346,7 +3351,7 @@ async function recoverUnpushedTickets() {
             ticketId: ticket.id,
             actorType: "system",
             activityType: ACTIVITY_TYPES.GIT_MERGED,
-            title: `Merged to lfg-agent (recovered)`,
+            title: `Merged to ${recoveryAnchor.anchorBranch} (recovered)`,
             description: `Feature branch ${featureBranch} merged (${mergeSha.slice(0, 7)}).`,
             metadata: { mergeSha, branch: featureBranch, recovered: true },
           });

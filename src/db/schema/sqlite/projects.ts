@@ -49,6 +49,7 @@ export const projects = sqliteTable(
 
     // Ticket key counter (auto-increment per project)
     ticketCounter: integer("ticket_counter").notNull().default(0),
+    epicCounter: integer("epic_counter").notNull().default(0),
 
     // Preview
     previewTicketId: text("preview_ticket_id"), // FK handled in relations
@@ -66,6 +67,11 @@ export const projects = sqliteTable(
     // When ON, a collaborator's ticket build / preview uses the OWNER's Git token
     // (scoped to this repo). OFF (default): each collaborator uses their own Git.
     shareGitAccess: integer("share_git_access", { mode: "boolean" }).notNull().default(false),
+    // Chat visibility across collaborators. OFF (default): each member sees ONLY
+    // their own conversations in this project. ON: every active member can list
+    // and open every member's project conversations, each labelled with its
+    // author. See ../pg/projects.ts for why this is opt-in.
+    shareChatHistory: integer("share_chat_history", { mode: "boolean" }).notNull().default(false),
 
     createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
     updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
