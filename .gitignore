@@ -56,3 +56,5 @@ claude.status
 # Templates config/deploy.yml.example and .kamal/secrets.example are tracked.
 config/deploy.yml
 .kamal/secrets
+
+backups/

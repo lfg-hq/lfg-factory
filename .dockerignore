@@ -36,3 +36,5 @@ CLAUDE.md
 claude.status
 screenshots
 *.log
+
+backups/
