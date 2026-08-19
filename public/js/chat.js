@@ -2072,7 +2072,15 @@ document.addEventListener('DOMContentLoaded', () => {
             // Remove any previous function call indicators — but NOT during
             // file_stream content streaming (those are ongoing chunks, not completion)
             if (data.notification_type !== 'file_stream') {
-                removeFunctionCallIndicator();
+                if (turnActive) {
+                    // A tool finished but the turn hasn't. The model is now reasoning
+                    // about what it just read, which can take 30s with nothing streaming.
+                    // Keep the pill and say so, rather than leaving the last tool's
+                    // stale action up — or, as before, blanking the screen entirely.
+                    setToolDetail(null, 'Thinking…');
+                } else {
+                    removeFunctionCallIndicator();
+                }
 
                 // Remove tool execution indicator
                 const toolExecutionIndicator = document.querySelector('.tool-execution-indicator');
