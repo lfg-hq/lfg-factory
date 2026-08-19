@@ -736,6 +736,9 @@ projectsRouter.get("/projects/:projectId/api/checklist", async (c) => {
     epic_key: epic?.epicKey ?? null,
     epic_name: epic?.name ?? null,
     epic_status: epic?.status ?? null,
+    // The epic's anchor branch — every ticket in it is cut from here and merged
+    // back into it, so it's the answer to "where does this feature's code live?"
+    epic_branch: epic?.branch ?? null,
     };
   });
 

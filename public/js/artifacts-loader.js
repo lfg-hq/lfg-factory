@@ -323,6 +323,84 @@ document.addEventListener('DOMContentLoaded', function() {
         return '';
     }
 
+    // ── Epic detail modal ────────────────────────────────────────────────
+    // The whole delivery unit in one place: what it delivers, where its code
+    // lives, the docs it draws on, and every ticket in it. This is the view a
+    // client can act on — "here is the feature, approve it or send it back".
+    async function openEpicDetail(projectId, epicId) {
+        if (!epicId) return;
+        const esc = (v) => String(v == null ? '' : v)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+        document.querySelectorAll('.lfg-epic-modal-backdrop').forEach(n => n.remove());
+        const backdrop = document.createElement('div');
+        backdrop.className = 'lfg-epic-modal-backdrop';
+        backdrop.innerHTML = '<div class="lfg-epic-modal"><div class="lfg-epic-modal-body">Loading…</div></div>';
+        document.body.appendChild(backdrop);
+
+        const close = () => backdrop.remove();
+        backdrop.addEventListener('click', (e) => { if (e.target === backdrop) close(); });
+        document.addEventListener('keydown', function onEsc(e) {
+            if (e.key === 'Escape') { close(); document.removeEventListener('keydown', onEsc); }
+        });
+
+        let data;
+        try {
+            const r = await fetch(`/api/epics/${epicId}`);
+            data = await r.json();
+            if (!r.ok || data.error) throw new Error(data.error || 'Failed to load epic');
+        } catch (err) {
+            backdrop.querySelector('.lfg-epic-modal-body').textContent = 'Could not load this epic.';
+            return;
+        }
+
+        const e = data.epic || {};
+        const statusLabel = String(e.status || '').replace('_', ' ');
+        const docs = data.docs || [];
+        const tickets = data.tickets || [];
+
+        const blockers = (data.mergeBlockers || []).map(b => `<li>${esc(b.message)}</li>`).join('');
+        const stacked = data.stackedOn
+            ? `<div class="lfg-epic-note">Built on top of <strong>${esc(data.stackedOn.epicKey || '')} ${esc(data.stackedOn.name)}</strong> (${esc(String(data.stackedOn.status).replace('_',' '))}) — this can't go live until that one does.</div>`
+            : '';
+
+        backdrop.querySelector('.lfg-epic-modal').innerHTML = `
+            <div class="lfg-epic-modal-head">
+                <div>
+                    <div class="lfg-epic-modal-key">${esc(e.epicKey || '')}</div>
+                    <h2 class="lfg-epic-modal-title">${esc(e.name || 'Epic')}</h2>
+                </div>
+                <button class="lfg-epic-modal-close" title="Close"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="lfg-epic-modal-body">
+                ${e.goal ? `<p class="lfg-epic-goal">${esc(e.goal)}</p>` : ''}
+
+                <div class="lfg-epic-meta">
+                    <span class="lfg-epic-state lfg-epic-${esc(e.status || 'draft')}">${esc(statusLabel)}</span>
+                    ${e.branch ? `<span class="lfg-epic-branch" title="This epic's anchor branch — every ticket in it is cut from here and merged back into it"><i class="fas fa-code-branch"></i> ${esc(e.branch)}</span>` : ''}
+                    ${e.baseBranch ? `<span class="lfg-epic-base" title="What the anchor was cut from${e.baseSha ? ' @ ' + esc(e.baseSha.slice(0,7)) : ''}">from ${esc(e.baseBranch)}${e.baseSha ? ' @ ' + esc(e.baseSha.slice(0, 7)) : ''}</span>` : ''}
+                </div>
+                ${stacked}
+                ${blockers ? `<div class="lfg-epic-blockers"><strong>Not ready to go live:</strong><ul>${blockers}</ul></div>` : ''}
+
+                <h3 class="lfg-epic-section">Documents <span class="lfg-epic-count">${docs.length}</span></h3>
+                ${docs.length
+                    ? `<ul class="lfg-epic-list">${docs.map(d => `<li><i class="fas fa-file-lines"></i> ${esc(d.name)} <span class="lfg-epic-dim">${esc(d.fileType)}</span></li>`).join('')}</ul>`
+                    : `<p class="lfg-epic-dim">No documents linked yet.</p>`}
+
+                <h3 class="lfg-epic-section">Tickets <span class="lfg-epic-count">${tickets.length}</span></h3>
+                ${tickets.length
+                    ? `<ul class="lfg-epic-list">${tickets.map(t => `<li>
+                            <span class="lfg-epic-tkey">${esc(t.ticketKey || '')}</span>
+                            ${esc(t.name)}
+                            <span class="lfg-epic-dim">${esc(String(t.status || 'open').replace('_', ' '))}</span>
+                       </li>`).join('')}</ul>`
+                    : `<p class="lfg-epic-dim">No tickets in this epic yet.</p>`}
+            </div>`;
+        backdrop.querySelector('.lfg-epic-modal-close').addEventListener('click', close);
+    }
+    window.openEpicDetail = openEpicDetail;
+
     // Initialize the artifact loaders immediately
     window.ArtifactsLoader = {
         /**
@@ -3005,6 +3083,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         lfgSorted.forEach(it => { const bk = lfgKeyOf(it); lfgCounts[bk] = (lfgCounts[bk] || 0) + 1; });
                         let itemsHTML = '';
                         let lfgCurBucket = null;
+                        let lfgCurGid = '';
 
                         lfgSorted.forEach(item => {
                             const bk = lfgKeyOf(item);
@@ -3012,7 +3091,28 @@ document.addEventListener('DOMContentLoaded', function() {
                                 lfgCurBucket = bk;
                                 const st = (lfgGroupBy === 'epic' && item.epic_status)
                                     ? `<span class="lfg-epic-state lfg-epic-${item.epic_status}">${item.epic_status.replace('_', ' ')}</span>` : '';
-                                itemsHTML += `<div class="lfg-date-group">${modalHelpers.escapeHtml(bk)}${st}<span class="lfg-date-count">${lfgCounts[bk]}</span></div>`;
+                                // Epic groups collapse, and carry an (i) that opens the
+                                // whole delivery unit — goal, docs and tickets together.
+                                const isEpicGroup = lfgGroupBy === 'epic' && item.epic_id;
+                                const gid = 'g' + String(bk).replace(/[^a-zA-Z0-9]/g, '');
+                                const chevron = lfgGroupBy === 'epic'
+                                    ? `<i class="fas fa-chevron-down lfg-group-chevron"></i>` : '';
+                                const info = isEpicGroup
+                                    ? `<button class="lfg-epic-info" data-epic-id="${item.epic_id}" title="Open epic details">
+                                           <i class="fas fa-circle-info"></i>
+                                       </button>` : '';
+                                const branch = (isEpicGroup && item.epic_branch)
+                                    ? `<span class="lfg-epic-branch-chip" title="Anchor branch — every ticket in this epic is cut from here and merged back into it"><i class="fas fa-code-branch"></i>${modalHelpers.escapeHtml(item.epic_branch)}</span>`
+                                    : '';
+                                itemsHTML += `<div class="lfg-date-group${lfgGroupBy === 'epic' ? ' lfg-group-toggle' : ''}" data-group="${gid}">`
+                                    + chevron
+                                    + `<span class="lfg-group-name">${modalHelpers.escapeHtml(bk)}</span>`
+                                    + st
+                                    + branch
+                                    + `<span class="lfg-date-count">${lfgCounts[bk]}</span>`
+                                    + info
+                                    + `</div>`;
+                                lfgCurGid = gid;
                             }
                             const statusClass = item.status ? item.status.toLowerCase().replace(' ', '-') : 'open';
                             const priorityClass = item.priority ? item.priority.toLowerCase() : 'medium';
@@ -3070,7 +3170,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                 : `<span class="lfg-row-dot" style="background:${lfgStatusColor(item.status)};" title="${modalHelpers.escapeHtml(item.status || 'open')}"></span>`;
                             const lfgBuildChip = lfgBuilding ? `<span style="flex:none;font-size:9.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:2px 7px;border-radius:5px;background:rgba(59,130,246,0.15);color:#60a5fa;">Building</span>` : '';
                             itemsHTML += `
-                                <div class="checklist-card ${statusClass} lfg-row" data-id="${item.id}">
+                                <div class="checklist-card ${statusClass} lfg-row" data-id="${item.id}" data-in-group="${lfgCurGid}">
                                     <input type="checkbox" class="ticket-select-checkbox" data-ticket-id="${item.id}" style="display: none; width: 14px; height: 14px; accent-color: #8b5cf6; cursor: pointer;" onclick="event.stopPropagation();">
                                     ${lfgMarker}
                                     ${lfgKey ? `<span class="ticket-key" style="display:inline-block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;font-weight:700;color:#8b5cf6;background:rgba(139,92,246,0.12);border:1px solid rgba(139,92,246,0.25);border-radius:5px;padding:1px 6px;">${modalHelpers.escapeHtml(lfgKey)}</span>` : ''}
@@ -3082,6 +3182,40 @@ document.addEventListener('DOMContentLoaded', function() {
                         });
                         
                         checklistContent.innerHTML = itemsHTML;
+
+                        // ── Collapsible epic groups ──────────────────────────
+                        // Collapse state is remembered per epic, so opening the tab
+                        // doesn't re-expand everything you deliberately folded away.
+                        const collapsedKey = 'lfgEpicCollapsed:' + projectId;
+                        let collapsed = {};
+                        try { collapsed = JSON.parse(localStorage.getItem(collapsedKey) || '{}'); } catch (e) {}
+
+                        const applyCollapse = (gid, isCollapsed) => {
+                            const hdr = checklistContent.querySelector(`.lfg-date-group[data-group="${gid}"]`);
+                            if (hdr) hdr.classList.toggle('is-collapsed', isCollapsed);
+                            checklistContent.querySelectorAll(`.lfg-row[data-in-group="${gid}"]`)
+                                .forEach(r => { r.style.display = isCollapsed ? 'none' : ''; });
+                        };
+
+                        checklistContent.querySelectorAll('.lfg-group-toggle').forEach(hdr => {
+                            const gid = hdr.getAttribute('data-group');
+                            if (collapsed[gid]) applyCollapse(gid, true);
+                            hdr.addEventListener('click', function(e) {
+                                // The (i) opens the epic; it must not also fold the group.
+                                if (e.target.closest('.lfg-epic-info')) return;
+                                const nowCollapsed = !hdr.classList.contains('is-collapsed');
+                                applyCollapse(gid, nowCollapsed);
+                                collapsed[gid] = nowCollapsed;
+                                try { localStorage.setItem(collapsedKey, JSON.stringify(collapsed)); } catch (e2) {}
+                            });
+                        });
+
+                        checklistContent.querySelectorAll('.lfg-epic-info').forEach(btn => {
+                            btn.addEventListener('click', function(e) {
+                                e.stopPropagation();
+                                openEpicDetail(projectId, this.getAttribute('data-epic-id'));
+                            });
+                        });
 
                         // Reattach event listeners after rendering
                         attachChecklistDetailListeners(filteredChecklist);
@@ -6570,31 +6704,30 @@ document.addEventListener('DOMContentLoaded', function() {
                         const docEpicLabel = (f) => {
                             const es = f.epics || [];
                             if (!es.length) return 'No epic';
-                            const e = es[0];
+                            // When filtering to one epic, label by THAT epic — a doc can
+                            // feed several, so picking the first would mislabel the group.
+                            const e = (currentEpic && currentEpic !== '__none__'
+                                ? es.find(x => x.epicId === currentEpic) : null) || es[0];
                             return (e.epicKey ? e.epicKey + ' · ' : '') + e.epicName;
                         };
-                        if (currentEpic === '') {
-                            data.files.sort((a, b) => {
-                                const al = docEpicLabel(a), bl = docEpicLabel(b);
-                                if (al === bl) return 0;
-                                if (al === 'No epic') return 1;
-                                if (bl === 'No epic') return -1;
-                                return al.localeCompare(bl);
-                            });
-                        }
+                        data.files.sort((a, b) => {
+                            const al = docEpicLabel(a), bl = docEpicLabel(b);
+                            if (al === bl) return 0;
+                            if (al === 'No epic') return 1;
+                            if (bl === 'No epic') return -1;
+                            return al.localeCompare(bl);
+                        });
                         let curDocGroup = null;
 
                         // Create file items with table-like layout
                         data.files.forEach(file => {
-                            if (currentEpic === '') {
-                                const g = docEpicLabel(file);
-                                if (g !== curDocGroup) {
-                                    curDocGroup = g;
-                                    const hdr = document.createElement('div');
-                                    hdr.className = 'lfg-date-group';
-                                    hdr.textContent = g;
-                                    fileBrowserList.appendChild(hdr);
-                                }
+                            const g = docEpicLabel(file);
+                            if (g !== curDocGroup) {
+                                curDocGroup = g;
+                                const hdr = document.createElement('div');
+                                hdr.className = 'lfg-date-group';
+                                hdr.textContent = g;
+                                fileBrowserList.appendChild(hdr);
                             }
                             const icon = getFileIcon(file.type);
                             const typeClass = `file-type-${file.type}`;
@@ -6626,14 +6759,14 @@ document.addEventListener('DOMContentLoaded', function() {
                             typeBadge.textContent = displayType;
                             typeBadge.title = displayType;
                             fileType.appendChild(typeBadge);
-                            // A doc can feed several epics (the Main PRD usually does).
-                            (file.epics || []).forEach(e => {
-                                const chip = document.createElement('span');
-                                chip.className = 'lfg-epic-state lfg-epic-' + (e.epicStatus || 'draft');
-                                chip.textContent = e.epicKey || e.epicName;
-                                chip.title = e.epicName + ' — ' + String(e.epicStatus || '').replace('_', ' ');
-                                fileType.appendChild(chip);
-                            });
+                            // Which epics this doc feeds goes in the row's tooltip, not as
+                            // extra chips — the type cell is a fixed grid column and chips
+                            // overflowed it into the neighbouring column.
+                            if ((file.epics || []).length) {
+                                fileItem.title = 'Used by: ' + file.epics
+                                    .map(e => (e.epicKey ? e.epicKey + ' · ' : '') + e.epicName)
+                                    .join(', ');
+                            }
                             
                             // Create owner cell
                             const fileOwner = document.createElement('div');
