@@ -1584,8 +1584,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Restore send button
                 hideStopButton();
 
-                // Turn complete → clear the persistent "Gathering information" indicator.
-                removeFunctionCallIndicator();
+                // Turn complete → clear the persistent working indicator.
+                removeFunctionCallIndicator(false, true);
 
                 // Reset the stop requested flag
                 stopRequested = false;
@@ -1636,11 +1636,10 @@ document.addEventListener('DOMContentLoaded', () => {
             // then set its second line.
             if (!messageContainer.querySelector('.function-call-indicator')) {
                 showFunctionCallIndicator(data.function_name, { investigation: data.investigation, detail: data.detail });
-            } else if (data.investigation) {
-                // Keep the "Gathering information" header; just refresh the detail line.
-                setToolDetail(null, data.detail);
             } else {
-                showFunctionCallIndicator(data.function_name, { investigation: data.investigation, detail: data.detail });
+                // The pill already exists — only its second line changes. Rebuilding
+                // it here is what replayed the enter animation on every tool call.
+                setToolDetail(null, data.detail);
             }
             scrollToBottom();
             return;
@@ -1660,8 +1659,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (data.notification_type === 'ask_user') {
                 console.log('ask_user raw payload:', JSON.stringify(data).slice(0, 800));
 
-                // Remove any function call indicators
-                removeFunctionCallIndicator();
+                // Waiting on the user — the assistant genuinely stopped working.
+                removeFunctionCallIndicator(false, true);
 
                 // Normalize: support both new questions[] format and legacy single-question format
                 let sections;
@@ -1878,7 +1877,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Handle confirm_action notification — blocking Yes/No permission popup
             if (data.notification_type === 'confirm_action') {
-                removeFunctionCallIndicator();
+                // Blocking Yes/No — work is paused until they answer.
+                removeFunctionCallIndicator(false, true);
 
                 const title = data.title || 'Proceed?';
                 const summary = data.summary || '';
@@ -2706,7 +2706,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     // Function to create and show stop button
+    // The assistant is mid-turn. While this is true the working indicator is
+    // PERSISTENT: individual tool notifications update its text but must not
+    // remove it, otherwise the pill blinks out between every tool call.
+    let turnActive = false;
+
     function showStopButton() {
+        turnActive = true;
         // Check if we're already in the process of transitioning
         if (currentButtonState === ButtonState.TRANSITIONING) {
             console.log('Button transition in progress, skipping showStopButton');
@@ -2768,6 +2774,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Function to hide stop button and show send button
     function hideStopButton() {
+        turnActive = false;
         // Check if we're already in the process of transitioning
         if (currentButtonState === ButtonState.TRANSITIONING) {
             console.log('Button transition in progress, skipping hideStopButton');
@@ -2808,7 +2815,13 @@ document.addEventListener('DOMContentLoaded', () => {
     // Function to reset streaming state completely
     function resetStreamingState() {
         console.log('Resetting streaming state');
-        
+
+        // A dropped socket ends the turn as far as this tab is concerned — clear
+        // the flag first so the working pill can actually be removed below,
+        // instead of being stranded on screen forever.
+        turnActive = false;
+        removeFunctionCallIndicator(true, true);
+
         // Reset flags
         isStreaming = false;
         window.__isAgentStreaming__ = false;
@@ -2879,8 +2892,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (typingIndicator) {
                 typingIndicator.remove();
             }
-            // Clear the persistent "Gathering information" indicator on stop.
-            removeFunctionCallIndicator();
+            // Clear the persistent working indicator on stop.
+            removeFunctionCallIndicator(false, true);
 
             // Add a note that generation was stopped
             const assistantMessage = currentStreamingEl || getLastAssistantMessage();
@@ -3643,12 +3656,13 @@ document.addEventListener('DOMContentLoaded', () => {
         opts = opts || {};
         const investigation = !!opts.investigation || INVESTIGATION_TOOLS.has(functionName);
         const details = getFunctionDetails(functionName);
-        // For investigation, keep a stable header ("Gathering information…") and put the
-        // tool's own label (e.g. "Inspect preview") on the detail line.
-        const label = investigation ? 'Gathering information' : (details.label || functionName);
+        // ONE stable header for the whole turn — "Working…" — with the specific
+        // action on the detail line. Swapping the header per tool made the pill
+        // churn through half a dozen labels while nothing visibly progressed.
+        const label = 'Working';
         const icon = investigation ? 'fa-magnifying-glass' : (details.icon || 'fa-cog');
         const color = investigation ? '#a78bfa' : (details.color || '#94a3b8');
-        const detailText = opts.detail || (investigation ? (details.label || '') : '');
+        const detailText = opts.detail || details.label || (investigation ? 'Gathering information' : '');
 
         let indicator = messageContainer.querySelector('.function-call-indicator');
         if (!indicator) {
@@ -4010,7 +4024,13 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Function to remove any function call indicators
     // instant=true skips animation (used when replacing with a new pill)
-    function removeFunctionCallIndicator(instant = false) {
+    // force=true removes even mid-turn — for the events that genuinely END the
+    // work: turn complete, stop, error, or a blocking question to the user.
+    // Without force, a call while the assistant is still working is IGNORED:
+    // tool-completion notifications used to tear the pill down and the next tool
+    // rebuilt it, which is what made it flash on and off all turn.
+    function removeFunctionCallIndicator(instant = false, force = false) {
+        if (turnActive && !force) return;
         const existingIndicators = document.querySelectorAll('.function-call-indicator, .function-call-success');
         existingIndicators.forEach(indicator => {
             if (instant) {
