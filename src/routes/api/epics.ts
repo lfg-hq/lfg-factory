@@ -223,16 +223,21 @@ epicsApi.post("/epics/:epicId/sync-branch", async (c) => {
   const loaded = await loadEpic(epicId!, user.id);
   if (!loaded) return c.json({ error: "Epic not found" }, 404);
 
+  const body = await c.req.json<{ force?: boolean }>().catch(() => ({ force: false }));
+
   try {
-    const result = await syncEpicBranch(epicId!, user.id);
+    const result = await syncEpicBranch(epicId!, user.id, { force: !!body.force });
     const conflicts = result.results.filter((r) => r.status === "conflict");
+    const contaminating = result.results.filter((r) => r.status === "would_contaminate");
     return c.json({
       ...result,
       merged: result.results.filter((r) => r.status === "merged").length,
       alreadyPresent: result.results.filter((r) => r.status === "already").length,
       conflicts: conflicts.length,
-      // A conflict needs a human — say so rather than reporting a clean sync.
-      needsAttention: conflicts,
+      // Refused, not failed: merging would have pulled other features' unapproved
+      // work into this epic. Re-send with force:true only if that's genuinely wanted.
+      wouldContaminate: contaminating.length,
+      needsAttention: [...conflicts, ...contaminating],
     });
   } catch (err) {
     return c.json({ error: (err as Error).message }, 500);

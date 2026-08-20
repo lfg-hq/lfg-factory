@@ -687,6 +687,41 @@ echo CLONE_OK
 }
 
 /**
+ * What `head` would bring into `base`: the commits present on head and not on
+ * base. Used to check a merge BEFORE running it — a branch cut from the old
+ * global anchor carries that anchor's whole history, so merging it into a clean
+ * epic branch would import every other feature's unapproved work with it.
+ */
+export async function compareBranches(opts: {
+  provider: RepoProvider;
+  owner: string;
+  repo: string;
+  token: string;
+  base: string;
+  head: string;
+}): Promise<{ aheadBy: number; commits: Array<{ sha: string; message: string }> } | null> {
+  const { provider, owner, repo, token, base, head } = opts;
+  if (provider !== "github") return null;
+
+  const resp = await fetch(
+    `https://api.github.com/repos/${owner}/${repo}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`,
+    { headers: ghHeaders(token) }
+  );
+  if (!resp.ok) return null;
+  const data = await resp.json() as {
+    ahead_by?: number;
+    commits?: Array<{ sha: string; commit?: { message?: string } }>;
+  };
+  return {
+    aheadBy: data.ahead_by ?? 0,
+    commits: (data.commits ?? []).map((c) => ({
+      sha: c.sha,
+      message: (c.commit?.message ?? "").split("\n")[0]!.slice(0, 120),
+    })),
+  };
+}
+
+/**
  * Merge `head` into `base` server-side via the provider API — no VM, no PR, no
  * rebuild.
  *

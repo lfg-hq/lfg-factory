@@ -214,10 +214,17 @@ export async function listUnassignedTickets(projectId: string) {
  */
 export async function syncEpicBranch(
   epicId: string,
-  actingUserId: string
+  actingUserId: string,
+  opts?: { force?: boolean }
 ): Promise<{
   epicBranch: string | null;
-  results: Array<{ ticketKey: string | null; branch: string; status: string; detail?: string }>;
+  results: Array<{
+    ticketKey: string | null;
+    branch: string;
+    status: string;
+    detail?: string;
+    extraCommits?: Array<{ sha: string; message: string }>;
+  }>;
 }> {
   const epic = await getEpic(epicId);
   if (!epic) throw new Error(`Epic not found: ${epicId}`);
@@ -238,11 +245,56 @@ export async function syncEpicBranch(
     .from(projectTickets)
     .where(eq(projectTickets.epicId, epicId));
 
-  const { mergeBranchViaApi } = await import("./git.ts");
-  const results: Array<{ ticketKey: string | null; branch: string; status: string; detail?: string }> = [];
+  const { mergeBranchViaApi, compareBranches } = await import("./git.ts");
+  const results: Array<{
+    ticketKey: string | null;
+    branch: string;
+    status: string;
+    detail?: string;
+    extraCommits?: Array<{ sha: string; message: string }>;
+  }> = [];
+
+  // Commit messages the executor writes for a ticket's own work.
+  const ownsCommit = (msg: string, t: { ticketKey: string | null; name: string }) =>
+    (t.ticketKey ? msg.toLowerCase().includes(t.ticketKey.toLowerCase()) : false) ||
+    msg.toLowerCase().includes(t.name.toLowerCase().slice(0, 40));
 
   for (const t of tickets) {
     if (!t.branch) continue; // never built — nothing on a branch to bring over
+
+    // A branch cut from the old global anchor carries that anchor's whole
+    // history. Merging it into an epic cut from main would import every OTHER
+    // feature's unapproved work too — the exact leak epics exist to stop. So
+    // look before merging, and refuse when the branch brings in more than its
+    // own ticket's commits.
+    const cmp = await compareBranches({
+      provider: auth.provider,
+      owner: auth.owner,
+      repo: auth.repo,
+      token: auth.token,
+      base: epic.branch,
+      head: t.branch,
+    }).catch(() => null);
+
+    if (cmp && cmp.aheadBy === 0) {
+      results.push({ ticketKey: t.ticketKey, branch: t.branch, status: "already" });
+      continue;
+    }
+
+    const foreign = cmp ? cmp.commits.filter((c) => !ownsCommit(c.message, t)) : [];
+    if (foreign.length && !opts?.force) {
+      results.push({
+        ticketKey: t.ticketKey,
+        branch: t.branch,
+        status: "would_contaminate",
+        detail:
+          `${t.branch} was cut from \`${LEGACY_ANCHOR_BRANCH}\`, so merging it would also bring ` +
+          `${foreign.length} commit(s) belonging to other work into ${epic.epicKey}.`,
+        extraCommits: foreign.slice(0, 20),
+      });
+      continue;
+    }
+
     const r = await mergeBranchViaApi({
       provider: auth.provider,
       owner: auth.owner,

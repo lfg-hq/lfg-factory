@@ -486,8 +486,26 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (d.merged) bits.push(`${d.merged} merged in`);
                 if (d.alreadyPresent) bits.push(`${d.alreadyPresent} already there`);
                 if (d.conflicts) bits.push(`${d.conflicts} need manual merge`);
+                if (d.wouldContaminate) bits.push(`${d.wouldContaminate} skipped`);
                 syncStatus.textContent = bits.length ? bits.join(' · ') : 'Nothing to sync';
                 if (d.conflicts) syncStatus.style.color = '#f87171';
+
+                // Explain a refusal rather than leaving a bare "skipped" — this is
+                // the case where the branch would drag other features in with it.
+                const blocked = (d.needsAttention || []).filter(r => r.status === 'would_contaminate');
+                if (blocked.length) {
+                    const box = document.createElement('div');
+                    box.className = 'lfg-epic-blockers';
+                    box.style.marginTop = '12px';
+                    box.innerHTML = '<strong>Not synced — it would pull in other work:</strong><ul>'
+                        + blocked.map(r => `<li>${esc(r.ticketKey || r.branch)} — ${esc(r.detail || '')}`
+                            + (r.extraCommits && r.extraCommits.length
+                                ? `<br><span class="lfg-epic-dim" style="margin-left:0">e.g. ${esc(r.extraCommits.slice(0,3).map(c => c.message).join('; '))}</span>`
+                                : '')
+                            + '</li>').join('')
+                        + '</ul>';
+                    syncBtn.closest('.lfg-epic-actions').after(box);
+                }
             } catch (e) {
                 syncStatus.textContent = 'Sync failed';
             } finally {
