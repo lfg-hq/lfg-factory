@@ -686,6 +686,51 @@ echo CLONE_OK
   return ok;
 }
 
+/**
+ * Merge `head` into `base` server-side via the provider API — no VM, no PR, no
+ * rebuild.
+ *
+ * The recovery tool for work built under the OLD global anchor and later adopted
+ * into an epic: the code already exists on the ticket's feature branch, so
+ * replaying the whole build just to move it is wasteful and can produce
+ * different code. This replays the merge instead.
+ *
+ * Returns "merged" | "already" (nothing to do) | "conflict".
+ */
+export async function mergeBranchViaApi(opts: {
+  provider: RepoProvider;
+  owner: string;
+  repo: string;
+  token: string;
+  base: string;
+  head: string;
+  message?: string;
+}): Promise<{ status: "merged" | "already" | "conflict"; sha?: string; detail?: string }> {
+  const { provider, owner, repo, token, base, head, message } = opts;
+
+  if (provider !== "github") {
+    return { status: "conflict", detail: "Server-side merge is GitHub-only; open an MR on GitLab." };
+  }
+
+  const resp = await fetch(`https://api.github.com/repos/${owner}/${repo}/merges`, {
+    method: "POST",
+    headers: ghHeaders(token),
+    body: JSON.stringify({
+      base,
+      head,
+      commit_message: message ?? `Merge ${head} into ${base}`,
+    }),
+  });
+
+  // 201 merged · 204 base already contains head · 409 conflict · 404 missing branch
+  if (resp.status === 204) return { status: "already" };
+  if (resp.ok) {
+    const data = await resp.json() as { sha?: string };
+    return { status: "merged", sha: data.sha };
+  }
+  return { status: "conflict", detail: (await resp.text()).slice(0, 300) };
+}
+
 // ── Remote branch refs (no VM needed) ────────────────────────────────
 
 export type RepoProvider = "github" | "gitlab";

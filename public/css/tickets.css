@@ -4299,3 +4299,20 @@
 [data-theme="light"] .lfg-epic-modal { background: #fff; color: #0f172a; border-color: #e2e8f0; }
 [data-theme="light"] .lfg-epic-modal-head { border-bottom-color: #e2e8f0; }
 [data-theme="light"] .lfg-epic-list li { border-bottom-color: #eef2f7; }
+
+.lfg-epic-actions {
+  display: flex; align-items: center; gap: 12px;
+  margin-top: 22px; padding-top: 16px;
+  border-top: 1px solid var(--border-color, #232323);
+}
+.lfg-epic-sync {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 12.5px; font-weight: 550;
+  padding: 7px 13px; border-radius: 7px; cursor: pointer;
+  background: rgba(139, 92, 246, .12);
+  color: #a78bfa;
+  border: 1px solid rgba(139, 92, 246, .28);
+}
+.lfg-epic-sync:hover:not(:disabled) { background: rgba(139, 92, 246, .2); }
+.lfg-epic-sync:disabled { opacity: .55; cursor: default; }
+.lfg-epic-sync-status { margin-left: 0; }

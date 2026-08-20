@@ -396,8 +396,39 @@ document.addEventListener('DOMContentLoaded', function() {
                             <span class="lfg-epic-dim">${esc(String(t.status || 'open').replace('_', ' '))}</span>
                        </li>`).join('')}</ul>`
                     : `<p class="lfg-epic-dim">No tickets in this epic yet.</p>`}
+                <div class="lfg-epic-actions">
+                    <button class="lfg-epic-sync" title="Pull work that was built before this epic existed onto its branch">
+                        <i class="fas fa-code-merge"></i> Sync branch
+                    </button>
+                    <span class="lfg-epic-sync-status lfg-epic-dim"></span>
+                </div>
             </div>`;
         backdrop.querySelector('.lfg-epic-modal-close').addEventListener('click', close);
+
+        // Tickets built BEFORE this epic existed merged into the old global anchor,
+        // not into the epic branch. This replays those merges instead of making the
+        // user delete branches and rebuild.
+        const syncBtn = backdrop.querySelector('.lfg-epic-sync');
+        const syncStatus = backdrop.querySelector('.lfg-epic-sync-status');
+        syncBtn.addEventListener('click', async () => {
+            syncBtn.disabled = true;
+            syncStatus.textContent = 'Syncing…';
+            try {
+                const r = await fetch(`/api/epics/${epicId}/sync-branch`, { method: 'POST' });
+                const d = await r.json();
+                if (!r.ok || d.error) { syncStatus.textContent = d.error || 'Sync failed'; return; }
+                const bits = [];
+                if (d.merged) bits.push(`${d.merged} merged in`);
+                if (d.alreadyPresent) bits.push(`${d.alreadyPresent} already there`);
+                if (d.conflicts) bits.push(`${d.conflicts} need manual merge`);
+                syncStatus.textContent = bits.length ? bits.join(' · ') : 'Nothing to sync';
+                if (d.conflicts) syncStatus.style.color = '#f87171';
+            } catch (e) {
+                syncStatus.textContent = 'Sync failed';
+            } finally {
+                syncBtn.disabled = false;
+            }
+        });
     }
     window.openEpicDetail = openEpicDetail;
 

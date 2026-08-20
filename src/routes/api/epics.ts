@@ -18,6 +18,7 @@ import {
   assignTicketsToEpic,
   listUnassignedTickets,
   listEpicDocs,
+  syncEpicBranch,
   linkDocsToEpic,
   unlinkDocsFromEpic,
   LEGACY_ANCHOR_BRANCH,
@@ -209,6 +210,33 @@ epicsApi.delete("/epics/:epicId/docs", async (c) => {
 
   await unlinkDocsFromEpic(epicId!, body.fileIds);
   return c.json({ ok: true, docs: await listEpicDocs(epicId!) });
+});
+
+// ── POST /api/epics/:epicId/sync-branch ──────────────────────────────
+// Bring work built before this epic existed onto its branch, by replaying each
+// ticket's feature-branch merge. Cheaper and safer than deleting branches and
+// rebuilding — the code already exists, it just landed on the wrong anchor.
+epicsApi.post("/epics/:epicId/sync-branch", async (c) => {
+  const user = c.get("user");
+  const { epicId } = c.req.param();
+
+  const loaded = await loadEpic(epicId!, user.id);
+  if (!loaded) return c.json({ error: "Epic not found" }, 404);
+
+  try {
+    const result = await syncEpicBranch(epicId!, user.id);
+    const conflicts = result.results.filter((r) => r.status === "conflict");
+    return c.json({
+      ...result,
+      merged: result.results.filter((r) => r.status === "merged").length,
+      alreadyPresent: result.results.filter((r) => r.status === "already").length,
+      conflicts: conflicts.length,
+      // A conflict needs a human — say so rather than reporting a clean sync.
+      needsAttention: conflicts,
+    });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 500);
+  }
 });
 
 // ── GET /api/epics/:epicId ───────────────────────────────────────────

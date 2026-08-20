@@ -202,6 +202,63 @@ export async function listUnassignedTickets(projectId: string) {
     .where(and(eq(projectTickets.projectId, projectId), isNull(projectTickets.epicId)));
 }
 
+/**
+ * Pull work that was built BEFORE this epic existed onto the epic's branch.
+ *
+ * A ticket built under the old global anchor has its code on its own feature
+ * branch, merged into `lfg-agent` — not into the epic it was later adopted into.
+ * Rather than deleting the branch and rebuilding (which re-runs the agent and can
+ * produce different code), replay the merge: feature branch → epic branch, over
+ * the provider API. Idempotent — a ticket already contained in the epic branch
+ * reports "already" and is left alone.
+ */
+export async function syncEpicBranch(
+  epicId: string,
+  actingUserId: string
+): Promise<{
+  epicBranch: string | null;
+  results: Array<{ ticketKey: string | null; branch: string; status: string; detail?: string }>;
+}> {
+  const epic = await getEpic(epicId);
+  if (!epic) throw new Error(`Epic not found: ${epicId}`);
+  if (!epic.branch) return { epicBranch: null, results: [] };
+
+  const [project] = await db.select().from(projects).where(eq(projects.id, epic.projectId)).limit(1);
+  if (!project) throw new Error(`Project not found: ${epic.projectId}`);
+
+  const auth = await resolveRepoAuth(project, actingUserId);
+  if (!auth) throw new Error("No connected repo or credentials.");
+
+  const tickets = await db
+    .select({
+      ticketKey: projectTickets.ticketKey,
+      name: projectTickets.name,
+      branch: projectTickets.githubBranch,
+    })
+    .from(projectTickets)
+    .where(eq(projectTickets.epicId, epicId));
+
+  const { mergeBranchViaApi } = await import("./git.ts");
+  const results: Array<{ ticketKey: string | null; branch: string; status: string; detail?: string }> = [];
+
+  for (const t of tickets) {
+    if (!t.branch) continue; // never built — nothing on a branch to bring over
+    const r = await mergeBranchViaApi({
+      provider: auth.provider,
+      owner: auth.owner,
+      repo: auth.repo,
+      token: auth.token,
+      base: epic.branch,
+      head: t.branch,
+      message: `Adopt ${t.ticketKey ?? t.name} into ${epic.epicKey}`,
+    }).catch((e) => ({ status: "conflict" as const, detail: (e as Error).message?.slice(0, 200) }));
+    results.push({ ticketKey: t.ticketKey, branch: t.branch, status: r.status, detail: r.detail });
+  }
+
+  console.log(`[epics] ${epic.epicKey}: synced ${results.length} branch(es) into ${epic.branch}`);
+  return { epicBranch: epic.branch, results };
+}
+
 // ── Lookups ──────────────────────────────────────────────────────────
 
 export async function getEpic(epicId: string): Promise<Epic | undefined> {
