@@ -136,7 +136,23 @@ ticketsApi.get("/:projectId/tickets/:ticketId", async (c) => {
   // deep link that can open the exact branch in one click.
   const repo = buildRepoLinks(project, ticket.githubBranch ?? null);
 
-  return c.json({ ticket, logs, repo });
+  // The branch this ticket cascades on — its epic's, or the legacy global anchor.
+  // The drawer used to hardcode "lfg-agent" in its status banner and buttons,
+  // which reported the wrong branch for every ticket in an epic.
+  const { resolveTicketAnchor } = await import("../../services/epics.ts");
+  const anchor = await resolveTicketAnchor(ticket);
+
+  return c.json({
+    ticket: {
+      ...ticket,
+      anchorBranch: anchor.anchorBranch,
+      epicBranch: anchor.epic?.branch ?? null,
+      epicKey: anchor.epic?.epicKey ?? null,
+      epicName: anchor.epic?.name ?? null,
+    },
+    logs,
+    repo,
+  });
 });
 
 /** Build the clone URL / host / web-IDE link the "Open in editor" menu needs. */

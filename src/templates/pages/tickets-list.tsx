@@ -1115,6 +1115,9 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
         // Cache + (re)render details from the authoritative live row — this is what
         // makes the drawer open even when ticketMap was stale/missing the ticket.
         ticketMap[ticketId] = Object.assign({}, ticketMap[ticketId] || {}, live);
+        // Remember the real anchor so the banner and merge button name the branch
+        // this ticket actually merges into, instead of assuming lfg-agent.
+        _ticketAnchorBranch = live.anchorBranch || live.anchor_branch || '';
         renderDrawerDetails(ticketMap[ticketId]);
         var qs = live.queueStatus || live.queue_status || '';
         var st = live.status || (t && t.status) || 'open';
@@ -1302,6 +1305,11 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     return r.length > 180 ? r.slice(0, 177) + '…' : r;
   }
 
+  // The branch this ticket cascades on — its EPIC's branch, or the legacy global
+  // anchor for tickets that predate epics. Set when the ticket is opened; the
+  // banner used to hardcode "lfg-agent" and so lied for every epic ticket.
+  var _ticketAnchorBranch = '';
+
   function updateTicketStatusBanner(fields) {
     var topEl = document.getElementById('ticket-status-banner');
     var botEl = document.getElementById('actions-bottom-banner');
@@ -1320,7 +1328,11 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       b = { bg: 'rgba(239,68,68,.14)', fg: '#fca5a5', icon: 'fa-circle-exclamation', where: 'bottom',
             text: reason ? ('Build failed — ' + reason) : 'Build failed — check the logs above and rebuild.' };
     } else if (merge === 'merged' || st === 'done' || st === 'completed' || st === 'merged') {
-      b = { bg: 'rgba(16,185,129,.12)', fg: '#6ee7b7', icon: 'fa-circle-check', where: 'bottom', text: 'Build complete' + (merge === 'merged' ? ' — merged to lfg-agent.' : ' — ready for review.') };
+      var anchor = fields.anchorBranch || fields.anchor_branch || _ticketAnchorBranch || '';
+      b = { bg: 'rgba(16,185,129,.12)', fg: '#6ee7b7', icon: 'fa-circle-check', where: 'bottom',
+            text: 'Build complete' + (merge === 'merged'
+              ? (anchor ? ' — merged to ' + anchor + '.' : ' — merged.')
+              : ' — ready for review.') };
     } else if (st === 'in_review' || st === 'review') {
       b = { bg: 'rgba(16,185,129,.12)', fg: '#6ee7b7', icon: 'fa-circle-check', where: 'bottom', text: 'Build complete — in review.' };
     }
@@ -1960,7 +1972,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     // Actions
     html += '<div style="display:flex;gap:0.5rem;margin-top:0.25rem;flex-wrap:wrap;align-items:center;">';
     html += '<button onclick="pushToGithub()" id="git-push-btn" class="git-action-btn">'
-      + '<i class="fas fa-cloud-upload-alt"></i> Push & Merge to lfg-agent</button>';
+      + '<i class="fas fa-cloud-upload-alt"></i> Push &amp; Merge to ' + (_ticketAnchorBranch || 'epic branch') + '</button>';
 
     // Open in editor menu (only when we have a real repo to clone).
     if (_gitRepo && _gitRepo.hasRepo && _gitRepo.cloneUrl) {
@@ -2092,12 +2104,12 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       if (!res.ok) { alert(data.error || 'Failed to push'); }
       else {
         var msg = 'Pushed ' + (data.sha || '').slice(0, 7) + ' to ' + (data.branch || '');
-        if (data.mergeStatus === 'merged') msg += ' and merged to lfg-agent';
+        if (data.mergeStatus === 'merged') msg += ' and merged to ' + (_ticketAnchorBranch || 'the epic branch');
         alert(msg);
       }
       loadGitInfo();
     } catch(e) { alert('Failed: ' + e.message); }
-    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-cloud-upload-alt"></i> Push & Merge to lfg-agent'; }
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-cloud-upload-alt"></i> Push &amp; Merge to ' + (_ticketAnchorBranch || 'epic branch'); }
   }
 
 
