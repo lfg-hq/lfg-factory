@@ -224,6 +224,20 @@ export async function listUnapprovedEpics(projectId: string, excludeEpicId?: str
   return db.select().from(epics).where(where);
 }
 
+/**
+ * What an epic's branch should be cut from.
+ *
+ * Never the legacy global anchor. Epics created before that rule existed have
+ * `lfg-agent` recorded as their base; honouring it would re-import every other
+ * feature's unapproved work the moment the branch had to be recreated. Reading
+ * it through here heals those rows without a migration — delete the bad branch
+ * and the next build recreates it from main.
+ */
+export function epicBaseBranch(epic: { baseBranch?: string | null }): string {
+  const base = epic.baseBranch || "main";
+  return base === LEGACY_ANCHOR_BRANCH ? "main" : base;
+}
+
 // ── The branch a ticket lives on ─────────────────────────────────────
 
 export interface TicketAnchor {
@@ -250,7 +264,7 @@ export async function resolveTicketAnchor(ticket: {
     if (epic?.branch) {
       return {
         anchorBranch: epic.branch,
-        baseBranch: epic.baseBranch || "main",
+        baseBranch: epicBaseBranch(epic),
         epic,
       };
     }

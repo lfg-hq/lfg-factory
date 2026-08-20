@@ -19,6 +19,7 @@ import {
   assignTicketsToEpic,
   listUnassignedTickets,
   listEpicDocs,
+  epicBaseBranch,
   linkDocsToEpic,
   unlinkDocsFromEpic,
   LEGACY_ANCHOR_BRANCH,
@@ -250,7 +251,10 @@ epicsApi.get("/epics/:epicId", async (c) => {
     : null;
 
   return c.json({
-    epic,
+    // baseBranch is normalised: an epic recorded against the legacy anchor is
+    // reported (and recreated) as main, so the modal doesn't state a base the
+    // system would never actually use.
+    epic: { ...epic, baseBranch: epicBaseBranch(epic) },
     tickets,
     docs,
     stackedOn: parent ? { id: parent.id, epicKey: parent.epicKey, name: parent.name, status: parent.status } : null,
