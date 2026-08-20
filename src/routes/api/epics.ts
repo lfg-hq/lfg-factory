@@ -4,6 +4,7 @@ import { db } from "../../config/db.ts";
 import { epics } from "../../db/schema/epics.ts";
 import { projectTickets } from "../../db/schema/tickets.ts";
 import { projectFiles } from "../../db/schema/documents.ts";
+import { projects } from "../../db/schema/projects.ts";
 import { users } from "../../db/schema/users.ts";
 import { eq, and, asc, inArray } from "drizzle-orm";
 import { getProjectAccess } from "../../auth/project-access.ts";
@@ -34,11 +35,25 @@ type AuthEnv = {
 const epicsApi = new Hono<AuthEnv>();
 epicsApi.use("*", requireAuth);
 
-/** Load an epic and confirm the caller can see its project. */
+/**
+ * Load an epic and confirm the caller can see its project.
+ *
+ * `epic.projectId` is the INTERNAL projects.id, but getProjectAccess matches on
+ * the PUBLIC projects.projectId — passing the internal one always missed, so
+ * every /api/epics/:id route 404'd. Resolve the public id first.
+ */
 async function loadEpic(epicId: string, userId: string) {
   const epic = await getEpic(epicId);
   if (!epic) return null;
-  const access = await getProjectAccess(epic.projectId, userId);
+
+  const [proj] = await db
+    .select({ publicId: projects.projectId })
+    .from(projects)
+    .where(eq(projects.id, epic.projectId))
+    .limit(1);
+  if (!proj) return null;
+
+  const access = await getProjectAccess(proj.publicId, userId);
   if (!access) return null;
   return { epic, access };
 }
