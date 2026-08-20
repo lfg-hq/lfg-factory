@@ -323,6 +323,70 @@ document.addEventListener('DOMContentLoaded', function() {
         return '';
     }
 
+    // The modal mounts on <body>, outside the artifacts panel — so its styles can't
+    // live in the panel's injected <style>, and tickets.css isn't loaded on the chat
+    // page at all. Inject once, on demand.
+    function ensureEpicModalStyles() {
+        if (document.getElementById('lfg-epic-modal-styles')) return;
+        const st = document.createElement('style');
+        st.id = 'lfg-epic-modal-styles';
+        st.textContent = `
+.lfg-epic-modal-backdrop{position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.55);
+  display:flex;align-items:center;justify-content:center;padding:24px;}
+.lfg-epic-modal{width:min(680px,100%);max-height:84vh;overflow:auto;border-radius:14px;
+  background:var(--card-bg,#fff);color:var(--text-color,#0f172a);
+  border:1px solid var(--border-color,#e2e8f0);box-shadow:0 24px 60px rgba(0,0,0,.35);}
+.lfg-epic-modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;
+  padding:20px 22px 14px;border-bottom:1px solid var(--border-color,#e2e8f0);}
+.lfg-epic-modal-key{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;
+  font-weight:700;color:#8b5cf6;margin-bottom:4px;}
+.lfg-epic-modal-title{margin:0;font-size:18px;font-weight:650;line-height:1.3;}
+.lfg-epic-modal-close{background:none;border:none;cursor:pointer;font-size:15px;padding:4px 6px;
+  color:var(--text-secondary,#94a3b8);}
+.lfg-epic-modal-body{padding:18px 22px 24px;}
+.lfg-epic-goal{margin:0 0 14px;font-size:14px;line-height:1.55;color:var(--text-secondary,#64748b);}
+.lfg-epic-meta{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px;}
+.lfg-epic-meta .lfg-epic-state{font-size:9.5px;font-weight:700;letter-spacing:.04em;
+  text-transform:uppercase;padding:2px 7px;border-radius:5px;background:rgba(148,163,184,.18);}
+.lfg-epic-branch,.lfg-epic-base{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:11px;color:var(--text-secondary,#64748b);background:rgba(127,127,127,.12);
+  border-radius:6px;padding:3px 8px;display:inline-flex;align-items:center;gap:6px;
+  max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.lfg-epic-note,.lfg-epic-blockers{font-size:12.5px;line-height:1.5;border-radius:8px;
+  padding:10px 12px;margin-bottom:14px;}
+.lfg-epic-note{background:rgba(59,130,246,.1);color:#2563eb;}
+.lfg-epic-blockers{background:rgba(239,68,68,.1);color:#dc2626;}
+.lfg-epic-blockers ul{margin:6px 0 0;padding-left:18px;}
+.lfg-epic-section{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--text-secondary,#94a3b8);margin:20px 0 8px;display:flex;align-items:center;gap:8px;}
+.lfg-epic-count{font-size:10px;font-weight:600;letter-spacing:0;background:rgba(127,127,127,.15);
+  border-radius:999px;padding:1px 7px;}
+.lfg-epic-list{list-style:none;margin:0;padding:0;}
+.lfg-epic-list li{display:flex;align-items:center;gap:9px;font-size:13px;padding:7px 0;
+  border-bottom:1px solid var(--border-color,#eef2f7);}
+.lfg-epic-list li:last-child{border-bottom:none;}
+.lfg-epic-list i{font-size:11px;opacity:.55;flex:none;}
+.lfg-epic-tkey{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px;
+  font-weight:700;color:#8b5cf6;background:rgba(139,92,246,.12);
+  border:1px solid rgba(139,92,246,.25);border-radius:5px;padding:1px 6px;flex:none;}
+.lfg-epic-dim{color:var(--text-secondary,#94a3b8);font-size:11.5px;margin-left:auto;flex:none;}
+.lfg-epic-actions{display:flex;align-items:center;gap:12px;margin-top:22px;padding-top:16px;
+  border-top:1px solid var(--border-color,#eef2f7);}
+.lfg-epic-sync{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:550;
+  padding:7px 13px;border-radius:7px;cursor:pointer;background:rgba(139,92,246,.12);
+  color:#7c3aed;border:1px solid rgba(139,92,246,.28);}
+.lfg-epic-sync:disabled{opacity:.55;cursor:default;}
+.lfg-epic-sync-status{margin-left:0;}
+[data-theme="dark"] .lfg-epic-modal{background:#161616;color:#e2e8f0;border-color:#2a2a2a;}
+[data-theme="dark"] .lfg-epic-modal-head{border-bottom-color:#2a2a2a;}
+[data-theme="dark"] .lfg-epic-list li{border-bottom-color:#232323;}
+[data-theme="dark"] .lfg-epic-note{color:#93c5fd;}
+[data-theme="dark"] .lfg-epic-blockers{color:#fca5a5;}
+[data-theme="dark"] .lfg-epic-sync{color:#a78bfa;}
+`;
+        document.head.appendChild(st);
+    }
+
     // ── Epic detail modal ────────────────────────────────────────────────
     // The whole delivery unit in one place: what it delivers, where its code
     // lives, the docs it draws on, and every ticket in it. This is the view a
@@ -332,6 +396,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const esc = (v) => String(v == null ? '' : v)
             .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+        ensureEpicModalStyles();
         document.querySelectorAll('.lfg-epic-modal-backdrop').forEach(n => n.remove());
         const backdrop = document.createElement('div');
         backdrop.className = 'lfg-epic-modal-backdrop';
@@ -2797,9 +2862,58 @@ document.addEventListener('DOMContentLoaded', function() {
                                 padding: 1px 7px; border-radius: 999px;
                             }
                             .lfg-date-group::after { content: ''; flex: 1; height: 1px; background: ${isLightTheme ? '#edeff2' : 'rgba(255,255,255,0.05)'}; }
+                            /* Epic group header. The name may be long, so it gets the
+                               flexible space and truncates; everything else is fixed. */
+                            .lfg-date-group.lfg-group-toggle { cursor: pointer; user-select: none; }
+                            .lfg-group-name {
+                                flex: 1 1 auto; min-width: 0;
+                                overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                            }
+                            .lfg-date-group.lfg-group-toggle::after { display: none; }
+                            .lfg-group-chevron {
+                                flex: none; font-size: 9px; opacity: .55;
+                                transition: transform .15s ease;
+                            }
+                            .lfg-date-group.is-collapsed .lfg-group-chevron { transform: rotate(-90deg); }
+                            .lfg-epic-state {
+                                flex: none; font-size: 9.5px; font-weight: 700; letter-spacing: .04em;
+                                text-transform: uppercase; padding: 2px 7px; border-radius: 5px;
+                            }
+                            .lfg-epic-draft     { background: rgba(148,163,184,.18); color: ${isLightTheme ? '#64748b' : '#94a3b8'}; }
+                            .lfg-epic-building  { background: rgba(59,130,246,.16);  color: ${isLightTheme ? '#2563eb' : '#60a5fa'}; }
+                            .lfg-epic-in_review { background: rgba(168,85,247,.16);  color: ${isLightTheme ? '#7c3aed' : '#c084fc'}; }
+                            .lfg-epic-approved  { background: rgba(34,197,94,.16);   color: ${isLightTheme ? '#16a34a' : '#4ade80'}; }
+                            .lfg-epic-merged    { background: rgba(34,197,94,.22);   color: ${isLightTheme ? '#15803d' : '#22c55e'}; }
+                            .lfg-epic-rejected  { background: rgba(239,68,68,.16);   color: ${isLightTheme ? '#dc2626' : '#f87171'}; }
+                            .lfg-epic-branch-chip {
+                                flex: 0 1 auto; min-width: 0; max-width: 16rem;
+                                display: inline-flex; align-items: center; gap: 5px;
+                                font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+                                font-size: 10px; font-weight: 500;
+                                text-transform: none; letter-spacing: 0;
+                                color: ${isLightTheme ? '#8a93a2' : '#79828f'};
+                                background: ${isLightTheme ? '#f1f2f4' : 'rgba(255,255,255,0.05)'};
+                                border-radius: 5px; padding: 2px 7px;
+                                overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                            }
+                            .lfg-epic-branch-chip i { font-size: 9px; opacity: .7; flex: none; }
+                            .lfg-epic-info {
+                                flex: none; background: none; border: none; padding: 2px 4px;
+                                cursor: pointer; opacity: .55; line-height: 1;
+                                color: ${isLightTheme ? '#8a93a2' : '#79828f'};
+                            }
+                            .lfg-epic-info:hover { opacity: 1; color: #8b5cf6; }
 
                             /* ── Prettier filter controls ──────────────────────────────── */
-                            .checklist-filters .filter-group { display: flex; align-items: center; gap: 6px; }
+                            .checklist-filters { min-width: 0; }
+                            .checklist-filters .filter-options { min-width: 0; }
+                            .checklist-filters .filter-group {
+                                display: flex; align-items: center; gap: 6px;
+                                flex-wrap: wrap; justify-content: flex-end; min-width: 0;
+                            }
+                            /* Epic names are long; without a cap one title pushes the
+                               row past the panel and adds a horizontal scrollbar. */
+                            #epic-filter, #group-by-filter { max-width: 13rem !important; }
                             .checklist-filter-dropdown {
                                 height: 30px !important; min-width: 0 !important; max-width: none !important; width: auto !important;
                                 padding: 0 27px 0 11px !important; border-radius: 8px !important;
@@ -2825,13 +2939,13 @@ document.addEventListener('DOMContentLoaded', function() {
                             #checklist-actions-dropdown { width: 30px !important; height: 30px !important; border-radius: 8px !important; }
                         </style>
                         <div class="checklist-wrapper" data-selection-mode="false">
-                            <div class="checklist-header" style="display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: transparent; border: none;">
+                            <div class="checklist-header" style="display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 16px; background: transparent; border: none; flex-wrap: wrap; min-width: 0;">
                                 <!-- Select All (hidden by default, shown in selection mode) -->
                                 <div id="select-all-container" style="display: none; align-items: center; gap: 6px;">
                                     <input type="checkbox" id="select-all-tickets" class="ticket-checkbox" style="width: 16px; height: 16px; cursor: pointer; accent-color: #8b5cf6;">
                                     <label for="select-all-tickets" style="font-size: 12px; color: ${isLightTheme ? '#64748b' : '#888'}; cursor: pointer;">Select All</label>
                                 </div>
-                                <div id="header-spacer" style="flex: 1;"></div>
+                                <div id="header-spacer" style="flex: 1 1 0; min-width: 0;"></div>
                                 <div style="display: flex; align-items: center;">
                                     <div class="checklist-filters" style="margin-right: 12px;">
                                         <div class="filter-options">
@@ -6751,14 +6865,24 @@ document.addEventListener('DOMContentLoaded', function() {
                         let curDocGroup = null;
 
                         // Create file items with table-like layout
+                        const showDocGroups = currentEpic === '';
                         data.files.forEach(file => {
-                            const g = docEpicLabel(file);
-                            if (g !== curDocGroup) {
-                                curDocGroup = g;
-                                const hdr = document.createElement('div');
-                                hdr.className = 'lfg-date-group';
-                                hdr.textContent = g;
-                                fileBrowserList.appendChild(hdr);
+                            if (showDocGroups) {
+                                const g = docEpicLabel(file);
+                                if (g !== curDocGroup) {
+                                    curDocGroup = g;
+                                    const hdr = document.createElement('div');
+                                    hdr.className = 'lfg-doc-group';
+                                    // Inline: the Docs tab doesn't load tickets.css, and the
+                                    // panel's injected <style> only exists once the Tickets
+                                    // tab has rendered at least once.
+                                    hdr.style.cssText = 'display:flex;align-items:center;gap:8px;'
+                                        + 'padding:14px 12px 6px;font-size:11px;font-weight:600;'
+                                        + 'letter-spacing:.05em;text-transform:uppercase;'
+                                        + 'color:var(--text-secondary,#8a93a2);';
+                                    hdr.textContent = g;
+                                    fileBrowserList.appendChild(hdr);
+                                }
                             }
                             const icon = getFileIcon(file.type);
                             const typeClass = `file-type-${file.type}`;

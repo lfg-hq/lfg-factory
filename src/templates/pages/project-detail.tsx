@@ -907,7 +907,7 @@ export function ProjectDetailPage({
                     <select id="file-type-filter" class="input" style="padding:0.4rem 0.6rem;font-size:0.8125rem;">
                       <option value="">All Types</option>
                     </select>
-                    <select id="file-epic-filter" class="input" title="Filter documents by epic" style="padding:0.4rem 0.6rem;font-size:0.8125rem;">
+                    <select id="file-epic-filter" class="input" title="Filter documents by epic" style="max-width:15rem;padding:0.4rem 0.6rem;font-size:0.8125rem;">
                       <option value="">All Epics</option>
                     </select>
                     <button id="refresh-filebrowser" class="btn btn-secondary" style="font-size:0.8125rem;display:flex;align-items:center;gap:0.4rem;">
