@@ -72,13 +72,6 @@ export interface CreateEpicInput {
    * clean `main`, which is what stops unapproved work leaking between features.
    */
   parentEpicId?: string | null;
-  /**
-   * Override what the epic branch is cut from. Used when ADOPTING tickets that
-   * were already built and merged under the old global anchor — the epic takes
-   * over `lfg-agent`'s current head so the work that already exists ends up
-   * inside the epic, instead of a branch off main that's missing all of it.
-   */
-  baseBranchOverride?: string | null;
 }
 
 /**
@@ -108,13 +101,15 @@ export async function createEpic(input: CreateEpicInput): Promise<Epic> {
     parent = (await getEpic(input.parentEpicId)) ?? null;
   }
 
-  let baseBranch = input.baseBranchOverride || parent?.branch || "main";
+  // Always cut from approved code. An epic never starts from the legacy anchor:
+  // that would import whatever unapproved work happened to be sitting there.
+  let baseBranch = parent?.branch || "main";
   let baseSha: string | null = null;
 
   const auth = await resolveRepoAuth(project, project.ownerId);
   if (auth) {
     try {
-      if (!parent && !input.baseBranchOverride) baseBranch = await getDefaultBranch(auth);
+      if (!parent) baseBranch = await getDefaultBranch(auth);
       const sha = await getRemoteBranchSha({ ...auth, branch: baseBranch });
       if (sha) {
         const created = await createRemoteBranch({ ...auth, branch, fromSha: sha });
@@ -154,11 +149,15 @@ export async function createEpic(input: CreateEpicInput): Promise<Epic> {
 /**
  * Move existing tickets into an epic.
  *
- * Grouping is retroactive; git is not. A ticket that already merged under the
- * old global anchor keeps the branch it was built on — what changes is that the
- * epic now owns it for review and approval, and any ticket built FROM NOW ON
- * cascades on the epic's branch. That's why adoption pairs with
- * `baseBranchOverride`: cut the epic from the anchor that already holds the work.
+ * Grouping is retroactive; git is not. A ticket that already merged elsewhere
+ * keeps the branch it was built on — what changes is that the epic now owns it
+ * for review and approval, and any ticket built FROM NOW ON cascades on the
+ * epic's branch, which is cut from main.
+ *
+ * So adopting an already-built ticket does NOT put its code on the epic branch.
+ * Reconciling that is deliberately left to a human: the alternatives (cutting
+ * the epic from the legacy anchor, or auto-merging the old branch in) both drag
+ * other features' unapproved work along with them.
  *
  * Returns the tickets actually moved (ids outside the project are ignored).
  */
@@ -200,115 +199,6 @@ export async function listUnassignedTickets(projectId: string) {
     })
     .from(projectTickets)
     .where(and(eq(projectTickets.projectId, projectId), isNull(projectTickets.epicId)));
-}
-
-/**
- * Pull work that was built BEFORE this epic existed onto the epic's branch.
- *
- * A ticket built under the old global anchor has its code on its own feature
- * branch, merged into `lfg-agent` — not into the epic it was later adopted into.
- * Rather than deleting the branch and rebuilding (which re-runs the agent and can
- * produce different code), replay the merge: feature branch → epic branch, over
- * the provider API. Idempotent — a ticket already contained in the epic branch
- * reports "already" and is left alone.
- */
-export async function syncEpicBranch(
-  epicId: string,
-  actingUserId: string,
-  opts?: { force?: boolean }
-): Promise<{
-  epicBranch: string | null;
-  results: Array<{
-    ticketKey: string | null;
-    branch: string;
-    status: string;
-    detail?: string;
-    extraCommits?: Array<{ sha: string; message: string }>;
-  }>;
-}> {
-  const epic = await getEpic(epicId);
-  if (!epic) throw new Error(`Epic not found: ${epicId}`);
-  if (!epic.branch) return { epicBranch: null, results: [] };
-
-  const [project] = await db.select().from(projects).where(eq(projects.id, epic.projectId)).limit(1);
-  if (!project) throw new Error(`Project not found: ${epic.projectId}`);
-
-  const auth = await resolveRepoAuth(project, actingUserId);
-  if (!auth) throw new Error("No connected repo or credentials.");
-
-  const tickets = await db
-    .select({
-      ticketKey: projectTickets.ticketKey,
-      name: projectTickets.name,
-      branch: projectTickets.githubBranch,
-    })
-    .from(projectTickets)
-    .where(eq(projectTickets.epicId, epicId));
-
-  const { mergeBranchViaApi, compareBranches } = await import("./git.ts");
-  const results: Array<{
-    ticketKey: string | null;
-    branch: string;
-    status: string;
-    detail?: string;
-    extraCommits?: Array<{ sha: string; message: string }>;
-  }> = [];
-
-  // Commit messages the executor writes for a ticket's own work.
-  const ownsCommit = (msg: string, t: { ticketKey: string | null; name: string }) =>
-    (t.ticketKey ? msg.toLowerCase().includes(t.ticketKey.toLowerCase()) : false) ||
-    msg.toLowerCase().includes(t.name.toLowerCase().slice(0, 40));
-
-  for (const t of tickets) {
-    if (!t.branch) continue; // never built — nothing on a branch to bring over
-
-    // A branch cut from the old global anchor carries that anchor's whole
-    // history. Merging it into an epic cut from main would import every OTHER
-    // feature's unapproved work too — the exact leak epics exist to stop. So
-    // look before merging, and refuse when the branch brings in more than its
-    // own ticket's commits.
-    const cmp = await compareBranches({
-      provider: auth.provider,
-      owner: auth.owner,
-      repo: auth.repo,
-      token: auth.token,
-      base: epic.branch,
-      head: t.branch,
-    }).catch(() => null);
-
-    if (cmp && cmp.aheadBy === 0) {
-      results.push({ ticketKey: t.ticketKey, branch: t.branch, status: "already" });
-      continue;
-    }
-
-    const foreign = cmp ? cmp.commits.filter((c) => !ownsCommit(c.message, t)) : [];
-    if (foreign.length && !opts?.force) {
-      results.push({
-        ticketKey: t.ticketKey,
-        branch: t.branch,
-        status: "would_contaminate",
-        detail:
-          `${t.branch} was cut from \`${LEGACY_ANCHOR_BRANCH}\`, so merging it would also bring ` +
-          `${foreign.length} commit(s) belonging to other work into ${epic.epicKey}.`,
-        extraCommits: foreign.slice(0, 20),
-      });
-      continue;
-    }
-
-    const r = await mergeBranchViaApi({
-      provider: auth.provider,
-      owner: auth.owner,
-      repo: auth.repo,
-      token: auth.token,
-      base: epic.branch,
-      head: t.branch,
-      message: `Adopt ${t.ticketKey ?? t.name} into ${epic.epicKey}`,
-    }).catch((e) => ({ status: "conflict" as const, detail: (e as Error).message?.slice(0, 200) }));
-    results.push({ ticketKey: t.ticketKey, branch: t.branch, status: r.status, detail: r.detail });
-  }
-
-  console.log(`[epics] ${epic.epicKey}: synced ${results.length} branch(es) into ${epic.branch}`);
-  return { epicBranch: epic.branch, results };
 }
 
 // ── Lookups ──────────────────────────────────────────────────────────

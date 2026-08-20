@@ -370,19 +370,11 @@ document.addEventListener('DOMContentLoaded', function() {
   font-weight:700;color:#8b5cf6;background:rgba(139,92,246,.12);
   border:1px solid rgba(139,92,246,.25);border-radius:5px;padding:1px 6px;flex:none;}
 .lfg-epic-dim{color:var(--text-secondary,#94a3b8);font-size:11.5px;margin-left:auto;flex:none;}
-.lfg-epic-actions{display:flex;align-items:center;gap:12px;margin-top:22px;padding-top:16px;
-  border-top:1px solid var(--border-color,#eef2f7);}
-.lfg-epic-sync{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:550;
-  padding:7px 13px;border-radius:7px;cursor:pointer;background:rgba(139,92,246,.12);
-  color:#7c3aed;border:1px solid rgba(139,92,246,.28);}
-.lfg-epic-sync:disabled{opacity:.55;cursor:default;}
-.lfg-epic-sync-status{margin-left:0;}
 [data-theme="dark"] .lfg-epic-modal{background:#161616;color:#e2e8f0;border-color:#2a2a2a;}
 [data-theme="dark"] .lfg-epic-modal-head{border-bottom-color:#2a2a2a;}
 [data-theme="dark"] .lfg-epic-list li{border-bottom-color:#232323;}
 [data-theme="dark"] .lfg-epic-note{color:#93c5fd;}
 [data-theme="dark"] .lfg-epic-blockers{color:#fca5a5;}
-[data-theme="dark"] .lfg-epic-sync{color:#a78bfa;}
 `;
         document.head.appendChild(st);
     }
@@ -461,57 +453,9 @@ document.addEventListener('DOMContentLoaded', function() {
                             <span class="lfg-epic-dim">${esc(String(t.status || 'open').replace('_', ' '))}</span>
                        </li>`).join('')}</ul>`
                     : `<p class="lfg-epic-dim">No tickets in this epic yet.</p>`}
-                <div class="lfg-epic-actions">
-                    <button class="lfg-epic-sync" title="Pull work that was built before this epic existed onto its branch">
-                        <i class="fas fa-code-merge"></i> Sync branch
-                    </button>
-                    <span class="lfg-epic-sync-status lfg-epic-dim"></span>
-                </div>
             </div>`;
         backdrop.querySelector('.lfg-epic-modal-close').addEventListener('click', close);
 
-        // Tickets built BEFORE this epic existed merged into the old global anchor,
-        // not into the epic branch. This replays those merges instead of making the
-        // user delete branches and rebuild.
-        const syncBtn = backdrop.querySelector('.lfg-epic-sync');
-        const syncStatus = backdrop.querySelector('.lfg-epic-sync-status');
-        syncBtn.addEventListener('click', async () => {
-            syncBtn.disabled = true;
-            syncStatus.textContent = 'Syncing…';
-            try {
-                const r = await fetch(`/api/epics/${epicId}/sync-branch`, { method: 'POST' });
-                const d = await r.json();
-                if (!r.ok || d.error) { syncStatus.textContent = d.error || 'Sync failed'; return; }
-                const bits = [];
-                if (d.merged) bits.push(`${d.merged} merged in`);
-                if (d.alreadyPresent) bits.push(`${d.alreadyPresent} already there`);
-                if (d.conflicts) bits.push(`${d.conflicts} need manual merge`);
-                if (d.wouldContaminate) bits.push(`${d.wouldContaminate} skipped`);
-                syncStatus.textContent = bits.length ? bits.join(' · ') : 'Nothing to sync';
-                if (d.conflicts) syncStatus.style.color = '#f87171';
-
-                // Explain a refusal rather than leaving a bare "skipped" — this is
-                // the case where the branch would drag other features in with it.
-                const blocked = (d.needsAttention || []).filter(r => r.status === 'would_contaminate');
-                if (blocked.length) {
-                    const box = document.createElement('div');
-                    box.className = 'lfg-epic-blockers';
-                    box.style.marginTop = '12px';
-                    box.innerHTML = '<strong>Not synced — it would pull in other work:</strong><ul>'
-                        + blocked.map(r => `<li>${esc(r.ticketKey || r.branch)} — ${esc(r.detail || '')}`
-                            + (r.extraCommits && r.extraCommits.length
-                                ? `<br><span class="lfg-epic-dim" style="margin-left:0">e.g. ${esc(r.extraCommits.slice(0,3).map(c => c.message).join('; '))}</span>`
-                                : '')
-                            + '</li>').join('')
-                        + '</ul>';
-                    syncBtn.closest('.lfg-epic-actions').after(box);
-                }
-            } catch (e) {
-                syncStatus.textContent = 'Sync failed';
-            } finally {
-                syncBtn.disabled = false;
-            }
-        });
     }
     window.openEpicDetail = openEpicDetail;
 
@@ -3600,12 +3544,13 @@ document.addEventListener('DOMContentLoaded', function() {
                                             body: JSON.stringify({ ticketIds: selectedIds })
                                         });
                                     } else {
-                                        // A brand-new epic around existing work: adopt the
-                                        // anchor so already-built code lives inside it.
+                                        // A brand-new epic around existing work. Its branch is
+                                        // cut from main — already-built code stays on the branch
+                                        // it was built on; this groups the tickets, nothing more.
                                         res = await fetch(`/api/projects/${projectId}/epics/adopt`, {
                                             method: 'POST',
                                             headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCsrfToken() },
-                                            body: JSON.stringify({ name: answer.trim(), ticketIds: selectedIds, adoptFrom: 'anchor' })
+                                            body: JSON.stringify({ name: answer.trim(), ticketIds: selectedIds })
                                         });
                                     }
                                     const data = await res.json();

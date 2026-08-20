@@ -18,7 +18,6 @@ import {
   assignTicketsToEpic,
   listUnassignedTickets,
   listEpicDocs,
-  syncEpicBranch,
   linkDocsToEpic,
   unlinkDocsFromEpic,
   LEGACY_ANCHOR_BRANCH,
@@ -145,9 +144,6 @@ epicsApi.post("/projects/:projectId/epics/adopt", async (c) => {
     name?: string;
     goal?: string;
     ticketIds?: string[];
-    /** "anchor" = cut from the legacy lfg-agent head (keeps already-built code);
-     *  "main"   = cut clean, for tickets that were never built. */
-    adoptFrom?: "anchor" | "main";
   }>();
 
   if (!body.name?.trim()) return c.json({ error: "name is required" }, 400);
@@ -159,7 +155,6 @@ epicsApi.post("/projects/:projectId/epics/adopt", async (c) => {
     name: body.name.trim(),
     goal: body.goal,
     createdById: user.id,
-    baseBranchOverride: body.adoptFrom === "main" ? null : LEGACY_ANCHOR_BRANCH,
   });
 
   const { moved, ticketIds: movedIds } = await assignTicketsToEpic(epic.id, ticketIds);
@@ -210,38 +205,6 @@ epicsApi.delete("/epics/:epicId/docs", async (c) => {
 
   await unlinkDocsFromEpic(epicId!, body.fileIds);
   return c.json({ ok: true, docs: await listEpicDocs(epicId!) });
-});
-
-// ── POST /api/epics/:epicId/sync-branch ──────────────────────────────
-// Bring work built before this epic existed onto its branch, by replaying each
-// ticket's feature-branch merge. Cheaper and safer than deleting branches and
-// rebuilding — the code already exists, it just landed on the wrong anchor.
-epicsApi.post("/epics/:epicId/sync-branch", async (c) => {
-  const user = c.get("user");
-  const { epicId } = c.req.param();
-
-  const loaded = await loadEpic(epicId!, user.id);
-  if (!loaded) return c.json({ error: "Epic not found" }, 404);
-
-  const body = await c.req.json<{ force?: boolean }>().catch(() => ({ force: false }));
-
-  try {
-    const result = await syncEpicBranch(epicId!, user.id, { force: !!body.force });
-    const conflicts = result.results.filter((r) => r.status === "conflict");
-    const contaminating = result.results.filter((r) => r.status === "would_contaminate");
-    return c.json({
-      ...result,
-      merged: result.results.filter((r) => r.status === "merged").length,
-      alreadyPresent: result.results.filter((r) => r.status === "already").length,
-      conflicts: conflicts.length,
-      // Refused, not failed: merging would have pulled other features' unapproved
-      // work into this epic. Re-send with force:true only if that's genuinely wanted.
-      wouldContaminate: contaminating.length,
-      needsAttention: [...conflicts, ...contaminating],
-    });
-  } catch (err) {
-    return c.json({ error: (err as Error).message }, 500);
-  }
 });
 
 // ── GET /api/epics/:epicId ───────────────────────────────────────────

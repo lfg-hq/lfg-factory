@@ -11,7 +11,6 @@ import {
   assignTicketsToEpic,
   linkDocsToEpic,
   getEpic as getEpicById,
-  LEGACY_ANCHOR_BRANCH,
   UNAPPROVED_STATUSES,
 } from "../../services/epics.ts";
 
@@ -123,9 +122,10 @@ export const addToEpic = tool({
     "tickets MOVE into the epic (a ticket belongs to exactly one epic), while docs are " +
     "LINKED (they stay in the project's Docs tab, stay editable, and one doc can feed " +
     "several epics — nothing is hidden or taken away). " +
-    "\n\nAlso: a NEW epic wrapped around already-BUILT tickets is cut from the branch " +
-    "their code was merged into, not from main — otherwise its branch wouldn't contain " +
-    "their work. That happens automatically; don't say it starts from main.",
+    "\n\nAn epic's branch is always cut from `main`. If the tickets you're adding were " +
+    "ALREADY BUILT before the epic existed, their code is on their own branches and is NOT " +
+    "on the epic branch — grouping them is organisational only. Say so in one clause when " +
+    "it applies, and don't imply the code moved.",
   inputSchema: zodSchema(
     z.object({
       projectId: z.string(),
@@ -146,26 +146,26 @@ export const addToEpic = tool({
 
     let targetId = epicId;
 
+    // Tickets already built before this epic existed: their code sits on their own
+    // branches, not on the epic branch, which is always cut from main. Report that
+    // rather than implying the grouping moved any code.
+    const rows = tIds.length
+      ? await db
+          .select({ merged: projectTickets.githubMergeStatus })
+          .from(projectTickets)
+          .where(and(eq(projectTickets.projectId, projectId), inArray(projectTickets.id, tIds)))
+      : [];
+    const alreadyBuilt = rows.filter((r) => r.merged === "merged").length;
+
     if (!targetId) {
       if (!newEpicName?.trim()) {
         return { error: "Pass either epicId (an existing epic) or newEpicName (to create one)." };
       }
-      // Are any of these already built? If so the epic must ADOPT the anchor that
-      // holds their code rather than branch off clean main.
-      const rows = tIds.length
-        ? await db
-            .select({ merged: projectTickets.githubMergeStatus })
-            .from(projectTickets)
-            .where(and(eq(projectTickets.projectId, projectId), inArray(projectTickets.id, tIds)))
-        : [];
-      const anyBuilt = rows.some((r) => r.merged === "merged");
-
       const epic = await createEpic({
         projectId,
         name: newEpicName.trim(),
         goal,
         createdById: userId,
-        baseBranchOverride: anyBuilt ? LEGACY_ANCHOR_BRANCH : null,
       });
       targetId = epic.id;
     }
@@ -181,9 +181,10 @@ export const addToEpic = tool({
       epicKey: epic?.epicKey ?? null,
       epicName: epic?.name ?? null,
       branch: epic?.branch ?? null,
-      adoptedExistingWork: epic?.baseBranch === LEGACY_ANCHOR_BRANCH,
       // Docs were linked, not moved — say so if you mention them.
       docsRemainInProjectDocs: true,
+      // Grouped but built earlier: their code is NOT on the epic branch.
+      alreadyBuiltElsewhere: alreadyBuilt,
     };
   },
 });
