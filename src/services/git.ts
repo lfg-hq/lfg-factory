@@ -98,7 +98,7 @@ export async function setupRepo(opts: GitSetupOptions): Promise<void> {
 set -e
 if [ -d "${projectDir}/.git" ]; then
   cd "${projectDir}"
-  git fetch origin 2>&1
+  git fetch --prune origin 2>&1
   git checkout ${branch} 2>&1
   git pull origin ${branch} 2>&1
 else
@@ -376,7 +376,7 @@ git config user.name "LFG AI"
 git remote set-url origin "${authUrl}" 2>/dev/null || true
 
 # Fetch latest
-git fetch origin
+git fetch --prune origin
 
 # Checkout the anchor (create it from the base branch if it doesn't exist yet)
 if git rev-parse --verify origin/${targetBranch} 2>/dev/null; then

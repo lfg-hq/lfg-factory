@@ -2428,7 +2428,7 @@ export PATH=/root/node/current/bin:/usr/local/bin:/usr/bin:/bin:$PATH
 apk add --no-cache git ca-certificates >/dev/null 2>&1 || true
 mkdir -p /data
 if [ -d ${PROJECT_DIR}/.git ]; then
-  cd ${PROJECT_DIR} && git remote set-url origin "${authUrl}" && git fetch origin 2>&1 && { ${coBranch}; git pull --ff-only >/dev/null 2>&1; echo CLONE_OK; }
+  cd ${PROJECT_DIR} && git remote set-url origin "${authUrl}" && git fetch --prune origin 2>&1 && { ${coBranch}; git pull --ff-only >/dev/null 2>&1; echo CLONE_OK; }
 else
   rm -rf ${PROJECT_DIR}; git clone "${authUrl}" ${PROJECT_DIR} 2>&1 | tail -3; if [ -d ${PROJECT_DIR}/.git ]; then cd ${PROJECT_DIR} && (${coBranch}) && echo CLONE_OK; fi
 fi`, 240_000);
@@ -2946,11 +2946,11 @@ cd ${PROJECT_DIR} 2>/dev/null || { echo "NO_REPO"; exit 1; }
 [ -e .git ] || { echo "NO_REPO"; exit 1; }
 ${authUrl ? `git remote set-url origin "${authUrl}" 2>/dev/null || true` : ""}
 # Explicit destination refspecs so refs/remotes/origin/<branch> is ALWAYS created —
-# a bare 'git fetch origin <branch>' only updates FETCH_HEAD and relies on the clone's
+# a bare 'git fetch --prune origin <branch>' only updates FETCH_HEAD and relies on the clone's
 # fetch refspec for the remote-tracking ref, which fails for slashed branch names /
 # narrowed clones (branch exists on GitHub but 'git rev-parse origin/<branch>' is empty).
 FETCH_ERR=$(git fetch --no-tags --force origin "+refs/heads/${head}:refs/remotes/origin/${head}" "+refs/heads/${b}:refs/remotes/origin/${b}" 2>&1) || true
-git fetch origin --prune >/dev/null 2>&1 || true
+git fetch --prune origin --prune >/dev/null 2>&1 || true
 echo "===BRANCHES==="
 git for-each-ref --format='%(refname:short)' refs/remotes/origin 2>/dev/null | sed 's#^origin/##' | grep -v '^HEAD$' | sort -u
 echo "===REFS==="

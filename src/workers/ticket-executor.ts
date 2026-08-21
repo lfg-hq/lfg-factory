@@ -1086,7 +1086,7 @@ cd ${WORKING_DIR}
 if [ -d "${projectDirName}/.git" ]; then
     echo "REPO_EXISTS"
     cd ${projectDirName}
-    git fetch origin
+    git fetch --prune origin
     git reset --hard HEAD 2>/dev/null || true
     git clean -fd 2>/dev/null || true
 elif [ -d "${projectDirName}" ] && [ "$(ls -A ${projectDirName} 2>/dev/null)" ]; then
@@ -1095,7 +1095,7 @@ elif [ -d "${projectDirName}" ] && [ "$(ls -A ${projectDirName} 2>/dev/null)" ];
     git init
     git remote add origin https://${githubToken}@github.com/${githubOwner}/${githubRepo}.git 2>/dev/null || \
         git remote set-url origin https://${githubToken}@github.com/${githubOwner}/${githubRepo}.git
-    git fetch origin
+    git fetch --prune origin
 else
     echo "CLONING_REPO"
     rm -rf ${projectDirName}
@@ -1659,7 +1659,7 @@ async function ensureIsolatedChatSandbox(
       // commit — a build or a prior chat may have pushed since it was last used.
       await wakeTicketVm(existing.magsWorkspaceId);
       const sync = await execOnWorkspace(existing.magsWorkspaceId,
-        `cd ${WORKING_DIR}/${projectDirName} 2>/dev/null && git config --global --add safe.directory '*' 2>/dev/null; git fetch origin 2>&1 | tail -1; git checkout -B ${featureBranch} origin/${featureBranch} 2>/dev/null || git checkout ${featureBranch} 2>/dev/null; git reset --hard origin/${featureBranch} 2>/dev/null; git clean -fd 2>/dev/null; echo READY`,
+        `cd ${WORKING_DIR}/${projectDirName} 2>/dev/null && git config --global --add safe.directory '*' 2>/dev/null; git fetch --prune origin 2>&1 | tail -1; git checkout -B ${featureBranch} origin/${featureBranch} 2>/dev/null || git checkout ${featureBranch} 2>/dev/null; git reset --hard origin/${featureBranch} 2>/dev/null; git clean -fd 2>/dev/null; echo READY`,
         { timeout: 90_000 });
       if (sync.output.includes("READY")) {
         // Drop any REDUNDANT dedicated rows for this ticket so we converge on one.
@@ -2477,7 +2477,7 @@ async function executeTicketApi(ticketId: string, useCodingAgent: boolean, actor
 cd ${WORKING_DIR}/project || { echo "GIT_SETUP_FAILED_NO_GIT"; exit 1; }
 git config user.email "ai@lfg.dev"; git config user.name "LFG AI"
 git remote set-url origin "${auth.authUrl}" 2>/dev/null || git remote add origin "${auth.authUrl}" 2>/dev/null || true
-git fetch origin 2>&1 || true
+git fetch --prune origin 2>&1 || true
 if ! git rev-parse --verify origin/${anchorBranch} 2>/dev/null; then
     echo "CREATING_ANCHOR_BRANCH"
     ANCHOR_BASE="${anchorBase}"
@@ -2506,7 +2506,7 @@ cd ${WORKING_DIR}
 if [ -d "${projectDirName}/.git" ]; then
     echo "REPO_EXISTS"
     cd ${projectDirName}
-    git fetch origin
+    git fetch --prune origin
     git reset --hard HEAD 2>/dev/null || true
     git clean -fd 2>/dev/null || true
 elif [ -d "${projectDirName}" ] && [ "$(ls -A ${projectDirName} 2>/dev/null)" ]; then
@@ -2515,7 +2515,7 @@ elif [ -d "${projectDirName}" ] && [ "$(ls -A ${projectDirName} 2>/dev/null)" ];
     git init
     git remote add origin "${auth.authUrl}" 2>/dev/null || \\
         git remote set-url origin "${auth.authUrl}"
-    git fetch origin
+    git fetch --prune origin
 else
     echo "CLONING_REPO"
     rm -rf ${projectDirName}
