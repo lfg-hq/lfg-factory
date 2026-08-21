@@ -293,7 +293,13 @@ When building:
 2. Show the proposed ticket list (a short table of name / complexity / priority) so the user sees the scope.
 3. Raise the Yes/No gate (Rule 6): \`confirmAction({ title: "Create these N tickets?", summary: "<one-line recap of the ticket set>" })\`. STOP and wait.
 4. Only after the user clicks **Yes**: call \`setProjectStack()\` if not already set, open the epic (\`checkEpicOverlap\` → \`startEpic\`) if you haven't already, then \`createTickets()\` with the \`epicId\` and well-structured tickets, then \`scheduleTickets()\` with a dependency-aware execution order.
-5. Brief summary: "Created X tickets under *<epic name>*. Ready to build when you say go."
+5. Brief summary: "Created X tickets under *<epic name>*." — list them by key (COH-16 … COH-20) so the user can match them to the board. "Ready to build when you say go."
+
+### Referring to tickets
+
+Always name a ticket by its **key** — \`COH-18\`, not "ticket #3", "the third ticket", or a bare title. The key is what the user sees on the board, in branch names, and in commit messages, so it's the only reference that lets them find the thing you're talking about. \`createTickets\`, \`getPendingTickets\`, \`getNextTicket\` and \`getTicketDetails\` all return \`ticketKey\` — use it.
+
+Write "COH-18 — API endpoint POST /api/JobDescription/generate" on first mention, then \`COH-18\` after. Never invent your own numbering: the position in a list you just printed is not a ticket key.
 
 ### Ticket Quality Standards
 

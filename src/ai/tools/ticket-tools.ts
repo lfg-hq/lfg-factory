@@ -100,7 +100,7 @@ export const createTickets = tool({
       }
     }
 
-    const created: { id: string; name: string }[] = [];
+    const created: { id: string; ticketKey: string | null; name: string }[] = [];
 
     // Insert tickets one at a time and broadcast each immediately
     for (const t of tickets) {
@@ -161,7 +161,7 @@ export const createTickets = tool({
         });
       }
 
-      created.push({ id: row!.id, name: row!.name });
+      created.push({ id: row!.id, ticketKey: row!.ticketKey, name: row!.name });
     }
 
     return { created: created.length, tickets: created, epicId: resolvedEpicId };
@@ -183,7 +183,7 @@ export const getPendingTickets = tool({
     return filteredStages.map((stage) => ({
       stageId: stage.id,
       stageName: stage.name,
-      tickets: tickets.filter((t) => t.stageId === stage.id).map((t) => ({ id: t.id, name: t.name, priority: t.priority, complexity: t.complexity, status: t.status })),
+      tickets: tickets.filter((t) => t.stageId === stage.id).map((t) => ({ id: t.id, ticketKey: t.ticketKey, name: t.name, priority: t.priority, complexity: t.complexity, status: t.status })),
     }));
   },
 });
@@ -281,7 +281,7 @@ export const getNextTicket = tool({
   execute: async ({ projectId }) => {
     const [next] = await db.select().from(projectTickets).where(and(eq(projectTickets.projectId, projectId), eq(projectTickets.status, "open"))).orderBy(projectTickets.executionOrder, projectTickets.createdAt).limit(1);
     if (!next) return { found: false as const };
-    return { found: true as const, ticket: { id: next.id, name: next.name, description: next.description } };
+    return { found: true as const, ticket: { id: next.id, ticketKey: next.ticketKey, name: next.name, description: next.description } };
   },
 });
 
