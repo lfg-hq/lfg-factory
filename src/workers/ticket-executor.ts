@@ -1332,6 +1332,7 @@ Before implementing, fix the git issue:
     prompt = buildBuilderPrompt({
       ticket: {
         id: ticket.id,
+        ticketKey: ticket.ticketKey,
         name: ticket.name,
         description: ticket.description,
         details: (ticket.details as Record<string, unknown>) ?? {},
@@ -1494,7 +1495,7 @@ Before implementing, fix the git issue:
       const { sha } = await commitAndPush({
         workspaceId,
         projectDir: `${WORKING_DIR}/${projectDirName}`,
-        commitMessage: `feat: ${ticket.name}`,
+        commitMessage: `feat: ${ticket.ticketKey ? ticket.ticketKey + " " : ""}${ticket.name}`,
         featureBranch,
         repoUrl: `https://github.com/${githubOwner}/${githubRepo}.git`,
         githubToken,
@@ -1978,7 +1979,7 @@ ${message}
 
   const prompt = buildTicketChatPrompt(
     {
-      ticket: { id: ticket.id, name: ticket.name, description: ticket.description },
+      ticket: { id: ticket.id, ticketKey: ticket.ticketKey, name: ticket.name, description: ticket.description },
       project: { id: project!.id, name: project!.name },
       callbackBaseUrl: CALLBACK_BASE_URL,
       cliApiKey,
@@ -2649,6 +2650,7 @@ git branch --show-current
   const systemPrompt = buildApiBuilderPrompt({
     ticket: {
       id: ticket.id,
+      ticketKey: ticket.ticketKey,
       name: ticket.name,
       description: ticket.description,
       details: (ticket.details as Record<string, unknown>) ?? {},
@@ -2956,7 +2958,7 @@ git branch --show-current
       const { sha } = await commitAndPush({
         workspaceId,
         projectDir,
-        commitMessage: `feat: ${ticket.name}`,
+        commitMessage: `feat: ${ticket.ticketKey ? ticket.ticketKey + " " : ""}${ticket.name}`,
         featureBranch,
         repoUrl: pushAuth.repoUrl,
         githubToken: pushAuth.token,
@@ -3219,6 +3221,7 @@ async function recoverUnpushedTickets() {
         githubCommitSha: projectTickets.githubCommitSha,
         githubBranch: projectTickets.githubBranch,
         assigneeId: projectTickets.assigneeId,
+        ticketKey: projectTickets.ticketKey, // so the recovered commit is traceable to a ticket
         epicId: projectTickets.epicId, // decides which anchor the recovered work merges into
       })
       .from(projectTickets)
@@ -3305,7 +3308,7 @@ async function recoverUnpushedTickets() {
         const { sha } = await commitAndPush({
           workspaceId,
           projectDir: `${WORKING_DIR}/${projectDirName}`,
-          commitMessage: `feat: ${ticket.name}`,
+          commitMessage: `feat: ${ticket.ticketKey ? ticket.ticketKey + " " : ""}${ticket.name}`,
           featureBranch,
           repoUrl: `https://github.com/${project.repoOwner}/${project.repoName}.git`,
           githubToken: ghToken.accessToken,

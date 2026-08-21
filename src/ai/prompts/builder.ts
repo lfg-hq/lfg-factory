@@ -10,6 +10,10 @@
 export interface BuilderPromptContext {
   ticket: {
     id: string;
+    /** Human-facing key (e.g. "COH-16") — what the user sees on the board and in
+     *  the branch name. The agent had only the UUID, so anything it wrote back
+     *  referred to the ticket by a name or a made-up number. */
+    ticketKey?: string | null;
     name: string;
     description: string;
     details?: Record<string, unknown>;
@@ -62,7 +66,8 @@ Dev Port: ${techStack.port ?? "unknown"}`
   return `You are a senior software engineer implementing a ticket in the LFG platform.
 
 ## Ticket
-ID: ${ticket.id}
+ID: ${ticket.id}${ticket.ticketKey ? `
+Key: ${ticket.ticketKey}  (refer to this ticket as ${ticket.ticketKey} in any summary you write)` : ""}
 Name: ${ticket.name}
 
 ## Description
@@ -208,7 +213,7 @@ export function buildTicketChatPrompt(
 ): string {
   const { ticket, project, callbackBaseUrl, cliApiKey } = ctx;
 
-  return `You are continuing work on ticket "${ticket.name}" (ID: ${ticket.id}) in the project "${project.name}".
+  return `You are continuing work on ticket ${ticket.ticketKey ? ticket.ticketKey + " " : ""}"${ticket.name}" (ID: ${ticket.id}) in the project "${project.name}".
 
 ${previousContext ? `## Previous Context\n${previousContext}\n` : ""}
 

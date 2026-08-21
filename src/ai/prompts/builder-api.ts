@@ -31,7 +31,8 @@ Dev Port: ${techStack.port ?? "unknown"}`
   return `You are a senior software engineer implementing a ticket in the LFG platform.
 
 ## Ticket
-ID: ${ticket.id}
+ID: ${ticket.id}${ticket.ticketKey ? `
+Key: ${ticket.ticketKey}  (refer to this ticket as ${ticket.ticketKey} in any summary you write)` : ""}
 Name: ${ticket.name}
 
 ## Description
