@@ -33,6 +33,17 @@ document.addEventListener('DOMContentLoaded', function() {
         updateChatContainerPosition(true);
     }
     
+    // The ticket detail overlay lives in the CHAT column but is opened from THIS panel
+    // (Tickets tab → click a ticket). So closing the panel has to close it too — left
+    // behind on its own it stretches across the full width with the list it came from
+    // gone, which reads as a stuck screen. Called from every close path below.
+    function closeTicketDetail() {
+        const t = window.TicketAgentChat;
+        if (t && typeof t.isOpen === 'function' && t.isOpen() && typeof t.close === 'function') {
+            try { t.close(); } catch (e) { console.warn('closing ticket detail failed:', e); }
+        }
+    }
+
     // Toggle panel visibility when floating button is clicked
     artifactsButton.addEventListener('click', function() {
         const isExpanded = artifactsPanel.classList.toggle('expanded');
@@ -51,9 +62,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             }
         } else {
+            closeTicketDetail(); // before the reflow below, so the chat re-lays-out once
             appContainer.classList.remove('artifacts-expanded');
         }
-        
+
         // Store state in localStorage
         localStorage.setItem('artifacts_expanded', isExpanded);
         
@@ -63,6 +75,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Close panel when toggle button inside panel is clicked
     artifactsToggle.addEventListener('click', function() {
+        closeTicketDetail();
         artifactsPanel.classList.remove('expanded');
         artifactsButton.classList.remove('active');
         appContainer.classList.remove('artifacts-expanded');
@@ -448,6 +461,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
             } else {
                 // Close the panel
+                closeTicketDetail();
                 artifactsPanel.classList.remove('expanded');
                 appContainer.classList.remove('artifacts-expanded');
                 artifactsButton.classList.remove('active');
