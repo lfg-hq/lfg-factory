@@ -55,9 +55,74 @@ const app = new Hono();
 // browsers cache them — the origin (which can be busy with LLM/build work) then
 // serves each asset at most once per cache window instead of on every page load.
 const STATIC_CACHE = "public, max-age=3600, s-maxage=604800, stale-while-revalidate=86400";
+
+// Two things were making every page load pay full freight for static assets:
+//   1. NO VALIDATOR. hono's serveStatic sends neither ETag nor Last-Modified, so a
+//      browser had nothing to revalidate with and every refresh re-downloaded every
+//      file in full (a 200 each, never a 304). That's the reload flash: the page
+//      renders before ~270kB of CSS has come back down again.
+//   2. NO COMPRESSION. CSS/JS are most of the weight (light-mode.css 121kB raw,
+//      tickets.css 92kB) and went out uncompressed.
+// Both are fixed here. NOTE: hono/compress is NOT usable on Bun — it needs
+// CompressionStream, which Bun 1.2.23 doesn't define, so it throws and every asset
+// 500s. Bun.gzipSync does the job instead, and the result is memoized so a file is
+// read + compressed once per deploy rather than once per request.
+const gzipCache = new Map<string, { tag: string; body: Uint8Array; type: string }>();
+let gzipCacheBytes = 0;
+const GZIP_CACHE_MAX = 64 * 1024 * 1024; // whole-dir ceiling; /public is far smaller
+const COMPRESSIBLE = /^(?:text\/|application\/(?:javascript|json|xml|manifest)|image\/svg\+xml)/i;
+
 app.use("/public/*", async (c, next) => {
+  const rel = decodeURIComponent(new URL(c.req.url).pathname);
+  // The tag comes from mtime+size: one stat, and it changes by itself on deploy.
+  let tag = "";
+  if (!rel.includes("..")) {
+    try {
+      const f = Bun.file("." + rel);
+      const size = f.size;
+      if (size > 0) tag = `W/"${Math.floor(f.lastModified).toString(36)}-${size.toString(36)}"`;
+    } catch { /* missing/unreadable → no validator; serveStatic answers below */ }
+  }
+  // Unchanged since the browser last fetched it — send no body at all.
+  if (tag && c.req.header("If-None-Match") === tag) {
+    return c.body(null, 304, { ETag: tag, "Cache-Control": STATIC_CACHE });
+  }
+
+  const wantsGzip = (c.req.header("Accept-Encoding") || "").includes("gzip");
+  const headers = () => ({
+    "Cache-Control": STATIC_CACHE,
+    // gzip and identity are different representations of one URL; without Vary a
+    // shared cache can hand a gzip body to a client that never asked for one.
+    Vary: "Accept-Encoding",
+    ...(tag ? { ETag: tag } : {}),
+  });
+
+  // Hot path: already compressed this exact version of the file.
+  const hit = tag && wantsGzip ? gzipCache.get(rel) : undefined;
+  if (hit && hit.tag === tag) {
+    return c.body(hit.body as unknown as ArrayBuffer, 200, { ...headers(), "Content-Type": hit.type, "Content-Encoding": "gzip" });
+  }
+
   await next();
-  if (c.res && c.res.status === 200) c.header("Cache-Control", STATIC_CACHE);
+  if (!c.res || c.res.status !== 200) return;
+  for (const [k, v] of Object.entries(headers())) c.header(k, v);
+
+  const type = c.res.headers.get("Content-Type") || "";
+  if (!wantsGzip || !COMPRESSIBLE.test(type)) return; // fonts/images already compressed
+  try {
+    const raw = new Uint8Array(await c.res.arrayBuffer());
+    const gz = Bun.gzipSync(raw);
+    if (tag && gzipCacheBytes + gz.byteLength <= GZIP_CACHE_MAX) {
+      const prev = gzipCache.get(rel);
+      if (prev) gzipCacheBytes -= prev.body.byteLength;
+      gzipCache.set(rel, { tag, body: gz, type });
+      gzipCacheBytes += gz.byteLength;
+    }
+    c.res = new Response(gz as unknown as ArrayBuffer, {
+      status: 200,
+      headers: { ...headers(), "Content-Type": type, "Content-Encoding": "gzip" },
+    });
+  } catch { /* compression is an optimisation — serve what serveStatic produced */ }
 });
 app.use("/public/*", serveStatic({ root: "./" }));
 app.use("/uploads/*", serveStatic({ root: "./" }));
