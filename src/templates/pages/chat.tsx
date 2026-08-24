@@ -103,13 +103,13 @@ export function ChatPage({
           </a>
         </div>
         <div class="sidebar-nav">
-          <a href="/chat/project/${projectId}" class="nav-link chat-link active">
-            <i class="fas fa-comments"></i>
-            <span class="nav-text">Chat</span>
-          </a>
           <a href="/projects/${projectId}" class="nav-link">
             <i class="fas fa-tachometer-alt"></i>
             <span class="nav-text">Dashboard</span>
+          </a>
+          <a href="/chat/project/${projectId}" class="nav-link chat-link active">
+            <i class="fas fa-comments"></i>
+            <span class="nav-text">Chat</span>
           </a>
           <a href="/projects/${projectId}/tickets" class="nav-link">
             <i class="fas fa-tasks"></i>

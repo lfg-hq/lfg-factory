@@ -139,13 +139,13 @@ export function ProjectDetailPage({
           </a>
         </div>
         <div class="sidebar-nav">
-          <a href="/chat/project/${project.projectId}" class="nav-link">
-            <i class="fas fa-comments"></i>
-            <span class="nav-text">Chat</span>
-          </a>
           <a href="/projects/${project.projectId}" class="nav-link${activeTab === "home" ? " active" : ""}">
             <i class="fas fa-tachometer-alt"></i>
             <span class="nav-text">Dashboard</span>
+          </a>
+          <a href="/chat/project/${project.projectId}" class="nav-link">
+            <i class="fas fa-comments"></i>
+            <span class="nav-text">Chat</span>
           </a>
           <a href="/projects/${project.projectId}/tickets" class="nav-link">
             <i class="fas fa-tasks"></i>
