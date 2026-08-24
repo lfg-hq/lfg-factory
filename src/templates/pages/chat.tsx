@@ -282,7 +282,10 @@ export function ChatPage({
         <div class="tab-pane" id="preview">
           <div id="preview-root" data-project-id="${projectId}" style="height:100%;display:flex;flex-direction:column;">
             <div class="preview-header" style="padding:14px 20px;border-bottom:1px solid var(--border-color,#2a2a2a);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:nowrap;">
-              <div style="display:flex;flex-direction:column;gap:2px;min-width:0;flex:0 1 auto;overflow:hidden;">
+              <!-- flex:none — the title block is short and fixed. Letting it SHRINK is what
+                   chopped the status line mid-word ("Live · (defa…") whenever the toolbar
+                   got busy; the toolbar absorbs the squeeze instead (its chips scroll). -->
+              <div style="display:flex;flex-direction:column;gap:2px;flex:none;overflow:hidden;">
                 <div style="display:flex;align-items:center;gap:12px;">
                   <h3 style="color:var(--text-color,#e2e8f0);margin:0;font-size:16px;font-weight:600;white-space:nowrap;">Preview</h3>
                   <!-- "Chat with ticket" sits on the SAME line as the title (rendered here by preview-tab.js). -->
@@ -290,10 +293,12 @@ export function ChatPage({
                 </div>
                 <span id="preview-substatus" style="color:var(--text-secondary,#9ca3af);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px;">Loading…</span>
               </div>
-              <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end;flex:0 1 auto;min-width:0;">
+              <div style="display:flex;gap:6px;align-items:center;flex-wrap:nowrap;justify-content:flex-end;flex:1 1 auto;min-width:0;">
                 <!-- Profile moved into the ⋮ overflow menu (rendered by preview-tab.js). -->
                 <button id="preview-plan-btn" style="display:none;"></button>
-                <div id="preview-actions" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end;"></div>
+                <!-- The running toolbar switches itself to nowrap + a scrolling chip strip
+                     (see ensureToolbarStyles in preview-tab.js); other views still wrap. -->
+                <div id="preview-actions" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end;min-width:0;flex:1 1 auto;"></div>
               </div>
             </div>
             <div id="preview-body" style="flex:1;min-height:0;position:relative;overflow:hidden;">

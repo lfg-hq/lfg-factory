@@ -62,7 +62,9 @@
   }
 
   function btn(label, opts = {}) {
-    const base = "height:32px;padding:0 12px;border-radius:7px;cursor:pointer;font-size:12.5px;display:inline-flex;align-items:center;justify-content:center;gap:7px;font-weight:500;white-space:nowrap;transition:background .12s,border-color .12s;";
+    // flex:none — a toolbar button must never be squeezed narrower than its label/icon
+    // (the chip strip is what gives up space when the panel is narrow).
+    const base = "height:32px;padding:0 12px;border-radius:7px;cursor:pointer;font-size:12.5px;display:inline-flex;align-items:center;justify-content:center;gap:7px;font-weight:500;white-space:nowrap;flex:none;transition:background .12s,border-color .12s;";
     const style = opts.primary
       ? "background:#7c3aed;color:#fff;border:1px solid #7c3aed;"
       : opts.danger
@@ -73,6 +75,30 @@
   }
   // A thin vertical divider between button groups in the toolbar.
   function tbDiv() { return `<span style="width:1px;height:20px;background:var(--border-color,#333);margin:0 3px;flex:none;"></span>`; }
+
+  // One-time toolbar stylesheet. The toolbar used to WRAP when the panel got narrow,
+  // which orphaned the ⋮ overflow button onto a second row on its own — the header grew
+  // a ragged extra line and the menu button floated away from the controls it belongs to.
+  // Instead: never wrap, and let the ONE genuinely variable-width group (the app chips)
+  // scroll horizontally, so every fixed control keeps its place at any width.
+  // Injected from here so both mount points (chat + the ticket drawer) get it, and with
+  // !important because the containers carry inline styles from their templates.
+  function ensureToolbarStyles() {
+    if (document.getElementById("pv-toolbar-css")) return;
+    const st = document.createElement("style");
+    st.id = "pv-toolbar-css";
+    st.textContent =
+      // Scoped to the RUNNING toolbar (the only one with a chip strip). The error and
+      // progress views show wide labelled buttons ("Run default branch") with nothing
+      // that can scroll, so they keep their old wrapping behaviour.
+      "#preview-actions:has(.pv-scroll){flex-wrap:nowrap!important;min-width:0;flex:1 1 auto;}" +
+      ".pv-scroll{display:flex;align-items:center;gap:6px;flex:1 1 auto;min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-ms-overflow-style:none;}" +
+      ".pv-scroll::-webkit-scrollbar{display:none;}" +
+      // The branch <select> is the one fixed control that can afford to give up width
+      // before the chips start scrolling.
+      "#preview-actions select[data-branch]{flex:0 1 auto;min-width:92px;}";
+    document.head.appendChild(st);
+  }
 
   // --- Multi-app service switcher ---------------------------------------------
   // Which app's URL the iframe currently shows (null → primary). Persists across
@@ -90,13 +116,16 @@
   function serviceChips(state) {
     const svcs = (state && state.services) || [];
     // "＋ Add app" — the deterministic path when the probe didn't detect a second app.
-    const addBtn = `<button data-action="svcadd" title="Add another app in this repo (folder + start command + port)" style="height:32px;padding:0 10px;border-radius:7px;font-size:12px;cursor:pointer;border:1px dashed var(--border-color,#444);background:transparent;color:var(--text-secondary,#9ca3af);display:inline-flex;align-items:center;gap:6px;white-space:nowrap;"><i class="fas fa-plus" style="font-size:10px;"></i>Add app</button>`;
-    if (svcs.length < 2) return addBtn + tbDiv();
+    const addBtn = `<button data-action="svcadd" title="Add another app in this repo (folder + start command + port)" style="height:32px;padding:0 10px;border-radius:7px;font-size:12px;cursor:pointer;border:1px dashed var(--border-color,#444);background:transparent;color:var(--text-secondary,#9ca3af);display:inline-flex;align-items:center;gap:6px;white-space:nowrap;flex:none;"><i class="fas fa-plus" style="font-size:10px;"></i>Add app</button>`;
+    // The chips are the only group whose width grows with the project (one per app), so
+    // they're the group that scrolls when space runs out — the divider stays outside it.
+    const strip = (inner) => `<div class="pv-scroll">${inner}</div>` + tbDiv();
+    if (svcs.length < 2) return strip(addBtn);
     const active = activeSvc(state);
     const chips = svcs.map((s) => {
       const isActive = active && s.name === active.name;
       const clickable = !!s.url;
-      const chip = `padding:0 10px;height:32px;border-radius:7px;font-size:12px;cursor:${clickable ? "pointer" : "default"};border:1px solid ${isActive ? "#7c3aed" : "var(--border-color,#333)"};background:${isActive ? "rgba(124,58,237,.14)" : "transparent"};color:${clickable ? "var(--text-color,#cbd5e1)" : "var(--text-secondary,#9ca3af)"};display:inline-flex;align-items:center;gap:7px;font-weight:500;white-space:nowrap;`;
+      const chip = `padding:0 10px;height:32px;border-radius:7px;font-size:12px;cursor:${clickable ? "pointer" : "default"};border:1px solid ${isActive ? "#7c3aed" : "var(--border-color,#333)"};background:${isActive ? "rgba(124,58,237,.14)" : "transparent"};color:${clickable ? "var(--text-color,#cbd5e1)" : "var(--text-secondary,#9ca3af)"};display:inline-flex;align-items:center;gap:7px;font-weight:500;white-space:nowrap;flex:none;`;
       const toggle = s.primary
         ? ""
         : `<span data-action="svctoggle:${esc(s.name)}:${s.enabled ? "0" : "1"}" title="${s.enabled ? "Turn this app off" : "Turn this app on"}" style="font-size:10px;font-weight:600;padding:1px 6px;border-radius:5px;letter-spacing:.5px;background:${s.enabled ? "rgba(16,185,129,.18)" : "rgba(148,163,184,.15)"};color:${s.enabled ? "#10b981" : "#94a3b8"};cursor:pointer;">${s.enabled ? "ON" : "OFF"}</span>`;
@@ -111,10 +140,11 @@
       const tip = `${esc(s.name)}${s.port ? " · :" + s.port : ""}${s.dir ? " · " + esc(s.dir) : ""}${s.url ? " · " + esc(s.url) : (s.enabled ? " · (starting…)" : "")}`;
       return `<button ${clickable ? `data-action="svc:${esc(s.name)}"` : ""} title="${tip}" style="${chip}">${dot}<span>${esc(s.name)}</span>${toggle}${openBtn}${fixBtn}${rm}</button>`;
     }).join("");
-    return chips + addBtn + tbDiv();
+    return strip(chips + addBtn);
   }
 
   function renderActions(html) {
+    ensureToolbarStyles();
     const el = $("preview-actions");
     if (el) el.innerHTML = html || "";
   }
