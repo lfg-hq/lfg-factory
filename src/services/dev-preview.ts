@@ -2725,7 +2725,11 @@ fi`, 240_000);
     for (let attempt = 1; attempt <= 5; attempt++) {
       try {
         await enableHttpAccess(workspaceId, effectivePort);
-        try { previewUrl = await setStableUrl(alias, workspaceId); }
+        // PIN the primary alias to its OWN port, exactly like every companion does
+        // (exposeService). Registered without a port it resolves to "the job's primary
+        // port" — which the FIRST companion then moves when its own enableHttpAccess
+        // runs, silently re-pointing the primary subdomain at the companion's app.
+        try { previewUrl = await setStableUrl(alias, workspaceId, effectivePort); }
         catch { previewUrl = await enableHttpAccess(workspaceId, effectivePort); }
         if (previewUrl) break;
       } catch (e) {
@@ -2743,6 +2747,12 @@ fi`, 240_000);
     await setPreview(projectId, userId, { previewStatus: "running", appUrl: previewUrl, appPort: effectivePort, previewError: null }, "Preview is live");
     // Multi-app: bring up any ENABLED companion services on their own subdomains.
     const companionSummary = await runEnabledCompanions(projectId, userId, workspaceId, manifest, PROJECT_DIR, alias, previewUrl).catch(() => "");
+    // Each companion's exposeService() calls enableHttpAccess for ITS port, which leaves
+    // the job's primary port pointing at whichever companion started last. Restore it to
+    // the primary app so the job's bare URL (and any unpinned alias) means the main app.
+    if ((manifest.services || []).some((s) => !s.primary && s.enabled)) {
+      await enableHttpAccess(workspaceId, effectivePort).catch(() => {});
+    }
     // Post-run verification (URL + assets + DB) → publish the launch summary to chat.
     const vManifest = effectivePort === manifest.port ? manifest : { ...manifest, port: effectivePort };
     const v = await verifyPreview(projectId, userId, workspaceId, vManifest, branch || "(default)").catch(() => null);
@@ -3081,6 +3091,12 @@ async function startCompanionInBackground(projectId: string, userId: string, man
       plog(projectId, userId, `Starting app "${name}" in the background — the main app keeps running…`);
       const r = await exposeService(projectId, userId, workspaceId, added, PROJECT_DIR, stableAlias);
       if (r.url) await persistServiceBaseUrl(projectId, workspaceId, name, r.url).catch(() => {});
+      // exposeService just pointed the job's primary port at THIS companion. Restore it to
+      // the primary app — this toggle path deliberately leaves the primary running and
+      // never re-registers its alias, so without this the main URL starts serving the
+      // companion the moment you flip a second app ON.
+      const primaryPort = row?.appPort ?? manifest.port;
+      if (primaryPort) await enableHttpAccess(workspaceId, primaryPort).catch(() => {});
       const appDomain = process.env.MAGS_APP_DOMAIN || "app.lfg.run";
       broadcastToUser(userId, { type: "preview_services", projectId: pub(projectId), services: (manifest.services || []).map((s) => ({
         name: s.name, port: s.port, primary: !!s.primary, enabled: !!s.primary || !!s.enabled,
@@ -3648,11 +3664,19 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) $(git log -1 --oneline
     // new subdomain, leaving old URLs pointing at a stale binding.
     if (!row.stableAlias) await db.update(projectEnvironments).set({ stableAlias: alias, updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId)).catch(() => {});
     let previewUrl = row.appUrl || "";
-    try { previewUrl = await setStableUrl(alias, workspaceId); } catch { /* keep existing */ }
+    // PIN the primary alias to its OWN port (see the same call in setupPreview): an
+    // unpinned alias tracks the job's primary port, which a companion's exposeService
+    // moves — leaving the primary subdomain serving the companion's app.
+    try { previewUrl = await setStableUrl(alias, workspaceId, effectivePort); } catch { /* keep existing */ }
     await setPreview(projectId, userId, { previewStatus: "running", appUrl: previewUrl, appPort: effectivePort, previewError: null, previewBranch: branchLabel }, "Preview is live");
     // Multi-app: bring up any ENABLED companion services on their own subdomains (in the
     // SAME run dir — a ticket worktree or the main checkout).
     const companionSummary = await runEnabledCompanions(projectId, userId, workspaceId, manifest, runDir, alias, previewUrl).catch(() => "");
+    // Companions leave the job's primary port pointing at the last one started — restore
+    // it to the primary app (see the same call in setupPreview).
+    if ((manifest.services || []).some((s) => !s.primary && s.enabled)) {
+      await enableHttpAccess(workspaceId, effectivePort).catch(() => {});
+    }
     // Post-run verification (URL + assets + DB) → publish the launch summary to chat.
     const vManifest = effectivePort === manifest.port ? manifest : { ...manifest, port: effectivePort };
     const v = await verifyPreview(projectId, userId, workspaceId, vManifest, branchLabel).catch(() => null);
