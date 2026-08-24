@@ -20,6 +20,8 @@ interface Ticket {
   description: string;
   createdAt?: Date | string;
   updatedAt?: Date | string;
+  /** When the build finished and the ticket moved to In Review; null = never built. */
+  lastExecutionAt?: Date | string | null;
 }
 
 interface ExecutionModeConfig {
@@ -94,6 +96,12 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       (byStage[backlogStage.id] as Ticket[]).push(t);
     }
   }
+  // Most recently COMPLETED first within each column, so the newest finished work is at
+  // the top of "In Review" instead of buried under everything built before it. Tickets
+  // that have never been built have no completion time and keep the query's creation
+  // order below them (sort is stable, so equal keys don't move).
+  const doneAt = (t: Ticket) => (t.lastExecutionAt ? new Date(t.lastExecutionAt).getTime() : 0);
+  for (const id of Object.keys(byStage)) (byStage[id] as Ticket[]).sort((a, b) => doneAt(b) - doneAt(a));
 
   return html`<!DOCTYPE html>
 <html lang="en" data-theme="dark">

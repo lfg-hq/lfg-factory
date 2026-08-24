@@ -3171,6 +3171,12 @@ document.addEventListener('DOMContentLoaded', function() {
                                          : 'No epic';
                         const lfgKeyOf = (it) => lfgGroupBy === 'epic' ? lfgEpicLabel(it) : lfgBucket(it.created_at);
 
+                        // Most recently COMPLETED first — the work you just finished is what
+                        // you want to look at. Tickets that have never been built have no
+                        // completion time and keep their existing order BELOW the finished
+                        // ones (they're the queue, not the results).
+                        const lfgDoneAt = (it) => { const d = it.completed_at ? new Date(it.completed_at).getTime() : 0; return isNaN(d) ? 0 : d; };
+                        const lfgByCompletion = (a, b) => lfgDoneAt(b) - lfgDoneAt(a);
                         const lfgSorted = [...filteredChecklist].sort((a, b) => {
                             if (lfgGroupBy === 'epic') {
                                 const ae = lfgEpicLabel(a), be = lfgEpicLabel(b);
@@ -3181,10 +3187,11 @@ document.addEventListener('DOMContentLoaded', function() {
                                     if (be === 'No epic') return -1;
                                     return ae.localeCompare(be);
                                 }
-                                // Within an epic, build order is the meaningful order.
-                                return new Date(a.created_at) - new Date(b.created_at);
+                                // Within an epic: newest completion first, then build order
+                                // for whatever hasn't been built yet.
+                                return lfgByCompletion(a, b) || (new Date(a.created_at) - new Date(b.created_at));
                             }
-                            return new Date(b.created_at) - new Date(a.created_at);
+                            return lfgByCompletion(a, b) || (new Date(b.created_at) - new Date(a.created_at));
                         });
                         const lfgCounts = {};
                         lfgSorted.forEach(it => { const bk = lfgKeyOf(it); lfgCounts[bk] = (lfgCounts[bk] || 0) + 1; });

@@ -534,8 +534,12 @@ projectsRouter.get("/projects/:projectId/tickets", async (c) => {
       complexity: projectTickets.complexity,
       queueStatus: projectTickets.queueStatus,
       description: projectTickets.description,
+      // When the build finished and the ticket moved to In Review — the board sorts on it.
+      lastExecutionAt: projectTickets.lastExecutionAt,
     }).from(projectTickets)
       .where(eq(projectTickets.projectId, project.id))
+      // Base order; re-sorted below so the most recently COMPLETED ticket is top of its
+      // column. Kept as the tiebreak for tickets that have never been built.
       .orderBy(asc(projectTickets.createdAt)),
     db.select().from(applicationState)
       .where(eq(applicationState.userId, user.id))
@@ -730,6 +734,10 @@ projectsRouter.get("/projects/:projectId/api/checklist", async (c) => {
     queue_status: t.queueStatus,
     created_at: t.createdAt,
     updated_at: t.updatedAt,
+    // When the build finished and the ticket moved to In Review (ticket-executor sets
+    // lastExecutionAt at that moment). Null = never built. The list sorts on this so the
+    // most recently finished work is at the top.
+    completed_at: t.lastExecutionAt,
     attachments: attByTicket[t.id] ?? [],
     conversation_id: t.conversationId ?? null,
     epic_id: t.epicId ?? null,
