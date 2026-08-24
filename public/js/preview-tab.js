@@ -863,10 +863,11 @@
   }
 
   // HARD rebuild: force-kill a stuck/orphaned VM (app still serves but the control plane lost
-  // it → "No VM found" for exec/@preview/logs) and respawn a clean, MANAGEABLE VM. Your data
-  // on /data reattaches; the app + companions restart on the fresh VM.
+  // it → "No VM found" for exec/@preview/logs) and respawn a clean, MANAGEABLE VM. /data is a
+  // PER-VM volume, so the fresh VM MAY come back blank — the restart it triggers probes for the
+  // checkout and falls back to a full setup (re-clone + rebuild) when it does.
   async function doRebuildVm() {
-    if (!confirm("Rebuild the preview sandbox?\n\nUse this when the app still loads but Logs / @preview say \"No VM found\" — it force-restarts the VM (your database + code on /data are preserved) and re-runs the app. Brief downtime.")) return;
+    if (!confirm("Rebuild the preview sandbox?\n\nUse this when the app still loads but Logs / @preview say \"No VM found\" — it force-restarts the VM and re-runs the app.\n\nThe fresh VM may come back with an empty disk. If so the code is re-cloned and rebuilt automatically, but any DATABASE CONTENT not reproduced by your migrations/seed scripts will be gone. Takes a few minutes.")) return;
     setSub("Rebuilding the sandbox VM…");
     logText = "";
     render({ previewStatus: "starting" });

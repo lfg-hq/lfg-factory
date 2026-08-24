@@ -2343,6 +2343,46 @@ async function resolveAuthedRepoUrl(projectId: string, actingUserId?: string): P
 }
 
 /**
+ * DISK-GENERATION GUARD (part 1 of 2): is this VM's /data still the one our
+ * checkpoint describes?
+ *
+ * /data is a PER-VM ext4 volume (`disk_gb` → /dev/vdb); `workspace_id` only syncs
+ * the separate /workspace via JuiceFS. So a respawned microVM can come back with a
+ * BLANK /data — no checkout, no toolchain, no DB volumes — and we must not assume
+ * either way. Probe instead of trusting.
+ *
+ * Exec failures are deliberately NOT treated as "wiped": they say nothing about the
+ * disk, and the normal path surfaces the real error.
+ */
+async function checkoutMissing(workspaceId: string): Promise<boolean> {
+  const probe = await sh(workspaceId, `test -d ${PROJECT_DIR}/.git && echo REPO_OK || echo NO_REPO`, 60_000)
+    .catch(() => ({ output: "" } as { output: string }));
+  return probe.output.includes("NO_REPO");
+}
+
+/**
+ * DISK-GENERATION GUARD (part 2 of 2): drop the checkpoint that describes a disk
+ * that no longer exists.
+ *
+ * Everything needed to rebuild from nothing is in Postgres — repo URL + token, the
+ * app profile (stack, schemaSteps, configPatches), setupManifest's install/build/run
+ * commands, projectDatabases' engines + passwords, and the env vars. But the two
+ * checkpoint columns are keyed to the PROJECT, not to the disk they were achieved
+ * on, and both suppress that rebuild:
+ *   • setupComplete=1 → setupPreview "starts the app directly", skipping the runbook.
+ *   • setupSteps      → executeRunbook marks those steps "✓ (already done)" and skips
+ *                       install / toolchain / build / schema.
+ * On a blank disk that lands straight in the AI driver with no source and no
+ * toolchain (which is exactly the failure this guard exists to prevent). Clearing
+ * them makes the next run do the full clone → DBs → env → install → build → schema.
+ */
+async function clearSetupCheckpoint(projectId: string): Promise<void> {
+  await db.update(projectEnvironments)
+    .set({ setupComplete: 0, setupSteps: null, updatedAt: new Date() })
+    .where(eq(projectEnvironments.projectId, projectId)).catch(() => {});
+}
+
+/**
  * Full setup: bring the client app up live in its sandbox and return a preview
  * URL. Long-running — call in the background and stream status over WS.
  */
@@ -2373,9 +2413,17 @@ export async function setupPreview(projectId: string, opts: SetupOptions): Promi
     plog(projectId, userId, "Starting the project's sandbox…");
     const { workspaceId, recreated } = await ensureProjectSandbox(projectId);
     plog(projectId, userId, recreated
-      ? "Sandbox VM was respawned (its persistent /data — repo, toolchain, DBs — is reattached)"
+      ? "Sandbox VM was respawned — checking what survived on its /data…"
       : "Sandbox ready — reusing the existing VM (Alpine Linux, 8GB, Docker-capable)");
     await prep("vm", "done");
+    // Disk-generation guard: a respawned VM can come back with a blank /data, and the
+    // checkpoint columns would still claim install/build/schema are done — so the
+    // runbook below would skip them and start an app that isn't there. Invalidate it
+    // BEFORE the getEnv() read that decides what to skip.
+    if (await checkoutMissing(workspaceId)) {
+      await clearSetupCheckpoint(projectId);
+      plog(projectId, userId, "This sandbox has no checkout — its /data was reset. Rebuilding from scratch: clone → databases → env → install → build → schema.");
+    }
     await setPreview(projectId, userId, { previewStatus: "detecting", previewError: null, previewBranch: branch || "(default)" }, "Preparing sandbox…");
 
     // 0. Install + start Docker UP FRONT (before pulling the code) so it's ready
@@ -3154,15 +3202,17 @@ export async function removeService(projectId: string, userId: string, name: str
  * HARD sandbox rebuild — for a STUCK/ORPHANED VM: the app still serves (its microVM + edge
  * route linger) but the control plane lost the job, so exec/@preview/logs all fail with
  * "No running or sleeping VM found". ensureProjectSandbox's soft liveness probe can pass on
- * such a VM, so we force-kill it (stopWorkspace, /data persists) and respawn a clean,
- * MANAGEABLE VM, then re-run the app (+ enabled companions) on it.
+ * such a VM, so we force-kill it (stopWorkspace, which keeps the workspace) and respawn a
+ * clean, MANAGEABLE VM, then re-run the app (+ enabled companions) on it.
  */
 export async function rebuildPreviewSandbox(projectId: string, userId: string): Promise<{ ok: true } | { error: string }> {
   await loadPublicId(projectId);
   resetLog(projectId);
-  plog(projectId, userId, "Rebuilding the preview sandbox — killing the stuck VM and respawning a fresh one (your data on /data reattaches)…");
+  plog(projectId, userId, "Rebuilding the preview sandbox — killing the stuck VM and respawning a fresh one…");
   try {
-    await restartProjectSandbox(projectId); // stopWorkspace + respawn (persistent disk reattaches)
+    // stopWorkspace + respawn. The new VM may boot a blank /data; the restartPreview
+    // below probes for the checkout and falls back to a full setup when it's gone.
+    await restartProjectSandbox(projectId);
   } catch (e) {
     plog(projectId, userId, `Sandbox rebuild failed: ${(e as Error).message?.slice(0, 200)}`, { level: "error" });
     return { error: (e as Error).message?.slice(0, 200) || "rebuild failed" };
@@ -3202,17 +3252,39 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
   // touch its git worktrees / start a build (acquired AFTER the setupPreview
   // delegation above so we don't deadlock waiting on our own lock).
   const releaseRun = await acquirePreviewRun(projectId);
+  // Set when we hand off to setupPreview, which takes the run lock ITSELF — we must
+  // release ours before delegating or it would wait forever on us (see the guard below).
+  let lockReleased = false;
   try {
     const { recreated } = await ensureProjectSandbox(projectId);
     const workspaceId = await envWorkspaceId(projectId);
 
-    // The VM had stopped and was respawned — but the workspace is persistent, so its
-    // /data (repo clone, toolchain, DB volumes, ticket worktrees) is REATTACHED, not
-    // lost. We only need to bring Docker back so the DB containers (restart
-    // unless-stopped) come up with their persisted data before we run the app.
+    // The VM had stopped and was respawned. Bring Docker back so the DB containers
+    // (restart=unless-stopped) come up with whatever data survived on /data — then the
+    // guard below decides whether "whatever survived" includes the checkout at all.
     if (recreated) {
-      plog(projectId, userId, "Sandbox VM was respawned (its /data persists) — restarting Docker + databases…");
+      plog(projectId, userId, "Sandbox VM was respawned — restarting Docker + databases…");
       await ensureDocker(projectId).catch(() => {});
+    }
+
+    // Disk-generation guard: no checkout means this VM's /data was reset, so there is
+    // nothing to restart — the recorded build/run commands would run against an empty
+    // directory and dead-end in the AI driver, hunting for source that isn't on the box.
+    // Invalidate the stale checkpoint and run the FULL setup, which rebuilds everything
+    // from what's persisted in Postgres.
+    if (await checkoutMissing(workspaceId)) {
+      await clearSetupCheckpoint(projectId);
+      if (ticketId) {
+        // A ticket branch needs the base checkout to cut a worktree from (or to switch),
+        // so there's nothing useful to do here — and silently running a full DEFAULT-branch
+        // setup is not what was asked for. Say what happened and what fixes it.
+        await setStep("locate", "failed");
+        return failed(projectId, userId, "This sandbox's disk was reset (the VM was respawned), so the base checkout is gone. Run the default branch once to rebuild it, then preview this ticket's branch.");
+      }
+      plog(projectId, userId, "No checkout on this sandbox — its /data was reset. Running the full setup to rebuild it…");
+      releaseRun();
+      lockReleased = true;
+      return await setupPreview(projectId, opts);
     }
 
     // Pick the run directory: a ticket's worktree, or the default checkout.
@@ -3397,7 +3469,18 @@ rm -rf ${PROJECT_DIR}/bin ${PROJECT_DIR}/obj ${PROJECT_DIR}/*/bin ${PROJECT_DIR}
 echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) $(git log -1 --oneline 2>/dev/null)"
 `, 240_000);
       if (sync.output.includes("NO_MAIN")) {
-        plog(projectId, userId, "No base checkout yet — the full setup will clone it.");
+        // Belt-and-braces: the disk-generation guard above already routes a wiped /data
+        // to the full setup, so reaching here means the checkout went away mid-run (or
+        // PROJECT_DIR exists without a .git). Either way there is NOTHING to build —
+        // delegate instead of carrying on into build/run against an empty directory,
+        // which is what previously burned a whole agent run and reported "the app did
+        // not come back up". This path is default-branch only (ticketId is falsy here),
+        // so handing off to setupPreview is always the right move.
+        await clearSetupCheckpoint(projectId);
+        plog(projectId, userId, "No base checkout on this sandbox — running the full setup to clone it…");
+        releaseRun();
+        lockReleased = true;
+        return await setupPreview(projectId, opts);
       } else {
         const head = sync.output.match(/HEAD=(.+)/)?.[1]?.trim();
         plog(projectId, userId, `Default branch synced to latest ✓${head ? ` (${head})` : ""}`);
@@ -3415,8 +3498,9 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) $(git log -1 --oneline
     // truth is projectDatabases — the list of engines WE actually created (each with its
     // stored password) — NOT manifest.databases, which detection can drop between
     // re-probes (leaving "Databases — none provisioned" while /data/pgdata + the app's
-    // injected DATABASE_URL still expect it). After a VM respawn the containers live on
-    // the persistent /data/docker but may not have auto-started, so bring them all up.
+    // injected DATABASE_URL still expect it). After a VM respawn the containers may just
+    // need starting (/data survived) or may need re-creating from scratch (/data came back
+    // blank) — ensureEngine's docker bring-up covers both, so bring them all up.
     // ensureEngine is idempotent (docker start; reuses the stored password) — we do NOT
     // touch env vars: connection strings are already injected by writeEnvFile.
     const provisionedEngines = await db.select({ engine: projectDatabases.engine })
@@ -3587,8 +3671,13 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) $(git log -1 --oneline
     }
     return failed(projectId, userId, msg);
   } finally {
-    cancelledProjects.delete(projectId);
-    releaseRun(); // let a queued run (branch switch) proceed on the now-free VM
+    // When we handed off to setupPreview we already released the lock, and IT owns the
+    // run's lifecycle from that point — clearing the cancel flag here would fire late
+    // (after its whole pipeline) and could clear a flag belonging to a newer run.
+    if (!lockReleased) {
+      cancelledProjects.delete(projectId);
+      releaseRun(); // let a queued run (branch switch) proceed on the now-free VM
+    }
   }
 }
 

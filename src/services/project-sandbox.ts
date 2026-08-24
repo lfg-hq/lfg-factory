@@ -226,7 +226,8 @@ export async function ensureProjectSandbox(projectId: string): Promise<{ workspa
   // that isn't there and every exec fails with "no VM associated with this job" (Docker
   // won't start, `git fetch` dies → "Could not fetch the repo"). So when the job claims
   // running, actually PROBE it; if the probe fails, treat it as dead, clear the zombie
-  // job, and fall through to respawn (the persistent /data reattaches).
+  // job, and fall through to respawn. NOTE: a respawn may come back with a BLANK
+  // /data — see the `recreated` note below.
   if (alive) {
     const probe = await execOnWorkspace(workspaceId, "echo __vm_alive__", { timeout: 15_000 })
       .then((r) => ({ ok: /__vm_alive__/.test(r?.output || ""), detail: r?.output || "" }))
@@ -234,16 +235,29 @@ export async function ensureProjectSandbox(projectId: string): Promise<{ workspa
     if (!probe.ok) {
       console.warn(`[project-sandbox] Job ${workspaceId} reports running but exec failed (phantom VM — reaped microVM + zombie job): ${probe.detail.slice(0, 120)}. Forcing respawn.`);
       alive = false;
-      await stopWorkspace(workspaceId).catch(() => {}); // clear the zombie job before recreate (persistent disk reattaches)
+      await stopWorkspace(workspaceId).catch(() => {}); // clear the zombie job before recreate
       await sleep(2000);
     }
   }
 
-  const recreated = !alive && !!existing?.workspaceId; // had a VM before, it wasn't running → respawn (data persists)
+  // DO NOT ASSUME /data SURVIVES A RESPAWN. `recreated` means "we had a VM, it wasn't
+  // running, so we're booting a new one" — and /data is a PER-VM ext4 volume (`disk_gb`
+  // → /dev/vdb). The `workspace_id` we pass to newWorkspaceV2 syncs the SEPARATE
+  // /workspace tree via JuiceFS; it does NOT back /data (see the verified note in
+  // instant-app.ts's ensureSandbox, and the header of schema/pg/project-environments.ts:
+  // data survives "as long as the VM is up"). A sleep/wake keeps the disk; a respawn can
+  // hand back a blank one — no checkout, no toolchain, no DB volumes.
+  //
+  // Callers must therefore PROBE rather than trust: dev-preview's checkoutMissing() +
+  // clearSetupCheckpoint() guard does exactly that, and re-runs the full setup (which
+  // rebuilds from the repo + app profile + manifest + DB creds held in Postgres) when
+  // the disk came back empty. Treating a blank disk as "reattached" is what previously
+  // sent a restart into the AI driver with no source and no toolchain on the box.
+  const recreated = !alive && !!existing?.workspaceId;
   if (alive) {
     console.log(`[project-sandbox] REUSING running sandbox VM ${workspaceId} for project ${projectId}`);
   } else if (recreated) {
-    console.log(`[project-sandbox] Sandbox VM ${workspaceId} was not running (status: ${job?.status ?? "gone"}) — RESPAWNING it. The workspace is persistent, so its /data (DB, repo, toolchain) reattaches. project ${projectId}`);
+    console.log(`[project-sandbox] Sandbox VM ${workspaceId} was not running (status: ${job?.status ?? "gone"}) — RESPAWNING it. Its /data may come back EMPTY (per-VM volume); callers must probe. project ${projectId}`);
   } else {
     console.log(`[project-sandbox] Creating the project's first sandbox VM ${workspaceId} for project ${projectId}`);
   }
@@ -264,13 +278,14 @@ export async function ensureProjectSandbox(projectId: string): Promise<{ workspa
         if (/already exists/i.test(msg)) break;
         // Transient Mags provisioning failure (VM ended with status: error /
         // completed, or never started) — terminate the bad VM job and retry.
-        // CRITICAL: use stopWorkspace (kills the VM), NOT deleteWorkspace — the
-        // workspace is persistent:true and its /data (DB, repo clone, toolchain,
-        // worktrees) is stored by name in JuiceFS/S3. Deleting it here wiped the
-        // whole project sandbox on a transient hiccup; a plain retry reattaches the
-        // SAME disk, so main's build/DB survive a respawn.
+        // CRITICAL: use stopWorkspace (kills the VM), NOT deleteWorkspace — deleting
+        // drops the workspace record itself (its name is the respawn key, and it backs
+        // the /workspace JuiceFS tree + the stable URL alias), so a transient hiccup
+        // would tear down the whole project sandbox. A plain retry keeps the workspace
+        // and reboots into it. (It does NOT guarantee the same /data — that's a per-VM
+        // volume; see the `recreated` note above.)
         if (attempt < 3 && /status: error|status: completed|did not start/i.test(msg)) {
-          console.warn(`[project-sandbox] VM ${workspaceId} attempt ${attempt} failed (${msg.slice(0, 80)}); stopping the bad VM and retrying (data preserved)…`);
+          console.warn(`[project-sandbox] VM ${workspaceId} attempt ${attempt} failed (${msg.slice(0, 80)}); stopping the bad VM and retrying (workspace kept)…`);
           await stopWorkspace(workspaceId).catch(() => {});
           await sleep(3000);
           continue;
@@ -290,18 +305,22 @@ export async function ensureProjectSandbox(projectId: string): Promise<{ workspa
 }
 
 /**
- * Force a FRESH VM boot for the project, keeping the persistent /data disk (repo
- * clone, toolchain, DB volumes, worktrees reattach). Use when the VM is reachable
- * but its runtime is degraded — e.g. after an OOM cascade `git-remote-https` starts
- * segfaulting (signal 11) on every fresh fetch. A phantom-guard `echo` probe passes
- * on such a VM, so we can't rely on ensureProjectSandbox's liveness check; this kills
- * the VM outright and respawns it (clean RAM) with the same workspace/disk.
+ * Force a FRESH VM boot for the project, keeping the workspace (its name, /workspace
+ * tree and stable URL). Use when the VM is reachable but its runtime is degraded —
+ * e.g. after an OOM cascade `git-remote-https` starts segfaulting (signal 11) on every
+ * fresh fetch. A phantom-guard `echo` probe passes on such a VM, so we can't rely on
+ * ensureProjectSandbox's liveness check; this kills the VM outright and respawns it
+ * with clean RAM.
+ *
+ * The new VM may boot a BLANK /data (per-VM volume — see the `recreated` note above),
+ * so the caller must probe for the checkout afterwards and fall back to a full setup.
+ * rebuildPreviewSandbox does this by routing through restartPreview's guard.
  */
 export async function restartProjectSandbox(projectId: string): Promise<{ workspaceId: string }> {
   const [existing] = await db.select().from(projectEnvironments).where(eq(projectEnvironments.projectId, projectId));
   if (existing?.workspaceId) {
-    // stopWorkspace (NOT deleteWorkspace) kills the VM but preserves its persistent
-    // disk — the fresh VM reattaches the same /data on respawn.
+    // stopWorkspace (NOT deleteWorkspace) kills the VM but keeps the workspace, so the
+    // respawn reuses the same name/URL instead of tearing the sandbox down.
     await stopWorkspace(existing.workspaceId).catch(() => {});
     await db.update(projectEnvironments).set({ status: "stopped", updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId)).catch(() => {});
     await sleep(3000); // let Mags settle the job to a non-running state before respawn
