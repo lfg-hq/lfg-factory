@@ -1534,13 +1534,17 @@ Before implementing, fix the git issue:
   if (implementationStatus === "complete" && githubOwner && githubRepo && githubToken) {
     try {
       await addLog(ticketId, "Committing changes...", "command", ownerId);
+      // One provider-aware credential for the push and the merge below — both used to
+      // hardcode github.com regardless of where the repo actually lives.
+      const gitAuth = await resolveRepoAuth(project, gitUserId).catch(() => null);
       const { sha } = await commitAndPush({
         workspaceId,
         projectDir: `${WORKING_DIR}/${projectDirName}`,
         commitMessage: `feat: ${ticket.ticketKey ? ticket.ticketKey + " " : ""}${ticket.name}`,
         featureBranch,
-        repoUrl: `https://github.com/${githubOwner}/${githubRepo}.git`,
-        githubToken,
+        repoUrl: gitAuth?.repoUrl ?? `https://github.com/${githubOwner}/${githubRepo}.git`,
+        githubToken: gitAuth?.token ?? githubToken,
+        tokenUser: gitAuth?.tokenUser,
       });
 
       await db
@@ -1568,12 +1572,17 @@ Before implementing, fix the git issue:
       // and so inherits this code — and only this epic's code.
       try {
         await addLog(ticketId, `Merging to ${anchorBranch}...`, "command", ownerId);
+        // Provider-aware: this used to hardcode github.com with a GitHub-shaped
+        // credential, so on a GitLab project the merge fetched from a repo that doesn't
+        // exist. resolveRepoAuth gives the right host, token and credential username.
+        const mergeAuth = gitAuth;
         const { sha: mergeSha, files: mergedFiles } = await mergeToAnchor({
           workspaceId,
           projectDir: `${WORKING_DIR}/${projectDirName}`,
           featureBranch,
-          repoUrl: `https://github.com/${githubOwner}/${githubRepo}.git`,
-          githubToken,
+          repoUrl: mergeAuth?.repoUrl ?? `https://github.com/${githubOwner}/${githubRepo}.git`,
+          githubToken: mergeAuth?.token ?? githubToken!,
+          tokenUser: mergeAuth?.tokenUser,
           targetBranch: anchorBranch,
           baseBranch: anchorBase,
         });
@@ -3324,6 +3333,10 @@ async function recoverUnpushedTickets() {
           ownerId: projects.ownerId,
           repoOwner: projects.repoOwner,
           repoName: projects.repoName,
+          // Needed to work out WHICH host this repo is on — without them the recovery
+          // path assumed GitHub for every project.
+          repoUrl: projects.repoUrl,
+          repoProvider: projects.repoProvider,
           shareGitAccess: projects.shareGitAccess,
         })
         .from(projects)
@@ -3376,14 +3389,19 @@ async function recoverUnpushedTickets() {
         continue;
       }
 
+      // Provider-aware credential for the push AND the merge below — both used to be
+      // hardcoded to github.com, which simply doesn't resolve for a GitLab project.
+      const recoverAuth = await resolveRepoAuth(project, project.ownerId).catch(() => null);
+
       try {
         const { sha } = await commitAndPush({
           workspaceId,
           projectDir: `${WORKING_DIR}/${projectDirName}`,
           commitMessage: `feat: ${ticket.ticketKey ? ticket.ticketKey + " " : ""}${ticket.name}`,
           featureBranch,
-          repoUrl: `https://github.com/${project.repoOwner}/${project.repoName}.git`,
-          githubToken: ghToken.accessToken,
+          repoUrl: recoverAuth?.repoUrl ?? `https://github.com/${project.repoOwner}/${project.repoName}.git`,
+          githubToken: recoverAuth?.token ?? ghToken.accessToken,
+          tokenUser: recoverAuth?.tokenUser,
         });
 
         await db
@@ -3411,8 +3429,9 @@ async function recoverUnpushedTickets() {
             workspaceId,
             projectDir: `${WORKING_DIR}/${projectDirName}`,
             featureBranch,
-            repoUrl: `https://github.com/${project.repoOwner}/${project.repoName}.git`,
-            githubToken: ghToken.accessToken,
+            repoUrl: recoverAuth?.repoUrl ?? `https://github.com/${project.repoOwner}/${project.repoName}.git`,
+            githubToken: recoverAuth?.token ?? ghToken.accessToken,
+            tokenUser: recoverAuth?.tokenUser,
             targetBranch: recoveryAnchor.anchorBranch,
             baseBranch: recoveryAnchor.baseBranch,
           });
