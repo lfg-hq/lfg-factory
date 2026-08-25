@@ -402,8 +402,20 @@ git config user.email "ai@lfg.dev"
 git config user.name "LFG AI"
 git remote set-url origin "${authUrl}" 2>/dev/null || true
 
-# Fetch latest
+# Fetch latest. Explicit refspecs for BOTH branches: the preview-sandbox fallback runs
+# in a clone that has never seen this ticket's feature branch, and a narrowed clone won't
+# create refs/remotes/origin/<branch> from a bare fetch.
 git fetch --prune origin
+git fetch --no-tags --force origin "+refs/heads/${featureBranch}:refs/remotes/origin/${featureBranch}" 2>/dev/null || true
+git fetch --no-tags --force origin "+refs/heads/${targetBranch}:refs/remotes/origin/${targetBranch}" 2>/dev/null || true
+
+# Resolve the feature branch to a ref that actually EXISTS here. On the ticket's own build
+# VM it's a local branch; anywhere else only origin/<branch> exists, and a bare
+# a bare 'git merge feature/x' there fails with "not something we can merge" — which the conflict
+# guard below would then report as a conflict with no files.
+FEATURE_REF="${featureBranch}"
+git rev-parse --verify -q "${featureBranch}" >/dev/null 2>&1 || FEATURE_REF="origin/${featureBranch}"
+git rev-parse --verify -q "$FEATURE_REF" >/dev/null 2>&1 || { echo "NO_FEATURE_REF"; exit 0; }
 
 # Checkout the anchor (create it from the base branch if it doesn't exist yet)
 if git rev-parse --verify origin/${targetBranch} 2>/dev/null; then
@@ -417,7 +429,7 @@ fi
 # What this ticket actually changed, relative to the anchor. Recorded on the epic
 # so a later epic touching the same files can be spotted without asking anyone.
 echo "CHANGED_FILES_START"
-git diff --name-only HEAD...${featureBranch} 2>/dev/null || true
+git diff --name-only "HEAD...$FEATURE_REF" 2>/dev/null || true
 echo "CHANGED_FILES_END"
 
 # Merge feature branch into the anchor.
@@ -426,12 +438,12 @@ echo "CHANGED_FILES_END"
 # tree and an unmerged index — the cleanup below never ran, and the next run inherited it
 # (git stash then refuses with "needs merge", so even the autostash net is dead there).
 # Report the conflicting paths, ABORT, and put the checkout back where it started.
-if ! git merge ${featureBranch} -m "Merge ${featureBranch} into ${targetBranch}"; then
+if ! git merge "$FEATURE_REF" -m "Merge ${featureBranch} into ${targetBranch}"; then
   echo "CONFLICT_FILES_START"
   git diff --name-only --diff-filter=U 2>/dev/null || true
   echo "CONFLICT_FILES_END"
   git merge --abort 2>/dev/null || git reset --hard HEAD 2>/dev/null || true
-  git checkout ${featureBranch} 2>/dev/null || true
+  git checkout ${featureBranch} 2>/dev/null || git checkout --detach "$FEATURE_REF" 2>/dev/null || true
   echo "MERGE_CONFLICT"
   exit 0
 fi
@@ -456,6 +468,10 @@ echo "MERGE_SHA:$SHA"
     const cf = result.output.match(/CONFLICT_FILES_START\n([\s\S]*?)CONFLICT_FILES_END/);
     const conflicted = (cf?.[1] ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
     throw new MergeConflictError(targetBranch, conflicted);
+  }
+
+  if (result.output.includes("NO_FEATURE_REF")) {
+    throw new Error(`Merge to ${targetBranch} failed: the branch ${featureBranch} isn't on the remote (nothing was pushed for it yet).`);
   }
 
   const shaMatch = result.output.match(/MERGE_SHA:([a-f0-9]{40})/);
