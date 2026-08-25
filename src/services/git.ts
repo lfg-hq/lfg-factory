@@ -15,6 +15,27 @@ import { execOnWorkspace } from "./mags.ts";
  */
 export const LEGACY_ANCHOR_BRANCH = "lfg-agent";
 
+/**
+ * A merge that stopped on CONTENT conflicts, as opposed to failing outright.
+ *
+ * Distinct from a plain Error on purpose: a conflict is a recoverable, expected state
+ * with a known set of files, and the caller can hand it to the resolver agent. Anything
+ * else (auth, a missing anchor, the VM dying) is a real failure and stays a plain throw.
+ *
+ * By the time this is thrown the merge has already been ABORTED and the checkout put
+ * back on the feature branch — nothing is left half-merged for the next run to trip on.
+ */
+export class MergeConflictError extends Error {
+  readonly files: string[];
+  readonly targetBranch: string;
+  constructor(targetBranch: string, files: string[]) {
+    super(`Merge into ${targetBranch} conflicts in ${files.length} file(s): ${files.join(", ") || "unknown"}`);
+    this.name = "MergeConflictError";
+    this.files = files;
+    this.targetBranch = targetBranch;
+  }
+}
+
 export interface GitSetupOptions {
   workspaceId: string;
   repoUrl: string;         // HTTPS with token embedded, or SSH URL
@@ -393,8 +414,21 @@ echo "CHANGED_FILES_START"
 git diff --name-only HEAD...${featureBranch} 2>/dev/null || true
 echo "CHANGED_FILES_END"
 
-# Merge feature branch into the anchor
-git merge ${featureBranch} -m "Merge ${featureBranch} into ${targetBranch}"
+# Merge feature branch into the anchor.
+# NOT bare under 'set -e': a conflicting merge would abort the script right here, leaving
+# the shared checkout sitting on the anchor with MERGE_HEAD set, conflict markers in the
+# tree and an unmerged index — the cleanup below never ran, and the next run inherited it
+# (git stash then refuses with "needs merge", so even the autostash net is dead there).
+# Report the conflicting paths, ABORT, and put the checkout back where it started.
+if ! git merge ${featureBranch} -m "Merge ${featureBranch} into ${targetBranch}"; then
+  echo "CONFLICT_FILES_START"
+  git diff --name-only --diff-filter=U 2>/dev/null || true
+  echo "CONFLICT_FILES_END"
+  git merge --abort 2>/dev/null || git reset --hard HEAD 2>/dev/null || true
+  git checkout ${featureBranch} 2>/dev/null || true
+  echo "MERGE_CONFLICT"
+  exit 0
+fi
 
 # Push the anchor
 git push origin ${targetBranch} 2>&1
@@ -410,6 +444,13 @@ echo "MERGE_SHA:$SHA"
   const result = await execOnWorkspace(workspaceId, `echo ${scriptB64} | base64 -d | sh`, {
     timeout: 120_000,
   });
+
+  // Conflicts are a distinct, recoverable outcome — the checkout is already clean.
+  if (result.output.includes("MERGE_CONFLICT")) {
+    const cf = result.output.match(/CONFLICT_FILES_START\n([\s\S]*?)CONFLICT_FILES_END/);
+    const conflicted = (cf?.[1] ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
+    throw new MergeConflictError(targetBranch, conflicted);
+  }
 
   const shaMatch = result.output.match(/MERGE_SHA:([a-f0-9]{40})/);
   if (!shaMatch) {
