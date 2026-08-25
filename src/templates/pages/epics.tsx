@@ -146,32 +146,62 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
     .app-container.sidebar-minimized .epics-page { margin-left: 60px; }
     .sidebar-minimized-preload .epics-page,
     .sidebar-minimized-init .epics-page { margin-left: 60px !important; transition: none !important; }
-    .epics-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 1.25rem 1.5rem 3rem; }
-    .epic-card {
-      border: 1px solid var(--border-color);
-      border-radius: 12px;
-      background: var(--card-bg, var(--background-surface));
-      margin-bottom: 1rem;
-      overflow: hidden;
+    .epics-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0.5rem 1.5rem 3rem; }
+
+    /* ── The list ─────────────────────────────────────────────────────────── */
+    .epic-item { border-bottom: 1px solid var(--border-color); }
+    .epic-summary {
+      width: 100%; display: flex; align-items: center; gap: 0.85rem;
+      padding: 0.9rem 0.25rem; background: none; border: none; cursor: pointer;
+      text-align: left; color: var(--text-color); font-size: 0.9rem;
     }
-    .epic-head { padding: 1rem 1.1rem; display: flex; flex-direction: column; gap: 0.5rem; }
-    .epic-body { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1.25rem; padding: 0 1.1rem 1.1rem; }
-    .epic-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem 0.9rem; font-size: 0.75rem; color: var(--text-secondary); }
-    .epic-row {
-      display: flex; align-items: center; gap: 0.5rem; padding: 5px 0;
-      font-size: 0.8rem; color: var(--text-color); text-decoration: none;
-      border-bottom: 1px solid color-mix(in srgb, var(--border-color) 45%, transparent);
+    .epic-summary:hover { background: color-mix(in srgb, var(--border-color) 22%, transparent); }
+    .epic-caret { font-size: 0.7rem; color: var(--text-secondary); transition: transform .15s; flex: none; width: 12px; }
+    .epic-item.open .epic-caret { transform: rotate(90deg); }
+    .epic-ident { display: flex; align-items: baseline; gap: 0.55rem; flex: 1; min-width: 0; }
+    .epic-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .epic-key { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.72rem; color: var(--text-secondary); flex: none; }
+    .epic-pill {
+      flex: none; padding: 0.2rem 0.55rem; border-radius: 5px; border: 1px solid;
+      font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
     }
-    .epic-row:last-child { border-bottom: none; }
-    .epic-row:hover { color: #a78bfa; }
-    .epic-key { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.7rem; color: var(--text-secondary); flex: none; }
+    .epic-counts { flex: none; display: flex; gap: 0.9rem; font-size: 0.75rem; color: var(--text-secondary); }
+    .epic-dim { color: var(--text-secondary); font-weight: 400; }
+    .epic-goal {
+      padding: 0 0.25rem 0.85rem 2.1rem; margin-top: -0.55rem;
+      font-size: 0.82rem; line-height: 1.5; color: var(--text-secondary); max-width: 80ch;
+    }
+
+    /* ── Expanded detail ──────────────────────────────────────────────────── */
+    .epic-detail { padding: 0 0.25rem 1.2rem 2.1rem; }
+    .epic-detail-head {
+      display: flex; align-items: center; gap: 0.9rem; flex-wrap: wrap;
+      padding: 0.5rem 0 0.9rem; font-size: 0.78rem; color: var(--text-secondary);
+    }
+    .epic-branch-line { display: inline-flex; align-items: center; gap: 0.45rem; min-width: 0; }
     .epic-branch {
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.68rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.7rem;
       background: color-mix(in srgb, var(--border-color) 45%, transparent);
       padding: 2px 7px; border-radius: 5px; color: var(--text-secondary);
-      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 340px;
     }
-    .epic-truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .epic-link { color: #a78bfa; text-decoration: none; }
+    .epic-merged { color: #22c55e; }
+    .epic-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1.4rem; }
+    .epic-cols h4 {
+      margin: 0 0 0.5rem; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.06em;
+      text-transform: uppercase; color: var(--text-secondary);
+    }
+    .epic-row {
+      display: flex; align-items: center; gap: 0.5rem; width: 100%;
+      padding: 0.35rem 0; font-size: 0.8rem; text-align: left;
+      color: var(--text-color); text-decoration: none;
+      background: none; border: none; border-bottom: 1px solid color-mix(in srgb, var(--border-color) 40%, transparent);
+      cursor: pointer;
+    }
+    .epic-row:last-child { border-bottom: none; }
+    button.epic-row:hover, a.epic-row:hover { color: #a78bfa; }
+    .epic-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .epic-btn {
       padding: 5px 12px; border-radius: 7px; font-size: 0.76rem; font-weight: 600; cursor: pointer;
       border: 1px solid var(--border-color); background: transparent; color: var(--text-color); white-space: nowrap;
@@ -179,6 +209,29 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
     .epic-btn:disabled { opacity: 0.5; cursor: default; }
     .epic-btn-go { background: #7c3aed; border-color: #7c3aed; color: #fff; }
     .epic-btn-no { color: #f87171; }
+
+    .epics-empty { max-width: 520px; margin: 3rem auto; text-align: center; color: var(--text-secondary); }
+    .epics-empty i { font-size: 1.8rem; opacity: 0.25; }
+    .epics-empty-title { margin: 0.9rem 0 0.3rem; font-size: 0.95rem; color: var(--text-color); }
+    .epics-empty p { font-size: 0.82rem; line-height: 1.6; margin: 0; }
+
+    /* ── Detail drawer ────────────────────────────────────────────────────── */
+    .epic-drawer {
+      position: fixed; top: 0; right: 0; bottom: 0; width: min(760px, 82vw); z-index: 1200;
+      background: var(--card-bg, var(--background-surface)); border-left: 1px solid var(--border-color);
+      box-shadow: -18px 0 50px rgba(0,0,0,.35); display: flex; flex-direction: column;
+    }
+    .epic-drawer-scrim { position: fixed; inset: 0; z-index: 1150; background: rgba(0,0,0,.35); }
+    .epic-drawer-head {
+      display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+      padding: 0.85rem 1.1rem; border-bottom: 1px solid var(--border-color);
+      font-weight: 600; color: var(--text-color); font-size: 0.9rem;
+    }
+    .epic-drawer-x { background: none; border: none; color: var(--text-secondary); cursor: pointer; font-size: 1rem; }
+    .epic-drawer-body { flex: 1; min-height: 0; overflow: auto; }
+    .epic-drawer-body iframe { width: 100%; height: 100%; border: 0; display: block; }
+    .epic-doc { padding: 1.1rem 1.3rem; font-size: 0.86rem; line-height: 1.65; color: var(--text-color); }
+    .epic-doc pre { white-space: pre-wrap; word-break: break-word; font-family: inherit; margin: 0; }
   </style>
 </head>
 <body>
@@ -272,120 +325,184 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
 
     <div class="epics-scroll">
       ${epics.length === 0 ? html`
-        <div style="max-width:520px;margin:3rem auto;text-align:center;color:var(--text-secondary);">
-          <i class="fas fa-layer-group" style="font-size:1.8rem;opacity:0.25;"></i>
-          <p style="margin:0.9rem 0 0.3rem;font-size:0.95rem;color:var(--text-color);">No epics yet</p>
-          <p style="margin:0;font-size:0.82rem;line-height:1.6;">
-            An epic groups a feature's docs, tickets and branch into one reviewable unit.
-            Ask in chat to group work into an epic, or pick "Move to epic" on a ticket.
-          </p>
+        <div class="epics-empty">
+          <i class="fas fa-layer-group"></i>
+          <p class="epics-empty-title">No epics yet</p>
+          <p>An epic groups a feature's docs, tickets and branch into one reviewable unit.
+             Ask in chat to group work into an epic, or pick "Move to epic" on a ticket.</p>
         </div>
       ` : epics.map((e) => {
         const ets = ticketsByEpic.get(e.id) ?? [];
         const eds = docsByEpic.get(e.id) ?? [];
-        // The origin chat plus every distinct chat a ticket in this epic was built from.
         const convIds: string[] = [];
         if (e.conversationId) convIds.push(e.conversationId);
         for (const t of ets) if (t.conversationId && !convIds.includes(t.conversationId)) convIds.push(t.conversationId);
         const branches = ets.map((t) => t.githubBranch).filter(Boolean) as string[];
         const color = EPIC_STATUS_COLOR[e.status] ?? "#94a3b8";
+        const done = ets.filter((t) => t.status === "done" || t.status === "review").length;
         return html`
-          <div class="epic-card">
-            <div class="epic-head">
-              <div style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;">
+          <div class="epic-item" data-epic-row="${e.id}">
+            <!-- The SUMMARY row is the whole list: identity, one line of intent, and the
+                 counts. Detail stays folded away until you ask for it — four columns of
+                 everything for every epic is not a list, it's a wall. -->
+            <button class="epic-summary" data-epic-toggle="${e.id}" aria-expanded="false">
+              <i class="fas fa-chevron-right epic-caret"></i>
+              <span class="epic-ident">
                 ${e.epicKey ? html`<span class="epic-key">${e.epicKey}</span>` : ""}
-                <span style="font-size:0.98rem;font-weight:600;color:var(--text-color);">${e.name}</span>
-                ${pill(e.status.replace("_", " "), color)}
+                <span class="epic-name">${e.name}</span>
+              </span>
+              <span class="epic-pill" style="color:${color};border-color:${color}55;background:${color}1a;">${e.status.replace("_", " ")}</span>
+              <span class="epic-counts">
+                <span>${ets.length} ${ets.length === 1 ? "ticket" : "tickets"}${ets.length ? html` <span class="epic-dim">(${done} done)</span>` : ""}</span>
+                <span>${eds.length} ${eds.length === 1 ? "doc" : "docs"}</span>
+                <span>${branches.length + (e.branch ? 1 : 0)} ${branches.length + (e.branch ? 1 : 0) === 1 ? "branch" : "branches"}</span>
+                <span>${convIds.length} ${convIds.length === 1 ? "chat" : "chats"}</span>
+              </span>
+            </button>
+            ${e.goal ? html`<div class="epic-goal">${e.goal}</div>` : ""}
+
+            <div class="epic-detail" id="epic-detail-${e.id}" hidden>
+              <div class="epic-detail-head">
+                ${e.branch ? html`
+                  <span class="epic-branch-line">
+                    <i class="fas fa-code-branch"></i>
+                    <code class="epic-branch">${e.branch}</code>
+                    <span class="epic-dim">from ${e.baseBranch}</span>
+                  </span>` : html`<span class="epic-dim">No branch cut yet</span>`}
+                ${e.previewUrl ? html`<a href="${e.previewUrl}" target="_blank" rel="noopener" class="epic-link"><i class="fas fa-play"></i> Preview</a>` : ""}
+                ${e.prUrl ? html`<a href="${e.prUrl}" target="_blank" rel="noopener" class="epic-link"><i class="fas fa-code-pull-request"></i> Request</a>` : ""}
+                ${e.mergedAt ? html`<span class="epic-merged">Merged ${fmt(e.mergedAt)}</span>` : ""}
                 <span style="flex:1;"></span>
-                <!-- The approval boundary, as actions. An epic merges to main only when
-                     it's been accepted, so Merge only appears once it's approved. -->
                 ${e.status === "in_review" ? html`
                   <button class="epic-btn epic-btn-go" data-epic="${e.id}" data-act="approve">Approve</button>
-                  <button class="epic-btn epic-btn-no" data-epic="${e.id}" data-act="reject">Reject</button>
-                ` : ""}
+                  <button class="epic-btn epic-btn-no" data-epic="${e.id}" data-act="reject">Reject</button>` : ""}
                 ${e.status === "approved" ? html`
-                  <button class="epic-btn epic-btn-go" data-epic="${e.id}" data-act="merge">Merge to main</button>
-                ` : ""}
+                  <button class="epic-btn epic-btn-go" data-epic="${e.id}" data-act="merge">Merge to main</button>` : ""}
               </div>
-              ${e.goal ? html`<div style="font-size:0.83rem;color:var(--text-secondary);line-height:1.5;">${e.goal}</div>` : ""}
-              <div class="epic-meta">
-                ${e.branch ? html`
-                  <span title="This epic's integration branch, cut from ${e.baseBranch}">
-                    <i class="fas fa-code-branch" style="opacity:0.5;margin-right:5px;"></i>
-                    <span class="epic-branch">${e.branch}</span>
-                    <span style="opacity:0.5;"> ← ${e.baseBranch}</span>
-                  </span>
-                ` : html`<span style="opacity:0.6;">No branch cut yet</span>`}
-                ${e.previewUrl ? html`<a href="${e.previewUrl}" target="_blank" rel="noopener" style="color:#a78bfa;text-decoration:none;"><i class="fas fa-play" style="margin-right:5px;"></i>Preview</a>` : ""}
-                ${e.prUrl ? html`<a href="${e.prUrl}" target="_blank" rel="noopener" style="color:#a78bfa;text-decoration:none;"><i class="fas fa-code-pull-request" style="margin-right:5px;"></i>Pull request</a>` : ""}
-                ${e.mergedAt ? html`<span style="color:#22c55e;">Merged ${fmt(e.mergedAt)}</span>` : ""}
-                <span style="opacity:0.55;">${ets.length} ${ets.length === 1 ? "ticket" : "tickets"} · ${eds.length} ${eds.length === 1 ? "doc" : "docs"} · ${convIds.length} ${convIds.length === 1 ? "chat" : "chats"}</span>
+
+              <div class="epic-cols">
+                <section>
+                  <h4>Tickets <span class="epic-dim">${ets.length}</span></h4>
+                  ${ets.length === 0 ? html`<p class="epic-dim">None yet.</p>` : ets.map((t) => html`
+                    <button class="epic-row" data-open-ticket="${t.id}" title="${t.name}">
+                      ${t.ticketKey ? html`<span class="epic-key">${t.ticketKey}</span>` : ""}
+                      <span class="epic-row-name">${t.name}</span>
+                      <span class="epic-dim" style="color:${TICKET_STATUS_COLOR[t.status] ?? "#94a3b8"};">${t.status.replace("_", " ")}</span>
+                    </button>`)}
+                </section>
+
+                <section>
+                  <h4>Documents <span class="epic-dim">${eds.length}</span></h4>
+                  ${eds.length === 0 ? html`<p class="epic-dim">None linked.</p>` : eds.map((d) => html`
+                    <button class="epic-row" data-open-doc="${d.id}" data-doc-name="${d.name}" title="${d.name}">
+                      <i class="fas fa-file-lines epic-dim"></i>
+                      <span class="epic-row-name">${d.name}</span>
+                      <span class="epic-dim">${d.owned ? "draft" : d.fileType}</span>
+                    </button>`)}
+                </section>
+
+                <section>
+                  <h4>Conversations <span class="epic-dim">${convIds.length}</span></h4>
+                  ${convIds.length === 0 ? html`<p class="epic-dim">None linked.</p>` : convIds.map((cid, i) => html`
+                    <a class="epic-row" href="/chat/project/${project.projectId}/conversation/${cid}">
+                      <i class="fas fa-comments epic-dim"></i>
+                      <span class="epic-row-name">${convById.get(cid)?.title || "Untitled chat"}</span>
+                      ${i === 0 && e.conversationId === cid ? html`<span class="epic-dim">origin</span>` : ""}
+                    </a>`)}
+                </section>
+
+                <section>
+                  <h4>Branches <span class="epic-dim">${branches.length + (e.branch ? 1 : 0)}</span></h4>
+                  ${e.branch ? html`<div class="epic-row"><code class="epic-branch">${e.branch}</code><span class="epic-dim">epic</span></div>` : ""}
+                  ${branches.map((b) => html`<div class="epic-row"><code class="epic-branch">${b}</code></div>`)}
+                </section>
               </div>
             </div>
-
-            <div class="epic-body">
-              <div>
-                ${sectionTitle("Tickets built", ets.length)}
-                ${ets.length === 0 ? emptyNote("No tickets in this epic yet.") : ets.map((t) => html`
-                  <a class="epic-row" href="/projects/${project.projectId}/tickets?ticket=${t.id}" title="${t.name}">
-                    ${t.ticketKey ? html`<span class="epic-key">${t.ticketKey}</span>` : ""}
-                    <span class="epic-truncate" style="flex:1;min-width:0;">${t.name}</span>
-                    <span style="font-size:0.68rem;color:${TICKET_STATUS_COLOR[t.status] ?? "#94a3b8"};flex:none;">${t.status.replace("_", " ")}</span>
-                  </a>
-                `)}
-              </div>
-
-              <div>
-                ${sectionTitle("Documents", eds.length)}
-                ${eds.length === 0 ? emptyNote("No documents linked.") : eds.map((d) => html`
-                  <div class="epic-row" title="${d.owned ? "Draft owned by this epic — folds into the master doc on approval" : `Linked ${d.fileType}`}">
-                    <i class="fas fa-file-lines" style="opacity:0.45;font-size:0.75rem;flex:none;"></i>
-                    <span class="epic-truncate" style="flex:1;min-width:0;">${d.name}</span>
-                    <span style="font-size:0.66rem;color:var(--text-secondary);opacity:0.7;flex:none;">${d.owned ? "draft" : d.fileType}</span>
-                  </div>
-                `)}
-              </div>
-
-              <div>
-                ${sectionTitle("Branches", branches.length + (e.branch ? 1 : 0))}
-                ${e.branch ? html`
-                  <div class="epic-row" title="The epic's integration branch">
-                    <i class="fas fa-code-branch" style="opacity:0.45;font-size:0.75rem;flex:none;"></i>
-                    <span class="epic-branch" style="flex:1;min-width:0;">${e.branch}</span>
-                    <span style="font-size:0.66rem;color:var(--text-secondary);opacity:0.7;flex:none;">epic</span>
-                  </div>
-                ` : ""}
-                ${branches.length === 0 && !e.branch ? emptyNote("No branches cut yet.") : branches.map((b) => html`
-                  <div class="epic-row" title="${b}">
-                    <i class="fas fa-code-branch" style="opacity:0.3;font-size:0.75rem;flex:none;"></i>
-                    <span class="epic-branch" style="flex:1;min-width:0;">${b}</span>
-                  </div>
-                `)}
-              </div>
-
-              <div>
-                ${sectionTitle("Conversations", convIds.length)}
-                ${convIds.length === 0 ? emptyNote("No linked chats.") : convIds.map((cid, i) => html`
-                  <a class="epic-row" href="/chat/project/${project.projectId}/conversation/${cid}" title="Open this chat">
-                    <i class="fas fa-comments" style="opacity:0.45;font-size:0.75rem;flex:none;"></i>
-                    <span class="epic-truncate" style="flex:1;min-width:0;">${convById.get(cid)?.title || "Untitled chat"}</span>
-                    ${i === 0 && e.conversationId === cid ? html`<span style="font-size:0.66rem;color:var(--text-secondary);opacity:0.7;flex:none;">origin</span>` : ""}
-                  </a>
-                `)}
-              </div>
-            </div>
-          </div>
-        `;
+          </div>`;
       })}
     </div>
   </div>
   </div>
 
+  <!-- Detail drawer: a ticket or a document opens HERE, over the list, instead of
+       navigating away to the tickets board and losing your place. -->
+  <div id="epic-drawer" class="epic-drawer" hidden>
+    <div class="epic-drawer-head">
+      <span id="epic-drawer-title">Details</span>
+      <button class="epic-drawer-x" onclick="closeEpicDrawer()"><i class="fas fa-xmark"></i></button>
+    </div>
+    <div id="epic-drawer-body" class="epic-drawer-body"></div>
+  </div>
+  <div id="epic-drawer-scrim" class="epic-drawer-scrim" hidden onclick="closeEpicDrawer()"></div>
+
 <script src="/public/js/sidebar.js"></script>
 <script>
-  // Approve / reject / merge. Delegated so the buttons stay declarative in the markup.
-  // A merge the system refuses comes back 409 with the blocking reason (unbuilt tickets,
-  // an unmerged parent epic) — show that reason rather than a generic failure.
+  var PROJECT_ID = '${project.projectId}';
+
+  // Expand/collapse. The list stays a list; detail is opt-in.
+  document.addEventListener('click', function (ev) {
+    var t = ev.target.closest ? ev.target.closest('[data-epic-toggle]') : null;
+    if (!t) return;
+    var id = t.getAttribute('data-epic-toggle');
+    var item = document.querySelector('[data-epic-row="' + id + '"]');
+    var detail = document.getElementById('epic-detail-' + id);
+    if (!item || !detail) return;
+    var open = !detail.hidden;
+    detail.hidden = open;
+    item.classList.toggle('open', !open);
+    t.setAttribute('aria-expanded', String(!open));
+  });
+
+  // A ticket opens HERE, in a drawer, using the ticket board's existing embed render —
+  // same drawer the chat page uses. Going to the board and back loses your place.
+  function openEpicDrawer(title, html) {
+    document.getElementById('epic-drawer-title').textContent = title;
+    document.getElementById('epic-drawer-body').innerHTML = html;
+    document.getElementById('epic-drawer').hidden = false;
+    document.getElementById('epic-drawer-scrim').hidden = false;
+  }
+  function closeEpicDrawer() {
+    document.getElementById('epic-drawer').hidden = true;
+    document.getElementById('epic-drawer-scrim').hidden = true;
+    document.getElementById('epic-drawer-body').innerHTML = '';
+  }
+  window.closeEpicDrawer = closeEpicDrawer;
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeEpicDrawer(); });
+
+  document.addEventListener('click', function (ev) {
+    var tk = ev.target.closest ? ev.target.closest('[data-open-ticket]') : null;
+    if (tk) {
+      var tid = tk.getAttribute('data-open-ticket');
+      var name = (tk.querySelector('.epic-row-name') || {}).textContent || 'Ticket';
+      openEpicDrawer(name, '<iframe src="/projects/' + PROJECT_ID + '/tickets?embed=' + encodeURIComponent(tid) + '"></iframe>');
+      return;
+    }
+    var dc = ev.target.closest ? ev.target.closest('[data-open-doc]') : null;
+    if (dc) {
+      var fid = dc.getAttribute('data-open-doc');
+      var dname = dc.getAttribute('data-doc-name') || 'Document';
+      openEpicDrawer(dname, '<div class="epic-doc">Loading\u2026</div>');
+      fetch('/projects/' + PROJECT_ID + '/api/files/' + fid + '/content')
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          var body = document.getElementById('epic-drawer-body');
+          if (!body) return;
+          var pre = document.createElement('pre');
+          pre.textContent = (j && j.content) || 'This document is empty.';
+          var wrap = document.createElement('div');
+          wrap.className = 'epic-doc';
+          wrap.appendChild(pre);
+          body.innerHTML = '';
+          body.appendChild(wrap);
+        })
+        .catch(function () {
+          var body = document.getElementById('epic-drawer-body');
+          if (body) body.innerHTML = '<div class="epic-doc">Could not load this document.</div>';
+        });
+    }
+  });
+
+  // Approve / reject / merge.
   document.addEventListener('click', function (ev) {
     var b = ev.target.closest ? ev.target.closest('[data-act]') : null;
     if (!b) return;
@@ -398,9 +515,7 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
     var all = document.querySelectorAll('[data-epic="' + id + '"]');
     for (var i = 0; i < all.length; i++) all[i].disabled = true;
     fetch('/api/epics/' + id + '/' + act, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{}'
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
     }).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok, j: j }; });
     }).then(function (res) {
