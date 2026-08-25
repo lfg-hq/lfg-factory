@@ -179,7 +179,7 @@ export const AgentPage = () => html`
                                 <i data-lucide="terminal" class="w-4 h-4 text-brand-600"></i>
                                 <span class="text-xs font-bold text-brand-700 uppercase tracking-wider">Agent execution</span>
                             </div>
-                            <h3 class="font-display font-bold text-2xl text-slate-900 mb-3">Track and course-correct Claude Code sessions.</h3>
+                            <h3 class="font-display font-bold text-2xl text-slate-900 mb-3">Orchestrate coding CLI sessions: Claude Code, Codex, or open-source models.</h3>
                             <p class="text-slate-600 leading-relaxed mb-4">Each ticket is executed by Claude Code in a sandboxed environment. LFG Agent tracks progress, shows you exactly what was built, and lets you continue, restart, or course-correct at any point.</p>
                             <ul class="space-y-2 text-sm text-slate-600">
                                 <li class="flex gap-2"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i> Sandboxed Claude Code sessions per ticket</li>
