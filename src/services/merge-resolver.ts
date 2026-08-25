@@ -1,424 +1,249 @@
 /**
- * Merge-conflict resolver — hands a conflicted merge to an agent inside the sandbox.
+ * Merge a ticket branch into its epic branch by handing the job to the SAME coding CLI
+ * that built the ticket (Pi, or Claude Code) — running in the same sandbox, with the
+ * same shell, on the same checkout.
  *
- * Division of labour is deliberate. WE drive git: recreate the conflict, verify the
- * result, commit and push. The AGENT only edits the conflicting files. It never gets to
- * decide that the merge is finished, and it never pushes — because the failure mode that
- * matters here isn't "the agent can't fix it", it's "the agent produces something
- * plausible that lands on the epic branch unnoticed", which is exactly what epics exist
- * to prevent.
+ * This file used to drive git itself: recreate the conflict, feed the agent a
+ * file-editing tool, whitelist which paths it was allowed to touch, cap it at 20 files
+ * and 24 steps, then judge the result. That scaffolding is what actually failed. A merge
+ * blocked by a shallow clone ("refusing to merge unrelated histories") died inside a
+ * 24-step budget spent reading conflict hunks — a problem any competent agent solves with
+ * one `git fetch --unshallow`, if you let it run git and give it room.
  *
- * So every resolution passes a deterministic gate before it's committed: no unmerged
- * paths, no conflict markers anywhere in the tree, and — when the caller supplies a build
- * command — a build that actually compiles. Anything short of that is aborted and
- * reported as unresolved, leaving the branch exactly as it was.
+ * So: clear instructions, a real shell, no step cap. We keep exactly two things, because
+ * neither is cleverness — credentials (the agent can't push without them) and the verdict
+ * (the agent doesn't get to declare success; we check the remote).
  */
-import { z } from "zod";
-import { generateText, stepCountIs, tool, zodSchema, type LanguageModel } from "ai";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { execOnWorkspace } from "./mags.ts";
 import { db } from "../config/db.ts";
 import { modelSelections } from "../db/schema/chat.ts";
-import { llmApiKeys } from "../db/schema/users.ts";
+import { llmApiKeys, profiles, applicationState } from "../db/schema/users.ts";
 import { projectEnvironments } from "../db/schema/project-environments.ts";
-import { getModel, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
+import { projectEnvironmentVariables } from "../db/schema/projects.ts";
+import { decrypt } from "../ai/tools/env-tools.ts";
+import { getProviderName, getProviderModel, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
+import { startPiCli, streamPiToCompletion, isPiSupportedProvider, extractPiProgress } from "./pi-cli.ts";
+import {
+  startClaudeCli, pollOutput, parseJsonlEvents, isStreamComplete, extractExitCode,
+} from "./claude-cli.ts";
+import { getOpenAICodexAccessToken } from "./openai-codex-auth.ts";
 
-export interface ResolveMergeInput {
-  workspaceId: string;
-  projectDir: string;
-  featureBranch: string;
-  targetBranch: string;
-  /** Paths git reported as unmerged. */
-  files: string[];
-  /** Token-embedded remote URL, so the push works on a private repo. */
-  authUrl: string;
-  model: LanguageModel;
-  /** Optional build command — when given, a resolution that doesn't compile is rejected. */
-  verifyCmd?: string;
-  /** Progress lines (ticket log / preview log). */
-  onLog?: (line: string) => void;
-}
-
-export interface ResolveMergeResult {
-  resolved: boolean;
-  /** Merge commit sha on the target branch, when resolved. */
+export interface AgentMergeResult {
+  merged: boolean;
+  /** Target-branch sha on the REMOTE once the merge has actually landed. */
   sha?: string;
-  files: string[];
-  /** One-line account of what was done, for the ticket log and the Git tab. */
+  /** The agent's own account: what was wrong, and what it did about it. */
   summary: string;
-  /** The resolver's own account — why it conflicted and what it did, per file. Present
-   *  even when the resolution was REJECTED, since that's when you most want to see what
-   *  was attempted. */
-  explanation?: string;
 }
 
-/**
- * Files we will NOT let an agent reconcile. Not because it couldn't produce something
- * that parses, but because a wrong answer here is silent and expensive: a hand-merged
- * lockfile installs versions nobody chose, and a hand-merged migration corrupts a schema
- * in a way that only shows up later. These go to a human.
- */
-const NEVER_AUTO_RESOLVE = [
-  /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|packages\.lock\.json|Gemfile\.lock|poetry\.lock|Cargo\.lock|composer\.lock)$/i,
-  /(^|\/)([Mm]igrations?)\//,
-  /\.(png|jpe?g|gif|ico|pdf|zip|gz|tar|dll|so|dylib|exe|woff2?|ttf)$/i,
-];
+const MERGE_TIMEOUT_MS = 20 * 60_000;
 
-/** Past this, the branches have genuinely diverged (a re-cut anchor, say) and this is a
- *  structural problem to look at, not a merge to patch up file by file. */
-const MAX_FILES = 20;
-
-function guardrail(files: string[]): string | null {
-  if (!files.length) return "git reported a conflict but no unmerged paths — nothing safe to act on.";
-  if (files.length > MAX_FILES) {
-    return `${files.length} conflicting files — too divergent to resolve automatically (this usually means the branches were cut from different bases).`;
-  }
-  const blocked = files.filter((f) => NEVER_AUTO_RESOLVE.some((re) => re.test(f)));
-  if (blocked.length) {
-    return `Not auto-resolving: ${blocked.join(", ")}. Lockfiles, migrations and binaries need a human — a plausible-looking merge of these breaks things quietly.`;
-  }
-  return null;
+/** The line that actually explains a git failure, for the log and the agent's prompt. */
+export function gitFailureReason(error: string): string {
+  const fatal = error.match(/fatal:[^\n]*/i)?.[0]
+    ?? error.match(/error:[^\n]*/i)?.[0]
+    ?? error.match(/CONFLICT[^\n]*/)?.[0];
+  return (fatal ?? error.split("\n").find((l) => l.trim()) ?? "").trim().slice(0, 300);
 }
 
-export async function resolveMergeConflict(input: ResolveMergeInput): Promise<ResolveMergeResult> {
-  const { workspaceId, projectDir, featureBranch, targetBranch, files, authUrl, model, verifyCmd } = input;
-  const log = input.onLog ?? (() => {});
-
-  const refused = guardrail(files);
-  if (refused) {
-    log(`Conflict NOT auto-resolved — ${refused}`);
-    return { resolved: false, files, summary: refused };
+/** Plain-English cause for the reasons we've actually seen bite, so the log says WHY. */
+export function explainGitFailure(error: string): string {
+  const r = gitFailureReason(error);
+  if (/refusing to merge unrelated histories/i.test(error)) {
+    return `${r} — this checkout is a shallow clone (cloned with --depth 1), so the commit both branches descend from was never downloaded. Git can't find a common ancestor it doesn't have. Unshallowing the repo fixes it.`;
   }
+  if (/local changes.*would be overwritten|Your local changes/i.test(error)) {
+    return `${r} — the sandbox checkout has uncommitted edits (preview setup rewrites config files on every run) and git won't switch branches over them.`;
+  }
+  if (/couldn't find remote ref|no such ref|unknown revision/i.test(error)) {
+    return `${r} — the branch isn't on the remote, or wasn't fetched into this checkout.`;
+  }
+  if (/Authentication failed|could not read Username|403|401/i.test(error)) {
+    return `${r} — the git credentials for this repo were rejected.`;
+  }
+  return r;
+}
 
-  const sh = async (script: string, timeout = 120_000) => {
-    const b64 = Buffer.from(script).toString("base64");
-    const r = await execOnWorkspace(workspaceId, `echo ${b64} | base64 -d | sh`, { timeout })
-      .catch((e) => ({ output: `EXEC_FAILED: ${(e as Error).message}`, exitCode: 1 }));
-    return { output: r.output ?? "", exitCode: r.exitCode ?? 0 };
+/** Which CLI to drive, resolved exactly the way the ticket builder resolves it. */
+async function resolveCli(userId: string) {
+  const [appState] = await db.select({ k: applicationState.builderModelKey, mode: applicationState.builderAuthMode })
+    .from(applicationState).where(eq(applicationState.userId, userId)).limit(1);
+  const LEGACY = "claude_4.5_sonnet";
+  let modelKey = appState?.k && appState.k !== LEGACY ? appState.k : "";
+  if (!modelKey) {
+    const [sel] = await db.select({ m: modelSelections.selectedModel })
+      .from(modelSelections).where(eq(modelSelections.userId, userId)).limit(1);
+    modelKey = sel?.m || DEFAULT_MODEL_KEY;
+  }
+  const provider = getProviderName(modelKey);
+  const authMode = appState?.mode === "api_key" ? "api_key" : "subscription";
+  const [keys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, userId)).limit(1);
+  const apiKey = provider
+    ? ({
+        anthropic: keys?.anthropicApiKey, openai: keys?.openaiApiKey, google: keys?.googleApiKey,
+        kimi: keys?.kimiApiKey, deepseek: keys?.deepseekApiKey, glm: keys?.glmApiKey,
+      } as Record<string, string | null | undefined>)[provider] ?? undefined
+    : undefined;
+  const [profile] = await db.select().from(profiles).where(eq(profiles.userId, userId)).limit(1);
+  const usesCodex = authMode === "subscription" && provider === "openai"
+    && !!profile?.openaiCodexAuthenticated && !!profile.openaiCodexCredentials;
+  const oauthAccessToken = usesCodex
+    ? await getOpenAICodexAccessToken(userId).catch(() => undefined)
+    : undefined;
+  const usePi = !!provider && provider !== "anthropic" && isPiSupportedProvider(provider)
+    && !!(apiKey || oauthAccessToken);
+  const claudeUsable = provider === "anthropic"
+    && (!!keys?.anthropicApiKey || (!!profile?.claudeCodeAuthenticated && !!profile.claudeCodeCredentials));
+  return {
+    modelKey, provider, apiKey: usesCodex ? undefined : apiKey, oauthAccessToken, usePi, claudeUsable,
+    anthropicApiKey: provider === "anthropic" && authMode === "api_key" ? keys?.anthropicApiKey ?? undefined : undefined,
+    piModelId: getProviderModel(modelKey) ?? modelKey,
   };
-
-  // Put the checkout back INTO the conflicted state we just aborted, so the agent has
-  // real conflict markers to work with rather than a description of them.
-  log(`Re-creating the merge so it can be resolved (${files.length} file(s))…`);
-  const setup = await sh(`
-cd "${projectDir}" || exit 1
-git config user.email "ai@lfg.dev"; git config user.name "LFG AI"
-git remote set-url origin "${authUrl}" 2>/dev/null || true
-git fetch --prune origin >/dev/null 2>&1
-# Same reason as mergeToAnchor: the checkout we're handed is not guaranteed clean, and
-# git checkout refuses over local edits or untracked files that the branch also has.
-git stash push -u -m lfg-merge-autostash >/dev/null 2>&1 || true
-git reset --hard >/dev/null 2>&1 || true
-git clean -fd >/dev/null 2>&1 || true
-git checkout ${targetBranch} 2>/dev/null || git checkout -b ${targetBranch} origin/${targetBranch}
-git reset --hard origin/${targetBranch} >/dev/null 2>&1
-git merge ${featureBranch} -m "Merge ${featureBranch} into ${targetBranch}" >/dev/null 2>&1
-UN=$(git diff --name-only --diff-filter=U 2>/dev/null)
-[ -n "$UN" ] && { echo "CONFLICTED"; echo "$UN"; } || echo "NO_CONFLICT"`);
-
-  if (setup.output.includes("NO_CONFLICT")) {
-    // Replaying it worked, so there was never a content conflict — the first attempt died
-    // before finishing (an interrupted run leaves "Merging to …" as the last line and
-    // nothing after it), or the anchor moved since. Say which, rather than leaving a
-    // silent success where a failure was reported minutes earlier.
-    log(
-      `Merge succeeded on retry — there was no content conflict.\n\n` +
-      `Why the first attempt didn't land: the merge was started but never completed — ` +
-      `typically the build run was interrupted mid-command, or the target branch moved between ` +
-      `the two attempts. Replaying it against the current ${targetBranch} applied cleanly, so ` +
-      `nothing had to be reconciled and no code was changed to make it work.`
-    );
-    const done = await sh(`cd "${projectDir}" && git push origin ${targetBranch} 2>&1 | tail -2 && echo "SHA:$(git rev-parse ${targetBranch})" && git checkout ${featureBranch} 2>/dev/null || true`);
-    const sha = done.output.match(/SHA:([a-f0-9]{40})/)?.[1];
-    return { resolved: !!sha, sha, files, summary: "Merged cleanly on retry — no conflict resolution needed." };
-  }
-  if (!setup.output.includes("CONFLICTED")) {
-    log("Could not re-create the merge to resolve it.");
-    await sh(`cd "${projectDir}" && git merge --abort 2>/dev/null; git checkout ${featureBranch} 2>/dev/null || true`);
-    return { resolved: false, files, summary: `Could not re-create the merge:\n${setup.output.slice(-400)}` };
-  }
-
-  // ── The agent: edit the conflicting files, nothing else ──────────────────────
-  const tools = {
-    run: tool({
-      description:
-        "Run ONE shell command in the repo (the conflicted merge is already in progress there). Use it to read the conflicting files, inspect both sides (`git log`, `git show`, `git diff`), and write the resolved content. Returns exit code + combined output. Do NOT commit, push, merge, rebase, reset, or checkout a different branch — the caller does all of that and will verify your work first.",
-      inputSchema: zodSchema(z.object({
-        command: z.string().describe("One shell command, e.g. `cat -n src/Program.cs`, `git show :2:src/Program.cs`, `git diff --name-only --diff-filter=U`, or a heredoc that writes the resolved file."),
-      })),
-      execute: async ({ command }: { command: string }) => {
-        // Block the git verbs that would take the decision out of our hands. The sandbox
-        // is disposable, so this is about keeping the workflow honest, not security.
-        if (/\bgit\s+(commit|push|merge|rebase|reset|cherry-pick|checkout\s+-|switch)\b/.test(command)) {
-          return { exitCode: 1, output: "Refused: the caller handles commit/push/merge. Only edit the conflicting files." };
-        }
-        log(`  resolver$ ${command.slice(0, 120)}`);
-        const r = await sh(`cd "${projectDir}" && ${command}`, 120_000);
-        return { exitCode: r.exitCode, output: r.output.slice(-6000) || "(no output)" };
-      },
-    }),
-  };
-
-  // Gather WHY this conflicted, deterministically, before the agent gets involved: where
-  // the branches diverged and which commits on each side touched each file. Grounding the
-  // explanation in real history beats letting a model narrate from the markers alone.
-  const shq = (f: string) => `'${f.replace(/'/g, `'\\''`)}'`;
-  const ctx = await sh(`
-cd "${projectDir}"
-MB=$(git merge-base ${targetBranch} ${featureBranch} 2>/dev/null)
-echo "MERGE_BASE:$MB $(git log -1 --format='%cr' "$MB" 2>/dev/null)"
-for f in ${files.map(shq).join(" ")}; do
-  echo "FILE:$f"
-  echo "  hunks: $(grep -c '^<<<<<<< ' "$f" 2>/dev/null || echo '?')"
-  echo "  on ${targetBranch}:"; git log --format='    %h %s' "$MB..${targetBranch}" -- "$f" 2>/dev/null | head -4
-  echo "  on ${featureBranch}:"; git log --format='    %h %s' "$MB..${featureBranch}" -- "$f" 2>/dev/null | head -4
-done`, 60_000);
-  const conflictContext = ctx.output.slice(0, 4000);
-
-  const fileList = files.map((f) => `  - ${f}`).join("\n");
-  log(`Handing the conflict to the AI resolver…`);
-  const run = await generateText({
-    model,
-    tools,
-    stopWhen: stepCountIs(30),
-    system:
-      `You are resolving a git merge conflict inside a disposable Linux sandbox. The merge of ` +
-      `\`${featureBranch}\` into \`${targetBranch}\` is IN PROGRESS in the working tree, with conflict markers in place.\n\n` +
-      `Your ONLY job is to edit the conflicting files so they are correct, then stop. Do not commit, push, ` +
-      `or run any git command that changes branches or history — the caller commits and pushes after ` +
-      `verifying your work, and will reject it if conflict markers remain or the build fails.\n\n` +
-      `How to do this well:\n` +
-      `- Read each conflicting file in full. Understand what BOTH sides were trying to do before choosing.\n` +
-      `- \`git show :2:<path>\` is the target side ("ours"), \`git show :3:<path>\` is the incoming side ("theirs"), ` +
-      `\`git log --oneline -3 ${featureBranch}\` shows what the feature branch was doing.\n` +
-      `- The usual right answer is to KEEP BOTH intentions, not to pick a side: two branches that each ` +
-      `registered a service, added a using, or appended a route both need their line in the result.\n` +
-      `- Remove every \`<<<<<<<\`, \`=======\` and \`>>>>>>>\` marker. Leave the file syntactically valid.\n` +
-      `- Do not "fix" anything unrelated to the conflict, and do not delete code you don't understand.\n\n` +
-      `WHEN YOU ARE DONE, your final reply is an explanation a developer will read in the ticket log ` +
-      `weeks from now, with no other context. Use exactly this shape, plain text, no preamble:\n\n` +
-      `Why it conflicted\n` +
-      `<1-3 sentences: what each side changed and why git couldn't order them. Name the real things — ` +
-      `"both branches registered a service in Program.cs", not "the same lines changed".>\n\n` +
-      `What I did\n` +
-      `- <file>: <what you kept from each side, and anything you deliberately dropped and why>\n\n` +
-      `Keep it short and concrete. If you were unsure about a choice, say so on a final "Worth checking:" line.`,
-    prompt:
-      `Resolve the conflicts from merging \`${featureBranch}\` into \`${targetBranch}\`.\n\n` +
-      `Conflicting files:\n${fileList}\n\n` +
-      `History behind the conflict (where the branches diverged, and what each side did to each file):\n` +
-      `${conflictContext}\n\n` +
-      `Edit them so the merged result keeps what both branches intended, then explain as instructed.`,
-  }).catch((e) => {
-    log(`Resolver agent errored: ${(e as Error).message?.slice(0, 160)}`);
-    return null;
-  });
-  const explanation = (run?.text ?? "").trim();
-
-  // ── Our gate. The agent's opinion that it's done counts for nothing. ─────────
-  log("Checking the resolution…");
-  const check = await sh(`
-cd "${projectDir}"
-UN=$(git diff --name-only --diff-filter=U 2>/dev/null)
-[ -n "$UN" ] && { echo "STILL_UNMERGED"; echo "$UN"; }
-# Conflict markers anywhere in the tree, including files it wasn't asked about.
-if git grep -lE '^(<{7}|={7}|>{7})( |$)' -- . 2>/dev/null | head -5 | grep -q .; then
-  echo "MARKERS_REMAIN"; git grep -lE '^(<{7}|={7}|>{7})( |$)' -- . 2>/dev/null | head -5
-fi
-echo "CHECK_DONE"`);
-
-  if (check.output.includes("STILL_UNMERGED") || check.output.includes("MARKERS_REMAIN")) {
-    const why = check.output.includes("MARKERS_REMAIN") ? "conflict markers are still in the tree" : "files are still unmerged";
-    log(`Resolution REJECTED — ${why}. The merge is aborted; the branch is exactly as it was.`);
-    if (explanation) log(`What the resolver attempted (rejected, not applied):\n\n${explanation}`);
-    await sh(`cd "${projectDir}" && git merge --abort 2>/dev/null; git checkout ${featureBranch} 2>/dev/null || true`);
-    return { resolved: false, files, explanation, summary: `The AI resolver did not finish the merge (${why}) — needs a human.` };
-  }
-
-  // Optional build gate: a resolution that doesn't compile is worse than no resolution,
-  // because it lands on the branch the client previews.
-  if (verifyCmd) {
-    log(`Verifying the resolved merge builds: ${verifyCmd}`);
-    const built = await sh(`cd "${projectDir}" && ${verifyCmd} 2>&1 | tail -30`, 1_800_000);
-    if (built.exitCode !== 0) {
-      log(`Resolution REJECTED — the merged result does not build (exit ${built.exitCode}). The merge is aborted; the branch is exactly as it was.`);
-      if (explanation) log(`What the resolver attempted (rejected, not applied):\n\n${explanation}`);
-      log(`Build output:\n${built.output.slice(-800)}`);
-      await sh(`cd "${projectDir}" && git merge --abort 2>/dev/null; git checkout ${featureBranch} 2>/dev/null || true`);
-      return { resolved: false, files, explanation, summary: `The AI resolved the conflicts but the result didn't build — needs a human.\n${built.output.slice(-600)}` };
-    }
-    log("Resolved merge builds ✓");
-  }
-
-  // Ours to commit and push — never the agent's.
-  const commit = await sh(`
-cd "${projectDir}"
-git add -A
-git commit -m "Merge ${featureBranch} into ${targetBranch} (AI-resolved conflicts in ${files.length} file(s))" 2>&1 | tail -2
-git push origin ${targetBranch} 2>&1 | tail -2
-echo "SHA:$(git rev-parse ${targetBranch})"
-git checkout ${featureBranch} 2>/dev/null || true`, 180_000);
-
-  const sha = commit.output.match(/SHA:([a-f0-9]{40})/)?.[1];
-  if (!sha) {
-    log("Could not commit/push the resolved merge.");
-    await sh(`cd "${projectDir}" && git merge --abort 2>/dev/null; git checkout ${featureBranch} 2>/dev/null || true`);
-    return { resolved: false, files, summary: `Resolved the conflicts but could not push:\n${commit.output.slice(-400)}` };
-  }
-
-  const summary = `AI-resolved ${files.length} conflicting file(s) merging into ${targetBranch}: ${files.join(", ")}${verifyCmd ? " (build verified)" : ""}.`;
-  // The explainer is the point of all this: months from now the ticket log should say why
-  // the merge failed and what was changed, not just that something happened.
-  log(
-    `Merge conflict resolved — ${files.length} file(s) into ${targetBranch}` +
-    `${verifyCmd ? " (build verified)" : " (no build command configured — NOT build-verified)"}\n\n` +
-    (explanation || "(the resolver gave no explanation)") +
-    `\n\nMerge commit ${sha.slice(0, 7)}. Review the diff before approving.`
-  );
-  return { resolved: true, sha, files, summary, explanation };
 }
 
-/**
- * Convenience wrapper for the two places a ticket's merge can conflict (the build, and
- * the Push & Merge button): resolves the acting user's model and the project's build
- * command, then runs the resolver.
- *
- * The build command is the important part — it's what turns "the markers are gone" into
- * "this actually compiles", and it's already recorded on the project's preview manifest.
- * Returns null when there's no usable model, which callers read as "unresolved".
- */
-export async function resolveTicketMergeConflict(o: {
-  /** Internal project id. */
-  projectId: string;
-  /** Whose model + API keys to drive the resolver with. */
-  userId: string;
-  workspaceId: string;
-  projectDir: string;
-  featureBranch: string;
-  targetBranch: string;
-  files: string[];
-  authUrl: string;
-  onLog?: (line: string) => void;
-}): Promise<ResolveMergeResult | null> {
-  const [sel] = await db.select().from(modelSelections).where(eq(modelSelections.userId, o.userId));
-  const [keys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, o.userId));
-  let model: LanguageModel;
+async function projectEnv(projectId: string): Promise<Record<string, string>> {
   try {
-    model = getModel(sel?.selectedModel ?? DEFAULT_MODEL_KEY, {
-      anthropic: keys?.anthropicApiKey ?? undefined, openai: keys?.openaiApiKey ?? undefined,
-      google: keys?.googleApiKey ?? undefined, kimi: keys?.kimiApiKey ?? undefined,
-      deepseek: keys?.deepseekApiKey ?? undefined, glm: keys?.glmApiKey ?? undefined,
-    }, { allowEnvFallback: true });
-  } catch {
-    return null; // no usable key → leave the conflict for a human
-  }
+    const rows = await db.select({ key: projectEnvironmentVariables.key, v: projectEnvironmentVariables.encryptedValue })
+      .from(projectEnvironmentVariables)
+      .where(and(eq(projectEnvironmentVariables.projectId, projectId), eq(projectEnvironmentVariables.hasValue, true)));
+    const out: Record<string, string> = {};
+    for (const r of rows) out[r.key] = decrypt(r.v);
+    return out;
+  } catch { return {}; }
+}
 
-  let verifyCmd: string | undefined;
+async function buildCmdFor(projectId: string): Promise<string | undefined> {
   try {
     const [env] = await db.select({ m: projectEnvironments.setupManifest })
-      .from(projectEnvironments).where(eq(projectEnvironments.projectId, o.projectId)).limit(1);
-    verifyCmd = env?.m ? (JSON.parse(env.m) as { buildCmd?: string }).buildCmd : undefined;
-  } catch { /* no manifest → resolve without the build gate */ }
-
-  return await resolveMergeConflict({
-    workspaceId: o.workspaceId,
-    projectDir: o.projectDir,
-    featureBranch: o.featureBranch,
-    targetBranch: o.targetBranch,
-    files: o.files,
-    authUrl: o.authUrl,
-    model,
-    verifyCmd,
-    onLog: o.onLog,
-  });
-}
-
-export interface RepairMergeResult {
-  merged: boolean;
-  sha?: string;
-  summary: string;
+      .from(projectEnvironments).where(eq(projectEnvironments.projectId, projectId)).limit(1);
+    return env?.m ? (JSON.parse(env.m) as { buildCmd?: string }).buildCmd : undefined;
+  } catch { return undefined; }
 }
 
 /**
- * Last resort for a merge that failed for a reason that ISN'T a content conflict — a
- * dirty working tree, a ref that won't resolve, some git state nobody anticipated.
- *
- * Those used to dead-end at the user with a wall of git output. The agent gets the same
- * thing a person would: a shell in that sandbox, the error text, and the two branch
- * names. It may touch git freely here (unlike the conflict resolver, which is kept away
- * from it) because the job IS the git state — but it still cannot decide it succeeded:
- * we verify the target branch actually contains the feature branch afterwards, and only
- * then report a merge.
+ * Merge `featureBranch` into `targetBranch` and push, using the coding CLI in the
+ * sandbox. Handles both cases the old code split apart — content conflicts and
+ * everything-else (shallow clone, dirty tree, missing ref) — because from the agent's
+ * side they're one job: get the merge through.
  */
-export async function repairMerge(o: {
+export async function mergeWithAgent(o: {
   projectId: string;
   userId: string;
   workspaceId: string;
-  projectDir: string;
+  projectDir: string;      // "/data/project"
   featureBranch: string;
   targetBranch: string;
+  /** Token-embedded remote URL, so the push works on a private repo. */
   authUrl: string;
-  error: string;
+  /** What git said when we tried it ourselves. */
+  error?: string;
+  /** Paths git reported unmerged, when it was a content conflict. */
+  conflictFiles?: string[];
   onLog?: (line: string) => void;
-}): Promise<RepairMergeResult> {
+}): Promise<AgentMergeResult> {
   const log = o.onLog ?? (() => {});
-  const [sel] = await db.select().from(modelSelections).where(eq(modelSelections.userId, o.userId));
-  const [keys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, o.userId));
-  let model: LanguageModel;
-  try {
-    model = getModel(sel?.selectedModel ?? DEFAULT_MODEL_KEY, {
-      anthropic: keys?.anthropicApiKey ?? undefined, openai: keys?.openaiApiKey ?? undefined,
-      google: keys?.googleApiKey ?? undefined, kimi: keys?.kimiApiKey ?? undefined,
-      deepseek: keys?.deepseekApiKey ?? undefined, glm: keys?.glmApiKey ?? undefined,
-    }, { allowEnvFallback: true });
-  } catch {
-    return { merged: false, summary: "No AI model available to repair the merge — add an API key in Settings." };
-  }
+  const dirName = o.projectDir.replace(/^\/(root|data)\//, "").replace(/^\//, "");
 
   const sh = async (script: string, timeout = 120_000) => {
     const b64 = Buffer.from(script).toString("base64");
     const r = await execOnWorkspace(o.workspaceId, `echo ${b64} | base64 -d | sh`, { timeout })
-      .catch((e) => ({ output: `EXEC_FAILED: ${(e as Error).message}`, exitCode: 1, stderr: "" }));
-    return { output: `${r.output ?? ""}${(r as { stderr?: string }).stderr ? "\n" + (r as { stderr?: string }).stderr : ""}`, exitCode: r.exitCode ?? 0 };
+      .catch((e) => ({ output: `EXEC_FAILED: ${(e as Error).message}`, exitCode: 1 }));
+    return { output: r.output ?? "", exitCode: r.exitCode ?? 0 };
   };
 
-  log("The merge failed for a reason that isn't a conflict — handing it to the agent to sort out…");
-  const tools = {
-    run: tool({
-      description:
-        "Run ONE shell command in the repo. You have full git access here — the job is to get the merge through, so stashing, cleaning, resetting, fetching and checking out are all fair game. Returns exit code + combined output.",
-      inputSchema: zodSchema(z.object({ command: z.string().describe("One shell command.") })),
-      execute: async ({ command }: { command: string }) => {
-        log(`  repair$ ${command.slice(0, 140)}`);
-        const r = await sh(`cd "${o.projectDir}" && ${command}`, 180_000);
-        return { exitCode: r.exitCode, output: r.output.slice(-6000) || "(no output)" };
-      },
-    }),
-  };
+  if (o.error) log(`Why the merge failed: ${explainGitFailure(o.error)}`);
+  log(`Handing the merge to the coding agent in the sandbox — it has the repo, a shell, and the error.`);
 
-  const run = await generateText({
-    model,
-    tools,
-    stopWhen: stepCountIs(24),
-    system:
-      `You are fixing a git merge that failed inside a disposable Linux sandbox. Merge ` +
-      `\`${o.featureBranch}\` into \`${o.targetBranch}\` and push the result to origin.\n\n` +
-      `This checkout is a scratch working copy, NOT anyone's workstation: local edits and ` +
-      `untracked files in it are throwaway (preview setup rewrites config files like ` +
-      `appsettings.json on every run). You may stash, clean, reset or re-checkout freely to ` +
-      `get a workable tree. What you must NOT do is change the CONTENT of either branch to ` +
-      `make the merge easier — no reverting the feature work, no force-pushing, no deleting ` +
-      `commits, no --strategy=ours to sidestep a real conflict.\n\n` +
-      `If the merge turns out to have genuine content conflicts, resolve them keeping BOTH ` +
-      `sides' intent, then commit.\n\n` +
-      `Finish by pushing ${o.targetBranch} to origin. Then reply with 2-4 plain sentences: ` +
-      `what was actually wrong, and what you did about it.`,
-    prompt:
-      `Merging \`${o.featureBranch}\` into \`${o.targetBranch}\` failed with:\n\n${o.error.slice(0, 2000)}\n\n` +
-      `Diagnose it in the sandbox, fix it, and push ${o.targetBranch}.`,
-  }).catch((e) => { log(`Repair agent errored: ${(e as Error).message?.slice(0, 160)}`); return null; });
+  // Credentials and permission. Not strategy — the agent cannot push without these.
+  await sh(`
+git config --global --add safe.directory '*' 2>/dev/null || true
+cd "${o.projectDir}" 2>/dev/null || exit 0
+git config user.email "agent@lfg.dev" 2>/dev/null || true
+git config user.name "LFG Agent" 2>/dev/null || true
+git remote set-url origin "${o.authUrl}" 2>/dev/null || git remote add origin "${o.authUrl}" 2>/dev/null || true
+git merge --abort 2>/dev/null || true`);
 
-  // Our verdict, not the agent's: does the target on the REMOTE actually contain the
+  const buildCmd = await buildCmdFor(o.projectId);
+  const prompt = `Merge the branch \`${o.featureBranch}\` into \`${o.targetBranch}\` in the git repository at ${o.projectDir}, and push \`${o.targetBranch}\` to origin.
+
+${o.error ? `## We tried it and git said\n\`\`\`\n${o.error.slice(0, 1500)}\n\`\`\`\n` : ""}${o.conflictFiles?.length ? `## Conflicting files\n${o.conflictFiles.join("\n")}\n` : ""}
+## What you should know about this checkout
+- \`origin\` is already set to an authenticated URL — push works, don't change the remote.
+- This is a DISPOSABLE sandbox clone, not anyone's workstation. Uncommitted edits and untracked files in it are throwaway (preview setup rewrites config files like appsettings.json on every run), so you may stash, clean, reset or re-checkout freely to get a workable tree.
+- The repo was cloned with \`--depth 1\`, so it is SHALLOW. If git says "refusing to merge unrelated histories", that is why: the commit both branches descend from was never downloaded. Fix it by fetching the real history — \`git fetch --unshallow origin\` (or \`git fetch --deepen=500 origin\`), then fetch both branches — NOT by deleting \`.git/shallow\`, which removes the marker without downloading anything.
+
+## Rules
+- Do NOT change the CONTENT of either branch to make the merge easier: no reverting the feature work, no force-push, no dropping commits, no \`-X ours\`/\`-X theirs\` to sidestep a real conflict.
+- If there are genuine content conflicts, resolve them by hand keeping BOTH sides' intent, then commit the merge.
+${buildCmd ? `- Before pushing, confirm the merged tree still builds: \`${buildCmd}\`. If it doesn't, fix the merge until it does.\n` : ""}- Finish by pushing \`${o.targetBranch}\` to origin, and verify with \`git ls-remote\` that origin actually has it.
+
+## When you're done
+Reply with 2-4 plain sentences: what was actually wrong with the merge, and what you did about it.`;
+
+  const cli = await resolveCli(o.userId);
+  let account = "";
+
+  if (cli.usePi && cli.provider) {
+    log(`Merging with Pi (${cli.provider}/${cli.piModelId})…`);
+    try {
+      const pi = await startPiCli({
+        workspaceId: o.workspaceId, prompt, projectDir: dirName,
+        provider: cli.provider, modelId: cli.piModelId,
+        apiKey: cli.apiKey, oauthAccessToken: cli.oauthAccessToken,
+        envVars: await projectEnv(o.projectId),
+      });
+      let lastLog = 0;
+      const res = await streamPiToCompletion({
+        workspaceId: o.workspaceId, outputFile: pi.outputFile, backgroundPid: pi.backgroundPid,
+        timeoutMs: MERGE_TIMEOUT_MS, progressMaxLen: 200,
+        onProgress: (m) => { const n = Date.now(); if (n - lastLog < 3_000) return; lastLog = n; log(`  ${m}`); },
+      });
+      account = (extractPiProgress(res.tail || "", 1200) || "").replace(/^Agent:\s*/, "").trim();
+      if (res.fatalError) log(`Pi stopped: ${res.fatalError.slice(0, 200)}`);
+    } catch (e) {
+      log(`Pi could not start: ${(e as Error).message?.slice(0, 200)}`);
+    }
+  } else if (cli.claudeUsable) {
+    log(`Merging with Claude Code…`);
+    try {
+      const run = await startClaudeCli({
+        workspaceId: o.workspaceId, prompt, projectDir: dirName,
+        userId: o.userId, maxTurns: 80, anthropicApiKey: cli.anthropicApiKey,
+        envVars: await projectEnv(o.projectId),
+      });
+      let offset = 0, all = "", done = false, errs = 0, lastLog = 0;
+      const deadline = Date.now() + MERGE_TIMEOUT_MS;
+      while (Date.now() < deadline && !done) {
+        await new Promise((r) => setTimeout(r, 5_000));
+        let poll;
+        try { poll = await pollOutput(o.workspaceId, run.outputFile, offset, run.backgroundPid); errs = 0; }
+        catch { if (++errs >= 6) break; continue; }
+        offset = poll.newOffset;
+        if (poll.data) {
+          all += poll.data;
+          const now = Date.now();
+          if (now - lastLog > 3_000) {
+            lastLog = now;
+            const ev = parseJsonlEvents(poll.data);
+            const last = ev[ev.length - 1];
+            if (last) log(`  ${JSON.stringify(last).slice(0, 200)}`);
+          }
+          if (isStreamComplete(ev0(all))) done = true;
+        }
+        if (!poll.alive && poll.alive !== undefined && poll.alive === false) done = true;
+      }
+      extractExitCode(all);
+      account = lastAssistantText(all);
+    } catch (e) {
+      log(`Claude Code could not start: ${(e as Error).message?.slice(0, 200)}`);
+    }
+  } else {
+    log(`No coding agent is available for this merge — connect a model in Settings.`);
+    return { merged: false, summary: "No coding agent available to run the merge — connect a model in Settings." };
+  }
+
+  // OUR verdict, not the agent's: does the target on the REMOTE actually contain the
   // feature branch now? Nothing else counts as merged.
   const check = await sh(`
 cd "${o.projectDir}"
@@ -428,14 +253,30 @@ if git merge-base --is-ancestor "origin/${o.featureBranch}" "origin/${o.targetBr
   echo "MERGED:$(git rev-parse origin/${o.targetBranch})"
 else
   echo "NOT_MERGED"
-fi`, 90_000);
+fi`, 120_000);
 
   const sha = check.output.match(/MERGED:([a-f0-9]{40})/)?.[1];
-  const account = (run?.text ?? "").trim();
   if (sha) {
-    log(`Merge repaired.\n\n${account || "(the agent gave no account)"}\n\n${o.targetBranch} is now at ${sha.slice(0, 7)} and contains ${o.featureBranch}.`);
-    return { merged: true, sha, summary: account || "the agent repaired the merge" };
+    log(`Merged. ${account || "(the agent gave no account)"}\n\n${o.targetBranch} is now at ${sha.slice(0, 7)} and contains ${o.featureBranch}.`);
+    return { merged: true, sha, summary: account || "the agent completed the merge" };
   }
-  log(`The agent could not get the merge through. ${account ? "\n\n" + account : ""}`);
+  log(`The agent could not get the merge through.${account ? `\n\n${account}` : ""}`);
   return { merged: false, summary: account || "The agent could not complete the merge — needs a human." };
+}
+
+/** Events parsed from the whole stream so far (cheap enough at these sizes). */
+function ev0(all: string) { return parseJsonlEvents(all); }
+
+/** The agent's closing message from a Claude JSONL stream, or "". */
+function lastAssistantText(all: string): string {
+  try {
+    const events = parseJsonlEvents(all);
+    for (let i = events.length - 1; i >= 0; i--) {
+      const e = events[i] as { type?: string; message?: { content?: Array<{ type?: string; text?: string }> }; result?: string };
+      if (e.type === "result" && typeof e.result === "string" && e.result.trim()) return e.result.trim().slice(0, 1200);
+      const text = e.message?.content?.filter((c) => c.type === "text").map((c) => c.text).join("\n").trim();
+      if (text) return text.slice(0, 1200);
+    }
+  } catch { /* fall through */ }
+  return "";
 }

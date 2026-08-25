@@ -406,8 +406,32 @@ git remote set-url origin "${authUrl}" 2>/dev/null || true
 # in a clone that has never seen this ticket's feature branch, and a narrowed clone won't
 # create refs/remotes/origin/<branch> from a bare fetch.
 git fetch --prune origin
+
+# UNSHALLOW FIRST. We clone these sandboxes with --depth 1, so the commit the feature
+# branch and the epic branch both descend from was never downloaded — and git, finding no
+# common ancestor it can see, refuses the merge outright with "refusing to merge unrelated
+# histories". Nothing about the branches is wrong; the history is just missing. Fetch it
+# before merging. (--unshallow errors on an already-complete repo, hence the guard.)
+if [ -f .git/shallow ]; then
+  echo "shallow clone — fetching full history so the merge base exists…"
+  git fetch --no-tags --force --unshallow origin 2>/dev/null \
+    || git fetch --no-tags --force --deepen=1000 origin 2>/dev/null \
+    || true
+fi
+
+# Fetch both branches WITH history (no --depth here, for the same reason).
 git fetch --no-tags --force origin "+refs/heads/${featureBranch}:refs/remotes/origin/${featureBranch}" 2>/dev/null || true
 git fetch --no-tags --force origin "+refs/heads/${targetBranch}:refs/remotes/origin/${targetBranch}" 2>/dev/null || true
+
+# A repo can still lack the merge base if it was deepened rather than unshallowed.
+# Deepen until the two branches share one (bounded — this is cheap and it either works
+# in the first round or the branches genuinely have unrelated roots).
+if [ -f .git/shallow ]; then
+  for _d in 1000 5000 50000; do
+    git merge-base "origin/${featureBranch}" "origin/${targetBranch}" >/dev/null 2>&1 && break
+    git fetch --no-tags --force --deepen=$_d origin "${featureBranch}" "${targetBranch}" >/dev/null 2>&1 || break
+  done
+fi
 
 # Resolve the feature branch to a ref that actually EXISTS here. On the ticket's own build
 # VM it's a local branch; anywhere else only origin/<branch> exists, and a bare

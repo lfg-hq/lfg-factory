@@ -420,43 +420,32 @@ async function resolvePreviewSandbox(internalProjectId: string): Promise<string 
 }
 
 /**
- * Hand a conflicted merge to the resolver agent. Everything it needs that only the
- * executor knows — which model to drive it with, whose API keys, and the project's build
- * command (so a resolution that doesn't compile gets rejected) — is gathered here.
- * Returns null when there's no model available, which reads as "unresolved" upstream.
+ * Hand a failed merge to the coding agent in the sandbox. Everything it needs that only
+ * the executor knows — the authenticated remote and the owner whose model drives the CLI
+ * — is gathered here. Conflicts and non-conflict git failures take the same path: from
+ * the agent's side both are just "get this merge through".
  */
-async function tryResolveMergeConflict(o: {
+async function tryAgentMerge(o: {
   ticketId: string; ownerId: string; workspaceId: string; projectDir: string;
-  featureBranch: string; targetBranch: string; files: string[];
-  repoUrl: string; githubToken: string; projectId: string; builderUserId: string;
-}): Promise<{ resolved: boolean; sha?: string; summary: string } | null> {
+  featureBranch: string; targetBranch: string; files?: string[];
+  authUrl: string; projectId: string; error?: string;
+}): Promise<{ merged: boolean; sha?: string; summary: string } | null> {
   try {
-    const { resolveMergeConflict } = await import("../services/merge-resolver.ts");
-    const modelKey = await resolveBuilderModelKey(o.builderUserId);
-    const [keys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, o.builderUserId));
-    let model;
-    try {
-      model = getModel(modelKey, {
-        anthropic: keys?.anthropicApiKey ?? undefined, openai: keys?.openaiApiKey ?? undefined,
-        google: keys?.googleApiKey ?? undefined, kimi: keys?.kimiApiKey ?? undefined,
-        deepseek: keys?.deepseekApiKey ?? undefined, glm: keys?.glmApiKey ?? undefined,
-      }, { allowEnvFallback: true });
-    } catch { return null; } // no usable key → leave it for a human
-    // The build gate, when the preview has recorded how this project builds.
-    const runInfo = await loadRunInfo(o.projectId).catch(() => null);
-    return await resolveMergeConflict({
+    const { mergeWithAgent } = await import("../services/merge-resolver.ts");
+    return await mergeWithAgent({
+      projectId: o.projectId,
+      userId: o.ownerId,
       workspaceId: o.workspaceId,
       projectDir: o.projectDir,
       featureBranch: o.featureBranch,
       targetBranch: o.targetBranch,
-      files: o.files,
-      authUrl: o.repoUrl.replace("https://", `https://x-access-token:${o.githubToken}@`),
-      model,
-      verifyCmd: runInfo?.buildCmd,
+      authUrl: o.authUrl,
+      error: o.error,
+      conflictFiles: o.files,
       onLog: (line) => { addLog(o.ticketId, line, "command", o.ownerId).catch(() => {}); },
     });
   } catch (e) {
-    console.warn("[ticket-executor] merge resolver failed:", e);
+    console.warn("[ticket-executor] agent merge failed:", e);
     return null;
   }
 }
@@ -1613,33 +1602,35 @@ Before implementing, fix the git issue:
         // aborted and the checkout put back, so we can hand the files to the resolver.
         // Anything else is a real failure and just gets reported.
         const { MergeConflictError } = await import("../services/git.ts");
-        if (mergeErr instanceof MergeConflictError) {
-          await addLog(ticketId, `Merge to ${anchorBranch} hit conflicts in: ${mergeErr.files.join(", ")}`, "command", ownerId);
-          const resolved = await tryResolveMergeConflict({
-            ticketId, ownerId, workspaceId,
-            projectDir: `${WORKING_DIR}/${projectDirName}`,
-            featureBranch, targetBranch: anchorBranch,
-            files: mergeErr.files,
-            repoUrl: `https://github.com/${githubOwner}/${githubRepo}.git`,
-            githubToken,
-            projectId: project.id,
-            builderUserId: ownerId,
-          });
-          if (resolved?.resolved && resolved.sha) {
-            await db.update(projectTickets)
-              .set({ githubMergeStatus: "merged_with_conflicts", updatedAt: new Date() })
-              .where(eq(projectTickets.id, ticketId));
-            await addLog(ticketId, `Merged to ${anchorBranch} (${resolved.sha.slice(0, 7)}) — ${resolved.summary}`, "command", ownerId);
-            await maybeSubmitEpicForReview(ticket.epicId);
-          } else {
-            await db.update(projectTickets)
-              .set({ githubMergeStatus: "conflict", updatedAt: new Date() })
-              .where(eq(projectTickets.id, ticketId));
-            await addLog(ticketId, `Merge to ${anchorBranch} CONFLICTED and needs a human: ${resolved?.summary ?? "no resolver available"}`, "cli_error", ownerId);
-          }
+        const conflictFiles = mergeErr instanceof MergeConflictError ? mergeErr.files : undefined;
+        if (conflictFiles?.length) {
+          await addLog(ticketId, `Merge to ${anchorBranch} hit conflicts in: ${conflictFiles.join(", ")}`, "command", ownerId);
         } else {
           console.warn(`[ticket-executor] Merge to ${anchorBranch} failed:`, mergeErr);
-          await addLog(ticketId, `Merge to ${anchorBranch} failed: ${mergeErr}`, "cli_error", ownerId);
+          await addLog(ticketId, `Merge to ${anchorBranch} failed: ${String(mergeErr).slice(0, 400)}`, "cli_error", ownerId);
+        }
+        const merged = await tryAgentMerge({
+          ticketId, ownerId, workspaceId,
+          projectDir: `${WORKING_DIR}/${projectDirName}`,
+          featureBranch, targetBranch: anchorBranch,
+          files: conflictFiles,
+          authUrl: gitAuth?.authUrl
+            ?? `https://x-access-token:${githubToken}@github.com/${githubOwner}/${githubRepo}.git`,
+          projectId: project.id,
+          error: String(mergeErr),
+        });
+        if (merged?.merged && merged.sha) {
+          const status = conflictFiles?.length ? "merged_with_conflicts" : "merged";
+          await db.update(projectTickets)
+            .set({ githubMergeStatus: status, updatedAt: new Date() })
+            .where(eq(projectTickets.id, ticketId));
+          await addLog(ticketId, `Merged to ${anchorBranch} (${merged.sha.slice(0, 7)}) — ${merged.summary}`, "command", ownerId);
+          await maybeSubmitEpicForReview(ticket.epicId);
+        } else {
+          await db.update(projectTickets)
+            .set({ githubMergeStatus: "conflict", updatedAt: new Date() })
+            .where(eq(projectTickets.id, ticketId));
+          await addLog(ticketId, `Merge to ${anchorBranch} needs a human: ${merged?.summary ?? "no agent available"}`, "cli_error", ownerId);
         }
       }
     } catch (err) {
