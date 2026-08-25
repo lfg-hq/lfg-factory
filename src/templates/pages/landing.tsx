@@ -216,8 +216,8 @@ export const LandingPage = ({ posts = [], turnstileSiteKey = "" }: { posts?: Blo
         <div class="hidden md:flex items-center gap-6">
           <a href="/" class="text-sm font-medium text-brand-600 font-semibold">Home</a>
           <a href="/agent/" class="text-sm font-medium text-slate-600 hover:text-brand-600 transition-colors">Agent</a>
-          <a href="/factory/" class="text-sm font-medium text-slate-600 hover:text-brand-600 transition-colors">Factory</a>
-          <a href="/portfolio/" class="text-sm font-medium text-slate-600 hover:text-brand-600 transition-colors">Portfolio</a>
+          <a href="/self-host/" class="text-sm font-medium text-slate-600 hover:text-brand-600 transition-colors">Self-host</a>
+          <a href="/proof/" class="text-sm font-medium text-slate-600 hover:text-brand-600 transition-colors">Portfolio</a>
           <a href="/services/" class="text-sm font-medium text-slate-600 hover:text-brand-600 transition-colors">Services</a>
           <a href="/blog/" class="text-sm font-medium text-slate-600 hover:text-brand-600 transition-colors">Blog</a>
 
@@ -244,8 +244,8 @@ export const LandingPage = ({ posts = [], turnstileSiteKey = "" }: { posts?: Blo
       <div id="mobile-menu" class="hidden md:hidden absolute top-full left-0 w-full bg-white border-b border-slate-200 p-4 flex-col gap-3 shadow-xl">
         <a href="/" class="text-base font-medium text-slate-700 py-2 mobile-link">Home</a>
         <a href="/agent/" class="text-base font-medium text-slate-700 py-2 mobile-link">Agent</a>
-        <a href="/factory/" class="text-base font-medium text-slate-700 py-2 mobile-link">Factory</a>
-        <a href="/portfolio/" class="text-base font-medium text-slate-700 py-2 mobile-link">Portfolio</a>
+        <a href="/self-host/" class="text-base font-medium text-slate-700 py-2 mobile-link">Self-host</a>
+        <a href="/proof/" class="text-base font-medium text-slate-700 py-2 mobile-link">Portfolio</a>
         <a href="/services/" class="text-base font-medium text-slate-700 py-2 mobile-link">Services</a>
         <a href="/blog/" class="text-base font-medium text-slate-700 py-2 mobile-link">Blog</a>
         <a href="/auth/register" class="bg-brand-600 text-white w-full py-3 rounded-lg font-semibold text-center block mobile-link">Access Agent</a>
@@ -299,7 +299,7 @@ export const LandingPage = ({ posts = [], turnstileSiteKey = "" }: { posts?: Blo
                         </div>
 
                         <p class="mt-8 text-sm text-slate-500 animate-fade-up">
-                            IT services firm? <a href="/factory/" class="font-semibold text-slate-600 hover:text-brand-600 transition-colors inline-flex items-center gap-1">See the Factory <i data-lucide="arrow-right" class="w-3.5 h-3.5"></i></a>
+                            IT services firm? <a href="/self-host/" class="font-semibold text-slate-600 hover:text-brand-600 transition-colors inline-flex items-center gap-1">Self-host the factory <i data-lucide="arrow-right" class="w-3.5 h-3.5"></i></a>
                         </p>
                     </div>
 
@@ -564,7 +564,7 @@ export const LandingPage = ({ posts = [], turnstileSiteKey = "" }: { posts?: Blo
                 </div>
                 <!-- View full portfolio CTA -->
                 <div class="mt-10 text-center">
-                    <a href="/portfolio/" class="inline-flex items-center gap-2 px-6 py-3 rounded-full border border-slate-200 bg-white text-slate-700 font-semibold hover:border-brand-300 hover:text-brand-700 transition-colors shadow-sm">
+                    <a href="/proof/" class="inline-flex items-center gap-2 px-6 py-3 rounded-full border border-slate-200 bg-white text-slate-700 font-semibold hover:border-brand-300 hover:text-brand-700 transition-colors shadow-sm">
                         See the full portfolio <i data-lucide="arrow-right" class="w-4 h-4"></i>
                     </a>
                 </div>
@@ -580,8 +580,8 @@ export const LandingPage = ({ posts = [], turnstileSiteKey = "" }: { posts?: Blo
                         <h2 class="font-display font-bold text-2xl text-white">Run a services firm? License the factory itself.</h2>
                         <p class="text-slate-400 mt-2">The same pipeline that ships our products can run inside your delivery org. Self-hosted, senior-review gated, built for fixed-price economics.</p>
                     </div>
-                    <a href="/factory/" class="shrink-0 inline-flex items-center gap-2 px-6 py-3 rounded-full bg-white text-slate-900 font-semibold hover:bg-brand-600 hover:text-white transition-colors">
-                        Explore LFG Factory <i data-lucide="arrow-right" class="w-4 h-4"></i>
+                    <a href="/self-host/" class="shrink-0 inline-flex items-center gap-2 px-6 py-3 rounded-full bg-white text-slate-900 font-semibold hover:bg-brand-600 hover:text-white transition-colors">
+                        Explore self-hosting <i data-lucide="arrow-right" class="w-4 h-4"></i>
                     </a>
                 </div>
             </div>
@@ -682,8 +682,8 @@ export const LandingPage = ({ posts = [], turnstileSiteKey = "" }: { posts?: Blo
                         <li><a href="/agent/" class="hover:text-brand-400 transition-colors">Agent</a></li>
                         <li><a href="/services/" class="hover:text-brand-400 transition-colors">Services</a></li>
                         <li><a href="/blog/" class="hover:text-brand-400 transition-colors">Blog</a></li>
-                        <li><a href="/portfolio/" class="hover:text-brand-400 transition-colors">Portfolio</a></li>
-                        <li><a href="/factory/" class="hover:text-brand-400 transition-colors">Factory</a></li>
+                        <li><a href="/proof/" class="hover:text-brand-400 transition-colors">Portfolio</a></li>
+                        <li><a href="/self-host/" class="hover:text-brand-400 transition-colors">Self-host</a></li>
                         <li><a href="/#book-demo" class="hover:text-brand-400 transition-colors">Book demo</a></li>
                     </ul>
                 </div>
