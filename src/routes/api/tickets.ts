@@ -1210,16 +1210,49 @@ ticketsApi.post("/:projectId/tickets/:ticketId/git/push", async (c) => {
       // from not having clicked at all. Report what actually happened.
       const { MergeConflictError } = await import("../../services/git.ts");
       if (mergeErr instanceof MergeConflictError) {
+        await addTicketLog(ticketId, `Merge to ${anchorBranch} hit conflicts in: ${mergeErr.files.join(", ")}`, "cli_error", user.id).catch(() => {});
+
+        // Same treatment a build gets: hand it to the resolver rather than making you
+        // rebuild the whole ticket just to reconcile a couple of files. It runs on the
+        // workspace resolved above — the ticket's own woken VM where possible, so the
+        // build gate compiles against a warm toolchain.
+        const { resolveTicketMergeConflict } = await import("../../services/merge-resolver.ts");
+        const fixed = await resolveTicketMergeConflict({
+          projectId: project.id,
+          userId: user.id,
+          workspaceId: workWorkspaceId,
+          projectDir: "/data/project",
+          featureBranch,
+          targetBranch: anchorBranch,
+          files: mergeErr.files,
+          authUrl: `https://x-access-token:${ghToken.accessToken}@github.com/${repoOwner}/${repoName}.git`,
+          onLog: (line) => { addTicketLog(ticketId, line, "command", user.id).catch(() => {}); },
+        }).catch((e) => { console.warn("[tickets] merge resolver failed:", e); return null; });
+
+        if (fixed?.resolved && fixed.sha) {
+          mergeStatus = "merged_with_conflicts";
+          await db.update(projectTickets)
+            .set({ githubMergeStatus: "merged_with_conflicts", updatedAt: new Date() })
+            .where(eq(projectTickets.id, ticketId));
+          await addTicketLog(ticketId, `Merged to ${anchorBranch} (${fixed.sha.slice(0, 7)}) — ${fixed.summary}`, "command", user.id).catch(() => {});
+          await maybeSubmitEpicForReview(ticket.epicId);
+          return c.json({
+            sha, branch: featureBranch, mergeStatus,
+            conflict: { targetBranch: anchorBranch, files: mergeErr.files, resolved: true },
+            message: `Merged into ${anchorBranch}. ${mergeErr.files.length} file(s) conflicted and the agent resolved them${fixed.summary.includes("build verified") ? ", build verified" : ""} — worth a look at the diff.`,
+          });
+        }
+
         mergeStatus = "conflict";
         await db.update(projectTickets)
           .set({ githubMergeStatus: "conflict", updatedAt: new Date() })
           .where(eq(projectTickets.id, ticketId));
-        await addTicketLog(ticketId, `Merge to ${anchorBranch} hit conflicts in: ${mergeErr.files.join(", ")}`, "cli_error", user.id).catch(() => {});
+        const why = fixed?.summary ?? "no model available to resolve it";
+        await addTicketLog(ticketId, `Merge to ${anchorBranch} CONFLICTED and needs a human: ${why}`, "cli_error", user.id).catch(() => {});
         return c.json({
           sha, branch: featureBranch, mergeStatus,
-          conflict: { targetBranch: anchorBranch, files: mergeErr.files },
-          // The build path resolves conflicts automatically; from here it's a rebuild.
-          message: `Pushed, but merging into ${anchorBranch} conflicts in ${mergeErr.files.length} file(s): ${mergeErr.files.join(", ")}. Rebuild the ticket to have the agent resolve it, or merge by hand.`,
+          conflict: { targetBranch: anchorBranch, files: mergeErr.files, resolved: false },
+          message: `Pushed, but merging into ${anchorBranch} conflicts in ${mergeErr.files.length} file(s): ${mergeErr.files.join(", ")}.\n\n${why}`,
         });
       }
       console.warn(`[tickets] Merge to ${anchorBranch} failed during push:`, mergeErr);

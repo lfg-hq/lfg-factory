@@ -15,7 +15,13 @@
  */
 import { z } from "zod";
 import { generateText, stepCountIs, tool, zodSchema, type LanguageModel } from "ai";
+import { eq } from "drizzle-orm";
 import { execOnWorkspace } from "./mags.ts";
+import { db } from "../config/db.ts";
+import { modelSelections } from "../db/schema/chat.ts";
+import { llmApiKeys } from "../db/schema/users.ts";
+import { projectEnvironments } from "../db/schema/project-environments.ts";
+import { getModel, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
 
 export interface ResolveMergeInput {
   workspaceId: string;
@@ -216,4 +222,59 @@ git checkout ${featureBranch} 2>/dev/null || true`, 180_000);
   const summary = `AI-resolved ${files.length} conflicting file(s) merging into ${targetBranch}: ${files.join(", ")}${verifyCmd ? " (build verified)" : ""}.`;
   log(summary);
   return { resolved: true, sha, files, summary };
+}
+
+/**
+ * Convenience wrapper for the two places a ticket's merge can conflict (the build, and
+ * the Push & Merge button): resolves the acting user's model and the project's build
+ * command, then runs the resolver.
+ *
+ * The build command is the important part — it's what turns "the markers are gone" into
+ * "this actually compiles", and it's already recorded on the project's preview manifest.
+ * Returns null when there's no usable model, which callers read as "unresolved".
+ */
+export async function resolveTicketMergeConflict(o: {
+  /** Internal project id. */
+  projectId: string;
+  /** Whose model + API keys to drive the resolver with. */
+  userId: string;
+  workspaceId: string;
+  projectDir: string;
+  featureBranch: string;
+  targetBranch: string;
+  files: string[];
+  authUrl: string;
+  onLog?: (line: string) => void;
+}): Promise<ResolveMergeResult | null> {
+  const [sel] = await db.select().from(modelSelections).where(eq(modelSelections.userId, o.userId));
+  const [keys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, o.userId));
+  let model: LanguageModel;
+  try {
+    model = getModel(sel?.selectedModel ?? DEFAULT_MODEL_KEY, {
+      anthropic: keys?.anthropicApiKey ?? undefined, openai: keys?.openaiApiKey ?? undefined,
+      google: keys?.googleApiKey ?? undefined, kimi: keys?.kimiApiKey ?? undefined,
+      deepseek: keys?.deepseekApiKey ?? undefined, glm: keys?.glmApiKey ?? undefined,
+    }, { allowEnvFallback: true });
+  } catch {
+    return null; // no usable key → leave the conflict for a human
+  }
+
+  let verifyCmd: string | undefined;
+  try {
+    const [env] = await db.select({ m: projectEnvironments.setupManifest })
+      .from(projectEnvironments).where(eq(projectEnvironments.projectId, o.projectId)).limit(1);
+    verifyCmd = env?.m ? (JSON.parse(env.m) as { buildCmd?: string }).buildCmd : undefined;
+  } catch { /* no manifest → resolve without the build gate */ }
+
+  return await resolveMergeConflict({
+    workspaceId: o.workspaceId,
+    projectDir: o.projectDir,
+    featureBranch: o.featureBranch,
+    targetBranch: o.targetBranch,
+    files: o.files,
+    authUrl: o.authUrl,
+    model,
+    verifyCmd,
+    onLog: o.onLog,
+  });
 }
