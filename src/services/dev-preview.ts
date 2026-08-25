@@ -18,6 +18,7 @@ import { and, desc, eq, isNotNull, or } from "drizzle-orm";
 import { db } from "../config/db.ts";
 import { projects, projectEnvironmentVariables } from "../db/schema/projects.ts";
 import { projectEnvironments } from "../db/schema/project-environments.ts";
+import { epics } from "../db/schema/epics.ts";
 import { projectDatabases } from "../db/schema/project-databases.ts";
 import { githubTokens, llmApiKeys } from "../db/schema/users.ts";
 import { modelSelections } from "../db/schema/chat.ts";
@@ -1556,7 +1557,20 @@ async function resolvePreviewWorkDir(projectId: string, workspaceId: string): Pr
       .where(and(eq(projectTickets.projectId, projectId), eq(projectTickets.githubBranch, branch)));
     ticketId = tk?.id ?? null;
   }
-  if (!ticketId) return { dir: PROJECT_DIR, note: "the default branch" };
+  // Not a ticket branch — an EPIC's integration branch runs in its own worktree too, so
+  // resolve that instead of silently handing back the default checkout (which would have
+  // the agent inspecting a tree that isn't what's running).
+  if (!ticketId) {
+    const [ep] = await db.select({ id: epics.id })
+      .from(epics)
+      .where(and(eq(epics.projectId, projectId), eq(epics.branch, branch)));
+    if (!ep) return { dir: PROJECT_DIR, note: "the default branch" };
+    const ewt = branchWorktreeDir(branch);
+    const echk = await sh(workspaceId, `test -d ${ewt} && test -e ${ewt}/.git && echo OK || echo NO`, 20_000).catch(() => ({ output: "NO" } as { output: string }));
+    return echk.output.includes("OK")
+      ? { dir: ewt, note: `epic branch ${branch} (worktree)` }
+      : { dir: PROJECT_DIR, note: "the default branch" };
+  }
 
   const wt = ticketWorktreeDir(ticketId);
   const chk = await sh(workspaceId, `test -d ${wt} && test -e ${wt}/.git && echo OK || echo NO`, 20_000).catch(() => ({ output: "NO" } as { output: string }));
@@ -2281,6 +2295,17 @@ export interface SetupOptions { userId: string; branch?: string; rebuildManifest
  *  match the name the ticket executor creates: `wt-ticket-<ticketId first 12>`. */
 function ticketWorktreeDir(ticketId: string): string { return `/data/wt-ticket-${ticketId.slice(0, 12)}`; }
 
+/** The worktree directory for an arbitrary branch (an EPIC's integration branch, say)
+ *  that isn't tied to a ticket. Slashes and anything shell-unfriendly are flattened, and
+ *  a short hash of the ORIGINAL name is appended so two branches that flatten to the same
+ *  string (epic/a-b vs epic/a/b) can't land in one directory. */
+function branchWorktreeDir(branch: string): string {
+  const slug = branch.replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "branch";
+  let h = 0;
+  for (let i = 0; i < branch.length; i++) h = (Math.imul(h, 31) + branch.charCodeAt(i)) | 0;
+  return `/data/wt-br-${slug}-${(h >>> 0).toString(36)}`;
+}
+
 /** Resolve a token-embedded clone URL for the project's repo (GitHub or GitLab),
  *  with a FRESH token — so a `git fetch` works even if the remote's baked-in token
  *  from the original clone has since expired. Used to reconstruct a ticket worktree. */
@@ -2971,6 +2996,28 @@ export async function getPreviewBranches(projectId: string): Promise<Array<{ id:
     ));
   for (const r of builtRows) add(r.id, r.name, r.key, r.branch || `feature/ticket-${r.id}`);
 
+  // 3) EPIC branches. An epic is the unit a client actually reviews — its integration
+  // branch has every ticket in the epic merged into it, so previewing it shows the whole
+  // feature working together rather than one ticket's slice. Listed FIRST (right under
+  // "Default branch") since that's the more common thing to want to look at.
+  const epicRows = await db
+    .select({ id: epics.id, key: epics.epicKey, name: epics.name, branch: epics.branch, status: epics.status })
+    .from(epics)
+    .where(and(eq(epics.projectId, projectId), isNotNull(epics.branch)))
+    .orderBy(desc(epics.createdAt));
+  const epicEntries = epicRows
+    // A rejected epic's branch is abandoned; a branchless one was never cut.
+    .filter((e) => e.branch && e.status !== "rejected")
+    .map((e) => ({
+      // "epic:" prefixed so the client can tell an epic from a ticket id, and so the
+      // run carries no ticketId (there's no single ticket this is).
+      id: `epic:${e.id}`,
+      label: `${e.key ? e.key + " — " : ""}${e.name}`.slice(0, 60),
+      ticketId: null as string | null,
+      branch: e.branch as string,
+    }));
+  out.splice(1, 0, ...epicEntries);
+
   return out;
 }
 
@@ -3240,10 +3287,14 @@ export async function rebuildPreviewSandbox(projectId: string, userId: string): 
 
 export async function restartPreview(projectId: string, opts: SetupOptions): Promise<{ previewUrl: string } | { error: string }> {
   const { userId, ticketId } = opts;
+  // An explicit branch to run (an epic's integration branch). Ignored when a ticketId is
+  // given — that resolves its own branch. "(default)" is the default-branch sentinel the
+  // selector uses, not a real branch, so it never counts as explicit.
+  const explicitBranch = !ticketId && opts.branch && opts.branch !== "(default)" ? opts.branch.trim() : "";
   const row = await getEnv(projectId);
   if (!row?.setupManifest || !row?.runCommand || row?.setupComplete !== 1) {
     // Nothing to restart yet → run the full setup (default branch only).
-    if (ticketId) return { error: "Set up the preview first, then you can run a ticket's branch." };
+    if (ticketId || explicitBranch) return { error: "Set up the preview first, then you can run a specific branch." };
     return setupPreview(projectId, opts);
   }
   let manifest = JSON.parse(row.setupManifest) as PreviewManifest; // may gain DBs via reconcile below
@@ -3290,12 +3341,12 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
     // from what's persisted in Postgres.
     if (await checkoutMissing(workspaceId)) {
       await clearSetupCheckpoint(projectId);
-      if (ticketId) {
-        // A ticket branch needs the base checkout to cut a worktree from (or to switch),
+      if (ticketId || explicitBranch) {
+        // Any specific branch needs the base checkout to cut a worktree from (or to switch),
         // so there's nothing useful to do here — and silently running a full DEFAULT-branch
         // setup is not what was asked for. Say what happened and what fixes it.
         await setStep("locate", "failed");
-        return failed(projectId, userId, "This sandbox's disk was reset (the VM was respawned), so the base checkout is gone. Run the default branch once to rebuild it, then preview this ticket's branch.");
+        return failed(projectId, userId, "This sandbox's disk was reset (the VM was respawned), so the base checkout is gone. Run the default branch once to rebuild it, then preview this branch.");
       }
       plog(projectId, userId, "No checkout on this sandbox — its /data was reset. Running the full setup to rebuild it…");
       releaseRun();
@@ -3309,10 +3360,17 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
     await setStep("locate", "running");
     const [projRow] = await db.select({ mode: projects.previewBranchMode }).from(projects).where(eq(projects.id, projectId));
     const checkoutMode = (projRow?.mode || "worktree") === "checkout";
-    if (ticketId) {
-      // The remote branch: the ticket's recorded branch, else the convention.
-      const [tk] = await db.select({ gb: projectTickets.githubBranch }).from(projectTickets).where(eq(projectTickets.id, ticketId));
-      const remoteBranch = tk?.gb || `feature/ticket-${ticketId}`;
+    // A run targets EITHER a ticket (its feature branch) or an explicit branch — an
+    // epic's integration branch, so a whole delivery unit can be previewed as one thing
+    // instead of one ticket at a time. Everything below is driven by `remoteBranch`, so
+    // the two cases differ only in where the branch name and the worktree dir come from.
+    if (ticketId || explicitBranch) {
+      let remoteBranch = explicitBranch;
+      if (ticketId) {
+        // The remote branch: the ticket's recorded branch, else the convention.
+        const [tk] = await db.select({ gb: projectTickets.githubBranch }).from(projectTickets).where(eq(projectTickets.id, ticketId));
+        remoteBranch = tk?.gb || `feature/ticket-${ticketId}`;
+      }
       branchLabel = remoteBranch;
       const auth = await resolveAuthedRepoUrl(projectId, userId);
       if ("error" in auth) { await setStep("locate", "failed"); return failed(projectId, userId, auth.error); }
@@ -3341,7 +3399,7 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
         plog(projectId, userId, `Main checkout is now on ${remoteBranch} ✓ (local changes stashed)`);
       } else {
         // WORKTREE mode (default): a separate dir; the main checkout is untouched.
-        runDir = ticketWorktreeDir(ticketId);
+        runDir = ticketId ? ticketWorktreeDir(ticketId) : branchWorktreeDir(remoteBranch);
         // ALWAYS fetch + hard-sync the worktree to the LATEST pushed commit — an
         // existing worktree can be at a STALE commit (the ticket was rebuilt), which
         // is why "I don't see the new changes". Also repair the INVERTED layout where

@@ -54,8 +54,11 @@ previewApi.post("/:projectId/preview/restart", async (c) => {
   if (!access) return c.json({ error: "Project not found" }, 404);
   const body = await c.req.json().catch(() => ({}));
   const ticketId = typeof body.ticketId === "string" && body.ticketId ? body.ticketId : undefined;
+  // An explicit branch to run — an epic's integration branch, which belongs to no single
+  // ticket. Ignored when a ticketId is present; that resolves its own branch.
+  const branch = typeof body.branch === "string" && body.branch ? body.branch : undefined;
   const conversationId = typeof body.conversationId === "string" ? body.conversationId : null;
-  restartPreview(access.project.id, { userId: user.id, ticketId, conversationId }).catch((e) => console.error("[preview] restart failed:", e));
+  restartPreview(access.project.id, { userId: user.id, ticketId, branch, conversationId }).catch((e) => console.error("[preview] restart failed:", e));
   return c.json({ ok: true, status: "starting" }, 202);
 });
 

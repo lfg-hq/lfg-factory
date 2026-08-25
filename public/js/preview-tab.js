@@ -929,12 +929,16 @@
     // The API restarts by TICKET id, so map the selection back through the list
     // (synthetic "branch:<name>" entries carry the ticket id when we could infer it).
     const entry = branches.find((b) => b.id === branchId);
-    const ticketId = branchId && branchId !== "default" ? (entry ? entry.ticketId : branchId) : null;
-    setSub(ticketId ? "Running branch…" : "Restarting the app…");
+    // An EPIC selection has no ticket — it carries a branch instead, which the server
+    // checks out into its own worktree. Ticket entries keep working exactly as before.
+    const isEpic = !!(entry && String(entry.id || "").indexOf("epic:") === 0);
+    const ticketId = !isEpic && branchId && branchId !== "default" ? (entry ? entry.ticketId : branchId) : null;
+    const branch = isEpic ? entry.branch : null;
+    setSub(ticketId || branch ? "Running branch…" : "Restarting the app…");
     logText = "";
     render({ previewStatus: "starting" });
     managePolling("starting");
-    try { await api("/restart", { method: "POST", body: JSON.stringify({ ticketId, conversationId: window.currentConversationId || null }) }); }
+    try { await api("/restart", { method: "POST", body: JSON.stringify({ ticketId, branch, conversationId: window.currentConversationId || null }) }); }
     catch (e) { render({ previewStatus: "error", error: "Restart failed: " + e.message }); }
   }
 
