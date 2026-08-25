@@ -27,6 +27,7 @@ import homeApi from "./routes/api/project-home.ts";
 import projectTransferApi from "./routes/api/project-transfer.ts";
 import previewApi from "./routes/api/preview.ts";
 import epicsApi from "./routes/api/epics.ts";
+import boardsApi from "./routes/api/boards.ts";
 import previewProxy from "./routes/preview-proxy.ts";
 import agentsRoutes from "./routes/agents.ts";
 import agentsApi from "./routes/api/agents.ts";
@@ -185,6 +186,8 @@ app.route("/api/projects", pinsApi);
 app.route("/api/projects", homeApi);
 app.route("/api/projects", projectTransferApi);
 app.route("/api/projects", previewApi);
+// Jira/Linear board linking + sync, all under /api/projects/:projectId/boards.
+app.route("/api/projects", boardsApi);
 // Epics own both /api/projects/:id/epics and /api/epics/:id, so they mount at /api.
 app.route("/api", epicsApi);
 app.route("/preview-proxy", previewProxy);

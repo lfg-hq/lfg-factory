@@ -224,7 +224,7 @@ export const BuildLandingPage = ({ turnstileSiteKey = "" }: BuildLandingPageProp
     <section class="final-cta section-ink"><div class="container reveal"><p class="eyebrow"><span></span> Your next release starts here</p><h2>Bring us one workflow.<br><em>We’ll bring back working software.</em></h2><p>See the proposed scope, delivery range and likely cost before you commit.</p><a class="button button-primary" href="#blueprint" data-track="final_blueprint">Get my free Build Blueprint <i data-lucide="arrow-right"></i></a></div></section>
   </main>
 
-  <footer><div class="container footer-grid"><a class="brand" href="/"><span class="brand-mark">L</span><span>LFG</span></a><p>AI handles execution. Senior engineers own the outcome.</p><div><a href="#how-it-works">How it works</a><a href="#what-we-build">What we build</a><a href="#faq">FAQ</a><a href="/privacy/">Privacy</a><a href="/terms/">Terms</a></div><small>© ${new Date().getFullYear()} LFG. All rights reserved.</small></div></footer>
+  <footer><div class="container footer-grid"><a class="brand" href="/"><span class="brand-mark">L</span><span>LFG</span></a><p>AI handles execution. Senior engineers own the outcome.</p><div><a href="#how-it-works">How it works</a><a href="#what-we-build">What we build</a><a href="#faq">FAQ</a><a href="/privacy/">Privacy</a><a href="/terms/">Terms</a></div><small>© ${new Date().getFullYear()} LFG Inc. All rights reserved.</small></div></footer>
 
   <div class="verify-modal" id="verify-modal" hidden role="dialog" aria-modal="true" aria-labelledby="verify-title">
     <div class="verify-card"><button class="modal-close" type="button" aria-label="Close verification"><i data-lucide="x"></i></button>

@@ -420,6 +420,15 @@ export function ProjectDetailPage({
                 <div id="home-team" style="margin-top:0.6rem;"><div style="color:var(--text-secondary);font-size:0.85rem;">Loading…</div></div>
               </div>
 
+              <!-- Issue tracker (Jira / Linear) -->
+              <div class="home-card" id="board-card" data-project="${project.projectId}" data-canmanage="${(isOwner || role === "admin" || role === "member") ? "1" : ""}">
+                <div style="display:flex;justify-content:space-between;align-items:center;">
+                  <h3 class="home-sec-title" style="margin:0;">Issue tracker</h3>
+                  <a href="/settings/integrations" class="home-team-action" title="Manage connections"><i class="fas fa-gear"></i></a>
+                </div>
+                <div id="board-body" style="margin-top:0.6rem;color:var(--text-secondary);font-size:0.85rem;">Loading…</div>
+              </div>
+
               <!-- Pinned "Start here" -->
               <div class="home-card">
                 <div style="display:flex;justify-content:space-between;align-items:center;">
@@ -1455,6 +1464,7 @@ export function ProjectDetailPage({
   </div>
 
   <script src="/public/js/sidebar.js"></script>
+  <script src="/public/js/board-sync.js"></script>
   <script>requestAnimationFrame(()=>requestAnimationFrame(()=>document.documentElement.classList.remove('sidebar-minimized-preload')));</script>
   <script>
     // Codebase modal open/close. The shared .modal-overlay class hides via

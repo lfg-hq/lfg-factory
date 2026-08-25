@@ -51,7 +51,7 @@ export const SelfHostPage = () => html`
 </head>
 <body class="text-slate-900 font-sans selection:bg-indigo-600 selection:text-white">
 
-    ${ Nav({ activePage: "self-host", ctaLabel: "Get started", ctaHref: "https://github.com/lfg-hq/lfg" }) }
+    ${ Nav({ activePage: "self-host" }) }
 
     <main>
         <!-- HERO -->

@@ -30,6 +30,13 @@ const envSchema = z.object({
   // GitLab base URL — gitlab.com by default, override for self-hosted GitLab.
   GITLAB_BASE_URL: z.string().optional().default("https://gitlab.com"),
 
+  // Issue-tracker boards (Jira / Linear). Unset = the Connect buttons explain what to
+  // register instead of failing at the redirect.
+  LINEAR_CLIENT_ID: z.string().optional().default(""),
+  LINEAR_CLIENT_SECRET: z.string().optional().default(""),
+  JIRA_CLIENT_ID: z.string().optional().default(""),
+  JIRA_CLIENT_SECRET: z.string().optional().default(""),
+
   ANTHROPIC_API_KEY: z.string().optional().default(""),
   OPENAI_API_KEY: z.string().optional().default(""),
   GOOGLE_AI_API_KEY: z.string().optional().default(""),

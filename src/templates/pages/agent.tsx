@@ -8,8 +8,8 @@ export const AgentPage = () => html`
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LFG | AI Agents Build Your Software. Humans Verify.</title>
-    <meta name="description" content="LFG is an AI-first software factory. Autonomous agents handle requirements, ticketing, coding, and testing. Humans verify. Ship 10x faster at 80% less cost.">
+    <title>LFG | How the factory works — pipeline, models, self-hosting</title>
+    <meta name="description" content="How the LFG pipeline works end to end: brief to PRD, dependency-aware ticket graph, sandboxed agent execution, senior review on every diff. Self-hosted, model-agnostic.">
     <link rel="icon" type="image/x-icon" href="/public/images/favicon.ico">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -393,34 +393,7 @@ bun run dev
         </section>
     </main>
 
-    <footer class="bg-slate-900 border-t border-slate-800 pt-16 pb-8">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div class="grid grid-cols-1 md:grid-cols-4 gap-12 mb-12">
-                <div class="col-span-1 md:col-span-2">
-                    <div class="flex items-center gap-2 mb-4 text-white font-bold text-xl">
-                        <i data-lucide="rocket" class="w-6 h-6 text-brand-500"></i><span>LFG</span>
-                    </div>
-                    <p class="text-slate-400 max-w-sm leading-relaxed">AI-first software factory. Agents build. Humans verify. Ship faster than you thought possible.</p>
-                </div>
-                <div>
-                    <h4 class="font-bold text-white mb-4 uppercase text-xs tracking-wider">Company</h4>
-                    <ul class="space-y-3 text-sm text-slate-400">
-                        <li><a href="/agent/" class="hover:text-brand-400 transition-colors">Agent</a></li>
-                        <li><a href="/services/" class="hover:text-brand-400 transition-colors">Services</a></li>
-                        <li><a href="/blog/" class="hover:text-brand-400 transition-colors">Blog</a></li>
-                    </ul>
-                </div>
-                <div>
-                    <h4 class="font-bold text-white mb-4 uppercase text-xs tracking-wider">Community</h4>
-                    <ul class="space-y-3 text-sm text-slate-400">
-                        <li><a href="https://github.com/lfg-hq/lfg" target="_blank" rel="noopener noreferrer" class="hover:text-brand-400 transition-colors flex items-center gap-2"><svg viewBox="0 0 24 24" fill="currentColor" class="w-4 h-4" aria-hidden="true"><path d="M12 .5C5.73.5.5 5.73.5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.8 0c2.21-1.49 3.18-1.18 3.18-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.41-2.69 5.39-5.25 5.67.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5Z"/></svg> GitHub</a></li>
-                        <li><a href="/auth/login" class="hover:text-brand-400 transition-colors flex items-center gap-2"><i data-lucide="rocket" class="w-4 h-4"></i> Platform</a></li>
-                    </ul>
-                </div>
-            </div>
-            <div class="border-t border-slate-800 pt-8 text-center text-sm text-slate-500">&copy; 2026 LFG. Open source, MIT licensed.</div>
-        </div>
-    </footer>
+    ${ Footer() }
 
     <script>
         lucide.createIcons();

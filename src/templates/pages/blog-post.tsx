@@ -1,4 +1,5 @@
 import { html, raw } from "hono/html";
+import { Nav, Footer } from "../components/nav.tsx";
 import type { BlogPost } from "../../utils/blog.ts";
 
 export function BlogPostPage({
@@ -54,47 +55,23 @@ export function BlogPostPage({
       .prose th { background: #f8fafc; color: #0f172a; font-weight: 600; }
       .prose a { color: #4f46e5; text-decoration: underline; text-underline-offset: 2px; }
       .prose a:hover { color: #4338ca; }
+      /* The shared Nav toggles html.dark; the prose colours above are hardcoded,
+         so they need explicit dark counterparts or the article goes unreadable. */
+      html.dark .prose h1, html.dark .prose h2, html.dark .prose h3, html.dark .prose h4 { color: #e6edf3; }
+      html.dark .prose p, html.dark .prose li { color: #b0bac6; }
+      html.dark .prose strong { color: #e6edf3; }
+      html.dark .prose code { background: #1c2128; border-color: rgba(255,255,255,0.1); color: #a5b4fc; }
+      html.dark .prose blockquote { background: rgba(99,102,241,0.06); color: #8b949e; }
+      html.dark .prose hr { border-top-color: rgba(255,255,255,0.08); }
+      html.dark .prose th, html.dark .prose td { border-color: rgba(255,255,255,0.08); }
+      html.dark .prose th { background: #161b22; color: #e6edf3; }
+      html.dark .prose a { color: #818cf8; }
     </style>
 </head>
 <body class="text-slate-900 bg-slate-50">
-    <nav class="sticky top-0 z-40 bg-white/90 backdrop-blur border-b border-slate-200">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-            <a href="/" class="flex items-center gap-2">
-                <i data-lucide="rocket" class="w-5 h-5 text-indigo-600"></i>
-                <span class="font-display font-bold text-lg">LFG</span>
-            </a>
-            <div class="hidden md:flex items-center gap-6">
-                <a href="/" class="text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors">Home</a>
-                <a href="/agent/" class="text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors">Agent</a>
-                <a href="/factory/" class="text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors">Factory</a>
-                <a href="/portfolio/" class="text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors">Portfolio</a>
-                <a href="/services/" class="text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors">Services</a>
-                <a href="/blog/" class="text-sm font-medium text-indigo-600 font-semibold">Blog</a>
-                <div class="flex items-center gap-4 ml-2">
-                    <a href="https://github.com/lfg-hq/lfg" target="_blank" rel="noopener noreferrer" class="text-slate-500 hover:text-slate-900 transition-colors">
-<svg viewBox="0 0 24 24" fill="currentColor" class="w-5 h-5" aria-hidden="true"><path d="M12 .5C5.73.5.5 5.73.5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.8 0c2.21-1.49 3.18-1.18 3.18-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.41-2.69 5.39-5.25 5.67.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5Z"/></svg>
-                    </a>
-                    <a href="/auth/register" class="bg-slate-900 hover:bg-indigo-700 text-white px-5 py-2 rounded-full text-sm font-semibold transition-all shadow-lg">
-                        Get Started
-                    </a>
-                </div>
-            </div>
-            <div class="md:hidden">
-                <button id="mobile-menu-btn" class="text-slate-600"><i data-lucide="menu" class="w-6 h-6"></i></button>
-            </div>
-        </div>
-        <div id="mobile-menu" class="hidden md:hidden absolute top-full left-0 w-full bg-white border-b border-slate-200 p-4 flex-col gap-3 shadow-xl z-50">
-            <a href="/" class="text-base font-medium text-slate-700 py-2 mobile-link">Home</a>
-            <a href="/agent/" class="text-base font-medium text-slate-700 py-2 mobile-link">Agent</a>
-            <a href="/factory/" class="text-base font-medium text-slate-700 py-2 mobile-link">Factory</a>
-            <a href="/portfolio/" class="text-base font-medium text-slate-700 py-2 mobile-link">Portfolio</a>
-            <a href="/services/" class="text-base font-medium text-slate-700 py-2 mobile-link">Services</a>
-            <a href="/blog/" class="text-base font-medium text-slate-700 py-2 mobile-link">Blog</a>
-            <a href="/auth/register" class="bg-indigo-600 text-white w-full py-3 rounded-lg font-semibold text-center block mobile-link">Get Started</a>
-        </div>
-    </nav>
+    ${ Nav({ activePage: "blog" }) }
 
-    <main class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-10 sm:py-14">
+    <main class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-28 sm:pt-32 pb-10 sm:pb-14">
         <div class="mb-6">
             <a href="/blog/" class="inline-flex items-center gap-1.5 text-sm font-medium text-slate-500 hover:text-indigo-600 transition-colors">
                 <i data-lucide="arrow-left" class="w-4 h-4"></i> All posts
@@ -131,34 +108,10 @@ export function BlogPostPage({
         </div>
     </main>
 
-    <footer class="bg-slate-900 border-t border-slate-800 pt-12 pb-8 mt-16">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row items-center justify-between gap-4">
-            <div class="flex items-center gap-2 text-white font-bold">
-                <i data-lucide="rocket" class="w-5 h-5 text-indigo-400"></i><span>LFG</span>
-            </div>
-            <div class="flex items-center gap-6 text-sm text-slate-400">
-                <a href="/" class="hover:text-indigo-400 transition-colors">Home</a>
-                <a href="/agent/" class="hover:text-indigo-400 transition-colors">Agent</a>
-                <a href="/factory/" class="hover:text-indigo-400 transition-colors">Factory</a>
-                <a href="/portfolio/" class="hover:text-indigo-400 transition-colors">Portfolio</a>
-                <a href="/services/" class="hover:text-indigo-400 transition-colors">Services</a>
-                <a href="/blog/" class="hover:text-indigo-400 transition-colors">Blog</a>
-                <a href="https://github.com/lfg-hq/lfg" target="_blank" rel="noopener noreferrer" class="hover:text-indigo-400 transition-colors">GitHub</a>
-            </div>
-            <p class="text-xs text-slate-500">&copy; ${new Date().getFullYear()} LFG Inc. Open source under Apache 2.0.</p>
-        </div>
-    </footer>
+    ${ Footer() }
 
     <script>
       lucide.createIcons();
-      const mobileBtn = document.getElementById('mobile-menu-btn');
-      const mobileMenu = document.getElementById('mobile-menu');
-      if (mobileBtn && mobileMenu) {
-          mobileBtn.addEventListener('click', () => { mobileMenu.classList.toggle('hidden'); mobileMenu.classList.toggle('flex'); });
-          document.querySelectorAll('.mobile-link').forEach(link => {
-              link.addEventListener('click', () => { mobileMenu.classList.add('hidden'); mobileMenu.classList.remove('flex'); });
-          });
-      }
     </script>
 </body>
 </html>`;

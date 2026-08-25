@@ -7,8 +7,17 @@ export const ServicesPage = () => html`
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>LFG Services | We Build Software That Ships</title>
-  <meta name="description" content="Work with LFG to plan, build, and launch your product. AI-first engineering with senior review. From brief to deployed in days.">
+  <title>LFG | Done-for-you delivery on the factory</title>
+  <meta name="description" content="Some teams license the LFG factory and run it themselves. Others want us to run it. Same pipeline either way — planned, built, and senior-reviewed, with the code handed over.">
+  <meta property="og:title" content="LFG | Done-for-you delivery on the factory">
+  <meta property="og:description" content="Some teams license the factory. Others want us to run it. Same pipeline either way.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://lfg.run/services/">
+  <meta property="og:image" content="https://lfg.run/public/images/screenshots/agent-ticket-board.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="LFG | Done-for-you delivery on the factory">
+  <meta name="twitter:description" content="Some teams license the factory. Others want us to run it. Same pipeline either way.">
+  <meta name="twitter:image" content="https://lfg.run/public/images/screenshots/agent-ticket-board.png">
   <link rel="icon" type="image/x-icon" href="/public/images/favicon.ico">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -56,7 +65,7 @@ export const ServicesPage = () => html`
 </head>
 <body class="text-slate-900 font-sans selection:bg-indigo-600 selection:text-white">
 
-  ${ Nav({ activePage: "services", ctaLabel: "Access Agent", ctaHref: "/auth/register" }) }
+  ${ Nav({ activePage: "services" }) }
 
   <main>
 
@@ -71,14 +80,17 @@ export const ServicesPage = () => html`
           <div class="animate-fade-up">
             <div class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full glass shadow-sm mb-7">
               <span class="w-2 h-2 rounded-full bg-brand-500 animate-pulse"></span>
-              <span class="text-xs font-bold text-slate-600 uppercase tracking-wider">Now taking projects</span>
+              <span class="text-xs font-bold text-slate-600 uppercase tracking-wider">A service tier of the product</span>
             </div>
             <h1 class="font-display font-bold text-4xl sm:text-5xl leading-[1.1] tracking-tight text-slate-900 mb-5">
-              We build your product.<br>
-              <span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-pink-500">You ship in days.</span>
+              Done-for-you delivery.<br>
+              <span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-pink-500">We run the factory for you.</span>
             </h1>
-            <p class="text-lg text-slate-600 leading-relaxed mb-8">
-              LFG runs an AI-first engineering pipeline for clients who need to move fast. From brief to deployed product in days, not months, with full visibility at every step.
+            <p class="text-lg text-slate-600 leading-relaxed mb-6">
+              Some teams license the factory and run it inside their own org. Others want us to run it. Same pipeline either way: PRD, dependency-aware ticket graph, sandboxed agent execution, senior review on every diff, and the source handed over at the end.
+            </p>
+            <p class="text-base text-slate-600 leading-relaxed mb-8">
+              Would rather run it yourself? <a href="/" class="font-semibold text-brand-600 hover:text-brand-700 transition-colors">See the factory</a>.
             </p>
 
             <!-- Process pills -->
@@ -180,6 +192,28 @@ export const ServicesPage = () => html`
             </form>
           </div>
 
+        </div>
+      </div>
+    </section>
+
+    <!-- WORKING UNDER A PARTNER'S BRAND -->
+    <section class="py-16 bg-white border-t border-slate-100">
+      <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="rounded-2xl border-2 border-brand-200 bg-brand-50 p-8 sm:p-10">
+          <div class="flex items-start gap-4">
+            <div class="w-11 h-11 rounded-xl bg-brand-600 text-white flex items-center justify-center shrink-0">
+              <i data-lucide="handshake" class="w-5 h-5"></i>
+            </div>
+            <div>
+              <h2 class="font-display font-bold text-2xl text-slate-900 mb-3">If you are an agency, we work behind you</h2>
+              <p class="text-slate-700 leading-relaxed mb-4">
+                When we deliver under a services firm's brand, we work as a subcontractor. Your client relationship, your invoice, your name on the release. We do not approach your clients, and we do not put your logo in our marketing without asking.
+              </p>
+              <p class="text-slate-600 text-sm leading-relaxed">
+                Plenty of firms start here for one project, then license the factory and bring it in-house once their own engineers have seen it run. That is the intended path, not a lost sale.
+              </p>
+            </div>
+          </div>
         </div>
       </div>
     </section>

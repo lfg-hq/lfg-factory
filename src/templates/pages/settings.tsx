@@ -25,6 +25,10 @@ interface SettingsPageProps {
     username: string | null;
     avatarUrl: string | null;
   };
+  boards?: {
+    linear: BoardRowProps;
+    jira: BoardRowProps;
+  };
   gitlab?: {
     connected: boolean;
     username: string | null;
@@ -45,7 +49,18 @@ interface SettingsPageProps {
   success?: string;
 }
 
-export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, gitlab, telegram, composio, activeSection = "llm-keys", error, success }: SettingsPageProps) {
+/** One issue-tracker row. `configured` is separate from `connected` on purpose: a
+ *  missing client id is an operator problem, and the row must say so rather than
+ *  offering a Connect button that dead-ends at an error redirect. */
+interface BoardRowProps {
+  configured: boolean;
+  connected: boolean;
+  accountName?: string | null;
+  accountEmail?: string | null;
+  siteUrl?: string | null;
+}
+
+export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, gitlab, boards, telegram, composio, activeSection = "llm-keys", error, success }: SettingsPageProps) {
   const avatarLetter = (user.name?.[0] ?? user.email?.[0] ?? "?").toUpperCase();
 
   return html`<!DOCTYPE html>
@@ -881,6 +896,67 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
               `}
             </div>
           </div>
+        </div>
+
+        <!-- Issue trackers: Jira + Linear -->
+        <div class="llm-keys-table" style="margin-top:1.5rem;">
+          <div class="llm-keys-row" style="border-bottom:1px solid rgba(255,255,255,0.07);padding:1rem 1.375rem;">
+            <h3 style="margin:0;font-size:0.9375rem;font-weight:700;color:var(--text-color,#f0f0f0);display:flex;align-items:center;gap:.5rem;">
+              <i class="fas fa-list-check" style="font-size:1rem;color:#8b5cf6;"></i>
+              Issue trackers
+            </h3>
+            <div class="byok-desc" style="margin-left:auto;">Link a board per project, then sync tickets both ways.</div>
+          </div>
+
+          ${[
+            { key: "linear", name: "Linear", icon: "fas fa-diagram-project", color: "#5e6ad2",
+              desc: "Sync a project's tickets with a Linear team \u2014 issues in, status and branches out.",
+              row: boards?.linear,
+              setup: "Create an OAuth application at linear.app/settings/api/applications, then set LINEAR_CLIENT_ID and LINEAR_CLIENT_SECRET." },
+            { key: "jira", name: "Jira", icon: "fab fa-jira", color: "#2684ff",
+              desc: "Sync a project's tickets with a Jira project \u2014 issues in, status and branches out.",
+              row: boards?.jira,
+              setup: "Create an OAuth 2.0 (3LO) app at developer.atlassian.com, add the Jira API with read:jira-work, write:jira-work and offline_access, then set JIRA_CLIENT_ID and JIRA_CLIENT_SECRET." },
+          ].map((b) => html`
+            <div class="llm-keys-row">
+              <div style="flex:1;display:flex;align-items:center;gap:.875rem;">
+                <div style="width:36px;height:36px;border-radius:50%;background:${b.color}1f;display:flex;align-items:center;justify-content:center;">
+                  <i class="${b.icon}" style="font-size:1.1rem;color:${b.color};"></i>
+                </div>
+                <div>
+                  <div class="byok-label" style="margin-bottom:.15rem;display:flex;align-items:center;gap:.4rem;">
+                    <span>${b.name}</span>
+                    ${b.row?.connected && b.row.accountName
+                      ? html`<span style="font-weight:400;color:var(--text-secondary);font-size:.8125rem;">${b.row.accountName}${b.row.siteUrl ? html` \u00b7 ${b.row.siteUrl.replace(/^https?:\/\//, "")}` : ""}</span>`
+                      : ""}
+                  </div>
+                  <div class="byok-desc">${b.row?.configured === false ? b.setup : b.desc}</div>
+                </div>
+              </div>
+              <div>
+                ${b.row?.connected ? html`
+                  <div style="display:flex;align-items:center;gap:.5rem;">
+                    <span style="padding:.4rem .875rem;background:rgba(16,185,129,.1);color:#34d399;border:1px solid rgba(16,185,129,.25);border-radius:7px;font-size:.8125rem;line-height:1.2;display:inline-flex;align-items:center;gap:.35rem;">
+                      <i class="fas fa-check"></i> Connected
+                    </span>
+                    <form method="POST" action="/settings/${b.key}/disconnect" style="margin:0;">
+                      <button type="submit" style="padding:.4rem .875rem;background:rgba(239,68,68,.08);color:#f87171;border:1px solid rgba(239,68,68,.2);border-radius:7px;font-size:.8125rem;line-height:1.2;cursor:pointer;">
+                        Disconnect
+                      </button>
+                    </form>
+                  </div>
+                ` : b.row?.configured === false ? html`
+                  <span style="padding:.4rem .875rem;background:rgba(255,255,255,.05);color:var(--text-secondary);border:1px solid rgba(255,255,255,.1);border-radius:7px;font-size:.8125rem;line-height:1.2;">
+                    Not set up
+                  </span>
+                ` : html`
+                  <a href="/accounts/${b.key}-connect" class="llm-btn-save" style="color:#fff;border-radius:7px;padding:.45rem .875rem;font-size:.8125rem;text-decoration:none;display:inline-flex;align-items:center;gap:.4rem;">
+                    <i class="${b.icon}"></i> Connect ${b.name}
+                  </a>
+                `}
+              </div>
+            </div>
+          `)}
         </div>
 
         <!-- Telegram Card -->

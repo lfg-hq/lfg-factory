@@ -1,10 +1,11 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { requireAuth } from "../auth/middleware.ts";
 import { db } from "../config/db.ts";
 import { llmApiKeys, profiles, githubTokens, gitlabTokens } from "../db/schema/users.ts";
 import { telegramBots } from "../db/schema/telegram.ts";
 import { composioToolkits } from "../db/schema/composio.ts";
-import { eq } from "drizzle-orm";
+import { boardConnections } from "../db/schema/boards.ts";
+import { and, eq } from "drizzle-orm";
 import { isBotActive } from "../services/telegram.ts";
 import { isComposioConfigured } from "../services/composio-manager.ts";
 import { SettingsPage } from "../templates/pages/settings.tsx";
@@ -206,6 +207,21 @@ settingsRouter.get("/settings/integrations", async (c) => {
     getTelegramBot(user.id),
     db.select().from(composioToolkits).where(eq(composioToolkits.userId, user.id)),
   ]);
+  const boardConns = await db.select().from(boardConnections).where(eq(boardConnections.userId, user.id));
+  const boardRow = (p: "linear" | "jira") => {
+    const conn = boardConns.find((x) => x.provider === p) ?? null;
+    return {
+      // Unconfigured is a DIFFERENT state from disconnected: nothing the user does in
+      // this UI can fix a missing client id, so the row has to say so.
+      configured: p === "linear"
+        ? !!(env.LINEAR_CLIENT_ID && env.LINEAR_CLIENT_SECRET)
+        : !!(env.JIRA_CLIENT_ID && env.JIRA_CLIENT_SECRET),
+      connected: !!conn,
+      accountName: conn?.accountName ?? null,
+      accountEmail: conn?.accountEmail ?? null,
+      siteUrl: conn?.siteUrl ?? null,
+    };
+  };
   const url = new URL(c.req.url);
   const error = url.searchParams.get("error") ?? undefined;
   const success = url.searchParams.get("success") ?? undefined;
@@ -254,6 +270,7 @@ settingsRouter.get("/settings/integrations", async (c) => {
           enabled: t.enabled,
         })),
       },
+      boards: { linear: boardRow("linear"), jira: boardRow("jira") },
       activeSection: "integrations",
       error,
       success,
@@ -590,6 +607,214 @@ settingsRouter.post("/settings/gitlab/disconnect", async (c) => {
   const user = c.get("user");
   await db.delete(gitlabTokens).where(eq(gitlabTokens.userId, user.id));
   return c.redirect("/settings/integrations?success=GitLab+disconnected");
+});
+
+// ── Board OAuth: Linear + Jira (same shape as the GitHub/GitLab flows above) ──
+//
+// Both store into board_connection rather than a provider-specific table, because the
+// sync engine treats them as one thing. Jira additionally resolves a CLOUD ID: every
+// Jira REST call is addressed to a site, and the OAuth grant can cover several.
+
+function boardRedirectUri(provider: "linear" | "jira") {
+  return `${env.BETTER_AUTH_URL}/accounts/${provider}-callback`;
+}
+
+/** Remember where to come back to, the way the GitLab flow does. */
+function setOAuthCookies(c: Context<AuthEnv>, provider: string, state: string) {
+  c.header("Set-Cookie", `${provider}_oauth_state=${state}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`);
+  const returnTo = c.req.query("returnTo");
+  if (returnTo && returnTo.startsWith("/") && !returnTo.startsWith("//")) {
+    c.header("Set-Cookie", `${provider}_oauth_return=${encodeURIComponent(returnTo)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`, { append: true });
+  }
+}
+
+function readReturnTo(c: Context<AuthEnv>, provider: string): string {
+  const m = (c.req.header("Cookie") ?? "").match(new RegExp(`${provider}_oauth_return=([^;]+)`));
+  const v = m?.[1] ? decodeURIComponent(m[1]) : "";
+  return v.startsWith("/") && !v.startsWith("//") ? v : "";
+}
+
+function checkState(c: Context<AuthEnv>, provider: string): boolean {
+  const m = (c.req.header("Cookie") ?? "").match(new RegExp(`${provider}_oauth_state=([^;]+)`));
+  return !!m?.[1] && m[1] === c.req.query("state");
+}
+
+// GET /accounts/linear-connect
+settingsRouter.get("/accounts/linear-connect", async (c) => {
+  if (!env.LINEAR_CLIENT_ID) {
+    return c.redirect("/settings/integrations?error=" + encodeURIComponent("Linear OAuth isn't configured — set LINEAR_CLIENT_ID and LINEAR_CLIENT_SECRET (create the app at linear.app/settings/api/applications)"));
+  }
+  const state = crypto.randomUUID();
+  setOAuthCookies(c, "linear", state);
+  const params = new URLSearchParams({
+    client_id: env.LINEAR_CLIENT_ID,
+    redirect_uri: boardRedirectUri("linear"),
+    response_type: "code",
+    scope: "read,write,issues:create",
+    state,
+    prompt: "consent",
+  });
+  return c.redirect(`https://linear.app/oauth/authorize?${params.toString()}`);
+});
+
+// GET /accounts/linear-callback
+settingsRouter.get("/accounts/linear-callback", async (c) => {
+  const user = c.get("user");
+  const code = c.req.query("code");
+  if (!code) return c.redirect("/settings/integrations?error=No+code+from+Linear");
+  if (!checkState(c, "linear")) return c.redirect("/settings/integrations?error=Invalid+OAuth+state");
+  c.header("Set-Cookie", "linear_oauth_state=; Path=/; HttpOnly; Max-Age=0");
+  if (!env.LINEAR_CLIENT_ID || !env.LINEAR_CLIENT_SECRET) {
+    return c.redirect("/settings/integrations?error=Linear+OAuth+not+configured");
+  }
+  try {
+    // Linear's token endpoint takes form encoding, not JSON.
+    const form = new URLSearchParams({
+      code,
+      redirect_uri: boardRedirectUri("linear"),
+      client_id: env.LINEAR_CLIENT_ID,
+      client_secret: env.LINEAR_CLIENT_SECRET,
+      grant_type: "authorization_code",
+    });
+    const tokenResp = await fetch("https://api.linear.app/oauth/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: form.toString(),
+    });
+    const tok = (await tokenResp.json().catch(() => ({}))) as { access_token?: string; scope?: string; error?: string; error_description?: string };
+    if (!tok.access_token) {
+      return c.redirect(`/settings/integrations?error=${encodeURIComponent(tok.error_description ?? tok.error ?? "Linear token exchange failed")}`);
+    }
+    const { LinearClient } = await import("../services/boards/linear.ts");
+    const me = await new LinearClient(tok.access_token).whoami();
+    await upsertBoardConnection(user.id, "linear", {
+      accessToken: tok.access_token,
+      // Linear OAuth tokens don't expire, so there's nothing to refresh.
+      refreshToken: null,
+      tokenExpiresAt: null,
+      accountId: me.id,
+      accountName: me.name,
+      accountEmail: me.email ?? null,
+      accountAvatarUrl: me.avatarUrl ?? null,
+      cloudId: null,
+      siteUrl: null,
+      scope: tok.scope ?? "",
+    });
+    const back = readReturnTo(c, "linear");
+    return c.redirect(back || "/settings/integrations?success=Linear+connected");
+  } catch (err) {
+    console.error("[linear-oauth] Callback error:", err);
+    return c.redirect(`/settings/integrations?error=${encodeURIComponent(String(err))}`);
+  }
+});
+
+// GET /accounts/jira-connect
+settingsRouter.get("/accounts/jira-connect", async (c) => {
+  if (!env.JIRA_CLIENT_ID) {
+    return c.redirect("/settings/integrations?error=" + encodeURIComponent("Jira OAuth isn't configured — set JIRA_CLIENT_ID and JIRA_CLIENT_SECRET (create an OAuth 2.0 (3LO) app at developer.atlassian.com)"));
+  }
+  const state = crypto.randomUUID();
+  setOAuthCookies(c, "jira", state);
+  const params = new URLSearchParams({
+    audience: "api.atlassian.com",
+    client_id: env.JIRA_CLIENT_ID,
+    // offline_access is what yields a refresh token; without it the connection dies
+    // silently after an hour.
+    scope: "read:jira-work write:jira-work read:jira-user offline_access",
+    redirect_uri: boardRedirectUri("jira"),
+    state,
+    response_type: "code",
+    prompt: "consent",
+  });
+  return c.redirect(`https://auth.atlassian.com/authorize?${params.toString()}`);
+});
+
+// GET /accounts/jira-callback
+settingsRouter.get("/accounts/jira-callback", async (c) => {
+  const user = c.get("user");
+  const code = c.req.query("code");
+  if (!code) return c.redirect("/settings/integrations?error=No+code+from+Jira");
+  if (!checkState(c, "jira")) return c.redirect("/settings/integrations?error=Invalid+OAuth+state");
+  c.header("Set-Cookie", "jira_oauth_state=; Path=/; HttpOnly; Max-Age=0");
+  if (!env.JIRA_CLIENT_ID || !env.JIRA_CLIENT_SECRET) {
+    return c.redirect("/settings/integrations?error=Jira+OAuth+not+configured");
+  }
+  try {
+    const tokenResp = await fetch("https://auth.atlassian.com/oauth/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        grant_type: "authorization_code",
+        client_id: env.JIRA_CLIENT_ID,
+        client_secret: env.JIRA_CLIENT_SECRET,
+        code,
+        redirect_uri: boardRedirectUri("jira"),
+      }),
+    });
+    const tok = (await tokenResp.json().catch(() => ({}))) as {
+      access_token?: string; refresh_token?: string; expires_in?: number; scope?: string; error?: string; error_description?: string;
+    };
+    if (!tok.access_token) {
+      return c.redirect(`/settings/integrations?error=${encodeURIComponent(tok.error_description ?? tok.error ?? "Jira token exchange failed")}`);
+    }
+    // Which Jira SITE did they grant us? Every REST call is addressed to a cloudId.
+    const resResp = await fetch("https://api.atlassian.com/oauth/token/accessible-resources", {
+      headers: { Authorization: `Bearer ${tok.access_token}`, Accept: "application/json" },
+    });
+    const sites = (await resResp.json().catch(() => [])) as Array<{ id: string; name: string; url: string }>;
+    const site = sites[0];
+    if (!site) {
+      return c.redirect(`/settings/integrations?error=${encodeURIComponent("The Jira account granted access to no site — pick a site during authorization")}`);
+    }
+    const { JiraClient } = await import("../services/boards/jira.ts");
+    const me = await new JiraClient(tok.access_token, site.id, site.url).whoami().catch(() => null);
+    await upsertBoardConnection(user.id, "jira", {
+      accessToken: tok.access_token,
+      refreshToken: tok.refresh_token ?? null,
+      tokenExpiresAt: new Date(Date.now() + (tok.expires_in ?? 3600) * 1000),
+      accountId: me?.id ?? null,
+      accountName: me?.name ?? site.name,
+      accountEmail: me?.email ?? null,
+      accountAvatarUrl: me?.avatarUrl ?? null,
+      cloudId: site.id,
+      siteUrl: site.url,
+      scope: tok.scope ?? "",
+    });
+    const back = readReturnTo(c, "jira");
+    return c.redirect(back || "/settings/integrations?success=Jira+connected");
+  } catch (err) {
+    console.error("[jira-oauth] Callback error:", err);
+    return c.redirect(`/settings/integrations?error=${encodeURIComponent(String(err))}`);
+  }
+});
+
+async function upsertBoardConnection(
+  userId: string,
+  provider: "linear" | "jira",
+  values: Omit<typeof boardConnections.$inferInsert, "userId" | "provider" | "id">
+) {
+  const [existing] = await db.select().from(boardConnections)
+    .where(and(eq(boardConnections.userId, userId), eq(boardConnections.provider, provider)))
+    .limit(1);
+  if (existing) {
+    await db.update(boardConnections).set({ ...values, updatedAt: new Date() }).where(eq(boardConnections.id, existing.id));
+  } else {
+    await db.insert(boardConnections).values({ userId, provider, ...values });
+  }
+}
+
+// POST /settings/:provider/disconnect for boards. Project links cascade; no issue or
+// ticket is touched.
+settingsRouter.post("/settings/linear/disconnect", async (c) => {
+  const user = c.get("user");
+  await db.delete(boardConnections).where(and(eq(boardConnections.userId, user.id), eq(boardConnections.provider, "linear")));
+  return c.redirect("/settings/integrations?success=Linear+disconnected");
+});
+
+settingsRouter.post("/settings/jira/disconnect", async (c) => {
+  const user = c.get("user");
+  await db.delete(boardConnections).where(and(eq(boardConnections.userId, user.id), eq(boardConnections.provider, "jira")));
+  return c.redirect("/settings/integrations?success=Jira+disconnected");
 });
 
 export default settingsRouter;
