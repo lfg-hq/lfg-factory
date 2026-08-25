@@ -4,20 +4,15 @@ type NavPage = "home" | "agent" | "self-host" | "case-studies" | "compare" | "se
 
 interface NavOptions {
   activePage: NavPage;
-  /** Primary (filled) CTA. Defaults to the pilot form on the homepage. */
+  /** The single filled CTA. Defaults to self-serve signup. */
   ctaLabel?: string;
   ctaHref?: string;
-  /** Secondary (text) CTA — self-serve signup stays reachable from every page. */
-  secondaryCtaLabel?: string;
-  secondaryCtaHref?: string;
 }
 
 export const Nav = ({
   activePage,
-  ctaLabel = "Book a pilot",
-  ctaHref = "/#pilot-form",
-  secondaryCtaLabel = "Access Agent",
-  secondaryCtaHref = "/auth/register",
+  ctaLabel = "Access Agent",
+  ctaHref = "/auth/register",
 }: NavOptions) => html`
 <!-- FOUC prevention: runs before paint -->
 <script>
@@ -115,7 +110,6 @@ export const Nav = ({
         <button id="theme-toggle" onclick="window.toggleTheme && window.toggleTheme()" class="text-slate-500 hover:text-slate-900 transition-colors" title="Toggle dark mode" aria-label="Toggle dark mode">
           <i data-lucide="moon" class="w-5 h-5"></i>
         </button>
-        <a href="${secondaryCtaHref}" class="text-sm font-semibold text-slate-600 hover:text-brand-600 transition-colors whitespace-nowrap">${secondaryCtaLabel}</a>
         <a href="${ctaHref}" class="bg-slate-900 hover:bg-brand-700 text-white px-5 py-2 rounded-full text-sm font-semibold transition-all shadow-lg whitespace-nowrap">
           ${ctaLabel}
         </a>
@@ -135,7 +129,6 @@ export const Nav = ({
     <a href="/case-studies/" class="text-base font-medium ${activePage === "case-studies" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">Case studies</a>
     <a href="/blog/" class="text-base font-medium ${activePage === "blog" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">Blog</a>
     <a href="/services/" class="text-base font-normal ${activePage === "services" ? "text-brand-600 font-semibold" : "text-slate-400"} py-2 mobile-link">Services</a>
-    <a href="${secondaryCtaHref}" class="text-base font-semibold text-slate-700 py-2 mobile-link">${secondaryCtaLabel}</a>
     <a href="${ctaHref}" class="bg-brand-600 text-white w-full py-3 rounded-lg font-semibold text-center block mobile-link">${ctaLabel}</a>
   </div>
 </nav>
@@ -217,7 +210,6 @@ export const Footer = () => html`
         <a href="/vs-coding-agents/" class="hover:text-white transition-colors">Vs. coding agents</a>
         <a href="/blog/" class="hover:text-white transition-colors">Blog</a>
         <a href="/services/" class="hover:text-white transition-colors">Services</a>
-        <a href="/#pilot-form" class="hover:text-white transition-colors">Book a pilot</a>
         <a href="https://github.com/lfg-hq/lfg" target="_blank" rel="noopener noreferrer" class="hover:text-white transition-colors">GitHub</a>
       </div>
     </div>

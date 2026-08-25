@@ -160,7 +160,7 @@ export const VsCodingAgentsPage = () => html`
 </head>
 <body class="text-slate-900 font-sans selection:bg-brand-600 selection:text-white">
 
-  ${ Nav({ activePage: "compare", ctaLabel: "Run a project through LFG", ctaHref: "#pilot-form" }) }
+  ${ Nav({ activePage: "compare" }) }
 
   <main>
 
