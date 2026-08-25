@@ -3086,8 +3086,14 @@ ${authUrl ? `git remote set-url origin "${authUrl}" 2>/dev/null || true` : ""}
 # a bare 'git fetch --prune origin <branch>' only updates FETCH_HEAD and relies on the clone's
 # fetch refspec for the remote-tracking ref, which fails for slashed branch names /
 # narrowed clones (branch exists on GitHub but 'git rev-parse origin/<branch>' is empty).
-FETCH_ERR=$(git fetch --no-tags --force origin "+refs/heads/${head}:refs/remotes/origin/${head}" "+refs/heads/${b}:refs/remotes/origin/${b}" 2>&1) || true
-git fetch --prune origin --prune >/dev/null 2>&1 || true
+FETCH_OK=1
+FETCH_ERR=$(git fetch --no-tags --force origin "+refs/heads/${head}:refs/remotes/origin/${head}" "+refs/heads/${b}:refs/remotes/origin/${b}" 2>&1) || FETCH_OK=0
+git fetch --prune origin >/dev/null 2>&1 || true
+# A failed fetch used to be swallowed here and only reported if the HEAD ref was also
+# missing. When the refs exist but are STALE the comparison still ran — against an old
+# tip — and produced a wrong-but-plausible answer: commits already merged into the base
+# listed as if this branch introduced them. Wrong quietly is worse than broken loudly.
+[ "$FETCH_OK" = "1" ] || { echo "FETCH_FAILED"; echo "FETCH_ERR:$FETCH_ERR"; }
 echo "===BRANCHES==="
 git for-each-ref --format='%(refname:short)' refs/remotes/origin 2>/dev/null | sed 's#^origin/##' | grep -v '^HEAD$' | sort -u
 echo "===REFS==="
@@ -3112,6 +3118,16 @@ git diff "$BASE"..."$HEAD" 2>/dev/null | head -c 300000
     return (next < 0 ? rest : rest.slice(0, next)).trim();
   };
   const branches = sect("BRANCHES").split("\n").map((s) => s.trim()).filter(Boolean);
+  // Refuse to show a comparison built on refs we couldn't refresh. Scrub the token the
+  // remote URL carries before echoing git's message back.
+  if (output.includes("FETCH_FAILED")) {
+    const raw = output.match(/FETCH_ERR:([\s\S]*?)(?:\n===|$)/)?.[1]?.trim() ?? "";
+    const safe = raw.replace(/\/\/[^@\s]+@/g, "//***@").slice(0, 300);
+    return {
+      branches, base: b, head, files: [], diff: "", commits: [],
+      error: `Couldn't refresh \`${b}\` and \`${head}\` from the remote, so this comparison would be stale — showing nothing rather than something wrong.\n\n${safe}`,
+    };
+  }
   if (output.includes("NO_HEAD")) {
     const fetchErr = output.match(/FETCH_ERR:([\s\S]*?)(?:\n===|$)/)?.[1]?.trim();
     // Distinguish "the branch really isn't on the remote" from "we couldn't fetch it"
