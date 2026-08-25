@@ -1271,19 +1271,24 @@ body[data-theme="light"] {
     background-color: rgba(124, 58, 237, 0.12) !important;
 }
 
-/* Fix sidebar bottom section */
+/* Fix sidebar bottom section.
+   NO border-top here. Dark mode draws these separators in rgba(255,255,255,.08), which
+   is invisible against the dark rail — so dark has always looked like one clean column.
+   Light mode used solid #e2e8f0, which turned the same separators into two hard rules
+   above the theme toggle and the avatar. Matching dark means drawing nothing. */
 [data-theme="light"] .sidebar-bottom-content {
     background-color: transparent !important;
-    border-top: 1px solid #e2e8f0 !important;
+    border-top: none !important;
 }
 
 [data-theme="light"] .bottom-nav {
     background-color: transparent !important;
+    border-bottom: none !important;
 }
 
 /* Fix user info section */
 [data-theme="light"] .user-info {
-    border-top: 1px solid #e2e8f0 !important;
+    border-top: none !important;
 }
 
 [data-theme="light"] .avatar-text {
@@ -2907,8 +2912,11 @@ body[data-theme="light"] {
    BOTTOM NAV BORDER FIX
    ================================================================= */
 
+/* Deliberately no border — see the sidebar-bottom-content note above. This rule sits
+   LATER in the file than that one and has equal specificity, so re-adding a border here
+   would silently win and put the separator back. */
 [data-theme="light"] .bottom-nav {
-    border-bottom: 1px solid #e2e8f0 !important;
+    border-bottom: none !important;
 }
 
 /* =================================================================
