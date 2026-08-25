@@ -351,7 +351,7 @@ export const ShipV2LandingPage = () => html`
 
         </div>
         <div class="text-center mt-10">
-          <a href="/portfolio/" class="inline-flex items-center gap-2 text-sm font-semibold text-brand-600 hover:text-brand-700">
+          <a href="/case-studies/" class="inline-flex items-center gap-2 text-sm font-semibold text-brand-600 hover:text-brand-700">
             See full portfolio <i data-lucide="arrow-right" class="w-4 h-4"></i>
           </a>
         </div>
@@ -447,7 +447,7 @@ export const ShipV2LandingPage = () => html`
 
   <footer class="py-8 pb-24 lg:pb-8 border-t border-slate-200 bg-white">
     <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-      <p class="text-xs text-slate-500">&copy; ${new Date().getFullYear()} LFG · <a href="mailto:hello@lfg.run" class="hover:text-brand-600">hello@lfg.run</a></p>
+      <p class="text-xs text-slate-500">&copy; ${new Date().getFullYear()} LFG Inc. · <a href="mailto:hello@lfg.run" class="hover:text-brand-600">hello@lfg.run</a></p>
     </div>
   </footer>
 

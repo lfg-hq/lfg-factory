@@ -1,25 +1,37 @@
 import { html } from "hono/html";
 import { Nav, Footer } from "../components/nav.tsx";
 
-export const PortfolioPage = () => html`
+/**
+ * Headline delivery numbers for the case studies page. These are the most credible
+ * thing on the page, so they are kept here as one editable list rather than
+ * being buried in markup. Placeholders render as an em dash on purpose —
+ * publish real figures, never estimates.
+ */
+const PROOF_STATS: Array<{ value: string; label: string }> = [
+  { value: "\u2014", label: "engineers on the team" },
+  { value: "\u2014", label: "calendar weeks per product" },
+  { value: "\u2014", label: "token spend per product" },
+];
+
+export const CaseStudiesPage = () => html`
 <!DOCTYPE html>
 <html lang="en" class="scroll-smooth">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Portfolio | Built with LFG Agent</title>
-    <meta name="description" content="Real products shipped using LFG Agent, from idea to working software in days. See what AI-first engineering looks like in production.">
+    <title>Case studies | Products built on the LFG factory</title>
+    <meta name="description" content="Mags, Easylogs and Kitereach are production products built end to end on the LFG pipeline by a team you can count on one hand. We are the factory's first customer.">
 
-    <meta property="og:title" content="Portfolio | Built with LFG Agent">
-    <meta property="og:description" content="Real products shipped using LFG Agent, from idea to working software in days.">
+    <meta property="og:title" content="Case studies | Products built on the LFG factory">
+    <meta property="og:description" content="Production products built end to end on the LFG pipeline. We are the factory's first customer.">
     <meta property="og:type" content="website">
-    <meta property="og:url" content="https://lfg.run/portfolio/">
-    <meta property="og:image" content="https://lfg.run/static/images/logo_lfg.png">
+    <meta property="og:url" content="https://lfg.run/case-studies/">
+    <meta property="og:image" content="https://lfg.run/public/images/screenshots/agent-ticket-board.png">
 
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="Portfolio | Built with LFG Agent">
-    <meta name="twitter:description" content="Real products shipped using LFG Agent, from idea to working software in days.">
-    <meta name="twitter:image" content="https://lfg.run/static/images/logo_lfg.png">
+    <meta name="twitter:title" content="Case studies | Products built on the LFG factory">
+    <meta name="twitter:description" content="Production products built end to end on the LFG pipeline. We are the factory's first customer.">
+    <meta name="twitter:image" content="https://lfg.run/public/images/screenshots/agent-ticket-board.png">
 
     <link rel="icon" type="image/x-icon" href="/public/images/favicon.ico">
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -72,7 +84,7 @@ export const PortfolioPage = () => html`
 </head>
 <body class="text-slate-900 font-sans selection:bg-indigo-600 selection:text-white">
 
-    ${ Nav({ activePage: "portfolio" }) }
+    ${ Nav({ activePage: "case-studies" }) }
 
     <main>
 
@@ -84,17 +96,36 @@ export const PortfolioPage = () => html`
           <div class="text-center max-w-3xl mx-auto">
             <div class="inline-flex items-center gap-2 px-4 py-2 rounded-full glass shadow-sm mb-8 animate-fade-up">
               <i data-lucide="layers" class="w-3.5 h-3.5 text-brand-600"></i>
-              <span class="text-xs font-bold text-slate-600 uppercase tracking-wider">Products we built</span>
+              <span class="text-xs font-bold text-slate-600 uppercase tracking-wider">Built on LFG</span>
             </div>
             <h1 class="font-display font-semibold text-3xl sm:text-4xl md:text-5xl lg:text-6xl leading-[1.1] tracking-tight text-slate-900 animate-fade-up" style="animation-delay:0.1s">
-              We build real products.<br><span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-pink-500">Here's the proof.</span>
+              We are the factory's<br><span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-pink-500">first customer.</span>
             </h1>
             <p class="text-lg sm:text-xl text-slate-600 mt-7 max-w-2xl mx-auto leading-relaxed animate-fade-up" style="animation-delay:0.2s">
-              Every product below is live, solves a real problem we had, and runs on the same LFG Agent pipeline we sell. Not demos. Not side projects. Tools we depend on every day, and we keep building more.
+              Mags, Easylogs, and Kitereach are production products built end to end on this pipeline by a team you can count on one hand. These are not client case studies &mdash; they are what the factory produced when we pointed it at our own roadmap.
             </p>
+
+            <!-- Delivery numbers.
+                 TODO(lfg): replace the placeholder values below with the real
+                 figures before this page goes out in outreach. They are the
+                 single most credible thing on the page — an em dash reads as
+                 "not published yet", an invented number reads as marketing. -->
+            <div class="mt-10 grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-3xl mx-auto animate-fade-up" style="animation-delay:0.25s">
+              ${PROOF_STATS.map(
+                (stat) => html`
+                <div class="glass rounded-xl p-5 text-center">
+                  <p class="font-display font-bold text-2xl text-slate-900">${stat.value}</p>
+                  <p class="text-xs text-slate-500 mt-1.5">${stat.label}</p>
+                </div>`
+              )}
+            </div>
+
             <div class="mt-8 flex flex-wrap items-center justify-center gap-4 animate-fade-up" style="animation-delay:0.3s">
-              <a href="/agent/" class="px-7 py-3.5 rounded-full bg-brand-600 text-white font-semibold hover:bg-brand-700 transition-all inline-flex items-center gap-2 shadow-lg shadow-brand-600/25">
-                See how LFG Agent builds <i data-lucide="arrow-right" class="w-4 h-4"></i>
+              <a href="/#pilot-form" class="px-7 py-3.5 rounded-full bg-brand-600 text-white font-semibold hover:bg-brand-700 transition-all inline-flex items-center gap-2 shadow-lg shadow-brand-600/25">
+                Book a pilot <i data-lucide="arrow-right" class="w-4 h-4"></i>
+              </a>
+              <a href="/agent/" class="px-7 py-3.5 rounded-full border border-slate-300 bg-white text-slate-800 font-semibold hover:border-brand-400 hover:text-brand-700 transition-colors inline-flex items-center gap-2">
+                See how it works
               </a>
             </div>
           </div>
@@ -481,12 +512,12 @@ export const PortfolioPage = () => html`
                 <span class="w-2 h-2 rounded-full bg-brand-500 animate-pulse"></span>
                 <span class="text-xs font-bold text-brand-700 uppercase tracking-wider">Always shipping</span>
               </div>
-              <h2 class="font-display font-bold text-2xl md:text-3xl text-slate-900 mb-4">This portfolio keeps growing</h2>
+              <h2 class="font-display font-bold text-2xl md:text-3xl text-slate-900 mb-4">The list keeps growing</h2>
               <p class="text-slate-600 leading-relaxed mb-4">
-                We're not a studio that ships on contract and moves on. Every product we build becomes part of the stack we run. We keep using, improving, and expanding each one, and LFG Agent keeps getting better with every project.
+                Every product we build becomes part of the stack we run. We keep using, improving, and expanding each one, and the pipeline gets sharper with every project we push through it.
               </p>
               <p class="text-slate-600 leading-relaxed">
-                More products are in the pipeline. Some solve problems in our own workflow. Some are standalone ideas. All of them are built with the same agent you can use today.
+                More products are in the pipeline. Some solve problems in our own workflow, some are standalone ideas. All of them are built on the same factory you can license and run yourself.
               </p>
             </div>
             <div class="bg-slate-50 rounded-2xl border border-slate-200 p-7">

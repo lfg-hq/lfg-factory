@@ -1,6 +1,6 @@
 import { html } from "hono/html";
 
-type NavPage = "home" | "agent" | "self-host" | "proof" | "compare" | "services" | "blog";
+type NavPage = "home" | "agent" | "self-host" | "case-studies" | "compare" | "services" | "blog";
 
 interface NavOptions {
   activePage: NavPage;
@@ -104,7 +104,7 @@ export const Nav = ({
       <a href="/" class="text-sm font-medium ${activePage === "home" ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600"} transition-colors">Product</a>
       <a href="/agent/" class="text-sm font-medium ${activePage === "agent" ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600"} transition-colors">How it works</a>
       <a href="/self-host/" class="text-sm font-medium ${activePage === "self-host" ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600"} transition-colors">Self-host</a>
-      <a href="/proof/" class="text-sm font-medium ${activePage === "proof" ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600"} transition-colors">Proof</a>
+      <a href="/case-studies/" class="text-sm font-medium ${activePage === "case-studies" ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600"} transition-colors">Case studies</a>
       <a href="/blog/" class="text-sm font-medium ${activePage === "blog" ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600"} transition-colors">Blog</a>
       <!-- Services is a secondary path: last in the order and visually lighter -->
       <a href="/services/" class="text-sm font-normal ${activePage === "services" ? "text-brand-600 font-semibold" : "text-slate-400 hover:text-brand-600"} transition-colors">Services</a>
@@ -132,7 +132,7 @@ export const Nav = ({
     <a href="/" class="text-base font-medium ${activePage === "home" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">Product</a>
     <a href="/agent/" class="text-base font-medium ${activePage === "agent" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">How it works</a>
     <a href="/self-host/" class="text-base font-medium ${activePage === "self-host" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">Self-host</a>
-    <a href="/proof/" class="text-base font-medium ${activePage === "proof" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">Proof</a>
+    <a href="/case-studies/" class="text-base font-medium ${activePage === "case-studies" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">Case studies</a>
     <a href="/blog/" class="text-base font-medium ${activePage === "blog" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">Blog</a>
     <a href="/services/" class="text-base font-normal ${activePage === "services" ? "text-brand-600 font-semibold" : "text-slate-400"} py-2 mobile-link">Services</a>
     <a href="${secondaryCtaHref}" class="text-base font-semibold text-slate-700 py-2 mobile-link">${secondaryCtaLabel}</a>
@@ -213,7 +213,7 @@ export const Footer = () => html`
         <a href="/" class="hover:text-white transition-colors">Product</a>
         <a href="/agent/" class="hover:text-white transition-colors">How it works</a>
         <a href="/self-host/" class="hover:text-white transition-colors">Self-host</a>
-        <a href="/proof/" class="hover:text-white transition-colors">Proof</a>
+        <a href="/case-studies/" class="hover:text-white transition-colors">Case studies</a>
         <a href="/vs-coding-agents/" class="hover:text-white transition-colors">Vs. coding agents</a>
         <a href="/blog/" class="hover:text-white transition-colors">Blog</a>
         <a href="/services/" class="hover:text-white transition-colors">Services</a>

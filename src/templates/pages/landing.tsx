@@ -217,7 +217,7 @@ export const LandingPage = ({ posts = [], turnstileSiteKey = "" }: { posts?: Blo
           <a href="/" class="text-sm font-medium text-brand-600 font-semibold">Home</a>
           <a href="/agent/" class="text-sm font-medium text-slate-600 hover:text-brand-600 transition-colors">Agent</a>
           <a href="/self-host/" class="text-sm font-medium text-slate-600 hover:text-brand-600 transition-colors">Self-host</a>
-          <a href="/proof/" class="text-sm font-medium text-slate-600 hover:text-brand-600 transition-colors">Portfolio</a>
+          <a href="/case-studies/" class="text-sm font-medium text-slate-600 hover:text-brand-600 transition-colors">Case studies</a>
           <a href="/services/" class="text-sm font-medium text-slate-600 hover:text-brand-600 transition-colors">Services</a>
           <a href="/blog/" class="text-sm font-medium text-slate-600 hover:text-brand-600 transition-colors">Blog</a>
 
@@ -245,7 +245,7 @@ export const LandingPage = ({ posts = [], turnstileSiteKey = "" }: { posts?: Blo
         <a href="/" class="text-base font-medium text-slate-700 py-2 mobile-link">Home</a>
         <a href="/agent/" class="text-base font-medium text-slate-700 py-2 mobile-link">Agent</a>
         <a href="/self-host/" class="text-base font-medium text-slate-700 py-2 mobile-link">Self-host</a>
-        <a href="/proof/" class="text-base font-medium text-slate-700 py-2 mobile-link">Portfolio</a>
+        <a href="/case-studies/" class="text-base font-medium text-slate-700 py-2 mobile-link">Case studies</a>
         <a href="/services/" class="text-base font-medium text-slate-700 py-2 mobile-link">Services</a>
         <a href="/blog/" class="text-base font-medium text-slate-700 py-2 mobile-link">Blog</a>
         <a href="/auth/register" class="bg-brand-600 text-white w-full py-3 rounded-lg font-semibold text-center block mobile-link">Access Agent</a>
@@ -562,10 +562,10 @@ export const LandingPage = ({ posts = [], turnstileSiteKey = "" }: { posts?: Blo
                         <a href="https://kitereach.com" target="_blank" rel="noopener noreferrer" class="text-sm font-semibold text-brand-700 inline-flex items-center gap-2 hover:gap-3 transition-all">Visit site <i data-lucide="arrow-up-right" class="w-4 h-4"></i></a>
                     </article>
                 </div>
-                <!-- View full portfolio CTA -->
+                <!-- View all case studies CTA -->
                 <div class="mt-10 text-center">
-                    <a href="/proof/" class="inline-flex items-center gap-2 px-6 py-3 rounded-full border border-slate-200 bg-white text-slate-700 font-semibold hover:border-brand-300 hover:text-brand-700 transition-colors shadow-sm">
-                        See the full portfolio <i data-lucide="arrow-right" class="w-4 h-4"></i>
+                    <a href="/case-studies/" class="inline-flex items-center gap-2 px-6 py-3 rounded-full border border-slate-200 bg-white text-slate-700 font-semibold hover:border-brand-300 hover:text-brand-700 transition-colors shadow-sm">
+                        See all case studies <i data-lucide="arrow-right" class="w-4 h-4"></i>
                     </a>
                 </div>
             </div>
@@ -682,7 +682,7 @@ export const LandingPage = ({ posts = [], turnstileSiteKey = "" }: { posts?: Blo
                         <li><a href="/agent/" class="hover:text-brand-400 transition-colors">Agent</a></li>
                         <li><a href="/services/" class="hover:text-brand-400 transition-colors">Services</a></li>
                         <li><a href="/blog/" class="hover:text-brand-400 transition-colors">Blog</a></li>
-                        <li><a href="/proof/" class="hover:text-brand-400 transition-colors">Portfolio</a></li>
+                        <li><a href="/case-studies/" class="hover:text-brand-400 transition-colors">Case studies</a></li>
                         <li><a href="/self-host/" class="hover:text-brand-400 transition-colors">Self-host</a></li>
                         <li><a href="/#book-demo" class="hover:text-brand-400 transition-colors">Book demo</a></li>
                     </ul>
