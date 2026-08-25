@@ -1097,63 +1097,22 @@ ticketsApi.post("/:projectId/tickets/:ticketId/git/push", async (c) => {
 
   const [, repoOwner, repoName] = repoUrl;
 
-  // Find sandbox
-  const [sandbox] = await db
-    .select()
-    .from(sandboxes)
-    .where(and(eq(sandboxes.ticketId, ticketId), eq(sandboxes.workspaceType, "ticket")))
-    .limit(1);
-
-  if (!sandbox?.magsWorkspaceId) {
-    return c.json({ error: "No active sandbox. Build the ticket first." }, 400);
+  // No sandbox row is no longer a dead end: resolveTicketWorkspace looks the row up
+  // itself and, failing that, starts the project's sandbox. The one hard requirement is
+  // a pushed branch to merge FROM.
+  if (!ticket.githubBranch && !ticket.githubCommitSha) {
+    return c.json({ error: "This ticket has no branch yet — build it first." }, 400);
   }
 
-  // The sandbox ROW outlives the VM: an isolated build destroys its throwaway workspace
-  // when the ticket finishes, so a ticket built days ago points at a workspace that no
-  // longer exists. Exec against it returns exit 2 with no output at all, which surfaced
-  // as "(no output from commit script — exit 2). Diagnostics:" with nothing after it.
-  // Probe first, and fall back to the project's long-lived PREVIEW sandbox — mergeToAnchor
-  // fetches from the remote, so it only needs SOME checkout of the repo, not the original
-  // build tree. Nothing is left to commit in that case (the build already pushed the
-  // branch), so we merge without re-committing.
-  // ALWAYS prefer the ticket's own build VM: it holds this ticket's working tree, its
-  // warm toolchain and package caches, and is the box the work actually happened on.
-  // It idle-sleeps after a build ("kept warm for resume; removed when the ticket is
-  // approved"), so try WAKING it before concluding anything — a sleeping VM is not a
-  // dead one, and falling back on a sleeper would needlessly leave its context behind.
-  const { execOnWorkspace, setNoSleep } = await import("../../services/mags.ts");
-  await setNoSleep(sandbox.magsWorkspaceId, true).catch(() => {});
-  let buildVmAlive = await execOnWorkspace(sandbox.magsWorkspaceId, "echo __alive__", { timeout: 30_000 })
-    .then((r) => /__alive__/.test(r?.output ?? ""))
-    .catch(() => false);
-  if (!buildVmAlive) {
-    // One retry: waking is not instant, and the first exec after a wake can land early.
-    await new Promise((r) => setTimeout(r, 4000));
-    buildVmAlive = await execOnWorkspace(sandbox.magsWorkspaceId, "echo __alive__", { timeout: 30_000 })
-      .then((r) => /__alive__/.test(r?.output ?? ""))
-      .catch(() => false);
-  }
-  let workWorkspaceId = sandbox.magsWorkspaceId;
-  let canCommit = true;
-  if (!buildVmAlive) {
-    const { envWorkspaceId } = await import("../../services/project-sandbox.ts");
-    const previewWs = await envWorkspaceId(project.id).catch(() => null);
-    const previewAlive = previewWs
-      ? await execOnWorkspace(previewWs, "echo __alive__", { timeout: 15_000 })
-          .then((r) => /__alive__/.test(r?.output ?? "")).catch(() => false)
-      : false;
-    if (!previewAlive) {
-      return c.json({
-        error: `This ticket's build sandbox couldn't be woken and there's no running preview sandbox to merge from. Open the Preview tab and run the default branch, then try again — or rebuild the ticket.`,
-      }, 409);
-    }
-    // Falling back costs nothing for a MERGE: mergeToAnchor fetches both branches from
-    // the remote and hard-resets to the anchor, so it needs a clone and credentials, not
-    // this ticket's tree. What we lose is the ability to commit uncommitted work — and
-    // there is none to lose, because the build already pushed the branch.
-    workWorkspaceId = previewWs!;
-    canCommit = false; // its /data/project is the default-branch checkout, not this ticket's tree
-  }
+  // One resolver for both git actions: wake the ticket's own VM, probe it with the work
+  // we intend to do, and RELAUNCH the project's sandbox rather than giving up. See
+  // resolveTicketWorkspace.
+  const ws = await resolveTicketWorkspace(project.id, ticketId);
+  if ("error" in ws) return c.json({ error: ws.error }, 409);
+  const workWorkspaceId = ws.workspaceId;
+  // Only the ticket's OWN tree can have uncommitted work worth committing. Anywhere else
+  // the branch is already on the remote, so we skip straight to the merge.
+  const canCommit = ws.isOwnTree;
 
   const { commitAndPush, createPullRequest } = await import("../../services/git.ts");
 
@@ -1390,27 +1349,42 @@ async function resolveTicketWorkspace(
   ticketId: string,
 ): Promise<{ workspaceId: string; isOwnTree: boolean } | { error: string }> {
   const { execOnWorkspace, setNoSleep } = await import("../../services/mags.ts");
-  const alive = async (ws: string) =>
-    execOnWorkspace(ws, "echo __alive__", { timeout: 30_000 })
-      .then((r) => /__alive__/.test(r?.output ?? "")).catch(() => false);
+
+  // Probe with the work we actually intend to do, not `echo`. A VM can answer a trivial
+  // command and still be useless — that's the case that produced "the sandbox didn't
+  // respond": the wake probe passed, then the real script came back empty. Asking git,
+  // in the directory we're about to use, also catches a live VM whose /data was reset.
+  const usable = async (ws: string) =>
+    execOnWorkspace(ws, 'cd /data/project 2>/dev/null && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo __NO_REPO__', { timeout: 30_000 })
+      .then((r) => { const o = (r?.output ?? "").trim(); return !!o && !o.includes("__NO_REPO__"); })
+      .catch(() => false);
 
   const [sandbox] = await db.select().from(sandboxes)
     .where(and(eq(sandboxes.ticketId, ticketId), eq(sandboxes.workspaceType, "ticket"))).limit(1);
 
+  // 1. The ticket's own build VM — it holds this ticket's tree and warm toolchain. These
+  // idle-sleep after a build, so wake it before judging it.
   if (sandbox?.magsWorkspaceId) {
     await setNoSleep(sandbox.magsWorkspaceId, true).catch(() => {});
-    let ok = await alive(sandbox.magsWorkspaceId);
-    if (!ok) { await new Promise((r) => setTimeout(r, 4000)); ok = await alive(sandbox.magsWorkspaceId); }
+    let ok = await usable(sandbox.magsWorkspaceId);
+    if (!ok) { await new Promise((r) => setTimeout(r, 4000)); ok = await usable(sandbox.magsWorkspaceId); }
     if (ok) return { workspaceId: sandbox.magsWorkspaceId, isOwnTree: true };
   }
 
-  const { envWorkspaceId } = await import("../../services/project-sandbox.ts");
-  const previewWs = await envWorkspaceId(internalProjectId).catch(() => null);
-  if (previewWs && await alive(previewWs)) return { workspaceId: previewWs, isOwnTree: false };
-
-  return {
-    error: "No live sandbox for this ticket: its build VM couldn't be woken and there's no running preview sandbox. Open the Preview tab and run the default branch, then try again — or rebuild the ticket.",
-  };
+  // 2. RELAUNCH rather than give up. ensureProjectSandbox respawns the project's preview
+  // VM when it isn't running, so "no live sandbox" becomes "start one and carry on" —
+  // which is all this needs, since everything left to do (merge, diff, describe) works
+  // from the remote and only wants a clone.
+  try {
+    const { ensureProjectSandbox } = await import("../../services/project-sandbox.ts");
+    const { workspaceId } = await ensureProjectSandbox(internalProjectId);
+    if (await usable(workspaceId)) return { workspaceId, isOwnTree: false };
+    return {
+      error: "Started the project's sandbox, but it has no checkout to work from (its disk was reset). Open the Preview tab and run the default branch once — that re-clones the repo — then try again.",
+    };
+  } catch (e) {
+    return { error: `Couldn't start a sandbox to run this from: ${(e as Error).message?.slice(0, 200)}` };
+  }
 }
 
 // ── POST /:projectId/tickets/:ticketId/git/pr ───────────────────────
