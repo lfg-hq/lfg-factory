@@ -490,6 +490,9 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
         <a href="/chat/project/${project.projectId}" class="nav-link">
           <i class="fas fa-comments"></i><span class="nav-text">Chat</span>
         </a>
+        <a href="/projects/${project.projectId}/epics" class="nav-link">
+          <i class="fas fa-layer-group"></i><span class="nav-text">Epics</span>
+        </a>
         <a href="/projects/${project.projectId}/tickets" class="nav-link active">
           <i class="fas fa-tasks"></i><span class="nav-text">Tickets</span>
         </a>
@@ -2484,6 +2487,15 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     }
 
     connectWS();
+  })();
+
+  // Deep link: /projects/<id>/tickets?ticket=<ticketId> opens that ticket's drawer on
+  // load. The Epics page links here, so a ticket listed under an epic lands on the
+  // ticket itself rather than dropping you on the board to hunt for it.
+  (function () {
+    var want = new URLSearchParams(window.location.search).get('ticket');
+    if (!want) return;
+    if (document.querySelector('[data-ticket-id="' + want + '"]')) openTicketDrawer(want);
   })();
 
   requestAnimationFrame(() => requestAnimationFrame(() => {

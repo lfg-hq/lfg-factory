@@ -111,6 +111,10 @@ export function ChatPage({
             <i class="fas fa-comments"></i>
             <span class="nav-text">Chat</span>
           </a>
+          <a href="/projects/${projectId}/epics" class="nav-link">
+            <i class="fas fa-layer-group"></i>
+            <span class="nav-text">Epics</span>
+          </a>
           <a href="/projects/${projectId}/tickets" class="nav-link">
             <i class="fas fa-tasks"></i>
             <span class="nav-text">Tickets</span>

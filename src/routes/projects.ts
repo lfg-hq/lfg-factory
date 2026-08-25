@@ -24,7 +24,9 @@ import { getProjectActivities } from "../services/activity-log.ts";
 import { ProjectListPage } from "../templates/pages/project-list.tsx";
 import { ProjectDetailPage } from "../templates/pages/project-detail.tsx";
 import { TicketsListPage } from "../templates/pages/tickets-list.tsx";
+import { EpicsPage } from "../templates/pages/epics.tsx";
 import { epics } from "../db/schema/epics.ts";
+import { epicDocuments } from "../db/schema/epic-documents.ts";
 import { epicLinksForDocs } from "../services/epics.ts";
 import { getProjectAccess, requirePermission, PermissionError } from "../auth/project-access.ts";
 import type { auth } from "../auth/index.ts";
@@ -505,6 +507,73 @@ projectsRouter.post("/projects/:projectId/delete", async (c) => {
 
   await db.delete(projects).where(eq(projects.id, access.project.id));
   return c.redirect("/projects");
+});
+
+// ── GET /projects/:projectId/epics — one card per delivery unit ─────
+// Everything an epic produced in one place: its tickets, documents, branches and the
+// chats it came from. All four sets are fetched up front and grouped in memory — one
+// query each rather than per-epic fan-out, so the page renders complete on first paint.
+projectsRouter.get("/projects/:projectId/epics", async (c) => {
+  const user = c.get("user");
+  const { projectId } = c.req.param();
+  if (!projectId) return c.text("Missing projectId", 400);
+
+  const access = await getProjectAccess(projectId, user.id);
+  if (!access) return c.text("Project not found", 404);
+  const project = access.project;
+
+  const [epicRows, ticketRows, ownedDocs, linkedDocs] = await Promise.all([
+    db.select().from(epics).where(eq(epics.projectId, project.id)).orderBy(desc(epics.createdAt)),
+    db.select({
+      id: projectTickets.id,
+      epicId: projectTickets.epicId,
+      ticketKey: projectTickets.ticketKey,
+      name: projectTickets.name,
+      status: projectTickets.status,
+      priority: projectTickets.priority,
+      githubBranch: projectTickets.githubBranch,
+      conversationId: projectTickets.conversationId,
+      lastExecutionAt: projectTickets.lastExecutionAt,
+    }).from(projectTickets)
+      .where(eq(projectTickets.projectId, project.id))
+      .orderBy(asc(projectTickets.executionOrder), asc(projectTickets.createdAt)),
+    // Docs the epic OWNS — its scope/tech-analysis drafts, which only fold into the
+    // master doc when the epic is approved (projectFiles.epicId, "" = project-level).
+    db.select({ id: projectFiles.id, epicId: projectFiles.epicId, name: projectFiles.name, fileType: projectFiles.fileType })
+      .from(projectFiles)
+      .where(and(eq(projectFiles.projectId, project.id), ne(projectFiles.epicId, ""), eq(projectFiles.isActive, true))),
+    // Docs merely LINKED to an epic (many-to-many) — typically the shared master PRD,
+    // which several epics draw on and none of them owns.
+    db.select({ id: projectFiles.id, epicId: epicDocuments.epicId, name: projectFiles.name, fileType: projectFiles.fileType })
+      .from(epicDocuments)
+      .innerJoin(projectFiles, eq(projectFiles.id, epicDocuments.fileId))
+      .where(eq(projectFiles.projectId, project.id)),
+  ]);
+
+  // Titles for every chat referenced by an epic or one of its tickets.
+  const convIds = [...new Set([
+    ...epicRows.map((e) => e.conversationId),
+    ...ticketRows.map((t) => t.conversationId),
+  ].filter(Boolean) as string[])];
+  const convRows = convIds.length
+    ? await db.select({ id: conversations.id, title: conversations.title })
+        .from(conversations).where(inArray(conversations.id, convIds)).catch(() => [])
+    : [];
+
+  // An owned doc and a linked doc can be the same file; keep one row per (epic, file)
+  // and let "owned" win, since that's the stronger relationship to show.
+  const seen = new Set<string>();
+  const docs = [...ownedDocs.map((d) => ({ ...d, owned: true })), ...linkedDocs.map((d) => ({ ...d, owned: false }))]
+    .filter((d) => (seen.has(d.epicId + d.id) ? false : (seen.add(d.epicId + d.id), true)));
+
+  return c.html(EpicsPage({
+    project: { id: project.id, projectId: project.projectId, name: project.name, icon: project.icon },
+    user: { name: user.name, email: user.email },
+    epics: epicRows,
+    tickets: ticketRows,
+    docs,
+    conversations: convRows,
+  }));
 });
 
 // ── GET /projects/:projectId/tickets — tickets kanban ───────────────

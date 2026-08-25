@@ -147,6 +147,10 @@ export function ProjectDetailPage({
             <i class="fas fa-comments"></i>
             <span class="nav-text">Chat</span>
           </a>
+          <a href="/projects/${project.projectId}/epics" class="nav-link">
+            <i class="fas fa-layer-group"></i>
+            <span class="nav-text">Epics</span>
+          </a>
           <a href="/projects/${project.projectId}/tickets" class="nav-link">
             <i class="fas fa-tasks"></i>
             <span class="nav-text">Tickets</span>
