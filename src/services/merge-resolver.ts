@@ -88,15 +88,27 @@ async function resolveCli(userId: string) {
   const [profile] = await db.select().from(profiles).where(eq(profiles.userId, userId)).limit(1);
   const usesCodex = authMode === "subscription" && provider === "openai"
     && !!profile?.openaiCodexAuthenticated && !!profile.openaiCodexCredentials;
+  // Minting the subscription token can fail (expired refresh token, auth workspace down).
+  // Keep the REASON — swallowing it is how "Pi could not start: an API key or OAuth access
+  // token is required" happened with a perfectly good API key sitting in the row.
+  let credentialNote = "";
   const oauthAccessToken = usesCodex
-    ? await getOpenAICodexAccessToken(userId).catch(() => undefined)
+    ? await getOpenAICodexAccessToken(userId).catch((e: Error) => {
+        credentialNote = `OpenAI Codex subscription token unavailable (${e.message?.slice(0, 120)})`;
+        return undefined;
+      })
     : undefined;
+  // ONE credential decision, and usePi is derived from IT — not from a key we then blank.
+  // The old order asked "is there a key?" and passed "the key, unless Codex is connected",
+  // which sent Pi nothing whenever the Codex token couldn't be minted.
+  const piApiKey = oauthAccessToken ? undefined : apiKey;
+  if (credentialNote && piApiKey) credentialNote += " — falling back to the stored API key";
   const usePi = !!provider && provider !== "anthropic" && isPiSupportedProvider(provider)
-    && !!(apiKey || oauthAccessToken);
+    && !!(piApiKey || oauthAccessToken);
   const claudeUsable = provider === "anthropic"
     && (!!keys?.anthropicApiKey || (!!profile?.claudeCodeAuthenticated && !!profile.claudeCodeCredentials));
   return {
-    modelKey, provider, apiKey: usesCodex ? undefined : apiKey, oauthAccessToken, usePi, claudeUsable,
+    modelKey, provider, apiKey: piApiKey, oauthAccessToken, usePi, claudeUsable, credentialNote,
     anthropicApiKey: provider === "anthropic" && authMode === "api_key" ? keys?.anthropicApiKey ?? undefined : undefined,
     piModelId: getProviderModel(modelKey) ?? modelKey,
   };
@@ -184,6 +196,8 @@ Reply with 2-4 plain sentences: what was actually wrong with the merge, and what
   const cli = await resolveCli(o.userId);
   let account = "";
 
+  if (cli.credentialNote) log(cli.credentialNote);
+
   if (cli.usePi && cli.provider) {
     log(`Merging with Pi (${cli.provider}/${cli.piModelId})…`);
     try {
@@ -239,8 +253,10 @@ Reply with 2-4 plain sentences: what was actually wrong with the merge, and what
       log(`Claude Code could not start: ${(e as Error).message?.slice(0, 200)}`);
     }
   } else {
-    log(`No coding agent is available for this merge — connect a model in Settings.`);
-    return { merged: false, summary: "No coding agent available to run the merge — connect a model in Settings." };
+    const why = cli.credentialNote
+      || `no usable credential for ${cli.provider ?? "the selected model"} (${cli.modelKey})`;
+    log(`No coding agent is available for this merge — ${why}.`);
+    return { merged: false, summary: `No coding agent available to run the merge — ${why}.` };
   }
 
   // OUR verdict, not the agent's: does the target on the REMOTE actually contain the

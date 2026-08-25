@@ -1977,7 +1977,9 @@ ${message}
       const webhookReachable = !!cliApiKey && !/localhost|127\.0\.0\.1|\/\/0\.0\.0\.0/.test(CALLBACK_BASE_URL);
       const pi = await startPiCli({
         workspaceId, prompt: piPrompt, projectDir: projectDirName,
-        provider: chatProvider, modelId: piModelId, apiKey: chatUsesOpenAICodex ? undefined : chatProviderKey ?? undefined,
+        provider: chatProvider, modelId: piModelId,
+        // Credential picked from the token we actually HAVE (see the build path).
+        apiKey: chatOAuthToken ? undefined : chatProviderKey ?? undefined,
         oauthAccessToken: chatOAuthToken, envVars: piEnvVars,
         forward: webhookReachable ? { apiUrl: CALLBACK_BASE_URL, apiKey: cliApiKey, mode: "ticket" as const, ticketId } : undefined,
       });
@@ -2859,8 +2861,19 @@ git branch --show-current
           projectDir: projectDirName,
           provider,
           modelId: piModelId,
-          apiKey: useOpenAICodex ? undefined : providerApiKey ?? undefined,
-          oauthAccessToken: useOpenAICodex ? await getOpenAICodexAccessToken(ownerId) : undefined,
+          // Mint the subscription token FIRST and pick the credential from what we
+          // actually got. Deciding "Codex is connected → send no API key" before knowing
+          // whether the token minted is how Pi ends up started with neither credential
+          // ("an API key or OAuth access token is required") on a user who has a key.
+          ...(await (async () => {
+            const tok = useOpenAICodex
+              ? await getOpenAICodexAccessToken(ownerId).catch(async (e: Error) => {
+                  await addLog(ticketId, `OpenAI Codex subscription token unavailable (${e.message?.slice(0, 120)})${providerApiKey ? " — using the stored API key instead" : ""}`, "command", ownerId).catch(() => {});
+                  return undefined;
+                })
+              : undefined;
+            return { apiKey: tok ? undefined : providerApiKey ?? undefined, oauthAccessToken: tok };
+          })()),
           envVars: piEnvVars,
           forward: webhookReachable ? { apiUrl: CALLBACK_BASE_URL, apiKey: cliApiKey, mode: "ticket" as const, ticketId } : undefined,
         });
