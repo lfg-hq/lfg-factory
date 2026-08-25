@@ -2006,13 +2006,18 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
 
     html += '</div>'; // /git-info-grid
 
-    // Branch diff viewer: this ticket's branch vs a selectable base (default main).
+    // Branch diff viewer: this ticket's branch vs a selectable base. The default is the
+    // ticket's ANCHOR (its epic branch), not main — that's what it was cut from and what
+    // Push & Merge targets, so it matches what a merge request for this ticket shows.
+    // Defaulting to main compared against a branch the epic never merged, which listed
+    // every commit the anchor carries that main doesn't (100+ of them) as if they
+    // belonged to this ticket.
     html += '<div id="git-diff-wrap" style="margin-top:1rem;border-top:1px solid var(--border-color,#2a2a2a);padding-top:1rem;">'
       + '<div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.75rem;">'
       + '<span class="git-label">Changes</span>'
       + '<code class="git-branch-badge">' + escHtml(branch || ('feature/ticket-' + _currentTicketId)) + '</code>'
       + '<span style="color:var(--text-secondary,#9ca3af);">vs</span>'
-      + '<select id="git-diff-base" onchange="loadGitDiff(this.value)" style="padding:4px 8px;border-radius:6px;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);font-size:12px;"><option>main</option></select>'
+      + '<select id="git-diff-base" onchange="loadGitDiff(this.value)" style="padding:4px 8px;border-radius:6px;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);font-size:12px;"><option>' + escHtml(_ticketAnchorBranch || 'main') + '</option></select>'
       + '<button onclick="loadGitDiff()" class="git-action-btn" style="padding:4px 10px;"><i class="fas fa-sync-alt"></i></button>'
       + '</div>'
       + '<div id="git-diff-body"><div class="git-empty">Loading diff…</div></div>'
@@ -2025,7 +2030,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
   async function loadGitDiff(base) {
     var body = document.getElementById('git-diff-body');
     if (!body || !_currentTicketId) return;
-    if (!base) { var _s = document.getElementById('git-diff-base'); base = (_s && _s.value) || 'main'; }
+    if (!base) { var _s = document.getElementById('git-diff-base'); base = (_s && _s.value) || _ticketAnchorBranch || 'main'; }
     body.innerHTML = '<div class="git-empty">Loading diff…</div>';
     var data = await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + _currentTicketId + '/git/diff?base=' + encodeURIComponent(base || 'main'))
       .then(function(r){ return r.json(); }).catch(function(){ return null; });

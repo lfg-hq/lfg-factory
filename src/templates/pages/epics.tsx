@@ -161,13 +161,21 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
     }
     .epic-truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .epic-btn {
+      padding: 5px 12px; border-radius: 7px; font-size: 0.76rem; font-weight: 600; cursor: pointer;
+      border: 1px solid var(--border-color); background: transparent; color: var(--text-color); white-space: nowrap;
+    }
+    .epic-btn:disabled { opacity: 0.5; cursor: default; }
+    .epic-btn-go { background: #7c3aed; border-color: #7c3aed; color: #fff; }
+    .epic-btn-no { color: #f87171; }
   </style>
 </head>
 <body>
   <div class="app-container">
-    <div class="sidebar" id="sidebar">
+    <div class="sidebar" id="sidebar" data-current-project-id="${project.projectId}">
+      <div class="sidebar-top-content">
       <div class="sidebar-header">
-        <div class="logo-container">
+        <div class="logo-section">
           <span class="logo-icon">🚀</span>
           <span class="logo-text">LFG</span>
         </div>
@@ -212,7 +220,7 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
           <i class="fas fa-bolt"></i><span class="nav-text">Instant</span>
         </a>
       </div>
-    </div>
+      </div>
     <div class="sidebar-bottom-content">
       <div class="sidebar-nav bottom-nav">
         <button class="nav-link theme-toggle-sidebar" data-theme-toggle>
@@ -240,6 +248,9 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
     </div>
   </div>
 
+  <!-- Main epics page — INSIDE .app-container, which is the flex row that offsets it
+       past the sidebar. Outside it, the page sat under the rail with its left edge
+       clipped and the sidebar's bottom block stranded at the top of the content. -->
   <div class="epics-page">
     <div style="padding:1.1rem 1.5rem 0;display:flex;align-items:baseline;gap:0.75rem;flex-wrap:wrap;">
       <h1 style="margin:0;font-size:1.15rem;font-weight:600;color:var(--text-color);">Epics</h1>
@@ -274,6 +285,16 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
                 ${e.epicKey ? html`<span class="epic-key">${e.epicKey}</span>` : ""}
                 <span style="font-size:0.98rem;font-weight:600;color:var(--text-color);">${e.name}</span>
                 ${pill(e.status.replace("_", " "), color)}
+                <span style="flex:1;"></span>
+                <!-- The approval boundary, as actions. An epic merges to main only when
+                     it's been accepted, so Merge only appears once it's approved. -->
+                ${e.status === "in_review" ? html`
+                  <button class="epic-btn epic-btn-go" data-epic="${e.id}" data-act="approve">Approve</button>
+                  <button class="epic-btn epic-btn-no" data-epic="${e.id}" data-act="reject">Reject</button>
+                ` : ""}
+                ${e.status === "approved" ? html`
+                  <button class="epic-btn epic-btn-go" data-epic="${e.id}" data-act="merge">Merge to main</button>
+                ` : ""}
               </div>
               ${e.goal ? html`<div style="font-size:0.83rem;color:var(--text-secondary);line-height:1.5;">${e.goal}</div>` : ""}
               <div class="epic-meta">
@@ -347,9 +368,40 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
       })}
     </div>
   </div>
+  </div>
 
 <script src="/public/js/sidebar.js"></script>
 <script>
+  // Approve / reject / merge. Delegated so the buttons stay declarative in the markup.
+  // A merge the system refuses comes back 409 with the blocking reason (unbuilt tickets,
+  // an unmerged parent epic) — show that reason rather than a generic failure.
+  document.addEventListener('click', function (ev) {
+    var b = ev.target.closest ? ev.target.closest('[data-act]') : null;
+    if (!b) return;
+    var id = b.getAttribute('data-epic');
+    var act = b.getAttribute('data-act');
+    var ask = act === 'merge' ? 'Merge this epic into main?'
+      : act === 'approve' ? 'Approve this epic? It can then be merged to main.'
+      : 'Reject this epic? Its branch is abandoned and its draft docs are discarded.';
+    if (!window.confirm(ask)) return;
+    var all = document.querySelectorAll('[data-epic="' + id + '"]');
+    for (var i = 0; i < all.length; i++) all[i].disabled = true;
+    fetch('/api/epics/' + id + '/' + act, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}'
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok, j: j }; });
+    }).then(function (res) {
+      if (res.ok) { window.location.reload(); return; }
+      window.alert(res.j && res.j.error ? res.j.error : 'That did not go through.');
+      for (var i = 0; i < all.length; i++) all[i].disabled = false;
+    }).catch(function () {
+      window.alert('Request failed.');
+      for (var i = 0; i < all.length; i++) all[i].disabled = false;
+    });
+  });
+
   requestAnimationFrame(() => requestAnimationFrame(() => {
     document.documentElement.classList.remove('sidebar-minimized-preload');
   }));
