@@ -121,26 +121,72 @@
     // they're the group that scrolls when space runs out — the divider stays outside it.
     const strip = (inner) => `<div class="pv-scroll">${inner}</div>` + tbDiv();
     if (svcs.length < 2) return strip(addBtn);
+    // ONE control instead of a chip per app. The chip row grew with the project and was
+    // the first thing to overflow on a narrow panel — which pushed the app switcher out
+    // of reach exactly when you needed it. A fixed-width dropdown always fits; every
+    // per-app control (ON/OFF, open, fix, remove) moves into the menu.
     const active = activeSvc(state);
-    const chips = svcs.map((s) => {
+    const label = active ? active.name : svcs[0].name;
+    const live = !!(active && active.url);
+    const enabledCount = svcs.filter((s) => s.primary || s.enabled).length;
+    const tip = svcs.map((s) => `${s.name}${s.primary ? " (primary)" : s.enabled ? "" : " — off"}${s.port ? " · :" + s.port : ""}`).join("\n");
+    const btn2 = `<button data-action="svcmenu" title="${esc(`Apps in this preview:\n${tip}`)}" style="height:32px;padding:0 9px 0 10px;border-radius:7px;font-size:12px;cursor:pointer;border:1px solid var(--border-color,#333);background:transparent;color:var(--text-color,#cbd5e1);display:inline-flex;align-items:center;gap:7px;font-weight:500;white-space:nowrap;flex:none;max-width:200px;">`
+      + `<span style="width:6px;height:6px;border-radius:50%;background:${live ? "#10b981" : "#94a3b8"};flex:none;"></span>`
+      + `<span style="overflow:hidden;text-overflow:ellipsis;">${esc(label)}</span>`
+      + `<span style="font-size:10.5px;opacity:.5;flex:none;">${enabledCount}/${svcs.length}</span>`
+      + `<i class="fas fa-chevron-down" style="font-size:9px;opacity:.55;flex:none;"></i></button>`;
+    return strip(btn2);
+  }
+
+  /** The app switcher menu: one row per app, each with its own ON/OFF, open, fix and
+   *  (for hand-added apps) remove — the controls that used to live inline on the chips.
+   *  Rendered on <body> like the ⋮ menu, so it dispatches through onActionClick itself
+   *  rather than relying on the #preview-actions delegate. */
+  function toggleAppMenu(anchor) {
+    const existing = document.getElementById("preview-app-menu");
+    if (existing) { existing.remove(); return; }
+    const svcs = (current && current.services) || [];
+    const active = activeSvc(current);
+    const m = document.createElement("div");
+    m.id = "preview-app-menu";
+    m.style.cssText = "position:fixed;z-index:100;min-width:270px;max-width:360px;background:var(--card-bg,#161616);border:1px solid var(--border-color,#333);border-radius:10px;box-shadow:0 12px 34px rgba(0,0,0,.45);padding:5px;display:flex;flex-direction:column;gap:2px;";
+    const iconBtn = (action, icon, title) => `<span data-action="${action}" title="${esc(title)}" style="opacity:.6;cursor:pointer;padding:3px 5px;border-radius:5px;flex:none;"><i class="fas ${icon}" style="font-size:10.5px;"></i></span>`;
+    const row = (s) => {
       const isActive = active && s.name === active.name;
-      const clickable = !!s.url;
-      const chip = `padding:0 10px;height:32px;border-radius:7px;font-size:12px;cursor:${clickable ? "pointer" : "default"};border:1px solid ${isActive ? "#7c3aed" : "var(--border-color,#333)"};background:${isActive ? "rgba(124,58,237,.14)" : "transparent"};color:${clickable ? "var(--text-color,#cbd5e1)" : "var(--text-secondary,#9ca3af)"};display:inline-flex;align-items:center;gap:7px;font-weight:500;white-space:nowrap;flex:none;`;
-      const toggle = s.primary
-        ? ""
-        : `<span data-action="svctoggle:${esc(s.name)}:${s.enabled ? "0" : "1"}" title="${s.enabled ? "Turn this app off" : "Turn this app on"}" style="font-size:10px;font-weight:600;padding:1px 6px;border-radius:5px;letter-spacing:.5px;background:${s.enabled ? "rgba(16,185,129,.18)" : "rgba(148,163,184,.15)"};color:${s.enabled ? "#10b981" : "#94a3b8"};cursor:pointer;">${s.enabled ? "ON" : "OFF"}</span>`;
-      // Manually-added apps get a remove (×); a subtle dot marks them as hand-added.
-      const rm = s.manual ? `<span data-action="svcremove:${esc(s.name)}" title="Remove this app" style="font-size:11px;opacity:.6;cursor:pointer;padding-left:1px;">✕</span>` : "";
-      const dot = s.manual ? `<span title="Added manually" style="width:5px;height:5px;border-radius:50%;background:#a78bfa;flex:none;"></span>` : "";
-      // Open-in-new-tab per app so its URL is reachable/visible even before switching.
-      const openBtn = s.url ? `<span data-action="svcopen:${esc(s.name)}" title="Open ${esc(s.url)} in a new tab" style="font-size:10px;opacity:.6;cursor:pointer;padding-left:1px;"><i class="fas fa-arrow-up-right-from-square"></i></span>` : "";
-      // Per-app "Fix" — asks the preview agent to fix THIS app (installs deps, runs migrations,
-      // (re)starts it) and record the fixes so future runs don't need the AI again.
-      const fixBtn = `<span data-action="svcfix:${esc(s.name)}" title="Fix this app — the preview agent installs deps, runs migrations, and (re)starts it, recording the fixes" style="font-size:10px;opacity:.6;cursor:pointer;padding-left:1px;"><i class="fas fa-wrench"></i></span>`;
-      const tip = `${esc(s.name)}${s.port ? " · :" + s.port : ""}${s.dir ? " · " + esc(s.dir) : ""}${s.url ? " · " + esc(s.url) : (s.enabled ? " · (starting…)" : "")}`;
-      return `<button ${clickable ? `data-action="svc:${esc(s.name)}"` : ""} title="${tip}" style="${chip}">${dot}<span>${esc(s.name)}</span>${toggle}${openBtn}${fixBtn}${rm}</button>`;
-    }).join("");
-    return strip(chips + addBtn);
+      const sub = [s.port ? ":" + s.port : "", s.dir || ""].filter(Boolean).join(" · ");
+      const state2 = s.primary
+        ? `<span style="font-size:10px;opacity:.45;flex:none;">primary</span>`
+        : `<span data-action="svctoggle:${esc(s.name)}:${s.enabled ? "0" : "1"}" title="${s.enabled ? "Turn this app off" : "Turn this app on"}" style="font-size:10px;font-weight:600;padding:1px 6px;border-radius:5px;letter-spacing:.5px;flex:none;background:${s.enabled ? "rgba(16,185,129,.18)" : "rgba(148,163,184,.15)"};color:${s.enabled ? "#10b981" : "#94a3b8"};cursor:pointer;">${s.enabled ? "ON" : "OFF"}</span>`;
+      return `<div style="display:flex;align-items:center;gap:7px;padding:7px 8px;border-radius:7px;background:${isActive ? "rgba(124,58,237,.14)" : "transparent"};">`
+        + `<span ${s.url ? `data-action="svc:${esc(s.name)}"` : ""} style="flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;cursor:${s.url ? "pointer" : "default"};">`
+        + `<span style="font-size:12.5px;color:var(--text-color,#e2e8f0);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(s.name)}${s.manual ? ` <span style="color:#a78bfa;font-size:10px;">•</span>` : ""}</span>`
+        + (sub ? `<span style="font-size:10.5px;color:var(--text-secondary,#9ca3af);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(sub)}</span>` : "")
+        + `</span>${state2}`
+        + (s.url ? iconBtn(`svcopen:${esc(s.name)}`, "fa-arrow-up-right-from-square", `Open ${s.url} in a new tab`) : "")
+        + iconBtn(`svcfix:${esc(s.name)}`, "fa-wrench", "Fix this app — the preview agent installs deps, runs migrations, and (re)starts it")
+        + (s.manual ? iconBtn(`svcremove:${esc(s.name)}`, "fa-xmark", "Remove this app") : "")
+        + `</div>`;
+    };
+    m.innerHTML = svcs.map(row).join("")
+      + `<div style="height:1px;background:var(--border-color,#333);margin:4px 2px;"></div>`
+      + `<button data-action="svcadd" style="text-align:left;padding:8px 10px;border-radius:7px;cursor:pointer;font-size:12.5px;background:transparent;color:var(--text-secondary,#9ca3af);border:none;display:flex;align-items:center;gap:9px;"><i class="fas fa-plus" style="font-size:10px;width:14px;text-align:center;"></i>Add app</button>`;
+    document.body.appendChild(m);
+    const r = anchor.getBoundingClientRect();
+    m.style.top = (r.bottom + 6) + "px";
+    // Prefer left-aligned under the button, but never off the right edge of a narrow panel.
+    m.style.left = Math.max(8, Math.min(r.left, window.innerWidth - m.offsetWidth - 8)) + "px";
+    m.addEventListener("click", (e) => {
+      const el = e.target.closest("[data-action]");
+      if (!el) return;
+      const a = el.getAttribute("data-action");
+      m.remove();
+      // openAddApp anchors its popover to the element it's given — the menu row is gone
+      // by now, so hand it the toolbar button instead.
+      if (a === "svcadd") openAddApp(anchor); else onActionClick({ target: el });
+    });
+    setTimeout(() => document.addEventListener("click", function onDoc(ev) {
+      if (!m.contains(ev.target) && ev.target !== anchor && !anchor.contains(ev.target)) { m.remove(); document.removeEventListener("click", onDoc); }
+    }), 0);
   }
 
   function renderActions(html) {
@@ -1002,6 +1048,7 @@
       if (w) { const open = w.style.display !== "none"; w.style.display = open ? "none" : "block"; if (b) b.textContent = (open ? "▸" : "▾") + " Edit as JSON (advanced)"; }
     }
     else if (action === "open" && current && current.previewUrl) window.open(current.previewUrl, "_blank");
+    else if (action === "svcmenu") toggleAppMenu(b);
     else if (action.indexOf("svc:") === 0) switchService(action.slice(4));
     else if (action.indexOf("svctoggle:") === 0) {
       const parts = action.slice("svctoggle:".length).split(":");
