@@ -229,11 +229,69 @@
   // ── Shared Logs | Steps toggle (used in the progress, running-overlay, and
   // error views). `progressTab` is the shared state; refreshPanes() swaps the
   // visible pane(s) in place so no view is rebuilt (keeps the iframe mounted). ──
-  function segInner() {
-    const seg = (id, label) => `<button data-ptab="${id}" style="padding:5px 14px;border-radius:7px;cursor:pointer;font-size:12.5px;border:1px solid var(--border-color,#333);background:${progressTab === id ? "#7c3aed" : "var(--border-color,#2a2a2a)"};color:${progressTab === id ? "#fff" : "var(--text-color,#e2e8f0)"};">${label}</button>`;
-    return seg("logs", "Setup") + seg("applogs", "App logs") + seg("steps", "Steps");
+  // ONE connected segmented control for "what am I looking at", instead of two
+  // separate rows of floating pills (a pane strip AND a source strip) that looked
+  // identical and read as two competing sets of tabs. Every segment here answers the
+  // same question, so they share one control: Setup and Steps are setup-time views,
+  // then the app's own log, each companion app, and each database.
+  function segList() {
+    const out = [
+      { key: "logs", label: "Setup", ptab: "logs" },
+      { key: "steps", label: "Steps", ptab: "steps" },
+      { key: "app", label: "App", alog: "app" },
+    ];
+    const cap = (x) => (x || "db").charAt(0).toUpperCase() + (x || "db").slice(1);
+    const svcs = (current && current.services) || [];
+    for (const sv of svcs) if (!sv.primary && sv.enabled) out.push({ key: "svc:" + sv.name, label: cap(sv.name), alog: "svc:" + sv.name });
+    for (const d of dbLogs) out.push({ key: d.engine, label: cap(d.engine), alog: d.engine, db: true });
+    return out;
   }
-  function segButtons() { return `<div data-ptab-header style="display:flex;gap:4px;flex:none;">${segInner()}</div>`; }
+  function activeSegKey() {
+    if (progressTab === "steps") return "steps";
+    if (progressTab === "applogs") return appLogView;
+    return "logs";
+  }
+  /** True when the selected segment is a database — Reset DB only makes sense there. */
+  function selectedIsDb() {
+    const seg = segList().find((x) => x.key === activeSegKey());
+    return !!(seg && seg.db);
+  }
+  function segInner() {
+    const list = segList();
+    const active = activeSegKey();
+    const strip = list.map((x, i) => {
+      const on = x.key === active;
+      // A database segment reads green when active so it's obvious you're looking at a
+      // DB and not the app — the one distinction worth a colour.
+      const accent = x.db ? "#059669" : "#7c3aed";
+      const first = i === 0, last = i === list.length - 1;
+      const radius = `${first ? "7px" : "0"} ${last ? "7px" : "0"} ${last ? "7px" : "0"} ${first ? "7px" : "0"}`;
+      const attr = x.ptab ? `data-ptab="${x.ptab}"` : `data-action="alog:${esc(x.alog)}"`;
+      return `<button ${attr} style="padding:5px 13px;cursor:pointer;font-size:12.5px;white-space:nowrap;`
+        + `border:1px solid ${on ? accent : "var(--border-color,#333)"};`
+        + `border-radius:${radius};${first ? "" : "margin-left:-1px;"}`
+        + `background:${on ? accent : "var(--border-color,#2a2a2a)"};color:${on ? "#fff" : "var(--text-color,#e2e8f0)"};`
+        + `font-weight:${on ? "600" : "400"};position:relative;z-index:${on ? "1" : "0"};">${esc(x.label)}</button>`;
+    }).join("");
+
+    // Actions sit apart from the switches, and only appear where they apply: you can
+    // refresh a log, and you can reset a database — but "Reset DB" has no business
+    // shouting in red while you're reading the app's output.
+    const onLog = progressTab === "applogs";
+    const refresh = onLog
+      ? `<button data-action="refreshapplog" title="Refresh this log" style="flex:none;padding:5px 9px;font-size:12px;border-radius:6px;cursor:pointer;background:transparent;color:var(--text-secondary,#9ca3af);border:1px solid var(--border-color,#333);"><i class="fas fa-rotate-right"></i></button>`
+      : "";
+    const reset = (onLog && selectedIsDb())
+      ? `<button data-action="resetdb" title="Wipe this database + reseed (fixes a broken/foreign DB)" style="flex:none;padding:5px 11px;font-size:12px;border-radius:6px;cursor:pointer;background:transparent;color:#f87171;border:1px solid rgba(248,113,113,.45);display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-rotate-left"></i><span>Reset DB</span></button>`
+      : "";
+    const actions = (refresh || reset)
+      ? `<span style="display:inline-flex;gap:6px;margin-left:8px;">${reset}${refresh}</span>`
+      : "";
+    // One line, always: on a narrow panel the strip scrolls sideways rather than
+    // wrapping into a second row — which is what made this look like two tab bars.
+    return `<span style="display:inline-flex;min-width:0;overflow-x:auto;scrollbar-width:none;">${strip}</span>${actions}`;
+  }
+  function segButtons() { return `<div data-ptab-header style="display:flex;align-items:center;min-width:0;flex:0 1 auto;">${segInner()}</div>`; }
   function activePane() {
     if (progressTab === "steps") return stepsPanel(true);
     if (progressTab === "applogs") return appLogPanel();
@@ -244,32 +302,26 @@
   // via a SWITCHER (App / Postgres / …) — one log at a time, not stacked. A "Reset DB"
   // button wipes + reseeds a broken/foreign database.
   function appLogPanel() {
+    // Source switches and actions live in the ONE header strip now, so the pane is
+    // just the log.
     return `<div style="position:relative;flex:1;min-height:0;display:flex;flex-direction:column;gap:8px;">
-      <div style="display:flex;align-items:center;gap:8px;">
-        <div id="applog-tabs" style="display:flex;gap:5px;flex:1;flex-wrap:wrap;min-width:0;">${appLogTabs()}</div>
-        <button data-action="resetdb" title="Wipe the database + reseed (fixes a broken/foreign DB)" style="flex:none;padding:6px 12px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;background:#dc2626;color:#fff;border:1px solid #dc2626;box-shadow:0 1px 4px rgba(0,0,0,.3);display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-rotate-left"></i><span>Reset DB</span></button>
-        <button data-action="refreshapplog" title="Refresh" style="flex:none;padding:6px 10px;font-size:12px;border-radius:6px;cursor:pointer;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);display:inline-flex;align-items:center;gap:5px;"><i class="fas fa-rotate-right"></i><span>Refresh</span></button>
-      </div>
       <pre id="app-log" style="flex:1;min-height:0;margin:0;overflow:auto;text-align:left;background:var(--background-surface,#141414);border:1px solid var(--border-color,#2a2a2a);border-radius:8px;padding:12px 14px;font-size:12px;line-height:1.55;color:var(--text-color,#cbd5e1);white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${esc(appLogBody())}</pre>
     </div>`;
-  }
-  function appLogTabs() {
-    const tab = (id, label, color) => `<button data-action="alog:${id}" style="padding:4px 12px;border-radius:7px;cursor:pointer;font-size:12px;white-space:nowrap;border:1px solid ${appLogView === id ? color : "var(--border-color,#333)"};background:${appLogView === id ? color : "var(--border-color,#2a2a2a)"};color:${appLogView === id ? "#fff" : "var(--text-color,#e2e8f0)"};font-weight:${appLogView === id ? "600" : "400"};">${esc(label)}</button>`;
-    const cap = (s) => (s || "db").charAt(0).toUpperCase() + (s || "db").slice(1);
-    let html = tab("app", "App", "#7c3aed");
-    // One log tab per enabled companion app (Admin, etc.) — reads its preview-<name>.log.
-    const svcs = (current && current.services) || [];
-    for (const s of svcs) { if (!s.primary && s.enabled) html += tab("svc:" + s.name, cap(s.name), "#7c3aed"); }
-    for (const d of dbLogs) html += tab(d.engine, cap(d.engine), "#059669");
-    return html;
   }
   function appLogBody() {
     if (appLogView === "app" || appLogView.indexOf("svc:") === 0) return appLogText || "Loading the app's runtime log…";
     const d = dbLogs.find((x) => x.engine === appLogView);
     return d ? d.log : "(no log for this database)";
   }
+  let lastSegSig = "";
   function paintAppLog(keepScroll) {
-    const tabs = $("applog-tabs"); if (tabs) tabs.innerHTML = appLogTabs();
+    // Rebuild the header only when the segments or the selection changed — this runs on
+    // a 4s poll and a needless rebuild would drop hover/focus every tick.
+    const sig = segList().map((x) => x.key).join("|") + "#" + activeSegKey();
+    if (sig !== lastSegSig) {
+      lastSegSig = sig;
+      document.querySelectorAll("[data-ptab-header]").forEach((h) => { h.innerHTML = segInner(); });
+    }
     const el = $("app-log");
     if (el) { const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80; el.textContent = appLogBody(); if (!keepScroll || atBottom) el.scrollTop = el.scrollHeight; }
   }
@@ -1043,7 +1095,17 @@
     else if (action === "togglelog") toggleLog();
     else if (action === "refreshapplog") loadAppLog();
     else if (action === "resetdb") doResetDb();
-    else if (action.indexOf("alog:") === 0) { appLogView = action.slice(5); if (appLogView === "app" || appLogView.indexOf("svc:") === 0) loadAppLog(); else paintAppLog(false); }
+    else if (action.indexOf("alog:") === 0) {
+      // A source segment doubles as a pane switch: picking "App"/"Admin"/a database
+      // from Setup or Steps takes you to that log rather than silently changing a
+      // selection on a pane you can't see.
+      appLogView = action.slice(5);
+      const wasElsewhere = progressTab !== "applogs";
+      progressTab = "applogs";
+      if (wasElsewhere) { refreshPanes(); startAppPoll(); }
+      else { document.querySelectorAll("[data-ptab-header]").forEach((h) => { h.innerHTML = segInner(); }); }
+      if (appLogView === "app" || appLogView.indexOf("svc:") === 0) loadAppLog(); else paintAppLog(false);
+    }
     else if (action === "copylog") copyLog();
     else if (action === "screenshot") takeScreenshot(b);
     else if (action === "closeplan") togglePlan();
