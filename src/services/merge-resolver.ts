@@ -46,6 +46,10 @@ export interface ResolveMergeResult {
   files: string[];
   /** One-line account of what was done, for the ticket log and the Git tab. */
   summary: string;
+  /** The resolver's own account — why it conflicted and what it did, per file. Present
+   *  even when the resolution was REJECTED, since that's when you most want to see what
+   *  was attempted. */
+  explanation?: string;
 }
 
 /**
@@ -108,8 +112,17 @@ UN=$(git diff --name-only --diff-filter=U 2>/dev/null)
 [ -n "$UN" ] && { echo "CONFLICTED"; echo "$UN"; } || echo "NO_CONFLICT"`);
 
   if (setup.output.includes("NO_CONFLICT")) {
-    // The merge went through this time (the anchor moved under us). Nothing to resolve.
-    log("The merge applied cleanly on retry — no conflict to resolve.");
+    // Replaying it worked, so there was never a content conflict — the first attempt died
+    // before finishing (an interrupted run leaves "Merging to …" as the last line and
+    // nothing after it), or the anchor moved since. Say which, rather than leaving a
+    // silent success where a failure was reported minutes earlier.
+    log(
+      `Merge succeeded on retry — there was no content conflict.\n\n` +
+      `Why the first attempt didn't land: the merge was started but never completed — ` +
+      `typically the build run was interrupted mid-command, or the target branch moved between ` +
+      `the two attempts. Replaying it against the current ${targetBranch} applied cleanly, so ` +
+      `nothing had to be reconciled and no code was changed to make it work.`
+    );
     const done = await sh(`cd "${projectDir}" && git push origin ${targetBranch} 2>&1 | tail -2 && echo "SHA:$(git rev-parse ${targetBranch})" && git checkout ${featureBranch} 2>/dev/null || true`);
     const sha = done.output.match(/SHA:([a-f0-9]{40})/)?.[1];
     return { resolved: !!sha, sha, files, summary: "Merged cleanly on retry — no conflict resolution needed." };
@@ -141,9 +154,25 @@ UN=$(git diff --name-only --diff-filter=U 2>/dev/null)
     }),
   };
 
+  // Gather WHY this conflicted, deterministically, before the agent gets involved: where
+  // the branches diverged and which commits on each side touched each file. Grounding the
+  // explanation in real history beats letting a model narrate from the markers alone.
+  const shq = (f: string) => `'${f.replace(/'/g, `'\\''`)}'`;
+  const ctx = await sh(`
+cd "${projectDir}"
+MB=$(git merge-base ${targetBranch} ${featureBranch} 2>/dev/null)
+echo "MERGE_BASE:$MB $(git log -1 --format='%cr' "$MB" 2>/dev/null)"
+for f in ${files.map(shq).join(" ")}; do
+  echo "FILE:$f"
+  echo "  hunks: $(grep -c '^<<<<<<< ' "$f" 2>/dev/null || echo '?')"
+  echo "  on ${targetBranch}:"; git log --format='    %h %s' "$MB..${targetBranch}" -- "$f" 2>/dev/null | head -4
+  echo "  on ${featureBranch}:"; git log --format='    %h %s' "$MB..${featureBranch}" -- "$f" 2>/dev/null | head -4
+done`, 60_000);
+  const conflictContext = ctx.output.slice(0, 4000);
+
   const fileList = files.map((f) => `  - ${f}`).join("\n");
   log(`Handing the conflict to the AI resolver…`);
-  await generateText({
+  const run = await generateText({
     model,
     tools,
     stopWhen: stepCountIs(30),
@@ -161,15 +190,25 @@ UN=$(git diff --name-only --diff-filter=U 2>/dev/null)
       `registered a service, added a using, or appended a route both need their line in the result.\n` +
       `- Remove every \`<<<<<<<\`, \`=======\` and \`>>>>>>>\` marker. Leave the file syntactically valid.\n` +
       `- Do not "fix" anything unrelated to the conflict, and do not delete code you don't understand.\n\n` +
-      `When every conflicting file is resolved, reply with one short line naming what you did.`,
+      `WHEN YOU ARE DONE, your final reply is an explanation a developer will read in the ticket log ` +
+      `weeks from now, with no other context. Use exactly this shape, plain text, no preamble:\n\n` +
+      `Why it conflicted\n` +
+      `<1-3 sentences: what each side changed and why git couldn't order them. Name the real things — ` +
+      `"both branches registered a service in Program.cs", not "the same lines changed".>\n\n` +
+      `What I did\n` +
+      `- <file>: <what you kept from each side, and anything you deliberately dropped and why>\n\n` +
+      `Keep it short and concrete. If you were unsure about a choice, say so on a final "Worth checking:" line.`,
     prompt:
       `Resolve the conflicts from merging \`${featureBranch}\` into \`${targetBranch}\`.\n\n` +
       `Conflicting files:\n${fileList}\n\n` +
-      `Edit them so the merged result keeps what both branches intended, then stop.`,
+      `History behind the conflict (where the branches diverged, and what each side did to each file):\n` +
+      `${conflictContext}\n\n` +
+      `Edit them so the merged result keeps what both branches intended, then explain as instructed.`,
   }).catch((e) => {
     log(`Resolver agent errored: ${(e as Error).message?.slice(0, 160)}`);
     return null;
   });
+  const explanation = (run?.text ?? "").trim();
 
   // ── Our gate. The agent's opinion that it's done counts for nothing. ─────────
   log("Checking the resolution…");
@@ -185,9 +224,10 @@ echo "CHECK_DONE"`);
 
   if (check.output.includes("STILL_UNMERGED") || check.output.includes("MARKERS_REMAIN")) {
     const why = check.output.includes("MARKERS_REMAIN") ? "conflict markers are still in the tree" : "files are still unmerged";
-    log(`Resolution rejected — ${why}. Aborting the merge and leaving the branch untouched.`);
+    log(`Resolution REJECTED — ${why}. The merge is aborted; the branch is exactly as it was.`);
+    if (explanation) log(`What the resolver attempted (rejected, not applied):\n\n${explanation}`);
     await sh(`cd "${projectDir}" && git merge --abort 2>/dev/null; git checkout ${featureBranch} 2>/dev/null || true`);
-    return { resolved: false, files, summary: `The AI resolver did not finish the merge (${why}) — needs a human.` };
+    return { resolved: false, files, explanation, summary: `The AI resolver did not finish the merge (${why}) — needs a human.` };
   }
 
   // Optional build gate: a resolution that doesn't compile is worse than no resolution,
@@ -196,9 +236,11 @@ echo "CHECK_DONE"`);
     log(`Verifying the resolved merge builds: ${verifyCmd}`);
     const built = await sh(`cd "${projectDir}" && ${verifyCmd} 2>&1 | tail -30`, 1_800_000);
     if (built.exitCode !== 0) {
-      log(`Resolved merge does NOT build (exit ${built.exitCode}) — aborting.`);
+      log(`Resolution REJECTED — the merged result does not build (exit ${built.exitCode}). The merge is aborted; the branch is exactly as it was.`);
+      if (explanation) log(`What the resolver attempted (rejected, not applied):\n\n${explanation}`);
+      log(`Build output:\n${built.output.slice(-800)}`);
       await sh(`cd "${projectDir}" && git merge --abort 2>/dev/null; git checkout ${featureBranch} 2>/dev/null || true`);
-      return { resolved: false, files, summary: `The AI resolved the conflicts but the result didn't build — needs a human.\n${built.output.slice(-600)}` };
+      return { resolved: false, files, explanation, summary: `The AI resolved the conflicts but the result didn't build — needs a human.\n${built.output.slice(-600)}` };
     }
     log("Resolved merge builds ✓");
   }
@@ -220,8 +262,15 @@ git checkout ${featureBranch} 2>/dev/null || true`, 180_000);
   }
 
   const summary = `AI-resolved ${files.length} conflicting file(s) merging into ${targetBranch}: ${files.join(", ")}${verifyCmd ? " (build verified)" : ""}.`;
-  log(summary);
-  return { resolved: true, sha, files, summary };
+  // The explainer is the point of all this: months from now the ticket log should say why
+  // the merge failed and what was changed, not just that something happened.
+  log(
+    `Merge conflict resolved — ${files.length} file(s) into ${targetBranch}` +
+    `${verifyCmd ? " (build verified)" : " (no build command configured — NOT build-verified)"}\n\n` +
+    (explanation || "(the resolver gave no explanation)") +
+    `\n\nMerge commit ${sha.slice(0, 7)}. Review the diff before approving.`
+  );
+  return { resolved: true, sha, files, summary, explanation };
 }
 
 /**
