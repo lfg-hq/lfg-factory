@@ -2288,6 +2288,38 @@ RULES: source-code edits follow the CODE CHANGES policy above (allowed only on a
   return await summarizePreviewRun(driver.model, instruction, projectId, false);
 }
 
+/**
+ * Park uncommitted work before a hard reset, keeping exactly ONE autostash per context.
+ *
+ * `-u` is the point: without it, NEW files aren't stashed, and the `git clean -fd` that
+ * follows every reset deletes them outright — so a source file the preview agent wrote
+ * but didn't commit was gone for good. (`-u` takes untracked files only; ignored ones —
+ * .env, node_modules, bin/obj — are left alone, which is what we want. That needs `-a`.)
+ *
+ * The single-entry cap is deliberate. Uncommitted changes in a sandbox are throwaway
+ * fixups to make the app run here (connection-string repoints and the like, re-applied
+ * from the saved profile on every run), so this is a one-deep undo, not an archive —
+ * stashes must not pile up on a long-lived box. Older entries for the same context, and
+ * any from the previous naming scheme, are dropped.
+ */
+function autostash(dir: string, tag: string): string {
+  const t = `lfg-autostash:${tag}`;
+  return `
+git -C "${dir}" stash push -u -m "${t}" >/dev/null 2>&1 || true
+# Keep only the newest entry for this context (index 0 is newest, so drop from the tail),
+# and clear out any left by the older single-name scheme.
+while [ "$(git -C "${dir}" stash list 2>/dev/null | grep -cF "${t}")" -gt 1 ]; do
+  _old=$(git -C "${dir}" stash list 2>/dev/null | grep -F "${t}" | tail -1 | cut -d: -f1)
+  [ -n "$_old" ] || break
+  git -C "${dir}" stash drop "$_old" >/dev/null 2>&1 || break
+done
+while git -C "${dir}" stash list 2>/dev/null | grep -qF "lfg-preview-autostash"; do
+  _leg=$(git -C "${dir}" stash list 2>/dev/null | grep -F "lfg-preview-autostash" | tail -1 | cut -d: -f1)
+  [ -n "$_leg" ] || break
+  git -C "${dir}" stash drop "$_leg" >/dev/null 2>&1 || break
+done`.trim();
+}
+
 // ── Public API ───────────────────────────────────────────────────────────────
 export interface SetupOptions { userId: string; branch?: string; rebuildManifest?: boolean; ticketId?: string; conversationId?: string | null }
 
@@ -3387,7 +3419,7 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
 cd ${PROJECT_DIR} 2>/dev/null || { echo NO_MAIN; exit 0; }
 git remote set-url origin "${auth.authUrl}" 2>/dev/null
 fuser -k ${manifest.port}/tcp 2>/dev/null; pkill -f ':${manifest.port}' 2>/dev/null; sleep 1
-git stash push -m lfg-preview-autostash 2>&1 | tail -1
+${autostash(PROJECT_DIR, "checkout")}
 git fetch --no-tags --force origin "+refs/heads/${remoteBranch}:refs/remotes/origin/${remoteBranch}" 2>&1 | tail -3
 git checkout -B "${remoteBranch}" "origin/${remoteBranch}" 2>&1 | tail -3
 # Nuke stale build output so Release recompiles the Razor views (see worktree path).
@@ -3443,6 +3475,9 @@ done
 git worktree prune 2>/dev/null
 if [ -e "${runDir}/.git" ]; then
   # Existing worktree → hard-reset to the LATEST pushed commit (picks up new changes).
+  # Park anything uncommitted first: this reset+clean is the one place that used to
+  # discard a worktree's work silently, with no stash net at all.
+${autostash(runDir, remoteBranch).split("\n").map((l) => "  " + l).join("\n")}
   git -C "${runDir}" -c http.version=HTTP/1.1 -c pack.threads=1 fetch --no-tags --force --depth=1 origin "+refs/heads/${remoteBranch}:refs/remotes/origin/${remoteBranch}" 2>&1 | tail -1
   git -C "${runDir}" reset --hard "origin/${remoteBranch}" 2>&1 | tail -2
   git -C "${runDir}" clean -fd 2>&1 | tail -1
@@ -3532,7 +3567,7 @@ sleep 2; df -h /data 2>/dev/null | tail -1`, 120_000).catch(() => {});
 cd ${PROJECT_DIR} 2>/dev/null || { echo NO_MAIN; exit 0; }
 ${authUrl ? `git remote set-url origin "${authUrl}" 2>/dev/null` : ""}
 fuser -k ${manifest.port}/tcp 2>/dev/null; pkill -f ':${manifest.port}' 2>/dev/null; sleep 1
-git stash push -m lfg-preview-autostash 2>&1 | tail -1
+${autostash(PROJECT_DIR, "default")}
 git fetch --no-tags --force origin 2>&1 | tail -2
 git remote set-head origin -a >/dev/null 2>&1
 DEF=$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null | sed 's@^origin/@@'); [ -z "$DEF" ] && DEF=main
