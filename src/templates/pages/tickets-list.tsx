@@ -1553,14 +1553,19 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
   function scrollActionsBottom() {
     var area = document.getElementById('actions-log-area');
     if (!area) return;
-    var body = area.closest('.drawer-body');
+    // Scroll EVERY scrollable ancestor, not just the two we guessed: which element
+    // actually owns the overflow depends on the pane, and picking the wrong one leaves
+    // you looking at the middle of the log. Retried for ~1.5s because the agent card
+    // renders markdown after the rows land and grows the content under us.
     var go = function() {
-      area.scrollTop = area.scrollHeight;
-      if (body) body.scrollTop = body.scrollHeight;
+      var el = area;
+      while (el && el !== document.body) {
+        if (el.scrollHeight > el.clientHeight + 4) el.scrollTop = el.scrollHeight;
+        el = el.parentElement;
+      }
     };
     requestAnimationFrame(function() { requestAnimationFrame(go); });
-    setTimeout(go, 60);
-    setTimeout(go, 250);
+    [60, 200, 500, 900, 1500].forEach(function(ms) { setTimeout(go, ms); });
   }
 
   async function loadExecutionLogs() {
@@ -1841,6 +1846,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
   var _gitStatusColors = { pending:'#6b7280', pr_open:'#3b82f6', pushed:'#3b82f6', merged:'#34d399', failed:'#f87171', not_pushed:'#f87171', conflict:'#f59e0b', merged_with_conflicts:'#34d399' };
   var _gitRepo = null;   // { provider, cloneUrl, webUrl, webIdeUrl, hasRepo } for the ticket's project
   var _gitBranch = '';   // this ticket's feature branch
+  var _gitTicket = null; // last loaded ticket row (for the PR block)
   var _gitStatusLabels = {
     not_pushed:'Not pushed',
     pushed:'Pushed (not merged)',
@@ -1859,6 +1865,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     const ticket = resp.ticket;
 
     const branch = ticket.githubBranch || ticket.github_branch || '';
+    _gitTicket = ticket;
     _gitRepo = resp.repo || null;
     _gitBranch = branch;
     const sha = ticket.githubCommitSha || ticket.github_commit_sha || '';
@@ -1933,6 +1940,28 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     }
     html += '</div>';
 
+    // Raise a PR/MR. Sits with the other actions rather than in a dialog: choosing a
+    // target and leaving a note for the reviewer are the whole interaction, and the
+    // description is written for you by an agent that reads the diff against the ticket.
+    var existingPr = (_gitTicket && (_gitTicket.githubPrUrl || _gitTicket.github_pr_url)) || '';
+    var prVerb = (_gitRepo && _gitRepo.provider === 'gitlab') ? 'merge request' : 'pull request';
+    html += '<div id="git-pr-wrap" style="margin-top:.9rem;padding:.75rem;border:1px solid var(--border-color,#2a2a2a);border-radius:8px;">'
+      + '<div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.6rem;">'
+      + '<span class="git-label" style="margin:0;">Raise a ' + prVerb + '</span>'
+      + (existingPr ? '<a href="' + escHtml(existingPr) + '" target="_blank" rel="noopener" style="font-size:.75rem;color:#a78bfa;">already open \u2197</a>' : '')
+      + '</div>'
+      + '<div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.6rem;">'
+      + '<span style="font-size:.75rem;color:var(--text-secondary,#9ca3af);">into</span>'
+      + '<select id="git-pr-target" class="filter-select" style="font-size:12px;padding:4px 8px;max-width:280px;"></select>'
+      + '</div>'
+      + '<textarea id="git-pr-comment" rows="2" placeholder="Anything the reviewer should know? (optional)" '
+      + 'style="width:100%;box-sizing:border-box;padding:.5rem;border-radius:6px;font-size:.8rem;resize:vertical;'
+      + 'background:var(--input-bg,rgba(127,127,127,.08));color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);"></textarea>'
+      + '<div style="display:flex;align-items:center;gap:.6rem;margin-top:.6rem;flex-wrap:wrap;">'
+      + '<button onclick="raisePr()" id="git-pr-btn" class="git-action-btn"><i class="fas fa-code-pull-request"></i> Raise ' + prVerb + '</button>'
+      + '<span style="font-size:.72rem;color:var(--text-secondary,#9ca3af);">The agent reads the diff against this ticket and its documents, then writes the description.</span>'
+      + '</div></div>';
+
     html += '</div>'; // /git-info-grid
 
     // Branch diff viewer: this ticket's branch vs a selectable base. The default is the
@@ -1969,6 +1998,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       var cur = data.base || 'main';
       sel.innerHTML = data.branches.map(function(b){ return '<option' + (b === cur ? ' selected' : '') + '>' + escHtml(b) + '</option>'; }).join('');
     }
+    // Same branch list feeds the PR target picker — one fetch, both selectors.
+    _fillPrTargets(data.branches, _ticketAnchorBranch);
     if (data.error) { body.innerHTML = '<div class="git-empty">' + escHtml(data.error) + '</div>'; return; }
     // Commit list (multiple commits — e.g. build + chat follow-ups). Shown above
     // the diff so you see every commit on the branch, not just the latest SHA.
@@ -2148,6 +2179,47 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     _lastLogContent = '';
     _lastFailureReason = '';
   }
+
+  // ── Raise a PR/MR (Git tab) ──────────────────────────────────────
+  // The target list is the same set of remote branches the diff selector offers, so you
+  // can raise against the epic branch (the default — it's where this ticket merges) or
+  // against main for a wider review, without typing a branch name.
+  function _fillPrTargets(branches, preferred) {
+    var sel = document.getElementById('git-pr-target');
+    if (!sel) return;
+    var list = (branches || []).filter(function(b){ return b && b !== _gitBranch; });
+    if (!list.length) { list = [preferred || 'main']; }
+    var want = preferred || _ticketAnchorBranch || 'main';
+    if (list.indexOf(want) < 0) list.unshift(want);
+    sel.innerHTML = list.map(function(b){
+      return '<option' + (b === want ? ' selected' : '') + '>' + escHtml(b) + '</option>';
+    }).join('');
+  }
+
+  async function raisePr() {
+    if (!_currentTicketId) return;
+    var btn = document.getElementById('git-pr-btn');
+    var sel = document.getElementById('git-pr-target');
+    var note = document.getElementById('git-pr-comment');
+    var target = (sel && sel.value) || _ticketAnchorBranch || 'main';
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Analysing the change\u2026'; }
+    try {
+      var r = await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + _currentTicketId + '/git/pr', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetBranch: target, comment: (note && note.value) || '' })
+      });
+      var j = await r.json();
+      if (!r.ok) { alert(j.error || 'Could not raise it.'); }
+      else {
+        if (note) note.value = '';
+        alert('Opened: ' + (j.title || '') + _NL + _NL + (j.prUrl || ''));
+        if (j.prUrl) window.open(j.prUrl, '_blank');
+        loadGitInfo();
+      }
+    } catch (e) { alert('Failed: ' + e.message); }
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-code-pull-request"></i> Raise request'; }
+  }
+  window.raisePr = raisePr;
 
   // ── Open in editor (Git tab) ─────────────────────────────────────
   var _gitToastTimer = null;

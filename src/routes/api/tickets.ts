@@ -13,6 +13,8 @@ import { getProjectAccess, requirePermission } from "../../auth/project-access.t
 import { nextTicketKey } from "../../utils/ticket-keys.ts";
 import { notify } from "../../services/notify.ts";
 import { addLog as addTicketLog } from "../../services/ticket-logs.ts";
+import { modelSelections } from "../../db/schema/chat.ts";
+import { llmApiKeys } from "../../db/schema/users.ts";
 import type { auth } from "../../auth/index.ts";
 
 type AuthEnv = {
@@ -1372,3 +1374,132 @@ ticketsApi.delete("/:projectId/tickets/:ticketId/addenda/:addendumId", async (c)
 });
 
 export default ticketsApi;
+
+/**
+ * Find a live sandbox to run git against for this ticket.
+ *
+ * Prefers the ticket's OWN build VM — it holds this ticket's tree and warm toolchain —
+ * and WAKES it first, because these VMs idle-sleep after a build and exec against a
+ * sleeping workspace returns exit 2 with no output at all. Only when it can't be woken
+ * do we fall back to the project's long-lived preview sandbox, which is fine for anything
+ * that works from the remote (merging, diffing, describing a change) but is NOT this
+ * ticket's working tree — hence `isOwnTree`.
+ */
+async function resolveTicketWorkspace(
+  internalProjectId: string,
+  ticketId: string,
+): Promise<{ workspaceId: string; isOwnTree: boolean } | { error: string }> {
+  const { execOnWorkspace, setNoSleep } = await import("../../services/mags.ts");
+  const alive = async (ws: string) =>
+    execOnWorkspace(ws, "echo __alive__", { timeout: 30_000 })
+      .then((r) => /__alive__/.test(r?.output ?? "")).catch(() => false);
+
+  const [sandbox] = await db.select().from(sandboxes)
+    .where(and(eq(sandboxes.ticketId, ticketId), eq(sandboxes.workspaceType, "ticket"))).limit(1);
+
+  if (sandbox?.magsWorkspaceId) {
+    await setNoSleep(sandbox.magsWorkspaceId, true).catch(() => {});
+    let ok = await alive(sandbox.magsWorkspaceId);
+    if (!ok) { await new Promise((r) => setTimeout(r, 4000)); ok = await alive(sandbox.magsWorkspaceId); }
+    if (ok) return { workspaceId: sandbox.magsWorkspaceId, isOwnTree: true };
+  }
+
+  const { envWorkspaceId } = await import("../../services/project-sandbox.ts");
+  const previewWs = await envWorkspaceId(internalProjectId).catch(() => null);
+  if (previewWs && await alive(previewWs)) return { workspaceId: previewWs, isOwnTree: false };
+
+  return {
+    error: "No live sandbox for this ticket: its build VM couldn't be woken and there's no running preview sandbox. Open the Preview tab and run the default branch, then try again — or rebuild the ticket.",
+  };
+}
+
+// ── POST /:projectId/tickets/:ticketId/git/pr ───────────────────────
+// Raise a PR/MR for this ticket's branch, with a description an agent writes by reading
+// the diff against the ticket's requirements and the epic's documents.
+ticketsApi.post("/:projectId/tickets/:ticketId/git/pr", async (c) => {
+  const user = c.get("user");
+  const { projectId, ticketId } = c.req.param();
+
+  const access = await getProjectAccess(projectId!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  const project = access.project;
+
+  const [ticket] = await db.select().from(projectTickets)
+    .where(and(eq(projectTickets.id, ticketId!), eq(projectTickets.projectId, project.id)));
+  if (!ticket) return c.json({ error: "Ticket not found" }, 404);
+  if (!ticket.githubBranch) return c.json({ error: "This ticket has no branch yet — build it first." }, 400);
+
+  const body = await c.req.json<{ targetBranch?: string; comment?: string }>().catch(() => ({} as { targetBranch?: string; comment?: string }));
+
+  // Provider-aware: the existing PR path assumed GitHub, which silently excluded every
+  // GitLab project from raising one at all.
+  const provider = (/gitlab/i.test(project.repoUrl ?? "") || project.repoProvider === "gitlab") ? "gitlab" as const : "github" as const;
+  const owner = project.repoOwner ?? "";
+  const repo = (project.repoName ?? "").replace(/\.git$/, "");
+  if (!owner || !repo) return c.json({ error: "This project has no repository configured." }, 400);
+
+  let token = "";
+  if (provider === "gitlab") {
+    const { getValidGitlabToken } = await import("../../services/gitlab-token.ts");
+    token = (await getValidGitlabToken(user.id)) ?? "";
+    if (!token) return c.json({ error: "GitLab isn't connected — connect it in Settings to raise a merge request." }, 400);
+  } else {
+    const [gh] = await db.select().from(githubTokens).where(eq(githubTokens.userId, user.id)).limit(1);
+    token = gh?.accessToken ?? "";
+    if (!token) return c.json({ error: "GitHub isn't connected — connect it in Settings to raise a pull request." }, 400);
+  }
+
+  // Default to where this ticket actually merges (its epic branch), but honour an
+  // explicit choice — raising against main for review is a legitimate thing to want.
+  const { resolveTicketAnchor } = await import("../../services/epics.ts");
+  const { anchorBranch } = await resolveTicketAnchor(ticket);
+  const targetBranch = (body.targetBranch || anchorBranch || "main").trim();
+  const featureBranch = ticket.githubBranch;
+  if (targetBranch === featureBranch) {
+    return c.json({ error: "The target branch is the same as this ticket's branch — pick a different target." }, 400);
+  }
+
+  const ws = await resolveTicketWorkspace(project.id, ticketId!);
+  if ("error" in ws) return c.json({ error: ws.error }, 409);
+
+  try {
+    const { authorPullRequest } = await import("../../services/pr-author.ts");
+    const { openChangeRequest } = await import("../../services/git.ts");
+    const [sel] = await db.select().from(modelSelections).where(eq(modelSelections.userId, user.id));
+    const [keys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, user.id));
+    const { getModel, DEFAULT_MODEL_KEY } = await import("../../ai/provider.ts");
+    const model = getModel(sel?.selectedModel ?? DEFAULT_MODEL_KEY, {
+      anthropic: keys?.anthropicApiKey ?? undefined, openai: keys?.openaiApiKey ?? undefined,
+      google: keys?.googleApiKey ?? undefined, kimi: keys?.kimiApiKey ?? undefined,
+      deepseek: keys?.deepseekApiKey ?? undefined, glm: keys?.glmApiKey ?? undefined,
+    }, { allowEnvFallback: true });
+
+    await addTicketLog(ticketId!, `Raising a ${provider === "gitlab" ? "merge" : "pull"} request: ${featureBranch} → ${targetBranch}`, "command", user.id).catch(() => {});
+    const { title, body: prBody } = await authorPullRequest({
+      workspaceId: ws.workspaceId,
+      projectDir: "/data/project",
+      projectId: project.id,
+      ticketId: ticketId!,
+      featureBranch,
+      targetBranch,
+      comment: body.comment,
+      model,
+      onLog: (line) => { addTicketLog(ticketId!, line, "command", user.id).catch(() => {}); },
+    });
+
+    const { prNumber, prUrl } = await openChangeRequest({
+      provider, owner, repo, token, featureBranch, targetBranch, title, body: prBody,
+    });
+
+    await db.update(projectTickets)
+      .set({ githubPrUrl: prUrl, githubPrNumber: prNumber, updatedAt: new Date() })
+      .where(eq(projectTickets.id, ticketId!));
+    await addTicketLog(ticketId!, `Opened ${provider === "gitlab" ? "MR" : "PR"} !${prNumber}: ${title}\n${prUrl}`, "command", user.id).catch(() => {});
+
+    return c.json({ prUrl, prNumber, title, targetBranch });
+  } catch (err) {
+    const msg = (err as Error).message ?? String(err);
+    await addTicketLog(ticketId!, `Raising the request failed: ${msg.slice(0, 300)}`, "cli_error", user.id).catch(() => {});
+    return c.json({ error: `Couldn't raise it: ${msg.slice(0, 300)}` }, 500);
+  }
+});

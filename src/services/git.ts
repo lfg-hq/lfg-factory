@@ -343,7 +343,13 @@ echo "COMMIT_SHA:$SHA"
         `cd "${projectDir}" 2>&1 || echo "NO_DIR ${projectDir}"; echo "--- pwd ---"; pwd 2>&1; echo "--- .git ---"; ls -la .git 2>&1 | head -5; echo "--- status ---"; git status 2>&1 | head -8; echo "--- remote ---"; git remote -v 2>&1; echo "--- head ---"; git rev-parse --abbrev-ref HEAD 2>&1`,
         { timeout: 30_000 }
       ).catch((e) => ({ output: `diagnostic exec failed: ${(e as Error).message}`, exitCode: 1 }));
-      diag = `(no output from commit script — exit ${result.exitCode}). Diagnostics:\n${d.output.slice(0, 1200)}`;
+      // A trivial `pwd; ls` returning NOTHING as well means the commands never reached a
+      // shell at all — the workspace is asleep or gone, and exec answers exit 2 with an
+      // empty body. Naming that beats "(no output from commit script)" followed by an
+      // empty "Diagnostics:", which reads like the tool is broken rather than the VM.
+      diag = d.output.trim()
+        ? `(no output from commit script — exit ${result.exitCode}). Diagnostics:\n${d.output.slice(0, 1200)}`
+        : `The sandbox didn't respond — a diagnostic command returned nothing either, so this VM is asleep or no longer exists (exec answered exit ${result.exitCode} with an empty body). Rebuild the ticket, or run the default branch in the Preview tab so there's a live sandbox to work from.`;
     }
     throw new Error(`Commit/push failed:\n${diag}`);
   }
@@ -844,4 +850,64 @@ function ghHeaders(token: string): Record<string, string> {
 
 export function featureBranchName(ticketId: string): string {
   return `feature/ticket-${ticketId}`;
+}
+
+/**
+ * Open a pull request / merge request, whichever the project's host calls it.
+ *
+ * createPullRequest above is GitHub-only, which silently excluded every GitLab project
+ * from the one workflow that most needs a provider-neutral path. Same contract for both:
+ * an existing open request for the same head→base is RETURNED rather than erroring, so
+ * raising twice is idempotent and lands you back on the same page.
+ */
+export async function openChangeRequest(opts: {
+  provider: RepoProvider;
+  owner: string;
+  repo: string;
+  token: string;
+  featureBranch: string;
+  targetBranch: string;
+  title: string;
+  body?: string;
+}): Promise<GitPrResult> {
+  const { provider, owner, repo, token, featureBranch, targetBranch, title } = opts;
+  const body = opts.body ?? "";
+
+  if (provider === "gitlab") {
+    const base = `https://gitlab.com/api/v4/projects/${glProjectPath(owner, repo)}/merge_requests`;
+    const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+    const resp = await fetch(base, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        source_branch: featureBranch,
+        target_branch: targetBranch,
+        title,
+        description: body,
+        remove_source_branch: false,
+      }),
+    });
+    if (resp.ok) {
+      const mr = await resp.json() as { iid: number; web_url: string };
+      return { prNumber: mr.iid, prUrl: mr.web_url };
+    }
+    // GitLab 409s when an open MR already exists for this source→target pair.
+    const text = await resp.text();
+    if (resp.status === 409 || /already exists/i.test(text)) {
+      const q = `${base}?state=opened&source_branch=${encodeURIComponent(featureBranch)}&target_branch=${encodeURIComponent(targetBranch)}`;
+      const found = await fetch(q, { headers }).then((r) => r.json()).catch(() => []) as Array<{ iid: number; web_url: string }>;
+      if (found[0]) return { prNumber: found[0].iid, prUrl: found[0].web_url };
+    }
+    throw new Error(`Failed to open merge request: ${text.slice(0, 300)}`);
+  }
+
+  return await createPullRequest({
+    repoOwner: owner,
+    repoName: repo,
+    featureBranch,
+    targetBranch,
+    title,
+    body,
+    githubToken: token,
+  } as GitMergeOptions);
 }
