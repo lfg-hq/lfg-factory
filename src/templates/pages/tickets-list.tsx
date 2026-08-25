@@ -737,9 +737,6 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     <button class="drawer-tab" data-tab="git" onclick="switchDrawerTab('git', this)">
       <i class="fab fa-github"></i> Git
     </button>
-    <button class="drawer-tab" data-tab="addenda" onclick="switchDrawerTab('addenda', this)">
-      <i class="fas fa-plus-circle"></i> Addenda <span id="addenda-count" class="addenda-count" style="display:none;"></span>
-    </button>
     <button class="drawer-tab" data-tab="logs" onclick="switchDrawerTab('logs', this)">
       <i class="fas fa-file-alt"></i> Server Logs
     </button>
@@ -864,19 +861,6 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     <div class="drawer-tab-content" id="tab-git">
       <div id="git-info" style="flex:1;overflow-y:auto;padding:1rem;">
         <div class="placeholder-pane"><i class="fab fa-github"></i><p>Loading git info…</p></div>
-      </div>
-    </div>
-
-    <!-- Addenda tab: follow-up change requests that feed the next (re)build -->
-    <div class="drawer-tab-content" id="tab-addenda">
-      <div class="addenda-toolbar">
-        <input id="addendum-input" type="text" placeholder="Request a change or refinement (e.g. make the header sticky)…"
-          onkeydown="if(event.key==='Enter'){submitAddendum();}" />
-        <button onclick="submitAddendum()" class="addenda-add-btn"><i class="fas fa-plus"></i> Add</button>
-      </div>
-      <div class="addenda-hint">Pending addenda are handed to the agent the next time this ticket is built — with the original spec and what got done. Resolved on a successful build.</div>
-      <div id="addenda-list" class="addenda-list">
-        <div class="placeholder-pane"><i class="fas fa-plus-circle"></i><p>No change requests yet</p></div>
       </div>
     </div>
 
@@ -1137,7 +1121,6 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
         var isActive = qs === 'queued' || qs === 'executing';
         // Persistent build-status banner (survives refresh — from the ticket row).
         updateTicketStatusBanner(live);
-        loadAddenda(); // updates the Addenda tab badge with the pending count
         var buildBtn = document.getElementById('drawer-build-btn');
         // While a build is running you can't start another — hide Build entirely and
         // show only Stop (cleaner than a disabled "Building…" button).
@@ -1232,7 +1215,6 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     }
     if (tabId === 'tasks')   loadTasks();
     if (tabId === 'git')     loadGitInfo();
-    if (tabId === 'addenda') loadAddenda();
     if (tabId === 'logs') {
       _serverLogOffset = 0;
       document.getElementById('server-logs-area').innerHTML = '';
@@ -1819,64 +1801,6 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       loadTasks();
     } catch(e) { console.error('deleteTask', e); }
   }
-  // ── Ticket Addenda (follow-up change requests) ──────────────────────
-  async function loadAddenda() {
-    if (!_currentTicketId) return;
-    var list = document.getElementById('addenda-list');
-    try {
-      var r = await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + _currentTicketId + '/addenda');
-      var j = await r.json();
-      _renderAddenda((j && j.addenda) || []);
-    } catch (e) { if (list) list.innerHTML = '<div class="placeholder-pane"><p>Failed to load addenda.</p></div>'; }
-  }
-  function _renderAddenda(items) {
-    var list = document.getElementById('addenda-list');
-    var badge = document.getElementById('addenda-count');
-    if (!list) return;
-    var pending = items.filter(function(a){ return a.status === 'pending'; }).length;
-    if (badge) { if (pending > 0) { badge.style.display = ''; badge.textContent = pending; } else { badge.style.display = 'none'; } }
-    if (!items.length) { list.innerHTML = '<div class="placeholder-pane"><i class="fas fa-plus-circle"></i><p>No change requests yet</p></div>'; return; }
-    list.innerHTML = items.map(function(a){
-      var resolved = a.status === 'resolved';
-      var when = fmtLogTime(a.createdAt);
-      return '<div class="addendum-item' + (resolved ? ' resolved' : '') + '">'
-        + '<div class="addendum-text">' + escHtml(a.description || '') + '</div>'
-        + '<div class="addendum-meta">'
-          + '<span class="addendum-status">' + (resolved ? 'Resolved' : 'Pending') + '</span>'
-          + '<span>' + escHtml(when) + '</span>'
-          + (resolved ? '' : '<button class="addendum-act" data-resolve="' + a.id + '">Mark resolved</button>')
-          + '<button class="addendum-act addendum-del" data-del="' + a.id + '">Delete</button>'
-        + '</div>'
-      + '</div>';
-    }).join('');
-    // Delegated actions (avoids inline onclick with quoted ids in this template).
-    list.onclick = function(e){
-      var rb = e.target.closest('[data-resolve]');
-      var dl = e.target.closest('[data-del]');
-      if (rb) resolveAddendum(rb.getAttribute('data-resolve'));
-      else if (dl) deleteAddendum(dl.getAttribute('data-del'));
-    };
-  }
-  async function submitAddendum() {
-    var input = document.getElementById('addendum-input');
-    var v = ((input && input.value) || '').trim();
-    if (!v || !_currentTicketId) return;
-    input.value = '';
-    try {
-      await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + _currentTicketId + '/addenda', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ description: v }) });
-      loadAddenda();
-    } catch (e) { if (typeof toast === 'function') toast('Failed to add: ' + e.message); }
-  }
-  window.submitAddendum = submitAddendum;
-  async function resolveAddendum(id) {
-    try { await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + _currentTicketId + '/addenda/' + id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'resolved' }) }); loadAddenda(); } catch (e) {}
-  }
-  window.resolveAddendum = resolveAddendum;
-  async function deleteAddendum(id) {
-    try { await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + _currentTicketId + '/addenda/' + id, { method: 'DELETE' }); loadAddenda(); } catch (e) {}
-  }
-  window.deleteAddendum = deleteAddendum;
-
   async function loadTasks() {
     if (!_currentTicketId) return;
     try {
