@@ -1082,20 +1082,19 @@ ticketsApi.post("/:projectId/tickets/:ticketId/git/push", async (c) => {
 
   if (!ticket) return c.json({ error: "Ticket not found" }, 404);
 
-  // Get GitHub token
-  const [ghToken] = await db
-    .select()
-    .from(githubTokens)
-    .where(eq(githubTokens.userId, user.id))
-    .limit(1);
-
-  if (!ghToken?.accessToken) return c.json({ error: "GitHub not connected. Connect GitHub in Settings." }, 400);
-
-  // Extract owner/repo
-  const repoUrl = getProjectRepo(project);
-  if (!repoUrl) return c.json({ error: "No GitHub repo configured for this project" }, 400);
-
-  const [, repoOwner, repoName] = repoUrl;
+  // PROVIDER-AWARE. This route demanded a GitHub token and built github.com URLs, so on
+  // a GitLab project the merge fetched from https://github.com/<gitlab-owner>/<repo>.git
+  // and died with "Repository not found". resolveRepoAuth returns the right host, token
+  // and credential username for whichever provider the project is actually on.
+  const { resolveRepoAuth } = await import("../../services/repo-auth.ts");
+  const repoAuth = await resolveRepoAuth(project, user.id).catch(() => null);
+  if (!repoAuth) {
+    return c.json({
+      error: "No repository credentials for this project — connect GitHub or GitLab in Settings.",
+    }, 400);
+  }
+  const repoOwner = repoAuth.owner;
+  const repoName = repoAuth.repo;
 
   // No sandbox row is no longer a dead end: resolveTicketWorkspace looks the row up
   // itself and, failing that, starts the project's sandbox. The one hard requirement is
@@ -1128,8 +1127,9 @@ ticketsApi.post("/:projectId/tickets/:ticketId/git/push", async (c) => {
           projectDir: "/data/project",
           commitMessage: `update: ${ticket.name}`,
           featureBranch,
-          repoUrl: `https://github.com/${repoOwner}/${repoName}.git`,
-          githubToken: ghToken.accessToken,
+          repoUrl: repoAuth.repoUrl,
+          githubToken: repoAuth.token,
+          tokenUser: repoAuth.tokenUser,
         })).sha
       : (ticket.githubCommitSha ?? "");
 
@@ -1154,8 +1154,9 @@ ticketsApi.post("/:projectId/tickets/:ticketId/git/push", async (c) => {
         workspaceId: workWorkspaceId,
         projectDir: "/data/project",
         featureBranch,
-        repoUrl: `https://github.com/${repoOwner}/${repoName}.git`,
-        githubToken: ghToken.accessToken,
+        repoUrl: repoAuth.repoUrl,
+        githubToken: repoAuth.token,
+        tokenUser: repoAuth.tokenUser,
         targetBranch: anchorBranch,
         baseBranch,
       });
@@ -1186,7 +1187,7 @@ ticketsApi.post("/:projectId/tickets/:ticketId/git/push", async (c) => {
           featureBranch,
           targetBranch: anchorBranch,
           files: mergeErr.files,
-          authUrl: `https://x-access-token:${ghToken.accessToken}@github.com/${repoOwner}/${repoName}.git`,
+          authUrl: repoAuth.authUrl,
           onLog: (line) => { addTicketLog(ticketId, line, "command", user.id).catch(() => {}); },
         }).catch((e) => { console.warn("[tickets] merge resolver failed:", e); return null; });
 
