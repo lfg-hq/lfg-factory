@@ -134,7 +134,18 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
   <script src="/public/js/theme-switcher.js"></script>
   <style>
-    .epics-page { height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+    /* .sidebar is position:fixed (sidebar.css), so it's OUT OF FLOW — being a flex
+       sibling of it offsets this page by nothing, and the content renders underneath the
+       rail with its left edge clipped. Every full-page view compensates with an explicit
+       margin; .tickets-page does exactly this. The preload variant matches the class the
+       inline <head> script sets, so a minimized rail doesn't flash a 260px indent. */
+    .epics-page {
+      flex: 1; height: 100vh; overflow: hidden; display: flex; flex-direction: column;
+      margin-left: 260px;
+    }
+    .app-container.sidebar-minimized .epics-page { margin-left: 60px; }
+    .sidebar-minimized-preload .epics-page,
+    .sidebar-minimized-init .epics-page { margin-left: 60px !important; transition: none !important; }
     .epics-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 1.25rem 1.5rem 3rem; }
     .epic-card {
       border: 1px solid var(--border-color);

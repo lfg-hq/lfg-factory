@@ -1106,28 +1106,82 @@ ticketsApi.post("/:projectId/tickets/:ticketId/git/push", async (c) => {
     return c.json({ error: "No active sandbox. Build the ticket first." }, 400);
   }
 
+  // The sandbox ROW outlives the VM: an isolated build destroys its throwaway workspace
+  // when the ticket finishes, so a ticket built days ago points at a workspace that no
+  // longer exists. Exec against it returns exit 2 with no output at all, which surfaced
+  // as "(no output from commit script — exit 2). Diagnostics:" with nothing after it.
+  // Probe first, and fall back to the project's long-lived PREVIEW sandbox — mergeToAnchor
+  // fetches from the remote, so it only needs SOME checkout of the repo, not the original
+  // build tree. Nothing is left to commit in that case (the build already pushed the
+  // branch), so we merge without re-committing.
+  // ALWAYS prefer the ticket's own build VM: it holds this ticket's working tree, its
+  // warm toolchain and package caches, and is the box the work actually happened on.
+  // It idle-sleeps after a build ("kept warm for resume; removed when the ticket is
+  // approved"), so try WAKING it before concluding anything — a sleeping VM is not a
+  // dead one, and falling back on a sleeper would needlessly leave its context behind.
+  const { execOnWorkspace, setNoSleep } = await import("../../services/mags.ts");
+  await setNoSleep(sandbox.magsWorkspaceId, true).catch(() => {});
+  let buildVmAlive = await execOnWorkspace(sandbox.magsWorkspaceId, "echo __alive__", { timeout: 30_000 })
+    .then((r) => /__alive__/.test(r?.output ?? ""))
+    .catch(() => false);
+  if (!buildVmAlive) {
+    // One retry: waking is not instant, and the first exec after a wake can land early.
+    await new Promise((r) => setTimeout(r, 4000));
+    buildVmAlive = await execOnWorkspace(sandbox.magsWorkspaceId, "echo __alive__", { timeout: 30_000 })
+      .then((r) => /__alive__/.test(r?.output ?? ""))
+      .catch(() => false);
+  }
+  let workWorkspaceId = sandbox.magsWorkspaceId;
+  let canCommit = true;
+  if (!buildVmAlive) {
+    const { envWorkspaceId } = await import("../../services/project-sandbox.ts");
+    const previewWs = await envWorkspaceId(project.id).catch(() => null);
+    const previewAlive = previewWs
+      ? await execOnWorkspace(previewWs, "echo __alive__", { timeout: 15_000 })
+          .then((r) => /__alive__/.test(r?.output ?? "")).catch(() => false)
+      : false;
+    if (!previewAlive) {
+      return c.json({
+        error: `This ticket's build sandbox couldn't be woken and there's no running preview sandbox to merge from. Open the Preview tab and run the default branch, then try again — or rebuild the ticket.`,
+      }, 409);
+    }
+    // Falling back costs nothing for a MERGE: mergeToAnchor fetches both branches from
+    // the remote and hard-resets to the anchor, so it needs a clone and credentials, not
+    // this ticket's tree. What we lose is the ability to commit uncommitted work — and
+    // there is none to lose, because the build already pushed the branch.
+    workWorkspaceId = previewWs!;
+    canCommit = false; // its /data/project is the default-branch checkout, not this ticket's tree
+  }
+
   const { commitAndPush, createPullRequest } = await import("../../services/git.ts");
 
   const featureBranch = ticket.githubBranch ?? `feature/ticket-${ticketId}`;
 
   try {
-    const { sha } = await commitAndPush({
-      workspaceId: sandbox.magsWorkspaceId,
-      projectDir: "/data/project",
-      commitMessage: `update: ${ticket.name}`,
-      featureBranch,
-      repoUrl: `https://github.com/${repoOwner}/${repoName}.git`,
-      githubToken: ghToken.accessToken,
-    });
+    // Only commit when we're in the ticket's OWN build tree. On the preview-sandbox
+    // fallback there is nothing of this ticket's to commit — the branch is already on
+    // the remote — so keep the recorded sha and go straight to the merge.
+    const sha = canCommit
+      ? (await commitAndPush({
+          workspaceId: workWorkspaceId,
+          projectDir: "/data/project",
+          commitMessage: `update: ${ticket.name}`,
+          featureBranch,
+          repoUrl: `https://github.com/${repoOwner}/${repoName}.git`,
+          githubToken: ghToken.accessToken,
+        })).sha
+      : (ticket.githubCommitSha ?? "");
 
-    await db
-      .update(projectTickets)
-      .set({
-        githubBranch: featureBranch,
-        githubCommitSha: sha,
-        updatedAt: new Date(),
-      })
-      .where(eq(projectTickets.id, ticketId));
+    if (canCommit) {
+      await db
+        .update(projectTickets)
+        .set({
+          githubBranch: featureBranch,
+          githubCommitSha: sha,
+          updatedAt: new Date(),
+        })
+        .where(eq(projectTickets.id, ticketId));
+    }
 
     // Merge feature branch → the ticket's epic branch (direct push)
     let mergeStatus = ticket.githubMergeStatus;
@@ -1136,7 +1190,7 @@ ticketsApi.post("/:projectId/tickets/:ticketId/git/push", async (c) => {
     const { anchorBranch, baseBranch } = await resolveTicketAnchor(ticket);
     try {
       await mergeToAnchor({
-        workspaceId: sandbox.magsWorkspaceId,
+        workspaceId: workWorkspaceId,
         projectDir: "/data/project",
         featureBranch,
         repoUrl: `https://github.com/${repoOwner}/${repoName}.git`,
