@@ -105,6 +105,11 @@ cd "${projectDir}" || exit 1
 git config user.email "ai@lfg.dev"; git config user.name "LFG AI"
 git remote set-url origin "${authUrl}" 2>/dev/null || true
 git fetch --prune origin >/dev/null 2>&1
+# Same reason as mergeToAnchor: the checkout we're handed is not guaranteed clean, and
+# git checkout refuses over local edits or untracked files that the branch also has.
+git stash push -u -m lfg-merge-autostash >/dev/null 2>&1 || true
+git reset --hard >/dev/null 2>&1 || true
+git clean -fd >/dev/null 2>&1 || true
 git checkout ${targetBranch} 2>/dev/null || git checkout -b ${targetBranch} origin/${targetBranch}
 git reset --hard origin/${targetBranch} >/dev/null 2>&1
 git merge ${featureBranch} -m "Merge ${featureBranch} into ${targetBranch}" >/dev/null 2>&1
@@ -326,4 +331,111 @@ export async function resolveTicketMergeConflict(o: {
     verifyCmd,
     onLog: o.onLog,
   });
+}
+
+export interface RepairMergeResult {
+  merged: boolean;
+  sha?: string;
+  summary: string;
+}
+
+/**
+ * Last resort for a merge that failed for a reason that ISN'T a content conflict — a
+ * dirty working tree, a ref that won't resolve, some git state nobody anticipated.
+ *
+ * Those used to dead-end at the user with a wall of git output. The agent gets the same
+ * thing a person would: a shell in that sandbox, the error text, and the two branch
+ * names. It may touch git freely here (unlike the conflict resolver, which is kept away
+ * from it) because the job IS the git state — but it still cannot decide it succeeded:
+ * we verify the target branch actually contains the feature branch afterwards, and only
+ * then report a merge.
+ */
+export async function repairMerge(o: {
+  projectId: string;
+  userId: string;
+  workspaceId: string;
+  projectDir: string;
+  featureBranch: string;
+  targetBranch: string;
+  authUrl: string;
+  error: string;
+  onLog?: (line: string) => void;
+}): Promise<RepairMergeResult> {
+  const log = o.onLog ?? (() => {});
+  const [sel] = await db.select().from(modelSelections).where(eq(modelSelections.userId, o.userId));
+  const [keys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, o.userId));
+  let model: LanguageModel;
+  try {
+    model = getModel(sel?.selectedModel ?? DEFAULT_MODEL_KEY, {
+      anthropic: keys?.anthropicApiKey ?? undefined, openai: keys?.openaiApiKey ?? undefined,
+      google: keys?.googleApiKey ?? undefined, kimi: keys?.kimiApiKey ?? undefined,
+      deepseek: keys?.deepseekApiKey ?? undefined, glm: keys?.glmApiKey ?? undefined,
+    }, { allowEnvFallback: true });
+  } catch {
+    return { merged: false, summary: "No AI model available to repair the merge — add an API key in Settings." };
+  }
+
+  const sh = async (script: string, timeout = 120_000) => {
+    const b64 = Buffer.from(script).toString("base64");
+    const r = await execOnWorkspace(o.workspaceId, `echo ${b64} | base64 -d | sh`, { timeout })
+      .catch((e) => ({ output: `EXEC_FAILED: ${(e as Error).message}`, exitCode: 1, stderr: "" }));
+    return { output: `${r.output ?? ""}${(r as { stderr?: string }).stderr ? "\n" + (r as { stderr?: string }).stderr : ""}`, exitCode: r.exitCode ?? 0 };
+  };
+
+  log("The merge failed for a reason that isn't a conflict — handing it to the agent to sort out…");
+  const tools = {
+    run: tool({
+      description:
+        "Run ONE shell command in the repo. You have full git access here — the job is to get the merge through, so stashing, cleaning, resetting, fetching and checking out are all fair game. Returns exit code + combined output.",
+      inputSchema: zodSchema(z.object({ command: z.string().describe("One shell command.") })),
+      execute: async ({ command }: { command: string }) => {
+        log(`  repair$ ${command.slice(0, 140)}`);
+        const r = await sh(`cd "${o.projectDir}" && ${command}`, 180_000);
+        return { exitCode: r.exitCode, output: r.output.slice(-6000) || "(no output)" };
+      },
+    }),
+  };
+
+  const run = await generateText({
+    model,
+    tools,
+    stopWhen: stepCountIs(24),
+    system:
+      `You are fixing a git merge that failed inside a disposable Linux sandbox. Merge ` +
+      `\`${o.featureBranch}\` into \`${o.targetBranch}\` and push the result to origin.\n\n` +
+      `This checkout is a scratch working copy, NOT anyone's workstation: local edits and ` +
+      `untracked files in it are throwaway (preview setup rewrites config files like ` +
+      `appsettings.json on every run). You may stash, clean, reset or re-checkout freely to ` +
+      `get a workable tree. What you must NOT do is change the CONTENT of either branch to ` +
+      `make the merge easier — no reverting the feature work, no force-pushing, no deleting ` +
+      `commits, no --strategy=ours to sidestep a real conflict.\n\n` +
+      `If the merge turns out to have genuine content conflicts, resolve them keeping BOTH ` +
+      `sides' intent, then commit.\n\n` +
+      `Finish by pushing ${o.targetBranch} to origin. Then reply with 2-4 plain sentences: ` +
+      `what was actually wrong, and what you did about it.`,
+    prompt:
+      `Merging \`${o.featureBranch}\` into \`${o.targetBranch}\` failed with:\n\n${o.error.slice(0, 2000)}\n\n` +
+      `Diagnose it in the sandbox, fix it, and push ${o.targetBranch}.`,
+  }).catch((e) => { log(`Repair agent errored: ${(e as Error).message?.slice(0, 160)}`); return null; });
+
+  // Our verdict, not the agent's: does the target on the REMOTE actually contain the
+  // feature branch now? Nothing else counts as merged.
+  const check = await sh(`
+cd "${o.projectDir}"
+git remote set-url origin "${o.authUrl}" 2>/dev/null || true
+git fetch --no-tags --force origin "+refs/heads/${o.targetBranch}:refs/remotes/origin/${o.targetBranch}" "+refs/heads/${o.featureBranch}:refs/remotes/origin/${o.featureBranch}" >/dev/null 2>&1
+if git merge-base --is-ancestor "origin/${o.featureBranch}" "origin/${o.targetBranch}" 2>/dev/null; then
+  echo "MERGED:$(git rev-parse origin/${o.targetBranch})"
+else
+  echo "NOT_MERGED"
+fi`, 90_000);
+
+  const sha = check.output.match(/MERGED:([a-f0-9]{40})/)?.[1];
+  const account = (run?.text ?? "").trim();
+  if (sha) {
+    log(`Merge repaired.\n\n${account || "(the agent gave no account)"}\n\n${o.targetBranch} is now at ${sha.slice(0, 7)} and contains ${o.featureBranch}.`);
+    return { merged: true, sha, summary: account || "the agent repaired the merge" };
+  }
+  log(`The agent could not get the merge through. ${account ? "\n\n" + account : ""}`);
+  return { merged: false, summary: account || "The agent could not complete the merge — needs a human." };
 }

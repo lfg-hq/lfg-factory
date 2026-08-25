@@ -417,6 +417,24 @@ FEATURE_REF="${featureBranch}"
 git rev-parse --verify -q "${featureBranch}" >/dev/null 2>&1 || FEATURE_REF="origin/${featureBranch}"
 git rev-parse --verify -q "$FEATURE_REF" >/dev/null 2>&1 || { echo "NO_FEATURE_REF"; exit 0; }
 
+# CLEAN THE TREE FIRST. This runs in whatever checkout we could get, and the preview
+# sandbox's is never pristine: preview setup rewrites connection strings in
+# appsettings*.json on every run, and builds leave untracked assets behind. git checkout
+# then refuses outright ("Your local changes would be overwritten by checkout" /
+# "untracked working tree files would be overwritten"), which is a dirty tree, NOT a
+# merge conflict — no amount of conflict resolution fixes it.
+# Nothing here is precious: it's a throwaway working tree and the merge only needs refs.
+# stash -u keeps a copy of both tracked and untracked work anyway, and only the newest
+# entry is kept so these can't pile up on a long-lived box.
+git stash push -u -m lfg-merge-autostash >/dev/null 2>&1 || true
+while [ "$(git stash list 2>/dev/null | grep -cF 'lfg-merge-autostash')" -gt 1 ]; do
+  _old=$(git stash list 2>/dev/null | grep -F 'lfg-merge-autostash' | tail -1 | cut -d: -f1)
+  [ -n "$_old" ] || break
+  git stash drop "$_old" >/dev/null 2>&1 || break
+done
+git reset --hard >/dev/null 2>&1 || true
+git clean -fd >/dev/null 2>&1 || true
+
 # Checkout the anchor (create it from the base branch if it doesn't exist yet)
 if git rev-parse --verify origin/${targetBranch} 2>/dev/null; then
   git checkout ${targetBranch} 2>/dev/null || git checkout -b ${targetBranch} origin/${targetBranch}

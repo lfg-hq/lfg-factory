@@ -1217,11 +1217,40 @@ ticketsApi.post("/:projectId/tickets/:ticketId/git/push", async (c) => {
           message: `Pushed, but merging into ${anchorBranch} conflicts in ${mergeErr.files.length} file(s): ${mergeErr.files.join(", ")}.\n\n${why}`,
         });
       }
+      // NOT a content conflict — a dirty tree, a bad ref, a git state we didn't foresee.
+      // These used to dead-end at the user. Hand them to the agent too: it has a shell in
+      // the same sandbox and the error text, which is exactly what a person would need.
+      // The deterministic paths still run first; this is the net for what they miss.
       console.warn(`[tickets] Merge to ${anchorBranch} failed during push:`, mergeErr);
-      await addTicketLog(ticketId, `Merge to ${anchorBranch} failed: ${mergeErr}`, "cli_error", user.id).catch(() => {});
+      await addTicketLog(ticketId, `Merge to ${anchorBranch} failed: ${String(mergeErr).slice(0, 400)}`, "cli_error", user.id).catch(() => {});
+      const { repairMerge } = await import("../../services/merge-resolver.ts");
+      const repaired = await repairMerge({
+        projectId: project.id,
+        userId: user.id,
+        workspaceId: workWorkspaceId,
+        projectDir: "/data/project",
+        featureBranch,
+        targetBranch: anchorBranch,
+        authUrl: repoAuth.authUrl,
+        error: String(mergeErr),
+        onLog: (line) => { addTicketLog(ticketId, line, "command", user.id).catch(() => {}); },
+      }).catch((e) => { console.warn("[tickets] merge repair failed:", e); return null; });
+
+      if (repaired?.merged && repaired.sha) {
+        mergeStatus = "merged";
+        await db.update(projectTickets)
+          .set({ githubMergeStatus: "merged", updatedAt: new Date() })
+          .where(eq(projectTickets.id, ticketId));
+        await addTicketLog(ticketId, `Merged to ${anchorBranch} (${repaired.sha.slice(0, 7)}) — ${repaired.summary}`, "command", user.id).catch(() => {});
+        await maybeSubmitEpicForReview(ticket.epicId);
+        return c.json({
+          sha, branch: featureBranch, mergeStatus,
+          message: `Merged into ${anchorBranch}. The first attempt failed and the agent sorted it out — ${repaired.summary}`,
+        });
+      }
       return c.json({
         sha, branch: featureBranch, mergeStatus,
-        message: `Pushed, but the merge into ${anchorBranch} failed: ${String(mergeErr).slice(0, 300)}`,
+        message: `Pushed, but the merge into ${anchorBranch} failed and the agent couldn't repair it.\n\n${repaired?.summary ?? String(mergeErr).slice(0, 400)}`,
       });
     }
 
