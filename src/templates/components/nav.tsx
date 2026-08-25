@@ -96,8 +96,8 @@ export const Nav = ({
       <span class="font-display font-bold text-xl tracking-tight text-slate-900">LFG</span>
     </a>
     <div class="hidden md:flex items-center gap-6">
-      <a href="/" class="text-sm font-medium ${activePage === "home" ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600"} transition-colors">Product</a>
-      <a href="/agent/" class="text-sm font-medium ${activePage === "agent" ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600"} transition-colors">How it works</a>
+      <a href="/" class="text-sm font-medium ${activePage === "home" ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600"} transition-colors">Home</a>
+      <a href="/agent/" class="text-sm font-medium ${activePage === "agent" ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600"} transition-colors">Agent</a>
       <a href="/self-host/" class="text-sm font-medium ${activePage === "self-host" ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600"} transition-colors">Self-host</a>
       <a href="/case-studies/" class="text-sm font-medium ${activePage === "case-studies" ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600"} transition-colors">Case studies</a>
       <a href="/blog/" class="text-sm font-medium ${activePage === "blog" ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600"} transition-colors">Blog</a>
@@ -123,8 +123,8 @@ export const Nav = ({
     </div>
   </div>
   <div id="mobile-menu" class="hidden md:hidden absolute top-full left-0 w-full bg-white border-b border-slate-200 p-4 flex-col gap-3 shadow-xl">
-    <a href="/" class="text-base font-medium ${activePage === "home" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">Product</a>
-    <a href="/agent/" class="text-base font-medium ${activePage === "agent" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">How it works</a>
+    <a href="/" class="text-base font-medium ${activePage === "home" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">Home</a>
+    <a href="/agent/" class="text-base font-medium ${activePage === "agent" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">Agent</a>
     <a href="/self-host/" class="text-base font-medium ${activePage === "self-host" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">Self-host</a>
     <a href="/case-studies/" class="text-base font-medium ${activePage === "case-studies" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">Case studies</a>
     <a href="/blog/" class="text-base font-medium ${activePage === "blog" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">Blog</a>
@@ -203,8 +203,8 @@ export const Footer = () => html`
         <p class="text-sm leading-relaxed">The self-hosted agentic software factory. We run our own company on it.</p>
       </div>
       <div class="flex flex-wrap items-center gap-x-6 gap-y-3 text-sm md:justify-end md:max-w-lg">
-        <a href="/" class="hover:text-white transition-colors">Product</a>
-        <a href="/agent/" class="hover:text-white transition-colors">How it works</a>
+        <a href="/" class="hover:text-white transition-colors">Home</a>
+        <a href="/agent/" class="hover:text-white transition-colors">Agent</a>
         <a href="/self-host/" class="hover:text-white transition-colors">Self-host</a>
         <a href="/case-studies/" class="hover:text-white transition-colors">Case studies</a>
         <a href="/vs-coding-agents/" class="hover:text-white transition-colors">Vs. coding agents</a>
