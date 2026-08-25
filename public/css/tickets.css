@@ -4131,8 +4131,9 @@
 .git-head-meta { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; font-size: 0.8rem; }
 .git-status-pill {
     display: inline-flex; align-items: center; gap: 0.4rem; flex: none;
-    padding: 0.3rem 0.7rem; border-radius: 999px; border: 1px solid;
-    font-size: 0.75rem; font-weight: 600; white-space: nowrap;
+    padding: 0.28rem 0.7rem; border-radius: 6px; border: 1px solid;
+    font-size: 0.72rem; font-weight: 600; white-space: nowrap;
+    text-transform: uppercase; letter-spacing: 0.03em;
 }
 .git-pr-link { color: #a78bfa; text-decoration: none; font-size: 0.78rem; }
 .git-action-primary { background: #7c3aed !important; border-color: #7c3aed !important; color: #fff !important; }

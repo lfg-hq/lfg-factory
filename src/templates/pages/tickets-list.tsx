@@ -1889,7 +1889,6 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
                     : '<span class="git-empty">No branch yet</span>')
       +   '</div>'
       +   '<span class="git-status-pill" style="color:' + statusColor + ';border-color:' + statusColor + '55;background:' + statusColor + '1a;">'
-      +     '<span style="width:7px;height:7px;border-radius:50%;background:' + statusColor + ';"></span>'
       +     escHtml(statusLabel)
       +   '</span>'
       + '</div>';
@@ -1915,11 +1914,14 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
 
     // Actions
     html += '<div class="git-span" style="display:flex;gap:0.5rem;margin-top:0.25rem;flex-wrap:wrap;align-items:center;">';
-    html += '<button onclick="pushToGithub()" id="git-push-btn" class="git-action-btn git-action-primary">'
-      + '<i class="fas fa-code-merge"></i> Merge into ' + (_ticketAnchorBranch || 'epic branch') + '</button>';
     var prVerb = (_gitRepo && _gitRepo.provider === 'gitlab') ? 'merge request' : 'pull request';
-    html += '<button onclick="openPrDialog()" id="git-pr-open-btn" class="git-action-btn">'
+    var anchorShort = (_ticketAnchorBranch || 'epic branch');
+    if (anchorShort.length > 24) anchorShort = anchorShort.slice(0, 22) + '\u2026';
+    html += '<button onclick="openPrDialog()" id="git-pr-open-btn" class="git-action-btn git-action-primary">'
       + '<i class="fas fa-code-pull-request"></i> Create ' + prVerb + '</button>';
+    html += '<button onclick="pushToGithub()" id="git-push-btn" class="git-action-btn" title="Merge straight into '
+      + escHtml(_ticketAnchorBranch || 'the epic branch') + ' without review">'
+      + '<i class="fas fa-code-merge"></i> Merge into ' + escHtml(anchorShort) + '</button>';
 
     // Open in editor menu (only when we have a real repo to clone).
     if (_gitRepo && _gitRepo.hasRepo && _gitRepo.cloneUrl) {
