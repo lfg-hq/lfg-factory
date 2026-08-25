@@ -138,6 +138,16 @@ body[data-theme="light"] {
     color: #7c3aed !important;
 }
 
+[data-theme="light"] .project-dropdown-trigger.active,
+[data-theme="light"] .project-dropdown-trigger.active i:first-child,
+[data-theme="light"] .project-dropdown-trigger.active .project-name-text {
+    color: #7c3aed !important;
+}
+
+[data-theme="light"] .project-dropdown-trigger.active {
+    background-color: rgba(124, 58, 237, 0.12) !important;
+}
+
 [data-theme="light"] .nav-text {
     color: inherit !important;
 }

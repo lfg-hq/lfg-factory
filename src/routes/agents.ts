@@ -11,7 +11,6 @@ import { modelSelections, agentRoles } from "../db/schema/chat.ts";
 import { composioToolkits } from "../db/schema/composio.ts";
 import { listConnectors } from "../services/composio-manager.ts";
 import { listModels, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
-import { AgentsListPage } from "../templates/pages/agents-list.tsx";
 import { AgentDetailPage } from "../templates/pages/agent-detail.tsx";
 import { AgentsCentralPage } from "../templates/pages/agents-central.tsx";
 import type { auth } from "../auth/index.ts";
@@ -36,33 +35,10 @@ agentsRoutes.use("*", async (c, next) => {
 });
 
 // ── Agent list ────────────────────────────────────────────────────────
-
-agentsRoutes.get("/agents", async (c) => {
-  const user = c.get("user");
-
-  const agentList = await db
-    .select()
-    .from(agents)
-    .where(eq(agents.userId, user.id))
-    .orderBy(desc(agents.createdAt));
-
-  return c.html(
-    AgentsListPage({
-      user: { id: user.id, name: user.name, email: user.email ?? "" },
-      agents: agentList.map((a) => ({
-        agentId: a.agentId,
-        name: a.name,
-        status: a.status,
-        personality: a.personality,
-        instructions: a.instructions,
-        composioToolkits: (a.composioToolkits as string[] | null) ?? [],
-        sandboxUrl: a.sandboxUrl,
-        createdAt: a.createdAt,
-        updatedAt: a.updatedAt,
-      })),
-    })
-  );
-});
+// There is no standalone Agents page any more — agents live as a tab on the
+// Projects page, alongside Projects and Instant Apps, so the sidebar rail and
+// the tab strip are the same navigation. Old /agents links land there.
+agentsRoutes.get("/agents", (c) => c.redirect("/projects?tab=agents", 302));
 
 // ── Central chat ──────────────────────────────────────────────────────
 

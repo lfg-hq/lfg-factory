@@ -109,7 +109,7 @@ export function AgentDetailPage({
             <i class="fas fa-bolt"></i>
             <span class="nav-text">Instant Apps</span>
           </a>
-          <a href="/agents" class="nav-link active">
+          <a href="/projects?tab=agents" class="nav-link active">
             <i class="fas fa-robot"></i>
             <span class="nav-text">Agents</span>
           </a>
@@ -154,7 +154,7 @@ export function AgentDetailPage({
       <div class="project-header">
         <div class="project-header-content">
           <div class="project-name-container" style="display:flex;align-items:center;gap:0.5rem;">
-            <a href="/agents" style="color:var(--text-secondary);text-decoration:none;">
+            <a href="/projects?tab=agents" style="color:var(--text-secondary);text-decoration:none;">
               <i class="fas fa-arrow-left"></i>
             </a>
             <i class="fas fa-robot" style="color:var(--primary-color);"></i>

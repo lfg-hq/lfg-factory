@@ -75,7 +75,7 @@ export function AgentsCentralPage({ user, agents, messages }: AgentsCentralPageP
             <i class="fas fa-bolt"></i>
             <span class="nav-text">Instant Apps</span>
           </a>
-          <a href="/agents" class="nav-link active">
+          <a href="/projects?tab=agents" class="nav-link active">
             <i class="fas fa-robot"></i>
             <span class="nav-text">Agents</span>
           </a>
@@ -120,7 +120,7 @@ export function AgentsCentralPage({ user, agents, messages }: AgentsCentralPageP
         <!-- Chat area -->
         <div class="central-chat-main">
           <div class="central-chat-header">
-            <a href="/agents" style="color:var(--text-secondary);text-decoration:none;margin-right:0.75rem;">
+            <a href="/projects?tab=agents" style="color:var(--text-secondary);text-decoration:none;margin-right:0.75rem;">
               <i class="fas fa-arrow-left"></i>
             </a>
             <h1 style="font-size:1.125rem;font-weight:600;margin:0;">Central Agent Chat</h1>

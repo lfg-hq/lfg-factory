@@ -95,7 +95,7 @@ export function ProjectListPage({ user, projects, projectStats = {}, instantApps
           </button>
         </div>
         <div class="project-selector-section">
-          <a href="/projects" class="project-dropdown-trigger">
+          <a href="/projects" class="project-dropdown-trigger${isProjectsTab ? " active" : ""}">
             <i class="fas fa-folder"></i>
             <span class="project-name-text">Projects</span>
           </a>
@@ -105,7 +105,7 @@ export function ProjectListPage({ user, projects, projectStats = {}, instantApps
             <i class="fas fa-bolt"></i>
             <span class="nav-text">Instant Apps</span>
           </a>
-          <a href="/projects?tab=agents" class="nav-link">
+          <a href="/projects?tab=agents" class="nav-link${isAgentsTab ? " active" : ""}">
             <i class="fas fa-robot"></i>
             <span class="nav-text">Agents</span>
           </a>

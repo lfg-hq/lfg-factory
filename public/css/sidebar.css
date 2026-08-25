@@ -807,6 +807,13 @@
     background: rgba(255, 255, 255, 0.05);
 }
 
+/* Matches .nav-link.active — the rail mirrors the Projects page tab strip,
+   so whichever tab you're on, its rail icon reads as selected. */
+.project-dropdown-trigger.active {
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.9);
+}
+
 .project-dropdown-trigger:focus {
     outline: none;
 }

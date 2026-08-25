@@ -718,7 +718,7 @@
     try {
       var res = await fetch("/api/agents/" + id, { method: "DELETE" });
       if (res.ok) {
-        window.location.href = "/agents";
+        window.location.href = "/projects?tab=agents";
       } else {
         alert("Failed to delete agent");
       }
