@@ -1878,33 +1878,28 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     const statusLabel = _gitStatusLabels[mergeStatus] || (mergeStatus ? mergeStatus.replace(/_/g, ' ') : 'none');
     const notPushed = mergeStatus === 'not_pushed';
 
-    var html = '<div class="git-info-grid">';
-
-    // Branch
-    html += '<div class="git-field">'
-      + '<span class="git-label">Branch</span>'
-      + (branch
-        ? '<code class="git-branch-badge">' + escHtml(branch) + '</code>'
-        : '<span class="git-empty">No branch yet</span>')
+    // Branch first and full width — it's the identity of everything else on this tab,
+    // and boxing it into a third of a grid row wrapped it across three lines. Status sits
+    // beside it; the commit is secondary metadata underneath.
+    var html = '<div class="git-head">'
+      + '<div class="git-head-top">'
+      +   '<div class="git-head-branch">'
+      +     '<span class="git-label">Branch</span>'
+      +     (branch ? '<code class="git-branch-badge">' + escHtml(branch) + '</code>'
+                    : '<span class="git-empty">No branch yet</span>')
+      +   '</div>'
+      +   '<span class="git-status-pill" style="color:' + statusColor + ';border-color:' + statusColor + '55;background:' + statusColor + '1a;">'
+      +     '<span style="width:7px;height:7px;border-radius:50%;background:' + statusColor + ';"></span>'
+      +     escHtml(statusLabel)
+      +   '</span>'
       + '</div>';
 
-    // Last Commit (+ when it was built, so the SHA isn't a dateless mystery)
     var commitWhen = ticket.lastExecutionAt || ticket.last_execution_at || ticket.updatedAt || ticket.updated_at || '';
-    html += '<div class="git-field">'
-      + '<span class="git-label">Last Commit</span>'
-      + '<span style="display:inline-flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">'
+    html += '<div class="git-head-meta">'
+      + '<span class="git-label">Last commit</span>'
       + '<code class="git-value">' + (shortSha || '—') + '</code>'
-      + (shortSha && commitWhen ? '<span class="git-empty" style="font-size:0.75rem;">' + escHtml(fmtLogTime(commitWhen)) + '</span>' : '')
-      + '</span>'
-      + '</div>';
-
-    // Merge Status badge
-    html += '<div class="git-field">'
-      + '<span class="git-label">Merge Status</span>'
-      + '<span style="display:inline-flex;align-items:center;gap:0.4rem;">'
-      + '<span style="width:8px;height:8px;border-radius:50%;background:' + statusColor + ';display:inline-block;"></span>'
-      + '<span class="git-value">' + escHtml(statusLabel) + '</span>'
-      + '</span>'
+      + (shortSha && commitWhen ? '<span class="git-empty">' + escHtml(fmtLogTime(commitWhen)) + '</span>' : '')
+      + (prNumber && prUrl ? ' <a href="' + escHtml(prUrl) + '" target="_blank" rel="noopener" class="git-pr-link">!' + prNumber + ' open</a>' : '')
       + '</div>';
 
     // Loud warning when the build finished but was NOT pushed (no repo/token or a
@@ -1920,8 +1915,11 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
 
     // Actions
     html += '<div class="git-span" style="display:flex;gap:0.5rem;margin-top:0.25rem;flex-wrap:wrap;align-items:center;">';
-    html += '<button onclick="pushToGithub()" id="git-push-btn" class="git-action-btn">'
-      + '<i class="fas fa-cloud-upload-alt"></i> Push &amp; Merge to ' + (_ticketAnchorBranch || 'epic branch') + '</button>';
+    html += '<button onclick="pushToGithub()" id="git-push-btn" class="git-action-btn git-action-primary">'
+      + '<i class="fas fa-code-merge"></i> Merge into ' + (_ticketAnchorBranch || 'epic branch') + '</button>';
+    var prVerb = (_gitRepo && _gitRepo.provider === 'gitlab') ? 'merge request' : 'pull request';
+    html += '<button onclick="openPrDialog()" id="git-pr-open-btn" class="git-action-btn">'
+      + '<i class="fas fa-code-pull-request"></i> Create ' + prVerb + '</button>';
 
     // Open in editor menu (only when we have a real repo to clone).
     if (_gitRepo && _gitRepo.hasRepo && _gitRepo.cloneUrl) {
@@ -1945,24 +1943,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     // description is written for you by an agent that reads the diff against the ticket.
     var existingPr = (_gitTicket && (_gitTicket.githubPrUrl || _gitTicket.github_pr_url)) || '';
     var prVerb = (_gitRepo && _gitRepo.provider === 'gitlab') ? 'merge request' : 'pull request';
-    html += '<div id="git-pr-wrap" class="git-span" style="margin-top:.9rem;padding:.75rem;border:1px solid var(--border-color,#2a2a2a);border-radius:8px;">'
-      + '<div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.6rem;">'
-      + '<span class="git-label" style="margin:0;">Raise a ' + prVerb + '</span>'
-      + (existingPr ? '<a href="' + escHtml(existingPr) + '" target="_blank" rel="noopener" style="font-size:.75rem;color:#a78bfa;">already open \u2197</a>' : '')
-      + '</div>'
-      + '<div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.6rem;">'
-      + '<span style="font-size:.75rem;color:var(--text-secondary,#9ca3af);">into</span>'
-      + '<select id="git-pr-target" class="filter-select" style="font-size:12px;padding:4px 8px;max-width:280px;"><option>' + escHtml(_ticketAnchorBranch || 'main') + '</option></select>'
-      + '</div>'
-      + '<textarea id="git-pr-comment" rows="2" placeholder="Anything the reviewer should know? (optional)" '
-      + 'style="width:100%;box-sizing:border-box;padding:.5rem;border-radius:6px;font-size:.8rem;resize:vertical;'
-      + 'background:var(--input-bg,rgba(127,127,127,.08));color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);"></textarea>'
-      + '<div style="display:flex;align-items:center;gap:.6rem;margin-top:.6rem;flex-wrap:wrap;">'
-      + '<button onclick="raisePr()" id="git-pr-btn" class="git-action-btn"><i class="fas fa-code-pull-request"></i> Raise ' + prVerb + '</button>'
-      + '<span style="font-size:.72rem;color:var(--text-secondary,#9ca3af);">The agent reads the diff against this ticket and its documents, then writes the description.</span>'
-      + '</div></div>';
-
-    html += '</div>'; // /git-info-grid
+    html += '</div>'; // /git-head
 
     // Branch diff viewer: this ticket's branch vs a selectable base. The default is the
     // ticket's ANCHOR (its epic branch), not main — that's what it was cut from and what
@@ -1971,7 +1952,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     // every commit the anchor carries that main doesn't (100+ of them) as if they
     // belonged to this ticket.
     html += '<div id="git-diff-wrap" style="margin-top:1rem;border-top:1px solid var(--border-color,#2a2a2a);padding-top:1rem;">'
-      + '<div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.75rem;">'
+      + '<div class="git-changes-row" style="margin-bottom:0.75rem;">'
       + '<span class="git-label">Changes</span>'
       + '<code class="git-branch-badge">' + escHtml(branch || ('feature/ticket-' + _currentTicketId)) + '</code>'
       + '<span style="color:var(--text-secondary,#9ca3af);">vs</span>'
@@ -2181,20 +2162,54 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
   }
 
   // ── Raise a PR/MR (Git tab) ──────────────────────────────────────
+  // A dialog rather than a permanently-open form: raising a request is an occasional,
+  // deliberate action, and an always-visible target picker + textarea pushed the diff —
+  // the thing you actually came to look at — off the screen.
+  function openPrDialog() {
+    var existing = document.getElementById('pr-dialog');
+    if (existing) existing.remove();
+    var verb = (_gitRepo && _gitRepo.provider === 'gitlab') ? 'merge request' : 'pull request';
+    var opts = (_prBranches && _prBranches.length ? _prBranches : [_ticketAnchorBranch || 'main'])
+      .filter(function(b){ return b && b !== _gitBranch; });
+    var want = _ticketAnchorBranch || 'main';
+    if (opts.indexOf(want) < 0) opts.unshift(want);
+    var d = document.createElement('div');
+    d.id = 'pr-dialog';
+    d.className = 'pr-dialog-backdrop';
+    d.innerHTML =
+      '<div class="pr-dialog">'
+      + '<div class="pr-dialog-head">Create ' + verb
+      +   '<button class="pr-dialog-x" data-prclose="1"><i class="fas fa-xmark"></i></button></div>'
+      + '<div class="pr-dialog-body">'
+      +   '<div class="pr-row"><span class="git-label">From</span><code class="git-branch-badge">' + escHtml(_gitBranch || '') + '</code></div>'
+      +   '<div class="pr-row"><span class="git-label">Into</span>'
+      +     '<select id="git-pr-target" class="filter-select">'
+      +       opts.map(function(b){ return '<option' + (b === want ? ' selected' : '') + '>' + escHtml(b) + '</option>'; }).join('')
+      +     '</select></div>'
+      +   '<label class="git-label" style="display:block;margin:.85rem 0 .35rem;">Anything the reviewer should know?</label>'
+      +   '<textarea id="git-pr-comment" rows="4" class="pr-textarea" placeholder="Optional \u2014 context, caveats, what to look at first"></textarea>'
+      +   '<p class="pr-hint">The agent reads the diff against this ticket, its acceptance criteria and the epic\u2019s documents, then writes the description \u2014 including anything specified but missing.</p>'
+      + '</div>'
+      + '<div class="pr-dialog-foot">'
+      +   '<button class="git-action-btn" data-prclose="1">Cancel</button>'
+      +   '<button class="git-action-btn git-action-primary" id="git-pr-btn" onclick="raisePr()"><i class="fas fa-code-pull-request"></i> Create ' + verb + '</button>'
+      + '</div></div>';
+    document.body.appendChild(d);
+    d.addEventListener('click', function(ev) {
+      if (ev.target === d || (ev.target.closest && ev.target.closest('[data-prclose]'))) d.remove();
+    });
+    var ta = document.getElementById('git-pr-comment');
+    if (ta) ta.focus();
+  }
+  window.openPrDialog = openPrDialog;
+  function closePrDialog() { var d = document.getElementById('pr-dialog'); if (d) d.remove(); }
+
+
   // The target list is the same set of remote branches the diff selector offers, so you
   // can raise against the epic branch (the default — it's where this ticket merges) or
   // against main for a wider review, without typing a branch name.
-  function _fillPrTargets(branches, preferred) {
-    var sel = document.getElementById('git-pr-target');
-    if (!sel) return;
-    var list = (branches || []).filter(function(b){ return b && b !== _gitBranch; });
-    if (!list.length) { list = [preferred || 'main']; }
-    var want = preferred || _ticketAnchorBranch || 'main';
-    if (list.indexOf(want) < 0) list.unshift(want);
-    sel.innerHTML = list.map(function(b){
-      return '<option' + (b === want ? ' selected' : '') + '>' + escHtml(b) + '</option>';
-    }).join('');
-  }
+  var _prBranches = [];
+  function _fillPrTargets(branches) { _prBranches = branches || []; }
 
   async function raisePr() {
     if (!_currentTicketId) return;
@@ -2211,7 +2226,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       var j = await r.json();
       if (!r.ok) { alert(j.error || 'Could not raise it.'); }
       else {
-        if (note) note.value = '';
+        closePrDialog();
         alert('Opened: ' + (j.title || '') + _NL + _NL + (j.prUrl || ''));
         if (j.prUrl) window.open(j.prUrl, '_blank');
         loadGitInfo();

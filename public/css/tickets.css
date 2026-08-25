@@ -4113,3 +4113,68 @@
 .log-entry.log-agent .log-agent-content.markdown-content strong { font-weight: 700; }
 
 
+
+
+/* ── Git tab: header, status, PR dialog ─────────────────────────────────────── */
+/* Branch is the identity of this tab, so it gets the full width and its own line;
+   status sits beside it, commit metadata reads underneath. The old grid squeezed the
+   branch into a third of a row and wrapped it across three lines. */
+.git-head { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1rem; }
+.git-head-top { display: flex; align-items: flex-end; gap: 1rem; flex-wrap: wrap; }
+.git-head-branch { display: flex; flex-direction: column; gap: 0.3rem; flex: 1; min-width: 0; }
+.git-head-branch .git-branch-badge {
+    display: block; width: 100%; box-sizing: border-box;
+    white-space: nowrap; overflow-x: auto; overflow-y: hidden;
+    scrollbar-width: none; padding: 0.4rem 0.6rem; font-size: 0.82rem;
+}
+.git-head-branch .git-branch-badge::-webkit-scrollbar { display: none; }
+.git-head-meta { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; font-size: 0.8rem; }
+.git-status-pill {
+    display: inline-flex; align-items: center; gap: 0.4rem; flex: none;
+    padding: 0.3rem 0.7rem; border-radius: 999px; border: 1px solid;
+    font-size: 0.75rem; font-weight: 600; white-space: nowrap;
+}
+.git-pr-link { color: #a78bfa; text-decoration: none; font-size: 0.78rem; }
+.git-action-primary { background: #7c3aed !important; border-color: #7c3aed !important; color: #fff !important; }
+
+/* The CHANGES row is one line: branch, "vs", the base picker and refresh. It wrapped
+   because the branch badge could grow unbounded — let it scroll inside itself instead. */
+.git-changes-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: nowrap; min-width: 0; }
+.git-changes-row .git-branch-badge {
+    flex: 1 1 auto; min-width: 0; white-space: nowrap;
+    overflow-x: auto; scrollbar-width: none;
+}
+.git-changes-row .git-branch-badge::-webkit-scrollbar { display: none; }
+.git-changes-row > .git-label, .git-changes-row > span { flex: none; }
+.git-changes-row select { flex: 0 1 220px; min-width: 120px; }
+
+.pr-dialog-backdrop {
+    position: fixed; inset: 0; z-index: 2000; background: rgba(0,0,0,.55);
+    display: flex; align-items: center; justify-content: center; padding: 1.5rem;
+}
+.pr-dialog {
+    width: 560px; max-width: 100%; max-height: 85vh; overflow: auto;
+    background: var(--card-bg, #161616); border: 1px solid var(--border-color, #333);
+    border-radius: 12px; box-shadow: 0 24px 60px rgba(0,0,0,.5);
+}
+.pr-dialog-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0.9rem 1.1rem; border-bottom: 1px solid var(--border-color, #2a2a2a);
+    font-weight: 600; color: var(--text-color);
+}
+.pr-dialog-x { background: none; border: none; color: var(--text-secondary); cursor: pointer; font-size: 1rem; }
+.pr-dialog-body { padding: 1.1rem; }
+.pr-dialog-foot {
+    display: flex; justify-content: flex-end; gap: 0.6rem;
+    padding: 0.9rem 1.1rem; border-top: 1px solid var(--border-color, #2a2a2a);
+}
+.pr-row { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.6rem; min-width: 0; }
+.pr-row .git-label { flex: none; width: 44px; }
+.pr-row .git-branch-badge, .pr-row select { flex: 1 1 auto; min-width: 0; }
+.pr-textarea {
+    width: 100%; box-sizing: border-box; padding: 0.6rem; border-radius: 7px;
+    font-size: 0.85rem; resize: vertical; font-family: inherit;
+    background: var(--input-bg, rgba(127,127,127,.08)); color: var(--text-color);
+    border: 1px solid var(--border-color, #333);
+}
+.pr-hint { margin: 0.7rem 0 0; font-size: 0.75rem; line-height: 1.5; color: var(--text-secondary); }

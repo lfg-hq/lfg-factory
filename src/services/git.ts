@@ -476,7 +476,29 @@ echo "MERGE_SHA:$SHA"
 
   const shaMatch = result.output.match(/MERGE_SHA:([a-f0-9]{40})/);
   if (!shaMatch) {
-    throw new Error(`Merge to ${targetBranch} failed:\n${result.output}`);
+    // STDERR MATTERS HERE. The script redirects its own stderr with `exec 2>&1`, so
+    // anything git says lands in stdout — but if the inner shell dies BEFORE that line
+    // (a parse error, base64 -d failing, /bin/sh missing) nothing inside ever runs and
+    // the message goes to the OUTER shell's stderr instead. Reading only stdout turned
+    // every such failure into "Merge to X failed:" with nothing after the colon, which
+    // is exactly the dead end this has been hitting.
+    const parts = [
+      result.output?.trim(),
+      result.stderr?.trim() ? `stderr: ${result.stderr.trim()}` : "",
+      `exit ${result.exitCode}`,
+    ].filter(Boolean);
+    let detail = parts.join("\n");
+    if (!result.output?.trim() && !result.stderr?.trim()) {
+      // Both empty: the command never produced anything. Ask the box directly what state
+      // it's in rather than reporting a blank failure.
+      const d = await execOnWorkspace(
+        workspaceId,
+        `echo "--- pwd ---"; pwd 2>&1; echo "--- dir ---"; ls -d "${projectDir}" 2>&1; echo "--- git ---"; command -v git 2>&1; echo "--- sh ---"; command -v sh 2>&1; echo "--- head ---"; cd "${projectDir}" 2>&1 && git rev-parse --abbrev-ref HEAD 2>&1`,
+        { timeout: 30_000 },
+      ).catch((e) => ({ output: `diagnostic exec failed: ${(e as Error).message}`, exitCode: 1, stderr: "" }));
+      detail = `the merge command produced no output at all (exit ${result.exitCode}).\nSandbox state:\n${(d.output || "(nothing)").slice(0, 800)}`;
+    }
+    throw new Error(`Merge to ${targetBranch} failed: ${detail}`);
   }
 
   const block = result.output.match(/CHANGED_FILES_START\n([\s\S]*?)CHANGED_FILES_END/);
