@@ -1919,7 +1919,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     }
 
     // Actions
-    html += '<div style="display:flex;gap:0.5rem;margin-top:0.25rem;flex-wrap:wrap;align-items:center;">';
+    html += '<div class="git-span" style="display:flex;gap:0.5rem;margin-top:0.25rem;flex-wrap:wrap;align-items:center;">';
     html += '<button onclick="pushToGithub()" id="git-push-btn" class="git-action-btn">'
       + '<i class="fas fa-cloud-upload-alt"></i> Push &amp; Merge to ' + (_ticketAnchorBranch || 'epic branch') + '</button>';
 
@@ -1945,14 +1945,14 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     // description is written for you by an agent that reads the diff against the ticket.
     var existingPr = (_gitTicket && (_gitTicket.githubPrUrl || _gitTicket.github_pr_url)) || '';
     var prVerb = (_gitRepo && _gitRepo.provider === 'gitlab') ? 'merge request' : 'pull request';
-    html += '<div id="git-pr-wrap" style="margin-top:.9rem;padding:.75rem;border:1px solid var(--border-color,#2a2a2a);border-radius:8px;">'
+    html += '<div id="git-pr-wrap" class="git-span" style="margin-top:.9rem;padding:.75rem;border:1px solid var(--border-color,#2a2a2a);border-radius:8px;">'
       + '<div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.6rem;">'
       + '<span class="git-label" style="margin:0;">Raise a ' + prVerb + '</span>'
       + (existingPr ? '<a href="' + escHtml(existingPr) + '" target="_blank" rel="noopener" style="font-size:.75rem;color:#a78bfa;">already open \u2197</a>' : '')
       + '</div>'
       + '<div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.6rem;">'
       + '<span style="font-size:.75rem;color:var(--text-secondary,#9ca3af);">into</span>'
-      + '<select id="git-pr-target" class="filter-select" style="font-size:12px;padding:4px 8px;max-width:280px;"></select>'
+      + '<select id="git-pr-target" class="filter-select" style="font-size:12px;padding:4px 8px;max-width:280px;"><option>' + escHtml(_ticketAnchorBranch || 'main') + '</option></select>'
       + '</div>'
       + '<textarea id="git-pr-comment" rows="2" placeholder="Anything the reviewer should know? (optional)" '
       + 'style="width:100%;box-sizing:border-box;padding:.5rem;border-radius:6px;font-size:.8rem;resize:vertical;'

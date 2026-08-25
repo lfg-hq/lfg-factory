@@ -3877,18 +3877,28 @@
 
 /* ── Git tab ─────────────────────────────────────────────────────── */
 
+/* Compact meta row rather than a full-width vertical stack: branch, commit and status
+   are all short values, and stacking them at full width made the tab mostly empty space
+   and pushed the actions below the fold. This rule comes AFTER the 2-column one earlier
+   in this file and supersedes it. */
 .git-info-grid {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 0.75rem 1.5rem;
     font-size: 0.8375rem;
+    align-items: start;
 }
 
 .git-field {
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
+    align-items: flex-start;  /* stop short values stretching to full width */
+    min-width: 0;
 }
+
+/* Rows that must span the whole grid (warnings, action buttons, the PR block). */
+.git-info-grid > .git-span { grid-column: 1 / -1; }
 
 .git-label {
     color: var(--text-secondary);
