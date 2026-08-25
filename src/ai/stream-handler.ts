@@ -544,6 +544,22 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
   }
 
   // Polymorphic tool bag: composition varies by mode (agent / instant / product).
+  // The tools that record which chat produced a ticket or an epic take conversationId as
+  // a MODEL-supplied argument, and the model frequently omits it — which is why work built
+  // from a chat shows up with no conversation linked anywhere. The server always knows
+  // which conversation this is, so inject it rather than hoping: an explicit value from
+  // the model still wins, this only fills the blank.
+  const withConversation = (t: Record<string, any>): Record<string, any> => {
+    for (const name of ["createTickets", "startEpic", "addToEpic", "createTicket"]) {
+      const tool = t[name];
+      if (!tool || typeof tool.execute !== "function") continue;
+      const original = tool.execute.bind(tool);
+      tool.execute = (args: Record<string, unknown>, opts: unknown) =>
+        original({ ...args, conversationId: (args?.conversationId as string) || convId }, opts);
+    }
+    return t;
+  };
+
   let tools: Record<string, any> = instantMode
     ? createInstantTools({
         userId,

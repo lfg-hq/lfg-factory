@@ -457,12 +457,23 @@ echo "CHANGED_FILES_END"
 # (git stash then refuses with "needs merge", so even the autostash net is dead there).
 # Report the conflicting paths, ABORT, and put the checkout back where it started.
 if ! git merge "$FEATURE_REF" -m "Merge ${featureBranch} into ${targetBranch}"; then
-  echo "CONFLICT_FILES_START"
-  git diff --name-only --diff-filter=U 2>/dev/null || true
-  echo "CONFLICT_FILES_END"
+  # Classify by UNMERGED PATHS, not by exit code. A failing merge is only a content
+  # conflict if git actually left conflicted files behind; everything else (a checkout it
+  # refused, a bad ref, a dirty tree) exits non-zero too. Calling those a conflict sent
+  # them to the conflict resolver with an EMPTY file list, which correctly refused
+  # ("no unmerged paths — nothing safe to act on") and dead-ended at the user instead of
+  # reaching the repair agent that handles exactly this class of failure.
+  UNMERGED=$(git diff --name-only --diff-filter=U 2>/dev/null)
   git merge --abort 2>/dev/null || git reset --hard HEAD 2>/dev/null || true
   git checkout ${featureBranch} 2>/dev/null || git checkout --detach "$FEATURE_REF" 2>/dev/null || true
-  echo "MERGE_CONFLICT"
+  if [ -n "$UNMERGED" ]; then
+    echo "CONFLICT_FILES_START"
+    echo "$UNMERGED"
+    echo "CONFLICT_FILES_END"
+    echo "MERGE_CONFLICT"
+  else
+    echo "MERGE_FAILED_NO_CONFLICT"
+  fi
   exit 0
 fi
 
@@ -485,7 +496,10 @@ echo "MERGE_SHA:$SHA"
   if (result.output.includes("MERGE_CONFLICT")) {
     const cf = result.output.match(/CONFLICT_FILES_START\n([\s\S]*?)CONFLICT_FILES_END/);
     const conflicted = (cf?.[1] ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
-    throw new MergeConflictError(targetBranch, conflicted);
+    // Belt-and-braces: a "conflict" with no files isn't one. Fall through to the plain
+    // error path so the caller routes it to the repair agent rather than the conflict
+    // resolver, which has nothing to work with and will refuse.
+    if (conflicted.length) throw new MergeConflictError(targetBranch, conflicted);
   }
 
   if (result.output.includes("NO_FEATURE_REF")) {
