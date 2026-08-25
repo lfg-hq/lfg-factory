@@ -126,6 +126,11 @@ export function createWebResearchTools() {
   return { webSearch, readUrl };
 }
 
+/** How often a long-running tool pings the chat's idle watchdog. Must stay well
+ *  under CHAT_STREAM_IDLE_TIMEOUT_MIN (default 4 min) — 15s matches the
+ *  watchdog's own poll interval. */
+const HEARTBEAT_MS = 15_000;
+
 /**
  * Build a progress callback that broadcasts in-flight status updates over
  * the user's WS so the chat UI can show "Provisioning sandbox…",
@@ -152,8 +157,30 @@ function makeProgress(agentId: string, userId: string) {
 export function createAgentTools(params: {
   agentId: string;
   userId: string;
+  /** Proof-of-life callback for the chat's idle watchdog — see startHeartbeat below. */
+  onActivity?: () => void;
 }) {
-  const { agentId, userId } = params;
+  const { agentId, userId, onActivity } = params;
+
+  /**
+   * The chat idle watchdog (src/ws/chat-handler.ts) aborts a run when the MODEL
+   * STREAM goes quiet for CHAT_STREAM_IDLE_TIMEOUT_MIN (default 4 min). But a
+   * sandbox command is synchronous and may legitimately run for up to 10 minutes
+   * (runInSandbox caps timeout_seconds at 600) emitting zero stream events — so
+   * the watchdog used to kill agents that were actively working, surfacing a bogus
+   * "The assistant stopped responding" toast mid-command.
+   *
+   * Long-running tools beat this heartbeat for the duration of their work, so
+   * "busy in a tool" counts as activity. A genuinely hung provider (no tool
+   * running, no output) still trips the watchdog exactly as before.
+   */
+  const startHeartbeat = (): (() => void) => {
+    if (!onActivity) return () => {};
+    const id = setInterval(() => {
+      try { onActivity(); } catch { /* best-effort */ }
+    }, HEARTBEAT_MS);
+    return () => clearInterval(id);
+  };
 
   const runInSandbox = tool({
     description:
@@ -197,6 +224,9 @@ export function createAgentTools(params: {
       console.log(`${tag} preview: ${cmdPreview}`);
 
       const progress = makeProgress(agentId, userId);
+      // Covers all three phases — booting the workspace, the exec itself, and the
+      // Data Room sync can each outlast the chat watchdog's idle window.
+      const stopHeartbeat = startHeartbeat();
       try {
         const t0 = Date.now();
         console.log(`${tag} [phase 1/3] ensureWorkspace…`);
@@ -264,6 +294,8 @@ export function createAgentTools(params: {
       } catch (err) {
         console.error(`${tag} threw:`, (err as Error).message);
         return `Sandbox exec failed: ${(err as Error).message}`;
+      } finally {
+        stopHeartbeat();
       }
     },
   });
@@ -661,6 +693,9 @@ export function createAgentTools(params: {
       console.log(`${tag} ━━━━━━━━━ [START] code (${code.length}ch) ━━━━━━━━━`);
       console.log(`${tag} preview: ${preview}`);
       const progress = makeProgress(agentId, userId);
+      // A kernel cell can churn for minutes (model training, big joins) without
+      // producing a single stream event — keep the chat watchdog fed.
+      const stopHeartbeat = startHeartbeat();
       try {
         const t0 = Date.now();
         console.log(`${tag} [phase 1/3] ensureWorkspace…`);
@@ -712,6 +747,8 @@ export function createAgentTools(params: {
       } catch (err) {
         console.error(`${tag} threw:`, (err as Error).message);
         return `Python kernel call failed: ${(err as Error).message}`;
+      } finally {
+        stopHeartbeat();
       }
     },
   });

@@ -591,7 +591,9 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
 
   // Add agent-specific tools (sandbox, memory, self-config).
   if (agentRecord) {
-    const agentTools = createAgentTools({ agentId: agentRecord.agentId, userId });
+    // onActivity: long sandbox/Python calls beat the chat idle watchdog while they
+    // work, so a 10-minute command isn't mistaken for a hung stream and aborted.
+    const agentTools = createAgentTools({ agentId: agentRecord.agentId, userId, onActivity: req.onActivity });
     tools = { ...tools, ...agentTools };
   }
 
