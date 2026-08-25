@@ -1,14 +1,24 @@
 import { html } from "hono/html";
 
-type NavPage = "home" | "agent" | "self-host" | "factory" | "portfolio" | "services" | "blog";
+type NavPage = "home" | "agent" | "self-host" | "proof" | "compare" | "services" | "blog";
 
 interface NavOptions {
   activePage: NavPage;
+  /** Primary (filled) CTA. Defaults to the pilot form on the homepage. */
   ctaLabel?: string;
   ctaHref?: string;
+  /** Secondary (text) CTA — self-serve signup stays reachable from every page. */
+  secondaryCtaLabel?: string;
+  secondaryCtaHref?: string;
 }
 
-export const Nav = ({ activePage, ctaLabel = "Access Agent", ctaHref = "/auth/register" }: NavOptions) => html`
+export const Nav = ({
+  activePage,
+  ctaLabel = "Book a pilot",
+  ctaHref = "/#pilot-form",
+  secondaryCtaLabel = "Access Agent",
+  secondaryCtaHref = "/auth/register",
+}: NavOptions) => html`
 <!-- FOUC prevention: runs before paint -->
 <script>
   (function() {
@@ -91,13 +101,13 @@ export const Nav = ({ activePage, ctaLabel = "Access Agent", ctaHref = "/auth/re
       <span class="font-display font-bold text-xl tracking-tight text-slate-900">LFG</span>
     </a>
     <div class="hidden md:flex items-center gap-6">
-      <a href="/" class="text-sm font-medium ${activePage === "home" ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600"} transition-colors">Home</a>
-      <a href="/agent/" class="text-sm font-medium ${activePage === "agent" ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600"} transition-colors">Agent</a>
+      <a href="/" class="text-sm font-medium ${activePage === "home" ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600"} transition-colors">Product</a>
+      <a href="/agent/" class="text-sm font-medium ${activePage === "agent" ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600"} transition-colors">How it works</a>
       <a href="/self-host/" class="text-sm font-medium ${activePage === "self-host" ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600"} transition-colors">Self-host</a>
-      <a href="/factory/" class="text-sm font-medium ${activePage === "factory" ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600"} transition-colors">Factory</a>
-      <a href="/portfolio/" class="text-sm font-medium ${activePage === "portfolio" ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600"} transition-colors">Portfolio</a>
-      <a href="/services/" class="text-sm font-medium ${activePage === "services" ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600"} transition-colors">Services</a>
+      <a href="/proof/" class="text-sm font-medium ${activePage === "proof" ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600"} transition-colors">Proof</a>
       <a href="/blog/" class="text-sm font-medium ${activePage === "blog" ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600"} transition-colors">Blog</a>
+      <!-- Services is a secondary path: last in the order and visually lighter -->
+      <a href="/services/" class="text-sm font-normal ${activePage === "services" ? "text-brand-600 font-semibold" : "text-slate-400 hover:text-brand-600"} transition-colors">Services</a>
       <div class="flex items-center gap-4 ml-2">
         <a href="https://github.com/lfg-hq/lfg" target="_blank" rel="noopener noreferrer" class="text-slate-500 hover:text-slate-900 transition-colors">
 <svg viewBox="0 0 24 24" fill="currentColor" class="w-5 h-5" aria-hidden="true"><path d="M12 .5C5.73.5.5 5.73.5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.68 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.8 0c2.21-1.49 3.18-1.18 3.18-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.41-2.69 5.39-5.25 5.67.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5Z"/></svg>
@@ -105,7 +115,8 @@ export const Nav = ({ activePage, ctaLabel = "Access Agent", ctaHref = "/auth/re
         <button id="theme-toggle" onclick="window.toggleTheme && window.toggleTheme()" class="text-slate-500 hover:text-slate-900 transition-colors" title="Toggle dark mode" aria-label="Toggle dark mode">
           <i data-lucide="moon" class="w-5 h-5"></i>
         </button>
-        <a href="${ctaHref}" class="bg-slate-900 hover:bg-brand-700 text-white px-5 py-2 rounded-full text-sm font-semibold transition-all shadow-lg">
+        <a href="${secondaryCtaHref}" class="text-sm font-semibold text-slate-600 hover:text-brand-600 transition-colors whitespace-nowrap">${secondaryCtaLabel}</a>
+        <a href="${ctaHref}" class="bg-slate-900 hover:bg-brand-700 text-white px-5 py-2 rounded-full text-sm font-semibold transition-all shadow-lg whitespace-nowrap">
           ${ctaLabel}
         </a>
       </div>
@@ -118,13 +129,13 @@ export const Nav = ({ activePage, ctaLabel = "Access Agent", ctaHref = "/auth/re
     </div>
   </div>
   <div id="mobile-menu" class="hidden md:hidden absolute top-full left-0 w-full bg-white border-b border-slate-200 p-4 flex-col gap-3 shadow-xl">
-    <a href="/" class="text-base font-medium ${activePage === "home" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">Home</a>
-    <a href="/agent/" class="text-base font-medium ${activePage === "agent" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">Agent</a>
+    <a href="/" class="text-base font-medium ${activePage === "home" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">Product</a>
+    <a href="/agent/" class="text-base font-medium ${activePage === "agent" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">How it works</a>
     <a href="/self-host/" class="text-base font-medium ${activePage === "self-host" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">Self-host</a>
-    <a href="/factory/" class="text-base font-medium ${activePage === "factory" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">Factory</a>
-    <a href="/portfolio/" class="text-base font-medium ${activePage === "portfolio" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">Portfolio</a>
-    <a href="/services/" class="text-base font-medium ${activePage === "services" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">Services</a>
+    <a href="/proof/" class="text-base font-medium ${activePage === "proof" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">Proof</a>
     <a href="/blog/" class="text-base font-medium ${activePage === "blog" ? "text-brand-600 font-semibold" : "text-slate-700"} py-2 mobile-link">Blog</a>
+    <a href="/services/" class="text-base font-normal ${activePage === "services" ? "text-brand-600 font-semibold" : "text-slate-400"} py-2 mobile-link">Services</a>
+    <a href="${secondaryCtaHref}" class="text-base font-semibold text-slate-700 py-2 mobile-link">${secondaryCtaLabel}</a>
     <a href="${ctaHref}" class="bg-brand-600 text-white w-full py-3 rounded-lg font-semibold text-center block mobile-link">${ctaLabel}</a>
   </div>
 </nav>
@@ -186,26 +197,36 @@ export const Nav = ({ activePage, ctaLabel = "Access Agent", ctaHref = "/auth/re
 `;
 
 export const Footer = () => html`
-<footer class="bg-slate-900 text-slate-400 py-10">
+<footer class="bg-slate-900 text-slate-400 py-12">
   <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-    <div class="flex flex-col md:flex-row items-center justify-between gap-6">
-      <div class="flex items-center gap-2">
-        <div class="bg-brand-600 text-white p-1.5 rounded-lg">
-          <i data-lucide="rocket" class="w-4 h-4"></i>
+    <div class="flex flex-col md:flex-row md:items-start justify-between gap-8">
+      <div class="max-w-sm">
+        <div class="flex items-center gap-2 mb-3">
+          <div class="bg-brand-600 text-white p-1.5 rounded-lg">
+            <i data-lucide="rocket" class="w-4 h-4"></i>
+          </div>
+          <span class="font-display font-bold text-white text-lg">LFG</span>
         </div>
-        <span class="font-display font-bold text-white text-lg">LFG</span>
+        <p class="text-sm leading-relaxed">The self-hosted agentic software factory. We run our own company on it.</p>
       </div>
-      <div class="flex flex-wrap items-center justify-center gap-6 text-sm">
-        <a href="/" class="hover:text-white transition-colors">Home</a>
-        <a href="/agent/" class="hover:text-white transition-colors">Agent</a>
+      <div class="flex flex-wrap items-center gap-x-6 gap-y-3 text-sm md:justify-end md:max-w-lg">
+        <a href="/" class="hover:text-white transition-colors">Product</a>
+        <a href="/agent/" class="hover:text-white transition-colors">How it works</a>
         <a href="/self-host/" class="hover:text-white transition-colors">Self-host</a>
-        <a href="/factory/" class="hover:text-white transition-colors">Factory</a>
-        <a href="/portfolio/" class="hover:text-white transition-colors">Portfolio</a>
-        <a href="/services/" class="hover:text-white transition-colors">Services</a>
+        <a href="/proof/" class="hover:text-white transition-colors">Proof</a>
+        <a href="/vs-coding-agents/" class="hover:text-white transition-colors">Vs. coding agents</a>
         <a href="/blog/" class="hover:text-white transition-colors">Blog</a>
+        <a href="/services/" class="hover:text-white transition-colors">Services</a>
+        <a href="/#pilot-form" class="hover:text-white transition-colors">Book a pilot</a>
         <a href="https://github.com/lfg-hq/lfg" target="_blank" rel="noopener noreferrer" class="hover:text-white transition-colors">GitHub</a>
       </div>
-      <p class="text-xs">&copy; ${new Date().getFullYear()} LFG. Open source under MIT.</p>
+    </div>
+    <div class="border-t border-slate-800 mt-8 pt-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+      <p>&copy; ${new Date().getFullYear()} LFG Inc. Open source core under MIT.</p>
+      <div class="flex items-center gap-5">
+        <a href="/privacy/" class="hover:text-white transition-colors">Privacy</a>
+        <a href="/terms/" class="hover:text-white transition-colors">Terms</a>
+      </div>
     </div>
   </div>
 </footer>

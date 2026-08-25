@@ -3,8 +3,8 @@ import { LandingPage } from "../templates/pages/landing.tsx";
 import { AgentPage } from "../templates/pages/agent.tsx";
 import { SelfHostPage } from "../templates/pages/self-host.tsx";
 import { ServicesPage } from "../templates/pages/services.tsx";
-import { PortfolioPage } from "../templates/pages/portfolio.tsx";
-import { FactoryPage } from "../templates/pages/factory.tsx";
+import { ProofPage } from "../templates/pages/proof.tsx";
+import { VsCodingAgentsPage } from "../templates/pages/vs-coding-agents.tsx";
 import { BlogPage } from "../templates/pages/blog.tsx";
 import { BlogPostPage } from "../templates/pages/blog-post.tsx";
 import { BuildLandingPage } from "../templates/pages/build-landing.tsx";
@@ -113,11 +113,20 @@ landing.get("/self-host/", (c) => c.html(SelfHostPage()));
 landing.get("/services", (c) => c.redirect("/services/"));
 landing.get("/services/", (c) => c.html(ServicesPage()));
 
-landing.get("/portfolio", (c) => c.redirect("/portfolio/"));
-landing.get("/portfolio/", (c) => c.html(PortfolioPage()));
+landing.get("/proof", (c) => c.redirect("/proof/"));
+landing.get("/proof/", (c) => c.html(ProofPage()));
 
-landing.get("/factory", (c) => c.redirect("/factory/"));
-landing.get("/factory/", (c) => c.html(FactoryPage()));
+// Positioning page: "why LFG if we already use Claude Code / Codex?"
+landing.get("/vs-coding-agents", (c) => c.redirect("/vs-coding-agents/"));
+landing.get("/vs-coding-agents/", (c) => c.html(VsCodingAgentsPage()));
+landing.get("/why-lfg", (c) => c.redirect("/vs-coding-agents/", 301));
+landing.get("/why-lfg/", (c) => c.redirect("/vs-coding-agents/", 301));
+
+// The factory pitch is now the homepage; /portfolio became /proof.
+landing.get("/factory", (c) => c.redirect("/", 301));
+landing.get("/factory/", (c) => c.redirect("/", 301));
+landing.get("/portfolio", (c) => c.redirect("/proof/", 301));
+landing.get("/portfolio/", (c) => c.redirect("/proof/", 301));
 
 landing.post("/api/portfolio/connect", async (c) => {
   try {
