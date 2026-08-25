@@ -273,8 +273,14 @@ fi`, 120_000);
 
   const sha = check.output.match(/MERGED:([a-f0-9]{40})/)?.[1];
   if (sha) {
-    log(`Merged. ${account || "(the agent gave no account)"}\n\n${o.targetBranch} is now at ${sha.slice(0, 7)} and contains ${o.featureBranch}.`);
-    return { merged: true, sha, summary: account || "the agent completed the merge" };
+    // Some CLIs end a run with tool calls and no closing prose. Say what we KNOW rather
+    // than "(the agent gave no account)", which reads like something went wrong.
+    const told = account
+      || (o.conflictFiles?.length
+        ? `Resolved ${o.conflictFiles.length} conflicting file(s) and pushed ${o.targetBranch}.`
+        : `Completed the merge and pushed ${o.targetBranch}.`);
+    log(`Merged. ${told}\n\n${o.targetBranch} is now at ${sha.slice(0, 7)} and contains ${o.featureBranch}.`);
+    return { merged: true, sha, summary: told };
   }
   log(`The agent could not get the merge through.${account ? `\n\n${account}` : ""}`);
   return { merged: false, summary: account || "The agent could not complete the merge — needs a human." };

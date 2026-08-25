@@ -615,10 +615,7 @@
     const canPick = setupDone && branches.length > 1;
     setSub(stopped ? "Stopped" : "Not running");
     renderActions("");
-    const opts = branches.map((b) => {
-      const runnable = b.id === "default" || !!b.ticketId;
-      return `<option value="${esc(b.id)}"${b.id === branchId ? " selected" : ""}${runnable ? "" : " disabled"}>${esc(b.label)}</option>`;
-    }).join("");
+    const opts = branchOptions();
     const branchSel = canPick ? `<div style="display:flex;flex-direction:column;gap:6px;align-items:center;margin-top:4px;">
         <div style="font-size:12px;color:var(--text-secondary,#9ca3af);">Choose which branch to preview</div>
         <select data-branch style="height:36px;padding:0 12px;border-radius:8px;font-size:13px;background:var(--card-bg,#161616);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);max-width:340px;cursor:pointer;">${opts}</select>
@@ -956,13 +953,19 @@
     catch (e) { render({ previewStatus: "error", error: "Rebuild failed: " + e.message }); }
   }
 
-  // Options for the branch <select>. An entry with no ticketId other than
-  // "default" is one we discovered from the running state but can't re-launch
-  // (the API restarts by ticket id) — show it, selected, but not pickable.
+  // Can this entry actually be launched? "default" and ticket branches restart by
+  // ticket id; an EPIC restarts by BRANCH NAME (doRestart passes entry.branch), which
+  // is why epics count as runnable despite having no ticketId. Everything else is an
+  // entry we discovered from the running state but can't re-launch — shown, selected,
+  // but not pickable.
+  function isRunnable(b) {
+    return b.id === "default" || !!b.ticketId || String(b.id || "").indexOf("epic:") === 0;
+  }
+
+  // Options for the branch <select>.
   function branchOptions() {
     return branches.map((b) => {
-      const runnable = b.id === "default" || !!b.ticketId;
-      return `<option value="${esc(b.id)}"${b.id === branchId ? " selected" : ""}${runnable ? "" : " disabled"}>${esc(b.label)}</option>`;
+      return `<option value="${esc(b.id)}"${b.id === branchId ? " selected" : ""}${isRunnable(b) ? "" : " disabled"}>${esc(b.label)}</option>`;
     }).join("");
   }
 

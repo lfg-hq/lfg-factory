@@ -1166,6 +1166,18 @@ ticketsApi.post("/:projectId/tickets/:ticketId/git/push", async (c) => {
         .set({ githubMergeStatus: "merged", updatedAt: new Date() })
         .where(eq(projectTickets.id, ticketId));
       await maybeSubmitEpicForReview(ticket.epicId);
+      // The same green agent bubble a BUILD ends with. Pushing/merging from the Git tab
+      // only wrote plain command logs, so the outcome was buried in the Actions stream
+      // with no summary to look at.
+      await addTicketLog(ticketId, [
+        `✅ **Merged** into \`${anchorBranch}\`.`,
+        ``,
+        `- Branch: \`${featureBranch}\``,
+        sha ? `- Commit: \`${sha.slice(0, 7)}\`` : "",
+        `- Merged cleanly — no conflicts.`,
+        ``,
+        `Open the **Preview** tab and pick \`${anchorBranch}\` to run the whole epic.`,
+      ].filter(Boolean).join("\n"), "ai_response", user.id).catch(() => {});
     } catch (mergeErr) {
       // Conflicts and non-conflict git failures (shallow clone, dirty tree, a ref that
       // won't resolve) go to the SAME place: the coding agent in the sandbox, with a
@@ -1201,6 +1213,21 @@ ticketsApi.post("/:projectId/tickets/:ticketId/git/push", async (c) => {
           .where(eq(projectTickets.id, ticketId));
         await addTicketLog(ticketId, `Merged to ${anchorBranch} (${merged.sha.slice(0, 7)}) — ${merged.summary}`, "command", user.id).catch(() => {});
         await maybeSubmitEpicForReview(ticket.epicId);
+        await addTicketLog(ticketId, [
+          `✅ **Merged** into \`${anchorBranch}\`.`,
+          ``,
+          conflictFiles?.length
+            ? `**The first attempt failed and the agent sorted it out.** ${conflictFiles.length} file(s) conflicted:\n${conflictFiles.map((f) => `- \`${f}\``).join("\n")}`
+            : `**The first attempt failed and the agent sorted it out.**`,
+          ``,
+          merged.summary && merged.summary !== "the agent completed the merge"
+            ? `**What it did:** ${merged.summary}` : "",
+          ``,
+          `- Branch: \`${featureBranch}\``,
+          `- \`${anchorBranch}\` is now at \`${merged.sha.slice(0, 7)}\``,
+          ``,
+          `Worth reviewing the diff on the **Git** tab — a resolved conflict is a judgement call.`,
+        ].filter(Boolean).join("\n"), "ai_response", user.id).catch(() => {});
         return c.json({
           sha, branch: featureBranch, mergeStatus,
           message: `Merged into ${anchorBranch}. ${merged.summary}`,
@@ -1213,6 +1240,15 @@ ticketsApi.post("/:projectId/tickets/:ticketId/git/push", async (c) => {
         .where(eq(projectTickets.id, ticketId));
       const why = merged?.summary ?? explainGitFailure(String(mergeErr));
       await addTicketLog(ticketId, `Merge to ${anchorBranch} needs a human: ${why}`, "cli_error", user.id).catch(() => {});
+      await addTicketLog(ticketId, [
+        `⚠️ **Pushed, but not merged** into \`${anchorBranch}\`.`,
+        ``,
+        conflictFiles?.length ? `Conflicting file(s):\n${conflictFiles.map((f) => `- \`${f}\``).join("\n")}` : "",
+        ``,
+        `**Why:** ${why}`,
+        ``,
+        `- Branch: \`${featureBranch}\`${sha ? ` at \`${sha.slice(0, 7)}\`` : ""} — the work is safe on the remote.`,
+      ].filter(Boolean).join("\n"), "ai_response", user.id).catch(() => {});
       return c.json({
         sha, branch: featureBranch, mergeStatus,
         conflict: conflictFiles?.length ? { targetBranch: anchorBranch, files: conflictFiles, resolved: false } : undefined,
