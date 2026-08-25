@@ -14,7 +14,7 @@
  *  4. Poll the JSONL output file with byte offset + alive check until the exit marker.
  */
 
-import { execOnWorkspace, findJob } from "./mags.ts";
+import { execOnWorkspace, findJob, syncWorkspaceClock } from "./mags.ts";
 
 async function execLite(workspaceId: string, script: string, timeout = 15_000) {
   const b64 = Buffer.from(script).toString("base64");
@@ -246,6 +246,10 @@ function sleep(ms: number) {
  * Launch Pi in the VM (non-blocking, background). Returns the output file + pid.
  */
 export async function startPiCli(opts: PiRunOptions): Promise<PiRunResult> {
+  // Builds install packages and talk to provider APIs over TLS. A VM resumed with a
+  // drifted clock rejects valid certificates (CERT_NOT_YET_VALID) and the failure looks
+  // like anything but a clock problem, so straighten it out before we start.
+  await syncWorkspaceClock(opts.workspaceId).catch(() => {});
   const baseCfg = PI_PROVIDERS[opts.provider];
   if (!baseCfg) throw new Error(`Pi runner: unsupported provider '${opts.provider}'`);
   if (!opts.apiKey && !opts.oauthAccessToken) throw new Error("Pi runner: an API key or OAuth access token is required");

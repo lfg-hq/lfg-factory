@@ -11,7 +11,7 @@ import { db } from "../config/db.ts";
 import { profiles } from "../db/schema/users.ts";
 import { sandboxes } from "../db/schema/sandbox.ts";
 import { decryptSecret, encryptSecret } from "../utils/crypto.ts";
-import { execOnWorkspace, newWorkspace, stopWorkspace } from "./mags.ts";
+import { execOnWorkspace, newWorkspace, stopWorkspace, syncWorkspaceClock } from "./mags.ts";
 
 const WORKSPACE_TYPE = "openai_codex_auth";
 const AUTH_DIR = "/root/.pi/agent";
@@ -102,6 +102,9 @@ async function readWorkspaceCredential(workspaceId: string): Promise<OpenAICodex
 }
 
 async function installCurrentPi(workspaceId: string): Promise<void> {
+  // A VM whose clock is behind sees the npm registry's TLS cert as "not yet valid" and
+  // the install dies with CERT_NOT_YET_VALID — nothing to do with the user's account.
+  await syncWorkspaceClock(workspaceId);
   const packageName = JSON.stringify(PI_PACKAGE);
   const script = `export HOME=/root
 for rc in /etc/profile ~/.profile ~/.bashrc; do [ -f "$rc" ] && . "$rc" >/dev/null 2>&1 || true; done
@@ -117,7 +120,11 @@ PI_AI_CLI=$(find /data/.npm-global/lib/node_modules -path '*/pi-ai/dist/cli.js' 
 echo "PI_AI_CLI=$PI_AI_CLI"`;
   const result = await execOnWorkspace(workspaceId, script, { timeout: 180_000 });
   if (result.exitCode !== 0 || !result.output.includes("PI_AI_CLI=")) {
-    throw new Error(`Could not install the current Pi authentication runtime: ${(result.output || result.stderr).slice(-800)}`);
+    const raw = (result.output || result.stderr);
+    const hint = /CERT_NOT_YET_VALID|certificate is not yet valid|CERT_HAS_EXPIRED/i.test(raw)
+      ? "The sandbox VM's clock is wrong, so it rejects valid TLS certificates. We tried to correct it and it didn't take — retry in a moment; if it persists the VM needs recycling. "
+      : "";
+    throw new Error(`Could not install the current Pi authentication runtime: ${hint}${raw.slice(-600)}`);
   }
 }
 
@@ -253,6 +260,8 @@ export async function getOpenAICodexAccessToken(userId: string): Promise<string>
         .catch(() => false);
       if (!alive) workspaceId = null;
     }
+    // Same reason as the install: a skewed clock breaks the HTTPS token refresh too.
+    if (workspaceId) await syncWorkspaceClock(workspaceId);
     if (!workspaceId) {
       workspaceId = await createAuthWorkspace(userId);
       await installCurrentPi(workspaceId);

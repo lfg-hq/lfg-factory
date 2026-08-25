@@ -1368,11 +1368,22 @@ body[data-theme="light"] {
     background-color: #f8fafc !important;
 }
 
-[data-theme="light"] .settings-sidebar,
+/* The sidebar is only a 220px WRAPPER around the nav card — giving it a fill and a
+   border too drew a second, square-cornered box behind the rounded one, whose corners
+   stuck out past it. The card belongs on the nav itself. */
+[data-theme="light"] .settings-sidebar {
+    background-color: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+}
+
 [data-theme="light"] .settings-nav,
 [data-theme="light"] .settings-menu {
     background-color: #ffffff !important;
-    border: 1px solid #e2e8f0 !important;
+    /* #e2e8f0 reads as a drawn line in light mode; dark mode's card is a fill with a
+       hairline you can barely see. Match that weight. */
+    border: 1px solid rgba(15, 23, 42, 0.06) !important;
+    border-radius: 10px !important;
 }
 
 [data-theme="light"] .settings-nav-item,
