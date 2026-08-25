@@ -1914,10 +1914,15 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
   // bespoke start/restart/sandbox-info + feature-demo recorder were removed.
 
   // ── Git tab ──────────────────────────────────────────────────────
-  var _gitStatusColors = { pending:'#6b7280', pr_open:'#3b82f6', pushed:'#3b82f6', merged:'#34d399', failed:'#f87171', not_pushed:'#f87171' };
+  var _gitStatusColors = { pending:'#6b7280', pr_open:'#3b82f6', pushed:'#3b82f6', merged:'#34d399', failed:'#f87171', not_pushed:'#f87171', conflict:'#f59e0b', merged_with_conflicts:'#34d399' };
   var _gitRepo = null;   // { provider, cloneUrl, webUrl, webIdeUrl, hasRepo } for the ticket's project
   var _gitBranch = '';   // this ticket's feature branch
-  var _gitStatusLabels = { not_pushed:'Not pushed', pushed:'Pushed (not merged)' };
+  var _gitStatusLabels = {
+    not_pushed:'Not pushed',
+    pushed:'Pushed (not merged)',
+    conflict:'Conflict — needs a human',
+    merged_with_conflicts:'Merged (AI-resolved conflicts)',
+  };
 
   async function loadGitInfo() {
     if (!_currentTicketId) return;
@@ -2121,9 +2126,15 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       var data = await res.json();
       if (!res.ok) { alert(data.error || 'Failed to push'); }
       else {
-        var msg = 'Pushed ' + (data.sha || '').slice(0, 7) + ' to ' + (data.branch || '');
-        if (data.mergeStatus === 'merged') msg += ' and merged to ' + (_ticketAnchorBranch || 'the epic branch');
-        alert(msg);
+        // The server now reports a conflict (or any merge failure) instead of returning
+        // 200 with the old status — say so rather than implying the merge went through.
+        if (data.message) {
+          alert(data.message);
+        } else {
+          var msg = 'Pushed ' + (data.sha || '').slice(0, 7) + ' to ' + (data.branch || '');
+          if (data.mergeStatus === 'merged') msg += ' and merged to ' + (_ticketAnchorBranch || 'the epic branch');
+          alert(msg);
+        }
       }
       loadGitInfo();
     } catch(e) { alert('Failed: ' + e.message); }

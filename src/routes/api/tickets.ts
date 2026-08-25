@@ -12,6 +12,7 @@ import { eq, and, asc, desc, max, notExists } from "drizzle-orm";
 import { getProjectAccess, requirePermission } from "../../auth/project-access.ts";
 import { nextTicketKey } from "../../utils/ticket-keys.ts";
 import { notify } from "../../services/notify.ts";
+import { addLog as addTicketLog } from "../../services/ticket-logs.ts";
 import type { auth } from "../../auth/index.ts";
 
 type AuthEnv = {
@@ -1150,7 +1151,29 @@ ticketsApi.post("/:projectId/tickets/:ticketId/git/push", async (c) => {
         .where(eq(projectTickets.id, ticketId));
       await maybeSubmitEpicForReview(ticket.epicId);
     } catch (mergeErr) {
+      // This used to be a bare console.warn, so a conflict returned HTTP 200 with the
+      // OLD status and the panel kept saying "Pushed (not merged)" — indistinguishable
+      // from not having clicked at all. Report what actually happened.
+      const { MergeConflictError } = await import("../../services/git.ts");
+      if (mergeErr instanceof MergeConflictError) {
+        mergeStatus = "conflict";
+        await db.update(projectTickets)
+          .set({ githubMergeStatus: "conflict", updatedAt: new Date() })
+          .where(eq(projectTickets.id, ticketId));
+        await addTicketLog(ticketId, `Merge to ${anchorBranch} hit conflicts in: ${mergeErr.files.join(", ")}`, "cli_error", user.id).catch(() => {});
+        return c.json({
+          sha, branch: featureBranch, mergeStatus,
+          conflict: { targetBranch: anchorBranch, files: mergeErr.files },
+          // The build path resolves conflicts automatically; from here it's a rebuild.
+          message: `Pushed, but merging into ${anchorBranch} conflicts in ${mergeErr.files.length} file(s): ${mergeErr.files.join(", ")}. Rebuild the ticket to have the agent resolve it, or merge by hand.`,
+        });
+      }
       console.warn(`[tickets] Merge to ${anchorBranch} failed during push:`, mergeErr);
+      await addTicketLog(ticketId, `Merge to ${anchorBranch} failed: ${mergeErr}`, "cli_error", user.id).catch(() => {});
+      return c.json({
+        sha, branch: featureBranch, mergeStatus,
+        message: `Pushed, but the merge into ${anchorBranch} failed: ${String(mergeErr).slice(0, 300)}`,
+      });
     }
 
     return c.json({ sha, branch: featureBranch, mergeStatus });
