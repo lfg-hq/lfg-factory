@@ -270,43 +270,43 @@ export const LandingPage = ({ posts = [], turnstileSiteKey = "" }: { posts?: Blo
                             <span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-pink-500">in days, not months.</span>
                         </h1>
                         <p class="text-base sm:text-lg text-slate-600 mt-6 max-w-2xl leading-relaxed animate-fade-up">
-                            LFG is an AI-native software factory. We use our custom built AI agent to research, plan, build, and ship production software, with engineers as quality control. Faster delivery, lower cost, real products.
+                            LFG Agent is a software factory you run yourself. Hand it a brief and it researches, plans, builds, tests and ships production software &mdash; with your engineers as quality control. Open source, self-hosted, running on whichever models you choose.
                         </p>
 
                         <div class="mt-8 flex flex-col sm:flex-row gap-3 animate-fade-up">
-                            <a href="#hero-form" class="px-7 py-3 rounded-full bg-slate-900 text-white font-semibold hover:bg-slate-800 transition-colors inline-flex items-center justify-center gap-2">
-                                Access Agent <i data-lucide="arrow-right" class="w-4 h-4"></i>
+                            <a href="/auth/register" class="px-7 py-3 rounded-full bg-slate-900 text-white font-semibold hover:bg-slate-800 transition-colors inline-flex items-center justify-center gap-2">
+                                Start building free <i data-lucide="arrow-right" class="w-4 h-4"></i>
                             </a>
                             <a href="/agent/" class="px-7 py-3 rounded-full border border-slate-300 bg-white text-slate-800 font-semibold hover:border-brand-400 hover:text-brand-700 transition-colors inline-flex items-center justify-center gap-2">
-                                <i data-lucide="rocket" class="w-4 h-4"></i> Set up your own agent
+                                <i data-lucide="play" class="w-4 h-4"></i> See the agent work
                             </a>
                         </div>
                         <p class="mt-3 text-xs text-slate-500 animate-fade-up">Open source &middot; self-host with Docker &middot; bring your own model &amp; API key</p>
 
                         <div class="mt-8 grid sm:grid-cols-3 gap-4 text-sm animate-fade-up">
                             <div class="rounded-xl border border-slate-200 bg-white/80 p-3">
-                                <p class="font-bold text-slate-900">24h</p>
-                                <p class="text-slate-600 text-xs mt-1">to first PRD draft</p>
+                                <p class="font-bold text-slate-900">PRD</p>
+                                <p class="text-slate-600 text-xs mt-1">from a one-line brief</p>
                             </div>
                             <div class="rounded-xl border border-slate-200 bg-white/80 p-3">
-                                <p class="font-bold text-slate-900">Daily</p>
-                                <p class="text-slate-600 text-xs mt-1">ticket-level visibility</p>
+                                <p class="font-bold text-slate-900">Tickets</p>
+                                <p class="text-slate-600 text-xs mt-1">planned, dependency-aware</p>
                             </div>
                             <div class="rounded-xl border border-slate-200 bg-white/80 p-3">
-                                <p class="font-bold text-slate-900">Senior review</p>
-                                <p class="text-slate-600 text-xs mt-1">before each release</p>
+                                <p class="font-bold text-slate-900">Pull requests</p>
+                                <p class="text-slate-600 text-xs mt-1">built, tested, ready to review</p>
                             </div>
                         </div>
 
                         <p class="mt-8 text-sm text-slate-500 animate-fade-up">
-                            IT services firm? <a href="/self-host/" class="font-semibold text-slate-600 hover:text-brand-600 transition-colors inline-flex items-center gap-1">Self-host the factory <i data-lucide="arrow-right" class="w-3.5 h-3.5"></i></a>
+                            Would rather we ran it for you? <a href="/services/" class="font-semibold text-slate-600 hover:text-brand-600 transition-colors inline-flex items-center gap-1">LFG delivery services <i data-lucide="arrow-right" class="w-3.5 h-3.5"></i></a>
                         </p>
                     </div>
 
                     <div class="glass rounded-2xl p-5 sm:p-6 shadow-2xl border border-slate-200/70">
                         <div class="mb-4">
-                            <h2 class="font-display text-xl font-bold text-slate-900">Tell us what to build</h2>
-                            <p class="text-sm text-slate-500 mt-1">Describe your development needs. We'll send you a PRD + plan, and we might build it for free.</p>
+                            <h2 class="font-display text-xl font-bold text-slate-900">Try it on your own project</h2>
+                            <p class="text-sm text-slate-500 mt-1">Describe what you want built. The agent writes the PRD and the ticket plan and emails them to you. Free.</p>
                         </div>
 
                         <form id="hero-form" class="space-y-3">
@@ -338,7 +338,7 @@ export const LandingPage = ({ posts = [], turnstileSiteKey = "" }: { posts?: Blo
                             </div>
                             <button type="submit" class="w-full inline-flex items-center justify-center gap-2 bg-brand-600 hover:bg-brand-700 text-white px-5 py-3 rounded-lg font-semibold transition-all">
                                 <i data-lucide="sparkles" class="w-4 h-4"></i>
-                                <span id="hero-btn-text">Get Your Free Plan</span>
+                                <span id="hero-btn-text">Run the agent on it</span>
                             </button>
                         </form>
                     </div>

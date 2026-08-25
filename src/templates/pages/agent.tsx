@@ -115,7 +115,7 @@ export const AgentPage = () => html`
             <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                 <div class="text-center mb-12">
                     <p class="text-sm font-bold text-brand-600 uppercase tracking-wider mb-2">See it in action</p>
-                    <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">Your AI product manager at work</h2>
+                    <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">LFG Agent at work</h2>
                     <p class="text-slate-600 text-lg mt-4">From requirements analysis to ticket execution, every step is visible and trackable.</p>
                 </div>
                 <div class="space-y-16">
@@ -208,7 +208,7 @@ export const AgentPage = () => html`
             <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                 <div class="text-center max-w-3xl mx-auto mb-16">
                     <p class="text-sm font-bold text-brand-600 uppercase tracking-wider mb-2">What LFG Agent does</p>
-                    <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">Your AI product manager, end to end</h2>
+                    <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">One agent, the whole lifecycle</h2>
                     <p class="text-slate-600 text-lg mt-4">LFG Agent handles the entire product lifecycle, from understanding what needs to be built to making sure it gets built right.</p>
                 </div>
                 <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
