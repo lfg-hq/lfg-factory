@@ -273,9 +273,50 @@
 
   // Persistent floating button to open the comments panel — always present in the
   // viewer (even with 0 comments) so there's a clear, discoverable entry point.
+  /**
+   * Is the document actually on screen? The FAB is position:fixed on document.body, so
+   * nothing about closing the viewer, switching artifact tabs or going back to the chat
+   * removed it — it just sat there over the chat composer, on a page with no document in
+   * sight. Tying it to the viewer's visibility covers every dismissal path at once,
+   * including ones added later.
+   */
+  function viewerVisible() {
+    var el = document.getElementById("viewer-markdown");
+    return !!(el && el.offsetParent !== null);
+  }
+
+  /** Remove the FAB and panel, and stop watching. Safe to call repeatedly. */
+  function teardownComments() {
+    var fab = document.getElementById("comments-toggle-fab");
+    if (fab) fab.remove();
+    var panel = document.getElementById("comments-panel");
+    if (panel) panel.remove();
+    state.panelOpen = false;
+    if (fabWatchdog) { clearInterval(fabWatchdog); fabWatchdog = null; }
+  }
+  window.teardownDocumentComments = teardownComments;
+
+  var fabWatchdog = null;
+  var fabRetried = false;
+  function watchViewer() {
+    if (fabWatchdog) return;
+    fabWatchdog = setInterval(function () {
+      if (!viewerVisible()) teardownComments();
+    }, 700);
+  }
+
   function ensureCommentsFab() {
     var unresolvedCount = state.comments.filter(function (c) { return !c.isResolved; }).length;
     var fab = document.getElementById("comments-toggle-fab");
+    // No document in view → no comment affordance, whatever the state says. One retry
+    // first: on the very first render this can run a tick before the viewer has laid
+    // out, and treating that as "no document" would hide the button for good.
+    if (!viewerVisible()) {
+      teardownComments();
+      if (!fabRetried) { fabRetried = true; setTimeout(ensureCommentsFab, 300); }
+      return;
+    }
+    fabRetried = false;
     // Show the FAB whenever commenting is allowed or comments already exist.
     if (!state.canComment && state.comments.length === 0) { if (fab) fab.remove(); return; }
     if (!fab) {
@@ -286,6 +327,7 @@
       document.body.appendChild(fab);
     }
     fab.style.display = state.panelOpen ? "none" : "";
+    watchViewer();
     fab.innerHTML = '<i class="fas fa-comments"></i> Comments' + (unresolvedCount ? ' <span class="badge">' + unresolvedCount + "</span>" : "");
   }
 

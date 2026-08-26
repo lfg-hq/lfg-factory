@@ -1431,6 +1431,10 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     var rowId = 'log-' + idx;
     var el = document.createElement('div');
     el.className = 'log-entry';
+    // Ordering key: the build's own output arrives over a webhook and can land AFTER
+    // the completion summary was written, so rows must be placed by WHEN THEY HAPPENED,
+    // not when they reached the browser.
+    el.setAttribute('data-ts', String(Date.parse(row.createdAt || '') || 0));
 
     if (type === 'ai_response') {
       // Agent — coloured left border (green for success, red for a failure
@@ -2508,7 +2512,23 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
 
       var idx = area.children.length;
       var wasAtBottom = !area.children.length || (area.scrollHeight - area.scrollTop - area.clientHeight < 120);
-      area.appendChild(renderLogEntry(log, 'live-' + idx));
+      var node = renderLogEntry(log, 'live-' + idx);
+
+      // Insert in timestamp order instead of always appending. The VM buffers its JSONL
+      // and forwards it over the webhook, so the tail of a build routinely arrives after
+      // the executor has already written "Ticket complete" — which is why the log kept
+      // scrolling on past the summary with dotnet restore output, looking like the build
+      // was still running when it had finished and merged.
+      var ts = Date.parse(log.createdAt || '') || 0;
+      var before = null;
+      if (ts) {
+        for (var i = area.children.length - 1; i >= 0; i--) {
+          var rowTs = Number(area.children[i].getAttribute('data-ts') || 0);
+          if (!rowTs || rowTs <= ts) break;   // rows before this one are older — stop
+          before = area.children[i];
+        }
+      }
+      if (before) area.insertBefore(node, before); else area.appendChild(node);
 
       if (wasAtBottom) scrollActionsBottom();
       _lastLogCount = area.children.length;
