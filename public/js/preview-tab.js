@@ -92,7 +92,11 @@
       // progress views show wide labelled buttons ("Run default branch") with nothing
       // that can scroll, so they keep their old wrapping behaviour.
       "#preview-actions:has(.pv-scroll){flex-wrap:nowrap!important;min-width:0;flex:1 1 auto;}" +
-      ".pv-scroll{display:flex;align-items:center;gap:6px;flex:1 1 auto;min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-ms-overflow-style:none;}" +
+      // flex-GROW 0: the strip takes only the width its controls need and shrinks
+      // (scrolling) when the toolbar runs out of room. With 1 1 auto it swallowed every
+      // spare pixel, so a single app dropdown sat alone on the left with a canyon of
+      // empty space between it and the Chat button.
+      ".pv-scroll{display:flex;align-items:center;gap:6px;flex:0 1 auto;min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-ms-overflow-style:none;}" +
       ".pv-scroll::-webkit-scrollbar{display:none;}" +
       // The branch <select> is the one fixed control that can afford to give up width
       // before the chips start scrolling.
@@ -128,12 +132,20 @@
     const active = activeSvc(state);
     const label = active ? active.name : svcs[0].name;
     const live = !!(active && active.url);
-    const enabledCount = svcs.filter((s) => s.primary || s.enabled).length;
+    // What the badge must answer is "is there ANOTHER app, and is it up?" — "2/2" was a
+    // ratio of enabled-to-total that told you neither.
+    const others = svcs.filter((s) => !active || s.name !== active.name);
+    const othersUp = others.filter((s) => s.url || s.primary || s.enabled);
     const tip = svcs.map((s) => `${s.name}${s.primary ? " (primary)" : s.enabled ? "" : " — off"}${s.port ? " · :" + s.port : ""}`).join("\n");
-    const btn2 = `<button data-action="svcmenu" title="${esc(`Apps in this preview:\n${tip}`)}" style="height:32px;padding:0 9px 0 10px;border-radius:7px;font-size:12px;cursor:pointer;border:1px solid var(--border-color,#333);background:transparent;color:var(--text-color,#cbd5e1);display:inline-flex;align-items:center;gap:7px;font-weight:500;white-space:nowrap;flex:none;max-width:200px;">`
+    const btn2 = `<button data-action="svcmenu" title="${esc(others.length ? `Switch app — ${others.length} other app${others.length === 1 ? "" : "s"} in this preview${othersUp.length ? ` (${othersUp.length} running)` : ""}:\n${tip}` : `Apps in this preview:\n${tip}`)}" style="height:32px;padding:0 9px 0 10px;border-radius:7px;font-size:12px;cursor:pointer;border:1px solid var(--border-color,#333);background:transparent;color:var(--text-color,#cbd5e1);display:inline-flex;align-items:center;gap:7px;font-weight:500;white-space:nowrap;flex:none;max-width:200px;">`
       + `<span style="width:6px;height:6px;border-radius:50%;background:${live ? "#10b981" : "#94a3b8"};flex:none;"></span>`
       + `<span style="overflow:hidden;text-overflow:ellipsis;">${esc(label)}</span>`
-      + `<span style="font-size:10.5px;opacity:.5;flex:none;">${enabledCount}/${svcs.length}</span>`
+      + (others.length
+          ? `<span style="font-size:10px;font-weight:600;flex:none;padding:1px 5px;border-radius:999px;`
+            + `background:${othersUp.length ? "rgba(16,185,129,.16)" : "var(--border-color,#2a2a2a)"};`
+            + `color:${othersUp.length ? "#10b981" : "var(--text-secondary,#9ca3af)"};">`
+            + `+${others.length}${othersUp.length ? "" : " off"}</span>`
+          : "")
       + `<i class="fas fa-chevron-down" style="font-size:9px;opacity:.55;flex:none;"></i></button>`;
     return strip(btn2);
   }
