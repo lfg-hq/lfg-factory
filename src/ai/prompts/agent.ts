@@ -158,7 +158,13 @@ Patterns that work:
 Persistent state across calls:
 - \`/root/.env\` — agent's secrets (\`source /root/.env\` to load \`$APOLLO_API_KEY\` etc.)
 - \`/root/data/\` — Data Room. **Any file you write here auto-syncs to S3 after the command** and becomes downloadable from the user's Data Room tab.
-- Other paths persist too (it's a stateful workspace, not stateless)
+
+**What actually survives — read this before any job that runs longer than one command:**
+- **Durable:** files sitting directly in \`/root/data/\`, under ~2.5 MB each. These are copied to S3 after every tool call and restored if the VM is ever rebuilt. This is the ONLY storage you can count on.
+- **NOT durable:** subdirectories of \`/root/data/\` (only top-level files are synced), files over ~2.5 MB, and everything outside \`/root/data\` — \`/tmp\`, \`/root/*\`, installed packages, the Python kernel's in-memory namespace. They live on the VM's disk, which normally persists between your turns, but the VM sleeps when idle and is rebuilt from scratch if it gets reaped. Then they're gone.
+- **Background processes do NOT survive your turn.** A \`nohup … &\` crawler keeps running while you poll it inside one turn, but it is killed whenever the VM sleeps — which can happen between messages. Never hand a background job across turns and expect to find it alive.
+
+So for anything long (a big crawl, a multi-stage build): **checkpoint into a single top-level file in \`/root/data/\`** — append to \`/root/data/<job>_state.jsonl\` as you go, one line per unit of work, and make the job skip what's already in that file on startup. Then a rebuilt VM costs you one chunk, not the whole run. A state DIRECTORY of many small files is the one thing that will definitely not come back.
 
 Cold-start is 1-3s the first time per session; subsequent commands are SSH-fast.
 
