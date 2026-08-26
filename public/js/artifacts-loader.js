@@ -2871,8 +2871,26 @@ document.addEventListener('DOMContentLoaded', function() {
                             .checklist-filters .filter-options { min-width: 0; }
                             .checklist-filters .filter-group {
                                 display: flex; align-items: center; gap: 6px;
-                                flex-wrap: wrap; justify-content: flex-end; min-width: 0;
+                                /* ONE line. Wrapping put "Group by epic" and a bare × on a
+                                   second row, where they read as their own unexplained
+                                   toolbar rather than as part of the filters. */
+                                flex-wrap: nowrap; justify-content: flex-end; min-width: 0;
+                                overflow-x: auto; scrollbar-width: none; -ms-overflow-style: none;
                             }
+                            .checklist-filters .filter-group::-webkit-scrollbar { display: none; }
+                            /* Grouping is not a filter — it changes the SHAPE of the list, not
+                               what's in it. A divider says so. */
+                            .checklist-filters .filter-sep {
+                                width: 1px; height: 18px; flex: none; margin: 0 2px;
+                                background: ${isLightTheme ? '#e4e7ec' : 'rgba(255,255,255,0.10)'};
+                            }
+                            /* A filter that's actually doing something looks like it. */
+                            .checklist-filter-dropdown.is-active {
+                                border-color: ${isLightTheme ? '#c4b5fd' : 'rgba(139,92,246,0.55)'} !important;
+                                color: ${isLightTheme ? '#6d28d9' : '#c4b5fd'} !important;
+                                background: ${isLightTheme ? '#f5f3ff' : 'rgba(139,92,246,0.12)'} !important;
+                            }
+                            .checklist-filters .clear-filters-btn[hidden] { display: none !important; }
                             /* Epic names are long; without a cap one title pushes the
                                row past the panel and adds a horizontal scrollbar. */
                             #epic-filter, #group-by-filter { max-width: 13rem !important; }
@@ -2937,11 +2955,12 @@ document.addEventListener('DOMContentLoaded', function() {
                                                     ${epicOptions.map(e => `<option value="${e.id}">${e.label}</option>`).join('')}
                                                     <option value="__none__">No epic</option>
                                                 </select>
+                                                <span class="filter-sep"></span>
                                                 <select id="group-by-filter" class="checklist-filter-dropdown" title="Group tickets by">
                                                     <option value="date">Group by date</option>
                                                     <option value="epic">Group by epic</option>
                                                 </select>
-                                                <button id="clear-checklist-filters" class="clear-filters-btn" title="Clear filters">
+                                                <button id="clear-checklist-filters" class="clear-filters-btn" title="Clear filters" hidden>
                                                     <i class="fas fa-times"></i>
                                                 </button>
                                             </div>
@@ -3022,6 +3041,26 @@ document.addEventListener('DOMContentLoaded', function() {
                     const groupByFilter = document.getElementById('group-by-filter');
                     // Grouping choice sticks per project — you pick "by epic" once and
                     // the board keeps showing delivery units on every visit.
+                    // Keep the chrome honest: highlight the filters that are narrowing the
+                    // list, and only offer "clear" when something needs clearing. Grouping is
+                    // deliberately excluded — clearing filters shouldn't reshape the board.
+                    const syncFilterChrome = () => {
+                        const picks = [statusFilter, roleFilter, fileFilter, conversationFilter, epicFilter];
+                        let active = 0;
+                        picks.forEach((sel) => {
+                            if (!sel) return;
+                            const on = sel.value && sel.value !== 'all';
+                            sel.classList.toggle('is-active', !!on);
+                            if (on) active++;
+                        });
+                        if (clearFiltersBtn) clearFiltersBtn.hidden = active === 0;
+                    };
+                    [statusFilter, roleFilter, fileFilter, conversationFilter, epicFilter].forEach((sel) => {
+                        if (sel) sel.addEventListener('change', syncFilterChrome);
+                    });
+                    if (clearFiltersBtn) clearFiltersBtn.addEventListener('click', () => setTimeout(syncFilterChrome, 0));
+                    syncFilterChrome();
+
                     const groupByKey = 'lfgTicketGroupBy:' + projectId;
                     window.__lfgTicketGroupBy = localStorage.getItem(groupByKey) || 'date';
                     if (groupByFilter) groupByFilter.value = window.__lfgTicketGroupBy;
@@ -3177,6 +3216,18 @@ document.addEventListener('DOMContentLoaded', function() {
                         // ones (they're the queue, not the results).
                         const lfgDoneAt = (it) => { const d = it.completed_at ? new Date(it.completed_at).getTime() : 0; return isNaN(d) ? 0 : d; };
                         const lfgByCompletion = (a, b) => lfgDoneAt(b) - lfgDoneAt(a);
+                        // ANYTHING RUNNING SORTS FIRST, everywhere. A ticket being built is the
+                        // one row you keep coming back to look at, and it was landing wherever
+                        // its completion date happened to put it — usually the bottom, since it
+                        // has no completion date yet.
+                        const lfgLive = (it) => {
+                            const st = String(it.status || '').toLowerCase();
+                            const q = String(it.queue_status || '').toLowerCase();
+                            if (st === 'in_progress' || st === 'building' || q === 'running') return 0;
+                            if (q === 'queued' || q === 'pending') return 1;
+                            return 2;
+                        };
+                        const lfgByLive = (a, b) => lfgLive(a) - lfgLive(b);
                         const lfgSorted = [...filteredChecklist].sort((a, b) => {
                             if (lfgGroupBy === 'epic') {
                                 const ae = lfgEpicLabel(a), be = lfgEpicLabel(b);
@@ -3187,11 +3238,11 @@ document.addEventListener('DOMContentLoaded', function() {
                                     if (be === 'No epic') return -1;
                                     return ae.localeCompare(be);
                                 }
-                                // Within an epic: newest completion first, then build order
-                                // for whatever hasn't been built yet.
-                                return lfgByCompletion(a, b) || (new Date(a.created_at) - new Date(b.created_at));
+                                // Within an epic: what's running now, then newest completion,
+                                // then build order for whatever hasn't been built yet.
+                                return lfgByLive(a, b) || lfgByCompletion(a, b) || (new Date(a.created_at) - new Date(b.created_at));
                             }
-                            return lfgByCompletion(a, b) || (new Date(b.created_at) - new Date(a.created_at));
+                            return lfgByLive(a, b) || lfgByCompletion(a, b) || (new Date(b.created_at) - new Date(a.created_at));
                         });
                         const lfgCounts = {};
                         lfgSorted.forEach(it => { const bk = lfgKeyOf(it); lfgCounts[bk] = (lfgCounts[bk] || 0) + 1; });
@@ -3218,6 +3269,8 @@ document.addEventListener('DOMContentLoaded', function() {
                                 const branch = (isEpicGroup && item.epic_branch)
                                     ? `<span class="lfg-epic-branch-chip" title="Anchor branch — every ticket in this epic is cut from here and merged back into it"><i class="fas fa-code-branch"></i>${modalHelpers.escapeHtml(item.epic_branch)}</span>`
                                     : '';
+                                // Close the previous group's body before opening the next.
+                                if (lfgCurGid) itemsHTML += `</div>`;
                                 itemsHTML += `<div class="lfg-date-group${lfgGroupBy === 'epic' ? ' lfg-group-toggle' : ''}" data-group="${gid}">`
                                     + chevron
                                     + `<span class="lfg-group-name">${modalHelpers.escapeHtml(bk)}</span>`
@@ -3225,7 +3278,13 @@ document.addEventListener('DOMContentLoaded', function() {
                                     + branch
                                     + `<span class="lfg-date-count">${lfgCounts[bk]}</span>`
                                     + info
-                                    + `</div>`;
+                                    + `</div>`
+                                    // Rows live INSIDE a container. Collapsing used to set
+                                    // display:none on each row individually, so any later
+                                    // re-render of a row (a live status update) brought it back
+                                    // while the header kept its collapsed chevron — a group that
+                                    // showed ▶ with all its tickets still listed.
+                                    + `<div class="lfg-group-body" data-group-body="${gid}">`;
                                 lfgCurGid = gid;
                             }
                             const statusClass = item.status ? item.status.toLowerCase().replace(' ', '-') : 'open';
@@ -3295,6 +3354,7 @@ document.addEventListener('DOMContentLoaded', function() {
                             `;
                         });
                         
+                        if (lfgCurGid) itemsHTML += `</div>`; // close the final group body
                         checklistContent.innerHTML = itemsHTML;
 
                         // ── Collapsible epic groups ──────────────────────────
@@ -3307,8 +3367,10 @@ document.addEventListener('DOMContentLoaded', function() {
                         const applyCollapse = (gid, isCollapsed) => {
                             const hdr = checklistContent.querySelector(`.lfg-date-group[data-group="${gid}"]`);
                             if (hdr) hdr.classList.toggle('is-collapsed', isCollapsed);
-                            checklistContent.querySelectorAll(`.lfg-row[data-in-group="${gid}"]`)
-                                .forEach(r => { r.style.display = isCollapsed ? 'none' : ''; });
+                            // Hide the ONE container, not N rows — the chevron and the rows can
+                            // no longer disagree.
+                            const bodyEl = checklistContent.querySelector(`.lfg-group-body[data-group-body="${gid}"]`);
+                            if (bodyEl) bodyEl.style.display = isCollapsed ? 'none' : '';
                         };
 
                         checklistContent.querySelectorAll('.lfg-group-toggle').forEach(hdr => {

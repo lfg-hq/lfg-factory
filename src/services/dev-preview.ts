@@ -2992,16 +2992,18 @@ export async function capturePreviewScreenshot(
  *    the branch lives on the remote and the preview reconstructs it on select.
  * Powers the preview branch selector.
  */
-export async function getPreviewBranches(projectId: string): Promise<Array<{ id: string; label: string; ticketId: string | null; branch: string }>> {
-  const out: Array<{ id: string; label: string; ticketId: string | null; branch: string }> = [
-    { id: "default", label: "Default branch", ticketId: null, branch: "(default)" },
+export async function getPreviewBranches(projectId: string): Promise<Array<{ id: string; label: string; ticketId: string | null; branch: string; group?: string }>> {
+  // `group` partitions the selector: epics are delivery units, tickets are slices of
+  // one. A single flat list of 20 entries made you read every line to find either.
+  const out: Array<{ id: string; label: string; ticketId: string | null; branch: string; group?: string }> = [
+    { id: "default", label: "Default branch", ticketId: null, branch: "(default)", group: "" },
   ];
   const seen = new Set<string>();
   const add = (ticketId: string, name: string | null, key: string | null, branch: string) => {
     if (!ticketId || seen.has(ticketId)) return;
     seen.add(ticketId);
     const label = `${key ? key + " — " : ""}${name ?? "ticket"}`.slice(0, 60);
-    out.push({ id: ticketId, label, ticketId, branch });
+    out.push({ id: ticketId, label, ticketId, branch, group: "Tickets" });
   };
 
   // 1) Ticket worktrees are recorded as sandbox rows (workspaceType
@@ -3025,7 +3027,10 @@ export async function getPreviewBranches(projectId: string): Promise<Array<{ id:
     .where(and(
       eq(projectTickets.projectId, projectId),
       or(isNotNull(projectTickets.githubBranch), isNotNull(projectTickets.githubCommitSha)),
-    ));
+    ))
+    // Newest first: the ticket you just built is the one you want to run, and it was
+    // landing wherever the database happened to return it.
+    .orderBy(desc(projectTickets.createdAt));
   for (const r of builtRows) add(r.id, r.name, r.key, r.branch || `feature/ticket-${r.id}`);
 
   // 3) EPIC branches. An epic is the unit a client actually reviews — its integration
@@ -3047,6 +3052,7 @@ export async function getPreviewBranches(projectId: string): Promise<Array<{ id:
       label: `${e.key ? e.key + " — " : ""}${e.name}`.slice(0, 60),
       ticketId: null as string | null,
       branch: e.branch as string,
+      group: "Epics",
     }));
   out.splice(1, 0, ...epicEntries);
 

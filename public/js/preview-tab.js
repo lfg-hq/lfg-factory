@@ -1026,11 +1026,21 @@
     return b.id === "default" || !!b.ticketId || String(b.id || "").indexOf("epic:") === 0;
   }
 
-  // Options for the branch <select>.
+  // Options for the branch <select>, PARTITIONED. Epics (whole delivery units) and
+  // tickets (one slice each) are different things to run, and a flat list of twenty
+  // entries made you read every line to tell which was which.
   function branchOptions() {
-    return branches.map((b) => {
-      return `<option value="${esc(b.id)}"${b.id === branchId ? " selected" : ""}${isRunnable(b) ? "" : " disabled"}>${esc(b.label)}</option>`;
-    }).join("");
+    const opt = (b) =>
+      `<option value="${esc(b.id)}"${b.id === branchId ? " selected" : ""}${isRunnable(b) ? "" : " disabled"}>${esc(b.label)}</option>`;
+    const inGroup = (name) => branches.filter((b) => (b.group || "") === name);
+    const ungrouped = branches.filter((b) => !b.group);
+    const epics = inGroup("Epics");
+    const tickets = inGroup("Tickets");
+    // Nothing tagged (an older server) → keep the flat list rather than an empty one.
+    if (!epics.length && !tickets.length) return branches.map(opt).join("");
+    return ungrouped.map(opt).join("")
+      + (epics.length ? `<optgroup label="Epics">${epics.map(opt).join("")}</optgroup>` : "")
+      + (tickets.length ? `<optgroup label="Tickets">${tickets.map(opt).join("")}</optgroup>` : "");
   }
 
   // Fetch the previewable branches (default + ticket worktrees) for the selector.
