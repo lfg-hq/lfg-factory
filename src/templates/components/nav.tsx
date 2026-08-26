@@ -1,6 +1,6 @@
 import { html } from "hono/html";
 
-type NavPage = "home" | "agent" | "self-host" | "case-studies" | "compare" | "services" | "blog";
+type NavPage = "home" | "agent" | "self-host" | "case-studies" | "compare" | "white-label" | "services" | "blog";
 
 interface NavOptions {
   activePage: NavPage;
@@ -206,6 +206,7 @@ export const Footer = () => html`
         <a href="/" class="hover:text-white transition-colors">Home</a>
         <a href="/agent/" class="hover:text-white transition-colors">Agent</a>
         <a href="/self-host/" class="hover:text-white transition-colors">Self-host</a>
+        <a href="/white-label/" class="hover:text-white transition-colors">White-label</a>
         <a href="/case-studies/" class="hover:text-white transition-colors">Case studies</a>
         <a href="/vs-coding-agents/" class="hover:text-white transition-colors">Vs. coding agents</a>
         <a href="/blog/" class="hover:text-white transition-colors">Blog</a>

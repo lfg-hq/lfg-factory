@@ -4,6 +4,7 @@ import { AgentPage } from "../templates/pages/agent.tsx";
 import { SelfHostPage } from "../templates/pages/self-host.tsx";
 import { ServicesPage } from "../templates/pages/services.tsx";
 import { CaseStudiesPage } from "../templates/pages/case-studies.tsx";
+import { WhiteLabelPage } from "../templates/pages/white-label.tsx";
 import { VsCodingAgentsPage } from "../templates/pages/vs-coding-agents.tsx";
 import { BlogPage } from "../templates/pages/blog.tsx";
 import { BlogPostPage } from "../templates/pages/blog-post.tsx";
@@ -118,6 +119,9 @@ landing.get("/case-studies/", (c) => c.html(CaseStudiesPage()));
 // Earlier names for the same page.
 landing.get("/proof", (c) => c.redirect("/case-studies/", 301));
 landing.get("/proof/", (c) => c.redirect("/case-studies/", 301));
+
+landing.get("/white-label", (c) => c.redirect("/white-label/"));
+landing.get("/white-label/", (c) => c.html(WhiteLabelPage()));
 
 // Positioning page: "why LFG if we already use Claude Code / Codex?"
 landing.get("/vs-coding-agents", (c) => c.redirect("/vs-coding-agents/"));
@@ -264,6 +268,57 @@ landing.post("/api/services/inquiry", async (c) => {
         <table style="border-collapse:collapse;width:100%">${rows}</table>
         <h3 style="color:#0f172a;margin-top:20px">Requirements</h3>
         <p style="color:#475569;white-space:pre-wrap">${requirements}</p>
+      </div>`,
+    });
+
+    return c.json({ success: true });
+  } catch {
+    return c.json({ error: "Invalid request." }, 400);
+  }
+});
+
+// White-label inquiry (firms that want a branded instance we operate)
+landing.post("/api/white-label/inquiry", async (c) => {
+  try {
+    const body = await c.req.json();
+    const name = (body.name ?? "").trim();
+    const email = (body.email ?? "").trim();
+    const firm = (body.firm ?? "").trim();
+    const context = (body.context ?? "").trim();
+    if (!name || !email || !firm || !context) {
+      return c.json({ error: "Name, work email, firm, and what you would white-label it for are required." }, 400);
+    }
+
+    // Same rule as the pilot pipeline: business email only
+    const FREE_EMAIL_DOMAINS = new Set([
+      "gmail.com", "googlemail.com", "yahoo.com", "yahoo.co.in", "hotmail.com",
+      "outlook.com", "live.com", "aol.com", "icloud.com", "me.com", "proton.me",
+      "protonmail.com", "mail.com", "gmx.com", "yandex.com", "rediffmail.com",
+    ]);
+    const domain = email.split("@")[1]?.toLowerCase().trim();
+    if (!domain || FREE_EMAIL_DOMAINS.has(domain)) {
+      return c.json({ error: "Please use your work email address, not a personal one." }, 400);
+    }
+
+    const fields = [
+      ["Name", name],
+      ["Work email", email],
+      ["Firm", firm],
+      ["Delivery headcount", body.headcount || "\u2014"],
+      ["Hosting preference", body.hosting || "\u2014"],
+    ];
+
+    const rows = fields.map(([k, v]) => `<tr><td style="padding:6px 12px;font-weight:600;color:#334155;white-space:nowrap">${k}</td><td style="padding:6px 12px;color:#475569">${v}</td></tr>`).join("");
+
+    await sendEmail({
+      to: "hello@lfg.run",
+      subject: `[WHITE-LABEL] ${name} \u2014 ${firm}`,
+      text: fields.map(([k, v]) => `${k}: ${v}`).join("\n") + `\n\nWhat they would white-label it for:\n${context}`,
+      html: `<div style="font-family:sans-serif;max-width:600px">
+        <h2 style="color:#0f172a">New white-label inquiry</h2>
+        <table style="border-collapse:collapse;width:100%">${rows}</table>
+        <h3 style="color:#0f172a;margin-top:20px">What they would white-label it for</h3>
+        <p style="color:#475569;white-space:pre-wrap">${context}</p>
       </div>`,
     });
 
