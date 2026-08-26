@@ -2468,6 +2468,41 @@ body[data-theme="light"] {
 [data-theme="light"] .log-entry.log-user .log-user-content {
     color: #1e293b;
 }
+
+/* The LFG Agent card had light overrides for its neighbours but none of its own, so it
+   kept dark-mode colours on a white page: #e2e8f0 body text (near-invisible) over a
+   faint amber wash, with a timestamp at 20% white. */
+[data-theme="light"] .log-entry.log-lfg-agent {
+    background: rgba(245, 158, 11, 0.07);
+    border-left-color: #d97706;
+}
+[data-theme="light"] .log-entry.log-lfg-agent .log-lfg-agent-label {
+    background: rgba(217, 119, 6, 0.14);
+    color: #b45309;
+}
+[data-theme="light"] .log-entry.log-lfg-agent .log-lfg-agent-content {
+    color: #1e293b;
+}
+[data-theme="light"] .log-entry.log-lfg-agent .log-time {
+    color: #94a3b8;
+}
+
+/* Same omission on the error card: #fca5a5 body text is a dark-mode red that turns to
+   pale pink on white, and its timestamp was 20% WHITE — invisible. */
+[data-theme="light"] .log-entry.log-error {
+    background: rgba(239, 68, 68, 0.06);
+    border-left-color: #dc2626;
+}
+[data-theme="light"] .log-entry.log-error .log-error-content {
+    color: #b91c1c;
+}
+[data-theme="light"] .log-entry.log-error .log-error-label {
+    background: rgba(220, 38, 38, 0.12);
+    color: #b91c1c;
+}
+[data-theme="light"] .log-entry.log-error .log-time {
+    color: #94a3b8;
+}
 [data-theme="light"] .log-time {
     color: #94a3b8;
 }

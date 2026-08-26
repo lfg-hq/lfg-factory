@@ -3416,8 +3416,29 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
       let remoteBranch = explicitBranch;
       if (ticketId) {
         // The remote branch: the ticket's recorded branch, else the convention.
-        const [tk] = await db.select({ gb: projectTickets.githubBranch }).from(projectTickets).where(eq(projectTickets.id, ticketId));
+        const [tk] = await db.select({
+          gb: projectTickets.githubBranch,
+          sha: projectTickets.githubCommitSha,
+          merge: projectTickets.githubMergeStatus,
+          key: projectTickets.ticketKey,
+          status: projectTickets.status,
+        }).from(projectTickets).where(eq(projectTickets.id, ticketId));
         remoteBranch = tk?.gb || `feature/ticket-${ticketId}`;
+
+        // REFUSE a branch that was never pushed, rather than discovering it as a
+        // fatal git error four steps later. A build whose commit/push failed leaves
+        // its work in the build sandbox only — there is nothing on the remote to check
+        // out, so "couldn't find remote ref" was the truth told in the least useful way
+        // possible, to whoever happened to open the Preview tab (a client, in one case).
+        if (tk && !tk.sha && (tk.merge === "not_pushed" || tk.status === "failed")) {
+          await setStep("locate", "failed");
+          const name = tk.key ? `${tk.key}` : "This ticket";
+          return failed(projectId, userId,
+            `${name} has nothing to preview — its build finished but the changes were never pushed` +
+            `${tk.status === "failed" ? " (the build failed)" : ""}, so \`${remoteBranch}\` doesn't exist on the remote.\n\n` +
+            `The work is still in the build sandbox. Open the ticket's Actions log to see the failing step, fix the cause and rebuild — ` +
+            `then this preview will have something to run.`);
+        }
       }
       branchLabel = remoteBranch;
       const auth = await resolveAuthedRepoUrl(projectId, userId);

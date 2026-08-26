@@ -52,7 +52,7 @@ import {
 import { buildApiBuilderPrompt } from "../ai/prompts/builder-api.ts";
 import { createBuilderTools } from "../ai/tools/builder-tools.ts";
 import { getModel, getProviderName, getProviderModel, DEFAULT_MODEL_KEY, type ProviderName } from "../ai/provider.ts";
-import { modelSelections } from "../db/schema/chat.ts";
+import { modelSelections, messages } from "../db/schema/chat.ts";
 import { resolveRepoAuth, extractRepoUrl, type RepoAuth } from "../services/repo-auth.ts";
 import {
   resolveTicketAnchor,
@@ -3270,6 +3270,14 @@ async function markTicketFailed(ticketId: string, reason: string, userId?: strin
     `**How to proceed:** open the **Actions** log above and find the failing step, then either adjust the ticket and press **Build Ticket** again, or reply here with guidance and I'll retry. Your branch and build sandbox are preserved, so nothing is lost.`;
   await addLog(ticketId, failMsg, "ai_response", userId);
 
+  // TELL THE CHAT THAT ASKED FOR IT. A failure used to live only in the ticket's
+  // Actions log, so the conversation that queued the build carried on as if the work
+  // had landed — and the next preview summary in that thread read like a delivery.
+  // Anyone reading the chat (a client, say) had no way to know the ticket was dead.
+  await announceFailureToChat(ticketId, reason).catch((e) => {
+    console.warn("[ticket-executor] could not post the failure to chat:", e);
+  });
+
   // Emit execution_finished so the handler chain continues (auto-queue next ticket).
   // Only emit when the caller hasn't already triggered this event (e.g., early failures
   // before the CLI starts). Normal-flow failures already have the event from the CLI callback.
@@ -3282,6 +3290,44 @@ async function markTicketFailed(ticketId: string, reason: string, userId?: strin
       exitCode: 1,
     });
   }
+}
+
+/**
+ * Post a build failure into the conversation that queued the ticket.
+ *
+ * The ticket already carries `conversationId` (the server injects it when the chat
+ * creates the ticket), so the failure can be reported where the request was made
+ * rather than only on a tab nobody had open.
+ */
+async function announceFailureToChat(ticketId: string, reason: string): Promise<void> {
+  const [t] = await db
+    .select({
+      conversationId: projectTickets.conversationId,
+      key: projectTickets.ticketKey,
+      name: projectTickets.name,
+      branch: projectTickets.githubBranch,
+      sha: projectTickets.githubCommitSha,
+    })
+    .from(projectTickets)
+    .where(eq(projectTickets.id, ticketId))
+    .limit(1);
+  if (!t?.conversationId) return; // nothing linked it to a chat
+
+  const label = t.key ? `${t.key} — ${t.name}` : t.name;
+  const pushed = t.sha
+    ? `The branch \`${t.branch ?? "?"}\` has the commit, so the code is safe on the remote.`
+    : `**Nothing was pushed** — the work is only in the build sandbox, and \`${t.branch ?? "its branch"}\` does not exist on the remote. Previewing this ticket will not work until it does.`;
+
+  const content =
+    `❌ **${label} failed to build.**\n\n` +
+    `${reason}\n\n${pushed}\n\n` +
+    `Open the ticket's **Actions** log for the failing step. Fix the cause and rebuild, or tell me what to change and I'll retry.`;
+
+  await db.insert(messages).values({
+    conversationId: t.conversationId,
+    role: "assistant",
+    content,
+  });
 }
 
 function sleep(ms: number) {

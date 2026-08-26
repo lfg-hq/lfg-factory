@@ -13,7 +13,8 @@
     "db:studio": "drizzle-kit studio",
     "typecheck": "tsc --noEmit",
     "test:boards": "bun run scripts/test-board-sync.ts",
-    "test:epics": "bun run scripts/test-epics-page.ts"
+    "test:epics": "bun run scripts/test-epics-page.ts",
+    "check:contrast": "node scripts/check-log-contrast.mjs"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
