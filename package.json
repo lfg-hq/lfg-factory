@@ -12,7 +12,8 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "typecheck": "tsc --noEmit",
-    "test:boards": "bun run scripts/test-board-sync.ts"
+    "test:boards": "bun run scripts/test-board-sync.ts",
+    "test:epics": "bun run scripts/test-epics-page.ts"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

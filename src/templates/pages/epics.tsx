@@ -152,12 +152,14 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
     .epics-list { flex: 1; min-width: 0; overflow-y: auto; padding: 0.25rem 1.5rem 3rem; }
     /* The panel only exists once an epic is chosen. A permanently-mounted empty
        "Details" pane reads as something broken, which is exactly how it looked. */
+    /* The panel GROWS into whatever the list doesn't take. Giving both a fixed basis
+       (420px + 860px) left a dead strip on the right of any wide screen. */
     .epic-panel {
-      flex: 0 0 min(56%, 860px); min-width: 0; display: flex; flex-direction: column;
+      flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column;
       border-left: 1px solid var(--border-color); background: var(--card-bg, var(--background-surface));
     }
     .epic-panel[hidden] { display: none; }
-    .epics-body.has-panel .epics-list { flex: 0 0 auto; width: min(420px, 44%); }
+    .epics-body.has-panel .epics-list { flex: 0 0 min(420px, 38%); }
     @media (max-width: 900px) {
       /* No room for two panes — the panel takes over. */
       .epic-panel { position: fixed; inset: 0 0 0 auto; width: min(560px, 100%); z-index: 1200; box-shadow: -18px 0 50px rgba(0,0,0,.35); }
@@ -178,23 +180,33 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
 
     /* ── The list ─────────────────────────────────────────────────────────── */
     .epic-item { border-bottom: 1px solid var(--border-color); }
+    /* The WHOLE block opens the epic — title, description and counts alike. Only the
+       title row used to be clickable, so clicking the description did nothing. */
     .epic-summary {
       width: 100%; text-align: left; background: none; border: none; cursor: pointer;
-      display: flex; align-items: center; gap: 0.6rem; padding: 0.85rem 0.75rem;
-      color: var(--text-color); border-radius: 8px;
+      display: block; padding: 0.8rem 0.75rem; color: var(--text-color); border-radius: 8px;
     }
+    .epic-summary-top { display: flex; align-items: center; gap: 0.6rem; }
     .epic-summary:hover { background: color-mix(in srgb, var(--border-color) 22%, transparent); }
     .epic-item.selected .epic-summary { background: color-mix(in srgb, var(--primary-color, #8b5cf6) 12%, transparent); }
     .epic-ident { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 0.5rem; }
     .epic-key { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.72rem; color: var(--text-secondary); flex: none; }
     .epic-name { font-weight: 650; font-size: 0.92rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .epic-pill { font-size: 0.66rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; padding: 2px 7px; border-radius: 5px; border: 1px solid; white-space: nowrap; flex: none; }
-    .epic-counts { display: flex; gap: 0.8rem; font-size: 0.74rem; color: var(--text-secondary); flex: none; }
+    /* Counts sit on their OWN line as one quiet run of text. Stacked against the title
+       row they crowded the pill and the chevron into a jumble. */
+    .epic-counts { display: flex; flex-wrap: wrap; gap: 0.55rem; margin-top: 0.5rem; font-size: 0.73rem; color: var(--text-secondary); }
+    .epic-counts .sep { opacity: 0.4; }
     .epic-dim { color: var(--text-secondary); opacity: 0.75; }
-    .epic-goal { margin: -0.35rem 0 0.85rem 0.75rem; font-size: 0.8rem; line-height: 1.55; color: var(--text-secondary); max-width: 62ch; }
+    .epic-goal {
+      margin: 0.35rem 0 0; font-size: 0.8rem; line-height: 1.55; color: var(--text-secondary);
+      max-width: 62ch; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    }
 
     /* ── Detail, stacked one section under another ────────────────────────── */
-    .epic-detail { padding: 1.1rem 1.3rem 2.5rem; }
+    /* Cap the reading width. Now that the panel grows to fill the row, an unbounded
+       detail stretched each ticket's name and its status to opposite edges. */
+    .epic-detail { padding: 1.2rem 1.5rem 3rem; max-width: 900px; }
     .epic-detail-head { display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap; margin-bottom: 1.1rem; }
     .epic-branch-line { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.78rem; color: var(--text-secondary); }
     .epic-branch { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.74rem; padding: 2px 7px; border-radius: 5px; background: color-mix(in srgb, var(--border-color) 40%, transparent); color: var(--text-color); }
@@ -216,8 +228,31 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
     .epic-row:last-child { border-bottom: none; }
     button.epic-row:hover, a.epic-row:hover { color: #a78bfa; }
     .epic-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .epic-doc { padding: 1.1rem 1.3rem; font-size: 0.86rem; line-height: 1.65; color: var(--text-color); }
-    .epic-doc pre { white-space: pre-wrap; word-break: break-word; font-family: inherit; margin: 0; }
+    /* Documents are MARKDOWN — rendered, not dumped. They used to land in one giant
+       <pre>, which a global rule painted dark on a light page. */
+    .epic-doc { padding: 1.2rem 1.5rem 3rem; font-size: 0.875rem; line-height: 1.7; color: var(--text-color); max-width: 78ch; }
+    .epic-doc h1 { font-size: 1.35rem; margin: 0 0 0.8rem; }
+    .epic-doc h2 { font-size: 1.08rem; margin: 1.7rem 0 0.6rem; padding-bottom: 0.3rem; border-bottom: 1px solid var(--border-color); }
+    .epic-doc h3 { font-size: 0.95rem; margin: 1.3rem 0 0.45rem; }
+    .epic-doc p { margin: 0 0 0.85rem; }
+    .epic-doc ul, .epic-doc ol { margin: 0 0 0.9rem; padding-left: 1.35rem; }
+    .epic-doc li { margin: 0.2rem 0; }
+    .epic-doc code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82em;
+      padding: 1px 5px; border-radius: 4px; background: color-mix(in srgb, var(--border-color) 45%, transparent);
+    }
+    .epic-doc pre {
+      background: color-mix(in srgb, var(--border-color) 28%, transparent);
+      border: 1px solid var(--border-color); border-radius: 8px;
+      padding: 0.8rem 0.95rem; overflow-x: auto; margin: 0 0 1rem;
+    }
+    .epic-doc pre code { background: none; padding: 0; font-size: 0.8rem; }
+    .epic-doc table { border-collapse: collapse; width: 100%; margin: 0 0 1rem; font-size: 0.82rem; display: block; overflow-x: auto; }
+    .epic-doc th, .epic-doc td { border: 1px solid var(--border-color); padding: 0.4rem 0.6rem; text-align: left; vertical-align: top; }
+    .epic-doc th { background: color-mix(in srgb, var(--border-color) 30%, transparent); font-weight: 650; }
+    .epic-doc blockquote { margin: 0 0 1rem; padding-left: 0.9rem; border-left: 3px solid var(--border-color); color: var(--text-secondary); }
+    .epic-doc a { color: var(--primary-color, #8b5cf6); }
+    .epic-doc img { max-width: 100%; }
   </style>
 </head>
 <body>
@@ -330,19 +365,23 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
         return html`
           <div class="epic-item" data-epic-item="${e.id}">
             <button class="epic-summary" data-epic-open="${e.id}">
-              <span class="epic-ident">
-                ${e.epicKey ? html`<span class="epic-key">${e.epicKey}</span>` : ""}
-                <span class="epic-name">${e.name}</span>
+              <span class="epic-summary-top">
+                <span class="epic-ident">
+                  ${e.epicKey ? html`<span class="epic-key">${e.epicKey}</span>` : ""}
+                  <span class="epic-name">${e.name}</span>
+                </span>
+                <span class="epic-pill" style="color:${color};border-color:${color}55;background:${color}1a;">${e.status.replace("_", " ")}</span>
+                <i class="fas fa-chevron-right epic-dim" style="font-size:0.7rem;"></i>
               </span>
-              <span class="epic-pill" style="color:${color};border-color:${color}55;background:${color}1a;">${e.status.replace("_", " ")}</span>
+              ${e.goal ? html`<span class="epic-goal">${e.goal}</span>` : ""}
               <span class="epic-counts">
                 <span>${ets.length} ${ets.length === 1 ? "ticket" : "tickets"}${ets.length ? html` <span class="epic-dim">(${done} done)</span>` : ""}</span>
+                <span class="sep">·</span>
                 <span>${eds.length} ${eds.length === 1 ? "doc" : "docs"}</span>
+                <span class="sep">·</span>
                 <span>${convIds.length} ${convIds.length === 1 ? "chat" : "chats"}</span>
               </span>
-              <i class="fas fa-chevron-right epic-dim" style="font-size:0.7rem;"></i>
             </button>
-            ${e.goal ? html`<div class="epic-goal">${e.goal}</div>` : ""}
 
             <!-- The panel's contents, rendered server-side and cloned in on click.
                  Sections run one UNDER another: the panel is tall and narrow, and the
@@ -423,6 +462,8 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
   </div>
   </div>
 
+<script src="/public/js/marked.min.js"></script>
+<script src="/public/js/markdown-config.js"></script>
 <script src="/public/js/sidebar.js"></script>
 <script>
   var PROJECT_ID = '${project.projectId}';
@@ -505,10 +546,17 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
       fetch('/projects/' + PROJECT_ID + '/api/files/' + fid + '/content')
         .then(function (r) { return r.json(); })
         .then(function (j) {
-          var pre = document.createElement('pre');
-          pre.textContent = (j && j.content) || 'This document is empty.';
-          wrap.textContent = '';
-          wrap.appendChild(pre);
+          var raw = (j && j.content) || '';
+          if (!raw.trim()) { wrap.textContent = 'This document is empty.'; return; }
+          if (typeof marked !== 'undefined') {
+            wrap.innerHTML = marked.parse(raw);
+          } else {
+            // No renderer loaded — show the text readably rather than as one long line.
+            var pre = document.createElement('pre');
+            pre.textContent = raw;
+            wrap.textContent = '';
+            wrap.appendChild(pre);
+          }
         })
         .catch(function () { wrap.textContent = 'Could not load this document.'; });
     }
