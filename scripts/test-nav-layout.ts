@@ -17,8 +17,12 @@ for (const p of PROJECT_PAGES) {
   const rail = s.slice(s.indexOf('<div class="sidebar-nav">'), s.indexOf("sidebar-bottom-content"));
   const has = (label: string) => rail.includes(`<span class="nav-text">${label}</span>`);
   const name = p.split("/").pop()!;
-  if (!has("Instant") && !has("Chat") && !has("Tickets") && !has("Epics")) ok(`${name}: rail trimmed to Dashboard`);
-  else fail(`${name}: still lists ${["Instant", "Chat", "Tickets", "Epics"].filter(has).join(", ")}`);
+  // Instant is the ONLY link that was meant to leave the rail. Chat, Epics and
+  // Tickets belong here — removing them was my misreading, not the request.
+  const missing = ["Chat", "Epics", "Tickets"].filter((l) => !has(l));
+  if (has("Instant")) fail(`${name}: Instant still in the rail`);
+  else if (missing.length) fail(`${name}: rail is missing ${missing.join(", ")}`);
+  else ok(`${name}: rail has Chat, Epics, Tickets — no Instant`);
 }
 
 console.log("\nchat history:");
@@ -58,11 +62,15 @@ for (const d of ["pg", "sqlite"]) {
 
 console.log("\nproject tabs:");
 const pd = read("src/templates/pages/project-detail.tsx");
-const tabs = pd.slice(pd.indexOf("<!-- Horizontal Tab Nav"), pd.indexOf("<style>", pd.indexOf("<!-- Horizontal Tab Nav")));
-if (!/tab=instant/.test(tabs)) ok("Instant removed from the tab bar");
-else fail("Instant still a tab");
-for (const t of ["Home", "Chats", "Tickets", "Events", "Settings"]) {
-  if (tabs.includes(`> ${t}\n`) || tabs.includes(`></i> ${t}`)) ok(`${t} stays in the row`);
+// Stop at the More MENU: slicing to the next <style> ran past it, so the menu's own
+// Documents link read as a leftover tab.
+const tabs = pd.slice(pd.indexOf("<!-- Horizontal Tab Nav"), pd.indexOf('id="project-more-menu"'));
+for (const gone of ["instant", "conversations", "tickets", "documents"]) {
+  if (!new RegExp(`tab=${gone}"`).test(tabs)) ok(`${gone} is off the dashboard tab row`);
+  else fail(`${gone} still a dashboard tab`);
+}
+for (const t of ["Home", "Events", "Settings"]) {
+  if (tabs.includes(`></i> ${t}`)) ok(`${t} stays in the row`);
   else fail(`${t} missing from the row`);
 }
 const menu = pd.slice(pd.indexOf('id="project-more-menu"'), pd.indexOf('id="project-more-menu"') + 1400);

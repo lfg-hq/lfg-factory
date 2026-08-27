@@ -143,6 +143,18 @@ export function ProjectDetailPage({
             <i class="fas fa-tachometer-alt"></i>
             <span class="nav-text">Dashboard</span>
           </a>
+          <a href="/chat/project/${project.projectId}" class="nav-link">
+            <i class="fas fa-comments"></i>
+            <span class="nav-text">Chat</span>
+          </a>
+          <a href="/projects/${project.projectId}/epics" class="nav-link">
+            <i class="fas fa-layer-group"></i>
+            <span class="nav-text">Epics</span>
+          </a>
+          <a href="/projects/${project.projectId}/tickets" class="nav-link">
+            <i class="fas fa-tasks"></i>
+            <span class="nav-text">Tickets</span>
+          </a>
         </div>
         <div class="conversations-section" data-sidebar-chats data-project="${project.projectId}">
           <h3 class="sidebar-section-title">Recent chats</h3>
@@ -231,13 +243,6 @@ export function ProjectDetailPage({
       <div class="project-tabs" style="display:flex;gap:0;border-bottom:1px solid var(--border-color);padding:0 2rem;background:var(--body-bg);">
         <a href="/projects/${project.projectId}" class="tab-item${activeTab === "home" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "home" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "home" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
           <i class="fas fa-house"></i> Home
-        </a>
-        <a href="/projects/${project.projectId}?tab=conversations" class="tab-item${activeTab === "conversations" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "conversations" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "conversations" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
-          <i class="fas fa-comments"></i> Chats
-          ${conversations.length > 0 ? html`<span style="font-size:0.7rem;background:rgba(139,92,246,0.2);color:#a78bfa;padding:0.1rem 0.4rem;border-radius:9999px;">${conversations.length}</span>` : ""}
-        </a>
-        <a href="/projects/${project.projectId}?tab=tickets" class="tab-item${activeTab === "tickets" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "tickets" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "tickets" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
-          <i class="fas fa-tasks"></i> Tickets
         </a>
         <a href="/projects/${project.projectId}?tab=events" class="tab-item${activeTab === "events" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "events" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "events" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
           <i class="fas fa-stream"></i> Events
