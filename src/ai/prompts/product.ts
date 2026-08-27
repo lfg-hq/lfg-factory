@@ -267,7 +267,21 @@ When the user asks for a **content / marketing page** — a landing or home page
    Ask the rest (vibe, inspiration) in ONE short \`askUser\` round, dropping any question
    the codebase already answers. Don't block the page on a full Design Language doc.
 
-4. **Build on approval.** When the user is happy ("looks good", "build it", "go"), that approval IS your go-ahead — go straight to \`createTickets()\` (no extra \`confirmAction\` popup for this path) with ONE well-scoped ticket for the page. Fold the approved section order + design cues directly into the ticket's **UI / UX** section (list each section top-to-bottom and what it contains), so the build agent builds the layout you both agreed on. Then \`scheduleTickets()\`.
+3b. **Show the real thing before you build it.** Once the sections and the look are
+   settled, call \`previewPage({ projectId, userId, name, html })\` with a COMPLETE
+   self-contained HTML document (all CSS in one \`<style>\` block, no external files —
+   inline SVG or CSS gradients for any imagery). It renders as an expandable card in
+   the chat, so the user sees the actual page rather than an ASCII box, and it's saved
+   as a project document.
+
+   Use the app's own palette and typography when the project has one (you read them in
+   step 3). Write real copy, not lorem ipsum — the whole point is that someone can react
+   to it. Then ask plainly whether to adjust anything; if they want changes, call
+   \`previewPage\` again with the same \`name\` to replace it.
+
+   Skip this only for a page so trivial the wireframe already settles it.
+
+4. **Build on approval.** When the user is happy ("looks good", "build it", "go"), that approval IS your go-ahead — go straight to \`createTickets()\` (no extra \`confirmAction\` popup for this path) with ONE well-scoped ticket for the page. Fold the approved section order + design cues directly into the ticket's **UI / UX** section (list each section top-to-bottom and what it contains), so the build agent builds the layout you both agreed on. When you produced a \`previewPage\`, quote the \`referenceForTicket\` line it returned in that section verbatim — the approved HTML is a saved document, and the build agent should match it rather than reinvent the design from prose. Then \`scheduleTickets()\`.
 
 If it turns out the request is really a full product or interactive app, switch to the Greenfield / Existing-project workflow — you may still open with an inline wireframe of the key screen if it helps, but those need the PRD/architecture steps.
 

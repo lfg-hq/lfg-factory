@@ -2556,6 +2556,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 renderPipelineStatus(data.payload || data.content || {});
                 break;
 
+            case 'page_preview':
+                // A rendered page, inline in the transcript.
+                renderPagePreview(data.file_id, data.file_name);
+                break;
+
             case 'tool_activity':
                 // Show tool activity indicator (e.g., "Searching knowledge base...")
                 showToolActivity(data.tool_label || data.tool_name || 'Working');
@@ -2582,6 +2587,70 @@ document.addEventListener('DOMContentLoaded', () => {
         const stale = document.querySelector('.tool-activity-indicator');
         if (stale) stale.remove();
         trailStep({ detail: label, icon: 'fa-bolt', color: '#a78bfa' });
+    }
+
+    /**
+     * A real, rendered preview of a page — inline, expandable, in the transcript.
+     *
+     * A wireframe tells you the shape; this tells you what it will FEEL like, which is
+     * what a client actually reacts to. The HTML is a saved project document, so the
+     * ticket can reference the exact thing that was approved.
+     */
+    function renderPagePreview(fileId, fileName) {
+        if (!fileId) return;
+        const card = document.createElement('div');
+        card.className = 'page-preview-card';
+        card.innerHTML = `
+            <div class="page-preview-head">
+                <i class="fas fa-window-maximize"></i>
+                <span class="page-preview-name"></span>
+                <button class="page-preview-btn" data-pv="expand" title="Full screen"><i class="fas fa-up-right-and-down-left-from-center"></i></button>
+                <button class="page-preview-btn" data-pv="open" title="Open in a new tab"><i class="fas fa-arrow-up-right-from-square"></i></button>
+                <button class="page-preview-btn" data-pv="toggle" title="Collapse"><i class="fas fa-chevron-down"></i></button>
+            </div>
+            <div class="page-preview-body">
+                <div class="page-preview-loading">Rendering preview…</div>
+            </div>`;
+        card.querySelector('.page-preview-name').textContent = fileName || 'Page preview';
+        messageContainer.appendChild(card);
+        scrollToBottom();
+
+        const body = card.querySelector('.page-preview-body');
+        const projectId = window.currentProjectId || extractProjectIdFromPath();
+        fetch('/projects/' + projectId + '/api/files/' + fileId + '/content')
+            .then((r) => r.json())
+            .then((j) => {
+                const html = (j && j.content) || '';
+                if (!html.trim()) { body.innerHTML = '<div class="page-preview-loading">This preview is empty.</div>'; return; }
+                const frame = document.createElement('iframe');
+                // Sandboxed: this is model-authored markup rendering inside the app, so it
+                // gets no scripts, no forms and no access back to this origin.
+                frame.setAttribute('sandbox', '');
+                frame.setAttribute('loading', 'lazy');
+                frame.srcdoc = html;
+                body.innerHTML = '';
+                body.appendChild(frame);
+                card.dataset.html = html;
+            })
+            .catch(() => { body.innerHTML = '<div class="page-preview-loading">Could not load this preview.</div>'; });
+
+        card.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-pv]');
+            if (!btn) return;
+            const act = btn.getAttribute('data-pv');
+            if (act === 'toggle') {
+                const collapsed = card.classList.toggle('is-collapsed');
+                btn.title = collapsed ? 'Expand' : 'Collapse';
+            } else if (act === 'expand') {
+                card.classList.toggle('is-full');
+            } else if (act === 'open') {
+                // A blob URL rather than document.write, so the page opens on its own
+                // opaque origin instead of inheriting this one.
+                const blob = new Blob([card.dataset.html || ''], { type: 'text/html' });
+                window.open(URL.createObjectURL(blob), '_blank', 'noopener');
+            }
+        });
+        return card;
     }
 
     /**

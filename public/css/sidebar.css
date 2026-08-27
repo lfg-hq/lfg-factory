@@ -182,7 +182,9 @@
     font-size: 14px !important;
     font-weight: 400 !important;
     margin-bottom: 2px !important;
-    transition: all 0.15s ease !important;
+    /* Colour ONLY. `transition: all` animated the hover margin change below, which is
+       what made every item slide sideways under the cursor. */
+    transition: background-color 0.12s ease, color 0.12s ease !important;
     line-height: 20px !important;
 }
 
@@ -191,18 +193,16 @@
     transition: none !important;
 }
 
+/* No geometry changes on hover or select — the item stays exactly where it is and
+   only its colour moves. The 5px side margins these used to add were the jiggle. */
 .nav-link:hover {
     background: rgba(255, 255, 255, 0.08) !important;
     color: rgba(255, 255, 255, 0.9) !important;
-    margin-left: 5px;
-    margin-right: 5px;
 }
 
 .nav-link.active {
     background: rgba(255, 255, 255, 0.08) !important;
     color: rgba(255, 255, 255, 0.9) !important;
-    margin-left: 5px;
-    margin-right: 5px;
 }
 
 .nav-link i {

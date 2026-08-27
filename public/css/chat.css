@@ -2816,3 +2816,82 @@ input:checked + .turbo-slider + .turbo-label,
    washed-out column in the screenshot. */
 [data-theme="light"] .agent-trail-step { color: #475569; opacity: 0.85; }
 [data-theme="light"] .agent-trail-step.is-current { color: #0f172a; opacity: 1; }
+
+/* ── In-chat page preview ────────────────────────────────────────────────────
+   A rendered page sitting in the transcript: header strip, sandboxed iframe,
+   collapsible, expandable to full screen. Sized so it reads as a preview of a
+   page rather than an attempt to BE the page. */
+.page-preview-card {
+    margin: 10px 0 16px;
+    max-width: 760px;
+    border: 1px solid var(--border-color, #2a2a2a);
+    border-radius: 12px;
+    overflow: hidden;
+    background: var(--card-bg, #161616);
+}
+
+.page-preview-head {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 8px 10px 8px 12px;
+    border-bottom: 1px solid var(--border-color, #2a2a2a);
+    font-size: 12.5px;
+    color: var(--text-secondary, #9ca3af);
+}
+.page-preview-head > i { font-size: 11px; opacity: 0.7; }
+.page-preview-name {
+    flex: 1;
+    min-width: 0;
+    font-weight: 600;
+    color: var(--text-color, #e2e8f0);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.page-preview-btn {
+    flex: none;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 6px;
+    color: var(--text-secondary, #9ca3af);
+    font-size: 11px;
+}
+.page-preview-btn:hover { background: rgba(127, 127, 127, 0.15); color: var(--text-color, #e2e8f0); }
+
+.page-preview-body { height: 420px; background: #fff; }
+.page-preview-body iframe { width: 100%; height: 100%; border: 0; display: block; background: #fff; }
+.page-preview-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    font-size: 12.5px;
+    color: #64748b;
+    background: var(--card-bg, #161616);
+}
+
+.page-preview-card.is-collapsed .page-preview-body { display: none; }
+.page-preview-card.is-collapsed .page-preview-head { border-bottom: none; }
+.page-preview-card.is-collapsed [data-pv="toggle"] i { transform: rotate(-90deg); }
+
+/* Full screen: the page gets the whole viewport, because judging a layout through a
+   420px letterbox is most of why a preview fails to convince anyone. */
+.page-preview-card.is-full {
+    position: fixed;
+    inset: 24px;
+    z-index: 1300;
+    max-width: none;
+    margin: 0;
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
+    display: flex;
+    flex-direction: column;
+}
+.page-preview-card.is-full .page-preview-body { flex: 1; height: auto; }
+
+[data-theme="light"] .page-preview-card { background: #fff; border-color: #e5e7eb; }
+[data-theme="light"] .page-preview-head { border-bottom-color: #e5e7eb; color: #64748b; }
+[data-theme="light"] .page-preview-loading { background: #fff; }

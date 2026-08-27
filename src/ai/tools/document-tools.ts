@@ -76,6 +76,69 @@ export const streamDocumentContent = tool({
   },
 });
 
+// ── previewPage ───────────────────────────────────────────────────────────────
+
+export const previewPage = tool({
+  description:
+    "Show the user a REAL, rendered preview of a page before any ticket is built — a " +
+    "self-contained HTML document (all CSS inline in a <style> block, no external files, " +
+    "no build step) that appears as an expandable card in the chat. Use this once the " +
+    "content and section order of a landing/marketing page are agreed: an ASCII wireframe " +
+    "shows the shape, but only this shows what the page will FEEL like. " +
+    "Match the app's existing palette and typography when the project has one. " +
+    "The preview is saved as a project document, and the id it returns MUST be quoted in " +
+    "the ticket you create so the build agent works from the approved design.",
+  inputSchema: zodSchema(
+    z.object({
+      projectId: z.string(),
+      userId: z.string().describe("The user's ID — used to push the preview into their chat"),
+      name: z.string().describe("What this page is, e.g. 'RingDesk landing page'"),
+      html: z
+        .string()
+        .describe(
+          "A COMPLETE, self-contained HTML document: <!doctype html> … </html>, with all " +
+          "styling inside one <style> block. No external stylesheets, scripts or images " +
+          "(use inline SVG or CSS gradients). It must render correctly opened on its own."
+        ),
+    })
+  ),
+  execute: async ({ projectId, userId, name, html }) => {
+    const fileType = "page_preview";
+    const { s3Key, dbContent } = await saveContent(projectId, fileType, name, html);
+
+    const [file] = await db
+      .insert(projectFiles)
+      .values({ projectId, epicId: "", name, fileType, content: dbContent, s3Key })
+      .onConflictDoUpdate({
+        target: [projectFiles.projectId, projectFiles.epicId, projectFiles.name, projectFiles.fileType],
+        set: { content: dbContent, s3Key, updatedAt: new Date() },
+      })
+      .returning();
+
+    emitFileCreated({ projectId, documentId: file!.id, documentType: fileType, name });
+
+    // Straight into the transcript as a card. Deliberately NOT the artifacts panel:
+    // the point is to see the page inline, next to the conversation that produced it.
+    if (_wsBroadcast) {
+      _wsBroadcast(userId, {
+        type: "ai_chunk",
+        is_notification: true,
+        notification_type: "page_preview",
+        file_id: file!.id,
+        file_name: name,
+        is_complete: true,
+      });
+    }
+    return {
+      saved: true,
+      id: file!.id,
+      name,
+      // Say it plainly so the model quotes the id in the ticket rather than paraphrasing.
+      referenceForTicket: `Approved design preview: document ${file!.id} ("${name}") — build the page to match it.`,
+    };
+  },
+});
+
 // ── getFileList ───────────────────────────────────────────────────────────────
 
 export const getFileList = tool({
