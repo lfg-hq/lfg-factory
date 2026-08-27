@@ -690,6 +690,18 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
   let checkpointPromise: Promise<void> | null = null;
   let lastCheckpoint = 0;
   const CHECKPOINT_MS = 2500;
+  // What the user watched happen this turn, in order. Kept alongside the message so
+  // reopening the conversation still shows what the agent did — the trail used to live
+  // only in the DOM and vanished on refresh.
+  const activityTrail: Array<{ text: string; tool?: string }> = [];
+  const noteActivity = (text: string, tool?: string) => {
+    if (!text) return;
+    const last = activityTrail[activityTrail.length - 1];
+    if (last && last.text === text) return;          // same line twice in a row
+    if (activityTrail.length >= 60) return;          // a runaway turn shouldn't bloat the row
+    activityTrail.push(tool ? { text, tool } : { text });
+  };
+
   const persistAssistant = async (
     content: string,
     opts: { steps?: any[] | null; final?: boolean } = {},
@@ -703,6 +715,7 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
           isPartial: !final,
           lastUpdated: new Date(),
           ...(opts.steps !== undefined ? { toolSteps: opts.steps } : {}),
+          ...(activityTrail.length ? { activityTrail } : {}),
         }).where(eq(messages.id, assistantMsgId));
       } else {
         const [row] = await db.insert(messages).values({
@@ -711,6 +724,7 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
           content,
           isPartial: !final,
           toolSteps: opts.steps ?? null,
+          activityTrail: activityTrail.length ? activityTrail : null,
         }).returning({ id: messages.id });
         assistantMsgId = row?.id ?? null;
       }
@@ -912,6 +926,7 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
           if (event.toolName !== "askUser" && event.toolName !== "confirmAction") {
             const detail = toolActionDetail(event.toolName, (event as Record<string, unknown>).input ?? (event as Record<string, unknown>).args);
             if (detail) {
+              noteActivity(detail, event.toolName);
               ws.send(JSON.stringify({
                 type: "ai_chunk", chunk: "", is_final: false, is_notification: true,
                 notification_type: "tool_detail", function_name: event.toolName,
@@ -1004,6 +1019,14 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
             const r = (event as Record<string, unknown>).result as Record<string, unknown> | undefined;
             const name = r && typeof r === "object" ? (r as { name?: unknown }).name : undefined;
             if (typeof name === "string" && name.trim()) {
+              // Replace the placeholder line rather than appending a second one.
+              const refined = `Reading ${name.trim().slice(0, 60)}`;
+              for (let i = activityTrail.length - 1; i >= 0; i--) {
+                if (activityTrail[i]!.tool === "getFileContent" && /^Reading /.test(activityTrail[i]!.text)) {
+                  activityTrail[i] = { text: refined, tool: "getFileContent" };
+                  break;
+                }
+              }
               ws.send(JSON.stringify({
                 type: "ai_chunk", chunk: "", is_final: false, is_notification: true,
                 notification_type: "tool_detail", function_name: event.toolName,

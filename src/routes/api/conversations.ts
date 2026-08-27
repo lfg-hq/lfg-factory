@@ -102,6 +102,8 @@ conversationsApi.get("/:id", async (c) => {
       content: m.content,
       content_if_file: m.contentIfFile ?? null,
       created_at: m.createdAt,
+      // What the agent did during this turn, so reopening the chat still shows it.
+      activity_trail: m.activityTrail ?? null,
       // Null on every normal message (the conversation's own author). Set when an
       // owner/admin stepped into this chat, so the UI can label that turn.
       author: m.authorId ? (authorNames[m.authorId] ?? "Teammate") : null,

@@ -69,6 +69,11 @@ export const messages = pgTable(
     // can replay context the LLM had (not just its final text).
     // Null on user rows and on legacy assistant rows.
     toolSteps: jsonb("tool_steps").$type<any[] | null>(),
+    // The compact list of steps the user watched while this turn ran ("Reading X",
+    // "Listing the project files"). SEPARATE from toolSteps, which is the AI SDK's raw
+    // replay context — provider-shaped, huge, and dropped past 200KB. This is the UI's
+    // record, so the working trail survives a refresh.
+    activityTrail: jsonb("activity_trail").$type<Array<{ text: string; tool?: string }> | null>(),
     createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),
     lastUpdated: timestamp("last_updated", { mode: "date" }).notNull().default(sql`now()`),
   },

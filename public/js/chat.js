@@ -3830,6 +3830,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (meta) meta.textContent = count + (count === 1 ? ' step' : ' steps') + ' · ' + secs + 's';
     }
 
+    /** Replay a SAVED trail from history: same component, already finished. */
+    function renderSavedTrail(steps) {
+        activeTrail = null;                       // never continue a historical trail
+        steps.forEach((st) => trailStep({ detail: st.text, tool: st.tool }));
+        finalizeTrail();
+    }
+
     /** The turn is over: stamp the trail, collapse it, and leave it in the transcript. */
     function finalizeTrail() {
         if (!activeTrail || !activeTrail.isConnected) { activeTrail = null; return; }
@@ -4736,6 +4743,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 const cif = message.content_if_file;
                 if (Array.isArray(cif) && cif.length && (cif[0].type || '').startsWith('image/') && cif[0].url) {
                     fileData = { name: cif[0].name, type: cif[0].type, url: cif[0].url };
+                }
+                // The trail the user watched during this turn, replayed COLLAPSED above
+                // the answer it produced — the live one only ever lived in the DOM, so a
+                // refresh used to erase the record of what the agent did.
+                if (message.role === 'assistant' && Array.isArray(message.activity_trail) && message.activity_trail.length) {
+                    renderSavedTrail(message.activity_trail);
                 }
                 if ((message.content && message.content.trim() !== '') || fileData) {
                     addMessageToChat(message.role, message.content || '', fileData);

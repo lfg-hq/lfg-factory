@@ -79,8 +79,12 @@ globalThis.scrollToBottom = () => {};
 const start = src.indexOf("    let activeTrail = null;");
 const end = src.indexOf("    // Function to show a function call success message");
 const body = src.slice(start, end);
+// renderSavedTrail lives just above finalizeTrail; pull it in too.
+const savedStart = src.indexOf("    /** Replay a SAVED trail from history");
+const savedEnd = src.indexOf("    /** The turn is over:");
+const withReplay = body + src.slice(savedStart, savedEnd);
 const api = new Function("messageContainer", "document", "scrollToBottom",
-  body + "; return { trailStep, finalizeTrail, updateTrailMeta, getTrail: () => activeTrail };")(
+  withReplay + "; return { trailStep, finalizeTrail, updateTrailMeta, renderSavedTrail, getTrail: () => activeTrail };")(
   messageContainer, globalThis.document, globalThis.scrollToBottom);
 
 let bad = 0;
@@ -137,6 +141,24 @@ else fail("row text is " + (refined && refined.dataset.text));
 api.trailStep({ detail: "Reading a file", key: "call_10", tool: "getFileContent" });
 if (trail2.querySelectorAll(".agent-trail-step").length === afterRefine + 1) ok("a different call gets its own row");
 else fail("rows keyed wrongly across calls");
+
+// A refresh must bring the trail back — collapsed, with every step.
+const before = messageContainer.children.length;
+api.renderSavedTrail([
+  { text: "Loading project dashboard", tool: "getProjectDashboard" },
+  { text: "Reading Main PRD", tool: "getFileContent" },
+  { text: "Listing the project files", tool: "getFileList" },
+]);
+const replayed = messageContainer.children[messageContainer.children.length - 1];
+if (messageContainer.children.length === before + 1) ok("a saved trail replays as ONE trail");
+else fail("replay produced " + (messageContainer.children.length - before) + " elements");
+if (replayed.querySelectorAll(".agent-trail-step").length === 3) ok("every saved step comes back");
+else fail("replayed " + replayed.querySelectorAll(".agent-trail-step").length + " steps");
+if (replayed.classList.contains("is-collapsed") && replayed.classList.contains("is-done"))
+  ok("history replays finished and folded away");
+else fail("replayed trail is not in its finished state");
+if (!api.getTrail()) ok("a replayed trail can't be continued by the next live step");
+else fail("history would keep collecting live steps");
 
 console.log(bad ? `\n${bad} FAILED` : "\nall checks pass");
 process.exit(bad ? 1 : 0);

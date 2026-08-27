@@ -73,6 +73,8 @@ export const messages = sqliteTable(
     // can replay context the LLM had (not just its final text).
     // Null on user rows and on legacy assistant rows.
     toolSteps: text("tool_steps", { mode: "json" }).$type<any[] | null>(),
+    // See ../pg/chat.ts — the UI's record of the working trail.
+    activityTrail: text("activity_trail", { mode: "json" }).$type<Array<{ text: string; tool?: string }> | null>(),
     createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
     lastUpdated: integer("last_updated", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
   },
