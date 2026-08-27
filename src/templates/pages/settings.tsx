@@ -214,10 +214,10 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
       display: flex; align-items: center; justify-content: center;
       flex-shrink: 0;
     }
-    .llm-logo-wrap.openai  { background: rgba(16,163,127,0.12); color: #10a37f; }
-    .llm-logo-wrap.anthropic { background: rgba(217,119,6,0.12); color: #d97706; }
-    .llm-logo-wrap.gemini  { background: rgba(66,133,244,0.12); color: #4285f4; }
-    .llm-logo-wrap svg, .llm-logo-wrap img { width: 22px; height: 22px; display: block; }
+    .llm-logo-wrap { background: rgba(255,255,255,0.07); }
+    .llm-logo-wrap svg, .llm-logo-wrap img { width: 22px; height: 22px; display: block; object-fit: contain; }
+    /* Single-colour marks ship black; flip them so they read on the dark theme. */
+    .llm-logo-mono { filter: invert(1); }
 
     .llm-row-name {
       font-size: 0.9375rem;
@@ -321,6 +321,8 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
     [data-theme="light"] .cc-code-input { background: #ffffff; border-color: #e2e8f0; color: #1e293b; }
     [data-theme="light"] .cc-code-input:focus { border-color: #a78bfa; }
     [data-theme="light"] .provider-logo-openai { filter: none; }
+    [data-theme="light"] .llm-logo-wrap { background: #f1f5f9; }
+    [data-theme="light"] .llm-logo-mono { filter: none; }
     [data-theme="light"] .cc-status-badge { background: #f1f5f9 !important; color: #64748b !important; border-color: #e2e8f0 !important; }
     /* The global light-theme anchor rule otherwise overrides the white text on
        primary links, producing purple-on-purple for the OpenAI sign-in button. */
@@ -429,7 +431,7 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
           <!-- Claude provider -->
           <div class="llm-keys-row coding-agent-provider-header" style="border-bottom:1px solid var(--border-color, rgba(255,255,255,0.07));padding:1rem 1.375rem;justify-content:space-between;">
             <h3 style="margin:0;font-size:0.9375rem;font-weight:700;color:var(--text-color,#f0f0f0);display:flex;align-items:center;gap:.5rem;">
-              <img src="/public/images/anthropic-logo.png" alt="" style="width:18px;height:18px;object-fit:contain;" />
+              <img src="/public/images/models/claude.svg" alt="" style="width:18px;height:18px;object-fit:contain;" />
               Claude Code
             </h3>
             ${claudeCode?.hasCredentials && claudeCode?.authenticated ? html`
@@ -1223,7 +1225,7 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
           <div class="llm-keys-row">
             <div class="llm-row-label">
               <div class="llm-logo-wrap openai">
-                <svg fill="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142-.0852 4.783-2.7582a.7712.7712 0 0 0 .7806 0l5.8428 3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142.0852-4.7735 2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0593a4.4708 4.4708 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997L9.4041 13.5V10.4976z"/></svg>
+                <img src="/public/images/models/openai.svg" alt="OpenAI" class="llm-logo-mono" />
               </div>
               <div>
                 <div class="llm-row-name">OpenAI <a href="https://platform.openai.com/api-keys" target="_blank" class="help-circle">?</a></div>
@@ -1251,7 +1253,7 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
           <div class="llm-keys-row">
             <div class="llm-row-label">
               <div class="llm-logo-wrap anthropic">
-                <img src="/public/images/anthropic-logo.png" alt="Anthropic" />
+                <img src="/public/images/models/claude.svg" alt="Anthropic" />
               </div>
               <div>
                 <div class="llm-row-name">Anthropic <a href="https://console.anthropic.com/settings/keys" target="_blank" class="help-circle">?</a></div>
@@ -1279,7 +1281,7 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
           <div class="llm-keys-row">
             <div class="llm-row-label">
               <div class="llm-logo-wrap gemini">
-                <img src="/public/images/gemini-logo.png" alt="Google Gemini" />
+                <img src="/public/images/models/gemini.svg" alt="Google Gemini" />
               </div>
               <div>
                 <div class="llm-row-name">Google Gemini <a href="https://makersuite.google.com/app/apikey" target="_blank" class="help-circle">?</a></div>
@@ -1306,8 +1308,8 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
           <!-- Kimi -->
           <div class="llm-keys-row">
             <div class="llm-row-label">
-              <div class="llm-logo-wrap kimi" style="background:linear-gradient(135deg,#1a1a2e,#16213e);color:#4fc3f7;">
-                <span style="font-weight:700;font-size:0.8rem;">K</span>
+              <div class="llm-logo-wrap kimi">
+                <img src="/public/images/models/kimi.svg" alt="Kimi" class="llm-logo-mono" />
               </div>
               <div>
                 <div class="llm-row-name">Kimi <a href="https://platform.moonshot.cn/console/api-keys" target="_blank" class="help-circle">?</a></div>
@@ -1334,8 +1336,8 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
           <!-- DeepSeek -->
           <div class="llm-keys-row">
             <div class="llm-row-label">
-              <div class="llm-logo-wrap deepseek" style="background:linear-gradient(135deg,#1a1a2e,#0b3d91);color:#4d6bfe;">
-                <span style="font-weight:700;font-size:0.8rem;">DS</span>
+              <div class="llm-logo-wrap deepseek">
+                <img src="/public/images/models/deepseek.svg" alt="DeepSeek" />
               </div>
               <div>
                 <div class="llm-row-name">DeepSeek <a href="https://platform.deepseek.com/api_keys" target="_blank" class="help-circle">?</a></div>
@@ -1362,8 +1364,8 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
           <!-- GLM (Z.ai) -->
           <div class="llm-keys-row">
             <div class="llm-row-label">
-              <div class="llm-logo-wrap glm" style="background:linear-gradient(135deg,#1a1a2e,#3b1f7a);color:#a78bfa;">
-                <span style="font-weight:700;font-size:0.8rem;">GLM</span>
+              <div class="llm-logo-wrap glm">
+                <img src="/public/images/models/glm.svg" alt="GLM" class="llm-logo-mono" />
               </div>
               <div>
                 <div class="llm-row-name">GLM (Z.ai) <a href="https://docs.z.ai/guides/llm/glm-5.2" target="_blank" class="help-circle">?</a></div>
