@@ -2575,22 +2575,13 @@ document.addEventListener('DOMContentLoaded', () => {
      * Show a tool activity indicator below the chat (replaces typing indicator).
      */
     function showToolActivity(label) {
-        // Remove any existing tool activity or typing indicator
-        const existing = document.querySelector('.tool-activity-indicator');
-        if (existing) existing.remove();
+        // Server-pushed tool activity joins the same trail — otherwise two different
+        // progress widgets stack up on screen saying the same thing.
         const typing = document.querySelector('.typing-indicator');
         if (typing) typing.remove();
-
-        const indicator = document.createElement('div');
-        indicator.className = 'tool-activity-indicator';
-        indicator.innerHTML = `
-            <div style="display:flex;align-items:center;gap:8px;padding:8px 16px;color:#a0a0b0;font-size:13px;">
-                <span class="tool-spinner" style="display:inline-block;width:14px;height:14px;border:2px solid #a0a0b0;border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;"></span>
-                <span>${label}...</span>
-            </div>
-        `;
-        messageContainer.appendChild(indicator);
-        scrollToBottom();
+        const stale = document.querySelector('.tool-activity-indicator');
+        if (stale) stale.remove();
+        trailStep({ detail: label, icon: 'fa-bolt', color: '#a78bfa' });
     }
 
     /**
@@ -3672,39 +3663,100 @@ document.addEventListener('DOMContentLoaded', () => {
         const color = investigation ? '#a78bfa' : (details.color || '#94a3b8');
         const detailText = opts.detail || details.label || (investigation ? 'Gathering information' : '');
 
-        let indicator = messageContainer.querySelector('.function-call-indicator');
-        if (!indicator) {
-            indicator = document.createElement('div');
-            indicator.className = 'function-call-indicator';
-            indicator.innerHTML = `
-                <div class="tool-call-pill">
-                    <i class="tool-call-icon"></i>
-                    <span class="tool-call-body">
-                        <span class="tool-call-label"></span>
-                        <span class="tool-call-detail"></span>
-                    </span>
-                    <span class="tool-call-dots"><span>.</span><span>.</span><span>.</span></span>
-                </div>`;
-            messageContainer.appendChild(indicator);
+        return trailStep({ icon, color, detail: detailText, label });
+    }
+
+    // ── The working trail ────────────────────────────────────────────────────
+    //
+    // One pill that rewrote itself told you the agent was busy and nothing else — on a
+    // large codebase it sat on "Reading the codebase" for minutes while a dozen distinct
+    // things happened underneath. The trail ACCUMULATES those steps on a connected line,
+    // so you can see what it's actually doing, and it stays in the transcript afterwards
+    // (collapsed) so you can go back and read what happened.
+    let activeTrail = null;
+
+    function trailStep(step) {
+        if (!activeTrail || !activeTrail.isConnected) {
+            activeTrail = document.createElement('div');
+            activeTrail.className = 'agent-trail is-running';
+            activeTrail.dataset.started = String(Date.now());
+            activeTrail.innerHTML = `
+                <button type="button" class="agent-trail-head" aria-expanded="true">
+                    <span class="agent-trail-spinner"></span>
+                    <span class="agent-trail-title">Working</span>
+                    <span class="agent-trail-meta"></span>
+                    <i class="fas fa-chevron-down agent-trail-caret"></i>
+                </button>
+                <div class="agent-trail-steps"></div>`;
+            activeTrail.querySelector('.agent-trail-head').addEventListener('click', function () {
+                const collapsed = activeTrail_toggle(this.closest('.agent-trail'));
+                this.setAttribute('aria-expanded', String(!collapsed));
+            });
+            messageContainer.appendChild(activeTrail);
         }
-        indicator.style.setProperty('--tool-color', color);
-        const iconEl = indicator.querySelector('.tool-call-icon');
-        if (iconEl) iconEl.className = `fas ${icon} tool-call-icon`;
-        const labelEl = indicator.querySelector('.tool-call-label');
-        if (labelEl) labelEl.textContent = label;
-        setToolDetail(indicator, detailText);
+
+        const steps = activeTrail.querySelector('.agent-trail-steps');
+        const text = step.detail || step.label || 'Working';
+        const last = steps.lastElementChild;
+        // Don't stack the same line twice — a tool that reports progress repeatedly
+        // should update its row, not add another identical one.
+        if (last && last.dataset.text === text) {
+            last.classList.add('is-current');
+            return activeTrail;
+        }
+        if (last) last.classList.remove('is-current');
+
+        const row = document.createElement('div');
+        row.className = 'agent-trail-step is-current';
+        row.dataset.text = text;
+        row.innerHTML = `
+            <span class="agent-trail-dot" style="--tool-color:${step.color || '#94a3b8'}">
+                <i class="fas ${step.icon || 'fa-cog'}"></i>
+            </span>
+            <span class="agent-trail-text"></span>`;
+        row.querySelector('.agent-trail-text').textContent = text;
+        steps.appendChild(row);
+        updateTrailMeta(activeTrail);
         scrollToBottom();
-        return indicator;
+        return activeTrail;
+    }
+
+    function activeTrail_toggle(trail) {
+        if (!trail) return false;
+        const collapsed = trail.classList.toggle('is-collapsed');
+        return collapsed;
+    }
+
+    function updateTrailMeta(trail) {
+        if (!trail) return;
+        const count = trail.querySelectorAll('.agent-trail-step').length;
+        const secs = Math.max(1, Math.round((Date.now() - Number(trail.dataset.started || Date.now())) / 1000));
+        const meta = trail.querySelector('.agent-trail-meta');
+        if (meta) meta.textContent = count + (count === 1 ? ' step' : ' steps') + ' · ' + secs + 's';
+    }
+
+    /** The turn is over: stamp the trail, collapse it, and leave it in the transcript. */
+    function finalizeTrail() {
+        if (!activeTrail || !activeTrail.isConnected) { activeTrail = null; return; }
+        const trail = activeTrail;
+        activeTrail = null;
+        updateTrailMeta(trail);
+        trail.classList.remove('is-running');
+        trail.classList.add('is-done', 'is-collapsed');
+        const title = trail.querySelector('.agent-trail-title');
+        if (title) title.textContent = 'Worked';
+        const head = trail.querySelector('.agent-trail-head');
+        if (head) head.setAttribute('aria-expanded', 'false');
+        const current = trail.querySelector('.agent-trail-step.is-current');
+        if (current) current.classList.remove('is-current');
     }
 
     // Update just the second line of the live indicator (the specific action).
     function setToolDetail(indicator, text) {
-        indicator = indicator || messageContainer.querySelector('.function-call-indicator');
-        if (!indicator) return;
-        const el = indicator.querySelector('.tool-call-detail');
-        if (!el) return;
-        el.textContent = text || '';
-        el.style.display = text ? '' : 'none';
+        // The detail line WAS the pill's second row; it's a step on the trail now, so a
+        // stream of details reads as a sequence instead of overwriting itself.
+        if (!text) return;
+        trailStep({ detail: text, icon: 'fa-magnifying-glass', color: '#a78bfa' });
     }
     
     // Function to show a function call success message
@@ -4039,6 +4091,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // rebuilt it, which is what made it flash on and off all turn.
     function removeFunctionCallIndicator(instant = false, force = false) {
         if (turnActive && !force) return;
+        // The trail is KEPT — collapsed, with its steps intact — because the whole point
+        // is being able to go back and see what the agent did. Only the legacy pills go.
+        finalizeTrail();
         const existingIndicators = document.querySelectorAll('.function-call-indicator, .function-call-success');
         existingIndicators.forEach(indicator => {
             if (instant) {

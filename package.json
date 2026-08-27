@@ -17,7 +17,8 @@
     "check:contrast": "node scripts/check-log-contrast.mjs",
     "test:nav": "bun run scripts/test-nav-layout.ts",
     "check:pages": "node scripts/check-page-structure.mjs",
-    "test:sidebar": "node scripts/test-sidebar-chats.mjs"
+    "test:sidebar": "node scripts/test-sidebar-chats.mjs",
+    "test:trail": "node scripts/test-agent-trail.mjs"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
