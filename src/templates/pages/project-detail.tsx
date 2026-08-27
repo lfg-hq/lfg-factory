@@ -143,22 +143,12 @@ export function ProjectDetailPage({
             <i class="fas fa-tachometer-alt"></i>
             <span class="nav-text">Dashboard</span>
           </a>
-          <a href="/chat/project/${project.projectId}" class="nav-link">
-            <i class="fas fa-comments"></i>
-            <span class="nav-text">Chat</span>
-          </a>
-          <a href="/projects/${project.projectId}/epics" class="nav-link">
-            <i class="fas fa-layer-group"></i>
-            <span class="nav-text">Epics</span>
-          </a>
-          <a href="/projects/${project.projectId}/tickets" class="nav-link">
-            <i class="fas fa-tasks"></i>
-            <span class="nav-text">Tickets</span>
-          </a>
-          <a href="/instant/project/${project.projectId}" class="nav-link${activeTab === "instant" ? " active" : ""}">
-            <i class="fas fa-bolt"></i>
-            <span class="nav-text">Instant</span>
-          </a>
+        </div>
+        <div class="conversations-section" data-sidebar-chats data-project="${project.projectId}">
+          <h3 class="sidebar-section-title">Recent chats</h3>
+          <div id="conversation-list" class="conversation-list">
+            <!-- Populated by /public/js/sidebar-chats.js -->
+          </div>
         </div>
       </div>
       <div class="sidebar-bottom-content">
@@ -235,39 +225,70 @@ export function ProjectDetailPage({
         </div>
       </div>
 
-      <!-- Horizontal Tab Nav -->
-      <div class="project-tabs" style="display:flex;gap:0;border-bottom:1px solid var(--border-color);padding:0 2rem;background:var(--body-bg);">
+      <!-- Horizontal Tab Nav — the everyday four, then a MORE menu.
+           Nine tabs across the top made the row a wall of equal-weight choices;
+           Instant is gone from here entirely. -->
         <a href="/projects/${project.projectId}" class="tab-item${activeTab === "home" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "home" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "home" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
           <i class="fas fa-house"></i> Home
-        </a>
-        <a href="/projects/${project.projectId}?tab=inbox" class="tab-item${activeTab === "inbox" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "inbox" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "inbox" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
-          <i class="fas fa-inbox"></i> Inbox
-          <span id="inbox-tab-badge" style="display:none;font-size:0.7rem;background:var(--primary-color);color:#fff;padding:0.1rem 0.4rem;border-radius:9999px;"></span>
         </a>
         <a href="/projects/${project.projectId}?tab=conversations" class="tab-item${activeTab === "conversations" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "conversations" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "conversations" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
           <i class="fas fa-comments"></i> Chats
           ${conversations.length > 0 ? html`<span style="font-size:0.7rem;background:rgba(139,92,246,0.2);color:#a78bfa;padding:0.1rem 0.4rem;border-radius:9999px;">${conversations.length}</span>` : ""}
         </a>
-        <a href="/projects/${project.projectId}?tab=documents" class="tab-item${activeTab === "documents" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "documents" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "documents" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
-          <i class="fas fa-file-lines"></i> Documents
-        </a>
         <a href="/projects/${project.projectId}?tab=tickets" class="tab-item${activeTab === "tickets" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "tickets" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "tickets" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
           <i class="fas fa-tasks"></i> Tickets
-        </a>
-        <a href="/projects/${project.projectId}?tab=instant" class="tab-item${activeTab === "instant" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "instant" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "instant" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
-          <i class="fas fa-bolt"></i> Instant
-          ${instantApps.length > 0 ? html`<span style="font-size:0.7rem;background:rgba(139,92,246,0.2);color:#a78bfa;padding:0.1rem 0.4rem;border-radius:9999px;">${instantApps.length}</span>` : ""}
         </a>
         <a href="/projects/${project.projectId}?tab=events" class="tab-item${activeTab === "events" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "events" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "events" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
           <i class="fas fa-stream"></i> Events
         </a>
-        <a href="/projects/${project.projectId}?tab=environment" class="tab-item${activeTab === "environment" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "environment" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "environment" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
-          <i class="fas fa-key"></i> Environment
-        </a>
         <a href="/projects/${project.projectId}?tab=settings" class="tab-item${activeTab === "settings" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "settings" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "settings" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
           <i class="fas fa-cog"></i> Settings
         </a>
+
+        <div class="tab-more" style="position:relative;display:flex;align-items:center;margin-left:auto;">
+          <button type="button" id="project-more-btn" aria-expanded="false"
+            style="display:flex;align-items:center;gap:0.4rem;padding:0.875rem 1rem;background:none;border:none;cursor:pointer;font-size:0.875rem;font-weight:500;color:${["inbox","documents","epics","environment"].includes(activeTab) ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${["inbox","documents","epics","environment"].includes(activeTab) ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;">
+            More
+            <span id="project-more-dot" style="display:none;width:6px;height:6px;border-radius:50%;background:var(--primary-color);"></span>
+            <i class="fas fa-chevron-down" style="font-size:0.65rem;opacity:0.7;"></i>
+          </button>
+          <div id="project-more-menu" hidden
+            style="position:absolute;top:100%;right:0;z-index:60;min-width:210px;background:var(--card-bg);border:1px solid var(--border-color);border-radius:10px;box-shadow:0 12px 30px rgba(0,0,0,0.18);padding:5px;">
+            <a href="/projects/${project.projectId}?tab=inbox" class="more-item">
+              <i class="fas fa-inbox"></i> Inbox
+              <span id="inbox-tab-badge" style="display:none;margin-left:auto;font-size:0.7rem;background:var(--primary-color);color:#fff;padding:0.1rem 0.4rem;border-radius:9999px;"></span>
+            </a>
+            <a href="/projects/${project.projectId}/epics" class="more-item"><i class="fas fa-layer-group"></i> Epics</a>
+            <a href="/projects/${project.projectId}?tab=documents" class="more-item"><i class="fas fa-file-lines"></i> Documents</a>
+            <a href="/projects/${project.projectId}?tab=environment" class="more-item"><i class="fas fa-key"></i> Environment</a>
+          </div>
+        </div>
       </div>
+      <style>
+        .project-tabs .more-item {
+          display:flex; align-items:center; gap:0.6rem; padding:0.55rem 0.7rem; border-radius:7px;
+          text-decoration:none; font-size:0.85rem; color:var(--text-color);
+        }
+        .project-tabs .more-item i { width:16px; text-align:center; opacity:0.7; font-size:0.8rem; }
+        .project-tabs .more-item:hover { background:color-mix(in srgb, var(--border-color) 35%, transparent); }
+      </style>
+      <script>
+        (function () {
+          var btn = document.getElementById('project-more-btn');
+          var menu = document.getElementById('project-more-menu');
+          if (!btn || !menu) return;
+          function close() { menu.hidden = true; btn.setAttribute('aria-expanded', 'false'); }
+          btn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            menu.hidden = !menu.hidden;
+            btn.setAttribute('aria-expanded', String(!menu.hidden));
+          });
+          document.addEventListener('click', function (e) {
+            if (!menu.hidden && !menu.contains(e.target)) close();
+          });
+          document.addEventListener('keydown', function (e) { if (e.key === 'Escape') close(); });
+        })();
+      </script>
       <style>
         /* Clean, blended list — one bordered container with subtle row dividers. */
         .lfg-list { border:1px solid var(--border-color); border-radius:var(--radius); overflow:hidden; background:var(--card-bg); }
@@ -302,7 +323,9 @@ export function ProjectDetailPage({
             .start-work-eyebrow { display:flex;align-items:center;gap:0.4rem;margin-bottom:0.45rem;color:var(--primary-color);font-size:0.72rem;font-weight:700;text-transform:uppercase;letter-spacing:0.08em; }
             .start-work-title { margin:0;color:var(--text-color);font-size:1.15rem;font-weight:700; }
             .start-work-intro { margin:0.4rem 0 0;color:var(--text-secondary);font-size:0.86rem;line-height:1.5; }
-            .start-work-options { display:grid;grid-template-columns:1.25fr 1fr;gap:0.75rem;margin-top:1.15rem; }
+            /* Chat is the only way in from here now — the "create a ticket directly"
+               shortcut is gone, so this is a single full-width choice, not a column. */
+            .start-work-options { display:grid;grid-template-columns:1fr;gap:0.75rem;margin-top:1.15rem; }
             .start-choice { display:flex;align-items:flex-start;gap:0.9rem;min-width:0;padding:1rem;border:1px solid var(--border-color);border-radius:var(--radius);background:var(--card-bg);text-decoration:none;transition:border-color .15s,background .15s,transform .15s,box-shadow .15s; }
             .start-choice:hover { transform:translateY(-1px);border-color:rgba(139,92,246,0.5);box-shadow:0 6px 18px rgba(0,0,0,0.08); }
             .start-choice-primary { border-color:rgba(139,92,246,0.42);background:rgba(139,92,246,0.08); }
@@ -350,14 +373,6 @@ export function ProjectDetailPage({
                   <span class="start-choice-title">Describe what you need</span>
                   <span class="start-choice-copy">Start with an idea, problem, or outcome—even if it is vague. The AI will ask questions, inspect the project, and help shape the work.</span>
                   <span class="start-choice-cta">Start a chat <i class="fas fa-arrow-right"></i></span>
-                </span>
-              </a>
-              <a href="/projects/${project.projectId}?tab=tickets&create=1" class="start-choice start-choice-secondary">
-                <span class="start-choice-icon"><i class="fas fa-list-check"></i></span>
-                <span class="start-choice-body">
-                  <span class="start-choice-title">Create a ticket directly</span>
-                  <span class="start-choice-copy">Best for a specific task or bug you can already describe. It can still be refined before anything is built.</span>
-                  <span class="start-choice-cta">Create ticket <i class="fas fa-arrow-right"></i></span>
                 </span>
               </a>
             </div>

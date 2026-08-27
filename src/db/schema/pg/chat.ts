@@ -34,6 +34,9 @@ export const conversations = pgTable(
     title: text("title"),
     projectId: text("project_id"),
     designCanvasId: text("design_canvas_id"),
+    // Pinned chats sit above the recent list and never scroll away. A timestamp rather
+    // than a boolean so the pinned group has a stable order of its own.
+    pinnedAt: timestamp("pinned_at", { mode: "date" }),
     createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),
     updatedAt: timestamp("updated_at", { mode: "date" }).notNull().default(sql`now()`),
   },

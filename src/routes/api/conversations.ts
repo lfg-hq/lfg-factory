@@ -18,6 +18,35 @@ type AuthEnv = {
 const conversationsApi = new Hono<AuthEnv>();
 conversationsApi.use("*", requireAuth);
 
+// POST /api/conversations/:id/pin — pin or unpin a chat.
+//
+// Pinning is per CONVERSATION, not per viewer: a chat belongs to whoever started it,
+// and getChatAccess already decides who may touch it. Body { pinned: boolean }; omit it
+// to toggle.
+conversationsApi.post("/:id/pin", async (c) => {
+  const user = c.get("user");
+  const { id } = c.req.param();
+
+  // getChatAccess RETURNS a verdict rather than throwing, so a truthiness check would
+  // have let a denied viewer pin someone else's chat.
+  const access = await getChatAccess(id, user.id);
+  if (!access.canRead) return c.json({ error: "Conversation not found" }, 404);
+  if (!access.canWrite) return c.json({ error: "You can't pin a chat you don't own" }, 403);
+
+  const [row] = await db.select({ pinnedAt: conversations.pinnedAt })
+    .from(conversations).where(eq(conversations.id, id)).limit(1);
+  if (!row) return c.json({ error: "Conversation not found" }, 404);
+
+  const body = await c.req.json().catch(() => ({})) as { pinned?: boolean };
+  const wantPinned = typeof body.pinned === "boolean" ? body.pinned : !row.pinnedAt;
+
+  await db.update(conversations)
+    .set({ pinnedAt: wantPinned ? new Date() : null })
+    .where(eq(conversations.id, id));
+
+  return c.json({ ok: true, pinned: wantPinned });
+});
+
 // GET /api/conversations/:id/
 conversationsApi.get("/:id", async (c) => {
   const user = c.get("user");

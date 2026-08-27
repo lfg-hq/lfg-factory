@@ -333,6 +333,7 @@ async function listProjectConversations(
       createdAt: conversations.createdAt,
       updatedAt: conversations.updatedAt,
       userId: conversations.userId,
+      pinnedAt: conversations.pinnedAt,
       authorName: users.name,
     })
     .from(conversations)
@@ -347,7 +348,8 @@ async function listProjectConversations(
         )
       )
     )
-    .orderBy(desc(conversations.updatedAt));
+    // Pinned first (newest pin at the top of that group), then the rest by recency.
+    .orderBy(desc(conversations.pinnedAt), desc(conversations.updatedAt));
 
   return rows.map((r) => ({
     id: r.id,
@@ -355,6 +357,8 @@ async function listProjectConversations(
     created_at: r.createdAt,
     updated_at: r.updatedAt,
     is_mine: r.userId === viewerId,
+    pinned: !!r.pinnedAt,
+    pinned_at: r.pinnedAt ?? null,
     // Only meaningful when sharing is on; null for your own chats so the UI
     // doesn't label every row with your own name.
     author: r.userId === viewerId ? null : (r.authorName ?? "Teammate"),

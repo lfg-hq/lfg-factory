@@ -1079,3 +1079,37 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ── Chat history in the rail ─────────────────────────────────────────────
+   The rail shows conversations on every project page now, not only inside the
+   chat page, so these carry the pinned group and its pin control. */
+.conversation-group-label {
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.5;
+  padding: 0.55rem 0.75rem 0.2rem;
+}
+.conversation-item { position: relative; }
+.conversation-item .conversation-pin {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: 0;
+  padding: 4px 5px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 10px;
+  color: currentColor;
+  /* Hidden until hover so the rail stays quiet; a PINNED chat keeps it visible,
+     otherwise there's no way to tell what's pinned or to unpin it. */
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.conversation-item:hover .conversation-pin,
+.conversation-item .conversation-pin:focus-visible { opacity: 0.65; }
+.conversation-item.is-pinned .conversation-pin { opacity: 0.9; transform: translateY(-50%) rotate(-35deg); }
+.conversation-item .conversation-pin:hover { opacity: 1; background: rgba(127, 127, 127, 0.16); }

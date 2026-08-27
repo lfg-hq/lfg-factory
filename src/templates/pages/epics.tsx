@@ -292,19 +292,13 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
         <a href="/projects/${project.projectId}" class="nav-link">
           <i class="fas fa-tachometer-alt"></i><span class="nav-text">Dashboard</span>
         </a>
-        <a href="/chat/project/${project.projectId}" class="nav-link">
-          <i class="fas fa-comments"></i><span class="nav-text">Chat</span>
-        </a>
-        <a href="/projects/${project.projectId}/epics" class="nav-link active">
-          <i class="fas fa-layer-group"></i><span class="nav-text">Epics</span>
-        </a>
-        <a href="/projects/${project.projectId}/tickets" class="nav-link">
-          <i class="fas fa-tasks"></i><span class="nav-text">Tickets</span>
-        </a>
-        <a href="/instant/project/${project.projectId}" class="nav-link">
-          <i class="fas fa-bolt"></i><span class="nav-text">Instant</span>
-        </a>
       </div>
+        <div class="conversations-section" data-sidebar-chats data-project="${project.projectId}">
+          <h3 class="sidebar-section-title">Recent chats</h3>
+          <div id="conversation-list" class="conversation-list">
+            <!-- Populated by /public/js/sidebar-chats.js -->
+          </div>
+        </div>
       </div>
     <div class="sidebar-bottom-content">
       <div class="sidebar-nav bottom-nav">

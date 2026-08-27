@@ -37,6 +37,8 @@ export const conversations = sqliteTable(
     title: text("title"),
     projectId: text("project_id"), // FK set in relations (circular dep)
     designCanvasId: text("design_canvas_id"), // FK set in relations
+    // See ../pg/chat.ts — pinned chats sit above the recent list.
+    pinnedAt: integer("pinned_at", { mode: "timestamp" }),
     createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
     updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
   },

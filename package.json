@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit",
     "test:boards": "bun run scripts/test-board-sync.ts",
     "test:epics": "bun run scripts/test-epics-page.ts",
-    "check:contrast": "node scripts/check-log-contrast.mjs"
+    "check:contrast": "node scripts/check-log-contrast.mjs",
+    "test:nav": "bun run scripts/test-nav-layout.ts"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
