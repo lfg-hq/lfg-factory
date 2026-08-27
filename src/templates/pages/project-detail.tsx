@@ -169,6 +169,12 @@ export function ProjectDetailPage({
             <a href="/projects/${project.projectId}?tab=environment" class="nav-link">
               <i class="fas fa-key"></i><span class="nav-text">Environment</span>
             </a>
+            <a href="/projects/${project.projectId}?tab=events" class="nav-link">
+              <i class="fas fa-stream"></i><span class="nav-text">Events</span>
+            </a>
+            <a href="/projects/${project.projectId}?tab=settings" class="nav-link">
+              <i class="fas fa-cog"></i><span class="nav-text">Settings</span>
+            </a>
           </div>
         </div>
         <div class="conversations-section" data-sidebar-chats data-project="${project.projectId}">
@@ -252,21 +258,6 @@ export function ProjectDetailPage({
         </div>
       </div>
 
-      <!-- Horizontal Tab Nav — the everyday five, then a MORE menu.
-           Nine tabs across the top made the row a wall of equal-weight choices;
-           Instant is gone from here entirely. -->
-      <div class="project-tabs" style="display:flex;gap:0;border-bottom:1px solid var(--border-color);padding:0 2rem;background:var(--body-bg);">
-        <a href="/projects/${project.projectId}" class="tab-item${activeTab === "home" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "home" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "home" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
-          <i class="fas fa-house"></i> Home
-        </a>
-        <a href="/projects/${project.projectId}?tab=events" class="tab-item${activeTab === "events" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "events" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "events" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
-          <i class="fas fa-stream"></i> Events
-        </a>
-        <a href="/projects/${project.projectId}?tab=settings" class="tab-item${activeTab === "settings" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "settings" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "settings" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
-          <i class="fas fa-cog"></i> Settings
-        </a>
-
-      </div>
       <style>
         /* Clean, blended list — one bordered container with subtle row dividers. */
         .lfg-list { border:1px solid var(--border-color); border-radius:var(--radius); overflow:hidden; background:var(--card-bg); }

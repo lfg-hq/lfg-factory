@@ -69,33 +69,36 @@ for (const d of ["pg", "sqlite"]) {
 
 console.log("\nproject tabs:");
 const pd = read("src/templates/pages/project-detail.tsx");
-// Stop at the More MENU: slicing to the next <style> ran past it, so the menu's own
-// Documents link read as a leftover tab.
-const tabStart = pd.indexOf('<div class="project-tabs"');
-const tabs = pd.slice(tabStart, pd.indexOf("<style>", tabStart));
-for (const gone of ["instant", "conversations", "tickets", "documents"]) {
-  if (!new RegExp(`tab=${gone}"`).test(tabs)) ok(`${gone} is off the dashboard tab row`);
-  else fail(`${gone} still a dashboard tab`);
-}
-for (const t of ["Home", "Events", "Settings"]) {
-  if (tabs.includes(`></i> ${t}`)) ok(`${t} stays in the row`);
-  else fail(`${t} missing from the row`);
-}
-if (!pd.includes('id="project-more-menu"')) ok("More is NOT on the dashboard tab row");
-else fail("More still in the dashboard tabs");
+if (!pd.includes('<div class="project-tabs"')) ok("the duplicate tab row is gone — the rail is the only navigation");
+else fail("project-tabs row still rendered");
 
 console.log("\nMore, in the rail:");
 for (const p of PROJECT_PAGES) {
   const s2 = read(p);
   const name = p.split("/").pop()!;
-  const more = s2.slice(s2.indexOf('id="sidebar-more-items"'), s2.indexOf('id="sidebar-more-items"') + 900);
-  const missing = ["Epics", "Docs", "Inbox", "Environment"].filter((t) => !more.includes(`>${t}<`));
+  // Slice to the END of the group: a fixed 900-char window cut off the last items
+  // once the group grew, and reported them missing when they were right there.
+  const moreStart = s2.indexOf('id="sidebar-more-items"');
+  const more = s2.slice(moreStart, s2.indexOf("conversations-section", moreStart));
+  const missing = ["Epics", "Docs", "Inbox", "Environment", "Events", "Settings"].filter((t) => !more.includes(`>${t}<`));
   if (!s2.includes("sidebar-more-toggle")) fail(`${name}: no More toggle in the rail`);
   else if (missing.length) fail(`${name}: More is missing ${missing.join(", ")}`);
-  else ok(`${name}: More holds Epics, Docs, Inbox, Environment`);
+  else ok(`${name}: More holds Epics, Docs, Inbox, Environment, Events, Settings`);
 }
 if (read("public/js/sidebar.js").includes("sidebar-more-toggle")) ok("the toggle is wired in sidebar.js (loads on every rail)");
 else fail("nothing opens the More section");
+// What looked "selected" in More was only ever :hover — nothing marked the page you
+// were actually on.
+if (/classList\.toggle\("active", isCurrent\)/.test(read("public/js/sidebar.js"))) ok("More marks the page you're on");
+else fail("no active state in More — hover is the only highlight");
+
+console.log("\nrail rows are the same component everywhere:");
+const chatJs = read("public/js/chat.js");
+const shared = read("public/js/sidebar-chats.js");
+if (chatJs.includes('class="conversation-pin"') && shared.includes('class="conversation-pin"')) ok("pin on both renderers");
+else fail("pin missing from one renderer");
+if (chatJs.includes('class="delete-conversation"') && shared.includes('class="delete-conversation"')) ok("delete on both renderers");
+else fail("delete missing from one renderer");
 
 console.log("\ndashboard:");
 if (!pd.includes("Create a ticket directly")) ok("create-ticket shortcut removed");

@@ -43,11 +43,13 @@
     item.innerHTML =
       '<div class="conversation-title" title="' + esc(title) + '">' + esc(short) + "</div>" +
       (conv.is_mine
-        // Styled as a sibling of .delete-conversation so it inherits the same
-        // hidden-until-hover behaviour that button already has.
+        // Pin AND delete, the same pair the chat page shows — otherwise the rail is a
+        // different component depending on which page you're standing on.
         ? '<button class="conversation-pin" title="' + (conv.pinned ? "Unpin" : "Pin to top") +
           '" data-pin="' + esc(conv.id) + '" data-pinned="' + (conv.pinned ? "1" : "") + '">' +
-          '<i class="fas fa-thumbtack"></i></button>'
+          '<i class="fas fa-thumbtack"></i></button>' +
+          '<button class="delete-conversation" title="Delete" data-del="' + esc(conv.id) + '">' +
+          '<i class="fas fa-trash"></i></button>'
         : '<span class="conversation-author" title="' + esc(conv.author || "") + '">' + esc(conv.author || "") + "</span>");
 
     item.addEventListener("click", function () {
@@ -109,6 +111,16 @@
   }
 
   listEl.addEventListener("click", function (e) {
+    var del = e.target.closest ? e.target.closest("[data-del]") : null;
+    if (del) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!window.confirm("Delete this chat? This cannot be undone.")) return;
+      fetch("/api/conversations/" + del.getAttribute("data-del"), { method: "DELETE" })
+        .then(load)
+        .catch(function () { note("Couldn't delete that chat."); });
+      return;
+    }
     var btn = e.target.closest ? e.target.closest("[data-pin]") : null;
     if (!btn) return;
     // Pinning must not follow the link the button sits inside.

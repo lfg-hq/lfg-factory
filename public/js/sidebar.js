@@ -146,10 +146,23 @@ document.addEventListener('DOMContentLoaded', () => {
     try { remembered = localStorage.getItem(KEY) || ""; } catch (e) {}
     // Open it when the page you're on lives inside it, so the rail doesn't hide
     // where you already are.
+    // Mark the page you're actually on. Nothing did this before, so the only thing
+    // that ever looked "selected" in here was whatever the mouse happened to be over.
     var here = window.location.pathname + window.location.search;
-    var containsCurrent = Array.prototype.some.call(items.querySelectorAll("a"), function (a) {
+    var containsCurrent = false;
+    Array.prototype.forEach.call(items.querySelectorAll("a"), function (a) {
       var href = a.getAttribute("href") || "";
-      return href && here.indexOf(href.replace(/^.*?(?=\/projects)/, "")) !== -1;
+      if (!href) return;
+      var path = href.split("?")[0];
+      var tab = (href.split("?")[1] || "").match(/tab=([\w-]+)/);
+      var hereTab = (window.location.search.match(/tab=([\w-]+)/) || [])[1];
+      // A tabbed destination matches only when the tab matches; an ordinary page
+      // (Epics) matches on its path.
+      var isCurrent = tab
+        ? (window.location.pathname === path && hereTab === tab[1])
+        : (window.location.pathname === path);
+      a.classList.toggle("active", isCurrent);
+      if (isCurrent) containsCurrent = true;
     });
     set(!!remembered || containsCurrent);
 

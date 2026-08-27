@@ -36,13 +36,10 @@ for (const t of m.matchAll(/<(\/?)([a-zA-Z][\w-]*)([^>]*?)(\/?)>/g)) {
 if (bad) { console.log("FAIL " + bad); process.exit(1); }
 if (stack.length) { console.log("FAIL unclosed: " + stack.join(", ")); process.exit(1); }
 
-// And the specific breakage: tabs must sit inside their flex container.
-// The tab row ends at its own closing </div>; "More" moved to the sidebar, so the old
-// anchor (project-more-menu) is gone and indexOf(-1) was slicing to end-of-file.
-const tabStart = src.indexOf('<div class="project-tabs"');
-const tabs = src.slice(tabStart, src.indexOf("</div>", src.lastIndexOf("</a>", src.indexOf("<style>", tabStart))) + 6);
-if (!/<div class="project-tabs"[^>]*display:flex/.test(tabs)) { console.log("FAIL tabs have no flex container"); process.exit(1); }
-const opens = (tabs.match(/<div /g) || []).length;
+// The tab row was removed entirely — every destination lives in the rail now. What
+// still matters is that the document is well-formed after these template edits, which
+// is what the walk above proves.
 console.log("  ok  document balances");
-console.log("  ok  tab row has its flex container");
-console.log(`  ok  ${(tabs.match(/class="tab-item/g) || []).length} tabs inside it (${opens} div(s) opened in the block)`);
+const rail = src.slice(src.indexOf('<div class="sidebar-nav">'), src.indexOf("conversations-section"));
+if (/<div class="sidebar-more-items"/.test(rail)) console.log("  ok  rail carries the More group");
+else { console.log("FAIL rail lost the More group"); process.exit(1); }

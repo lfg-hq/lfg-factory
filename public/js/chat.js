@@ -4873,12 +4873,32 @@ document.addEventListener('DOMContentLoaded', () => {
             .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;');
 
+        // Pin + delete, matching the rail on every other page — the same list should
+        // not be a different component depending on which page you're standing on.
+        const pinned = !!conversation.pinned;
+        if (pinned) conversationItem.classList.add('is-pinned');
         conversationItem.innerHTML = `
             <div class="conversation-title" title="${esc(conversation.title)}${isMine ? '' : ' — ' + esc(author)}">${esc(title)}</div>
             ${isMine
-                ? '<button class="delete-conversation" title="Delete"><i class="fas fa-trash"></i></button>'
+                ? '<button class="conversation-pin" title="' + (pinned ? 'Unpin' : 'Pin to top') + '" data-pin="' + esc(conversation.id) + '" data-pinned="' + (pinned ? '1' : '') + '"><i class="fas fa-thumbtack"></i></button>'
+                  + '<button class="delete-conversation" title="Delete"><i class="fas fa-trash"></i></button>'
                 : '<span class="conversation-author" title="' + esc(author) + "'s chat (read-only)\">" + esc(author) + '</span>'}
         `;
+        const pinBtn = conversationItem.querySelector('[data-pin]');
+        if (pinBtn) {
+            pinBtn.addEventListener('click', (ev) => {
+                ev.preventDefault();
+                ev.stopPropagation();   // must not also open the chat
+                pinBtn.disabled = true;
+                fetch('/api/conversations/' + conversation.id + '/pin', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ pinned: !pinned }),
+                }).then((r) => r.json())
+                  .then((j) => { if (j && j.ok) loadConversations(); else pinBtn.disabled = false; })
+                  .catch(() => { pinBtn.disabled = false; });
+            });
+        }
         if (!isMine) conversationItem.classList.add('conversation-shared');
 
         return conversationItem;
