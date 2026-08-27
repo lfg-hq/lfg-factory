@@ -63,6 +63,35 @@
     return h;
   }
 
+  function note(text) {
+    listEl.innerHTML = "";
+    var d = document.createElement("div");
+    d.className = "empty-conversations-message";
+    d.textContent = text;
+    listEl.appendChild(d);
+  }
+
+  function render(convs) {
+    listEl.innerHTML = "";
+    if (!convs.length) { note("No chats yet."); return; }
+
+    var pinned = convs.filter(function (c) { return c.pinned; });
+    var rest = convs.filter(function (c) { return !c.pinned; });
+    // A "Pinned" heading only earns its space when something is pinned; the section
+    // already carries a "Recent chats" heading above it.
+    if (pinned.length) {
+      listEl.appendChild(heading("Pinned"));
+      pinned.forEach(function (c) { listEl.appendChild(row(c)); });
+      if (rest.length) listEl.appendChild(heading("Recent"));
+    }
+    rest.forEach(function (c) { listEl.appendChild(row(c)); });
+
+    var here = window.location.pathname;
+    listEl.querySelectorAll(".conversation-item").forEach(function (el) {
+      if (here.indexOf("/conversation/" + el.dataset.id) !== -1) el.classList.add("active");
+    });
+  }
+
   function load() {
     fetch("/api/projects/" + projectId + "/conversations/")
       .then(function (r) {
