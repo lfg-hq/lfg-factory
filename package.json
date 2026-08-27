@@ -21,7 +21,8 @@
     "test:trail": "node scripts/test-agent-trail.mjs",
     "check:rail": "node scripts/check-rail-collisions.mjs",
     "test:preview": "node scripts/test-page-preview.mjs",
-    "test:trail-server": "node scripts/test-trail-recording.mjs"
+    "test:trail-server": "node scripts/test-trail-recording.mjs",
+    "test:tooloutput": "node scripts/test-tool-output.mjs"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

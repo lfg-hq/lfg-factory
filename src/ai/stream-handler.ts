@@ -1061,12 +1061,21 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
         }
 
         case "tool-result": {
+          // AI SDK v6 puts the tool's return value on `output`. Reading `.result`
+          // (the v4/v5 name) silently yielded undefined, so everything gated on it —
+          // the page-preview card, the resolved file name — simply never fired.
+          const toolOutput = (ev: unknown): Record<string, unknown> | undefined => {
+            const e = (ev ?? {}) as Record<string, unknown>;
+            const v = e.output ?? e.result;
+            return v && typeof v === "object" ? (v as Record<string, unknown>) : undefined;
+          };
+
           // The rendered page goes down the SAME channel as every other chat
           // notification — the one the trail already proves reaches the client.
           if (event.toolName === "previewPage") {
-            const r = (event as Record<string, unknown>).result as Record<string, unknown> | undefined;
-            const id = r && typeof r === "object" ? (r as { id?: unknown }).id : undefined;
-            const nm = r && typeof r === "object" ? (r as { name?: unknown }).name : undefined;
+            const r = toolOutput(event);
+            const id = r?.id;
+            const nm = r?.name;
             if (typeof id === "string" && id) {
               flush();
               ws.send(JSON.stringify({
@@ -1082,8 +1091,8 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
           // The result carries the real name — send it back under the same call id so
           // the line becomes "Reading Main PRD".
           if (event.toolName === "getFileContent") {
-            const r = (event as Record<string, unknown>).result as Record<string, unknown> | undefined;
-            const name = r && typeof r === "object" ? (r as { name?: unknown }).name : undefined;
+            const r = toolOutput(event);
+            const name = r?.name;
             if (typeof name === "string" && name.trim()) {
               // Replace the placeholder line rather than appending a second one.
               const refined = `Reading ${name.trim().slice(0, 60)}`;
@@ -1103,7 +1112,7 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
           }
           // Fallback: if askUser card wasn't sent via tool-call, try from tool-result
           if (event.toolName === "askUser" && !askUserCardSent) {
-            const resultObj = (event as Record<string, unknown>).result;
+            const resultObj = toolOutput(event);
             if (resultObj && typeof resultObj === "object") {
               const qList = normalizeAskUserQuestions(
                 (resultObj as Record<string, unknown>).questions
