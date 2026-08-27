@@ -15,7 +15,8 @@
     "test:boards": "bun run scripts/test-board-sync.ts",
     "test:epics": "bun run scripts/test-epics-page.ts",
     "check:contrast": "node scripts/check-log-contrast.mjs",
-    "test:nav": "bun run scripts/test-nav-layout.ts"
+    "test:nav": "bun run scripts/test-nav-layout.ts",
+    "check:pages": "node scripts/check-page-structure.mjs"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
