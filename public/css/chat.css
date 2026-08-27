@@ -2696,15 +2696,17 @@ input:checked + .turbo-slider + .turbo-label,
 .agent-trail {
     margin: 6px 0 14px;
     max-width: 620px;
-    border-left: 2px solid var(--border-color, #2a2a2a);
+    /* NO border here. The line used to run down the OUTSIDE of the column with the
+       icons hanging off it; it belongs between the icons, linking each step to the
+       one above. Drawn per row below, centred on the icon. */
 }
 
 .agent-trail-head {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 9px;
     width: 100%;
-    padding: 3px 8px 3px 12px;
+    padding: 3px 8px 3px 4px;
     background: none;
     border: none;
     cursor: pointer;
@@ -2722,8 +2724,13 @@ input:checked + .turbo-slider + .turbo-label,
 .agent-trail.is-collapsed .agent-trail-steps { display: none; }
 
 .agent-trail-spinner {
-    width: 10px;
-    height: 10px;
+    /* Same 15px column as the step icons, so the head sits ON the line, not beside it. */
+    width: 15px;
+    height: 15px;
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     border: 1.5px solid currentColor;
     border-top-color: transparent;
     border-radius: 50%;
@@ -2751,11 +2758,12 @@ input:checked + .turbo-slider + .turbo-label,
 /* Rows sit on a 22px grid — 2px padding plus a 1.5 line-height left them drifting
    apart over a long run. */
 .agent-trail-step {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 9px;
     height: 22px;
-    padding: 0 8px 0 6px;
+    padding: 0 8px 0 4px;
     font-size: 12.5px;
     line-height: 22px;
     color: var(--text-secondary, #9ca3af);
@@ -2763,11 +2771,25 @@ input:checked + .turbo-slider + .turbo-label,
 }
 .agent-trail-step.is-current { opacity: 1; color: var(--text-color, #e2e8f0); font-weight: 500; }
 
+/* The connector: a hairline down the middle of the icon column, from the row above
+   into this row's icon. Each step therefore touches the one above it. */
+.agent-trail-step::before {
+    content: "";
+    position: absolute;
+    left: 11.5px;              /* centre of the 15px icon at padding-left 4px */
+    top: -11px;
+    height: 22px;
+    width: 1.5px;
+    background: var(--border-color, #2a2a2a);
+}
+.agent-trail-step:first-child::before { top: -8px; height: 19px; }
+
 .agent-trail-dot {
+    position: relative;        /* sits ON TOP of the connector */
+    z-index: 1;
     flex: none;
     width: 15px;
     height: 15px;
-    margin-left: -8.5px;
     border-radius: 50%;
     display: inline-flex;
     align-items: center;
@@ -2786,7 +2808,7 @@ input:checked + .turbo-slider + .turbo-label,
     min-width: 0;
 }
 
-[data-theme="light"] .agent-trail { border-left-color: #e5e7eb; }
+[data-theme="light"] .agent-trail-step::before { background: #e5e7eb; }
 [data-theme="light"] .agent-trail-dot { background: #f8fafc; }
 [data-theme="light"] .agent-trail-head { color: #64748b; }
 [data-theme="light"] .agent-trail-head:hover { color: #1e293b; }
