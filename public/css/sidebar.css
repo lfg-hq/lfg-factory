@@ -1082,34 +1082,54 @@
 
 /* ── Chat history in the rail ─────────────────────────────────────────────
    The rail shows conversations on every project page now, not only inside the
-   chat page, so these carry the pinned group and its pin control. */
+   chat page. The pin button mirrors .delete-conversation exactly — this file is
+   !important throughout, so plain rules lose and the pin stayed visible. */
 .conversation-group-label {
-  font-size: 0.66rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  opacity: 0.5;
-  padding: 0.55rem 0.75rem 0.2rem;
+    font-size: 10px !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.06em !important;
+    text-transform: uppercase !important;
+    opacity: 0.45 !important;
+    padding: 8px 12px 2px !important;
 }
-.conversation-item { position: relative; }
+
 .conversation-item .conversation-pin {
-  position: absolute;
-  right: 6px;
-  top: 50%;
-  transform: translateY(-50%);
-  background: none;
-  border: 0;
-  padding: 4px 5px;
-  border-radius: 5px;
-  cursor: pointer;
-  font-size: 10px;
-  color: currentColor;
-  /* Hidden until hover so the rail stays quiet; a PINNED chat keeps it visible,
-     otherwise there's no way to tell what's pinned or to unpin it. */
-  opacity: 0;
-  transition: opacity 0.12s ease;
+    opacity: 0 !important;
+    visibility: hidden !important;
+    padding: 4px 8px !important;
+    background: transparent !important;
+    border: none !important;
+    color: rgba(255, 255, 255, 0.4) !important;
+    cursor: pointer !important;
+    font-size: 11px !important;
+    transition: opacity 0.2s ease, visibility 0.2s ease !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    line-height: 1 !important;
+    margin-left: auto !important;
+    flex-shrink: 0 !important;
 }
-.conversation-item:hover .conversation-pin,
-.conversation-item .conversation-pin:focus-visible { opacity: 0.65; }
-.conversation-item.is-pinned .conversation-pin { opacity: 0.9; transform: translateY(-50%) rotate(-35deg); }
-.conversation-item .conversation-pin:hover { opacity: 1; background: rgba(127, 127, 127, 0.16); }
+
+.conversation-item:hover .conversation-pin {
+    opacity: 1 !important;
+    visibility: visible !important;
+}
+
+/* A PINNED chat keeps its pin on show — otherwise nothing distinguishes it, and
+   there's no way to unpin without hunting. */
+.conversation-item.is-pinned .conversation-pin {
+    opacity: 1 !important;
+    visibility: visible !important;
+    color: var(--primary-color, #8b5cf6) !important;
+    transform: rotate(-35deg) !important;
+}
+
+.conversation-item .conversation-pin:hover i { color: rgba(255, 255, 255, 0.85) !important; }
+
+/* ── "More" in the rail ─────────────────────────────────────────────────── */
+.sidebar-more-toggle .sidebar-more-caret { margin-left: auto !important; font-size: 10px !important; transition: transform 0.15s ease !important; }
+.sidebar-more-toggle[aria-expanded="true"] .sidebar-more-caret { transform: rotate(180deg) !important; }
+.sidebar-more-items { display: none !important; }
+.sidebar-more-items.is-open { display: block !important; }
+.sidebar-more-items .nav-link { padding-left: 34px !important; }

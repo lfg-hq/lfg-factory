@@ -37,9 +37,12 @@ if (bad) { console.log("FAIL " + bad); process.exit(1); }
 if (stack.length) { console.log("FAIL unclosed: " + stack.join(", ")); process.exit(1); }
 
 // And the specific breakage: tabs must sit inside their flex container.
-const tabs = src.slice(src.indexOf("<!-- Horizontal Tab Nav"), src.indexOf("project-more-menu"));
+// The tab row ends at its own closing </div>; "More" moved to the sidebar, so the old
+// anchor (project-more-menu) is gone and indexOf(-1) was slicing to end-of-file.
+const tabStart = src.indexOf('<div class="project-tabs"');
+const tabs = src.slice(tabStart, src.indexOf("</div>", src.lastIndexOf("</a>", src.indexOf("<style>", tabStart))) + 6);
 if (!/<div class="project-tabs"[^>]*display:flex/.test(tabs)) { console.log("FAIL tabs have no flex container"); process.exit(1); }
 const opens = (tabs.match(/<div /g) || []).length;
 console.log("  ok  document balances");
 console.log("  ok  tab row has its flex container");
-console.log(`  ok  ${(tabs.match(/class="tab-item/g) || []).length} tabs + More menu inside it (${opens} divs opened in the block)`);
+console.log(`  ok  ${(tabs.match(/class="tab-item/g) || []).length} tabs inside it (${opens} div(s) opened in the block)`);

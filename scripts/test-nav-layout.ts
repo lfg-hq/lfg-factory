@@ -64,7 +64,8 @@ console.log("\nproject tabs:");
 const pd = read("src/templates/pages/project-detail.tsx");
 // Stop at the More MENU: slicing to the next <style> ran past it, so the menu's own
 // Documents link read as a leftover tab.
-const tabs = pd.slice(pd.indexOf("<!-- Horizontal Tab Nav"), pd.indexOf('id="project-more-menu"'));
+const tabStart = pd.indexOf('<div class="project-tabs"');
+const tabs = pd.slice(tabStart, pd.indexOf("<style>", tabStart));
 for (const gone of ["instant", "conversations", "tickets", "documents"]) {
   if (!new RegExp(`tab=${gone}"`).test(tabs)) ok(`${gone} is off the dashboard tab row`);
   else fail(`${gone} still a dashboard tab`);
@@ -73,13 +74,21 @@ for (const t of ["Home", "Events", "Settings"]) {
   if (tabs.includes(`></i> ${t}`)) ok(`${t} stays in the row`);
   else fail(`${t} missing from the row`);
 }
-const menu = pd.slice(pd.indexOf('id="project-more-menu"'), pd.indexOf('id="project-more-menu"') + 1400);
-for (const t of ["Inbox", "Epics", "Documents", "Environment"]) {
-  if (menu.includes(`> ${t}`)) ok(`${t} moved into More`);
-  else fail(`${t} not in the More menu`);
+if (!pd.includes('id="project-more-menu"')) ok("More is NOT on the dashboard tab row");
+else fail("More still in the dashboard tabs");
+
+console.log("\nMore, in the rail:");
+for (const p of PROJECT_PAGES) {
+  const s2 = read(p);
+  const name = p.split("/").pop()!;
+  const more = s2.slice(s2.indexOf('id="sidebar-more-items"'), s2.indexOf('id="sidebar-more-items"') + 900);
+  const missing = ["Epics", "Docs", "Inbox", "Environment"].filter((t) => !more.includes(`>${t}<`));
+  if (!s2.includes("sidebar-more-toggle")) fail(`${name}: no More toggle in the rail`);
+  else if (missing.length) fail(`${name}: More is missing ${missing.join(", ")}`);
+  else ok(`${name}: More holds Epics, Docs, Inbox, Environment`);
 }
-if (pd.includes('id="project-more-btn"') && pd.includes("aria-expanded")) ok("More menu is a real toggle");
-else fail("More menu has no toggle");
+if (read("public/js/sidebar.js").includes("sidebar-more-toggle")) ok("the toggle is wired in sidebar.js (loads on every rail)");
+else fail("nothing opens the More section");
 
 console.log("\ndashboard:");
 if (!pd.includes("Create a ticket directly")) ok("create-ticket shortcut removed");

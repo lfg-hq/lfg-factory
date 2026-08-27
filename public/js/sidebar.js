@@ -123,3 +123,41 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     
 });
+/* ── "More" in the rail ──────────────────────────────────────────────────────
+   Epics, Docs, Inbox and Environment live behind a chevron so the rail stays
+   short. The open/closed state is remembered — it's a drawer you set once, not a
+   thing to keep reopening. Lives here because sidebar.js loads on every page that
+   has a rail. */
+(function () {
+  "use strict";
+  var KEY = "lfgSidebarMoreOpen";
+  function init() {
+    var btn = document.querySelector(".sidebar-more-toggle");
+    var items = document.getElementById("sidebar-more-items");
+    if (!btn || !items) return;
+
+    function set(open) {
+      items.classList.toggle("is-open", open);
+      btn.setAttribute("aria-expanded", String(open));
+      try { localStorage.setItem(KEY, open ? "1" : ""); } catch (e) {}
+    }
+
+    var remembered = "";
+    try { remembered = localStorage.getItem(KEY) || ""; } catch (e) {}
+    // Open it when the page you're on lives inside it, so the rail doesn't hide
+    // where you already are.
+    var here = window.location.pathname + window.location.search;
+    var containsCurrent = Array.prototype.some.call(items.querySelectorAll("a"), function (a) {
+      var href = a.getAttribute("href") || "";
+      return href && here.indexOf(href.replace(/^.*?(?=\/projects)/, "")) !== -1;
+    });
+    set(!!remembered || containsCurrent);
+
+    btn.addEventListener("click", function (e) {
+      e.preventDefault();
+      set(!items.classList.contains("is-open"));
+    });
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
+  else init();
+})();

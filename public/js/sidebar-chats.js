@@ -27,20 +27,33 @@
     });
   }
 
+  /**
+   * Same DOM the chat page builds (div.conversation-item > div.conversation-title),
+   * because sidebar.css styles those exact elements — with !important throughout. An
+   * <a> wrapper with a <span> title rendered in the wrong weight and size.
+   */
   function row(conv) {
-    var a = document.createElement("a");
-    a.className = "conversation-item" + (conv.pinned ? " is-pinned" : "");
-    a.href = "/chat/project/" + projectId + "/conversation/" + conv.id;
-    a.title = conv.title || "Untitled";
-    a.innerHTML =
-      '<span class="conversation-title">' + esc(conv.title || "Untitled") + "</span>" +
-      (conv.author ? '<span class="conversation-author">' + esc(conv.author) + "</span>" : "") +
-      // Only your own chats can be pinned; the server enforces it too.
+    var item = document.createElement("div");
+    item.className = "conversation-item" + (conv.pinned ? " is-pinned" : "");
+    item.dataset.id = conv.id;
+
+    var title = conv.title || "Untitled";
+    var short = title.length > 25 ? title.slice(0, 25) + "..." : title;
+
+    item.innerHTML =
+      '<div class="conversation-title" title="' + esc(title) + '">' + esc(short) + "</div>" +
       (conv.is_mine
-        ? '<button class="conversation-pin" title="' + (conv.pinned ? "Unpin" : "Pin to top") + '" data-pin="' + esc(conv.id) + '" data-pinned="' + (conv.pinned ? "1" : "") + '">'
-          + '<i class="fas fa-thumbtack"></i></button>'
-        : "");
-    return a;
+        // Styled as a sibling of .delete-conversation so it inherits the same
+        // hidden-until-hover behaviour that button already has.
+        ? '<button class="conversation-pin" title="' + (conv.pinned ? "Unpin" : "Pin to top") +
+          '" data-pin="' + esc(conv.id) + '" data-pinned="' + (conv.pinned ? "1" : "") + '">' +
+          '<i class="fas fa-thumbtack"></i></button>'
+        : '<span class="conversation-author" title="' + esc(conv.author || "") + '">' + esc(conv.author || "") + "</span>");
+
+    item.addEventListener("click", function () {
+      window.location.href = "/chat/project/" + projectId + "/conversation/" + conv.id;
+    });
+    return item;
   }
 
   function heading(text) {
@@ -48,40 +61,6 @@
     h.className = "conversation-group-label";
     h.textContent = text;
     return h;
-  }
-
-  function render(convs) {
-    listEl.innerHTML = "";
-    if (!convs.length) {
-      var empty = document.createElement("div");
-      empty.className = "empty-conversations-message";
-      empty.textContent = "No chats yet.";
-      listEl.appendChild(empty);
-      return;
-    }
-    var pinned = convs.filter(function (c) { return c.pinned; });
-    var rest = convs.filter(function (c) { return !c.pinned; });
-    // Headings only when there's a pinned group to separate — one "Recent chats"
-    // heading above the whole list is already in the markup.
-    if (pinned.length) {
-      listEl.appendChild(heading("Pinned"));
-      pinned.forEach(function (c) { listEl.appendChild(row(c)); });
-      if (rest.length) listEl.appendChild(heading("Recent"));
-    }
-    rest.forEach(function (c) { listEl.appendChild(row(c)); });
-
-    var here = window.location.pathname;
-    listEl.querySelectorAll(".conversation-item").forEach(function (el) {
-      if (el.getAttribute("href") === here) el.classList.add("active");
-    });
-  }
-
-  function note(text) {
-    listEl.innerHTML = "";
-    var d = document.createElement("div");
-    d.className = "empty-conversations-message";
-    d.textContent = text;
-    listEl.appendChild(d);
   }
 
   function load() {

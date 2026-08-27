@@ -155,6 +155,25 @@ export function ProjectDetailPage({
             <i class="fas fa-tasks"></i>
             <span class="nav-text">Tickets</span>
           </a>
+          <button type="button" class="nav-link sidebar-more-toggle" aria-expanded="false" aria-controls="sidebar-more-items">
+            <i class="fas fa-ellipsis"></i>
+            <span class="nav-text">More</span>
+            <i class="fas fa-chevron-down sidebar-more-caret nav-text"></i>
+          </button>
+          <div class="sidebar-more-items" id="sidebar-more-items">
+            <a href="/projects/${project.projectId}/epics" class="nav-link">
+              <i class="fas fa-layer-group"></i><span class="nav-text">Epics</span>
+            </a>
+            <a href="/projects/${project.projectId}?tab=documents" class="nav-link">
+              <i class="fas fa-file-lines"></i><span class="nav-text">Docs</span>
+            </a>
+            <a href="/projects/${project.projectId}?tab=inbox" class="nav-link">
+              <i class="fas fa-inbox"></i><span class="nav-text">Inbox</span>
+            </a>
+            <a href="/projects/${project.projectId}?tab=environment" class="nav-link">
+              <i class="fas fa-key"></i><span class="nav-text">Environment</span>
+            </a>
+          </div>
         </div>
         <div class="conversations-section" data-sidebar-chats data-project="${project.projectId}">
           <h3 class="sidebar-section-title">Recent chats</h3>
@@ -251,50 +270,7 @@ export function ProjectDetailPage({
           <i class="fas fa-cog"></i> Settings
         </a>
 
-        <div class="tab-more" style="position:relative;display:flex;align-items:center;margin-left:auto;">
-          <button type="button" id="project-more-btn" aria-expanded="false"
-            style="display:flex;align-items:center;gap:0.4rem;padding:0.875rem 1rem;background:none;border:none;cursor:pointer;font-size:0.875rem;font-weight:500;color:${["inbox","documents","epics","environment"].includes(activeTab) ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${["inbox","documents","epics","environment"].includes(activeTab) ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;">
-            More
-            <span id="project-more-dot" style="display:none;width:6px;height:6px;border-radius:50%;background:var(--primary-color);"></span>
-            <i class="fas fa-chevron-down" style="font-size:0.65rem;opacity:0.7;"></i>
-          </button>
-          <div id="project-more-menu" hidden
-            style="position:absolute;top:100%;right:0;z-index:60;min-width:210px;background:var(--card-bg);border:1px solid var(--border-color);border-radius:10px;box-shadow:0 12px 30px rgba(0,0,0,0.18);padding:5px;">
-            <a href="/projects/${project.projectId}?tab=inbox" class="more-item">
-              <i class="fas fa-inbox"></i> Inbox
-              <span id="inbox-tab-badge" style="display:none;margin-left:auto;font-size:0.7rem;background:var(--primary-color);color:#fff;padding:0.1rem 0.4rem;border-radius:9999px;"></span>
-            </a>
-            <a href="/projects/${project.projectId}/epics" class="more-item"><i class="fas fa-layer-group"></i> Epics</a>
-            <a href="/projects/${project.projectId}?tab=documents" class="more-item"><i class="fas fa-file-lines"></i> Documents</a>
-            <a href="/projects/${project.projectId}?tab=environment" class="more-item"><i class="fas fa-key"></i> Environment</a>
-          </div>
-        </div>
       </div>
-      <style>
-        .project-tabs .more-item {
-          display:flex; align-items:center; gap:0.6rem; padding:0.55rem 0.7rem; border-radius:7px;
-          text-decoration:none; font-size:0.85rem; color:var(--text-color);
-        }
-        .project-tabs .more-item i { width:16px; text-align:center; opacity:0.7; font-size:0.8rem; }
-        .project-tabs .more-item:hover { background:color-mix(in srgb, var(--border-color) 35%, transparent); }
-      </style>
-      <script>
-        (function () {
-          var btn = document.getElementById('project-more-btn');
-          var menu = document.getElementById('project-more-menu');
-          if (!btn || !menu) return;
-          function close() { menu.hidden = true; btn.setAttribute('aria-expanded', 'false'); }
-          btn.addEventListener('click', function (e) {
-            e.stopPropagation();
-            menu.hidden = !menu.hidden;
-            btn.setAttribute('aria-expanded', String(!menu.hidden));
-          });
-          document.addEventListener('click', function (e) {
-            if (!menu.hidden && !menu.contains(e.target)) close();
-          });
-          document.addEventListener('keydown', function (e) { if (e.key === 'Escape') close(); });
-        })();
-      </script>
       <style>
         /* Clean, blended list — one bordered container with subtle row dividers. */
         .lfg-list { border:1px solid var(--border-color); border-radius:var(--radius); overflow:hidden; background:var(--card-bg); }

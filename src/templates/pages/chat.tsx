@@ -119,6 +119,25 @@ export function ChatPage({
             <i class="fas fa-tasks"></i>
             <span class="nav-text">Tickets</span>
           </a>
+          <button type="button" class="nav-link sidebar-more-toggle" aria-expanded="false" aria-controls="sidebar-more-items">
+            <i class="fas fa-ellipsis"></i>
+            <span class="nav-text">More</span>
+            <i class="fas fa-chevron-down sidebar-more-caret nav-text"></i>
+          </button>
+          <div class="sidebar-more-items" id="sidebar-more-items">
+            <a href="/projects/${projectId}/epics" class="nav-link">
+              <i class="fas fa-layer-group"></i><span class="nav-text">Epics</span>
+            </a>
+            <a href="/projects/${projectId}?tab=documents" class="nav-link">
+              <i class="fas fa-file-lines"></i><span class="nav-text">Docs</span>
+            </a>
+            <a href="/projects/${projectId}?tab=inbox" class="nav-link">
+              <i class="fas fa-inbox"></i><span class="nav-text">Inbox</span>
+            </a>
+            <a href="/projects/${projectId}?tab=environment" class="nav-link">
+              <i class="fas fa-key"></i><span class="nav-text">Environment</span>
+            </a>
+          </div>
         </div>
         <div class="conversations-section">
           <h3 class="sidebar-section-title">Recent chats</h3>
