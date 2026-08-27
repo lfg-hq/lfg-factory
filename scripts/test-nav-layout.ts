@@ -69,8 +69,15 @@ for (const d of ["pg", "sqlite"]) {
 
 console.log("\nproject tabs:");
 const pd = read("src/templates/pages/project-detail.tsx");
-if (!pd.includes('<div class="project-tabs"')) ok("the duplicate tab row is gone — the rail is the only navigation");
-else fail("project-tabs row still rendered");
+// Only the tabs whose destinations the rail already carries were meant to go.
+const tabsBlock = pd.slice(pd.indexOf('<div class="project-tabs"'), pd.indexOf("<style>", pd.indexOf('<div class="project-tabs"')));
+const tabLabels = [...tabsBlock.matchAll(/<\/i> (\w+)/g)].map((m) => m[1]);
+if (tabLabels.join(",") === "Home,Events,Settings") ok("tab row keeps exactly what the rail lacks");
+else fail("tab row is " + tabLabels.join(","));
+for (const gone of ["conversations", "documents", "tickets", "inbox", "environment", "instant"]) {
+  if (!new RegExp(`tab=${gone}"`).test(tabsBlock)) ok(`${gone} left the tab row (it's in the rail)`);
+  else fail(`${gone} still duplicated in the tab row`);
+}
 
 console.log("\nMore, in the rail:");
 for (const p of PROJECT_PAGES) {
@@ -80,10 +87,12 @@ for (const p of PROJECT_PAGES) {
   // once the group grew, and reported them missing when they were right there.
   const moreStart = s2.indexOf('id="sidebar-more-items"');
   const more = s2.slice(moreStart, s2.indexOf("conversations-section", moreStart));
-  const missing = ["Epics", "Docs", "Inbox", "Environment", "Events", "Settings"].filter((t) => !more.includes(`>${t}<`));
+  const missing = ["Epics", "Docs", "Inbox", "Environment"].filter((t) => !more.includes(`>${t}<`));
+  const strays = ["Events", "Settings"].filter((t) => more.includes(`>${t}</span>`));
   if (!s2.includes("sidebar-more-toggle")) fail(`${name}: no More toggle in the rail`);
   else if (missing.length) fail(`${name}: More is missing ${missing.join(", ")}`);
-  else ok(`${name}: More holds Epics, Docs, Inbox, Environment, Events, Settings`);
+  else if (strays.length) fail(`${name}: ${strays.join(", ")} belong in the tab row, not the rail`);
+  else ok(`${name}: More holds Epics, Docs, Inbox, Environment`);
 }
 if (read("public/js/sidebar.js").includes("sidebar-more-toggle")) ok("the toggle is wired in sidebar.js (loads on every rail)");
 else fail("nothing opens the More section");

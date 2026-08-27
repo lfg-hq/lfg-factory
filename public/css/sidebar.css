@@ -1155,13 +1155,15 @@
    the project page) at 1.125rem/600, and it loads after this file — so on the
    dashboard the rail's rows rendered big and bold while every other page showed
    them compact. Scope to the rail and win. */
+/* Only the FONT needs overriding here — projects.css sets .conversation-title to
+   1.125rem/600 for a different component. Constraining line-height and height as well
+   is what squashed the rows into a thin strip; spacing stays exactly as sidebar.css
+   defines it for every other page. */
 .conversations-section .conversation-title {
     font-size: 13px !important;
     font-weight: 400 !important;
-    line-height: 1.35 !important;
     margin-bottom: 0 !important;
 }
-.conversations-section .conversation-item { min-height: 0 !important; }
 
 /* ── "More" is a <button> pretending to be a nav link ─────────────────────
    Without this it renders with the browser's default button chrome — the black

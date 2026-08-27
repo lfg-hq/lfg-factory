@@ -513,12 +513,6 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
           <a href="/projects/${project.projectId}?tab=environment" class="nav-link">
             <i class="fas fa-key"></i><span class="nav-text">Environment</span>
           </a>
-          <a href="/projects/${project.projectId}?tab=events" class="nav-link">
-            <i class="fas fa-stream"></i><span class="nav-text">Events</span>
-          </a>
-          <a href="/projects/${project.projectId}?tab=settings" class="nav-link">
-            <i class="fas fa-cog"></i><span class="nav-text">Settings</span>
-          </a>
         </div>
       </div>
         <div class="conversations-section" data-sidebar-chats data-project="${project.projectId}">
