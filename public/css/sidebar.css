@@ -1155,6 +1155,15 @@
    the project page) at 1.125rem/600, and it loads after this file — so on the
    dashboard the rail's rows rendered big and bold while every other page showed
    them compact. Scope to the rail and win. */
+/* The rail's list stacks — it is NOT a gapped flex column. project_detail.css sets
+   .conversation-list { display:flex; gap:1rem } for a different component entirely, and
+   that page serves Docs, Inbox, Environment and Settings — which is why the rows were
+   spread out there and tight everywhere else. */
+.conversations-section .conversation-list {
+    display: block !important;
+    gap: 0 !important;
+}
+
 /* Only the FONT needs overriding here — projects.css sets .conversation-title to
    1.125rem/600 for a different component. Constraining line-height and height as well
    is what squashed the rows into a thin strip; spacing stays exactly as sidebar.css

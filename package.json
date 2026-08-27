@@ -18,7 +18,8 @@
     "test:nav": "bun run scripts/test-nav-layout.ts",
     "check:pages": "node scripts/check-page-structure.mjs",
     "test:sidebar": "node scripts/test-sidebar-chats.mjs",
-    "test:trail": "node scripts/test-agent-trail.mjs"
+    "test:trail": "node scripts/test-agent-trail.mjs",
+    "check:rail": "node scripts/check-rail-collisions.mjs"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
