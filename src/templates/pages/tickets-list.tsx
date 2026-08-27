@@ -871,6 +871,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
 </div>
 
 <script src="/public/js/sidebar.js"></script>
+<script src="/public/js/sidebar-chats.js"></script>
 <script src="/public/js/sharing.js"></script>
 <!-- Shared preview component — the SAME one the main chat Preview panel uses. -->
 <script src="/public/js/preview-tab.js"></script>

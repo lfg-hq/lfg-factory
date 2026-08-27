@@ -76,11 +76,28 @@
     });
   }
 
+  function note(text) {
+    listEl.innerHTML = "";
+    var d = document.createElement("div");
+    d.className = "empty-conversations-message";
+    d.textContent = text;
+    listEl.appendChild(d);
+  }
+
   function load() {
     fetch("/api/projects/" + projectId + "/conversations/")
-      .then(function (r) { return r.json(); })
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
       .then(function (j) { render(Array.isArray(j) ? j : []); })
-      .catch(function () { /* the rail simply stays empty */ });
+      // Say something. An empty rail that swallowed its error is indistinguishable
+      // from "you have no chats" — which is how a script that never even loaded went
+      // unnoticed.
+      .catch(function (e) {
+        console.warn("[sidebar-chats] could not load conversations:", e);
+        note("Couldn't load chats.");
+      });
   }
 
   listEl.addEventListener("click", function (e) {

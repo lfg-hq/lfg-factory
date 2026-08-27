@@ -1480,6 +1480,7 @@ export function ProjectDetailPage({
   </div>
 
   <script src="/public/js/sidebar.js"></script>
+<script src="/public/js/sidebar-chats.js"></script>
   <script src="/public/js/board-sync.js"></script>
   <script>requestAnimationFrame(()=>requestAnimationFrame(()=>document.documentElement.classList.remove('sidebar-minimized-preload')));</script>
   <script>

@@ -459,6 +459,7 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
 <script src="/public/js/marked.min.js"></script>
 <script src="/public/js/markdown-config.js"></script>
 <script src="/public/js/sidebar.js"></script>
+<script src="/public/js/sidebar-chats.js"></script>
 <script>
   var PROJECT_ID = '${project.projectId}';
 

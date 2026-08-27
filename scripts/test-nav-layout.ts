@@ -35,6 +35,13 @@ if (!read("src/templates/pages/chat.tsx").includes("sidebar-chats.js")) ok("chat
 else fail("two renderers on the chat page");
 if (read("public/js/sidebar-chats.js").includes('document.getElementById("chat-form")')) ok("shared script bails on the chat page");
 else fail("shared script would fight chat.js");
+// The markup can name the script in a COMMENT while never loading it — which is
+// exactly how the rail shipped empty. Assert the actual <script> tag.
+for (const p of ["src/templates/pages/project-detail.tsx", "src/templates/pages/epics.tsx", "src/templates/pages/tickets-list.tsx"]) {
+  const name = p.split("/").pop()!;
+  if (read(p).includes('<script src="/public/js/sidebar-chats.js"></script>')) ok(`${name}: actually loads the script`);
+  else fail(`${name}: names the script but never loads it`);
+}
 
 console.log("\npinning:");
 const api = read("src/routes/api/conversations.ts");
