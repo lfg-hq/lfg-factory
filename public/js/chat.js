@@ -4767,6 +4767,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     addMessageToChat(message.role, message.content || '', fileData);
                     rendered++;
                 }
+                // Any page preview this turn produced, rebuilt from the saved document.
+                if (message.role === 'assistant' && Array.isArray(message.page_previews)) {
+                    message.page_previews.forEach((p) => p && p.id && renderPagePreview(p.id, p.name));
+                }
             });
             console.log('[loadConversation] rendered', rendered, 'messages');
             

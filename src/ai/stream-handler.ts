@@ -741,6 +741,9 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
   // reopening the conversation still shows what the agent did — the trail used to live
   // only in the DOM and vanished on refresh.
   const activityTrail: Array<{ text: string; tool?: string }> = [];
+  // Previews rendered this turn, saved with the message so a refresh brings the card
+  // back — it used to exist only in the socket message that announced it.
+  const pagePreviews: Array<{ id: string; name: string }> = [];
   const noteActivity = (text: string, tool?: string) => {
     if (!text) return;
     const last = activityTrail[activityTrail.length - 1];
@@ -763,6 +766,7 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
           lastUpdated: new Date(),
           ...(opts.steps !== undefined ? { toolSteps: opts.steps } : {}),
           ...(activityTrail.length ? { activityTrail } : {}),
+          ...(pagePreviews.length ? { pagePreviews } : {}),
         }).where(eq(messages.id, assistantMsgId));
       } else {
         const [row] = await db.insert(messages).values({
@@ -772,6 +776,7 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
           isPartial: !final,
           toolSteps: opts.steps ?? null,
           activityTrail: activityTrail.length ? activityTrail : null,
+          pagePreviews: pagePreviews.length ? pagePreviews : null,
         }).returning({ id: messages.id });
         assistantMsgId = row?.id ?? null;
       }
@@ -1077,6 +1082,12 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
             const id = r?.id;
             const nm = r?.name;
             if (typeof id === "string" && id) {
+              const previewName = typeof nm === "string" ? nm : "Page preview";
+              // Re-previewing under the same name replaces the entry, matching the
+              // client, where a new render overwrites the same card.
+              const at = pagePreviews.findIndex((p) => p.id === id || p.name === previewName);
+              if (at >= 0) pagePreviews[at] = { id, name: previewName };
+              else pagePreviews.push({ id, name: previewName });
               flush();
               ws.send(JSON.stringify({
                 type: "ai_chunk", chunk: "", is_final: false, is_notification: true,

@@ -104,6 +104,8 @@ conversationsApi.get("/:id", async (c) => {
       created_at: m.createdAt,
       // What the agent did during this turn, so reopening the chat still shows it.
       activity_trail: m.activityTrail ?? null,
+      // Previews rendered in this turn, so reopening the chat shows the card again.
+      page_previews: m.pagePreviews ?? null,
       // Null on every normal message (the conversation's own author). Set when an
       // owner/admin stepped into this chat, so the UI can label that turn.
       author: m.authorId ? (authorNames[m.authorId] ?? "Teammate") : null,

@@ -74,6 +74,9 @@ export const messages = pgTable(
     // replay context — provider-shaped, huge, and dropped past 200KB. This is the UI's
     // record, so the working trail survives a refresh.
     activityTrail: jsonb("activity_trail").$type<Array<{ text: string; tool?: string }> | null>(),
+    // Page previews produced during this turn, so the card comes back on refresh
+    // rather than living only in the socket message that announced it.
+    pagePreviews: jsonb("page_previews").$type<Array<{ id: string; name: string }> | null>(),
     createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),
     lastUpdated: timestamp("last_updated", { mode: "date" }).notNull().default(sql`now()`),
   },

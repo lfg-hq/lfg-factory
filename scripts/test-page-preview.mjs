@@ -111,5 +111,23 @@ else fail("prompt never calls previewPage");
 if (/referenceForTicket.*verbatim/s.test(prompt)) ok("the ticket carries the approved design");
 else fail("ticket wouldn't reference the preview");
 
+// A refresh must bring the card back: it can't live only in the socket message.
+const handler2 = fs.readFileSync("src/ai/stream-handler.ts", "utf8");
+if (/pagePreviews\.push\(\{ id, name: previewName \}\)/.test(handler2)) ok("the preview is recorded on the turn");
+else fail("nothing records the preview server-side");
+if (/pagePreviews: pagePreviews\.length \? pagePreviews : null/.test(handler2)) ok("saved with the assistant message");
+else fail("preview never persisted");
+if (/const at = pagePreviews\.findIndex/.test(handler2)) ok("re-previewing replaces the entry (no duplicate cards on reload)");
+else fail("a second preview would stack up in history");
+for (const d of ["pg", "sqlite"]) {
+  if (/pagePreviews/.test(fs.readFileSync(`src/db/schema/${d}/chat.ts`, "utf8"))) ok(`${d}: column present`);
+  else fail(`${d}: column missing`);
+}
+const api = fs.readFileSync("src/routes/api/conversations.ts", "utf8");
+if (/page_previews: m\.pagePreviews/.test(api)) ok("the API returns it with history");
+else fail("history response omits the preview");
+if (/message\.page_previews\.forEach/.test(chat)) ok("history replays the card");
+else fail("nothing re-renders the card on load");
+
 console.log(bad ? `\n${bad} FAILED` : "\nall checks pass");
 process.exit(bad ? 1 : 0);
