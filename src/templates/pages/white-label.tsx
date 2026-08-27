@@ -83,7 +83,7 @@ export const WhiteLabelPage = () => html`
                     <span class="text-xs font-bold text-slate-600 uppercase tracking-wider">Managed white-label</span>
                 </div>
                 <h1 class="font-display font-semibold text-4xl sm:text-5xl lg:text-6xl leading-[1.1] tracking-tight text-slate-900 animate-fade-up">
-                    Your factory.
+                    Your factory.<br>
                     <span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-pink-500">Your name on it.</span>
                 </h1>
                 <p class="text-lg text-slate-600 mt-6 max-w-2xl mx-auto leading-relaxed animate-fade-up">

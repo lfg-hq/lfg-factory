@@ -4127,6 +4127,24 @@ body[data-theme="light"] {
     color: #7c3aed !important;
 }
 
+/* sidebar.css paints every .dropdown-item icon rgba(255,255,255,0.5) with
+   !important, which beats the inline colours in the markup. Fine on the dark
+   menu, invisible on a white one — the icons were simply gone in light mode. */
+[data-theme="light"] #checklist-actions-menu .dropdown-item i,
+[data-theme="light"] .dropdown-menu .dropdown-item i {
+    color: rgba(15, 23, 42, 0.45) !important;
+}
+
+[data-theme="light"] #checklist-actions-menu .dropdown-item:hover i,
+[data-theme="light"] .dropdown-menu .dropdown-item:hover i {
+    color: #7c3aed !important;
+}
+
+/* Destructive row keeps its red in both states. */
+[data-theme="light"] #delete-all-checklist i {
+    color: #dc2626 !important;
+}
+
 /* Delete item in dropdown (keep red) */
 [data-theme="light"] #delete-all-checklist {
     color: #dc2626 !important;
