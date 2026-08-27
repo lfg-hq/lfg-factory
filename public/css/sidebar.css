@@ -1133,3 +1133,37 @@
 .sidebar-more-items { display: none !important; }
 .sidebar-more-items.is-open { display: block !important; }
 .sidebar-more-items .nav-link { padding-left: 34px !important; }
+
+/* ── Rail chat rows: hold their own against page stylesheets ──────────────
+   projects.css styles a DIFFERENT component's .conversation-title (the cards on
+   the project page) at 1.125rem/600, and it loads after this file — so on the
+   dashboard the rail's rows rendered big and bold while every other page showed
+   them compact. Scope to the rail and win. */
+.conversations-section .conversation-title {
+    font-size: 13px !important;
+    font-weight: 400 !important;
+    line-height: 1.35 !important;
+    margin-bottom: 0 !important;
+}
+.conversations-section .conversation-item { min-height: 0 !important; }
+
+/* ── "More" is a <button> pretending to be a nav link ─────────────────────
+   Without this it renders with the browser's default button chrome — the black
+   box around it — and its focus ring stuck around after clicking. */
+.sidebar-nav button.nav-link.sidebar-more-toggle {
+    width: 100% !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    outline: none !important;
+    font: inherit !important;
+    text-align: left !important;
+    color: inherit !important;
+    -webkit-appearance: none !important;
+    appearance: none !important;
+}
+.sidebar-nav button.nav-link.sidebar-more-toggle:focus,
+.sidebar-nav button.nav-link.sidebar-more-toggle:focus-visible {
+    outline: none !important;
+    box-shadow: none !important;
+}

@@ -1885,8 +1885,17 @@ input:checked + .turbo-slider + .turbo-label,
 
 .chat-container .project-header {
     padding: 10px 20px;
-    border-bottom: 1px solid var(--border-color, #2a2a2a);
+    /* NO border. The artifacts button floats at top-right, and this rule drew a rule
+       straight through it — most visible in light mode, where the line has contrast.
+       The heading is separated by weight and space instead of a line that has to
+       dodge a floating control. */
+    border-bottom: none;
     flex-shrink: 0;
+    padding-bottom: 14px;
+}
+.chat-container .project-header .project-name {
+    font-weight: 650;
+    letter-spacing: -0.01em;
 }
 
 .chat-container .project-header-content {

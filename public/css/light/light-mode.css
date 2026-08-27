@@ -3184,18 +3184,22 @@ body[data-theme="light"] {
    ARTIFACTS BUTTON - Remove circle completely, icon only
    ================================================================= */
 
+/* The artifacts button is a PURPLE CIRCLE in dark mode and was being stripped to a
+   bare grey glyph here — same control, two completely different things depending on
+   the theme. Keep the circle; only the shadow needs to be lighter. */
 [data-theme="light"] .artifacts-button {
-    background: none !important;
+    background: linear-gradient(135deg, var(--primary-color), #9d65e5) !important;
     border: none !important;
-    box-shadow: none !important;
-    color: #64748b !important;
+    box-shadow: 0 4px 12px rgba(76, 29, 149, 0.22) !important;
+    color: #fff !important;
 }
 
 [data-theme="light"] .artifacts-button:hover {
-    background: none !important;
+    background: linear-gradient(135deg, #7c3aed, #9d65e5) !important;
     border: none !important;
-    color: #7c3aed !important;
-    transform: scale(1.1) !important;
+    color: #fff !important;
+    box-shadow: 0 6px 16px rgba(76, 29, 149, 0.3) !important;
+    transform: scale(1.1) rotate(15deg) !important;
     box-shadow: none !important;
 }
 

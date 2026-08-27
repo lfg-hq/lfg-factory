@@ -12,17 +12,24 @@ const PROJECT_PAGES = [
 ];
 
 console.log("sidebar rail:");
+/** Just the TOP-LEVEL links: everything before the More section starts. */
+function railTop(src: string) {
+  const start = src.indexOf('<div class="sidebar-nav">');
+  return src.slice(start, src.indexOf("sidebar-more-toggle", start));
+}
 for (const p of PROJECT_PAGES) {
-  const s = read(p);
+  const s2 = read(p);
+  const s = s2;
   const rail = s.slice(s.indexOf('<div class="sidebar-nav">'), s.indexOf("sidebar-bottom-content"));
   const has = (label: string) => rail.includes(`<span class="nav-text">${label}</span>`);
   const name = p.split("/").pop()!;
   // Instant is the ONLY link that was meant to leave the rail. Chat, Epics and
   // Tickets belong here — removing them was my misreading, not the request.
-  const missing = ["Chat", "Epics", "Tickets"].filter((l) => !has(l));
+  const missing = ["Chat", "Tickets"].filter((l) => !has(l));
   if (has("Instant")) fail(`${name}: Instant still in the rail`);
   else if (missing.length) fail(`${name}: rail is missing ${missing.join(", ")}`);
-  else ok(`${name}: rail has Chat, Epics, Tickets — no Instant`);
+  else if (railTop(s2).includes("Epics")) fail(`${name}: Epics listed twice (top level AND More)`);
+  else ok(`${name}: rail has Chat + Tickets, Epics only inside More`);
 }
 
 console.log("\nchat history:");
@@ -95,6 +102,18 @@ if (!pd.includes("Create a ticket directly")) ok("create-ticket shortcut removed
 else fail("create-ticket card still there");
 if (pd.includes("start-work-options { display:grid;grid-template-columns:1fr;")) ok("remaining choice spans the row");
 else fail("layout still expects two cards");
+
+console.log("\nstyling:");
+const sideCss = read("public/css/sidebar.css");
+if (/\.conversations-section \.conversation-title[^}]*font-weight: 400/.test(sideCss)) ok("rail rows keep their weight against projects.css");
+else fail("projects.css will win the .conversation-title font again");
+if (/button\.nav-link\.sidebar-more-toggle[^}]*appearance: none/.test(sideCss)) ok("More button has no default button chrome");
+else fail("More still renders as a browser button");
+const lightCss = read("public/css/light/light-mode.css");
+if (/\[data-theme="light"\] \.artifacts-button \{[^}]*linear-gradient/.test(lightCss)) ok("artifacts button is a circle in light mode too");
+else fail("light mode still strips the artifacts button");
+if (!/\.chat-container \.project-header \{[^}]*border-bottom: 1px/.test(read("public/css/chat.css"))) ok("no rule drawn through the artifacts button");
+else fail("header border still crosses the button");
 
 console.log(bad ? `\n${bad} FAILED` : "\nall checks pass");
 process.exit(bad ? 1 : 0);
