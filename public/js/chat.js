@@ -1635,7 +1635,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // Ensure the indicator exists (in case the detail beats the early notification),
             // then set its second line.
             if (!messageContainer.querySelector('.function-call-indicator')) {
-                showFunctionCallIndicator(data.function_name, { investigation: data.investigation, detail: data.detail });
+                showFunctionCallIndicator(data.function_name, { investigation: data.investigation, detail: data.detail, key: data.tool_call_id });
             } else {
                 // The pill already exists — only its second line changes. Rebuilding
                 // it here is what replayed the enter animation on every tool call.
@@ -3663,7 +3663,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const color = investigation ? '#a78bfa' : (details.color || '#94a3b8');
         const detailText = opts.detail || details.label || (investigation ? 'Gathering information' : '');
 
-        return trailStep({ icon, color, detail: detailText, label });
+        return trailStep({ icon, color, detail: detailText, label, key: opts.key, tool: functionName });
     }
 
     // ── The working trail ────────────────────────────────────────────────────
@@ -3675,7 +3675,18 @@ document.addEventListener('DOMContentLoaded', () => {
     // (collapsed) so you can go back and read what happened.
     let activeTrail = null;
 
+    // One glyph per KIND of work — every row carrying the same magnifying glass made
+    // the column unreadable at a glance.
+    const TRAIL_ICONS = {
+        getFileContent: 'fa-file-lines', getFileList: 'fa-folder-open',
+        queryCodebase: 'fa-code', inspectPreview: 'fa-desktop',
+        getTicketDetails: 'fa-ticket', getPendingTickets: 'fa-ticket',
+        getRecentActivities: 'fa-clock-rotate-left', getProjectContext: 'fa-table-columns',
+        createTickets: 'fa-plus', updateFileContent: 'fa-pen', patchFileContent: 'fa-pen',
+    };
+
     function trailStep(step) {
+        if (step.tool && TRAIL_ICONS[step.tool]) step.icon = TRAIL_ICONS[step.tool];
         if (!activeTrail || !activeTrail.isConnected) {
             activeTrail = document.createElement('div');
             activeTrail.className = 'agent-trail is-running';
@@ -3697,6 +3708,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const steps = activeTrail.querySelector('.agent-trail-steps');
         const text = step.detail || step.label || 'Working';
+
+        // The same tool CALL reporting again refines its own row instead of adding
+        // another: a file is requested by id, so the first line can only say "Reading a
+        // file" — the result names it, and that name belongs on the same line.
+        if (step.key) {
+            const existing = steps.querySelector('[data-key="' + step.key + '"]');
+            if (existing) {
+                existing.dataset.text = text;
+                var t = existing.querySelector('.agent-trail-text');
+                if (t) t.textContent = text;
+                return activeTrail;
+            }
+        }
+
         const last = steps.lastElementChild;
         // Don't stack the same line twice — a tool that reports progress repeatedly
         // should update its row, not add another identical one.
@@ -3709,6 +3734,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const row = document.createElement('div');
         row.className = 'agent-trail-step is-current';
         row.dataset.text = text;
+        if (step.key) row.dataset.key = step.key;
         row.innerHTML = `
             <span class="agent-trail-dot" style="--tool-color:${step.color || '#94a3b8'}">
                 <i class="fas ${step.icon || 'fa-cog'}"></i>

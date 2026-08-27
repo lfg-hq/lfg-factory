@@ -31,6 +31,21 @@ function el(tag = "div") {
     closest() { return this; },
     get lastElementChild() { return this.children[this.children.length - 1] || null; },
     querySelector(sel) {
+      // Attribute selectors — the code looks rows up by [data-key="..."], and a stub
+      // that only understands classes silently reports "not found" and makes correct
+      // code look broken.
+      const attr = sel.match(/^\[([\w-]+)="([^"]*)"\]$/);
+      if (attr) {
+        const prop = attr[1].replace(/^data-/, "").replace(/-(\w)/g, (_, c) => c.toUpperCase());
+        const walkA = (n) => {
+          for (const c of n.children) {
+            if (c.dataset && c.dataset[prop] === attr[2]) return c;
+            const d = walkA(c); if (d) return d;
+          }
+          return null;
+        };
+        return walkA(this);
+      }
       const want = sel.replace(/^\./, "");
       const hit = (n) => n.className && n.className.split(" ").includes(want);
       const walk = (n) => { for (const c of n.children) { if (hit(c)) return c; const d = walk(c); if (d) return d; } return null; };
@@ -102,6 +117,26 @@ if (trail.isConnected && trail.querySelectorAll(".agent-trail-step").length === 
 else fail("the record was discarded on completion");
 if (!api.getTrail()) ok("the next turn starts a fresh trail");
 else fail("the finished trail would keep collecting");
+
+// A file is fetched by ID, so the first line can only say "Reading a file"; the
+// result names it. That refinement must REPLACE the line, not add a second one.
+// finalizeTrail() ran above, so these steps open a FRESH trail — assert against that
+// one, not the finished one.
+api.trailStep({ detail: "Reading a file", key: "call_9", tool: "getFileContent" });
+const trail2 = api.getTrail();
+const beforeRefine = trail2.querySelectorAll(".agent-trail-step").length;
+api.trailStep({ detail: "Reading Main PRD", key: "call_9", tool: "getFileContent" });
+const afterRefine = trail2.querySelectorAll(".agent-trail-step").length;
+if (afterRefine === beforeRefine) ok("a refined detail updates its own row");
+else fail(`refinement added a row (${beforeRefine} → ${afterRefine})`);
+const refined = trail2.querySelectorAll(".agent-trail-step").find((r) => r.dataset.key === "call_9");
+if (refined && refined.dataset.text === "Reading Main PRD") ok("the row now names the file");
+else fail("row text is " + (refined && refined.dataset.text));
+
+// Different calls of the same tool stay separate lines.
+api.trailStep({ detail: "Reading a file", key: "call_10", tool: "getFileContent" });
+if (trail2.querySelectorAll(".agent-trail-step").length === afterRefine + 1) ok("a different call gets its own row");
+else fail("rows keyed wrongly across calls");
 
 console.log(bad ? `\n${bad} FAILED` : "\nall checks pass");
 process.exit(bad ? 1 : 0);

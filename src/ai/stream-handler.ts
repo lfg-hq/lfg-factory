@@ -915,6 +915,9 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
               ws.send(JSON.stringify({
                 type: "ai_chunk", chunk: "", is_final: false, is_notification: true,
                 notification_type: "tool_detail", function_name: event.toolName,
+                // The call id lets the client REFINE this line in place when the
+                // result arrives, instead of adding a second row for the same action.
+                tool_call_id: (event as Record<string, unknown>).toolCallId ?? null,
                 investigation: INVESTIGATION_TOOLS.has(event.toolName), detail,
               }));
             }
@@ -994,6 +997,21 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
         }
 
         case "tool-result": {
+          // A file is requested by ID, so the tool-call could only say "Reading a file".
+          // The result carries the real name — send it back under the same call id so
+          // the line becomes "Reading Main PRD".
+          if (event.toolName === "getFileContent") {
+            const r = (event as Record<string, unknown>).result as Record<string, unknown> | undefined;
+            const name = r && typeof r === "object" ? (r as { name?: unknown }).name : undefined;
+            if (typeof name === "string" && name.trim()) {
+              ws.send(JSON.stringify({
+                type: "ai_chunk", chunk: "", is_final: false, is_notification: true,
+                notification_type: "tool_detail", function_name: event.toolName,
+                tool_call_id: (event as Record<string, unknown>).toolCallId ?? null,
+                investigation: true, detail: `Reading ${name.trim().slice(0, 60)}`,
+              }));
+            }
+          }
           // Fallback: if askUser card wasn't sent via tool-call, try from tool-result
           if (event.toolName === "askUser" && !askUserCardSent) {
             const resultObj = (event as Record<string, unknown>).result;
