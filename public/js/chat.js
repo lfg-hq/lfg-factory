@@ -4088,6 +4088,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 icon: 'fa-globe',
                 color: '#38bdf8',
             },
+            'previewPage': {
+                label: 'Generating preview page',
+                icon: 'fa-window-maximize',
+                color: '#a78bfa',
+            },
             'getProjectDashboard': {
                 label: 'Loading project dashboard',
                 icon: 'fa-th-large',

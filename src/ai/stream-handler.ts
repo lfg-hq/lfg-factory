@@ -177,7 +177,7 @@ const TOOL_LABELS: Record<string, string> = {
   streamDocumentContent: "Writing a document",
   patchFileContent: "Editing a document",
   updateFileContent: "Updating a document",
-  previewPage: "Building a page preview",
+  previewPage: "Generating preview page",
   createTickets: "Creating tickets",
   updateTicket: "Updating a ticket",
   updateTicketDetails: "Updating ticket details",
