@@ -92,9 +92,17 @@ if (notifIdx > 0) ok("page_preview is handled in the notification path");
 else fail("nothing handles the page_preview notification");
 if (notifIdx > 0 && notifIdx < docIdx) ok("handled BEFORE the document-save branch swallows it");
 else fail("the document-save branch would claim it first");
+// The notification must go down the CHAT STREAM socket (ws.send in the stream
+// handler), not the connection manager's broadcastToUser — that's a different channel
+// and the chat page never read it, which is why the card never appeared.
+const handler = fs.readFileSync("src/ai/stream-handler.ts", "utf8");
+const previewSend = handler.slice(handler.indexOf('if (event.toolName === "previewPage")'), handler.indexOf('if (event.toolName === "previewPage")') + 900);
+if (/ws\.send\(JSON\.stringify\(\{[\s\S]*notification_type: "page_preview"/.test(previewSend)) ok("the card is pushed on the chat stream socket");
+else fail("preview notification is not sent on the stream socket");
 const tools = fs.readFileSync("src/ai/tools/document-tools.ts", "utf8");
-if (/notification_type: "page_preview"/.test(tools)) ok("the tool pushes the card to chat");
-else fail("tool never notifies the client");
+const previewTool = tools.slice(tools.indexOf("export const previewPage"), tools.indexOf("// ── getFileList"));
+if (!/_wsBroadcast\(/.test(previewTool)) ok("the tool does NOT also broadcast (no duplicate card)");
+else fail("tool still broadcasts — two cards, or one on a dead channel");
 if (/referenceForTicket/.test(tools)) ok("the tool returns a reference for the ticket");
 else fail("no ticket reference returned");
 const prompt = fs.readFileSync("src/ai/prompts/product.ts", "utf8");

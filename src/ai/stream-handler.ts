@@ -1061,6 +1061,23 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
         }
 
         case "tool-result": {
+          // The rendered page goes down the SAME channel as every other chat
+          // notification — the one the trail already proves reaches the client.
+          if (event.toolName === "previewPage") {
+            const r = (event as Record<string, unknown>).result as Record<string, unknown> | undefined;
+            const id = r && typeof r === "object" ? (r as { id?: unknown }).id : undefined;
+            const nm = r && typeof r === "object" ? (r as { name?: unknown }).name : undefined;
+            if (typeof id === "string" && id) {
+              flush();
+              ws.send(JSON.stringify({
+                type: "ai_chunk", chunk: "", is_final: false, is_notification: true,
+                notification_type: "page_preview",
+                file_id: id,
+                file_name: typeof nm === "string" ? nm : "Page preview",
+              }));
+            }
+          }
+
           // A file is requested by ID, so the tool-call could only say "Reading a file".
           // The result carries the real name — send it back under the same call id so
           // the line becomes "Reading Main PRD".

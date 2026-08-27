@@ -117,18 +117,10 @@ export const previewPage = tool({
 
     emitFileCreated({ projectId, documentId: file!.id, documentType: fileType, name });
 
-    // Straight into the transcript as a card. Deliberately NOT the artifacts panel:
-    // the point is to see the page inline, next to the conversation that produced it.
-    if (_wsBroadcast) {
-      _wsBroadcast(userId, {
-        type: "ai_chunk",
-        is_notification: true,
-        notification_type: "page_preview",
-        file_id: file!.id,
-        file_name: name,
-        is_complete: true,
-      });
-    }
+    // The card is pushed by the stream handler on tool-result, NOT from here.
+    // _wsBroadcast goes through the connection manager's socket registry, which is a
+    // different channel from the chat stream the rest of this UI arrives on — the
+    // notification was being sent into a socket the chat page never reads.
     return {
       saved: true,
       id: file!.id,
