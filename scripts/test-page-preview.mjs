@@ -83,8 +83,15 @@ if (card.classList.contains("is-full")) ok("expands to full screen");
 else fail("expand does nothing");
 
 // The wiring around it.
-if (/case 'page_preview':/.test(chat)) ok("the websocket routes page_preview to the card");
+// The preview is a SAVED DOCUMENT, so it carries a file_id — and the generic
+// document-save branch claims any notification with one and returns. The card only
+// renders if it's intercepted first.
+const notifIdx = chat.indexOf("if (data.notification_type === 'page_preview' && data.file_id)");
+const docIdx = chat.indexOf("const nonDocumentTypes = [");
+if (notifIdx > 0) ok("page_preview is handled in the notification path");
 else fail("nothing handles the page_preview notification");
+if (notifIdx > 0 && notifIdx < docIdx) ok("handled BEFORE the document-save branch swallows it");
+else fail("the document-save branch would claim it first");
 const tools = fs.readFileSync("src/ai/tools/document-tools.ts", "utf8");
 if (/notification_type: "page_preview"/.test(tools)) ok("the tool pushes the card to chat");
 else fail("tool never notifies the client");

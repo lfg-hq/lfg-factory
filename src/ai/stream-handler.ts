@@ -162,6 +162,53 @@ export const INVESTIGATION_TOOLS = new Set([
 /** A short, human line describing WHAT a tool call is actually doing, from its args —
  *  so the status pill can say "Reading src/foo.ts on feature/cal-7" instead of a bare
  *  "Inspect preview". Returns "" when there's nothing specific to add. */
+/**
+ * A readable name for any tool, used when toolActionDetail has nothing specific to say.
+ *
+ * Without this the saved trail only kept the handful of tools that produce a detail
+ * string, so a turn the user watched run nine steps replayed as one after a refresh.
+ */
+const TOOL_LABELS: Record<string, string> = {
+  getProjectDashboard: "Loading project dashboard",
+  getFileList: "Listing the project files",
+  getFileContent: "Reading a file",
+  queryCodebase: "Reading the codebase",
+  inspectPreview: "Inspecting the live preview",
+  streamDocumentContent: "Writing a document",
+  patchFileContent: "Editing a document",
+  updateFileContent: "Updating a document",
+  previewPage: "Building a page preview",
+  createTickets: "Creating tickets",
+  updateTicket: "Updating a ticket",
+  updateTicketDetails: "Updating ticket details",
+  getPendingTickets: "Checking pending tickets",
+  getTicketDetails: "Loading ticket details",
+  getNextTicket: "Finding the next ticket",
+  scheduleTickets: "Scheduling the build",
+  queueTicketExecution: "Queueing a build",
+  retryTicket: "Retrying a ticket",
+  sendTicketMessage: "Messaging the ticket agent",
+  startEpic: "Starting an epic",
+  addToEpic: "Adding to the epic",
+  checkEpicOverlap: "Checking for overlapping work",
+  getEpicStatus: "Checking epic status",
+  listTicketsForEpic: "Listing the epic's tickets",
+  getRecentActivities: "Checking recent activity",
+  lookupTechnologySpecs: "Researching technology",
+  setProjectStack: "Recording the stack",
+  captureProjectName: "Naming the project",
+  getProjectEnvVars: "Reading environment variables",
+  registerRequiredEnvVars: "Registering environment variables",
+  setEnvVar: "Setting an environment variable",
+};
+
+export function toolLabel(toolName: string): string {
+  if (TOOL_LABELS[toolName]) return TOOL_LABELS[toolName]!;
+  // camelCase → "Camel case", so an unmapped tool still reads as something.
+  const words = toolName.replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 export function toolActionDetail(toolName: string, input: unknown): string {
   const o = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
   const s = (v: unknown) => (typeof v === "string" ? v : "");
@@ -925,8 +972,10 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
           // indicator reads "Reading src/foo.ts on feature/cal-7", not a bare tool name.
           if (event.toolName !== "askUser" && event.toolName !== "confirmAction") {
             const detail = toolActionDetail(event.toolName, (event as Record<string, unknown>).input ?? (event as Record<string, unknown>).args);
+            // Record the step whether or not there's a specific detail — the fallback
+            // label is what the user sees live, so it belongs in the saved trail too.
+            noteActivity(detail || toolLabel(event.toolName), event.toolName);
             if (detail) {
-              noteActivity(detail, event.toolName);
               ws.send(JSON.stringify({
                 type: "ai_chunk", chunk: "", is_final: false, is_notification: true,
                 notification_type: "tool_detail", function_name: event.toolName,

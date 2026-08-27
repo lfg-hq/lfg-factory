@@ -20,7 +20,8 @@
     "test:sidebar": "node scripts/test-sidebar-chats.mjs",
     "test:trail": "node scripts/test-agent-trail.mjs",
     "check:rail": "node scripts/check-rail-collisions.mjs",
-    "test:preview": "node scripts/test-page-preview.mjs"
+    "test:preview": "node scripts/test-page-preview.mjs",
+    "test:trail-server": "node scripts/test-trail-recording.mjs"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

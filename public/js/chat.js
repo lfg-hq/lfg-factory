@@ -2029,6 +2029,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
+            // A rendered page preview. This MUST be handled before the file_id branch
+            // below: the preview is a saved document, so that branch would treat it as a
+            // document save, open the artifacts panel and return — which is exactly why
+            // the card never appeared.
+            if (data.notification_type === 'page_preview' && data.file_id) {
+                renderPagePreview(data.file_id, data.file_name);
+                const pid = currentProjectId || extractProjectIdFromPath?.();
+                if (pid && window.ArtifactsLoader && typeof window.ArtifactsLoader.loadFileBrowser === 'function') {
+                    setTimeout(() => window.ArtifactsLoader.loadFileBrowser(pid), 200);
+                }
+                return;
+            }
+
             // Check if this is a document save notification with file_id
             // Handle any notification with a file_id as a potential document save, except for non-document types
             const nonDocumentTypes = ['features', 'personas', 'execute_command', 'command_output', 'start_server', 'checklist', 'open_app', 'ticket_stream']; // file_stream omitted: streaming chunks have no file_id, so the data.file_id guard already filters them; the is_complete notification needs to reach handleDocumentSaved
@@ -2554,11 +2567,6 @@ document.addEventListener('DOMContentLoaded', () => {
             case 'status_update':
                 // Pipeline status update
                 renderPipelineStatus(data.payload || data.content || {});
-                break;
-
-            case 'page_preview':
-                // A rendered page, inline in the transcript.
-                renderPagePreview(data.file_id, data.file_name);
                 break;
 
             case 'tool_activity':
