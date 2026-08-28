@@ -1,16 +1,19 @@
 /**
- * Skills — workflow instructions loaded into the agent's prompt ON DEMAND.
+ * Skills — workflow instructions the AGENT fetches when it judges them relevant.
  *
- * The product prompt carried every workflow at once: greenfield, existing project,
- * tickets, epics, design language AND the whole landing-page loop. A page request had to
- * compete for attention with ~460 lines covering situations it wasn't in, and the
- * landing-page steps (wireframe → settle copy → offer a preview → only then a ticket)
- * sat 230 lines down. Skipping straight to createTickets was the predictable result.
+ * Two things were wrong with carrying every workflow in the system prompt: the prompt
+ * grew past what any single turn needs (the landing-page loop sat 230 lines down,
+ * competing with pipelines for situations the user wasn't in), and the first fix —
+ * the SERVER regex-matching the user's words and appending the file — just moved the
+ * guess somewhere the model couldn't correct. Keywords miss ("make the top of the site
+ * nicer") and over-fire ("restart the preview sandbox").
  *
- * A skill is a markdown file appended to the system prompt only when the conversation is
- * actually about that thing, matched on the user's own words.
+ * So the file describes itself and the agent decides. Each skill carries frontmatter
+ * saying what it's for; the prompt lists those descriptions; `loadSkill` returns the
+ * body. Adding a skill is adding one .md file — nothing here or in the prompt needs a
+ * matching edit.
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -18,67 +21,69 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export interface Skill {
   id: string;
-  file: string;
-  /** Any of these in the user's message loads the skill. */
-  triggers: RegExp[];
+  /** One line: what this covers and when to reach for it. Shown to the agent. */
+  description: string;
+  body: string;
 }
 
-export const SKILLS: Skill[] = [
-  {
-    id: "landing-page",
-    file: "landing-page.md",
-    triggers: [
-      /\blanding[\s-]?page\b/i,
-      /\bmarketing (page|site)\b/i,
-      /\bhome ?page\b/i,
-      /\b(about|pricing|contact|faq|docs?) page\b/i,
-      /\bsplash page\b/i,
-      /\bwebsite for\b/i,
-      // The follow-ups that happen once a page is in flight, so the skill stays loaded
-      // through the iteration rather than only on the opening message.
-      /\bpreview page\b/i,
-      /\bpreviewPage\b/,
-      // Verb-anchored: "preview" alone also means the running-app Preview tab, and
-      // matching that would load this skill for unrelated sandbox work.
-      /\b(create|make|render|refresh|regenerate|redo|show)\s+(the\s+|a\s+|another\s+)?preview\b/i,
-      /\bhero (section|copy)\b/i,
-      /\bwireframe\b/i,
-    ],
-  },
-];
+let cached: Skill[] | null = null;
 
-const cache = new Map<string, string>();
-
-function read(file: string): string {
-  const hit = cache.get(file);
-  if (hit) return hit;
-  try {
-    const text = readFileSync(join(__dirname, file), "utf-8");
-    cache.set(file, text);
-    return text;
-  } catch (e) {
-    console.warn(`[skills] could not read ${file}:`, (e as Error).message);
-    return "";
+/** Split `---\nkey: value\n---\nbody` into its parts. */
+function parse(file: string, raw: string): Skill | null {
+  const m = raw.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
+  if (!m) {
+    console.warn(`[skills] ${file} has no frontmatter — skipped`);
+    return null;
   }
+  const meta: Record<string, string> = {};
+  for (const line of m[1]!.split("\n")) {
+    const at = line.indexOf(":");
+    if (at > 0) meta[line.slice(0, at).trim()] = line.slice(at + 1).trim();
+  }
+  const id = meta.name || file.replace(/\.md$/, "");
+  if (!meta.description) {
+    console.warn(`[skills] ${file} has no description — the agent won't know when to use it`);
+  }
+  return { id, description: meta.description ?? "", body: (m[2] ?? "").trim() };
 }
 
-/** Which skills the given text calls for. */
-export function matchSkills(text: string): Skill[] {
-  if (!text) return [];
-  return SKILLS.filter((s) => s.triggers.some((t) => t.test(text)));
+export function allSkills(): Skill[] {
+  if (cached) return cached;
+  try {
+    cached = readdirSync(__dirname)
+      .filter((f) => f.endsWith(".md"))
+      .map((f) => parse(f, readFileSync(join(__dirname, f), "utf-8")))
+      .filter((s): s is Skill => !!s && !!s.body);
+  } catch (e) {
+    console.warn("[skills] could not read the skills directory:", (e as Error).message);
+    cached = [];
+  }
+  return cached;
+}
+
+export function getSkill(id: string): Skill | undefined {
+  const want = String(id ?? "").trim().toLowerCase();
+  return allSkills().find((s) => s.id.toLowerCase() === want);
 }
 
 /**
- * The block to append to the system prompt for this turn, or "" when nothing matches.
- * `context` should include the user's message and enough recent conversation that a
- * skill stays loaded while the user is still working on it — "add more FAQs" on its own
- * would match nothing.
+ * The catalogue for the system prompt: ids and descriptions only, so the agent knows
+ * what exists and can decide. Costs a few lines rather than the whole workflow.
  */
-export function skillsFor(context: string): string {
-  const matched = matchSkills(context);
-  if (!matched.length) return "";
-  return matched
-    .map((s) => `\n\n---\n\n${read(s.file)}`)
-    .filter((t) => t.trim())
-    .join("");
+export function skillCatalogue(): string {
+  const skills = allSkills();
+  if (!skills.length) return "";
+  const lines = skills.map((s) => `- \`${s.id}\` — ${s.description}`).join("\n");
+  return `## Skills
+
+Detailed workflows you can load when they apply. Each is a full set of steps that
+REPLACES improvising:
+
+${lines}
+
+Call \`loadSkill({ id })\` the moment you recognise the work as one of these — BEFORE
+you start it — and then follow what it says. Load it once per conversation; you keep
+it for the rest of the turn and the ones after. If a skill covers the work, following
+it is not optional: skipping ahead (straight to \`createTickets\`, say) is exactly what
+these exist to prevent.`;
 }

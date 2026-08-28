@@ -1,6 +1,7 @@
 // ── Tool Collections ──────────────────────────────────────────────────────────
 
 export { getProjectDashboard, setProjectStack, captureProjectName } from "./project-tools.ts";
+export { loadSkill } from "./skill-tools.ts";
 
 export {
   streamDocumentContent,
@@ -60,6 +61,7 @@ import { getProjectEnvVars, registerRequiredEnvVars, setEnvVar } from "./env-too
 import { broadcastToUser, askUser, confirmAction, lookupTechnologySpecs } from "./misc-tools.ts";
 import { queryCodebase } from "./codebase-tools.ts";
 import { getRecentActivities } from "./activity-tools.ts";
+import { loadSkill } from "./skill-tools.ts";
 
 export const toolsProduct = {
   startEpic,
@@ -99,6 +101,7 @@ export const toolsProduct = {
   confirmAction,
   queryCodebase,
   getRecentActivities,
+  loadSkill,
 };
 
 // ── tools_turbo: Lightweight subset for quick interactions ────────────────────

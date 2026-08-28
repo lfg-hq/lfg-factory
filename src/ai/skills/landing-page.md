@@ -1,7 +1,7 @@
-<!-- LANDING PAGE SKILL
-     Loaded into the product agent's prompt only when a content/marketing page comes up.
-     It used to sit inline in product.ts, ~230 lines into a 460-line prompt, competing
-     with every other workflow for the model's attention. -->
+---
+name: landing-page
+description: Building or editing a content/marketing page — landing or home page, About, Pricing, Contact, FAQ, Blog or Docs. Covers the whole loop: inline wireframe, settling the copy in chat, offering a rendered preview, and turning the approved design into one ticket. NOT for app screens, dashboards or auth flows.
+---
 
 ## Content & Landing Pages — Lightweight Page Path
 

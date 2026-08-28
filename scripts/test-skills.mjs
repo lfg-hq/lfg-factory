@@ -1,84 +1,72 @@
 /**
- * Skill loading: bun run test:skills
+ * Skills: bun run test:skills
  *
- * A skill must load when the work is about it, stay loaded while the user keeps
- * iterating, and stay out of the prompt the rest of the time.
+ * Skills are AGENT-FETCHED. The prompt advertises what exists; loadSkill returns the
+ * body. Nothing here should keyword-match the user — that was the previous design, and
+ * it guessed from outside the conversation.
  */
-import { matchSkills, skillsFor, SKILLS } from "../src/ai/skills/index.ts";
+import fs from "node:fs";
+import { allSkills, getSkill, skillCatalogue } from "../src/ai/skills/index.ts";
+import { loadSkill } from "../src/ai/tools/skill-tools.ts";
 
 let bad = 0;
 const ok = (m) => console.log("  ok   " + m);
 const fail = (m) => { bad++; console.log("  FAIL " + m); };
 
-const loads = (text) => matchSkills(text).some((s) => s.id === "landing-page");
+console.log("the registry:");
+const skills = allSkills();
+if (skills.length) ok(`${skills.length} skill(s) discovered from the directory`);
+else fail("no skills found");
+const lp = getSkill("landing-page");
+if (lp) ok("landing-page loads by id");
+else fail("landing-page missing");
+if (lp && lp.description.length > 40) ok("it describes itself (frontmatter)");
+else fail("no usable description");
+if (lp && !lp.body.startsWith("---")) ok("frontmatter is stripped from the body");
+else fail("frontmatter leaked into the instructions");
+if (getSkill("LANDING-PAGE")) ok("id match is case-insensitive");
+else fail("case-sensitive id lookup");
 
-console.log("loads when it should:");
-for (const t of [
-  "I want to build a landing page for this project",
-  "can you make a marketing page",
-  "build me a home page",
-  "add a pricing page",
-  "I want a website for my clinic",
-  "tweak the hero copy",
-  "redo the wireframe",
-  "pls create preview again",   // mid-iteration, via history
-]) {
-  if (loads(t)) ok(`"${t.slice(0, 42)}"`);
-  else fail(`did NOT load for "${t}"`);
-}
+console.log("\nwhat the prompt carries:");
+const cat = skillCatalogue();
+if (cat.includes("landing-page") && cat.includes("loadSkill")) ok("the catalogue lists the skill and how to load it");
+else fail("catalogue incomplete");
+if (!cat.includes("Sketch a loose wireframe")) ok("the catalogue does NOT inline the workflow");
+else fail("the whole skill is still in the prompt");
+if (cat.length < 1200) ok(`catalogue is small (${cat.length} chars) vs the skill body (${lp.body.length})`);
+else fail(`catalogue is ${cat.length} chars — too heavy for every turn`);
 
-console.log("\nstays out otherwise:");
-for (const t of [
-  "fix the merge conflict on COH-19",
-  "restart the preview sandbox",        // the app Preview tab, not a page
-  "the preview is failing to build",
-  "why did the build fail?",
-  "add a column to the tickets table",
-  "what does this project do",
-  "",
-]) {
-  if (!loads(t)) ok(`"${(t || "(empty)").slice(0, 42)}"`);
-  else fail(`loaded for unrelated: "${t}"`);
-}
+console.log("\nthe tool:");
+const good = await loadSkill.execute({ id: "landing-page" }, {});
+if (good.found && good.instructions.includes("Settle the CONTENT first")) ok("returns the full workflow");
+else fail("tool did not return the instructions");
+const bad1 = await loadSkill.execute({ id: "nope" }, {});
+if (!bad1.found && Array.isArray(bad1.available) && bad1.available.length) ok("an unknown id lists the real options");
+else fail("unknown id fails without guidance");
 
-console.log("\nthe content:");
-const block = skillsFor("I want to build a landing page");
-if (block.includes("Settle the CONTENT first")) ok("carries the content-before-preview rule");
-else fail("skill text missing the content rule");
-if (block.includes("previewPage")) ok("carries the preview step");
-else fail("skill text missing previewPage");
-if (block.includes("Build on approval")) ok("carries the ticket step");
-else fail("skill text missing the ticket step");
-if (skillsFor("unrelated question") === "") ok("adds nothing when no skill matches");
-else fail("injected text for an unrelated turn");
-if (block.length > 3000) ok(`skill is substantial (${block.length} chars) and out of the base prompt`);
-else fail(`skill looks truncated (${block.length} chars)`);
-
-// The base prompt must no longer carry the whole workflow.
-const fs = await import("node:fs");
-const prompt = fs.readFileSync("src/ai/prompts/product.ts", "utf8");
-if (!prompt.includes("Settle the CONTENT first")) ok("the base prompt no longer inlines the workflow");
-else fail("workflow is still inline in product.ts");
-if (prompt.includes("loaded into your context automatically")) ok("the base prompt points at the skill");
-else fail("nothing tells the model a skill exists");
-
-// The flow rules themselves — they moved from product.ts into the skill, so they're
-// asserted here now.
 console.log("\nthe flow the skill teaches:");
-const skill = fs.readFileSync("src/ai/skills/landing-page.md", "utf8");
-const flat = skill.replace(/\n\s+/g, " ");
-if (/Settle the CONTENT first/.test(skill)) ok("content is settled before any render");
-else fail("preview still comes first");
-if (/Want me to render a quick preview/.test(flat)) ok("it ASKS before rendering");
-else fail("no permission step");
-if (/Wait for a yes/.test(skill)) ok("and waits for the answer");
-else fail("doesn't wait");
-if (/a content tweak is a chat reply, not a re-render/.test(flat)) ok("edits after a preview stay in chat");
-else fail("would re-render on every tweak");
-if (/visual rather than textual/.test(skill)) ok("visual changes still re-render immediately");
-else fail("no exception for layout changes");
-if (/referenceForTicket/.test(skill)) ok("the ticket carries the approved design");
-else fail("ticket wouldn't reference the preview");
+const body = lp.body;
+const flat = body.replace(/\n\s+/g, " ");
+const rules = [
+  ["content is settled before any render", /Settle the CONTENT first/],
+  ["it ASKS before rendering", /Want me to render a quick preview/],
+  ["and waits for the answer", /Wait for a yes/],
+  ["edits after a preview stay in chat", /a content tweak is a chat reply, not a re-render/],
+  ["visual changes still re-render immediately", /visual rather than textual/],
+  ["the ticket carries the approved design", /referenceForTicket/],
+];
+for (const [label, re] of rules) {
+  if (re.test(body) || re.test(flat)) ok(label);
+  else fail(label);
+}
+
+console.log("\nno server-side guessing left:");
+const handler = fs.readFileSync("src/ai/stream-handler.ts", "utf8");
+if (!/skillsFor\(/.test(handler)) ok("the server no longer appends skills by keyword");
+else fail("keyword matching is still in the stream handler");
+const prompt = fs.readFileSync("src/ai/prompts/product.ts", "utf8");
+if (!prompt.includes("Sketch a loose wireframe")) ok("the workflow is out of the base prompt");
+else fail("workflow still inline in product.ts");
 
 console.log(bad ? `\n${bad} FAILED` : "\nall checks pass");
 process.exit(bad ? 1 : 0);

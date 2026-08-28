@@ -2,6 +2,8 @@
  * System prompt for the LFG Product Manager Agent.
  * Ported from factory/prompts/product_prompt.py → get_system_prompt_product()
  */
+import { skillCatalogue } from "../skills/index.ts";
+
 export function getProductSystemPrompt(params?: {
   userName?: string;
   projectName?: string;
@@ -224,14 +226,7 @@ The PRD is the source of truth. After it's written, the scope and requirements a
 
 ---
 
-## Content & Landing Pages
-
-When the user asks for a **content / marketing page** — landing or home page, About,
-Pricing, Contact, Blog, Docs, or any layout-driven page that is NOT a full app,
-dashboard, auth flow or interactive screen — do NOT run the greenfield pipeline.
-A dedicated workflow for this is loaded into your context automatically whenever such a
-page is mentioned; follow it exactly, and do not shortcut to \`createTickets()\`
-without it.
+${skillCatalogue()}
 
 ---
 
