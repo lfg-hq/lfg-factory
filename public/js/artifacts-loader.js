@@ -7176,6 +7176,11 @@ document.addEventListener('DOMContentLoaded', function() {
                     'report': 'fas fa-file-contract',
                     'research': 'fas fa-microscope',
                     'spec': 'fas fa-clipboard-list',
+                    // A saved page preview is a rendered page, not prose — give it an
+                    // icon that says so in a list of documents.
+                    'page_preview': 'fas fa-window-maximize',
+                    'tech_analysis': 'fas fa-microscope',
+                    'design_language': 'fas fa-palette',
                     'other': 'fas fa-file'
                 };
                 // Return specific icon if available, otherwise return generic file icon

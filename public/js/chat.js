@@ -2604,7 +2604,7 @@ document.addEventListener('DOMContentLoaded', () => {
      * what a client actually reacts to. The HTML is a saved project document, so the
      * ticket can reference the exact thing that was approved.
      */
-    function renderPagePreview(fileId, fileName) {
+    function renderPagePreview(fileId, fileName, opts) {
         if (!fileId) return;
         const card = document.createElement('div');
         card.className = 'page-preview-card';
@@ -2622,6 +2622,11 @@ document.addEventListener('DOMContentLoaded', () => {
         card.querySelector('.page-preview-name').textContent = fileName || 'Page preview';
         messageContainer.appendChild(card);
         scrollToBottom();
+        // Say where it went. The card scrolls away with the conversation, but the page
+        // is a saved document — people should know to look in Docs for it later.
+        if (!opts || !opts.replay) {
+            if (typeof window.showToast === 'function') window.showToast('Preview saved to Docs', 'success');
+        }
 
         const body = card.querySelector('.page-preview-body');
         const projectId = window.currentProjectId || extractProjectIdFromPath();
@@ -4769,7 +4774,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 // Any page preview this turn produced, rebuilt from the saved document.
                 if (message.role === 'assistant' && Array.isArray(message.page_previews)) {
-                    message.page_previews.forEach((p) => p && p.id && renderPagePreview(p.id, p.name));
+                    message.page_previews.forEach((p) => p && p.id && renderPagePreview(p.id, p.name, { replay: true }));
                 }
             });
             console.log('[loadConversation] rendered', rendered, 'messages');
