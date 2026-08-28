@@ -3519,6 +3519,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     function addMessageToChat(role, content, fileData = null, userRole = null, isPartial = false) {
+        // An assistant message CLOSES the trail above it. The agent works, says
+        // something, works again — so the steps and the text should read in the order
+        // they happened, not as one block of steps with all the prose underneath.
+        if (role === 'assistant' && content && content.trim()) finalizeTrail();
         // Skip adding empty messages unless there's an audio indicator
         if (!content || content.trim() === '') {
             if (!fileData || !fileData.audioIndicator) {
@@ -3852,11 +3856,22 @@ document.addEventListener('DOMContentLoaded', () => {
             last.classList.add('is-current');
             return activeTrail;
         }
+        // The generic label lands first ("Inspect preview"), the specific detail a beat
+        // later ("Inspecting the live preview — …"). Same call, one row.
+        if (last && step.tool && last.dataset.tool === step.tool && !last.dataset.key && step.detail) {
+            last.dataset.text = text;
+            if (step.key) last.dataset.key = step.key;
+            const t0 = last.querySelector('.agent-trail-text');
+            if (t0) t0.textContent = text;
+            last.classList.add('is-current');
+            return activeTrail;
+        }
         if (last) last.classList.remove('is-current');
 
         const row = document.createElement('div');
         row.className = 'agent-trail-step is-current';
         row.dataset.text = text;
+        if (step.tool) row.dataset.tool = step.tool;
         if (step.key) row.dataset.key = step.key;
         row.innerHTML = `
             <span class="agent-trail-dot" style="--tool-color:${step.color || '#94a3b8'}">

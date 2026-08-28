@@ -160,5 +160,21 @@ else fail("replayed trail is not in its finished state");
 if (!api.getTrail()) ok("a replayed trail can't be continued by the next live step");
 else fail("history would keep collecting live steps");
 
+// The generic label and its detail are ONE call, so they belong on one row.
+api.finalizeTrail();
+api.trailStep({ label: "Inspect preview", tool: "inspectPreview" });
+const t3 = api.getTrail();
+const afterGeneric = t3.querySelectorAll(".agent-trail-step").length;
+api.trailStep({ detail: "Inspecting the live preview — Diagnose disk-full", tool: "inspectPreview" });
+if (t3.querySelectorAll(".agent-trail-step").length === afterGeneric) ok("the detail replaces the generic row (one call, one line)");
+else fail("the same call produced two rows");
+const only = t3.querySelectorAll(".agent-trail-step").slice(-1)[0];
+if (only.dataset.text.includes("Diagnose disk-full")) ok("...keeping the specific text");
+else fail("row text is " + only.dataset.text);
+// A DIFFERENT tool still gets its own row.
+api.trailStep({ label: "Reading the codebase", tool: "queryCodebase" });
+if (t3.querySelectorAll(".agent-trail-step").length === afterGeneric + 1) ok("a different tool still gets its own row");
+else fail("rows collapsed across tools");
+
 console.log(bad ? `\n${bad} FAILED` : "\nall checks pass");
 process.exit(bad ? 1 : 0);
