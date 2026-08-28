@@ -16,6 +16,7 @@ import { withCaching } from "./prompt-cache.ts";
 import { toolsProduct, toolsTurbo } from "./tools/index.ts";
 import { createInstantTools } from "./tools/instant-tools.ts";
 import { setDocumentWsBroadcast, setTicketWsBroadcast } from "./tools/index.ts";
+import { skillsFor, matchSkills } from "./skills/index.ts";
 import { setMiscWsBroadcast } from "./tools/index.ts";
 import { getProductSystemPrompt } from "./prompts/product.ts";
 import { normalizeAskUserQuestions } from "./tools/misc-tools.ts";
@@ -708,6 +709,20 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
     systemPrompt = getInstantSystemPrompt();
   } else {
     systemPrompt = getProductSystemPrompt({ userId, projectId: internalProjectId, conversationId: convId, projectFlags });
+
+    // Load any workflow SKILL this turn calls for. The match runs over the user's
+    // message plus recent history, so a skill stays loaded while the work continues —
+    // "add more FAQs" names nothing on its own, but the landing page it belongs to was
+    // named a few turns earlier.
+    const skillContext = [
+      userMessage,
+      ...history.slice(-6).map((m) => (typeof m.content === "string" ? m.content : "")),
+    ].join("\n");
+    const skills = skillsFor(skillContext);
+    if (skills) {
+      systemPrompt += skills;
+      console.log(`[skills] loaded: ${matchSkills(skillContext).map((s) => s.id).join(", ")}`);
+    }
   }
 
   // ── 6. Stream with AI SDK ────────────────────────────────────────────────────
