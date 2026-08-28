@@ -621,6 +621,13 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
       ? toolsTurbo
       : toolsProduct;
 
+  // loadSkill has to see the PROJECT's skills, not just the built-ins — otherwise a
+  // custom workflow appears in the catalogue and then fails to load.
+  if (!instantMode) {
+    const { buildLoadSkillTool } = await import("./tools/skill-tools.ts");
+    tools = { ...tools, loadSkill: buildLoadSkillTool(internalProjectId ?? undefined) };
+  }
+
   // Merge Composio tools. For agent chats, scope strictly to the toolkits
   // the user has explicitly enabled on that agent (agent.composioToolkits).
   // A new agent with nothing toggled on gets no Composio tools at all.
@@ -714,6 +721,11 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
     // only advertises what exists. Server-side keyword matching guessed from outside the
     // conversation and got it wrong in both directions.
     systemPrompt = getProductSystemPrompt({ userId, projectId: internalProjectId, conversationId: convId, projectFlags });
+
+    // The catalogue is per-project: built-in skills plus anything this project added.
+    const { skillCatalogueFor } = await import("./skills/index.ts");
+    const { SKILLS_PLACEHOLDER } = await import("./prompts/product.ts");
+    systemPrompt = systemPrompt.replace(SKILLS_PLACEHOLDER, await skillCatalogueFor(internalProjectId ?? undefined));
 
     // Whatever the project owner told every agent here to do. Appended last so it
     // outranks the defaults it contradicts.

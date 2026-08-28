@@ -32,3 +32,5 @@ export * from "./epics.ts";
 export * from "./epic-documents.ts";
 
 export * from "./boards.ts";
+
+export * from "./project-skills.ts";

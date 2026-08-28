@@ -262,6 +262,9 @@ export function ProjectDetailPage({
         <a href="/projects/${project.projectId}" class="tab-item${activeTab === "home" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "home" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "home" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
           <i class="fas fa-house"></i> Home
         </a>
+        <a href="/projects/${project.projectId}?tab=agent" class="tab-item${activeTab === "agent" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "agent" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "agent" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
+          <i class="fas fa-robot"></i> Agent
+        </a>
         <a href="/projects/${project.projectId}?tab=events" class="tab-item${activeTab === "events" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "events" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "events" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
           <i class="fas fa-stream"></i> Events
         </a>
@@ -316,6 +319,42 @@ export function ProjectDetailPage({
             .start-choice-copy { display:block;margin-top:0.28rem;color:var(--text-secondary);font-size:0.79rem;line-height:1.45; }
             .start-choice-cta { display:inline-flex;align-items:center;gap:0.35rem;margin-top:0.72rem;color:var(--primary-color);font-size:0.8rem;font-weight:650; }
             .home-team-actions { display:flex;align-items:center;gap:0.7rem; }
+            /* ── Agent tab ── */
+            .agent-card { border:1px solid var(--border-color); border-radius:12px; padding:1.25rem 1.4rem; margin-bottom:1.25rem; background:var(--card-bg); }
+            .agent-card-head { display:flex; align-items:flex-start; gap:1rem; margin-bottom:0.9rem; }
+            .agent-card-head h3 { margin:0 0 0.3rem; font-size:1rem; font-weight:650; color:var(--text-color); }
+            .agent-card-head p { margin:0; font-size:0.83rem; line-height:1.55; color:var(--text-secondary); max-width:62ch; }
+            .agent-card textarea, .skill-form input, .skill-form textarea {
+              width:100%; box-sizing:border-box; padding:0.7rem 0.85rem; border-radius:8px;
+              border:1px solid var(--border-color); background:var(--body-bg); color:var(--text-color);
+              font-size:0.85rem; line-height:1.6; font-family:inherit; resize:vertical;
+            }
+            .agent-card textarea:focus, .skill-form input:focus, .skill-form textarea:focus { outline:none; border-color:var(--primary-color); }
+            .agent-row { display:flex; align-items:center; gap:0.75rem; margin-top:0.7rem; }
+            .agent-status { font-size:0.78rem; color:var(--text-secondary); }
+
+            .skill-form { border:1px dashed var(--border-color); border-radius:10px; padding:1rem 1.1rem; margin-bottom:1rem; background:var(--body-bg); }
+            .skill-form[hidden] { display:none; }
+            .skill-form-grid { display:grid; grid-template-columns:minmax(0,220px) minmax(0,1fr); gap:0.9rem; }
+            @media (max-width: 720px) { .skill-form-grid { grid-template-columns:1fr; } }
+            .skill-form label { display:block; }
+            .skill-form label > span { display:block; font-size:0.78rem; font-weight:600; color:var(--text-color); margin-bottom:0.3rem; }
+            .skill-form small { display:block; margin-top:0.3rem; font-size:0.73rem; line-height:1.45; color:var(--text-secondary); }
+            .skill-body-label { margin-top:0.9rem; }
+
+            .skills-list { display:flex; flex-direction:column; gap:0.6rem; }
+            .skill-item { border:1px solid var(--border-color); border-radius:10px; padding:0.85rem 1rem; }
+            .skill-item.is-overridden { opacity:0.55; }
+            .skill-item-top { display:flex; align-items:center; gap:0.6rem; flex-wrap:wrap; }
+            .skill-name { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:0.82rem; font-weight:600; color:var(--primary-color); }
+            .skill-tag { font-size:0.66rem; font-weight:700; letter-spacing:0.04em; text-transform:uppercase; padding:2px 7px; border-radius:5px; }
+            .skill-tag.built-in { background:color-mix(in srgb, var(--border-color) 55%, transparent); color:var(--text-secondary); }
+            .skill-tag.project { background:rgba(139,92,246,0.14); color:#a78bfa; }
+            .skill-actions { margin-left:auto; display:flex; gap:0.4rem; }
+            .skill-action { background:none; border:none; cursor:pointer; color:var(--text-secondary); font-size:0.78rem; padding:2px 6px; border-radius:5px; }
+            .skill-action:hover { color:var(--text-color); background:color-mix(in srgb, var(--border-color) 40%, transparent); }
+            .skill-desc { margin:0.45rem 0 0; font-size:0.83rem; line-height:1.55; color:var(--text-secondary); }
+
             .home-team-action { display:inline-flex;align-items:center;gap:0.3rem;padding:0;border:0;background:none;color:var(--primary-color);font:inherit;font-size:0.76rem;text-decoration:none;cursor:pointer; }
           </style>
 
@@ -1253,6 +1292,64 @@ export function ProjectDetailPage({
           </div>
         ` : ""}
 
+        <!-- ── Agent: the instructions every agent here follows, and the workflows
+                  it can pull in. Its own tab because this is where you TEACH the
+                  system, not a checkbox you set once. ── -->
+        ${activeTab === "agent" ? html`
+        <div style="max-width:900px;">
+          <div class="agent-card">
+            <div class="agent-card-head">
+              <div>
+                <h3>Instructions</h3>
+                <p>Added to every agent working on this project — the chat agent and each ticket build. The standing rules a newcomer would need told. Where these conflict with the agent's defaults, these win.</p>
+              </div>
+            </div>
+            <textarea id="custom-instructions" rows="7" placeholder="Always use the existing design tokens — never introduce new colours.&#10;Never edit files under src/generated/.&#10;Copy is British English."></textarea>
+            <div class="agent-row">
+              <button onclick="saveCustomInstructions()" class="btn btn-primary" style="font-size:0.85rem;">Save instructions</button>
+              <span id="custom-instructions-status" class="agent-status"></span>
+            </div>
+          </div>
+
+          <div class="agent-card">
+            <div class="agent-card-head">
+              <div>
+                <h3>Skills</h3>
+                <p>Workflows the agent loads for itself when a job matches one — it decides, so you don't have to remember to ask. Add your own for the things only this project knows.</p>
+              </div>
+              <button onclick="newSkill()" class="btn btn-secondary" style="font-size:0.82rem;white-space:nowrap;"><i class="fas fa-plus"></i> Add skill</button>
+            </div>
+
+            <form id="skill-form" class="skill-form" hidden onsubmit="return saveSkill(event)">
+              <div class="skill-form-grid">
+                <label>
+                  <span>Name</span>
+                  <input id="skill-name" placeholder="release-checklist" autocomplete="off" />
+                  <small>What the agent calls. Lowercase and hyphens.</small>
+                </label>
+                <label>
+                  <span>When to use it</span>
+                  <input id="skill-desc" placeholder="Cutting a release — versioning, changelog, tagging and the deploy order." autocomplete="off" />
+                  <small>The agent reads ONLY this to decide whether to load the skill. Be specific about when it applies — and when it doesn't.</small>
+                </label>
+              </div>
+              <label class="skill-body-label">
+                <span>Instructions</span>
+                <textarea id="skill-body" rows="10" placeholder="1. Bump the version in package.json…"></textarea>
+                <small>Markdown. Written for the agent: steps, rules, what "done" looks like.</small>
+              </label>
+              <div class="agent-row">
+                <button type="submit" class="btn btn-primary" style="font-size:0.85rem;">Save skill</button>
+                <button type="button" onclick="cancelSkill()" class="btn btn-secondary" style="font-size:0.85rem;">Cancel</button>
+                <span id="skill-form-status" class="agent-status"></span>
+              </div>
+            </form>
+
+            <div id="skills-list" class="skills-list">Loading…</div>
+          </div>
+        </div>
+        ` : ""}
+
         ${activeTab === "settings" ? html`
           <div>
             <h2 style="font-size:1.1rem;font-weight:600;color:var(--text-color);margin:0 0 1.5rem;">Project Settings</h2>
@@ -1340,32 +1437,6 @@ export function ProjectDetailPage({
                 </label>
               </div>
               ` : ""}
-            </div>
-
-            <!-- What the agents on this project are told, and what they can look up. -->
-            <div style="margin-top:2.5rem;padding-top:2rem;border-top:1px solid var(--border-color);">
-              <h3 style="font-size:1rem;font-weight:600;color:var(--text-color);margin:0 0 0.35rem;">Agent instructions</h3>
-              <p style="margin:0 0 0.75rem;color:var(--text-secondary);font-size:0.85rem;">
-                Anything here is added to EVERY agent working on this project — the chat agent and each ticket build.
-                Use it for the standing rules a newcomer would need told: conventions to follow, things never to touch,
-                the tone of the product. Where these conflict with the agent's defaults, these win.
-              </p>
-              <textarea id="custom-instructions" rows="6" placeholder="e.g. Always use the existing design tokens — never introduce new colours.&#10;Never edit files under src/generated/.&#10;Copy is British English."
-                style="width:100%;box-sizing:border-box;padding:0.7rem 0.85rem;border-radius:var(--radius);border:1px solid var(--border-color);background:var(--card-bg);color:var(--text-color);font-size:0.85rem;line-height:1.55;font-family:inherit;resize:vertical;"></textarea>
-              <div style="display:flex;align-items:center;gap:0.75rem;margin-top:0.6rem;">
-                <button onclick="saveCustomInstructions()" class="btn btn-secondary" style="font-size:0.85rem;">Save instructions</button>
-                <span id="custom-instructions-status" style="font-size:0.78rem;color:var(--text-secondary);"></span>
-              </div>
-            </div>
-
-            <div style="margin-top:2.5rem;padding-top:2rem;border-top:1px solid var(--border-color);">
-              <h3 style="font-size:1rem;font-weight:600;color:var(--text-color);margin:0 0 0.35rem;">Skills</h3>
-              <p style="margin:0 0 0.75rem;color:var(--text-secondary);font-size:0.85rem;">
-                Detailed workflows the agent loads for itself when a job matches one. These ship with LFG
-                (<code style="font-size:0.8rem;">src/ai/skills/*.md</code>) and apply to every project — the agent decides when to
-                pull one in, so you don't have to remember to ask.
-              </p>
-              <div id="skills-list" style="display:flex;flex-direction:column;gap:0.5rem;font-size:0.85rem;color:var(--text-secondary);">Loading…</div>
             </div>
 
             ${(isOwner || role === "admin") ? html`
@@ -1723,21 +1794,83 @@ export function ProjectDetailPage({
         .then(function(d){ if (st) st.textContent = d && d.error ? d.error : "Saved — every agent on this project follows these from the next message."; })
         .catch(function(){ if (st) st.textContent = "Could not save."; });
     }
+    var _skills = [];
     function loadSkills() {
       var host = document.getElementById("skills-list");
       if (!host) return;
       fetch("/api/projects/" + projectId + "/skills")
         .then(function(r){ return r.json(); })
         .then(function(d){
-          var list = (d && d.skills) || [];
-          if (!list.length) { host.textContent = "No skills installed."; return; }
-          host.innerHTML = list.map(function(sk){
-            return '<div style="display:flex;gap:0.6rem;align-items:flex-start;padding:0.6rem 0.75rem;border:1px solid var(--border-color);border-radius:8px;">'
-              + '<code style="flex:none;font-size:0.78rem;color:var(--primary-color);">' + esc(sk.id) + '</code>'
-              + '<span style="flex:1;min-width:0;line-height:1.5;">' + esc(sk.description || "") + '</span></div>';
+          _skills = (d && d.skills) || [];
+          if (!_skills.length) { host.textContent = "No skills installed."; return; }
+          host.innerHTML = _skills.map(function(sk, i){
+            var own = sk.source === "project";
+            return '<div class="skill-item' + (sk.overridden ? ' is-overridden' : '') + '">'
+              + '<div class="skill-item-top">'
+                + '<span class="skill-name">' + esc(sk.id) + '</span>'
+                + '<span class="skill-tag ' + (own ? 'project' : 'built-in') + '">' + (own ? 'This project' : 'Built in') + '</span>'
+                + (sk.overridden ? '<span class="agent-status">replaced by this project\'s version</span>' : '')
+                + (own ? '<span class="skill-actions">'
+                    + '<button class="skill-action" onclick="editSkill(' + i + ')"><i class="fas fa-pen"></i> Edit</button>'
+                    + '<button class="skill-action" onclick="deleteSkill(\'' + esc(sk.rowId) + '\', \'' + esc(sk.id) + '\')"><i class="fas fa-trash"></i></button>'
+                  + '</span>' : '')
+              + '</div>'
+              + '<p class="skill-desc">' + esc(sk.description || "") + '</p>'
+            + '</div>';
           }).join("");
         })
         .catch(function(){ host.textContent = "Could not load skills."; });
+    }
+
+    function newSkill() {
+      var f = document.getElementById("skill-form");
+      if (!f) return;
+      f.hidden = false;
+      document.getElementById("skill-name").value = "";
+      document.getElementById("skill-desc").value = "";
+      document.getElementById("skill-body").value = "";
+      document.getElementById("skill-form-status").textContent = "";
+      document.getElementById("skill-name").focus();
+    }
+    function editSkill(i) {
+      var sk = _skills[i];
+      if (!sk) return;
+      newSkill();
+      document.getElementById("skill-name").value = sk.id || "";
+      document.getElementById("skill-desc").value = sk.description || "";
+      document.getElementById("skill-body").value = sk.body || "";
+    }
+    function cancelSkill() {
+      var f = document.getElementById("skill-form");
+      if (f) f.hidden = true;
+    }
+    function saveSkill(ev) {
+      if (ev) ev.preventDefault();
+      var st = document.getElementById("skill-form-status");
+      st.textContent = "Saving…";
+      fetch("/api/projects/" + projectId + "/skills", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: document.getElementById("skill-name").value,
+          description: document.getElementById("skill-desc").value,
+          body: document.getElementById("skill-body").value
+        })
+      })
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+          if (d && d.error) { st.textContent = d.error; return; }
+          st.textContent = "";
+          cancelSkill();
+          loadSkills();
+        })
+        .catch(function(){ st.textContent = "Could not save."; });
+      return false;
+    }
+    function deleteSkill(rowId, name) {
+      if (!confirm('Delete the "' + name + '" skill? The agent will stop being offered it.')) return;
+      fetch("/api/projects/" + projectId + "/skills/" + rowId, { method: "DELETE" })
+        .then(function(){ loadSkills(); })
+        .catch(function(){});
     }
     function esc(v) {
       return String(v == null ? "" : v).replace(/[&<>"']/g, function(c){
@@ -1769,9 +1902,11 @@ export function ProjectDetailPage({
     if ('${activeTab}' === 'settings') {
       loadMembers();
       if (canManageTeam) { loadInvitations(); loadShareGit(); loadShareChat(); }
-      // Instructions and skills are visible to anyone who can open Settings — the
-      // rules the agents follow here shouldn't be a secret from the people working
-      // alongside them. Saving is still permission-checked server-side.
+    }
+    // Instructions and skills live on their own tab. Readable by anyone who can open
+    // it — the rules the agents follow here shouldn't be a secret from the people
+    // working alongside them. Saving stays permission-checked server-side.
+    if ('${activeTab}' === 'agent') {
       loadCustomInstructions();
       loadSkills();
     }

@@ -72,7 +72,7 @@ const pd = read("src/templates/pages/project-detail.tsx");
 // Only the tabs whose destinations the rail already carries were meant to go.
 const tabsBlock = pd.slice(pd.indexOf('<div class="project-tabs"'), pd.indexOf("<style>", pd.indexOf('<div class="project-tabs"')));
 const tabLabels = [...tabsBlock.matchAll(/<\/i> (\w+)/g)].map((m) => m[1]);
-if (tabLabels.join(",") === "Home,Events,Settings") ok("tab row keeps exactly what the rail lacks");
+if (tabLabels.join(",") === "Home,Agent,Events,Settings") ok("tab row keeps exactly what the rail lacks");
 else fail("tab row is " + tabLabels.join(","));
 for (const gone of ["conversations", "documents", "tickets", "inbox", "environment", "instant"]) {
   if (!new RegExp(`tab=${gone}"`).test(tabsBlock)) ok(`${gone} left the tab row (it's in the rail)`);

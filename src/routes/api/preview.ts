@@ -130,7 +130,65 @@ previewApi.get("/:projectId/skills", async (c) => {
   const access = await getProjectAccess(c.req.param("projectId")!, user.id);
   if (!access) return c.json({ error: "Project not found" }, 404);
   const { allSkills } = await import("../../ai/skills/index.ts");
-  return c.json({ skills: allSkills().map((s) => ({ id: s.id, description: s.description })) });
+  const { projectSkills } = await import("../../db/schema/project-skills.ts");
+  const own = await db.select().from(projectSkills).where(eq(projectSkills.projectId, access.project.id));
+  const ownNames = new Set(own.map((r) => r.name.toLowerCase()));
+  return c.json({
+    skills: [
+      ...own.map((r) => ({
+        id: r.name, description: r.description, body: r.body,
+        enabled: r.enabled, source: "project" as const, rowId: r.id,
+      })),
+      // A project skill of the same name REPLACES the built-in, so mark the shadowed
+      // one rather than listing two things the agent can't tell apart.
+      ...allSkills().map((s) => ({
+        id: s.id, description: s.description, body: s.body,
+        enabled: true, source: "built-in" as const, rowId: null,
+        overridden: ownNames.has(s.id.toLowerCase()),
+      })),
+    ],
+  });
+});
+
+/** Create or update one of this project's own skills. */
+previewApi.post("/:projectId/skills", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId")!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  try { requirePermission(access, "canManageTickets"); }
+  catch { return c.json({ error: "You don't have permission to change this project's skills" }, 403); }
+
+  const body = await c.req.json().catch(() => ({} as Record<string, unknown>));
+  // The name is what the agent CALLS, so it has to be a stable identifier.
+  const name = String(body.name ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48);
+  const description = String(body.description ?? "").trim().slice(0, 500);
+  const text = String(body.body ?? "").trim().slice(0, 20_000);
+  if (!name) return c.json({ error: "Give the skill a name" }, 400);
+  if (!description) return c.json({ error: "Describe when the agent should use it — that's how it decides" }, 400);
+  if (!text) return c.json({ error: "The skill needs instructions" }, 400);
+
+  const { projectSkills } = await import("../../db/schema/project-skills.ts");
+  const [row] = await db.insert(projectSkills)
+    .values({ projectId: access.project.id, name, description, body: text, createdBy: user.id })
+    .onConflictDoUpdate({
+      target: [projectSkills.projectId, projectSkills.name],
+      set: { description, body: text, updatedAt: new Date() },
+    })
+    .returning();
+  return c.json({ ok: true, skill: { id: row!.name, description: row!.description, rowId: row!.id, source: "project" } });
+});
+
+previewApi.delete("/:projectId/skills/:skillId", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId")!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  try { requirePermission(access, "canManageTickets"); }
+  catch { return c.json({ error: "You don't have permission to change this project's skills" }, 403); }
+  const { projectSkills } = await import("../../db/schema/project-skills.ts");
+  await db.delete(projectSkills).where(
+    and(eq(projectSkills.projectId, access.project.id), eq(projectSkills.id, c.req.param("skillId")!))
+  );
+  return c.json({ ok: true });
 });
 
 previewApi.get("/:projectId/preview/build-settings", async (c) => {

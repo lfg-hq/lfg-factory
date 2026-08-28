@@ -32,7 +32,7 @@ else fail("build agent never sees them");
 if (/Where they conflict with your defaults, follow these/.test(handler)) ok("and they outrank the defaults");
 else fail("no precedence stated");
 
-console.log("\nsettings page:");
+console.log("\nthe agent tab:");
 if (/id="custom-instructions"/.test(page) && /saveCustomInstructions\(\)/.test(page)) ok("there's a box and a save");
 else fail("no instructions UI");
 if (/id="skills-list"/.test(page) && /loadSkills\(\)/.test(page)) ok("skills are listed");
@@ -46,6 +46,44 @@ console.log("\nthe registry behind it:");
 const skills = allSkills();
 if (skills.length && skills.every((s) => s.id && s.description)) ok(`${skills.length} skill(s), each with an id and a description`);
 else fail("a skill is missing its id or description");
+
+console.log("\ncustom skills:");
+for (const d of ["pg", "sqlite"]) {
+  if (fs.existsSync(`src/db/schema/${d}/project-skills.ts`)) ok(`${d}: project_skill table`);
+  else fail(`${d}: table missing`);
+}
+const skillsApi = api.slice(api.indexOf('previewApi.get("/:projectId/skills"'), api.indexOf('previewApi.get("/:projectId/preview/build-settings"'));
+if (/previewApi\.post\("\/:projectId\/skills"/.test(skillsApi)) ok("you can add one");
+else fail("no create endpoint");
+if (/previewApi\.delete\("\/:projectId\/skills\/:skillId"/.test(skillsApi)) ok("...and delete one");
+else fail("no delete endpoint");
+if (/requirePermission\(access, "canManageTickets"\)/.test(skillsApi)) ok("writing is permission-checked");
+else fail("anyone could add a skill");
+if (/replace\(\/\[\^a-z0-9\]\+\/g, "-"\)/.test(skillsApi)) ok("the name is normalised to a callable id");
+else fail("a name with spaces would be uncallable");
+if (/Describe when the agent should use it/.test(skillsApi)) ok("a description is required — it's how the agent decides");
+else fail("description not enforced");
+if (/overridden: ownNames\.has/.test(skillsApi)) ok("a project skill shadowing a built-in is marked, not duplicated");
+else fail("both would list identically");
+
+const skills2 = fs.readFileSync("src/ai/skills/index.ts", "utf8");
+if (/export async function skillsFor/.test(skills2) && /A project skill wins on a name clash/.test(skills2)) ok("the registry merges project skills over built-ins");
+else fail("project skills not merged");
+const st = fs.readFileSync("src/ai/tools/skill-tools.ts", "utf8");
+if (/export function buildLoadSkillTool/.test(st)) ok("loadSkill can be bound to a project");
+else fail("loadSkill would only see built-ins");
+if (/buildLoadSkillTool\(internalProjectId/.test(handler)) ok("...and the stream handler binds it");
+else fail("bound tool never used");
+if (/skillCatalogueFor\(internalProjectId/.test(handler)) ok("the prompt catalogue is per-project");
+else fail("catalogue is still global");
+
+const page2 = fs.readFileSync("src/templates/pages/project-detail.tsx", "utf8");
+if (/tab=agent/.test(page2) && /activeTab === "agent" \? html`/.test(page2)) ok("Agent has its own tab");
+else fail("no Agent tab");
+if (/function saveSkill\(ev\)/.test(page2) && /function deleteSkill\(/.test(page2)) ok("the tab can add and remove skills");
+else fail("UI can't manage skills");
+if (/skill-tag/.test(page2) && /Built in/.test(page2)) ok("built-in vs project is visible at a glance");
+else fail("no source badge");
 
 console.log(bad ? `\n${bad} FAILED` : "\nall checks pass");
 process.exit(bad ? 1 : 0);

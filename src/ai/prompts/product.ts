@@ -2,7 +2,8 @@
  * System prompt for the LFG Product Manager Agent.
  * Ported from factory/prompts/product_prompt.py → get_system_prompt_product()
  */
-import { skillCatalogue } from "../skills/index.ts";
+/** Replaced per-request with the project's own catalogue (built-ins + custom). */
+export const SKILLS_PLACEHOLDER = "<<LFG_SKILLS>>";
 
 export function getProductSystemPrompt(params?: {
   userName?: string;
@@ -226,7 +227,7 @@ The PRD is the source of truth. After it's written, the scope and requirements a
 
 ---
 
-${skillCatalogue()}
+${SKILLS_PLACEHOLDER}
 
 ---
 

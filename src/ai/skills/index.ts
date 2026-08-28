@@ -87,3 +87,61 @@ it for the rest of the turn and the ones after. If a skill covers the work, foll
 it is not optional: skipping ahead (straight to \`createTickets\`, say) is exactly what
 these exist to prevent.`;
 }
+
+// ── Project skills ──────────────────────────────────────────────────────────
+// The same shape as a built-in, stored per project. Merged into the catalogue the
+// agent sees, so it can't tell the two apart — which is the point: "how we cut a
+// release here" should be as loadable as the workflows that ship with the product.
+
+export interface ResolvedSkills {
+  list: Skill[];
+  catalogue: string;
+}
+
+async function projectSkills(projectId?: string): Promise<Skill[]> {
+  if (!projectId) return [];
+  try {
+    const { db } = await import("../../config/db.ts");
+    const { projectSkills: table } = await import("../../db/schema/project-skills.ts");
+    const { and, eq } = await import("drizzle-orm");
+    const rows = await db
+      .select()
+      .from(table)
+      .where(and(eq(table.projectId, projectId), eq(table.enabled, true)));
+    return rows.map((r) => ({ id: r.name, description: r.description, body: r.body }));
+  } catch (e) {
+    console.warn("[skills] could not load project skills:", (e as Error).message);
+    return [];
+  }
+}
+
+/** Built-ins plus this project's own. A project skill wins on a name clash. */
+export async function skillsFor(projectId?: string): Promise<Skill[]> {
+  const own = await projectSkills(projectId);
+  const ownIds = new Set(own.map((s) => s.id.toLowerCase()));
+  return [...own, ...allSkills().filter((s) => !ownIds.has(s.id.toLowerCase()))];
+}
+
+export async function getSkillFor(projectId: string | undefined, id: string): Promise<Skill | undefined> {
+  const want = String(id ?? "").trim().toLowerCase();
+  return (await skillsFor(projectId)).find((s) => s.id.toLowerCase() === want);
+}
+
+/** The prompt catalogue, including anything this project added. */
+export async function skillCatalogueFor(projectId?: string): Promise<string> {
+  const skills = await skillsFor(projectId);
+  if (!skills.length) return "";
+  const lines = skills.map((s) => `- \`${s.id}\` — ${s.description}`).join("\n");
+  return `## Skills
+
+Detailed workflows you can load when they apply. Each is a full set of steps that
+REPLACES improvising:
+
+${lines}
+
+Call \`loadSkill({ id })\` the moment you recognise the work as one of these — BEFORE
+you start it — and then follow what it says. Load it once per conversation; you keep
+it for the rest of the turn and the ones after. If a skill covers the work, following
+it is not optional: skipping ahead (straight to \`createTickets\`, say) is exactly what
+these exist to prevent.`;
+}

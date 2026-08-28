@@ -9,7 +9,7 @@
  */
 import { tool, zodSchema } from "ai";
 import { z } from "zod";
-import { allSkills, getSkill } from "../skills/index.ts";
+import { allSkills, getSkill, skillsFor, getSkillFor } from "../skills/index.ts";
 
 export const loadSkill = tool({
   description:
@@ -42,3 +42,37 @@ export const loadSkill = tool({
     };
   },
 });
+
+/**
+ * The same tool, bound to a project so its OWN skills are loadable too. The unbound
+ * export above only ever sees the built-ins, which would make a project's custom
+ * workflow visible in the catalogue and then fail to load.
+ */
+export function buildLoadSkillTool(projectId?: string) {
+  return tool({
+    description:
+      "Load a detailed workflow (a 'skill') into your context before doing that kind of " +
+      "work. Call this the moment you recognise the request as one of the skills listed " +
+      "in your prompt — before starting the work, not after. The full instructions come " +
+      "back as the result; follow them exactly.",
+    inputSchema: zodSchema(
+      z.object({ id: z.string().describe("The skill id, exactly as listed in your prompt.") })
+    ),
+    execute: async ({ id }: { id: string }) => {
+      const skill = await getSkillFor(projectId, id);
+      if (!skill) {
+        return {
+          found: false as const,
+          error: `No skill called "${id}".`,
+          available: (await skillsFor(projectId)).map((s) => ({ id: s.id, description: s.description })),
+        };
+      }
+      return {
+        found: true as const,
+        id: skill.id,
+        instructions: skill.body,
+        note: "Follow these steps for this piece of work. They replace your default approach.",
+      };
+    },
+  });
+}
