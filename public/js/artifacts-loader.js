@@ -3209,6 +3209,12 @@ document.addEventListener('DOMContentLoaded', function() {
                             it.epic_name ? (it.epic_key ? it.epic_key + ' · ' + it.epic_name : it.epic_name)
                                          : 'No epic';
                         const lfgKeyOf = (it) => lfgGroupBy === 'epic' ? lfgEpicLabel(it) : lfgBucket(it.created_at);
+                        /** Start-of-day for the created date — the value the date groups order by. */
+                        const lfgDayOf = (it) => {
+                            const d = new Date(it.created_at);
+                            if (isNaN(d)) return 0;                     // undated sinks to the bottom
+                            return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+                        };
 
                         // Most recently COMPLETED first — the work you just finished is what
                         // you want to look at. Tickets that have never been built have no
@@ -3242,7 +3248,14 @@ document.addEventListener('DOMContentLoaded', function() {
                                 // then build order for whatever hasn't been built yet.
                                 return lfgByLive(a, b) || lfgByCompletion(a, b) || (new Date(a.created_at) - new Date(b.created_at));
                             }
-                            return lfgByLive(a, b) || lfgByCompletion(a, b) || (new Date(b.created_at) - new Date(a.created_at));
+                            // Date grouping: the BUCKET decides the order first, newest day at
+                            // the top. Sorting purely by completion put today's unbuilt ticket
+                            // below every finished one, so the TODAY header landed at the
+                            // bottom of the list.
+                            return lfgDayOf(b) - lfgDayOf(a)
+                                || lfgByLive(a, b)
+                                || lfgByCompletion(a, b)
+                                || (new Date(b.created_at) - new Date(a.created_at));
                         });
                         const lfgCounts = {};
                         lfgSorted.forEach(it => { const bk = lfgKeyOf(it); lfgCounts[bk] = (lfgCounts[bk] || 0) + 1; });

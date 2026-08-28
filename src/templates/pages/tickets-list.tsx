@@ -1151,14 +1151,15 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
         buildBtn.innerHTML = '<i class="fas fa-bolt"></i> Build Ticket';
         var stopBtn = document.getElementById('drawer-stop-btn');
         if (stopBtn) stopBtn.style.display = isActive ? '' : 'none';
-        // If executing, switch to Actions tab so user sees live logs
+        // A running build still wins — live logs are the reason you opened it — but that
+        // does NOT overwrite your preference for the next ticket you open.
         if (isActive) {
-          switchDrawerTab('actions', document.querySelector('.drawer-tab[data-tab="actions"]'));
+          switchDrawerTab('actions', document.querySelector('.drawer-tab[data-tab="actions"]'), { remember: false });
         } else {
-          switchDrawerTab('details', document.querySelector('.drawer-tab[data-tab="details"]'));
+          openPreferredDrawerTab();
         }
       }).catch(function() {
-        switchDrawerTab('details', document.querySelector('.drawer-tab[data-tab="details"]'));
+        openPreferredDrawerTab();
       });
   }
 
@@ -1215,7 +1216,27 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
   window.saveTicketEdit = saveTicketEdit;
   window.cancelTicketEdit = cancelTicketEdit;
 
-  function switchDrawerTab(tabId, btn) {
+  // Which tab you were last looking at, so opening the next ticket lands there instead
+  // of snapping back to Details every time. Session-scoped: it follows the browsing you
+  // are doing right now, and a fresh visit starts on Details.
+  var DRAWER_TAB_KEY = 'lfg_drawer_tab';
+  function rememberDrawerTab(tabId) {
+    try { sessionStorage.setItem(DRAWER_TAB_KEY, tabId); } catch (e) {}
+  }
+  function preferredDrawerTab() {
+    try { return sessionStorage.getItem(DRAWER_TAB_KEY) || 'details'; } catch (e) { return 'details'; }
+  }
+  function openPreferredDrawerTab() {
+    var want = preferredDrawerTab();
+    var btn = document.querySelector('.drawer-tab[data-tab="' + want + '"]');
+    // The tab may not exist for this ticket (no preview, say) — fall back rather than
+    // opening the drawer with nothing selected.
+    if (!btn) { want = 'details'; btn = document.querySelector('.drawer-tab[data-tab="details"]'); }
+    switchDrawerTab(want, btn, { remember: false });
+  }
+
+  function switchDrawerTab(tabId, btn, opts) {
+    if (!opts || opts.remember !== false) rememberDrawerTab(tabId);
     document.querySelectorAll('.drawer-tab').forEach(b => b.classList.remove('active'));
     document.querySelectorAll('.drawer-tab-content').forEach(p => p.classList.remove('active'));
     if (btn) btn.classList.add('active');
