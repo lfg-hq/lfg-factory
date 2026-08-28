@@ -303,20 +303,30 @@ previewApi.post("/:projectId/preview/exec", async (c) => {
   if (!env?.workspaceId) return c.json({ error: "This project has no sandbox yet — run the preview once first." }, 400);
 
   const cwd = typeof body.cwd === "string" && body.cwd.trim() ? body.cwd.trim() : "/data/project";
+  // Report the directory the command LEFT us in, so `cd` persists across calls — each
+  // exec is its own shell, so without this you can never move around the box.
+  const MARK = "__LFG_CWD__";
   // base64 so quoting/newlines survive the exec channel intact.
-  const script = `cd ${cwd} 2>/dev/null || cd /data 2>/dev/null || true\n${command}`;
+  const script = `cd ${cwd} 2>/dev/null || cd /data 2>/dev/null || true\n${command}\n__rc=$?\nprintf '\\n${MARK}%s\\n' "$(pwd)"\nexit $__rc`;
   const b64 = Buffer.from(script).toString("base64");
 
   try {
-    const r = await execOnWorkspace(env.workspaceId, `echo ${b64} | base64 -d | sh`, { timeout: 60_000 });
-    const out = String(r.output ?? "");
+    // Generous but bounded: an install or a build is a legitimate thing to run here.
+    const r = await execOnWorkspace(env.workspaceId, `echo ${b64} | base64 -d | sh`, { timeout: 180_000 });
+    let out = String(r.output ?? "");
+    let endCwd = cwd;
+    const m = out.match(new RegExp(MARK + "(.*)\\n?$"));
+    if (m) {
+      endCwd = (m[1] || cwd).trim() || cwd;
+      out = out.slice(0, m.index).replace(/\n$/, "");
+    }
     return c.json({
       ok: true,
       exitCode: r.exitCode ?? 0,
       // Cap the tail: a stray `cat` of a bundle shouldn't wedge the panel.
       output: out.length > 40_000 ? out.slice(-40_000) : out,
       truncated: out.length > 40_000,
-      cwd,
+      cwd: endCwd,
     });
   } catch (e) {
     return c.json({ ok: false, error: (e as Error).message?.slice(0, 400) || "Command failed" }, 502);

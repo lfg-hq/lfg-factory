@@ -16,7 +16,7 @@ if (/requirePermission\(access, "canEditFiles"\)/.test(route)) ok("gated on canE
 else fail("no permission gate on a shell");
 if (/getProjectAccess/.test(route)) ok("scoped to a project you have access to");
 else fail("no access check");
-if (/timeout: 60_000/.test(route)) ok("commands time out");
+if (/timeout: \d+_000/.test(route)) ok("commands time out");
 else fail("a hung command would hang the request");
 if (/out\.length > 40_000/.test(route)) ok("output is capped");
 else fail("unbounded output");
@@ -45,6 +45,39 @@ else fail("no left-hand slot");
 const left = js.slice(js.indexOf("function syncLeftActions()"), js.indexOf("function refreshPanes()"));
 if (/progressTab === "applogs" && selectedIsDb\(\)/.test(left)) ok("...and only on a database tab");
 else fail("Reset DB shows for the wrong tabs");
+
+console.log("\nmoving around the box:");
+if (/__LFG_CWD__/.test(route)) ok("the command reports where it ended up");
+else fail("cd could never persist");
+if (/exit \$__rc/.test(route)) ok("the real exit code survives the marker");
+else fail("the marker would mask the command's exit code");
+if (/out\.slice\(0, m\.index\)/.test(route)) ok("the marker is stripped from what you see");
+else fail("the marker would show in the output");
+if (/timeout: 180_000/.test(route)) ok("long enough for an install or a build");
+else fail("timeout too short for real work");
+if (/if \(j\.cwd && j\.cwd !== shellCwd\)/.test(js)) ok("the client keeps the new directory");
+else fail("client ignores the returned cwd");
+if (/pv-shell-cwd/.test(js)) ok("the prompt shows where you are");
+else fail("no cwd in the prompt");
+
+// The exact parse the server does, run for real.
+const MARK = "__LFG_CWD__";
+const parse = (out0, cwd) => {
+  let out = out0, endCwd = cwd;
+  const m = out.match(new RegExp(MARK + "(.*)\\n?$"));
+  if (m) { endCwd = (m[1] || cwd).trim() || cwd; out = out.slice(0, m.index).replace(/\n$/, ""); }
+  return { out, endCwd };
+};
+const a = parse("/usr/bin\n\n__LFG_CWD__/usr\n", "/data/project");
+if (a.endCwd === "/usr" && !a.out.includes(MARK)) ok("parses a real cd result");
+else fail("cwd parse wrong: " + JSON.stringify(a));
+const b = parse("no marker", "/data/project");
+if (b.endCwd === "/data/project" && b.out === "no marker") ok("output without a marker is left alone");
+else fail("mangles unmarked output");
+
+console.log("\nno command allowlist:");
+if (!/allow(list|ed)|forbidden|blocked/i.test(route)) ok("any command runs — the sandbox is disposable and the developer owns it");
+else fail("commands are being filtered");
 
 console.log(bad ? `\n${bad} FAILED` : "\nall checks pass");
 process.exit(bad ? 1 : 0);

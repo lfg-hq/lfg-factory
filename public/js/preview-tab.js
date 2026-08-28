@@ -264,6 +264,7 @@
   }
   function activeSegKey() {
     if (progressTab === "steps") return "steps";
+    if (progressTab === "shell") return "shell";   // else Setup stayed lit on the Shell tab
     if (progressTab === "applogs") return appLogView;
     return "logs";
   }
@@ -316,7 +317,7 @@
     return `<div style="flex:1;min-height:0;display:flex;flex-direction:column;gap:8px;">
       <pre id="pv-shell-out" style="flex:1;min-height:0;margin:0;overflow:auto;text-align:left;background:#0f1117;border:1px solid var(--border-color,#2a2a2a);border-radius:8px;padding:12px 14px;font-size:12px;line-height:1.55;color:#d7dce5;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${esc(shellHistory.join("\n")) || "Runs in the preview sandbox at " + esc(shellCwd) + ".\nTry: df -h /data   ·   du -sh /data/project/*   ·   ls -la"}</pre>
       <div style="display:flex;gap:6px;align-items:center;flex:none;">
-        <span style="font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--text-secondary,#9ca3af);flex:none;">$</span>
+        <span id="pv-shell-cwd" title="Working directory — cd persists between commands" style="font-family:ui-monospace,Menlo,monospace;font-size:11.5px;color:var(--text-secondary,#9ca3af);flex:none;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(shellCwd)} $</span>
         <input id="pv-shell-in" spellcheck="false" placeholder="df -h /data"
           style="flex:1;min-width:0;height:34px;padding:0 10px;border-radius:8px;border:1px solid var(--border-color,#2a2a2a);background:var(--background-surface,#141414);color:var(--text-color,#e2e8f0);font-size:12.5px;font-family:ui-monospace,Menlo,monospace;" />
         <button data-action="shellrun" style="height:34px;padding:0 12px;border-radius:8px;border:1px solid var(--border-color,#333);background:var(--primary-color,#8b5cf6);color:#fff;font-size:12.5px;cursor:pointer;flex:none;">Run</button>
@@ -340,6 +341,13 @@
       .then((j) => {
         if (j.error) shellHistory.push(j.error);
         else {
+          // The server reports where the command LEFT us, so `cd` sticks — each exec is
+          // its own shell, so without this you can never move around.
+          if (j.cwd && j.cwd !== shellCwd) {
+            shellCwd = j.cwd;
+            const cwdEl = $("pv-shell-cwd");
+            if (cwdEl) cwdEl.textContent = shellCwd + " $";
+          }
           if (j.output) shellHistory.push(j.output.replace(/\s+$/, ""));
           if (j.truncated) shellHistory.push("… (output truncated)");
           if (j.exitCode) shellHistory.push("[exit " + j.exitCode + "]");
