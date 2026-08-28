@@ -37,6 +37,12 @@ if (bad) { console.log("FAIL " + bad); process.exit(1); }
 if (stack.length) { console.log("FAIL unclosed: " + stack.join(", ")); process.exit(1); }
 
 console.log("  ok  document balances");
+// The breadcrumb / repo switcher / "Back to Workspace" header is a DASHBOARD thing.
+// On pages reached from the left rail you're already inside one project.
+const headerIdx = src.indexOf("<!-- Project Header");
+const gated = src.slice(headerIdx, headerIdx + 700).includes('activeTab === "home" ? html`');
+if (gated) console.log("  ok  project header renders on Home only");
+else { console.log("FAIL project header shows on every tab"); process.exit(1); }
 // The tab row is back to Home / Events / Settings — the three destinations the left
 // rail does NOT carry — and it must still sit inside its flex container.
 const tabStart = src.indexOf('<div class="project-tabs"');

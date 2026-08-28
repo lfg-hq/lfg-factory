@@ -213,8 +213,11 @@ export function ProjectDetailPage({
 
     <!-- Main content -->
     <div class="main-content-with-sidebar">
-      <!-- Project Header -->
-      <div class="page-header" style="padding:1.25rem 2rem;border-bottom:1px solid var(--border-color);display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:nowrap;gap:1rem;">
+      <!-- Project Header — HOME ONLY. Breadcrumb, repo switcher and "Back to
+           Workspace" are for orienting yourself among projects, which is a dashboard
+           job. On Environment / Events / Settings, reached from the left rail, you are
+           already inside one project and the rail is the navigation. -->
+      ${activeTab === "home" ? html`      <div class="page-header" style="padding:1.25rem 2rem;border-bottom:1px solid var(--border-color);display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:nowrap;gap:1rem;">
         <div style="display:flex;align-items:center;gap:0.75rem;flex:1 1 auto;min-width:0;">
           <a href="/projects" style="color:var(--text-secondary);text-decoration:none;font-size:0.875rem;display:flex;align-items:center;gap:0.4rem;white-space:nowrap;">
             <i class="fas fa-arrow-left"></i> Projects
@@ -250,7 +253,7 @@ export function ProjectDetailPage({
             <i class="fas fa-arrow-left"></i> Back to Workspace
           </a>
         </div>
-      </div>
+      </div>` : ""}
 
       <!-- Horizontal Tab Nav — only what the LEFT RAIL doesn't already carry.
            Chats, Documents, Tickets, Inbox, Epics, Environment and Instant were all
