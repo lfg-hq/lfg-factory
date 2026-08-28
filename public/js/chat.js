@@ -697,8 +697,8 @@ document.addEventListener('DOMContentLoaded', () => {
                             
                             // Update transcription display
                             if (recordingIndicator && recordingIndicator.transcriptionArea) {
-                                const displayText = finalTranscript + '<span style="color: #94a3b8; font-style: italic;">' + interimTranscript + '</span>';
-                                recordingIndicator.transcriptionArea.innerHTML = displayText || '<span style="color: #94a3b8; font-style: italic;">Listening...</span>';
+                                const displayText = finalTranscript + '<span style="opacity:.55; font-style: italic;">' + interimTranscript + '</span>';
+                                recordingIndicator.transcriptionArea.innerHTML = displayText || '<span style="opacity:.55; font-style: italic;">Listening…</span>';
                                 
                                 // Show send button if there's any transcribed text
                                 if (finalTranscript.trim() || interimTranscript.trim()) {
@@ -5383,13 +5383,14 @@ document.addEventListener('DOMContentLoaded', () => {
         // Create transcription area
         const transcriptionArea = document.createElement('div');
         transcriptionArea.className = 'live-transcription';
-        transcriptionArea.style.cssText = 'flex: 1; padding: 8px 12px; background: rgba(255,255,255,0.05); border-radius: 6px; min-height: 40px; color: #e2e8f0; font-size: 14px; line-height: 1.4;';
-        transcriptionArea.innerHTML = '<span style="color: #94a3b8; font-style: italic;">Listening...</span>';
+        // Theme tokens, not hardcoded dark values — this panel renders in light mode too.
+        transcriptionArea.style.cssText = 'flex: 1; padding: 8px 12px; background: color-mix(in srgb, var(--border-color, #2a2a2a) 35%, transparent); border-radius: 6px; min-height: 40px; color: var(--text-color, #e2e8f0); font-size: 14px; line-height: 1.4;';
+        transcriptionArea.innerHTML = '<span style="opacity:.55; font-style: italic;">Listening…</span>';
         
         // Create send button (initially hidden)
         const sendBtn = document.createElement('button');
         sendBtn.className = 'recording-send-btn';
-        sendBtn.style.cssText = 'width: 36px; height: 36px; padding: 0; background: #3b82f6; color: white; border: none; border-radius: 50%; font-size: 14px; cursor: pointer; display: none; align-self: center; flex-shrink: 0;';
+        sendBtn.style.cssText = 'width: 32px; height: 32px; padding: 0; background: var(--primary-color, #8b5cf6); color: #fff; border: none; border-radius: 50%; font-size: 13px; cursor: pointer; display: none; align-self: center; flex-shrink: 0;';
         sendBtn.innerHTML = '<i class="fas fa-paper-plane"></i>';
         sendBtn.title = 'Send message';
         sendBtn.onclick = () => {

@@ -382,6 +382,20 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       .builder-auth-select, .builder-model-select { min-width: 0; max-width: none; flex: 1; }
     }
     /* Tab panes — not in tickets.css */
+    .drawer-refs { display: flex; flex-direction: column; gap: 6px; }
+    .drawer-ref {
+      display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+      border: 1px solid var(--border-color); border-radius: 8px;
+      text-decoration: none; color: var(--text-color); font-size: 0.85rem;
+    }
+    .drawer-ref:hover { border-color: var(--primary-color); }
+    .drawer-ref i { font-size: 0.8rem; opacity: 0.7; }
+    .drawer-ref-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .drawer-ref-type {
+      flex: none; font-size: 0.68rem; padding: 2px 6px; border-radius: 4px;
+      background: color-mix(in srgb, var(--border-color) 45%, transparent);
+      color: var(--text-secondary); font-family: ui-monospace, Menlo, monospace;
+    }
     .drawer-tab-content { display: none !important; }
     .drawer-tab-content.active { display: flex !important; flex-direction: column; flex: 1; }
     #tab-actions.active { padding: 0; position: relative; }
@@ -780,6 +794,12 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
           <h4>Description</h4>
           <div id="drawer-description" class="markdown-content"></div>
         </div>
+        <!-- Documents this ticket references (an approved page design, usually). The
+             ticket text only carries the raw id, which tells a human nothing. -->
+        <div class="detail-section" id="drawer-refs-section" hidden>
+          <h4>Attached</h4>
+          <div id="drawer-refs" class="drawer-refs"></div>
+        </div>
         <div class="detail-section" id="drawer-linked-docs" style="display:none;">
           <h4>Linked Documents</h4>
           <div id="drawer-linked-docs-list"></div>
@@ -1099,8 +1119,51 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     var _descEl = document.getElementById('drawer-description');
     if (t.description && typeof marked !== 'undefined') { _descEl.innerHTML = marked.parse(t.description); }
     else { _descEl.textContent = t.description || 'No description provided.'; }
+    renderTicketRefs(t);
     document.getElementById('drawer-created').textContent = t.createdAt || t.created_at || '';
     document.getElementById('drawer-updated').textContent = t.updatedAt || t.updated_at || '';
+  }
+
+  /**
+   * Turn the document ids the product agent writes into the ticket ("Approved design
+   * preview: document <uuid>") into something openable. The build agent gets the file
+   * itself; a person reading the ticket was left with a bare uuid.
+   */
+  function renderTicketRefs(t) {
+    var section = document.getElementById('drawer-refs-section');
+    var host = document.getElementById('drawer-refs');
+    if (!section || !host) return;
+    section.hidden = true;
+    host.innerHTML = '';
+
+    var text = [t.name || '', t.description || '', t.notes || ''].join(String.fromCharCode(10));
+    var ids = (text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) || [])
+      .map(function (x) { return x.toLowerCase(); });
+    ids = ids.filter(function (x, i) { return ids.indexOf(x) === i; });
+    if (!ids.length) return;
+
+    fetch('/projects/' + PROJECT_ID + '/api/files/browser')
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        var files = (j && j.files) || [];
+        var hits = files.filter(function (f) { return ids.indexOf(String(f.id).toLowerCase()) !== -1; });
+        if (!hits.length) return;                 // an id that isn't a project doc
+        section.hidden = false;
+        hits.forEach(function (f) {
+          var a = document.createElement('a');
+          a.className = 'drawer-ref';
+          a.href = '/projects/' + PROJECT_ID + '?tab=documents&file=' + encodeURIComponent(f.id);
+          a.target = '_blank';
+          a.rel = 'noopener';
+          var icon = f.type === 'page_preview' ? 'fa-window-maximize' : 'fa-file-lines';
+          a.innerHTML = '<i class="fas ' + icon + '"></i>' +
+            '<span class="drawer-ref-name"></span>' +
+            '<span class="drawer-ref-type">' + escHtml(f.type || 'document') + '</span>';
+          a.querySelector('.drawer-ref-name').textContent = f.name || 'Document';
+          host.appendChild(a);
+        });
+      })
+      .catch(function () { /* the ticket still reads fine without this */ });
   }
 
   function openTicketDrawer(ticketId) {

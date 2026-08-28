@@ -2895,3 +2895,106 @@ input:checked + .turbo-slider + .turbo-label,
 [data-theme="light"] .page-preview-card { background: #fff; border-color: #e5e7eb; }
 [data-theme="light"] .page-preview-head { border-bottom-color: #e5e7eb; color: #64748b; }
 [data-theme="light"] .page-preview-loading { background: #fff; }
+
+/* ── Voice: recording panel + sent message ───────────────────────────────────
+   None of this had ANY css. The waveform "bars" were unstyled divs — full-width
+   blocks whose height was rewritten every animation frame, so the panel reflowed
+   60 times a second (the flicker), and the sent bubble had no layout at all, which
+   is why it rendered as a tall empty block with the text stranded at the bottom. */
+
+.audio-recording-indicator {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 10px 0 14px;
+    padding: 12px 14px;
+    max-width: 560px;
+    border-radius: 12px;
+    background: var(--card-bg, #161616);
+    border: 1px solid var(--border-color, #2a2a2a);
+}
+
+.audio-waveform {
+    display: flex;
+    align-items: center;      /* bars grow from the middle, not the top */
+    gap: 3px;
+    flex: 1;
+    height: 36px;             /* FIXED: the panel must not resize as bars move */
+    min-width: 0;
+    overflow: hidden;
+}
+
+.waveform-bar {
+    width: 3px;
+    flex: none;
+    border-radius: 2px;
+    background: var(--primary-color, #8b5cf6);
+    /* No transition: the height is already updated per animation frame from live
+       audio, and animating on top of that fights the data and smears it. */
+}
+
+.recording-time {
+    flex: none;
+    font-size: 12.5px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-secondary, #9ca3af);
+    min-width: 42px;
+    text-align: right;
+}
+
+.recording-cancel-btn,
+.recording-send-btn {
+    flex: none;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    border: 1px solid var(--border-color, #2a2a2a);
+    background: transparent;
+    color: var(--text-secondary, #9ca3af);
+    cursor: pointer;
+    font-size: 12px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.recording-cancel-btn:hover { color: #f87171; border-color: rgba(248, 113, 113, 0.4); }
+
+.live-transcription {
+    /* Bounded, with its own scroll: a growing transcript used to push the panel
+       taller on every word. */
+    max-height: 96px;
+    overflow-y: auto;
+}
+
+/* The sent voice message */
+.message-audio { display: block; }
+
+.message-audio-container {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: flex-start;
+    max-width: 100%;
+}
+
+.message-audio-header {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    opacity: 0.75;
+}
+
+.audio-transcription {
+    font-size: 14.5px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+[data-theme="light"] .audio-recording-indicator { background: #fff; border-color: #e5e7eb; }
+[data-theme="light"] .recording-time { color: #64748b; }
+[data-theme="light"] .recording-cancel-btn,
+[data-theme="light"] .recording-send-btn { border-color: #e5e7eb; color: #64748b; }
