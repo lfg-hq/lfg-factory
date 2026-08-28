@@ -4800,3 +4800,86 @@ body.ticket-modal-open {
 .env-panel.is-narrow .env-col-desc {
     display: none;
 }
+
+/* ── Saved page preview, in the Docs viewer ──────────────────────────────────
+   Preview by default with the markup one click away. The code view is styled
+   explicitly for BOTH themes: inheriting the viewer's prose colours put pale
+   grey text on a dark panel, which is unreadable. */
+.pv-doc { display: flex; flex-direction: column; gap: 10px; }
+
+.pv-doc-bar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: none;
+}
+
+.pv-doc-tab {
+    padding: 5px 12px;
+    font-size: 12.5px;
+    font-weight: 600;
+    border-radius: 7px;
+    border: 1px solid var(--border-color, #2a2a2a);
+    background: transparent;
+    color: var(--text-secondary, #9ca3af);
+    cursor: pointer;
+}
+.pv-doc-tab:hover { color: var(--text-color, #e2e8f0); }
+.pv-doc-tab.is-on {
+    background: var(--primary-color, #8b5cf6);
+    border-color: var(--primary-color, #8b5cf6);
+    color: #fff;
+}
+
+.pv-doc-open {
+    margin-left: auto;
+    padding: 5px 10px;
+    font-size: 12px;
+    border-radius: 7px;
+    border: 1px solid var(--border-color, #2a2a2a);
+    background: transparent;
+    color: var(--text-secondary, #9ca3af);
+    cursor: pointer;
+}
+.pv-doc-open:hover { color: var(--text-color, #e2e8f0); }
+
+.pv-doc-body { flex: 1; min-height: 0; }
+
+.pv-doc-frame {
+    width: 100%;
+    height: calc(100vh - 260px);
+    min-height: 420px;
+    border: 1px solid var(--border-color, #2a2a2a);
+    border-radius: 10px;
+    background: #fff;
+    display: block;
+}
+
+/* Dark by default and light-inverted below — the markup needs real contrast in
+   both, not the document body's prose colour. */
+.pv-doc-code {
+    margin: 0;
+    height: calc(100vh - 260px);
+    min-height: 420px;
+    overflow: auto;
+    padding: 14px 16px;
+    border: 1px solid var(--border-color, #2a2a2a);
+    border-radius: 10px;
+    background: #0f1117;
+    color: #d7dce5;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12.5px;
+    line-height: 1.6;
+    white-space: pre;
+    tab-size: 2;
+}
+
+[data-theme="light"] .pv-doc-code {
+    background: #f8fafc;
+    border-color: #e5e7eb;
+    color: #1e293b;
+}
+[data-theme="light"] .pv-doc-tab { border-color: #e5e7eb; color: #64748b; }
+[data-theme="light"] .pv-doc-tab:hover { color: #1e293b; }
+[data-theme="light"] .pv-doc-open { border-color: #e5e7eb; color: #64748b; }
+[data-theme="light"] .pv-doc-frame { border-color: #e5e7eb; }

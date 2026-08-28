@@ -7892,14 +7892,58 @@ document.addEventListener('DOMContentLoaded', function() {
                     // dumping several hundred lines of markup as text — this is the Docs
                     // view of the same thing the chat card shows.
                     if (data.type === 'page_preview') {
-                        const frame = document.createElement('iframe');
-                        // Sandboxed with no flags: model-authored markup gets no scripts,
-                        // no forms and no access to this origin.
-                        frame.setAttribute('sandbox', '');
-                        frame.srcdoc = content;
-                        frame.style.cssText = 'width:100%;height:calc(100vh - 220px);min-height:420px;border:1px solid var(--border-color,#2a2a2a);border-radius:10px;background:#fff;display:block;';
+                        // Preview by default, code on demand — the markup IS the document,
+                        // so it has to stay reachable, but nobody opens a saved page to
+                        // read 600 lines of CSS first.
+                        const wrap = document.createElement('div');
+                        wrap.className = 'pv-doc';
+                        wrap.innerHTML =
+                            '<div class="pv-doc-bar">' +
+                                '<button type="button" class="pv-doc-tab is-on" data-pvdoc="render">Preview</button>' +
+                                '<button type="button" class="pv-doc-tab" data-pvdoc="code">Code</button>' +
+                                '<button type="button" class="pv-doc-open" data-pvdoc="open" title="Open in a new tab">' +
+                                    '<i class="fas fa-arrow-up-right-from-square"></i></button>' +
+                            '</div>' +
+                            '<div class="pv-doc-body"></div>';
+                        const body = wrap.querySelector('.pv-doc-body');
+
+                        const showRender = () => {
+                            const frame = document.createElement('iframe');
+                            // Sandboxed with no flags: model-authored markup gets no
+                            // scripts, no forms and no access to this origin.
+                            frame.setAttribute('sandbox', '');
+                            frame.srcdoc = content;
+                            frame.className = 'pv-doc-frame';
+                            body.innerHTML = '';
+                            body.appendChild(frame);
+                        };
+                        const showCode = () => {
+                            const pre = document.createElement('pre');
+                            pre.className = 'pv-doc-code';
+                            pre.textContent = content;   // escaped by textContent
+                            body.innerHTML = '';
+                            body.appendChild(pre);
+                        };
+                        showRender();
+
+                        wrap.addEventListener('click', (e) => {
+                            const btn = e.target.closest('[data-pvdoc]');
+                            if (!btn) return;
+                            const mode = btn.getAttribute('data-pvdoc');
+                            if (mode === 'open') {
+                                // Blob URL, so the page opens on its own opaque origin
+                                // rather than inheriting this one.
+                                const blob = new Blob([content], { type: 'text/html' });
+                                window.open(URL.createObjectURL(blob), '_blank', 'noopener');
+                                return;
+                            }
+                            wrap.querySelectorAll('.pv-doc-tab').forEach((t) => t.classList.remove('is-on'));
+                            btn.classList.add('is-on');
+                            if (mode === 'code') showCode(); else showRender();
+                        });
+
                         viewerMarkdown.innerHTML = '';
-                        viewerMarkdown.appendChild(frame);
+                        viewerMarkdown.appendChild(wrap);
                         return;
                     }
 
