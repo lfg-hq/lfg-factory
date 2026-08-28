@@ -37,7 +37,12 @@ function el(tag = "div") {
 const messageContainer = el();
 let fetched = null;
 globalThis.messageContainer = messageContainer;
-globalThis.document = { createElement: el };
+// The renderer binds an Escape handler on document, so the stub needs one.
+const docHandlers = {};
+globalThis.document = {
+  createElement: el,
+  addEventListener: (t, f) => { (docHandlers[t] ||= []).push(f); },
+};
 globalThis.scrollToBottom = () => {};
 globalThis.window = { currentProjectId: "pub-1", open: () => {} };
 globalThis.extractProjectIdFromPath = () => "pub-1";
@@ -45,7 +50,9 @@ globalThis.Blob = class {};
 globalThis.URL = { createObjectURL: () => "blob:x" };
 globalThis.fetch = async (u) => { fetched = u; return { json: async () => ({ content: "<!doctype html><html><body>hi</body></html>" }) }; };
 
-const start = chat.indexOf("    function renderPagePreview(");
+// Start at syncPreviewChrome — renderPagePreview calls it, and slicing from the
+// renderer alone left it undefined.
+const start = chat.indexOf("    function syncPreviewChrome(");
 const end = chat.indexOf("    /**\n     * Render a question card inline in the chat.");
 const fn = new Function("messageContainer", "document", "scrollToBottom", "window", "extractProjectIdFromPath", "fetch", "Blob", "URL",
   chat.slice(start, end) + "; return renderPagePreview;")(
@@ -82,6 +89,25 @@ card._ls.click({ target: { closest: (s) => (s === "[data-pv]" ? { getAttribute: 
 if (card.classList.contains("is-full")) ok("expands to full screen");
 else fail("expand does nothing");
 
+// While expanded, the last header button must DISMISS the takeover rather than fold
+// the card away underneath it.
+const collapsedBefore = card.classList.contains("is-collapsed");
+card._ls.click({ target: { closest: (s) => (s === "[data-pv]" ? { getAttribute: () => "toggle" } : null) } });
+if (!card.classList.contains("is-full")) ok("the toggle leaves full screen");
+else fail("still full screen after dismiss");
+// Dismissing the takeover must not ALSO fold the card — whatever its collapsed state
+// was before, it should be the same after.
+if (card.classList.contains("is-collapsed") === collapsedBefore) ok("...without changing whether the card is folded");
+else fail("dismissing full screen also toggled the card's collapse");
+const chat2 = fs.readFileSync("public/js/chat.js", "utf8");
+if (/fa-xmark/.test(chat2) && /syncPreviewChrome/.test(chat2)) ok("the chevron becomes an × while expanded");
+else fail("no icon swap for full screen");
+// Prove Escape works by firing it, rather than grepping for the handler.
+card.classList.add("is-full");
+(docHandlers.keydown || []).forEach((f) => f({ key: "Escape" }));
+if (!card.classList.contains("is-full")) ok("Escape also leaves full screen");
+else fail("Escape does not dismiss");
+
 // The wiring around it.
 // The preview is a SAVED DOCUMENT, so it carries a file_id — and the generic
 // document-save branch claims any notification with one and returns. The card only
@@ -105,10 +131,11 @@ if (!/_wsBroadcast\(/.test(previewTool)) ok("the tool does NOT also broadcast (n
 else fail("tool still broadcasts — two cards, or one on a dead channel");
 if (/referenceForTicket/.test(tools)) ok("the tool returns a reference for the ticket");
 else fail("no ticket reference returned");
-const prompt = fs.readFileSync("src/ai/prompts/product.ts", "utf8");
-if (/previewPage\(\{ projectId, userId, name, html \}\)/.test(prompt)) ok("the landing flow is told to use it");
-else fail("prompt never calls previewPage");
-if (/referenceForTicket.*verbatim/s.test(prompt)) ok("the ticket carries the approved design");
+// The landing-page workflow moved out of product.ts into a loadable skill.
+const skill = fs.readFileSync("src/ai/skills/landing-page.md", "utf8");
+if (/previewPage\(\{ projectId, userId, name, html \}\)/.test(skill)) ok("the landing skill is told to use it");
+else fail("skill never calls previewPage");
+if (/referenceForTicket[\s\S]{0,120}verbatim/.test(skill)) ok("the ticket carries the approved design");
 else fail("ticket wouldn't reference the preview");
 
 // A refresh must bring the card back: it can't live only in the socket message.

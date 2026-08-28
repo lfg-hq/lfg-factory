@@ -2598,6 +2598,29 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     /**
+     * The header's last button is a chevron (collapse) normally, and an × (dismiss the
+     * full-screen takeover) while expanded — a chevron there reads as "fold away", which
+     * is not what you want from a full-screen page.
+     */
+    function syncPreviewChrome(card) {
+        const full = card.classList.contains('is-full');
+        const toggle = card.querySelector('[data-pv="toggle"]');
+        const expand = card.querySelector('[data-pv="expand"]');
+        if (toggle) {
+            toggle.innerHTML = full
+                ? '<i class="fas fa-xmark"></i>'
+                : '<i class="fas fa-chevron-down"></i>';
+            toggle.title = full ? 'Close full screen' : (card.classList.contains('is-collapsed') ? 'Expand' : 'Collapse');
+        }
+        if (expand) {
+            expand.innerHTML = full
+                ? '<i class="fas fa-down-left-and-up-right-to-center"></i>'
+                : '<i class="fas fa-up-right-and-down-left-from-center"></i>';
+            expand.title = full ? 'Exit full screen' : 'Full screen';
+        }
+    }
+
+    /**
      * A real, rendered preview of a page — inline, expandable, in the transcript.
      *
      * A wireframe tells you the shape; this tells you what it will FEEL like, which is
@@ -2647,15 +2670,30 @@ document.addEventListener('DOMContentLoaded', () => {
             })
             .catch(() => { body.innerHTML = '<div class="page-preview-loading">Could not load this preview.</div>'; });
 
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && card.classList.contains('is-full')) {
+                card.classList.remove('is-full');
+                syncPreviewChrome(card);
+            }
+        });
+
         card.addEventListener('click', (e) => {
             const btn = e.target.closest('[data-pv]');
             if (!btn) return;
             const act = btn.getAttribute('data-pv');
             if (act === 'toggle') {
+                // Full screen: this button MEANS "dismiss" — leave the takeover, don't
+                // fold the card away underneath it.
+                if (card.classList.contains('is-full')) {
+                    card.classList.remove('is-full');
+                    syncPreviewChrome(card);
+                    return;
+                }
                 const collapsed = card.classList.toggle('is-collapsed');
                 btn.title = collapsed ? 'Expand' : 'Collapse';
             } else if (act === 'expand') {
                 card.classList.toggle('is-full');
+                syncPreviewChrome(card);
             } else if (act === 'open') {
                 // A blob URL rather than document.write, so the page opens on its own
                 // opaque origin instead of inheriting this one.
