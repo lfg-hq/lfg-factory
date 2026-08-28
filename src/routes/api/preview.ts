@@ -9,7 +9,8 @@
 import { Hono } from "hono";
 import { eq, and, asc } from "drizzle-orm";
 import { requireAuth } from "../../auth/middleware.ts";
-import { getProjectAccess } from "../../auth/project-access.ts";
+import { getProjectAccess, requirePermission } from "../../auth/project-access.ts";
+import { execOnWorkspace } from "../../services/mags.ts";
 import { db } from "../../config/db.ts";
 import { projectEnvironments } from "../../db/schema/project-environments.ts";
 import { projects, projectEnvironmentVariables } from "../../db/schema/projects.ts";
@@ -270,6 +271,58 @@ previewApi.get("/:projectId/preview/app-logs", async (c) => {
 });
 
 // Reset a provisioned database (wipe its data → fresh cluster + reseed on restart).
+/**
+ * POST /:projectId/preview/exec — run one shell command in the preview sandbox.
+ *
+ * When the app won't boot, the answer is usually a question you can only ask the box:
+ * how full is the disk, what's in .next, is the port taken. Without this you have to
+ * find the workspace id and reach for a terminal, which is a wall in the middle of an
+ * otherwise self-contained loop.
+ *
+ * Deliberately a command RUNNER, not a PTY: one command, one result. No interactive
+ * programs, but it covers df/du/rm/ls/cat/ps, which is what the failures actually need.
+ */
+previewApi.post("/:projectId/preview/exec", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId")!, user.id);
+  if (!access) return c.json({ error: "Not found" }, 404);
+  // Same bar as editing the project's files — this is a shell in its sandbox.
+  try { requirePermission(access, "canEditFiles"); }
+  catch { return c.json({ error: "You don't have permission to run commands on this project" }, 403); }
+
+  const body = await c.req.json().catch(() => ({} as { command?: string; cwd?: string }));
+  const command = typeof body.command === "string" ? body.command.trim() : "";
+  if (!command) return c.json({ error: "No command given" }, 400);
+  if (command.length > 4000) return c.json({ error: "Command too long" }, 400);
+
+  const [env] = await db
+    .select({ workspaceId: projectEnvironments.workspaceId })
+    .from(projectEnvironments)
+    .where(eq(projectEnvironments.projectId, access.project.id))
+    .limit(1);
+  if (!env?.workspaceId) return c.json({ error: "This project has no sandbox yet — run the preview once first." }, 400);
+
+  const cwd = typeof body.cwd === "string" && body.cwd.trim() ? body.cwd.trim() : "/data/project";
+  // base64 so quoting/newlines survive the exec channel intact.
+  const script = `cd ${cwd} 2>/dev/null || cd /data 2>/dev/null || true\n${command}`;
+  const b64 = Buffer.from(script).toString("base64");
+
+  try {
+    const r = await execOnWorkspace(env.workspaceId, `echo ${b64} | base64 -d | sh`, { timeout: 60_000 });
+    const out = String(r.output ?? "");
+    return c.json({
+      ok: true,
+      exitCode: r.exitCode ?? 0,
+      // Cap the tail: a stray `cat` of a bundle shouldn't wedge the panel.
+      output: out.length > 40_000 ? out.slice(-40_000) : out,
+      truncated: out.length > 40_000,
+      cwd,
+    });
+  } catch (e) {
+    return c.json({ ok: false, error: (e as Error).message?.slice(0, 400) || "Command failed" }, 502);
+  }
+});
+
 previewApi.post("/:projectId/preview/reset-db", async (c) => {
   const user = c.get("user");
   const access = await getProjectAccess(c.req.param("projectId")!, user.id);

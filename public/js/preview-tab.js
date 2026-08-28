@@ -251,6 +251,10 @@
       { key: "logs", label: "Setup", ptab: "logs" },
       { key: "steps", label: "Steps", ptab: "steps" },
       { key: "app", label: "App", alog: "app" },
+      // A shell in the sandbox. When the app won't boot ("no space left on device"),
+      // the next question is always one command away — and used to mean finding the
+      // workspace id and opening a terminal.
+      { key: "shell", label: "Shell", ptab: "shell", shell: true },
     ];
     const cap = (x) => (x || "db").charAt(0).toUpperCase() + (x || "db").slice(1);
     const svcs = (current && current.services) || [];
@@ -286,19 +290,12 @@
         + `font-weight:${on ? "600" : "400"};position:relative;z-index:${on ? "1" : "0"};">${esc(x.label)}</button>`;
     }).join("");
 
-    // Actions sit apart from the switches, and only appear where they apply: you can
-    // refresh a log, and you can reset a database — but "Reset DB" has no business
-    // shouting in red while you're reading the app's output.
-    const onLog = progressTab === "applogs";
-    const refresh = onLog
-      ? `<button data-action="refreshapplog" title="Refresh this log" style="flex:none;padding:5px 9px;font-size:12px;border-radius:6px;cursor:pointer;background:transparent;color:var(--text-secondary,#9ca3af);border:1px solid var(--border-color,#333);"><i class="fas fa-rotate-right"></i></button>`
-      : "";
-    const reset = (onLog && selectedIsDb())
-      ? `<button data-action="resetdb" title="Wipe this database + reseed (fixes a broken/foreign DB)" style="flex:none;padding:5px 11px;font-size:12px;border-radius:6px;cursor:pointer;background:transparent;color:#f87171;border:1px solid rgba(248,113,113,.45);display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-rotate-left"></i><span>Reset DB</span></button>`
-      : "";
-    const actions = (refresh || reset)
-      ? `<span style="display:inline-flex;gap:6px;margin-left:8px;">${reset}${refresh}</span>`
-      : "";
+    // Refresh is ALWAYS here, in the same place. It used to appear and disappear with
+    // the selected tab, and Reset DB used to appear beside it — so the whole segmented
+    // control shifted sideways as you moved between tabs. Reset DB now lives on the
+    // LEFT (see the overlay header), where it can come and go without moving anything.
+    const refresh = `<button data-action="refreshapplog" title="Refresh this log" style="flex:none;padding:5px 9px;font-size:12px;border-radius:6px;cursor:pointer;background:transparent;color:var(--text-secondary,#9ca3af);border:1px solid var(--border-color,#333);"><i class="fas fa-rotate-right"></i></button>`;
+    const actions = `<span style="display:inline-flex;gap:6px;margin-left:8px;">${refresh}</span>`;
     // One line, always: on a narrow panel the strip scrolls sideways rather than
     // wrapping into a second row — which is what made this look like two tab bars.
     return `<span style="display:inline-flex;min-width:0;overflow-x:auto;scrollbar-width:none;">${strip}</span>${actions}`;
@@ -306,8 +303,56 @@
   function segButtons() { return `<div data-ptab-header style="display:flex;align-items:center;min-width:0;flex:0 1 auto;">${segInner()}</div>`; }
   function activePane() {
     if (progressTab === "steps") return stepsPanel(true);
+    if (progressTab === "shell") return shellPanel();
     if (progressTab === "applogs") return appLogPanel();
     return logPanel(true);
+  }
+
+  // Command runner, not a terminal emulator: one command, one result. That covers the
+  // df/du/rm/ls questions a stuck sandbox actually raises.
+  let shellHistory = [];
+  let shellCwd = "/data/project";
+  function shellPanel() {
+    return `<div style="flex:1;min-height:0;display:flex;flex-direction:column;gap:8px;">
+      <pre id="pv-shell-out" style="flex:1;min-height:0;margin:0;overflow:auto;text-align:left;background:#0f1117;border:1px solid var(--border-color,#2a2a2a);border-radius:8px;padding:12px 14px;font-size:12px;line-height:1.55;color:#d7dce5;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${esc(shellHistory.join("\n")) || "Runs in the preview sandbox at " + esc(shellCwd) + ".\nTry: df -h /data   ·   du -sh /data/project/*   ·   ls -la"}</pre>
+      <div style="display:flex;gap:6px;align-items:center;flex:none;">
+        <span style="font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--text-secondary,#9ca3af);flex:none;">$</span>
+        <input id="pv-shell-in" spellcheck="false" placeholder="df -h /data"
+          style="flex:1;min-width:0;height:34px;padding:0 10px;border-radius:8px;border:1px solid var(--border-color,#2a2a2a);background:var(--background-surface,#141414);color:var(--text-color,#e2e8f0);font-size:12.5px;font-family:ui-monospace,Menlo,monospace;" />
+        <button data-action="shellrun" style="height:34px;padding:0 12px;border-radius:8px;border:1px solid var(--border-color,#333);background:var(--primary-color,#8b5cf6);color:#fff;font-size:12.5px;cursor:pointer;flex:none;">Run</button>
+      </div>
+    </div>`;
+  }
+
+  function runShell() {
+    const input = $("pv-shell-in");
+    const out = $("pv-shell-out");
+    if (!input || !out) return;
+    const cmd = (input.value || "").trim();
+    if (!cmd) return;
+    input.value = "";
+    shellHistory.push("$ " + cmd);
+    out.textContent = shellHistory.join("\n");
+    out.scrollTop = out.scrollHeight;
+
+    api("/exec", { method: "POST", body: JSON.stringify({ command: cmd, cwd: shellCwd }) })
+      .then((r) => r.json())
+      .then((j) => {
+        if (j.error) shellHistory.push(j.error);
+        else {
+          if (j.output) shellHistory.push(j.output.replace(/\s+$/, ""));
+          if (j.truncated) shellHistory.push("… (output truncated)");
+          if (j.exitCode) shellHistory.push("[exit " + j.exitCode + "]");
+        }
+        // Keep the buffer bounded so a chatty command can't grow it forever.
+        if (shellHistory.length > 400) shellHistory = shellHistory.slice(-400);
+        out.textContent = shellHistory.join("\n");
+        out.scrollTop = out.scrollHeight;
+      })
+      .catch((e) => {
+        shellHistory.push("Could not run that: " + (e.message || "network error"));
+        out.textContent = shellHistory.join("\n");
+      });
   }
 
   // App logs = the app's own runtime output + each provisioned DB's docker log, chosen
@@ -333,6 +378,7 @@
     if (sig !== lastSegSig) {
       lastSegSig = sig;
       document.querySelectorAll("[data-ptab-header]").forEach((h) => { h.innerHTML = segInner(); });
+      syncLeftActions();
     }
     const el = $("app-log");
     if (el) { const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80; el.textContent = appLogBody(); if (!keepScroll || atBottom) el.scrollTop = el.scrollHeight; }
@@ -368,8 +414,19 @@
   }
   function startAppPoll() { stopAppPoll(); appLogTimer = setInterval(loadAppLog, 4000); }
   function stopAppPoll() { if (appLogTimer) { clearInterval(appLogTimer); appLogTimer = null; } }
+  /** Reset DB shows only on a database tab — on the LEFT, so nothing else moves. */
+  function syncLeftActions() {
+    const host = document.getElementById("pv-left-actions");
+    if (!host) return;
+    const show = progressTab === "applogs" && selectedIsDb();
+    host.innerHTML = show
+      ? `<button data-action="resetdb" title="Wipe this database + reseed (fixes a broken/foreign DB)" style="flex:none;padding:4px 10px;font-size:11.5px;border-radius:6px;cursor:pointer;background:transparent;color:#f87171;border:1px solid rgba(248,113,113,.45);display:inline-flex;align-items:center;gap:6px;"><i class="fas fa-rotate-left"></i><span>Reset DB</span></button>`
+      : "";
+  }
+
   function refreshPanes() {
     document.querySelectorAll("[data-ptab-header]").forEach((h) => { h.innerHTML = segInner(); });
+    syncLeftActions();
     document.querySelectorAll("[data-pane]").forEach((p) => { p.innerHTML = activePane(); });
     if (progressTab === "logs") scrollLog();
   }
@@ -819,12 +876,16 @@
     overlay.style.cssText = "position:absolute;inset:0;padding:16px 20px;background:var(--bg-color,#0f0f0f);display:flex;flex-direction:column;gap:10px;z-index:5;";
     overlay.innerHTML = `
       <div style="display:flex;align-items:center;gap:12px;">
-        <div style="flex:1;font-size:12px;color:var(--text-secondary,#9ca3af);">Preview</div>
+        <div style="flex:1;min-width:0;display:flex;align-items:center;gap:10px;font-size:12px;color:var(--text-secondary,#9ca3af);">
+          <span style="flex:none;">Preview</span>
+          <span id="pv-left-actions" style="display:inline-flex;gap:6px;"></span>
+        </div>
         ${segButtons()}
         <button data-action="togglelog" title="Close" style="flex:none;padding:5px 9px;border-radius:6px;cursor:pointer;font-size:12px;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);"><i class="fas fa-times"></i></button>
       </div>
       <div data-pane style="flex:1;min-height:0;display:flex;flex-direction:column;">${activePane()}</div>`;
     body.appendChild(overlay);
+    syncLeftActions();
     if (progressTab === "applogs") { loadAppLog(); startAppPoll(); }
     else if (progressTab === "logs") scrollLog();
   }
@@ -1098,6 +1159,13 @@
       progressTab = pt.getAttribute("data-ptab");
       refreshPanes();
       if (progressTab === "applogs") { loadAppLog(); startAppPoll(); } else { stopAppPoll(); }
+      if (progressTab === "shell") {
+        const inp = $("pv-shell-in");
+        if (inp) {
+          inp.focus();
+          inp.addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); runShell(); } });
+        }
+      }
       return;
     }
     const b = e.target.closest("[data-action]");
@@ -1115,6 +1183,7 @@
     else if (action === "rundefault") { branchId = "default"; doRestart(); } // back to main (fast path)
     else if (action === "stop") doStop();
     else if (action === "togglelog") toggleLog();
+    else if (action === "shellrun") runShell();
     else if (action === "refreshapplog") loadAppLog();
     else if (action === "resetdb") doResetDb();
     else if (action.indexOf("alog:") === 0) {
@@ -1125,7 +1194,7 @@
       const wasElsewhere = progressTab !== "applogs";
       progressTab = "applogs";
       if (wasElsewhere) { refreshPanes(); startAppPoll(); }
-      else { document.querySelectorAll("[data-ptab-header]").forEach((h) => { h.innerHTML = segInner(); }); }
+      else { document.querySelectorAll("[data-ptab-header]").forEach((h) => { h.innerHTML = segInner(); }); syncLeftActions(); }
       if (appLogView === "app" || appLogView.indexOf("svc:") === 0) loadAppLog(); else paintAppLog(false);
     }
     else if (action === "copylog") copyLog();
