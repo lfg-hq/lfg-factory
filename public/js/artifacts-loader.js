@@ -7888,6 +7888,21 @@ document.addEventListener('DOMContentLoaded', function() {
                         return /^#{1,6}\s|^\*\s|^\-\s|^\d+\.\s|```|^\|.*\|$|\[.*\]\(.*\)|\*\*.*\*\*|\*.*\*/m.test(content);
                     };
                     
+                    // A saved page preview is a WHOLE HTML DOCUMENT. Render it, rather than
+                    // dumping several hundred lines of markup as text — this is the Docs
+                    // view of the same thing the chat card shows.
+                    if (data.type === 'page_preview') {
+                        const frame = document.createElement('iframe');
+                        // Sandboxed with no flags: model-authored markup gets no scripts,
+                        // no forms and no access to this origin.
+                        frame.setAttribute('sandbox', '');
+                        frame.srcdoc = content;
+                        frame.style.cssText = 'width:100%;height:calc(100vh - 220px);min-height:420px;border:1px solid var(--border-color,#2a2a2a);border-radius:10px;background:#fff;display:block;';
+                        viewerMarkdown.innerHTML = '';
+                        viewerMarkdown.appendChild(frame);
+                        return;
+                    }
+
                     // Always render as markdown if it contains markdown patterns or is a known markdown type
                     const knownMarkdownTypes = ['prd', 'implementation', 'design', 'analysis', 'documentation', 'readme'];
                     if (knownMarkdownTypes.includes(data.type) || isMarkdownContent(content)) {
