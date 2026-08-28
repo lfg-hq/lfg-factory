@@ -13,6 +13,7 @@ import { getProjectAccess, requirePermission } from "../../auth/project-access.t
 import { nextTicketKey } from "../../utils/ticket-keys.ts";
 import { notify } from "../../services/notify.ts";
 import { addLog as addTicketLog } from "../../services/ticket-logs.ts";
+import { isChatTurnActive, decodeQuestionMeta } from "../../services/ticket-chat-turn.ts";
 import { modelSelections } from "../../db/schema/chat.ts";
 import { llmApiKeys } from "../../db/schema/users.ts";
 import type { auth } from "../../auth/index.ts";
@@ -413,14 +414,42 @@ ticketsApi.get("/:projectId/tickets/:ticketId/logs", async (c) => {
     .orderBy(desc(ticketLogs.createdAt))
     .limit(500);
 
-  return c.json(logs.reverse().map((l) => ({
-    id: l.id,
-    type: l.logType,
-    message: l.command,
-    explanation: l.explanation,
-    output: l.output,        // paired tool_result output (command+output render as one row)
-    createdAt: l.createdAt,
-  })));
+  return c.json(logs.reverse().map((l) => {
+    // A question row carries its clickable options (and whether it blocks) as JSON in
+    // `explanation` — unpack it so a reload renders the same ACTION REQUIRED card the
+    // live WS event did, buttons included.
+    const q = l.logType === "question" ? decodeQuestionMeta(l.explanation) : null;
+    return {
+      id: l.id,
+      type: l.logType,
+      message: l.command,
+      explanation: q ? null : l.explanation,
+      output: l.output,        // paired tool_result output (command+output render as one row)
+      createdAt: l.createdAt,
+      ...(q ? { options: q.options, blocking: q.blocking } : {}),
+    };
+  }));
+});
+
+// ── GET /:projectId/tickets/:ticketId/chat/status ───────────────────
+// Is a chat turn (or a build) running right now? The chat input uses this on open
+// and after a reload to decide between a send arrow and a red Stop button — the
+// live transitions arrive over WS as `ticket_chat_state`.
+ticketsApi.get("/:projectId/tickets/:ticketId/chat/status", async (c) => {
+  const user = c.get("user");
+  const { projectId, ticketId } = c.req.param();
+  const access = await getProjectAccess(projectId, user.id);
+  if (!access) return c.json({ error: "Not found" }, 404);
+
+  const [t] = await db
+    .select({ queueStatus: projectTickets.queueStatus })
+    .from(projectTickets)
+    .where(and(eq(projectTickets.id, ticketId!), eq(projectTickets.projectId, access.project.id)))
+    .limit(1);
+  if (!t) return c.json({ error: "Ticket not found" }, 404);
+
+  const building = /^(queued|executing|building|running)$/i.test(t.queueStatus ?? "");
+  return c.json({ busy: isChatTurnActive(ticketId!) || building, building });
 });
 
 // ── GET /:projectId/tickets/:ticketId/tasks ─────────────────────────
@@ -581,8 +610,25 @@ ticketsApi.post("/:projectId/tickets/:ticketId/chat", async (c) => {
   const body = await c.req.json<{ message: string }>();
   if (!body.message?.trim()) return c.json({ error: "message required" }, 400);
 
+  // ONE TURN AT A TIME. A second message while the agent is working used to start a
+  // SECOND agent in the same sandbox on the same branch — two runs interleaving edits
+  // and commits for one request. The client stops the run (red Stop button) and the
+  // message is sent after; nothing is silently dropped.
+  const [busyTicket] = await db
+    .select({ queueStatus: projectTickets.queueStatus })
+    .from(projectTickets)
+    .where(eq(projectTickets.id, ticketId!))
+    .limit(1);
+  const buildRunning = /^(queued|executing|building|running)$/i.test(busyTicket?.queueStatus ?? "");
+  if (isChatTurnActive(ticketId!) || buildRunning) {
+    return c.json({
+      error: "The agent is still working on this ticket. Stop it to send a new message.",
+      busy: true,
+    }, 409);
+  }
+
   // Check if the agent is waiting for input (latest log is a "question")
-  const [latestLog] = await db.select({ logType: ticketLogs.logType })
+  const [latestLog] = await db.select({ logType: ticketLogs.logType, explanation: ticketLogs.explanation })
     .from(ticketLogs)
     .where(eq(ticketLogs.ticketId, ticketId!))
     .orderBy(desc(ticketLogs.createdAt))
@@ -595,7 +641,11 @@ ticketsApi.post("/:projectId/tickets/:ticketId/chat", async (c) => {
     command: body.message,
   });
 
-  if (latestLog?.logType === "question") {
+  // Only a BLOCKING question (the askUser tool / request-input long-poll) parks an
+  // agent waiting for this answer. A question the agent asked at the END of a chat
+  // turn has no poller — routing its answer into the notes marker would swallow the
+  // message and the user would get silence.
+  if (latestLog?.logType === "question" && decodeQuestionMeta(latestLog.explanation).blocking) {
     // Agent is waiting for input — write INPUT_RESPONSE marker to notes
     // so the /request-input/ long-poll picks it up
     const marker = `INPUT_RESPONSE:${ticketId}:${body.message}`;

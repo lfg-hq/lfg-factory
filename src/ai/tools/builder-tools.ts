@@ -12,6 +12,7 @@ import { db } from "../../config/db.ts";
 import { projectTickets, projectTodoLists } from "../../db/schema/tickets.ts";
 import { emit } from "../../events/bus.ts";
 import { addLog } from "../../services/ticket-logs.ts";
+import { encodeQuestionMeta } from "../../services/ticket-chat-turn.ts";
 import { eq } from "drizzle-orm";
 import { matchKnowledge } from "../knowledge/matcher.ts";
 
@@ -384,9 +385,11 @@ export function createBuilderTools(ctx: BuilderToolContext) {
           ? `${question}\n\nContext: ${context}`
           : question;
 
-        await addLog(ctx.ticketId, message, "question", ctx.userId, {
-          options: suggestions,
-        });
+        // BLOCKING: this tool parks the agent on the long-poll below, so the user's
+        // next chat message is routed to it as the answer (see the chat route).
+        await addLog(ctx.ticketId, message, "question", ctx.userId,
+          { options: suggestions },
+          { explanation: encodeQuestionMeta({ blocking: true, options: suggestions }) });
 
         // Long-poll projectTickets.notes for INPUT_RESPONSE marker
         const marker = `INPUT_RESPONSE:${ctx.ticketId}:`;

@@ -60,8 +60,13 @@ export interface TurnOutcome {
   text: string;
 }
 
+// Detection is deliberately loose: the marker can arrive inside a JSONL payload
+// where the newlines are escaped (`...done.\nLFG_TURN: answer"`), so anchoring to
+// line starts would miss it. Stripping stays line-based so the reply reads clean.
+const MODE_ANY = /LFG[_ ]?TURN\s*[:=]\s*[*`_\s]*(answer|question|change)\b/gi;
+const OPTIONS_ANY = /LFG[_ ]?OPTIONS\s*[:=]\s*(\[[^\]]*\]|[^\n\\]+)/gi;
 const MODE_LINE = /^[\s>*_`-]*LFG[_ ]?TURN\s*[:=]\s*\**\s*(answer|question|change)\b.*$/gim;
-const OPTIONS_LINE = /^[\s>*_`-]*LFG[_ ]?OPTIONS\s*[:=]\s*(.+)$/gim;
+const OPTIONS_LINE = /^[\s>*_`-]*LFG[_ ]?OPTIONS\s*[:=]\s*.*$/gim;
 
 /** Parse (and strip) the LFG_TURN / LFG_OPTIONS markers from an agent message. */
 export function parseTurnMarkers(text: string | undefined | null): TurnOutcome {
@@ -70,13 +75,19 @@ export function parseTurnMarkers(text: string | undefined | null): TurnOutcome {
   let options: string[] = [];
 
   // Last marker wins — the agent may restate it while thinking out loud.
-  for (const m of raw.matchAll(MODE_LINE)) mode = m[1]!.toLowerCase() as TurnMode;
-  for (const m of raw.matchAll(OPTIONS_LINE)) {
+  for (const m of raw.matchAll(MODE_ANY)) mode = m[1]!.toLowerCase() as TurnMode;
+  for (const m of raw.matchAll(OPTIONS_ANY)) {
     const parsed = parseOptions(m[1]!);
     if (parsed.length) options = parsed;
   }
 
-  const cleaned = raw.replace(MODE_LINE, "").replace(OPTIONS_LINE, "").replace(/\n{3,}/g, "\n\n").trim();
+  const cleaned = raw
+    .replace(MODE_LINE, "")
+    .replace(OPTIONS_LINE, "")
+    .replace(MODE_ANY, "")
+    .replace(OPTIONS_ANY, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
   return { mode, options, text: cleaned };
 }
 
@@ -109,10 +120,14 @@ interface LiveTurn {
 const live = new Map<string, LiveTurn>();
 /** Per-ticket promise chain — a queued (orchestrator) message waits, never races. */
 const chains = new Map<string, Promise<unknown>>();
+/** Turns accepted but not yet started. Counted SYNCHRONOUSLY on the way in, so a
+ *  double-click can't slip a second message through the window between "message
+ *  accepted" and "agent actually running". */
+const pending = new Map<string, number>();
 
-/** Is a chat turn running for this ticket right now? */
+/** Is a chat turn running (or about to run) for this ticket? */
 export function isChatTurnActive(ticketId: string): boolean {
-  return live.has(ticketId);
+  return live.has(ticketId) || (pending.get(ticketId) ?? 0) > 0;
 }
 
 /**
@@ -121,6 +136,7 @@ export function isChatTurnActive(ticketId: string): boolean {
  * message up front, so in practice only the orchestrator ever queues here.
  */
 export async function runChatTurn<T>(ticketId: string, fn: () => Promise<T>): Promise<T> {
+  pending.set(ticketId, (pending.get(ticketId) ?? 0) + 1);
   const prior = chains.get(ticketId) ?? Promise.resolve();
   const run = prior.catch(() => {}).then(async () => {
     live.set(ticketId, { startedAt: Date.now(), mode: null, options: [], repliedInStream: false });
@@ -128,6 +144,8 @@ export async function runChatTurn<T>(ticketId: string, fn: () => Promise<T>): Pr
       return await fn();
     } finally {
       live.delete(ticketId);
+      const left = (pending.get(ticketId) ?? 1) - 1;
+      if (left > 0) pending.set(ticketId, left); else pending.delete(ticketId);
       if (chains.get(ticketId) === run) chains.delete(ticketId);
     }
   });
@@ -146,6 +164,16 @@ export function noteAgentReply(ticketId: string, outcome: TurnOutcome): void {
   if (outcome.mode) t.mode = outcome.mode;
   if (outcome.options.length) t.options = outcome.options;
   if (outcome.text) t.repliedInStream = true;
+}
+
+/**
+ * Record just the mode seen in streamed output that ISN'T the agent's reply row
+ * (Pi's `--mode json` stream logs its assistant text as plain progress labels, so
+ * the marker can go past here without a reply row existing).
+ */
+export function noteAgentMode(ticketId: string, mode: TurnMode | null): void {
+  const t = live.get(ticketId);
+  if (t && mode) t.mode = mode;
 }
 
 /** What the stream told us about the in-flight turn (null when none is running). */
@@ -191,12 +219,12 @@ export async function resolveTurnOutcome(params: {
   ticketId: string;
   workspaceId: string;
   projectDir: string;
-  /** Raw final text from the agent, when the executor has it (the Pi tail). */
-  tail?: string;
+  /** The agent's final message, when this path has it (Pi's extracted summary). */
+  replyText?: string;
 }): Promise<{ mode: TurnMode; reply: TurnOutcome; revertedEdits: boolean; repliedInStream: boolean }> {
-  const { ticketId, workspaceId, projectDir, tail } = params;
+  const { ticketId, workspaceId, projectDir, replyText } = params;
   const observed = observedTurn(ticketId);
-  const fromTail = parseTurnMarkers(tail);
+  const fromTail = parseTurnMarkers(replyText);
   const mode = observed?.mode ?? fromTail.mode;
   const options = (observed?.options?.length ? observed.options : fromTail.options) ?? [];
   const dirty = await workingTreeDirty(workspaceId, projectDir);

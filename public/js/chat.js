@@ -1115,7 +1115,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             // "Chat with ticket" live updates (native left panel).
-            if (data.type === 'ticket_log' || data.type === 'ticket_log_output' || data.type === 'ticket_status') {
+            if (data.type === 'ticket_log' || data.type === 'ticket_log_output' || data.type === 'ticket_status' || data.type === 'ticket_chat_state') {
                 if (window.TicketAgentChat && window.TicketAgentChat.onWs) window.TicketAgentChat.onWs(data);
                 // A build state change → refresh the Task List so its row indicator updates
                 // live (spinner on/off), even when the ticket panel is closed.

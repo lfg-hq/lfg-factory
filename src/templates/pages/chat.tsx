@@ -49,6 +49,12 @@ export function ChatPage({
     #ta-log .markdown-content p { margin:.3em 0; }
     #ta-log .ta-agent-fail { border-left-color:#f87171; }
     #ta-log .ta-error { align-self:flex-start; max-width:92%; background:rgba(248,113,113,.08); border:1px solid rgba(248,113,113,.28); color:#fca5a5; padding:8px 12px; border-radius:8px; font-size:13px; line-height:1.5; }
+    #ta-log .ta-question { align-self:flex-start; max-width:92%; background:rgba(245,158,11,.08); border:1px solid rgba(245,158,11,.30); border-left:3px solid #f59e0b; padding:10px 13px; border-radius:10px; font-size:13.5px; line-height:1.55; }
+    #ta-log .ta-question-label { font-size:10.5px; text-transform:uppercase; letter-spacing:.5px; color:#f59e0b; font-weight:700; margin-bottom:4px; display:flex; align-items:center; gap:6px; }
+    #ta-log .ta-qopts { display:flex; flex-wrap:wrap; gap:6px; margin-top:9px; }
+    #ta-log .ta-qopt { background:rgba(245,158,11,.12); border:1px solid rgba(245,158,11,.35); color:var(--text-color,#e2e8f0); font-size:12.5px; padding:5px 11px; border-radius:999px; cursor:pointer; }
+    #ta-log .ta-qopt:hover { background:rgba(245,158,11,.22); }
+    #ta-log .ta-qopt:disabled { opacity:.45; cursor:default; }
     #ta-log .ta-cmdrow { align-self:stretch; }
     #ta-log .ta-cmd-header { display:flex; align-items:center; gap:8px; cursor:pointer; font-size:12.5px; color:var(--text-color,#cbd5e1); padding:3px 4px; border-radius:6px; }
     #ta-log .ta-cmd-header:hover { background:var(--border-color,#1f1f1f); }

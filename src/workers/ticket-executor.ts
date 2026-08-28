@@ -149,6 +149,12 @@ import { getBuildProfile, detectProjectType } from "../services/instant-profiles
 import { generateText, stepCountIs } from "ai";
 import { resolveUserModel } from "../services/app-profile.ts";
 import { addLog } from "../services/ticket-logs.ts";
+import {
+  runChatTurn,
+  resolveTurnOutcome,
+  encodeQuestionMeta,
+  TICKET_CHAT_MODE_CONTRACT,
+} from "../services/ticket-chat-turn.ts";
 import { generateTicketDemo } from "../services/ticket-demo.ts";
 import { matchKnowledgeForPrompt } from "../ai/knowledge/matcher.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
@@ -787,6 +793,21 @@ export async function requestTicketStop(ticketId: string, projectId?: string): P
   emit({ type: "ticket.execution_finished", ticketId, status: "failed", exitCode: 130, projectId });
 }
 
+/** Tell the browser whether a chat turn is running, so the send button can be a Stop
+ *  button for exactly as long as the agent is actually busy (a build's spinner rides
+ *  on queueStatus; a chat turn never touches it). */
+async function broadcastChatState(ticketId: string, busy: boolean): Promise<void> {
+  try {
+    const [row] = await db
+      .select({ owner: projects.ownerId })
+      .from(projectTickets)
+      .innerJoin(projects, eq(projects.id, projectTickets.projectId))
+      .where(eq(projectTickets.id, ticketId))
+      .limit(1);
+    if (row?.owner) broadcastToUser(row.owner, { type: "ticket_chat_state", ticketId, busy });
+  } catch { /* the turn still runs fine without the indicator */ }
+}
+
 /** If the user cancelled this ticket, do the "stopped" bookkeeping and return true so
  *  the caller bails out (skipping the normal complete/failed handling). */
 async function stoppedByUser(ticketId: string, ownerId: string): Promise<boolean> {
@@ -927,8 +948,20 @@ export async function startTicketWorker() {
 
   bus.on("ticket.chat_message", async (event) => {
     const { ticketId, message, sender, actorId } = event.payload;
+    // ONE TURN AT A TIME. Builds have had a concurrency guard forever; chat had none,
+    // so two messages sent back to back started two agents in the SAME sandbox on the
+    // same branch — interleaved edits and two commits for one request. The user-facing
+    // route rejects a second message outright; anything that still lands here (the
+    // orchestrator) queues behind the live turn instead of racing it.
     try {
-      await executeTicketChat(ticketId, message, sender, actorId);
+      await runChatTurn(ticketId, async () => {
+        await broadcastChatState(ticketId, true);
+        try {
+          await executeTicketChat(ticketId, message, sender, actorId);
+        } finally {
+          await broadcastChatState(ticketId, false);
+        }
+      });
     } catch (err) {
       console.error(`[ticket-executor] Chat failed for ticket ${ticketId}:`, err);
     }
@@ -1888,6 +1921,102 @@ fi
 
 // ── Chat Resume Executor ──────────────────────────────────────────────
 
+/**
+ * The context blocks a chat turn needs, shared by the Pi and Claude Code paths:
+ * the requirements (acceptance criteria + notes), what was already built, the
+ * conversation so far, pending addenda and the project's directives.
+ *
+ * The conversation block is what makes a chat feel like a chat — it now carries
+ * questions the agent asked as well as its answers, so "the blue one" on line 3
+ * still means something on line 4.
+ */
+async function buildChatContext(
+  ticket: {
+    id: string;
+    acceptanceCriteria?: unknown;
+    notes?: string | null;
+    githubBranch?: string | null;
+    githubCommitSha?: string | null;
+  },
+  projectId: string,
+  currentMessage: string,
+): Promise<string> {
+  const ac = ((ticket.acceptanceCriteria as string[] | null) ?? []).filter(Boolean);
+  const acBlock = ac.length ? `\n## Acceptance criteria (must all still hold)\n${ac.map((c, i) => `${i + 1}. ${c}`).join("\n")}\n` : "";
+  const notesBlock = ticket.notes?.trim() ? `\n## Notes / rules to honor\n${ticket.notes.trim()}\n` : "";
+  const built = ticket.githubBranch || ticket.githubCommitSha;
+  const statusBlock = built
+    ? `\n## Current status of this job\nThis ticket was ALREADY built and its code is in the working tree (branch ${ticket.githubBranch ?? "?"}${ticket.githubCommitSha ? `, last commit ${ticket.githubCommitSha.slice(0, 7)}` : ""}). You are ITERATING on that existing implementation — build on it, don't start over.\n`
+    : `\n## Current status of this job\nThis ticket has not been built yet — there is no implementation on the branch.\n`;
+  // Conversation so far — questions included, and long enough to actually be one.
+  const recent = await db.select({ t: ticketLogs.logType, m: ticketLogs.command })
+    .from(ticketLogs)
+    .where(and(eq(ticketLogs.ticketId, ticket.id), inArray(ticketLogs.logType, ["user_message", "ai_response", "question"])))
+    .orderBy(desc(ticketLogs.createdAt)).limit(20);
+  const convo = recent.reverse().filter((r) => (r.m ?? "").trim() && (r.m ?? "").trim() !== currentMessage.trim());
+  const speaker = (t: string) => (t === "user_message" ? "User" : t === "question" ? "Agent (asked)" : "Agent");
+  const convoBlock = convo.length
+    ? `\n## Conversation so far (oldest first)\n${convo.map((r) => `${speaker(r.t)}: ${(r.m ?? "").slice(0, 800)}`).join("\n")}\n`
+    : "";
+  const dirBlock = await directivesBlock(projectId);
+  const addBlock = (await ticketAddendaContext(ticket.id)).block; // pending addenda + history
+  return `${acBlock}${notesBlock}${statusBlock}${convoBlock}${addBlock}${dirBlock}`;
+}
+
+/**
+ * End a chat turn honestly: the agent's declared mode AND the working tree decide
+ * what happens. Only a turn that actually changed files commits/pushes/merges and
+ * moves the ticket; an answer or a question is just logged (a question as a tagged
+ * `question` row, so the UI shows it as ACTION REQUIRED), and any stray edits an
+ * answer left behind are reverted so Q&A never leaks into the branch.
+ */
+async function concludeChatTurn(params: {
+  ticketId: string;
+  ownerId: string;
+  project: { id: string; repoOwner: string | null; repoName: string | null; repoUrl: string | null; repoProvider?: string | null; stack?: string | null };
+  ticket: { id: string; name: string; githubBranch: string | null; epicId?: string | null };
+  workspaceId: string;
+  projectPath: string;
+  message: string;
+  gitUserId: string;
+  /** The agent's final message, when this path has it in hand (Pi's summary — the
+   *  raw tail is JSONL, so the human text has to be extracted before it gets here). */
+  replyText?: string;
+}): Promise<void> {
+  const { ticketId, ownerId, project, ticket, workspaceId, projectPath, message, gitUserId, replyText } = params;
+
+  const outcome = await resolveTurnOutcome({ ticketId, workspaceId, projectDir: projectPath, replyText });
+
+  if (outcome.mode === "change") {
+    // Strip the mode markers out of the summary — they're protocol, not prose.
+    const summary = outcome.reply.text.slice(0, 1200);
+    await finalizeTicketChat(ticketId, ownerId, project, ticket, workspaceId, message, summary, gitUserId);
+    return;
+  }
+
+  if (outcome.revertedEdits) {
+    await addLog(ticketId, "Discarded the edits made while answering — nothing was committed to the branch.", "command", ownerId);
+  }
+
+  // The streamed output already surfaced the reply (and typed it correctly, question
+  // included) — don't post it twice.
+  if (outcome.repliedInStream) return;
+
+  const text = outcome.reply.text.trim();
+  if (outcome.mode === "question") {
+    await addLog(
+      ticketId,
+      text || "I need a bit more detail before I change anything — what exactly should I do?",
+      "question",
+      ownerId,
+      { options: outcome.reply.options },
+      { explanation: encodeQuestionMeta({ blocking: false, options: outcome.reply.options }) },
+    );
+    return;
+  }
+  await addLog(ticketId, text || "Done — no code changes were needed.", "ai_response", ownerId);
+}
+
 async function executeTicketChat(
   ticketId: string,
   message: string,
@@ -1944,12 +2073,27 @@ async function executeTicketChat(
     await addLog(ticketId, chatSb.error, "cli_error", ownerId);
     return;
   }
-  const sandbox = { magsWorkspaceId: chatSb.workspaceId, cliSessionId: null as string | null };
   const workspaceId = chatSb.workspaceId;
+  // Resume the CLI session this ticket's chat has been using. This row is written by
+  // the /api/v1/cli/output webhook on every turn; the chat used to hardcode null here,
+  // so every Claude message started a BLIND fresh session — the agent had no memory of
+  // the conversation it was supposedly continuing.
+  const [chatSbRow] = await db
+    .select({ cliSessionId: sandboxes.cliSessionId })
+    .from(sandboxes)
+    .where(eq(sandboxes.magsWorkspaceId, workspaceId))
+    .limit(1);
+  const sandbox = { magsWorkspaceId: workspaceId, cliSessionId: chatSbRow?.cliSessionId ?? null };
   // New user request → pin the (possibly slept) chat VM awake for the duration.
   await wakeTicketVm(workspaceId);
   const projectDirName = "project";
+  const projectPath = `${WORKING_DIR}/${projectDirName}`;
   let sessionId = sandbox.cliSessionId ?? undefined;
+
+  // Shared context for BOTH agent paths (Pi and Claude Code): the requirements, what
+  // was already built, and the conversation so far — so a follow-up isn't blind and a
+  // question can be answered from what the ticket actually is.
+  const chatContext = await buildChatContext(ticket, project!.id, message);
 
   // ── Route to Pi for non-Claude models (mirror the BUILD path) ───────────
   // The chat used to be hardcoded to Claude Code — a DeepSeek/OpenAI/GLM user
@@ -2060,18 +2204,15 @@ ${TICKET_CHAT_MODE_CONTRACT}
         const _piBase = piResult.fatalError ?? (piResult.exitCode ? `exit code ${piResult.exitCode}` : "the agent stopped without finishing");
         const reason = _piDetail ? `${_piBase} — ${_piDetail}` : _piBase;
         await addLog(ticketId, `Pi chat failed: ${reason}`, "cli_error", ownerId);
-      } else if (piResult.didWork) {
-        // FINALIZE (same as a build): a chat that CHANGES CODE must COMMIT + PUSH +
-        // MERGE and update status — otherwise the work sits uncommitted in the VM,
-        // the status never moves, and nothing is on the remote. This was missing
-        // → "changes done but no commit / status / merge". A pure Q&A turn (no
-        // edits → !didWork) skips this and just leaves the answer in the log.
-        await finalizeTicketChat(ticketId, ownerId, project!, ticket, workspaceId, message, piWorkSummary(piResult.tail), gitUserId);
       } else {
-        // Pi answered without changing code (Q&A). Surface its reply so the client's
-        // "Thinking…" indicator resolves and the user sees the response.
-        const tail = (piResult.tail || "").trim();
-        await addLog(ticketId, tail ? tail.slice(-1500) : "Done — no code changes were needed.", "ai_response", ownerId);
+        // What KIND of turn was this? `piResult.didWork` can't answer that — it's
+        // `toolCalls > 0 || hadSuccess`, true the moment the agent reads a file, so
+        // gating the commit on it turned every question into a commit + merge + "✅
+        // Update applied". The declared mode plus the actual working tree decide.
+        await concludeChatTurn({
+          ticketId, ownerId, project: project!, ticket, workspaceId, projectPath, message, gitUserId,
+          replyText: piWorkSummary(piResult.tail), // the agent's prose, pulled out of Pi's JSONL
+        });
       }
     } catch (err) {
       await addLog(ticketId, `Pi chat error: ${(err as Error).message}`, "cli_error", ownerId);
@@ -2118,7 +2259,8 @@ ${TICKET_CHAT_MODE_CONTRACT}
       callbackBaseUrl: CALLBACK_BASE_URL,
       cliApiKey,
     },
-    message
+    message,
+    chatContext, // requirements + build state + the conversation so far
   );
 
   const envVars: Record<string, string> = {
@@ -2206,82 +2348,14 @@ ${TICKET_CHAT_MODE_CONTRACT}
     if (await stoppedByUser(ticketId, ownerId)) return;
   }
 
-  // ── Commit + push changes made during chat (only if agent succeeded) ─
-  // Only attempt git push if the agent exited successfully (exit code 0).
-  // A simple Q&A or a failed chat should not trigger commit/push.
+  // ── End the turn: commit ONLY a real change ──────────────────────────
+  // Same gate as the Pi path — the declared mode plus the working tree. An answer
+  // or a question commits nothing and moves no status; a change goes through the
+  // shared finalize (commit → push → merge → In Review → "Update applied").
   if (waitResult.status === "complete") {
-    const [ghToken] = await db
-      .select()
-      .from(githubTokens)
-      .where(eq(githubTokens.userId, gitUserId))
-      .limit(1);
-
-    const githubToken = ghToken?.accessToken;
-
-    let chatGhOwner: string | null = project!.repoOwner ?? null;
-    let chatGhRepo: string | null = project!.repoName ?? null;
-    const chatRepoUrl = project!.repoUrl ?? extractRepoUrl(project!.stack ?? "");
-
-    if (!chatGhOwner || !chatGhRepo) {
-      if (chatRepoUrl) {
-        const ghMatch = chatRepoUrl.match(/github\.com\/([^/]+)\/([^/.]+)/);
-        if (ghMatch) {
-          chatGhOwner = ghMatch[1] ?? null;
-          chatGhRepo = ghMatch[2] ?? null;
-        }
-      }
-    }
-
-    if (chatGhOwner && chatGhRepo && githubToken) {
-      const featureBranch = ticket.githubBranch ?? ticketBranchName(ticket);
-      const chatAnchor = await resolveTicketAnchor(ticket);
-      try {
-        await addLog(ticketId, "Checking for code changes...", "command", ownerId);
-        const { sha } = await commitAndPush({
-          workspaceId,
-          projectDir: `${WORKING_DIR}/${projectDirName}`,
-          commitMessage: `update: ${ticket.name} (chat)`,
-          featureBranch,
-          repoUrl: `https://github.com/${chatGhOwner}/${chatGhRepo}.git`,
-          githubToken,
-        });
-
-        await db
-          .update(projectTickets)
-          .set({
-            githubBranch: featureBranch,
-            githubCommitSha: sha,
-            updatedAt: new Date(),
-          })
-          .where(eq(projectTickets.id, ticketId));
-
-        await addLog(ticketId, `Pushed commit ${sha.slice(0, 7)} to ${featureBranch}`, "command", ownerId);
-
-        // Merge feature branch → the epic's anchor branch (direct push)
-        try {
-          const { sha: mergeSha } = await mergeToAnchor({
-            workspaceId: sandbox.magsWorkspaceId!,
-            projectDir: `${WORKING_DIR}/${projectDirName}`,
-            featureBranch,
-            repoUrl: `https://github.com/${chatGhOwner}/${chatGhRepo}.git`,
-            githubToken,
-            targetBranch: chatAnchor.anchorBranch,
-            baseBranch: chatAnchor.baseBranch,
-          });
-          await db
-            .update(projectTickets)
-            .set({ githubMergeStatus: "merged", updatedAt: new Date() })
-            .where(eq(projectTickets.id, ticketId));
-          await addLog(ticketId, `Merged to ${chatAnchor.anchorBranch} (${mergeSha.slice(0, 7)})`, "command", ownerId);
-        } catch (mergeErr) {
-          console.warn(`[ticket-executor] Chat: merge to ${chatAnchor.anchorBranch} failed:`, mergeErr);
-        }
-      } catch (err) {
-        // commitAndPush handles NO_CHANGES gracefully, so this is a real error
-        // Don't show git errors to user for chat — it's noise for Q&A interactions
-        console.warn(`[ticket-executor] Chat: commit+push failed (silent):`, err);
-      }
-    }
+    await concludeChatTurn({
+      ticketId, ownerId, project: project!, ticket, workspaceId, projectPath, message, gitUserId,
+    });
   }
 
   // Save credentials back to DB after chat

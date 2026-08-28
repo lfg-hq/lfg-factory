@@ -175,6 +175,20 @@
   function setBuildUI() {
     const s = $("ta-stop");
     if (s) { s.style.display = isBusy() ? "inline-flex" : "none"; s.disabled = false; s.innerHTML = '<i class="fas fa-stop" style="font-size:10px;"></i>Stop'; }
+    // The send arrow becomes a red STOP while the agent is working: you can't queue a
+    // second message (that used to start a second agent in the same sandbox), but you
+    // can stop this turn — and whatever you've typed is sent the moment it stops.
+    const send = $("ta-send");
+    if (send) {
+      const busy = isBusy();
+      send.style.background = busy ? "#dc2626" : "#7c3aed";
+      send.title = busy ? "Stop the agent (your message sends right after)" : "Send";
+      send.innerHTML = busy ? '<i class="fas fa-stop" style="font-size:11px;"></i>' : '<i class="fas fa-arrow-up"></i>';
+    }
+    const input = $("ta-input");
+    if (input) {
+      input.placeholder = isBusy() ? "Agent is working — press ■ to stop and send…" : "Send a message to the agent…";
+    }
     const b = $("ta-build"); if (!b) return;
     if (isBuilding()) { b.disabled = true; b.style.opacity = ".9"; b.innerHTML = '<i class="fas fa-spinner fa-spin" style="font-size:10px;"></i>Building…'; }
     else { b.disabled = chatBusy; b.style.opacity = chatBusy ? ".55" : "1"; b.innerHTML = '<i class="fas fa-play" style="font-size:10px;"></i>Build'; }
@@ -379,6 +393,12 @@
     tasksLoaded = false; gitLoaded = false;
     chatBusy = false; // per-ticket state — a previous ticket's in-flight turn isn't this one's
     setBuildUI();
+    // A turn started before this page loaded is still running server-side — ask, so the
+    // button opens as Stop instead of inviting a second message that would be rejected.
+    fetch(`/api/projects/${PID()}/tickets/${id}/chat/status`, { credentials: "same-origin" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (d && ticketId === id) { chatBusy = !!d.busy; setBuildUI(); } })
+      .catch(() => {});
     const p = panel();
     if (!p) return;
     const title = $("ta-title");
@@ -479,6 +499,14 @@
       return `<div class="ta-agent${fail ? " ta-agent-fail" : ""}"><div class="ta-agent-label">Agent</div><div class="markdown-content">${md(msg)}</div></div>`;
     }
     if (type === "cli_error") return `<div class="ta-error"><i class="fas fa-triangle-exclamation"></i> ${esc(msg)}</div>`;
+    if (type === "question") {
+      // The agent asked something back instead of guessing — tagged, not a plain reply.
+      const opts = Array.isArray(row.options) ? row.options : [];
+      const btns = opts.length
+        ? `<div class="ta-qopts">${opts.map((o) => `<button class="ta-qopt" data-ta-answer="${esc(o)}">${esc(o)}</button>`).join("")}</div>`
+        : "";
+      return `<div class="ta-question"><div class="ta-question-label"><i class="fas fa-circle-question"></i> Needs your answer</div><div class="markdown-content">${md(msg)}</div>${btns}</div>`;
+    }
     // command / tool row → ONE collapsible: the command as the header, its output as the body.
     const out = String(row.output || "");
     const hasOut = out.length > 0;
@@ -545,7 +573,30 @@
     const input = $("ta-input"); if (input) input.focus();
   }
 
+  // The arrow is a Stop button while a turn runs: stop first, then send what's typed.
+  // Waits for the executor to actually bail (the "stopped" broadcast) so the new
+  // message can't land on top of a still-dying agent.
+  async function stopThenSend() {
+    const id = ticketId;
+    await stopTicket();
+    // Ask the SERVER when the turn is really over — the local flag is optimistic, and
+    // sending into a still-unwinding turn just earns a 409.
+    for (let i = 0; i < 24; i++) {
+      await new Promise((r) => setTimeout(r, 400));
+      if (ticketId !== id) return;
+      try {
+        const r = await fetch(`/api/projects/${PID()}/tickets/${id}/chat/status`, { credentials: "same-origin" });
+        const j = r.ok ? await r.json() : null;
+        if (j && !j.busy) break;
+      } catch (_) { break; } // can't ask → try the send and let the 409 speak
+    }
+    chatBusy = false; setBuildUI();
+    const input = $("ta-input");
+    if (input && (input.value.trim() || pendingUploads.length)) await send();
+  }
+
   async function send() {
+    if (isBusy()) return stopThenSend();
     const input = $("ta-input");
     if (!input) return;
     const typed = input.value.trim();
@@ -578,7 +629,21 @@
         method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin",
         body: JSON.stringify({ message: msg }),
       });
-      if (!r.ok) { const t = $("ta-thinking"); if (t) t.textContent = "Couldn't reach the agent — try again."; chatBusy = false; setBuildUI(); }
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        const t = $("ta-thinking");
+        // 409 = a turn is already running (someone else's tab, or a build). Keep the
+        // Stop affordance up and put the message back so nothing is lost.
+        if (r.status === 409) {
+          if (t) t.remove();
+          if (input) input.value = typed;
+          chatBusy = true; setBuildUI();
+          toast(j.error || "The agent is still working — stop it to send this.");
+          return;
+        }
+        if (t) t.textContent = "Couldn't reach the agent — try again.";
+        chatBusy = false; setBuildUI();
+      }
     } catch (_) { const t = $("ta-thinking"); if (t) t.textContent = "Network error — try again."; chatBusy = false; setBuildUI(); }
     // Live WS updates replace the thinking row with the agent's streamed response.
   }
@@ -597,9 +662,15 @@
       const atBottom = area.scrollHeight - area.scrollTop - area.clientHeight < 120;
       area.insertAdjacentHTML("beforeend", renderRow(msg.log));
       if (atBottom) area.scrollTop = area.scrollHeight;
-      // Terminal row for a chat turn → the agent is done, hide Stop.
+      // Terminal row for a chat turn → the agent is done, hide Stop. A `question` ends
+      // the turn too: the agent handed the conversation back and is waiting on you.
       const lt = msg.log.type || "";
-      if (lt === "ai_response" || lt === "cli_error") { chatBusy = false; setBuildUI(); }
+      if (lt === "ai_response" || lt === "cli_error" || lt === "question") { chatBusy = false; setBuildUI(); }
+    } else if (msg.type === "ticket_chat_state") {
+      // Authoritative busy signal from the executor (a chat turn never moves
+      // queueStatus, so this is the only way the button knows it's over).
+      chatBusy = !!msg.busy;
+      setBuildUI();
     } else if (msg.type === "ticket_status") {
       curMeta = Object.assign({}, curMeta, { status: msg.status, queueStatus: msg.queueStatus }); // reflect build state
       if (String(msg.status || "").toLowerCase() === "stopped") chatBusy = false;
@@ -630,6 +701,15 @@
     $("ta-file")?.addEventListener("change", (e) => { const fs = e.target.files ? Array.from(e.target.files) : []; fs.forEach(uploadFile); e.target.value = ""; });
     // Collapse/expand a command row's output; clear a pending upload.
     $("ta-log")?.addEventListener("click", (e) => {
+      // Answer a tagged question by clicking one of its options.
+      const opt = e.target.closest && e.target.closest("[data-ta-answer]");
+      if (opt) {
+        const input = $("ta-input");
+        if (input) input.value = opt.getAttribute("data-ta-answer") || "";
+        opt.parentElement?.querySelectorAll(".ta-qopt").forEach((b) => { b.disabled = true; });
+        send();
+        return;
+      }
       const h = e.target.closest && e.target.closest("[data-ta-toggle]");
       if (!h) return;
       const body = document.getElementById(h.getAttribute("data-ta-toggle"));

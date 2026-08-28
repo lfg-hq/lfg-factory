@@ -847,7 +847,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
           </button>
           <input id="actions-chat-input" type="text" placeholder="Send a message to the agent..."
             onkeydown="if(event.key==='Enter'){sendTicketChatMsg();}" />
-          <button onclick="sendTicketChatMsg()" class="logs-chat-send-btn" title="Send message">
+          <button id="actions-chat-send" onclick="sendTicketChatMsg()" class="logs-chat-send-btn" title="Send message">
             <i class="fas fa-arrow-up" style="font-size:.65rem;"></i>
           </button>
         </div>
@@ -1171,6 +1171,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     _lastLogContent = '';
     _logsFirstLoad = true;
     _currentTicketId = ticketId;
+    _chatBusy = false; setChatBusyUI();
+    refreshChatBusy(); // a turn may already be running server-side (build, or another tab)
     const t = ticketMap[ticketId];
     // Render from the local map if we have it; otherwise open with a placeholder
     // and let the live fetch below fill it in — NEVER silently return (that reads
@@ -1380,9 +1382,45 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
         method: 'POST', headers: { 'Content-Type': 'application/json' }
       });
     } catch(e) { /* best-effort */ }
+    _chatBusy = false; setChatBusyUI();
     if (stopBtn) { stopBtn.disabled = false; stopBtn.innerHTML = '<i class="fas fa-stop"></i> Stop'; stopBtn.style.display = 'none'; }
     var b = document.getElementById('drawer-build-btn');
     if (b) { b.disabled = false; b.style.display = ''; b.innerHTML = '<i class="fas fa-bolt"></i> Build Ticket'; }
+  }
+
+  // ── One agent turn at a time ─────────────────────────────────────
+  // A second message used to start a SECOND agent in the same sandbox on the same
+  // branch — two runs interleaving edits and commits for one request. While a turn is
+  // running the send arrow is a red stop: it kills the turn, then sends what you typed.
+  var _chatBusy = false;
+  function setChatBusyUI() {
+    var btn = document.getElementById('actions-chat-send');
+    if (btn) {
+      btn.innerHTML = _chatBusy
+        ? '<i class="fas fa-stop" style="font-size:.62rem;"></i>'
+        : '<i class="fas fa-arrow-up" style="font-size:.65rem;"></i>';
+      btn.style.background = _chatBusy ? '#dc2626' : '';
+      btn.style.color = _chatBusy ? '#fff' : '';
+      btn.title = _chatBusy ? 'Stop the agent (your message sends right after)' : 'Send message';
+    }
+    var input = document.getElementById('actions-chat-input');
+    if (input) input.placeholder = _chatBusy
+      ? 'Agent is working — press stop to send…'
+      : 'Send a message to the agent...';
+  }
+  // Ask the server whether a turn is already running (a build, or a chat turn started
+  // before this page loaded) so the button opens in the right state.
+  async function refreshChatBusy() {
+    if (!_currentTicketId) return;
+    var id = _currentTicketId;
+    try {
+      var r = await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + id + '/chat/status');
+      if (!r.ok) return;
+      var j = await r.json();
+      if (_currentTicketId !== id) return;
+      _chatBusy = !!j.busy;
+      setChatBusyUI();
+    } catch(e) { /* the chat still works without the indicator */ }
   }
 
   // ── Actions tab: execution logs + agent chat ─────────────────────
@@ -1812,6 +1850,28 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
   async function sendTicketChatMsg() {
     var input = document.getElementById('actions-chat-input');
     var msg = input.value.trim();
+    // The arrow is a Stop button while a turn runs: stop it, wait for the executor to
+    // actually bail, then send what was typed.
+    if (_chatBusy) {
+      var stoppingId = _currentTicketId;
+      await stopCurrentTicket();
+      // Ask the SERVER when the turn is really over — the local flag is optimistic,
+      // and sending into a still-unwinding turn just earns a 409.
+      for (var w = 0; w < 24; w++) {
+        await new Promise(function(r){ setTimeout(r, 400); });
+        if (_currentTicketId !== stoppingId) return;
+        var done = false;
+        try {
+          var sr = await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + stoppingId + '/chat/status');
+          if (sr.ok) { var sj = await sr.json(); done = !sj.busy; }
+          else done = true;
+        } catch(e) { done = true; }
+        if (done) break;
+      }
+      _chatBusy = false; setChatBusyUI();
+      if (!input.value.trim() && !_pendingUpload) return;
+      return sendTicketChatMsg();
+    }
     // Allow sending with just an attachment (no text).
     if ((!msg && !_pendingUpload) || !_currentTicketId) return;
     input.value = '';
@@ -1843,6 +1903,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     }
     // Then show thinking indicator (appended after your message).
     showThinkingIndicator();
+    _chatBusy = true; setChatBusyUI();
     try {
       var resp = await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + _currentTicketId + '/chat', {
         method: 'POST',
@@ -1853,6 +1914,20 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
         var err = await resp.json().catch(function() { return { error: 'Failed' }; });
         console.error('sendTicketChatMsg error:', err);
         hideThinkingIndicator();
+        // 409: a turn was already running (another tab, or a build). Put the message
+        // back so it is not lost, and keep the stop affordance up.
+        if (resp.status === 409) {
+          input.value = msg;
+          _chatBusy = true; setChatBusyUI();
+          var bb409 = document.getElementById('actions-bottom-banner');
+          if (bb409) {
+            bb409.style.display = ''; bb409.style.color = '#f59e0b';
+            bb409.textContent = err.error || 'The agent is still working — stop it to send this.';
+            setTimeout(function() { bb409.style.display = 'none'; }, 5000);
+          }
+          return;
+        }
+        _chatBusy = false; setChatBusyUI();
       }
       _lastLogCount = 0; _lastLogContent = ''; _logsFirstLoad = true;
       // Poll for new logs in case WS misses the broadcast
@@ -1863,7 +1938,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
         // Stop polling after 30s or if thinking is done
         if (!_agentThinking || chatPollCount > 10) clearInterval(chatPollTimer);
       }, 3000);
-    } catch(e) { console.error('sendTicketChatMsg', e); hideThinkingIndicator(); }
+    } catch(e) { console.error('sendTicketChatMsg', e); hideThinkingIndicator(); _chatBusy = false; setChatBusyUI(); }
   }
 
   // ── Option selection for askUser questions ──────────────────────
@@ -2563,6 +2638,11 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
             // Subtasks changed during the build (seeded / status updated) — refresh
             // the Tasks tab live so progress shows as it happens.
             loadTasks();
+          } else if (msg.type === 'ticket_chat_state' && msg.ticketId === _currentTicketId) {
+            // Authoritative busy signal from the executor — a chat turn never moves
+            // queueStatus, so this is what flips the send arrow to red and back.
+            _chatBusy = !!msg.busy;
+            setChatBusyUI();
           } else if (msg.type === 'ticket_status') {
             handleTicketStatus(msg);
           } else if (msg.type === 'preview_status') {
@@ -2612,6 +2692,11 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
 
       // Hide thinking indicator when agent responds
       if (log.type !== 'user_message') hideThinkingIndicator();
+      // Terminal row for a chat turn — including a question, which hands the
+      // conversation back to you — releases the send button.
+      if (log.type === 'ai_response' || log.type === 'cli_error' || log.type === 'question') {
+        _chatBusy = false; setChatBusyUI();
+      }
 
       var placeholder = area.querySelector('.log-placeholder');
       if (placeholder) area.innerHTML = '';

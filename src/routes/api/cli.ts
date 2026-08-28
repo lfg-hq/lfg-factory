@@ -23,6 +23,7 @@ import { emit } from "../../events/bus.ts";
 import { parseJsonlEvents, extractSessionId, isStreamComplete } from "../../services/claude-cli.ts";
 import { addLog, attachLogOutput, formatToolUse } from "../../services/ticket-logs.ts";
 import { describePiTool, describePiLine, noteBuildActivity } from "../../services/pi-cli.ts";
+import { parseTurnMarkers, noteAgentReply, noteAgentMode, encodeQuestionMeta } from "../../services/ticket-chat-turn.ts";
 import { broadcastInstantStatus } from "../../services/instant-app.ts";
 
 export const cliRouter = new Hono<{ Variables: { cliUserId: string } }>();
@@ -320,8 +321,12 @@ cliRouter.post("/request-input", async (c) => {
     options,
   });
 
-  // Log as "question" type (broadcasts via WS automatically through addLog)
-  await addLog(ticket_id, question, "question", inputOwnerId);
+  // Log as "question" type (broadcasts via WS automatically through addLog). Tagged
+  // BLOCKING: the agent is parked on the long-poll below, so the user's next message
+  // must be routed to it as the answer rather than started as a new chat turn.
+  await addLog(ticket_id, question, "question", inputOwnerId,
+    { options },
+    { explanation: encodeQuestionMeta({ blocking: true, options: Array.isArray(options) ? options : [] }) });
 
   // Emit needs_attention for orchestrator consumption
   emit({
@@ -475,7 +480,21 @@ cliRouter.post("/output", async (c) => {
         if (ev.type === "assistant") {
           for (const block of content) {
             if (block.type === "text" && block.text?.trim()) {
-              await addLog(ticket_id, block.text, "ai_response", ownerId); logged++;
+              // A chat turn declares what it was — answer / question / change — on the
+              // last line. Strip that protocol out of what the user reads, remember it
+              // for the executor's commit gate, and file a question as a QUESTION row
+              // so it renders as "action required" instead of a flat agent reply.
+              const turn = parseTurnMarkers(block.text);
+              noteAgentReply(ticket_id, turn);
+              const text = turn.text || block.text;
+              if (turn.mode === "question") {
+                await addLog(ticket_id, text, "question", ownerId,
+                  { options: turn.options },
+                  { explanation: encodeQuestionMeta({ blocking: false, options: turn.options }) });
+              } else {
+                await addLog(ticket_id, text, "ai_response", ownerId);
+              }
+              logged++;
             } else if (block.type === "tool_use" && block.name) {
               const toolMsg = formatToolUse(block.name, block.input ?? {});
               const logId = await addLog(ticket_id, toolMsg, "command", ownerId); logged++;
@@ -531,7 +550,15 @@ cliRouter.post("/output", async (c) => {
     // then also drop exact repeats across POST batches (via _lastPiLabel).
     const labels: string[] = [];
     for (const line of rawText.split("\n")) {
-      try { const l = describePiLine(line); if (l) labels.push(l); } catch { /* skip a bad line */ }
+      try {
+        const l = describePiLine(line);
+        if (!l) continue;
+        // Pi streams its assistant text as progress labels, so the turn marker can
+        // ride along here. Keep the mode, keep it out of the user's trail.
+        const turn = parseTurnMarkers(l);
+        noteAgentMode(ticket_id, turn.mode);
+        if (turn.text) labels.push(turn.text);
+      } catch { /* skip a bad line */ }
     }
     const norm = (s: string) => s.replace(/…+$/, "").trimEnd();
     // 1) Within-batch: collapse a growing-prefix run to its final (longest) label.
