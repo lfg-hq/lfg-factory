@@ -72,6 +72,8 @@ export const projects = sqliteTable(
     // and open every member's project conversations, each labelled with its
     // author. See ../pg/projects.ts for why this is opt-in.
     shareChatHistory: integer("share_chat_history", { mode: "boolean" }).notNull().default(false),
+    // See ../pg/projects.ts — per-project agent instructions.
+    customInstructions: text("custom_instructions"),
 
     createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
     updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),

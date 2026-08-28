@@ -27,7 +27,8 @@
     "test:skills": "bun run scripts/test-skills.mjs",
     "test:designrefs": "node scripts/test-ticket-design-refs.mjs",
     "test:voice": "node scripts/test-voice-ui.mjs",
-    "test:shell": "node scripts/test-preview-shell.mjs"
+    "test:shell": "node scripts/test-preview-shell.mjs",
+    "test:instructions": "bun run scripts/test-agent-instructions.mjs"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

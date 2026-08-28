@@ -70,6 +70,9 @@ export const projects = pgTable(
     // its author. Opt-in, because chat transcripts carry candid product thinking
     // that people don't expect to be shared by default.
     shareChatHistory: boolean("share_chat_history").notNull().default(false),
+    // Free-text instructions the user wants EVERY agent on this project to follow —
+    // reaches both the chat agent and each ticket build.
+    customInstructions: text("custom_instructions"),
     createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),
     updatedAt: timestamp("updated_at", { mode: "date" }).notNull().default(sql`now()`),
   },

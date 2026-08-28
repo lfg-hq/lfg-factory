@@ -714,6 +714,21 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
     // only advertises what exists. Server-side keyword matching guessed from outside the
     // conversation and got it wrong in both directions.
     systemPrompt = getProductSystemPrompt({ userId, projectId: internalProjectId, conversationId: convId, projectFlags });
+
+    // Whatever the project owner told every agent here to do. Appended last so it
+    // outranks the defaults it contradicts.
+    if (internalProjectId) {
+      const [projRow] = await db
+        .select({ ci: projects.customInstructions })
+        .from(projects)
+        .where(eq(projects.id, internalProjectId))
+        .limit(1)
+        .catch(() => [] as Array<{ ci: string | null }>);
+      const ci = (projRow?.ci ?? "").trim();
+      if (ci) {
+        systemPrompt += `\n\n---\n\n## Project instructions (from this project's settings)\n\n${ci}\n\nThese come from the people who own this project. Where they conflict with your defaults, follow these.`;
+      }
+    }
   }
 
   // ── 6. Stream with AI SDK ────────────────────────────────────────────────────

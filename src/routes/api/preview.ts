@@ -121,12 +121,25 @@ previewApi.get("/:projectId/preview/branches", async (c) => {
 });
 
 // Per-project build/preview settings: ticket build isolation + preview branch mode.
+// GET /api/projects/:projectId/skills — what workflows the agent can pull in. Ids and
+// descriptions only; the bodies are prompt material, not settings-pane content.
+// Project-scoped because this router mounts at /api/projects, and a bare /skills would
+// sit ambiguously beside the /:projectId routes.
+previewApi.get("/:projectId/skills", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId")!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  const { allSkills } = await import("../../ai/skills/index.ts");
+  return c.json({ skills: allSkills().map((s) => ({ id: s.id, description: s.description })) });
+});
+
 previewApi.get("/:projectId/preview/build-settings", async (c) => {
   const user = c.get("user");
   const access = await getProjectAccess(c.req.param("projectId")!, user.id);
   if (!access) return c.json({ error: "Project not found" }, 404);
-  const p = access.project as { ticketBuildIsolation?: string; previewBranchMode?: string; dbMode?: string; shareGitAccess?: boolean; shareChatHistory?: boolean };
+  const p = access.project as { ticketBuildIsolation?: string; previewBranchMode?: string; dbMode?: string; shareGitAccess?: boolean; shareChatHistory?: boolean; customInstructions?: string | null };
   return c.json({
+    customInstructions: p.customInstructions ?? "",
     ticketBuildIsolation: p.ticketBuildIsolation ?? "isolated",
     previewBranchMode: p.previewBranchMode ?? "worktree",
     dbMode: p.dbMode ?? "auto",
@@ -158,6 +171,13 @@ previewApi.post("/:projectId/preview/build-settings", async (c) => {
   if (typeof body.shareChatHistory === "boolean") {
     if (access.role !== "owner") return c.json({ error: "Only the project owner can change chat visibility." }, 403);
     patch.shareChatHistory = body.shareChatHistory;
+  }
+  // Instructions every agent on this project must follow. Anyone who can manage the
+  // project's work can set them; capped so a runaway paste can't crowd out the prompt.
+  if (typeof body.customInstructions === "string") {
+    try { requirePermission(access, "canManageTickets"); }
+    catch { return c.json({ error: "You don't have permission to change agent instructions" }, 403); }
+    patch.customInstructions = body.customInstructions.slice(0, 4000);
   }
   if (!Object.keys(patch).length) return c.json({ error: "Nothing valid to update" }, 400);
   patch.updatedAt = new Date();

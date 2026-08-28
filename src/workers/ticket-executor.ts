@@ -497,12 +497,22 @@ async function resolveTicketAddenda(ticketId: string, pendingIds: string[]): Pro
 
 /** The project's mandatory directives (app_profile) as a prompt block, or "". */
 async function directivesBlock(projectId: string): Promise<string> {
+  let out = "";
   try {
     const { loadAppProfile } = await import("../services/app-profile.ts");
     const d = (await loadAppProfile(projectId))?.profile.directives ?? [];
-    if (!d.length) return "";
-    return `\n## MANDATORY DIRECTIVES — always enforce (fixing a violation is part of the task)\n${d.map((x, i) => `${i + 1}. ${x}`).join("\n")}\n`;
-  } catch { return ""; }
+    if (d.length) {
+      out += `\n## MANDATORY DIRECTIVES — always enforce (fixing a violation is part of the task)\n${d.map((x, i) => `${i + 1}. ${x}`).join("\n")}\n`;
+    }
+  } catch { /* profile is optional */ }
+  try {
+    // The same instructions the chat agent gets — one place to say "always do X here",
+    // honoured by whoever is doing the work.
+    const [row] = await db.select({ ci: projects.customInstructions }).from(projects).where(eq(projects.id, projectId)).limit(1);
+    const ci = (row?.ci ?? "").trim();
+    if (ci) out += `\n## PROJECT INSTRUCTIONS (from this project's settings)\n${ci}\n`;
+  } catch { /* instructions are optional */ }
+  return out;
 }
 
 /**

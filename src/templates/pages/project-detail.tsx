@@ -1342,6 +1342,32 @@ export function ProjectDetailPage({
               ` : ""}
             </div>
 
+            <!-- What the agents on this project are told, and what they can look up. -->
+            <div style="margin-top:2.5rem;padding-top:2rem;border-top:1px solid var(--border-color);">
+              <h3 style="font-size:1rem;font-weight:600;color:var(--text-color);margin:0 0 0.35rem;">Agent instructions</h3>
+              <p style="margin:0 0 0.75rem;color:var(--text-secondary);font-size:0.85rem;">
+                Anything here is added to EVERY agent working on this project — the chat agent and each ticket build.
+                Use it for the standing rules a newcomer would need told: conventions to follow, things never to touch,
+                the tone of the product. Where these conflict with the agent's defaults, these win.
+              </p>
+              <textarea id="custom-instructions" rows="6" placeholder="e.g. Always use the existing design tokens — never introduce new colours.&#10;Never edit files under src/generated/.&#10;Copy is British English."
+                style="width:100%;box-sizing:border-box;padding:0.7rem 0.85rem;border-radius:var(--radius);border:1px solid var(--border-color);background:var(--card-bg);color:var(--text-color);font-size:0.85rem;line-height:1.55;font-family:inherit;resize:vertical;"></textarea>
+              <div style="display:flex;align-items:center;gap:0.75rem;margin-top:0.6rem;">
+                <button onclick="saveCustomInstructions()" class="btn btn-secondary" style="font-size:0.85rem;">Save instructions</button>
+                <span id="custom-instructions-status" style="font-size:0.78rem;color:var(--text-secondary);"></span>
+              </div>
+            </div>
+
+            <div style="margin-top:2.5rem;padding-top:2rem;border-top:1px solid var(--border-color);">
+              <h3 style="font-size:1rem;font-weight:600;color:var(--text-color);margin:0 0 0.35rem;">Skills</h3>
+              <p style="margin:0 0 0.75rem;color:var(--text-secondary);font-size:0.85rem;">
+                Detailed workflows the agent loads for itself when a job matches one. These ship with LFG
+                (<code style="font-size:0.8rem;">src/ai/skills/*.md</code>) and apply to every project — the agent decides when to
+                pull one in, so you don't have to remember to ask.
+              </p>
+              <div id="skills-list" style="display:flex;flex-direction:column;gap:0.5rem;font-size:0.85rem;color:var(--text-secondary);">Loading…</div>
+            </div>
+
             ${(isOwner || role === "admin") ? html`
             <div style="margin-top:2.5rem;padding-top:2rem;border-top:1px solid var(--border-color);">
               <h3 style="font-size:1rem;font-weight:600;color:var(--text-color);margin:0 0 0.35rem;">Export project</h3>
@@ -1676,6 +1702,49 @@ export function ProjectDetailPage({
       s.style.color = "var(--text-secondary)";
       s.textContent = on ? "On — members can read each other's chats in this project." : "Off — each member's chat is private to them.";
     }
+    function loadCustomInstructions() {
+      var ta = document.getElementById("custom-instructions");
+      if (!ta) return;
+      fetch("/api/projects/" + projectId + "/preview/build-settings")
+        .then(function(r){ return r.json(); })
+        .then(function(d){ if (d && typeof d.customInstructions === "string") ta.value = d.customInstructions; })
+        .catch(function(){});
+    }
+    function saveCustomInstructions() {
+      var ta = document.getElementById("custom-instructions");
+      var st = document.getElementById("custom-instructions-status");
+      if (!ta) return;
+      if (st) st.textContent = "Saving…";
+      fetch("/api/projects/" + projectId + "/preview/build-settings", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ customInstructions: ta.value })
+      })
+        .then(function(r){ return r.json(); })
+        .then(function(d){ if (st) st.textContent = d && d.error ? d.error : "Saved — every agent on this project follows these from the next message."; })
+        .catch(function(){ if (st) st.textContent = "Could not save."; });
+    }
+    function loadSkills() {
+      var host = document.getElementById("skills-list");
+      if (!host) return;
+      fetch("/api/projects/" + projectId + "/skills")
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+          var list = (d && d.skills) || [];
+          if (!list.length) { host.textContent = "No skills installed."; return; }
+          host.innerHTML = list.map(function(sk){
+            return '<div style="display:flex;gap:0.6rem;align-items:flex-start;padding:0.6rem 0.75rem;border:1px solid var(--border-color);border-radius:8px;">'
+              + '<code style="flex:none;font-size:0.78rem;color:var(--primary-color);">' + esc(sk.id) + '</code>'
+              + '<span style="flex:1;min-width:0;line-height:1.5;">' + esc(sk.description || "") + '</span></div>';
+          }).join("");
+        })
+        .catch(function(){ host.textContent = "Could not load skills."; });
+    }
+    function esc(v) {
+      return String(v == null ? "" : v).replace(/[&<>"']/g, function(c){
+        return { "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c];
+      });
+    }
+
     function loadShareChat() {
       var cb = document.getElementById("share-chat-toggle");
       if (!cb) return;
@@ -1700,6 +1769,11 @@ export function ProjectDetailPage({
     if ('${activeTab}' === 'settings') {
       loadMembers();
       if (canManageTeam) { loadInvitations(); loadShareGit(); loadShareChat(); }
+      // Instructions and skills are visible to anyone who can open Settings — the
+      // rules the agents follow here shouldn't be a secret from the people working
+      // alongside them. Saving is still permission-checked server-side.
+      loadCustomInstructions();
+      loadSkills();
     }
   </script>
 
