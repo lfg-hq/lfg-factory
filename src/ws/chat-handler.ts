@@ -101,6 +101,8 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
 
   if (msg.type === "message") {
     const { message, conversation_id, project_id, turbo_mode, instant_mode, user_role, file, file_data, files } = msg;
+    // Dictated messages are marked so the transcript can show a mic after a reload.
+    const isVoice = !!(msg as { is_voice?: boolean }).is_voice;
     const mentionedTickets = (msg as { mentioned_tickets?: Array<{ id: string; key?: string; name?: string; branch?: string }> }).mentioned_tickets;
     // Multiple attachments: prefer the `files` array; fall back to the single file_data/file.
     const resolvedFiles = (files && files.length ? files : ([file_data ?? file].filter(Boolean) as NonNullable<typeof file_data>[]));
@@ -210,6 +212,7 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
           file: resolvedFile,
           files: resolvedFiles,
           mentionedTickets,
+          isVoice,
           abortController: conn.abortController,
           onActivity: bumpActivity,
         });

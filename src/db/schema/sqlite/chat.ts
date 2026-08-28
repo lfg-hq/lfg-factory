@@ -77,6 +77,8 @@ export const messages = sqliteTable(
     activityTrail: text("activity_trail", { mode: "json" }).$type<Array<{ text: string; tool?: string }> | null>(),
     // See ../pg/chat.ts — previews rendered in this turn.
     pagePreviews: text("page_previews", { mode: "json" }).$type<Array<{ id: string; name: string }> | null>(),
+    // See ../pg/chat.ts — dictated message marker.
+    isVoice: integer("is_voice", { mode: "boolean" }).notNull().default(false),
     createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
     lastUpdated: integer("last_updated", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
   },

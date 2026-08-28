@@ -130,6 +130,8 @@ export interface StreamRequest {
   ws: ServerWebSocket<WsData>;
   userId: string;
   userMessage: string;
+  /** The user dictated this message — recorded so history can show the mic. */
+  isVoice?: boolean;
   conversationId?: string;
   projectId?: string;
   turboMode?: boolean;
@@ -344,7 +346,7 @@ export async function describeAttachedImages(
 }
 
 export async function handleStream(req: StreamRequest): Promise<{ conversationId: string }> {
-  const { ws, userId, userMessage, projectId, turboMode, instantMode, abortController } = req;
+  const { ws, userId, userMessage, projectId, turboMode, instantMode, abortController, isVoice } = req;
 
   // ── 1. Resolve or create conversation ───────────────────────────────────────
   let convId = req.conversationId;
@@ -399,6 +401,7 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
     conversationId: convId,
     role: "user",
     content: userMessage,
+    isVoice: !!isVoice,
     // Only stamped when someone OTHER than the conversation's author wrote it.
     authorId: writingAsGuest ? userId : null,
   }).returning({ id: messages.id });

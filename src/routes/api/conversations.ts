@@ -106,6 +106,8 @@ conversationsApi.get("/:id", async (c) => {
       activity_trail: m.activityTrail ?? null,
       // Previews rendered in this turn, so reopening the chat shows the card again.
       page_previews: m.pagePreviews ?? null,
+      // Dictated, so the transcript can show a mic rather than looking typed.
+      is_voice: !!m.isVoice,
       // Null on every normal message (the conversation's own author). Set when an
       // owner/admin stepped into this chat, so the UI can label that turn.
       author: m.authorId ? (authorNames[m.authorId] ?? "Teammate") : null,

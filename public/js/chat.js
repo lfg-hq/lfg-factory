@@ -3087,7 +3087,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     // Function to handle the actual WebSocket message sending
-    function sendMessageToServer(message, filesData = null) {
+    function sendMessageToServer(message, filesData = null, opts = {}) {
         // Accept either an array of files (multi-attach) or a single object (legacy).
         const filesArr = Array.isArray(filesData) ? filesData.filter(Boolean) : (filesData ? [filesData] : []);
         const fileData = filesArr[0] || null; // primary — legacy single-file references below
@@ -3156,7 +3156,10 @@ document.addEventListener('DOMContentLoaded', () => {
             provider: currentProvider,
             project_id: currentProjectId,
             user_role: userRole,
-            turbo_mode: turboMode
+            turbo_mode: turboMode,
+            // Marks a dictated message so history can show the mic. Without it a voice
+            // message is indistinguishable from typing once the page reloads.
+            is_voice: !!opts.voice
         };
         
         // Add project_id if available
@@ -4765,6 +4768,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 // The trail the user watched during this turn, replayed COLLAPSED above
                 // the answer it produced — the live one only ever lived in the DOM, so a
                 // refresh used to erase the record of what the agent did.
+                // A dictated message keeps its mic on reload. addMessageToChat's 4th
+                // argument is userRole, not options — so the marker is added after.
+                if (message.role === 'user' && message.is_voice) {
+                    const el = addMessageToChat('user', message.content || '', fileData);
+                    markMessageAsVoice(el);
+                    rendered++;
+                    return;
+                }
                 if (message.role === 'assistant' && Array.isArray(message.activity_trail) && message.activity_trail.length) {
                     renderSavedTrail(message.activity_trail);
                 }
@@ -5412,6 +5423,17 @@ document.addEventListener('DOMContentLoaded', () => {
         return indicator;
     }
     
+    /** Put a small "Voice message" line above a message bubble's text. */
+    function markMessageAsVoice(messageEl) {
+        if (!messageEl) return;
+        const content = messageEl.querySelector('.message-content') || messageEl;
+        if (!content || content.querySelector('.message-audio-header')) return;
+        const tag = document.createElement('div');
+        tag.className = 'message-audio-header';
+        tag.innerHTML = '<i class="fas fa-microphone"></i> Voice message';
+        content.insertBefore(tag, content.firstChild);
+    }
+
     // Helper function to send audio message
     async function sendAudioMessage(audioFile, liveTranscript = '') {
         // Add user message with audio indicator
@@ -5437,12 +5459,14 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // If we have a live transcript, send it as a message with audio styling
         if (liveTranscript && liveTranscript.trim()) {
-            const messageElement = addMessageToChat('user', '', { 
-                audioIndicator: audioIndicator
-            });
-            
-            // Send the transcribed text to the server
-            sendMessageToServer(liveTranscript);
+            // Render the transcript as the message text with a mic marker, rather than
+            // an empty bubble holding a separate indicator element — that is what
+            // produced the tall empty block.
+            const messageElement = addMessageToChat('user', liveTranscript);
+            markMessageAsVoice(messageElement);
+
+            // Send the transcribed text to the server, flagged as dictated.
+            sendMessageToServer(liveTranscript, null, { voice: true });
             return;
         }
         

@@ -77,6 +77,8 @@ export const messages = pgTable(
     // Page previews produced during this turn, so the card comes back on refresh
     // rather than living only in the socket message that announced it.
     pagePreviews: jsonb("page_previews").$type<Array<{ id: string; name: string }> | null>(),
+    // The user dictated this message — history shows a mic instead of it looking typed.
+    isVoice: boolean("is_voice").notNull().default(false),
     createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),
     lastUpdated: timestamp("last_updated", { mode: "date" }).notNull().default(sql`now()`),
   },

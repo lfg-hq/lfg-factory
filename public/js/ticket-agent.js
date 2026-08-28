@@ -110,7 +110,45 @@
       (imgAtts.length ? `<div style="margin-top:12px;display:flex;flex-wrap:wrap;gap:6px;">` +
         imgAtts.map((a) => `<a href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.name || "attachment")}"><img src="${esc(a.url)}" loading="lazy" style="max-width:180px;max-height:150px;border-radius:8px;border:1px solid var(--border-color,#2a2a2a);display:block;"></a>`).join("") +
       `</div>` : "") +
-      (desc ? `<div class="markdown-content" style="margin-top:14px;font-size:13px;color:var(--text-color,#cbd5e1);line-height:1.6;">${md(desc)}</div>` : '<div style="margin-top:14px;opacity:.5;font-size:12.5px;">No description.</div>');
+      (desc ? `<div class="markdown-content" style="margin-top:14px;font-size:13px;color:var(--text-color,#cbd5e1);line-height:1.6;">${md(desc)}</div>` : '<div style="margin-top:14px;opacity:.5;font-size:12.5px;">No description.</div>') +
+      `<div id="ta-refs" style="margin-top:14px;"></div>`;
+    renderDocRefs(meta);
+  }
+
+  /**
+   * Documents the ticket cites, as openable rows. The agent writes "Approved design
+   * preview: document <uuid>" into the ticket text; the build agent gets the file, but
+   * a person reading the ticket was left with a bare uuid.
+   */
+  function renderDocRefs(meta) {
+    const host = $("ta-refs");
+    if (!host || !meta) return;
+    const text = [meta.name || "", meta.description || "", meta.notes || ""].join("\n");
+    let ids = (text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) || [])
+      .map((x) => x.toLowerCase());
+    ids = ids.filter((x, i) => ids.indexOf(x) === i);
+    if (!ids.length) return;
+
+    const pid = (window.currentProjectId) || (location.pathname.split("/")[3] || "");
+    if (!pid) return;
+    fetch(`/projects/${pid}/api/files/browser`)
+      .then((r) => r.json())
+      .then((j) => {
+        const hits = ((j && j.files) || []).filter((f) => ids.indexOf(String(f.id).toLowerCase()) !== -1);
+        if (!hits.length) return;
+        host.innerHTML =
+          `<div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;opacity:.55;margin-bottom:6px;">Attached</div>` +
+          hits.map((f) => {
+            const icon = f.type === "page_preview" ? "fa-window-maximize" : "fa-file-lines";
+            return `<a href="/projects/${esc(pid)}?tab=documents&file=${encodeURIComponent(f.id)}" target="_blank" rel="noopener"
+              style="display:flex;align-items:center;gap:8px;padding:8px 10px;margin-bottom:6px;border:1px solid var(--border-color,#2a2a2a);border-radius:8px;text-decoration:none;color:var(--text-color,#e2e8f0);font-size:12.5px;">
+              <i class="fas ${icon}" style="opacity:.7;font-size:11px;"></i>
+              <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(f.name || "Document")}</span>
+              <span style="flex:none;font-size:10.5px;opacity:.6;font-family:ui-monospace,Menlo,monospace;">${esc(f.type || "")}</span>
+            </a>`;
+          }).join("");
+      })
+      .catch(() => { /* the ticket still reads fine without this */ });
   }
 
   // ── Ticket actions (Build / Edit / Delete) — on THIS panel, not the list row ──
@@ -247,6 +285,12 @@
   }
 
   // ── Tabs: Details / Actions (agent chat) / Tasks / Git ─────────────────────
+  var TAB_KEY = "lfg_drawer_tab";   // shared with the tickets-page drawer
+  function rememberTab(tab) { try { sessionStorage.setItem(TAB_KEY, tab); } catch (e) {} }
+  function preferredTab() {
+    try { return sessionStorage.getItem(TAB_KEY) || ""; } catch (e) { return ""; }
+  }
+
   function switchTicketTab(tab) {
     activeTab = tab;
     document.querySelectorAll("#ta-tabs .ta-tab").forEach((b) => b.classList.toggle("active", b.getAttribute("data-ta-tab") === tab));
@@ -266,6 +310,9 @@
     return s === "open" ? "details" : "actions";
   }
   function applyAutoTab(count) {
+    // A tab you chose yourself outranks the guess — that's the whole point of it
+    // sticking. Only auto-pick when you haven't expressed a preference this session.
+    if (preferredTab()) { autoTabPending = false; return; }
     if (!autoTabPending) return;
     autoTabPending = false;
     const want = count > 0 ? "actions" : "details";
@@ -357,7 +404,11 @@
     // ticket row, open on whichever tab has something to show (see seedTab/applyAutoTab).
     // Set BEFORE loadLog() so the flag can't be read by its continuation before it exists.
     autoTabPending = !opts.withPreview;
-    switchTicketTab(opts.withPreview ? "actions" : seedTab(meta));
+    // "Chat with ticket" always means Actions. Otherwise: your remembered tab if you
+    // have one, else the seeded guess.
+    var want = opts.withPreview ? "actions" : (preferredTab() || seedTab(meta));
+    if (preferredTab()) autoTabPending = false;
+    switchTicketTab(want);
     loadLog();
     startPoll();
     // Only take over the RIGHT panel with the live preview when explicitly asked (the
@@ -572,7 +623,7 @@
     $("ta-delete")?.addEventListener("click", deleteTicket);
     // A deliberate tab choice outranks the pending auto-switch — never yank the panel
     // out from under someone who just clicked Details while the logs were still loading.
-    $("ta-tabs")?.addEventListener("click", (e) => { const b = e.target.closest("[data-ta-tab]"); if (b) { autoTabPending = false; switchTicketTab(b.getAttribute("data-ta-tab")); } });
+    $("ta-tabs")?.addEventListener("click", (e) => { const b = e.target.closest("[data-ta-tab]"); if (b) { autoTabPending = false; rememberTab(b.getAttribute("data-ta-tab")); switchTicketTab(b.getAttribute("data-ta-tab")); } });
     $("ta-send")?.addEventListener("click", send);
     $("ta-input")?.addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
     $("ta-attach")?.addEventListener("click", () => $("ta-file")?.click());

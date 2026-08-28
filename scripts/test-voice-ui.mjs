@@ -53,5 +53,24 @@ else fail("panel would keep dark colours on white");
 if (!/background: rgba\(255,255,255,0\.05\)/.test(js.slice(js.indexOf("transcriptionArea.style.cssText"), js.indexOf("transcriptionArea.style.cssText") + 300))) ok("the transcript area uses theme tokens, not hardcoded dark");
 else fail("hardcoded dark inline style remains");
 
+console.log("\nthe marker survives a reload:");
+const handler = fs.readFileSync("src/ai/stream-handler.ts", "utf8");
+const wsh = fs.readFileSync("src/ws/chat-handler.ts", "utf8");
+const api = fs.readFileSync("src/routes/api/conversations.ts", "utf8");
+if (/is_voice: !!opts\.voice/.test(js)) ok("the client flags a dictated message");
+else fail("nothing marks the outgoing message");
+if (/const isVoice = !!\(msg as \{ is_voice\?: boolean \}\)\.is_voice/.test(wsh)) ok("the socket handler reads it");
+else fail("flag dropped at the socket");
+if (/isVoice: !!isVoice/.test(handler)) ok("saved on the user message");
+else fail("never persisted");
+if (/is_voice: !!m\.isVoice/.test(api)) ok("returned with history");
+else fail("history omits it");
+if (/markMessageAsVoice\(el\)/.test(js)) ok("history replays the mic marker");
+else fail("reloaded voice messages look typed");
+// The old path put an empty bubble next to a separate indicator element; that is the
+// tall empty block.
+if (/addMessageToChat\('user', liveTranscript\)/.test(js)) ok("the transcript IS the bubble text now");
+else fail("still rendering an empty bubble plus an indicator");
+
 console.log(bad ? `\n${bad} FAILED` : "\nall checks pass");
 process.exit(bad ? 1 : 0);
