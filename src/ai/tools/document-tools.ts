@@ -80,11 +80,13 @@ export const streamDocumentContent = tool({
 
 export const previewPage = tool({
   description:
-    "Show the user a REAL, rendered preview of a page before any ticket is built — a " +
-    "self-contained HTML document (all CSS inline in a <style> block, no external files, " +
-    "no build step) that appears as an expandable card in the chat. Use this once the " +
-    "content and section order of a landing/marketing page are agreed: an ASCII wireframe " +
-    "shows the shape, but only this shows what the page will FEEL like. " +
+    "Show the user a REAL, rendered preview of a page — a self-contained HTML document " +
+    "(all CSS inline in a <style> block, no external files, no build step) that appears " +
+    "as an expandable card in the chat. " +
+    "CALL THIS ONLY WHEN THE CONTENT IS SETTLED AND THE USER HAS AGREED TO A PREVIEW. " +
+    "It re-renders the whole page and takes about a minute, so copy changes belong in " +
+    "chat first — settle the words, ask 'want me to render a preview?', then call this. " +
+    "Do not call it again for every small text edit; batch them, or wait to be asked. " +
     "Match the app's existing palette and typography when the project has one. " +
     "The preview is saved as a project document, and the id it returns MUST be quoted in " +
     "the ticket you create so the build agent works from the approved design.",
