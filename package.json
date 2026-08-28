@@ -24,7 +24,8 @@
     "test:trail-server": "node scripts/test-trail-recording.mjs",
     "test:tooloutput": "node scripts/test-tool-output.mjs",
     "test:docview": "node scripts/test-doc-preview-view.mjs",
-    "test:skills": "bun run scripts/test-skills.mjs"
+    "test:skills": "bun run scripts/test-skills.mjs",
+    "test:designrefs": "node scripts/test-ticket-design-refs.mjs"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

@@ -505,6 +505,62 @@ async function directivesBlock(projectId: string): Promise<string> {
   } catch { return ""; }
 }
 
+/**
+ * Put any project document the ticket REFERENCES into the build sandbox.
+ *
+ * The product agent writes "Approved design preview: document <uuid>" into the ticket,
+ * but the build prompt only ever carried the ticket's own text — the document lives in
+ * the LFG database, not the repo, so that id was a dead reference and the agent had to
+ * reinvent the design from prose. Now the file is written into the sandbox (under the
+ * already-gitignored .lfg/) and the prompt points at the path.
+ */
+async function materializeTicketDocs(args: {
+  projectId: string;
+  workspaceId: string;
+  projectDir: string;
+  text: string;
+}): Promise<Array<{ name: string; fileType: string; path: string }>> {
+  const ids = [...new Set(
+    (args.text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) ?? [])
+      .map((x) => x.toLowerCase())
+  )];
+  if (!ids.length) return [];
+
+  try {
+    const { projectFiles } = await import("../db/schema/documents.ts");
+    const { getContent } = await import("../services/s3.ts");
+    const rows = await db
+      .select()
+      .from(projectFiles)
+      .where(and(eq(projectFiles.projectId, args.projectId), inArray(projectFiles.id, ids)));
+    if (!rows.length) return [];
+
+    const out: Array<{ name: string; fileType: string; path: string }> = [];
+    for (const f of rows.slice(0, 4)) {           // a ticket referencing more is a smell
+      const content = await getContent(f.s3Key, f.content).catch(() => "");
+      if (!content || content.length > 400_000) continue;
+      const ext = f.fileType === "page_preview" ? "html" : "md";
+      const slug = (f.name || f.id).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) || f.id;
+      const path = `${args.projectDir}/.lfg/design/${slug}.${ext}`;
+      const b64 = Buffer.from(content).toString("base64");
+      const script = `mkdir -p ${args.projectDir}/.lfg/design && echo ${b64} | base64 -d > ${path} && wc -c < ${path}`;
+      const scriptB64 = Buffer.from(script).toString("base64");
+      const r = await execOnWorkspace(args.workspaceId, `echo ${scriptB64} | base64 -d | sh`, { timeout: 60_000 })
+        .catch((e) => ({ output: `EXEC_FAILED: ${(e as Error).message}`, exitCode: 1 }));
+      if ((r.exitCode ?? 0) === 0) {
+        out.push({ name: f.name, fileType: f.fileType, path });
+        console.log(`[ticket-executor] materialized doc "${f.name}" (${f.fileType}) → ${path}`);
+      } else {
+        console.warn(`[ticket-executor] could not write ${path}: ${(r.output || "").slice(0, 160)}`);
+      }
+    }
+    return out;
+  } catch (e) {
+    console.warn("[ticket-executor] materializeTicketDocs failed:", (e as Error).message);
+    return [];
+  }
+}
+
 function buildPiTicketPrompt(args: {
   ticket: { name: string; description: string | null; notes?: string | null; acceptanceCriteria?: string[] | null };
   techStack?: { language?: string; framework?: string; packageManager?: string; port?: number } | null;
@@ -519,12 +575,26 @@ function buildPiTicketPrompt(args: {
   addenda?: string;
   /** Screenshots/images the user attached to this ticket, as absolute fetchable URLs. */
   attachments?: Array<{ url: string; name?: string }>;
+  /** Project documents the ticket references, written into the sandbox. */
+  designRefs?: Array<{ name: string; fileType: string; path: string }>;
 }): string {
   const t = args.ticket;
   const ac = (t.acceptanceCriteria ?? []).map((c, i) => `${i + 1}. ${c}`).join("\n") || "Not specified.";
   const attBlock = (args.attachments && args.attachments.length)
     ? `\n## Attached screenshots\nThe user attached ${args.attachments.length} image(s) to this ticket — the description above reflects them. If you can view images, fetch them:\n` +
       args.attachments.map((a) => `- ${a.name || "image"}: ${a.url}`).join("\n") + "\n"
+    : "";
+  // An approved design preview is a rendered HTML page sitting in the sandbox. Say so
+  // plainly: the agent should OPEN it, not guess from the prose description.
+  const refBlock = (args.designRefs && args.designRefs.length)
+    ? `\n## Design reference — READ THIS FIRST\n` +
+      args.designRefs.map((d) => {
+        const what = d.fileType === "page_preview"
+          ? "the APPROVED page design, already signed off by the user"
+          : `a project document (${d.fileType})`;
+        return `- \`${d.path}\` — ${what}: "${d.name}"`;
+      }).join("\n") +
+      `\nOpen these before writing any code. Where a page design is given, match its structure, copy, spacing and colours — it is what the user approved, not a suggestion. Port it into this project's own components and styling conventions rather than pasting the file in.\n`
     : "";
   const port = args.runInfo?.port ?? args.techStack?.port ?? 8080;
   const runBlock = args.runInfo && (args.runInfo.installCmd || args.runInfo.buildCmd || args.runInfo.runCmd)
@@ -560,7 +630,7 @@ ${ac}
 ${attBlock}
 ## Tech stack
 ${stack}
-${runBlock}${args.addenda ?? ""}${args.directives ?? ""}
+${refBlock}${runBlock}${args.addenda ?? ""}${args.directives ?? ""}
 ## Sandbox environment
 - This is an **Alpine Linux** sandbox. Install system packages with **\`apk add\`** ONLY — apt/apt-get/yum/dnf/brew do NOT exist here. You are root; do NOT use \`sudo\`.
 - **ALL work must live on \`/data\`** (an ~8GB volume). The root filesystem \`/\` is tiny (~2.9GB) and fills up fast. The project is at **\`/data/project\`**. Every toolchain cache/download is ALREADY redirected to /data for you (GOPATH/GOMODCACHE/GOCACHE + Go toolchain downloads, pip/uv/cargo/npm caches, XDG caches, TMPDIR). Do NOT install into \`/root\` or \`/tmp\`, and do NOT point any cache/install/toolchain dir back at the root fs — if you need a new cache/output dir, put it under \`/data\`. If a build ever reports "no space left on device", it's because something wrote to \`/\`; move it under \`/data\`.
@@ -2826,6 +2896,14 @@ git branch --show-current
       directives: await directivesBlock(project.id),
       addenda: addendaCtx.block,
       attachments: ticketAttachments,
+      // Any document the ticket cites (an approved page preview, most often) is written
+      // into the sandbox first, so the reference resolves to a file the agent can open.
+      designRefs: await materializeTicketDocs({
+        projectId: project.id,
+        workspaceId,
+        projectDir,
+        text: [ticket.name, ticket.description ?? "", ticket.notes ?? ""].join("\n"),
+      }),
     });
     try {
       // Resolve (or mint) the CLI API key that authenticates the VM→server webhook.
