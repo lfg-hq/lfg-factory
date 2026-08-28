@@ -7,6 +7,8 @@
  *  - Completion markers that the executor detects to stop polling
  */
 
+import { TICKET_CHAT_MODE_CONTRACT } from "../../services/ticket-chat-turn.ts";
+
 export interface BuilderPromptContext {
   ticket: {
     id: string;
@@ -203,8 +205,14 @@ IMPLEMENTATION_STATUS: FAILED - [reason]
 }
 
 /**
- * Prompt for resuming a ticket chat session.
- * Used when a user or the main agent sends a message to the ticket agent.
+ * Prompt for a ticket chat message (user or orchestrator).
+ *
+ * A chat message is NOT automatically "build this" — it can be a question, an
+ * under-specified request that needs a question back, or a real instruction. The
+ * mode contract makes the agent say which one it chose; the executor gates the
+ * commit on that plus the actual working tree. `previousContext` carries the
+ * ticket's requirements, build state and recent conversation (built once in the
+ * executor and shared with the Pi path).
  */
 export function buildTicketChatPrompt(
   ctx: Pick<BuilderPromptContext, "ticket" | "project" | "callbackBaseUrl" | "cliApiKey">,
@@ -213,22 +221,20 @@ export function buildTicketChatPrompt(
 ): string {
   const { ticket, project, callbackBaseUrl, cliApiKey } = ctx;
 
-  return `You are continuing work on ticket ${ticket.ticketKey ? ticket.ticketKey + " " : ""}"${ticket.name}" (ID: ${ticket.id}) in the project "${project.name}".
-
-${previousContext ? `## Previous Context\n${previousContext}\n` : ""}
-
-## New Message from User/Orchestrator
+  return `You are the agent on ticket ${ticket.ticketKey ? ticket.ticketKey + " " : ""}"${ticket.name}" (ID: ${ticket.id}) in the project "${project.name}". The repo is already cloned and checked out at /data/project.
+${previousContext ? `\n${previousContext}` : ""}
+## New message from the user
 ${userMessage}
+
+${TICKET_CHAT_MODE_CONTRACT}
+
+## Working rules
+- Explore the repo and reuse its existing patterns; don't regress work already done.
+- Do NOT run \`git commit\`, \`git push\` or switch branches — commit/push is handled for you.
+- In change mode, keep the change focused and make sure the project still builds.
 
 ## Callback API
 Base URL: ${callbackBaseUrl}
 Auth Header: X-CLI-API-Key: ${cliApiKey}
-
-Respond to the message and continue implementation as needed. If you complete the requested change, report:
-IMPLEMENTATION_STATUS: COMPLETE
-
-If you cannot complete it:
-IMPLEMENTATION_STATUS: FAILED
-Reason: <brief explanation>
 `;
 }

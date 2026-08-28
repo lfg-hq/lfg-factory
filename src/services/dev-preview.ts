@@ -1645,10 +1645,20 @@ function gitCheck(seg: string, allowBranchSwitch: boolean): { ok: boolean; reaso
   return { ok: false, reason: `\`git ${sub || "(none)"}\` is not an allowed subcommand — inspection is read-only apart from fetch/checkout/switch inside a ticket worktree` };
 }
 
-/** Build the read-only `inspectPreview` tool bound to a project. Returns {} if there's no
- *  project context (standalone chat), so it's safe to spread unconditionally. */
-export function createPreviewInspectTool(params: { projectId?: string }): Record<string, unknown> {
+/** Build the `inspectPreview` tool bound to a project. Read-only by default; a project
+ *  whose owner turned on Agent shell access gets the unrestricted version instead, which
+ *  is why this is async — the flag decides what the DESCRIPTION promises, and a tool that
+ *  advertises writes it then refuses is worse than one that never offered.
+ *  Returns {} if there's no project context (standalone chat), so it's safe to spread. */
+export async function createPreviewInspectTool(params: { projectId?: string }): Promise<Record<string, unknown>> {
   const { projectId } = params;
+  let shellAccess = false;
+  if (projectId) {
+    const [row] = await db.select({ f: projects.agentShellAccess }).from(projects).where(eq(projects.id, projectId)).limit(1)
+      .catch(() => [] as Array<{ f: boolean }>);
+    shellAccess = !!row?.f;
+  }
+  if (shellAccess) return { inspectPreview: previewShellTool(projectId!) };
   return {
     inspectPreview: tool({
       description:
@@ -1693,6 +1703,47 @@ export function createPreviewInspectTool(params: { projectId?: string }): Record
       },
     }),
   };
+}
+
+/** The same window with the guard-rail removed, for a project that opted in. Everything
+ *  else is identical — same workdir resolution, same output cap — so turning the setting
+ *  on doesn't change WHERE the agent looks, only what it may do there. */
+function previewShellTool(projectId: string) {
+  return tool({
+    description:
+      "A SHELL on this project's LIVE preview sandbox — this project has granted the agent full shell access, so you can both diagnose AND FIX. Runs ONE command and returns its output. Use it for real evidence (curl the app, tail the log, `docker logs`, query the DB, read-only git) and, when you find the problem, for the repair: free a full disk, install a missing package, restart a crashed process, apply a migration, fix a config file. By DEFAULT it runs in whatever checkout the preview is currently serving — a ticket's worktree when a ticket branch is live — so what you touch matches what the user is looking at; pass `workdir` for the main checkout or another ticket's worktree. This is a real machine and the changes are real: prefer the narrow command over the broad one, SAY what you ran and what it did, and don't delete anything you can't identify. `@preview` still owns the full rebuild/restart flow — reach for it rather than reconstructing a boot sequence by hand. Only works when a preview sandbox exists for this project.",
+    inputSchema: zodSchema(z.object({
+      command: z.string().describe("One shell command, e.g. `df -h`, `docker system prune -f`, `tail -n 100 preview.log`, `npm install`, `curl -s -i http://localhost:8080/`."),
+      workdir: z.string().optional().describe("Which checkout to run in: \"preview\" (default) = the one the preview is currently serving; \"main\" = the default-branch checkout (/data/project); \"ticket:<ticketId>\" = that ticket's worktree; or an absolute path under /data."),
+      reason: z.string().optional().describe("One line: what you're doing and why."),
+    })),
+    execute: async ({ command, workdir }: { command: string; workdir?: string; reason?: string }) => {
+      let workspaceId: string;
+      try { workspaceId = await envWorkspaceId(projectId); }
+      catch { return { error: "No preview sandbox exists for this project yet. Ask the user to start a preview (Run default branch), then the shell will work." }; }
+      const w = (workdir || "preview").trim();
+      let dir: string;
+      let note: string;
+      if (w === "main") { dir = PROJECT_DIR; note = "the default checkout"; }
+      else if (w.startsWith("ticket:")) { const t = w.slice(7).trim(); dir = ticketWorktreeDir(t); note = `the worktree for ticket ${t}`; }
+      else if (w.startsWith("/")) {
+        if (!/^\/data\/[\w./-]*$/.test(w)) return { error: 'workdir must be "preview", "main", "ticket:<id>", or an absolute path under /data.' };
+        dir = w; note = w;
+      } else {
+        ({ dir, note } = await resolvePreviewWorkDir(projectId, workspaceId));
+      }
+      try {
+        // Longer than the read-only ceiling: an install or a prune legitimately takes minutes.
+        const res = await sh(workspaceId, `${envPrefix(dir)}${command}`, 180_000);
+        const output = (res.output || "").slice(-6000).trim();
+        return { workdir: dir, ran_in: note, exitCode: res.exitCode, output: output || "(no output)" };
+      } catch (e) {
+        const msg = (e as Error).message || String(e);
+        if (/no VM associated|not found|unreachable/i.test(msg)) return { error: "The preview sandbox isn't running right now — ask the user to start/restart the preview." };
+        return { error: `Command failed: ${msg.slice(0, 200)}` };
+      }
+    },
+  });
 }
 
 function buildDriverSystemPrompt(manifest: PreviewManifest, engines: EngineHandle[], workDir: string = PROJECT_DIR, configNotes: string[] = [], directives: string[] = []): string {

@@ -74,6 +74,8 @@ export const projects = sqliteTable(
     shareChatHistory: integer("share_chat_history", { mode: "boolean" }).notNull().default(false),
     // See ../pg/projects.ts — per-project agent instructions.
     customInstructions: text("custom_instructions"),
+    // See ../pg/projects.ts — when ON the agent's preview shell may write, not just read.
+    agentShellAccess: integer("agent_shell_access", { mode: "boolean" }).notNull().default(false),
 
     createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
     updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),

@@ -195,9 +195,11 @@ previewApi.get("/:projectId/preview/build-settings", async (c) => {
   const user = c.get("user");
   const access = await getProjectAccess(c.req.param("projectId")!, user.id);
   if (!access) return c.json({ error: "Project not found" }, 404);
-  const p = access.project as { ticketBuildIsolation?: string; previewBranchMode?: string; dbMode?: string; shareGitAccess?: boolean; shareChatHistory?: boolean; customInstructions?: string | null };
+  const p = access.project as { ticketBuildIsolation?: string; previewBranchMode?: string; dbMode?: string; shareGitAccess?: boolean; shareChatHistory?: boolean; customInstructions?: string | null; agentShellAccess?: boolean };
   return c.json({
     customInstructions: p.customInstructions ?? "",
+    agentShellAccess: !!p.agentShellAccess,
+    canGrantShell: access.role === "owner",
     ticketBuildIsolation: p.ticketBuildIsolation ?? "isolated",
     previewBranchMode: p.previewBranchMode ?? "worktree",
     dbMode: p.dbMode ?? "auto",
@@ -236,6 +238,13 @@ previewApi.post("/:projectId/preview/build-settings", async (c) => {
     try { requirePermission(access, "canManageTickets"); }
     catch { return c.json({ error: "You don't have permission to change agent instructions" }, 403); }
     patch.customInstructions = body.customInstructions.slice(0, 4000);
+  }
+  // Lets the chat agent RUN things on the preview VM rather than only reading it —
+  // owner-only, same as the other two settings that widen what someone else's session
+  // can reach. Off unless deliberately turned on.
+  if (typeof body.agentShellAccess === "boolean") {
+    if (access.role !== "owner") return c.json({ error: "Only the project owner can grant the agent shell access." }, 403);
+    patch.agentShellAccess = body.agentShellAccess;
   }
   if (!Object.keys(patch).length) return c.json({ error: "Nothing valid to update" }, 400);
   patch.updatedAt = new Date();

@@ -73,6 +73,13 @@ export const projects = pgTable(
     // Free-text instructions the user wants EVERY agent on this project to follow —
     // reaches both the chat agent and each ticket build.
     customInstructions: text("custom_instructions"),
+    // What the chat agent may do in the preview sandbox. OFF (default): inspection is
+    // read-only — it can curl, tail logs and read the DB, and anything that writes is
+    // refused. ON: the same tool runs any command, so the agent can free a full disk,
+    // restart a crashed process or apply a migration itself instead of reporting the
+    // problem back and waiting. Opt-in and owner-only: it is the difference between an
+    // agent that observes the VM and one that can change it unattended.
+    agentShellAccess: boolean("agent_shell_access").notNull().default(false),
     createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),
     updatedAt: timestamp("updated_at", { mode: "date" }).notNull().default(sql`now()`),
   },

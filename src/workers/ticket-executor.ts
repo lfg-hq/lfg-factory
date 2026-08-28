@@ -2015,44 +2015,24 @@ async function executeTicketChat(
       .from(projectEnvironmentVariables)
       .where(and(eq(projectEnvironmentVariables.projectId, project!.id), eq(projectEnvironmentVariables.hasValue, true)));
     for (const r of piEnvRows) piEnvVars[r.key] = decrypt(r.encryptedValue);
-    // Give Pi the FULL context so a follow-up isn't blind: the requirements
-    // (acceptance criteria + notes), what was already built (branch/commit/status),
-    // and the recent conversation so it continues rather than restarts.
-    const ac = ((ticket.acceptanceCriteria as string[] | null) ?? []).filter(Boolean);
-    const acBlock = ac.length ? `\n## Acceptance criteria (must all still hold)\n${ac.map((c, i) => `${i + 1}. ${c}`).join("\n")}\n` : "";
-    const notesBlock = ticket.notes?.trim() ? `\n## Notes / rules to honor\n${ticket.notes.trim()}\n` : "";
-    const built = ticket.githubBranch || ticket.githubCommitSha;
-    const statusBlock = built
-      ? `\n## Current status of this job\nThis ticket was ALREADY built and its code is in the working tree (branch ${ticket.githubBranch ?? "?"}${ticket.githubCommitSha ? `, last commit ${ticket.githubCommitSha.slice(0, 7)}` : ""}). You are ITERATING on that existing implementation — build on it, don't start over.\n`
-      : `\n## Current status of this job\nThis ticket has not been built yet — implement it from the current repo state.\n`;
-    // Recent conversation (last few user asks + agent replies) for continuity.
-    const recent = await db.select({ t: ticketLogs.logType, m: ticketLogs.command })
-      .from(ticketLogs)
-      .where(and(eq(ticketLogs.ticketId, ticketId), inArray(ticketLogs.logType, ["user_message", "ai_response"])))
-      .orderBy(desc(ticketLogs.createdAt)).limit(8);
-    const convo = recent.reverse().filter((r) => (r.m ?? "").trim() && (r.m ?? "").trim() !== message.trim());
-    const convoBlock = convo.length
-      ? `\n## Recent conversation (oldest first)\n${convo.map((r) => `${r.t === "user_message" ? "User" : "Agent"}: ${(r.m ?? "").slice(0, 400)}`).join("\n")}\n`
-      : "";
-    const dirBlock = await directivesBlock(project!.id);
-    const addBlock = (await ticketAddendaContext(ticketId)).block; // pending addenda + history (context)
-    const piPrompt = `You are continuing work on an existing ticket in the repository at /data/${projectDirName}.
+    const piPrompt = `You are the agent on an existing ticket in the repository at /data/${projectDirName}.
 
 ## Ticket
 ${ticket.name}
 
 ## Description
 ${ticket.description ?? ""}
-${acBlock}${notesBlock}${statusBlock}${convoBlock}${addBlock}${dirBlock}
-## New instruction from the user (do this now)
+${chatContext}
+## New message from the user
 ${message}
 
-## Instructions
+${TICKET_CHAT_MODE_CONTRACT}
+
+## Working rules
 - The repo is already cloned and set up at /data/${projectDirName}; explore it and reuse existing patterns.
 - Honor the acceptance criteria, notes, and MANDATORY DIRECTIVES above; do NOT regress work already done.
-- Do exactly what the user's new instruction asks; keep the change focused.
 - Do NOT run 'git commit', 'git push', or switch branches — commit/push is handled automatically.
-- Before finishing, make sure the project still builds/compiles.`;
+- In change mode: keep the change focused, and make sure the project still builds/compiles.`;
     try {
       const webhookReachable = !!cliApiKey && !/localhost|127\.0\.0\.1|\/\/0\.0\.0\.0/.test(CALLBACK_BASE_URL);
       const pi = await startPiCli({

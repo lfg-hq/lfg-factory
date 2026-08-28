@@ -342,6 +342,23 @@ export function ProjectDetailPage({
             .skill-form small { display:block; margin-top:0.3rem; font-size:0.73rem; line-height:1.45; color:var(--text-secondary); }
             .skill-body-label { margin-top:0.9rem; }
 
+            .access-opts { display:grid; grid-template-columns:1fr 1fr; gap:0.7rem; }
+            @media (max-width: 720px) { .access-opts { grid-template-columns:1fr; } }
+            .access-opt {
+              display:block; border:1px solid var(--border-color); border-radius:10px;
+              padding:0.85rem 0.95rem; cursor:pointer; background:var(--body-bg); transition:border-color 0.15s, background 0.15s;
+            }
+            .access-opt:hover { border-color:var(--primary-color); }
+            .access-opt input { position:absolute; opacity:0; pointer-events:none; }
+            .access-opt-title { display:flex; align-items:center; gap:0.45rem; font-size:0.85rem; font-weight:600; color:var(--text-color); }
+            .access-opt-title i { width:14px; font-size:0.8rem; color:var(--text-secondary); }
+            .access-opt p { margin:0.35rem 0 0; font-size:0.78rem; line-height:1.5; color:var(--text-secondary); }
+            .access-opt.selected { border-color:var(--primary-color); background:color-mix(in srgb, var(--primary-color) 8%, var(--body-bg)); }
+            .access-opt.selected .access-opt-title i { color:var(--primary-color); }
+            .access-opts.locked .access-opt { cursor:not-allowed; opacity:0.65; }
+            .access-opts.locked .access-opt:hover { border-color:var(--border-color); }
+            .access-opts.locked .access-opt.selected { opacity:1; }
+
             .skills-list { display:flex; flex-direction:column; gap:0.6rem; }
             .skill-item { border:1px solid var(--border-color); border-radius:10px; padding:0.85rem 1rem; }
             .skill-item.is-overridden { opacity:0.55; }
@@ -1347,6 +1364,28 @@ export function ProjectDetailPage({
 
             <div id="skills-list" class="skills-list">Loading…</div>
           </div>
+
+          <div class="agent-card">
+            <div class="agent-card-head">
+              <div>
+                <h3>Sandbox access</h3>
+                <p>What the chat agent may do on this project's preview machine when it looks into a problem. Reading always works; running things is the part you decide.</p>
+              </div>
+            </div>
+            <div id="shell-access-opts" class="access-opts">
+              <label class="access-opt" for="shell-off">
+                <input type="radio" name="shell-access" id="shell-off" value="off" onchange="saveShellAccess(false)" />
+                <span class="access-opt-title"><i class="fas fa-eye"></i> Read only</span>
+                <p>It can curl the app, tail logs, read the database and inspect git — then tell you what's wrong. Anything that writes is refused.</p>
+              </label>
+              <label class="access-opt" for="shell-on">
+                <input type="radio" name="shell-access" id="shell-on" value="on" onchange="saveShellAccess(true)" />
+                <span class="access-opt-title"><i class="fas fa-terminal"></i> Full shell</span>
+                <p>It can also fix what it finds — free a full disk, restart a dead process, install a missing package — without you opening a terminal.</p>
+              </label>
+            </div>
+            <div class="agent-row"><span id="shell-access-status" class="agent-status"></span></div>
+          </div>
         </div>
         ` : ""}
 
@@ -1778,8 +1817,45 @@ export function ProjectDetailPage({
       if (!ta) return;
       fetch("/api/projects/" + projectId + "/preview/build-settings")
         .then(function(r){ return r.json(); })
-        .then(function(d){ if (d && typeof d.customInstructions === "string") ta.value = d.customInstructions; })
+        .then(function(d){
+          if (!d) return;
+          if (typeof d.customInstructions === "string") ta.value = d.customInstructions;
+          paintShellAccess(!!d.agentShellAccess, !!d.canGrantShell);
+        })
         .catch(function(){});
+    }
+    // The picker is the state — no separate save button, since there's nothing to
+    // compose. Owners only: it decides what someone else's chat can do to the VM.
+    function paintShellAccess(on, canGrant) {
+      var opts = document.getElementById("shell-access-opts");
+      if (!opts) return;
+      var el = document.getElementById(on ? "shell-on" : "shell-off");
+      if (el) el.checked = true;
+      var labels = opts.querySelectorAll(".access-opt");
+      for (var i = 0; i < labels.length; i++) {
+        var input = labels[i].querySelector("input");
+        labels[i].classList.toggle("selected", !!(input && input.checked));
+        if (input) input.disabled = !canGrant;
+      }
+      opts.classList.toggle("locked", !canGrant);
+      var st = document.getElementById("shell-access-status");
+      if (st) st.textContent = canGrant
+        ? (on ? "The agent runs commands on the preview machine. Changes it makes are real." : "The agent reports problems it finds; you fix them.")
+        : "Only the project owner can change this.";
+    }
+    function saveShellAccess(on) {
+      var st = document.getElementById("shell-access-status");
+      if (st) st.textContent = "Saving…";
+      fetch("/api/projects/" + projectId + "/preview/build-settings", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agentShellAccess: on })
+      })
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+          if (d && d.error) { if (st) st.textContent = d.error; return; }
+          paintShellAccess(on, true);
+        })
+        .catch(function(){ if (st) st.textContent = "Could not save."; });
     }
     function saveCustomInstructions() {
       var ta = document.getElementById("custom-instructions");
