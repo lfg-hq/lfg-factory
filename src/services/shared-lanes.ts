@@ -128,6 +128,78 @@ export async function tryAcquireLane(
   return { ok: true, release: () => releaseLane(req.ticketId) };
 }
 
+/** One ticket worktree living in the shared VM, as far as eviction is concerned. */
+export interface WorktreeCandidate {
+  ticketId: string;
+  /** Ticket status: "done", "review", "failed", "in_progress"… */
+  status: string | null;
+  /** The ticket's branch, to compare against what the preview is serving. */
+  branch: string | null;
+  /** A pushed commit — proof the work exists somewhere other than this directory. */
+  sha: string | null;
+  /** Last time the ticket was touched; least-recently-touched is evicted first. */
+  touched: Date | string | null;
+}
+
+/**
+ * Decide WHICH worktrees may be removed to free space, and in what order.
+ *
+ * A worktree is a cache: its branch is on the remote, so removing it costs a
+ * `git worktree add` plus a dependency install next time that ticket is built —
+ * and nothing at all if it never is. What must never be removed is a directory
+ * that is the ONLY copy of something, or one that's in use right now.
+ *
+ * Order: finished tickets first (nobody is coming back to them), then tickets whose
+ * work is safely pushed, least-recently-touched first. That second tier is the one
+ * that matters in practice — a real board parks a dozen tickets in In Review, and a
+ * done-only policy would free nothing exactly when space runs out.
+ */
+export function planWorktreeEviction(
+  candidates: WorktreeCandidate[],
+  ctx: {
+    /** The ticket asking for space — never evict the directory it's about to use. */
+    keepTicketId?: string;
+    /** The branch the preview is serving right now, if any. */
+    liveBranch?: string | null;
+    /** Include the "pushed but not finished" tier (In Review and friends). */
+    includePushed: boolean;
+  },
+): WorktreeCandidate[] {
+  const safe = candidates.filter((c) =>
+    !!c.ticketId &&
+    c.ticketId !== ctx.keepTicketId &&
+    !lanes.has(c.ticketId) &&                                        // working right now
+    !(c.branch && ctx.liveBranch && c.branch === ctx.liveBranch) &&  // on screen right now
+    c.status !== "in_progress",
+  );
+  const age = (c: WorktreeCandidate) => new Date(c.touched ?? 0).getTime();
+  const byAge = (a: WorktreeCandidate, b: WorktreeCandidate) => age(a) - age(b);
+  const done = safe.filter((c) => c.status === "done").sort(byAge);
+  // Only what is PUSHED. A build whose push failed has its sole copy in that
+  // directory — deleting it would destroy the work outright.
+  const pushed = ctx.includePushed
+    ? safe.filter((c) => c.status !== "done" && !!c.sha).sort(byAge)
+    : [];
+  return [...done, ...pushed];
+}
+
+/**
+ * What is actually eating /data, biggest first — so a "low on disk" refusal tells the
+ * user where the space went instead of leaving them to guess.
+ */
+export async function topDiskConsumers(workspaceId: string, limit = 5): Promise<string> {
+  try {
+    const r = await execOnWorkspace(
+      workspaceId,
+      `du -sh /data/* 2>/dev/null | sort -rh | head -${limit} | awk '{printf "%s %s, ", $1, $2}'`,
+      { timeout: 90_000 },
+    );
+    return (r.output || "").trim().replace(/,$/, "");
+  } catch {
+    return "";
+  }
+}
+
 /**
  * Stop ONE lane without touching the rest of the box.
  *

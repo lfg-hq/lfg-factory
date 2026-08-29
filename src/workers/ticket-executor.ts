@@ -181,6 +181,10 @@ import {
   laneOf,
   activeLanes,
   scopedStopScript,
+  freeDiskGb,
+  laneMinFreeGb,
+  topDiskConsumers,
+  planWorktreeEviction,
 } from "../services/shared-lanes.ts";
 import { generateTicketDemo } from "../services/ticket-demo.ts";
 import { matchKnowledgeForPrompt } from "../ai/knowledge/matcher.ts";
@@ -501,27 +505,80 @@ async function resolveBuildPlacement(
   };
 }
 
-/** Free disk by removing worktrees of tickets that are DONE — except one the preview
- *  is currently serving. Called only when a lane is refused for space. */
-async function evictFinishedWorktrees(workspaceId: string, projectId: string): Promise<void> {
+/**
+ * Reclaim /data space in the shared preview VM by removing ticket worktrees.
+ *
+ * A worktree is a CACHE, not the work: everything in it is either pushed to the
+ * remote or still in the tree of a running build. Removing a pushed one costs a
+ * `git worktree add` and a dependency install on the next build (the caches on
+ * /data survive), and costs nothing at all if the ticket is never touched again.
+ *
+ * Two tiers, gentlest first, stopping the moment we're above `targetGb`:
+ *   1. tickets that are DONE — nobody is coming back to these;
+ *   2. tickets whose work is SAFELY ON THE REMOTE (a pushed commit), oldest first.
+ *      This is the tier that matters on a real board, where a dozen tickets sit in
+ *      In Review for weeks and tier 1 alone would free nothing.
+ *
+ * Never touched: an active lane's worktree, the one the preview is serving right
+ * now, and anything whose work was never pushed (a build whose push failed — its
+ * only copy is that directory).
+ */
+async function reclaimWorktreeSpace(
+  workspaceId: string,
+  projectId: string,
+  opts: { keepTicketId?: string; targetGb: number; includePushed: boolean },
+): Promise<{ freed: string[]; freeGb: number | null }> {
+  const freed: string[] = [];
+  let freeGb = await freeDiskGb(workspaceId);
+  if (freeGb !== null && freeGb >= opts.targetGb) return { freed, freeGb };
+
   const rows = await db
-    .select({ id: sandboxes.id, ticketId: sandboxes.ticketId, status: projectTickets.status, branch: projectTickets.githubBranch })
+    .select({
+      id: sandboxes.id,
+      ticketId: sandboxes.ticketId,
+      key: projectTickets.ticketKey,
+      status: projectTickets.status,
+      branch: projectTickets.githubBranch,
+      sha: projectTickets.githubCommitSha,
+      touched: projectTickets.updatedAt,
+    })
     .from(sandboxes)
     .innerJoin(projectTickets, eq(projectTickets.id, sandboxes.ticketId))
     .where(and(eq(sandboxes.magsWorkspaceId, workspaceId), eq(sandboxes.workspaceType, "ticket-worktree")))
-    .catch(() => [] as { id: string; ticketId: string | null; status: string | null; branch: string | null }[]);
+    .catch(() => []);
+
   const live = await livecastPreviewBranch(projectId);
-  for (const r of rows) {
-    if (!r.ticketId || r.status !== "done") continue;
-    if (r.branch && r.branch === live) continue; // being served right now
-    if (laneOf(r.ticketId)) continue;            // actively working
-    const dir = ticketWorktreeDirName(r.ticketId);
+  const byTicket = new Map(rows.filter((r) => r.ticketId).map((r) => [r.ticketId!, r]));
+  const plan = planWorktreeEviction(
+    rows.filter((r) => !!r.ticketId).map((r) => ({
+      ticketId: r.ticketId!, status: r.status, branch: r.branch, sha: r.sha, touched: r.touched,
+    })),
+    { keepTicketId: opts.keepTicketId, liveBranch: live, includePushed: opts.includePushed },
+  );
+
+  for (const c of plan) {
+    if (freeGb !== null && freeGb >= opts.targetGb) break;
+    const r = byTicket.get(c.ticketId)!;
+    const dir = ticketWorktreeDirName(r.ticketId!);
     await execOnWorkspace(workspaceId,
       `cd ${WORKING_DIR}/project 2>/dev/null && git worktree remove --force ${WORKING_DIR}/${dir} 2>/dev/null; rm -rf ${WORKING_DIR}/${dir} 2>/dev/null; git worktree prune 2>/dev/null; echo evicted`,
-      { timeout: 60_000 }).catch(() => {});
+      { timeout: 120_000 }).catch(() => {});
     await db.delete(sandboxes).where(eq(sandboxes.id, r.id)).catch(() => {});
-    console.log(`[ticket-executor] Evicted finished worktree ${dir} to free space`);
+    freed.push(r.key ?? dir);
+    console.log(`[ticket-executor] Reclaimed worktree ${dir} (${r.status}) in ${workspaceId}`);
+    freeGb = await freeDiskGb(workspaceId);
   }
+  return { freed, freeGb };
+}
+
+/** Keep the box comfortable after a build, so the NEXT one isn't refused for space.
+ *  Only touches finished tickets — the cheap tier, no rebuild cost anyone will feel. */
+function reclaimOpportunistically(workspaceId: string, projectId: string, keepTicketId: string): void {
+  void reclaimWorktreeSpace(workspaceId, projectId, {
+    keepTicketId,
+    targetGb: laneMinFreeGb() + 2, // aim above the refusal line, not at it
+    includePushed: false,
+  }).catch(() => {});
 }
 
 /** The branch the project's preview is serving right now (null when idle). */
@@ -1059,7 +1116,20 @@ export async function startTicketWorker() {
       const lane = await tryAcquireLane(
         { ticketId, projectId: projectId!, workspaceId: placement.workspaceId, dir: placement.dir,
           kind: "build", credKey: placement.credKey, exclusiveConfig: placement.exclusiveConfig },
-        () => evictFinishedWorktrees(placement.workspaceId, projectId!),
+        // Out of space → reclaim worktrees before giving up. Their branches are on
+        // the remote; the only cost is a re-install on the next build of that ticket.
+        async () => {
+          const { freed } = await reclaimWorktreeSpace(placement.workspaceId, projectId!, {
+            keepTicketId: ticketId,
+            targetGb: laneMinFreeGb() + 1,
+            includePushed: true,
+          });
+          if (freed.length) {
+            await addLog(ticketId,
+              `Freed space in the preview VM by removing ${freed.length} idle worktree${freed.length === 1 ? "" : "s"} (${freed.join(", ")}) — they rebuild from the remote when those tickets are next touched.`,
+              "command", placementProject?.ownerId).catch(() => {});
+          }
+        },
       );
       if (!lane.ok) {
         // Stay QUEUED (not "none") so the ticket is picked up when a lane frees —
@@ -1068,7 +1138,13 @@ export async function startTicketWorker() {
         console.log(`[ticket-executor] Ticket ${ticketId} waiting for a shared lane — ${lane.reason}`);
         if (!laneWaitNotified.has(ticketId)) {
           laneWaitNotified.add(ticketId);
-          await addLog(ticketId, `Waiting for a build slot in the shared preview VM — ${lane.reason}.`, "command", placementProject?.ownerId).catch(() => {});
+          // If we're stuck on SPACE (not on a busy slot), say what's using the disk —
+          // at that point everything reclaimable is already gone and it's the user's
+          // call (drop caches, grow the volume, approve some tickets).
+          const detail = /disk/.test(lane.reason)
+            ? await topDiskConsumers(placement.workspaceId).then((t) => (t ? ` Largest on /data: ${t}.` : "")).catch(() => "")
+            : "";
+          await addLog(ticketId, `Waiting for a build slot in the shared preview VM — ${lane.reason}.${detail}`, "command", placementProject?.ownerId).catch(() => {});
         }
         await db.update(projectTickets)
           .set({ queueStatus: "queued", updatedAt: new Date() })
@@ -1081,6 +1157,9 @@ export async function startTicketWorker() {
         await executeTicketApi(ticketId, useCodingAgent, event.payload.actorId, placement);
       } finally {
         lane.release();
+        // Tidy finished tickets' worktrees now, so the next build isn't the one that
+        // discovers the disk is full.
+        reclaimOpportunistically(placement.workspaceId, projectId!, ticketId);
         void dispatchNextQueued(projectId!, ticketId);
       }
     };
