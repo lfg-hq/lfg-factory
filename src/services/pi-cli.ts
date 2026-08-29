@@ -147,6 +147,13 @@ export interface PiRunOptions {
    *  tool-call ops to /instant-progress (appId); mode="ticket" POSTs raw JSONL to
    *  /output (ticketId). Graceful no-op if the VM can't reach apiUrl. */
   forward?: { apiUrl: string; apiKey: string; appId?: string; mode?: "instant" | "ticket"; ticketId?: string };
+  /** Extra directories to PREPEND to the runner's PATH. PATH can't travel through
+   *  `envVars` (it's in PI_UNSAFE_ENV — a persisted PATH once hid node + pi), so a
+   *  caller that knows about a toolchain installed elsewhere on the box passes it
+   *  here. Used by SHARED-preview-VM builds, where the .NET SDK the preview
+   *  installed lives at /data/.dotnet rather than on the default PATH. Empty/absent
+   *  → the runner's PATH is exactly what it always was. */
+  extraPathDirs?: string[];
 }
 
 export interface PiRunResult {
@@ -156,6 +163,19 @@ export interface PiRunResult {
 
 export function isPiSupportedProvider(provider: string): boolean {
   return provider in PI_PROVIDERS;
+}
+
+/**
+ * Does running this provider write the SHARED per-VM config file?
+ *
+ * Custom (OpenAI-compatible) providers need a models.json, and Pi reads it from one
+ * fixed path — /root/.pi/agent/models.json — with the API key embedded. Two builds
+ * in the SAME VM needing different contents there would clobber each other, so the
+ * shared-preview-VM lane manager refuses to overlap them. Native providers
+ * (anthropic/openai/google) pass their credential per-run and are safe to overlap.
+ */
+export function piProviderUsesSharedConfig(provider: string): boolean {
+  return !!PI_PROVIDERS[provider]?.custom;
 }
 
 // Stack-agnostic set of "the build is genuinely working" subprocesses: package
@@ -474,7 +494,13 @@ echo "[pi-runner] node heap cap = \${PI_HEAP}MB (RAM \${PI_MEM_MB:-?}MB, max \${
 source ${envFile}
 # RE-ASSERT the toolchain PATH AFTER sourcing envFile — sourcing it can (and did)
 # overwrite PATH with a persisted value that lacks /usr/bin, hiding node 22 + pi.
-export PATH=/data/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:\$PATH
+export PATH=/data/.npm-global/bin:/usr/local/bin:/usr/bin:/bin:\$PATH${
+  (opts.extraPathDirs ?? []).length
+    ? `
+# Caller-supplied toolchain dirs (shared preview VM: the SDK the preview installed).
+export PATH=${(opts.extraPathDirs ?? []).map((d) => d.replace(/[^\w/.:-]/g, "")).join(":")}:\$PATH`
+    : ""
+}
 cd ${WORKING_DIR}/${projectDirName}
 # DIAGNOSTIC (PATHFIX-v3): show the TRUTH — resolved node/pi, whether the binaries
 # exist on disk, and the actual PATH — so we can see exactly what's wrong.

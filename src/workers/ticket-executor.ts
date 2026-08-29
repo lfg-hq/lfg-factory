@@ -68,19 +68,37 @@ import {
  */
 export async function cleanupTicketWorktree(ticketId: string): Promise<void> {
   const rows = await db.select().from(sandboxes).where(eq(sandboxes.ticketId, ticketId));
+  const keep: string[] = []; // rows we deliberately leave in place
   for (const sb of rows) {
     if (!sb.magsWorkspaceId) continue;
     const isPreview = sb.magsWorkspaceId.startsWith("pv-");
     if (sb.workspaceType === "ticket-worktree" && isPreview) {
       // A worktree lives inside the always-on preview VM — remove the worktree,
-      // never the VM.
-      const dir = `wt-ticket-${ticketId.slice(0, 12)}`;
+      // never the VM. EXCEPT when the preview is currently serving this branch from
+      // that very directory: deleting it would pull the files out from under a
+      // running app someone is looking at. Leave it; it's evicted later when a lane
+      // needs the space (evictFinishedWorktrees).
+      const [t] = await db.select({ branch: projectTickets.githubBranch, projectId: projectTickets.projectId })
+        .from(projectTickets).where(eq(projectTickets.id, ticketId)).limit(1);
+      const liveBranch = t?.projectId ? await livecastPreviewBranch(t.projectId) : null;
+      if (t?.branch && liveBranch && t.branch === liveBranch) {
+        console.log(`[ticket-executor] Keeping worktree for ${ticketId} — the preview is serving ${liveBranch}`);
+        keep.push(sb.id);
+        continue;
+      }
+      const dir = ticketWorktreeDirName(ticketId);
       await execOnWorkspace(sb.magsWorkspaceId, `cd ${WORKING_DIR}/project 2>/dev/null && git worktree remove --force ${WORKING_DIR}/${dir} 2>/dev/null; rm -rf ${WORKING_DIR}/${dir} 2>/dev/null; git worktree prune 2>/dev/null; echo cleaned`, { timeout: 60_000 }).catch(() => {});
     } else if (!isPreview) {
       // A DEDICATED isolated VM (ticket-chat / ticket build) — destroy it so the
       // warm chat sandbox doesn't linger after the ticket is done.
       await deleteWorkspace(sb.magsWorkspaceId).catch(() => {});
     }
+  }
+  if (keep.length) {
+    for (const sb of rows) {
+      if (!keep.includes(sb.id)) await db.delete(sandboxes).where(eq(sandboxes.id, sb.id)).catch(() => {});
+    }
+    return;
   }
   await db.delete(sandboxes).where(eq(sandboxes.ticketId, ticketId)).catch(() => {});
 }
@@ -114,7 +132,7 @@ async function resolveBuilderAuthMode(ownerId: string): Promise<BuilderAuthMode>
     .limit(1);
   return appState?.mode === "api_key" ? "api_key" : "subscription";
 }
-import { startPiCli, streamPiToCompletion, isPiSupportedProvider, extractPiProgress } from "../services/pi-cli.ts";
+import { startPiCli, streamPiToCompletion, isPiSupportedProvider, extractPiProgress, piProviderUsesSharedConfig } from "../services/pi-cli.ts";
 import { getOpenAICodexAccessToken, hasOpenAICodexCredentials } from "../services/openai-codex-auth.ts";
 
 /** Pi's final "here's what I did" summary from its output tail (or ""). */
@@ -155,6 +173,15 @@ import {
   encodeQuestionMeta,
   TICKET_CHAT_MODE_CONTRACT,
 } from "../services/ticket-chat-turn.ts";
+import {
+  tryAcquireLane,
+  acquireLaneWaiting,
+  releaseLane,
+  noteLanePid,
+  laneOf,
+  activeLanes,
+  scopedStopScript,
+} from "../services/shared-lanes.ts";
 import { generateTicketDemo } from "../services/ticket-demo.ts";
 import { matchKnowledgeForPrompt } from "../ai/knowledge/matcher.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
@@ -423,6 +450,109 @@ async function resolvePreviewSandbox(internalProjectId: string): Promise<string 
     const probe = await execOnWorkspace(env.workspaceId, 'test -d /data/project/.git && echo REPO_OK || echo NO_REPO', { timeout: 60_000 }).catch(() => ({ output: "" } as any));
     return (probe.output || "").includes("REPO_OK") ? env.workspaceId : null;
   } catch { return null; }
+}
+
+// ── Shared-preview-VM placement (opt-in; default builds never come here) ─────
+//
+// Everything below is reached ONLY when a project is set to "Shared preview VM"
+// (ticketBuildIsolation = "shared"). The default "Fresh sandbox (isolated)" path
+// resolves `shared: false` on the first line and behaves exactly as it always has.
+
+export const SHARED_MODE = "shared";
+
+/** The worktree directory name a ticket gets inside the shared preview VM. This is
+ *  the SAME dir the preview serves the branch from (dev-preview's ticketWorktreeDir),
+ *  which is what makes "build here, then just restart the server" work. */
+export function ticketWorktreeDirName(ticketId: string): string {
+  return `wt-ticket-${ticketId.slice(0, 12)}`;
+}
+
+type BuildPlacement =
+  | { shared: true; workspaceId: string; dir: string; credKey: string; exclusiveConfig: boolean }
+  | { shared: false };
+
+/** Is this project on shared mode, and is its preview VM actually usable right now? */
+async function resolveBuildPlacement(
+  ticketId: string,
+  project: { id: string; ownerId: string; ticketBuildIsolation?: string },
+): Promise<BuildPlacement> {
+  if ((project.ticketBuildIsolation ?? "isolated") !== SHARED_MODE) return { shared: false };
+  const workspaceId = await resolvePreviewSandbox(project.id);
+  // No reachable preview VM (never set up, or wiped) → fall back to the isolated
+  // path rather than failing the build. The user sees which one ran in the log.
+  if (!workspaceId) return { shared: false };
+
+  const modelKey = await resolveBuilderModelKey(project.ownerId);
+  const provider = getProviderName(modelKey) ?? "";
+  const [keys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, project.ownerId)).limit(1);
+  const providerKey = ({
+    anthropic: keys?.anthropicApiKey, openai: keys?.openaiApiKey, google: keys?.googleApiKey,
+    kimi: keys?.kimiApiKey, deepseek: keys?.deepseekApiKey, glm: keys?.glmApiKey,
+  } as Record<string, string | null | undefined>)[provider];
+  // Fingerprint, never the key itself: lanes may only overlap when the credential
+  // that lands in the VM's shared Pi config is identical.
+  const credKey = `${provider}|${getProviderModel(modelKey) ?? modelKey}|${(providerKey ?? "sub").slice(-6)}`;
+  return {
+    shared: true,
+    workspaceId,
+    dir: ticketWorktreeDirName(ticketId),
+    credKey,
+    exclusiveConfig: piProviderUsesSharedConfig(provider),
+  };
+}
+
+/** Free disk by removing worktrees of tickets that are DONE — except one the preview
+ *  is currently serving. Called only when a lane is refused for space. */
+async function evictFinishedWorktrees(workspaceId: string, projectId: string): Promise<void> {
+  const rows = await db
+    .select({ id: sandboxes.id, ticketId: sandboxes.ticketId, status: projectTickets.status, branch: projectTickets.githubBranch })
+    .from(sandboxes)
+    .innerJoin(projectTickets, eq(projectTickets.id, sandboxes.ticketId))
+    .where(and(eq(sandboxes.magsWorkspaceId, workspaceId), eq(sandboxes.workspaceType, "ticket-worktree")))
+    .catch(() => [] as { id: string; ticketId: string | null; status: string | null; branch: string | null }[]);
+  const live = await livecastPreviewBranch(projectId);
+  for (const r of rows) {
+    if (!r.ticketId || r.status !== "done") continue;
+    if (r.branch && r.branch === live) continue; // being served right now
+    if (laneOf(r.ticketId)) continue;            // actively working
+    const dir = ticketWorktreeDirName(r.ticketId);
+    await execOnWorkspace(workspaceId,
+      `cd ${WORKING_DIR}/project 2>/dev/null && git worktree remove --force ${WORKING_DIR}/${dir} 2>/dev/null; rm -rf ${WORKING_DIR}/${dir} 2>/dev/null; git worktree prune 2>/dev/null; echo evicted`,
+      { timeout: 60_000 }).catch(() => {});
+    await db.delete(sandboxes).where(eq(sandboxes.id, r.id)).catch(() => {});
+    console.log(`[ticket-executor] Evicted finished worktree ${dir} to free space`);
+  }
+}
+
+/** The branch the project's preview is serving right now (null when idle). */
+async function livecastPreviewBranch(projectId: string): Promise<string | null> {
+  try {
+    const [env] = await db
+      .select({ b: projectEnvironments.previewBranch, s: projectEnvironments.previewStatus })
+      .from(projectEnvironments)
+      .where(eq(projectEnvironments.projectId, projectId))
+      .limit(1);
+    return env && env.s !== "idle" && env.s !== "stopped" ? env.b ?? null : null;
+  } catch { return null; }
+}
+
+/** Tickets already told "waiting for a slot", so a retry doesn't repeat itself. */
+const laneWaitNotified = new Set<string>();
+
+/** Re-dispatch the oldest still-queued ticket for a project after a lane frees. */
+async function dispatchNextQueued(projectId: string, exceptTicketId: string): Promise<void> {
+  try {
+    const rows = await db
+      .select({ id: projectTickets.id })
+      .from(projectTickets)
+      .where(and(eq(projectTickets.projectId, projectId), eq(projectTickets.queueStatus, "queued")))
+      .orderBy(asc(projectTickets.executionOrder), asc(projectTickets.queuedAt))
+      .limit(4);
+    const next = rows.find((r) => r.id !== exceptTicketId && !executingTickets.has(r.id));
+    if (next) emit({ type: "ticket.queued", ticketId: next.id, projectId });
+  } catch (e) {
+    console.warn("[ticket-executor] dispatchNextQueued failed:", (e as Error).message);
+  }
 }
 
 /**
@@ -762,7 +892,7 @@ export async function requestTicketStop(ticketId: string, projectId?: string): P
     // `ticket-worktree`, so filtering on "ticket" alone left those agents alive and
     // "Stop" silently did nothing for a message sent from the ticket chat.
     const sbs = await db
-      .select({ ws: sandboxes.magsWorkspaceId })
+      .select({ ws: sandboxes.magsWorkspaceId, type: sandboxes.workspaceType })
       .from(sandboxes)
       .where(
         and(
@@ -770,14 +900,29 @@ export async function requestTicketStop(ticketId: string, projectId?: string): P
           inArray(sandboxes.workspaceType, ["ticket", "ticket-chat", "ticket-worktree"]),
         ),
       );
+
+    // SHARED PREVIEW VM: the pattern kill below would take out every OTHER ticket's
+    // agent in the same box (and any install the preview is running). Kill only this
+    // lane: its recorded agent pid, plus anything whose working directory is this
+    // ticket's worktree — which is where the agent and every command it spawns live.
+    const sharedRows = sbs.filter((sb) => sb.ws && sb.type === "ticket-worktree" && sb.ws.startsWith("pv-"));
+    if (sharedRows.length) {
+      const dir = `${WORKING_DIR}/${ticketWorktreeDirName(ticketId)}`;
+      const b64 = Buffer.from(scopedStopScript(dir, laneOf(ticketId)?.pid)).toString("base64");
+      await Promise.all(sharedRows.map((sb) =>
+        execOnWorkspace(sb.ws!, `echo ${b64} | base64 -d | sh`, { timeout: 30_000 }).catch(() => {})));
+      releaseLane(ticketId);
+    }
     // Kill the detached agent IN the VM — this is what actually stops a build the
     // loop can't reach cross-process. busybox pkill has no \b/ERE, so match with
     // plain substrings (pkill never matches its own pid). Cover the Pi node agent
     // (pi-coding-agent), its invocation (`pi -p`, `mode json`), Claude, and any
     // long child install so nothing keeps writing/committing after "Stop".
+    // (Shared-VM lanes were handled above by the scoped kill — a pattern kill there
+    // would stop every other ticket working in the same box.)
     await Promise.all(
       sbs
-        .filter((sb) => !!sb.ws)
+        .filter((sb) => !!sb.ws && !(sb.type === "ticket-worktree" && sb.ws.startsWith("pv-")))
         .map((sb) =>
           execOnWorkspace(
             sb.ws!,
@@ -897,12 +1042,55 @@ export async function startTicketWorker() {
     // Determine execution mode from user's applicationState
     const useApiMode = await isApiMode(projectId);
 
+    // SHARED PREVIEW VM (opt-in): resolve once here so the build function doesn't
+    // re-probe, and admit the ticket into a bounded lane. On the default isolated
+    // setting this returns { shared: false } immediately and nothing below changes.
+    const placementProject = projectId
+      ? (await db.select({ id: projects.id, ownerId: projects.ownerId, ticketBuildIsolation: projects.ticketBuildIsolation })
+          .from(projects).where(eq(projects.id, projectId)).limit(1))[0]
+      : undefined;
+    const placement: BuildPlacement = placementProject
+      ? await resolveBuildPlacement(ticketId, placementProject)
+      : { shared: false };
+
+    /** Run a Pi build, holding a lane when this project shares the preview VM. */
+    const runApiBuild = async (useCodingAgent: boolean) => {
+      if (!placement.shared) return executeTicketApi(ticketId, useCodingAgent, event.payload.actorId);
+      const lane = await tryAcquireLane(
+        { ticketId, projectId: projectId!, workspaceId: placement.workspaceId, dir: placement.dir,
+          kind: "build", credKey: placement.credKey, exclusiveConfig: placement.exclusiveConfig },
+        () => evictFinishedWorktrees(placement.workspaceId, projectId!),
+      );
+      if (!lane.ok) {
+        // Stay QUEUED (not "none") so the ticket is picked up when a lane frees —
+        // a release re-dispatches the oldest one waiting. The timer covers the race
+        // where every lane freed in the moment between our check and this line.
+        console.log(`[ticket-executor] Ticket ${ticketId} waiting for a shared lane — ${lane.reason}`);
+        if (!laneWaitNotified.has(ticketId)) {
+          laneWaitNotified.add(ticketId);
+          await addLog(ticketId, `Waiting for a build slot in the shared preview VM — ${lane.reason}.`, "command", placementProject?.ownerId).catch(() => {});
+        }
+        await db.update(projectTickets)
+          .set({ queueStatus: "queued", updatedAt: new Date() })
+          .where(eq(projectTickets.id, ticketId)).catch(() => {});
+        setTimeout(() => { void dispatchNextQueued(projectId!, ""); }, 20_000).unref?.();
+        return;
+      }
+      laneWaitNotified.delete(ticketId);
+      try {
+        await executeTicketApi(ticketId, useCodingAgent, event.payload.actorId, placement);
+      } finally {
+        lane.release();
+        void dispatchNextQueued(projectId!, ticketId);
+      }
+    };
+
     if (useApiMode) {
       // API mode: parallel across DIFFERENT tickets is fine; the executingTickets
       // guard above prevents the SAME ticket from running twice.
       console.log(`[ticket-executor] API mode — executing ticket ${ticketId}`);
       try {
-        await executeTicketApi(ticketId, false, event.payload.actorId);
+        await runApiBuild(false);
       } catch (err) {
         console.error(`[ticket-executor] API mode failed for ticket ${ticketId}:`, err);
         await markTicketFailed(ticketId, String(err));
@@ -915,12 +1103,19 @@ export async function startTicketWorker() {
       if (builderProvider && builderProvider !== "anthropic") {
         console.log(`[ticket-executor] CLI mode + ${builderProvider} — using Pi (Claude Code is Claude-only)`);
         try {
-          await executeTicketApi(ticketId, true, event.payload.actorId);
+          await runApiBuild(true);
         } catch (err) {
           console.error(`[ticket-executor] Pi (CLI-routed) failed for ticket ${ticketId}:`, err);
           await markTicketFailed(ticketId, String(err));
         }
       } else {
+        // Shared mode can't run here: the Claude Code path clones into its own VM.
+        // Say so instead of silently ignoring the setting.
+        if (placement.shared) {
+          await addLog(ticketId,
+            "This project is set to build in the shared preview VM, but Claude Code builds run in their own sandbox — using a fresh isolated sandbox for this ticket.",
+            "command", placementProject?.ownerId).catch(() => {});
+        }
         // CLI mode + Claude → Claude Code CLI. One ticket per project at a time.
         if (projectId && executingProjects.has(projectId)) {
           console.log(`[ticket-executor] Project ${projectId} already executing — deferring ticket ${ticketId}`);
@@ -1814,6 +2009,66 @@ Before implementing, fix the git issue:
  * "ticket-chat" sandbox; otherwise provisions + clones. Torn down when the ticket is
  * approved/Done (cleanupTicketWorktree), kept warm meanwhile for fast follow-ups.
  */
+/**
+ * SHARED MODE ONLY: make sure the ticket's worktree exists in the preview VM and is
+ * on its branch, so a chat turn can run there. Reuses the worktree the build left
+ * behind (with its node_modules/obj intact); creates it if the ticket hasn't been
+ * built yet. Never touches /data/project itself — that's what the preview serves.
+ */
+async function ensureSharedChatWorktree(
+  ticket: { id: string; projectId: string; githubBranch: string | null; epicId?: string | null },
+  project: { id: string; repoOwner: string | null; repoName: string | null; repoUrl: string | null; repoProvider?: string | null; stack?: string | null },
+  ownerId: string,
+  gitUserId: string,
+  usingOwnGit: boolean,
+  workspaceId: string,
+): Promise<{ dir: string } | { error: string }> {
+  const dir = ticketWorktreeDirName(ticket.id);
+  const featureBranch = ticket.githubBranch ?? ticketBranchName(ticket);
+  const { anchorBranch } = await resolveTicketAnchor(ticket);
+  const auth = await resolveRepoAuth(project, gitUserId);
+  if (!auth) return { error: usingOwnGit ? NO_SHARED_GIT_MESSAGE : "No repository/credentials configured — connect the repo in Settings, then chat with the agent." };
+
+  const script = `
+cd ${WORKING_DIR}/project 2>/dev/null || { echo NO_BASE_CHECKOUT; exit 1; }
+git config --global --add safe.directory '*' 2>/dev/null || true
+git remote set-url origin "${auth.authUrl}" 2>/dev/null || true
+git fetch --prune origin 2>&1 | tail -1
+if [ -e "${WORKING_DIR}/${dir}/.git" ]; then
+    cd ${WORKING_DIR}/${dir} || { echo WT_FAILED; exit 1; }
+    git checkout -B ${featureBranch} origin/${featureBranch} 2>/dev/null || git checkout ${featureBranch} 2>/dev/null || true
+    git reset --hard origin/${featureBranch} 2>/dev/null || true
+else
+    git worktree prune 2>/dev/null || true
+    if git rev-parse --verify origin/${featureBranch} 2>/dev/null; then
+        git worktree add --force -B ${featureBranch} ${WORKING_DIR}/${dir} origin/${featureBranch} 2>&1 | tail -2
+    else
+        git worktree add --force -B ${featureBranch} ${WORKING_DIR}/${dir} origin/${anchorBranch} 2>&1 | tail -2 \\
+          || git worktree add --force -B ${featureBranch} ${WORKING_DIR}/${dir} ${anchorBranch} 2>&1 | tail -2
+    fi
+fi
+cd ${WORKING_DIR}/${dir} 2>/dev/null || { echo WT_FAILED; exit 1; }
+git config user.email "ai@lfg.dev"; git config user.name "LFG AI"
+[ -e .git ] && echo WT_READY || echo WT_FAILED
+`.trim();
+  const b64 = Buffer.from(script).toString("base64");
+  const r = await execOnWorkspace(workspaceId, `echo ${b64} | base64 -d | sh`, { timeout: 180_000 })
+    .catch((e) => ({ output: `EXEC_FAILED: ${(e as Error).message}` }));
+  if (!r.output.includes("WT_READY")) {
+    return { error: `Couldn't prepare this ticket's worktree in the preview VM: ${(r.output || "").slice(-300)}` };
+  }
+  // Bookkeeping row so Stop, cleanup and eviction can find this worktree.
+  const [existing] = await db.select({ id: sandboxes.id }).from(sandboxes)
+    .where(and(eq(sandboxes.ticketId, ticket.id), eq(sandboxes.workspaceType, "ticket-worktree"))).limit(1);
+  if (!existing) {
+    await db.insert(sandboxes).values({
+      projectId: ticket.projectId, userId: ownerId, ticketId: ticket.id,
+      magsWorkspaceId: workspaceId, workspaceType: "ticket-worktree", status: "ready",
+    }).catch(() => {});
+  }
+  return { dir };
+}
+
 async function ensureIsolatedChatSandbox(
   ticket: { id: string; projectId: string; githubBranch: string | null; epicId?: string | null },
   project: { id: string; repoOwner: string | null; repoName: string | null; repoUrl: string | null; repoProvider?: string | null; stack?: string | null },
@@ -1822,7 +2077,16 @@ async function ensureIsolatedChatSandbox(
   // collaborator's OWN token, so a missing token yields the right "connect/ask owner" text.
   gitUserId: string = ownerId,
   usingOwnGit: boolean = false,
-): Promise<{ workspaceId: string } | { error: string }> {
+  // SHARED PREVIEW VM (opt-in): chat runs in the ticket's worktree inside the preview
+  // VM instead of a dedicated clone — same box the build used, so an "answer" turn can
+  // look at the branch (and the running app + its databases) with no VM boot at all.
+  sharedWorkspaceId: string | null = null,
+): Promise<{ workspaceId: string; projectDir: string } | { error: string }> {
+  if (sharedWorkspaceId) {
+    const wt = await ensureSharedChatWorktree(ticket, project, ownerId, gitUserId, usingOwnGit, sharedWorkspaceId);
+    if ("error" in wt) return wt;
+    return { workspaceId: sharedWorkspaceId, projectDir: wt.dir };
+  }
   const projectDirName = "project";
   const featureBranch = ticket.githubBranch ?? ticketBranchName(ticket);
   const { anchorBranch } = await resolveTicketAnchor(ticket);
@@ -1855,7 +2119,7 @@ async function ensureIsolatedChatSandbox(
             await db.delete(sandboxes).where(eq(sandboxes.id, r.id)).catch(() => {});
           }
         }
-        return { workspaceId: existing.magsWorkspaceId };
+        return { workspaceId: existing.magsWorkspaceId, projectDir: projectDirName };
       }
     } catch { /* dead — reprovision below */ }
     await db.delete(sandboxes).where(eq(sandboxes.id, existing.id)).catch(() => {});
@@ -1916,7 +2180,7 @@ fi
     await db.delete(sandboxes).where(and(eq(sandboxes.ticketId, ticket.id), eq(sandboxes.workspaceType, "ticket-chat"))).catch(() => {});
     return { error: `Couldn't clone the repo into the chat sandbox: ${r.output.slice(-300)}` };
   }
-  return { workspaceId };
+  return { workspaceId, projectDir: projectDirName };
 }
 
 // ── Chat Resume Executor ──────────────────────────────────────────────
@@ -1990,7 +2254,7 @@ async function concludeChatTurn(params: {
   if (outcome.mode === "change") {
     // Strip the mode markers out of the summary — they're protocol, not prose.
     const summary = outcome.reply.text.slice(0, 1200);
-    await finalizeTicketChat(ticketId, ownerId, project, ticket, workspaceId, message, summary, gitUserId);
+    await finalizeTicketChat(ticketId, ownerId, project, ticket, workspaceId, message, summary, gitUserId, projectPath);
     return;
   }
 
@@ -2065,9 +2329,31 @@ async function executeTicketChat(
   // Chat runs in a DEDICATED isolated sandbox (fresh clone of the branch), REUSED
   // across messages but NEVER the shared preview VM — so a chat commit can't sweep
   // the preview's run-enabling config hacks into the branch.
+  // SHARED PREVIEW VM (opt-in): chat happens in this ticket's worktree in the preview
+  // VM — no VM boot, no re-clone, and the agent can see the branch the preview runs.
+  // On the default isolated setting this resolves to null and the chat behaves exactly
+  // as before: its own dedicated sandbox with a fresh clone of the branch.
+  const chatPlacement = await resolveBuildPlacement(ticketId, {
+    id: project!.id, ownerId, ticketBuildIsolation: (project as { ticketBuildIsolation?: string }).ticketBuildIsolation,
+  });
+  let chatLane: { release: () => void } | null = null;
+  if (chatPlacement.shared) {
+    // Interactive: wait briefly for a slot rather than refusing the user's message,
+    // then go ahead anyway — a slower answer beats no answer.
+    const d = await acquireLaneWaiting(
+      { ticketId, projectId: project!.id, workspaceId: chatPlacement.workspaceId, dir: chatPlacement.dir,
+        kind: "chat", credKey: chatPlacement.credKey, exclusiveConfig: chatPlacement.exclusiveConfig },
+      90_000,
+      (reason) => { void addLog(ticketId, `Waiting for a slot in the preview VM — ${reason}.`, "command", ownerId).catch(() => {}); },
+    );
+    if (d.ok) chatLane = d;
+  }
+
+  try {
   const chatSb = await ensureIsolatedChatSandbox(
     { id: ticket.id, projectId: ticket.projectId, githubBranch: ticket.githubBranch },
     project!, ownerId, gitUserId, usingOwnCollaboratorToken,
+    chatPlacement.shared ? chatPlacement.workspaceId : null,
   );
   if ("error" in chatSb) {
     await addLog(ticketId, chatSb.error, "cli_error", ownerId);
@@ -2078,15 +2364,19 @@ async function executeTicketChat(
   // the /api/v1/cli/output webhook on every turn; the chat used to hardcode null here,
   // so every Claude message started a BLIND fresh session — the agent had no memory of
   // the conversation it was supposedly continuing.
+  // Keyed on the TICKET, not just the workspace — in shared mode every ticket's row
+  // points at the same preview VM, so a workspace-only lookup would hand this chat
+  // another ticket's CLI session.
   const [chatSbRow] = await db
     .select({ cliSessionId: sandboxes.cliSessionId })
     .from(sandboxes)
-    .where(eq(sandboxes.magsWorkspaceId, workspaceId))
+    .where(and(eq(sandboxes.ticketId, ticketId), eq(sandboxes.magsWorkspaceId, workspaceId)))
     .limit(1);
   const sandbox = { magsWorkspaceId: workspaceId, cliSessionId: chatSbRow?.cliSessionId ?? null };
   // New user request → pin the (possibly slept) chat VM awake for the duration.
   await wakeTicketVm(workspaceId);
-  const projectDirName = "project";
+  // "project" for a dedicated chat sandbox; the ticket's worktree in shared mode.
+  const projectDirName = chatSb.projectDir;
   const projectPath = `${WORKING_DIR}/${projectDirName}`;
   let sessionId = sandbox.cliSessionId ?? undefined;
 
@@ -2154,6 +2444,15 @@ async function executeTicketChat(
       LFG_API_URL: CALLBACK_BASE_URL, LFG_API_KEY: cliApiKey,
       LFG_TICKET_ID: ticket.id, LFG_PROJECT_ID: project!.id,
     };
+    // SHARED VM: same toolchain the preview installed on this box, so a chat turn can
+    // build/run the app in the worktree instead of hunting for a missing SDK.
+    const chatToolchainPaths: string[] = [];
+    if (chatPlacement.shared) {
+      piEnvVars.DOTNET_ROOT = "/data/.dotnet";
+      piEnvVars.DOTNET_CLI_HOME = "/data/.dotnet";
+      piEnvVars.NUGET_PACKAGES = "/data/.nuget";
+      chatToolchainPaths.push("/data/.dotnet", "/data/.dotnet/tools");
+    }
     const piEnvRows = await db
       .select({ key: projectEnvironmentVariables.key, encryptedValue: projectEnvironmentVariables.encryptedValue })
       .from(projectEnvironmentVariables)
@@ -2185,8 +2484,11 @@ ${TICKET_CHAT_MODE_CONTRACT}
         // Credential picked from the token we actually HAVE (see the build path).
         apiKey: chatOAuthToken ? undefined : chatProviderKey ?? undefined,
         oauthAccessToken: chatOAuthToken, envVars: piEnvVars,
+        ...(chatToolchainPaths.length ? { extraPathDirs: chatToolchainPaths } : {}),
         forward: webhookReachable ? { apiUrl: CALLBACK_BASE_URL, apiKey: cliApiKey, mode: "ticket" as const, ticketId } : undefined,
       });
+      // Shared VM: remember the pid so Stop ends THIS chat turn, not the whole box.
+      if (chatPlacement.shared) noteLanePid(ticketId, pi.backgroundPid ? parseInt(pi.backgroundPid, 10) : undefined);
       let lastPiLog = 0;
       const piResult = await streamPiToCompletion({
         workspaceId, outputFile: pi.outputFile, backgroundPid: pi.backgroundPid, timeoutMs: BUILD_TIMEOUT_MS,
@@ -2373,7 +2675,11 @@ ${TICKET_CHAT_MODE_CONTRACT}
   }
 
   // Chat turn done — let the dedicated chat VM idle-sleep until the next request.
+  // (No-op for the shared preview VM, which is keepAlive by design.)
   await sleepTicketVm(workspaceId);
+  } finally {
+    chatLane?.release();
+  }
 }
 
 /**
@@ -2391,8 +2697,11 @@ async function finalizeTicketChat(
   message: string,
   workSummary = "",
   gitUserId: string = ownerId, // fine-grained Git: whose token commits/pushes this chat's edits
+  // Where the chat's edits actually are: the dedicated sandbox's clone, or — in shared
+  // preview-VM mode — this ticket's worktree. Committing from the wrong directory would
+  // push the WRONG tree (or nothing at all).
+  projectDir: string = `${WORKING_DIR}/project`,
 ): Promise<void> {
-  const projectDir = `${WORKING_DIR}/project`;
   const featureBranch = ticket.githubBranch ?? ticketBranchName(ticket);
   const { anchorBranch, baseBranch: anchorBase } = await resolveTicketAnchor(ticket);
   const auth = await resolveRepoAuth(project, gitUserId);
@@ -2475,7 +2784,14 @@ async function getBuilderProvider(projectId: string | null): Promise<ProviderNam
 }
 
 /** Execute with direct provider tools, or with Pi when Coding Agent mode is requested. */
-async function executeTicketApi(ticketId: string, useCodingAgent: boolean, actorId?: string): Promise<void> {
+async function executeTicketApi(
+  ticketId: string,
+  useCodingAgent: boolean,
+  actorId?: string,
+  // Resolved by the dispatcher when the project shares the preview VM, so we don't
+  // probe it twice. Absent → the isolated path, exactly as before.
+  placement?: BuildPlacement,
+): Promise<void> {
   const startTime = Date.now();
 
   // ── Load data (shared with CLI mode) ────────────────────────────────
@@ -2527,12 +2843,18 @@ async function executeTicketApi(ticketId: string, useCodingAgent: boolean, actor
   // (build → commit → push → destroy), so a bad build can never disrupt the
   // always-on preview VM (which reconstructs the branch worktree from the remote
   // on demand). "shared" → reuse the preview VM via a git worktree (warm caches).
-  const isolatedBuild = ((project as { ticketBuildIsolation?: string }).ticketBuildIsolation ?? "isolated") !== "shared";
-  const sharedWorkspaceId = isolatedBuild ? null : await resolvePreviewSandbox(project.id);
+  const isolatedBuild = ((project as { ticketBuildIsolation?: string }).ticketBuildIsolation ?? "isolated") !== SHARED_MODE;
+  const sharedWorkspaceId = isolatedBuild
+    ? null
+    : (placement?.shared ? placement.workspaceId : await resolvePreviewSandbox(project.id));
   const useWorktree = !!sharedWorkspaceId;
   if (useWorktree) {
-    projectDirName = `wt-ticket-${ticketId.slice(0, 12)}`;
-    await addLog(ticketId, `Reusing the project's preview sandbox (git worktree ${projectDirName})...`, "command", ownerId);
+    projectDirName = ticketWorktreeDirName(ticketId);
+    const others = activeLanes(sharedWorkspaceId!).filter((l) => l.ticketId !== ticketId).length;
+    await addLog(ticketId,
+      `Building in the project's preview VM (git worktree ${projectDirName})` +
+      `${others ? ` — ${others} other ticket${others === 1 ? " is" : "s are"} also working in it` : ""}.`,
+      "command", ownerId);
   } else if (isolatedBuild) {
     await addLog(ticketId, `Isolated build: spinning up a fresh sandbox for this ticket (it's destroyed after the branch is pushed).`, "command", ownerId);
   }
@@ -2694,13 +3016,31 @@ if ! git rev-parse --verify origin/${anchorBranch} 2>/dev/null; then
     git branch ${anchorBranch} origin/$ANCHOR_BASE 2>/dev/null || git branch ${anchorBranch} 2>/dev/null || true
     git push -u origin ${anchorBranch} 2>&1 || true
 fi
-git worktree remove --force ${WORKING_DIR}/${projectDirName} 2>/dev/null || true
-rm -rf ${WORKING_DIR}/${projectDirName} 2>/dev/null || true
-git worktree prune 2>/dev/null || true
-if git rev-parse --verify origin/${featureBranch} 2>/dev/null; then
-    git worktree add --force -B ${featureBranch} ${WORKING_DIR}/${projectDirName} origin/${featureBranch} 2>&1
+# REUSE an existing worktree instead of deleting it. Two reasons: this directory is
+# the SAME one the preview serves the branch from, so an rm -rf pulls the files out
+# from under a running app; and keeping it preserves node_modules/obj between builds,
+# which is most of the speed-up the shared VM is for. git clean -fd (no -x) drops
+# stray tracked-tree files but leaves gitignored build output alone.
+if [ -e "${WORKING_DIR}/${projectDirName}/.git" ]; then
+    echo "WORKTREE_REUSED"
+    cd ${WORKING_DIR}/${projectDirName} || { echo "GIT_SETUP_FAILED_NO_GIT"; exit 1; }
+    if git rev-parse --verify origin/${featureBranch} 2>/dev/null; then
+        git checkout -B ${featureBranch} origin/${featureBranch} 2>&1
+        git reset --hard origin/${featureBranch} 2>&1 | tail -1
+    else
+        git checkout -B ${featureBranch} origin/${anchorBranch} 2>&1 || git checkout -B ${featureBranch} ${anchorBranch} 2>&1
+    fi
+    git clean -fd 2>/dev/null || true
+    cd ${WORKING_DIR}/project || true
 else
-    git worktree add --force -B ${featureBranch} ${WORKING_DIR}/${projectDirName} origin/${anchorBranch} 2>&1 || git worktree add --force -B ${featureBranch} ${WORKING_DIR}/${projectDirName} ${anchorBranch} 2>&1
+    git worktree remove --force ${WORKING_DIR}/${projectDirName} 2>/dev/null || true
+    rm -rf ${WORKING_DIR}/${projectDirName} 2>/dev/null || true
+    git worktree prune 2>/dev/null || true
+    if git rev-parse --verify origin/${featureBranch} 2>/dev/null; then
+        git worktree add --force -B ${featureBranch} ${WORKING_DIR}/${projectDirName} origin/${featureBranch} 2>&1
+    else
+        git worktree add --force -B ${featureBranch} ${WORKING_DIR}/${projectDirName} origin/${anchorBranch} 2>&1 || git worktree add --force -B ${featureBranch} ${WORKING_DIR}/${projectDirName} ${anchorBranch} 2>&1
+    fi
 fi
 cd ${WORKING_DIR}/${projectDirName} 2>/dev/null || { echo "GIT_SETUP_FAILED_NO_GIT"; exit 1; }
 git config user.email "ai@lfg.dev"; git config user.name "LFG AI"
@@ -2940,6 +3280,18 @@ git branch --show-current
     console.log(`[ticket-executor-api] Using Pi in-sandbox agent: ${provider}/${piModelId}`);
     const piEnvVars: Record<string, string> = {};
     for (const r of projectEnvRows) piEnvVars[r.key] = decrypt(r.encryptedValue);
+    // SHARED VM: point the build at the toolchain the PREVIEW already installed on
+    // this box (/data/.dotnet, /data/.nuget) instead of letting it restore into a
+    // fresh cache or fail to find `dotnet` at all. Pi's own cache vars already cover
+    // node/go/python/rust; .NET is set up on the preview side only. No effect on the
+    // isolated path, which never sets these.
+    const sharedToolchainPaths: string[] = [];
+    if (useWorktree) {
+      piEnvVars.DOTNET_ROOT = piEnvVars.DOTNET_ROOT ?? "/data/.dotnet";
+      piEnvVars.DOTNET_CLI_HOME = piEnvVars.DOTNET_CLI_HOME ?? "/data/.dotnet";
+      piEnvVars.NUGET_PACKAGES = piEnvVars.NUGET_PACKAGES ?? "/data/.nuget";
+      sharedToolchainPaths.push("/data/.dotnet", "/data/.dotnet/tools");
+    }
     // Screenshots the user attached to this ticket → absolute URLs the agent can fetch.
     const ticketAttRows = await db.select().from(projectTicketAttachments)
       .where(eq(projectTicketAttachments.ticketId, ticketId)).catch(() => []);
@@ -3017,8 +3369,12 @@ git branch --show-current
             return { apiKey: tok ? undefined : providerApiKey ?? undefined, oauthAccessToken: tok };
           })()),
           envVars: piEnvVars,
+          ...(sharedToolchainPaths.length ? { extraPathDirs: sharedToolchainPaths } : {}),
           forward: webhookReachable ? { apiUrl: CALLBACK_BASE_URL, apiKey: cliApiKey, mode: "ticket" as const, ticketId } : undefined,
         });
+        // Remember the agent's pid so Stop can kill THIS lane and leave the other
+        // tickets (and the running preview) in the shared VM alone.
+        if (useWorktree) noteLanePid(ticketId, pi.backgroundPid ? parseInt(pi.backgroundPid, 10) : undefined);
         if (webhookReachable && !isResume) await addLog(ticketId, "Streaming build logs via webhook…", "command", ownerId);
         let lastPiLog = 0;
         const piResult = await streamPiToCompletion({
@@ -3511,7 +3867,7 @@ async function recoverUnpushedTickets() {
 
       // Must have a live sandbox
       const [sandbox] = await db
-        .select({ magsWorkspaceId: sandboxes.magsWorkspaceId })
+        .select({ magsWorkspaceId: sandboxes.magsWorkspaceId, workspaceType: sandboxes.workspaceType })
         .from(sandboxes)
         .where(eq(sandboxes.ticketId, ticket.id))
         .limit(1);
@@ -3553,7 +3909,12 @@ async function recoverUnpushedTickets() {
       const workspaceId = sandbox.magsWorkspaceId;
       const featureBranch = ticket.githubBranch ?? ticketBranchName(ticket);
       const recoveryAnchor = await resolveTicketAnchor(ticket);
-      const projectDirName = "project";
+      // SHARED preview VM: the unpushed work is in the ticket's WORKTREE. Committing
+      // from /data/project here would push the preview's main checkout to the ticket's
+      // branch — the wrong tree entirely.
+      const projectDirName = sandbox.workspaceType === "ticket-worktree"
+        ? ticketWorktreeDirName(ticket.id)
+        : "project";
 
       // The build VM is ephemeral — after a server restart / VM sleep it may be
       // gone. Its changes lived only inside that VM and were never pushed, so if
