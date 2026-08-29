@@ -566,28 +566,28 @@ export const VsCodingAgentsPage = () => html`
           <div class="flex items-center justify-between gap-3 px-5 py-3 border-b border-slate-200/70">
             <p class="text-xs font-bold text-slate-500 uppercase tracking-[0.12em]">Delivery dashboard</p>
             <span class="inline-flex items-center gap-1.5 text-[11px] font-semibold px-2 py-1 rounded-md bg-amber-50 text-amber-700 border border-amber-200">
-              <i data-lucide="info" class="w-3 h-3"></i> Illustrative figures
+              <i data-lucide="info" class="w-3 h-3"></i> Published once measured
             </span>
           </div>
           <div class="grid grid-cols-2 md:grid-cols-3 gap-3 p-5">
             <div class="fx-stage p-5">
-              <p class="font-display font-bold text-2xl text-slate-900">36</p>
+              <p class="font-display font-bold text-2xl text-slate-300">&mdash;</p>
               <p class="text-xs text-slate-500 mt-1">Projects delivered</p>
             </div>
             <div class="fx-stage p-5">
-              <p class="font-display font-bold text-2xl text-slate-900">147</p>
+              <p class="font-display font-bold text-2xl text-slate-300">&mdash;</p>
               <p class="text-xs text-slate-500 mt-1">Tickets completed</p>
             </div>
             <div class="fx-stage p-5">
-              <p class="font-display font-bold text-2xl text-slate-900">82%</p>
+              <p class="font-display font-bold text-2xl text-slate-300">&mdash;</p>
               <p class="text-xs text-slate-500 mt-1">First-review acceptance</p>
             </div>
             <div class="fx-stage p-5">
-              <p class="font-display font-bold text-2xl text-slate-900">11%</p>
+              <p class="font-display font-bold text-2xl text-slate-300">&mdash;</p>
               <p class="text-xs text-slate-500 mt-1">Rework rate</p>
             </div>
             <div class="fx-stage p-5">
-              <p class="font-display font-bold text-2xl text-slate-900">214 hrs</p>
+              <p class="font-display font-bold text-2xl text-slate-300">&mdash;</p>
               <p class="text-xs text-slate-500 mt-1">Human review hours avoided</p>
             </div>
             <div class="fx-stage p-5">
@@ -599,7 +599,7 @@ export const VsCodingAgentsPage = () => html`
 
         <div class="fx-note rounded-lg p-5 mt-6">
           <p class="text-sm text-slate-600 leading-relaxed">
-            These numbers are a mock-up of the executive view, not a customer result. Your own numbers come out of a pilot &mdash; that is the point of running one.
+            This is the shape of the executive view, not a customer result. We publish delivery figures only once they are measured &mdash; yours come out of a pilot, which is the point of running one.
           </p>
         </div>
       </div>

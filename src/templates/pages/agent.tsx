@@ -299,7 +299,7 @@ export const AgentPage = () => html`
                             <div class="w-10 h-10 rounded-lg bg-brand-100 text-brand-700 flex items-center justify-center mb-4"><i data-lucide="terminal" class="w-5 h-5"></i></div>
                             <p class="text-xs uppercase font-bold tracking-wider text-brand-600 mb-2">04: Agent</p>
                             <h3 class="font-display font-bold text-lg mb-2">Code &amp; test</h3>
-                            <p class="text-sm text-slate-600">Claude Code executes each ticket in a sandbox. You can watch, course-correct, or let it run autonomously.</p>
+                            <p class="text-sm text-slate-600">Each ticket is executed in a sandbox. You can watch it, steer it, or leave it to run and review the result.</p>
                         </article>
                         <div class="hidden lg:flex items-center justify-center absolute -right-[30px] top-11 -translate-y-1/2 z-20 w-7 h-7 rounded-full bg-brand-600 text-white shadow-md ring-2 ring-white"><i data-lucide="arrow-right" class="w-4 h-4"></i></div>
                     </div>
@@ -313,7 +313,7 @@ export const AgentPage = () => html`
                     </div>
                 </div>
                 <div class="mt-10 text-center">
-                    <p class="text-slate-500 text-sm font-medium"><span class="text-brand-600 font-bold">You touch 2 of 5 steps.</span> The rest is fully autonomous.</p>
+                    <p class="text-slate-500 text-sm font-medium"><span class="text-brand-600 font-bold">You touch 2 of 5 steps.</span> The pipeline carries the rest.</p>
                 </div>
             </div>
         </section>

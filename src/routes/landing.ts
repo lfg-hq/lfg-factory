@@ -1,9 +1,13 @@
 import { Hono } from "hono";
-import { LandingPage } from "../templates/pages/landing.tsx";
+import { HomePage } from "../templates/pages/home.tsx";
+import { HowItWorksPage } from "../templates/pages/how-it-works.tsx";
+import { SoftwareServicesPage } from "../templates/pages/software-services.tsx";
+import { StartupsPage } from "../templates/pages/startups.tsx";
+import { DevelopmentServicesPage } from "../templates/pages/development-services.tsx";
+import { CaseStudiesIndexPage, CaseStudyPage } from "../templates/pages/case-studies-pages.tsx";
+import { getCaseStudy } from "../data/case-studies.ts";
 import { AgentPage } from "../templates/pages/agent.tsx";
 import { SelfHostPage } from "../templates/pages/self-host.tsx";
-import { ServicesPage } from "../templates/pages/services.tsx";
-import { CaseStudiesPage } from "../templates/pages/case-studies.tsx";
 import { WhiteLabelPage } from "../templates/pages/white-label.tsx";
 import { VsCodingAgentsPage } from "../templates/pages/vs-coding-agents.tsx";
 import { BlogPage } from "../templates/pages/blog.tsx";
@@ -89,8 +93,18 @@ const landing = new Hono();
 
 landing.get("/", (c) => {
   const posts = loadBlogPosts().slice(0, 3);
-  return c.html(LandingPage({ posts, turnstileSiteKey: env.TURNSTILE_SITE_KEY }));
+  return c.html(HomePage({ posts, turnstileSiteKey: env.TURNSTILE_SITE_KEY }));
 });
+
+landing.get("/how-it-works", (c) => c.redirect("/how-it-works/"));
+landing.get("/how-it-works/", (c) => c.html(HowItWorksPage()));
+
+// Solutions: split by who the buyer is, not by feature.
+landing.get("/software-services", (c) => c.redirect("/software-services/"));
+landing.get("/software-services/", (c) => c.html(SoftwareServicesPage()));
+
+landing.get("/startups", (c) => c.redirect("/startups/"));
+landing.get("/startups/", (c) => c.html(StartupsPage()));
 
 // Instant Apps landing — describe an app, verify email (or Google), build on /instant.
 // optionalAuth lets an already-logged-in visitor skip verification.
@@ -112,10 +126,16 @@ landing.get("/self-host", (c) => c.redirect("/self-host/"));
 landing.get("/self-host/", (c) => c.html(SelfHostPage()));
 
 landing.get("/services", (c) => c.redirect("/services/"));
-landing.get("/services/", (c) => c.html(ServicesPage()));
+landing.get("/services/", (c) => c.html(DevelopmentServicesPage()));
 
 landing.get("/case-studies", (c) => c.redirect("/case-studies/"));
-landing.get("/case-studies/", (c) => c.html(CaseStudiesPage()));
+landing.get("/case-studies/", (c) => c.html(CaseStudiesIndexPage()));
+landing.get("/case-studies/:slug", (c) => c.redirect(`/case-studies/${c.req.param("slug")}/`));
+landing.get("/case-studies/:slug/", (c) => {
+  const study = getCaseStudy(c.req.param("slug"));
+  if (!study) return c.notFound();
+  return c.html(CaseStudyPage({ study }));
+});
 // Earlier names for the same page.
 landing.get("/proof", (c) => c.redirect("/case-studies/", 301));
 landing.get("/proof/", (c) => c.redirect("/case-studies/", 301));
@@ -325,6 +345,55 @@ landing.post("/api/white-label/inquiry", async (c) => {
     return c.json({ success: true });
   } catch {
     return c.json({ error: "Invalid request." }, 400);
+  }
+});
+
+// "Give LFG one real piece of work" — the single intake behind the homepage
+// form and the services-firm pilot form. One endpoint, routed by intent, so
+// there is one inbox to watch rather than three.
+landing.post("/api/start", async (c) => {
+  try {
+    const body = await c.req.json();
+    const name = (body.name ?? "").trim();
+    const email = (body.email ?? "").trim();
+    const brief = (body.brief ?? "").trim();
+    if (!name || !email || !brief) {
+      return c.json({ error: "Name, email, and a description of the work are required." }, 400);
+    }
+    if (brief.length < 20) {
+      return c.json({ error: "Please describe the work in a little more detail." }, 400);
+    }
+
+    const intent = (body.intent ?? "project").trim();
+    const label = intent === "pilot" ? "AGENCY PILOT" : intent === "other" ? "ENQUIRY" : "PROJECT";
+
+    const fields: Array<[string, string]> = [
+      ["Name", name],
+      ["Email", email],
+      ["Company", (body.company ?? body.firm ?? "").trim() || "—"],
+      ["Intent", intent],
+      ["Delivery headcount", (body.headcount ?? "").trim() || "—"],
+    ];
+    const rows = fields
+      .map(([k, v]) => `<tr><td style="padding:6px 12px;font-weight:600;color:#334155;white-space:nowrap">${k}</td><td style="padding:6px 12px;color:#475569">${v}</td></tr>`)
+      .join("");
+
+    await sendEmail({
+      to: "hello@lfg.run",
+      subject: `[${label}] ${name}${body.company || body.firm ? ` — ${body.company || body.firm}` : ""}`,
+      text: fields.map(([k, v]) => `${k}: ${v}`).join("\n") + `\n\nThe work:\n${brief}`,
+      html: `<div style="font-family:sans-serif;max-width:600px">
+        <h2 style="color:#0f172a">New ${label.toLowerCase()} request</h2>
+        <table style="border-collapse:collapse;width:100%">${rows}</table>
+        <h3 style="color:#0f172a;margin-top:20px">The work</h3>
+        <p style="color:#475569;white-space:pre-wrap">${brief}</p>
+      </div>`,
+    });
+
+    return c.json({ success: true });
+  } catch (err) {
+    console.error("[start] intake error:", err);
+    return c.json({ error: "Unable to submit right now." }, 500);
   }
 });
 
