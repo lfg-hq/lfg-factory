@@ -209,9 +209,9 @@ ${SiteNav({ active: "home" })}
               </div>`)}
           </div>
         </div>
-        <p class="text-sm text-slate-500 mt-4 max-w-4xl leading-relaxed">
-          One pipeline, from the requirement to the release.
-          <span class="text-slate-700 font-medium">Every plan document is written to be reviewed</span> &mdash; requirements, architecture and the ticket breakdown &mdash; and so is the finished change. LFG's job is to produce those documents quickly <em>and</em> make them quick to check, which is what decides whether a complex project holds together.
+        <p class="text-sm text-slate-500 mt-4 max-w-3xl leading-relaxed">
+          <span class="text-slate-700 font-medium">The plan is written to be reviewed.</span>
+          LFG produces requirements, architecture and tickets fast &mdash; and makes them fast to check, which is what holds a complex project together.
         </p>
       </div>
     </div>
