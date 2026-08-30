@@ -25,7 +25,10 @@ import type { BlogPost } from "../../utils/blog.ts";
  */
 type Step = [n: number, label: string, human: boolean];
 const PHASES: Array<[phase: string, steps: Step[]]> = [
-  ["Plan",  [[1, "Requirements", false], [2, "Architecture", false], [3, "Tickets", false]]],
+  // Two human gates, not one. Approving the architecture before anything is
+  // built is the cheaper of the two — a misjudged plan costs a conversation
+  // here and a rewrite after step 4.
+  ["Plan",  [[1, "Requirements", false], [2, "Architecture", true], [3, "Tickets", false]]],
   ["Build", [[4, "Build", false], [5, "Test", false]]],
   ["Ship",  [[6, "Review", true], [7, "Ship", false]]],
 ];
@@ -163,8 +166,8 @@ ${SiteNav({ active: "home" })}
         <div class="rounded-2xl border border-slate-200 bg-white px-6 py-5">
           <div class="hidden lg:grid grid-cols-7 gap-x-3 mb-3">
             ${PHASES.map(([phase], pi) => html`
-              <div class="${pi === 0 ? "col-span-3" : "col-span-2"} border-t-2 ${pi === 2 ? "border-brand-300" : "border-slate-200"} pt-2">
-                <span class="text-[11px] font-bold ${pi === 2 ? "text-brand-600" : "text-slate-400"} uppercase tracking-wider">${phase}</span>
+              <div class="${pi === 0 ? "col-span-3" : "col-span-2"} border-t-2 ${pi === 1 ? "border-slate-200" : "border-brand-300"} pt-2">
+                <span class="text-[11px] font-bold ${pi === 1 ? "text-slate-400" : "text-brand-600"} uppercase tracking-wider">${phase}</span>
               </div>`)}
           </div>
           <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-x-3 gap-y-4">
@@ -172,12 +175,13 @@ ${SiteNav({ active: "home" })}
               <div class="flex items-center gap-2 min-w-0">
                 <span class="w-6 h-6 rounded-full ${isHuman ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-500"} text-[11px] font-bold flex items-center justify-center shrink-0">${n}</span>
                 <span class="text-sm font-semibold ${isHuman ? "text-brand-700" : "text-slate-700"} truncate">${label}</span>
+                ${isHuman ? html`<i data-lucide="user-check" class="w-3.5 h-3.5 text-brand-500 shrink-0" title="A person signs off here"></i>` : ""}
               </div>`)}
           </div>
         </div>
         <p class="text-sm text-slate-500 mt-4">
           One pipeline, from the requirement to the release.
-          <span class="text-slate-700 font-medium">Step 6 is always a person</span> &mdash; your engineers hold the review gate.
+          <span class="text-slate-700 font-medium">Steps 2 and 6 are always a person</span> &mdash; your engineers weigh the architecture before anything is built, and the finished change before it ships.
         </p>
       </div>
     </div>
@@ -287,6 +291,42 @@ ${SiteNav({ active: "home" })}
       <div class="mt-8 rounded-xl border-l-4 border-brand-500 bg-white p-6">
         <p class="text-lg font-semibold text-slate-900">They are the engines. LFG is the factory built around them.</p>
         <p class="text-slate-600 mt-2">Which is why better coding models make LFG better rather than redundant. <a href="/how-it-works/" class="font-semibold text-brand-700 hover:underline">See how the factory works</a>.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ 4b. THE HONEST OBJECTION ═══════════
+       Deliberately a dark break: it is the turn of the argument, and it keeps
+       the light/tinted rhythm of the surrounding sections intact. -->
+  <section class="bg-slate-900 py-20">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="max-w-2xl mb-10">
+        <p class="text-xs font-bold text-brand-400 uppercase tracking-wider mb-2">The honest objection</p>
+        <h2 class="font-display font-bold text-3xl md:text-4xl text-white">The sceptics are right about long-horizon agents.</h2>
+      </div>
+
+      <figure class="border-l-2 border-brand-400 pl-6 sm:pl-8">
+        <blockquote class="space-y-5">
+          <p class="font-display text-xl sm:text-2xl leading-snug text-slate-100">
+            &ldquo;Long-horizon tasks are still a joke. They do not work, and I do not care what anybody says. Do not show me a stupid evaluation. Do not tell me about some dumb script you ran for 48 hours. Long-horizon tasks are not handled well. They simply do not work.&rdquo;
+          </p>
+          <p class="font-display text-xl sm:text-2xl leading-snug text-slate-100">
+            &ldquo;Second, complex problems also do not work. They are neither addressed nor handled well.&rdquo;
+          </p>
+        </blockquote>
+        <figcaption class="text-sm text-slate-400 mt-6">Chamath Palihapitiya, at the Stanford AI Club</figcaption>
+      </figure>
+
+      <div class="mt-12 space-y-4 max-w-3xl">
+        <p class="text-lg text-slate-300 leading-relaxed">
+          We think that is broadly right, and it is the reason LFG is built the way it is. Handing an agent a whole project and letting it run for two days is not a delivery model. It is a demo that works until it doesn't, and you find out at the end.
+        </p>
+        <p class="text-lg text-slate-300 leading-relaxed">
+          So the factory never asks one to. A requirement is decomposed into tickets small enough to verify on their own, each with acceptance criteria written before the work starts. Every one is checked individually before it counts as done, and anything that fails goes back rather than accumulating quietly into the next task. The horizon any single agent runs is short by design.
+        </p>
+        <p class="text-lg text-white leading-relaxed font-semibold">
+          Complexity is handled by decomposition and by human judgment at the two points that matter &mdash; not by asking a model to hold the whole problem at once.
+        </p>
       </div>
     </div>
   </section>
