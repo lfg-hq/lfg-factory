@@ -189,11 +189,23 @@ ${SiteNav({ active: "software-services" })}
   <section class="band-tint py-20">
     <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="max-w-2xl mb-12">
-        <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">Integration</p>
-        <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">It runs alongside the team you already have.</h2>
-        <p class="text-slate-600 text-lg mt-4">No migration, no rebuild of how you work. It attaches to the repository and the process you use today.</p>
+        <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">Fit</p>
+        <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">Shaped around how your firm already works.</h2>
+        <p class="text-slate-600 text-lg mt-4">
+          We configure the product to the client rather than handing over something generic and expecting you to adapt to it. No migration, no rebuild of your process &mdash; it attaches to the repositories and the way of working you have today.
+        </p>
       </div>
-      <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-5">
+      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
+        <div class="rounded-2xl border border-brand-200 bg-white p-6 ring-1 ring-brand-100">
+          <div class="w-10 h-10 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center mb-4"><i data-lucide="sliders-horizontal" class="w-4 h-4"></i></div>
+          <h3 class="font-display font-bold text-base mb-2">Configured to your process</h3>
+          <p class="text-sm text-slate-600 leading-relaxed">Your standards, your definition of done, your review rules and the shape of the work you deliver. We tune the product per client, not per plan tier.</p>
+        </div>
+        <div class="rounded-2xl border border-brand-200 bg-white p-6 ring-1 ring-brand-100">
+          <div class="w-10 h-10 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center mb-4"><i data-lucide="palette" class="w-4 h-4"></i></div>
+          <h3 class="font-display font-bold text-base mb-2">Under your own brand</h3>
+          <p class="text-sm text-slate-600 leading-relaxed">Deliver on it as your own capability, on your own domain. <a href="/white-label/" class="font-semibold text-brand-700 hover:underline">See white-label</a>.</p>
+        </div>
         <div class="rounded-2xl border border-slate-200 bg-white p-6">
           <div class="w-10 h-10 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center mb-4"><i data-lucide="folder-git-2" class="w-4 h-4"></i></div>
           <h3 class="font-display font-bold text-base mb-2">Your repositories</h3>
@@ -215,9 +227,6 @@ ${SiteNav({ active: "software-services" })}
           <p class="text-sm text-slate-600 leading-relaxed">Run it in your own environment when a client's requirements demand it. The core is MIT.</p>
         </div>
       </div>
-      <p class="text-sm text-slate-500 mt-6">
-        Want it under your own brand? <a href="/white-label/" class="font-semibold text-brand-700 hover:underline">See white-label</a>.
-      </p>
     </div>
   </section>
 

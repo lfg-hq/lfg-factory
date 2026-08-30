@@ -33,15 +33,17 @@ const SHOTS: Array<[src: string, caption: string, alt: string, label: string]> =
    "A ticket executing in LFG: logs, diff and review state side by side", "your-project/build"],
 ];
 
-type Step = [n: number, label: string, human: boolean];
-const PHASES: Array<[phase: string, steps: Step[]]> = [
-  // The whole of Plan is reviewed, not just the architecture: requirements,
-  // architecture and the ticket breakdown are each written to be checked by a
-  // person before anything is built. Reads cleanly as a story too —
-  // Plan is human, Build is agents, Ship is human again.
-  ["Plan",  [[1, "Requirements", true], [2, "Architecture", true], [3, "Tickets", true]]],
-  ["Build", [[4, "Build", false], [5, "Test", false]]],
-  ["Ship",  [[6, "Review", true], [7, "Ship", false]]],
+/**
+ * Seven stages in three phases.
+ *
+ * Who is involved is stated once per phase rather than icon-tagged on four of
+ * the seven stages — that repetition was what made the rail look busy, and it
+ * said the same thing four times. Numbers stay uniform for the same reason.
+ */
+const PHASES: Array<[phase: string, who: string, steps: Array<[number, string]>]> = [
+  ["Plan",  "yours to review",  [[1, "Requirements"], [2, "Architecture"], [3, "Tickets"]]],
+  ["Build", "runs on its own",  [[4, "Build"], [5, "Test"]]],
+  ["Ship",  "your sign-off",    [[6, "Review"], [7, "Ship"]]],
 ];
 
 const COMPARISON: Array<[string, string]> = [
@@ -193,25 +195,24 @@ ${SiteNav({ active: "home" })}
            the stages without carving the row into cards, which is what left all
            the dead space when the groups had uneven counts. -->
       <div class="mt-14 animate-fade-up">
-        <div class="rounded-2xl border border-slate-200 bg-white px-6 py-5">
-          <div class="hidden lg:grid grid-cols-7 gap-x-3 mb-3">
-            ${PHASES.map(([phase], pi) => html`
-              <div class="${pi === 0 ? "col-span-3" : "col-span-2"} border-t-2 ${pi === 1 ? "border-slate-200" : "border-brand-300"} pt-2">
-                <span class="text-[11px] font-bold ${pi === 1 ? "text-slate-400" : "text-brand-600"} uppercase tracking-wider">${phase}</span>
-              </div>`)}
-          </div>
-          <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-x-3 gap-y-4">
-            ${PHASES.flatMap(([, steps]) => steps).map(([n, label, isHuman]) => html`
-              <div class="flex items-center gap-2 min-w-0">
-                <span class="w-6 h-6 rounded-full ${isHuman ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-500"} text-[11px] font-bold flex items-center justify-center shrink-0">${n}</span>
-                <span class="text-sm font-semibold ${isHuman ? "text-brand-700" : "text-slate-700"} truncate">${label}</span>
-                ${isHuman ? html`<i data-lucide="user-check" class="w-3.5 h-3.5 text-brand-500 shrink-0" title="A person signs off here"></i>` : ""}
-              </div>`)}
-          </div>
+        <div class="rounded-2xl border border-slate-200 bg-white px-6 py-6 flex flex-col lg:flex-row gap-y-6">
+          ${PHASES.map(([phase, who, steps], pi) => html`
+            <div class="${pi === 0 ? "lg:flex-[3]" : "lg:flex-[2]"} ${pi > 0 ? "lg:pl-7 lg:border-l lg:border-slate-200" : ""} ${pi < 2 ? "lg:pr-7" : ""}">
+              <p class="text-[11px] uppercase tracking-wider mb-3">
+                <span class="font-bold ${pi === 1 ? "text-slate-400" : "text-brand-600"}">${phase}</span>
+                <span class="text-slate-400 font-medium normal-case tracking-normal"> &middot; ${who}</span>
+              </p>
+              <div class="flex flex-wrap gap-x-6 gap-y-2.5">
+                ${steps.map(([n, label]) => html`
+                  <div class="flex items-center gap-2">
+                    <span class="text-xs font-semibold text-slate-400 tabular-nums">${n}</span>
+                    <span class="text-sm font-semibold text-slate-800">${label}</span>
+                  </div>`)}
+              </div>
+            </div>`)}
         </div>
-        <p class="text-sm text-slate-500 mt-4 max-w-3xl leading-relaxed">
-          <span class="text-slate-700 font-medium">The plan is written to be reviewed.</span>
-          LFG produces requirements, architecture and tickets fast &mdash; and makes them fast to check, which is what holds a complex project together.
+        <p class="text-sm text-slate-500 mt-4">
+          Review plans and tickets as needed. LFG makes them quick to produce, and quick to check.
         </p>
       </div>
     </div>
@@ -221,30 +222,34 @@ ${SiteNav({ active: "home" })}
   <section class="band-tint py-20">
     <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="max-w-3xl mb-12">
-        <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">One software factory. Two ways to use it.</h2>
-        <p class="text-slate-600 text-lg mt-4">An AI software factory for modern software development — whether you need software built, or you build it for other people.</p>
+        <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-3">An AI software factory for modern software development</p>
+        <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">Buy the outcome, or run the factory.</h2>
       </div>
 
       <div class="grid lg:grid-cols-2 gap-6">
         <div class="rounded-2xl border border-slate-200 bg-white p-8 flex flex-col">
           <div class="w-11 h-11 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center mb-5"><i data-lucide="package" class="w-5 h-5"></i></div>
-          <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">I need software built</p>
-          <h3 class="font-display font-bold text-2xl text-slate-900 mb-3">Let LFG build it.</h3>
-          <p class="text-slate-600 leading-relaxed mb-6">Give us a requirement, a backlog or a product idea. We run it through the LFG factory to plan, build, test and deliver it.</p>
+          <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">LFG Delivery</p>
+          <h3 class="font-display font-bold text-2xl text-slate-900 mb-3">We own the outcome.</h3>
+          <p class="text-slate-600 leading-relaxed mb-6">
+            Hand us a requirement, a backlog or a product. You get tested, merge-ready pull requests in your own repository, against acceptance criteria agreed before we start. If it does not meet them, it is not done.
+          </p>
           <ul class="space-y-2 text-sm text-slate-600 mb-7">
             <li class="flex gap-2.5"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i>Growing businesses and SMBs</li>
             <li class="flex gap-2.5"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i>Startups and product teams</li>
-            <li class="flex gap-2.5"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i>Companies with a backlog that keeps slipping</li>
-            <li class="flex gap-2.5"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i>Internal software projects</li>
+            <li class="flex gap-2.5"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i>Backlogs that keep slipping</li>
+            <li class="flex gap-2.5"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i>Internal tools and modernization</li>
           </ul>
-          <a href="/services/" class="mt-auto inline-flex items-center gap-2 font-semibold text-brand-700 hover:gap-3 transition-all">Build with LFG <i data-lucide="arrow-right" class="w-4 h-4"></i></a>
+          <a href="/services/" class="mt-auto inline-flex items-center gap-2 font-semibold text-brand-700 hover:gap-3 transition-all">Have it delivered <i data-lucide="arrow-right" class="w-4 h-4"></i></a>
         </div>
 
         <div class="rounded-2xl border border-brand-200 bg-white p-8 flex flex-col ring-1 ring-brand-100">
           <div class="w-11 h-11 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center mb-5"><i data-lucide="building-2" class="w-5 h-5"></i></div>
-          <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">I deliver software for clients</p>
-          <h3 class="font-display font-bold text-2xl text-slate-900 mb-3">Put the factory inside your delivery organization.</h3>
-          <p class="text-slate-600 leading-relaxed mb-6">Turn client requirements into scoped plans, tickets, tested code and release-ready work, while your senior engineers provide the oversight.</p>
+          <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">LFG Factory</p>
+          <h3 class="font-display font-bold text-2xl text-slate-900 mb-3">You own it. We supply the machine.</h3>
+          <p class="text-slate-600 leading-relaxed mb-6">
+            Run the factory inside your own delivery organization. Client requirements become scoped plans, tickets, tested code and release-ready work &mdash; configured to how your firm works, under your name, with your engineers holding the gates.
+          </p>
           <ul class="space-y-2 text-sm text-slate-600 mb-7">
             <li class="flex gap-2.5"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i>Software services companies</li>
             <li class="flex gap-2.5"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i>IT consulting firms</li>
