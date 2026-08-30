@@ -13,18 +13,23 @@ import { CASE_STUDIES, hasMetrics, type CaseStudy } from "../../data/case-studie
  * confident figure that turns out to be made up.
  */
 
-const metricGrid = (c: CaseStudy) => html`
-  <dl class="grid grid-cols-2 sm:grid-cols-3 gap-px bg-slate-200 rounded-2xl overflow-hidden border border-slate-200">
-    ${c.metrics.map((m) => html`
-      <div class="bg-white p-5">
-        <dd class="font-display font-bold text-2xl text-slate-900">${m.value ?? html`<span class="text-slate-300">&mdash;</span>`}</dd>
-        <dt class="text-xs text-slate-500 mt-1 leading-snug">${m.label}</dt>
-      </div>`)}
-  </dl>
-  ${hasMetrics(c) ? "" : html`
-  <p class="text-xs text-slate-500 mt-4">
-    These figures are published only once they are measured from the project record. We would rather show an em dash than an estimate.
-  </p>`}`;
+/**
+ * Renders nothing at all until at least one metric is measured. A grid of em
+ * dashes reads as a broken page rather than as integrity, so the section simply
+ * does not exist until there are numbers to put in it — and appears on its own
+ * the moment someone fills them into src/data/case-studies.ts.
+ */
+const metricSection = (c: CaseStudy) => !hasMetrics(c) ? "" : html`
+  <div>
+    <h2 class="font-display font-bold text-2xl text-slate-900 mb-4">The numbers</h2>
+    <dl class="grid grid-cols-2 sm:grid-cols-3 gap-px bg-slate-200 rounded-2xl overflow-hidden border border-slate-200">
+      ${c.metrics.filter((m) => m.value !== null).map((m) => html`
+        <div class="bg-white p-5">
+          <dd class="font-display font-bold text-2xl text-slate-900">${m.value}</dd>
+          <dt class="text-xs text-slate-500 mt-1 leading-snug">${m.label}</dt>
+        </div>`)}
+    </dl>
+  </div>`;
 
 export const CaseStudiesIndexPage = () => html`
 <!DOCTYPE html>
@@ -177,10 +182,7 @@ ${SiteNav({ active: "case-studies" })}
         <h2 class="font-display font-bold text-2xl text-slate-900 mb-3">Outcome</h2>
         <p class="text-slate-600 text-lg leading-relaxed">${study.outcome}</p>
       </div>
-      <div>
-        <h2 class="font-display font-bold text-2xl text-slate-900 mb-4">The numbers</h2>
-        ${metricGrid(study)}
-      </div>
+      ${metricSection(study)}
     </div>
   </section>
 

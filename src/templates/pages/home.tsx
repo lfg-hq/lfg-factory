@@ -148,41 +148,37 @@ ${SiteNav({ active: "home" })}
             <img src="/public/images/screenshots/agent-ticket-board.png" alt="An LFG project board: every ticket, its state and its owner" class="w-full block" />
           </div>
 
-          <div class="mt-4 rounded-2xl border border-slate-200 bg-white p-5">
-            <div class="flex items-start gap-3">
-              <div class="w-9 h-9 rounded-lg bg-indigo-100 text-brand-700 flex items-center justify-center shrink-0"><i data-lucide="bot" class="w-4 h-4"></i></div>
-              <div class="min-w-0">
-                <p class="text-sm font-semibold text-slate-900">Rather run it yourself?</p>
-                <p class="text-xs text-slate-500 mt-0.5 leading-relaxed">Sign up and put the agent on your own repository. Free to start, bring your own model keys.</p>
-                <div class="flex flex-wrap items-center gap-x-4 gap-y-1.5 mt-2.5">
-                  <a href="/auth/register" class="text-sm font-semibold text-brand-700 hover:gap-2.5 inline-flex items-center gap-1.5 transition-all">Try the agent <i data-lucide="arrow-right" class="w-3.5 h-3.5"></i></a>
-                  <a href="/agent/" class="text-sm font-medium text-slate-500 hover:text-brand-600 transition-colors">How it works</a>
-                </div>
-              </div>
-            </div>
+          <div class="mt-4 rounded-xl border border-slate-200 bg-white px-4 py-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+            <i data-lucide="bot" class="w-4 h-4 text-brand-600 shrink-0"></i>
+            <span class="text-sm text-slate-600">Rather run it yourself?</span>
+            <a href="/auth/register" class="ml-auto text-sm font-semibold text-brand-700 hover:gap-2.5 inline-flex items-center gap-1.5 transition-all">Try the agent <i data-lucide="arrow-right" class="w-3.5 h-3.5"></i></a>
           </div>
         </div>
       </div>
 
-      <!-- The pipeline, chunked into three phases so it reads as a shape
-           rather than seven things to hold in your head at once -->
-      <div class="mt-16 animate-fade-up">
-        <div class="flex flex-col md:flex-row md:items-stretch gap-3">
-          ${PHASES.map(([phase, steps], pi) => html`
-            ${pi > 0 ? html`<div class="hidden md:flex items-center shrink-0"><i data-lucide="chevron-right" class="w-5 h-5 text-slate-300"></i></div>` : ""}
-            <div class="flex-1 rounded-2xl border ${pi === 2 ? "border-brand-200 bg-white ring-1 ring-brand-100" : "border-slate-200 bg-white"} p-5">
-              <p class="text-[11px] font-bold ${pi === 2 ? "text-brand-600" : "text-slate-400"} uppercase tracking-wider mb-3.5">${phase}</p>
-              <div class="flex flex-wrap gap-x-5 gap-y-2.5">
-                ${steps.map(([n, label, isHuman]) => html`
-                  <div class="flex items-center gap-2">
-                    <span class="w-5 h-5 rounded-full ${isHuman ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-500"} text-[10px] font-bold flex items-center justify-center shrink-0">${n}</span>
-                    <span class="text-sm font-semibold ${isHuman ? "text-brand-700" : "text-slate-700"}">${label}</span>
-                    ${isHuman ? html`<span class="text-[10px] font-bold text-brand-600 uppercase tracking-wide px-1.5 py-0.5 rounded bg-brand-50">You</span>` : ""}
-                  </div>`)}
-              </div>
-            </div>`)}
+      <!-- One continuous rail rather than three boxes. Phase rules above group
+           the stages without carving the row into cards, which is what left all
+           the dead space when the groups had uneven counts. -->
+      <div class="mt-14 animate-fade-up">
+        <div class="rounded-2xl border border-slate-200 bg-white px-6 py-5">
+          <div class="hidden lg:grid grid-cols-7 gap-x-3 mb-3">
+            ${PHASES.map(([phase], pi) => html`
+              <div class="${pi === 0 ? "col-span-3" : "col-span-2"} border-t-2 ${pi === 2 ? "border-brand-300" : "border-slate-200"} pt-2">
+                <span class="text-[11px] font-bold ${pi === 2 ? "text-brand-600" : "text-slate-400"} uppercase tracking-wider">${phase}</span>
+              </div>`)}
+          </div>
+          <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-x-3 gap-y-4">
+            ${PHASES.flatMap(([, steps]) => steps).map(([n, label, isHuman]) => html`
+              <div class="flex items-center gap-2 min-w-0">
+                <span class="w-6 h-6 rounded-full ${isHuman ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-500"} text-[11px] font-bold flex items-center justify-center shrink-0">${n}</span>
+                <span class="text-sm font-semibold ${isHuman ? "text-brand-700" : "text-slate-700"} truncate">${label}</span>
+              </div>`)}
+          </div>
         </div>
-        <p class="text-sm text-slate-500 mt-4">One pipeline, from the requirement to the release. Step 6 is always a person &mdash; your engineers hold the review gate.</p>
+        <p class="text-sm text-slate-500 mt-4">
+          One pipeline, from the requirement to the release.
+          <span class="text-slate-700 font-medium">Step 6 is always a person</span> &mdash; your engineers hold the review gate.
+        </p>
       </div>
     </div>
   </section>
@@ -420,15 +416,12 @@ ${SiteNav({ active: "home" })}
             <div class="p-6 flex flex-col flex-1">
               <h3 class="font-display font-bold text-lg text-slate-900 group-hover:text-brand-700 transition-colors">${name}</h3>
               <p class="text-sm text-slate-600 leading-relaxed mt-2 mb-5">${blurb}</p>
-              <dl class="mt-auto grid grid-cols-3 gap-2 pt-4 border-t border-slate-100">
-                <div><dt class="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Tickets</dt><dd class="text-base font-bold text-slate-900">&mdash;</dd></div>
-                <div><dt class="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Duration</dt><dd class="text-base font-bold text-slate-900">&mdash;</dd></div>
-                <div><dt class="text-[10px] uppercase tracking-wider text-slate-400 font-bold">Reviewers</dt><dd class="text-base font-bold text-slate-900">&mdash;</dd></div>
-              </dl>
+              <span class="mt-auto text-sm font-semibold text-brand-700 inline-flex items-center gap-1.5 group-hover:gap-2.5 transition-all">
+                View case study <i data-lucide="arrow-right" class="w-3.5 h-3.5"></i>
+              </span>
             </div>
           </a>`)}
       </div>
-      <p class="text-xs text-slate-500 mt-5">Delivery figures are published only once they are measured. Placeholders show as an em dash rather than an estimate.</p>
     </div>
   </section>
 
