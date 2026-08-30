@@ -42,10 +42,12 @@ export const SiteHead = ({ title, description, path, image = "/public/images/scr
   <meta name="twitter:image" content="https://lfg.run${image}">
   <link rel="icon" type="image/x-icon" href="/public/images/favicon.ico">
   <script>
+    // Light is the default. We deliberately do NOT follow prefers-color-scheme:
+    // a first-time visitor on a dark-mode machine was landing on the dark
+    // treatment, which is not how the site is meant to be introduced. Dark is
+    // opt-in and only ever applied when the visitor has chosen it here before.
     (function() {
-      var stored = localStorage.getItem('lfg-theme');
-      var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      if (stored === 'dark' || (!stored && prefersDark)) document.documentElement.classList.add('dark');
+      if (localStorage.getItem('lfg-theme') === 'dark') document.documentElement.classList.add('dark');
     })();
   </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -246,6 +248,12 @@ export const SiteNav = ({ active = "none" }: { active?: SitePage }) => {
 </nav>
 <script>
   (function() {
+    // Older pages carry their own <head> and so never ran SiteHead's theme
+    // init. Apply the stored choice here too so a visitor who picked dark
+    // keeps it everywhere. Light remains the default; OS preference is not
+    // consulted anywhere.
+    if (localStorage.getItem('lfg-theme') === 'dark') document.documentElement.classList.add('dark');
+
     var navbar = document.getElementById('navbar');
     window.addEventListener('scroll', function() {
       if (window.scrollY > 20) { navbar.classList.add('scrolled','py-3'); navbar.classList.remove('bg-transparent','py-4'); }
@@ -270,9 +278,6 @@ export const SiteNav = ({ active = "none" }: { active?: SitePage }) => {
       updateIcons(isDark);
     };
     setTimeout(function() { updateIcons(document.documentElement.classList.contains('dark')); }, 100);
-    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function(e) {
-      if (!localStorage.getItem('lfg-theme')) { document.documentElement.classList.toggle('dark', e.matches); updateIcons(e.matches); }
-    });
   })();
 </script>`;
 };

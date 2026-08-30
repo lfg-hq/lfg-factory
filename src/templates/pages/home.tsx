@@ -23,12 +23,23 @@ import type { BlogPost } from "../../utils/blog.ts";
  * numbering keeps the sequence intact. The `human` flag marks the review gate,
  * which is the stage the whole pitch depends on being a person.
  */
+/** Hero slideshow: one shot per stretch of the pipeline. [src, caption, alt, chrome label] */
+const SHOTS: Array<[src: string, caption: string, alt: string, label: string]> = [
+  ["/public/images/screenshots/agent-prd-chat.png", "Requirements and plan",
+   "A requirement being turned into a PRD and technical plan in LFG", "your-project/plan"],
+  ["/public/images/screenshots/agent-ticket-board.png", "Ticket board",
+   "An LFG project board: every ticket, its state and its owner", "your-project/tickets"],
+  ["/public/images/screenshots/agent-ticket-execution.png", "Execution and review",
+   "A ticket executing in LFG: logs, diff and review state side by side", "your-project/build"],
+];
+
 type Step = [n: number, label: string, human: boolean];
 const PHASES: Array<[phase: string, steps: Step[]]> = [
-  // Two human gates, not one. Approving the architecture before anything is
-  // built is the cheaper of the two — a misjudged plan costs a conversation
-  // here and a rewrite after step 4.
-  ["Plan",  [[1, "Requirements", false], [2, "Architecture", true], [3, "Tickets", false]]],
+  // The whole of Plan is reviewed, not just the architecture: requirements,
+  // architecture and the ticket breakdown are each written to be checked by a
+  // person before anything is built. Reads cleanly as a story too —
+  // Plan is human, Build is agents, Ship is human again.
+  ["Plan",  [[1, "Requirements", true], [2, "Architecture", true], [3, "Tickets", true]]],
   ["Build", [[4, "Build", false], [5, "Test", false]]],
   ["Ship",  [[6, "Review", true], [7, "Ship", false]]],
 ];
@@ -138,17 +149,36 @@ ${SiteNav({ active: "home" })}
         <!-- Right: the product itself, plus the self-serve door for anyone
              who would rather drive it than buy delivery -->
         <div class="lg:col-span-5 animate-fade-up" style="animation-delay:.12s">
-          <div class="shot">
+          <!-- Rotates through the pipeline so the hero shows the product doing
+               each job, not one frozen board. All three shots are 1354x848, so
+               they stack with no layout shift. -->
+          <div class="shot" id="hero-shots">
             <div class="shot-bar">
               <span class="shot-dot bg-red-400/70"></span>
               <span class="shot-dot bg-amber-400/70"></span>
               <span class="shot-dot bg-emerald-400/70"></span>
-              <span class="ml-2 text-xs font-mono text-slate-400">your-project/tickets</span>
+              <span class="ml-2 text-xs font-mono text-slate-400" data-shot-label>your-project/plan</span>
               <span class="ml-auto inline-flex items-center gap-1.5 text-[11px] font-semibold text-emerald-500">
                 <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> live
               </span>
             </div>
-            <img src="/public/images/screenshots/agent-ticket-board.png" alt="An LFG project board: every ticket, its state and its owner" class="w-full block" />
+
+            <div class="relative aspect-[1354/848]">
+              ${SHOTS.map(([src, , alt], i) => html`
+                <img src="${src}" alt="${alt}" ${i === 0 ? "" : 'loading="lazy"'}
+                     data-shot="${i}"
+                     class="absolute inset-0 w-full h-full object-cover object-top transition-opacity duration-500 ${i === 0 ? "opacity-100" : "opacity-0"}" />`)}
+            </div>
+
+            <div class="flex items-center gap-3 px-4 py-3 border-t border-slate-100">
+              ${SHOTS.map(([, caption], i) => html`
+                <button type="button" data-shot-btn="${i}"
+                        class="group flex-1 text-left transition-opacity ${i === 0 ? "" : "opacity-45 hover:opacity-80"}"
+                        aria-label="Show ${caption}">
+                  <span class="block h-0.5 rounded-full mb-1.5 ${i === 0 ? "bg-brand-500" : "bg-slate-200"}" data-shot-bar></span>
+                  <span class="block text-[11px] font-semibold text-slate-600 leading-tight">${caption}</span>
+                </button>`)}
+            </div>
           </div>
 
           <div class="mt-4 rounded-xl border border-slate-200 bg-white px-4 py-3 flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -179,9 +209,9 @@ ${SiteNav({ active: "home" })}
               </div>`)}
           </div>
         </div>
-        <p class="text-sm text-slate-500 mt-4">
+        <p class="text-sm text-slate-500 mt-4 max-w-4xl leading-relaxed">
           One pipeline, from the requirement to the release.
-          <span class="text-slate-700 font-medium">Steps 2 and 6 are always a person</span> &mdash; your engineers weigh the architecture before anything is built, and the finished change before it ships.
+          <span class="text-slate-700 font-medium">Every plan document is written to be reviewed</span> &mdash; requirements, architecture and the ticket breakdown &mdash; and so is the finished change. LFG's job is to produce those documents quickly <em>and</em> make them quick to check, which is what decides whether a complex project holds together.
         </p>
       </div>
     </div>
@@ -588,6 +618,58 @@ ${SiteNav({ active: "home" })}
 ${SiteFooter()}
 
 <script>
+  // ── Hero slideshow ────────────────────────────────────────────
+  (function () {
+    var root = document.getElementById('hero-shots');
+    if (!root) return;
+    var LABELS = ['your-project/plan', 'your-project/tickets', 'your-project/build'];
+    var slides = root.querySelectorAll('[data-shot]');
+    var buttons = root.querySelectorAll('[data-shot-btn]');
+    var label = root.querySelector('[data-shot-label]');
+    if (slides.length < 2) return;
+
+    var current = 0;
+    var timer = null;
+    var DELAY = 5000;
+    var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    function show(next) {
+      current = (next + slides.length) % slides.length;
+      for (var i = 0; i < slides.length; i++) {
+        slides[i].classList.toggle('opacity-100', i === current);
+        slides[i].classList.toggle('opacity-0', i !== current);
+      }
+      for (var j = 0; j < buttons.length; j++) {
+        var on = j === current;
+        buttons[j].classList.toggle('opacity-45', !on);
+        buttons[j].classList.toggle('hover:opacity-80', !on);
+        var bar = buttons[j].querySelector('[data-shot-bar]');
+        if (bar) {
+          bar.classList.toggle('bg-brand-500', on);
+          bar.classList.toggle('bg-slate-200', !on);
+        }
+      }
+      if (label && LABELS[current]) label.textContent = LABELS[current];
+    }
+
+    function start() { if (!reduced && !timer) timer = setInterval(function () { show(current + 1); }, DELAY); }
+    function stop() { if (timer) { clearInterval(timer); timer = null; } }
+
+    for (var k = 0; k < buttons.length; k++) {
+      (function (idx) {
+        buttons[idx].addEventListener('click', function () { stop(); show(idx); start(); });
+      })(k);
+    }
+
+    // Don't advance under the reader's cursor, or while the tab is hidden.
+    root.addEventListener('mouseenter', stop);
+    root.addEventListener('mouseleave', start);
+    document.addEventListener('visibilitychange', function () { document.hidden ? stop() : start(); });
+
+    start();
+  })();
+
+  // ── Project intake ────────────────────────────────────────────
   (function () {
     var form = document.getElementById('start-form');
     if (!form) return;
