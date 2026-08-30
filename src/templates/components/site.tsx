@@ -152,6 +152,9 @@ const NAV_PRODUCT: NavItem[] = [
   ["/how-it-works/", "workflow", "How LFG works", "Requirement to release, stage by stage"],
   ["/agent/", "bot", "LFG Agent", "The engine underneath the factory"],
   ["/self-host/", "server", "Self-hosted", "Run it on your own infrastructure"],
+  // The self-serve door. Buyers get "Start a project"; anyone who would rather
+  // drive the agent themselves needs a route that is not buried on /agent/.
+  ["/auth/register", "sparkles", "Try the agent", "Sign up and run it on your own repo"],
 ];
 
 const NAV_SOLUTIONS: NavItem[] = [
@@ -291,6 +294,7 @@ export const SiteFooter = () => html`
           <li><a href="/how-it-works/" class="hover:text-white transition-colors">How LFG works</a></li>
           <li><a href="/agent/" class="hover:text-white transition-colors">LFG Agent</a></li>
           <li><a href="/self-host/" class="hover:text-white transition-colors">Self-hosted</a></li>
+          <li><a href="/auth/register" class="hover:text-white transition-colors">Try the agent</a></li>
           <li><a href="https://github.com/lfg-hq/lfg" target="_blank" rel="noopener noreferrer" class="hover:text-white transition-colors">GitHub</a></li>
         </ul>
       </div>

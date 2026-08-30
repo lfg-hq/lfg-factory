@@ -15,7 +15,20 @@ import type { BlogPost } from "../../utils/blog.ts";
  * proof anyone could catch out.
  */
 
-const PIPELINE = ["Requirements", "Architecture", "Tickets", "Build", "Test", "Review", "Ship"];
+/**
+ * The seven pipeline stages, grouped into three phases.
+ *
+ * Seven chevron-separated chips in a row read as seven unrelated things. Three
+ * labelled phases with numbered stops inside them read as one shape, and the
+ * numbering keeps the sequence intact. The `human` flag marks the review gate,
+ * which is the stage the whole pitch depends on being a person.
+ */
+type Step = [n: number, label: string, human: boolean];
+const PHASES: Array<[phase: string, steps: Step[]]> = [
+  ["Plan",  [[1, "Requirements", false], [2, "Architecture", false], [3, "Tickets", false]]],
+  ["Build", [[4, "Build", false], [5, "Test", false]]],
+  ["Ship",  [[6, "Review", true], [7, "Ship", false]]],
+];
 
 const COMPARISON: Array<[string, string]> = [
   ["Starts with a prompt", "Starts with a business requirement"],
@@ -89,46 +102,87 @@ ${SiteNav({ active: "home" })}
     <div class="absolute -top-10 right-[8%] w-72 h-72 rounded-full bg-brand-100 blur-3xl animate-drift"></div>
     <div class="absolute top-24 left-[4%] w-80 h-80 rounded-full bg-pink-100 blur-3xl animate-drift" style="animation-delay:1s"></div>
 
-    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
-      <div class="max-w-3xl">
-        <div class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full glass shadow-sm mb-7 animate-fade-up">
-          <span class="w-2 h-2 rounded-full bg-brand-500 animate-pulse"></span>
-          <span class="text-xs font-bold text-slate-600 uppercase tracking-wider">AI-native software development</span>
-        </div>
-        <h1 class="font-display font-semibold text-4xl sm:text-5xl lg:text-6xl leading-[1.08] tracking-tight text-slate-900 animate-fade-up">
-          Ship more software<br>with
-          <span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-pink-500">smaller teams.</span>
-        </h1>
-        <p class="text-lg text-slate-600 mt-6 max-w-2xl leading-relaxed animate-fade-up">
-          LFG is an AI software factory that turns requirements into production-ready software. It plans the work, builds the features, runs the tests, documents the changes and prepares the release, while engineers review the decisions that matter.
-        </p>
-        <p class="text-base text-slate-500 mt-3 max-w-2xl animate-fade-up">
-          Built for software services companies, startups and growing businesses.
-        </p>
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
+      <div class="grid lg:grid-cols-12 gap-10 xl:gap-14 items-center">
 
-        <div class="mt-8 flex flex-col sm:flex-row gap-3 animate-fade-up">
-          <a href="#start" class="px-7 py-3.5 rounded-full bg-slate-900 text-white font-semibold hover:bg-slate-800 transition-colors inline-flex items-center justify-center gap-2">
-            Build a project with LFG <i data-lucide="arrow-right" class="w-4 h-4"></i>
-          </a>
-          <a href="/software-services/" class="px-7 py-3.5 rounded-full border border-slate-300 bg-white text-slate-800 font-semibold hover:border-brand-400 hover:text-brand-700 transition-colors inline-flex items-center justify-center gap-2">
-            LFG for software companies
-          </a>
+        <!-- Left: the pitch -->
+        <div class="lg:col-span-7">
+          <div class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full glass shadow-sm mb-7 animate-fade-up">
+            <span class="w-2 h-2 rounded-full bg-brand-500 animate-pulse"></span>
+            <span class="text-xs font-bold text-slate-600 uppercase tracking-wider">AI-native software development</span>
+          </div>
+          <h1 class="font-display font-semibold text-4xl sm:text-5xl xl:text-6xl leading-[1.08] tracking-tight text-slate-900 animate-fade-up">
+            Ship more software<br>with
+            <span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-pink-500">smaller teams.</span>
+          </h1>
+          <p class="text-lg text-slate-600 mt-6 leading-relaxed animate-fade-up">
+            LFG is an AI software factory that turns requirements into production-ready software. It plans the work, builds the features, runs the tests, documents the changes and prepares the release, while engineers review the decisions that matter.
+          </p>
+          <p class="text-base text-slate-500 mt-3 animate-fade-up">
+            Built for software services companies, startups and growing businesses.
+          </p>
+
+          <div class="mt-8 flex flex-col sm:flex-row gap-3 animate-fade-up">
+            <a href="#start" class="px-7 py-3.5 rounded-full bg-slate-900 text-white font-semibold hover:bg-slate-800 transition-colors inline-flex items-center justify-center gap-2">
+              Build a project with LFG <i data-lucide="arrow-right" class="w-4 h-4"></i>
+            </a>
+            <a href="/software-services/" class="px-7 py-3.5 rounded-full border border-slate-300 bg-white text-slate-800 font-semibold hover:border-brand-400 hover:text-brand-700 transition-colors inline-flex items-center justify-center gap-2">
+              LFG for software companies
+            </a>
+          </div>
         </div>
-        <p class="mt-4 text-sm animate-fade-up">
-          <a href="/agent/" class="text-slate-500 hover:text-brand-600 transition-colors inline-flex items-center gap-1.5">Explore the LFG Agent <i data-lucide="arrow-right" class="w-3.5 h-3.5"></i></a>
-        </p>
+
+        <!-- Right: the product itself, plus the self-serve door for anyone
+             who would rather drive it than buy delivery -->
+        <div class="lg:col-span-5 animate-fade-up" style="animation-delay:.12s">
+          <div class="shot">
+            <div class="shot-bar">
+              <span class="shot-dot bg-red-400/70"></span>
+              <span class="shot-dot bg-amber-400/70"></span>
+              <span class="shot-dot bg-emerald-400/70"></span>
+              <span class="ml-2 text-xs font-mono text-slate-400">your-project/tickets</span>
+              <span class="ml-auto inline-flex items-center gap-1.5 text-[11px] font-semibold text-emerald-500">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> live
+              </span>
+            </div>
+            <img src="/public/images/screenshots/agent-ticket-board.png" alt="An LFG project board: every ticket, its state and its owner" class="w-full block" />
+          </div>
+
+          <div class="mt-4 rounded-2xl border border-slate-200 bg-white p-5">
+            <div class="flex items-start gap-3">
+              <div class="w-9 h-9 rounded-lg bg-indigo-100 text-brand-700 flex items-center justify-center shrink-0"><i data-lucide="bot" class="w-4 h-4"></i></div>
+              <div class="min-w-0">
+                <p class="text-sm font-semibold text-slate-900">Rather run it yourself?</p>
+                <p class="text-xs text-slate-500 mt-0.5 leading-relaxed">Sign up and put the agent on your own repository. Free to start, bring your own model keys.</p>
+                <div class="flex flex-wrap items-center gap-x-4 gap-y-1.5 mt-2.5">
+                  <a href="/auth/register" class="text-sm font-semibold text-brand-700 hover:gap-2.5 inline-flex items-center gap-1.5 transition-all">Try the agent <i data-lucide="arrow-right" class="w-3.5 h-3.5"></i></a>
+                  <a href="/agent/" class="text-sm font-medium text-slate-500 hover:text-brand-600 transition-colors">How it works</a>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
-      <!-- The product, in one line, before anyone scrolls -->
-      <div class="mt-14 animate-fade-up">
-        <div class="flex flex-wrap items-center gap-x-1.5 gap-y-2.5">
-          ${PIPELINE.map((step, i) => html`
-            ${i > 0 ? html`<i data-lucide="chevron-right" class="w-4 h-4 text-slate-300 shrink-0"></i>` : ""}
-            <div class="node ${i === PIPELINE.length - 1 ? "node-accent" : ""}">
-              <span class="text-sm font-semibold ${i === PIPELINE.length - 1 ? "text-brand-700" : "text-slate-700"}">${step}</span>
+      <!-- The pipeline, chunked into three phases so it reads as a shape
+           rather than seven things to hold in your head at once -->
+      <div class="mt-16 animate-fade-up">
+        <div class="flex flex-col md:flex-row md:items-stretch gap-3">
+          ${PHASES.map(([phase, steps], pi) => html`
+            ${pi > 0 ? html`<div class="hidden md:flex items-center shrink-0"><i data-lucide="chevron-right" class="w-5 h-5 text-slate-300"></i></div>` : ""}
+            <div class="flex-1 rounded-2xl border ${pi === 2 ? "border-brand-200 bg-white ring-1 ring-brand-100" : "border-slate-200 bg-white"} p-5">
+              <p class="text-[11px] font-bold ${pi === 2 ? "text-brand-600" : "text-slate-400"} uppercase tracking-wider mb-3.5">${phase}</p>
+              <div class="flex flex-wrap gap-x-5 gap-y-2.5">
+                ${steps.map(([n, label, isHuman]) => html`
+                  <div class="flex items-center gap-2">
+                    <span class="w-5 h-5 rounded-full ${isHuman ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-500"} text-[10px] font-bold flex items-center justify-center shrink-0">${n}</span>
+                    <span class="text-sm font-semibold ${isHuman ? "text-brand-700" : "text-slate-700"}">${label}</span>
+                    ${isHuman ? html`<span class="text-[10px] font-bold text-brand-600 uppercase tracking-wide px-1.5 py-0.5 rounded bg-brand-50">You</span>` : ""}
+                  </div>`)}
+              </div>
             </div>`)}
         </div>
-        <p class="text-sm text-slate-500 mt-4">One pipeline, from the requirement to the release. Your engineers hold the review gate.</p>
+        <p class="text-sm text-slate-500 mt-4">One pipeline, from the requirement to the release. Step 6 is always a person &mdash; your engineers hold the review gate.</p>
       </div>
     </div>
   </section>
