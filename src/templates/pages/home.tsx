@@ -295,38 +295,31 @@ ${SiteNav({ active: "home" })}
     </div>
   </section>
 
-  <!-- ═══════════ 4b. THE HONEST OBJECTION ═══════════
-       Deliberately a dark break: it is the turn of the argument, and it keeps
-       the light/tinted rhythm of the surrounding sections intact. -->
+  <!-- ═══════════ 4b. PLANNED, NOT LOOPED ═══════════
+       A dark break at the turn of the argument, which also keeps the
+       light/tinted rhythm of the surrounding sections intact. -->
   <section class="bg-slate-900 py-20">
     <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-      <div class="max-w-2xl mb-10">
-        <p class="text-xs font-bold text-brand-400 uppercase tracking-wider mb-2">The honest objection</p>
-        <h2 class="font-display font-bold text-3xl md:text-4xl text-white">The sceptics are right about long-horizon agents.</h2>
-      </div>
+      <div class="max-w-3xl">
+        <p class="text-xs font-bold text-brand-400 uppercase tracking-wider mb-3">Planned, not looped</p>
+        <h2 class="font-display font-bold text-3xl md:text-4xl text-white leading-tight mb-8">
+          You can't loop your way to working software.
+        </h2>
 
-      <figure class="border-l-2 border-brand-400 pl-6 sm:pl-8">
-        <blockquote class="space-y-5">
-          <p class="font-display text-xl sm:text-2xl leading-snug text-slate-100">
-            &ldquo;Long-horizon tasks are still a joke. They do not work, and I do not care what anybody says. Do not show me a stupid evaluation. Do not tell me about some dumb script you ran for 48 hours. Long-horizon tasks are not handled well. They simply do not work.&rdquo;
+        <div class="space-y-5">
+          <p class="text-lg text-slate-300 leading-relaxed">
+            Give an agent a large, loosely defined goal and let it run, and it drifts. Long-running tasks lose the thread. Genuinely complex problems do not survive being held in one long session. And because nothing is checked along the way, you find out at the end &mdash; when the work is finished, confident, and wrong in a way nobody has looked for.
           </p>
-          <p class="font-display text-xl sm:text-2xl leading-snug text-slate-100">
-            &ldquo;Second, complex problems also do not work. They are neither addressed nor handled well.&rdquo;
+          <p class="text-lg text-slate-300 leading-relaxed">
+            The usual response is to run it again. A better prompt, a longer leash, another few hours. But iteration is not a method, and repeating an unplanned process mostly buys a more expensive way to arrive at the same place. Endless loops do not fix anything, because the missing thing was never more attempts. It was a plan.
           </p>
-        </blockquote>
-        <figcaption class="text-sm text-slate-400 mt-6">Chamath Palihapitiya, at the Stanford AI Club</figcaption>
-      </figure>
-
-      <div class="mt-12 space-y-4 max-w-3xl">
-        <p class="text-lg text-slate-300 leading-relaxed">
-          We think that is broadly right, and it is the reason LFG is built the way it is. Handing an agent a whole project and letting it run for two days is not a delivery model. It is a demo that works until it doesn't, and you find out at the end.
-        </p>
-        <p class="text-lg text-slate-300 leading-relaxed">
-          So the factory never asks one to. A requirement is decomposed into tickets small enough to verify on their own, each with acceptance criteria written before the work starts. Every one is checked individually before it counts as done, and anything that fails goes back rather than accumulating quietly into the next task. The horizon any single agent runs is short by design.
-        </p>
-        <p class="text-lg text-white leading-relaxed font-semibold">
-          Complexity is handled by decomposition and by human judgment at the two points that matter &mdash; not by asking a model to hold the whole problem at once.
-        </p>
+          <p class="text-lg text-slate-300 leading-relaxed">
+            What works is deliberate and curated. Decide the architecture before anything is built. Break the requirement into pieces small enough to check on their own. Write down what &ldquo;done&rdquo; means before the work starts, so passing is a fact rather than an opinion. Verify each piece as it lands, and send failures back instead of letting them accumulate into the next task. Keep a person on the two decisions that carry the most consequence.
+          </p>
+          <p class="text-lg text-white leading-relaxed font-semibold">
+            That structure is the whole of what LFG is. It replaces the loop with a plan, and the plan is what makes the output something you can hand to a client.
+          </p>
+        </div>
       </div>
     </div>
   </section>
