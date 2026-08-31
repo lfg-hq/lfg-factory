@@ -37,10 +37,12 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 *.sqlite3
 data/*.db
 
-# Local file storage & user uploads (runtime data — never commit)
-data
-uploads
-screenshots
+# Local file storage & user uploads (runtime data — never commit).
+# Anchored to the repo root: unanchored, `data` also swallowed src/data/,
+# so a committed source file was silently skipped by `git add`.
+/data
+/uploads
+/screenshots
 
 # Databases (redundant safety alongside the patterns above)
 *.sqlite
