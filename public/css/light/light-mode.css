@@ -4581,3 +4581,97 @@ body[data-theme="light"] {
     background: #e2e8f0 !important;
     color: #1e293b !important;
 }
+
+/* =================================================================
+   CONNECTORS MODAL
+   chat.css builds this entire modal out of rgba(255,255,255,…) — fine
+   on a dark card, invisible on a white one. In light mode the card
+   backgrounds, borders, descriptions, tabs and close button all
+   disappeared, leaving logos and names floating on white.
+   ================================================================= */
+[data-theme="light"] .connectors-overlay,
+[data-theme="light"] .connector-detail-overlay {
+    background: rgba(15, 23, 42, 0.45) !important;
+}
+[data-theme="light"] .connectors-modal,
+[data-theme="light"] .connector-detail-modal {
+    background: #ffffff !important;
+    border-color: #e2e8f0 !important;
+    box-shadow: 0 30px 70px -25px rgba(15, 23, 42, 0.30) !important;
+}
+[data-theme="light"] .connectors-header {
+    border-bottom-color: #e2e8f0 !important;
+}
+[data-theme="light"] .connectors-header h3,
+[data-theme="light"] .connector-detail-header h3 {
+    color: #0f172a !important;
+}
+[data-theme="light"] .connectors-search-wrap {
+    background: #f1f5f9 !important;
+    border-color: #e2e8f0 !important;
+}
+[data-theme="light"] .connectors-search-wrap i { color: #94a3b8 !important; }
+[data-theme="light"] .connectors-search-wrap input { color: #1e293b !important; }
+[data-theme="light"] .connectors-search-wrap input::placeholder { color: #94a3b8 !important; }
+
+[data-theme="light"] .connectors-close { color: #94a3b8 !important; }
+[data-theme="light"] .connectors-close:hover { color: #1e293b !important; }
+
+[data-theme="light"] .connectors-subtitle,
+[data-theme="light"] .connector-detail-header p { color: #64748b !important; }
+
+[data-theme="light"] .connectors-tab {
+    background: #f1f5f9 !important;
+    border-color: #e2e8f0 !important;
+    color: #64748b !important;
+}
+[data-theme="light"] .connectors-tab:hover {
+    background: #e2e8f0 !important;
+    color: #1e293b !important;
+}
+[data-theme="light"] .connectors-tab.active {
+    background: #ede9fe !important;
+    border-color: #c4b5fd !important;
+    color: #6d28d9 !important;
+}
+
+[data-theme="light"] .connectors-loading,
+[data-theme="light"] .connectors-empty { color: #94a3b8 !important; }
+
+[data-theme="light"] .connector-card {
+    background: #ffffff !important;
+    border-color: #e2e8f0 !important;
+}
+[data-theme="light"] .connector-card:hover {
+    background: #f8fafc !important;
+    border-color: #cbd5e1 !important;
+}
+[data-theme="light"] .connector-card.connected {
+    border-color: rgba(16, 185, 129, 0.45) !important;
+}
+[data-theme="light"] .connector-logo,
+[data-theme="light"] .connector-detail-logo {
+    background: #f8fafc !important;
+}
+[data-theme="light"] .connector-name { color: #0f172a !important; }
+[data-theme="light"] .connector-desc { color: #64748b !important; }
+
+[data-theme="light"] .connectors-load-more-btn {
+    background: #f1f5f9 !important;
+    border-color: #e2e8f0 !important;
+    color: #475569 !important;
+}
+[data-theme="light"] .connectors-load-more-btn:hover {
+    background: #e2e8f0 !important;
+    color: #1e293b !important;
+}
+
+[data-theme="light"] .connector-detail-action-btn {
+    background: #4f46e5 !important;
+    color: #ffffff !important;
+}
+[data-theme="light"] .connector-detail-action-btn.disconnect {
+    background: #fef2f2 !important;
+    color: #dc2626 !important;
+    border-color: #fecaca !important;
+}

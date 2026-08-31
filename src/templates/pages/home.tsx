@@ -143,7 +143,7 @@ ${SiteNav({ active: "home" })}
                button, not two, because both audiences end in the same intake. -->
           <div class="mt-8 flex flex-col sm:flex-row gap-3 animate-fade-up">
             <a href="/auth/register" class="px-7 py-3.5 rounded-full bg-slate-900 text-white font-semibold hover:bg-slate-800 transition-colors inline-flex items-center justify-center gap-2">
-              Try LFG Agent <i data-lucide="arrow-right" class="w-4 h-4"></i>
+              Access LFG Agent <i data-lucide="arrow-right" class="w-4 h-4"></i>
             </a>
             <a href="#start" class="px-7 py-3.5 rounded-full border border-slate-300 bg-white text-slate-800 font-semibold hover:border-brand-400 hover:text-brand-700 transition-colors inline-flex items-center justify-center gap-2">
               Talk to us about a project

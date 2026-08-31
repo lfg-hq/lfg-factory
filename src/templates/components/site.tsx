@@ -156,7 +156,7 @@ const NAV_PRODUCT: NavItem[] = [
   ["/self-host/", "server", "Self-hosted", "Run it on your own infrastructure"],
   // Signing up is the top of the funnel now — it is free, it starts a
   // relationship, and a call can follow. The consultative path sits beside it.
-  ["/auth/register", "sparkles", "Try LFG Agent", "Sign up and run it on your own repo"],
+  ["/auth/register", "sparkles", "Access LFG Agent", "Sign in and run it on your own repo"],
 ];
 
 const NAV_SOLUTIONS: NavItem[] = [
@@ -218,8 +218,7 @@ export const SiteNav = ({ active = "none" }: { active?: SitePage }) => {
         <button id="theme-toggle" onclick="window.toggleTheme && window.toggleTheme()" class="text-slate-500 hover:text-slate-900 transition-colors" aria-label="Toggle dark mode">
           <i data-lucide="moon" class="w-5 h-5"></i>
         </button>
-        <a href="/auth/login" class="text-sm font-semibold text-slate-600 hover:text-brand-600 transition-colors whitespace-nowrap">Sign in</a>
-        <a href="/auth/register" class="bg-slate-900 hover:bg-brand-700 text-white px-5 py-2 rounded-full text-sm font-semibold transition-all whitespace-nowrap">Try LFG Agent</a>
+        <a href="/auth/register" class="bg-slate-900 hover:bg-brand-700 text-white px-5 py-2 rounded-full text-sm font-semibold transition-all whitespace-nowrap">Access LFG Agent</a>
       </div>
     </div>
 
@@ -242,8 +241,7 @@ export const SiteNav = ({ active = "none" }: { active?: SitePage }) => {
     <a href="https://github.com/lfg-hq/lfg" target="_blank" rel="noopener noreferrer" class="block py-2 text-base font-medium text-slate-700 m-link">GitHub</a>
     <div class="mt-4 pt-4 border-t border-slate-100 flex flex-col gap-2">
       <a href="/#start" class="block py-2 text-base font-medium text-slate-700 m-link">Talk to us about a project</a>
-      <a href="/auth/login" class="block py-2 text-base font-semibold text-slate-700 m-link">Sign in</a>
-      <a href="/auth/register" class="bg-brand-600 text-white w-full py-3 rounded-lg font-semibold text-center block m-link">Try LFG Agent</a>
+      <a href="/auth/register" class="bg-brand-600 text-white w-full py-3 rounded-lg font-semibold text-center block m-link">Access LFG Agent</a>
     </div>
   </div>
 </nav>
@@ -300,7 +298,7 @@ export const SiteFooter = () => html`
           <li><a href="/how-it-works/" class="hover:text-white transition-colors">How LFG works</a></li>
           <li><a href="/agent/" class="hover:text-white transition-colors">LFG Agent</a></li>
           <li><a href="/self-host/" class="hover:text-white transition-colors">Self-hosted</a></li>
-          <li><a href="/auth/register" class="hover:text-white transition-colors">Try LFG Agent</a></li>
+          <li><a href="/auth/register" class="hover:text-white transition-colors">Access LFG Agent</a></li>
           <li><a href="https://github.com/lfg-hq/lfg" target="_blank" rel="noopener noreferrer" class="hover:text-white transition-colors">GitHub</a></li>
         </ul>
       </div>
