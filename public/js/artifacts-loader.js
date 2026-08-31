@@ -6661,8 +6661,22 @@ document.addEventListener('DOMContentLoaded', function() {
          * on the backdrop, and on the close button. Restores focus and body scroll.
          */
         openReadMode: function(title) {
-            const source = document.getElementById('prd-streaming-content');
-            if (!source) return;
+            // #viewer-markdown is the shared render target for every document type;
+            // the PRD streaming pane is the fallback. Whichever is actually on
+            // screen is what gets lifted, so this works for all docs, not one.
+            const candidates = ['viewer-markdown', 'prd-streaming-content'];
+            let source = null;
+            for (const id of candidates) {
+                const el = document.getElementById(id);
+                if (el && el.offsetParent !== null && el.innerHTML.trim()) { source = el; break; }
+            }
+            if (!source) source = document.getElementById('viewer-markdown') || document.getElementById('prd-streaming-content');
+            if (!source || !source.innerHTML.trim()) return;
+
+            if (!title) {
+                const h = document.querySelector('.viewer-title, #viewer-title, .artifact-title');
+                title = (h && h.textContent.trim()) || (window.currentFileData && window.currentFileData.name) || 'Document';
+            }
 
             document.getElementById('lfg-read-mode')?.remove();
 
@@ -7981,7 +7995,20 @@ document.addEventListener('DOMContentLoaded', function() {
                         optionsWrapper.appendChild(optionsButton);
                         optionsWrapper.appendChild(dropdownMenu);
                         
+                        // Read mode — every document type renders through this
+                        // toolbar, so the button belongs here rather than on any
+                        // one viewer.
+                        const readButton = document.createElement('button');
+                        readButton.id = 'viewer-read';
+                        readButton.style.cssText = buttonStyle;
+                        readButton.innerHTML = '<i class="fas fa-book-open"></i>';
+                        readButton.title = 'Read mode';
+                        readButton.onmouseover = function() { this.style.color = 'var(--text-color)'; };
+                        readButton.onmouseout = function() { this.style.color = 'var(--text-secondary)'; };
+                        readButton.addEventListener('click', () => ArtifactsLoader.openReadMode());
+
                         // Append buttons to actions container
+                        viewerActions.appendChild(readButton);
                         viewerActions.appendChild(editButton);
                         viewerActions.appendChild(copyButton);
                         viewerActions.appendChild(optionsWrapper);
