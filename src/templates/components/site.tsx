@@ -292,7 +292,7 @@ export const SiteFooter = () => html`
           <div class="bg-brand-600 text-white p-1.5 rounded-lg"><i data-lucide="rocket" class="w-4 h-4"></i></div>
           <span class="font-display font-bold text-white text-lg">LFG</span>
         </div>
-        <p class="text-sm leading-relaxed">An AI software factory. We build software with it, and software companies use it to deliver their own client work.</p>
+        <p class="text-sm leading-relaxed">An AI software factory: requirements to tested, merge-ready software. We deliver on it, or your own team runs it.</p>
       </div>
       <div>
         <h4 class="font-bold text-white mb-3 uppercase text-xs tracking-wider">Product</h4>
