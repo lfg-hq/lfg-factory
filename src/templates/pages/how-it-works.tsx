@@ -202,7 +202,7 @@ ${SiteNav({ active: "how-it-works" })}
       </p>
       <div class="flex flex-col sm:flex-row gap-3 justify-center">
         <a href="/#start" class="px-7 py-3.5 rounded-full bg-slate-900 text-white font-semibold hover:bg-slate-800 transition-colors inline-flex items-center justify-center gap-2">
-          Submit a project <i data-lucide="arrow-right" class="w-4 h-4"></i>
+          Talk to us about a project <i data-lucide="arrow-right" class="w-4 h-4"></i>
         </a>
         <a href="/software-services/#pilot" class="px-7 py-3.5 rounded-full border border-slate-300 bg-white text-slate-800 font-semibold hover:border-brand-400 hover:text-brand-700 transition-colors inline-flex items-center justify-center gap-2">
           Book a factory pilot

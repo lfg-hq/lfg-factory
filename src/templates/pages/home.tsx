@@ -138,14 +138,20 @@ ${SiteNav({ active: "home" })}
             Built for software services companies, startups and growing businesses.
           </p>
 
+          <!-- Self-serve first: signing up costs nothing and starts a
+               relationship we can follow up on. The consultative path is one
+               button, not two, because both audiences end in the same intake. -->
           <div class="mt-8 flex flex-col sm:flex-row gap-3 animate-fade-up">
-            <a href="#start" class="px-7 py-3.5 rounded-full bg-slate-900 text-white font-semibold hover:bg-slate-800 transition-colors inline-flex items-center justify-center gap-2">
-              Build a project with LFG <i data-lucide="arrow-right" class="w-4 h-4"></i>
+            <a href="/auth/register" class="px-7 py-3.5 rounded-full bg-slate-900 text-white font-semibold hover:bg-slate-800 transition-colors inline-flex items-center justify-center gap-2">
+              Try LFG free <i data-lucide="arrow-right" class="w-4 h-4"></i>
             </a>
-            <a href="/software-services/" class="px-7 py-3.5 rounded-full border border-slate-300 bg-white text-slate-800 font-semibold hover:border-brand-400 hover:text-brand-700 transition-colors inline-flex items-center justify-center gap-2">
-              LFG for software companies
+            <a href="#start" class="px-7 py-3.5 rounded-full border border-slate-300 bg-white text-slate-800 font-semibold hover:border-brand-400 hover:text-brand-700 transition-colors inline-flex items-center justify-center gap-2">
+              Talk to us about a project
             </a>
           </div>
+          <p class="mt-4 text-sm text-slate-500 animate-fade-up">
+            Free to start &middot; runs on your own repository &middot; bring your own model keys
+          </p>
         </div>
 
         <!-- Right: the product itself, plus the self-serve door for anyone
@@ -183,11 +189,9 @@ ${SiteNav({ active: "home" })}
             </div>
           </div>
 
-          <div class="mt-4 rounded-xl border border-slate-200 bg-white px-4 py-3 flex flex-wrap items-center gap-x-3 gap-y-2">
-            <i data-lucide="bot" class="w-4 h-4 text-brand-600 shrink-0"></i>
-            <span class="text-sm text-slate-600">Rather run it yourself?</span>
-            <a href="/auth/register" class="ml-auto text-sm font-semibold text-brand-700 hover:gap-2.5 inline-flex items-center gap-1.5 transition-all">Try the agent <i data-lucide="arrow-right" class="w-3.5 h-3.5"></i></a>
-          </div>
+          <p class="mt-3 text-center text-xs text-slate-500">
+            This is the product you get on sign-up. <a href="/agent/" class="font-semibold text-brand-700 hover:underline">More about LFG Agent</a>
+          </p>
         </div>
       </div>
 
@@ -459,7 +463,7 @@ ${SiteNav({ active: "home" })}
         </div>
       </div>
 
-      <a href="/services/" class="inline-flex items-center gap-2 font-semibold text-brand-700 hover:gap-3 transition-all">Tell us what you want built <i data-lucide="arrow-right" class="w-4 h-4"></i></a>
+      <a href="/services/" class="inline-flex items-center gap-2 font-semibold text-brand-700 hover:gap-3 transition-all">Talk to us about a project <i data-lucide="arrow-right" class="w-4 h-4"></i></a>
     </div>
   </section>
 
@@ -603,7 +607,7 @@ ${SiteNav({ active: "home" })}
           </div>
           <div class="flex flex-col sm:flex-row gap-3">
             <button type="submit" class="flex-1 inline-flex items-center justify-center gap-2 bg-brand-600 hover:bg-brand-700 text-white py-3 rounded-lg font-semibold text-sm transition-colors">
-              <i data-lucide="send" class="w-4 h-4"></i><span class="btn-text">Submit a project</span>
+              <i data-lucide="send" class="w-4 h-4"></i><span class="btn-text">Send project details</span>
             </button>
             <a href="/software-services/#pilot" class="flex-1 inline-flex items-center justify-center gap-2 border border-slate-300 bg-white text-slate-800 py-3 rounded-lg font-semibold text-sm hover:border-brand-400 hover:text-brand-700 transition-colors">
               Book a factory pilot
@@ -708,7 +712,7 @@ ${SiteFooter()}
         err.classList.remove('hidden');
       } finally {
         btn.disabled = false;
-        btnText.textContent = 'Submit a project';
+        btnText.textContent = 'Send project details';
       }
     });
   })();
