@@ -1532,6 +1532,9 @@ document.addEventListener('DOMContentLoaded', function() {
                         // Clear any existing content and add the action buttons
                         prdActionsContainer.innerHTML = `
                             <div class="prd-actions" style="display: flex; gap: 4px;">
+                                <button class="artifact-read-btn" id="prd-read-btn" title="Read mode" style="padding: 4px 6px; background: transparent; border: none; color: #fff; cursor: pointer; transition: all 0.2s; opacity: 0.7;" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.7'">
+                                    <i class="fas fa-book-open"></i>
+                                </button>
                                 <button class="artifact-edit-btn" id="prd-edit-btn" data-project-id="${projectId}" title="Edit" style="padding: 4px 6px; background: transparent; border: none; color: #fff; cursor: pointer; transition: all 0.2s; opacity: 0.7;" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.7'">
                                     <i class="fas fa-edit"></i>
                                 </button>
@@ -1597,6 +1600,15 @@ document.addEventListener('DOMContentLoaded', function() {
                         window.prdStreamingState.fullContent = prdContent;
                     }
                     
+                    // Read mode — the side panel is narrow and busy; this puts the
+                    // document on the main screen with everything else dimmed out.
+                    const readBtn = document.getElementById('prd-read-btn');
+                    if (readBtn) {
+                        readBtn.addEventListener('click', function() {
+                            ArtifactsLoader.openReadMode(data.title || currentPrdName || 'Document');
+                        });
+                    }
+
                     // Add click event listener for the edit button
                     const editBtn = document.getElementById('prd-edit-btn');
                     if (editBtn) {
@@ -6638,6 +6650,99 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
                 }
             }, 100); // Small delay to show progress indicator
+        },
+
+        /**
+         * Read mode — lifts the already-rendered document out of the narrow side
+         * panel and onto the main screen, with everything behind it dimmed.
+         *
+         * Clones the live DOM rather than re-parsing the markdown, so whatever is
+         * on screen is exactly what you read, formatting and all. Closes on Escape,
+         * on the backdrop, and on the close button. Restores focus and body scroll.
+         */
+        openReadMode: function(title) {
+            const source = document.getElementById('prd-streaming-content');
+            if (!source) return;
+
+            document.getElementById('lfg-read-mode')?.remove();
+
+            const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+            const surface = isLight ? '#ffffff' : '#161b22';
+            const border  = isLight ? '#e2e8f0' : 'rgba(255,255,255,0.10)';
+            const text    = isLight ? '#1e293b' : '#c9d1d9';
+            const heading = isLight ? '#0f172a' : '#e6edf3';
+            const muted   = isLight ? '#64748b' : '#8b949e';
+
+            const overlay = document.createElement('div');
+            overlay.id = 'lfg-read-mode';
+            overlay.setAttribute('role', 'dialog');
+            overlay.setAttribute('aria-modal', 'true');
+            overlay.setAttribute('aria-label', title || 'Document');
+            overlay.style.cssText =
+                'position:fixed;inset:0;z-index:11000;display:flex;align-items:center;justify-content:center;' +
+                'padding:clamp(16px,4vh,48px);background:rgba(2,6,23,0.72);backdrop-filter:blur(3px);' +
+                'opacity:0;transition:opacity .16s ease;';
+
+            overlay.innerHTML =
+                '<div id="lfg-read-card" style="position:relative;display:flex;flex-direction:column;width:min(920px,100%);max-height:100%;' +
+                    'background:' + surface + ';border:1px solid ' + border + ';border-radius:14px;overflow:hidden;' +
+                    'box-shadow:0 40px 90px -30px rgba(2,6,23,0.6);transform:translateY(8px);transition:transform .16s ease;">' +
+                  '<div style="display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid ' + border + ';flex:0 0 auto;">' +
+                    '<i class="fas fa-book-open" style="color:' + muted + ';font-size:13px;"></i>' +
+                    '<span style="font-weight:600;font-size:14px;color:' + heading + ';flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
+                      (title || 'Document') + '</span>' +
+                    '<span style="font-size:11px;color:' + muted + ';white-space:nowrap;">Esc to close</span>' +
+                    '<button id="lfg-read-close" aria-label="Close read mode" style="background:transparent;border:none;color:' + muted +
+                      ';cursor:pointer;padding:4px 6px;font-size:15px;line-height:1;">&times;</button>' +
+                  '</div>' +
+                  '<div id="lfg-read-body" style="overflow-y:auto;padding:36px clamp(20px,5vw,56px) 56px;color:' + text + ';' +
+                    'font-size:16px;line-height:1.75;"></div>' +
+                '</div>';
+
+            document.body.appendChild(overlay);
+            overlay.querySelector('#lfg-read-body').appendChild(source.cloneNode(true));
+
+            // Wider measure and comfortable spacing for reading, scoped to the modal.
+            const style = document.createElement('style');
+            style.id = 'lfg-read-mode-style';
+            style.textContent =
+                '#lfg-read-body h1{font-size:1.9em;margin:0 0 .5em;color:' + heading + ';}' +
+                '#lfg-read-body h2{font-size:1.4em;margin:1.6em 0 .5em;color:' + heading + ';}' +
+                '#lfg-read-body h3{font-size:1.15em;margin:1.4em 0 .4em;color:' + heading + ';}' +
+                '#lfg-read-body p,#lfg-read-body li{font-size:16px;line-height:1.75;}' +
+                '#lfg-read-body ul,#lfg-read-body ol{padding-left:1.4em;margin:.7em 0;}' +
+                '#lfg-read-body li{margin:.35em 0;}' +
+                '#lfg-read-body pre{overflow-x:auto;padding:14px 16px;border-radius:8px;border:1px solid ' + border + ';}' +
+                '#lfg-read-body table{width:100%;border-collapse:collapse;margin:1em 0;display:block;overflow-x:auto;}' +
+                '#lfg-read-body th,#lfg-read-body td{border:1px solid ' + border + ';padding:8px 12px;text-align:left;}' +
+                '#lfg-read-body img{max-width:100%;height:auto;}';
+            document.head.appendChild(style);
+
+            const prevOverflow = document.body.style.overflow;
+            const prevFocus = document.activeElement;
+            document.body.style.overflow = 'hidden';
+
+            function close() {
+                document.removeEventListener('keydown', onKey);
+                document.body.style.overflow = prevOverflow;
+                overlay.style.opacity = '0';
+                setTimeout(function() {
+                    overlay.remove();
+                    document.getElementById('lfg-read-mode-style')?.remove();
+                    if (prevFocus && prevFocus.focus) prevFocus.focus();
+                }, 160);
+            }
+            function onKey(e) { if (e.key === 'Escape') { e.stopPropagation(); close(); } }
+
+            overlay.addEventListener('click', function(e) { if (e.target === overlay) close(); });
+            overlay.querySelector('#lfg-read-close').addEventListener('click', close);
+            document.addEventListener('keydown', onKey);
+
+            requestAnimationFrame(function() {
+                overlay.style.opacity = '1';
+                overlay.querySelector('#lfg-read-card').style.transform = 'translateY(0)';
+                overlay.querySelector('#lfg-read-close').focus();
+            });
         },
 
         copyToClipboard: function(text, contentType) {
