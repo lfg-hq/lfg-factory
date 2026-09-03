@@ -2698,12 +2698,14 @@ fi`, 240_000);
       plog(projectId, userId, `Generated ${envSync.generated.length} app secret(s): ${envSync.generated.join(", ")}`);
     }
     if (envSync?.needsInput.length) {
-      plog(projectId, userId, `${envSync.needsInput.length} external key(s) needed — set them in the Environment tab, then Restart: ${envSync.needsInput.map((n) => n.key).join(", ")}`);
+      // The keys are already synced INTO the Environment tab — listing every one of them
+      // here just buries the chat (a big repo greps out 150+ vars). Point at the tab and
+      // keep the names in the log line's detail for debugging.
+      plog(projectId, userId, `${envSync.needsInput.length} external key(s) needed — set them in the Environment tab, then Restart.`, { detail: envSync.needsInput.map((n) => n.key).join(", ") });
       await publishSummary(
         userId,
         opts.conversationId,
-        `🔑 **Set these in the Environment tab, then Restart** for full functionality:\n` +
-          envSync.needsInput.map((n) => `- \`${n.key}\`${n.description ? ` — ${n.description}` : ""}`).join("\n"),
+        `🔑 **${envSync.needsInput.length} environment variable(s) need values** — set them in the **Environment** tab, then Restart.`,
         pub(projectId),
       ).catch(() => {});
     }
