@@ -134,6 +134,10 @@ export const ENGINES: Record<DbEngine, EngineSpec> = {
       cmd: `redis-server --requirepass '${pw}' --appendonly yes --dir /data`,
       readyProbe: `docker exec redis redis-cli -a '${pw}' ping`,
       readyGrep: "PONG",
+      // redis-cli exits 0 even when AUTH fails (it just prints "NOAUTH …"), so the
+      // probe MUST grep for PONG. Without this, a container left over from a run
+      // whose password we never persisted rejects the newly generated one forever.
+      authProbe: `docker exec redis redis-cli -a '${pw}' ping 2>/dev/null | grep -q PONG`,
     }),
     connectionString: (c) => `redis://${c.user}:${c.pw}@127.0.0.1:${c.port}`,
   },
