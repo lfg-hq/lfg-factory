@@ -54,6 +54,11 @@ function dockerBringup(o: {
   readyProbe: string;   // a `docker exec <name> …` command
   readyGrep: string;    // string that must appear in the probe's output when ready
   authProbe?: string;   // a `docker exec …` that exits 0 ONLY if OUR credentials work
+  // Extended-regex matching the probe output when the engine is UP but REJECTING our
+  // credentials (e.g. redis "NOAUTH"). Without it a wrong password is indistinguishable
+  // from "still starting", so we'd burn the whole readiness budget before self-healing.
+  // Must NOT match a still-loading engine (redis "LOADING") — that one deserves the wait.
+  authFailGrep?: string;
 }): string {
   const envFlags = (o.env ?? []).map((e) => `-e ${e}`).join(" ");
   const dataDir = o.volume.split(":")[0];
@@ -69,8 +74,15 @@ else
   fuser -k ${o.port}/tcp >/dev/null 2>&1 || true; sleep 1
   ${runCmd} >/dev/null 2>&1
 fi
-# Wait until the server accepts connections.
-for i in $(seq 1 90); do ${o.readyProbe} 2>/dev/null | grep -q "${o.readyGrep}" && break; sleep 3; done
+# Wait until the server accepts connections. A probe that comes back with an explicit
+# "your credentials are wrong" ends the wait NOW — the answer will never change, and the
+# re-init below is what fixes it.
+for i in $(seq 1 90); do
+  PROBE_OUT=$(${o.readyProbe} 2>&1)
+  echo "$PROBE_OUT" | grep -q "${o.readyGrep}" && break
+${o.authFailGrep ? `  echo "$PROBE_OUT" | grep -qE '${o.authFailGrep}' && { echo "${o.name} is up but rejected our credentials — re-initializing"; break; }` : ""}
+  sleep 3
+done
 ${o.authProbe ? `
 # Verify OUR credentials actually work. A data dir created OUTSIDE our provisioning
 # makes the image "Skipping initialization", so our POSTGRES_/MYSQL_ USER+PASSWORD are
@@ -138,6 +150,9 @@ export const ENGINES: Record<DbEngine, EngineSpec> = {
       // probe MUST grep for PONG. Without this, a container left over from a run
       // whose password we never persisted rejects the newly generated one forever.
       authProbe: `docker exec redis redis-cli -a '${pw}' ping 2>/dev/null | grep -q PONG`,
+      // NOAUTH/WRONGPASS = definitively our password is wrong. LOADING is deliberately
+      // absent: that means the password WORKED and redis is replaying its AOF.
+      authFailGrep: "NOAUTH|WRONGPASS|invalid username-password",
     }),
     connectionString: (c) => `redis://${c.user}:${c.pw}@127.0.0.1:${c.port}`,
   },
@@ -342,6 +357,18 @@ export async function execInEnv(projectId: string, cmd: string, timeoutMs = 110_
 }
 
 /**
+ * Engines that actually have a container in the sandbox, recorded in project_database
+ * or not. Recovery has to key off THIS, not the table: an engine that came up but
+ * failed to record (the exact state a broken provisioning run leaves behind) is
+ * invisible to every table-driven control — precisely when you most need to reset it.
+ */
+export async function listSandboxEngines(workspaceId: string): Promise<DbEngine[]> {
+  const r = await execOnWorkspace(workspaceId, `docker ps -a --format '{{.Names}}' 2>/dev/null`, { timeout: 30_000 }).catch(() => ({ output: "" } as any));
+  const names = new Set((r.output || "").split("\n").map((l: string) => l.trim()).filter(Boolean));
+  return (Object.keys(ENGINES) as DbEngine[]).filter((e) => names.has(ENGINES[e].container));
+}
+
+/**
  * Health-check every provisioned DB by running a live connectivity probe against
  * its container (pg_isready / mysqladmin ping / redis PONG / sqlcmd SELECT 1).
  * Used by the preview post-run verification. Returns per-engine ok + detail.
@@ -382,6 +409,28 @@ export interface EngineHandle {
 }
 
 /**
+ * Turn a bring-up log tail into something a human can act on. Slicing the last N
+ * CHARACTERS cut mid-timestamp and surfaced whatever line happened to land there —
+ * "redis bring-up failed: :29:46.018 * Server initialized" reads like success. Take
+ * whole lines instead, drop our own markers, and lead with the last real one.
+ */
+// Lines the bring-up script itself prints when it knows what went wrong. These beat the
+// container's own log, which describes what the engine was DOING, not why we gave up —
+// the reason "Ready to accept connections" ended up presented as a failure.
+const BRINGUP_DIAGNOSTICS = /rejected our credentials|docker daemon unavailable|reinitializing|no space left|cannot allocate|permission denied/i;
+
+function failureReason(raw: string | undefined): string {
+  const lines = (raw || "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !/^ENGINE_(READY|ERROR)$/.test(l) && !/^-{2,}.*-{2,}$/.test(l));
+  if (!lines.length) return "no output from the bring-up script (check the sandbox's Docker daemon)";
+  const diagnosed = lines.filter((l) => BRINGUP_DIAGNOSTICS.test(l));
+  const picked = [...new Set([...diagnosed, ...lines.slice(-3)])];
+  return picked.join(" | ").slice(0, 400);
+}
+
+/**
  * Ensure a DB engine is installed + running in the project's sandbox and return
  * connection info (localhost). Idempotent — reuses an existing engine + password.
  */
@@ -413,11 +462,14 @@ export async function ensureEngine(projectId: string, engine: DbEngine): Promise
     const r = await execOnWorkspace(workspaceId, `tail -1 ${logf} 2>/dev/null`, { timeout: 40_000 }).catch(() => ({ output: "" } as any));
     if ((r.output || "").includes("ENGINE_READY")) { ready = true; break; }
     if ((r.output || "").includes("ENGINE_ERROR")) {
-      const log = await execOnWorkspace(workspaceId, `tail -8 ${logf} 2>/dev/null`, { timeout: 20_000 }).catch(() => ({ output: "" } as any));
-      throw new Error(`${engine} bring-up failed: ${(log.output || "").slice(-300)}`);
+      const log = await execOnWorkspace(workspaceId, `tail -12 ${logf} 2>/dev/null`, { timeout: 20_000 }).catch(() => ({ output: "" } as any));
+      throw new Error(`${engine} bring-up failed — ${failureReason(log.output)}`);
     }
   }
-  if (!ready) throw new Error(`${engine} bring-up timed out`);
+  if (!ready) {
+    const log = await execOnWorkspace(workspaceId, `tail -12 ${logf} 2>/dev/null`, { timeout: 20_000 }).catch(() => ({ output: "" } as any));
+    throw new Error(`${engine} bring-up timed out — ${failureReason(log.output)}`);
+  }
 
   const values = {
     projectId, engine, workspaceId, memGb: 8, diskGb: 20,

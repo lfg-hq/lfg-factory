@@ -29,7 +29,7 @@ import { getModel, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
 import { decryptSecret, encryptSecret } from "../utils/crypto.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { enableHttpAccess, execOnWorkspace, setStableUrl, startBrowserSession, stopWorkspace } from "./mags.ts";
-import { ensureProjectSandbox, restartProjectSandbox, ensureEngine, ensureDocker, envWorkspaceId, checkEngineHealth, ENGINES, type EngineHandle, type DbEngine } from "./project-sandbox.ts";
+import { ensureProjectSandbox, restartProjectSandbox, ensureEngine, ensureDocker, envWorkspaceId, checkEngineHealth, listSandboxEngines, ENGINES, type EngineHandle, type DbEngine } from "./project-sandbox.ts";
 import { probeAppProfile, saveAppProfile, loadAppProfile, deriveManifestFromProfile, syncDetectedEnv, applyProfileCorrection, recordProfileLearning, recordDirective, recordConfigPatch, buildConfigPatchScript, profileNotes, resolveUserModel, type AppProfile } from "./app-profile.ts";
 import { isS3Enabled, buildS3Key, uploadBinary, getPresignedGetUrl } from "./s3.ts";
 import { messages } from "../db/schema/chat.ts";
@@ -543,7 +543,12 @@ export async function getAppRuntimeLog(projectId: string, lines = 500, service?:
 export async function getDbLogs(projectId: string, lines = 200): Promise<Array<{ engine: string; log: string }>> {
   const workspaceId = await envWorkspaceId(projectId).catch(() => null);
   if (!workspaceId) return [];
-  const engines = await db.select({ engine: projectDatabases.engine }).from(projectDatabases).where(eq(projectDatabases.projectId, projectId));
+  // Union the recorded rows with the containers actually present. An engine that came
+  // up but never recorded its row still has logs worth reading — and showing its tab is
+  // what puts a Reset DB button in reach of the person staring at the failure.
+  const rows = await db.select({ engine: projectDatabases.engine }).from(projectDatabases).where(eq(projectDatabases.projectId, projectId));
+  const live = await listSandboxEngines(workspaceId).catch(() => [] as DbEngine[]);
+  const engines = [...new Set([...rows.map((r) => r.engine), ...live])].map((engine) => ({ engine }));
   const out: Array<{ engine: string; log: string }> = [];
   for (const { engine } of engines) {
     const container = ENGINES[engine as DbEngine]?.container;
@@ -562,8 +567,13 @@ export async function getDbLogs(projectId: string, lines = 200): Promise<Array<{
 export async function resetDatabase(projectId: string, userId: string, engine?: string): Promise<{ ok: boolean; error?: string; reset: string[] }> {
   const workspaceId = await envWorkspaceId(projectId).catch(() => null);
   if (!workspaceId) return { ok: false, error: "No sandbox for this project yet.", reset: [] };
+  // Reset has to reach containers the table doesn't know about — an engine that ran but
+  // failed to record is exactly the one needing a wipe, and keying off rows alone left
+  // it with no button anywhere in the UI.
   const rows = await db.select({ engine: projectDatabases.engine }).from(projectDatabases).where(eq(projectDatabases.projectId, projectId));
-  const targets = (engine ? rows.filter((r) => r.engine === engine) : rows).map((r) => r.engine as DbEngine);
+  const live = await listSandboxEngines(workspaceId).catch(() => [] as DbEngine[]);
+  const all = [...new Set([...rows.map((r) => r.engine), ...live])] as DbEngine[];
+  const targets = engine ? all.filter((e) => e === engine) : all;
   if (!targets.length) return { ok: false, error: "No provisioned database to reset.", reset: [] };
   await loadPublicId(projectId);
   for (const e of targets) {
@@ -571,6 +581,9 @@ export async function resetDatabase(projectId: string, userId: string, engine?: 
     if (!spec) continue;
     plog(projectId, userId, `Resetting ${e} — removing the container and wiping ${spec.dataDir}…`, { level: "error" });
     await sh(workspaceId, `docker rm -f ${spec.container} 2>/dev/null; rm -rf ${spec.dataDir}/* ${spec.dataDir}/.[!.]* 2>/dev/null; echo reset_${e}`, 60_000).catch(() => {});
+    // The row holds the password of a cluster that no longer exists. Drop it so the next
+    // run provisions fresh rather than probing a new container with a stale credential.
+    await db.delete(projectDatabases).where(and(eq(projectDatabases.projectId, projectId), eq(projectDatabases.engine, e))).catch(() => {});
   }
   // Restart re-provisions (fresh initdb with our creds) + re-runs migrations to reseed.
   restartPreview(projectId, { userId }).catch((e) => console.error("[preview] reset-db restart failed:", e));
