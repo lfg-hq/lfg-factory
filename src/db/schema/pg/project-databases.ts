@@ -3,7 +3,8 @@ import { sql } from "drizzle-orm";
 import { projects } from "./projects.ts";
 
 // ── Project databases ────────────────────────────────────────────────
-// Provisioned DB engines (one persistent Mags sandbox per project+engine),
+// Provisioned DB engines (one row per project+engine; all engines of a project
+// share that project's single Mags sandbox workspace),
 // used to run/test the project's app in dev. Data persists via the sandbox's
 // S3-synced workspace; the sandbox idle-reaps and is respawned on demand.
 export const projectDatabases = pgTable(
@@ -34,7 +35,9 @@ export const projectDatabases = pgTable(
   },
   (t) => [
     index("pdb_project_idx").on(t.projectId),
-    uniqueIndex("pdb_workspace_unique").on(t.workspaceId),
+    // NOT unique: every engine of a project runs in the SAME project sandbox,
+    // so a project with 2+ engines has 2+ rows sharing one workspace_id.
+    index("pdb_workspace_idx").on(t.workspaceId),
     uniqueIndex("pdb_project_engine_unique").on(t.projectId, t.engine),
   ]
 );

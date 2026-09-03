@@ -2872,7 +2872,7 @@ fi`, 240_000);
     }
     return { previewUrl };
   } catch (err) {
-    const msg = (err as Error).message ?? String(err);
+    const msg = errText(err);
     if (msg === "__CANCELLED__" || isCancelled(projectId)) {
       cancelledProjects.delete(projectId);
       plog(projectId, userId, "Setup cancelled by user");
@@ -2885,6 +2885,24 @@ fi`, 240_000);
     cancelledProjects.delete(projectId);
     releaseRun(); // let a queued run (branch switch) proceed on the now-free VM
   }
+}
+
+/**
+ * Drizzle wraps driver errors: `.message` is only "Failed query: … params: …",
+ * while the reason ("duplicate key value violates unique constraint …") sits in
+ * `.cause`. Unwrap the chain so a failed setup logs WHY, not just which query.
+ */
+function errText(err: unknown): string {
+  const parts: string[] = [];
+  const add = (v?: string) => { if (v && !parts.includes(v)) parts.push(v); };
+  let e: any = err;
+  for (let i = 0; e && i < 4; i++) {
+    add(typeof e === "string" ? e : e.message);
+    add(e.detail);                                    // pg: "Key (workspace_id)=(…) already exists."
+    add(e.constraint ? `constraint: ${e.constraint}` : undefined);
+    e = e.cause;
+  }
+  return parts.join(" — ") || String(err);
 }
 
 async function failed(projectId: string, userId: string, error: string): Promise<{ error: string }> {
