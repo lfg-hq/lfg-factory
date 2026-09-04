@@ -1082,7 +1082,14 @@ document.addEventListener('DOMContentLoaded', () => {
         
         socket.onmessage = function(event) {
             const data = JSON.parse(event.data);
-            
+
+            // ANY message from the server proves the socket is alive — not just a
+            // heartbeat. The monitor below force-closes a socket that looks dead, and
+            // force-closing it ABORTS whatever the agent is doing. Tying that judgement
+            // to one message type meant a turn streaming tool output for two minutes
+            // could still be declared dead and killed mid-work.
+            lastHeartbeatResponse = Date.now();
+
             // Handle heartbeat
             if (data.type === 'heartbeat') {
                 lastHeartbeatResponse = Date.now();
@@ -4467,7 +4474,10 @@ document.addEventListener('DOMContentLoaded', () => {
             const heartbeatTimeout = isStreaming ? 120000 : 60000;  // 2 minutes during streaming, 1 minute otherwise
             
             if (timeSinceLastHeartbeat > heartbeatTimeout) {
-                console.warn(`No heartbeat received for ${heartbeatTimeout/1000} seconds, connection may be dead`);
+                // Closing the socket aborts any in-flight turn server-side, so say
+                // plainly why — this used to look like the agent stopping for no reason.
+                console.warn(`No message from the server for ${heartbeatTimeout/1000}s — closing the socket` +
+                    (isStreaming ? ' (this will interrupt the reply in progress)' : ''));
                 showConnectionStatus('unstable');
                 
                 // Force reconnect

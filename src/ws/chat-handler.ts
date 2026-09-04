@@ -13,10 +13,19 @@ import { eq, asc, desc } from "drizzle-orm";
 import { runPreviewChat, restartPreview, getPreviewState } from "../services/dev-preview.ts";
 import { getProjectAccess } from "../auth/project-access.ts";
 
-const HEARTBEAT_INTERVAL_MS = 20_000;
+const HEARTBEAT_INTERVAL_MS = parseInt(process.env.WS_HEARTBEAT_MS || "20000", 10);
 
-// Active heartbeat timers by userId+sessionId
-const heartbeatTimers = new Map<string, ReturnType<typeof setInterval>>();
+// Heartbeat timers, one PER SOCKET.
+//
+// These used to be keyed `${userId}:${sessionId}` — and sessionId is the AUTH
+// session id, which every tab in a browser shares. So with two tabs open, the
+// second connection's timer overwrote the first's entry, and then closing EITHER
+// tab cleared whichever timer the key currently held — usually the OTHER tab's,
+// the one still working. That tab stopped receiving heartbeats, its client-side
+// connection monitor concluded the socket was dead after 120s, and force-closed
+// it — which aborts the in-flight turn server-side. A reply would simply stop
+// mid-sentence because a DIFFERENT tab had been closed.
+const heartbeatTimers = new WeakMap<ServerWebSocket<WsData>, ReturnType<typeof setInterval>>();
 
 export function onOpen(ws: ServerWebSocket<WsData>): void {
   const conn: WsConnection = {
@@ -38,26 +47,24 @@ export function onOpen(ws: ServerWebSocket<WsData>): void {
     });
   }
 
-  // Start heartbeat
-  const key = `${ws.data.userId}:${ws.data.sessionId}`;
+  // Start heartbeat — owned by THIS socket, so another tab closing can't stop it.
   const timer = setInterval(() => {
     try {
       ws.send(JSON.stringify({ type: "heartbeat" }));
     } catch {
       clearInterval(timer);
-      heartbeatTimers.delete(key);
+      heartbeatTimers.delete(ws);
     }
   }, HEARTBEAT_INTERVAL_MS);
-  heartbeatTimers.set(key, timer);
+  heartbeatTimers.set(ws, timer);
 }
 
 export function onClose(ws: ServerWebSocket<WsData>): void {
-  // Stop heartbeat
-  const key = `${ws.data.userId}:${ws.data.sessionId}`;
-  const timer = heartbeatTimers.get(key);
+  // Stop THIS socket's heartbeat (never another tab's).
+  const timer = heartbeatTimers.get(ws);
   if (timer) {
     clearInterval(timer);
-    heartbeatTimers.delete(key);
+    heartbeatTimers.delete(ws);
   }
 
   // Abort any in-flight generation. Tag WHY first: a turn cut off because the
