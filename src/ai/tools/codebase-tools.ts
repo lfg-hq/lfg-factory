@@ -155,6 +155,16 @@ export const queryCodebase = tool({
         branch: effectiveBranch,
         userId,
       });
+      // An empty answer is not "the repo has nothing" — it means the read loop ran
+      // out of steps or the model said nothing. Return WHY, so the agent narrows the
+      // question instead of firing the same one again at silence.
+      if (!result.answer?.trim()) {
+        return {
+          answer: "",
+          branch: result.branch,
+          error: result.incomplete ?? "The codebase query returned no answer. Narrow the question or name the folder to search.",
+        };
+      }
       return { answer: result.answer, branch: result.branch };
     } catch (err) {
       console.error(`[queryCodebase] Query failed:`, err);
