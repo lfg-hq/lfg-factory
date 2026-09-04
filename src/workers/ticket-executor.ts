@@ -1083,6 +1083,17 @@ export async function startTicketWorker() {
   // This happens when the server restarts between code completion and git push.
   setTimeout(() => recoverUnpushedTickets(), 5_000);
 
+  // Resume multi-ticket build runs that a restart or deploy interrupted. Runs live
+  // in the database, so "build all five" survives the process that started it: each
+  // item is reconciled against its ticket's real state (some may have finished while
+  // we were down) and the chain continues from the next one. Delayed so it lands
+  // after the sweeps above have settled the tickets they touch.
+  setTimeout(() => {
+    void import("../services/build-queue.ts")
+      .then((m) => m.resumeBuildRuns())
+      .catch((e) => console.warn("[ticket-executor] build-run resume failed:", (e as Error).message));
+  }, 8_000);
+
   bus.on("ticket.queued", async (event) => {
     const { ticketId } = event.payload;
 
@@ -3693,6 +3704,20 @@ git branch --show-current
     // The build addressed the pending addenda → mark them resolved.
     await resolveTicketAddenda(ticketId, addendaCtx.pendingIds);
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId, mergeStatus: mergedOk ? "merged" : "pushed" });
+    // TELL THE CHAIN IT SUCCEEDED. This emit was missing, and it's the reason a
+    // "build them all" stopped dead after the first ticket: the event that advances
+    // the queue was only ever emitted on FAILURE (markTicketFailed), on Stop, or by
+    // the Claude CLI forwarder's done=true — which the Pi forwarder never sends. So a
+    // build that WORKED signalled nothing and the chain died silently, while a build
+    // that failed moved things along.
+    emit({
+      type: "ticket.execution_finished",
+      ticketId,
+      status: "complete",
+      durationMs: Date.now() - startTime,
+      exitCode: 0,
+      projectId: project.id,
+    });
     // Auto-record a demo of the completed feature for the Preview tab (fire-and-forget).
     void generateTicketDemo(ticketId, { ownerId, projectId: project.id });
   } else {

@@ -343,14 +343,20 @@ When the user asks about build status or a ticket fails:
 
 ---
 
-## Auto-Queue Build Chain
+## Building tickets
 
-The system has an **automatic build chain** that reacts to ticket events:
+**More than one ticket → \`startBuildRun\`.** When the user says **"build them"**, **"build all"**, **"build the epic"**, or **"go"** after you've scheduled a set of tickets, call \`startBuildRun\` ONCE with every ticket id **in dependency order** (the order you scheduled), the \`epicId\`, and this \`conversationId\`. Never call \`queueTicketExecution\` in a loop, and never queue just the first and hope — that is what \`startBuildRun\` is for.
 
-- When a ticket **completes or fails**, the system auto-queues the **next open ticket** (by execution order, then creation order). You do NOT queue each one manually.
-- When the user says **"build all"**, **"start building"**, or **"go"**: queue only the **FIRST** ticket (by \`executionOrder\`). The chain handles the rest.
-- When **all tickets are done**, the user gets an automatic "batch complete" notification. You don't need to tell them to watch for it.
-- If a ticket fails, it's logged and the chain **continues**. The user can review failures later.
+A run is durable and self-driving:
+
+- Each ticket starts only after the previous one **succeeds**; the run stays inside the epic and never wanders into unrelated tickets.
+- It **survives server restarts and deploys** — an interrupted run resumes from where it stopped.
+- If a ticket **fails**, the chain **pauses** on it (everything after it depends on it) and the user is told. Once they retry that ticket, the rest continues.
+- When the last ticket lands, the run **starts the preview for the epic's branch and posts the URL into this conversation** — so promise exactly that: "I'll post the preview link when all N are built." Don't promise to watch anything yourself; the run reports back on its own.
+
+**One ticket → \`queueTicketExecution\`.** Single build, no chain.
+
+Use \`getBuildRunStatus(projectId)\` when the user asks how the build is going or what's left. \`getRecentActivities()\` still shows completions, failures and pushes.
 
 Call \`getRecentActivities()\` to see what completed/failed, whether pushes/merges succeeded, and whether the next ticket auto-queued — this gives you awareness of background events between user messages.
 

@@ -25,6 +25,8 @@ export {
   retryTicket,
   sendTicketMessage,
   queueTicketExecution,
+  startBuildRun,
+  getBuildRunStatus,
   setTicketWsBroadcast,
 } from "./ticket-tools.ts";
 
@@ -55,6 +57,7 @@ import {
   createTickets, getPendingTickets, getTicketDetails,
   updateTicket, updateTicketDetails, updateAllTickets,
   getNextTicket, scheduleTickets, retryTicket, sendTicketMessage, queueTicketExecution,
+  startBuildRun, getBuildRunStatus,
 } from "./ticket-tools.ts";
 import { startEpic, checkEpicOverlap, getEpicStatus, addToEpic, listTicketsForEpic } from "./epic-tools.ts";
 import { getProjectEnvVars, registerRequiredEnvVars, setEnvVar } from "./env-tools.ts";
@@ -89,6 +92,8 @@ export const toolsProduct = {
   retryTicket,
   sendTicketMessage,
   queueTicketExecution,
+  startBuildRun,
+  getBuildRunStatus,
   getProjectEnvVars,
   registerRequiredEnvVars,
   setEnvVar,

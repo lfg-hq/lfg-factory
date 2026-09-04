@@ -344,6 +344,70 @@ export const sendTicketMessage = tool({
   },
 });
 
+/**
+ * "Build them all" — the multi-ticket path. queueTicketExecution starts ONE ticket
+ * and forgets it; this records the whole set as a durable run, so the chain keeps
+ * its dependency order, stays inside the epic, survives a restart or a deploy, and
+ * ends by starting the preview and posting the URL back here.
+ */
+export const startBuildRun = tool({
+  description:
+    "Build MULTIPLE tickets in order as one tracked run. Use this whenever the user asks to build more than one ticket ('build them', 'build all', 'build the epic') — NOT queueTicketExecution in a loop. " +
+    "Pass ticketIds in dependency order (the order you scheduled them in); each ticket starts only after the previous one succeeds. " +
+    "The run survives server restarts, and when the last ticket lands it starts the preview for the epic's branch and posts the URL into this conversation. " +
+    "Tell the user you have queued N tickets and that you will post the preview link when they are all built.",
+  inputSchema: zodSchema(z.object({
+    projectId: z.string(),
+    userId: z.string().describe("User ID — the run belongs to them"),
+    conversationId: z.string().optional().describe("This conversation, so the run can report back into it"),
+    ticketIds: z.array(z.string()).min(1).describe("Ticket ids IN DEPENDENCY ORDER (first one builds first)"),
+    epicId: z.string().optional().describe("The epic these belong to — used to pick the branch to preview at the end"),
+    afterBuild: z.enum(["preview", "none"]).optional().describe(
+      "What to do when every ticket is built. 'preview' (default) starts the epic branch and returns a URL the user can test on; 'none' just reports completion."),
+  })),
+  execute: async ({ projectId, userId, conversationId, ticketIds, epicId, afterBuild }) => {
+    const { createBuildRun } = await import("../../services/build-queue.ts");
+    const res = await createBuildRun({
+      projectId, userId,
+      conversationId: conversationId ?? null,
+      ticketIds, epicId: epicId ?? null,
+      afterBuild: afterBuild ?? "preview",
+      triggerMessage: "Build the queued tickets",
+    });
+    if (!res.runId) return { success: false, error: "None of those ticket ids exist in this project." };
+    return {
+      success: true,
+      runId: res.runId,
+      queued: res.queued,
+      building: res.firstTicketId,
+      afterBuild: afterBuild ?? "preview",
+      note: `${res.queued} ticket(s) queued in order. The chain advances automatically as each completes and survives restarts.` +
+        ((afterBuild ?? "preview") === "preview" ? " The preview URL will be posted here when they are all built." : ""),
+    };
+  },
+});
+
+/** Where a build run is up to — which ticket is building, what's left, what failed. */
+export const getBuildRunStatus = tool({
+  description:
+    "Check the progress of the current multi-ticket build run for a project: which ticket is building now, which are done, and whether the chain is blocked by a failure. Use this when the user asks 'how is the build going' or 'what's left'.",
+  inputSchema: zodSchema(z.object({ projectId: z.string() })),
+  execute: async ({ projectId }) => {
+    const { getActiveRun } = await import("../../services/build-queue.ts");
+    const run = await getActiveRun(projectId);
+    if (!run) return { active: false, note: "No build run is in progress for this project." };
+    return {
+      active: true,
+      status: run.status,
+      afterBuild: run.afterBuild,
+      items: run.items,
+      note: run.status === "blocked"
+        ? "The chain is paused on a failed ticket — retry it and the rest will continue."
+        : "The chain advances on its own as each ticket completes.",
+    };
+  },
+});
+
 export const queueTicketExecution = tool({
   description: "Mark a ticket as queued for background execution by the coding agent.",
   inputSchema: zodSchema(z.object({

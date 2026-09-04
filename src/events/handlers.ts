@@ -35,6 +35,10 @@ async function getTicketName(ticketId: string): Promise<string> {
   return ticket?.name ?? ticketId.slice(0, 8);
 }
 
+/** ticketId:status → when we last handled it, so a duplicate finish can't
+ *  advance the build queue twice. */
+const recentFinishes = new Map<string, number>();
+
 // ── Auto-queue next ticket ──────────────────────────────────────────
 
 async function autoQueueNextTicket(projectId: string, completedTicketId: string): Promise<void> {
@@ -169,6 +173,17 @@ export function registerEventHandlers(): void {
   // ticket.execution_finished → log + auto-queue
   bus.on("ticket.execution_finished", async (event) => {
     const { ticketId, status, durationMs, exitCode } = event.payload;
+    // One finish per ticket. Some paths can emit twice (the CLI forwarder's done=true
+    // AND markTicketFailed), and a double would advance the queue twice — two tickets
+    // building at once, out of dependency order.
+    const dedupeKey = `${ticketId}:${status}`;
+    const last = recentFinishes.get(dedupeKey);
+    if (last && Date.now() - last < 60_000) {
+      console.log(`[handlers] duplicate execution_finished for ${ticketId} (${status}) — ignoring`);
+      return;
+    }
+    recentFinishes.set(dedupeKey, Date.now());
+    for (const [k, t] of recentFinishes) if (Date.now() - t > 300_000) recentFinishes.delete(k);
     const projectId = event.payload.projectId ?? await resolveProjectId(ticketId);
     if (!projectId) return;
     const name = await getTicketName(ticketId);
@@ -232,8 +247,14 @@ export function registerEventHandlers(): void {
       }
     }
 
-    // Auto-queue the next open ticket regardless of success/failure
-    await autoQueueNextTicket(projectId, ticketId);
+    // A ticket that belongs to a BUILD RUN is advanced by that run — it knows the
+    // dependency order, stays inside the epic, survives a restart, and finishes with
+    // the preview. Only when a ticket isn't part of a run do we fall back to the old
+    // project-wide "next open ticket" reflex.
+    const { onTicketFinished } = await import("../services/build-queue.ts");
+    const handledByRun = await onTicketFinished(ticketId, status === "complete" ? "complete" : "failed")
+      .catch((e) => { console.warn("[handlers] build-run advance failed:", (e as Error).message); return false; });
+    if (!handledByRun) await autoQueueNextTicket(projectId, ticketId);
   });
 
   // ticket.needs_attention → log activity
