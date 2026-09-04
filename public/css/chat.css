@@ -2998,3 +2998,49 @@ input:checked + .turbo-slider + .turbo-label,
 [data-theme="light"] .recording-time { color: #64748b; }
 [data-theme="light"] .recording-cancel-btn,
 [data-theme="light"] .recording-send-btn { border-color: #e5e7eb; color: #64748b; }
+
+/* ── Interrupted / stalled turn ──────────────────────────────────────────────
+   Only ever rendered on a turn that did NOT end normally, so it should read as a
+   quiet footnote on the message, not an error banner. Theme-aware via the same
+   tokens the rest of the transcript uses. */
+.message-end-reason {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+    padding-top: 9px;
+    border-top: 1px solid var(--border-color, rgba(128, 128, 128, 0.22));
+    font-size: 12.5px;
+    line-height: 1.45;
+    color: var(--text-secondary, #6b7280);
+}
+
+.message-end-reason i {
+    font-size: 11.5px;
+    opacity: 0.8;
+    flex: none;
+}
+
+.message-end-reason span {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.message-continue-btn {
+    flex: none;
+    background: transparent;
+    border: 1px solid var(--border-color, rgba(128, 128, 128, 0.35));
+    color: inherit;
+    font: inherit;
+    font-weight: 600;
+    padding: 3px 11px;
+    border-radius: 999px;
+    cursor: pointer;
+}
+
+.message-continue-btn:hover {
+    background: rgba(124, 58, 237, 0.12);
+    border-color: rgba(124, 58, 237, 0.45);
+    color: #7c3aed;
+}

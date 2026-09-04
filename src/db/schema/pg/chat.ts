@@ -77,6 +77,17 @@ export const messages = pgTable(
     // Page previews produced during this turn, so the card comes back on refresh
     // rather than living only in the socket message that announced it.
     pagePreviews: jsonb("page_previews").$type<Array<{ id: string; name: string }> | null>(),
+    // HOW this assistant turn ended. Recorded on every turn, surfaced in the UI only
+    // when it is not "complete" — a reply that was cut off used to be saved as though
+    // it had finished, so an interrupted thought was indistinguishable from an answer.
+    //   complete   — the model finished normally
+    //   stalled    — it announced an action, made no tool call, and stopped (even after
+    //                a nudge). The classic "let me check X" with nothing after it.
+    //   disconnect — the socket closed mid-turn (laptop slept, network dropped)
+    //   timeout    — the idle watchdog killed a hung generation
+    //   stopped    — the user pressed Stop
+    //   error      — the provider or a tool threw
+    endReason: text("end_reason"),
     // The user dictated this message — history shows a mic instead of it looking typed.
     isVoice: boolean("is_voice").notNull().default(false),
     createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),

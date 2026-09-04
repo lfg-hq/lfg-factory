@@ -4833,7 +4833,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     renderSavedTrail(message.activity_trail);
                 }
                 if ((message.content && message.content.trim() !== '') || fileData) {
-                    addMessageToChat(message.role, message.content || '', fileData);
+                    const el = addMessageToChat(message.role, message.content || '', fileData);
+                    if (message.role === 'assistant' && message.end_reason) markMessageEndReason(el, message.end_reason);
                     rendered++;
                 }
                 // Any page preview this turn produced, rebuilt from the saved document.
@@ -5477,6 +5478,38 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     /** Put a small "Voice message" line above a message bubble's text. */
+
+    // ── Interrupted / stalled turns ──────────────────────────────────────────
+    // A reply that stopped short used to be indistinguishable from a finished one:
+    // the row was saved the same way either way, so a half-thought looked like an
+    // answer. Shown ONLY when the turn did not end normally — a complete turn gets
+    // no badge at all.
+    const END_REASON_LABEL = {
+        disconnect: { icon: 'fa-plug-circle-xmark', text: 'Interrupted — the connection dropped while the agent was working.' },
+        timeout: { icon: 'fa-hourglass-end', text: 'Interrupted — the agent stopped responding and the turn timed out.' },
+        stopped: { icon: 'fa-circle-stop', text: 'You stopped this reply.' },
+        stalled: { icon: 'fa-circle-pause', text: 'The agent described its next step but never took it.' },
+        error: { icon: 'fa-triangle-exclamation', text: 'This turn ended with an error.' },
+    };
+    function markMessageEndReason(messageEl, reason) {
+        if (!messageEl || !reason || reason === 'complete') return;
+        const info = END_REASON_LABEL[reason];
+        if (!info) return;
+        const content = messageEl.querySelector('.message-content') || messageEl;
+        if (!content || content.querySelector('.message-end-reason')) return;
+        const bar = document.createElement('div');
+        bar.className = 'message-end-reason';
+        // "stopped" was the user's own doing — offering to continue is the point.
+        // An error is worth retrying too. A dropped connection: pick up where it left off.
+        const btn = '<button type="button" class="message-continue-btn">Continue</button>';
+        bar.innerHTML = '<i class="fas ' + info.icon + '"></i><span>' + info.text + '</span>' + btn;
+        bar.querySelector('.message-continue-btn').addEventListener('click', function () {
+            bar.remove();
+            if (typeof sendMessage === 'function') sendMessage('Continue from where you stopped.');
+        });
+        content.appendChild(bar);
+    }
+
     function markMessageAsVoice(messageEl) {
         if (!messageEl) return;
         const content = messageEl.querySelector('.message-content') || messageEl;

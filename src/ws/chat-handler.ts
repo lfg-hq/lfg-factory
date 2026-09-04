@@ -60,9 +60,11 @@ export function onClose(ws: ServerWebSocket<WsData>): void {
     heartbeatTimers.delete(key);
   }
 
-  // Abort any in-flight generation
+  // Abort any in-flight generation. Tag WHY first: a turn cut off because the
+  // laptop slept must not be saved as though the assistant had finished.
   const conn = getConnection(ws);
   if (conn?.abortController) {
+    conn.endReason = "disconnect";
     conn.abortController.abort();
   }
 
@@ -94,6 +96,7 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
 
   if (msg.type === "stop_generation") {
     conn.stopRequested = true;
+    conn.endReason = "stopped";
     conn.abortController?.abort();
     send(ws, { type: "stop_confirmed" });
     return;
@@ -165,6 +168,7 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
     const watchdog = setInterval(() => {
       if (Date.now() - lastActivity < idleMs) return; // still producing output — let it run
       watchdogFired = true;
+      conn.endReason = "timeout";
       console.warn(`[chat-handler] stream watchdog fired — no output for ${Math.round(idleMs / 1000)}s, aborting a hung generation`);
       try { conn.abortController?.abort(); } catch { /* best-effort */ }
       // Reset the guard immediately so a hung provider can't wedge the connection even if
@@ -214,6 +218,7 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
           mentionedTickets,
           isVoice,
           abortController: conn.abortController,
+          abortReason: () => conn.endReason,
           onActivity: bumpActivity,
         });
 

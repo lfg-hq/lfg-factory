@@ -78,6 +78,17 @@ export const messages = sqliteTable(
     // See ../pg/chat.ts — previews rendered in this turn.
     pagePreviews: text("page_previews", { mode: "json" }).$type<Array<{ id: string; name: string }> | null>(),
     // See ../pg/chat.ts — dictated message marker.
+    // HOW this assistant turn ended. Recorded on every turn, surfaced in the UI only
+    // when it is not "complete" — a reply that was cut off used to be saved as though
+    // it had finished, so an interrupted thought was indistinguishable from an answer.
+    //   complete   — the model finished normally
+    //   stalled    — it announced an action, made no tool call, and stopped (even after
+    //                a nudge). The classic "let me check X" with nothing after it.
+    //   disconnect — the socket closed mid-turn (laptop slept, network dropped)
+    //   timeout    — the idle watchdog killed a hung generation
+    //   stopped    — the user pressed Stop
+    //   error      — the provider or a tool threw
+    endReason: text("end_reason"),
     isVoice: integer("is_voice", { mode: "boolean" }).notNull().default(false),
     createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
     lastUpdated: integer("last_updated", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),

@@ -108,6 +108,9 @@ conversationsApi.get("/:id", async (c) => {
       page_previews: m.pagePreviews ?? null,
       // Dictated, so the transcript can show a mic rather than looking typed.
       is_voice: !!m.isVoice,
+      // How the turn ended. Null/"complete" on a normal reply; anything else means
+      // the answer stops short of where it was going, and the UI says so.
+      end_reason: m.endReason ?? null,
       // Null on every normal message (the conversation's own author). Set when an
       // owner/admin stepped into this chat, so the UI can label that turn.
       author: m.authorId ? (authorNames[m.authorId] ?? "Teammate") : null,

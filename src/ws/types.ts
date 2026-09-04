@@ -44,6 +44,8 @@ export interface WsConnection {
   isStreaming: boolean;
   stopRequested: boolean;
   abortController?: AbortController;
+  /** Why an in-flight turn was aborted: "disconnect" | "stopped" | "timeout". */
+  endReason?: string;
 }
 
 // Data stored on the Bun WebSocket object

@@ -68,6 +68,48 @@ const CITATION_PATTERNS = [
   /\bcite(?:turn\d+search\d+)+\b/g,              // bare citeturn0search0...
   /\(https?:\/\/[^)]*\?utm_source=openai\)/g,    // (url?utm_source=openai)
 ];
+/** Sent as a user turn ONLY inside the retry pass — never stored in the transcript. */
+const CONTINUE_NUDGE =
+  "You ended your turn describing what you were about to do, but you didn't do it — " +
+  "no tool was called, so nothing happened and the user is left waiting. " +
+  "Carry on now: call the tool you said you'd call and then answer. " +
+  "Do not restate the plan, do not apologise, and do not end another turn without either " +
+  "calling a tool or giving the complete answer.";
+
+/**
+ * Did this turn end by ANNOUNCING an action it never took?
+ *
+ * The failure looks like: "The codebase query came back empty — let me retry with more
+ * targeted questions." … and then the turn ends. The SDK's agent loop keeps going only
+ * while the model emits tool calls, so a promise-then-stop is a legitimate end of turn
+ * and the user gets a dead half-thought.
+ *
+ * Deliberately conservative: it only matches a FINAL sentence that is a first-person
+ * statement of intent. A turn that ends by answering, asking the user something, or
+ * offering a choice ("Want me to build it?") is a normal, complete turn and must not be
+ * nudged — a false positive costs a wasted model round-trip and a confusing double reply.
+ */
+export function endsOnUnkeptPromise(text: string): boolean {
+  const trimmed = (text ?? "").trim();
+  if (!trimmed) return false;
+  // A question back to the user is a complete turn: the ball is in their court.
+  if (/[?]\s*$/.test(trimmed)) return false;
+  // Take the last sentence/line with content.
+  const last = trimmed
+    .split(/\n+/).pop()!
+    .split(/(?<=[.!])\s+/).filter((s) => s.trim()).pop()!
+    .trim()
+    .replace(/^[-*>\s]+/, "");
+  if (!last || last.length > 200) return false;
+  // "Let me …", "I'll …", "Now let me …", "Let's check …", "One moment while I …"
+  const intent =
+    /^(now\s+)?(let me\b|let's\b|i'?ll\b|i am going to\b|i'?m going to\b|i will\b|give me a (moment|second)\b|one (moment|sec)\b|checking\b|looking\b|searching\b|hold on\b)/i;
+  if (!intent.test(last)) return false;
+  // "I'll need you to …" / "Let me know …" are requests TO THE USER, not self-directed.
+  if (/\b(let me know|i'?ll need (you|your)|tell me|send me|share)\b/i.test(last)) return false;
+  return true;
+}
+
 function stripCitations(text: string): string {
   let cleaned = text;
   for (const re of CITATION_PATTERNS) {
@@ -143,6 +185,9 @@ export interface StreamRequest {
   /** Tickets referenced via @ticket — their context is injected into the model. */
   mentionedTickets?: Array<{ id: string; key?: string; name?: string; branch?: string }>;
   abortController: AbortController;
+  /** Why the abort fired, if it did — only the caller knows whether the socket
+   *  closed, the user pressed Stop, or the idle watchdog gave up. */
+  abortReason?: () => string | undefined;
   /** Called on every stream event (chunk / tool call / step) — lets the caller's
    *  watchdog treat this as an IDLE timer (fires only when the model truly goes
    *  silent) instead of killing a long-but-active agentic run at a fixed wall clock. */
@@ -752,6 +797,10 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
   // Hoisted so we can read .response after the stream completes (for
   // tool-step persistence).
   let streamTextResult: ReturnType<typeof streamText> | null = null;
+  // Turn-outcome bookkeeping (see endReason on the message row).
+  let sawToolCallThisPass = false;   // did this pass actually DO something?
+  let stalledMidPromise = false;     // ended announcing an action it never took
+  let nudgeUsed = false;             // we spent a second pass trying to rescue it
 
   const flush = () => {
     if (!chunkBuffer) return;
@@ -788,7 +837,7 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
 
   const persistAssistant = async (
     content: string,
-    opts: { steps?: any[] | null; final?: boolean } = {},
+    opts: { steps?: any[] | null; final?: boolean; endReason?: string } = {},
   ): Promise<void> => {
     const final = opts.final ?? false;
     if (!content && !final) return; // nothing meaningful to save yet
@@ -798,6 +847,7 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
           content,
           isPartial: !final,
           lastUpdated: new Date(),
+          ...(opts.endReason ? { endReason: opts.endReason } : {}),
           ...(opts.steps !== undefined ? { toolSteps: opts.steps } : {}),
           ...(activityTrail.length ? { activityTrail } : {}),
           ...(pagePreviews.length ? { pagePreviews } : {}),
@@ -808,6 +858,7 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
           role: "assistant",
           content,
           isPartial: !final,
+          endReason: opts.endReason ?? null,
           toolSteps: opts.steps ?? null,
           activityTrail: activityTrail.length ? activityTrail : null,
           pagePreviews: pagePreviews.length ? pagePreviews : null,
@@ -827,15 +878,26 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
   const cached = withCaching(modelKey, { system: systemPrompt, messages: contextMessages });
 
   try {
+   // Up to TWO passes. The second only happens when the model ends a turn having
+   // ANNOUNCED an action it never took ("let me check X." → stop). Every provider
+   // does it; DeepSeek and Kimi do it often. The SDK's loop only continues while
+   // the model emits tool calls, so a promise-then-stop legitimately ends the turn
+   // and the user is handed a dead half-thought. One nudge, then we give up and
+   // say so rather than nudging forever.
+   let passMessages: any[] = cached.messages as any[];
+   for (let pass = 0; pass < 2; pass++) {
+    sawToolCallThisPass = false;
+    const textBeforePass = fullResponse;
     const result = streamText({
       model,
       system: cached.system,
-      messages: cached.messages as any,
+      messages: passMessages,
       tools,
       stopWhen: stepCountIs(80),
       abortSignal: abortController.signal,
       onStepFinish: ({ toolCalls }) => {
         if (!toolCalls?.length) return;
+        sawToolCallThisPass = true; // this pass did real work, not just talk
         flush();
         for (const tc of toolCalls) {
           // Skip tools that handle their own WS notifications — a generic
@@ -1186,6 +1248,23 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
 
     flush(); // send any remaining buffered text
 
+    // Did this pass end mid-promise? Only then is a second pass worth the tokens.
+    const producedThisPass = fullResponse.slice(textBeforePass.length);
+    stalledMidPromise =
+      !abortController.signal.aborted &&
+      !sawToolCallThisPass &&
+      endsOnUnkeptPromise(producedThisPass);
+    if (!stalledMidPromise || pass === 1) break;
+
+    // Nudge: replay what it just said and tell it to act. Kept OUT of the stored
+    // transcript — this is scaffolding for the model, not part of the conversation.
+    nudgeUsed = true;
+    passMessages = [
+      ...passMessages,
+      { role: "assistant", content: producedThisPass },
+      { role: "user", content: CONTINUE_NUDGE },
+    ];
+   }
   } catch (err: any) {
     if (err?.name !== "AbortError") {
       streamError = err;
@@ -1232,7 +1311,20 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
   // Finalize the (possibly already-checkpointed) assistant row: authoritative content,
   // tool steps, and isPartial=false. Upserts the same row created during streaming, so
   // there's exactly one message — no duplicate, and nothing lost if the stream was cut off.
-  await persistAssistant(finalContent, { steps: savedSteps, final: true });
+  // HOW the turn ended, so a cut-off reply is never saved as though it finished.
+  // The abort reason is known by the CALLER (disconnect vs Stop vs watchdog), so it
+  // tells us; everything else we can see from here.
+  const endReason = streamError
+    ? "error"
+    : abortController.signal.aborted
+      ? (req.abortReason?.() ?? "disconnect")
+      : stalledMidPromise
+        ? "stalled"
+        : "complete";
+  if (endReason !== "complete") {
+    console.warn(`[stream-handler] turn ended: ${endReason}` + (nudgeUsed ? " (nudge did not rescue it)" : ""));
+  }
+  await persistAssistant(finalContent, { steps: savedSteps, final: true, endReason });
 
   // ── 8. Send final signal ─────────────────────────────────────────────────────
   ws.send(JSON.stringify({
