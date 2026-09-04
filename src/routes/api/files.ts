@@ -35,7 +35,10 @@ files.post("/upload", async (c) => {
     if (!file) return c.json({ error: "No file provided" }, 400);
 
     const buffer = Buffer.from(await file.arrayBuffer());
-    const ext = (file.name.split(".").pop() ?? "bin").toLowerCase();
+    // The extension is attacker-controlled: "a.b/../../etc/x" would otherwise
+    // walk out of UPLOADS_DIR via path.join below. Keep alphanumerics only.
+    const rawExt = (file.name.split(".").pop() ?? "bin").toLowerCase();
+    const ext = /^[a-z0-9]{1,12}$/.test(rawExt) ? rawExt : "bin";
     const filename = `${crypto.randomUUID()}.${ext}`;
     const contentType = file.type || guessContentType(file.name);
 
@@ -122,6 +125,7 @@ files.get("/transcribe/:fileId", async (c) => {
     return c.json({ error: "OpenAI API key not configured" }, 503);
   }
 
+  const user = c.get("user");
   const { fileId } = c.req.param();
   const [fileRow] = await db
     .select()
@@ -129,6 +133,14 @@ files.get("/transcribe/:fileId", async (c) => {
     .where(eq(chatFiles.id, fileId));
 
   if (!fileRow) return c.json({ error: "File not found" }, 404);
+
+  // Same ownership gate as GET /:id — without it any signed-in user could
+  // transcribe (and so read back) another user's uploaded audio by its id.
+  const [owner] = await db
+    .select({ userId: conversations.userId })
+    .from(conversations)
+    .where(eq(conversations.id, fileRow.conversationId));
+  if (!owner || owner.userId !== user.id) return c.json({ error: "forbidden" }, 403);
 
   let fileData: Buffer;
   try {

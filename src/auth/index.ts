@@ -24,10 +24,18 @@ export const auth = betterAuth({
   baseURL: env.BETTER_AUTH_URL,
   basePath: "/api/auth",
   secret: env.BETTER_AUTH_SECRET,
-  trustedOrigins: [env.BETTER_AUTH_URL, "http://localhost:8000", "http://localhost:3000"],
+  // Localhost is a dev convenience only — trusting it in production would let a
+  // page served from a local origin drive authenticated requests.
+  trustedOrigins:
+    env.NODE_ENV === "production"
+      ? [env.BETTER_AUTH_URL]
+      : [env.BETTER_AUTH_URL, "http://localhost:8000", "http://localhost:3000"],
 
   database: drizzleAdapter(db, {
-    provider: "sqlite",
+    // Must track config/db.ts, which swaps in the PG driver for
+    // DATABASE_DRIVER=postgresql. Hardcoding "sqlite" made Better Auth emit
+    // SQLite-dialect behaviour against a Postgres connection.
+    provider: env.DATABASE_DRIVER === "postgresql" ? "pg" : "sqlite",
     schema: { user, session, account, verification },
     usePlural: false,
   }),

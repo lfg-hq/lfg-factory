@@ -488,7 +488,10 @@ export function InstantPage({
       conversationId: currentApp?.conversationId || null,
       githubRepoUrl: currentApp?.githubRepoUrl || "",
       testReport: currentApp?.testReport || null,
-    }))};
+    // Escape "<" so a "</script>" inside any value (repo URL, agent-written test
+    // report) can't terminate this tag and inject markup. Same guard the other
+    // inline-data pages use.
+    }).replace(/</g, "\\u003c"))};
     window.__WS_PATH__ = '/ws/chat';
   </script>
   <script src="/public/js/sidebar.js"></script>
