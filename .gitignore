@@ -60,3 +60,6 @@ config/deploy.yml
 .kamal/secrets
 
 backups/
+# npm lockfile — this project uses bun (bun.lock). A stray `npm install`
+# regenerating this would give contributors a second, conflicting dep graph.
+package-lock.json
