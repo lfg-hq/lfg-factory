@@ -114,7 +114,14 @@ export async function cleanupTicketWorktree(ticketId: string): Promise<void> {
 // stored value equal to it is indistinguishable from "never chose a builder
 // model" — treat it as unset so those users follow their chat pick.
 const LEGACY_BUILDER_DEFAULT = "claude_4.5_sonnet";
-async function resolveBuilderModelKey(ownerId: string): Promise<string> {
+async function resolveBuilderModelKey(ownerId: string, projectId?: string | null): Promise<string> {
+  // A project can PIN the builder model for everyone (Config tab). That beats any
+  // individual's account setting — the point of the pin is that a project builds the
+  // same way no matter who triggered it.
+  if (projectId) {
+    const [p] = await db.select({ locked: projects.lockedBuilderModel }).from(projects).where(eq(projects.id, projectId)).limit(1);
+    if (p?.locked) return p.locked;
+  }
   const [appState] = await db.select({ k: applicationState.builderModelKey }).from(applicationState).where(eq(applicationState.userId, ownerId)).limit(1);
   if (appState?.k && appState.k !== LEGACY_BUILDER_DEFAULT) return appState.k; // explicit, non-legacy pick
   const [sel] = await db.select({ m: modelSelections.selectedModel }).from(modelSelections).where(eq(modelSelections.userId, ownerId)).limit(1);
@@ -124,7 +131,11 @@ async function resolveBuilderModelKey(ownerId: string): Promise<string> {
 type BuilderAuthMode = "subscription" | "api_key";
 
 /** Explicit credential source selected beside the Coding Agent model picker. */
-async function resolveBuilderAuthMode(ownerId: string): Promise<BuilderAuthMode> {
+async function resolveBuilderAuthMode(ownerId: string, projectId?: string | null): Promise<BuilderAuthMode> {
+  if (projectId) {
+    const [p] = await db.select({ locked: projects.lockedBuilderAuthMode }).from(projects).where(eq(projects.id, projectId)).limit(1);
+    if (p?.locked === "api_key" || p?.locked === "subscription") return p.locked;
+  }
   const [appState] = await db
     .select({ mode: applicationState.builderAuthMode })
     .from(applicationState)
@@ -487,7 +498,7 @@ async function resolveBuildPlacement(
   // path rather than failing the build. The user sees which one ran in the log.
   if (!workspaceId) return { shared: false };
 
-  const modelKey = await resolveBuilderModelKey(project.ownerId);
+  const modelKey = await resolveBuilderModelKey(project.ownerId, project.id);
   const provider = getProviderName(modelKey) ?? "";
   const [keys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, project.ownerId)).limit(1);
   const providerKey = ({
@@ -1318,7 +1329,7 @@ async function executeTicket(ticketId: string, actorId?: string): Promise<void> 
     .where(eq(profiles.userId, ownerId))
     .limit(1);
 
-  const builderAuthMode = await resolveBuilderAuthMode(ownerId);
+  const builderAuthMode = await resolveBuilderAuthMode(ownerId, project?.id);
   // Fine-grained LLM: a collaborator may build with the OWNER's LLM only if granted the
   // access matching how the owner builds (subscription → canUseSub; API key → canUseKey).
   // Not granted → block (grandfathered/existing members default to granted).
@@ -2486,9 +2497,9 @@ async function executeTicketChat(
   // got "No valid Claude credentials" even though their ticket built with Pi.
   // Same routing as the builder: a Pi-supported provider with an API key or a
   // short-lived OpenAI Codex subscription bearer → Pi.
-  const chatModelKey = await resolveBuilderModelKey(ownerId);
+  const chatModelKey = await resolveBuilderModelKey(ownerId, project!.id);
   const chatProvider = getProviderName(chatModelKey);
-  const chatBuilderAuthMode = await resolveBuilderAuthMode(ownerId);
+  const chatBuilderAuthMode = await resolveBuilderAuthMode(ownerId, project!.id);
   // Fine-grained LLM: gate a collaborator's chat-driven build on the owner's LLM.
   {
     const buildActor = actorId ?? ticket.assigneeId ?? ownerId;
@@ -2881,7 +2892,7 @@ async function getBuilderProvider(projectId: string | null): Promise<ProviderNam
   if (!projectId) return null;
   const [project] = await db.select({ ownerId: projects.ownerId }).from(projects).where(eq(projects.id, projectId)).limit(1);
   if (!project) return null;
-  return getProviderName(await resolveBuilderModelKey(project.ownerId));
+  return getProviderName(await resolveBuilderModelKey(project.ownerId, projectId));
 }
 
 /** Execute with direct provider tools, or with Pi when Coding Agent mode is requested. */
@@ -2963,7 +2974,7 @@ async function executeTicketApi(
   // ── Resolve builder model early (needed to choose the VM rootfs) ─────
   // Follows the user's chat selection (e.g. DeepSeek) when no explicit builder
   // model is set — NOT a hardcoded Claude.
-  const modelKey = await resolveBuilderModelKey(ownerId);
+  const modelKey = await resolveBuilderModelKey(ownerId, project.id);
   const [userKeys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, ownerId)).limit(1);
   const provider = getProviderName(modelKey);
 
@@ -3348,7 +3359,7 @@ git branch --show-current
         glm: userKeys?.glmApiKey,
       } as Record<string, string | null | undefined>)[provider]
     : undefined;
-  const builderAuthMode = await resolveBuilderAuthMode(ownerId);
+  const builderAuthMode = await resolveBuilderAuthMode(ownerId, project?.id);
   // Fine-grained LLM: gate a collaborator's build on the owner's LLM (subscription →
   // canUseSub; API key → canUseKey). Not granted → block (existing members are granted).
   {

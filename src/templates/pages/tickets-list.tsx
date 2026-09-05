@@ -588,30 +588,9 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
         </select>
       </div>
       <div class="toolbar-actions">
-        ${executionMode ? html`
-          <div class="exec-controls">
-            <div class="exec-controls-row" title="Defaults used when a ticket build starts">
-              <span class="exec-controls-label"><i class="fas fa-terminal"></i> Build with</span>
-              <span class="exec-controls-divider" aria-hidden="true"></span>
-              <!-- Direct API is intentionally hidden for now; its backend implementation remains available. -->
-              <select class="builder-auth-select" id="builder-auth-select"
-                aria-label="Coding agent authentication" onchange="setBuilderAuthMode(this.value)"
-                ${!hasSubscriptions && !hasApiKeys ? "disabled" : ""}>
-                ${hasSubscriptions ? html`<option value="subscription" ${effectiveAuthMode === "subscription" ? "selected" : ""}>Subscription</option>` : ""}
-                ${hasApiKeys ? html`<option value="api_key" ${effectiveAuthMode === "api_key" ? "selected" : ""}>API token</option>` : ""}
-                ${!hasSubscriptions && !hasApiKeys ? html`<option value="">No credentials</option>` : ""}
-              </select>
-              <select class="builder-model-select" id="builder-model-select"
-                aria-label="Ticket builder model" onchange="setBuilderModel(this.value)" ${eligibleBuilderModels.length ? "" : "disabled"}>
-                ${eligibleBuilderModels.map(m => html`
-                  <option value="${m.key}" data-provider="${m.provider}" ${m.key === effectiveBuilderModelKey ? "selected" : ""}>${m.label}</option>
-                `)}
-                ${eligibleBuilderModels.length ? "" : html`<option value="">Connect a provider in Settings</option>`}
-              </select>
-              ${!hasSubscriptions && !hasApiKeys ? html`<a class="exec-auth-badge" href="/settings/integrations"><i class="fas fa-plug"></i> Connect</a>` : ""}
-            </div>
-          </div>
-        ` : ""}
+        <!-- "Build with" moved to the project's Config tab. It wrote to YOUR account
+             settings while builds read the project owner's, so a collaborator changing
+             it here silently changed nothing about how this project builds. -->
         <span class="toolbar-divider" aria-hidden="true"></span>
         <div class="build-settings-menu">
           <button class="build-settings-btn" onclick="toggleBuildSettings(event)" aria-label="Build and preview settings" title="Build & preview settings"><i class="fas fa-sliders-h"></i></button>
@@ -945,72 +924,9 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     });
   }
 
-  function renderBuilderModels(preferredKey) {
-    var select = document.getElementById('builder-model-select');
-    if (!select) return '';
-    var models = eligibleBuilderModels(_builderAuthMode);
-    select.innerHTML = '';
-    select.disabled = models.length === 0;
-    if (!models.length) {
-      var empty = document.createElement('option');
-      empty.value = '';
-      empty.textContent = 'Connect a provider in Settings';
-      select.appendChild(empty);
-      return '';
-    }
-    var selectedKey = models.some(function(model) { return model.key === preferredKey; })
-      ? preferredKey
-      : models[0].key;
-    models.forEach(function(model) {
-      var option = document.createElement('option');
-      option.value = model.key;
-      option.dataset.provider = model.provider;
-      option.textContent = model.label;
-      option.selected = model.key === selectedKey;
-      select.appendChild(option);
-    });
-    return selectedKey;
-  }
-
-  function setExecMode(cliEnabled) {
-    fetch('/api/settings/execution-mode', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ claudeCodeEnabled: cliEnabled }),
-    }).then(function(r) {
-      if (!r.ok) return;
-      var apiBtn = document.getElementById('exec-mode-api');
-      var cliBtn = document.getElementById('exec-mode-cli');
-      if (cliBtn) cliBtn.classList.toggle('active', cliEnabled);
-      if (apiBtn) apiBtn.classList.toggle('active', !cliEnabled);
-    });
-  }
-
-  function saveBuilderChoice(authMode, modelKey) {
-    var body = { claudeCodeEnabled: true, builderAuthMode: authMode };
-    if (modelKey) body.builderModelKey = modelKey;
-    return fetch('/api/settings/execution-mode', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-  }
-
-  function setBuilderAuthMode(authMode) {
-    _builderAuthMode = authMode;
-    var select = document.getElementById('builder-model-select');
-    var modelKey = renderBuilderModels(select ? select.value : '');
-    saveBuilderChoice(authMode, modelKey);
-  }
-
-  function setBuilderModel(modelKey) {
-    if (modelKey) saveBuilderChoice(_builderAuthMode, modelKey);
-  }
-
-  // Direct API is hidden: normalize existing users to Coding Agent and persist any
-  // credential/model fallback selected because a previously saved provider disconnected.
-  saveBuilderChoice(_builderAuthMode, '${effectiveBuilderModelKey}');
-
+  // The builder picker lives on the project's Config tab now; its helpers went with
+  // it. The load-time saveBuilderChoice() call went too — it PATCHed your account
+  // settings on every visit to this page, which is not something a board view should do.
   // Per-project build/preview settings (ticket build isolation, preview branch mode).
   function setBuildSetting(key, value) {
     fetch('/api/projects/' + PROJECT_ID + '/preview/build-settings', {

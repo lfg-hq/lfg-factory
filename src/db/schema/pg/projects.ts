@@ -55,6 +55,14 @@ export const projects = pgTable(
     // How this repo runs its tests, detected once (or set up once) rather than
     // rediscovered per ticket. Null until the first QA run resolves it.
     testCommand: text("test_command"),
+    // Project-wide model policy, set by the owner on the Config tab. NULL means
+    // "each person picks their own"; a value PINS that choice for everyone working
+    // on this project. Without this, a collaborator's "Build with" picker wrote to
+    // their OWN account settings while builds read the project owner's — so their
+    // choice silently did nothing.
+    lockedBuilderModel: text("locked_builder_model"),
+    lockedBuilderAuthMode: text("locked_builder_auth_mode"),
+    lockedChatModel: text("locked_chat_model"),
     // How the preview runs a ticket's FEATURE branch: "worktree" = a separate git
     // worktree dir (keeps the main checkout untouched), "checkout" = switch the
     // single main checkout to the branch after stashing local changes (no extra

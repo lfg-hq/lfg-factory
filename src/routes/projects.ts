@@ -13,12 +13,13 @@ import { conversations } from "../db/schema/chat.ts";
 import { ticketStages, projectTickets, projectTicketAttachments } from "../db/schema/tickets.ts";
 import { cleanupTicketWorktree } from "../workers/ticket-executor.ts";
 import { applicationState, githubTokens, gitlabTokens } from "../db/schema/users.ts";
+import { modelSelections } from "../db/schema/chat.ts";
 import { instantApps } from "../db/schema/instant.ts";
 import { env } from "../config/env.ts";
 import { agents } from "../db/schema/agents.ts";
 import { notifications } from "../db/schema/notifications.ts";
 import { eq, and, desc, asc, notExists, or, sql, inArray, isNull, ne } from "drizzle-orm";
-import { listModels } from "../ai/provider.ts";
+import { listModels, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
 import { saveContent, getContent, deleteContent } from "../services/s3.ts";
 import { getProjectActivities } from "../services/activity-log.ts";
 import { ProjectListPage } from "../templates/pages/project-list.tsx";
@@ -278,6 +279,49 @@ projectsRouter.get("/projects", async (c) => {
   }));
 });
 
+
+/**
+ * What the Config tab needs: the models this person can actually pick (they must
+ * have the credential), their current choices, and whatever the project has PINNED
+ * for everyone. A pin wins over the personal choice everywhere it is read.
+ */
+async function loadModelConfig(userId: string, project: { id: string; ownerId: string }) {
+  const [[appState], [profile], [keys], [sel], [proj]] = await Promise.all([
+    db.select().from(applicationState).where(eq(applicationState.userId, userId)).limit(1),
+    db.select({ openai: profiles.openaiCodexAuthenticated, anthropic: profiles.claudeCodeAuthenticated })
+      .from(profiles).where(eq(profiles.userId, userId)).limit(1),
+    db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, userId)).limit(1),
+    db.select().from(modelSelections).where(eq(modelSelections.userId, userId)).limit(1),
+    db.select({
+      lockedBuilderModel: projects.lockedBuilderModel,
+      lockedBuilderAuthMode: projects.lockedBuilderAuthMode,
+      lockedChatModel: projects.lockedChatModel,
+    }).from(projects).where(eq(projects.id, project.id)).limit(1),
+  ]);
+  const apiKeyProviders: Record<string, boolean> = {
+    openai: !!keys?.openaiApiKey, anthropic: !!keys?.anthropicApiKey, google: !!keys?.googleApiKey,
+    kimi: !!keys?.kimiApiKey, deepseek: !!keys?.deepseekApiKey, glm: !!keys?.glmApiKey,
+  };
+  const subs = new Set<string>();
+  if (profile?.openai) subs.add("openai");
+  if (profile?.anthropic) subs.add("anthropic");
+  const authMode = appState?.builderAuthMode === "api_key" ? "api_key" : "subscription";
+  const all = listModels().map((m) => ({ key: m.key, label: `${m.providerLabel} · ${m.label}`, provider: m.provider }));
+  return {
+    // Only offer what the chosen credential source can actually run.
+    models: all.filter((m) => (authMode === "subscription" ? subs.has(m.provider) : apiKeyProviders[m.provider])),
+    chatModels: all.map(({ key, label }) => ({ key, label })),
+    builderModelKey: appState?.builderModelKey ?? DEFAULT_MODEL_KEY,
+    builderAuthMode: authMode,
+    chatModelKey: sel?.selectedModel ?? DEFAULT_MODEL_KEY,
+    hasSubscriptions: subs.size > 0,
+    hasApiKeys: Object.values(apiKeyProviders).some(Boolean),
+    lockedBuilderModel: proj?.lockedBuilderModel ?? null,
+    lockedBuilderAuthMode: proj?.lockedBuilderAuthMode ?? null,
+    lockedChatModel: proj?.lockedChatModel ?? null,
+  };
+}
+
 // ── POST /projects/create — create project ──────────────────────────
 projectsRouter.post("/projects/create", async (c) => {
   const user = c.get("user");
@@ -430,6 +474,7 @@ projectsRouter.get("/projects/:projectId", async (c) => {
         createdAt: a.createdAt,
       })),
       activeTab: tab,
+      modelConfig: await loadModelConfig(user.id, project),
     })
   );
 });

@@ -58,13 +58,14 @@ const styleGated = src.slice(Math.max(0, styleIdx - 4000), styleIdx).lastIndexOf
 const styleOpen = src.slice(Math.max(0, styleIdx - 4000), styleIdx).lastIndexOf("<style>");
 if (styleOpen > styleGated) console.log("  ok  page styles are emitted for every tab");
 else { console.log("FAIL page styles are nested in a per-tab branch"); process.exit(1); }
-// The tab row is back to Home / Events / Settings — the three destinations the left
-// rail does NOT carry — and it must still sit inside its flex container.
+// The tab row carries only the destinations the left rail does NOT — and it must
+// still sit inside its flex container. Config joined it when the builder/chat model
+// pickers moved out of the Tickets toolbar and the chat composer.
 const tabStart = src.indexOf('<div class="project-tabs"');
 if (tabStart < 0) { console.log("FAIL the tab row is missing"); process.exit(1); }
 const tabs = src.slice(tabStart, src.indexOf("<style>", tabStart));
 const labels = [...tabs.matchAll(/<\/i> (\w+)/g)].map((m) => m[1]);
-if (labels.join(",") === "Home,Agent,Events,Settings") console.log("  ok  tab row is Home, Agent, Events, Settings");
+if (labels.join(",") === "Home,Agent,Config,Events,Settings") console.log("  ok  tab row is Home, Agent, Config, Events, Settings");
 else { console.log("FAIL tab row is " + labels.join(",")); process.exit(1); }
 if (/display:flex/.test(tabs.slice(0, 200))) console.log("  ok  tab row has its flex container");
 else { console.log("FAIL tabs have no flex container"); process.exit(1); }

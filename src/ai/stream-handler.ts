@@ -499,6 +499,15 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     .from(modelSelections)
     .where(eq(modelSelections.userId, userId));
 
+  // A project can PIN the chat model for everyone (Config tab). When set it wins over
+  // the individual's pick, so a team doesn't silently run the same project on five
+  // different models. Null (the default) leaves the choice to each person.
+  let pinnedChatModel: string | null = null;
+  if (projectId) {
+    const [proj] = await db.select({ locked: projects.lockedChatModel }).from(projects).where(eq(projects.projectId, projectId)).limit(1);
+    pinnedChatModel = proj?.locked ?? null;
+  }
+
   // Fine-grained LLM sharing: a collaborator granted "use my API keys" runs the analyst
   // chat on the OWNER's keys; otherwise on their own. The model CHOICE stays the acting
   // user's (modelSel above) — only the credential source is shared.
@@ -512,7 +521,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     .from(llmApiKeys)
     .where(eq(llmApiKeys.userId, keyUserId));
 
-  const modelKey = currentSubscription() ? `chatgpt/${currentSubscription()!.modelId}` : modelSel?.selectedModel ?? DEFAULT_MODEL_KEY;
+  const modelKey = currentSubscription() ? `chatgpt/${currentSubscription()!.modelId}` : pinnedChatModel ?? modelSel?.selectedModel ?? DEFAULT_MODEL_KEY;
   const userApiKeys = apiKeys
     ? { anthropic: apiKeys.anthropicApiKey ?? undefined, openai: apiKeys.openaiApiKey ?? undefined, google: apiKeys.googleApiKey ?? undefined, kimi: apiKeys.kimiApiKey ?? undefined, deepseek: apiKeys.deepseekApiKey ?? undefined, glm: apiKeys.glmApiKey ?? undefined }
     : undefined;

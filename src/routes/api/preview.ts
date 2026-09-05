@@ -195,13 +195,16 @@ previewApi.get("/:projectId/preview/build-settings", async (c) => {
   const user = c.get("user");
   const access = await getProjectAccess(c.req.param("projectId")!, user.id);
   if (!access) return c.json({ error: "Project not found" }, 404);
-  const p = access.project as { qaMode?: string; ticketBuildIsolation?: string; previewBranchMode?: string; dbMode?: string; shareGitAccess?: boolean; shareChatHistory?: boolean; customInstructions?: string | null; agentShellAccess?: boolean };
+  const p = access.project as { qaMode?: string; lockedBuilderModel?: string | null; lockedBuilderAuthMode?: string | null; lockedChatModel?: string | null; ticketBuildIsolation?: string; previewBranchMode?: string; dbMode?: string; shareGitAccess?: boolean; shareChatHistory?: boolean; customInstructions?: string | null; agentShellAccess?: boolean };
   return c.json({
     customInstructions: p.customInstructions ?? "",
     agentShellAccess: !!p.agentShellAccess,
     canGrantShell: access.role === "owner",
     ticketBuildIsolation: p.ticketBuildIsolation ?? "isolated",
     qaMode: p.qaMode ?? "off",
+    lockedBuilderModel: p.lockedBuilderModel ?? null,
+    lockedBuilderAuthMode: p.lockedBuilderAuthMode ?? null,
+    lockedChatModel: p.lockedChatModel ?? null,
     previewBranchMode: p.previewBranchMode ?? "worktree",
     dbMode: p.dbMode ?? "auto",
     shareGitAccess: !!p.shareGitAccess,
@@ -222,6 +225,14 @@ previewApi.post("/:projectId/preview/build-settings", async (c) => {
   if (body.ticketBuildIsolation === "isolated" || body.ticketBuildIsolation === "shared") patch.ticketBuildIsolation = body.ticketBuildIsolation;
   if (body.previewBranchMode === "worktree" || body.previewBranchMode === "checkout") patch.previewBranchMode = body.previewBranchMode;
   if (body.qaMode === "off" || body.qaMode === "tests") patch.qaMode = body.qaMode;
+  // Project-wide model policy (Config tab). "" clears the pin and hands the choice
+  // back to each person; a value fixes it for everyone. Owner-only — pinning a model
+  // spends the owner's credentials on everyone else's runs.
+  for (const [field, col] of [["lockedBuilderModel", "lockedBuilderModel"], ["lockedBuilderAuthMode", "lockedBuilderAuthMode"], ["lockedChatModel", "lockedChatModel"]] as const) {
+    if (typeof body[field] !== "string") continue;
+    if (access.role !== "owner") return c.json({ error: "Only the project owner can fix models for everyone." }, 403);
+    patch[col] = body[field] === "" ? null : body[field];
+  }
   if (body.dbMode === "auto" || body.dbMode === "new" || body.dbMode === "provided") patch.dbMode = body.dbMode;
   // Credential sharing lends the OWNER's Git token to collaborators — owner-only.
   if (typeof body.shareGitAccess === "boolean") {

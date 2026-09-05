@@ -63,6 +63,14 @@ export const projects = sqliteTable(
     // How this repo runs its tests, detected once (or set up once) rather than
     // rediscovered per ticket. Null until the first QA run resolves it.
     testCommand: text("test_command"),
+    // Project-wide model policy, set by the owner on the Config tab. NULL means
+    // "each person picks their own"; a value PINS that choice for everyone working
+    // on this project. Without this, a collaborator's "Build with" picker wrote to
+    // their OWN account settings while builds read the project owner's — so their
+    // choice silently did nothing.
+    lockedBuilderModel: text("locked_builder_model"),
+    lockedBuilderAuthMode: text("locked_builder_auth_mode"),
+    lockedChatModel: text("locked_chat_model"),
     // "worktree" = separate worktree dir; "checkout" = switch the main checkout to
     // the branch after stashing (no extra dirs).
     previewBranchMode: text("preview_branch_mode").notNull().default("worktree"),

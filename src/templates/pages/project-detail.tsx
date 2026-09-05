@@ -58,6 +58,20 @@ interface ProjectDetailPageProps {
   memberCount?: number;
   openTicketCount?: number;
   activeTab?: string;
+  /** Everything the Config tab needs: what this person may pick, and what the
+   *  project has pinned for everyone. */
+  modelConfig?: {
+    models: Array<{ key: string; label: string; provider: string }>;
+    chatModels: Array<{ key: string; label: string }>;
+    builderModelKey: string;
+    builderAuthMode: string;
+    chatModelKey: string;
+    hasSubscriptions: boolean;
+    hasApiKeys: boolean;
+    lockedBuilderModel: string | null;
+    lockedBuilderAuthMode: string | null;
+    lockedChatModel: string | null;
+  };
 }
 
 export function ProjectDetailPage({
@@ -76,6 +90,7 @@ export function ProjectDetailPage({
   memberCount = 1,
   openTicketCount = 0,
   activeTab = "conversations",
+  modelConfig,
 }: ProjectDetailPageProps) {
   const totalTickets = Object.values(ticketCounts).reduce((a, b) => a + b, 0);
 
@@ -272,6 +287,9 @@ export function ProjectDetailPage({
         </a>
         <a href="/projects/${project.projectId}?tab=agent" class="tab-item${activeTab === "agent" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "agent" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "agent" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
           <i class="fas fa-robot"></i> Agent
+        </a>
+        <a href="/projects/${project.projectId}?tab=config" class="tab-item${activeTab === "config" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "config" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "config" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
+          <i class="fas fa-sliders-h"></i> Config
         </a>
         <a href="/projects/${project.projectId}?tab=events" class="tab-item${activeTab === "events" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "events" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "events" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
           <i class="fas fa-stream"></i> Events
@@ -1321,6 +1339,65 @@ export function ProjectDetailPage({
           </div>
         ` : ""}
 
+        <!-- ── Config: which models do the work here. Both pickers used to live
+                  somewhere you'd only find by accident — the builder one in the
+                  Tickets toolbar, the chat one inside the composer's menu — and the
+                  builder one wrote to your OWN account while builds read the
+                  project owner's, so a collaborator's choice did nothing. ── -->
+        ${activeTab === "config" && modelConfig ? html`
+        <div style="max-width:900px;">
+          <div class="agent-card">
+            <div class="agent-card-head">
+              <div>
+                <h3>Ticket builds</h3>
+                <p>Which coding agent builds tickets in this project, and whose credentials it spends. Used by every ticket build and by the ticket chat.</p>
+              </div>
+            </div>
+            <div style="display:flex;gap:0.6rem;flex-wrap:wrap;align-items:center;">
+              <select id="cfg-builder-auth" onchange="cfgSaveBuilder()" ${modelConfig.lockedBuilderAuthMode && !isOwner ? "disabled" : ""}>
+                ${modelConfig.hasSubscriptions ? html`<option value="subscription" ${(modelConfig.lockedBuilderAuthMode ?? modelConfig.builderAuthMode) === "subscription" ? "selected" : ""}>Subscription</option>` : ""}
+                ${modelConfig.hasApiKeys ? html`<option value="api_key" ${(modelConfig.lockedBuilderAuthMode ?? modelConfig.builderAuthMode) === "api_key" ? "selected" : ""}>API token</option>` : ""}
+                ${!modelConfig.hasSubscriptions && !modelConfig.hasApiKeys ? html`<option value="">No credentials connected</option>` : ""}
+              </select>
+              <select id="cfg-builder-model" onchange="cfgSaveBuilder()" ${modelConfig.lockedBuilderModel && !isOwner ? "disabled" : ""}>
+                ${modelConfig.models.map((m) => html`<option value="${m.key}" ${m.key === (modelConfig.lockedBuilderModel ?? modelConfig.builderModelKey) ? "selected" : ""}>${m.label}</option>`)}
+              </select>
+              ${!modelConfig.hasSubscriptions && !modelConfig.hasApiKeys ? html`<a href="/settings/integrations" style="font-size:0.82rem;color:var(--primary-color);">Connect a provider</a>` : ""}
+            </div>
+            ${isOwner ? html`
+              <label style="display:flex;align-items:center;gap:0.5rem;margin-top:0.9rem;font-size:0.83rem;color:var(--text-secondary);cursor:pointer;">
+                <input type="checkbox" id="cfg-lock-builder" ${modelConfig.lockedBuilderModel ? "checked" : ""} onchange="cfgSaveBuilder()" />
+                Use this for everyone on this project
+              </label>
+              <p style="margin:0.35rem 0 0 1.6rem;font-size:0.78rem;color:var(--text-secondary);">Otherwise each person picks their own, and builds run on yours.</p>
+            ` : modelConfig.lockedBuilderModel ? html`
+              <p style="margin:0.8rem 0 0;font-size:0.8rem;color:var(--text-secondary);"><i class="fas fa-lock"></i> Fixed by the project owner.</p>
+            ` : ""}
+          </div>
+
+          <div class="agent-card">
+            <div class="agent-card-head">
+              <div>
+                <h3>Chat agent</h3>
+                <p>The model behind the chat on this project. You can still switch it for a single conversation from the composer.</p>
+              </div>
+            </div>
+            <select id="cfg-chat-model" onchange="cfgSaveChat()" ${modelConfig.lockedChatModel && !isOwner ? "disabled" : ""}>
+              ${modelConfig.chatModels.map((m) => html`<option value="${m.key}" ${m.key === (modelConfig.lockedChatModel ?? modelConfig.chatModelKey) ? "selected" : ""}>${m.label}</option>`)}
+            </select>
+            ${isOwner ? html`
+              <label style="display:flex;align-items:center;gap:0.5rem;margin-top:0.9rem;font-size:0.83rem;color:var(--text-secondary);cursor:pointer;">
+                <input type="checkbox" id="cfg-lock-chat" ${modelConfig.lockedChatModel ? "checked" : ""} onchange="cfgSaveChat()" />
+                Use this for everyone on this project
+              </label>
+            ` : modelConfig.lockedChatModel ? html`
+              <p style="margin:0.8rem 0 0;font-size:0.8rem;color:var(--text-secondary);"><i class="fas fa-lock"></i> Fixed by the project owner.</p>
+            ` : ""}
+          </div>
+          <div id="cfg-saved" style="font-size:0.8rem;color:var(--text-secondary);height:1.2em;"></div>
+        </div>
+        ` : ""}
+
         <!-- ── Agent: the instructions every agent here follows, and the workflows
                   it can pull in. Its own tab because this is where you TEACH the
                   system, not a checkbox you set once. ── -->
@@ -1897,10 +1974,12 @@ export function ProjectDetailPage({
               + '<div class="skill-item-top">'
                 + '<span class="skill-name">' + esc(sk.id) + '</span>'
                 + '<span class="skill-tag ' + (own ? 'project' : 'built-in') + '">' + (own ? 'This project' : 'Built in') + '</span>'
-                + (sk.overridden ? '<span class="agent-status">replaced by this project\'s version</span>' : '')
+                // &#39; not a bare apostrophe: inside an inline <script> in a template
+                // literal, a lone ' closes the JS string and kills the whole script.
+                + (sk.overridden ? '<span class="agent-status">replaced by this project&#39;s version</span>' : '')
                 + (own ? '<span class="skill-actions">'
                     + '<button class="skill-action" onclick="editSkill(' + i + ')"><i class="fas fa-pen"></i> Edit</button>'
-                    + '<button class="skill-action" onclick="deleteSkill(\'' + esc(sk.rowId) + '\', \'' + esc(sk.id) + '\')"><i class="fas fa-trash"></i></button>'
+                    + '<button class="skill-action" onclick="deleteSkill(\\'' + esc(sk.rowId) + '\\', \\'' + esc(sk.id) + '\\')"><i class="fas fa-trash"></i></button>'
                   + '</span>' : '')
               + '</div>'
               + '<p class="skill-desc">' + esc(sk.description || "") + '</p>'
@@ -1994,6 +2073,51 @@ export function ProjectDetailPage({
     // Instructions and skills live on their own tab. Readable by anyone who can open
     // it — the rules the agents follow here shouldn't be a secret from the people
     // working alongside them. Saving stays permission-checked server-side.
+    // ── Config tab ──────────────────────────────────────────────────────────
+    function cfgFlash(msg) {
+      var el = document.getElementById('cfg-saved');
+      if (!el) return;
+      el.textContent = msg;
+      setTimeout(function () { if (el.textContent === msg) el.textContent = ''; }, 2500);
+    }
+    function cfgPin(fields) {
+      var pid = document.body.getAttribute('data-project-id');
+      return fetch('/api/projects/' + pid + '/preview/build-settings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(fields),
+      });
+    }
+    async function cfgSaveBuilder() {
+      var auth = (document.getElementById('cfg-builder-auth') || {}).value || '';
+      var model = (document.getElementById('cfg-builder-model') || {}).value || '';
+      var lockEl = document.getElementById('cfg-lock-builder');
+      try {
+        // Always save it as YOUR choice; the pin is what makes it everyone's.
+        await fetch('/api/settings/execution-mode', {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ claudeCodeEnabled: true, builderAuthMode: auth, builderModelKey: model }),
+        });
+        if (lockEl) {
+          await cfgPin(lockEl.checked
+            ? { lockedBuilderModel: model, lockedBuilderAuthMode: auth }
+            : { lockedBuilderModel: '', lockedBuilderAuthMode: '' });
+        }
+        cfgFlash(lockEl && lockEl.checked ? 'Saved for everyone on this project.' : 'Saved.');
+      } catch (e) { cfgFlash('Could not save.'); }
+    }
+    async function cfgSaveChat() {
+      var model = (document.getElementById('cfg-chat-model') || {}).value || '';
+      var lockEl = document.getElementById('cfg-lock-chat');
+      try {
+        await fetch('/api/settings/model', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ modelKey: model }),
+        });
+        if (lockEl) await cfgPin(lockEl.checked ? { lockedChatModel: model } : { lockedChatModel: '' });
+        cfgFlash(lockEl && lockEl.checked ? 'Saved for everyone on this project.' : 'Saved.');
+      } catch (e) { cfgFlash('Could not save.'); }
+    }
+
     if ('${activeTab}' === 'agent') {
       loadCustomInstructions();
       loadSkills();
