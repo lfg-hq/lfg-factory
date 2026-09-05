@@ -493,12 +493,13 @@ export function ChatPage({
     document.querySelectorAll('#model-submenu .submenu-option').forEach(btn => {
       btn.addEventListener('click', async () => {
         const key = btn.dataset.value;
-        await fetch('/api/settings/model', {
+        const response = await fetch('/api/settings/model', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ modelKey: key }),
+          body: JSON.stringify({ modelKey: key, projectId: document.body.dataset.projectId }),
           credentials: 'include',
         });
+        if (!response.ok) { const error = await response.json(); alert(error.error || 'Could not change model'); return; }
         document.querySelectorAll('#model-submenu .submenu-option').forEach(b => b.classList.remove('selected'));
         btn.classList.add('selected');
         document.getElementById('current-model-left').textContent = btn.querySelector('span').textContent.trim();

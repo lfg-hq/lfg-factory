@@ -5,7 +5,10 @@ import { modelSelections, agentRoles } from "../../db/schema/chat.ts";
 import { applicationState } from "../../db/schema/users.ts";
 import { telegramBots } from "../../db/schema/telegram.ts";
 import { eq } from "drizzle-orm";
-import { listModels, DEFAULT_MODEL_KEY } from "../../ai/provider.ts";
+import { listModels, listChatModels, DEFAULT_MODEL_KEY } from "../../ai/provider.ts";
+import { isSubscriptionModel } from "../../ai/pi-subscription-model.ts";
+import { hasOpenAICodexCredentials } from "../../services/openai-codex-auth.ts";
+import { subscriptionOwner } from "../../services/subscription-execution.ts";
 import { validateBotToken, startBotForUser, stopBotForUser, isBotActive } from "../../services/telegram.ts";
 import type { auth } from "../../auth/index.ts";
 
@@ -22,13 +25,16 @@ settings.use("*", requireAuth);
 // POST /api/settings/model  — { modelKey: string }
 settings.post("/model", async (c) => {
   const user = c.get("user");
-  const { modelKey } = await c.req.json<{ modelKey: string }>();
+  const { modelKey, projectId } = await c.req.json<{ modelKey: string; projectId?: string }>();
 
   if (!modelKey) return c.json({ error: "modelKey required" }, 400);
 
   // Validate against known models
-  const known = listModels().find((m) => m.key === modelKey);
+  const known = listChatModels().find((m) => m.key === modelKey);
   if (!known) return c.json({ error: "Unknown model key" }, 400);
+  if (isSubscriptionModel(modelKey) && !await hasOpenAICodexCredentials(await subscriptionOwner(user.id, projectId))) {
+    return c.json({ error: "Connect ChatGPT in Settings, or ask the project owner to grant subscription access." }, 400);
+  }
 
   await db
     .insert(modelSelections)
@@ -63,8 +69,9 @@ settings.post("/role", async (c) => {
 });
 
 // GET /api/settings/models — list available models
-settings.get("/models", (c) => {
-  return c.json({ models: listModels() });
+settings.get("/models", async (c) => {
+  const connected = await hasOpenAICodexCredentials(await subscriptionOwner(c.get("user").id, c.req.query("projectId")));
+  return c.json({ models: listChatModels().map(m => ({ ...m, ...(isSubscriptionModel(m.key) ? { available: connected } : {}) })) });
 });
 
 // GET /api/settings/me — current user model + role selection

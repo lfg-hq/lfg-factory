@@ -122,7 +122,7 @@ export function ChatInput({
                               class="submenu-option${model.key === selectedModelKey ? " selected" : ""}${model.available === false ? " unavailable" : ""}"
                               data-value="${model.key}"
                               ${model.available === false ? "disabled" : ""}
-                              title="${model.available === false ? `Add a ${model.providerLabel} API key in Settings to use this model` : ""}"
+                              title="${model.available === false ? (model.key.startsWith("chatgpt/") ? "Connect ChatGPT in Settings to use subscription models" : `Add a ${model.providerLabel} API key in Settings to use this model`) : (model.key.startsWith("chatgpt/") ? "Uses your connected ChatGPT subscription; account limits apply" : "Uses provider API tokens")}"
                             >
                               <span>${model.label ?? model.key}</span>
                               <i class="fas fa-check"></i>

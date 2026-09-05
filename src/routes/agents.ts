@@ -10,7 +10,9 @@ import { agents, agentMessages } from "../db/schema/agents.ts";
 import { modelSelections, agentRoles } from "../db/schema/chat.ts";
 import { composioToolkits } from "../db/schema/composio.ts";
 import { listConnectors } from "../services/composio-manager.ts";
-import { listModels, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
+import { listChatModels, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
+import { isSubscriptionModel } from "../ai/pi-subscription-model.ts";
+import { hasOpenAICodexCredentials } from "../services/openai-codex-auth.ts";
 import { AgentDetailPage } from "../templates/pages/agent-detail.tsx";
 import { AgentsCentralPage } from "../templates/pages/agents-central.tsx";
 import type { auth } from "../auth/index.ts";
@@ -150,11 +152,13 @@ agentsRoutes.get("/agents/:agentId", async (c) => {
     mergedToolkits.push({ slug, name: t.toolkit });
   }
 
-  const models = listModels().map((m) => ({
+  const subscriptionConnected = await hasOpenAICodexCredentials(user.id);
+  const models = listChatModels().map((m) => ({
     key: m.key,
     label: m.label,
     providerLabel: m.providerLabel,
     requiresPro: m.requiresPro,
+    available: isSubscriptionModel(m.key) ? subscriptionConnected : true,
   }));
 
   return c.html(

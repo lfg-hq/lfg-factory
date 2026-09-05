@@ -350,6 +350,9 @@ async function listRoutes(workspaceId: string): Promise<string[]> {
 }
 
 async function resolveModel(ownerId: string) {
+  const { selectedSubscriptionModel } = await import("./subscription-execution.ts");
+  const subscription = await selectedSubscriptionModel(ownerId);
+  if (subscription) return subscription;
   const [modelSel] = await db.select().from(modelSelections).where(eq(modelSelections.userId, ownerId));
   const [keys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, ownerId));
   const modelKey = modelSel?.selectedModel ?? DEFAULT_MODEL_KEY;

@@ -6,7 +6,10 @@ import { modelSelections, agentRoles, conversations } from "../db/schema/chat.ts
 import { instantApps } from "../db/schema/instant.ts";
 import { llmApiKeys } from "../db/schema/users.ts";
 import { eq, and, desc, notExists } from "drizzle-orm";
-import { listModels, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
+import { listChatModels, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
+import { isSubscriptionModel } from "../ai/pi-subscription-model.ts";
+import { hasOpenAICodexCredentials } from "../services/openai-codex-auth.ts";
+import { subscriptionOwner } from "../services/subscription-execution.ts";
 import { ChatPage } from "../templates/pages/chat.tsx";
 import type { auth } from "../auth/index.ts";
 
@@ -58,13 +61,14 @@ async function handleChatPage(c: import("hono").Context, conversationId?: string
     deepseek: !!keyRow?.deepseek,
     glm: !!keyRow?.glm,
   };
-  const models = listModels()
+  const subscriptionConnected = await hasOpenAICodexCredentials(await subscriptionOwner(user.id, projectId));
+  const models = listChatModels()
     .map((m) => ({
       key: m.key,
       label: m.label,
       providerLabel: m.providerLabel,
       requiresPro: m.requiresPro,
-      available: !!connectedProviders[m.provider],
+      available: isSubscriptionModel(m.key) ? subscriptionConnected : !!connectedProviders[m.provider],
     }))
     .sort((a, b) => Number(b.available) - Number(a.available));
 

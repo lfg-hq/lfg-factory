@@ -45,6 +45,11 @@ export function registerAgentReflector(): void {
 }
 
 async function reflectOnLatestRun(agentId: string, userId: string): Promise<void> {
+  const { withUserSubscription } = await import("./subscription-execution.ts");
+  return withUserSubscription(userId, null, () => reflectOnLatestRunInternal(agentId, userId));
+}
+
+async function reflectOnLatestRunInternal(agentId: string, userId: string): Promise<void> {
   // Cool-down check
   const last = lastReflectionAt.get(agentId) ?? 0;
   if (Date.now() - last < MIN_INTERVAL_MS) return;

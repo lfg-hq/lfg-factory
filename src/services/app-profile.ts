@@ -49,6 +49,9 @@ export function providerSupportsStructured(provider: ProviderName | null): boole
 export async function resolveUserModel(
   userId: string,
 ): Promise<{ model: LanguageModel; modelKey: string; provider: ProviderName | null; supportsStructured: boolean }> {
+  const { selectedSubscriptionModel } = await import("./subscription-execution.ts");
+  const subscription = await selectedSubscriptionModel(userId);
+  if (subscription) return { model: subscription, modelKey: `chatgpt/${subscription.modelId}`, provider: "openai", supportsStructured: true };
   const [sel] = await db.select().from(modelSelections).where(eq(modelSelections.userId, userId));
   const [keys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, userId));
   const modelKey = sel?.selectedModel ?? DEFAULT_MODEL_KEY;

@@ -4,7 +4,8 @@
  * An owner can let specific teammates use the owner's connected LLM for project work:
  *   - `canUseOwnerLlmKey`          → the owner's API keys (analyst chat, codebase reads,
  *                                     and builds when the owner builds via an API key).
- *   - `canUseOwnerLlmSubscription` → the owner's Claude/ChatGPT subscription for builds.
+ *   - `canUseOwnerLlmSubscription` → the owner's Claude/ChatGPT subscription for builds,
+ *                                    and ChatGPT subscription for project agent work.
  *
  * The owner always has both. A collaborator's grants come from their projectMembers row
  * (default true for pre-existing members = grandfathered; new invitees are inserted OFF).
@@ -17,7 +18,7 @@ export interface LlmGrants {
   ownerId: string;
   isOwner: boolean;
   canUseKey: boolean; // may use the owner's API keys
-  canUseSub: boolean; // may use the owner's subscription (builds)
+  canUseSub: boolean; // may use the owner's subscription (builds and project agent work)
 }
 
 /**

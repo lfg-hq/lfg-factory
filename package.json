@@ -48,6 +48,7 @@
     "@aws-sdk/s3-request-presigner": "^3.1057.0",
     "@composio/core": "^0.6.5",
     "@composio/vercel": "^0.6.5",
+    "@earendil-works/pi-ai": "0.85.1",
     "@magpiecloud/mags": "1.13.1",
     "ai": "^6.0.97",
     "better-auth": "^1.4.18",

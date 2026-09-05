@@ -29,6 +29,8 @@ import { downloadBinary } from "../services/s3.ts";
 import { createPreviewInspectTool } from "../services/dev-preview.ts";
 import type { ServerWebSocket } from "bun";
 import type { WsData } from "../ws/types.ts";
+import { withUserSubscription } from "../services/subscription-execution.ts";
+import { currentSubscription } from "./subscription-context.ts";
 
 const MAX_HISTORY = 20; // messages to load for context
 const FLUSH_CHARS = 80;
@@ -391,6 +393,10 @@ export async function describeAttachedImages(
 }
 
 export async function handleStream(req: StreamRequest): Promise<{ conversationId: string }> {
+  return withUserSubscription(req.userId, req.projectId, () => handleStreamInternal(req));
+}
+
+async function handleStreamInternal(req: StreamRequest): Promise<{ conversationId: string }> {
   const { ws, userId, userMessage, projectId, turboMode, instantMode, abortController, isVoice } = req;
 
   // ── 1. Resolve or create conversation ───────────────────────────────────────
@@ -506,13 +512,13 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
     .from(llmApiKeys)
     .where(eq(llmApiKeys.userId, keyUserId));
 
-  const modelKey = modelSel?.selectedModel ?? DEFAULT_MODEL_KEY;
+  const modelKey = currentSubscription() ? `chatgpt/${currentSubscription()!.modelId}` : modelSel?.selectedModel ?? DEFAULT_MODEL_KEY;
   const userApiKeys = apiKeys
     ? { anthropic: apiKeys.anthropicApiKey ?? undefined, openai: apiKeys.openaiApiKey ?? undefined, google: apiKeys.googleApiKey ?? undefined, kimi: apiKeys.kimiApiKey ?? undefined, deepseek: apiKeys.deepseekApiKey ?? undefined, glm: apiKeys.glmApiKey ?? undefined }
     : undefined;
 
   // ── Check user has a key for the selected provider (unless instant mode) ────
-  if (!instantMode) {
+  if (!instantMode && !currentSubscription()) {
     const providerName = getProviderName(modelKey);
     const keyMap: Record<string, string | undefined> = {
       openai: userApiKeys?.openai,
@@ -537,7 +543,7 @@ export async function handleStream(req: StreamRequest): Promise<{ conversationId
     model = result.model;
     searchTools = result.searchTools;
   } catch (err) {
-    if (!instantMode) {
+    if (!instantMode || currentSubscription() || modelKey.startsWith("chatgpt/")) {
       const errMsg = err instanceof Error ? err.message : "Failed to initialize model";
       ws.send(JSON.stringify({ type: "ai_chunk", chunk: errMsg, is_final: true }));
       return { conversationId: convId };

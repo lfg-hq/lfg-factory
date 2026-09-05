@@ -4,6 +4,8 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { env } from "../config/env.ts";
 import modelsConfig from "../config/llm-models.json" with { type: "json" };
 import type { LanguageModel } from "ai";
+import { createPiSubscriptionModel, isSubscriptionModel, subscriptionCatalog, SUBSCRIPTION_PREFIX } from "./pi-subscription-model.ts";
+import { currentSubscription } from "./subscription-context.ts";
 
 export type ProviderName = "anthropic" | "openai" | "google" | "kimi" | "deepseek" | "glm";
 
@@ -158,6 +160,8 @@ export function getLiteModel(
   userApiKeys?: Parameters<typeof getModel>[1],
   opts?: Parameters<typeof getModel>[2]
 ): { model: LanguageModel; modelKey: string } {
+  const subscription = currentSubscription();
+  if (subscription) return { model: createPiSubscriptionModel(subscription.modelId, subscription.getAccessToken), modelKey: SUBSCRIPTION_PREFIX + subscription.modelId };
   const provider = getProviderName(modelKey);
   const liteKey = (provider && getLiteModelKeyFor(provider)) || modelKey;
   return { model: getModel(liteKey, userApiKeys, opts), modelKey: liteKey };
@@ -174,6 +178,9 @@ export function getModel(
   userApiKeys?: { anthropic?: string; openai?: string; google?: string; kimi?: string; deepseek?: string; glm?: string },
   { allowEnvFallback = false }: { allowEnvFallback?: boolean } = {}
 ): LanguageModel {
+  const subscription = currentSubscription();
+  if (subscription) return createPiSubscriptionModel(subscription.modelId, subscription.getAccessToken);
+  if (isSubscriptionModel(modelKey)) throw new Error("ChatGPT subscription requires an authorized agent execution context.");
   const entry = modelIndex.get(resolveModelKey(modelKey));
   if (!entry) {
     throw new Error(`Unknown model key: ${modelKey}`);
@@ -248,6 +255,8 @@ export function getGoogleVisionModel(
   userApiKeys?: { google?: string },
   { allowEnvFallback = false }: { allowEnvFallback?: boolean } = {}
 ): LanguageModel {
+  const subscription = currentSubscription();
+  if (subscription) return createPiSubscriptionModel(subscription.modelId, subscription.getAccessToken);
   const apiKey = userApiKeys?.google || (allowEnvFallback ? env.GOOGLE_AI_API_KEY : "");
   if (!apiKey) throw new Error("No Google AI API key configured. Please add your API key in Settings → LLM Keys to use this model.");
   const google = createGoogleGenerativeAI({ apiKey, fetch: llmFetch });
@@ -259,11 +268,16 @@ export function getGoogleVisionModel(
 
 /** Get the provider name for a given model key */
 export function getProviderName(modelKey: string): ProviderName | null {
+  if (isSubscriptionModel(modelKey)) return "openai";
   return modelIndex.get(resolveModelKey(modelKey))?.provider ?? null;
 }
 
 /** Get the provider-native model id (e.g. "deepseek-v4-pro") for a model key. */
 export function getProviderModel(modelKey: string): string | null {
+  if (isSubscriptionModel(modelKey)) {
+    const id = modelKey.slice(SUBSCRIPTION_PREFIX.length);
+    return subscriptionCatalog().some(m => m.id === id) ? id : null;
+  }
   return modelIndex.get(resolveModelKey(modelKey))?.model ?? null;
 }
 
@@ -276,6 +290,9 @@ export function getModelWithSearch(
   userApiKeys?: { anthropic?: string; openai?: string; google?: string; kimi?: string; deepseek?: string; glm?: string },
   { allowEnvFallback = false }: { allowEnvFallback?: boolean } = {}
 ): { model: LanguageModel; searchTools: Record<string, unknown> } {
+  if (currentSubscription() || isSubscriptionModel(modelKey)) {
+    return { model: getModel(modelKey, userApiKeys), searchTools: {} };
+  }
   const entry = modelIndex.get(resolveModelKey(modelKey));
   if (!entry) throw new Error(`Unknown model key: ${modelKey}`);
 
@@ -382,4 +399,14 @@ export function listModels() {
     }
   }
   return result;
+}
+
+/** Chat-only choices: do not change the coding-agent model IDs or builder settings. */
+export function listChatModels() {
+  const api = listModels();
+  const supported = new Set(subscriptionCatalog().map(m => m.id));
+  return [...api, ...api.filter(m => m.provider === "openai" && supported.has(m.providerModel)).map(m => ({
+    ...m, key: SUBSCRIPTION_PREFIX + m.providerModel,
+    label: `${m.label} · Subscription`, providerLabel: "ChatGPT subscription",
+  }))];
 }

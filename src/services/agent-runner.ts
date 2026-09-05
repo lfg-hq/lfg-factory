@@ -26,6 +26,7 @@ import { agents } from "../db/schema/agents.ts";
 import { messages, conversations, modelSelections } from "../db/schema/chat.ts";
 import { llmApiKeys } from "../db/schema/users.ts";
 import { getModelWithSearch, DEFAULT_MODEL_KEY, getProviderName } from "../ai/provider.ts";
+import { currentSubscription } from "../ai/subscription-context.ts";
 import { getAgentSystemPrompt } from "../ai/prompts/agent.ts";
 import { createAgentTools } from "../ai/tools/agent-tools.ts";
 import { getComposioTools, listConnectors } from "./composio-manager.ts";
@@ -59,6 +60,11 @@ export interface RunAgentTaskResult {
 }
 
 export async function runAgentTask(input: RunAgentTaskInput): Promise<RunAgentTaskResult> {
+  const { withUserSubscription } = await import("./subscription-execution.ts");
+  return withUserSubscription(input.userId, null, () => runAgentTaskInternal(input));
+}
+
+async function runAgentTaskInternal(input: RunAgentTaskInput): Promise<RunAgentTaskResult> {
   const { agentId, userId, prompt, triggerType, scheduleId, payload } = input;
 
   const [agent] = await db
@@ -128,7 +134,7 @@ export async function runAgentTask(input: RunAgentTaskInput): Promise<RunAgentTa
     .from(llmApiKeys)
     .where(eq(llmApiKeys.userId, userId));
 
-  const modelKey = modelSel?.selectedModel ?? DEFAULT_MODEL_KEY;
+  const modelKey = currentSubscription() ? `chatgpt/${currentSubscription()!.modelId}` : modelSel?.selectedModel ?? DEFAULT_MODEL_KEY;
   const userApiKeys = apiKeys
     ? {
         anthropic: apiKeys.anthropicApiKey ?? undefined,
@@ -149,7 +155,7 @@ export async function runAgentTask(input: RunAgentTaskInput): Promise<RunAgentTa
     deepseek: userApiKeys?.deepseek,
     glm: userApiKeys?.glm,
   };
-  if (providerName && !keyMap[providerName]) {
+  if (providerName && !keyMap[providerName] && !modelKey.startsWith("chatgpt/")) {
     const errMsg = `No ${providerName} API key — scheduled run cannot execute. Add a key in Settings → LLM Keys.`;
     await persistAndFinish(agent, agentId, userId, run.id, errMsg, "error", null);
     return { runId: run.id, output: errMsg, status: "error", errorMessage: errMsg };

@@ -1091,6 +1091,9 @@ echo LAUNCHED
 
 /** The user's chat model for the AI SDK (+ their provider keys). */
 async function resolveDriverModel(userId: string, projectId?: string) {
+  const { selectedSubscriptionModel } = await import("./subscription-execution.ts");
+  const subscription = await selectedSubscriptionModel(userId, projectId);
+  if (subscription) return { model: subscription, modelKey: `chatgpt/${subscription.modelId}` };
   const [sel] = await db.select().from(modelSelections).where(eq(modelSelections.userId, userId));
   const modelKey = sel?.selectedModel ?? DEFAULT_MODEL_KEY;
   // Fine-grained LLM: a collaborator granted "use my API keys" drives the preview on the

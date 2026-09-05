@@ -37,12 +37,27 @@ if (bad) { console.log("FAIL " + bad); process.exit(1); }
 if (stack.length) { console.log("FAIL unclosed: " + stack.join(", ")); process.exit(1); }
 
 console.log("  ok  document balances");
-// The breadcrumb / repo switcher / "Back to Workspace" header is a DASHBOARD thing.
-// On pages reached from the left rail you're already inside one project.
+// The breadcrumb / repo switcher / "Back to Workspace" header and the tab row belong
+// to the project DASHBOARD — Home, Agent, Events, Settings, Config. On pages reached
+// from the left rail (Docs, Environment, Inbox) you are already inside one project:
+// the header is noise there, and the tab row points at views the page isn't part of.
 const headerIdx = src.indexOf("<!-- Project Header");
-const gated = src.slice(headerIdx, headerIdx + 700).includes('activeTab === "home" ? html`');
-if (gated) console.log("  ok  project header renders on Home only");
-else { console.log("FAIL project header shows on every tab"); process.exit(1); }
+const headerGated = src.slice(headerIdx, headerIdx + 700).includes("isDashboardTab ? html`");
+if (headerGated) console.log("  ok  project header is gated on the dashboard tabs");
+else { console.log("FAIL project header is not gated on isDashboardTab"); process.exit(1); }
+
+const tabsIdx = src.indexOf('<div class="project-tabs"');
+const tabsGated = src.slice(Math.max(0, tabsIdx - 200), tabsIdx).includes("isDashboardTab ? html`");
+if (tabsGated) console.log("  ok  tab row is gated on the dashboard tabs");
+else { console.log("FAIL tab row renders on rail-reached pages (Docs/Environment/Inbox)"); process.exit(1); }
+
+// Every tab must get the page stylesheet. It used to live inside the home/inbox
+// branch, so Agent/Events/Settings rendered unstyled.
+const styleIdx = src.indexOf(".agent-card {");
+const styleGated = src.slice(Math.max(0, styleIdx - 4000), styleIdx).lastIndexOf('activeTab === "home" || activeTab === "inbox"');
+const styleOpen = src.slice(Math.max(0, styleIdx - 4000), styleIdx).lastIndexOf("<style>");
+if (styleOpen > styleGated) console.log("  ok  page styles are emitted for every tab");
+else { console.log("FAIL page styles are nested in a per-tab branch"); process.exit(1); }
 // The tab row is back to Home / Events / Settings — the three destinations the left
 // rail does NOT carry — and it must still sit inside its flex container.
 const tabStart = src.indexOf('<div class="project-tabs"');

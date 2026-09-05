@@ -78,6 +78,13 @@ export function ProjectDetailPage({
   activeTab = "conversations",
 }: ProjectDetailPageProps) {
   const totalTickets = Object.values(ticketCounts).reduce((a, b) => a + b, 0);
+
+  // The tabs that ARE the project dashboard. They share the project header and the
+  // tab row; everything else here (Docs, Environment, Inbox, Tickets, Chats) is
+  // reached from the left rail, is already scoped to this project, and so carries
+  // neither — a tab row on the Docs page pointed at a view the page wasn't part of.
+  const DASHBOARD_TABS = ["home", "agent", "events", "settings", "config"];
+  const isDashboardTab = DASHBOARD_TABS.includes(activeTab);
   const avatarLetter = (user.name?.[0] ?? user.email?.[0] ?? "?").toUpperCase();
   // Human labels: an invited "member" is shown as a Collaborator.
   const roleLabel = ({ owner: "Owner", admin: "Admin", member: "Collaborator", viewer: "Viewer", guest: "Guest" }[role] ?? role);
@@ -217,7 +224,7 @@ export function ProjectDetailPage({
            Workspace" are for orienting yourself among projects, which is a dashboard
            job. On Environment / Events / Settings, reached from the left rail, you are
            already inside one project and the rail is the navigation. -->
-      ${activeTab === "home" ? html`      <div class="page-header" style="padding:1.25rem 2rem;border-bottom:1px solid var(--border-color);display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:nowrap;gap:1rem;">
+      ${isDashboardTab ? html`      <div class="page-header" style="padding:1.25rem 2rem;border-bottom:1px solid var(--border-color);display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:nowrap;gap:1rem;">
         <div style="display:flex;align-items:center;gap:0.75rem;flex:1 1 auto;min-width:0;">
           <a href="/projects" style="color:var(--text-secondary);text-decoration:none;font-size:0.875rem;display:flex;align-items:center;gap:0.4rem;white-space:nowrap;">
             <i class="fas fa-arrow-left"></i> Projects
@@ -258,6 +265,7 @@ export function ProjectDetailPage({
       <!-- Horizontal Tab Nav — only what the LEFT RAIL doesn't already carry.
            Chats, Documents, Tickets, Inbox, Epics, Environment and Instant were all
            duplicated there, so they left this row; Home, Events and Settings stay. -->
+      ${isDashboardTab ? html`
       <div class="project-tabs" style="display:flex;gap:0;border-bottom:1px solid var(--border-color);padding:0 2rem;background:var(--body-bg);">
         <a href="/projects/${project.projectId}" class="tab-item${activeTab === "home" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "home" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "home" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
           <i class="fas fa-house"></i> Home
@@ -271,7 +279,7 @@ export function ProjectDetailPage({
         <a href="/projects/${project.projectId}?tab=settings" class="tab-item${activeTab === "settings" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "settings" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "settings" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
           <i class="fas fa-cog"></i> Settings
         </a>
-      </div>
+      </div>` : ""}
       <style>
         /* Clean, blended list — one bordered container with subtle row dividers. */
         .lfg-list { border:1px solid var(--border-color); border-radius:var(--radius); overflow:hidden; background:var(--card-bg); }
@@ -294,7 +302,10 @@ export function ProjectDetailPage({
 
       <!-- Tab content -->
       <div style="padding:2rem;max-width:1200px;margin:0 auto;">
-        ${(activeTab === "home" || activeTab === "inbox") ? html`
+      <!-- Page styles are emitted for EVERY tab. They used to be nested inside the
+           home/inbox branch, so opening Agent, Events or Settings rendered their
+           markup with no stylesheet at all — unstyled radios, a browser-default
+           textarea, no cards. -->
           <style>
             @media (max-width: 900px) {
               .home-grid { grid-template-columns: 1fr !important; }
@@ -374,6 +385,7 @@ export function ProjectDetailPage({
 
             .home-team-action { display:inline-flex;align-items:center;gap:0.3rem;padding:0;border:0;background:none;color:var(--primary-color);font:inherit;font-size:0.76rem;text-decoration:none;cursor:pointer; }
           </style>
+        ${(activeTab === "home" || activeTab === "inbox") ? html`
 
           ${activeTab === "home" ? html`
           <!-- Project summary -->
@@ -1656,7 +1668,7 @@ export function ProjectDetailPage({
               '<div style="display:flex;gap:1.25rem;flex-wrap:wrap;padding:0.15rem 0 0.6rem 2.75rem;border-bottom:1px solid var(--border-color);">'
               + '<label style="display:flex;align-items:center;gap:0.4rem;font-size:0.75rem;color:var(--text-secondary);cursor:pointer;" title="Let this collaborator use YOUR LLM API keys for the analyst chat, codebase reads, and API-key builds.">'
               + '<input type="checkbox" ' + (m.canUseOwnerLlmKey ? 'checked' : '') + ' onchange="setMemberLlm(\\'' + m.id + '\\',\\'canUseOwnerLlmKey\\',this.checked,this)" style="cursor:pointer;"> Use my API keys</label>'
-              + '<label style="display:flex;align-items:center;gap:0.4rem;font-size:0.75rem;color:var(--text-secondary);cursor:pointer;" title="Let this collaborator use YOUR Claude/ChatGPT subscription for ticket builds (coding agent).">'
+              + '<label style="display:flex;align-items:center;gap:0.4rem;font-size:0.75rem;color:var(--text-secondary);cursor:pointer;" title="Let this collaborator use YOUR Claude/ChatGPT subscription for ticket builds, and your ChatGPT subscription for project chat and agent work.">'
               + '<input type="checkbox" ' + (m.canUseOwnerLlmSubscription ? 'checked' : '') + ' onchange="setMemberLlm(\\'' + m.id + '\\',\\'canUseOwnerLlmSubscription\\',this.checked,this)" style="cursor:pointer;"> Use my subscription</label>'
               + '</div>'
             ) : '';

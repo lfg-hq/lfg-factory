@@ -497,6 +497,9 @@ export function parseGenerated(text: string): GeneratedTest[] {
 
 async function pickModel(ownerId: string) {
   try {
+    const { selectedSubscriptionModel } = await import("./subscription-execution.ts");
+    const subscription = await selectedSubscriptionModel(ownerId);
+    if (subscription) return subscription;
     const [sel] = await db.select().from(modelSelections).where(eq(modelSelections.userId, ownerId));
     const [keys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, ownerId));
     const modelKey = sel?.selectedModel ?? DEFAULT_MODEL_KEY;

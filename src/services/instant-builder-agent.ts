@@ -149,6 +149,9 @@ export async function resolveAgentBuilderForModel(
     return { modelKey, provider, userApiKeys, subscriptionAuth: "openai-codex" };
   }
 
+  // A persisted chat subscription choice must not become an API build if disconnected.
+  if (modelKey.startsWith("chatgpt/")) return null;
+
   // The user must have a valid key for the selected model's provider.
   const providerKey = userApiKeys[provider as keyof UserApiKeys];
   if (!providerKey) return null;

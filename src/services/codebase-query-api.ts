@@ -174,7 +174,11 @@ export async function queryCodebaseInProcess(
   // Build (or reuse, when the commit SHA is unchanged) the repo map.
   const { tree, repoMap } = await loadRepoMap(reader, owner, repo, ref, githubToken);
 
-  const { model, modelKey: liteKey } = getLiteModel(modelKey, userApiKeys, { allowEnvFallback });
+  const { selectedSubscriptionModel } = await import("./subscription-execution.ts");
+  const subscription = userId ? await selectedSubscriptionModel(userId) : null;
+  const { model, modelKey: liteKey } = subscription
+    ? { model: subscription, modelKey: `chatgpt/${subscription.modelId}` }
+    : getLiteModel(modelKey, userApiKeys, { allowEnvFallback });
 
   // On-demand retrieval tools, backed by the GitHub API.
   const tools = {

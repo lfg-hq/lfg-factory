@@ -693,7 +693,7 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
                   ${openaiCodex?.connected
                     ? "Coding Agent builds use your connected Codex entitlement when you select an OpenAI model."
                     : "Connect an eligible ChatGPT account to use its Codex entitlement in Coding Agent builds with an OpenAI model."}
-                  Direct API mode and normal LFG chat continue to use your OpenAI API key and API billing.
+                  In chat, choose a model under “ChatGPT subscription” to use this connection for agent work. Models under “OpenAI” still use API tokens and separate API billing. Subscription limits apply.
                 </div>
               </div>
               ${openaiCodex?.connected ? html`

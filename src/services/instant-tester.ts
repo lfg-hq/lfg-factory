@@ -226,7 +226,8 @@ async function generateExplainers(opts: InstantTestOptions, results: ScreenResul
 
     let model;
     try {
-      model = getModel(modelKey, userApiKeys, { allowEnvFallback: true });
+      const { selectedSubscriptionModel } = await import("./subscription-execution.ts");
+      model = await selectedSubscriptionModel(opts.userId) ?? getModel(modelKey, userApiKeys, { allowEnvFallback: true });
     } catch {
       return undefined; // no usable key — skip explainers, keep technical observations
     }
