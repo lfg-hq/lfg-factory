@@ -195,12 +195,13 @@ previewApi.get("/:projectId/preview/build-settings", async (c) => {
   const user = c.get("user");
   const access = await getProjectAccess(c.req.param("projectId")!, user.id);
   if (!access) return c.json({ error: "Project not found" }, 404);
-  const p = access.project as { ticketBuildIsolation?: string; previewBranchMode?: string; dbMode?: string; shareGitAccess?: boolean; shareChatHistory?: boolean; customInstructions?: string | null; agentShellAccess?: boolean };
+  const p = access.project as { qaMode?: string; ticketBuildIsolation?: string; previewBranchMode?: string; dbMode?: string; shareGitAccess?: boolean; shareChatHistory?: boolean; customInstructions?: string | null; agentShellAccess?: boolean };
   return c.json({
     customInstructions: p.customInstructions ?? "",
     agentShellAccess: !!p.agentShellAccess,
     canGrantShell: access.role === "owner",
     ticketBuildIsolation: p.ticketBuildIsolation ?? "isolated",
+    qaMode: p.qaMode ?? "off",
     previewBranchMode: p.previewBranchMode ?? "worktree",
     dbMode: p.dbMode ?? "auto",
     shareGitAccess: !!p.shareGitAccess,
@@ -220,6 +221,7 @@ previewApi.post("/:projectId/preview/build-settings", async (c) => {
   const patch: Record<string, unknown> = {};
   if (body.ticketBuildIsolation === "isolated" || body.ticketBuildIsolation === "shared") patch.ticketBuildIsolation = body.ticketBuildIsolation;
   if (body.previewBranchMode === "worktree" || body.previewBranchMode === "checkout") patch.previewBranchMode = body.previewBranchMode;
+  if (body.qaMode === "off" || body.qaMode === "tests") patch.qaMode = body.qaMode;
   if (body.dbMode === "auto" || body.dbMode === "new" || body.dbMode === "provided") patch.dbMode = body.dbMode;
   // Credential sharing lends the OWNER's Git token to collaborators — owner-only.
   if (typeof body.shareGitAccess === "boolean") {

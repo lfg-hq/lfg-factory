@@ -48,6 +48,13 @@ export const projects = pgTable(
     // a git worktree inside the always-on preview VM (warm caches, but a bad build
     // can disrupt the preview).
     ticketBuildIsolation: text("ticket_build_isolation").notNull().default("isolated"),
+    // QA agent: after a ticket builds, generate a test suite from its acceptance
+    // criteria and verify it red/green against the branch point. "off" (default) |
+    // "tests". Opt-in because it costs a second agent run per ticket.
+    qaMode: text("qa_mode").notNull().default("off"),
+    // How this repo runs its tests, detected once (or set up once) rather than
+    // rediscovered per ticket. Null until the first QA run resolves it.
+    testCommand: text("test_command"),
     // How the preview runs a ticket's FEATURE branch: "worktree" = a separate git
     // worktree dir (keeps the main checkout untouched), "checkout" = switch the
     // single main checkout to the branch after stashing local changes (no extra

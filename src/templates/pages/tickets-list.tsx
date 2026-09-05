@@ -36,7 +36,7 @@ interface ExecutionModeConfig {
 
 interface TicketsListPageProps {
   user: { id: string; name: string; email?: string };
-  project: { id: string; projectId: string; name: string; icon: string; ticketBuildIsolation?: string; previewBranchMode?: string };
+  project: { id: string; projectId: string; name: string; icon: string; ticketBuildIsolation?: string; previewBranchMode?: string; qaMode?: string };
   stages: TicketStage[];
   tickets: Ticket[];
   executionMode?: ExecutionModeConfig;
@@ -621,6 +621,12 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
               <select id="build-isolation-select" onchange="setBuildSetting('ticketBuildIsolation', this.value)">
                 <option value="isolated" ${(project.ticketBuildIsolation ?? "isolated") === "isolated" ? "selected" : ""}>Fresh sandbox (isolated)</option>
                 <option value="shared" ${project.ticketBuildIsolation === "shared" ? "selected" : ""}>Shared preview VM</option>
+              </select>
+            </label>
+            <label class="bs-row"><span>QA after build</span>
+              <select id="qa-mode-select" onchange="setBuildSetting('qaMode', this.value)">
+                <option value="off" ${(project.qaMode ?? "off") === "off" ? "selected" : ""}>Off</option>
+                <option value="tests" ${project.qaMode === "tests" ? "selected" : ""}>Write + verify tests</option>
               </select>
             </label>
             <label class="bs-row"><span>Preview branch</span>

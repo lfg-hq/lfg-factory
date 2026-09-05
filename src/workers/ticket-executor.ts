@@ -187,6 +187,7 @@ import {
   planWorktreeEviction,
 } from "../services/shared-lanes.ts";
 import { generateTicketDemo } from "../services/ticket-demo.ts";
+import { runTicketQa } from "../services/qa-agent.ts";
 import { matchKnowledgeForPrompt } from "../ai/knowledge/matcher.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { logActivity } from "../services/activity-log.ts";
@@ -2057,6 +2058,11 @@ Before implementing, fix the git issue:
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId, mergeStatus: "merged" });
     // Auto-record a demo of the completed feature for the Preview tab (fire-and-forget).
     void generateTicketDemo(ticketId, { ownerId, projectId: project.id });
+    // QA (opt-in, projects.qaMode = "tests"): write a test suite for the ticket's
+    // acceptance criteria and verify it red/green against the branch point, in the
+    // sandbox that just built it. Fire-and-forget like the demo — it never throws,
+    // never fails the ticket, and reports into the ticket's log.
+    void runTicketQa(ticketId, { ownerId, projectId: project.id });
   } else {
     const _detail = commitFailed ? "" : await lastErrorSnippet(ticketId);
     const reason = commitFailed
@@ -2843,6 +2849,11 @@ async function finalizeTicketChat(
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId, mergeStatus: mergedOk ? "merged" : "pushed" });
     // Auto-record a demo of the applied change for the Preview tab (fire-and-forget).
     void generateTicketDemo(ticketId, { ownerId, projectId: project.id });
+    // QA (opt-in, projects.qaMode = "tests"): write a test suite for the ticket's
+    // acceptance criteria and verify it red/green against the branch point, in the
+    // sandbox that just built it. Fire-and-forget like the demo — it never throws,
+    // never fails the ticket, and reports into the ticket's log.
+    void runTicketQa(ticketId, { ownerId, projectId: project.id });
   } catch (err) {
     await addLog(ticketId, `Commit/push FAILED — chat changes were NOT saved to the remote: ${(err as Error).message?.slice(0, 300)}`, "cli_error", ownerId);
   }
@@ -3720,6 +3731,11 @@ git branch --show-current
     });
     // Auto-record a demo of the completed feature for the Preview tab (fire-and-forget).
     void generateTicketDemo(ticketId, { ownerId, projectId: project.id });
+    // QA (opt-in, projects.qaMode = "tests"): write a test suite for the ticket's
+    // acceptance criteria and verify it red/green against the branch point, in the
+    // sandbox that just built it. Fire-and-forget like the demo — it never throws,
+    // never fails the ticket, and reports into the ticket's log.
+    void runTicketQa(ticketId, { ownerId, projectId: project.id });
   } else {
     const _lastErr = commitFailed ? "" : await lastErrorSnippet(ticketId);
     const reason = commitFailed

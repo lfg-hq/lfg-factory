@@ -56,6 +56,13 @@ export const projects = sqliteTable(
     // "isolated" = fresh throwaway pi VM per ticket (build → push → destroy);
     // "shared" = git worktree in the always-on preview VM.
     ticketBuildIsolation: text("ticket_build_isolation").notNull().default("isolated"),
+    // QA agent: after a ticket builds, generate a test suite from its acceptance
+    // criteria and verify it red/green against the branch point. "off" (default) |
+    // "tests". Opt-in because it costs a second agent run per ticket.
+    qaMode: text("qa_mode").notNull().default("off"),
+    // How this repo runs its tests, detected once (or set up once) rather than
+    // rediscovered per ticket. Null until the first QA run resolves it.
+    testCommand: text("test_command"),
     // "worktree" = separate worktree dir; "checkout" = switch the main checkout to
     // the branch after stashing (no extra dirs).
     previewBranchMode: text("preview_branch_mode").notNull().default("worktree"),

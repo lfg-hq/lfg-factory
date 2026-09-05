@@ -644,6 +644,7 @@ projectsRouter.get("/projects/:projectId/tickets", async (c) => {
         name: project.name,
         icon: project.icon,
         ticketBuildIsolation: (project as { ticketBuildIsolation?: string }).ticketBuildIsolation ?? "isolated",
+        qaMode: (project as { qaMode?: string }).qaMode ?? "off",
         previewBranchMode: (project as { previewBranchMode?: string }).previewBranchMode ?? "worktree",
       },
       stages: stageRows,
