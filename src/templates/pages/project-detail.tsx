@@ -1394,6 +1394,36 @@ export function ProjectDetailPage({
               <p style="margin:0.8rem 0 0;font-size:0.8rem;color:var(--text-secondary);"><i class="fas fa-lock"></i> Fixed by the project owner.</p>
             ` : ""}
           </div>
+          <div class="agent-card">
+            <div class="agent-card-head">
+              <div>
+                <h3>Document templates</h3>
+                <p>The shape a document takes here. Before writing a PRD, SOW or spec the agent loads the template for that type and follows it — so documents come out in your form, not the model's default. Templates below ship with LFG; add your own for a type to replace one, or to cover a type we don't.</p>
+              </div>
+            </div>
+            <div id="tpl-list" style="font-size:0.85rem;color:var(--text-secondary);">Loading…</div>
+            <button class="btn btn-secondary" style="margin-top:0.8rem;font-size:0.82rem;" onclick="tplEdit('')">+ Add template</button>
+
+            <div id="tpl-form" style="display:none;margin-top:1rem;border-top:1px solid var(--border-color);padding-top:1rem;">
+              <div style="display:flex;gap:0.6rem;flex-wrap:wrap;margin-bottom:0.6rem;">
+                <input id="tpl-type" placeholder="Document type — prd, sow, spec…" style="flex:1;min-width:180px;" />
+                <input id="tpl-name" placeholder="Name (optional)" style="flex:1;min-width:180px;" />
+              </div>
+              <label style="display:block;font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.25rem;">The shape — headings, tables, placeholder prose. A sample page works.</label>
+              <textarea id="tpl-body" rows="10" placeholder="# {{Feature}}&#10;&#10;## Problem&#10;…"></textarea>
+              <label style="display:block;font-size:0.8rem;color:var(--text-secondary);margin:0.7rem 0 0.25rem;">Custom instructions — house rules for writing this type. Followed, never copied into the document.</label>
+              <textarea id="tpl-instructions" rows="4" placeholder="Always cite the ticket key. Keep requirements numbered. British spelling."></textarea>
+              <div style="display:flex;gap:0.6rem;align-items:center;margin-top:0.7rem;flex-wrap:wrap;">
+                <button class="btn btn-primary" style="font-size:0.82rem;" onclick="tplSave()">Save template</button>
+                <button class="btn btn-secondary" style="font-size:0.82rem;" onclick="tplCancel()">Cancel</button>
+                <label class="btn btn-secondary" style="font-size:0.82rem;cursor:pointer;margin:0;">
+                  Upload a sample<input type="file" id="tpl-upload" accept=".md,.markdown,.txt" style="display:none;" onchange="tplUpload(this)" />
+                </label>
+                <span id="tpl-msg" style="font-size:0.8rem;color:var(--text-secondary);"></span>
+              </div>
+            </div>
+          </div>
+
           <div id="cfg-saved" style="font-size:0.8rem;color:var(--text-secondary);height:1.2em;"></div>
         </div>
         ` : ""}
@@ -2073,6 +2103,91 @@ export function ProjectDetailPage({
     // Instructions and skills live on their own tab. Readable by anyone who can open
     // it — the rules the agents follow here shouldn't be a secret from the people
     // working alongside them. Saving stays permission-checked server-side.
+    // ── Document templates (Config tab) ────────────────────────────────────
+    // NB: every string below avoids a bare apostrophe — a lone ' closes the JS string
+    // and takes this whole inline script with it. Use &#39; in emitted HTML.
+    var _tpls = [];
+    function tplApi(path, opts) {
+      var pid = document.body.getAttribute('data-project-id');
+      return fetch('/api/projects/' + pid + '/doc-templates' + (path || ''), opts).then(function (r) { return r.json(); });
+    }
+    function tplMsg(m) {
+      var el = document.getElementById('tpl-msg');
+      if (el) { el.textContent = m; setTimeout(function () { if (el.textContent === m) el.textContent = ''; }, 2500); }
+    }
+    function tplRender() {
+      var list = document.getElementById('tpl-list');
+      if (!list) return;
+      if (!_tpls.length) { list.textContent = 'No templates yet.'; return; }
+      var rows = _tpls.map(function (t) {
+        var badge = t.source === 'project'
+          ? '<span class="agent-status">yours</span>'
+          : (t.overridden ? '<span class="agent-status">replaced by yours</span>' : '<span class="agent-status">built-in</span>');
+        var actions = t.source === 'project'
+          ? '<button class="skill-action" onclick="tplEdit(&#39;' + t.docType + '&#39;)">Edit</button>'
+            + '<button class="skill-action" onclick="tplDelete(&#39;' + t.rowId + '&#39;)">Delete</button>'
+          : '<button class="skill-action" onclick="tplEdit(&#39;' + t.docType + '&#39;)">Customise</button>';
+        return '<div class="skill-row"><div class="skill-head">'
+          + '<code>' + t.docType + '</code> ' + badge
+          + '<span class="skill-actions">' + actions + '</span></div>'
+          + (t.instructions ? '<p class="skill-desc">' + t.instructions.slice(0, 140) + '</p>' : '')
+          + '</div>';
+      }).join('');
+      list.innerHTML = rows;
+    }
+    function tplLoad() {
+      tplApi('').then(function (d) { _tpls = (d && d.templates) || []; tplRender(); })
+        .catch(function () { var l = document.getElementById('tpl-list'); if (l) l.textContent = 'Could not load templates.'; });
+    }
+    function tplEdit(docType) {
+      var form = document.getElementById('tpl-form');
+      if (form) form.style.display = 'block';
+      // Customising a built-in starts from ITS body, so nobody retypes a skeleton.
+      var t = _tpls.filter(function (x) { return x.docType === docType; })[0];
+      document.getElementById('tpl-type').value = t ? t.docType : '';
+      document.getElementById('tpl-name').value = t ? t.name : '';
+      document.getElementById('tpl-body').value = t ? t.body : '';
+      document.getElementById('tpl-instructions').value = t ? (t.instructions || '') : '';
+      document.getElementById('tpl-type').focus();
+    }
+    function tplCancel() {
+      var form = document.getElementById('tpl-form');
+      if (form) form.style.display = 'none';
+    }
+    function tplSave() {
+      var payload = {
+        docType: document.getElementById('tpl-type').value,
+        name: document.getElementById('tpl-name').value,
+        body: document.getElementById('tpl-body').value,
+        instructions: document.getElementById('tpl-instructions').value,
+      };
+      tplApi('', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+        .then(function (d) {
+          if (d && d.error) { tplMsg(d.error); return; }
+          tplMsg('Saved.'); tplCancel(); tplLoad();
+        }).catch(function () { tplMsg('Could not save.'); });
+    }
+    function tplDelete(rowId) {
+      if (!window.confirm('Delete this template? The built-in for that type comes back.')) return;
+      tplApi('/' + rowId, { method: 'DELETE' }).then(function () { tplLoad(); }).catch(function () { tplMsg('Could not delete.'); });
+    }
+    function tplUpload(input) {
+      var f = input.files && input.files[0];
+      if (!f) return;
+      if (f.size > 200000) { tplMsg('That file is too big (200 KB max).'); input.value = ''; return; }
+      var reader = new FileReader();
+      reader.onload = function () {
+        document.getElementById('tpl-body').value = String(reader.result || '');
+        // A sample page usually names its own type; suggest it rather than demand it.
+        var typeEl = document.getElementById('tpl-type');
+        if (typeEl && !typeEl.value) typeEl.value = f.name.replace(/\.[^.]+$/, '').toLowerCase().replace(/[^a-z0-9]+/g, '_');
+        tplMsg('Loaded ' + f.name + ' — review it and save.');
+      };
+      reader.readAsText(f);
+      input.value = '';
+    }
+    if ('${activeTab}' === 'config') tplLoad();
+
     // ── Config tab ──────────────────────────────────────────────────────────
     function cfgFlash(msg) {
       var el = document.getElementById('cfg-saved');

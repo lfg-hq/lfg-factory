@@ -33,6 +33,9 @@ export interface ChatHistoryMessage {
   role: "user" | "assistant" | "system";
   content: string;
   createdAt: Date | null;
+  activity_trail?: Array<{ text: string; tool?: string; warning?: boolean; afterText?: number }> | null;
+  end_reason?: string | null;
+  is_partial?: boolean;
 }
 
 // Per-connection state

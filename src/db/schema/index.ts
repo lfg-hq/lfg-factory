@@ -26,3 +26,4 @@ export * from "./epic-documents.ts";
 export * from "./boards.ts";
 
 export * from "./project-skills.ts";
+export * from "./document-templates.ts";

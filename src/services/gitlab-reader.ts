@@ -11,6 +11,7 @@
  */
 
 import { env } from "../config/env.ts";
+import { repositoryFetch as fetch } from './reading-budget.ts';
 import { renderRepoMap } from "./github-reader.ts";
 import type { RepoTree } from "./github-reader.ts";
 
@@ -44,8 +45,8 @@ export async function getRefSha(
     if (!resp.ok) return null;
     const data = (await resp.json()) as { id?: string };
     return data.id ?? null;
-  } catch {
-    return null;
+  } catch (error) {
+    throw error;
   }
 }
 
@@ -141,14 +142,14 @@ export async function searchCode(
       `${apiBase()}/projects/${projectId(owner, repo)}/search?scope=blobs&search=${encodeURIComponent(query)}&per_page=${limit}`,
       { headers: glHeaders(token) }
     );
-    if (!resp.ok) return [];
+    if (!resp.ok) throw new Error(`Repository search failed (HTTP ${resp.status}). Try targeted file reads instead.`);
     const data = (await resp.json()) as Array<{ path?: string }>;
     const seen = new Set<string>();
     for (const item of data) {
       if (item.path) seen.add(item.path);
     }
     return [...seen];
-  } catch {
-    return [];
+  } catch (error) {
+    throw error;
   }
 }

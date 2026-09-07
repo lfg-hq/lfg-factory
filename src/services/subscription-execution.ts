@@ -26,12 +26,12 @@ export async function withUserSubscription<T>(userId: string, projectId: string 
 }
 
 /** For standalone evaluators/preview jobs that are not children of a chat turn. */
-export async function selectedSubscriptionModel(userId: string, internalProjectId?: string) {
+export async function selectedSubscriptionModel(userId: string, internalProjectId?: string, helperModelId?: string) {
   const inherited = currentSubscription();
-  if (inherited) return createPiSubscriptionModel(inherited.modelId, inherited.getAccessToken);
+  if (inherited) return createPiSubscriptionModel(helperModelId ?? inherited.modelId, inherited.getAccessToken);
   const [selection] = await db.select().from(modelSelections).where(eq(modelSelections.userId, userId)).limit(1);
   if (!selection || !isSubscriptionModel(selection.selectedModel)) return null;
-  return createPiSubscriptionModel(selection.selectedModel.slice(SUBSCRIPTION_PREFIX.length), async () => {
+  return createPiSubscriptionModel(helperModelId ?? selection.selectedModel.slice(SUBSCRIPTION_PREFIX.length), async () => {
     let ownerId = userId;
     if (internalProjectId) {
       const [project] = await db.select({ id: projects.id, ownerId: projects.ownerId }).from(projects).where(eq(projects.id, internalProjectId)).limit(1);

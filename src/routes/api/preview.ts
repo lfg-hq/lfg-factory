@@ -191,6 +191,75 @@ previewApi.delete("/:projectId/skills/:skillId", async (c) => {
   return c.json({ ok: true });
 });
 
+// ── Document templates ───────────────────────────────────────────────────────
+// The SHAPE a document takes here. Built-ins ship with LFG; a project template of the
+// same docType replaces one. Bodies ARE returned: unlike a skill, the point of the
+// settings pane is editing the skeleton.
+previewApi.get("/:projectId/doc-templates", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId")!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  const { builtinTemplates } = await import("../../ai/doc-templates/index.ts");
+  const { documentTemplates } = await import("../../db/schema/document-templates.ts");
+  const own = await db.select().from(documentTemplates).where(eq(documentTemplates.projectId, access.project.id));
+  const ownTypes = new Set(own.map((r) => r.docType.toLowerCase()));
+  return c.json({
+    templates: [
+      ...own.map((r) => ({
+        rowId: r.id, docType: r.docType, name: r.name, body: r.body,
+        instructions: r.instructions ?? "", source: "project" as const, overridden: false,
+      })),
+      ...builtinTemplates().map((t) => ({
+        rowId: null, docType: t.docType, name: t.id, body: t.body,
+        instructions: "", source: "built-in" as const,
+        // Marked rather than hidden, so it's clear WHY the built-in isn't in play.
+        overridden: ownTypes.has(t.docType),
+      })),
+    ],
+  });
+});
+
+/** Create or replace this project's template for one document type. */
+previewApi.post("/:projectId/doc-templates", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId")!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  try { requirePermission(access, "canManageTickets"); }
+  catch { return c.json({ error: "You don't have permission to change this project's templates" }, 403); }
+
+  const body = await c.req.json().catch(() => ({} as Record<string, unknown>));
+  // The docType is what the agent MATCHES on, so normalise it to one stable form.
+  const docType = String(body.docType ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 48);
+  const name = String(body.name ?? "").trim().slice(0, 120) || docType;
+  const text = String(body.body ?? "").trim().slice(0, 60_000);
+  const instructions = String(body.instructions ?? "").trim().slice(0, 8_000);
+  if (!docType) return c.json({ error: "Say which document type this is for (prd, sow, spec…)" }, 400);
+  if (!text) return c.json({ error: "A template needs a body — the shape the document should take" }, 400);
+
+  const { documentTemplates } = await import("../../db/schema/document-templates.ts");
+  const [row] = await db.insert(documentTemplates)
+    .values({ projectId: access.project.id, docType, name, body: text, instructions, createdBy: user.id })
+    .onConflictDoUpdate({
+      target: [documentTemplates.projectId, documentTemplates.docType],
+      set: { name, body: text, instructions, updatedAt: new Date() },
+    })
+    .returning();
+  return c.json({ ok: true, template: { rowId: row!.id, docType: row!.docType, name: row!.name, source: "project" } });
+});
+
+previewApi.delete("/:projectId/doc-templates/:templateId", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId")!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  try { requirePermission(access, "canManageTickets"); }
+  catch { return c.json({ error: "You don't have permission to change this project's templates" }, 403); }
+  const { documentTemplates } = await import("../../db/schema/document-templates.ts");
+  await db.delete(documentTemplates).where(
+    and(eq(documentTemplates.projectId, access.project.id), eq(documentTemplates.id, c.req.param("templateId")!))
+  );
+  return c.json({ ok: true });
+});
+
 previewApi.get("/:projectId/preview/build-settings", async (c) => {
   const user = c.get("user");
   const access = await getProjectAccess(c.req.param("projectId")!, user.id);

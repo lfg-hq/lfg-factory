@@ -83,9 +83,12 @@ const body = src.slice(start, end);
 const savedStart = src.indexOf("    /** Replay a SAVED trail from history");
 const savedEnd = src.indexOf("    /** The turn is over:");
 const withReplay = body + src.slice(savedStart, savedEnd);
-const api = new Function("messageContainer", "document", "scrollToBottom",
-  withReplay + "; return { trailStep, finalizeTrail, updateTrailMeta, renderSavedTrail, getTrail: () => activeTrail };")(
-  messageContainer, globalThis.document, globalThis.scrollToBottom);
+let now = 100000;
+let tick = null;
+const api = new Function("messageContainer", "document", "scrollToBottom", "Date", "setInterval", "clearInterval",
+  withReplay + "; return { trailStep, touchTrail, finalizeTrail, finishWorkPhase, assistantTimelineParts, updateTrailMeta, renderSavedTrail, getTrail: () => activeTrail };")(
+  messageContainer, globalThis.document, globalThis.scrollToBottom,
+  { now: () => now }, (callback) => { tick = callback; return 1; }, () => { tick = null; });
 
 let bad = 0;
 const ok = (m) => console.log("  ok   " + m);
@@ -175,6 +178,68 @@ else fail("row text is " + only.dataset.text);
 api.trailStep({ label: "Reading the codebase", tool: "queryCodebase" });
 if (t3.querySelectorAll(".agent-trail-step").length === afterGeneric + 1) ok("a different tool still gets its own row");
 else fail("rows collapsed across tools");
+
+now += 31000;
+tick();
+if (t3.querySelector('.agent-trail-title').textContent.includes('no update for 31s')) ok('silent work is labelled honestly');
+else fail('missing stale-progress label');
+if (t3.querySelector('.agent-trail-meta').textContent.includes('31s')) ok('timer advances without another tool event');
+else fail('elapsed time is frozen');
+api.touchTrail();
+if (t3.querySelector('.agent-trail-title').textContent === 'Working') ok('real activity clears stale status');
+else fail('stale status persists after activity');
+api.trailStep({ detail: 'Repository scan failed', tool: 'queryCodebase', warning: true });
+api.trailStep({ detail: 'Retrying repository scan', tool: 'queryCodebase' });
+if (t3.querySelectorAll('.agent-trail-step').some(r => r.dataset.text === 'Repository scan failed')) ok('retry preserves failure row');
+else fail('retry erased failure');
+api.finalizeTrail();
+if (t3.querySelector('.agent-trail-title').textContent === 'Completed with warnings') ok('recovered failures remain visible');
+else fail('warning lost at completion');
+if (tick === null) ok('completion cleans up live timer'); else fail('timer leaked');
+for (const status of ['Failed', 'Stopped', 'Interrupted — connection or stream ended']) {
+  api.trailStep({ detail: 'Working' });
+  const current = api.getTrail();
+  api.finalizeTrail(status);
+  if (status === 'Failed' && current.dataset.outcome !== 'failed') fail('failure still uses success icon');
+  if (status === 'Stopped' && current.dataset.outcome !== 'stopped') fail('stop still uses success icon');
+  if (current.querySelector('.agent-trail-title').textContent === status && tick === null) ok(status + ' preserved and timer cleaned');
+  else fail(status + ' incorrect');
+}
+// Execute the actual guard from addMessageToChat, not just the trail primitive.
+const guard = src.match(/if \(!turnActive && role === 'assistant'[^\n]+finalizeTrail\(\);/)[0];
+const addText = new Function('turnActive', 'role', 'content', 'finalizeTrail', guard);
+api.trailStep({ detail: 'Long tool' });
+addText(true, 'assistant', 'Let me look into that.', api.finalizeTrail);
+if (api.getTrail()?.classList.contains('is-running')) ok('intermediate assistant text does not finish live work');
+else fail('intermediate text stopped the trail');
+api.finalizeTrail();
+
+api.trailStep({ detail: 'Read a file' });
+const phase = api.getTrail();
+api.finishWorkPhase();
+if (!api.getTrail() && phase.querySelector('.agent-trail-title').textContent === 'Worked') ok('text begins after its action phase closes as Worked');
+else fail('response kept a live Working block');
+api.trailStep({ detail: 'Update a ticket' });
+if (api.getTrail() !== phase && api.getTrail().classList.contains('is-running')) ok('later actions open a separate Working block');
+else fail('later actions joined an earlier phase');
+api.finalizeTrail();
+const first = 'Let me merge them into one ticket.';
+const second = '\n\nNow let me update the main ticket to cover everything:';
+const third = '\n\nDone. Merged into one ticket.';
+const parts = api.assistantTimelineParts({
+  content: first + second + third,
+  activity_trail: [
+    { text: 'Read file', afterText: 0 },
+    { text: 'Merge tickets', afterText: first.length },
+    { text: 'Update ticket', afterText: first.length + second.length },
+  ],
+});
+if (parts.map(p => p.kind).join(',') === 'actions,message,actions,message,actions,message') ok('history restores interleaved actions and messages');
+else fail('history grouped all actions together');
+if (parts.filter(p => p.kind === 'message').map(p => p.text).join('') === first + second + third) ok('history preserves all response text and spacing exactly');
+else fail('history lost or duplicated prose');
+if (api.assistantTimelineParts({ content: first, activity_trail: [{ text: 'old record' }] }) === null) ok('legacy history falls back without guessing boundaries');
+else fail('legacy record got invented boundaries');
 
 console.log(bad ? `\n${bad} FAILED` : "\nall checks pass");
 process.exit(bad ? 1 : 0);

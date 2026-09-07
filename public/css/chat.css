@@ -508,7 +508,8 @@
 }
 
 /* Show actions on hover */
-.message:hover .message-actions {
+.message:hover .message-actions,
+.message:focus-within .message-actions {
     opacity: 1;
 }
 
@@ -546,8 +547,8 @@
 /* Adjust button color for user messages */
 .message.user .message-copy-btn {
     background: transparent;
-    border-color: rgba(0, 0, 0, 0.3);
-    color: #121212;
+    border-color: rgba(255, 255, 255, 0.5);
+    color: #fff;
 }
 
 .message.user .message-copy-btn:hover {
@@ -555,6 +556,16 @@
     border-color: rgba(0, 0, 0, 0.6);
     transform: scale(1.05);
 }
+
+.message-footer { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+.message-footer .message-copy-btn { margin-left: auto; min-height: 32px; border-color: var(--border-color, #64748b); }
+.message-expand-btn { border: 0; background: transparent; color: inherit; padding: 6px 0; cursor: pointer; font: inherit; font-size: 13px; font-weight: 600; }
+.message-expand-btn[hidden] { display: none; }
+.message-collapsed > .message-content { max-height: 240px; overflow: hidden; }
+.message .message-content { padding-right: 26px; }
+.message-footer button:focus-visible, .message-actions button:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+.message.user .message-footer .message-copy-btn { border-color: rgba(255,255,255,.5); }
+@media (hover: none) { .message-actions { opacity: 1; } }
 
 /* Make message position relative for absolute positioning of actions */
 .message {
@@ -2717,8 +2728,8 @@ input:checked + .turbo-slider + .turbo-label,
 }
 .agent-trail-head:hover { color: var(--text-color, #e2e8f0); }
 
-.agent-trail-title { font-weight: 600; letter-spacing: -0.01em; }
-.agent-trail-meta { margin-left: auto; font-size: 11px; opacity: 0.55; font-variant-numeric: tabular-nums; }
+.agent-trail-title { font-weight: 600; letter-spacing: -0.01em; min-width: 0; overflow-wrap: anywhere; }
+.agent-trail-meta { margin-left: auto; flex-shrink: 0; font-size: 11px; opacity: 0.55; font-variant-numeric: tabular-nums; }
 .agent-trail-caret { font-size: 9px; opacity: 0.5; transition: transform 0.15s ease; }
 .agent-trail.is-collapsed .agent-trail-caret { transform: rotate(-90deg); }
 .agent-trail.is-collapsed .agent-trail-steps { display: none; }
@@ -2753,6 +2764,9 @@ input:checked + .turbo-slider + .turbo-label,
     color: #10b981;
 }
 
+.agent-trail[data-outcome="failed"] .agent-trail-spinner::before { content: "\f00d"; color: #dc2626; }
+.agent-trail[data-outcome="stopped"] .agent-trail-spinner::before { content: "\f04d"; color: #64748b; }
+.agent-trail[data-outcome="warning"] .agent-trail-spinner::before { content: "\f071"; color: #b45309; }
 .agent-trail-steps { padding: 0 0 3px; }
 
 /* Rows sit on a 22px grid — 2px padding plus a 1.5 line-height left them drifting

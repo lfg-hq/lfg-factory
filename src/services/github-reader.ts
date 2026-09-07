@@ -11,6 +11,7 @@
  * All calls authenticate with the user's stored GitHub OAuth token.
  */
 
+import { repositoryFetch as fetch } from './reading-budget.ts';
 const API = "https://api.github.com";
 
 function ghHeaders(token: string, accept = "application/vnd.github+json"): Record<string, string> {
@@ -54,8 +55,8 @@ export async function getRefSha(
     );
     if (!resp.ok) return null;
     return (await resp.text()).trim() || null;
-  } catch {
-    return null;
+  } catch (error) {
+    throw error;
   }
 }
 
@@ -137,7 +138,7 @@ export async function searchCode(
     `${API}/search/code?q=${encodeURIComponent(q)}&per_page=${limit}`,
     { headers: ghHeaders(token, "application/vnd.github.text-match+json") }
   );
-  if (!resp.ok) return [];
+  if (!resp.ok) throw new Error(`Repository search failed (HTTP ${resp.status}). Try targeted file reads instead.`);
   const data = (await resp.json()) as { items?: Array<{ path: string }> };
   return (data.items ?? []).map((i) => i.path);
 }

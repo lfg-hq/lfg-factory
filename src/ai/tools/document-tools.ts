@@ -20,6 +20,8 @@ export const streamDocumentContent = tool({
   description:
     "Write any document (PRD, implementation plan, spec, roadmap, etc.) and stream it live to the user's right panel. " +
     "Use fileType='prd' for product requirements, 'implementation' for technical plans, or any descriptive type. " +
+    "If your prompt lists a template for this fileType, call loadDocumentTemplate FIRST and follow its skeleton — " +
+    "a document written in the wrong shape has to be rewritten. "  +
     "If a file with the same name+type already exists it will be updated in-place. " +
     "Pass `epicId` when the doc relates to a feature you're building — the doc is LINKED " +
     "to that epic so the epic shows the full picture. The doc still lives in the project's " +
