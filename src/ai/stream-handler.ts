@@ -1,3 +1,4 @@
+import { availableChatModels } from "../services/available-models.ts";
 import { streamText, stepCountIs, generateText } from "ai";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -6,7 +7,7 @@ import { getChatAccess } from "../services/chat-access.ts";
 import { messages, conversations, modelSelections, agentRoles, chatFiles } from "../db/schema/chat.ts";
 import { llmApiKeys } from "../db/schema/users.ts";
 import { projects } from "../db/schema/projects.ts";
-import { resolveLlmGrants, llmKeyUserId } from "../services/llm-access.ts";
+import { resolveLlmGrants, llmKeyUserId, userLlmAccess } from "../services/llm-access.ts";
 import { projectFiles } from "../db/schema/documents.ts";
 import { projectTickets, ticketLogs, ticketAddenda } from "../db/schema/tickets.ts";
 import { projectEnvironments } from "../db/schema/project-environments.ts";
@@ -511,17 +512,22 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   // Fine-grained LLM sharing: a collaborator granted "use my API keys" runs the analyst
   // chat on the OWNER's keys; otherwise on their own. The model CHOICE stays the acting
   // user's (modelSel above) — only the credential source is shared.
-  let keyUserId = userId;
+  const llmAccess = await userLlmAccess(userId, projectId);
+  if (!currentSubscription() && !llmAccess.canUseKey) throw new Error("Team API tokens are disabled. Connect and select your personal ChatGPT subscription.");
+  let keyUserId = llmAccess.keyUserId;
   if (projectId) {
     const [proj] = await db.select({ id: projects.id, ownerId: projects.ownerId }).from(projects).where(eq(projects.projectId, projectId)).limit(1);
-    if (proj) keyUserId = llmKeyUserId(await resolveLlmGrants(proj, userId), userId);
+    if (proj && !currentSubscription()) keyUserId = llmKeyUserId(await resolveLlmGrants(proj, userId), userId);
   }
   const [apiKeys] = await db
     .select()
     .from(llmApiKeys)
     .where(eq(llmApiKeys.userId, keyUserId));
 
-  const modelKey = currentSubscription() ? `chatgpt/${currentSubscription()!.modelId}` : pinnedChatModel ?? modelSel?.selectedModel ?? DEFAULT_MODEL_KEY;
+  const allowedModels = await availableChatModels(userId, projectId);
+  const preferredModel = pinnedChatModel ?? modelSel?.selectedModel;
+  const allowedModel = allowedModels.find(m => m.key === preferredModel)?.key ?? allowedModels[0]?.key ?? DEFAULT_MODEL_KEY;
+  const modelKey = currentSubscription() ? `chatgpt/${currentSubscription()!.modelId}` : allowedModel;
   const userApiKeys = apiKeys
     ? { anthropic: apiKeys.anthropicApiKey ?? undefined, openai: apiKeys.openaiApiKey ?? undefined, google: apiKeys.googleApiKey ?? undefined, kimi: apiKeys.kimiApiKey ?? undefined, deepseek: apiKeys.deepseekApiKey ?? undefined, glm: apiKeys.glmApiKey ?? undefined }
     : undefined;
@@ -548,19 +554,13 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   let model;
   let searchTools: Record<string, unknown> = {};
   try {
-    const result = getModelWithSearch(modelKey, userApiKeys, { allowEnvFallback: !!instantMode });
+    const result = getModelWithSearch(modelKey, userApiKeys, { allowEnvFallback: false });
     model = result.model;
     searchTools = result.searchTools;
   } catch (err) {
-    if (!instantMode || currentSubscription() || modelKey.startsWith("chatgpt/")) {
-      const errMsg = err instanceof Error ? err.message : "Failed to initialize model";
-      ws.send(JSON.stringify({ type: "ai_chunk", chunk: errMsg, is_final: true }));
-      return { conversationId: convId };
-    }
-    // Instant mode: fall back to default model with server keys
-    const result = getModelWithSearch(DEFAULT_MODEL_KEY, undefined, { allowEnvFallback: true });
-    model = result.model;
-    searchTools = result.searchTools;
+    const errMsg = err instanceof Error ? err.message : "Failed to initialize model";
+    ws.send(JSON.stringify({ type: "ai_chunk", chunk: errMsg, is_final: true }));
+    return { conversationId: convId };
   }
 
   // ── 4b. Attach an uploaded IMAGE to the model turn ──────────────────────────
@@ -1359,7 +1359,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     // fails.
     let titleModel = model;
     try {
-      titleModel = getLiteModel(modelKey, userApiKeys, { allowEnvFallback: !!instantMode }).model;
+      titleModel = getLiteModel(modelKey, userApiKeys, { allowEnvFallback: false }).model;
     } catch {
       // keep the full model
     }

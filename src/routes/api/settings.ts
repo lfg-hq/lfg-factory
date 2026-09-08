@@ -1,3 +1,5 @@
+import { availableChatModels } from "../../services/available-models.ts";
+import { userLlmAccess } from "../../services/llm-access.ts";
 import { Hono } from "hono";
 import { requireAuth } from "../../auth/middleware.ts";
 import { db } from "../../config/db.ts";
@@ -30,7 +32,7 @@ settings.post("/model", async (c) => {
   if (!modelKey) return c.json({ error: "modelKey required" }, 400);
 
   // Validate against known models
-  const known = listChatModels().find((m) => m.key === modelKey);
+  const known = (await availableChatModels(user.id, projectId)).find((m) => m.key === modelKey);
   if (!known) return c.json({ error: "Unknown model key" }, 400);
   if (isSubscriptionModel(modelKey) && !await hasOpenAICodexCredentials(await subscriptionOwner(user.id, projectId))) {
     return c.json({ error: "Connect ChatGPT in Settings, or ask the project owner to grant subscription access." }, 400);
@@ -70,8 +72,7 @@ settings.post("/role", async (c) => {
 
 // GET /api/settings/models — list available models
 settings.get("/models", async (c) => {
-  const connected = await hasOpenAICodexCredentials(await subscriptionOwner(c.get("user").id, c.req.query("projectId")));
-  return c.json({ models: listChatModels().map(m => ({ ...m, ...(isSubscriptionModel(m.key) ? { available: connected } : {}) })) });
+  return c.json({ models: await availableChatModels(c.get("user").id, c.req.query("projectId")) });
 });
 
 // GET /api/settings/me — current user model + role selection
@@ -95,10 +96,15 @@ settings.get("/me", async (c) => {
 settings.patch("/execution-mode", async (c) => {
   const user = c.get("user");
   const body = await c.req.json<{
+    projectId?: string;
     claudeCodeEnabled?: boolean;
     builderModelKey?: string;
     builderAuthMode?: "subscription" | "api_key";
   }>();
+
+  const access = await userLlmAccess(user.id, body.projectId);
+  if (body.builderAuthMode === "api_key" && !access.canUseKey || body.builderAuthMode === "subscription" && !access.canUseSubscription) return c.json({ error: "Credential source disabled by admin" }, 403);
+  if (body.builderModelKey && !access.canUseKey && listModels().find(m => m.key === body.builderModelKey)?.provider !== "openai") return c.json({ error: "Only ChatGPT models are enabled" }, 403);
 
   if (body.builderModelKey) {
     const known = listModels().find((m) => m.key === body.builderModelKey);

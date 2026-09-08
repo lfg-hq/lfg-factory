@@ -20,6 +20,8 @@ export const organizations = pgTable(
     ownerId: text("owner_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
+    tokensEnabled: boolean("tokens_enabled").notNull().default(true),
+    subscriptionsEnabled: boolean("subscriptions_enabled").notNull().default(true),
     description: text("description").default(""),
     avatar: text("avatar"),
     stripeCustomerId: text("stripe_customer_id"),

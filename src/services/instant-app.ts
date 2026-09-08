@@ -1,3 +1,5 @@
+import { projects } from "../db/schema/projects.ts";
+import { availableChatModels } from "./available-models.ts";
 import { and, desc, eq } from "drizzle-orm";
 import { generateObject } from "ai";
 import { z } from "zod";
@@ -1085,6 +1087,14 @@ async function runInstantBuild(appId: string, feedback?: string, designChoices?:
   try {
     console.log(`[instant] [${appId}] runInstantBuild START`);
     const t0 = Date.now();
+    const [pendingApp] = await db.select().from(instantApps).where(eq(instantApps.id, appId)).limit(1);
+    if (!pendingApp) return;
+    const [buildProject] = pendingApp.projectId ? await db.select({ publicId: projects.projectId }).from(projects).where(eq(projects.id, pendingApp.projectId)).limit(1) : [];
+    const publicProjectId = buildProject?.publicId;
+    const allowedModels = await availableChatModels(pendingApp.userId, publicProjectId);
+    const buildChoice = allowedModels.find(m => m.key === buildModelKey) ?? allowedModels[0];
+    if (!buildChoice?.available) throw new Error("Enable team tokens or connect your permitted personal ChatGPT subscription before building");
+    buildModelKey = buildChoice.key;
     const initial = await ensureSandboxForApp(appId, buildProjectType, buildModelKey);
     console.log(`[instant] [${appId}] ensureSandboxForApp done in ${Date.now() - t0}ms`);
     if (!initial) return;
@@ -1115,7 +1125,7 @@ async function runInstantBuild(appId: string, feedback?: string, designChoices?:
 
     if (wantsAgentForModel) {
       // User explicitly selected a non-Anthropic model — use the SSH agent with it.
-      agentBuild = await resolveAgentBuilderForModel(app.userId, buildModelKey!);
+      agentBuild = await resolveAgentBuilderForModel(app.userId, buildModelKey!, publicProjectId);
       if (!agentBuild) {
         throw new Error(`No ${selectedProvider} authentication found for the selected model. Add an API key, connect OpenAI Codex for OpenAI sandbox builds, or pick another model.`);
       }
@@ -1123,7 +1133,7 @@ async function runInstantBuild(appId: string, feedback?: string, designChoices?:
       console.log(`[instant] [${appId}] using SSH builder agent for selected model=${agentBuild.modelKey} (provider=${selectedProvider})`);
     } else {
       // Anthropic model, or no model info → Claude Code CLI (OAuth / Anthropic key).
-      const auth = await resolveClaudeAuth(app.userId);
+      const auth = await resolveClaudeAuth(app.userId, publicProjectId);
       if (auth?.mode === "oauth") {
         buildAuthMode = "oauth";
         // Always inject fresh credentials from DB into the VM before starting
@@ -1139,7 +1149,7 @@ async function runInstantBuild(appId: string, feedback?: string, designChoices?:
         console.log(`[instant] [${appId}] using Anthropic API key auth (Claude Code OAuth not connected)`);
       } else {
         // No Anthropic credentials — fall back to the SSH builder agent (DeepSeek/Kimi).
-        agentBuild = await resolveAgentBuilder(app.userId);
+        agentBuild = await resolveAgentBuilder(app.userId, publicProjectId);
         if (!agentBuild) {
           await markClaudeDisconnected(app.userId);
           throw new Error("No Claude Code connection or LLM key. Connect Claude Code or add an Anthropic, DeepSeek, or Kimi key in Settings → LLM Keys.");
@@ -1325,7 +1335,7 @@ async function runInstantBuild(appId: string, feedback?: string, designChoices?:
       try {
         const analysisModel = agentBuild
           ? getModel(agentBuild.modelKey, agentBuild.userApiKeys)
-          : getModel(buildModelKey ?? "claude_4.5_haiku", undefined, { allowEnvFallback: true });
+          : getModel(buildModelKey ?? "claude_4.5_haiku", { anthropic: anthropicApiKey }, { allowEnvFallback: false });
         apiAnalysis = await analyzeRequirementsForApiKeys(app, analysisModel);
         // Re-read app from DB to pick up any newly-saved envVars
         const [refreshed] = await db

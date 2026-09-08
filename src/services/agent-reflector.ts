@@ -1,3 +1,5 @@
+import { currentSubscription } from "../ai/subscription-context.ts";
+import { userLlmAccess } from "./llm-access.ts";
 /**
  * Agent Reflector
  *
@@ -73,7 +75,9 @@ async function reflectOnLatestRunInternal(agentId: string, userId: string): Prom
 
   // Resolve the user's model + key (same pattern as stream-handler)
   const [modelSel] = await db.select().from(modelSelections).where(eq(modelSelections.userId, userId));
-  const [apiKeys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, userId));
+  const llmAccess = await userLlmAccess(userId);
+  if (!currentSubscription() && !llmAccess.canUseKey) throw new Error("Team tokens are disabled; select ChatGPT subscription");
+  const [apiKeys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, llmAccess.keyUserId));
   const modelKey = modelSel?.selectedModel ?? DEFAULT_MODEL_KEY;
   const userApiKeys = apiKeys
     ? {

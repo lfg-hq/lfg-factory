@@ -1,3 +1,4 @@
+import { WorkspacePicker, type WorkspaceContext } from '../components/workspace-picker.ts';
 import { html } from "hono/html";
 
 interface Project {
@@ -42,6 +43,7 @@ interface PendingInvite {
 }
 
 interface ProjectListPageProps {
+  workspaceContext?: WorkspaceContext;
   user: { id: string; name: string; email?: string };
   projects: Project[];
   projectStats?: Record<string, { conversations: number; tickets: number; docs: number; pending: number }>;
@@ -53,7 +55,7 @@ interface ProjectListPageProps {
   success?: string;
 }
 
-export function ProjectListPage({ user, projects, projectStats = {}, instantApps = [], agents = [], pendingInvites = [], activeTab = "projects", error, success }: ProjectListPageProps) {
+export function ProjectListPage({ workspaceContext, user, projects, projectStats = {}, instantApps = [], agents = [], pendingInvites = [], activeTab = "projects", error, success }: ProjectListPageProps) {
   const roleLabel = (r: string) => (r === "viewer" || r === "guest" ? "Viewer" : r === "admin" ? "Admin" : "Collaborator");
   const avatarLetter = (user.name?.[0] ?? user.email?.[0] ?? "?").toUpperCase();
   const isAppsTab = activeTab === "instant_apps";
@@ -76,6 +78,7 @@ export function ProjectListPage({ user, projects, projectStats = {}, instantApps
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
   <script src="/public/js/theme-switcher.js"></script>
+<link rel="stylesheet" href="/public/css/workspace-picker.css" />
 </head>
 <body data-user-id="${user.id}" data-user-name="${user.name}">
   ${error ? html`<div class="messages"><div class="alert alert-danger">${error}</div></div>` : ""}
@@ -147,6 +150,7 @@ export function ProjectListPage({ user, projects, projectStats = {}, instantApps
     <!-- Main content -->
     <div class="main-content-with-sidebar" style="padding:2rem;">
       <div style="max-width:1200px;margin:0 auto;">
+        ${WorkspacePicker(workspaceContext, "/projects")}
         <!-- Header -->
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem;">
           <h1 style="font-size:1.5rem;font-weight:700;color:var(--text-color);margin:0;">Projects</h1>
@@ -412,7 +416,7 @@ export function ProjectListPage({ user, projects, projectStats = {}, instantApps
           ${projects.length === 0 ? html`
             <div style="text-align:center;padding:4rem 2rem;color:var(--text-secondary);">
               <i class="fas fa-folder-open" style="font-size:3rem;margin-bottom:1rem;opacity:0.3;display:block;"></i>
-              <p style="margin:0 0 1rem;">No projects yet.</p>
+              <p style="margin:0 0 1rem;">No projects yet. Ask a team admin to invite you to a project, or create your own.</p>
               <button
                 onclick="document.getElementById('create-modal').classList.add('active')"
                 class="btn btn-primary"

@@ -1,3 +1,4 @@
+import { userLlmAccess } from "./llm-access.ts";
 /**
  * Agent Runner — non-chat entry point for autonomous agent runs.
  *
@@ -129,10 +130,12 @@ async function runAgentTaskInternal(input: RunAgentTaskInput): Promise<RunAgentT
     .select()
     .from(modelSelections)
     .where(eq(modelSelections.userId, userId));
+  const llmAccess = await userLlmAccess(userId);
+  if (!currentSubscription() && !llmAccess.canUseKey) throw new Error("Team tokens are disabled; select ChatGPT subscription");
   const [apiKeys] = await db
     .select()
     .from(llmApiKeys)
-    .where(eq(llmApiKeys.userId, userId));
+    .where(eq(llmApiKeys.userId, llmAccess.keyUserId));
 
   const modelKey = currentSubscription() ? `chatgpt/${currentSubscription()!.modelId}` : modelSel?.selectedModel ?? DEFAULT_MODEL_KEY;
   const userApiKeys = apiKeys

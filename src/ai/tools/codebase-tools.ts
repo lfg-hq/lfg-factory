@@ -1,3 +1,4 @@
+import { currentSubscription } from "../subscription-context.ts";
 /**
  * Codebase Query Tool
  *
@@ -97,7 +98,7 @@ export const queryCodebase = tool({
     // the effective LLM key (owner's when granted "use my API keys", else their own) —
     // so a collaborator can explore the codebase using the owner's access when allowed.
     const gitActor = resolveGitActor(project, userId);
-    const keyUserId = llmKeyUserId(await resolveLlmGrants(project, userId), userId);
+    const keyUserId = currentSubscription() ? userId : llmKeyUserId(await resolveLlmGrants(project, userId), userId);
     const ownHint = gitActor.usingOwnCollaboratorToken ? " This project doesn't share the owner's Git — ask the owner to enable “Share Git access”." : "";
 
     // 2. Load the repo provider's token for the effective Git user

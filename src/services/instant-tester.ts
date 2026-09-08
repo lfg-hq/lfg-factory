@@ -1,3 +1,4 @@
+import { teamApiKeys } from "./llm-access.ts";
 /**
  * Instant App Tester — plug-and-play post-build QA.
  *
@@ -212,7 +213,9 @@ async function generateExplainers(opts: InstantTestOptions, results: ScreenResul
   if (!results.length) return undefined;
   try {
     const [modelSel] = await db.select().from(modelSelections).where(eq(modelSelections.userId, opts.userId));
-    const [keys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, opts.userId));
+    const { selectedSubscriptionModel } = await import("./subscription-execution.ts");
+    const subscription = await selectedSubscriptionModel(opts.userId);
+    const keys = subscription ? undefined : await teamApiKeys(opts.userId);
     const modelKey = modelSel?.selectedModel ?? DEFAULT_MODEL_KEY;
     const userApiKeys = keys
       ? {
@@ -227,7 +230,7 @@ async function generateExplainers(opts: InstantTestOptions, results: ScreenResul
     let model;
     try {
       const { selectedSubscriptionModel } = await import("./subscription-execution.ts");
-      model = await selectedSubscriptionModel(opts.userId) ?? getModel(modelKey, userApiKeys, { allowEnvFallback: true });
+      model = subscription ?? getModel(modelKey, userApiKeys, { allowEnvFallback: false });
     } catch {
       return undefined; // no usable key — skip explainers, keep technical observations
     }

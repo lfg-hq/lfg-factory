@@ -1,53 +1,66 @@
-/**
- * Fine-grained LLM credential sharing (per collaborator).
- *
- * An owner can let specific teammates use the owner's connected LLM for project work:
- *   - `canUseOwnerLlmKey`          → the owner's API keys (analyst chat, codebase reads,
- *                                     and builds when the owner builds via an API key).
- *   - `canUseOwnerLlmSubscription` → the owner's Claude/ChatGPT subscription for builds,
- *                                    and ChatGPT subscription for project agent work.
- *
- * The owner always has both. A collaborator's grants come from their projectMembers row
- * (default true for pre-existing members = grandfathered; new invitees are inserted OFF).
- */
+import { llmApiKeys } from "../db/schema/users.ts";
 import { and, eq } from "drizzle-orm";
+import { HTTPException } from "hono/http-exception";
 import { db } from "../config/db.ts";
-import { projectMembers } from "../db/schema/projects.ts";
+import { projectMembers, projects } from "../db/schema/projects.ts";
+import { projectTeam, teamAccess } from "./team-access.ts";
 
 export interface LlmGrants {
   ownerId: string;
+  keyUserId: string;
   isOwner: boolean;
-  canUseKey: boolean; // may use the owner's API keys
-  canUseSub: boolean; // may use the owner's subscription (builds and project agent work)
+  canUseKey: boolean;
+  canUseSub: boolean;
+  canUsePersonalSubscription: boolean;
 }
 
-/**
- * Resolve what LLM access the acting user has on a project. Loads the member row
- * for a collaborator; the owner is granted everything without a lookup.
- */
-export async function resolveLlmGrants(
-  project: { id: string; ownerId: string },
-  actingUserId: string | null | undefined,
-): Promise<LlmGrants> {
-  const ownerId = project.ownerId;
-  const actor = actingUserId || ownerId;
-  if (actor === ownerId) return { ownerId, isOwner: true, canUseKey: true, canUseSub: true };
-  const [m] = await db
-    .select({ k: projectMembers.canUseOwnerLlmKey, s: projectMembers.canUseOwnerLlmSubscription })
-    .from(projectMembers)
-    .where(and(eq(projectMembers.projectId, project.id), eq(projectMembers.userId, actor), eq(projectMembers.status, "active")))
-    .limit(1);
-  return { ownerId, isOwner: false, canUseKey: !!m?.k, canUseSub: !!m?.s };
+export async function resolveLlmGrants(project: { id: string; ownerId: string }, actingUserId: string | null | undefined): Promise<LlmGrants> {
+  const actor = actingUserId || project.ownerId;
+  const [stored] = await db.select().from(projects).where(eq(projects.id, project.id)).limit(1);
+  if (!stored) throw new HTTPException(404, { message: "Project not found" });
+  const team = await projectTeam(stored);
+  const { role: teamRole } = await teamAccess(actor, team.id);
+  const isOwner = actor === project.ownerId;
+  const [member] = await db.select().from(projectMembers).where(and(eq(projectMembers.projectId, project.id), eq(projectMembers.userId, actor), eq(projectMembers.status, "active"))).limit(1);
+  if (!isOwner && !member) throw new HTTPException(403, { message: "Project access denied" });
+  const canRun = isOwner || (!!member?.canChat && member.role !== "viewer");
+  return {
+    ownerId: project.ownerId, keyUserId: team.ownerId, isOwner,
+    canUseKey: canRun && teamRole !== "viewer" && team.tokensEnabled && (isOwner || !!member?.canUseOwnerLlmKey),
+    // Subscriptions are personal. Legacy grants never lend another person's login.
+    canUseSub: canRun && teamRole !== "viewer" && team.subscriptionsEnabled && isOwner,
+    canUsePersonalSubscription: canRun && teamRole !== "viewer" && team.subscriptionsEnabled && (isOwner || !!member?.canUsePersonalSubscription),
+  };
 }
 
-/**
- * Whose API keys the acting user should run with (analyst chat, codebase reads, preview
- * driver). The owner's when they're the owner or have been granted the key; else their own.
- */
-export function llmKeyUserId(grants: LlmGrants, actingUserId: string): string {
-  return grants.canUseKey ? grants.ownerId : actingUserId;
+export function llmKeyUserId(grants: LlmGrants, _actingUserId: string): string {
+  if (!grants.canUseKey) throw new HTTPException(403, { message: NO_LLM_ACCESS_MESSAGE });
+  return grants.keyUserId;
 }
 
-/** Shown when a collaborator isn't permitted to build with the owner's LLM. */
-export const NO_LLM_ACCESS_MESSAGE =
-  "You're not permitted to use the project owner's LLM for builds. Ask the owner to enable “Use my LLM” for you in the project's Settings → Team, or have the owner run this build.";
+export async function userLlmAccess(userId: string, publicProjectId?: string | null) {
+  if (publicProjectId) {
+    const [project] = await db.select().from(projects).where(eq(projects.projectId, publicProjectId)).limit(1);
+    if (!project) throw new HTTPException(404, { message: "Project not found" });
+    const g = await resolveLlmGrants(project, userId);
+    return { canUseKey: g.canUseKey, canUseSubscription: g.canUsePersonalSubscription, keyUserId: g.keyUserId };
+  }
+  const { team, role } = await teamAccess(userId);
+  return { canUseKey: team.tokensEnabled && role !== "viewer", canUseSubscription: team.subscriptionsEnabled && role !== "viewer", keyUserId: team.ownerId };
+}
+
+export const NO_LLM_ACCESS_MESSAGE = "LLM access is disabled. Ask an admin to allow team tokens or your personal ChatGPT subscription in Project Settings → Team.";
+
+export async function teamApiKeys(userId: string, internalProjectId?: string) {
+  let keyUserId: string;
+  if (internalProjectId) {
+    const [project] = await db.select().from(projects).where(eq(projects.id, internalProjectId)).limit(1);
+    if (!project) throw new HTTPException(404, { message: "Project not found" });
+    keyUserId = llmKeyUserId(await resolveLlmGrants(project, userId), userId);
+  } else {
+    const access = await userLlmAccess(userId);
+    if (!access.canUseKey) throw new HTTPException(403, { message: NO_LLM_ACCESS_MESSAGE });
+    keyUserId = access.keyUserId;
+  }
+  return (await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, keyUserId)).limit(1))[0];
+}

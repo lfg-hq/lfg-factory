@@ -1,3 +1,4 @@
+import { availableChatModels } from "../services/available-models.ts";
 import { Hono } from "hono";
 import { requireAuth } from "../auth/middleware.ts";
 import { db } from "../config/db.ts";
@@ -40,37 +41,11 @@ async function handleChatPage(c: import("hono").Context, conversationId?: string
     return c.text("Project not found", 404);
   }
 
-  const [modelSel, roleRow, keyRow] = await Promise.all([
-    db.select().from(modelSelections).where(eq(modelSelections.userId, user.id)).then((r) => r[0]),
-    db.select().from(agentRoles).where(eq(agentRoles.userId, user.id)).then((r) => r[0]),
-    db.select({
-      openai: llmApiKeys.openaiApiKey,
-      anthropic: llmApiKeys.anthropicApiKey,
-      google: llmApiKeys.googleApiKey,
-      kimi: llmApiKeys.kimiApiKey,
-      deepseek: llmApiKeys.deepseekApiKey,
-      glm: llmApiKeys.glmApiKey,
-    }).from(llmApiKeys).where(eq(llmApiKeys.userId, user.id)).then((r) => r[0]),
+  const [modelSel, roleRow] = await Promise.all([
+    db.select().from(modelSelections).where(eq(modelSelections.userId, user.id)).then(r => r[0]),
+    db.select().from(agentRoles).where(eq(agentRoles.userId, user.id)).then(r => r[0]),
   ]);
-
-  const connectedProviders: Record<string, boolean> = {
-    openai: !!keyRow?.openai,
-    anthropic: !!keyRow?.anthropic,
-    google: !!keyRow?.google,
-    kimi: !!keyRow?.kimi,
-    deepseek: !!keyRow?.deepseek,
-    glm: !!keyRow?.glm,
-  };
-  const subscriptionConnected = await hasOpenAICodexCredentials(await subscriptionOwner(user.id, projectId));
-  const models = listChatModels()
-    .map((m) => ({
-      key: m.key,
-      label: m.label,
-      providerLabel: m.providerLabel,
-      requiresPro: m.requiresPro,
-      available: isSubscriptionModel(m.key) ? subscriptionConnected : !!connectedProviders[m.provider],
-    }))
-    .sort((a, b) => Number(b.available) - Number(a.available));
+  const models = await availableChatModels(user.id, projectId);
 
   return c.html(
     ChatPage({
@@ -78,7 +53,7 @@ async function handleChatPage(c: import("hono").Context, conversationId?: string
       projectId,
       projectName: project.name,
       conversationId,
-      modelKey: modelSel?.selectedModel ?? DEFAULT_MODEL_KEY,
+      modelKey: models.some(m => m.key === modelSel?.selectedModel) ? modelSel!.selectedModel : models[0]?.key ?? "",
       roleKey: roleRow?.name ?? "product_analyst",
       models,
     })

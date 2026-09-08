@@ -1,3 +1,4 @@
+import { teamApiKeys } from "./llm-access.ts";
 /**
  * Ticket demo recorder — after a ticket build completes, exercise the feature and
  * capture proof it works, surfaced in the ticket's Preview tab.
@@ -79,6 +80,7 @@ export interface TicketDemoResult {
 interface GenerateOpts {
   workspaceId?: string;
   ownerId: string;
+  llmUserId?: string;
   projectId: string;
 }
 
@@ -128,7 +130,7 @@ async function run(ticketId: string, opts: GenerateOpts): Promise<void> {
   const changedFiles = await listChangedFiles(workspaceId);
   const routes = await listRoutes(workspaceId);
 
-  const plan = await planDemo(ticket.name, ticket.description, changedFiles, routes, opts.ownerId);
+  const plan = await planDemo(ticket.name, ticket.description, changedFiles, routes, opts.llmUserId ?? opts.ownerId, opts.projectId);
   console.log(`[ticket-demo] [${ticketId}] plan kind=${plan.kind} steps=${plan.steps?.length ?? 0} calls=${plan.calls?.length ?? 0}`);
 
   let result: TicketDemoResult;
@@ -151,6 +153,7 @@ async function planDemo(
   changedFiles: string[],
   routes: string[],
   ownerId: string,
+  projectId: string,
 ): Promise<DemoPlan> {
   // Heuristic seed — the LLM makes the final call, but we bias classification.
   const text = `${name} ${description}`.toLowerCase();
@@ -164,7 +167,7 @@ async function planDemo(
       : { kind: "frontend", steps: [{ action: "goto", path: routes[0] || "/" }, { action: "scroll", amount: 600 }, { action: "wait", ms: 1200 }] };
 
   try {
-    const model = await resolveModel(ownerId);
+    const model = await resolveModel(ownerId, projectId);
     if (!model) return fallback;
 
     const prompt =
@@ -349,12 +352,12 @@ async function listRoutes(workspaceId: string): Promise<string[]> {
   }
 }
 
-async function resolveModel(ownerId: string) {
+async function resolveModel(ownerId: string, projectId: string) {
   const { selectedSubscriptionModel } = await import("./subscription-execution.ts");
-  const subscription = await selectedSubscriptionModel(ownerId);
+  const subscription = await selectedSubscriptionModel(ownerId, projectId);
   if (subscription) return subscription;
   const [modelSel] = await db.select().from(modelSelections).where(eq(modelSelections.userId, ownerId));
-  const [keys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, ownerId));
+  const keys = await teamApiKeys(ownerId, projectId);
   const modelKey = modelSel?.selectedModel ?? DEFAULT_MODEL_KEY;
   const userApiKeys = keys
     ? {
@@ -366,7 +369,7 @@ async function resolveModel(ownerId: string) {
       }
     : undefined;
   try {
-    return getLiteModel(modelKey, userApiKeys, { allowEnvFallback: true }).model;
+    return getLiteModel(modelKey, userApiKeys, { allowEnvFallback: false }).model;
   } catch {
     return null;
   }

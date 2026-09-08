@@ -1,3 +1,4 @@
+import { availableChatModels } from "../services/available-models.ts";
 import { Hono } from "hono";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { requireAuth } from "../auth/middleware.ts";
@@ -105,7 +106,7 @@ instant.get("/instant", async (c) => {
       standaloneMode: true,
       modelKey: settings.modelKey,
       roleKey: settings.roleKey,
-      models: listModels().map((model) => ({
+      models: (await availableChatModels(user.id)).map((model) => ({
         key: model.key,
         label: model.label,
         providerLabel: model.providerLabel,
@@ -172,7 +173,7 @@ instant.get("/instant/app/:appId", async (c) => {
       standaloneMode: true,
       modelKey: settings.modelKey,
       roleKey: settings.roleKey,
-      models: listModels().map((model) => ({
+      models: (await availableChatModels(user.id)).map((model) => ({
         key: model.key,
         label: model.label,
         providerLabel: model.providerLabel,
@@ -207,7 +208,7 @@ instant.get("/instant/project/:projectId", async (c) => {
       projectName: project.name,
       modelKey: settings.modelKey,
       roleKey: settings.roleKey,
-      models: listModels().map((model) => ({
+      models: (await availableChatModels(user.id, project.projectId)).map((model) => ({
         key: model.key,
         label: model.label,
         providerLabel: model.providerLabel,
@@ -252,7 +253,7 @@ instant.get("/instant/project/:projectId/app/:appId", async (c) => {
       projectName: project.name,
       modelKey: settings.modelKey,
       roleKey: settings.roleKey,
-      models: listModels().map((model) => ({
+      models: (await availableChatModels(user.id, project.projectId)).map((model) => ({
         key: model.key,
         label: model.label,
         providerLabel: model.providerLabel,

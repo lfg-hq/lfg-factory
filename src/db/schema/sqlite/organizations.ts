@@ -21,6 +21,8 @@ export const organizations = sqliteTable(
     ownerId: text("owner_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
+    tokensEnabled: integer("tokens_enabled", { mode: "boolean" }).notNull().default(true),
+    subscriptionsEnabled: integer("subscriptions_enabled", { mode: "boolean" }).notNull().default(true),
     description: text("description").default(""),
     avatar: text("avatar"),
 

@@ -1,8 +1,11 @@
+import { getProjectAccess } from "../auth/project-access.ts";
+import { projectTeam } from "../services/team-access.ts";
+import { orgMemberships } from "../db/schema/organizations.ts";
 import { Hono } from "hono";
 import { requireAuth, optionalAuth } from "../auth/middleware.ts";
 import { db } from "../config/db.ts";
 import { projects, projectMembers, projectInvitations } from "../db/schema/projects.ts";
-import { users } from "../db/schema/users.ts";
+import { users, profiles } from "../db/schema/users.ts";
 import { eq, and } from "drizzle-orm";
 import { InvitationAcceptPage } from "../templates/pages/invitation-accept.tsx";
 import type { auth } from "../auth/index.ts";
@@ -85,6 +88,7 @@ invitationRoutes.post("/invitations/accept/:token", requireAuth as any, async (c
     );
 
   if (!invitation) return c.text("Invitation not found or already used", 404);
+  if (invitation.email.toLowerCase() !== user.email.toLowerCase()) return c.text("Sign in with the invited email address", 403);
 
   if (invitation.expiresAt && new Date(invitation.expiresAt) < new Date()) {
     return c.text("This invitation has expired", 410);
@@ -93,21 +97,32 @@ invitationRoutes.post("/invitations/accept/:token", requireAuth as any, async (c
   // Set permissions based on role
   const isGuest = invitation.role === "guest" || invitation.role === "viewer";
 
+  const [teamProject] = await db.select().from(projects).where(eq(projects.id, invitation.projectId)).limit(1);
+  if (!teamProject) return c.text("Project unavailable", 404);
+  const inviterAccess = await getProjectAccess(teamProject.projectId, invitation.inviterId);
+  if (!inviterAccess || !["owner", "admin"].includes(inviterAccess.role) || (invitation.role === "admin" && inviterAccess.role !== "owner")) return c.text("Invitation is no longer authorized", 403);
+  const team = await projectTeam(teamProject);
+  const [existingTeamMember] = await db.select().from(orgMemberships).where(and(eq(orgMemberships.userId, user.id), eq(orgMemberships.organizationId, team.id))).limit(1);
+  if (existingTeamMember && existingTeamMember.status !== "active") return c.text("Ask a team admin to restore your team access", 403);
+  await db.insert(orgMemberships).values({ userId: user.id, organizationId: team.id, role: "member" }).onConflictDoNothing();
+  await db.insert(profiles).values({ userId: user.id, currentOrganizationId: team.id }).onConflictDoNothing();
+
   // Create member row
-  await db.insert(projectMembers).values({
+  const memberValues = {
     projectId: invitation.projectId,
     userId: user.id,
     role: invitation.role,
     canEditFiles: !isGuest,
     canManageTickets: !isGuest,
     canChat: invitation.role !== "viewer",
-    canInviteMembers: false,
-    // New invitees start WITHOUT access to the owner's LLM creds — the owner opts them
-    // in per person from Settings → Team (grandfather default is for pre-existing rows).
-    canUseOwnerLlmKey: false,
+    canInviteMembers: invitation.role === "admin",
+    // Grants come from the invitation; new invitations default both options off.
+    canUseOwnerLlmKey: invitation.canUseOwnerLlmKey,
+    canUsePersonalSubscription: invitation.canUsePersonalSubscription,
     canUseOwnerLlmSubscription: false,
     invitedById: invitation.inviterId,
-  });
+  };
+  await db.insert(projectMembers).values(memberValues).onConflictDoUpdate({ target: [projectMembers.projectId, projectMembers.userId], set: { ...memberValues, status: "active", updatedAt: new Date() } });
 
   // Update invitation status
   await db

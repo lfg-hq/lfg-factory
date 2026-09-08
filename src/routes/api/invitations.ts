@@ -31,14 +31,21 @@ invitationsApi.post("/:projectId/invitations", async (c) => {
     return c.json({ error: "Only the project owner can invite people." }, 403);
   }
 
-  const body = await c.req.json<{ email: string; role?: string }>();
+  const body = await c.req.json<{ email: string; role?: string; canUseOwnerLlmKey?: boolean; canUsePersonalSubscription?: boolean }>();
   const email = body.email?.trim().toLowerCase();
   if (!email) return c.json({ error: "Email is required" }, 400);
 
   const role = body.role ?? "viewer";
-  if (!["member", "viewer", "guest"].includes(role)) {
+  if (!["admin", "member", "viewer", "guest"].includes(role)) {
     return c.json({ error: "Invalid role" }, 400);
   }
+
+  if (role === "admin" && access.role !== "owner") return c.json({ error: "Only the owner can appoint admins" }, 403);
+  for (const field of ["canUseOwnerLlmKey", "canUsePersonalSubscription"] as const) {
+    if (body[field] !== undefined && typeof body[field] !== "boolean") return c.json({ error: "Invalid LLM permission" }, 400);
+  }
+  if (body.canUseOwnerLlmKey && access.role !== "owner") return c.json({ error: "Only the owner can grant tokens" }, 403);
+  const llmPermissions = { canUseOwnerLlmKey: body.canUseOwnerLlmKey ?? false, canUsePersonalSubscription: body.canUsePersonalSubscription ?? false };
 
   // Check if already invited
   const [existing] = await db
@@ -70,7 +77,7 @@ invitationsApi.post("/:projectId/invitations", async (c) => {
           eq(projectMembers.userId, existingUser.id)
         )
       );
-    if (existingMember) return c.json({ error: "User is already a member" }, 409);
+    if (existingMember?.status === "active" || existingUser.id === access.project.ownerId) return c.json({ error: "User is already a member" }, 409);
   }
 
   const token = crypto.randomUUID() + "-" + crypto.randomUUID();
@@ -86,6 +93,7 @@ invitationsApi.post("/:projectId/invitations", async (c) => {
       projectId: access.project.id,
       inviterId: user.id,
       email,
+      ...llmPermissions,
       role,
       token,
       expiresAt,
@@ -94,6 +102,7 @@ invitationsApi.post("/:projectId/invitations", async (c) => {
       target: [projectInvitations.projectId, projectInvitations.email],
       set: {
         inviterId: user.id,
+        ...llmPermissions,
         role,
         token,
         expiresAt,
@@ -216,6 +225,7 @@ invitationsApi.get("/:projectId/members", async (c) => {
       canManageTickets: projectMembers.canManageTickets,
       canChat: projectMembers.canChat,
       canInviteMembers: projectMembers.canInviteMembers,
+      canUsePersonalSubscription: projectMembers.canUsePersonalSubscription,
       canUseOwnerLlmKey: projectMembers.canUseOwnerLlmKey,
       canUseOwnerLlmSubscription: projectMembers.canUseOwnerLlmSubscription,
       joinedAt: projectMembers.joinedAt,
@@ -256,6 +266,10 @@ invitationsApi.delete("/:projectId/members/:id", async (c) => {
     return c.json({ error: "Forbidden" }, 403);
   }
 
+  const [target] = await db.select().from(projectMembers).where(and(eq(projectMembers.id, id!), eq(projectMembers.projectId, access.project.id))).limit(1);
+  if (!target) return c.json({ error: "Member not found" }, 404);
+  if (target.userId === access.project.ownerId || (target.role === "admin" && access.role !== "owner")) return c.json({ error: "Only the owner can remove admins" }, 403);
+
   await db
     .update(projectMembers)
     .set({ status: "removed", updatedAt: new Date() })
@@ -286,12 +300,27 @@ invitationsApi.patch("/:projectId/members/:id", async (c) => {
     canManageTickets: boolean;
     canChat: boolean;
     canInviteMembers: boolean;
+    canUsePersonalSubscription: boolean;
     canUseOwnerLlmKey: boolean;
     canUseOwnerLlmSubscription: boolean;
   }>>();
 
+  if (body.role !== undefined && !["admin", "member", "viewer", "guest"].includes(body.role)) return c.json({ error: "Invalid role" }, 400);
+  const [member] = await db.select().from(projectMembers).where(and(eq(projectMembers.id, id!), eq(projectMembers.projectId, access.project.id))).limit(1);
+  if (!member) return c.json({ error: "Member not found" }, 404);
+  if ((body.role === "admin" || member.role === "admin") && access.role !== "owner") return c.json({ error: "Only the owner can change admins" }, 403);
+  for (const [key, value] of Object.entries(body)) {
+    if (key !== "role" && typeof value !== "boolean") return c.json({ error: "Permissions must be booleans" }, 400);
+  }
   const updateData: Record<string, unknown> = { updatedAt: new Date() };
-  if (body.role !== undefined) updateData.role = body.role;
+  if (body.role !== undefined) {
+    updateData.role = body.role;
+    updateData.canEditFiles = body.role === "admin" || body.role === "member";
+    updateData.canManageTickets = updateData.canEditFiles;
+    updateData.canChat = body.role !== "viewer";
+    updateData.canInviteMembers = body.role === "admin";
+  }
+  if (body.canUsePersonalSubscription !== undefined) updateData.canUsePersonalSubscription = body.canUsePersonalSubscription;
   if (body.canEditFiles !== undefined) updateData.canEditFiles = body.canEditFiles;
   if (body.canManageTickets !== undefined) updateData.canManageTickets = body.canManageTickets;
   if (body.canChat !== undefined) updateData.canChat = body.canChat;

@@ -1,0 +1,29 @@
+.project-team{--pt-surface:#18191b;--pt-soft:#202124;--pt-border:#2c2e32;--pt-ink:#eeeff2;--pt-muted:#9297a1;--pt-accent:#9875ec;background:var(--pt-surface);border:1px solid var(--pt-border);border-radius:12px;padding:24px;color:var(--pt-ink)}
+[data-theme=light] .project-team{--pt-surface:#fff;--pt-soft:#f7f8fa;--pt-border:#e7e9ef;--pt-ink:#242833;--pt-muted:#7b8190;--pt-accent:#7950d6;background:var(--pt-surface)!important}
+.project-team>h3{font-size:14px!important;margin-bottom:6px!important}
+.project-team>p{font-size:12px!important;color:var(--pt-muted)!important}
+.project-team #invite-form{gap:8px!important;margin-bottom:14px!important;max-width:720px}
+.project-team #invite-form input,.project-team select{height:36px!important;font:inherit!important;font-size:12px!important;color:var(--pt-ink)!important;background:var(--pt-surface)!important;border:1px solid var(--pt-border)!important;border-radius:6px!important;padding:0 10px!important;min-width:0}
+.project-team #invite-form .btn{font-size:12px;min-height:36px;padding:0 14px;background:var(--pt-accent);border-radius:6px}
+.pt-invite-access{display:flex;align-items:center;flex-wrap:wrap;gap:18px;font-size:11px;margin-bottom:24px;color:var(--pt-muted)}
+.pt-invite-access>span{font-weight:500;color:var(--pt-ink)}
+.pt-invite-access label,.pt-member-access label{display:flex!important;align-items:center;gap:8px!important;position:relative;font-size:11px!important;color:var(--pt-muted)!important;cursor:pointer}
+.pt-invite-access input,.pt-member-access input{position:absolute;opacity:0;width:30px;height:18px;margin:0;cursor:pointer}
+.pt-track{display:block;flex:none;position:relative;width:30px;height:18px;background:#727782;border-radius:20px;pointer-events:none}
+.pt-track:after{content:'';position:absolute;width:12px;height:12px;background:#fff;left:3px;top:3px;border-radius:50%;transition:transform .15s}
+input:checked+.pt-track{background:var(--pt-accent)}input:checked+.pt-track:after{transform:translateX(12px)}input:disabled+.pt-track{opacity:.4}input:focus-visible+.pt-track{outline:2px solid var(--pt-accent);outline-offset:3px}
+.project-team #members-list{border:1px solid var(--pt-border);border-radius:9px;overflow:hidden;margin:0!important}
+.pt-member+.pt-member,.pt-owner+.pt-member{border-top:1px solid var(--pt-border)}
+.project-team .pt-owner,.project-team .pt-member-header{padding:16px!important;border:0!important;gap:12px}
+.project-team .pt-owner>div,.project-team .pt-member-header>div:first-child{min-width:0}
+.project-team .pt-member-header>div:last-child{flex-shrink:0}
+.project-team .pt-member-header select{width:140px;height:32px!important;font-size:11px!important}
+.project-team .pt-member-access{padding:0 16px 16px 60px!important;border:0!important;gap:20px!important}
+.project-team .pt-owner>span{text-transform:none!important;color:var(--pt-accent)!important;background:var(--pt-soft)!important}
+.project-team .pt-owner>div>div:first-child{background:var(--pt-soft)!important;color:var(--pt-accent)!important}
+.project-team :focus-visible{outline:2px solid var(--pt-accent);outline-offset:2px}
+@media(max-width:600px){.project-team{padding:16px}.project-team #invite-form{flex-wrap:wrap}.project-team #invite-email{flex-basis:100%!important;width:100%}.project-team #invite-role{flex:1}.pt-invite-access{gap:12px}.pt-invite-access>span{flex-basis:100%}.project-team .pt-member-header{flex-wrap:wrap}.project-team .pt-member-header>div:last-child{margin-left:44px}.project-team .pt-member-access{padding-left:16px!important;flex-direction:column;gap:10px!important}}
+[data-theme=light] .project-team #invite-form input,[data-theme=light] .project-team #invite-form select{background-color:#fff!important;color:#242833!important;border-color:#e7e9ef!important}
+.project-team .pt-member-header>div:first-child>div:first-child{background:var(--pt-soft)!important;color:var(--pt-accent)!important;border-color:var(--pt-border)!important;flex-shrink:0}
+.project-team>div[style*="border-top"]{border-top-color:var(--pt-border)!important}
+.project-team .pt-member-header>div:first-child>div:last-child{min-width:0;overflow-wrap:anywhere}

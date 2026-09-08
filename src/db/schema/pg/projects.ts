@@ -23,6 +23,7 @@ export const projects = pgTable(
     name: text("name").notNull(),
     providedName: text("provided_name"),
     description: text("description"),
+    organizationId: text("organization_id"),
     ownerId: text("owner_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
@@ -113,6 +114,7 @@ export const projectMembers = pgTable(
     userId: text("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
+    canUsePersonalSubscription: boolean("can_use_personal_subscription").notNull().default(false),
     role: text("role").notNull().default("member"),
     status: text("status").notNull().default("active"),
     canEditFiles: boolean("can_edit_files").notNull().default(true),
@@ -126,8 +128,8 @@ export const projectMembers = pgTable(
     // builds/coding-agent. DEFAULT true so PRE-EXISTING members are grandfathered (they
     // already used the owner's creds); NEW invitees are inserted with these OFF (opt-in)
     // — see routes/invitations.ts.
-    canUseOwnerLlmKey: boolean("can_use_owner_llm_key").notNull().default(true),
-    canUseOwnerLlmSubscription: boolean("can_use_owner_llm_subscription").notNull().default(true),
+    canUseOwnerLlmKey: boolean("can_use_owner_llm_key").notNull().default(false),
+    canUseOwnerLlmSubscription: boolean("can_use_owner_llm_subscription").notNull().default(false),
     joinedAt: timestamp("joined_at", { mode: "date" }).notNull().default(sql`now()`),
     updatedAt: timestamp("updated_at", { mode: "date" }).notNull().default(sql`now()`),
     invitedById: text("invited_by_id").references(() => users.id, { onDelete: "set null" }),
@@ -151,6 +153,8 @@ export const projectInvitations = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     email: text("email").notNull(),
+    canUseOwnerLlmKey: boolean("can_use_owner_llm_key").notNull().default(false),
+    canUsePersonalSubscription: boolean("can_use_personal_subscription").notNull().default(false),
     role: text("role").notNull().default("member"),
     token: text("token").notNull().unique(),
     status: text("status").notNull().default("pending"),

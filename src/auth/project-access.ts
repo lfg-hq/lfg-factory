@@ -1,3 +1,4 @@
+import { projectTeam, teamAccess } from "../services/team-access.ts";
 import { db } from "../config/db.ts";
 import { projects, projectMembers } from "../db/schema/projects.ts";
 import { eq, and } from "drizzle-orm";
@@ -40,9 +41,12 @@ export async function getProjectAccess(
 
   if (!project) return null;
 
+  let teamRole: string;
+  try { teamRole = (await teamAccess(userId, (await projectTeam(project)).id)).role; } catch { return null; }
+
   // Check if owner
   if (project.ownerId === userId) {
-    return { project, role: "owner", permissions: OWNER_PERMISSIONS };
+    return { project, role: teamRole === "viewer" ? "viewer" : "owner", permissions: teamRole === "viewer" ? { canEditFiles: false, canManageTickets: false, canChat: false, canInviteMembers: false } : OWNER_PERMISSIONS };
   }
 
   // Check project membership
@@ -63,10 +67,10 @@ export async function getProjectAccess(
     project,
     role: member.role as ProjectRole,
     permissions: {
-      canEditFiles: member.canEditFiles,
-      canManageTickets: member.canManageTickets,
-      canChat: member.canChat,
-      canInviteMembers: member.canInviteMembers,
+      canEditFiles: teamRole !== "viewer" && member.canEditFiles,
+      canManageTickets: teamRole !== "viewer" && member.canManageTickets,
+      canChat: teamRole !== "viewer" && member.canChat,
+      canInviteMembers: teamRole !== "viewer" && member.canInviteMembers,
     },
   };
 }

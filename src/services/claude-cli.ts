@@ -1,3 +1,4 @@
+import { userLlmAccess } from "./llm-access.ts";
 /**
  * Claude Code CLI runner
  *
@@ -96,17 +97,17 @@ export type ClaudeAuth =
  * Returns null when none are available — the caller should tell the user to
  * connect Claude Code or add an Anthropic API key.
  */
-export async function resolveClaudeAuth(userId: string): Promise<ClaudeAuth | null> {
-  const credentials = await loadCredentials(userId);
-  if (credentials) return { mode: "oauth", credentials };
+export async function resolveClaudeAuth(userId: string, projectId?: string | null): Promise<ClaudeAuth | null> {
+  const access = await userLlmAccess(userId, projectId);
+  if (!access.canUseKey) return null;
 
   const [keys] = await db
     .select({ anthropic: llmApiKeys.anthropicApiKey })
     .from(llmApiKeys)
-    .where(eq(llmApiKeys.userId, userId))
+    .where(eq(llmApiKeys.userId, access.keyUserId))
     .limit(1);
 
-  const apiKey = keys?.anthropic || env.ANTHROPIC_API_KEY || "";
+  const apiKey = keys?.anthropic || "";
   if (apiKey) return { mode: "apiKey", apiKey };
 
   return null;

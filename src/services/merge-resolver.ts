@@ -1,3 +1,5 @@
+import { resolveLlmGrants, teamApiKeys } from "./llm-access.ts";
+import { projects } from "../db/schema/projects.ts";
 /**
  * Merge a ticket branch into its epic branch by handing the job to the SAME coding CLI
  * that built the ticket (Pi, or Claude Code) — running in the same sandbox, with the
@@ -66,7 +68,10 @@ export function explainGitFailure(error: string): string {
 }
 
 /** Which CLI to drive, resolved exactly the way the ticket builder resolves it. */
-async function resolveCli(userId: string) {
+async function resolveCli(userId: string, projectId: string) {
+  const [project] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
+  if (!project) throw new Error("Project not found");
+  const grants = await resolveLlmGrants(project, userId);
   const [appState] = await db.select({ k: applicationState.builderModelKey, mode: applicationState.builderAuthMode })
     .from(applicationState).where(eq(applicationState.userId, userId)).limit(1);
   const LEGACY = "claude_4.5_sonnet";
@@ -77,8 +82,9 @@ async function resolveCli(userId: string) {
     modelKey = sel?.m || DEFAULT_MODEL_KEY;
   }
   const provider = getProviderName(modelKey);
-  const authMode = appState?.mode === "api_key" ? "api_key" : "subscription";
-  const [keys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, userId)).limit(1);
+  const authMode = !grants.canUseKey ? "subscription" : !grants.canUsePersonalSubscription ? "api_key" : appState?.mode === "api_key" ? "api_key" : "subscription";
+  if (authMode === "subscription" && !grants.canUsePersonalSubscription) throw new Error("Personal subscriptions are disabled");
+  const keys = authMode === "api_key" ? await teamApiKeys(userId, projectId) : undefined;
   const apiKey = provider
     ? ({
         anthropic: keys?.anthropicApiKey, openai: keys?.openaiApiKey, google: keys?.googleApiKey,
@@ -106,7 +112,7 @@ async function resolveCli(userId: string) {
   const usePi = !!provider && provider !== "anthropic" && isPiSupportedProvider(provider)
     && !!(piApiKey || oauthAccessToken);
   const claudeUsable = provider === "anthropic"
-    && (!!keys?.anthropicApiKey || (!!profile?.claudeCodeAuthenticated && !!profile.claudeCodeCredentials));
+    && !!keys?.anthropicApiKey;
   return {
     modelKey, provider, apiKey: piApiKey, oauthAccessToken, usePi, claudeUsable, credentialNote,
     anthropicApiKey: provider === "anthropic" && authMode === "api_key" ? keys?.anthropicApiKey ?? undefined : undefined,
@@ -193,7 +199,7 @@ ${buildCmd ? `- Before pushing, confirm the merged tree still builds: \`${buildC
 ## When you're done
 Reply with 2-4 plain sentences: what was actually wrong with the merge, and what you did about it.`;
 
-  const cli = await resolveCli(o.userId);
+  const cli = await resolveCli(o.userId, o.projectId);
   let account = "";
 
   if (cli.credentialNote) log(cli.credentialNote);

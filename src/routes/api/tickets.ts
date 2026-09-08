@@ -1,3 +1,5 @@
+import { teamApiKeys } from "../../services/llm-access.ts";
+import { selectedSubscriptionModel } from "../../services/subscription-execution.ts";
 import { Hono } from "hono";
 import { requireAuth } from "../../auth/middleware.ts";
 import { db } from "../../config/db.ts";
@@ -1526,13 +1528,14 @@ ticketsApi.post("/:projectId/tickets/:ticketId/git/pr", async (c) => {
     const { authorPullRequest } = await import("../../services/pr-author.ts");
     const { openChangeRequest } = await import("../../services/git.ts");
     const [sel] = await db.select().from(modelSelections).where(eq(modelSelections.userId, user.id));
-    const [keys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, user.id));
+    const subscription = await selectedSubscriptionModel(user.id, project.id);
+    const keys = subscription ? undefined : await teamApiKeys(user.id, project.id);
     const { getModel, DEFAULT_MODEL_KEY } = await import("../../ai/provider.ts");
-    const model = getModel(sel?.selectedModel ?? DEFAULT_MODEL_KEY, {
+    const model = subscription ?? getModel(sel?.selectedModel ?? DEFAULT_MODEL_KEY, {
       anthropic: keys?.anthropicApiKey ?? undefined, openai: keys?.openaiApiKey ?? undefined,
       google: keys?.googleApiKey ?? undefined, kimi: keys?.kimiApiKey ?? undefined,
       deepseek: keys?.deepseekApiKey ?? undefined, glm: keys?.glmApiKey ?? undefined,
-    }, { allowEnvFallback: true });
+    }, { allowEnvFallback: false });
 
     await addTicketLog(ticketId!, `Raising a ${provider === "gitlab" ? "merge" : "pull"} request: ${featureBranch} → ${targetBranch}`, "command", user.id).catch(() => {});
     const { title, body: prBody } = await authorPullRequest({

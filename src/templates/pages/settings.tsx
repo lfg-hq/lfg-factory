@@ -1,7 +1,11 @@
+import { WorkspacePicker, type WorkspaceContext } from '../components/workspace-picker.ts';
 import { html } from "hono/html";
 
 interface SettingsPageProps {
+  workspaceContext?: WorkspaceContext;
   user: { id: string; name: string; email: string };
+  teamAccess?: { isAdmin: boolean; role: string; team: { name: string; tokensEnabled: boolean; subscriptionsEnabled: boolean } };
+  teamContent?: ReturnType<typeof html>;
   apiKeys: {
     openai: boolean;
     anthropic: boolean;
@@ -44,7 +48,7 @@ interface SettingsPageProps {
     configured: boolean;
     toolkits: Array<{ id: string; toolkit: string; enabled: boolean }>;
   };
-  activeSection?: "llm-keys" | "integrations";
+  activeSection?: "llm-keys" | "integrations" | "team";
   error?: string;
   success?: string;
 }
@@ -60,7 +64,7 @@ interface BoardRowProps {
   siteUrl?: string | null;
 }
 
-export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, gitlab, boards, telegram, composio, activeSection = "llm-keys", error, success }: SettingsPageProps) {
+export function SettingsPage({ workspaceContext, teamAccess, teamContent, user, apiKeys, claudeCode, openaiCodex, github, gitlab, boards, telegram, composio, activeSection = "llm-keys", error, success }: SettingsPageProps) {
   const avatarLetter = (user.name?.[0] ?? user.email?.[0] ?? "?").toUpperCase();
 
   return html`<!DOCTYPE html>
@@ -78,6 +82,7 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
   <script src="/public/js/theme-switcher.js"></script>
   <style>
+
     /* ── Layout ─────────────────────────────────────────────── */
     .settings-main {
       margin-left: 260px;
@@ -337,7 +342,20 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
       background: #f8fafc !important;
       border-color: #cbd5e1 !important;
     }
+    @media (max-width: 900px) {
+      .settings-main, .app-container.sidebar-minimized .settings-main { margin-left:0; }
+      .settings-page-header { padding:1.25rem; }
+      .settings-wrapper { flex-direction:column; padding:1.25rem; gap:1.25rem; }
+      .settings-sidebar { width:100%; }
+      .settings-nav { display:flex; flex-wrap:wrap; gap:.25rem; }
+      .settings-content, .team-settings { min-width:0; width:100%; }
+      .team-settings input, .team-settings select { box-sizing:border-box; }
+      .team-settings .llm-keys-row > div { min-width:0; overflow-wrap:anywhere; }
+      .team-settings form { max-width:100%; }
+    }
   </style>
+  <link rel="stylesheet" href="/public/css/team-settings.css" />
+<link rel="stylesheet" href="/public/css/workspace-picker.css" />
 </head>
 <body data-user-id="${user.id}" data-user-name="${user.name}">
 <div class="app-container">
@@ -389,11 +407,12 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
   </div>
 
   <!-- Main -->
-  <div class="settings-main">
+  <div class="settings-main team-page">
     <div class="settings-page-header">
       ${error ? html`<div style="margin-bottom:.875rem;padding:.7rem 1rem;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.25);border-radius:8px;color:#f87171;font-size:.875rem;">${error}</div>` : ""}
       ${success ? html`<div style="margin-bottom:.875rem;padding:.7rem 1rem;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.25);border-radius:8px;color:#4ade80;font-size:.875rem;">${success}</div>` : ""}
       <h1 class="settings-page-title"><i class="fas fa-cog"></i> Settings</h1>
+      ${WorkspacePicker(workspaceContext, activeSection === "llm-keys" ? "/settings" : activeSection === "integrations" ? "/settings/integrations" : "/settings/team")}
     </div>
 
     <div class="settings-wrapper">
@@ -401,9 +420,10 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
       <!-- Secondary nav -->
       <div class="settings-sidebar">
         <nav class="settings-nav">
-          <a href="/settings" class="settings-nav-item ${activeSection === "llm-keys" ? "active" : ""}">
+          ${teamAccess?.isAdmin !== false ? html`<a href="/settings" class="settings-nav-item ${activeSection === "llm-keys" ? "active" : ""}">
             <i class="fas fa-key"></i> LLM Keys
-          </a>
+          </a>` : ""}
+          <a href="/settings/team" class="settings-nav-item ${activeSection === "team" ? "active" : ""}"><i class="fas fa-users" aria-hidden="true"></i> People &amp; access</a>
           <a href="/settings/integrations" class="settings-nav-item ${activeSection === "integrations" ? "active" : ""}">
             <i class="fas fa-plug"></i> Integrations
           </a>
@@ -412,8 +432,9 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
 
       <!-- Content -->
       <div class="settings-content">
+      ${activeSection !== "team" ? html`<header class="settings-section-heading"><div class="tm-eyebrow">WORKSPACE SETTINGS</div><h2>${activeSection === "llm-keys" ? "LLM Keys" : "Integrations"}</h2><p>${activeSection === "llm-keys" ? "Manage the API keys your team uses to connect to AI." : "Connect your accounts and the tools your team works with."}</p></header>` : ""}
 
-      ${activeSection === "integrations" ? html`
+      ${activeSection === "team" ? html`<div class="team-settings">${teamContent}</div>` : activeSection === "integrations" ? html`
 
         <!-- Coding agent account connections -->
         <div class="llm-keys-table" style="margin-bottom:1.5rem;">
@@ -423,12 +444,13 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
                 <i class="fas fa-terminal" style="color:#8b5cf6;"></i>
                 Coding agent accounts
               </h3>
-              <div class="byok-desc" style="margin-top:.25rem;">Used by sandbox ticket builds in Coding Agent mode and by Instant builds.</div>
+              <div class="byok-desc" style="margin-top:.25rem;">Connect your accounts to power coding agents and Instant builds.</div>
             </div>
             <span style="font-size:.75rem;color:var(--text-secondary);">${Number(Boolean(claudeCode?.hasCredentials && claudeCode?.authenticated)) + Number(Boolean(openaiCodex?.connected))} connected</span>
           </div>
 
           <!-- Claude provider -->
+          ${teamAccess?.isAdmin !== false && teamAccess?.team.tokensEnabled !== false ? html`
           <div class="llm-keys-row coding-agent-provider-header" style="border-bottom:1px solid var(--border-color, rgba(255,255,255,0.07));padding:1rem 1.375rem;justify-content:space-between;">
             <h3 style="margin:0;font-size:0.9375rem;font-weight:700;color:var(--text-color,#f0f0f0);display:flex;align-items:center;gap:.5rem;">
               <img src="/public/images/models/claude.svg" alt="" style="width:18px;height:18px;object-fit:contain;" />
@@ -446,10 +468,10 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
           </div>
 
           <!-- Status + connect/disconnect -->
-          <div class="llm-keys-row" style="flex-direction:column;align-items:stretch;gap:1rem;">
+          <div class="llm-keys-row coding-agent-provider-body" style="flex-direction:column;align-items:stretch;gap:1rem;">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;">
               <div>
-                <div class="byok-label">Claude account</div>
+
                 <div class="byok-desc">
                   ${claudeCode?.hasCredentials && claudeCode?.authenticated
                     ? "Coding Agent builds use this account when you select a Claude model."
@@ -671,11 +693,13 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
           }
         </script>
 
+          ` : ""}
+          ${teamAccess?.team.subscriptionsEnabled !== false ? html`
           <!-- OpenAI provider -->
           <div class="llm-keys-row coding-agent-provider-header" style="border-top:1px solid var(--border-color, rgba(255,255,255,0.07));border-bottom:1px solid var(--border-color, rgba(255,255,255,0.07));padding:1rem 1.375rem;justify-content:space-between;">
             <h3 style="margin:0;font-size:0.9375rem;font-weight:700;color:var(--text-color,#f0f0f0);display:flex;align-items:center;gap:.5rem;">
               <img src="/public/images/models/openai.svg" alt="" class="provider-logo-openai" style="width:19px;height:19px;object-fit:contain;" />
-              OpenAI Codex
+              ChatGPT subscription
             </h3>
             ${openaiCodex?.connected ? html`
               <span style="font-size:.75rem;padding:.25rem .625rem;background:rgba(52,211,153,.1);color:#34d399;border:1px solid rgba(52,211,153,.25);border-radius:20px;">
@@ -685,15 +709,15 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
               <span class="cc-status-badge" style="font-size:.75rem;padding:.25rem .625rem;background:rgba(255,255,255,.06);color:rgba(255,255,255,.4);border:1px solid rgba(255,255,255,.1);border-radius:20px;">Not connected</span>
             `}
           </div>
-          <div class="llm-keys-row" style="flex-direction:column;align-items:stretch;gap:1rem;">
+          <div class="llm-keys-row coding-agent-provider-body" style="flex-direction:column;align-items:stretch;gap:1rem;">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;">
               <div style="max-width:680px;">
-                <div class="byok-label">ChatGPT subscription</div>
+
                 <div class="byok-desc">
                   ${openaiCodex?.connected
-                    ? "Coding Agent builds use your connected Codex entitlement when you select an OpenAI model."
-                    : "Connect an eligible ChatGPT account to use its Codex entitlement in Coding Agent builds with an OpenAI model."}
-                  In chat, choose a model under “ChatGPT subscription” to use this connection for agent work. Models under “OpenAI” still use API tokens and separate API billing. Subscription limits apply.
+                    ? "Your ChatGPT subscription is connected for coding agents."
+                    : "Use your personal ChatGPT subscription for coding agents."}
+                  <details class="integration-details"><summary>How model access works</summary><p>In chat, choose a model under “ChatGPT subscription”. OpenAI API models use your team’s API tokens and separate billing. Subscription limits apply.</p></details>
                 </div>
               </div>
               ${openaiCodex?.connected ? html`
@@ -745,6 +769,7 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
               <div id="oc-error" style="display:none;color:#f87171;font-size:.875rem;"></div>
             </div>
           </div>
+          ` : html`<p style="padding:1rem;">Personal ChatGPT subscriptions are disabled by your team admin.</p>`}
         </div>
 
         <script>
@@ -920,10 +945,10 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
               row: boards?.jira,
               setup: "Create an OAuth 2.0 (3LO) app at developer.atlassian.com, add the Jira API with read:jira-work, write:jira-work and offline_access, then set JIRA_CLIENT_ID and JIRA_CLIENT_SECRET." },
           ].map((b) => html`
-            <div class="llm-keys-row">
-              <div style="flex:1;display:flex;align-items:center;gap:.875rem;">
-                <div style="width:36px;height:36px;border-radius:50%;background:${b.color}1f;display:flex;align-items:center;justify-content:center;">
-                  <i class="${b.icon}" style="font-size:1.1rem;color:${b.color};"></i>
+            <div class="llm-keys-row tracker-row">
+              <div class="tracker-identity">
+                <div class="tracker-icon" style="color:${b.color};background:${b.color}14;">
+                  ${b.key === "linear" ? html`<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="currentColor"/><path d="m4 8 12 12M3 12l9 9M7 4l13 13" stroke="var(--tm-surface)" stroke-width="1.5"/></svg>` : html`<i class="${b.icon}" aria-hidden="true"></i>`}
                 </div>
                 <div>
                   <div class="byok-label" style="margin-bottom:.15rem;display:flex;align-items:center;gap:.4rem;">
@@ -932,7 +957,8 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
                       ? html`<span style="font-weight:400;color:var(--text-secondary);font-size:.8125rem;">${b.row.accountName}${b.row.siteUrl ? html` \u00b7 ${b.row.siteUrl.replace(/^https?:\/\//, "")}` : ""}</span>`
                       : ""}
                   </div>
-                  <div class="byok-desc">${b.row?.configured === false ? b.setup : b.desc}</div>
+                  <div class="byok-desc">${b.key === "linear" ? "Sync project tickets and statuses with Linear." : "Sync project tickets and statuses with Jira."}</div>
+                  ${b.row?.configured === false ? (teamAccess?.isAdmin !== false ? html`<details class="integration-details"><summary>Setup instructions</summary><p>${b.setup}</p></details>` : html`<p class="byok-desc">Ask an admin to enable this integration.</p>`) : ""}
                 </div>
               </div>
               <div>
@@ -948,8 +974,8 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
                     </form>
                   </div>
                 ` : b.row?.configured === false ? html`
-                  <span style="padding:.4rem .875rem;background:rgba(255,255,255,.05);color:var(--text-secondary);border:1px solid rgba(255,255,255,.1);border-radius:7px;font-size:.8125rem;line-height:1.2;">
-                    Not set up
+                  <span class="integration-status">
+                    Setup required
                   </span>
                 ` : html`
                   <a href="/accounts/${b.key}-connect" class="llm-btn-save" style="color:#fff;border-radius:7px;padding:.45rem .875rem;font-size:.8125rem;text-decoration:none;display:inline-flex;align-items:center;gap:.4rem;">
@@ -979,7 +1005,7 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
             `}
           </div>
 
-          <div class="llm-keys-row" style="flex-direction:column;align-items:stretch;gap:1rem;">
+          <div class="llm-keys-row coding-agent-provider-body" style="flex-direction:column;align-items:stretch;gap:1rem;">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;">
               <div>
                 <div class="byok-label">Your Personal Bot</div>
@@ -1101,67 +1127,32 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
         </script>
 
         <!-- Composio Connectors Card -->
-        <div class="llm-keys-table" style="margin-top:1.5rem;margin-bottom:1.5rem;">
-          <div class="llm-keys-row" style="border-bottom:1px solid rgba(255,255,255,0.07);padding:1rem 1.375rem;justify-content:space-between;">
-            <h3 style="margin:0;font-size:0.9375rem;font-weight:700;color:var(--text-color,#f0f0f0);display:flex;align-items:center;gap:.5rem;">
-              <i class="fas fa-puzzle-piece" style="color:#7c3aed;"></i>
-              Composio Connectors
-            </h3>
-            ${composio?.configured ? html`
-              <span style="font-size:.75rem;padding:.25rem .625rem;background:rgba(124,58,237,.1);color:#a78bfa;border:1px solid rgba(124,58,237,.25);border-radius:20px;">
-                <i class="fas fa-check-circle"></i>&nbsp; Configured
-              </span>
-            ` : html`
-              <span style="font-size:.75rem;padding:.25rem .625rem;background:rgba(245,158,11,.1);color:#fbbf24;border:1px solid rgba(245,158,11,.25);border-radius:20px;">
-                <i class="fas fa-exclamation-triangle"></i>&nbsp; API Key Required
-              </span>
-            `}
+        <section class="llm-keys-table composio-card" style="margin:24px 0;">
+          <div class="llm-keys-row" style="justify-content:space-between;">
+            <div><h3 style="margin:0;">Composio connectors</h3><p class="byok-desc" style="margin:5px 0 0;">Give your AI access to the apps you work with.</p></div>
+            <span class="integration-status">${composio?.configured ? "Ready" : "Setup required"}</span>
           </div>
-
-          <div class="llm-keys-row" style="flex-direction:column;align-items:stretch;gap:0.75rem;">
-            <p style="margin:0;font-size:.8125rem;color:rgba(255,255,255,.55);line-height:1.5;">
-              Connect 1000+ apps (GitHub, Gmail, Slack, Linear, Notion, etc.) via
-              <a href="https://composio.dev/tools" target="_blank" rel="noopener" style="color:#a78bfa;">Composio</a>.
-              These tools become available to the AI in chat and agent conversations.
-              ${!composio?.configured ? html`<br/><br/>Set <code style="background:rgba(255,255,255,.08);padding:.1rem .3rem;border-radius:3px;">COMPOSIO_API_KEY</code> in your environment. Get one at <a href="https://platform.composio.dev" target="_blank" rel="noopener" style="color:#a78bfa;">platform.composio.dev</a>.` : ""}
-            </p>
-
-            ${composio?.configured ? html`
-              <!-- Connected toolkits -->
-              <div id="composio-toolkit-list" style="display:flex;flex-direction:column;gap:0.5rem;">
-                ${(composio?.toolkits ?? []).length > 0 ? (composio?.toolkits ?? []).map((t) => html`
-                  <div style="display:flex;align-items:center;justify-content:space-between;padding:0.5rem 0.75rem;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:8px;">
-                    <div style="display:flex;align-items:center;gap:0.625rem;">
-                      <i class="fas fa-plug" style="color:#a78bfa;font-size:0.75rem;"></i>
-                      <span style="font-size:.8125rem;font-weight:600;color:var(--text-color);">${t.toolkit}</span>
-                    </div>
-                    <div style="display:flex;align-items:center;gap:0.5rem;">
-                      <label class="toggle-switch" style="margin:0;">
-                        <input type="checkbox" ${t.enabled ? "checked" : ""} onchange="window.__composioToggle('${t.id}', this.checked)" />
-                        <span class="toggle-slider"></span>
-                      </label>
-                      <button type="button" onclick="window.__composioRemove('${t.id}')" style="background:none;border:none;color:rgba(255,255,255,.3);cursor:pointer;padding:0.25rem;font-size:0.75rem;" title="Remove">
-                        <i class="fas fa-trash"></i>
-                      </button>
-                    </div>
-                  </div>
-                `) : html`<p style="margin:0;font-size:.8125rem;color:rgba(255,255,255,.35);font-style:italic;">No connectors added yet.</p>`}
-              </div>
-
-              <!-- Add toolkit form -->
-              <form id="composio-add-form" style="display:flex;gap:0.5rem;align-items:center;margin-top:0.25rem;" onsubmit="return window.__composioAdd(event)">
-                <input type="text" id="composio-toolkit-input" placeholder="e.g. GITHUB, GMAIL, SLACK, LINEAR, NOTION"
-                  style="flex:1;padding:0.5rem 0.75rem;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:8px;color:var(--text-color);font-size:.8125rem;outline:none;" />
-                <button type="submit" style="padding:0.5rem 1rem;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:.8125rem;font-weight:600;cursor:pointer;white-space:nowrap;">
-                  <i class="fas fa-plus"></i>&nbsp; Add
-                </button>
+          ${composio?.configured ? html`
+            <div id="composio-toolkit-list">
+              ${(composio.toolkits ?? []).length ? composio.toolkits.map(t => html`
+                <div class="composio-connector">
+                  <span class="composio-avatar" aria-hidden="true">${t.toolkit.slice(0, 2).toUpperCase()}</span>
+                  <div class="composio-identity"><strong>${t.toolkit.charAt(0).toUpperCase() + t.toolkit.slice(1).toLowerCase()}</strong><span>${t.enabled ? "Available to your AI" : "Disabled"}</span></div>
+                  <label class="toggle-switch"><input type="checkbox" role="switch" aria-label="Enable ${t.toolkit}" ${t.enabled ? "checked" : ""} onchange="window.__composioToggle('${t.id}', this.checked)"><span class="toggle-slider"></span></label>
+                  <button type="button" class="composio-remove" onclick="window.__composioRemove('${t.id}')" aria-label="Remove ${t.toolkit}" title="Remove connector">×</button>
+                </div>`)
+                : html`<div class="composio-empty"><strong>No connectors yet</strong><p class="byok-desc">Add an app to make its tools available in chat and agent conversations.</p></div>`}
+            </div>
+            <div class="composio-add">
+              <label for="composio-toolkit-input">Add a connector</label>
+              <form id="composio-add-form" onsubmit="window.__composioAdd(event); return false;">
+                <input type="text" id="composio-toolkit-input" placeholder="App name, e.g. GMAIL or SLACK" required autocomplete="off">
+                <button type="submit" class="llm-btn-save">Add connector</button>
               </form>
-              <p style="margin:0;font-size:.7rem;color:rgba(255,255,255,.3);">
-                Browse available toolkits at <a href="https://composio.dev/tools" target="_blank" rel="noopener" style="color:#a78bfa;">composio.dev/tools</a>
-              </p>
-            ` : ""}
-          </div>
-        </div>
+              <p class="byok-desc">Find the app name in the <a href="https://composio.dev/tools" target="_blank" rel="noopener">connector directory ↗</a></p>
+            </div>
+          ` : html`<div class="composio-empty"><strong>Connect your apps through Composio</strong><p class="byok-desc">Enable Composio to add tools for chat and agent conversations.</p>${teamAccess?.isAdmin !== false ? html`<details class="integration-details"><summary>Setup instructions</summary><p>Add <code>COMPOSIO_API_KEY</code> to your server environment. Get a key from the <a href="https://platform.composio.dev" target="_blank" rel="noopener">Composio dashboard ↗</a>.</p></details>` : html`<p class="byok-desc">Ask an admin to enable this integration.</p>`}</div>`}
+        </section>
 
         <script>
           window.__composioToggle = async function(id, enabled) {
@@ -1210,8 +1201,8 @@ export function SettingsPage({ user, apiKeys, claudeCode, openaiCodex, github, g
           <!-- BYOK row -->
           <div class="llm-keys-row" style="background:rgba(255,255,255,0.02);">
             <div style="flex:1;">
-              <div class="byok-label">Bring Your Own Keys</div>
-              <div class="byok-desc">Your OpenAI, Anthropic, Google, Kimi, DeepSeek, and GLM (Z.ai) keys will be used where available.</div>
+              <div class="byok-label">Enable LLM API tokens</div>
+              <div class="byok-desc">Allow permitted team members to use the providers configured below. Only admins can manage these tokens.</div>
             </div>
             <form method="POST" action="/settings/toggle-byok">
               <label class="toggle-switch">

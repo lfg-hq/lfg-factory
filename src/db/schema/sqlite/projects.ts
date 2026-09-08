@@ -23,6 +23,7 @@ export const projects = sqliteTable(
     name: text("name").notNull(),
     providedName: text("provided_name"),
     description: text("description"),
+    organizationId: text("organization_id"),
     ownerId: text("owner_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
@@ -112,6 +113,7 @@ export const projectMembers = sqliteTable(
     userId: text("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
+    canUsePersonalSubscription: integer("can_use_personal_subscription", { mode: "boolean" }).notNull().default(false),
     role: text("role").notNull().default("member"), // owner | admin | member | viewer
     status: text("status").notNull().default("active"),
 
@@ -124,8 +126,8 @@ export const projectMembers = sqliteTable(
     // (chat + codebase + api-key builds); `canUseOwnerLlmSubscription` → owner's
     // Claude/ChatGPT subscription for builds. DEFAULT true grandfathers existing members;
     // new invitees are inserted OFF (opt-in) in routes/invitations.ts.
-    canUseOwnerLlmKey: integer("can_use_owner_llm_key", { mode: "boolean" }).notNull().default(true),
-    canUseOwnerLlmSubscription: integer("can_use_owner_llm_subscription", { mode: "boolean" }).notNull().default(true),
+    canUseOwnerLlmKey: integer("can_use_owner_llm_key", { mode: "boolean" }).notNull().default(false),
+    canUseOwnerLlmSubscription: integer("can_use_owner_llm_subscription", { mode: "boolean" }).notNull().default(false),
 
     joinedAt: integer("joined_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
     updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
@@ -154,6 +156,8 @@ export const projectInvitations = sqliteTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     email: text("email").notNull(),
+    canUseOwnerLlmKey: integer("can_use_owner_llm_key", { mode: "boolean" }).notNull().default(false),
+    canUsePersonalSubscription: integer("can_use_personal_subscription", { mode: "boolean" }).notNull().default(false),
     role: text("role").notNull().default("member"),
     token: text("token").notNull().unique(),
     status: text("status").notNull().default("pending"),

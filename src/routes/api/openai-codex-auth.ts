@@ -1,3 +1,4 @@
+import { userLlmAccess } from "../../services/llm-access.ts";
 /** OpenAI Codex (ChatGPT subscription) connector API for Pi sandbox builds. */
 
 import { Hono } from "hono";
@@ -20,6 +21,7 @@ const openAICodexAuthApi = new Hono<AuthEnv>();
 openAICodexAuthApi.use("*", requireAuth);
 
 openAICodexAuthApi.post("/start", async (c) => {
+  if (!(await userLlmAccess(c.get("user").id)).canUseSubscription) return c.json({ error: "ChatGPT subscriptions are disabled by your admin" }, 403);
   const result = await startOpenAICodexAuth(c.get("user").id);
   return c.json(result, result.status === "error" ? 500 : 200);
 });

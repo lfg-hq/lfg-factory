@@ -123,6 +123,7 @@ export function ProjectDetailPage({
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
   <script src="/public/js/theme-switcher.js"></script>
+<link rel="stylesheet" href="/public/css/project-team.css">
 </head>
 <body data-user-id="${user.id}" data-user-name="${user.name}" data-project-id="${project.projectId}">
 
@@ -1509,22 +1510,24 @@ export function ProjectDetailPage({
             `}
 
             <!-- Team & Guests -->
-            <div style="margin-top:2.5rem;padding-top:2rem;border-top:1px solid var(--border-color);">
+            <div class="project-team" style="margin-top:2.5rem;">
               <h3 style="font-size:1rem;font-weight:600;color:var(--text-color);margin:0 0 0.5rem;">${isOwner ? "Team & Guests" : "Team"}</h3>
-              ${isOwner ? html`
+              ${isOwner || role === "admin" ? html`
               <p style="font-size:0.8125rem;color:var(--text-secondary);margin:0 0 1.25rem;">Invite people to collaborate on this project.</p>
 
               <!-- Invite Form -->
               <div style="display:flex;gap:0.5rem;margin-bottom:1.5rem;" id="invite-form">
-                <input type="email" id="invite-email" placeholder="Email address" class="input" style="flex:1;box-sizing:border-box;" />
-                <select id="invite-role" class="input" style="width:auto;min-width:130px;">
-                  <option value="member">Collaborator</option>
+                <input type="email" id="invite-email" aria-label="Invite email address" placeholder="name@company.com" class="input" style="flex:1;box-sizing:border-box;" />
+                <select id="invite-role" aria-label="Invitation role" class="input" style="width:auto;min-width:130px;">
+                  ${isOwner ? html`<option value="admin">Admin</option>` : ""}
+                  <option value="member" selected>Collaborator</option>
                   <option value="viewer">Viewer (read-only)</option>
                 </select>
                 <button type="button" class="btn btn-primary" onclick="sendInvitation()" style="white-space:nowrap;">
                   <i class="fas fa-paper-plane"></i> Invite
                 </button>
               </div>
+              <div class="pt-invite-access"><span>Model access</span><label><input type="checkbox" role="switch" id="invite-tokens" ${!isOwner ? "disabled" : ""}><span class="pt-track"></span> Team API tokens</label><label><input type="checkbox" role="switch" id="invite-subscription"><span class="pt-track"></span> Personal ChatGPT</label></div>
               <div id="invite-message" style="display:none;font-size:0.8125rem;margin-bottom:1rem;padding:0.5rem 0.75rem;border-radius:var(--radius);"></div>
               ` : html`
               <p style="font-size:0.8125rem;color:var(--text-secondary);margin:0 0 1.25rem;">People with access to this project.</p>
@@ -1714,7 +1717,7 @@ export function ProjectDetailPage({
   <script>
     // Team & Guests management
     var projectId = '${project.projectId}';
-    var canManageTeam = ${isOwner ? "true" : "false"};
+    var canManageTeam = ${isOwner || role === "admin" ? "true" : "false"};
     // Map stored role → human label (an invited "member" is a Collaborator).
     function roleLabelFor(r) {
       return ({ owner: 'Owner', admin: 'Admin', member: 'Collaborator', viewer: 'Viewer', guest: 'Guest' })[r] || r;
@@ -1744,11 +1747,15 @@ export function ProjectDetailPage({
             var llmRow = canShareLlm ? (
               '<div style="display:flex;gap:1.25rem;flex-wrap:wrap;padding:0.15rem 0 0.6rem 2.75rem;border-bottom:1px solid var(--border-color);">'
               + '<label style="display:flex;align-items:center;gap:0.4rem;font-size:0.75rem;color:var(--text-secondary);cursor:pointer;" title="Let this collaborator use YOUR LLM API keys for the analyst chat, codebase reads, and API-key builds.">'
-              + '<input type="checkbox" ' + (m.canUseOwnerLlmKey ? 'checked' : '') + ' onchange="setMemberLlm(\\'' + m.id + '\\',\\'canUseOwnerLlmKey\\',this.checked,this)" style="cursor:pointer;"> Use my API keys</label>'
-              + '<label style="display:flex;align-items:center;gap:0.4rem;font-size:0.75rem;color:var(--text-secondary);cursor:pointer;" title="Let this collaborator use YOUR Claude/ChatGPT subscription for ticket builds, and your ChatGPT subscription for project chat and agent work.">'
-              + '<input type="checkbox" ' + (m.canUseOwnerLlmSubscription ? 'checked' : '') + ' onchange="setMemberLlm(\\'' + m.id + '\\',\\'canUseOwnerLlmSubscription\\',this.checked,this)" style="cursor:pointer;"> Use my subscription</label>'
+              + '<input type="checkbox" ' + (m.canUseOwnerLlmKey ? 'checked' : '') + ' onchange="setMemberLlm(\\'' + m.id + '\\',\\'canUseOwnerLlmKey\\',this.checked,this)" style="cursor:pointer;"> Allow team API tokens</label>'
+              + '<label style="display:flex;align-items:center;gap:0.4rem;font-size:0.75rem;color:var(--text-secondary);cursor:pointer;" title="Let this person connect and use their own ChatGPT subscription. The team admin must also enable subscriptions.">'
+              + '<input type="checkbox" ' + (m.canUsePersonalSubscription ? 'checked' : '') + ' onchange="setMemberLlm(\\'' + m.id + '\\',\\'canUsePersonalSubscription\\',this.checked,this)" style="cursor:pointer;"> Allow personal ChatGPT subscription</label>'
               + '</div>'
             ) : '';
+            if (canManageTeam) {
+              llmRow += '<div style="padding:0.5rem 0;"><label>Role <select data-member-id="' + m.id + '" onchange="setMemberLlm(this.dataset.memberId,\\'role\\',this.value,this)">'
+                + ['admin','member','viewer','guest'].map(function(r) { return '<option value="' + r + '" ' + (m.role === r ? 'selected' : '') + '>' + roleLabelFor(r) + '</option>'; }).join('') + '</select></label></div>';
+            }
             var rowBorder = llmRow ? '' : 'border-bottom:1px solid var(--border-color);';
             items += '<div style="display:flex;align-items:center;justify-content:space-between;padding:0.625rem 0;' + rowBorder + '">'
               + '<div style="display:flex;align-items:center;gap:0.75rem;">'
@@ -1758,10 +1765,45 @@ export function ProjectDetailPage({
               + '<div style="font-size:0.75rem;color:var(--text-secondary);">' + (m.userEmail || '') + '</div></div></div>'
               + '<div style="display:flex;align-items:center;gap:0.5rem;">'
               + '<span style="font-size:0.7rem;padding:0.15rem 0.5rem;border-radius:10px;background:rgba(' + (m.role === 'admin' ? '59,130,246' : m.role === 'member' ? '34,197,94' : '107,114,128') + ',0.1);color:' + roleColor + ';font-weight:600;text-transform:uppercase;">' + roleLabelFor(m.role) + '</span>'
-              + (canManageTeam ? '<button onclick="removeMember(\\'' + m.id + '\\')" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:0.8rem;padding:0.25rem;" title="Remove"><i class="fas fa-times"></i></button>' : '')
+              + (canManageTeam ? '<button onclick="removeMember(\\'' + m.id + '\\')" style="background:none;border:none;color:var(--text-secondary);cursor:pointer;font-size:0.8rem;padding:0.25rem;" title="Remove member" aria-label="Remove member">×</button>' : '')
               + '</div></div>' + llmRow;
           });
           el.innerHTML = items || '<div style="font-size:0.8125rem;color:var(--text-secondary);padding:0.5rem 0;">No team members yet.</div>';
+          el.querySelectorAll('select[data-member-id]').forEach(function(select) {
+            var roleRow = select.parentElement.parentElement;
+            var previous = roleRow.previousElementSibling;
+            var accessRow = previous && previous.querySelector('input[type="checkbox"]') ? previous : null;
+            var header = accessRow ? accessRow.previousElementSibling : previous;
+            if (!header) return;
+            var actions = header.lastElementChild;
+            var badge = actions.querySelector('span');
+            if (badge) badge.remove();
+            select.setAttribute('aria-label', 'Member role');
+            actions.prepend(select);
+            roleRow.remove();
+            var member = document.createElement('div');
+            member.className = 'pt-member';
+            header.before(member);
+            member.append(header);
+            header.classList.add('pt-member-header');
+            if (accessRow) {
+              member.append(accessRow);
+              accessRow.className = 'pt-member-access';
+              accessRow.querySelectorAll('input').forEach(function(input) {
+                input.setAttribute('role','switch');
+                var track = document.createElement('span');
+                track.className = 'pt-track';
+                input.after(track);
+              });
+              accessRow.querySelectorAll('label').forEach(function(label) {
+                Array.from(label.childNodes).filter(function(node) { return node.nodeType === 3; }).forEach(function(node) {
+                  node.textContent = node.textContent.replace('Allow team API tokens','Team API tokens').replace('Allow personal ChatGPT subscription','Personal ChatGPT');
+                });
+              });
+            }
+          });
+          if (el.firstElementChild && !el.firstElementChild.classList.contains('pt-member')) el.firstElementChild.classList.add('pt-owner');
+
         });
     }
 
@@ -1790,7 +1832,7 @@ export function ProjectDetailPage({
       fetch('/api/projects/' + projectId + '/invitations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email, role: role })
+        body: JSON.stringify({ email: email, role: role, canUseOwnerLlmKey: document.getElementById("invite-tokens").checked, canUsePersonalSubscription: document.getElementById("invite-subscription").checked })
       }).then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
         .then(function(res) {
           msg.style.display = 'block';
@@ -1857,7 +1899,7 @@ export function ProjectDetailPage({
         .then(function(r) { return r.json(); })
         .then(function(d) {
           if (el) el.disabled = false;
-          if (d && d.error) { if (el) el.checked = !value; alert(d.error); }
+          if (d && d.error) { if (el && field !== 'role') el.checked = !value; alert(d.error); } loadMembers();
         })
         .catch(function() { if (el) { el.disabled = false; el.checked = !value; } });
     }
@@ -2093,29 +2135,31 @@ export function ProjectDetailPage({
       var lockEl = document.getElementById('cfg-lock-builder');
       try {
         // Always save it as YOUR choice; the pin is what makes it everyone's.
-        await fetch('/api/settings/execution-mode', {
+        var response = await fetch('/api/settings/execution-mode', {
           method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ claudeCodeEnabled: true, builderAuthMode: auth, builderModelKey: model }),
+          body: JSON.stringify({ projectId: projectId, claudeCodeEnabled: true, builderAuthMode: auth, builderModelKey: model }),
         });
+        if (!response.ok) throw new Error((await response.json()).error || "Could not save");
         if (lockEl) {
           await cfgPin(lockEl.checked
             ? { lockedBuilderModel: model, lockedBuilderAuthMode: auth }
             : { lockedBuilderModel: '', lockedBuilderAuthMode: '' });
         }
         cfgFlash(lockEl && lockEl.checked ? 'Saved for everyone on this project.' : 'Saved.');
-      } catch (e) { cfgFlash('Could not save.'); }
+      } catch (e) { cfgFlash(e.message || 'Could not save.'); }
     }
     async function cfgSaveChat() {
       var model = (document.getElementById('cfg-chat-model') || {}).value || '';
       var lockEl = document.getElementById('cfg-lock-chat');
       try {
-        await fetch('/api/settings/model', {
+        var response = await fetch('/api/settings/model', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ modelKey: model }),
+          body: JSON.stringify({ projectId: projectId, modelKey: model }),
         });
+        if (!response.ok) throw new Error((await response.json()).error || "Could not save");
         if (lockEl) await cfgPin(lockEl.checked ? { lockedChatModel: model } : { lockedChatModel: '' });
         cfgFlash(lockEl && lockEl.checked ? 'Saved for everyone on this project.' : 'Saved.');
-      } catch (e) { cfgFlash('Could not save.'); }
+      } catch (e) { cfgFlash(e.message || 'Could not save.'); }
     }
 
     if ('${activeTab}' === 'agent') {

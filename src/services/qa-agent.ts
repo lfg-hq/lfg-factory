@@ -1,3 +1,4 @@
+import { teamApiKeys } from "./llm-access.ts";
 /**
  * QA agent — the job that runs AFTER a ticket builds.
  *
@@ -181,7 +182,7 @@ export function describeReport(r: QaReport, criteriaCount: number): string {
 
 export async function runTicketQa(
   ticketId: string,
-  opts: { ownerId: string; projectId: string },
+  opts: { ownerId: string; llmUserId?: string; projectId: string },
 ): Promise<QaReport | null> {
   if (!isQaEnabled()) return null;
   try {
@@ -192,7 +193,7 @@ export async function runTicketQa(
   }
 }
 
-async function run(ticketId: string, opts: { ownerId: string; projectId: string }): Promise<QaReport | null> {
+async function run(ticketId: string, opts: { ownerId: string; llmUserId?: string; projectId: string }): Promise<QaReport | null> {
   const [ticket] = await db.select().from(projectTickets).where(eq(projectTickets.id, ticketId)).limit(1);
   if (!ticket) return null;
   const [project] = await db.select().from(projects).where(eq(projects.id, ticket.projectId)).limit(1);
@@ -237,7 +238,7 @@ async function run(ticketId: string, opts: { ownerId: string; projectId: string 
   // 3. Write the tests.
   const generated = await generateTests({
     ticket: { name: ticket.name, description: ticket.description ?? "", criteria },
-    runner, changed, workspaceId, cwd, ownerId: opts.ownerId,
+    runner, changed, workspaceId, cwd, ownerId: opts.llmUserId ?? opts.ownerId, projectId: opts.projectId,
   });
   if (!generated.length) {
     await addLog(ticketId, "QA skipped — couldn't generate usable tests for these criteria.", "command", opts.ownerId);
@@ -423,8 +424,9 @@ async function generateTests(args: {
   workspaceId: string;
   cwd: string;
   ownerId: string;
+  projectId: string;
 }): Promise<GeneratedTest[]> {
-  const model = await pickModel(args.ownerId);
+  const model = await pickModel(args.ownerId, args.projectId);
   if (!model) return [];
 
   // Show the model the code — a test that doesn't compile is useless, and the
@@ -495,13 +497,13 @@ export function parseGenerated(text: string): GeneratedTest[] {
   }
 }
 
-async function pickModel(ownerId: string) {
+async function pickModel(ownerId: string, projectId: string) {
   try {
     const { selectedSubscriptionModel } = await import("./subscription-execution.ts");
-    const subscription = await selectedSubscriptionModel(ownerId);
+    const subscription = await selectedSubscriptionModel(ownerId, projectId);
     if (subscription) return subscription;
     const [sel] = await db.select().from(modelSelections).where(eq(modelSelections.userId, ownerId));
-    const [keys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, ownerId));
+    const keys = await teamApiKeys(ownerId, projectId);
     const modelKey = sel?.selectedModel ?? DEFAULT_MODEL_KEY;
     return getModel(modelKey, keys ? {
       anthropic: keys.anthropicApiKey ?? undefined, openai: keys.openaiApiKey ?? undefined,

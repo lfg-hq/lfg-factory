@@ -29,7 +29,9 @@
     "test:designrefs": "node scripts/test-ticket-design-refs.mjs",
     "test:voice": "node scripts/test-voice-ui.mjs",
     "test:shell": "node scripts/test-preview-shell.mjs",
-    "test:instructions": "bun run scripts/test-agent-instructions.mjs"
+    "test:instructions": "bun run scripts/test-agent-instructions.mjs",
+    "test:rbac": "bun test tests/team-rbac.test.ts",
+    "db:migrate-teams": "bun run scripts/migrate-teams.ts"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

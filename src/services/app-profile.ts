@@ -1,3 +1,4 @@
+import { teamApiKeys } from "./llm-access.ts";
 /**
  * App Profile + Probe agent.
  *
@@ -53,7 +54,7 @@ export async function resolveUserModel(
   const subscription = await selectedSubscriptionModel(userId);
   if (subscription) return { model: subscription, modelKey: `chatgpt/${subscription.modelId}`, provider: "openai", supportsStructured: true };
   const [sel] = await db.select().from(modelSelections).where(eq(modelSelections.userId, userId));
-  const [keys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, userId));
+  const keys = await teamApiKeys(userId);
   const modelKey = sel?.selectedModel ?? DEFAULT_MODEL_KEY;
   const userApiKeys = keys
     ? {
@@ -67,7 +68,7 @@ export async function resolveUserModel(
     : undefined;
   const provider = getProviderName(modelKey);
   return {
-    model: getModel(modelKey, userApiKeys, { allowEnvFallback: true }),
+    model: getModel(modelKey, userApiKeys, { allowEnvFallback: false }),
     modelKey,
     provider,
     supportsStructured: providerSupportsStructured(provider),

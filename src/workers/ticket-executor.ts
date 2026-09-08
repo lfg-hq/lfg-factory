@@ -110,39 +110,7 @@ export async function cleanupTicketWorktree(ticketId: string): Promise<void> {
  * Claude. (The old hardcoded "claude_4.5_sonnet" fallback ignored the chat pick
  * AND was a dead key.)
  */
-// The old schema DEFAULT wrote this into builderModelKey for every row, so a
-// stored value equal to it is indistinguishable from "never chose a builder
-// model" — treat it as unset so those users follow their chat pick.
-const LEGACY_BUILDER_DEFAULT = "claude_4.5_sonnet";
-async function resolveBuilderModelKey(ownerId: string, projectId?: string | null): Promise<string> {
-  // A project can PIN the builder model for everyone (Config tab). That beats any
-  // individual's account setting — the point of the pin is that a project builds the
-  // same way no matter who triggered it.
-  if (projectId) {
-    const [p] = await db.select({ locked: projects.lockedBuilderModel }).from(projects).where(eq(projects.id, projectId)).limit(1);
-    if (p?.locked) return p.locked;
-  }
-  const [appState] = await db.select({ k: applicationState.builderModelKey }).from(applicationState).where(eq(applicationState.userId, ownerId)).limit(1);
-  if (appState?.k && appState.k !== LEGACY_BUILDER_DEFAULT) return appState.k; // explicit, non-legacy pick
-  const [sel] = await db.select({ m: modelSelections.selectedModel }).from(modelSelections).where(eq(modelSelections.userId, ownerId)).limit(1);
-  return sel?.m || DEFAULT_MODEL_KEY;
-}
-
-type BuilderAuthMode = "subscription" | "api_key";
-
-/** Explicit credential source selected beside the Coding Agent model picker. */
-async function resolveBuilderAuthMode(ownerId: string, projectId?: string | null): Promise<BuilderAuthMode> {
-  if (projectId) {
-    const [p] = await db.select({ locked: projects.lockedBuilderAuthMode }).from(projects).where(eq(projects.id, projectId)).limit(1);
-    if (p?.locked === "api_key" || p?.locked === "subscription") return p.locked;
-  }
-  const [appState] = await db
-    .select({ mode: applicationState.builderAuthMode })
-    .from(applicationState)
-    .where(eq(applicationState.userId, ownerId))
-    .limit(1);
-  return appState?.mode === "api_key" ? "api_key" : "subscription";
-}
+import { resolveBuildLlm, resolveBuilderModelKey, resolveBuilderAuthMode } from "../services/build-llm-access.ts";
 import { startPiCli, streamPiToCompletion, isPiSupportedProvider, extractPiProgress, piProviderUsesSharedConfig } from "../services/pi-cli.ts";
 import { getOpenAICodexAccessToken, hasOpenAICodexCredentials } from "../services/openai-codex-auth.ts";
 
@@ -631,7 +599,7 @@ async function dispatchNextQueued(projectId: string, exceptTicketId: string): Pr
  * the agent's side both are just "get this merge through".
  */
 async function tryAgentMerge(o: {
-  ticketId: string; ownerId: string; workspaceId: string; projectDir: string;
+  ticketId: string; ownerId: string; actorId?: string; workspaceId: string; projectDir: string;
   featureBranch: string; targetBranch: string; files?: string[];
   authUrl: string; projectId: string; error?: string;
 }): Promise<{ merged: boolean; sha?: string; summary: string } | null> {
@@ -639,7 +607,7 @@ async function tryAgentMerge(o: {
     const { mergeWithAgent } = await import("../services/merge-resolver.ts");
     return await mergeWithAgent({
       projectId: o.projectId,
-      userId: o.ownerId,
+      userId: o.actorId ?? o.ownerId,
       workspaceId: o.workspaceId,
       projectDir: o.projectDir,
       featureBranch: o.featureBranch,
@@ -1129,7 +1097,7 @@ export async function startTicketWorker() {
       ? (await db.select({ id: projects.id, ownerId: projects.ownerId, ticketBuildIsolation: projects.ticketBuildIsolation })
           .from(projects).where(eq(projects.id, projectId)).limit(1))[0]
       : undefined;
-    const placement: BuildPlacement = placementProject
+    const placement: BuildPlacement = placementProject && (!event.payload.actorId || event.payload.actorId === placementProject.ownerId)
       ? await resolveBuildPlacement(ticketId, placementProject)
       : { shared: false };
 
@@ -1201,7 +1169,7 @@ export async function startTicketWorker() {
       // CLI mode. Claude Code CLI only works with Claude models — route any
       // non-Anthropic builder model to the Pi in-sandbox coding agent instead.
       // Mirrors the instant-mode routing.
-      const builderProvider = await getBuilderProvider(projectId);
+      const builderProvider = await getBuilderProvider(projectId, event.payload.actorId);
       if (builderProvider && builderProvider !== "anthropic") {
         console.log(`[ticket-executor] CLI mode + ${builderProvider} — using Pi (Claude Code is Claude-only)`);
         try {
@@ -1322,6 +1290,9 @@ async function executeTicket(ticketId: string, actorId?: string): Promise<void> 
   if (!project) throw new Error(`Project ${ticket.projectId} not found`);
 
   const ownerId = project.ownerId;
+  const buildLlm = await resolveBuildLlm(project!, actorId ?? ticket.assigneeId ?? ownerId);
+
+  if (buildLlm.mode === "subscription") return executeTicketApi(ticketId, true, buildLlm.actorId);
 
   const [profile] = await db
     .select()
@@ -1329,28 +1300,13 @@ async function executeTicket(ticketId: string, actorId?: string): Promise<void> 
     .where(eq(profiles.userId, ownerId))
     .limit(1);
 
-  const builderAuthMode = await resolveBuilderAuthMode(ownerId, project?.id);
-  // Fine-grained LLM: a collaborator may build with the OWNER's LLM only if granted the
-  // access matching how the owner builds (subscription → canUseSub; API key → canUseKey).
-  // Not granted → block (grandfathered/existing members default to granted).
-  {
-    const buildActor = actorId ?? ticket.assigneeId ?? ownerId;
-    if (buildActor !== ownerId) {
-      const g = await resolveLlmGrants(project, buildActor);
-      if (!(builderAuthMode === "subscription" ? g.canUseSub : g.canUseKey)) {
-        await markTicketFailed(ticketId, NO_LLM_ACCESS_MESSAGE, ownerId);
-        return;
-      }
-    }
-  }
+  const builderAuthMode = buildLlm.mode;
   const [builderKeys] = await db
     .select({ anthropic: llmApiKeys.anthropicApiKey })
     .from(llmApiKeys)
-    .where(eq(llmApiKeys.userId, ownerId))
+    .where(eq(llmApiKeys.userId, buildLlm.keyUserId))
     .limit(1);
-  const useClaudeSubscription = builderAuthMode === "subscription"
-    && !!profile?.claudeCodeAuthenticated
-    && !!profile.claudeCodeCredentials;
+  const useClaudeSubscription = false;
   // A disconnected subscription falls back to the connected API token for legacy
   // selections; an explicit API-token selection never injects OAuth credentials.
   const anthropicApiKey = useClaudeSubscription ? undefined : builderKeys?.anthropic ?? undefined;
@@ -2020,7 +1976,7 @@ Before implementing, fix the git issue:
           await addLog(ticketId, `Merge to ${anchorBranch} failed: ${String(mergeErr).slice(0, 400)}`, "cli_error", ownerId);
         }
         const merged = await tryAgentMerge({
-          ticketId, ownerId, workspaceId,
+          ticketId, ownerId, actorId: buildLlm.actorId, workspaceId,
           projectDir: `${WORKING_DIR}/${projectDirName}`,
           featureBranch, targetBranch: anchorBranch,
           files: conflictFiles,
@@ -2068,12 +2024,12 @@ Before implementing, fix the git issue:
     await resolveTicketAddenda(ticketId, cliAddendaCtx.pendingIds);
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId, mergeStatus: "merged" });
     // Auto-record a demo of the completed feature for the Preview tab (fire-and-forget).
-    void generateTicketDemo(ticketId, { ownerId, projectId: project.id });
+    void generateTicketDemo(ticketId, { ownerId, llmUserId: buildLlm.actorId, projectId: project.id });
     // QA (opt-in, projects.qaMode = "tests"): write a test suite for the ticket's
     // acceptance criteria and verify it red/green against the branch point, in the
     // sandbox that just built it. Fire-and-forget like the demo — it never throws,
     // never fails the ticket, and reports into the ticket's log.
-    void runTicketQa(ticketId, { ownerId, projectId: project.id });
+    void runTicketQa(ticketId, { ownerId, llmUserId: buildLlm.actorId, projectId: project.id });
   } else {
     const _detail = commitFailed ? "" : await lastErrorSnippet(ticketId);
     const reason = commitFailed
@@ -2342,6 +2298,7 @@ async function buildChatContext(
  * answer left behind are reverted so Q&A never leaks into the branch.
  */
 async function concludeChatTurn(params: {
+  actorId?: string;
   ticketId: string;
   ownerId: string;
   project: { id: string; repoOwner: string | null; repoName: string | null; repoUrl: string | null; repoProvider?: string | null; stack?: string | null };
@@ -2361,7 +2318,7 @@ async function concludeChatTurn(params: {
   if (outcome.mode === "change") {
     // Strip the mode markers out of the summary — they're protocol, not prose.
     const summary = outcome.reply.text.slice(0, 1200);
-    await finalizeTicketChat(ticketId, ownerId, project, ticket, workspaceId, message, summary, gitUserId, projectPath);
+    await finalizeTicketChat(ticketId, ownerId, project, ticket, workspaceId, message, summary, gitUserId, projectPath, params.actorId);
     return;
   }
 
@@ -2409,6 +2366,7 @@ async function executeTicketChat(
     .limit(1);
 
   const ownerId = project!.ownerId;
+  const buildLlm = await resolveBuildLlm(project!, actorId ?? ticket.assigneeId ?? ownerId);
 
   // Fine-grained Git: the person CHATTING is the actor (fallback: the ticket's assignee).
   // Owner → owner's token; a collaborator → the owner's token only if shareGitAccess is
@@ -2440,7 +2398,7 @@ async function executeTicketChat(
   // VM — no VM boot, no re-clone, and the agent can see the branch the preview runs.
   // On the default isolated setting this resolves to null and the chat behaves exactly
   // as before: its own dedicated sandbox with a fresh clone of the branch.
-  const chatPlacement = await resolveBuildPlacement(ticketId, {
+  const chatPlacement = buildLlm.actorId !== ownerId ? { shared: false as const } : await resolveBuildPlacement(ticketId, {
     id: project!.id, ownerId, ticketBuildIsolation: (project as { ticketBuildIsolation?: string }).ticketBuildIsolation,
   });
   let chatLane: { release: () => void } | null = null;
@@ -2497,22 +2455,10 @@ async function executeTicketChat(
   // got "No valid Claude credentials" even though their ticket built with Pi.
   // Same routing as the builder: a Pi-supported provider with an API key or a
   // short-lived OpenAI Codex subscription bearer → Pi.
-  const chatModelKey = await resolveBuilderModelKey(ownerId, project!.id);
+  const chatModelKey = buildLlm.model;
   const chatProvider = getProviderName(chatModelKey);
-  const chatBuilderAuthMode = await resolveBuilderAuthMode(ownerId, project!.id);
-  // Fine-grained LLM: gate a collaborator's chat-driven build on the owner's LLM.
-  {
-    const buildActor = actorId ?? ticket.assigneeId ?? ownerId;
-    if (buildActor !== ownerId) {
-      const g = await resolveLlmGrants(project!, buildActor);
-      if (!(chatBuilderAuthMode === "subscription" ? g.canUseSub : g.canUseKey)) {
-        await addLog(ticketId, NO_LLM_ACCESS_MESSAGE, "cli_error", ownerId);
-        await markTicketFailed(ticketId, NO_LLM_ACCESS_MESSAGE, ownerId, { emitEvent: false });
-        return;
-      }
-    }
-  }
-  const [chatUserKeys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, ownerId)).limit(1);
+  const chatBuilderAuthMode = buildLlm.mode;
+  const [chatUserKeys] = buildLlm.mode === "api_key" ? await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, buildLlm.keyUserId)).limit(1) : [];
   const chatProviderKey = chatProvider
     ? ({
         anthropic: chatUserKeys?.anthropicApiKey,
@@ -2523,6 +2469,7 @@ async function executeTicketChat(
         glm: chatUserKeys?.glmApiKey,
       } as Record<string, string | null | undefined>)[chatProvider]
     : undefined;
+  if (buildLlm.mode === "api_key" && !chatProviderKey) throw new Error("No team API token configured for this model");
   const chatUsesClaudeSubscription = chatProvider === "anthropic"
     && chatBuilderAuthMode === "subscription"
     && !!profile?.claudeCodeAuthenticated
@@ -2532,10 +2479,9 @@ async function executeTicketChat(
     : undefined;
   const chatUsesOpenAICodex = chatBuilderAuthMode === "subscription"
     && chatProvider === "openai"
-    && !!profile?.openaiCodexAuthenticated
-    && !!profile.openaiCodexCredentials;
+    && await hasOpenAICodexCredentials(buildLlm.actorId);
   const chatOAuthToken = chatUsesOpenAICodex
-    ? await getOpenAICodexAccessToken(ownerId).catch(async (error) => {
+    ? await getOpenAICodexAccessToken(buildLlm.actorId).catch(async (error) => {
         await addLog(ticketId, `OpenAI Codex session error: ${(error as Error).message}`, "cli_error", ownerId);
         return undefined;
       })
@@ -2619,7 +2565,7 @@ ${TICKET_CHAT_MODE_CONTRACT}
         // gating the commit on it turned every question into a commit + merge + "✅
         // Update applied". The declared mode plus the actual working tree decide.
         await concludeChatTurn({
-          ticketId, ownerId, project: project!, ticket, workspaceId, projectPath, message, gitUserId,
+          ticketId, ownerId, actorId: buildLlm.actorId, project: project!, ticket, workspaceId, projectPath, message, gitUserId,
           replyText: piWorkSummary(piResult.tail), // the agent's prose, pulled out of Pi's JSONL
         });
       }
@@ -2763,12 +2709,12 @@ ${TICKET_CHAT_MODE_CONTRACT}
   // shared finalize (commit → push → merge → In Review → "Update applied").
   if (waitResult.status === "complete") {
     await concludeChatTurn({
-      ticketId, ownerId, project: project!, ticket, workspaceId, projectPath, message, gitUserId,
+      ticketId, ownerId, actorId: buildLlm.actorId, project: project!, ticket, workspaceId, projectPath, message, gitUserId,
     });
   }
 
   // Save credentials back to DB after chat
-  const chatSaved = await saveCredentialsFromVm(workspaceId, ownerId);
+  const chatSaved = chatUsesClaudeSubscription && await saveCredentialsFromVm(workspaceId, buildLlm.actorId);
   if (chatSaved) {
     await logActivity({
       projectId: project!.id,
@@ -2808,6 +2754,7 @@ async function finalizeTicketChat(
   // preview-VM mode — this ticket's worktree. Committing from the wrong directory would
   // push the WRONG tree (or nothing at all).
   projectDir: string = `${WORKING_DIR}/project`,
+  actorId: string = ownerId,
 ): Promise<void> {
   const featureBranch = ticket.githubBranch ?? ticketBranchName(ticket);
   const { anchorBranch, baseBranch: anchorBase } = await resolveTicketAnchor(ticket);
@@ -2859,12 +2806,12 @@ async function finalizeTicketChat(
     await markBuildTasksComplete(ticketId);
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId, mergeStatus: mergedOk ? "merged" : "pushed" });
     // Auto-record a demo of the applied change for the Preview tab (fire-and-forget).
-    void generateTicketDemo(ticketId, { ownerId, projectId: project.id });
+    void generateTicketDemo(ticketId, { ownerId, llmUserId: actorId, projectId: project.id });
     // QA (opt-in, projects.qaMode = "tests"): write a test suite for the ticket's
     // acceptance criteria and verify it red/green against the branch point, in the
     // sandbox that just built it. Fire-and-forget like the demo — it never throws,
     // never fails the ticket, and reports into the ticket's log.
-    void runTicketQa(ticketId, { ownerId, projectId: project.id });
+    void runTicketQa(ticketId, { ownerId, llmUserId: actorId, projectId: project.id });
   } catch (err) {
     await addLog(ticketId, `Commit/push FAILED — chat changes were NOT saved to the remote: ${(err as Error).message?.slice(0, 300)}`, "cli_error", ownerId);
   }
@@ -2888,11 +2835,11 @@ async function isApiMode(projectId: string | null): Promise<boolean> {
 
 /** Provider of the owner's selected builder model (used to route CLI mode:
  *  Claude → Claude Code CLI; anything else → Pi). */
-async function getBuilderProvider(projectId: string | null): Promise<ProviderName | null> {
+async function getBuilderProvider(projectId: string | null, actorId?: string): Promise<ProviderName | null> {
   if (!projectId) return null;
   const [project] = await db.select({ ownerId: projects.ownerId }).from(projects).where(eq(projects.id, projectId)).limit(1);
   if (!project) return null;
-  return getProviderName(await resolveBuilderModelKey(project.ownerId, projectId));
+  return getProviderName((await resolveBuildLlm({ id: projectId, ownerId: project.ownerId }, actorId ?? project.ownerId)).model);
 }
 
 /** Execute with direct provider tools, or with Pi when Coding Agent mode is requested. */
@@ -2915,6 +2862,7 @@ async function executeTicketApi(
   if (!project) throw new Error(`Project ${ticket.projectId} not found`);
 
   const ownerId = project.ownerId;
+  const buildLlm = await resolveBuildLlm(project!, actorId ?? ticket.assigneeId ?? ownerId);
 
   // Fine-grained Git: owner → owner's token; a collaborator → owner's token only if
   // shareGitAccess is ON, else their OWN connected Git. Actor = trigger (fallback: assignee).
@@ -2955,7 +2903,7 @@ async function executeTicketApi(
   // (build → commit → push → destroy), so a bad build can never disrupt the
   // always-on preview VM (which reconstructs the branch worktree from the remote
   // on demand). "shared" → reuse the preview VM via a git worktree (warm caches).
-  const isolatedBuild = ((project as { ticketBuildIsolation?: string }).ticketBuildIsolation ?? "isolated") !== SHARED_MODE;
+  const isolatedBuild = buildLlm.actorId !== ownerId || ((project as { ticketBuildIsolation?: string }).ticketBuildIsolation ?? "isolated") !== SHARED_MODE;
   const sharedWorkspaceId = isolatedBuild
     ? null
     : (placement?.shared ? placement.workspaceId : await resolvePreviewSandbox(project.id));
@@ -2974,8 +2922,9 @@ async function executeTicketApi(
   // ── Resolve builder model early (needed to choose the VM rootfs) ─────
   // Follows the user's chat selection (e.g. DeepSeek) when no explicit builder
   // model is set — NOT a hardcoded Claude.
-  const modelKey = await resolveBuilderModelKey(ownerId, project.id);
-  const [userKeys] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, ownerId)).limit(1);
+  const modelKey = buildLlm.model;
+  const [userKeys] = buildLlm.mode === "api_key" ? await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, buildLlm.keyUserId)).limit(1) : [];
+  if (buildLlm.mode === "subscription") useCodingAgent = true;
   const provider = getProviderName(modelKey);
 
   // "Default app-stack": for a brand-new project (no linked repo) built by a
@@ -3359,21 +3308,9 @@ git branch --show-current
         glm: userKeys?.glmApiKey,
       } as Record<string, string | null | undefined>)[provider]
     : undefined;
-  const builderAuthMode = await resolveBuilderAuthMode(ownerId, project?.id);
-  // Fine-grained LLM: gate a collaborator's build on the owner's LLM (subscription →
-  // canUseSub; API key → canUseKey). Not granted → block (existing members are granted).
-  {
-    const buildActor = actorId ?? ticket.assigneeId ?? ownerId;
-    if (buildActor !== ownerId) {
-      const g = await resolveLlmGrants(project, buildActor);
-      if (!(builderAuthMode === "subscription" ? g.canUseSub : g.canUseKey)) {
-        await markTicketFailed(ticketId, NO_LLM_ACCESS_MESSAGE, ownerId);
-        return;
-      }
-    }
-  }
+  const builderAuthMode = buildLlm.mode;
   const useOpenAICodex = useCodingAgent && builderAuthMode === "subscription"
-    && provider === "openai" && await hasOpenAICodexCredentials(ownerId);
+    && provider === "openai" && await hasOpenAICodexCredentials(buildLlm.actorId);
   // Pin the VM awake for the whole build (wakes a reused/slept VM too) so Mags can't
   // idle-sleep a live build → "lost contact". Turned back off at build end.
   await wakeTicketVm(workspaceId);
@@ -3473,7 +3410,7 @@ git branch --show-current
           // ("an API key or OAuth access token is required") on a user who has a key.
           ...(await (async () => {
             const tok = useOpenAICodex
-              ? await getOpenAICodexAccessToken(ownerId).catch(async (e: Error) => {
+              ? await getOpenAICodexAccessToken(buildLlm.actorId).catch(async (e: Error) => {
                   await addLog(ticketId, `OpenAI Codex subscription token unavailable (${e.message?.slice(0, 120)})${providerApiKey ? " — using the stored API key instead" : ""}`, "command", ownerId).catch(() => {});
                   return undefined;
                 })
@@ -3741,12 +3678,12 @@ git branch --show-current
       projectId: project.id,
     });
     // Auto-record a demo of the completed feature for the Preview tab (fire-and-forget).
-    void generateTicketDemo(ticketId, { ownerId, projectId: project.id });
+    void generateTicketDemo(ticketId, { ownerId, llmUserId: buildLlm.actorId, projectId: project.id });
     // QA (opt-in, projects.qaMode = "tests"): write a test suite for the ticket's
     // acceptance criteria and verify it red/green against the branch point, in the
     // sandbox that just built it. Fire-and-forget like the demo — it never throws,
     // never fails the ticket, and reports into the ticket's log.
-    void runTicketQa(ticketId, { ownerId, projectId: project.id });
+    void runTicketQa(ticketId, { ownerId, llmUserId: buildLlm.actorId, projectId: project.id });
   } else {
     const _lastErr = commitFailed ? "" : await lastErrorSnippet(ticketId);
     const reason = commitFailed

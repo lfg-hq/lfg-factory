@@ -1,3 +1,6 @@
+import { organizations } from "../db/schema/organizations.ts";
+import teamSettings from "./team-settings.ts";
+import { teamAccess, requireTeamAdmin, workspaceContext } from "../services/team-access.ts";
 import { Hono, type Context } from "hono";
 import { requireAuth } from "../auth/middleware.ts";
 import { db } from "../config/db.ts";
@@ -21,6 +24,7 @@ type AuthEnv = {
 
 const settingsRouter = new Hono<AuthEnv>();
 settingsRouter.use("*", requireAuth);
+settingsRouter.route("/", teamSettings);
 
 async function getOrCreateApiKeys(userId: string) {
   let [row] = await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, userId));
@@ -56,14 +60,18 @@ async function getTelegramBot(userId: string) {
 // GET /settings
 settingsRouter.get("/settings", async (c) => {
   const user = c.get("user");
+  const access = await teamAccess(user.id);
+  if (!access.isAdmin) return c.redirect("/settings/integrations");
   const [keys, profile, ghToken, glToken] = await Promise.all([
-    getOrCreateApiKeys(user.id),
+    getOrCreateApiKeys((await teamAccess(user.id)).team.ownerId),
     getProfile(user.id),
     getGithubToken(user.id),
     getGitlabToken(user.id),
   ]);
   return c.html(
     SettingsPage({
+      workspaceContext: await workspaceContext(user.id, user.email),
+      teamAccess: await teamAccess(user.id),
       user: { id: user.id, name: user.name, email: user.email },
       apiKeys: {
         openai: !!keys.openaiApiKey,
@@ -73,7 +81,7 @@ settingsRouter.get("/settings", async (c) => {
         kimi: !!keys.kimiApiKey,
         deepseek: !!keys.deepseekApiKey,
         glm: !!keys.glmApiKey,
-        usePersonalKeys: keys.usePersonalLlmKeys,
+        usePersonalKeys: (await teamAccess(user.id)).team.tokensEnabled,
       },
       claudeCode: {
         authenticated: profile.claudeCodeAuthenticated,
@@ -99,7 +107,8 @@ settingsRouter.get("/settings", async (c) => {
 
 // POST /settings/save-key
 settingsRouter.post("/settings/save-key", async (c) => {
-  const user = c.get("user");
+  const { team } = await requireTeamAdmin(c.get("user").id);
+  const user = { id: team.ownerId };
   const body = await c.req.parseBody();
   const provider = body["provider"] as string;
   const key = (body["key"] as string | undefined)?.trim();
@@ -131,7 +140,8 @@ settingsRouter.post("/settings/save-key", async (c) => {
 
 // POST /settings/remove-key
 settingsRouter.post("/settings/remove-key", async (c) => {
-  const user = c.get("user");
+  const { team } = await requireTeamAdmin(c.get("user").id);
+  const user = { id: team.ownerId };
   const body = await c.req.parseBody();
   const provider = body["provider"] as string;
 
@@ -153,18 +163,9 @@ settingsRouter.post("/settings/remove-key", async (c) => {
 
 // POST /settings/toggle-byok
 settingsRouter.post("/settings/toggle-byok", async (c) => {
-  const user = c.get("user");
+  const { team } = await requireTeamAdmin(c.get("user").id);
   const body = await c.req.parseBody();
-  const enabled = body["enabled"] === "on";
-
-  await db
-    .insert(llmApiKeys)
-    .values({ userId: user.id, usePersonalLlmKeys: enabled })
-    .onConflictDoUpdate({
-      target: llmApiKeys.userId,
-      set: { usePersonalLlmKeys: enabled },
-    });
-
+  await db.update(organizations).set({ tokensEnabled: body["enabled"] === "on", updatedAt: new Date() }).where(eq(organizations.id, team.id));
   return c.redirect("/settings");
 });
 
@@ -200,7 +201,7 @@ settingsRouter.post("/settings/claude-code/disconnect", async (c) => {
 settingsRouter.get("/settings/integrations", async (c) => {
   const user = c.get("user");
   const [keys, profile, ghToken, glToken, tgBot, userToolkits] = await Promise.all([
-    getOrCreateApiKeys(user.id),
+    getOrCreateApiKeys((await teamAccess(user.id)).team.ownerId),
     getProfile(user.id),
     getGithubToken(user.id),
     getGitlabToken(user.id),
@@ -227,6 +228,8 @@ settingsRouter.get("/settings/integrations", async (c) => {
   const success = url.searchParams.get("success") ?? undefined;
   return c.html(
     SettingsPage({
+      workspaceContext: await workspaceContext(user.id, user.email),
+      teamAccess: await teamAccess(user.id),
       user: { id: user.id, name: user.name, email: user.email },
       apiKeys: {
         openai: !!keys.openaiApiKey,
@@ -236,7 +239,7 @@ settingsRouter.get("/settings/integrations", async (c) => {
         kimi: !!keys.kimiApiKey,
         deepseek: !!keys.deepseekApiKey,
         glm: !!keys.glmApiKey,
-        usePersonalKeys: keys.usePersonalLlmKeys,
+        usePersonalKeys: (await teamAccess(user.id)).team.tokensEnabled,
       },
       claudeCode: {
         authenticated: profile.claudeCodeAuthenticated,

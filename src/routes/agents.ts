@@ -1,3 +1,4 @@
+import { availableChatModels } from "../services/available-models.ts";
 /**
  * Agent Page Routes
  */
@@ -152,14 +153,7 @@ agentsRoutes.get("/agents/:agentId", async (c) => {
     mergedToolkits.push({ slug, name: t.toolkit });
   }
 
-  const subscriptionConnected = await hasOpenAICodexCredentials(user.id);
-  const models = listChatModels().map((m) => ({
-    key: m.key,
-    label: m.label,
-    providerLabel: m.providerLabel,
-    requiresPro: m.requiresPro,
-    available: isSubscriptionModel(m.key) ? subscriptionConnected : true,
-  }));
+  const models = await availableChatModels(user.id);
 
   return c.html(
     AgentDetailPage({

@@ -1,3 +1,6 @@
+import { availableChatModels } from "../services/available-models.ts";
+import { resolveLlmGrants } from "../services/llm-access.ts";
+import { teamAccess, workspaceContext } from "../services/team-access.ts";
 import { Hono } from "hono";
 import { requireAuth } from "../auth/middleware.ts";
 import { db } from "../config/db.ts";
@@ -19,7 +22,7 @@ import { env } from "../config/env.ts";
 import { agents } from "../db/schema/agents.ts";
 import { notifications } from "../db/schema/notifications.ts";
 import { eq, and, desc, asc, notExists, or, sql, inArray, isNull, ne } from "drizzle-orm";
-import { listModels, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
+import { listModels, listChatModels, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
 import { saveContent, getContent, deleteContent } from "../services/s3.ts";
 import { getProjectActivities } from "../services/activity-log.ts";
 import { ProjectListPage } from "../templates/pages/project-list.tsx";
@@ -261,6 +264,7 @@ projectsRouter.get("/projects", async (c) => {
     }));
 
   return c.html(ProjectListPage({
+    workspaceContext: await workspaceContext(user.id, user.email),
     user: { id: user.id, name: user.name, email: user.email },
     projects: rows,
     projectStats,
@@ -286,11 +290,12 @@ projectsRouter.get("/projects", async (c) => {
  * for everyone. A pin wins over the personal choice everywhere it is read.
  */
 async function loadModelConfig(userId: string, project: { id: string; ownerId: string }) {
+  const grants = await resolveLlmGrants(project, userId);
   const [[appState], [profile], [keys], [sel], [proj]] = await Promise.all([
     db.select().from(applicationState).where(eq(applicationState.userId, userId)).limit(1),
     db.select({ openai: profiles.openaiCodexAuthenticated, anthropic: profiles.claudeCodeAuthenticated })
       .from(profiles).where(eq(profiles.userId, userId)).limit(1),
-    db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, userId)).limit(1),
+    db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, grants.keyUserId)).limit(1),
     db.select().from(modelSelections).where(eq(modelSelections.userId, userId)).limit(1),
     db.select({
       lockedBuilderModel: projects.lockedBuilderModel,
@@ -298,19 +303,19 @@ async function loadModelConfig(userId: string, project: { id: string; ownerId: s
       lockedChatModel: projects.lockedChatModel,
     }).from(projects).where(eq(projects.id, project.id)).limit(1),
   ]);
-  const apiKeyProviders: Record<string, boolean> = {
+  const apiKeyProviders: Record<string, boolean> = !grants.canUseKey ? {} : {
     openai: !!keys?.openaiApiKey, anthropic: !!keys?.anthropicApiKey, google: !!keys?.googleApiKey,
     kimi: !!keys?.kimiApiKey, deepseek: !!keys?.deepseekApiKey, glm: !!keys?.glmApiKey,
   };
   const subs = new Set<string>();
-  if (profile?.openai) subs.add("openai");
-  if (profile?.anthropic) subs.add("anthropic");
-  const authMode = appState?.builderAuthMode === "api_key" ? "api_key" : "subscription";
+  if (grants.canUsePersonalSubscription && profile?.openai) subs.add("openai");
+
+  const authMode = !grants.canUseKey ? "subscription" : !grants.canUsePersonalSubscription ? "api_key" : appState?.builderAuthMode === "api_key" ? "api_key" : "subscription";
   const all = listModels().map((m) => ({ key: m.key, label: `${m.providerLabel} · ${m.label}`, provider: m.provider }));
   return {
     // Only offer what the chosen credential source can actually run.
     models: all.filter((m) => (authMode === "subscription" ? subs.has(m.provider) : apiKeyProviders[m.provider])),
-    chatModels: all.map(({ key, label }) => ({ key, label })),
+    chatModels: listChatModels().filter(m => m.key.startsWith("chatgpt/") ? grants.canUsePersonalSubscription : grants.canUseKey && apiKeyProviders[m.provider]).map(({ key, label }) => ({ key, label })),
     builderModelKey: appState?.builderModelKey ?? DEFAULT_MODEL_KEY,
     builderAuthMode: authMode,
     chatModelKey: sel?.selectedModel ?? DEFAULT_MODEL_KEY,
@@ -326,6 +331,7 @@ async function loadModelConfig(userId: string, project: { id: string; ownerId: s
 projectsRouter.post("/projects/create", async (c) => {
   const user = c.get("user");
   const body = await c.req.parseBody();
+  if ((await teamAccess(user.id)).role === "viewer") return c.text("Viewers cannot create projects", 403);
 
   const name = (body["name"] as string | undefined)?.trim();
   const description = (body["description"] as string | undefined)?.trim() || null;
@@ -341,7 +347,7 @@ projectsRouter.post("/projects/create", async (c) => {
 
   const [project] = await db
     .insert(projects)
-    .values({ name, description: description ?? undefined, icon, ownerId: user.id })
+    .values({ name, description: description ?? undefined, icon, ownerId: user.id, organizationId: (await teamAccess(user.id)).team.id })
     .returning();
 
   if (!project) return c.text("Failed to create project", 500);
@@ -676,9 +682,11 @@ projectsRouter.get("/projects/:projectId/tickets", async (c) => {
       .limit(1),
   ]);
 
+  const grants = await resolveLlmGrants(project, user.id);
   const appState = appStateRows[0];
   const profile = profileRows[0];
-  const llmKeys = llmKeyRows[0];
+  const [teamKeys] = grants.canUseKey ? await db.select().from(llmApiKeys).where(eq(llmApiKeys.userId, grants.keyUserId)).limit(1) : [];
+  const llmKeys = { openai: teamKeys?.openaiApiKey, anthropic: teamKeys?.anthropicApiKey, google: teamKeys?.googleApiKey, kimi: teamKeys?.kimiApiKey, deepseek: teamKeys?.deepseekApiKey, glm: teamKeys?.glmApiKey };
 
   return c.html(
     TicketsListPage({
@@ -700,11 +708,11 @@ projectsRouter.get("/projects/:projectId/tickets", async (c) => {
       executionMode: {
         claudeCodeEnabled: appState?.claudeCodeEnabled ?? true,
         builderModelKey: appState?.builderModelKey ?? "claude_4.5_sonnet",
-        builderAuthMode: appState?.builderAuthMode === "api_key" ? "api_key" : "subscription",
-        models: listModels().map(m => ({ key: m.key, label: `${m.providerLabel} · ${m.label}`, provider: m.provider })),
-        openAICodexConnected: profile?.openAICodexConnected ?? false,
-        claudeCodeConnected: profile?.claudeCodeConnected ?? false,
-        apiKeyProviders: {
+        builderAuthMode: !grants.canUseKey ? "subscription" : !grants.canUsePersonalSubscription ? "api_key" : appState?.builderAuthMode === "api_key" ? "api_key" : "subscription",
+        models: listModels().filter(m => grants.canUseKey || (grants.canUsePersonalSubscription && m.provider === "openai")).map(m => ({ key: m.key, label: `${m.providerLabel} · ${m.label}`, provider: m.provider })),
+        openAICodexConnected: grants.canUsePersonalSubscription && (profile?.openAICodexConnected ?? false),
+        claudeCodeConnected: false,
+        apiKeyProviders: !grants.canUseKey ? {} : {
           openai: !!llmKeys?.openai,
           anthropic: !!llmKeys?.anthropic,
           google: !!llmKeys?.google,

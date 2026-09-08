@@ -1,3 +1,4 @@
+import { userLlmAccess } from "./llm-access.ts";
 /**
  * Instant Builder Agent — provider-agnostic build runner.
  *
@@ -66,9 +67,10 @@ const RUN_COMMAND_MAX_TIMEOUT = 420_000;
  * providers. Returns null when the user has no usable build credential.
  */
 export async function resolveAgentBuilder(
-  userId: string
+  userId: string, projectId?: string | null
 ): Promise<AgentBuilderSelection | null> {
-  const [keys] = await db
+  const access = await userLlmAccess(userId, projectId);
+  const [keys] = access.canUseKey ? await db
     .select({
       openai: llmApiKeys.openaiApiKey,
       anthropic: llmApiKeys.anthropicApiKey,
@@ -78,8 +80,8 @@ export async function resolveAgentBuilder(
       glm: llmApiKeys.glmApiKey,
     })
     .from(llmApiKeys)
-    .where(eq(llmApiKeys.userId, userId))
-    .limit(1);
+    .where(eq(llmApiKeys.userId, access.keyUserId))
+    .limit(1) : [];
 
   const userApiKeys: UserApiKeys = {
     openai: keys?.openai ?? undefined,
@@ -90,11 +92,11 @@ export async function resolveAgentBuilder(
     glm: keys?.glm ?? undefined,
   };
 
-  if (await hasOpenAICodexCredentials(userId)) {
+  if (access.canUseSubscription && await hasOpenAICodexCredentials(userId)) {
     return {
       modelKey: getLiteModelKeyFor("openai") ?? "gpt-5.6-luna",
       provider: "openai",
-      userApiKeys,
+      userApiKeys: {},
       subscriptionAuth: "openai-codex",
     };
   }
@@ -117,13 +119,14 @@ export async function resolveAgentBuilder(
  */
 export async function resolveAgentBuilderForModel(
   userId: string,
-  modelKey: string
+  modelKey: string, projectId?: string | null
 ): Promise<AgentBuilderSelection | null> {
+  const access = await userLlmAccess(userId, projectId);
   const provider = getProviderName(modelKey);
   // Anthropic models build via the Claude Code CLI, not this agent.
   if (!provider || provider === "anthropic") return null;
 
-  const [keys] = await db
+  const [keys] = access.canUseKey ? await db
     .select({
       openai: llmApiKeys.openaiApiKey,
       anthropic: llmApiKeys.anthropicApiKey,
@@ -133,8 +136,8 @@ export async function resolveAgentBuilderForModel(
       glm: llmApiKeys.glmApiKey,
     })
     .from(llmApiKeys)
-    .where(eq(llmApiKeys.userId, userId))
-    .limit(1);
+    .where(eq(llmApiKeys.userId, access.keyUserId))
+    .limit(1) : [];
 
   const userApiKeys: UserApiKeys = {
     openai: keys?.openai ?? undefined,
@@ -145,8 +148,8 @@ export async function resolveAgentBuilderForModel(
     glm: keys?.glm ?? undefined,
   };
 
-  if (provider === "openai" && await hasOpenAICodexCredentials(userId)) {
-    return { modelKey, provider, userApiKeys, subscriptionAuth: "openai-codex" };
+  if (access.canUseSubscription && provider === "openai" && await hasOpenAICodexCredentials(userId)) {
+    return { modelKey, provider, userApiKeys: {}, subscriptionAuth: "openai-codex" };
   }
 
   // A persisted chat subscription choice must not become an API build if disconnected.
