@@ -401,6 +401,63 @@ export function ProjectDetailPage({
             .skill-action:hover { color:var(--text-color); background:color-mix(in srgb, var(--border-color) 40%, transparent); }
             .skill-desc { margin:0.45rem 0 0; font-size:0.83rem; line-height:1.55; color:var(--text-secondary); }
 
+            /* ── Config tab ── */
+            /* Native selects render as tiny grey system widgets next to these cards, so
+               they get the same treatment as the inputs above, plus our own chevron. */
+            .cfg-field { display:flex; flex-direction:column; gap:0.35rem; min-width:200px; }
+            .cfg-field-label { font-size:0.72rem; font-weight:600; letter-spacing:0.04em; text-transform:uppercase; color:var(--text-secondary); }
+            .cfg-select {
+              appearance:none; -webkit-appearance:none;
+              width:100%; box-sizing:border-box; padding:0.6rem 2rem 0.6rem 0.8rem;
+              border:1px solid var(--border-color); border-radius:8px;
+              background:var(--body-bg); color:var(--text-color);
+              font-size:0.86rem; font-family:inherit; line-height:1.4; cursor:pointer;
+              background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' stroke='%239ca3af' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+              background-repeat:no-repeat; background-position:right 0.7rem center; background-size:12px;
+            }
+            .cfg-select:hover { border-color:color-mix(in srgb, var(--primary-color) 40%, var(--border-color)); }
+            .cfg-select:focus { outline:none; border-color:var(--primary-color); }
+            .cfg-select:disabled { opacity:0.55; cursor:not-allowed; }
+            .cfg-fields { display:flex; gap:0.9rem; flex-wrap:wrap; align-items:flex-end; }
+            /* A checkbox with its explanation reads as one control, not two stray lines. */
+            .cfg-toggle { display:flex; gap:0.6rem; align-items:flex-start; margin-top:1rem; padding-top:0.9rem; border-top:1px solid var(--border-color); cursor:pointer; }
+            .cfg-toggle input { margin:0.15rem 0 0; flex:none; width:15px; height:15px; accent-color:var(--primary-color); cursor:pointer; }
+            .cfg-toggle-text { display:flex; flex-direction:column; gap:0.15rem; }
+            .cfg-toggle-title { font-size:0.85rem; font-weight:600; color:var(--text-color); }
+            .cfg-toggle-note { font-size:0.78rem; color:var(--text-secondary); line-height:1.5; }
+            .cfg-locked { display:inline-flex; align-items:center; gap:0.35rem; margin-top:0.9rem; font-size:0.79rem; color:var(--text-secondary); }
+            .cfg-note { margin:0.9rem 0 0; padding:0.6rem 0.75rem; border-radius:8px; font-size:0.8rem; line-height:1.5;
+                        background:rgba(245,158,11,0.09); border:1px solid rgba(245,158,11,0.25); color:var(--text-secondary); }
+            .cfg-saved { font-size:0.8rem; color:var(--text-secondary); min-height:1.2em; margin-top:0.5rem; }
+
+            /* Template editing opens beside the page, not stapled underneath it: the
+               body is a full document skeleton and needs room to read. */
+            .tpl-drawer-backdrop { position:fixed; inset:0; background:rgba(0,0,0,0.45); opacity:0; pointer-events:none; transition:opacity .18s ease; z-index:1200; }
+            .tpl-drawer-backdrop.open { opacity:1; pointer-events:auto; }
+            .tpl-drawer {
+              position:fixed; top:0; right:0; height:100vh; width:min(620px, 92vw);
+              background:var(--card-bg); border-left:1px solid var(--border-color);
+              box-shadow:-12px 0 34px rgba(0,0,0,0.22);
+              transform:translateX(100%); transition:transform .2s ease; z-index:1201;
+              display:flex; flex-direction:column;
+            }
+            .tpl-drawer.open { transform:translateX(0); }
+            .tpl-drawer-head { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:1.1rem 1.4rem; border-bottom:1px solid var(--border-color); }
+            .tpl-drawer-head h3 { margin:0; font-size:0.98rem; font-weight:650; color:var(--text-color); }
+            .tpl-drawer-close { background:none; border:none; color:var(--text-secondary); font-size:1rem; cursor:pointer; padding:0.25rem 0.4rem; border-radius:6px; }
+            .tpl-drawer-close:hover { color:var(--text-color); background:color-mix(in srgb, var(--border-color) 40%, transparent); }
+            .tpl-drawer-body { flex:1; min-height:0; overflow-y:auto; padding:1.2rem 1.4rem; display:flex; flex-direction:column; gap:1rem; }
+            .tpl-drawer-foot { display:flex; align-items:center; gap:0.6rem; flex-wrap:wrap; padding:1rem 1.4rem; border-top:1px solid var(--border-color); }
+            .tpl-drawer .cfg-field-label { margin-bottom:0.1rem; }
+            .tpl-drawer input[type=text], .tpl-drawer textarea {
+              width:100%; box-sizing:border-box; padding:0.65rem 0.8rem; border-radius:8px;
+              border:1px solid var(--border-color); background:var(--body-bg); color:var(--text-color);
+              font-size:0.85rem; line-height:1.6; font-family:inherit; resize:vertical;
+            }
+            .tpl-drawer textarea { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:0.8rem; }
+            .tpl-drawer input[type=text]:focus, .tpl-drawer textarea:focus { outline:none; border-color:var(--primary-color); }
+            .tpl-hint { margin:0.25rem 0 0; font-size:0.78rem; line-height:1.5; color:var(--text-secondary); }
+
             .home-team-action { display:inline-flex;align-items:center;gap:0.3rem;padding:0;border:0;background:none;color:var(--primary-color);font:inherit;font-size:0.76rem;text-decoration:none;cursor:pointer; }
           </style>
         ${(activeTab === "home" || activeTab === "inbox") ? html`
@@ -1345,7 +1402,7 @@ export function ProjectDetailPage({
                   builder one wrote to your OWN account while builds read the
                   project owner's, so a collaborator's choice did nothing. ── -->
         ${activeTab === "config" && modelConfig ? html`
-        <div style="max-width:900px;">
+        <div style="max-width:820px;">
           <div class="agent-card">
             <div class="agent-card-head">
               <div>
@@ -1353,26 +1410,34 @@ export function ProjectDetailPage({
                 <p>Which coding agent builds tickets in this project, and whose credentials it spends. Used by every ticket build and by the ticket chat.</p>
               </div>
             </div>
-            <div style="display:flex;gap:0.6rem;flex-wrap:wrap;align-items:center;">
-              <select id="cfg-builder-auth" onchange="cfgSaveBuilder()" ${modelConfig.lockedBuilderAuthMode && !isOwner ? "disabled" : ""}>
-                ${modelConfig.hasSubscriptions ? html`<option value="subscription" ${(modelConfig.lockedBuilderAuthMode ?? modelConfig.builderAuthMode) === "subscription" ? "selected" : ""}>Subscription</option>` : ""}
-                ${modelConfig.hasApiKeys ? html`<option value="api_key" ${(modelConfig.lockedBuilderAuthMode ?? modelConfig.builderAuthMode) === "api_key" ? "selected" : ""}>API token</option>` : ""}
-                ${!modelConfig.hasSubscriptions && !modelConfig.hasApiKeys ? html`<option value="">No credentials connected</option>` : ""}
-              </select>
-              <select id="cfg-builder-model" onchange="cfgSaveBuilder()" ${modelConfig.lockedBuilderModel && !isOwner ? "disabled" : ""}>
-                ${modelConfig.models.map((m) => html`<option value="${m.key}" ${m.key === (modelConfig.lockedBuilderModel ?? modelConfig.builderModelKey) ? "selected" : ""}>${m.label}</option>`)}
-              </select>
-              ${!modelConfig.hasSubscriptions && !modelConfig.hasApiKeys ? html`<a href="/settings/integrations" style="font-size:0.82rem;color:var(--primary-color);">Connect a provider</a>` : ""}
+            <div class="cfg-fields">
+              <div class="cfg-field" style="max-width:190px;">
+                <span class="cfg-field-label">Credentials</span>
+                <select class="cfg-select" id="cfg-builder-auth" onchange="cfgSaveBuilder()" ${modelConfig.lockedBuilderAuthMode && !isOwner ? "disabled" : ""}>
+                  ${modelConfig.hasSubscriptions ? html`<option value="subscription" ${(modelConfig.lockedBuilderAuthMode ?? modelConfig.builderAuthMode) === "subscription" ? "selected" : ""}>Subscription</option>` : ""}
+                  ${modelConfig.hasApiKeys ? html`<option value="api_key" ${(modelConfig.lockedBuilderAuthMode ?? modelConfig.builderAuthMode) === "api_key" ? "selected" : ""}>API token</option>` : ""}
+                  ${!modelConfig.hasSubscriptions && !modelConfig.hasApiKeys ? html`<option value="">None connected</option>` : ""}
+                </select>
+              </div>
+              <div class="cfg-field" style="flex:1;min-width:240px;">
+                <span class="cfg-field-label">Coding agent model</span>
+                <select class="cfg-select" id="cfg-builder-model" onchange="cfgSaveBuilder()" ${modelConfig.lockedBuilderModel && !isOwner ? "disabled" : ""}>
+                  ${modelConfig.models.map((m) => html`<option value="${m.key}" ${m.key === (modelConfig.lockedBuilderModel ?? modelConfig.builderModelKey) ? "selected" : ""}>${m.label}</option>`)}
+                </select>
+              </div>
             </div>
+            ${!modelConfig.hasSubscriptions && !modelConfig.hasApiKeys ? html`
+              <p class="cfg-note">No provider is connected, so nothing can build yet. <a href="/settings/integrations" style="color:var(--primary-color);">Connect one</a>.</p>` : ""}
             ${isOwner ? html`
-              <label style="display:flex;align-items:center;gap:0.5rem;margin-top:0.9rem;font-size:0.83rem;color:var(--text-secondary);cursor:pointer;">
+              <label class="cfg-toggle">
                 <input type="checkbox" id="cfg-lock-builder" ${modelConfig.lockedBuilderModel ? "checked" : ""} onchange="cfgSaveBuilder()" />
-                Use this for everyone on this project
+                <span class="cfg-toggle-text">
+                  <span class="cfg-toggle-title">Use this for everyone on this project</span>
+                  <span class="cfg-toggle-note">Otherwise each person picks their own — and every build runs on yours anyway.</span>
+                </span>
               </label>
-              <p style="margin:0.35rem 0 0 1.6rem;font-size:0.78rem;color:var(--text-secondary);">Otherwise each person picks their own, and builds run on yours.</p>
             ` : modelConfig.lockedBuilderModel ? html`
-              <p style="margin:0.8rem 0 0;font-size:0.8rem;color:var(--text-secondary);"><i class="fas fa-lock"></i> Fixed by the project owner.</p>
-            ` : ""}
+              <span class="cfg-locked"><i class="fas fa-lock"></i> Fixed by the project owner.</span>` : ""}
           </div>
 
           <div class="agent-card">
@@ -1382,50 +1447,78 @@ export function ProjectDetailPage({
                 <p>The model behind the chat on this project. You can still switch it for a single conversation from the composer.</p>
               </div>
             </div>
-            <select id="cfg-chat-model" onchange="cfgSaveChat()" ${modelConfig.lockedChatModel && !isOwner ? "disabled" : ""}>
-              ${modelConfig.chatModels.map((m) => html`<option value="${m.key}" ${m.key === (modelConfig.lockedChatModel ?? modelConfig.chatModelKey) ? "selected" : ""}>${m.label}</option>`)}
-            </select>
+            <div class="cfg-field" style="max-width:340px;">
+              <span class="cfg-field-label">Model</span>
+              <select class="cfg-select" id="cfg-chat-model" onchange="cfgSaveChat()" ${modelConfig.lockedChatModel && !isOwner ? "disabled" : ""}>
+                ${modelConfig.chatModels.map((m) => html`<option value="${m.key}" ${m.key === (modelConfig.lockedChatModel ?? modelConfig.chatModelKey) ? "selected" : ""}>${m.label}</option>`)}
+              </select>
+            </div>
             ${isOwner ? html`
-              <label style="display:flex;align-items:center;gap:0.5rem;margin-top:0.9rem;font-size:0.83rem;color:var(--text-secondary);cursor:pointer;">
+              <label class="cfg-toggle">
                 <input type="checkbox" id="cfg-lock-chat" ${modelConfig.lockedChatModel ? "checked" : ""} onchange="cfgSaveChat()" />
-                Use this for everyone on this project
+                <span class="cfg-toggle-text">
+                  <span class="cfg-toggle-title">Use this for everyone on this project</span>
+                  <span class="cfg-toggle-note">Everyone chatting about this project uses the same model.</span>
+                </span>
               </label>
             ` : modelConfig.lockedChatModel ? html`
-              <p style="margin:0.8rem 0 0;font-size:0.8rem;color:var(--text-secondary);"><i class="fas fa-lock"></i> Fixed by the project owner.</p>
-            ` : ""}
+              <span class="cfg-locked"><i class="fas fa-lock"></i> Fixed by the project owner.</span>` : ""}
           </div>
+
           <div class="agent-card">
             <div class="agent-card-head">
               <div>
                 <h3>Document templates</h3>
-                <p>The shape a document takes here. Before writing a PRD, SOW or spec the agent loads the template for that type and follows it — so documents come out in your form, not the model's default. Templates below ship with LFG; add your own for a type to replace one, or to cover a type we don't.</p>
+                <p>The shape a document takes here. Before writing a PRD, SOW or spec, the agent loads the template for that type and follows it — so documents come out in your form, not the model's default. Add your own for a type to replace the built-in, or to cover a type we don't ship.</p>
               </div>
             </div>
-            <div id="tpl-list" style="font-size:0.85rem;color:var(--text-secondary);">Loading…</div>
-            <button class="btn btn-secondary" style="margin-top:0.8rem;font-size:0.82rem;" onclick="tplEdit('')">+ Add template</button>
-
-            <div id="tpl-form" style="display:none;margin-top:1rem;border-top:1px solid var(--border-color);padding-top:1rem;">
-              <div style="display:flex;gap:0.6rem;flex-wrap:wrap;margin-bottom:0.6rem;">
-                <input id="tpl-type" placeholder="Document type — prd, sow, spec…" style="flex:1;min-width:180px;" />
-                <input id="tpl-name" placeholder="Name (optional)" style="flex:1;min-width:180px;" />
-              </div>
-              <label style="display:block;font-size:0.8rem;color:var(--text-secondary);margin-bottom:0.25rem;">The shape — headings, tables, placeholder prose. A sample page works.</label>
-              <textarea id="tpl-body" rows="10" placeholder="# {{Feature}}&#10;&#10;## Problem&#10;…"></textarea>
-              <label style="display:block;font-size:0.8rem;color:var(--text-secondary);margin:0.7rem 0 0.25rem;">Custom instructions — house rules for writing this type. Followed, never copied into the document.</label>
-              <textarea id="tpl-instructions" rows="4" placeholder="Always cite the ticket key. Keep requirements numbered. British spelling."></textarea>
-              <div style="display:flex;gap:0.6rem;align-items:center;margin-top:0.7rem;flex-wrap:wrap;">
-                <button class="btn btn-primary" style="font-size:0.82rem;" onclick="tplSave()">Save template</button>
-                <button class="btn btn-secondary" style="font-size:0.82rem;" onclick="tplCancel()">Cancel</button>
-                <label class="btn btn-secondary" style="font-size:0.82rem;cursor:pointer;margin:0;">
-                  Upload a sample<input type="file" id="tpl-upload" accept=".md,.markdown,.txt" style="display:none;" onchange="tplUpload(this)" />
-                </label>
-                <span id="tpl-msg" style="font-size:0.8rem;color:var(--text-secondary);"></span>
-              </div>
+            <div id="tpl-note"></div>
+            <div id="tpl-list" class="skills-list">
+              <p class="skill-desc" style="margin:0;">Loading…</p>
+            </div>
+            <div class="agent-row">
+              <button class="btn btn-secondary" style="font-size:0.82rem;" onclick="tplEdit('')"><i class="fas fa-plus" style="font-size:0.72rem;"></i> Add template</button>
+              <span id="cfg-saved" class="cfg-saved" style="margin:0;"></span>
             </div>
           </div>
-
-          <div id="cfg-saved" style="font-size:0.8rem;color:var(--text-secondary);height:1.2em;"></div>
         </div>
+
+        <!-- Editor drawer. Lives outside the cards so it can sit over the page. -->
+        <div class="tpl-drawer-backdrop" id="tpl-backdrop" onclick="tplCancel()"></div>
+        <aside class="tpl-drawer" id="tpl-drawer" aria-hidden="true">
+          <div class="tpl-drawer-head">
+            <h3 id="tpl-drawer-title">Template</h3>
+            <button class="tpl-drawer-close" onclick="tplCancel()" aria-label="Close"><i class="fas fa-times"></i></button>
+          </div>
+          <div class="tpl-drawer-body">
+            <div class="cfg-field">
+              <span class="cfg-field-label">Document type</span>
+              <input type="text" id="tpl-type" placeholder="prd, sow, spec, tech_analysis…" />
+              <p class="tpl-hint">What the agent matches on. One template per type.</p>
+            </div>
+            <div class="cfg-field">
+              <span class="cfg-field-label">Name</span>
+              <input type="text" id="tpl-name" placeholder="Optional — e.g. Acme PRD" />
+            </div>
+            <div class="cfg-field">
+              <span class="cfg-field-label">The shape</span>
+              <textarea id="tpl-body" rows="16" placeholder="# {{Feature}}&#10;&#10;## Problem&#10;…"></textarea>
+              <p class="tpl-hint">Headings, tables, placeholder prose — a sample page works. {{Braces}} are for the agent to fill in.</p>
+            </div>
+            <div class="cfg-field">
+              <span class="cfg-field-label">Custom instructions</span>
+              <textarea id="tpl-instructions" rows="4" placeholder="Always cite the ticket key. Keep requirements numbered. British spelling."></textarea>
+              <p class="tpl-hint">House rules for writing this type. Followed, never copied into the document.</p>
+            </div>
+          </div>
+          <div class="tpl-drawer-foot">
+            <button class="btn btn-primary" style="font-size:0.83rem;" onclick="tplSave()">Save template</button>
+            <label class="btn btn-secondary" style="font-size:0.83rem;cursor:pointer;margin:0;">
+              Upload a sample<input type="file" id="tpl-upload" accept=".md,.markdown,.txt" style="display:none;" onchange="tplUpload(this)" />
+            </label>
+            <span id="tpl-msg" style="font-size:0.8rem;color:var(--text-secondary);"></span>
+          </div>
+        </aside>
         ` : ""}
 
         <!-- ── Agent: the instructions every agent here follows, and the workflows
@@ -2104,8 +2197,8 @@ export function ProjectDetailPage({
     // it — the rules the agents follow here shouldn't be a secret from the people
     // working alongside them. Saving stays permission-checked server-side.
     // ── Document templates (Config tab) ────────────────────────────────────
-    // NB: every string below avoids a bare apostrophe — a lone ' closes the JS string
-    // and takes this whole inline script with it. Use &#39; in emitted HTML.
+    // NB: no bare apostrophes in emitted HTML — a lone ' closes the JS string and
+    // takes this whole inline script with it. Use &#39;.
     var _tpls = [];
     function tplApi(path, opts) {
       var pid = document.body.getAttribute('data-project-id');
@@ -2115,53 +2208,61 @@ export function ProjectDetailPage({
       var el = document.getElementById('tpl-msg');
       if (el) { el.textContent = m; setTimeout(function () { if (el.textContent === m) el.textContent = ''; }, 2500); }
     }
+    function tplEsc(v) {
+      return String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
     function tplRender() {
       var list = document.getElementById('tpl-list');
       if (!list) return;
-      if (!_tpls.length) { list.textContent = 'No templates yet.'; return; }
-      var rows = _tpls.map(function (t) {
-        var badge = t.source === 'project'
-          ? '<span class="agent-status">yours</span>'
-          : (t.overridden ? '<span class="agent-status">replaced by yours</span>' : '<span class="agent-status">built-in</span>');
-        var actions = t.source === 'project'
-          ? '<button class="skill-action" onclick="tplEdit(&#39;' + t.docType + '&#39;)">Edit</button>'
-            + '<button class="skill-action" onclick="tplDelete(&#39;' + t.rowId + '&#39;)">Delete</button>'
-          : '<button class="skill-action" onclick="tplEdit(&#39;' + t.docType + '&#39;)">Customise</button>';
-        return '<div class="skill-row"><div class="skill-head">'
-          + '<code>' + t.docType + '</code> ' + badge
-          + '<span class="skill-actions">' + actions + '</span></div>'
-          + (t.instructions ? '<p class="skill-desc">' + t.instructions.slice(0, 140) + '</p>' : '')
-          + '</div>';
+      if (!_tpls.length) { list.innerHTML = '<p class="skill-desc" style="margin:0;">No templates yet.</p>'; return; }
+      list.innerHTML = _tpls.map(function (t) {
+        var isProject = t.source === 'project';
+        var tag = isProject
+          ? '<span class="skill-tag project">yours</span>'
+          : (t.overridden ? '<span class="skill-tag built-in">replaced</span>' : '<span class="skill-tag built-in">built-in</span>');
+        var actions = '<button class="skill-action" data-tpl-edit="' + tplEsc(t.docType) + '">'
+          + (isProject ? 'Edit' : 'Customise') + '</button>'
+          + (isProject ? '<button class="skill-action" data-tpl-del="' + tplEsc(t.rowId) + '">Delete</button>' : '');
+        var note = isProject && t.instructions
+          ? '<p class="skill-desc">' + tplEsc(t.instructions.slice(0, 160)) + '</p>'
+          : '<p class="skill-desc">' + tplEsc((t.body || '').split('\\n').filter(function (l) { return l.trim(); })[0] || '') + '</p>';
+        return '<div class="skill-item' + (t.overridden ? ' is-overridden' : '') + '">'
+          + '<div class="skill-item-top"><span class="skill-name">' + tplEsc(t.docType) + '</span>' + tag
+          + '<span class="skill-actions">' + actions + '</span></div>' + note + '</div>';
       }).join('');
-      list.innerHTML = rows;
     }
     function tplLoad() {
       tplApi('').then(function (d) {
         _tpls = (d && d.templates) || [];
         tplRender();
         // The table may not exist yet on this database — the built-ins still work.
-        if (d && d.unavailable) {
-          var l = document.getElementById('tpl-list');
-          if (l) l.insertAdjacentHTML('afterbegin', '<p class="skill-desc" style="margin:0 0 0.6rem;">' + d.unavailable + '</p>');
-        }
-      })
-        .catch(function () { var l = document.getElementById('tpl-list'); if (l) l.textContent = 'Could not load templates.'; });
+        var note = document.getElementById('tpl-note');
+        if (note) note.innerHTML = (d && d.unavailable) ? '<p class="cfg-note">' + tplEsc(d.unavailable) + '</p>' : '';
+      }).catch(function () {
+        var l = document.getElementById('tpl-list');
+        if (l) l.innerHTML = '<p class="skill-desc" style="margin:0;">Could not load templates.</p>';
+      });
+    }
+    function tplOpenDrawer(open) {
+      var d = document.getElementById('tpl-drawer');
+      var b = document.getElementById('tpl-backdrop');
+      if (d) { d.classList.toggle('open', open); d.setAttribute('aria-hidden', open ? 'false' : 'true'); }
+      if (b) b.classList.toggle('open', open);
     }
     function tplEdit(docType) {
-      var form = document.getElementById('tpl-form');
-      if (form) form.style.display = 'block';
       // Customising a built-in starts from ITS body, so nobody retypes a skeleton.
       var t = _tpls.filter(function (x) { return x.docType === docType; })[0];
+      document.getElementById('tpl-drawer-title').textContent = t
+        ? (t.source === 'project' ? 'Edit ' + t.docType : 'Customise ' + t.docType)
+        : 'New template';
       document.getElementById('tpl-type').value = t ? t.docType : '';
       document.getElementById('tpl-name').value = t ? t.name : '';
       document.getElementById('tpl-body').value = t ? t.body : '';
       document.getElementById('tpl-instructions').value = t ? (t.instructions || '') : '';
-      document.getElementById('tpl-type').focus();
+      tplOpenDrawer(true);
+      (t ? document.getElementById('tpl-body') : document.getElementById('tpl-type')).focus();
     }
-    function tplCancel() {
-      var form = document.getElementById('tpl-form');
-      if (form) form.style.display = 'none';
-    }
+    function tplCancel() { tplOpenDrawer(false); }
     function tplSave() {
       var payload = {
         docType: document.getElementById('tpl-type').value,
@@ -2172,7 +2273,7 @@ export function ProjectDetailPage({
       tplApi('', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
         .then(function (d) {
           if (d && d.error) { tplMsg(d.error); return; }
-          tplMsg('Saved.'); tplCancel(); tplLoad();
+          tplCancel(); tplLoad();
         }).catch(function () { tplMsg('Could not save.'); });
     }
     function tplDelete(rowId) {
@@ -2188,12 +2289,21 @@ export function ProjectDetailPage({
         document.getElementById('tpl-body').value = String(reader.result || '');
         // A sample page usually names its own type; suggest it rather than demand it.
         var typeEl = document.getElementById('tpl-type');
-        if (typeEl && !typeEl.value) typeEl.value = f.name.replace(/\.[^.]+$/, '').toLowerCase().replace(/[^a-z0-9]+/g, '_');
+        if (typeEl && !typeEl.value) typeEl.value = f.name.replace(/\\.[^.]+$/, '').toLowerCase().replace(/[^a-z0-9]+/g, '_');
         tplMsg('Loaded ' + f.name + ' — review it and save.');
       };
       reader.readAsText(f);
       input.value = '';
     }
+    // Delegated so the row buttons never need inline handlers (which is where the
+    // quoting bugs come from), and Escape closes the drawer like any other overlay.
+    document.addEventListener('click', function (e) {
+      var ed = e.target.closest && e.target.closest('[data-tpl-edit]');
+      if (ed) { tplEdit(ed.getAttribute('data-tpl-edit')); return; }
+      var del = e.target.closest && e.target.closest('[data-tpl-del]');
+      if (del) tplDelete(del.getAttribute('data-tpl-del'));
+    });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') tplCancel(); });
     if ('${activeTab}' === 'config') tplLoad();
 
     // ── Config tab ──────────────────────────────────────────────────────────
