@@ -201,9 +201,20 @@ previewApi.get("/:projectId/doc-templates", async (c) => {
   if (!access) return c.json({ error: "Project not found" }, 404);
   const { builtinTemplates } = await import("../../ai/doc-templates/index.ts");
   const { documentTemplates } = await import("../../db/schema/document-templates.ts");
-  const own = await db.select().from(documentTemplates).where(eq(documentTemplates.projectId, access.project.id));
+  // A missing table must not take the Config page down with it. The built-ins are on
+  // disk and work regardless, so degrade to those and say why — this is exactly the
+  // state a database sits in between deploying the code and running the migration.
+  let own: Array<typeof documentTemplates.$inferSelect> = [];
+  let unavailable: string | undefined;
+  try {
+    own = await db.select().from(documentTemplates).where(eq(documentTemplates.projectId, access.project.id));
+  } catch (e) {
+    console.warn("[doc-templates] could not read project templates:", (e as Error).message?.slice(0, 140));
+    unavailable = "Your own templates aren't available yet — the document_template table hasn't been created on this database. The built-in templates below still work.";
+  }
   const ownTypes = new Set(own.map((r) => r.docType.toLowerCase()));
   return c.json({
+    unavailable,
     templates: [
       ...own.map((r) => ({
         rowId: r.id, docType: r.docType, name: r.name, body: r.body,

@@ -24,7 +24,7 @@ api.all('/:projectId/tickets/:ticketId/code/:action', async c => {
     const origin = c.req.header('Origin');
     if (origin && origin !== new URL(c.req.url).origin) return c.json({ error: 'Invalid origin' }, 403);
     if (!access.permissions.canEditFiles) return c.json({ error: 'You do not have permission to edit this project' }, 403);
-    if (ticket.status === 'executing' || isChatTurnActive(ticketId)) return c.json({ error: 'An agent is working on this ticket. Wait for it to finish before editing or running commands.' }, 409);
+    if (ticket.queueStatus === 'executing' || isChatTurnActive(ticketId)) return c.json({ error: 'An agent is working on this ticket. Wait for it to finish before editing or running commands.' }, 409);
   }
   const [sb] = await db.select().from(sandboxes).where(and(eq(sandboxes.ticketId, ticketId), eq(sandboxes.projectId, access.project.id), inArray(sandboxes.workspaceType, ['ticket', 'ticket-worktree', 'ticket-chat']))).orderBy(desc(sandboxes.updatedAt)).limit(1);
   if (!sb?.magsWorkspaceId) return c.json({ error: 'No live checkout for this ticket. Build the ticket to enable browsing, editing and terminal access.', unavailable: true }, 409);
@@ -47,7 +47,7 @@ api.all('/:projectId/tickets/:ticketId/code/:action', async c => {
     if (action === 'commit' && (typeof body.message !== 'string' || !body.message.trim() || body.message.length > 2000)) return c.json({ error: 'Enter a commit message (up to 2,000 characters)' }, 400);
     const result = await ticketCodeCommand(sb.magsWorkspaceId, { action, root, branch, base: c.req.query('base') || 'main', path: mutate ? body.path : c.req.query('path'), content: body.content, version: body.version, message: body.message, author: c.get('user').name || 'LFG user', email: c.get('user').email });
     if (result.error) return c.json(result, 409);
-    if (action === 'tree') Object.assign(result, { canEdit: access.permissions.canEditFiles && ticket.status !== 'executing' && !isChatTurnActive(ticketId), root });
+    if (action === 'tree') Object.assign(result, { canEdit: access.permissions.canEditFiles && ticket.queueStatus !== 'executing' && !isChatTurnActive(ticketId), root });
     if (action === 'commit') await db.update(projectTickets).set({ githubCommitSha: result.sha, updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
     return c.json(result);
   } catch { return c.json({ error: 'The sandbox could not complete this request. Check that the ticket checkout is available and retry.' }, 503); }

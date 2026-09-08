@@ -2136,7 +2136,15 @@ export function ProjectDetailPage({
       list.innerHTML = rows;
     }
     function tplLoad() {
-      tplApi('').then(function (d) { _tpls = (d && d.templates) || []; tplRender(); })
+      tplApi('').then(function (d) {
+        _tpls = (d && d.templates) || [];
+        tplRender();
+        // The table may not exist yet on this database — the built-ins still work.
+        if (d && d.unavailable) {
+          var l = document.getElementById('tpl-list');
+          if (l) l.insertAdjacentHTML('afterbegin', '<p class="skill-desc" style="margin:0 0 0.6rem;">' + d.unavailable + '</p>');
+        }
+      })
         .catch(function () { var l = document.getElementById('tpl-list'); if (l) l.textContent = 'Could not load templates.'; });
     }
     function tplEdit(docType) {

@@ -126,6 +126,7 @@ app.use("/public/*", async (c, next) => {
     });
   } catch { /* compression is an optimisation — serve what serveStatic produced */ }
 });
+app.use("/vendor/monaco/*", serveStatic({ root: "./node_modules/monaco-editor/min", rewriteRequestPath: (path) => path.replace("/vendor/monaco", "") }));
 app.use("/public/*", serveStatic({ root: "./" }));
 app.use("/uploads/*", serveStatic({ root: "./" }));
 // Local file storage (FILE_STORAGE_TYPE=local): serve binaries written under

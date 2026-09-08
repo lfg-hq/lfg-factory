@@ -677,6 +677,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
                       <span class="kanban-card-title">${t.name}</span>
                     </div>
                     <div class="kanban-card-meta">
+                      <a class="ticket-code-link" href="/projects/${project.projectId}/tickets/${t.id}/diff" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open ticket code in a new window">&lt;/&gt; Code ↗</a>
                       <span class="priority-label" style="color:${PRIORITY_COLOR[t.priority] ?? "#6b7280"};">
                         <span class="kanban-priority-dot" style="background:${PRIORITY_COLOR[t.priority] ?? "#6b7280"};"></span>
                         ${t.priority}
@@ -707,6 +708,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     </div>
     <div class="drawer-header-right">
       <div class="drawer-actions">
+        <a class="ticket-code-link" id="drawer-code-link" target="_blank" rel="noopener">&lt;/&gt; Code ↗</a>
         <button class="drawer-execute-btn" id="drawer-build-btn" onclick="buildCurrentTicket()">
           <i class="fas fa-bolt"></i> Build Ticket
         </button>
@@ -1093,6 +1095,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     _lastLogContent = '';
     _logsFirstLoad = true;
     _currentTicketId = ticketId;
+    document.getElementById("drawer-code-link").href = "/projects/" + PROJECT_ID + "/tickets/" + encodeURIComponent(ticketId) + "/diff";
     _chatBusy = false; setChatBusyUI();
     refreshChatBusy(); // a turn may already be running server-side (build, or another tab)
     const t = ticketMap[ticketId];
