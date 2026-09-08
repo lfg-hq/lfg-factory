@@ -62,6 +62,7 @@ interface ProjectDetailPageProps {
    *  project has pinned for everyone. */
   modelConfig?: {
     models: Array<{ key: string; label: string; provider: string }>;
+    modelsByAuth?: Record<string, Array<{ key: string; label: string; provider: string }>>;
     chatModels: Array<{ key: string; label: string }>;
     builderModelKey: string;
     builderAuthMode: string;
@@ -1414,16 +1415,16 @@ export function ProjectDetailPage({
             <div class="cfg-fields">
               <div class="cfg-field" style="max-width:190px;">
                 <span class="cfg-field-label">Credentials</span>
-                <select class="cfg-select" id="cfg-builder-auth" onchange="cfgSaveBuilder()" ${modelConfig.lockedBuilderAuthMode && !isOwner ? "disabled" : ""}>
-                  ${modelConfig.hasSubscriptions ? html`<option value="subscription" ${(modelConfig.lockedBuilderAuthMode ?? modelConfig.builderAuthMode) === "subscription" ? "selected" : ""}>Subscription</option>` : ""}
-                  ${modelConfig.hasApiKeys ? html`<option value="api_key" ${(modelConfig.lockedBuilderAuthMode ?? modelConfig.builderAuthMode) === "api_key" ? "selected" : ""}>API token</option>` : ""}
+                <select class="cfg-select" id="cfg-builder-auth" onchange="cfgBuilderAuthChanged()" ${modelConfig.lockedBuilderAuthMode && !isOwner ? "disabled" : ""}>
+                  ${modelConfig.hasSubscriptions ? html`<option value="subscription" ${modelConfig.builderAuthMode === "subscription" ? "selected" : ""}>Subscription</option>` : ""}
+                  ${modelConfig.hasApiKeys ? html`<option value="api_key" ${modelConfig.builderAuthMode === "api_key" ? "selected" : ""}>API token</option>` : ""}
                   ${!modelConfig.hasSubscriptions && !modelConfig.hasApiKeys ? html`<option value="">None connected</option>` : ""}
                 </select>
               </div>
               <div class="cfg-field" style="flex:1;min-width:240px;">
                 <span class="cfg-field-label">Coding agent model</span>
-                <select class="cfg-select" id="cfg-builder-model" onchange="cfgSaveBuilder()" ${modelConfig.lockedBuilderModel && !isOwner ? "disabled" : ""}>
-                  ${modelConfig.models.map((m) => html`<option value="${m.key}" ${m.key === (modelConfig.lockedBuilderModel ?? modelConfig.builderModelKey) ? "selected" : ""}>${m.label}</option>`)}
+                <select class="cfg-select" id="cfg-builder-model" data-models-by-auth="${JSON.stringify(modelConfig.modelsByAuth ?? {})}" data-active-auth="${modelConfig.builderAuthMode}" onchange="cfgSaveBuilder()" ${modelConfig.lockedBuilderModel && !isOwner ? "disabled" : ""}>
+                  ${modelConfig.models.map((m) => html`<option value="${m.key}" ${m.key === modelConfig.builderModelKey ? "selected" : ""}>${m.label}</option>`)}
                 </select>
               </div>
             </div>
@@ -2362,6 +2363,21 @@ export function ProjectDetailPage({
         body: JSON.stringify(fields),
       });
     }
+    var cfgBuilderSelections = {};
+    function cfgBuilderAuthChanged() {
+      var select = document.getElementById('cfg-builder-model');
+      var auth = document.getElementById('cfg-builder-auth').value;
+      var catalog = JSON.parse(select.dataset.modelsByAuth || '{}');
+      var models = catalog[auth];
+      if (!models) return;
+      cfgBuilderSelections[select.dataset.activeAuth] = select.value;
+      var preferred = cfgBuilderSelections[auth] || select.value;
+      select.replaceChildren();
+      models.forEach(function(model) { select.add(new Option(model.label, model.key)); });
+      if (models.some(function(model) { return model.key === preferred; })) select.value = preferred;
+      select.dataset.activeAuth = auth;
+      if (models.length) cfgSaveBuilder();
+    }
     async function cfgSaveBuilder() {
       var auth = (document.getElementById('cfg-builder-auth') || {}).value || '';
       var model = (document.getElementById('cfg-builder-model') || {}).value || '';
@@ -2374,9 +2390,10 @@ export function ProjectDetailPage({
         });
         if (!response.ok) throw new Error((await response.json()).error || "Could not save");
         if (lockEl) {
-          await cfgPin(lockEl.checked
+          var pinResponse = await cfgPin(lockEl.checked
             ? { lockedBuilderModel: model, lockedBuilderAuthMode: auth }
             : { lockedBuilderModel: '', lockedBuilderAuthMode: '' });
+          if (!pinResponse.ok) throw new Error('Could not save project model settings');
         }
         cfgFlash(lockEl && lockEl.checked ? 'Saved for everyone on this project.' : 'Saved.');
       } catch (e) { cfgFlash(e.message || 'Could not save.'); }

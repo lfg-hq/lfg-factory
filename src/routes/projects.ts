@@ -1,3 +1,4 @@
+import { resolveBuilderModelKey } from "../services/build-llm-access.ts";
 import { availableChatModels } from "../services/available-models.ts";
 import { resolveLlmGrants } from "../services/llm-access.ts";
 import { teamAccess, workspaceContext } from "../services/team-access.ts";
@@ -22,7 +23,7 @@ import { env } from "../config/env.ts";
 import { agents } from "../db/schema/agents.ts";
 import { notifications } from "../db/schema/notifications.ts";
 import { eq, and, desc, asc, notExists, or, sql, inArray, isNull, ne } from "drizzle-orm";
-import { listModels, listChatModels, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
+import { listModels, listChatModels, getProviderModel, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
 import { saveContent, getContent, deleteContent } from "../services/s3.ts";
 import { getProjectActivities } from "../services/activity-log.ts";
 import { ProjectListPage } from "../templates/pages/project-list.tsx";
@@ -310,13 +311,23 @@ async function loadModelConfig(userId: string, project: { id: string; ownerId: s
   const subs = new Set<string>();
   if (grants.canUsePersonalSubscription && profile?.openai) subs.add("openai");
 
-  const authMode = !grants.canUseKey ? "subscription" : !grants.canUsePersonalSubscription ? "api_key" : appState?.builderAuthMode === "api_key" ? "api_key" : "subscription";
+  const requestedMode = proj?.lockedBuilderAuthMode ?? appState?.builderAuthMode;
+  const hasApiKeys = Object.values(apiKeyProviders).some(Boolean);
+  const authMode = requestedMode === "api_key"
+    ? (hasApiKeys ? "api_key" : "subscription")
+    : (subs.size ? "subscription" : "api_key");
   const all = listModels().map((m) => ({ key: m.key, label: `${m.providerLabel} · ${m.label}`, provider: m.provider }));
+  const modelsByAuth = {
+    api_key: all.filter(m => apiKeyProviders[m.provider]),
+    subscription: all.filter(m => subs.has(m.provider)),
+  };
+  const savedModel = await resolveBuilderModelKey(userId, project.id);
+  const selectedModel = modelsByAuth[authMode].find(m => m.key === savedModel || getProviderModel(m.key) === getProviderModel(savedModel))?.key ?? modelsByAuth[authMode][0]?.key ?? "";
   return {
-    // Only offer what the chosen credential source can actually run.
-    models: all.filter((m) => (authMode === "subscription" ? subs.has(m.provider) : apiKeyProviders[m.provider])),
+    modelsByAuth,
+    models: modelsByAuth[authMode],
     chatModels: listChatModels().filter(m => m.key.startsWith("chatgpt/") ? grants.canUsePersonalSubscription : grants.canUseKey && apiKeyProviders[m.provider]).map(({ key, label }) => ({ key, label })),
-    builderModelKey: appState?.builderModelKey ?? DEFAULT_MODEL_KEY,
+    builderModelKey: selectedModel,
     builderAuthMode: authMode,
     chatModelKey: sel?.selectedModel ?? DEFAULT_MODEL_KEY,
     hasSubscriptions: subs.size > 0,
