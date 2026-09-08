@@ -39,6 +39,13 @@ function toolEvents(name: string, args: Record<string, unknown>): AssistantMessa
 }
 
 describe("ChatGPT subscription model adapter (no network)", () => {
+  test('forwards low reasoning effort to the subscription transport', async () => {
+    const model = createPiSubscriptionModel(modelId, async () => 'token', (_m, _ctx, opts) => {
+      expect(opts?.reasoningEffort).toBe('low');
+      return textEvents('Read');
+    });
+    expect((await generateText({ model, prompt: 'Read', providerOptions: { openai: { reasoningEffort: 'low' } } })).text).toBe('Read');
+  });
   test("API factory stays API and subscription choices stay out of builder catalog", () => {
     expect(getModel(modelId, { openai: "not-a-real-key" }).provider).toContain("openai");
     expect(listModels().some(m => m.key.startsWith("chatgpt/"))).toBe(false);

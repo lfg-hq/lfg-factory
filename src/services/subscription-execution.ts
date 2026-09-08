@@ -34,9 +34,9 @@ export async function withUserSubscription<T>(userId: string, projectId: string 
 }
 
 /** For standalone evaluators/preview jobs that are not children of a chat turn. */
-export async function selectedSubscriptionModel(userId: string, internalProjectId?: string) {
+export async function selectedSubscriptionModel(userId: string, internalProjectId?: string, helperModelId?: string) {
   const inherited = currentSubscription();
-  if (inherited) return createPiSubscriptionModel(inherited.modelId, inherited.getAccessToken);
+  if (inherited) return createPiSubscriptionModel(helperModelId ?? inherited.modelId, inherited.getAccessToken);
   let publicProjectId: string | undefined;
   if (internalProjectId) {
     const [project] = await db.select({ publicId: projects.projectId }).from(projects).where(eq(projects.id, internalProjectId)).limit(1);
@@ -49,5 +49,5 @@ export async function selectedSubscriptionModel(userId: string, internalProjectI
   if (!model) throw new Error("No models enabled for this account or project");
   if (!isSubscriptionModel(model.key)) return null;
   if (!model.available) throw new Error("Connect your personal ChatGPT subscription in Settings → Integrations");
-  return createPiSubscriptionModel(model.key.slice(SUBSCRIPTION_PREFIX.length), async () => getOpenAICodexAccessToken(await subscriptionOwner(userId, publicProjectId)));
+  return createPiSubscriptionModel(helperModelId ?? model.key.slice(SUBSCRIPTION_PREFIX.length), async () => getOpenAICodexAccessToken(await subscriptionOwner(userId, publicProjectId)));
 }

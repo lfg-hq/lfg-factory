@@ -46,6 +46,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let messageQueue = [];
     let isStreaming = false; // Track whether we're currently streaming a response
     let currentStreamingEl = null; // The .message.assistant element for the CURRENT response
+    let messageContentSequence = 0;
     let stopRequested = false; // Track if user has already requested to stop generation
     
     // Chunk reassembly tracking
@@ -1190,6 +1191,8 @@ document.addEventListener('DOMContentLoaded', () => {
                             `;
                             // For audio messages, don't pass content since transcription is in the indicator
                             addMessageToChat(msg.role, '', { audioIndicator: audioIndicator });
+                        } else if (msg.role === 'assistant' && renderAssistantTimeline(msg)) {
+                            // Ordered text/action phases restored from the saved offsets.
                         } else if (msg.content && msg.content.trim() !== '') {
                             // Regular text messages
                             addMessageToChat(msg.role, msg.content, null, null, msg.is_partial);
@@ -1228,6 +1231,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     break;
                 
                 case 'stop_confirmed':
+                    finalizeTrail('Stopped');
                     // Handle confirmation that generation was stopped
                     console.log('Generation stopped by server');
 
@@ -1296,6 +1300,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     break;
                     
                 case 'error':
+                    finalizeTrail('Failed');
                     console.error('WebSocket error:', data.message);
                     
                     // Check if this is a token exhaustion error
@@ -1474,6 +1479,8 @@ document.addEventListener('DOMContentLoaded', () => {
         
         const chunk = data.chunk;
         const isFinal = data.is_final;
+        // Transport heartbeats do not count as agent progress; only actual chunks do.
+        touchTrail();
         
         // Debug logging only for notifications (skip for regular text chunks to reduce noise)
         if (data.is_notification || data.notification_type) {
@@ -1498,6 +1505,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         if (isFinal) {
+            const reason = data.end_reason;
+            finalizeTrail(reason === 'error' ? 'Failed'
+                : reason === 'stop' || reason === 'user_stop' || reason === 'stopped' ? 'Stopped'
+                : reason && reason !== 'complete' ? 'Interrupted — ' + reason
+                : undefined);
             // Final chunk with metadata
             console.log('AI response complete');
 
@@ -1557,6 +1569,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 isStreaming = false;
                 window.__isAgentStreaming__ = false;
+                finishMessageDisplay(finalMsg);
                 currentStreamingEl = null;
 
                 // Clean up orchestrator streaming marker
@@ -1610,7 +1623,13 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         // Handle early notifications (show a function call indicator but don't open artifacts yet)
+        if (data.notification_type === 'text_boundary') {
+            beginResponseBlock();
+            return;
+        }
         if (isEarlyNotification && data.function_name) {
+            finishMessageDisplay(currentStreamingEl);
+            currentStreamingEl = null;
             // Remove typing indicator — the tool pill replaces it
             const typingInd = document.querySelector('.typing-indicator');
             if (typingInd) typingInd.remove();
@@ -1639,6 +1658,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Specific action of the current tool (args now known) → update the live indicator.
         if (data.notification_type === 'tool_detail') {
+            if (data.warning) {
+                trailStep({ detail: data.detail, tool: data.function_name, warning: true });
+                return;
+            }
             // Ensure the indicator exists (in case the detail beats the early notification),
             // then set its second line.
             if (!messageContainer.querySelector('.function-call-indicator')) {
@@ -1667,6 +1690,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.log('ask_user raw payload:', JSON.stringify(data).slice(0, 800));
 
                 // Waiting on the user — the assistant genuinely stopped working.
+                finalizeTrail('Waiting for your answer');
                 removeFunctionCallIndicator(false, true);
 
                 // Normalize: support both new questions[] format and legacy single-question format
@@ -1885,6 +1909,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // Handle confirm_action notification — blocking Yes/No permission popup
             if (data.notification_type === 'confirm_action') {
                 // Blocking Yes/No — work is paused until they answer.
+                finalizeTrail('Waiting for your approval');
                 removeFunctionCallIndicator(false, true);
 
                 const title = data.title || 'Proceed?';
@@ -2447,6 +2472,7 @@ document.addEventListener('DOMContentLoaded', () => {
         
         if (!chunk) {
             // This is just a typing indicator
+            if (activeTrail) return;
             const typingIndicator = document.querySelector('.typing-indicator');
             if (!typingIndicator) {
                 const indicator = document.createElement('div');
@@ -2471,13 +2497,9 @@ document.addEventListener('DOMContentLoaded', () => {
             // Remove typing indicator if present
             const typingIndicator = document.querySelector('.typing-indicator');
             if (typingIndicator) typingIndicator.remove();
-            // Keep the "Gathering information" indicator up DURING the turn — agentic runs
-            // interleave streamed text with tool calls, and removing it on each intermediate
-            // message is what made it flicker on/off. Just move it BELOW the new message so it
-            // stays pinned to the bottom; it's cleared on is_final / stop.
-            const workingInd = messageContainer.querySelector('.function-call-indicator');
+            // Completed actions stay ABOVE the response they produced.
+            finishWorkPhase();
             addMessageToChat('assistant', chunk);
-            if (workingInd) messageContainer.appendChild(workingInd);
             currentStreamingEl = getLastAssistantMessage();
         } else {
             // Accumulate raw content and render via marked
@@ -2839,6 +2861,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function showStopButton() {
         turnActive = true;
+        document.querySelector('.typing-indicator')?.remove();
+        if (!activeTrail) trailStep({ detail: 'Waiting for the agent', icon: 'fa-hourglass' });
         // Check if we're already in the process of transitioning
         if (currentButtonState === ButtonState.TRANSITIONING) {
             console.log('Button transition in progress, skipping showStopButton');
@@ -2900,6 +2924,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Function to hide stop button and show send button
     function hideStopButton() {
+        messageContainer.querySelectorAll('.message[data-streaming="true"]').forEach(finishMessageDisplay);
         turnActive = false;
         // Check if we're already in the process of transitioning
         if (currentButtonState === ButtonState.TRANSITIONING) {
@@ -2946,6 +2971,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // the flag first so the working pill can actually be removed below,
         // instead of being stranded on screen forever.
         turnActive = false;
+        finalizeTrail('Interrupted — connection or stream ended');
         removeFunctionCallIndicator(true, true);
 
         // Reset flags
@@ -3019,6 +3045,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 typingIndicator.remove();
             }
             // Clear the persistent working indicator on stop.
+            finalizeTrail('Stopped');
             removeFunctionCallIndicator(false, true);
 
             // Add a note that generation was stopped
@@ -3526,10 +3553,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     function addMessageToChat(role, content, fileData = null, userRole = null, isPartial = false) {
-        // An assistant message CLOSES the trail above it. The agent works, says
-        // something, works again — so the steps and the text should read in the order
-        // they happened, not as one block of steps with all the prose underneath.
-        if (role === 'assistant' && content && content.trim()) finalizeTrail();
+        // History messages may close a replayed trail; live text must not close it.
+        // Intermediate assistant text is not proof that the turn has ended.
+        if (!turnActive && role === 'assistant' && content && content.trim()) finalizeTrail();
         // Skip adding empty messages unless there's an audio indicator
         if (!content || content.trim() === '') {
             if (!fileData || !fileData.audioIndicator) {
@@ -3606,6 +3632,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Create message content
         const contentDiv = document.createElement('div');
         contentDiv.className = 'message-content';
+        contentDiv.id = 'chat-message-content-' + (++messageContentSequence);
         contentDiv.setAttribute('data-raw-content', content);
         
         // Use marked.js to render markdown for assistant messages
@@ -3685,8 +3712,10 @@ document.addEventListener('DOMContentLoaded', () => {
         copyButton.className = 'message-copy-btn';
         copyButton.innerHTML = '<i class="fas fa-copy"></i>';
         copyButton.title = 'Copy message';
+        copyButton.type = 'button';
+        copyButton.setAttribute('aria-label', 'Copy full message');
         copyButton.onclick = function() {
-            copyMessageToClipboard(content, this);
+            copyMessageToClipboard(contentDiv.getAttribute('data-raw-content') || '', this);
         };
         
         // Create a message actions container
@@ -3697,6 +3726,28 @@ document.addEventListener('DOMContentLoaded', () => {
         // Append elements
         messageDiv.appendChild(contentDiv);
         messageDiv.appendChild(messageActions);
+        if (role === 'user' || role === 'assistant') {
+            const footer = document.createElement('div');
+            footer.className = 'message-footer';
+            const toggle = document.createElement('button');
+            toggle.type = 'button';
+            toggle.className = 'message-expand-btn';
+            toggle.hidden = true;
+            toggle.setAttribute('aria-controls', contentDiv.id);
+            toggle.onclick = () => {
+                messageDiv.dataset.expanded = String(messageDiv.dataset.expanded !== 'true');
+                updateMessageDisplay(messageDiv);
+            };
+            const bottomCopy = copyButton.cloneNode(true);
+            bottomCopy.innerHTML = '<i class="fas fa-copy" aria-hidden="true"></i> Copy';
+            bottomCopy.onclick = function() { copyMessageToClipboard(contentDiv.getAttribute('data-raw-content') || '', this); };
+            footer.appendChild(toggle);
+            footer.appendChild(bottomCopy);
+            messageDiv.appendChild(footer);
+            messageDiv.dataset.streaming = String(role === 'assistant' && turnActive);
+            contentDiv.addEventListener('load', () => updateMessageDisplay(messageDiv), true);
+            requestAnimationFrame(() => updateMessageDisplay(messageDiv));
+        }
         
         // Add partial message indicator if needed
         if (isPartial) {
@@ -3719,19 +3770,40 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     // Function to copy message to clipboard
+    function updateMessageDisplay(message) {
+        if (!message?.isConnected) return;
+        const content = message.querySelector('.message-content');
+        const toggle = message.querySelector('.message-expand-btn');
+        if (!content || !toggle) return;
+        const long = content.scrollHeight > 360;
+        const streaming = message.dataset.streaming === 'true';
+        const collapsed = long && !streaming && message.dataset.expanded !== 'true';
+        message.classList.toggle('message-collapsed', collapsed);
+        toggle.hidden = !long || streaming;
+        toggle.textContent = collapsed ? 'Show more' : 'Show less';
+        toggle.setAttribute('aria-expanded', String(!collapsed));
+    }
+
+    function finishMessageDisplay(message) {
+        if (!message) return;
+        message.dataset.streaming = 'false';
+        requestAnimationFrame(() => updateMessageDisplay(message));
+    }
+
+    let messageResizeFrame = null;
+    window.addEventListener('resize', () => {
+        cancelAnimationFrame(messageResizeFrame);
+        messageResizeFrame = requestAnimationFrame(() => {
+            messageContainer.querySelectorAll('.message').forEach(updateMessageDisplay);
+        });
+    });
+
     function copyMessageToClipboard(content, button) {
         // Use the Clipboard API if available
         if (navigator.clipboard && window.isSecureContext) {
             navigator.clipboard.writeText(content).then(() => {
                 // Show success feedback
-                const originalHTML = button.innerHTML;
-                button.innerHTML = '<i class="fas fa-check"></i>';
-                button.classList.add('copied');
-                
-                setTimeout(() => {
-                    button.innerHTML = originalHTML;
-                    button.classList.remove('copied');
-                }, 2000);
+                showMessageCopied(button);
             }).catch(err => {
                 console.error('Failed to copy text: ', err);
                 // Fallback to older method
@@ -3755,22 +3827,28 @@ document.addEventListener('DOMContentLoaded', () => {
         textArea.select();
         
         try {
-            document.execCommand('copy');
+            if (!document.execCommand('copy')) throw new Error('Clipboard unavailable');
             // Show success feedback
-            const originalHTML = button.innerHTML;
-            button.innerHTML = '<i class="fas fa-check"></i>';
-            button.classList.add('copied');
-            
-            setTimeout(() => {
-                button.innerHTML = originalHTML;
-                button.classList.remove('copied');
-            }, 2000);
+            showMessageCopied(button);
         } catch (err) {
             console.error('Failed to copy text: ', err);
             alert('Failed to copy message');
         }
         
         document.body.removeChild(textArea);
+    }
+
+    function showMessageCopied(button) {
+        if (!button._copyOriginal) button._copyOriginal = button.innerHTML;
+        clearTimeout(button._copyTimer);
+        button.innerHTML = '<i class="fas fa-check" aria-hidden="true"></i> Copied';
+        button.setAttribute('aria-label', 'Message copied');
+        button.classList.add('copied');
+        button._copyTimer = setTimeout(() => {
+            button.innerHTML = button._copyOriginal;
+            button.setAttribute('aria-label', 'Copy full message');
+            button.classList.remove('copied');
+        }, 2000);
     }
     
     // Function to show a function call indicator
@@ -3808,6 +3886,23 @@ document.addEventListener('DOMContentLoaded', () => {
     // so you can see what it's actually doing, and it stays in the transcript afterwards
     // (collapsed) so you can go back and read what happened.
     let activeTrail = null;
+    let trailTimer = null;
+
+    function finishWorkPhase() {
+        finalizeTrail(activeTrail?.dataset.warning === 'true' ? 'Worked with warnings' : 'Worked');
+    }
+
+    function beginResponseBlock() {
+        finishWorkPhase();
+        finishMessageDisplay(currentStreamingEl);
+        currentStreamingEl = null;
+    }
+
+    function touchTrail() {
+        if (!activeTrail) return;
+        activeTrail.dataset.lastActivity = String(Date.now());
+        updateTrailMeta(activeTrail);
+    }
 
     // One glyph per KIND of work — every row carrying the same magnifying glass made
     // the column unreadable at a glance.
@@ -3825,6 +3920,16 @@ document.addEventListener('DOMContentLoaded', () => {
             activeTrail = document.createElement('div');
             activeTrail.className = 'agent-trail is-running';
             activeTrail.dataset.started = String(Date.now());
+            activeTrail.dataset.lastActivity = String(Date.now());
+            clearInterval(trailTimer);
+            trailTimer = setInterval(() => {
+                if (!activeTrail || !activeTrail.isConnected) {
+                    clearInterval(trailTimer);
+                    trailTimer = null;
+                    return;
+                }
+                updateTrailMeta(activeTrail);
+            }, 1000);
             activeTrail.innerHTML = `
                 <button type="button" class="agent-trail-head" aria-expanded="true">
                     <span class="agent-trail-spinner"></span>
@@ -3840,6 +3945,12 @@ document.addEventListener('DOMContentLoaded', () => {
             messageContainer.appendChild(activeTrail);
         }
 
+        touchTrail();
+        if (step.warning) {
+            activeTrail.dataset.warning = 'true';
+            // A subsequent retry must not overwrite the failure in the trail.
+            if (!step.key) step.key = 'warning-' + Date.now();
+        }
         const steps = activeTrail.querySelector('.agent-trail-steps');
         const text = step.detail || step.label || 'Working';
 
@@ -3904,25 +4015,80 @@ document.addEventListener('DOMContentLoaded', () => {
         const secs = Math.max(1, Math.round((Date.now() - Number(trail.dataset.started || Date.now())) / 1000));
         const meta = trail.querySelector('.agent-trail-meta');
         if (meta) meta.textContent = count + (count === 1 ? ' step' : ' steps') + ' · ' + secs + 's';
+        if (trail.classList.contains('is-running')) {
+            const silent = Math.floor((Date.now() - Number(trail.dataset.lastActivity || trail.dataset.started)) / 1000);
+            const title = trail.querySelector('.agent-trail-title');
+            if (title) title.textContent = silent >= 30
+                ? 'Waiting for a response — no update for ' + silent + 's'
+                : 'Working';
+        }
     }
 
     /** Replay a SAVED trail from history: same component, already finished. */
-    function renderSavedTrail(steps) {
+    function renderSavedTrail(steps, endReason, phase = false) {
         activeTrail = null;                       // never continue a historical trail
-        steps.forEach((st) => trailStep({ detail: st.text, tool: st.tool }));
-        finalizeTrail();
+        steps.forEach((st) => trailStep({ detail: st.text, tool: st.tool, warning: st.warning }));
+        if (phase) { finishWorkPhase(); return; }
+        finalizeTrail(endReason === 'error' ? 'Failed' : endReason === 'stopped' ? 'Stopped'
+            : endReason && endReason !== 'complete' ? 'Interrupted — ' + endReason : undefined);
+    }
+
+    // Offsets refer to the persisted, citation-cleaned content. Old records have no
+    // offsets and retain their legacy rendering; never guess boundaries in prose.
+    function assistantTimelineParts(message) {
+        const content = message.content || '';
+        const steps = message.activity_trail;
+        if (!Array.isArray(steps) || !steps.length) return null;
+        let previous = 0;
+        for (const step of steps) {
+            if (!Number.isInteger(step.afterText) || step.afterText < previous || step.afterText > content.length) return null;
+            previous = step.afterText;
+        }
+        const parts = [];
+        let cursor = 0;
+        for (const step of steps) {
+            if (step.afterText > cursor) {
+                const text = content.slice(cursor, step.afterText);
+                if (text.trim()) parts.push({ kind: 'message', text });
+                cursor = step.afterText;
+            }
+            const last = parts[parts.length - 1];
+            if (last?.kind === 'actions' && last.offset === cursor) last.steps.push(step);
+            else parts.push({ kind: 'actions', offset: cursor, steps: [step] });
+        }
+        const tail = content.slice(cursor);
+        if (tail.trim()) parts.push({ kind: 'message', text: tail });
+        return parts;
+    }
+
+    function renderAssistantTimeline(message) {
+        const parts = assistantTimelineParts(message);
+        if (!parts) return false;
+        let lastMessage = null;
+        parts.forEach((part, index) => {
+            if (part.kind === 'message') lastMessage = addMessageToChat('assistant', part.text);
+            else renderSavedTrail(part.steps, message.end_reason, index < parts.length - 1);
+        });
+        if (lastMessage && message.end_reason) markMessageEndReason(lastMessage, message.end_reason);
+        return true;
     }
 
     /** The turn is over: stamp the trail, collapse it, and leave it in the transcript. */
-    function finalizeTrail() {
+    function finalizeTrail(outcome) {
+        clearInterval(trailTimer);
+        trailTimer = null;
         if (!activeTrail || !activeTrail.isConnected) { activeTrail = null; return; }
         const trail = activeTrail;
         activeTrail = null;
         updateTrailMeta(trail);
         trail.classList.remove('is-running');
         trail.classList.add('is-done', 'is-collapsed');
+        const terminal = outcome || (trail.dataset.warning === 'true' ? 'Completed with warnings' : 'Completed');
+        trail.dataset.outcome = terminal === 'Completed' || terminal === 'Worked' ? 'success'
+            : terminal === 'Failed' ? 'failed'
+            : terminal === 'Stopped' ? 'stopped' : 'warning';
         const title = trail.querySelector('.agent-trail-title');
-        if (title) title.textContent = 'Worked';
+        if (title) title.textContent = terminal;
         const head = trail.querySelector('.agent-trail-head');
         if (head) head.setAttribute('aria-expanded', 'false');
         const current = trail.querySelector('.agent-trail-step.is-current');
@@ -4839,10 +5005,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     rendered++;
                     return;
                 }
-                if (message.role === 'assistant' && Array.isArray(message.activity_trail) && message.activity_trail.length) {
-                    renderSavedTrail(message.activity_trail);
+                const renderedTimeline = message.role === 'assistant' && renderAssistantTimeline(message);
+                if (renderedTimeline) rendered++;
+                if (!renderedTimeline && message.role === 'assistant' && Array.isArray(message.activity_trail) && message.activity_trail.length) {
+                    renderSavedTrail(message.activity_trail, message.end_reason);
                 }
-                if ((message.content && message.content.trim() !== '') || fileData) {
+                if (!renderedTimeline && ((message.content && message.content.trim() !== '') || fileData)) {
                     const el = addMessageToChat(message.role, message.content || '', fileData);
                     if (message.role === 'assistant' && message.end_reason) markMessageEndReason(el, message.end_reason);
                     rendered++;

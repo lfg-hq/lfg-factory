@@ -11,6 +11,7 @@ import projectsRoutes from "./routes/projects.ts";
 import settingsRoutes from "./routes/settings.ts";
 import filesApi from "./routes/api/files.ts";
 import settingsApi from "./routes/api/settings.ts";
+import ticketCodeApi from "./routes/api/ticket-code.ts";
 import ticketsApi from "./routes/api/tickets.ts";
 import conversationsApi from "./routes/api/conversations.ts";
 import instantApi from "./routes/api/instant.ts";
@@ -125,6 +126,7 @@ app.use("/public/*", async (c, next) => {
     });
   } catch { /* compression is an optimisation — serve what serveStatic produced */ }
 });
+app.use("/vendor/monaco/*", serveStatic({ root: "./node_modules/monaco-editor/min", rewriteRequestPath: (path) => path.replace("/vendor/monaco", "") }));
 app.use("/public/*", serveStatic({ root: "./" }));
 app.use("/uploads/*", serveStatic({ root: "./" }));
 // Local file storage (FILE_STORAGE_TYPE=local): serve binaries written under
@@ -168,6 +170,7 @@ app.route("/", invitationRoutes);
 app.route("/", shareRoutes);
 app.route("/api/files", filesApi);
 app.route("/api/settings", settingsApi);
+app.route("/api/projects", ticketCodeApi);
 app.route("/api/projects", ticketsApi);
 app.route("/api/conversations", conversationsApi);
 app.route("/api/instant", instantApi);

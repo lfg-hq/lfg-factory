@@ -4179,3 +4179,5 @@
     border: 1px solid var(--border-color, #333);
 }
 .pr-hint { margin: 0.7rem 0 0; font-size: 0.75rem; line-height: 1.5; color: var(--text-secondary); }
+
+.ticket-code-link{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid #8470ba55;border-radius:6px;color:#bba6ed;background:#a98ce812;font-size:11px;font-weight:600;text-decoration:none;white-space:nowrap}.ticket-code-link:hover{background:#a98ce829;color:#d6c4ff}.kanban-card-meta .ticket-code-link{margin-right:auto}[data-theme="light"] .ticket-code-link{color:#6846a4;background:#f0eafb}

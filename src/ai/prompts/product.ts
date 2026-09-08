@@ -4,6 +4,8 @@
  */
 /** Replaced per-request with the project's own catalogue (built-ins + custom). */
 export const SKILLS_PLACEHOLDER = "<<LFG_SKILLS>>";
+/** Replaced per-project with the document types that have a template (see doc-templates). */
+export const DOC_TEMPLATES_PLACEHOLDER = "<<LFG_DOC_TEMPLATES>>";
 
 export function getProductSystemPrompt(params?: {
   userName?: string;
@@ -228,6 +230,8 @@ The PRD is the source of truth. After it's written, the scope and requirements a
 ---
 
 ${SKILLS_PLACEHOLDER}
+
+${DOC_TEMPLATES_PLACEHOLDER}
 
 ---
 

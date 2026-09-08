@@ -627,6 +627,15 @@ projectsRouter.get("/projects/:projectId/epics", async (c) => {
   }));
 });
 
+projectsRouter.get("/projects/:projectId/tickets/:ticketId/diff", async (c) => {
+  const access = await getProjectAccess(c.req.param("projectId"), c.get("user").id);
+  if (!access) return c.text("Project not found", 404);
+  const [ticket] = await db.select().from(projectTickets).where(and(eq(projectTickets.id, c.req.param("ticketId")), eq(projectTickets.projectId, access.project.id)));
+  if (!ticket) return c.text("Ticket not found", 404);
+  const { TicketCodePage } = await import("../templates/pages/ticket-code.tsx");
+  return c.html(TicketCodePage({ projectId: access.project.projectId, ticketId: ticket.id, name: ticket.name, ticketKey: ticket.ticketKey }));
+});
+
 // ── GET /projects/:projectId/tickets — tickets kanban ───────────────
 projectsRouter.get("/projects/:projectId/tickets", async (c) => {
   const user = c.get("user");

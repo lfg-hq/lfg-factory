@@ -315,6 +315,9 @@ async function sendHistory(ws: ServerWebSocket<WsData>, conversationId: string):
       role: m.role as "user" | "assistant" | "system",
       content: m.content,
       createdAt: m.createdAt,
+      activity_trail: m.activityTrail ?? null,
+      end_reason: m.endReason ?? null,
+      is_partial: m.isPartial ?? false,
     })),
   });
 }

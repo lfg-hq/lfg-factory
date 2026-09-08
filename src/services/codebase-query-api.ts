@@ -23,6 +23,9 @@ import { withCaching } from "../ai/prompt-cache.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { getRepoReader, type RepoReader, type RepoTree } from "./repo-reader.ts";
 import type { UserApiKeys } from "../ai/provider.ts";
+import { abortable, readingBudget, withRepositorySignal, ReadingError } from './reading-budget.ts';
+import { currentSubscription } from '../ai/subscription-context.ts';
+import { createPiSubscriptionModel } from '../ai/pi-subscription-model.ts';
 
 // Each answer costs roughly two steps per hop (grep → read), so 12 is only ~6
 // hops — enough for a small repo, not for a monorepo where finding "the story
@@ -30,7 +33,6 @@ import type { UserApiKeys } from "../ai/provider.ts";
 // budget runs out mid-hop the loop returns NO text (see below), so too small a
 // number doesn't degrade the answer, it erases it.
 const MAX_STEPS = parseInt(process.env.CODEBASE_QUERY_MAX_STEPS || "20", 10);
-const QUERY_TIMEOUT_MS = 180_000; // 3 min ceiling for the whole read loop
 
 // ── Repo-map cache (per process) ──────────────────────────────────────
 // Keyed by owner/repo@ref → { sha, tree, repoMap }. A cheap getRefSha() call
@@ -90,6 +92,10 @@ export interface CodebaseQueryOptions {
   branch?: string;
   /** When set, assistant text + status are streamed to this user over WS. */
   userId?: string;
+  abortSignal?: AbortSignal;
+  requestCache?: Map<string, Response>;
+  /** Turn-local callback, never a user-wide broadcast. */
+  onProgress?: (message: string, warning?: boolean) => void;
 }
 
 export interface CodebaseQueryResult {
@@ -116,6 +122,14 @@ function filesTouched(steps: Array<{ toolCalls?: Array<{ toolName?: string; inpu
 export interface QueryStep {
   text?: string;
   toolCalls?: Array<{ toolName?: string; input?: unknown }>;
+}
+
+export function recoverCodebaseQuery(reason: unknown, partialText: string, steps: QueryStep[], branch = 'default'): CodebaseQueryResult {
+  const incomplete = reason instanceof ReadingError ? `${reason.code}: ${reason.message}`
+    : `Repository investigation failed: ${reason instanceof Error ? reason.message : 'unknown error'}`;
+  const answer = deriveAnswer(partialText, steps, MAX_STEPS).answer;
+  const touched = filesTouched(steps);
+  return { answer: answer || (touched ? `Inspection was interrupted after attempting these file/search operations: ${touched}. No final conclusion was reached.` : ''), branch, incomplete };
 }
 
 /**
@@ -153,8 +167,32 @@ export function deriveAnswer(
 export async function queryCodebaseInProcess(
   opts: CodebaseQueryOptions
 ): Promise<CodebaseQueryResult> {
+  const budget = readingBudget(opts.abortSignal);
+  const collected: QueryStep[] = [];
+  let partialText = '';
+  const progress = (message: string, warning?: boolean) => {
+    if (budget.signal.aborted) return;
+    budget.activity();
+    opts.onProgress?.(message, warning);
+  };
+  try {
+    return await abortable(withRepositorySignal(budget.signal, () => runCodebaseQuery({
+      ...opts, abortSignal: budget.signal, onProgress: progress,
+    }, collected, text => { partialText += text; }), () => progress('Fetched repository data'), opts.requestCache), budget.signal);
+  } catch (error) {
+    if (opts.abortSignal?.aborted) throw opts.abortSignal.reason;
+    const reason = budget.signal.aborted ? budget.signal.reason : error;
+    const recovered = recoverCodebaseQuery(reason, partialText, collected, opts.branch);
+    opts.onProgress?.(recovered.incomplete!, true);
+    return recovered;
+  } finally { budget.dispose(); }
+}
+
+async function runCodebaseQuery(opts: CodebaseQueryOptions, collected: QueryStep[], onText: (text: string) => void): Promise<CodebaseQueryResult> {
   const { owner, repo, question, githubToken, modelKey, userApiKeys, allowEnvFallback, userId } = opts;
   const reader = getRepoReader(opts.provider);
+  const progress = opts.onProgress ?? (() => {});
+  progress("Fetching repository information");
 
   // Resolve the ref: explicit branch, else the repo's default branch.
   let ref = opts.branch;
@@ -172,13 +210,21 @@ export async function queryCodebaseInProcess(
   }
 
   // Build (or reuse, when the commit SHA is unchanged) the repo map.
+  progress("Fetching repository file map");
   const { tree, repoMap } = await loadRepoMap(reader, owner, repo, ref, githubToken);
+  progress("Inspecting repository files");
 
   const { selectedSubscriptionModel } = await import("./subscription-execution.ts");
-  const subscription = userId ? await selectedSubscriptionModel(userId) : null;
+  const inherited = currentSubscription();
+  const subscription = inherited
+    ? createPiSubscriptionModel('gpt-5.6-luna', inherited.getAccessToken)
+    : userId ? await selectedSubscriptionModel(userId, undefined, 'gpt-5.6-luna') : null;
   const { model, modelKey: liteKey } = subscription
     ? { model: subscription, modelKey: `chatgpt/${subscription.modelId}` }
     : getLiteModel(modelKey, userApiKeys, { allowEnvFallback });
+  progress(`Reading with ${subscription ? subscription.modelId : liteKey}`);
+  const reads = new Map<string, Promise<string | null>>();
+  const searches = new Map<string, Promise<string[]>>();
 
   // On-demand retrieval tools, backed by the GitHub API.
   const tools = {
@@ -188,11 +234,17 @@ export async function queryCodebaseInProcess(
         z.object({ path: z.string().describe("Repo-relative file path, e.g. src/index.ts") })
       ),
       execute: async ({ path }: { path: string }) => {
+        progress(`Reading ${path}`);
         try {
-          const content = await reader.readFile(owner, repo, path, ref!, githubToken);
-          if (content == null) return { error: `File not found: ${path}` };
+          if (!reads.has(path)) reads.set(path, reader.readFile(owner, repo, path, ref!, githubToken, 40000));
+          const content = await reads.get(path);
+          if (content == null) {
+            progress(`File not found: ${path}`, true);
+            return { error: `File not found: ${path}` };
+          }
           return { path, content };
         } catch (err) {
+          progress(`Could not read ${path}`, true);
           return { error: `Failed to read ${path}: ${(err as Error).message}` };
         }
       },
@@ -205,7 +257,10 @@ export async function queryCodebaseInProcess(
         z.object({ query: z.string().describe("Keyword, symbol, or short phrase to search for") })
       ),
       execute: async ({ query }: { query: string }) => {
-        const paths = await reader.searchCode(owner, repo, query, githubToken);
+        progress(`Searching repository for ${query}`);
+        const key = query.trim().toLowerCase();
+        if (!searches.has(key)) searches.set(key, reader.searchCode(owner, repo, query, githubToken));
+        const paths = await searches.get(key);
         return { query, matches: paths };
       },
     }),
@@ -217,6 +272,7 @@ export async function queryCodebaseInProcess(
         z.object({ prefix: z.string().optional().describe("Path prefix filter") })
       ),
       execute: async ({ prefix }: { prefix?: string }) => {
+        progress(`Listing files in ${prefix || 'repository'}`);
         const paths = tree.files
           .map((f) => f.path)
           .filter((p) => (prefix ? p.startsWith(prefix) : true))
@@ -235,6 +291,8 @@ export async function queryCodebaseInProcess(
     `${owner}/${repo} (branch: ${ref}).\n\n` +
     `Use the read_file, grep, and list_files tools to inspect only the files you actually ` +
     `need — do not guess. Answer the user's question precisely and concisely, citing exact ` +
+    `Start with relevant folders and targeted reads, not a broad scan. Do not repeat failed searches. ` +
+    `After inspecting useful evidence, state brief findings before investigating further so partial results survive interruption. ` +
     `file paths (and line references where helpful). If the answer isn't in the code, say so.\n\n` +
     `--- Repository file map ---\n${repoMap}`;
 
@@ -254,17 +312,25 @@ export async function queryCodebaseInProcess(
     messages: cached.messages as any,
     tools,
     stopWhen: stepCountIs(MAX_STEPS),
-    abortSignal: AbortSignal.timeout(QUERY_TIMEOUT_MS),
+    abortSignal: opts.abortSignal,
+    onStepFinish: step => { collected.push(step as QueryStep); },
     ...(providerOptions ? { providerOptions } : {}),
   });
 
   try {
     // Stream assistant text to the user as it arrives (mirrors the old CLI UX).
-    if (userId) {
+    {
+      let lastModelProgress = 0;
       for await (const event of result.fullStream) {
+        if (event.type === "error") throw event.error;
+        if (event.type === "text-delta") onText(event.text);
+        if ((event.type === "reasoning-delta" || event.type === "text-delta") && Date.now() - lastModelProgress >= 5000) {
+          progress(event.type === "text-delta" ? "Preparing codebase answer" : "Analysing repository");
+          lastModelProgress = Date.now();
+        }
         if (event.type === "text-delta") {
           const text = (event as any).text ?? (event as any).textDelta ?? "";
-          if (text) broadcastToUser(userId, { type: "codebase_query_chunk", text });
+          if (text && userId) broadcastToUser(userId, { type: "codebase_query_chunk", text });
         }
       }
     }
@@ -278,6 +344,7 @@ export async function queryCodebaseInProcess(
     // earlier steps, and if there is genuinely nothing, say WHY.
     const steps = (await Promise.resolve(result.steps).catch(() => [])) as QueryStep[];
     const derived = deriveAnswer(await result.text, steps, MAX_STEPS);
+    progress(derived.incomplete ? "Repository scan ended without an answer" : "Repository scan finished", !!derived.incomplete);
 
     if (userId) {
       broadcastToUser(userId, { type: "codebase_query_status", status: "complete" });
@@ -287,13 +354,6 @@ export async function queryCodebaseInProcess(
   } catch (err) {
     if (userId) {
       broadcastToUser(userId, { type: "codebase_query_status", status: "complete" });
-    }
-    const aborted =
-      (err as any)?.name === "TimeoutError" || (err as any)?.name === "AbortError";
-    if (aborted) {
-      throw new Error(
-        `Codebase query timed out after ${Math.round(QUERY_TIMEOUT_MS / 1000)}s. The model took too long — try a faster model or a more specific question.`
-      );
     }
     throw err;
   }

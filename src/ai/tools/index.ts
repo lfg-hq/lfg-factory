@@ -65,6 +65,7 @@ import { broadcastToUser, askUser, confirmAction, lookupTechnologySpecs } from "
 import { queryCodebase } from "./codebase-tools.ts";
 import { getRecentActivities } from "./activity-tools.ts";
 import { loadSkill } from "./skill-tools.ts";
+import { loadDocumentTemplate } from "./doc-template-tools.ts";
 
 export const toolsProduct = {
   startEpic,
@@ -107,6 +108,7 @@ export const toolsProduct = {
   queryCodebase,
   getRecentActivities,
   loadSkill,
+  loadDocumentTemplate,
 };
 
 // ── tools_turbo: Lightweight subset for quick interactions ────────────────────

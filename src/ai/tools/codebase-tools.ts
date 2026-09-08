@@ -44,6 +44,7 @@ export const queryCodebase = tool({
     "Query the project's codebase to answer questions about code structure, " +
     "find implementations, understand patterns, or explore the repository. " +
     "Reads the linked GitHub/GitLab repo directly (file map + on-demand file reads / grep) at ANY branch. " +
+    "Do NOT use this to read a saved report or document: use getFileList and getFileContent first. Only inspect source if verification is needed. " +
     "Use this when the user asks about their code — how something works, " +
     "where something is defined, code architecture, etc. " +
     "IMPORTANT: when the question is about the work done ON A TICKET (its changes, what a ticket implemented, or reviewing/critiquing a ticket's output), pass that ticket's `ticketId` so this reads the ticket's FEATURE branch — the ticket's changes live there, NOT on the default branch. Pass `branch` directly if you already know the branch name.",
@@ -62,7 +63,9 @@ export const queryCodebase = tool({
         .describe("Git branch to query. Default: the repo's default branch. Ignored if ticketId is given."),
     })
   ),
-  execute: async ({ projectId, userId, question, ticketId, branch }) => {
+  execute: async ({ projectId, userId, question, ticketId, branch }, { abortSignal, experimental_context }) => {
+    const onProgress = (experimental_context as { codebaseProgress?: (message: string, warning?: boolean) => void } | undefined)?.codebaseProgress;
+    const requestCache = (experimental_context as { repositoryCache?: Map<string, Response> } | undefined)?.repositoryCache;
     // 1. Load project → resolve owner/repo
     const [project] = await db
       .select()
@@ -155,6 +158,9 @@ export const queryCodebase = tool({
         userApiKeys,
         branch: effectiveBranch,
         userId,
+        abortSignal,
+        onProgress,
+        requestCache,
       });
       // An empty answer is not "the repo has nothing" — it means the read loop ran
       // out of steps or the model said nothing. Return WHY, so the agent narrows the
@@ -166,8 +172,9 @@ export const queryCodebase = tool({
           error: result.incomplete ?? "The codebase query returned no answer. Narrow the question or name the folder to search.",
         };
       }
-      return { answer: result.answer, branch: result.branch };
+      return { answer: result.answer, branch: result.branch, ...(result.incomplete ? { warning: result.incomplete, instruction: 'Use these partial findings and already-read documents. State what could not be verified; do not restart the same broad scan.' } : {}) };
     } catch (err) {
+      onProgress?.(abortSignal?.aborted ? "Repository scan cancelled" : "Repository scan failed — the agent will receive the error", true);
       console.error(`[queryCodebase] Query failed:`, err);
       return {
         error: `Codebase query failed: ${(err as Error).message?.slice(0, 300)}`,

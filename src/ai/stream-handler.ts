@@ -9,6 +9,7 @@ import { llmApiKeys } from "../db/schema/users.ts";
 import { projects } from "../db/schema/projects.ts";
 import { resolveLlmGrants, llmKeyUserId, userLlmAccess } from "../services/llm-access.ts";
 import { projectFiles } from "../db/schema/documents.ts";
+import { readingTools, READING_INSTRUCTIONS } from './reading-policy.ts';
 import { projectTickets, ticketLogs, ticketAddenda } from "../db/schema/tickets.ts";
 import { projectEnvironments } from "../db/schema/project-environments.ts";
 import { eq, and, desc, inArray } from "drizzle-orm";
@@ -785,8 +786,14 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
 
     // The catalogue is per-project: built-in skills plus anything this project added.
     const { skillCatalogueFor } = await import("./skills/index.ts");
-    const { SKILLS_PLACEHOLDER } = await import("./prompts/product.ts");
+    const { SKILLS_PLACEHOLDER, DOC_TEMPLATES_PLACEHOLDER } = await import("./prompts/product.ts");
     systemPrompt = systemPrompt.replace(SKILLS_PLACEHOLDER, await skillCatalogueFor(internalProjectId ?? undefined));
+
+    // Which document types have a template here. Types only — the bodies are long and
+    // most turns write no document, so the agent pulls one with loadDocumentTemplate
+    // when it is actually about to write.
+    const { templateCatalogueFor } = await import("./doc-templates/index.ts");
+    systemPrompt = systemPrompt.replace(DOC_TEMPLATES_PLACEHOLDER, await templateCatalogueFor(internalProjectId ?? undefined));
 
     // Whatever the project owner told every agent here to do. Appended last so it
     // outranks the defaults it contradicts.
@@ -838,16 +845,17 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   // What the user watched happen this turn, in order. Kept alongside the message so
   // reopening the conversation still shows what the agent did — the trail used to live
   // only in the DOM and vanished on refresh.
-  const activityTrail: Array<{ text: string; tool?: string }> = [];
+  const activityTrail: Array<{ text: string; tool?: string; warning?: boolean; afterText?: number }> = [];
   // Previews rendered this turn, saved with the message so a refresh brings the card
   // back — it used to exist only in the socket message that announced it.
   const pagePreviews: Array<{ id: string; name: string }> = [];
-  const noteActivity = (text: string, tool?: string) => {
+  const noteActivity = (text: string, tool?: string, warning = false) => {
     if (!text) return;
     const last = activityTrail[activityTrail.length - 1];
-    if (last && last.text === text) return;          // same line twice in a row
+    const afterText = stripCitations(fullResponse).length;
+    if (last && last.text === text && last.afterText === afterText) return;
     if (activityTrail.length >= 60) return;          // a runaway turn shouldn't bloat the row
-    activityTrail.push(tool ? { text, tool } : { text });
+    activityTrail.push({ text, afterText, ...(tool ? { tool } : {}), ...(warning ? { warning: true } : {}) });
   };
 
   const persistAssistant = async (
@@ -890,6 +898,9 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   // tools) and the last message (caches the growing history prefix). For every
   // other provider caching is automatic given our stable [system][tools][history]
   // ordering, so this is a no-op that returns the inputs unchanged.
+  tools = readingTools(tools, userMessage);
+  const repositoryCache = new Map<string, Response>();
+  systemPrompt += READING_INSTRUCTIONS;
   const cached = withCaching(modelKey, { system: systemPrompt, messages: contextMessages });
 
   try {
@@ -910,6 +921,19 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
       tools,
       stopWhen: stepCountIs(80),
       abortSignal: abortController.signal,
+      experimental_context: {
+        repositoryCache,
+        codebaseProgress: (detail: string, warning = false) => {
+          if (abortController.signal.aborted) return;
+          req.onActivity?.();
+          noteActivity(detail, "queryCodebase", warning);
+          ws.send(JSON.stringify({
+            type: "ai_chunk", chunk: "", is_final: false, is_notification: true,
+            notification_type: "tool_detail", function_name: "queryCodebase",
+            detail, warning,
+          }));
+        },
+      },
       onStepFinish: ({ toolCalls }) => {
         if (!toolCalls?.length) return;
         sawToolCallThisPass = true; // this pass did real work, not just talk
@@ -943,6 +967,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     const confirmArgs = new Map<string, string>();
     let confirmCardSent = false;
     let turnClosedByCard = false; // a propose_*/create_instant_app card fired — drop trailing text
+    let beginsTextBlock = true;
 
     for await (const event of result.fullStream) {
       if (abortController.signal.aborted) break;
@@ -952,6 +977,9 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
       req.onActivity?.();
 
       switch (event.type) {
+        case "text-start":
+          beginsTextBlock = true;
+          break;
 
         case "text-delta": {
           // After askUser card is sent, suppress text entirely — both display
@@ -959,7 +987,20 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
           // transient card UI which isn't persisted, so saving it confuses
           // the AI on subsequent turns.
           if (askUserCardSent || confirmCardSent || turnClosedByCard) break;
-
+          if (!event.text) break;
+          if (beginsTextBlock) {
+            flush();
+            // Model steps are separate messages, not adjacent token fragments.
+            if (fullResponse && !fullResponse.endsWith('\n\n')) {
+              fullResponse += '\n\n';
+              chunkBuffer += '\n\n';
+            }
+            ws.send(JSON.stringify({
+              type: "ai_chunk", chunk: "", is_final: false, is_notification: true,
+              notification_type: "text_boundary",
+            }));
+            beginsTextBlock = false;
+          }
           fullResponse += event.text;
           chunkBuffer += event.text;
           const now = Date.now();
@@ -975,6 +1016,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
         }
 
         case "tool-input-start": {
+          beginsTextBlock = true;
           // A card tool owns the turn — suppress any assistant text that follows.
           if (TURN_CLOSING_TOOLS.has(event.toolName)) turnClosedByCard = true;
           if (DOCUMENT_STREAM_TOOLS.has(event.toolName)) {
@@ -1176,6 +1218,17 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
           break;
         }
 
+        case "tool-error": {
+          const detail = `${toolLabel(event.toolName)} failed — reviewing the error`;
+          noteActivity(detail, event.toolName, true);
+          ws.send(JSON.stringify({
+            type: "ai_chunk", chunk: "", is_final: false, is_notification: true,
+            notification_type: "tool_detail", function_name: event.toolName,
+            detail, warning: true,
+          }));
+          break;
+        }
+
         case "tool-result": {
           // AI SDK v6 puts the tool's return value on `output`. Reading `.result`
           // (the v4/v5 name) silently yielded undefined, so everything gated on it —
@@ -1185,6 +1238,15 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
             const v = e.output ?? e.result;
             return v && typeof v === "object" ? (v as Record<string, unknown>) : undefined;
           };
+          if (toolOutput(event)?.error || toolOutput(event)?.warning) {
+            const detail = `${toolLabel(event.toolName)} incomplete — using available findings`;
+            noteActivity(detail, event.toolName, true);
+            ws.send(JSON.stringify({
+              type: "ai_chunk", chunk: "", is_final: false, is_notification: true,
+              notification_type: "tool_detail", function_name: event.toolName,
+              detail, warning: true,
+            }));
+          }
 
           // The rendered page goes down the SAME channel as every other chat
           // notification — the one the trail already proves reaches the client.
@@ -1220,7 +1282,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
               const refined = `Reading ${name.trim().slice(0, 60)}`;
               for (let i = activityTrail.length - 1; i >= 0; i--) {
                 if (activityTrail[i]!.tool === "getFileContent" && /^Reading /.test(activityTrail[i]!.text)) {
-                  activityTrail[i] = { text: refined, tool: "getFileContent" };
+                  activityTrail[i] = { ...activityTrail[i]!, text: refined, tool: "getFileContent" };
                   break;
                 }
               }
@@ -1347,6 +1409,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     chunk: streamError ? `\n\n*Error: ${streamError.message}*` : "",
     is_final: true,
     conversation_id: convId,
+    end_reason: endReason,
     projectId: projectId ?? null,
   }));
 

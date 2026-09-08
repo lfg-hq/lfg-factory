@@ -2328,6 +2328,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                                     </span>
                                                     ` : ''}
                                                 </div>
+                                                <a href="/projects/${encodeURIComponent(projectId)}/tickets/${encodeURIComponent(ticket.id)}/diff" target="_blank" rel="noopener" class="view-details-btn" onclick="event.stopPropagation()" title="Open ticket code in a new window">&lt;/&gt; ↗</a>
                                                 <button class="view-details-btn" data-index="${filteredTickets.indexOf(ticket)}" title="View details">
                                                     <i class="fas fa-info-circle"></i>
                                                 </button>
@@ -2344,7 +2345,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         html += '</div>';
                         ticketsContent.innerHTML = html;
 
-                        const detailButtons = ticketsContent.querySelectorAll('.view-details-btn');
+                        const detailButtons = ticketsContent.querySelectorAll('button.view-details-btn');
                         detailButtons.forEach((button, index) => {
                             button.addEventListener('click', function(event) {
                                 event.stopPropagation();
