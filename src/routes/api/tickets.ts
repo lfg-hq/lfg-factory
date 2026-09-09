@@ -1179,7 +1179,7 @@ ticketsApi.post("/:projectId/tickets/:ticketId/git/push", async (c) => {
     // Only commit when we're in the ticket's OWN build tree. On the preview-sandbox
     // fallback there is nothing of this ticket's to commit — the branch is already on
     // the remote — so keep the recorded sha and go straight to the merge.
-    const sha = canCommit
+    const publication = canCommit
       ? (await commitAndPush({
           validation: { projectId, userId: user.id, ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: (await (await import("../../services/epics.ts")).resolveTicketAnchor(ticket)).baseBranch },
           workspaceId: workWorkspaceId,
@@ -1189,8 +1189,9 @@ ticketsApi.post("/:projectId/tickets/:ticketId/git/push", async (c) => {
           repoUrl: repoAuth.repoUrl,
           githubToken: repoAuth.token,
           tokenUser: repoAuth.tokenUser,
-        })).sha
-      : (ticket.githubCommitSha ?? "");
+        }))
+      : { sha: ticket.githubCommitSha ?? "", documentation: undefined };
+    const sha = publication.sha;
 
     if (canCommit) {
       await db
@@ -1231,6 +1232,7 @@ ticketsApi.post("/:projectId/tickets/:ticketId/git/push", async (c) => {
       // with no summary to look at.
       await addTicketLog(ticketId, [
         `✅ **Merged** into \`${anchorBranch}\`.`,
+        publication.documentation?.message ?? "",
         ``,
         `- Branch: \`${featureBranch}\``,
         sha ? `- Commit: \`${sha.slice(0, 7)}\`` : "",

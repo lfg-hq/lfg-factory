@@ -396,7 +396,7 @@ async function commitTests(
   const auth = await resolveRepoAuth(project, gitUserId);
   if (!auth || !ticket.githubBranch) return undefined;
   try {
-    const { sha } = await commitAndPush({
+    const { sha, documentation } = await commitAndPush({
       validation: { projectId: project.id, userId: ownerId, ticketId: ticket.id, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBranch },
       workspaceId, projectDir: cwd,
       commitMessage: `test(${ticket.ticketKey ?? "ticket"}): cover ${count} acceptance criteri${count === 1 ? "on" : "a"}`,
@@ -409,6 +409,7 @@ async function commitTests(
       repoUrl: auth.repoUrl, githubToken: auth.token, tokenUser: auth.tokenUser,
       targetBranch: anchorBranch, baseBranch: anchorBranch,
     });
+    if (documentation) await addLog(ticket.id, documentation.message, "ai_response", ownerId);
     return sha;
   } catch {
     return undefined; // the report still stands; the tests just didn't land

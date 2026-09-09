@@ -1885,6 +1885,7 @@ Before implementing, fix the git issue:
   // A build isn't "done" until the work is on the remote. If we can't push (no
   // repo/token) or the push throws, that's a FAILURE — don't mark it In Review.
   let commitFailed = false;
+  let publicationDocumentation = "";
   if (implementationStatus === "complete" && !(githubOwner && githubRepo && githubToken)) {
     commitFailed = true;
     await addLog(ticketId, "Build finished but the work was NOT pushed — GitHub isn't connected (no repo/token). Connect GitHub in Settings and rebuild.", "cli_error", ownerId);
@@ -1895,7 +1896,7 @@ Before implementing, fix the git issue:
       // One provider-aware credential for the push and the merge below — both used to
       // hardcode github.com regardless of where the repo actually lives.
       const gitAuth = await resolveRepoAuth(project, gitUserId).catch(() => null);
-      const { sha } = await commitAndPush({
+      const { sha, documentation } = await commitAndPush({
       validation: { projectId: project.id, userId: buildLlm.actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, cancelled: () => cancelledTickets.has(ticketId), onLog: line => { addLog(ticketId, line, "command", ownerId).catch(() => {}); } },
         workspaceId,
         projectDir: `${WORKING_DIR}/${projectDirName}`,
@@ -1905,6 +1906,7 @@ Before implementing, fix the git issue:
         githubToken: gitAuth?.token ?? githubToken,
         tokenUser: gitAuth?.tokenUser,
       });
+      publicationDocumentation = documentation?.message ?? "";
 
       await db
         .update(projectTickets)
@@ -2024,7 +2026,7 @@ Before implementing, fix the git issue:
         updatedAt: new Date(),
       })
       .where(eq(projectTickets.id, ticketId));
-    const cliSummary = `✅ **Ticket complete** — moved to In Review.\n\n- Branch: \`${featureBranch}\`\n\nOpen the **Git** tab to review the diff, or the **Preview** tab to run this branch.`;
+    const cliSummary = `✅ **Ticket complete** — moved to In Review.\n\n${publicationDocumentation ? publicationDocumentation + "\n\n" : ""}- Branch: \`${featureBranch}\`\n\nOpen the **Git** tab to review the diff, or the **Preview** tab to run this branch.`;
     await addLog(ticketId, cliSummary, "ai_response", ownerId);
     await markBuildTasksComplete(ticketId);
     await resolveTicketAddenda(ticketId, cliAddendaCtx.pendingIds);
@@ -2774,7 +2776,7 @@ async function finalizeTicketChat(
   const summary = (message.split("\n")[0] || "update").trim().slice(0, 72);
   try {
     await addLog(ticketId, "Committing chat changes…", "command", ownerId);
-    const { sha } = await commitAndPush({
+    const { sha, documentation } = await commitAndPush({
       validation: { projectId: project.id, userId: actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, cancelled: () => cancelledTickets.has(ticketId), onLog: line => { addLog(ticketId, line, "command", ownerId).catch(() => {}); } },
       workspaceId, projectDir,
       commitMessage: `chore: ${summary}`,
@@ -2808,7 +2810,7 @@ async function finalizeTicketChat(
     await db.update(projectTickets).set({ status: "review", queueStatus: "none", lastExecutionAt: new Date(), updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
     // Clear agent-style summary so the chat ends with an explicit "what I did".
     const done = `✅ **Update applied.**\n\n` +
-      (workSummary ? `**What I did:**\n${workSummary}\n\n` : "") +
+      (documentation ? documentation.message + "\n\n" : workSummary ? `**What I did:**\n${workSummary}\n\n` : "") +
       `- Branch: \`${featureBranch}\`\n- Commit: \`${sha.slice(0, 7)}\`\n${mergedOk ? `- Merged to \`${anchorBranch}\` ✓\n` : ""}\nRe-run the **Preview** to see the change, or open the **Git** tab for the diff.`;
     await addLog(ticketId, done, "ai_response", ownerId);
     // A chat/update turn that COMMITS is a completion too — flip the subtasks done
@@ -3584,6 +3586,7 @@ git branch --show-current
   const durationMs = Date.now() - startTime;
 
   let commitFailed = false;
+  let publicationDocumentation = "";
   let completedSha = "";   // captured for the final completion summary
   let mergedOk = false;
   // Build succeeded but we have NO way to push (no repo linked or the token
@@ -3599,7 +3602,7 @@ git branch --show-current
   if (implementationStatus === "complete" && pushAuth) {
     try {
       await addLog(ticketId, "Committing changes...", "command", ownerId);
-      const { sha } = await commitAndPush({
+      const { sha, documentation } = await commitAndPush({
       validation: { projectId: project.id, userId: buildLlm.actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, cancelled: () => cancelledTickets.has(ticketId), onLog: line => { addLog(ticketId, line, "command", ownerId).catch(() => {}); } },
         workspaceId,
         projectDir,
@@ -3609,6 +3612,7 @@ git branch --show-current
         githubToken: pushAuth.token,
         tokenUser: pushAuth.tokenUser,
       });
+      publicationDocumentation = documentation?.message ?? "";
 
       completedSha = sha;
       // "pushed" clears any prior "not_pushed" flag even if the merge below fails.
@@ -3668,7 +3672,7 @@ git branch --show-current
     // A clear, agent-style completion summary (green ai_response bubble) so the
     // user gets an explicit "here's what got done" message, not just a buried log.
     const summary = `✅ **Ticket complete** — moved to In Review.\n\n` +
-      (workSummary ? `**What I did:**\n${workSummary}\n\n` : "") +
+      (publicationDocumentation ? publicationDocumentation + "\n\n" : workSummary ? `**What I did:**\n${workSummary}\n\n` : "") +
       `- Branch: \`${featureBranch}\`\n` +
       (completedSha ? `- Commit: \`${completedSha.slice(0, 7)}\`\n` : "") +
       (mergedOk ? `- Merged to \`${anchorBranch}\` ✓\n` : (completedSha ? `- Pushed (merge to ${anchorBranch} pending/failed — see logs)\n` : "")) +
@@ -4031,7 +4035,7 @@ async function recoverUnpushedTickets() {
       const recoverAuth = await resolveRepoAuth(project, project.ownerId).catch(() => null);
 
       try {
-        const { sha } = await commitAndPush({
+        const { sha, documentation } = await commitAndPush({
       validation: { projectId: project.id, userId: project.ownerId, ticketId: ticket.id, epicId: ticket.epicId ?? undefined, baselineBranch: recoveryAnchor.baseBranch, cancelled: () => cancelledTickets.has(ticket.id), onLog: line => { addLog(ticket.id, line, "command", project.ownerId).catch(() => {}); } },
           workspaceId,
           projectDir: `${WORKING_DIR}/${projectDirName}`,
@@ -4093,6 +4097,7 @@ async function recoverUnpushedTickets() {
           throw mergeErr;
         }
 
+        if (documentation) await addLog(ticket.id, documentation.message, "ai_response", project.ownerId);
         // Move to review
         const reviewStageId = await moveTicketToStage(ticket.id, project.id, "In Review");
         await db

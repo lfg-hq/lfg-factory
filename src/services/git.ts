@@ -72,6 +72,7 @@ export interface GitMergeOptions {
 }
 
 export interface GitCommitResult {
+  documentation?: {path:string;summary:string;message:string};
   sha: string;
   branch: string;
 }

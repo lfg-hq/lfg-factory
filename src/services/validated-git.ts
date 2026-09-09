@@ -21,7 +21,7 @@ function client(o:PublicationOptions) {
   return {sh,auth};
 }
 /** At most two source repairs; each is committed by the server and revalidated from scratch. */
-async function validateWithRepair(o:PublicationOptions,dir:string,branch:string,baseline:string,kind:ValidationEvidence['kind']) {
+async function validateWithRepair(o:PublicationOptions,dir:string,branch:string,baseline:string,kind:ValidationEvidence['kind'], onDocument?: (document:{path:string;summary:string;message:string})=>void) {
   const {sh}=client(o); const ctx=o.validation;const seen=new Set<string>();
   for(let attempt=0;attempt<3;attempt++) {
     if(ctx.cancelled?.())throw new ValidationFailure('Validation cancelled');
@@ -39,11 +39,25 @@ async function validateWithRepair(o:PublicationOptions,dir:string,branch:string,
           await sh(`echo ${encoded} | base64 -d > ${q(dir+"/.lfg-validation.json")}`);
         }
       }
-      const sha=await sh(`git -C ${q(dir)} add -A\nif ! git -C ${q(dir)} diff --cached --quiet; then git -C ${q(dir)} -c user.name='LFG Agent' -c user.email='agent@lfg.dev' commit -m 'Validate runtime and persist source repairs' >/dev/null; fi\ngit -C ${q(dir)} rev-parse HEAD`);
+      let sha=await sh(`git -C ${q(dir)} add -A\nif ! git -C ${q(dir)} diff --cached --quiet; then git -C ${q(dir)} -c user.name='LFG Agent' -c user.email='agent@lfg.dev' commit -m 'Validate runtime and persist source repairs' >/dev/null; fi\ngit -C ${q(dir)} rev-parse HEAD`);
       if(!/^[a-f0-9]{40}$/.test(sha))throw new ValidationFailure('Candidate commit could not be resolved');
       const evidence = await validateRevision({workspaceId:o.workspaceId,sourceDir:dir,revision:sha,branch,baseline,kind,context:ctx});
       assertEvidence(evidence, {projectId:ctx.projectId,branch,revision:sha,baseline});
       if(await sh(`git -C ${q(dir)} rev-parse HEAD`)!==sha)throw new ValidationFailure('Candidate changed during validation');
+      if (kind === 'ticket' && ctx.ticketId) {
+        const {updateTicketDocument,ticketDocumentMessage}=await import('./ticket-document.ts');
+        ctx.onLog?.('Updating the branch implementation document in docs…');
+        const document=await updateTicketDocument({workspaceId:o.workspaceId,dir,branch,projectId:ctx.projectId,ticketId:ctx.ticketId,userId:ctx.userId,revision:sha,baseline,evidence});
+        if (document.changed) {
+          // The document is committed before the final gate, never appended after a tested SHA.
+          sha=await sh(`git -C ${q(dir)} add -- ${q(document.path)}\ngit -C ${q(dir)} -c user.name='LFG Agent' -c user.email='agent@lfg.dev' commit -m 'docs: record ticket implementation and validation' >/dev/null\ngit -C ${q(dir)} rev-parse HEAD`);
+          const finalEvidence=await validateRevision({workspaceId:o.workspaceId,sourceDir:dir,revision:sha,branch,baseline,kind,context:ctx});
+          assertEvidence(finalEvidence,{projectId:ctx.projectId,branch,revision:sha,baseline});
+        }
+        onDocument?.({...document,message:ticketDocumentMessage(branch,o.repoUrl,document.summary)});
+      }
+      if(ctx.cancelled?.())throw new ValidationFailure('Validation cancelled');
+      if(await sh(`git -C ${q(dir)} rev-parse HEAD`)!==sha)throw new ValidationFailure('Candidate changed during documentation validation');
       return sha;
     }catch(e){
       const error=(e as Error).message;
@@ -67,9 +81,10 @@ export async function publishValidatedTicket(o:PublicationOptions) {
     const baselineBranch=checkedRef(o.validation.baselineBranch??'main');
     await sh(`git fetch --no-tags origin ${q(baselineBranch)}`);
     const baseline=await sh('git rev-parse FETCH_HEAD');
-    const sha=await validateWithRepair(o,o.projectDir,o.featureBranch,baseline,'ticket');
+    let documentation: {path:string;summary:string;message:string} | undefined;
+    const sha=await validateWithRepair(o,o.projectDir,o.featureBranch,baseline,'ticket',d=>{documentation=d;});
     await sh(`git push origin ${q(sha+':refs/heads/'+o.featureBranch)} ${q('--force-with-lease=refs/heads/'+o.featureBranch+':'+old)}\ntest "$(git ls-remote --heads origin ${q('refs/heads/'+o.featureBranch)} | cut -f1)" = ${q(sha)}`);
-    return {sha,branch:o.featureBranch};
+    return {sha,branch:o.featureBranch,documentation};
   });
 }
 export async function publishValidatedMerge(o:PublicationOptions & {targetBranch:string;baseBranch?:string;kind?:'integration'|'promotion'}) {
