@@ -710,7 +710,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       <div class="drawer-actions">
         <a class="ticket-code-link" id="drawer-code-link" target="_blank" rel="noopener">&lt;/&gt; Code ↗</a>
         <button class="drawer-execute-btn" id="drawer-build-btn" onclick="buildCurrentTicket()">
-          <i class="fas fa-bolt"></i> Build Ticket
+          <i class="fas fa-bolt"></i> Build
         </button>
         <button class="drawer-server-btn" id="drawer-stop-btn" onclick="stopCurrentTicket()" style="display:none;color:#f87171;border-color:#5a2a30;"><i class="fas fa-stop"></i> Stop</button>
         <div class="drawer-more-menu">
@@ -1028,8 +1028,17 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
   // freshly-fetched live row). Kept separate so a click still opens the drawer
   // even when the local ticketMap is stale/missing the ticket (was: silent no-op
   // = "card not clickable").
+  function hasPreviousBuild(t) {
+    t = t || {};
+    return !!(t.githubCommitSha || t.github_commit_sha || t.lastExecutionAt || t.last_execution_at)
+      || /^(review|in_review|done|completed|archived)$/.test(String(t.status || '').toLowerCase());
+  }
+  function buildButtonLabel() {
+    return '<i class="fas fa-bolt"></i> ' + (hasPreviousBuild(ticketMap[_currentTicketId]) ? 'Re-build' : 'Build');
+  }
   function renderDrawerDetails(t) {
     if (!t) return;
+    document.getElementById('drawer-build-btn').innerHTML = buildButtonLabel();
     var key = t.ticketKey || t.ticket_key || ('TKT-' + (t.index != null ? t.index : ''));
     var status = t.status || 'open';
     var priority = t.priority || 'Medium';
@@ -1120,7 +1129,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       .then(function(r) { return r.json(); })
       .then(function(resp) {
         var live = resp && resp.ticket ? resp.ticket : resp;
-        if (!live || (!live.id && !live.name)) return; // nothing to show
+        if (_currentTicketId !== ticketId || !live || (!live.id && !live.name)) return; // nothing to show
         // Cache + (re)render details from the authoritative live row — this is what
         // makes the drawer open even when ticketMap was stale/missing the ticket.
         ticketMap[ticketId] = Object.assign({}, ticketMap[ticketId] || {}, live);
@@ -1138,7 +1147,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
         // show only Stop (cleaner than a disabled "Building…" button).
         buildBtn.disabled = false;
         buildBtn.style.display = isActive ? 'none' : '';
-        buildBtn.innerHTML = '<i class="fas fa-bolt"></i> Build Ticket';
+        buildBtn.innerHTML = buildButtonLabel();
         var stopBtn = document.getElementById('drawer-stop-btn');
         if (stopBtn) stopBtn.style.display = isActive ? '' : 'none';
         // A running build still wins — live logs are the reason you opened it — but that
@@ -1265,6 +1274,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
   async function buildCurrentTicket() {
     if (!_currentTicketId) return;
     const btn = document.getElementById('drawer-build-btn');
+    if (btn.disabled) return;
+    if (hasPreviousBuild(ticketMap[_currentTicketId]) && !window.confirm('Re-build this ticket? The agent will run again on its existing branch and may make additional code changes.')) return;
     btn.disabled = true;
     btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Queuing…';
     // Clear any stale outcome banner from a previous run the moment we (re)build.
@@ -1279,20 +1290,20 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
         const err = await res.json().catch(() => ({}));
         alert(err.error || 'Failed to queue ticket');
         btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-bolt"></i> Build Ticket';
+        btn.innerHTML = buildButtonLabel();
         return;
       }
       // Queued — hide Build, reveal Stop (you can't build while building).
       btn.disabled = false;
       btn.style.display = 'none';
-      btn.innerHTML = '<i class="fas fa-bolt"></i> Build Ticket';
+      btn.innerHTML = buildButtonLabel();
       var stopBtn = document.getElementById('drawer-stop-btn');
       if (stopBtn) stopBtn.style.display = '';
       // Switch to Actions tab so user sees logs immediately
       switchDrawerTab('actions', document.querySelector('.drawer-tab[data-tab="actions"]'));
     } catch(e) {
       btn.disabled = false;
-      btn.innerHTML = '<i class="fas fa-bolt"></i> Build Ticket';
+      btn.innerHTML = buildButtonLabel();
       alert('Failed to queue ticket: ' + e.message);
     }
   }
@@ -1310,7 +1321,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     _chatBusy = false; setChatBusyUI();
     if (stopBtn) { stopBtn.disabled = false; stopBtn.innerHTML = '<i class="fas fa-stop"></i> Stop'; stopBtn.style.display = 'none'; }
     var b = document.getElementById('drawer-build-btn');
-    if (b) { b.disabled = false; b.style.display = ''; b.innerHTML = '<i class="fas fa-bolt"></i> Build Ticket'; }
+    if (b) { b.disabled = false; b.style.display = ''; b.innerHTML = buildButtonLabel(); }
   }
 
   // ── One agent turn at a time ─────────────────────────────────────
@@ -1417,6 +1428,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     const ticketId = msg.ticketId;
     const qs = msg.queueStatus || '';
     const st = msg.status || '';
+    ticketMap[ticketId] = Object.assign({}, ticketMap[ticketId] || {}, { status: st, queueStatus: qs });
     const stageId = msg.stageId || '';
 
     // Move kanban card to the new column if stageId changed
@@ -1444,7 +1456,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     if (qs !== 'queued' && qs !== 'executing') {
       hideThinkingIndicator();
       var btn = document.getElementById('drawer-build-btn');
-      if (btn) { btn.disabled = false; btn.style.display = ''; btn.innerHTML = '<i class="fas fa-bolt"></i> Build Ticket'; }
+      if (btn) { btn.disabled = false; btn.style.display = ''; btn.innerHTML = buildButtonLabel(); }
       var sbtn = document.getElementById('drawer-stop-btn');
       if (sbtn) sbtn.style.display = 'none';
     }

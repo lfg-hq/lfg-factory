@@ -172,6 +172,12 @@
   // for a queued build. Cleared on the turn's terminal log (ai_response / cli_error).
   let chatBusy = false;
   function isBusy() { return chatBusy || isBuilding(); }
+  function hasPreviousBuild(m) {
+    m = m || {};
+    return !!(m.githubCommitSha || m.github_commit_sha || m.lastExecutionAt || m.last_execution_at)
+      || /^(review|in_review|done|completed|archived)$/.test(String(m.status || "").toLowerCase());
+  }
+  let buildPending = false;
   function setBuildUI() {
     const s = $("ta-stop");
     if (s) { s.style.display = isBusy() ? "inline-flex" : "none"; s.disabled = false; s.innerHTML = '<i class="fas fa-stop" style="font-size:10px;"></i>Stop'; }
@@ -191,7 +197,7 @@
     }
     const b = $("ta-build"); if (!b) return;
     if (isBuilding()) { b.disabled = true; b.style.opacity = ".9"; b.innerHTML = '<i class="fas fa-spinner fa-spin" style="font-size:10px;"></i>Building…'; }
-    else { b.disabled = chatBusy; b.style.opacity = chatBusy ? ".55" : "1"; b.innerHTML = '<i class="fas fa-play" style="font-size:10px;"></i>Build'; }
+    else { b.disabled = chatBusy || buildPending; b.style.opacity = b.disabled ? ".55" : "1"; b.innerHTML = '<i class="fas fa-play" style="font-size:10px;"></i>' + (hasPreviousBuild(curMeta) ? "Re-build" : "Build"); b.title = hasPreviousBuild(curMeta) ? "Re-build this ticket" : "Build this ticket"; }
   }
   // Stop whatever the agent is doing right now (build OR the in-flight chat turn).
   // Same endpoint the Task List drawer uses; it kills the in-VM agent and unblocks
@@ -212,18 +218,24 @@
     loadLog();
   }
   async function buildTicket() {
-    if (!ticketId || isBuilding()) return;
+    if (!ticketId || isBusy() || buildPending) return;
+    if (hasPreviousBuild(curMeta) && !window.confirm("Re-build this ticket? The agent will run again on its existing branch and may make additional code changes.")) return;
+    const buildingId = ticketId;
+    buildPending = true;
+    setBuildUI();
     try {
       const r = await fetch(`/api/projects/${PID()}/tickets/${ticketId}/queue`, { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: "{}" });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || "failed");
+      if (ticketId !== buildingId) return;
       curMeta = Object.assign({}, curMeta, { queueStatus: "queued", status: "in_progress" }); // optimistic
       setBuildUI();
       renderMeta(curMeta);
       toast("Queued for build — watch the Actions tab.");
       switchTicketTab("actions");
       try { if (window.ArtifactsLoader && window.ArtifactsLoader._checklistProjectId) window.ArtifactsLoader.loadChecklist(window.ArtifactsLoader._checklistProjectId); } catch (_) {}
-    } catch (e) { toast("Couldn't queue: " + (e.message || e)); setBuildUI(); }
+    } catch (e) { toast("Couldn't queue: " + (e.message || e)); }
+    finally { buildPending = false; setBuildUI(); }
   }
   async function deleteTicket() {
     if (!ticketId) return;
@@ -404,15 +416,14 @@
     const title = $("ta-title");
     if (title) title.textContent = (key ? key + " · " : "") + (name || "Ticket");
     renderMeta(meta);
-    // Opened without fields (e.g. from the preview's "Chat with ticket") → fetch them so
-    // Details/Edit still work.
-    if (!meta) {
-      fetch(`/projects/${PID()}/api/checklist/${id}`, { credentials: "same-origin" })
+    // Refresh authoritative build history even when a checklist supplied cached metadata.
+    {
+      fetch(`/api/projects/${PID()}/tickets/${id}`, { credentials: "same-origin" })
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => {
           if (!d || !d.ticket || ticketId !== id) return;
           const t = d.ticket;
-          curMeta = { name: t.name, description: t.description, status: t.status, priority: t.priority, queueStatus: t.queueStatus, createdAt: t.createdAt, updatedAt: t.updatedAt, attachments: [] };
+          curMeta = Object.assign({}, curMeta, t, { attachments: (curMeta && curMeta.attachments) || [] });
           if (!editing) renderMeta(curMeta);
           setBuildUI();
         }).catch(() => {});
