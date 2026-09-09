@@ -1,3 +1,4 @@
+import { runGitSetup, prepareBuildRuntime } from "../services/build-preflight.ts";
 import { CONTRACT_INSTRUCTION } from "../services/runtime-validation.ts";
 /**
  * Ticket Executor Worker
@@ -302,29 +303,6 @@ async function markBuildTasksComplete(ticketId: string): Promise<void> {
   } catch (err) {
     console.warn(`[ticket-executor] markBuildTasksComplete failed for ${ticketId}:`, err);
   }
-}
-
-/**
- * Install the LANGUAGE TOOLCHAIN server-side BEFORE the agent runs — the preview already
- * detected the stack, so a Go/Rust build shouldn't waste minutes mid-run discovering
- * "X isn't installed" and installing it itself (the isolated build VM is a fresh rootfs
- * that does NOT inherit the preview VM's toolchain). Go/Rust aren't in the base rootfs;
- * Node/Python/PHP usually are. Env matches DATA_TOOLCHAIN_ENV so the agent reads the same
- * GOENV (GOTOOLCHAIN=auto → fetches the exact go.mod version, cached on /data). Best-effort.
- */
-async function ensureBuildToolchain(workspaceId: string, language: string | undefined, ticketId: string, ownerId: string): Promise<void> {
-  const lang = (language || "").toLowerCase();
-  let install = "";
-  if (/\bgo\b|golang/.test(lang)) {
-    install = "command -v go >/dev/null 2>&1 || apk add --no-cache go gcc musl-dev >/dev/null 2>&1; go env -w GOTOOLCHAIN=auto 2>/dev/null || true; go version 2>/dev/null || echo TOOLCHAIN_FAILED";
-  } else if (/rust|cargo/.test(lang)) {
-    install = "command -v cargo >/dev/null 2>&1 || apk add --no-cache rust cargo gcc musl-dev >/dev/null 2>&1; cargo --version 2>/dev/null || echo TOOLCHAIN_FAILED";
-  }
-  if (!install) return; // node/python/etc. ship in the rootfs — nothing to pre-install
-  await addLog(ticketId, `Preparing the ${lang} toolchain (so the agent doesn't install it mid-build)…`, "command", ownerId).catch(() => {});
-  const env = "export GOENV=/data/.config/go/env GOPATH=/data/go GOMODCACHE=/data/go/pkg/mod GOCACHE=/data/.cache/go-build GOTOOLCHAIN=auto CARGO_HOME=/data/.cargo RUSTUP_HOME=/data/.rustup; mkdir -p /data/.config/go /data/go/pkg/mod /data/.cache /data/.cargo 2>/dev/null || true;";
-  await execOnWorkspace(workspaceId, `${env} ${install}`, { timeout: 240_000 })
-    .catch((e) => console.warn(`[ticket-executor] toolchain prep failed for ${lang}:`, (e as Error).message?.slice(0, 120)));
 }
 
 /**
@@ -671,11 +649,12 @@ async function resolveTicketAddenda(ticketId: string, pendingIds: string[]): Pro
 }
 
 /** The project's mandatory directives (app_profile) as a prompt block, or "". */
-async function directivesBlock(projectId: string): Promise<string> {
+async function directivesBlock(projectId: string, branch = "default"): Promise<string> {
   let out = "";
   try {
     const { loadAppProfile } = await import("../services/app-profile.ts");
-    const d = (await loadAppProfile(projectId))?.profile.directives ?? [];
+    const profiles = await Promise.all([...new Set([branch,"default"])].map(b=>loadAppProfile(projectId,b)));
+    const d = [...new Set(profiles.flatMap(p=>p?.profile.directives ?? []))];
     if (d.length) {
       out += `\n## MANDATORY DIRECTIVES — always enforce (fixing a violation is part of the task)\n${d.map((x, i) => `${i + 1}. ${x}`).join("\n")}\n`;
     }
@@ -1544,8 +1523,7 @@ git branch --show-current
 
     try {
       // exec() breaks with multi-line scripts — base64-encode
-      const gitScriptB64 = Buffer.from(gitSetupScript).toString("base64");
-      const gitResult = await execOnWorkspace(workspaceId, `echo ${gitScriptB64} | base64 -d | sh`, { timeout: 120_000 });
+      const gitResult = await runGitSetup(workspaceId, gitSetupScript, `${WORKING_DIR}/${projectDirName}`, featureBranch, [githubToken]);
       console.log(`[ticket-executor] Git setup output:`, gitResult.output.slice(0, 300));
 
       if (gitResult.output.includes("GIT_SETUP_COMPLETE")) {
@@ -1571,6 +1549,8 @@ git branch --show-current
     } catch (err) {
       gitSetupError = `Git setup failed: ${err}`;
       console.error(`[ticket-executor] ${gitSetupError}`);
+      await markTicketFailed(ticketId, gitSetupError, ownerId, { emitEvent: false });
+      return;
     }
   } else if (githubToken) {
     // No repo linked — auto-create one on GitHub (matching Django behavior)
@@ -1656,6 +1636,14 @@ echo "BRANCH_CREATED"
     });
     console.log(`[ticket-executor] No GitHub token — skipping git setup`);
     await addLog(ticketId, "No GitHub token — code will not be persisted to a repository", "command", ownerId);
+  }
+
+  try {
+    await prepareBuildRuntime({workspaceId,projectId:project.id,branch:featureBranch,anchorBranch,dir:`${WORKING_DIR}/${projectDirName}`,userId:ownerId,
+      onLog: message => { void addLog(ticketId,message,"command",ownerId).catch(() => {}); }});
+  } catch (e) {
+    await markTicketFailed(ticketId, `Build environment blocked — ${(e as Error).message}`, ownerId);
+    return;
   }
 
   // ── Step 4: Refresh + inject credentials ────────────────────────────
@@ -2244,13 +2232,10 @@ else
 fi
 [ -d .git ] && echo GIT_SETUP_COMPLETE || echo GIT_SETUP_FAILED
 `.trim();
-  const b64 = Buffer.from(cloneScript).toString("base64");
-  const r = await execOnWorkspace(workspaceId, `echo ${b64} | base64 -d | sh`, { timeout: 300_000 })
-    .catch((e) => ({ output: `EXEC_FAILED: ${(e as Error).message}` }));
-  if (!r.output.includes("GIT_SETUP_COMPLETE")) {
-    await deleteWorkspace(workspaceId).catch(() => {});
-    await db.delete(sandboxes).where(and(eq(sandboxes.ticketId, ticket.id), eq(sandboxes.workspaceType, "ticket-chat"))).catch(() => {});
-    return { error: `Couldn't clone the repo into the chat sandbox: ${r.output.slice(-300)}` };
+  try {
+    await runGitSetup(workspaceId,cloneScript,`${WORKING_DIR}/${projectDirName}`,featureBranch,[auth.token]);
+  } catch (e) {
+    return { error: `Couldn't prepare the chat repository: ${(e as Error).message}` };
   }
   return { workspaceId, projectDir: projectDirName };
 }
@@ -2434,6 +2419,14 @@ async function executeTicketChat(
     return;
   }
   const workspaceId = chatSb.workspaceId;
+  try {
+    await prepareBuildRuntime({workspaceId,projectId:ticket.projectId,branch:ticket.githubBranch || "default",dir:`${WORKING_DIR}/${chatSb.projectDir}`,userId:ownerId,
+      onLog: message => { void addLog(ticketId,message,"command",ownerId).catch(() => {}); }});
+  } catch (e) {
+    await addLog(ticketId, `Build environment blocked — ${(e as Error).message}`, "cli_error", ownerId);
+    return;
+  }
+
   // Resume the CLI session this ticket's chat has been using. This row is written by
   // the /api/v1/cli/output webhook on every turn; the chat used to hardcode null here,
   // so every Claude message started a BLIND fresh session — the agent had no memory of
@@ -3185,8 +3178,7 @@ git branch --show-current
     const gitSetupScript = useWorktree ? worktreeScript : cloneScript;
 
     try {
-      const gitScriptB64 = Buffer.from(gitSetupScript).toString("base64");
-      const gitResult = await execOnWorkspace(workspaceId, `echo ${gitScriptB64} | base64 -d | sh`, { timeout: 120_000 });
+      const gitResult = await runGitSetup(workspaceId, gitSetupScript, `${WORKING_DIR}/${projectDirName}`, featureBranch, [auth.token]);
 
       if (gitResult.output.includes("GIT_SETUP_COMPLETE")) {
         if (!ticket.githubBranch) {
@@ -3328,9 +3320,14 @@ git branch --show-current
   // Pin the VM awake for the whole build (wakes a reused/slept VM too) so Mags can't
   // idle-sleep a live build → "lost contact". Turned back off at build end.
   await wakeTicketVm(workspaceId);
-  // Install the detected toolchain (Go/Rust) up-front so the agent doesn't burn minutes
-  // discovering + installing it mid-build.
-  await ensureBuildToolchain(workspaceId, savedTechStack?.language, ticketId, ownerId);
+  // Reuse preview discoveries, but verify/install the SDK in this build VM.
+  try {
+    await prepareBuildRuntime({workspaceId,projectId:project.id,branch:featureBranch,anchorBranch,dir:projectDir,userId:ownerId,
+      onLog: message => { void addLog(ticketId,message,"command",ownerId).catch(() => {}); }});
+  } catch (e) {
+    await markTicketFailed(ticketId, `Build environment blocked — ${(e as Error).message}`, ownerId);
+    return;
+  }
 
   // Direct API mode must stay on the provider API path. Pi (and therefore a
   // connected OpenAI Codex subscription) is reserved for Coding Agent mode.
@@ -3372,7 +3369,7 @@ git branch --show-current
       projectDir,
       prescaffolded,
       runInfo: await loadRunInfo(project.id),
-      directives: await directivesBlock(project.id),
+      directives: await directivesBlock(project.id, featureBranch),
       addenda: addendaCtx.block,
       attachments: ticketAttachments,
       // Any document the ticket cites (an approved page preview, most often) is written
