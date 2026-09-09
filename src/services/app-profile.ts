@@ -1,3 +1,4 @@
+import { mergeKnowledge, schemaStepSchema, replayActionSchema, shellQuote } from "./preview-plan.ts";
 import { teamApiKeys } from "./llm-access.ts";
 /**
  * App Profile + Probe agent.
@@ -111,11 +112,13 @@ export const appProfileSchema = z.object({
     connectionFormat: z.enum(CONN_FORMATS).describe("How to format the string: 'url' (Node/Python/Rails/Prisma), 'dotnet-npgsql', 'dotnet-mysql', 'dotnet-sqlserver', 'keyvalue'."),
   })).describe("Every database the app connects to AND how. Read appsettings*.json ConnectionStrings, docker-compose, ORM config, DATABASE_URL. [] if none."),
   // ── Schema build recipe (ORDERED — this is the part that keeps breaking) ──
-  schemaSteps: z.array(z.object({
-    kind: z.enum(["migration", "sqlScript", "seed"]).describe("migration = ORM migration command (EF/Prisma/Django); sqlScript = a raw .sql file the repo ships; seed = a seed/data-load command."),
-    command: z.string().describe("For 'migration'/'seed': the exact command with NO connection string and NO database name embedded — e.g. 'dotnet ef database update --project Cohire.Core --startup-project Cohire.Web'. CRITICAL: do NOT prepend ConnectionStrings__*=... or put a Database=... anywhere. The sandbox writes the ONE correct connection (to the auto-provisioned DB) into .env and sources it before every command, so the migration MUST inherit that — if you hardcode a DB name (e.g. one you saw in appsettings), the migration builds a DIFFERENT database than the app and the SQL scripts use, and the app then 500s on missing tables/columns. For a multi-DbContext app, add one migration step per context with --context. For 'sqlScript': ONLY the file path RELATIVE to the repo (e.g. 'Sql Scripts/Create_Workspace_Tables.sql') — the system pipes it into the provisioned DB itself."),
-    note: z.string().describe("Why this step / what it depends on, e.g. 'must run AFTER the EF migration creates the base tables'. Critical: order the whole array so dependencies come first (migrations before the scripts that ALTER their tables)."),
-  })).describe("The COMPLETE ordered recipe to build the schema so the app doesn't 500 on missing columns. Migrations first, then dependent SQL scripts, then seeds. NONE of the commands may embed a connection string or database name — they all run against the single .env-provided connection. [] only if the app has no schema setup."),
+  schemaSteps: z.array(schemaStepSchema).describe("Complete schema recipe in dependency order. Migration commands must specify the context. SQL scripts use relative paths. Supply read-only verify commands for scripts/seeds so replay can safely skip applied work."),
+  replayActions: z.array(replayActionSchema).optional(),
+  verificationPaths: z.array(z.string().regex(/^\/(?!\/)/)).optional().describe("Local feature routes to smoke-test, in addition to the homepage."),
+  environmentOverrides: z.array(z.object({ key: z.string(), encryptedValue: z.string() })).optional(),
+  inputFingerprint: z.string().optional(),
+  verifiedRevision: z.string().optional(),
+  blockedFailure: z.object({ revision: z.string(), key: z.string(), detail: z.string() }).optional(),
   // ── Env / secrets ──
   autoEnvVars: z.array(z.object({
     key: z.string(),
@@ -149,6 +152,7 @@ export const appProfileSchema = z.object({
     find: z.string().describe("Exact literal text to replace."),
     replace: z.string().describe("Replacement text."),
     note: z.string().optional(),
+    create: z.boolean().optional(),
   })).optional().describe("Leave EMPTY — auto-filled from runtime config fixes that must survive branch switches / rebuilds."),
 });
 export type AppProfile = z.infer<typeof appProfileSchema>;
@@ -188,6 +192,7 @@ export async function probeAppProfile(opts: {
   workspaceId: string;
   userId: string;
   workDir?: string;
+  knowledge?: string[];
   onLog?: (line: string, detail?: string) => void;
   abortSignal?: AbortSignal;
 }): Promise<AppProfile | null> {
@@ -243,7 +248,7 @@ export async function probeAppProfile(opts: {
       tools,
       stopWhen: stepCountIs(40),
       system: PROBE_SYSTEM,
-      prompt: `Probe the repository at ${workDir} and record its run profile. Investigate with the tools, then call saveProfile once. Begin.`,
+      prompt: `Previous verified instructions and discoveries (validate their applicability to this branch and encode recurring actions as replayActions with assertions): ${JSON.stringify(opts.knowledge ?? [])}. Probe the repository at ${workDir} and record its run profile. Investigate with the tools, then call saveProfile once. Begin.`,
       abortSignal,
     });
   } catch (e) {
@@ -302,6 +307,7 @@ function stripInlineConnEnv(cmd: string): string {
 export function deriveManifestFromProfile(profile: AppProfile): PreviewManifest {
   const migrations = profile.schemaSteps.filter((s) => s.kind === "migration").map((s) => stripInlineConnEnv(s.command));
   const sqlScripts = profile.schemaSteps.filter((s) => s.kind === "sqlScript").map((s) => s.command);
+  const schemaSteps = profile.schemaSteps.map(s => ({ ...s, command: s.kind === "sqlScript" ? s.command : stripInlineConnEnv(s.command) }));
   const seedCmd = stripInlineConnEnv(profile.schemaSteps.find((s) => s.kind === "seed")?.command || "");
   // Surface required secrets AND auto vars as manifest envVars (the .env writer
   // + the driver prompt read these). Secrets are marked required.
@@ -324,6 +330,9 @@ export function deriveManifestFromProfile(profile: AppProfile): PreviewManifest 
       ? profile.services.map((s, i) => ({ ...s, primary: !!s.primary || (i === 0 && !profile.services!.some((x) => x.primary)), enabled: s.enabled ?? !!s.primary }))
       : undefined,
     databases: profile.databases,
+    schemaSteps,
+    replayActions: profile.replayActions,
+    verificationPaths: profile.verificationPaths,
     migrations,
     sqlScripts,
     seedCmd,
@@ -415,7 +424,7 @@ export function profileNotes(profile: AppProfile): string[] {
   return [...profile.configQuirks, ...profile.buildQuirks, ...(profile.learnings ?? [])];
 }
 
-const PLAN_FIELDS = new Set(["toolchain", "installCmd", "buildCmd", "runCmd", "port", "startupProject"]);
+const PLAN_FIELDS = new Set(["toolchain", "installCmd", "buildCmd", "runCmd", "port", "startupProject", "schemaSteps", "replayActions", "verificationPaths", "configPatches"]);
 
 /**
  * Persist a plan-FIELD correction the run agent discovered (toolchain/install/
@@ -430,9 +439,15 @@ export async function applyProfileCorrection(projectId: string, field: string, v
   const p = loaded.profile;
   if (field === "toolchain") p.toolchain = value.split("\n").map((s) => s.trim()).filter(Boolean);
   else if (field === "port") { const n = parseInt(value, 10); if (n > 0) p.port = n; }
+  else if (field === "configPatches") p.configPatches = appProfileSchema.shape.configPatches.parse(JSON.parse(value));
+  else if (field === "schemaSteps") p.schemaSteps = z.array(schemaStepSchema).parse(JSON.parse(value));
+  else if (field === "replayActions") p.replayActions = z.array(replayActionSchema).parse(JSON.parse(value));
+  else if (field === "verificationPaths") p.verificationPaths = z.array(z.string().regex(/^\/(?!\/)/)).parse(JSON.parse(value));
   else (p as any)[field] = value;
+  delete p.blockedFailure;
+  delete p.verifiedRevision;
   const shown = field === "toolchain" ? p.toolchain.join("; ") : value;
-  p.learnings = [...(p.learnings ?? []), `learned: ${field} → ${shown}${note ? ` (${note})` : ""}`].slice(-40);
+  p.learnings = [...(p.learnings ?? []), `learned: ${field} → ${shown}${note ? ` (${note})` : ""}`];
   await saveAppProfile(projectId, p, branch);
   return true;
 }
@@ -446,7 +461,7 @@ export async function recordDirective(projectId: string, note: string, branch = 
   if (!loaded) return false;
   const p = loaded.profile;
   if ((p.directives ?? []).some((d) => d.trim() === trimmed)) return true; // de-dupe
-  p.directives = [...(p.directives ?? []), trimmed].slice(-40);
+  p.directives = [...(p.directives ?? []), trimmed];
   await saveAppProfile(projectId, p, branch);
   return true;
 }
@@ -461,13 +476,13 @@ export async function recordProfileLearning(projectId: string, note: string, bra
   const p = loaded.profile;
   // de-dupe: don't append a note we already have
   if ((p.learnings ?? []).some((l) => l === `learned: ${trimmed}` || l === trimmed)) return true;
-  p.learnings = [...(p.learnings ?? []), `learned: ${trimmed}`].slice(-40);
+  p.learnings = [...(p.learnings ?? []), `learned: ${trimmed}`];
   await saveAppProfile(projectId, p, branch);
   return true;
 }
 
 // ── Replayable config patches (survive branch switches / rebuilds) ───────────
-export type ConfigPatch = { file: string; find: string; replace: string; note?: string };
+export type ConfigPatch = { file: string; find: string; replace: string; note?: string; create?: boolean };
 
 /** Persist a config-file patch onto the profile (de-duped by file+find), so it's
  *  re-applied after every checkout. */
@@ -478,7 +493,7 @@ export async function recordConfigPatch(projectId: string, patch: ConfigPatch, b
   const patches = (p.configPatches ?? []).slice();
   const i = patches.findIndex((x) => x.file === patch.file && x.find === patch.find);
   if (i >= 0) patches[i] = patch; else patches.push(patch);
-  p.configPatches = patches.slice(-30);
+  p.configPatches = patches;
   await saveAppProfile(projectId, p, branch);
   return true;
 }
@@ -489,29 +504,7 @@ export async function recordConfigPatch(projectId: string, patch: ConfigPatch, b
  * safe). "" if no patches. Idempotent (skips if the replacement is already there).
  * Degrades to a no-op if python3 is absent (the driver then re-patches, as before).
  */
-export function buildConfigPatchScript(patches: ConfigPatch[] | undefined, dir: string): string {
-  if (!patches || !patches.length) return "";
-  const blob = Buffer.from(JSON.stringify(patches.map((p) => ({ file: p.file, find: p.find, replace: p.replace })))).toString("base64");
-  return `echo ${blob} | base64 -d > /tmp/_cfgpatch.json 2>/dev/null && python3 - "${dir}" <<'PYEOF' 2>/dev/null || true
-import json, os, sys
-base = sys.argv[1]
-try:
-    patches = json.load(open("/tmp/_cfgpatch.json"))
-except Exception:
-    patches = []
-for p in patches:
-    fp = os.path.join(base, p["file"])
-    if not os.path.isfile(fp):
-        continue
-    try:
-        s = open(fp, encoding="utf-8", errors="ignore").read()
-    except Exception:
-        continue
-    if p["find"] in s and p["replace"] not in s:
-        open(fp, "w", encoding="utf-8").write(s.replace(p["find"], p["replace"]))
-        print("re-applied config patch:", p["file"])
-PYEOF`;
-}
+export { buildConfigPatchScript } from "./preview-patches.ts";
 
 /** A NON-blocking, informational note: the app runs with its checked-in config;
  *  these are external credentials the user MAY add for full functionality. */

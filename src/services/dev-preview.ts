@@ -1,3 +1,5 @@
+import { branchDatabaseScript } from "./preview-isolation.ts";
+import { assetCaseCheck, schemaStepSchema, replayActionSchema, orderedSchema, mergeKnowledge, failureSummary, failureKey, executeSteps, shellQuote, type PlanStep } from "./preview-plan.ts";
 /**
  * Dev Preview — run a CLIENT project (the connected repo, not an Instant app)
  * inside its always-on project sandbox so a developer can see a live,
@@ -30,7 +32,7 @@ import { decryptSecret, encryptSecret } from "../utils/crypto.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { enableHttpAccess, execOnWorkspace, setStableUrl, startBrowserSession, stopWorkspace } from "./mags.ts";
 import { ensureProjectSandbox, restartProjectSandbox, ensureEngine, ensureDocker, envWorkspaceId, checkEngineHealth, listSandboxEngines, ENGINES, type EngineHandle, type DbEngine } from "./project-sandbox.ts";
-import { probeAppProfile, saveAppProfile, loadAppProfile, deriveManifestFromProfile, syncDetectedEnv, applyProfileCorrection, recordProfileLearning, recordDirective, recordConfigPatch, buildConfigPatchScript, profileNotes, resolveUserModel, type AppProfile } from "./app-profile.ts";
+import { probeAppProfile, saveAppProfile, loadAppProfile, deriveManifestFromProfile, syncDetectedEnv, applyProfileCorrection, recordProfileLearning, recordDirective, recordConfigPatch, buildConfigPatchScript, profileNotes, resolveUserModel, appProfileSchema, type AppProfile } from "./app-profile.ts";
 import { isS3Enabled, buildS3Key, uploadBinary, getPresignedGetUrl } from "./s3.ts";
 import { messages } from "../db/schema/chat.ts";
 import { projectTickets } from "../db/schema/tickets.ts";
@@ -87,6 +89,9 @@ export const manifestSchema = z.object({
     connectionEnvVar: z.string().describe("The EXACT env var / .NET config key the app reads its connection from. ASP.NET Core with appsettings ConnectionStrings:DefaultConnection → 'ConnectionStrings__DefaultConnection'. Rails/Node/Django with a URL → 'DATABASE_URL'. Redis → 'REDIS_URL'."),
     connectionFormat: z.enum(CONN_FORMATS).describe("How to FORMAT the connection string for that var: 'url' = scheme://user:pw@host:port/db (Node/Python/Rails/Prisma); 'dotnet-npgsql' = 'Host=..;Port=..;Database=..;Username=..;Password=..' (.NET+Postgres); 'dotnet-mysql' = 'Server=..;Port=..;Database=..;Uid=..;Pwd=..'; 'dotnet-sqlserver'; 'keyvalue' generic."),
   })).describe("Every database the app connects to AND how it connects — read appsettings*.json ConnectionStrings, docker-compose services, ORM config (Prisma/EF/TypeORM/SQLAlchemy), DATABASE_URL in .env.example. [] if none."),
+  schemaSteps: z.array(schemaStepSchema).optional(),
+  replayActions: z.array(replayActionSchema).optional(),
+  verificationPaths: z.array(z.string().regex(/^\/(?!\/)/)).optional(),
   migrations: z.array(z.string()).describe("Commands to create/apply the schema IN ORDER, e.g. ['dotnet ef database update --project Cohire.Core'], ['npx prisma migrate deploy'], ['python manage.py migrate']. [] if none."),
   sqlScripts: z.array(z.string()).describe("Raw .sql files the repo ships to build/seed the schema, as paths relative to the repo, IN THE ORDER they must run (e.g. ['Sql Scripts/01_schema.sql','Sql Scripts/02_seed.sql']). [] if none."),
   seedCmd: z.string().describe("Seed command if separate from migrations (e.g. 'npm run seed', 'python manage.py loaddata seed.json'). '' if none."),
@@ -430,7 +435,7 @@ async function reapplyEnv(projectId: string, userId: string, workspaceId: string
       const useProvided = await shouldUseProvidedDb(workspaceId, projectId, userId, dbSpec, providedVal, dbMode);
       if (useProvided) continue;
       plog(projectId, userId, `Starting ${dbSpec.engine} (docker) — pulling image + creating the container if needed…`);
-      const h = await ensureEngine(projectId, dbSpec.engine).catch((e) => { plog(projectId, userId, `Could not start ${dbSpec.engine}: ${(e as Error).message?.slice(0, 200)}`, { level: "error" }); return null; });
+      const h = await ensurePreviewEngine(projectId, userId, dbSpec.engine);
       if (h) { provisioned[dbSpec.connectionEnvVar] = formatConnection(dbSpec, h); plog(projectId, userId, `${dbSpec.engine} running ✓ (127.0.0.1:${h.port}) → ${dbSpec.connectionEnvVar} injected.`); }
     }
   }
@@ -446,69 +451,6 @@ async function reapplyEnv(projectId: string, userId: string, workspaceId: string
  * Falls back to a sensible ORM default when the plan gave no migration command. Runs in
  * runDir with .env sourced (DATABASE_URL) via envPrefix.
  */
-async function runSchemaSetup(projectId: string, userId: string, workspaceId: string, manifest: PreviewManifest, runDir: string): Promise<void> {
-  if (!(manifest.databases || []).length) return; // no DB → nothing to migrate
-  // Is the schema ALREADY present (existing DB) vs fresh/empty? We DON'T skip on "present"
-  // anymore — that's what left a ticket branch's NEW migration unapplied (app 500s on a
-  // missing column). Instead we ALWAYS run idempotent migrations (drizzle-kit migrate /
-  // prisma migrate deploy / ORM migrate → they apply only PENDING migrations, tracked in the
-  // migrations table), and only SKIP the destructive fallbacks (push --force / db push) and
-  // the seed on an existing DB (those would clobber/duplicate data).
-  let schemaPresent = false;
-  const primary = manifest.databases[0]!;
-  if (primary.engine === "postgres" || primary.engine === "mysql") {
-    const container = ENGINES[primary.engine].container;
-    let q = "";
-    if (primary.engine === "postgres") {
-      q = `docker exec ${container} psql -U app -d app -tAc "select count(*) from information_schema.tables where table_schema='public'"`;
-    } else {
-      const [row] = await db.select({ pw: projectDatabases.passwordEncrypted }).from(projectDatabases).where(and(eq(projectDatabases.projectId, projectId), eq(projectDatabases.engine, "mysql")));
-      let pw = ""; try { pw = row?.pw ? decryptSecret(row.pw) : ""; } catch { /* unreadable */ }
-      if (pw) q = `docker exec ${container} mysql -uapp -p'${pw}' app -N -e "select count(*) from information_schema.tables where table_schema='app'"`;
-    }
-    if (q) {
-      const r = await sh(workspaceId, `${q} 2>/dev/null | tr -d '[:space:]'`, 20_000).catch(() => ({ output: "" }));
-      const n = parseInt((r.output || "").trim(), 10);
-      if (Number.isFinite(n) && n > 0) schemaPresent = true;
-    }
-  }
-
-  let migrations = [...(manifest.migrations || [])];
-  if (!migrations.length) {
-    // The plan didn't give a migration command — infer one from the ORM in the repo.
-    // On an EXISTING DB use ONLY the tracked `migrate` (applies pending); on a FRESH DB add
-    // the push fallback so an app with no migration files still gets its schema created.
-    const probe = await sh(workspaceId, `cd ${runDir} 2>/dev/null; ls drizzle.config.* 2>/dev/null; ls prisma/schema.prisma 2>/dev/null`, 15_000).catch(() => ({ output: "" }));
-    const o = probe.output || "";
-    // On an existing DB, try tracked `migrate` first; if it FAILS (the usual cause is a
-    // migration-journal mismatch — the DB was first created with `push`, which records no
-    // journal, so `migrate` re-applies 0001 → "table already exists" → aborts before the new
-    // migration), fall back to `push --force` to SYNC the DB to the branch's schema (adds the
-    // missing columns). Preview data is disposable and this only runs on migrate FAILURE, not
-    // on every switch. On a FRESH DB the same chain seeds a schema even without migration files.
-    if (/drizzle\.config/.test(o)) migrations = ["npx --yes drizzle-kit migrate 2>&1 || npx --yes drizzle-kit push --force 2>&1"];
-    else if (/schema\.prisma/.test(o)) migrations = ["npx --yes prisma migrate deploy 2>&1 || npx --yes prisma db push --accept-data-loss 2>&1"];
-  }
-
-  if (!migrations.length && !(manifest.seedCmd && !schemaPresent)) return;
-  plog(projectId, userId, schemaPresent ? "Applying any new/pending migrations for this branch…" : "Applying the database schema (migrations)…");
-  // drizzle-kit/prisma emit a spinner as ANSI escapes that garble the log + hide the real
-  // error — strip them so a failure is actually readable.
-  const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "").replace(/\r/g, "\n");
-  for (const cmd of migrations) {
-    const c = localizeCmd(cmd, runDir);
-    plog(projectId, userId, `migrate: ${c}`);
-    const r = await runDetachedPolled(projectId, userId, workspaceId, c, 600_000, { stallMs: 180_000, workDir: runDir }).catch(() => ({ exitCode: 1, output: "" }));
-    plog(projectId, userId, r.exitCode === 0 ? `migrate ok ✓` : `migrate exited ${r.exitCode} (continuing — the app may still self-migrate)`, r.exitCode === 0 ? undefined : { level: "error", detail: stripAnsi(r.output || "").trim().slice(-1200) });
-  }
-  // Seed ONLY on a fresh DB — re-seeding an existing DB duplicates rows / clobbers data.
-  if (manifest.seedCmd && !schemaPresent) {
-    const c = localizeCmd(manifest.seedCmd, runDir);
-    plog(projectId, userId, `seed: ${c}`);
-    await runDetachedPolled(projectId, userId, workspaceId, c, 600_000, { stallMs: 180_000, workDir: runDir }).catch(() => {});
-  }
-}
-
 /**
  * Tail the RUNNING app's own stdout/stderr (preview.log in the VM) — the app's live
  * runtime output (auth errors, email attempts, request logs), distinct from LFG's setup
@@ -929,7 +871,7 @@ async function verifyPreview(projectId: string, userId: string, workspaceId: str
   }
 
   const overall: "ok" | "degraded" | "error" = urlDown ? "error" : (urlErr || assetsBad || dbBad) ? "degraded" : "ok";
-  const verdict = overall === "ok" ? "🟢 **All systems OK**"
+  const verdict = overall === "ok" ? "🟢 **Preview smoke checks passed**"
     : overall === "error" ? "🔴 **Failed — the app is not responding**"
     : `🟡 **Degraded** — ${[urlErr ? "URL returns a server error" : "", assetsBad ? "some assets broken" : "", dbBad ? "a database is unreachable" : ""].filter(Boolean).join(", ")}`;
 
@@ -1020,6 +962,7 @@ async function waitForAppUp(projectId: string, userId: string, workspaceId: stri
       plog(projectId, userId, out.trim().split("\n").slice(-1)[0]!.slice(0, 200), { detail: out.trim().slice(-1200) });
       lastMsgAt = Date.now();
       if (LISTENING_BANNER.test(out)) sawBanner = true;
+      if (/Unhandled exception|Application start-up failed|Application startup exception|PendingModelChangesWarning/.test(out)) return false;
     } else if (Date.now() - lastMsgAt > 12_000) {
       // Heartbeat so a silent build (e.g. a hung restore that prints nothing) still
       // shows liveness + elapsed time instead of a frozen spinner.
@@ -1120,15 +1063,8 @@ async function resolveDriverModel(userId: string, projectId?: string) {
 // The plan is compiled into an ORDERED list of commands (a runbook). We run them
 // one by one, log pass/fail against each, and PERSIST the statuses after every
 // step — so a restart resumes from the first not-done step instead of the top.
-export interface RunStep {
-  id: string;
-  phase: "prepare" | "toolchain" | "install" | "build" | "schema" | "run";
-  label: string;
-  command: string;
-  status: "pending" | "running" | "done" | "failed";
-  error?: string;
-  optional?: boolean; // schema steps: a failure is logged but doesn't block
-}
+export type RunStep = PlanStep;
+const activeProfileBranches = new Map<string, string>();
 
 /** Build the shell command that applies a raw .sql file to the provisioned DB.
  *  Every engine runs as a Docker container, so we pipe the host file into the
@@ -1148,10 +1084,10 @@ function sqlApplyCommand(engines: EngineHandle[], file: string): string {
   // ONLY fail (and it switches context to master, disrupting the real DB). The
   // schema is built from the migrations + the other scripts instead.
   const skipRestore = `if grep -qiE 'RESTORE[[:space:]]+DATABASE' "${f}" && grep -qiE 'FROM[[:space:]]+DISK' "${f}"; then echo "SKIPPED — full-DB RESTORE from a .bak not present in the sandbox; schema comes from migrations + the other scripts"; exit 0; fi; `;
-  if (ms) return `${skipRestore}${read} | docker exec -i mssql sh -c '/opt/mssql-tools18/bin/sqlcmd -S localhost -U ${ms.username} -P "${ms.password}" -C -d ${ms.dbName} -b || /opt/mssql-tools/bin/sqlcmd -S localhost -U ${ms.username} -P "${ms.password}" -d ${ms.dbName} -b'`;
-  if (pg) return `${read} | docker exec -i -e PGPASSWORD='${pg.password}' postgres psql -U ${pg.username} -d ${pg.dbName} -v ON_ERROR_STOP=0`;
+  if (ms) return `${skipRestore}${read} | docker exec -i mssql sh -c 'client=/opt/mssql-tools18/bin/sqlcmd; test -x "$client" || client=/opt/mssql-tools/bin/sqlcmd; exec "$client" -S localhost -U ${ms.username} -P "${ms.password}" -C -d ${ms.dbName} -b'`;
+  if (pg) return `${read} | docker exec -i -e PGPASSWORD='${pg.password}' postgres psql -U ${pg.username} -d ${pg.dbName} -v ON_ERROR_STOP=1`;
   if (my) return `${read} | docker exec -i mysql mysql -u${my.username} -p'${my.password}' ${my.dbName}`;
-  return `echo "no SQL engine provisioned to apply ${file}"`;
+  return `echo "No SQL engine provisioned to apply this script"; exit 1`;
 }
 
 /** Rewrite absolute PROJECT_DIR (/data/project) references in a RECORDED command to
@@ -1341,20 +1277,38 @@ PYEOF`;
 }
 
 /** Compile the manifest into an ordered runbook. */
-function buildRunbook(manifest: PreviewManifest, engines: EngineHandle[]): RunStep[] {
+function buildRunbook(manifest: PreviewManifest, engines: EngineHandle[], dir = PROJECT_DIR): RunStep[] {
   const steps: RunStep[] = [];
-  (manifest.toolchain || []).forEach((c, i) => steps.push({ id: `toolchain-${i}`, phase: "toolchain", label: c, command: c, status: "pending" }));
-  if (manifest.installCmd) steps.push({ id: "install", phase: "install", label: manifest.installCmd, command: manifest.installCmd, status: "pending" });
-  if (manifest.buildCmd) steps.push({ id: "build", phase: "build", label: manifest.buildCmd, command: manifest.buildCmd, status: "pending" });
-  (manifest.migrations || []).forEach((c, i) => steps.push({ id: `migrate-${i}`, phase: "schema", label: c, command: c, status: "pending", optional: true }));
-  (manifest.sqlScripts || []).forEach((file, i) => steps.push({ id: `sql-${i}`, phase: "schema", label: `apply ${file}`, command: sqlApplyCommand(engines, file), status: "pending", optional: true }));
-  if (manifest.seedCmd) steps.push({ id: "seed", phase: "schema", label: manifest.seedCmd, command: manifest.seedCmd, status: "pending", optional: true });
-  steps.push({ id: "run", phase: "run", label: manifest.runCmd, command: appStartCommand(manifest), status: "pending" });
+  const add = (id: string, phase: RunStep["phase"], command: string, label = command, verify?: string) => {
+    steps.push({ id, phase, label, command: localizeCmd(command, dir), verify: verify ? localizeCmd(verify, dir) : undefined, status: "pending" });
+  };
+  const actions = (phase: string) => (manifest.replayActions ?? []).filter(a => a.phase === phase).forEach(a =>
+    add(`action-${a.id}`, phase === "verify" ? "verify" : "build", a.command, a.note || a.id, a.verify));
+  (manifest.toolchain || []).forEach((c, i) => add(`toolchain-${i}`, "toolchain", c));
+  add("configuration", "install", "", "Apply saved repairs and isolate branch databases");
+  if (manifest.installCmd) add("install", "install", manifest.installCmd);
+  actions("beforeBuild");
+  if (/dotnet|aspnet/i.test(manifest.runtime + manifest.framework)) {
+    add("asset-case", "build", assetCaseCheck(dir), "Check static assets for case collisions");
+  }
+  if (manifest.buildCmd) add("build", "build", manifest.buildCmd);
+  actions("afterBuild");
+  if (/dotnet|aspnet/i.test(manifest.runtime + manifest.framework)) add("asset-case-after-build", "build", assetCaseCheck(dir), "Verify build did not recreate case aliases");
+  actions("beforeSchema");
+  orderedSchema(manifest).forEach((step, i) => add(`schema-${i}`, "schema",
+    step.kind !== "migration" && !step.verify ? `echo "Schema script/seed requires a read-only verify assertion before it can be replayed safely"; exit 1` : step.kind === "sqlScript" ? sqlApplyCommand(engines, step.command) : step.command,
+    step.note || `${step.kind}: ${step.command}`, step.verify));
+  add("run", "run", appStartCommand(manifest, dir), `Start app: ${manifest.runCmd}`);
+  actions("verify");
+  for (const [i, path] of [...new Set(["/", ...(manifest.verificationPaths ?? [])])].entries()) {
+    add(`http-${i}`, "verify", `code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 ${shellQuote(`http://127.0.0.1:${manifest.port}${path}`)}); case "$code" in 2??|3??) exit 0;; *) echo "HTTP $code for ${path.replace(/[^a-zA-Z0-9/_-]/g, "")}"; exit 1;; esac`, `Verify route ${path}`);
+  }
+  add("assets", "verify", "", "Verify assets and database health");
   return steps;
 }
 
 const PHASE_STATUS: Record<RunStep["phase"], PreviewStatus> = {
-  prepare: "provisioning", toolchain: "installing", install: "installing", build: "installing", schema: "seeding", run: "starting",
+  prepare: "provisioning", toolchain: "installing", install: "installing", build: "installing", schema: "seeding", run: "starting", verify: "starting", recovery: "starting",
 };
 
 // ── Pipeline prelude — the infra phases that run BEFORE the manifest runbook
@@ -1376,93 +1330,175 @@ async function persistSteps(projectId: string, userId: string, steps: RunStep[])
   await db.update(projectEnvironments)
     .set({ setupSteps: JSON.stringify(steps), setupLog: logBuffers.get(projectId), updatedAt: new Date() })
     .where(eq(projectEnvironments.projectId, projectId)).catch(() => {});
-  broadcastToUser(userId, { type: "preview_steps", projectId, steps });
+  broadcastToUser(userId, { type: "preview_steps", projectId: pub(projectId), steps });
 }
 
 /**
- * Execute the runbook with checkpoints. Resumes from `resumeSteps` (skips steps
- * already done). Deterministic happy path; on a critical failure or if the app
- * doesn't come up, hands off to the AI driver (which sees the partial state).
- * Returns { up, steps } — steps is the final checkpoint.
+ * Execute the shared plan with assertions and one bounded recovery attempt.
+ * Recovery is qualified in a clean checkout before replaying the selected checkout.
+ * No previous status is accepted as proof that a step is still valid.
  */
 async function executeRunbook(
   projectId: string, userId: string, workspaceId: string,
   manifest: PreviewManifest, engines: EngineHandle[], model: any,
-  resumeSteps: RunStep[] | null, prelude: RunStep[] = [], configNotes: string[] = [],
-): Promise<{ up: boolean; steps: RunStep[] }> {
-  const port = manifest.port;
-  // Prepend the (already-completed) infra prelude so the Steps view shows the
-  // whole pipeline; the loop below skips them (phase "prepare").
-  const steps = [...prelude, ...buildRunbook(manifest, engines)];
-  // Resume: carry over 'done' from a prior checkpoint (by id). The run step never
-  // stays "done" — the app may have stopped, so we always re-verify/restart it.
-  if (resumeSteps?.length) {
-    const done = new Set(resumeSteps.filter((s) => s.status === "done").map((s) => s.id));
-    for (const s of steps) if (s.phase !== "run" && done.has(s.id)) s.status = "done";
-  }
-
-  const persist = async () => {
-    await db.update(projectEnvironments)
-      .set({ setupSteps: JSON.stringify(steps), setupLog: logBuffers.get(projectId), updatedAt: new Date() })
-      .where(eq(projectEnvironments.projectId, projectId));
-    broadcastToUser(userId, { type: "preview_steps", projectId: pub(projectId), steps });
-  };
-  const timeoutFor = (s: RunStep) => s.phase === "schema" ? 600_000 : s.phase === "run" ? 60_000 : 1_800_000;
-
-  await persist();
-
-  // ── Setup steps (everything except the infra prelude and the app start) ──
-  for (const step of steps) {
-    if (step.phase === "prepare" || step.phase === "run") continue;
-    throwIfCancelled(projectId);
-    if (step.status === "done") { plog(projectId, userId, `✓ (already done) ${step.label}`); continue; }
-    step.status = "running"; step.error = undefined; await persist();
+  _resumeSteps: RunStep[] | null, prelude: RunStep[] = [], configNotes: string[] = [], dir = PROJECT_DIR,
+): Promise<{ up: boolean; steps: RunStep[]; error?: string }> {
+  const branch = activeProfileBranches.get(projectId) ?? "default";
+  const head = await sh(workspaceId, `git -C ${shellQuote(dir)} rev-parse HEAD`, 15_000);
+  const revision = head.output.trim();
+  const loaded = await loadAppProfile(projectId, branch);
+  // Include plan content so a corrected command/config invalidates a previous blocker.
+  const envHash = await sh(workspaceId, `sha256sum ${shellQuote(dir + "/.env")} | cut -d ' ' -f1`, 15_000);
+  const identity = revision + envHash.output.trim() + JSON.stringify([manifest, loaded?.profile.configPatches, loaded?.profile.environmentOverrides]);
+  let executionDir = dir;
+  let steps: RunStep[] = [...prelude, ...buildRunbook(manifest, engines, dir)];
+  const persist = () => persistSteps(projectId, userId, steps);
+  const run = async (step: RunStep, command: string) => {
     await setPreview(projectId, userId, { previewStatus: PHASE_STATUS[step.phase] }, step.label);
-    plog(projectId, userId, `▶ ${step.phase}: ${step.command}`);
-    // Schema (SQL restores) can be legitimately silent for long stretches → no
-    // stall guard; toolchain/install/build should stream progress → kill if they
-    // go silent for 4 min (a hung network/TLS op) and let the AI driver recover.
-    const r = await runDetachedPolled(projectId, userId, workspaceId, step.command, timeoutFor(step), { stallMs: step.phase === "schema" ? 0 : 240_000 });
-    if (r.exitCode === 0) {
-      step.status = "done";
-      plog(projectId, userId, `  ✓ ${step.label}`, r.output && r.output !== "(no output)" ? { detail: r.output.slice(-700) } : undefined);
-    } else {
-      step.error = r.output.slice(-1200);
-      plog(projectId, userId, `  ✗ ${step.label} (exit ${r.exitCode})`, { level: "error", detail: r.output.slice(-1200) });
-      if (step.optional) {
-        step.status = "failed"; // logged, but don't block — schema scripts are often idempotent/partial
-      } else {
-        step.status = "failed"; await persist();
-        // Critical step failed → hand the rest to the AI driver (it sees state).
-        if (model) {
-          plog(projectId, userId, `Handing off to the AI driver to recover "${step.label}"…`);
-          const up = await driveSandbox(projectId, userId, workspaceId, manifest, engines, model, PROJECT_DIR, configNotes);
-          if (up) { for (const s of steps) if (s.status !== "done") s.status = "done"; await persist(); return { up: true, steps }; }
-        }
-        await persist();
-        return { up: false, steps };
+    plog(projectId, userId, `▶ ${step.phase}: ${step.label}`);
+    if (step.id === "configuration") {
+      const profile = await loadAppProfile(projectId, branch);
+      if (profile) {
+        await applyBranchEnvironment(workspaceId, profile.profile, executionDir);
+        await applySavedPatches(projectId, userId, workspaceId, profile.profile, executionDir);
       }
+      if (branch !== "default") {
+        const isolated = await sh(workspaceId, branchDatabaseScript(executionDir, branch, engines), 180_000);
+        if (isolated.exitCode !== 0) return isolated;
+        const databases = JSON.parse(isolated.output.trim()) as Array<{engine:string;database:string}>;
+        for (const engine of engines) {
+          const matches = databases.filter(d => d.engine === engine.engine);
+          if (matches.length === 1) engine.dbName = matches[0]!.database;
+          else if (matches.length > 1 && orderedSchema(manifest).some(s => s.kind === "sqlScript")) throw new Error("Multiple logical databases detected. Record explicit context commands instead of ambiguous raw SQL scripts.");
+        }
+        plog(projectId, userId, "Branch databases isolated; external connections unchanged");
+      }
+      return { exitCode: 0, output: "Configuration verified" };
     }
+    if (step.id.startsWith("schema-") && command === step.command) {
+      const recipe = orderedSchema(manifest)[Number(step.id.slice(7))];
+      if (recipe?.kind === "sqlScript" && recipe.verify) command = localizeCmd(sqlApplyCommand(engines, recipe.command), executionDir);
+    }
+    if (step.id === "assets") {
+      const checked = await verifyPreview(projectId, userId, workspaceId, manifest, branch);
+      return { exitCode: checked.overall === "ok" ? 0 : 1, output: checked.summary + (checked.broken.length ? "\nBroken assets: " + checked.broken.join(", ") : "") };
+    }
+    const r = await runDetachedPolled(projectId, userId, workspaceId, command,
+      step.phase === "run" ? 60_000 : step.phase === "schema" ? 600_000 : 1_800_000,
+      { stallMs: step.phase === "schema" ? 0 : 900_000, workDir: executionDir });
+    throwIfCancelled(projectId);
+    if (step.phase === "run" && r.exitCode === 0) {
+      if (await waitForAppUp(projectId, userId, workspaceId, manifest.port, `${executionDir}/preview.log`, 120_000)) return r;
+      const log = await sh(workspaceId, `head -c 16000 ${shellQuote(`${executionDir}/preview.log`)}; tail -c 8000 ${shellQuote(`${executionDir}/preview.log`)}`, 20_000);
+      return { exitCode: 1, output: failureSummary(log.output) || `App did not respond on port ${manifest.port}` };
+    }
+    return r;
+  };
+  // Recovery is allowed once; success must survive an entire deterministic replay.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const failedStep = await executeSteps(steps, { run, persist, cancelled: () => isCancelled(projectId) });
+    if (!failedStep) {
+      const current = await loadAppProfile(projectId, branch);
+      if (current) {
+        delete current.profile.blockedFailure;
+        current.profile.verifiedRevision = revision;
+        await saveAppProfile(projectId, current.profile, branch);
+      }
+      return { up: true, steps };
+    }
+    const key = failureKey(identity, failedStep, failedStep.error ?? "");
+    if (attempt || !model || loaded?.profile.blockedFailure?.key === key) {
+      const detail = `${failedStep.label}: ${failedStep.error}`;
+      const current = await loadAppProfile(projectId, branch);
+      if (current) {
+        current.profile.blockedFailure = { revision, key, detail };
+        await saveAppProfile(projectId, current.profile, branch);
+      }
+      return { up: false, steps, error: detail + (loaded?.profile.blockedFailure?.key === key ? "\nThis failure was already investigated for this revision and plan. Fix the branch or update/re-probe its profile before retrying recovery." : "") };
+    }
+    const recovery: RunStep = { id: "recovery", phase: "recovery", label: `Repair ${failedStep.label}`, command: "", status: "running", startedAt: new Date().toISOString() };
+    steps.push(recovery); await persist();
+    await sh(workspaceId, `fuser -k ${manifest.port}/tcp 2>/dev/null || true`, 20_000);
+    const outcome = await driveSandbox(projectId, userId, workspaceId, manifest, engines, model, dir,
+      [...configNotes, `FAILED STEP ${failedStep.id}: ${failedStep.error}. Repair and PERSIST the recipe. The executor will replay it; merely starting a process is not sufficient.`]);
+    throwIfCancelled(projectId);
+    recovery.status = outcome ? "done" : "failed"; recovery.finishedAt = new Date().toISOString();
     await persist();
-  }
+    if (!outcome) {
+      const current = await loadAppProfile(projectId, branch);
+      const detail = driverFailures.get(projectId) || failedStep.error || "Recovery failed";
+      if (current) { current.profile.blockedFailure = { revision, key, detail }; await saveAppProfile(projectId, current.profile, branch); }
+      return { up: false, steps, error: detail };
+    }
+    const current = await loadAppProfile(projectId, branch);
+    if (current) {
+      Object.assign(manifest, deriveManifestFromProfile(current.profile));
 
-  // ── Start the app ──
-  const runStep = steps.find((s) => s.phase === "run")!;
-  runStep.status = "running"; runStep.error = undefined; await persist();
-  await setPreview(projectId, userId, { previewStatus: "starting" }, "Starting the app…");
-  plog(projectId, userId, `▶ start app: ${manifest.runCmd}`);
-  await runDetachedPolled(projectId, userId, workspaceId, runStep.command, 60_000);
-  if (await checkServer(workspaceId, port, 20)) { runStep.status = "done"; await persist(); return { up: true, steps }; }
+    }
+    // A warm worktree can hide unrecorded repairs. Qualify in a new detached
+    // checkout before replaying the original one. Database steps use their assertions.
+    const cleanDir = `/data/preview-check-${crypto.randomUUID()}`;
+    const clean: RunStep = { id: "clean-replay", phase: "recovery", label: "Verify saved repairs from a clean checkout", command: "", status: "running" };
+    steps.push(clean); await persist();
+    try {
+      const created = await sh(workspaceId, `git -C ${shellQuote(dir)} worktree add --detach ${shellQuote(cleanDir)} HEAD && cp ${shellQuote(dir + "/.env")} ${shellQuote(cleanDir + "/.env")}`, 60_000);
+      if (created.exitCode !== 0) throw new Error(failureSummary(created.output));
+      const rewrite = branch === "default" ? buildAppsettingsRewriteScript(engines, cleanDir) : "";
+      if (rewrite) { const r = await sh(workspaceId, rewrite, 60_000); if (r.exitCode !== 0) throw new Error("Clean checkout configuration failed"); }
 
-  // App didn't come up → AI driver recovery (schema/config/runtime issues).
-  const tail = await sh(workspaceId, `tail -20 ${PROJECT_DIR}/preview.log 2>/dev/null`, 20_000).catch(() => ({ output: "" }));
-  plog(projectId, userId, "App did not respond after start — handing to the AI driver to diagnose…", { level: "error", detail: tail.output.slice(-800) });
-  if (model) {
-    const up = await driveSandbox(projectId, userId, workspaceId, manifest, engines, model, PROJECT_DIR, configNotes);
-    if (up) { runStep.status = "done"; await persist(); return { up: true, steps }; }
+      executionDir = cleanDir;
+      const cleanSteps = buildRunbook(manifest, engines, cleanDir);
+      const previousSteps = steps;
+      steps = [...prelude, recovery, clean, ...cleanSteps];
+      const invalid = await executeSteps(cleanSteps, { run, persist, cancelled: () => isCancelled(projectId) });
+      if (invalid) throw new Error(`Saved repair did not replay: ${invalid.label}: ${invalid.error}`);
+      steps = previousSteps;
+      clean.status = "done";
+    } catch (error) {
+      if ((error as Error).message === "__CANCELLED__") throw error;
+      clean.status = "failed"; clean.error = failureSummary((error as Error).message); await persist();
+      if (current) { current.profile.blockedFailure = { revision, key, detail: clean.error }; await saveAppProfile(projectId, current.profile, branch); }
+      return { up: false, steps, error: clean.error };
+    } finally {
+      executionDir = dir;
+      // Stop only the scratch app, then remove only our generated checkout.
+      await sh(workspaceId, `fuser -k ${manifest.port}/tcp 2>/dev/null || true; git -C ${shellQuote(dir)} worktree remove --force ${shellQuote(cleanDir)}`, 30_000).catch(() => {});
+    }
+    plog(projectId, userId, "Clean replay passed — restarting from the saved plan in the selected checkout.");
+    steps = [...prelude, recovery, clean, ...buildRunbook(manifest, engines, dir)];
   }
-  runStep.status = "failed"; runStep.error = tail.output.slice(-1000); await persist();
-  return { up: false, steps };
+  return { up: false, steps, error: "Replay failed" };
+}
+const driverFailures = new Map<string, string>();
+
+async function ensurePreviewEngine(projectId: string, userId: string, engine: DbEngine) {
+  return ensureEngine(projectId, engine, {
+    cancelled: () => isCancelled(projectId),
+    progress: (elapsed) => plog(projectId, userId, `Waiting for ${engine} readiness (${elapsed}s)…`),
+  });
+}
+
+async function applyBranchEnvironment(workspaceId: string, profile: AppProfile, dir: string) {
+  const lines = (profile.environmentOverrides ?? []).filter(v => /^[A-Za-z_][A-Za-z0-9_]*$/.test(v.key) && !UNSAFE_ENV_KEYS.has(v.key))
+    .map(v => [v.key, `${v.key}=${shellQuote(decryptSecret(v.encryptedValue))}`]);
+  if (!lines.length) return;
+  const payload = Buffer.from(JSON.stringify(lines)).toString("base64");
+  const r = await sh(workspaceId, `python3 - ${shellQuote(dir + "/.env")} ${shellQuote(payload)} <<'PYEOF'
+import base64, json, sys
+path = sys.argv[1]
+values = dict(json.loads(base64.b64decode(sys.argv[2])))
+lines = [line for line in open(path).read().splitlines() if line.split("=", 1)[0] not in values]
+with open(path, "w") as f: f.write("\\n".join(lines + list(values.values())) + "\\n")
+PYEOF`, 30_000);
+  if (r.exitCode !== 0) throw new Error("Could not apply branch environment overrides");
+}
+
+async function applySavedPatches(projectId: string, userId: string, workspaceId: string, profile: AppProfile, dir: string) {
+  const script = buildConfigPatchScript(profile.configPatches, dir);
+  if (!script) return;
+  const result = await sh(workspaceId, script, 60_000);
+  if (result.exitCode !== 0) throw new Error(`Saved patch verification failed: ${failureSummary(result.output)}`);
+  plog(projectId, userId, "Saved patches applied and verified", { detail: result.output });
 }
 
 /** Prefix that puts the toolchain on PATH, caches on /data, and loads .env. The
@@ -1802,10 +1838,10 @@ HOW TO WORK:
 - Apply migrations, then the SQL scripts in order (SQL Server runs in Docker — use \`docker exec\` with sqlcmd inside the mssql container, or a client you install; the connection string is in .env).
 - Start the APP SERVER detached so it keeps running after the command returns: \`setsid sh -c 'cd ${workDir}; <run command>' </dev/null > ${workDir}/preview.log 2>&1 &\` — it must bind 0.0.0.0:${port}. (This is the ONLY case where you background a command yourself.)
 - VERIFY for real: \`curl -sS -i http://127.0.0.1:${port}/\`. A real 2xx/3xx/4xx = up → \`finish\` ready. 000/connection-refused = down → read ${workDir}/preview.log, diagnose, fix, retry.
-- WINDOWS → LINUX CASE SENSITIVITY: this app was likely developed on Windows (case-INsensitive filesystem) but runs here on Linux (case-SENSITIVE). If static assets 404 (broken images/CSS/JS — e.g. HTML references \`/images/…\` or \`/js/cohyremodification.js\` but the real files are \`wwwroot/Images/…\`, \`wwwroot/js/CohyreModification.js\`), it's a case mismatch, NOT a missing file. Fix it in the preview by adding case-bridging SYMLINKS in the web root (e.g. \`cd ${workDir}/<web>/wwwroot && ln -s Images images && ln -s CohyreModification.js js/cohyremodification.js\`) so the referenced paths resolve, then re-check. Call \`noteLearning\` with the exact symlinks so the next run + branches reapply them. (The proper fix — correcting the casing in the .cshtml views — belongs in a ticket, not here.) Be mindful of case in every path you reference.
+- CASE SENSITIVITY: Historical instructions recommending case aliases are obsolete; preserve their goal using canonical references instead. Correct asset REFERENCES to the canonical tracked filename. NEVER add case-bridging copies or symlinks under wwwroot: ASP.NET static asset discovery treats these as conflicting build targets. Remove only aliases proven preview-created (untracked and identical to their tracked target); never delete distinct tracked assets. Persist the repair. Verify the affected URLs AND rebuild again to prove the next run works.
 - A 500 needs judgement: the app IS serving (running), but errored on the request. Read the error in ${workDir}/preview.log.
   • ENVIRONMENT issue in your remit (missing/wrong connection string, a service that isn't up, a missing env var) → fix it and retry.
-  • A SCHEMA error ("Invalid column name", "Invalid object name", "relation does not exist", "Unknown column", a missing table/column — Postgres/MySQL/SQL Server alike) is almost always a schema that FAILED TO BUILD — and building the schema IS your job, so do NOT give up on it. (DB clients: SQL Server → \`docker exec -i mssql …sqlcmd…\`, list with \`SELECT name FROM sys.tables\`; Postgres → \`docker exec -i postgres psql\`, list with \`\\dt\` / information_schema.tables; MySQL → \`docker exec -i mysql mysql\`, \`SHOW TABLES\`.) First look at the Steps: did migration/schema steps FAIL (crossed out)? They usually did, for fixable reasons: (a) a SQL file has a UTF-8 BOM/encoding that breaks the first statement — re-apply stripping the BOM (\`tail -c +4 file | …\` if the first 3 bytes are EF BB BF); (b) the migration ran against a DIFFERENT database than the app (NEVER hardcode a DB name — use the .env connection the app uses; verify the app's DB actually has the tables); (c) wrong order — a script ALTERs a table an earlier failed step should have created, so fix the earlier step first; (d) a bad migration (e.g. drops a column before its table exists) — mark it applied in the ORM's migration-history table to skip it, per what you learn. (e) a script that RESTORES a whole database FROM DISK='…\\x.bak' — that backup lives on the original dev machine and is NOT in the repo/sandbox; SKIP it entirely (do not try to find, download, or recreate the .bak, and do not restore over the app's DB), the schema comes from the migrations + the other scripts. Re-apply the failed schema steps against the SAME DB the app uses, then restart and re-check the page. Call \`noteLearning\` for each fix so the next run has it.
+  • A SCHEMA error ("Invalid column name", "Invalid object name", "relation does not exist", "Unknown column", a missing table/column — Postgres/MySQL/SQL Server alike) is almost always a schema that FAILED TO BUILD — and building the schema IS your job, so do NOT give up on it. (DB clients: SQL Server → \`docker exec -i mssql …sqlcmd…\`, list with \`SELECT name FROM sys.tables\`; Postgres → \`docker exec -i postgres psql\`, list with \`\\dt\` / information_schema.tables; MySQL → \`docker exec -i mysql mysql\`, \`SHOW TABLES\`.) First look at the Steps: did migration/schema steps FAIL (crossed out)? They usually did, for fixable reasons: (a) a SQL file has a UTF-8 BOM/encoding that breaks the first statement — re-apply stripping the BOM (\`tail -c +4 file | …\` if the first 3 bytes are EF BB BF); (b) the migration ran against a DIFFERENT database than the app (NEVER hardcode a DB name — use the .env connection the app uses; verify the app's DB actually has the tables); (c) wrong order — a script ALTERs a table an earlier failed step should have created, so fix the earlier step first; (d) a bad migration (e.g. drops a column before its table exists) — report the actual schema conflict and repair the migration on the isolated branch; never forge migration history. (e) a script that RESTORES a whole database FROM DISK='…\\x.bak' — that backup lives on the original dev machine and is NOT in the repo/sandbox; SKIP it entirely (do not try to find, download, or recreate the .bak, and do not restore over the app's DB), the schema comes from the migrations + the other scripts. Re-apply the failed schema steps against the SAME DB the app uses, then restart and re-check the page. Call \`noteLearning\` for each fix so the next run has it.
   • If the app does NOT come up on the port AT ALL and preview.log is empty/short, it likely blocked/crashed DURING STARTUP — a logging sink or health check that can't reach a service (e.g. a Serilog MSSqlServer sink that reads its connection from appsettings.json and hangs/throws if it can't connect). Read the very first lines of preview.log, fix the startup blocker (point that sink/setting at the provisioned DB, or disable it for the preview), and restart. An app that won't start is IN your remit.
   • ONLY after the schema builds CLEANLY (all scripts applied to the app's DB with no errors) and the page STILL 500s on a missing column should you conclude it's a genuine app/repo bug (the app queries a column no migration/script creates) — THEN call \`finish\` "ready" and state precisely which column/table and that a clean schema build still lacks it. You may do up to ~2 full schema-repair passes; do not loop endlessly on the same failing command.
 
@@ -1817,7 +1853,7 @@ PERSISTING WHAT YOU LEARN (so the next run doesn't repeat your work):
 
 RUNNING COMMANDS — IMPORTANT:
 - The \`run\` tool already runs each command DETACHED and polls it to completion, so restore/build/install take as long as they need — you do NOT need to background them, add \`&\`, nohup, or your own timeout wrapper. Just run the plain command (e.g. \`dotnet build Cohire.sln -c Release\`).
-- Pass a large \`timeoutSec\` (~1500) for restore/build. If a command returns exitCode -2 ("still running after Ns"), it is STILL RUNNING — do NOT restart it; call \`run\` again (e.g. \`sleep 5\` or re-issue with a bigger timeoutSec) to keep waiting for it to finish. Never kill and restart a build that's progressing.
+- Pass a large timeoutSec (~1500) for restore/build. A deadline terminates the process (exit -2); inspect the error and change the approach before retrying. Cancellation (exit -3) stops recovery immediately.
 - If a command returns exitCode -4, we KILLED it: it produced NO output for ~4 min and looked stuck (commonly a hung network/TLS/DNS op — e.g. a package restore that can't validate a source's certificate even though \`curl\` to it works). Do NOT re-run the identical command. Diagnose the hang and change the approach (fix certs/CA path, a different package source or install method, offline/cached packages), then retry.
 - RUN IN "LOG MODE" — surface the REAL error on the FIRST run. Errors are expected; the point is to see WHAT failed immediately, not to re-run to find out. So for any command that can fail (build/restore/migrate/install): keep \`2>&1\`, and use the tool's VERBOSE/diagnostic flag so the actual error prints inline. Concretely:
   • \`dotnet ef database update …\` hides errors ("Build failed. Use dotnet build to see the errors.") — ALWAYS add \`-v\` (verbose) so the build error is shown, OR run \`dotnet build <sln> -c Release\` FIRST to get the real error, then re-run ef once it builds.
@@ -1826,7 +1862,7 @@ RUNNING COMMANDS — IMPORTANT:
   This avoids the wasteful "run → vague failure → re-run to see the error" cycle.
 
 RULES:
-- Do NOT modify the application's SOURCE CODE. You may install tools/deps, set env, choose commands, fix host/port, edit ./.env. If it genuinely needs a code change to run, call \`finish\` with status "failed" and the exact reason.
+- Source repairs are allowed ONLY in an isolated feature-branch worktree (not /data/project). Keep them minimal and persist each literal edit with persistConfigPatch in that branch profile so checkout replay reproduces it. Never commit/push/merge automatically. On the default checkout, finish failed with the exact source blocker. Never disable migrations, suppress PendingModelChangesWarning, or mark unapplied migrations as applied; repair and validate the model/migration instead.
 - When a command genuinely fails (a real non-zero exit with an error), read the error and fix the ENVIRONMENT, then continue. Keep going until the app responds or it truly cannot run — do not give up after one failed attempt.
 - One command per \`run\` call. Never print secrets.`;
 }
@@ -1882,7 +1918,7 @@ async function runDetachedPolled(
     const chkOut = chk.output || "";
     if (chkOut.includes("DONE:")) {
       const code = parseInt((chkOut.match(/DONE:(-?\d+)/) || [])[1] ?? "-1", 10);
-      const out = await execOnWorkspace(workspaceId, `tail -c 6000 ${logf} 2>/dev/null`, { timeout: 30_000 })
+      const out = await execOnWorkspace(workspaceId, `{ head -c 12000 ${logf}; tail -c 6000 ${logf}; } 2>/dev/null`, { timeout: 30_000 })
         .catch(() => ({ output: "", stderr: "", exitCode: 0 }));
       return { exitCode: code, output: (out.output || "").trim() || "(no output)" };
     }
@@ -1895,9 +1931,9 @@ async function runDetachedPolled(
       }
     }
   }
-  // Timed out — leave it running (a build may still finish); tell the model.
-  const tail = await execOnWorkspace(workspaceId, `tail -c 2000 ${logf} 2>/dev/null`, { timeout: 30_000 }).catch(() => ({ output: "" }));
-  return { exitCode: -2, output: `(still running after ${Math.round(maxMs / 1000)}s; poll again later. Recent output:\n${tail.output || ""})`.slice(-4000) };
+  // Deadline reached: terminate before recovery so a second build cannot race it.
+  const tail = await execOnWorkspace(workspaceId, `pkill -9 -f ${id} 2>/dev/null; tail -c 2000 ${logf} 2>/dev/null`, { timeout: 30_000 }).catch(() => ({ output: "" }));
+  return { exitCode: -2, output: `(terminated after ${Math.round(maxMs / 1000)}s deadline; no process remains running. Recent output:\n${tail.output || ""})`.slice(-4000) };
 }
 
 async function driveSandbox(
@@ -1911,18 +1947,24 @@ async function driveSandbox(
   configNotes: string[] = [],
 ): Promise<boolean> {
   const port = manifest.port;
+  const profileBranch = activeProfileBranches.get(projectId) ?? "default";
+  driverFailures.delete(projectId);
   let finished: { status: "ready" | "failed"; detail: string } | undefined;
   // Load the project's MANDATORY DIRECTIVES (user-authored + agent-appended must-dos).
-  const directives = (await loadAppProfile(projectId).catch(() => null))?.profile.directives ?? [];
+  const directives = (await loadAppProfile(projectId, profileBranch).catch(() => null))?.profile.directives ?? [];
 
+  const failedCommands = new Set<string>();
   const tools = {
     run: tool({
-      description: "Run one shell command in the Alpine sandbox (bash). The toolchain PATH, /data caches, and the project's .env are already set up. The command runs to completion no matter how long it takes (build/restore are fine) — we run it detached and poll, so you don't need to background it yourself. Returns exit code + combined stdout/stderr (last 6KB). exitCode -2 = still running after your timeout (call run again to keep polling — do NOT restart it). exitCode -4 = we KILLED it because it produced no output for ~4 min (stuck, e.g. a hung network/TLS op) — do NOT re-run the same command, change the approach.",
+      description: "Run one shell command in the Alpine sandbox (bash). The toolchain PATH, /data caches, and the project's .env are already set up. The command runs to completion no matter how long it takes (build/restore are fine) — we run it detached and poll, so you don't need to background it yourself. Returns exit code + combined stdout/stderr (last 6KB). exitCode -2 = terminated at the deadline; diagnose before retrying. exitCode -4 = we KILLED it because it produced no output for ~4 min (stuck, e.g. a hung network/TLS op) — do NOT re-run the same command, change the approach.",
       inputSchema: zodSchema(z.object({
         command: z.string().describe("The shell command to run (one command; use && or a heredoc for multi-step). Run it in the FOREGROUND — do NOT add '&'/nohup/setsid yourself; we detach it for you. EXCEPTION: the app server itself must be started detached (setsid ... &) so it keeps running."),
-        timeoutSec: z.number().optional().describe("How long to wait for THIS command before returning control (default 600, max 1800). For a big restore/build use ~1500. If it returns exitCode -2 (still running), call run again with the same/again to keep waiting."),
+        timeoutSec: z.number().optional().describe("How long to wait for THIS command before returning control (default 600, max 1800). For a big restore/build use ~1500. A timeout terminates the process before returning; do not launch duplicate work."),
       })),
       execute: async ({ command, timeoutSec }: { command: string; timeoutSec?: number }) => {
+        const state = await sh(workspaceId, `cd ${shellQuote(workDir)} && { git diff HEAD; sha256sum .env 2>/dev/null; } | sha256sum`, 15_000);
+        const commandKey = command + state.output.trim();
+        if (failedCommands.has(commandKey)) return { exitCode: 1, output: "This exact command already failed with the same source/environment. Change the repair before retrying; no duplicate command was started." };
         throwIfCancelled(projectId); // Stop pressed → abort the agent loop
         const maxMs = Math.min(Math.max(timeoutSec ?? 600, 10), 1800) * 1000;
         plog(projectId, userId, `$ ${command}`);
@@ -1930,27 +1972,33 @@ async function driveSandbox(
         // Kill a command that goes silent for 4 min (stuck) so the agent iterates
         // fast instead of burning the full timeout on a hang.
         const r = await runDetachedPolled(projectId, userId, workspaceId, command, maxMs, { stallMs: 240_000, workDir });
+        throwIfCancelled(projectId);
+        if (r.exitCode !== 0) failedCommands.add(commandKey);
         plog(projectId, userId, `  → exit ${r.exitCode}`, r.output ? { detail: r.output.slice(-1800), level: r.exitCode === 0 ? "info" : "error" } : undefined);
-        return { exitCode: r.exitCode, output: r.output.slice(-6000) || "(no output)" };
+        return { exitCode: r.exitCode, output: r.exitCode === 0 ? r.output.slice(-6000) || "(no output)" : failureSummary(r.output, 6000) };
       },
     }),
     updatePlan: tool({
       description: "Persist a correction to the saved SETUP PLAN (the checklist) so the NEXT run uses the working approach instead of repeating the failed one. Call this the moment you discover a plan command is wrong and you found what works — e.g. the toolchain 'apk add dotnet8-sdk' fails so you installed the runtime a different way, or the install/build/run command, startup project, or port in the plan is wrong. This does NOT run anything; it just rewrites the checklist. (For an environment fix that must persist across steps/restarts — an env var, a cert path, a package source — append it to ./.env instead; it is sourced before every command.)",
       inputSchema: zodSchema(z.object({
-        field: z.enum(["toolchain", "installCmd", "buildCmd", "runCmd", "port", "startupProject"]).describe("Which plan field to correct."),
+        field: z.enum(["toolchain", "installCmd", "buildCmd", "runCmd", "port", "startupProject", "schemaSteps", "replayActions", "verificationPaths", "configPatches"]).describe("Which plan field to correct."),
         value: z.string().describe("The corrected value. For 'toolchain', the FULL working command sequence, one command per line (replaces the old toolchain). For 'port', the number as a string. Otherwise the exact command/name."),
         reason: z.string().describe("Briefly: what was wrong and what you changed it to."),
       })),
       execute: async ({ field, value, reason }: { field: string; value: string; reason: string }) => {
         if (field === "toolchain") manifest.toolchain = value.split("\n").map((s) => s.trim()).filter(Boolean);
         else if (field === "port") { const p = parseInt(value, 10); if (p > 0) manifest.port = p; }
+        else if (field === "configPatches") { appProfileSchema.shape.configPatches.parse(JSON.parse(value)); }
+        else if (field === "schemaSteps") manifest.schemaSteps = z.array(schemaStepSchema).parse(JSON.parse(value));
+        else if (field === "replayActions") manifest.replayActions = z.array(replayActionSchema).parse(JSON.parse(value));
+        else if (field === "verificationPaths") manifest.verificationPaths = z.array(z.string().regex(/^\/(?!\/)/)).parse(JSON.parse(value));
         else (manifest as any)[field] = value;
         await db.update(projectEnvironments)
           .set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() })
           .where(eq(projectEnvironments.projectId, projectId)).catch(() => {});
         // Persist the correction into the PROFILE too — the manifest is re-derived
         // from the profile each run, so a manifest-only fix would be clobbered.
-        await applyProfileCorrection(projectId, field, value, reason).catch(() => {});
+        await applyProfileCorrection(projectId, field, value, reason, profileBranch);
         const shown = field === "toolchain" ? manifest.toolchain.join("; ") : String((manifest as any)[field]);
         plog(projectId, userId, `Updated plan: ${field} → ${shown}`, { detail: reason });
         return "plan updated — the next run will use this.";
@@ -1962,7 +2010,7 @@ async function driveSandbox(
         note: z.string().describe("One concrete, actionable sentence — what's true and what to do about it."),
       })),
       execute: async ({ note }: { note: string }) => {
-        const ok = await recordProfileLearning(projectId, note).catch(() => false);
+        const ok = await recordProfileLearning(projectId, note, profileBranch).catch(() => false);
         plog(projectId, userId, `Learned: ${note}`);
         return ok ? "recorded — future runs and branches will see this." : "noted (no profile to attach it to yet).";
       },
@@ -1973,23 +2021,26 @@ async function driveSandbox(
         directive: z.string().describe("One imperative, checkable rule the next run must satisfy."),
       })),
       execute: async ({ directive }: { directive: string }) => {
-        const ok = await recordDirective(projectId, directive).catch(() => false);
+        const ok = await recordDirective(projectId, directive, profileBranch).catch(() => false);
         plog(projectId, userId, `Added mandatory directive: ${directive}`);
         return ok ? "recorded — every future run must satisfy this." : "noted (no profile yet).";
       },
     }),
     persistConfigPatch: tool({
-      description: "Persist an edit to a CONFIG FILE so it SURVIVES a git branch switch, a fresh checkout, and a rebuild (like setEnv does for env vars, but for a tracked file that a checkout would otherwise reset). Use this — NOT a bare sed/echo — whenever you must edit a config file (NOT application source logic) for the app to RUN in the sandbox: e.g. repoint a connection string in appsettings.json from a dead dev/prod host to the provisioned localhost DB, or a Serilog sink connection that the app reads from the file. Give the EXACT literal text to find + its replacement. It's applied NOW and auto-re-applied after every future checkout/branch-switch, so branches and rebuilds never rediscover it.",
+      description: "Persist an edit to a CONFIG FILE so it SURVIVES a git branch switch, a fresh checkout, and a rebuild (like setEnv does for env vars, but for a tracked file that a checkout would otherwise reset). On isolated branches this also records minimal SOURCE repairs. Use this whenever you edit a file for the app to RUN in the sandbox: e.g. repoint a connection string in appsettings.json from a dead dev/prod host to the provisioned localhost DB, or a Serilog sink connection that the app reads from the file. Give the EXACT literal text to find + its replacement. It's applied NOW and auto-re-applied after every future checkout/branch-switch, so branches and rebuilds never rediscover it.",
       inputSchema: zodSchema(z.object({
         file: z.string().describe("Path relative to the working dir, e.g. 'Cohire.Web/appsettings.json'."),
         find: z.string().describe("EXACT literal substring currently in the file to replace (copy it verbatim)."),
         replace: z.string().describe("The replacement text."),
         reason: z.string().optional(),
+        create: z.boolean().optional().describe("Create a new file, only on an isolated branch; find must be empty."),
       })),
-      execute: async ({ file, find, replace, reason }: { file: string; find: string; replace: string; reason?: string }) => {
-        const script = buildConfigPatchScript([{ file, find, replace }], workDir);
-        if (script) await sh(workspaceId, script, 30_000).catch(() => {});
-        const ok = await recordConfigPatch(projectId, { file, find, replace, note: reason }).catch(() => false);
+      execute: async ({ file, find, replace, reason, create }: { file: string; find: string; replace: string; reason?: string; create?: boolean }) => {
+        if (workDir === PROJECT_DIR && /\.(cs|cshtml|tsx?|jsx?|py|go|rs|java)$/i.test(file)) return "Source repairs require an isolated feature-branch checkout.";
+        if (create && workDir === PROJECT_DIR) return "Creating source files requires an isolated branch";
+        const script = buildConfigPatchScript([{ file, find, replace, create }], workDir);
+        if (script) { const r = await sh(workspaceId, script, 30_000); if (r.exitCode !== 0) return `Patch failed: ${failureSummary(r.output)}`; }
+        const ok = await recordConfigPatch(projectId, { file, find, replace, note: reason, create }, profileBranch).catch(() => false);
         plog(projectId, userId, `Persisted config patch to ${file}`, { detail: reason });
         return ok ? "applied + persisted — it re-applies after every checkout/branch-switch." : "applied now, but couldn't persist (no profile yet).";
       },
@@ -2002,10 +2053,19 @@ async function driveSandbox(
         reason: z.string().optional().describe("Why it's needed"),
       })),
       execute: async ({ key, value, reason }: { key: string; value: string; reason?: string }) => {
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return "Invalid environment variable name";
         if (UNSAFE_ENV_KEYS.has(key)) {
           return `Refused: ${key} is machine-specific and must NOT be persisted — a persisted ${key} gets injected into other VMs and clobbers their real ${key} (breaking ls/node/apk). The toolchain PATH is already set for every command. To use a tool, reference its absolute path or install it via updatePlan's toolchain step instead.`;
         }
         try {
+          if (profileBranch !== "default") {
+            const current = await loadAppProfile(projectId, profileBranch);
+            if (!current) return "No branch profile to persist the environment repair";
+            current.profile.environmentOverrides = [...(current.profile.environmentOverrides ?? []).filter(v => v.key !== key), { key, encryptedValue: encryptSecret(value) }];
+            await saveAppProfile(projectId, current.profile, profileBranch);
+            await applyBranchEnvironment(workspaceId, current.profile, workDir);
+            return `Persisted ${key} on this branch only`;
+          }
           await db.insert(projectEnvironmentVariables)
             .values({ projectId, key, encryptedValue: encryptSecret(value), isSecret: false, hasValue: true, description: reason || "preview setup fix" })
             .onConflictDoUpdate({ target: [projectEnvironmentVariables.projectId, projectEnvironmentVariables.key], set: { encryptedValue: encryptSecret(value), hasValue: true, updatedAt: new Date() } });
@@ -2047,9 +2107,9 @@ async function driveSandbox(
     await generateText({
       model,
       tools,
-      stopWhen: stepCountIs(150), // generous step budget — schema-heavy apps (30+ scripts) need room to repair AND start
+      stopWhen: stepCountIs(40), // generous step budget — schema-heavy apps (30+ scripts) need room to repair AND start
       system: buildDriverSystemPrompt(manifest, engines, workDir, configNotes, directives),
-      prompt: `Bring the app up and verify it serves on 0.0.0.0:${port} (working dir: ${workDir}). Begin.`,
+      prompt: `Profile scope: ${profileBranch}. schemaSteps/replayActions/verificationPaths corrections must be JSON arrays. Persist every repair; do not use unrecorded shell workarounds. Bring the app up and verify it serves on 0.0.0.0:${port} (working dir: ${workDir}). Begin.`,
       abortSignal: ac.signal,
     });
   } catch (e) {
@@ -2072,11 +2132,12 @@ async function driveSandbox(
   // explicit failed over a port that merely answers.
   if (finished?.status === "failed") {
     plog(projectId, userId, "App could not be brought up", { level: "error", detail: finished.detail });
+    driverFailures.set(projectId, finished.detail);
     return false;
   }
   // Otherwise trust reality over the model's word: confirm the port actually serves
   // (covers the case where the model forgot to call finish but the app is genuinely up).
-  if (await checkServer(workspaceId, port, 8)) return true;
+  if (await checkServer(workspaceId, manifest.port, 8)) return true;
   return false;
 }
 
@@ -2142,11 +2203,12 @@ export async function runPreviewChat(opts: {
   catch { return { reply: "There's no preview sandbox for this project yet. Open the **Preview** tab and run setup first, then ask me again.", status: "error" }; }
 
   const row = await getEnv(projectId);
+  const profileBranch = row?.previewBranch && row.previewBranch !== "(default)" ? row.previewBranch : "default";
   const manifest = row?.setupManifest ? (JSON.parse(row.setupManifest) as PreviewManifest) : null;
   const port = manifest?.port ?? DEFAULT_PORT;
   const runCmd = row?.runCommand || manifest?.runCmd || "";
-  const savedProfile = await loadAppProfile(projectId);
-  const configNotes = savedProfile ? profileNotes(savedProfile.profile) : [];
+  const savedProfile = await loadAppProfile(projectId, profileBranch);
+  let configNotes = savedProfile ? profileNotes(savedProfile.profile) : [];
   const directives = savedProfile?.profile.directives ?? [];
   // What the last setup/preview run already did — captured BEFORE this chat runs
   // any commands of its own, so a follow-up @preview continues from where the
@@ -2190,7 +2252,7 @@ export async function runPreviewChat(opts: {
   let replyStatus: "ok" | "error" | "stuck" = "ok";
   const tools = {
     run: tool({
-      description: "Run one shell command in the project's live Alpine sandbox (bash). Runs detached + polled, so long commands are fine. Returns exit code + combined stdout/stderr (last 6KB). exitCode -2 = still running (call again to keep waiting); -4 = we killed it after ~4 min of no output (stuck — change approach).",
+      description: "Run one shell command in the project's live Alpine sandbox (bash). Runs detached + polled, so long commands are fine. Returns exit code + combined stdout/stderr (last 6KB). exitCode -2 = terminated at the deadline (inspect the failure before retrying); -4 = we killed it after ~4 min of no output (stuck — change approach).",
       inputSchema: zodSchema(z.object({
         command: z.string().describe("One shell command (use && or a heredoc for multi-step). Run in the FOREGROUND — do NOT add '&'/nohup/setsid yourself; we detach it. EXCEPTION: the app server must be launched detached (setsid ... &) so it keeps running."),
         timeoutSec: z.number().optional().describe("Seconds to wait before returning control (default 600, max 1800)."),
@@ -2201,7 +2263,7 @@ export async function runPreviewChat(opts: {
         plog(projectId, userId, `$ ${command}`);
         const r = await runDetachedPolled(projectId, userId, workspaceId, command, maxMs, { stallMs: 240_000, workDir, onActivity: opts.onActivity });
         plog(projectId, userId, `  → exit ${r.exitCode}`, r.output ? { detail: r.output.slice(-1800), level: r.exitCode === 0 ? "info" : "error" } : undefined);
-        return { exitCode: r.exitCode, output: r.output.slice(-6000) || "(no output)" };
+        return { exitCode: r.exitCode, output: r.exitCode === 0 ? r.output.slice(-6000) || "(no output)" : failureSummary(r.output, 6000) };
       },
     }),
     setEnv: tool({
@@ -2238,7 +2300,7 @@ export async function runPreviewChat(opts: {
         else if (field === "port") { const p = parseInt(value, 10); if (p > 0) manifest.port = p; }
         else (manifest as any)[field] = value;
         await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId)).catch(() => {});
-        await applyProfileCorrection(projectId, field, value, reason).catch(() => {});
+        await applyProfileCorrection(projectId, field, value, reason, profileBranch).catch(() => {});
         plog(projectId, userId, `Updated plan: ${field}`, { detail: reason });
         return "plan updated — future builds + branches use this.";
       },
@@ -2247,7 +2309,7 @@ export async function runPreviewChat(opts: {
       description: "Record a non-obvious FACT you learned about running THIS app that a plan field can't capture (a schema/ordering rule, a missing client, a config gotcha, a workaround) so future previews AND feature branches get it up front instead of rediscovering it. Persisted on the profile and shown to future agents as a CONFIG QUIRK.",
       inputSchema: zodSchema(z.object({ note: z.string().describe("One concrete, actionable sentence.") })),
       execute: async ({ note }: { note: string }) => {
-        const ok = await recordProfileLearning(projectId, note).catch(() => false);
+        const ok = await recordProfileLearning(projectId, note, profileBranch).catch(() => false);
         plog(projectId, userId, `Learned: ${note}`);
         return ok ? "recorded — future runs and branches will see this." : "noted (no profile yet).";
       },
@@ -2256,18 +2318,20 @@ export async function runPreviewChat(opts: {
       description: "Add a MANDATORY DIRECTIVE — a must-do rule every future run/preview must verify + satisfy (stronger than noteLearning). Use after solving a blocker that must never regress, phrased as an imperative the next agent can check.",
       inputSchema: zodSchema(z.object({ directive: z.string() })),
       execute: async ({ directive }: { directive: string }) => {
-        const ok = await recordDirective(projectId, directive).catch(() => false);
+        const ok = await recordDirective(projectId, directive, profileBranch).catch(() => false);
         plog(projectId, userId, `Added mandatory directive: ${directive}`);
         return ok ? "recorded — every future run must satisfy this." : "noted (no profile yet).";
       },
     }),
     persistConfigPatch: tool({
       description: "Persist a CONFIG-FILE edit so it SURVIVES a git branch switch / fresh checkout / rebuild (like setEnv for env vars, but for a tracked file). Use whenever you must edit a config file (NOT app source) for the app to RUN — e.g. repoint an appsettings.json connection from a dead host to the provisioned localhost DB. Exact literal find + replace. Applied now AND re-applied after every future checkout, so branches inherit it.",
-      inputSchema: zodSchema(z.object({ file: z.string(), find: z.string(), replace: z.string(), reason: z.string().optional() })),
-      execute: async ({ file, find, replace, reason }: { file: string; find: string; replace: string; reason?: string }) => {
-        const script = buildConfigPatchScript([{ file, find, replace }], workDir);
-        if (script) await sh(workspaceId, script, 30_000).catch(() => {});
-        const ok = await recordConfigPatch(projectId, { file, find, replace, note: reason }).catch(() => false);
+      inputSchema: zodSchema(z.object({ file: z.string(), find: z.string(), replace: z.string(), reason: z.string().optional(), create: z.boolean().optional() })),
+      execute: async ({ file, find, replace, reason, create }: { file: string; find: string; replace: string; reason?: string; create?: boolean }) => {
+        if (workDir === PROJECT_DIR && /\.(cs|cshtml|tsx?|jsx?|py|go|rs|java)$/i.test(file)) return "Source repairs require an isolated feature-branch checkout.";
+        if (create && workDir === PROJECT_DIR) return "Creating source files requires an isolated branch";
+        const script = buildConfigPatchScript([{ file, find, replace, create }], workDir);
+        if (script) { const applied = await sh(workspaceId, script, 30_000); if (applied.exitCode !== 0) return `Patch failed: ${failureSummary(applied.output)}`; }
+        const ok = await recordConfigPatch(projectId, { file, find, replace, note: reason, create }, profileBranch).catch(() => false);
         plog(projectId, userId, `Persisted config patch to ${file}`, { detail: reason });
         return ok ? "applied + persisted — re-applies after every checkout/branch-switch." : "applied now (no profile to persist to yet).";
       },
@@ -2326,7 +2390,7 @@ SCOPE — do ONLY what the user asked, nothing more:
 - Only take mutating/expensive actions (build, restore, migrate, seed, restart, install) when the user EXPLICITLY asks you to fix/change/restart/set something up. When unsure, investigate and report rather than mutate.
 - The app is usually ALREADY set up and running — assume the toolchain, DB, and build exist; verify before assuming they don't. Do not redo setup.
 - RUN IN "LOG MODE" so an error shows the FIRST time — don't run a command that hides the error and forces a re-run. Keep \`2>&1\` and add the tool's verbose flag (e.g. \`dotnet ef … -v\` — plain ef only says "Build failed. Use dotnet build to see the errors."; use \`--verbosity normal\`/\`npm --loglevel verbose\`). Don't \`grep\`/\`head\` away the real error + its context. Errors are expected — the goal is to see WHAT failed immediately.
-- CASE SENSITIVITY: Windows-developed apps 404 their own assets on Linux (case-sensitive) — e.g. HTML asks for \`/images/…\` but the file is \`wwwroot/Images/…\`. That's a case mismatch, not a missing file: add bridging symlinks in the web root (\`ln -s Images images\`, etc.), then \`noteLearning\` the exact symlinks so future runs + branches reapply them. Be mindful of case in every path.
+- CASE SENSITIVITY: Historical instructions recommending case aliases are obsolete; preserve their goal using canonical references instead. Correct asset REFERENCES to the canonical tracked filename. NEVER add case-bridging copies or symlinks under wwwroot: ASP.NET static asset discovery treats these as conflicting build targets. Remove only aliases proven preview-created (untracked and identical to their tracked target); never delete distinct tracked assets. Persist the repair. Verify the affected URLs AND rebuild again to prove the next run works.
 
 PERSIST YOUR FIXES (critical — otherwise they're lost and branches don't get them):
 - When you fix something with an ENV var (a cert/CA path, ASPNETCORE_FORWARDEDHEADERS_ENABLED for a reverse-proxy/HTTPS asset issue, a base URL, a runtime flag), call \`setEnv\` — do NOT just \`echo >> .env\`. setEnv records it on the project so EVERY future setup AND every ticket branch inherits it. An echo-only fix works for this one live app and then vanishes.
@@ -2632,13 +2696,7 @@ fi`, 240_000);
       }
     }
     if (!profile) {
-      const { supportsStructured } = await resolveUserModel(userId);
-      if (!supportsStructured) {
-        // Kimi/DeepSeek/GLM don't reliably converge on the multi-step agentic tool-probe
-        // (it can spin for minutes without ever finalizing a profile). Skip it and let the
-        // single-shot quick detection below build the manifest instead.
-        plog(projectId, userId, "Selected model isn't a strong agentic tool-caller — using quick detection instead of the deep probe.");
-      } else {
+      {
         const prior = await loadAppProfile(projectId); // carry learnings across a re-probe
         const pac = new AbortController();
         const pw = setInterval(() => { if (isCancelled(projectId)) pac.abort(); }, 1000);
@@ -2646,15 +2704,14 @@ fi`, 240_000);
           profile = await probeAppProfile({
             workspaceId,
             userId,
+            knowledge: prior ? [...(prior.profile.directives ?? []), ...profileNotes(prior.profile)] : [],
             onLog: (l, d) => plog(projectId, userId, l, d ? { detail: d } : undefined),
             abortSignal: pac.signal,
           });
         } finally { clearInterval(pw); }
         if (profile) {
           // A re-probe rewrites the plan but must NOT forget hard-won run learnings.
-          if (prior?.profile.learnings?.length) {
-            profile.learnings = [...prior.profile.learnings, ...(profile.learnings ?? [])].slice(-40);
-          }
+          profile = mergeKnowledge(profile, prior?.profile);
           await saveAppProfile(projectId, profile);
         }
       }
@@ -2662,6 +2719,9 @@ fi`, 240_000);
     throwIfCancelled(projectId);
 
     if (profile) {
+      const fingerprint = await sh(workspaceId, `git -C ${PROJECT_DIR} rev-parse HEAD^{tree}`, 15_000);
+      profile.inputFingerprint = fingerprint.output.trim();
+      await saveAppProfile(projectId, profile);
       manifest = deriveManifestFromProfile(profile);
       await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
       plog(projectId, userId, `Plan (from profile): ${manifest.stack || manifest.runtime}`, {
@@ -2688,6 +2748,10 @@ fi`, 240_000);
       manifest = await detectManifest(projectId, userId);
       await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
       plog(projectId, userId, `Plan: ${manifest.stack || manifest.runtime}`);
+      // Even quick detection needs a durable home for subsequent repairs.
+      profile = appProfileSchema.parse({ ...manifest, runtimeVersion: "", buildQuirks: [], configQuirks: [],
+        schemaSteps: orderedSchema(manifest), autoEnvVars: [], secretsRequired: [], directives: [], learnings: [] });
+      await saveAppProfile(projectId, profile);
     }
     await prep("plan", "done");
 
@@ -2755,7 +2819,7 @@ fi`, 240_000);
         }
         if (await shouldUseProvidedDb(workspaceId, projectId, userId, dbSpec, providedVal, dbMode)) continue;
         plog(projectId, userId, `Provisioning ${dbSpec.engine} → ${dbSpec.connectionEnvVar}…`);
-        const h = await ensureEngine(projectId, dbSpec.engine);
+        const h = await ensurePreviewEngine(projectId, userId, dbSpec.engine);
         engineHandles.push(h);
         provisioned[dbSpec.connectionEnvVar] = formatConnection(dbSpec, h);
         plog(projectId, userId, `${dbSpec.engine} ready at 127.0.0.1:${h.port} (db "${h.dbName}") → ${dbSpec.connectionEnvVar} ✓`);
@@ -2777,45 +2841,19 @@ fi`, 240_000);
       plog(projectId, userId, "Repointed appsettings SQL connections → local MSSQL", { detail: (r.output || "").slice(-500) });
     }
     // Re-apply persisted config-file patches (any app-specific fixes beyond the above).
-    if (profile?.configPatches?.length) {
-      const patchScript = buildConfigPatchScript(profile.configPatches, PROJECT_DIR);
-      if (patchScript) { await sh(workspaceId, patchScript, 60_000).catch(() => {}); plog(projectId, userId, `Re-applied ${profile.configPatches.length} saved config patch(es)`); }
-    }
+
     await prep("env", "done");
 
     // 5. Get the app running + VERIFIED via the CHECKPOINTED RUNBOOK. The plan is
-    // an ordered command list; we run each with a checkpoint, so a restart resumes
-    // from the first not-done step. FAST PATH: if setup already completed on a
-    // prior run, just (re)start the app directly.
+    // an ordered command list with assertions. Setup and restart use the same executor.
     const driver = await resolveDriverModel(userId, projectId);
     let up = false;
 
-    const alreadyRun = existing?.setupComplete === 1 && !!existing?.runCommand;
-    if (alreadyRun && !opts.rebuildManifest) {
-      plog(projectId, userId, "Setup already complete — starting the app directly…");
-      await setPreview(projectId, userId, { previewStatus: "starting" }, "Starting the app…");
-      if (await checkServer(workspaceId, manifest.port, 2)) {
-        up = true; plog(projectId, userId, "App is already running ✓");
-      } else {
-        await runDetachedPolled(projectId, userId, workspaceId, appStartCommand(manifest), 60_000);
-        up = await checkServer(workspaceId, manifest.port, 20);
-      }
-    }
-
-    if (!up) {
-      await setPreview(projectId, userId, { previewStatus: "installing" }, "Setting up & running the app…");
-      const resumeSteps: RunStep[] | null = existing?.setupSteps ? (JSON.parse(existing.setupSteps) as RunStep[]) : null;
-      const configNotes = profile ? profileNotes(profile) : [];
-      const result = await executeRunbook(projectId, userId, workspaceId, manifest, engineHandles, driver?.model, resumeSteps, prelude, configNotes);
-      up = result.up;
-      // Mark setup complete + store the run command so the next click is a fast run.
-      const setupDone = result.steps.filter((s) => s.phase !== "run").every((s) => s.status === "done" || s.optional);
-      await db.update(projectEnvironments).set({
-        setupComplete: up && setupDone ? 1 : 0,
-        runCommand: manifest.runCmd,
-        updatedAt: new Date(),
-      }).where(eq(projectEnvironments.projectId, projectId));
-    }
+    const configNotes = profile ? profileNotes(profile) : [];
+    const result = await executeRunbook(projectId, userId, workspaceId, manifest, engineHandles, driver?.model, null, prelude, configNotes);
+    up = result.up;
+    await db.update(projectEnvironments).set({ setupComplete: up ? 1 : 0, runCommand: manifest.runCmd, updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
+    if (!up) return failed(projectId, userId, result.error || "Preview plan failed — see the failing step.");
 
     // 6. Confirm the app is actually serving on its port (reality check).
     plog(projectId, userId, `Verifying the app responds on 127.0.0.1:${manifest.port}…`);
@@ -2872,7 +2910,9 @@ fi`, 240_000);
     plog(projectId, userId, `Preview live: ${previewUrl}`);
     await setPreview(projectId, userId, { previewStatus: "running", appUrl: previewUrl, appPort: effectivePort, previewError: null }, "Preview is live");
     // Multi-app: bring up any ENABLED companion services on their own subdomains.
-    const companionSummary = await runEnabledCompanions(projectId, userId, workspaceId, manifest, PROJECT_DIR, alias, previewUrl).catch(() => "");
+    const auditStep: RunStep = { id: "audit", phase: "verify", label: "Verify homepage, assets and database health", command: "", status: "running" };
+    result.steps.push(auditStep); await persistSteps(projectId, userId, result.steps);
+    const companionSummary = await runEnabledCompanions(projectId, userId, workspaceId, manifest, PROJECT_DIR, alias, previewUrl);
     // Each companion's exposeService() calls enableHttpAccess for ITS port, which leaves
     // the job's primary port pointing at whichever companion started last. Restore it to
     // the primary app so the job's bare URL (and any unpinned alias) means the main app.
@@ -2882,12 +2922,11 @@ fi`, 240_000);
     // Post-run verification (URL + assets + DB) → publish the launch summary to chat.
     const vManifest = effectivePort === manifest.port ? manifest : { ...manifest, port: effectivePort };
     const v = await verifyPreview(projectId, userId, workspaceId, vManifest, branch || "(default)").catch(() => null);
+    auditStep.status = v?.overall === "ok" ? "done" : "failed";
+    if (auditStep.status === "failed") auditStep.error = v?.summary || "Verification could not complete";
+    await persistSteps(projectId, userId, result.steps);
     if (v) await publishSummary(userId, opts.conversationId, `${v.summary}\n\n🔗 ${previewUrl}${companionSummary}`, pub(projectId)).catch(() => {});
-    // Self-heal broken assets via the agent (opt-in through directives), then re-summarize.
-    if (v?.broken?.length) {
-      const healed = await healBrokenAssets(projectId, userId, opts.conversationId, workspaceId, vManifest, branch || "(default)", v.broken).catch(() => null);
-      if (healed) await publishSummary(userId, opts.conversationId, `${healed.summary}\n\n🔗 ${previewUrl}${companionSummary}`, pub(projectId)).catch(() => {});
-    }
+    if (auditStep.status === "failed") return failed(projectId, userId, auditStep.error || "Preview verification failed");
     return { previewUrl };
   } catch (err) {
     const msg = errText(err);
@@ -2986,10 +3025,15 @@ export async function reprobeProfile(projectId: string, userId: string): Promise
     return;
   }
 
-  const prior = await loadAppProfile(projectId);
+  const state = await getEnv(projectId);
+  const branch = state?.previewBranch && state.previewBranch !== "(default)" ? state.previewBranch : "default";
+  const { dir } = await resolvePreviewWorkDir(projectId, workspaceId);
+  const prior = await loadAppProfile(projectId, branch);
   const profile = await probeAppProfile({
     workspaceId,
     userId,
+    workDir: dir,
+    knowledge: prior ? [...(prior.profile.directives ?? []), ...profileNotes(prior.profile)] : [],
     onLog: (l, d) => plog(projectId, userId, l, d ? { detail: d } : undefined),
   });
   if (!profile) {
@@ -2998,8 +3042,10 @@ export async function reprobeProfile(projectId: string, userId: string): Promise
     return;
   }
   // Keep hard-won learnings across the re-probe.
-  if (prior?.profile.learnings?.length) profile.learnings = [...prior.profile.learnings, ...(profile.learnings ?? [])].slice(-40);
-  await saveAppProfile(projectId, profile);
+  Object.assign(profile, mergeKnowledge(profile, prior?.profile));
+  const fp = await sh(workspaceId, `git -C ${shellQuote(dir)} rev-parse HEAD^{tree}`, 15_000);
+  profile.inputFingerprint = fp.output.trim();
+  await saveAppProfile(projectId, profile, branch);
   // Refresh the derived manifest so the next run uses the new plan.
   const manifest = deriveManifestFromProfile(profile);
   await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
@@ -3440,19 +3486,23 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
   }
   let manifest = JSON.parse(row.setupManifest) as PreviewManifest; // may gain DBs via reconcile below
   const savedProfile = await loadAppProfile(projectId);
-  const configNotes = savedProfile ? profileNotes(savedProfile.profile) : [];
+  let configNotes = savedProfile ? profileNotes(savedProfile.profile) : [];
   resetLog(projectId);
   await loadPublicId(projectId); // for WS routing
 
-  // A restart/branch run has its OWN 2-step checklist (locate → start) so the Steps
-  // view reflects THIS run, not the stale full-setup prep list.
+  // Prelude rows join the shared build/schema/start/verification executor for this run.
   const branchLabel0 = ticketId ? `feature/ticket-${ticketId}` : "(default)";
   const steps: RunStep[] = [
     { id: "locate", phase: "prepare", label: ticketId ? `Locate the ticket worktree (${branchLabel0})` : "Use the default checkout", command: "", status: "pending" },
-    { id: "run", phase: "run", label: `Start the app — ${manifest.runCmd}`, command: "", status: "pending" },
+    { id: "plan", phase: "prepare", label: "Validate the selected branch run profile", command: "", status: "pending" },
+    { id: "db", phase: "prepare", label: "Start required database services", command: "", status: "pending" },
+    { id: "env", phase: "prepare", label: "Apply environment and verify saved patches", command: "", status: "pending" },
   ];
   const setStep = async (id: string, s: RunStep["status"]) => {
-    const st = steps.find((x) => x.id === id); if (st) st.status = s;
+    const st = steps.find((x) => x.id === id); if (st) { st.status = s;
+      if (s === "running") { st.startedAt = new Date().toISOString(); await setPreview(projectId, userId, { previewStatus: "provisioning" }, st.label); }
+      else st.finishedAt = new Date().toISOString();
+    }
     await persistSteps(projectId, userId, steps);
   };
 
@@ -3727,158 +3777,71 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) $(git log -1 --oneline
     }
     await setStep("locate", "done");
 
+    await setStep("plan", "running");
+    const profileBranch = branchLabel === "(default)" ? "default" : branchLabel;
+    activeProfileBranches.set(projectId, profileBranch);
+    const fingerprint = await sh(workspaceId, `git -C ${shellQuote(runDir)} rev-parse HEAD^{tree}`, 15_000);
+    const inputs = fingerprint.output.trim();
+    let scoped = await loadAppProfile(projectId, profileBranch);
+    if (!scoped || scoped.profile.inputFingerprint !== inputs) {
+      plog(projectId, userId, "Branch inputs changed — checking its run profile before replay.");
+      const ac = new AbortController();
+      const timer = setInterval(() => { if (isCancelled(projectId)) ac.abort(); }, 1000);
+      let probed: AppProfile | null;
+      try { probed = await probeAppProfile({ workspaceId, userId, workDir: runDir, knowledge: [...(scoped?.profile.directives ?? savedProfile?.profile.directives ?? []), ...configNotes], abortSignal: ac.signal,
+        onLog: (l, d) => plog(projectId, userId, l, d ? { detail: d } : undefined) }); }
+      finally { clearInterval(timer); }
+      throwIfCancelled(projectId);
+      if (!probed) throw new Error("Could not validate the selected branch's run profile. No unverified plan was replayed; retry probing.");
+      // Branch-specific corrections stay on their branch. Inherit general instructions
+      // for a new branch, but never silently transplant literal patches from another branch.
+      const baseline = scoped?.profile ?? (savedProfile ? { ...savedProfile.profile, configPatches: [], replayActions: [], environmentOverrides: [] } : undefined);
+      const next = mergeKnowledge(probed, baseline);
+      next.inputFingerprint = inputs;
+      delete next.blockedFailure; delete next.verifiedRevision;
+      await saveAppProfile(projectId, next, profileBranch);
+      scoped = await loadAppProfile(projectId, profileBranch);
+    }
+    if (scoped) {
+      manifest = deriveManifestFromProfile(scoped.profile);
+      configNotes = profileNotes(scoped.profile);
+      await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
+    }
+    await setStep("plan", "done");
+    await setStep("db", "running");
     // Reconcile DBs on RESTART too (not just Re-setup): union already-provisioned engines
     // + engines the code signals, so a plain Restart also provisions a database the app
     // needs. reapplyEnv() below then brings each up via ensureEngine AND writes the
     // connection var into .env — so a NEWLY-provisioned DB is both started and reachable.
     manifest = await reconcileDatabases(projectId, userId, manifest, runDir);
 
-    // (Re)start EVERY database service we've provisioned for this project. The source of
-    // truth is projectDatabases — the list of engines WE actually created (each with its
-    // stored password) — NOT manifest.databases, which detection can drop between
-    // re-probes (leaving "Databases — none provisioned" while /data/pgdata + the app's
-    // injected DATABASE_URL still expect it). After a VM respawn the containers may just
-    // need starting (/data survived) or may need re-creating from scratch (/data came back
-    // blank) — ensureEngine's docker bring-up covers both, so bring them all up.
-    // ensureEngine is idempotent (docker start; reuses the stored password) — we do NOT
-    // touch env vars: connection strings are already injected by writeEnvFile.
-    const provisionedEngines = await db.select({ engine: projectDatabases.engine })
-      .from(projectDatabases).where(eq(projectDatabases.projectId, projectId));
-    if (provisionedEngines.length) {
-      plog(projectId, userId, `Ensuring ${provisionedEngines.length} database service(s) are running: ${provisionedEngines.map((e) => e.engine).join(", ")}…`);
-      for (const { engine } of provisionedEngines) {
-        await ensureEngine(projectId, engine as DbEngine)
-          .then((h) => plog(projectId, userId, `${engine} running ✓ (127.0.0.1:${h.port})`))
-          .catch((e) => plog(projectId, userId, `Could not (re)start ${engine}: ${(e as Error).message}`, { level: "error" }));
+    const engines: EngineHandle[] = [];
+    const provisionedEngines = await db.select({ engine: projectDatabases.engine }).from(projectDatabases).where(eq(projectDatabases.projectId, projectId));
+    for (const { engine } of provisionedEngines) {
+      throwIfCancelled(projectId);
+      plog(projectId, userId, `Starting ${engine}…`);
+      engines.push(await ensurePreviewEngine(projectId, userId, engine as DbEngine));
+    }
+    await setStep("db", "done");
+    await setStep("env", "running");
+    await reapplyEnv(projectId, userId, workspaceId, manifest);
+    if (runDir !== PROJECT_DIR) {
+      const copied = await sh(workspaceId, `cp ${PROJECT_DIR}/.env ${shellQuote(runDir + "/.env")}`, 15_000);
+      if (copied.exitCode !== 0) throw new Error("Could not copy environment into selected checkout");
+    }
+    for (const spec of manifest.databases) {
+      if (!engines.some(e => e.engine === spec.engine)) {
+        const managed = await db.select().from(projectDatabases).where(and(eq(projectDatabases.projectId, projectId), eq(projectDatabases.engine, spec.engine)));
+        if (managed.length) engines.push(await ensurePreviewEngine(projectId, userId, spec.engine));
       }
     }
-    // Safety net: also (re)start any DB container that EXISTS on this project's VM but
-    // isn't tracked in projectDatabases (e.g. a ticket build ran its own `docker run
-    // postgres` / drizzle push, so there's data + a container but no row for us to
-    // ensureEngine). `docker start` is a no-op if it's already running or absent, and
-    // touches no env. Per-project VM, so these containers are all this project's.
-    const dbStart = await sh(workspaceId, `for c in postgres mysql redis mssql; do docker start "$c" >/dev/null 2>&1 && echo "started:$c"; done; echo DONE`, 90_000).catch(() => ({ output: "" }));
-    const started = (dbStart.output || "").match(/started:(\w+)/g);
-    if (started?.length) plog(projectId, userId, `Started existing DB container(s): ${started.map((s) => s.split(":")[1]).join(", ")}`);
-    // Deterministic RULE: repoint every non-local SQL connection in the run dir's
-    // appsettings*.json (Web, Admin, …) to the provisioned local MSSQL, so a fresh
-    // branch checkout doesn't crash on a hardcoded dead host (e.g. Admin still
-    // pointing at SHABEER on the branch). Runs on the worktree OR the switched checkout.
-    if ((manifest.databases || []).some((d) => d.engine === "mssql")) {
-      const ms = await ensureEngine(projectId, "mssql").catch(() => null);
-      const rw = ms ? buildAppsettingsRewriteScript([ms], runDir) : "";
-      if (rw) { const r = await sh(workspaceId, rw, 60_000).catch(() => ({ output: "" })); plog(projectId, userId, "Repointed appsettings SQL connections → local MSSQL", { detail: (r.output || "").slice(-400) }); }
-    }
-    // Re-apply persisted config-file patches to the run dir — this is what makes a
-    // branch switch / worktree / fresh checkout inherit the connection repoints etc.
-    // (they'd otherwise be reset by the checkout), so branches don't re-investigate.
-    if (savedProfile?.profile.configPatches?.length) {
-      const patchScript = buildConfigPatchScript(savedProfile.profile.configPatches, runDir);
-      if (patchScript) { await sh(workspaceId, patchScript, 60_000).catch(() => {}); plog(projectId, userId, `Re-applied ${savedProfile.profile.configPatches.length} saved config patch(es) to ${runDir === PROJECT_DIR ? "the checkout" : "the worktree"}`); }
-    }
-
-    // Re-apply env from current settings so keys edited in the Environment tab take
-    // effect on Restart (restart otherwise reuses the .env from the last full setup).
-    await reapplyEnv(projectId, userId, workspaceId, manifest).catch((e) => plog(projectId, userId, `Env re-apply skipped: ${(e as Error).message?.slice(0, 120)}`, { level: "error" }));
-    if (runDir !== PROJECT_DIR) await sh(workspaceId, `cp ${PROJECT_DIR}/.env ${runDir}/.env 2>/dev/null || true`, 15_000).catch(() => {});
-
-    await setStep("run", "running");
-    const startingMsg = ticketId ? `Starting the preview on ${branchLabel}…` : "Restarting the app…";
-    await setPreview(projectId, userId, { previewStatus: "starting", previewError: null, previewBranch: branchLabel }, startingMsg);
-    const compiled = !!manifest.buildCmd || /dotnet|asp|java|go|rust|maven|gradle/i.test(`${manifest.runtime} ${manifest.framework}`);
-
-    // FAST DETERMINISTIC PATH: run the RECORDED build + run commands directly (they're
-    // known-good from the last successful setup, and the deps/DB/config are already
-    // set up on the persistent disk). Only if one of them ERRORS do we hand off to the
-    // AI driver — so a normal restart just builds (incremental, fast) + runs, instead
-    // of the driver re-investigating the whole plan (restore/migrate/PATH) every time.
-    let up = false;
-    let buildFailed = false;
-    if (compiled && manifest.buildCmd) {
-      // Make sure the toolchain is present BEFORE the recorded build — a root-fs reset
-      // between the main run and this branch run drops apk-installed tools, and the build
-      // would otherwise fail "go/gcc not found" and bounce to the driver. Go is installed
-      // to PERSISTENT /data; gcc/musl-dev come back from the /data apk cache.
-      await ensureGoToolchainOnData(projectId, userId, workspaceId, manifest, runDir);
-      await ensureApkToolchain(projectId, userId, workspaceId, manifest, runDir);
-      // Localize any hardcoded /data/project paths in the recorded build to THIS run
-      // dir, so a branch worktree build acts on the worktree (not on main's files).
-      const buildCmd = localizeCmd(manifest.buildCmd, runDir);
-      plog(projectId, userId, `Building (recorded): ${buildCmd}`);
-      // The recorded build is a TRUSTED, known-good command — and a large compiled build
-      // (.NET Release, Razor view compilation, Java/Gradle) legitimately produces NO
-      // console output for many minutes during restore/compile. The old 240s stall guard
-      // KILLED it (exit -4) on every restart, which handed control to the AI driver → a
-      // full ~30-min re-investigation instead of a fast replay. Give it a much longer
-      // stall window (15 min) + a bigger ceiling (30 min); maxMs still bounds a true hang.
-      const br = await runDetachedPolled(projectId, userId, workspaceId, buildCmd, 1_800_000, { stallMs: 900_000, workDir: runDir });
-      if (br.exitCode !== 0) {
-        buildFailed = true;
-        plog(projectId, userId, `Recorded build failed (exit ${br.exitCode}) — handing to the AI driver to investigate`, { level: "error", detail: br.output.slice(-1200) });
-        // The (re)build failed → we will NOT start a fresh process below. On this ONE
-        // shared preview VM, a STALE process from a prior run/branch (e.g. main's
-        // server, which embeds its OWN templates) is usually still bound to :${port}.
-        // Kill it now so a lingering 200 can't get mis-detected as "App running ✓" and
-        // silently serve the OLD page under THIS branch's summary. If recovery succeeds
-        // the driver restarts it cleanly; if not, :${port} stays empty and we honestly
-        // report failure. (No-op if the exec channel itself is down — driveSandbox's
-        // explicit-failed guard covers that case.)
-        await sh(workspaceId, `fuser -k ${manifest.port}/tcp 2>/dev/null; pkill -f ':${manifest.port}' 2>/dev/null; sleep 1; true`, 20_000).catch(() => {});
-      } else {
-        plog(projectId, userId, "Build ✓");
-      }
-    }
-    if (!buildFailed) {
-      // Apply DB migrations now — deps are installed (build ran) and the DB is up, so the
-      // schema exists BEFORE the app starts (otherwise a fresh cluster → 'relation "user"
-      // does not exist'). Idempotent, so it's a no-op when the schema already matches.
-      await runSchemaSetup(projectId, userId, workspaceId, manifest, runDir).catch((e) => plog(projectId, userId, `Migration step skipped: ${(e as Error).message?.slice(0, 120)}`, { level: "error" }));
-      plog(projectId, userId, `Starting the app from ${branchLabel}…`);
-      await runDetachedPolled(projectId, userId, workspaceId, appStartCommand(manifest, runDir), 30_000);
-      up = await waitForAppUp(projectId, userId, workspaceId, manifest.port, `${runDir}/preview.log`, ticketId ? 120_000 : 90_000);
-    }
-
-    // The port we'll actually expose. Normally manifest.port, but see the
-    // port-mismatch self-heal below (a .NET app that ignores ASPNETCORE_URLS).
-    let effectivePort = manifest.port;
-
-    // SELF-HEAL: the app may be RUNNING but on a different port than we asked for
-    // — e.g. a .NET app whose appsettings `Kestrel:Endpoints`/`applicationUrl`
-    // overrides ASPNETCORE_URLS, so it binds (say) 5123 while the proxy on 5000
-    // sees nothing ("app is up in the logs, but the URL errors out"). Read the
-    // port the app ITSELF announced; if it's different and reachable, expose THAT
-    // instead of failing. Generic — works whatever set the port (config or code).
-    if (!up) {
-      const bound = await detectBoundPorts(workspaceId, `${runDir}/preview.log`);
-      const alt = bound.find((p) => p !== manifest.port && ![80, 443].includes(p));
-      if (alt && await checkServer(workspaceId, alt, 2)) {
-        effectivePort = alt;
-        up = true;
-        plog(projectId, userId, `App bound port ${alt} (not ${manifest.port}) — likely an appsettings Kestrel/applicationUrl override of ASPNETCORE_URLS. Exposing ${alt} instead.`, { level: "info" });
-      }
-    }
-
-    // Only if the recorded build/run didn't bring it up → hand off to the driver to
-    // investigate (it reuses the warm toolchain/cache/DB + persisted fixes, streams
-    // its steps, fixes what's actually broken, and persists new fixes via setEnv).
-    if (!up) {
-      const driver = await resolveDriverModel(userId, projectId);
-      if (driver) {
-        plog(projectId, userId, "Recorded build/run didn't bring the app up — handing to the AI driver to investigate…");
-        await setPreview(projectId, userId, { previewStatus: "starting", previewBranch: branchLabel }, `Investigating & starting ${branchLabel} (AI driver)…`);
-        up = await driveSandbox(projectId, userId, workspaceId, manifest, [], driver.model, runDir, configNotes);
-      }
-    }
-    if (!up) {
-      await setStep("run", "failed");
-      const bound = await detectBoundPorts(workspaceId, `${runDir}/preview.log`);
-      const portNote = bound.length ? `\n\nThe app's log says it's listening on port ${bound.join(", ")} — but the preview expects ${manifest.port}. It's probably binding a port from appsettings (Kestrel:Endpoints/applicationUrl) or code (UseUrls) that overrides ASPNETCORE_URLS=…:${manifest.port}. Point it at ${manifest.port}.` : "";
-      const tail = await sh(workspaceId, `tail -40 ${runDir}/preview.log 2>/dev/null`, 20_000).catch(() => ({ output: "" }));
-      plog(projectId, userId, `The app did not come up on port ${manifest.port}${bound.length ? ` (it bound ${bound.join(", ")})` : ""}`, { level: "error", detail: (tail.output || "(no output — the app may have failed to build)").slice(-1500) });
-      return failed(projectId, userId, `The app did not come back up on port ${manifest.port}.${portNote}\n\n${(tail.output || "").slice(-800)}`);
-    }
-    await setStep("run", "done");
-    plog(projectId, userId, `App running ✓ (${branchLabel}${effectivePort !== manifest.port ? ` on port ${effectivePort}` : ""})`);
+    await setStep("env", "done");
+    const driver = await resolveDriverModel(userId, projectId);
+    const result = await executeRunbook(projectId, userId, workspaceId, manifest, engines, driver?.model, null, steps, configNotes, runDir);
+    if (!result.up) return failed(projectId, userId, result.error || "Preview plan failed — see the failing step.");
+    const effectivePort = manifest.port;
+    await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(manifest), runCommand: manifest.runCmd, updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
+    plog(projectId, userId, `App and saved plan verified ✓ (${branchLabel})`);
     // Re-expose (idempotent) and mark running — on the port the app actually bound.
     await enableHttpAccess(workspaceId, effectivePort).catch(() => {});
     const alias = row.stableAlias || randomAlias();
@@ -3894,7 +3857,14 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) $(git log -1 --oneline
     await setPreview(projectId, userId, { previewStatus: "running", appUrl: previewUrl, appPort: effectivePort, previewError: null, previewBranch: branchLabel }, "Preview is live");
     // Multi-app: bring up any ENABLED companion services on their own subdomains (in the
     // SAME run dir — a ticket worktree or the main checkout).
-    const companionSummary = await runEnabledCompanions(projectId, userId, workspaceId, manifest, runDir, alias, previewUrl).catch(() => "");
+    const companionStep: RunStep = { id: "companions", phase: "run", label: "Start enabled companion apps", command: "", status: "running" };
+    const auditStep: RunStep = { id: "audit", phase: "verify", label: "Verify homepage, assets and database health", command: "", status: "pending" };
+    result.steps.push(companionStep, auditStep);
+    await persistSteps(projectId, userId, result.steps);
+    const companionSummary = await runEnabledCompanions(projectId, userId, workspaceId, manifest, runDir, alias, previewUrl);
+    companionStep.status = /❌|failed|did not/i.test(companionSummary) ? "failed" : "done";
+    auditStep.status = "running";
+    await persistSteps(projectId, userId, result.steps);
     // Companions leave the job's primary port pointing at the last one started — restore
     // it to the primary app (see the same call in setupPreview).
     if ((manifest.services || []).some((s) => !s.primary && s.enabled)) {
@@ -3903,12 +3873,11 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) $(git log -1 --oneline
     // Post-run verification (URL + assets + DB) → publish the launch summary to chat.
     const vManifest = effectivePort === manifest.port ? manifest : { ...manifest, port: effectivePort };
     const v = await verifyPreview(projectId, userId, workspaceId, vManifest, branchLabel).catch(() => null);
+    auditStep.status = v?.overall === "ok" ? "done" : "failed";
+    if (auditStep.status === "failed") auditStep.error = v?.summary || "Verification could not complete";
+    await persistSteps(projectId, userId, result.steps);
     if (v) await publishSummary(userId, opts.conversationId, `${v.summary}\n\n🔗 ${previewUrl}${companionSummary}`, pub(projectId)).catch(() => {});
-    // Self-heal broken assets via the agent (opt-in through directives), then re-summarize.
-    if (v?.broken?.length) {
-      const healed = await healBrokenAssets(projectId, userId, opts.conversationId, workspaceId, vManifest, branchLabel, v.broken).catch(() => null);
-      if (healed) await publishSummary(userId, opts.conversationId, `${healed.summary}\n\n🔗 ${previewUrl}${companionSummary}`, pub(projectId)).catch(() => {});
-    }
+    if (auditStep.status === "failed") return failed(projectId, userId, auditStep.error || "Preview verification failed");
     return { previewUrl };
   } catch (err) {
     const msg = (err as Error).message ?? String(err);
@@ -3916,6 +3885,8 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) $(git log -1 --oneline
       await setPreview(projectId, userId, { previewStatus: "stopped", appUrl: null, previewError: null }, "Preview stopped").catch(() => {});
       return { error: "cancelled" };
     }
+    for (const st of steps) if (st.status === "running") { st.status = "failed"; st.error = failureSummary(msg); st.finishedAt = new Date().toISOString(); }
+    await persistSteps(projectId, userId, steps);
     return failed(projectId, userId, msg);
   } finally {
     // When we handed off to setupPreview we already released the lock, and IT owns the
@@ -3923,6 +3894,8 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) $(git log -1 --oneline
     // (after its whole pipeline) and could clear a flag belonging to a newer run.
     if (!lockReleased) {
       cancelledProjects.delete(projectId);
+      activeProfileBranches.delete(projectId);
+      driverFailures.delete(projectId);
       releaseRun(); // let a queued run (branch switch) proceed on the now-free VM
     }
   }

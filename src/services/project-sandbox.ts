@@ -434,7 +434,8 @@ function failureReason(raw: string | undefined): string {
  * Ensure a DB engine is installed + running in the project's sandbox and return
  * connection info (localhost). Idempotent — reuses an existing engine + password.
  */
-export async function ensureEngine(projectId: string, engine: DbEngine): Promise<EngineHandle> {
+export async function ensureEngine(projectId: string, engine: DbEngine, opts?: { cancelled?: () => boolean; progress?: (elapsedSeconds: number) => void }): Promise<EngineHandle> {
+  if (opts?.cancelled?.()) throw new Error("__CANCELLED__");
   const spec = ENGINES[engine];
   if (!spec) throw new Error(`Unsupported engine: ${engine}`);
   await ensureProjectSandbox(projectId);
@@ -444,8 +445,18 @@ export async function ensureEngine(projectId: string, engine: DbEngine): Promise
   const dockerOk = await ensureDocker(projectId);
   if (!dockerOk) throw new Error(`Docker could not be started in the sandbox — it's required to run the ${engine} database. Check the sandbox's Docker setup and retry.`);
 
-  const [row] = await db.select().from(projectDatabases).where(and(eq(projectDatabases.projectId, projectId), eq(projectDatabases.engine, engine)));
-  const password = row?.passwordEncrypted ? decryptSecret(row.passwordEncrypted) : generatePassword();
+  let [row] = await db.select().from(projectDatabases).where(and(eq(projectDatabases.projectId, projectId), eq(projectDatabases.engine, engine)));
+  // Persist credentials before detached provisioning: cancellation must not generate
+  // a different password for the same still-starting container on the next run.
+  if (!row) {
+    await db.insert(projectDatabases).values({ projectId, engine, workspaceId,
+      host: "127.0.0.1", port: spec.port, dbName: spec.defaultDb, username: spec.username,
+      passwordEncrypted: encryptSecret(generatePassword()), status: "provisioning", memGb: 8, diskGb: 20,
+    }).onConflictDoNothing();
+    [row] = await db.select().from(projectDatabases).where(and(eq(projectDatabases.projectId, projectId), eq(projectDatabases.engine, engine)));
+  }
+  if (!row?.passwordEncrypted) throw new Error("Could not persist database provisioning credentials");
+  const password = decryptSecret(row.passwordEncrypted);
 
   // Run the idempotent bring-up in the background; poll a marker (avoids the
   // exec socket timeout on apk install / init / image pull).
@@ -458,7 +469,10 @@ export async function ensureEngine(projectId: string, engine: DbEngine): Promise
   const maxPolls = { mssql: 120, mysql: 100, postgres: 75, redis: 60 }[engine] ?? 60; // ~16 / 13 / 10 / 8 min
   let ready = false;
   for (let i = 0; i < maxPolls; i++) {
+    if (opts?.cancelled?.()) throw new Error("__CANCELLED__");
+    if (i % 2 === 0) opts?.progress?.(i * 8);
     await sleep(8000);
+    if (opts?.cancelled?.()) throw new Error("__CANCELLED__");
     const r = await execOnWorkspace(workspaceId, `tail -1 ${logf} 2>/dev/null`, { timeout: 40_000 }).catch(() => ({ output: "" } as any));
     if ((r.output || "").includes("ENGINE_READY")) { ready = true; break; }
     if ((r.output || "").includes("ENGINE_ERROR")) {

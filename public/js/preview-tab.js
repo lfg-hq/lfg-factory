@@ -622,16 +622,16 @@
       const row = `<div style="display:flex;gap:8px;padding:3px 0;font-size:12px;align-items:flex-start;line-height:18px;">
         <span style="width:14px;height:18px;flex:none;display:flex;align-items:center;justify-content:center;">${STEP_ICON[s.status] || STEP_ICON.pending}</span>
         <span style="min-width:64px;flex:none;color:var(--text-secondary,#9ca3af);text-transform:uppercase;font-size:10px;letter-spacing:.4px;line-height:18px;">${esc(s.phase)}</span>
-        <span style="flex:1;color:${s.status === "failed" ? "#ef4444" : "var(--text-color,#e2e8f0)"};word-break:break-word;font-family:ui-monospace,Menlo,monospace;line-height:18px;">${esc(s.label)}</span>
+        <span style="flex:1;color:${s.status === "failed" ? "#ef4444" : "var(--text-color,#e2e8f0)"};word-break:break-word;font-family:ui-monospace,Menlo,monospace;line-height:18px;">${esc(s.label)}${s.attempt > 1 ? ` <small>(attempt ${Number(s.attempt)})</small>` : ""}${s.startedAt ? ` <small style="opacity:.65">${s.finishedAt ? Math.max(0, Math.round((Date.parse(s.finishedAt) - Date.parse(s.startedAt)) / 1000)) + "s" : "running"}</small>` : ""}</span>
       </div>`;
       // Show WHY a step failed (its captured error) so it's not just a mystery ✗.
       if (s.status === "failed" && s.error) {
-        return row + `<div style="margin:0 0 6px 84px;padding:6px 10px;border-left:2px solid #ef4444;background:rgba(239,68,68,0.06);border-radius:0 6px 6px 0;color:#fca5a5;font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,Menlo,monospace;max-height:160px;overflow:auto;">${esc(String(s.error).slice(-900))}</div>`;
+        return row + `<div style="margin:0 0 6px 84px;padding:6px 10px;border-left:2px solid #ef4444;background:rgba(239,68,68,0.06);border-radius:0 6px 6px 0;color:#fca5a5;font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,Menlo,monospace;max-height:160px;overflow:auto;">${esc(String(s.error).slice(0, 2400))}</div>`;
       }
       return row;
     }).join("");
     return `<div id="preview-steps-wrap" style="${flex ? "flex:1;min-height:0;" : "max-height:34%;"}overflow:auto;border:1px solid var(--border-color,#2a2a2a);border-radius:8px;padding:8px 12px;background:var(--background-surface,#141414);">
-      <div style="font-size:11px;color:var(--text-secondary,#9ca3af);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Setup steps (checkpointed — a restart resumes here)</div>${rows}</div>`;
+      <div style="font-size:11px;color:var(--text-secondary,#9ca3af);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Execution steps — verified for this run</div>${rows}</div>`;
   }
 
   // Repaint the Steps pane WITHOUT losing the user's scroll position — otherwise

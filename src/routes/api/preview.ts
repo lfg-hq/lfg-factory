@@ -627,7 +627,9 @@ previewApi.get("/:projectId/preview/profile", async (c) => {
   const user = c.get("user");
   const access = await getProjectAccess(c.req.param("projectId")!, user.id);
   if (!access) return c.json({ error: "Project not found" }, 404);
-  const loaded = await loadAppProfile(access.project.id);
+  const [state] = await db.select().from(projectEnvironments).where(eq(projectEnvironments.projectId, access.project.id));
+  const branch = state?.previewBranch && state.previewBranch !== "(default)" ? state.previewBranch : "default";
+  const loaded = await loadAppProfile(access.project.id, branch);
   return c.json({ profile: loaded?.profile ?? null, version: loaded?.version ?? 0 });
 });
 
@@ -637,7 +639,11 @@ previewApi.put("/:projectId/preview/profile", async (c) => {
   if (!access) return c.json({ error: "Project not found" }, 404);
   const parsed = appProfileSchema.safeParse(await c.req.json().catch(() => ({})));
   if (!parsed.success) return c.json({ error: "Invalid profile", issues: parsed.error.issues }, 400);
-  await saveAppProfile(access.project.id, parsed.data);
+  const [state] = await db.select().from(projectEnvironments).where(eq(projectEnvironments.projectId, access.project.id));
+  const branch = state?.previewBranch && state.previewBranch !== "(default)" ? state.previewBranch : "default";
+  delete parsed.data.blockedFailure;
+  delete parsed.data.verifiedRevision;
+  await saveAppProfile(access.project.id, parsed.data, branch);
   return c.json({ ok: true, profile: parsed.data });
 });
 
