@@ -1,3 +1,4 @@
+import { CONTRACT_INSTRUCTION } from "../services/runtime-validation.ts";
 /**
  * Ticket Executor Worker
  *
@@ -603,6 +604,7 @@ async function tryAgentMerge(o: {
   featureBranch: string; targetBranch: string; files?: string[];
   authUrl: string; projectId: string; error?: string;
 }): Promise<{ merged: boolean; sha?: string; summary: string } | null> {
+  if (o.error?.includes("ValidationFailure")) return { merged: false, summary: o.error };
   try {
     const { mergeWithAgent } = await import("../services/merge-resolver.ts");
     return await mergeWithAgent({
@@ -825,7 +827,8 @@ ${refBlock}${runBlock}${args.addenda ?? ""}${args.directives ?? ""}
 - Implement the ticket end to end so every acceptance criterion is met.${args.addenda ? "\n- If Addenda are listed above, they are the PRIMARY task this run — address every one, building on what was already done." : ""}${args.directives ? "\n- The MANDATORY DIRECTIVES above are non-negotiable — verify your change satisfies every one before finishing." : ""}
 - Make the app runnable: bind the dev server to 0.0.0.0 on port ${port}.
 - Do NOT run 'git commit', 'git push', or switch git branches — commit/push/merge is handled automatically after you finish.
-- Before finishing, make sure the project builds/compiles.`;
+- Before finishing, make sure the project builds/compiles.
+${CONTRACT_INSTRUCTION}`;
 }
 
 /**
@@ -1893,6 +1896,7 @@ Before implementing, fix the git issue:
       // hardcode github.com regardless of where the repo actually lives.
       const gitAuth = await resolveRepoAuth(project, gitUserId).catch(() => null);
       const { sha } = await commitAndPush({
+      validation: { projectId: project.id, userId: buildLlm.actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, cancelled: () => cancelledTickets.has(ticketId), onLog: line => { addLog(ticketId, line, "command", ownerId).catch(() => {}); } },
         workspaceId,
         projectDir: `${WORKING_DIR}/${projectDirName}`,
         commitMessage: `feat: ${ticket.ticketKey ? ticket.ticketKey + " " : ""}${ticket.name}`,
@@ -1932,6 +1936,7 @@ Before implementing, fix the git issue:
         // exist. resolveRepoAuth gives the right host, token and credential username.
         const mergeAuth = gitAuth;
         const { sha: mergeSha, files: mergedFiles } = await mergeToAnchor({
+      validation: { projectId: project.id, userId: buildLlm.actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, cancelled: () => cancelledTickets.has(ticketId), onLog: line => { addLog(ticketId, line, "command", ownerId).catch(() => {}); } },
           workspaceId,
           projectDir: `${WORKING_DIR}/${projectDirName}`,
           featureBranch,
@@ -1996,13 +2001,14 @@ Before implementing, fix the git issue:
           await db.update(projectTickets)
             .set({ githubMergeStatus: "conflict", updatedAt: new Date() })
             .where(eq(projectTickets.id, ticketId));
-          await addLog(ticketId, `Merge to ${anchorBranch} needs a human: ${merged?.summary ?? "no agent available"}`, "cli_error", ownerId);
+          await addLog(ticketId, `Merge to ${anchorBranch} blocked: ${merged?.summary ?? "no agent available"}`, "cli_error", ownerId);
+          throw mergeErr;
         }
       }
     } catch (err) {
       // A thrown commit/push means the work is NOT on the remote → not a success.
       commitFailed = true;
-      await addLog(ticketId, `Git commit/push FAILED — changes were NOT saved: ${err}`, "cli_error", ownerId);
+      await addLog(ticketId, `Publication/validation FAILED — candidate is not ready for review: ${err}`, "cli_error", ownerId);
     }
   }
 
@@ -2022,6 +2028,7 @@ Before implementing, fix the git issue:
     await addLog(ticketId, cliSummary, "ai_response", ownerId);
     await markBuildTasksComplete(ticketId);
     await resolveTicketAddenda(ticketId, cliAddendaCtx.pendingIds);
+    await maybeSubmitEpicForReview(ticket.epicId);
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId, mergeStatus: "merged" });
     // Auto-record a demo of the completed feature for the Preview tab (fire-and-forget).
     void generateTicketDemo(ticketId, { ownerId, llmUserId: buildLlm.actorId, projectId: project.id });
@@ -2033,11 +2040,11 @@ Before implementing, fix the git issue:
   } else {
     const _detail = commitFailed ? "" : await lastErrorSnippet(ticketId);
     const reason = commitFailed
-      ? "the changes were built but were NOT pushed to git (commit/push failed or GitHub not connected) — fix the cause and rebuild"
+      ? "publication or integration validation failed — see the exact blocker in the build log; rebuild after fixing it"
       : (_detail ? `did not complete — ${_detail}` : "Implementation did not complete (the agent stopped without a specific error)");
-    if (commitFailed) await db.update(projectTickets).set({ githubMergeStatus: "not_pushed", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId)).catch(() => {});
+    if (commitFailed) await db.update(projectTickets).set({ githubMergeStatus: "failed", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId)).catch(() => {});
     await markTicketFailed(ticketId, reason, ownerId, { emitEvent: false });
-    broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "failed", queueStatus: "none", mergeStatus: commitFailed ? "not_pushed" : undefined });
+    broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "failed", queueStatus: "none", mergeStatus: commitFailed ? "failed" : undefined });
   }
 
   // Session ID is now saved by the /api/v1/cli/output/ endpoint
@@ -2768,6 +2775,7 @@ async function finalizeTicketChat(
   try {
     await addLog(ticketId, "Committing chat changes…", "command", ownerId);
     const { sha } = await commitAndPush({
+      validation: { projectId: project.id, userId: actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, cancelled: () => cancelledTickets.has(ticketId), onLog: line => { addLog(ticketId, line, "command", ownerId).catch(() => {}); } },
       workspaceId, projectDir,
       commitMessage: `chore: ${summary}`,
       featureBranch,
@@ -2780,6 +2788,7 @@ async function finalizeTicketChat(
     try {
       await addLog(ticketId, `Merging to ${anchorBranch}…`, "command", ownerId);
       const { sha: mergeSha } = await mergeToAnchor({
+      validation: { projectId: project.id, userId: actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, cancelled: () => cancelledTickets.has(ticketId), onLog: line => { addLog(ticketId, line, "command", ownerId).catch(() => {}); } },
         workspaceId, projectDir, featureBranch,
         repoUrl: auth.repoUrl, githubToken: auth.token, tokenUser: auth.tokenUser,
         targetBranch: anchorBranch, baseBranch: anchorBase,
@@ -2790,6 +2799,8 @@ async function finalizeTicketChat(
     } catch (mergeErr) {
       await addLog(ticketId, `Pushed, but merge to ${anchorBranch} failed: ${(mergeErr as Error).message?.slice(0, 200)}`, "cli_error", ownerId);
     }
+
+    if (!mergedOk) throw new Error("Integration validation failed; chat changes are not ready for review.");
 
     // Move to In Review + broadcast so the status banner/kanban update live and
     // survive a refresh (the durable ticket row now reflects the outcome).
@@ -2804,6 +2815,7 @@ async function finalizeTicketChat(
     // (the build success paths do this; the chat finalize was missing it, so tasks
     // stayed pending after an "Update applied").
     await markBuildTasksComplete(ticketId);
+    await maybeSubmitEpicForReview(ticket.epicId);
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId, mergeStatus: mergedOk ? "merged" : "pushed" });
     // Auto-record a demo of the applied change for the Preview tab (fire-and-forget).
     void generateTicketDemo(ticketId, { ownerId, llmUserId: actorId, projectId: project.id });
@@ -3588,6 +3600,7 @@ git branch --show-current
     try {
       await addLog(ticketId, "Committing changes...", "command", ownerId);
       const { sha } = await commitAndPush({
+      validation: { projectId: project.id, userId: buildLlm.actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, cancelled: () => cancelledTickets.has(ticketId), onLog: line => { addLog(ticketId, line, "command", ownerId).catch(() => {}); } },
         workspaceId,
         projectDir,
         commitMessage: `feat: ${ticket.ticketKey ? ticket.ticketKey + " " : ""}${ticket.name}`,
@@ -3614,6 +3627,7 @@ git branch --show-current
       try {
         await addLog(ticketId, `Merging to ${anchorBranch}...`, "command", ownerId);
         const { sha: mergeSha, files: mergedFiles } = await mergeToAnchor({
+      validation: { projectId: project.id, userId: buildLlm.actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, cancelled: () => cancelledTickets.has(ticketId), onLog: line => { addLog(ticketId, line, "command", ownerId).catch(() => {}); } },
           workspaceId,
           projectDir,
           featureBranch,
@@ -3631,12 +3645,13 @@ git branch --show-current
         await maybeSubmitEpicForReview(ticket.epicId);
       } catch (mergeErr) {
         console.warn(`[ticket-executor-api] Merge to ${anchorBranch} failed:`, mergeErr);
+        throw mergeErr;
       }
     } catch (err) {
       // A failed commit/push means the work is NOT saved — do NOT report success.
       commitFailed = true;
       const msg = (err as Error).message?.slice(0, 400) ?? String(err);
-      await addLog(ticketId, `Git commit/push FAILED — changes were NOT saved: ${msg}`, "command", ownerId);
+      await addLog(ticketId, `Publication/validation FAILED — candidate is not ready for review: ${msg}`, "command", ownerId);
       console.error(`[ticket-executor-api] commit/push failed:`, err);
     }
   }
@@ -3662,6 +3677,7 @@ git branch --show-current
     await markBuildTasksComplete(ticketId);
     // The build addressed the pending addenda → mark them resolved.
     await resolveTicketAddenda(ticketId, addendaCtx.pendingIds);
+    await maybeSubmitEpicForReview(ticket.epicId);
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId, mergeStatus: mergedOk ? "merged" : "pushed" });
     // TELL THE CHAIN IT SUCCEEDED. This emit was missing, and it's the reason a
     // "build them all" stopped dead after the first ticket: the event that advances
@@ -3687,13 +3703,13 @@ git branch --show-current
   } else {
     const _lastErr = commitFailed ? "" : await lastErrorSnippet(ticketId);
     const reason = commitFailed
-      ? "the changes were built but were NOT pushed (commit/push failed or no repo/token) — fix the cause and rebuild; the build sandbox is kept so the work isn't lost"
+      ? "publication or integration validation failed — see the exact blocker in the build log; the build sandbox is kept"
       : `the agent finished without reporting completion${_lastErr ? ` — last error: ${_lastErr}` : ""}`;
     // Persist a durable "not_pushed" merge state so the Git tab flags it (red)
     // even after refresh — not just a transient Actions-log line.
-    if (commitFailed) await db.update(projectTickets).set({ githubMergeStatus: "not_pushed", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId)).catch(() => {});
+    if (commitFailed) await db.update(projectTickets).set({ githubMergeStatus: "failed", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId)).catch(() => {});
     await markTicketFailed(ticketId, reason, ownerId, { emitEvent: false });
-    broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "failed", queueStatus: "none", mergeStatus: commitFailed ? "not_pushed" : undefined });
+    broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "failed", queueStatus: "none", mergeStatus: commitFailed ? "failed" : undefined });
   }
 
   // ISOLATED build: the dedicated VM is KEPT (not destroyed here) and allowed to
@@ -4016,6 +4032,7 @@ async function recoverUnpushedTickets() {
 
       try {
         const { sha } = await commitAndPush({
+      validation: { projectId: project.id, userId: project.ownerId, ticketId: ticket.id, epicId: ticket.epicId ?? undefined, baselineBranch: recoveryAnchor.baseBranch, cancelled: () => cancelledTickets.has(ticket.id), onLog: line => { addLog(ticket.id, line, "command", project.ownerId).catch(() => {}); } },
           workspaceId,
           projectDir: `${WORKING_DIR}/${projectDirName}`,
           commitMessage: `feat: ${ticket.ticketKey ? ticket.ticketKey + " " : ""}${ticket.name}`,
@@ -4047,6 +4064,7 @@ async function recoverUnpushedTickets() {
         // Also attempt merge
         try {
           const { sha: mergeSha } = await mergeToAnchor({
+      validation: { projectId: project.id, userId: project.ownerId, ticketId: ticket.id, epicId: ticket.epicId ?? undefined, baselineBranch: recoveryAnchor.baseBranch, cancelled: () => cancelledTickets.has(ticket.id), onLog: line => { addLog(ticket.id, line, "command", project.ownerId).catch(() => {}); } },
             workspaceId,
             projectDir: `${WORKING_DIR}/${projectDirName}`,
             featureBranch,
@@ -4072,6 +4090,7 @@ async function recoverUnpushedTickets() {
           });
         } catch (mergeErr) {
           console.warn(`[ticket-executor] Recovery merge failed for ${ticket.id}:`, mergeErr);
+          throw mergeErr;
         }
 
         // Move to review

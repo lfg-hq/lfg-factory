@@ -1,3 +1,4 @@
+import { validationPolicySchema } from "./validation-contract.ts";
 import { mergeKnowledge, schemaStepSchema, replayActionSchema, shellQuote } from "./preview-plan.ts";
 import { teamApiKeys } from "./llm-access.ts";
 /**
@@ -83,6 +84,7 @@ const CONN_FORMATS = ["url", "dotnet-npgsql", "dotnet-mysql", "dotnet-sqlserver"
 
 export const appProfileSchema = z.object({
   // ── Stack / versions ──
+  validation: validationPolicySchema.optional(),
   stack: z.string().describe("Human summary incl. versions, e.g. '.NET 8 / ASP.NET Core, multi-project solution'."),
   runtime: z.string().describe("dotnet | node | python | ruby | php | go"),
   framework: z.string().describe("aspnet-core | next | vite | django | rails | express | laravel; '' if unknown"),
@@ -108,6 +110,7 @@ export const appProfileSchema = z.object({
   // ── Databases ──
   databases: z.array(z.object({
     engine: z.enum(["postgres", "mysql", "redis", "mssql"]).describe("The app's REAL engine. mssql = Microsoft SQL Server (Docker). Do NOT downgrade SQL Server to postgres."),
+    databaseName: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).optional().describe("Logical SQL database name. Preserve separate databases when connection keys target different databases; omit for app or Redis."),
     connectionEnvVar: z.string().describe("EXACT env var / .NET config key the app reads the connection from, e.g. 'ConnectionStrings__DefaultConnection', 'DATABASE_URL', 'REDIS_URL'. If the app reads the SAME connection under several keys, list the primary here and note the others in configQuirks."),
     connectionFormat: z.enum(CONN_FORMATS).describe("How to format the string: 'url' (Node/Python/Rails/Prisma), 'dotnet-npgsql', 'dotnet-mysql', 'dotnet-sqlserver', 'keyvalue'."),
   })).describe("Every database the app connects to AND how. Read appsettings*.json ConnectionStrings, docker-compose, ORM config, DATABASE_URL. [] if none."),

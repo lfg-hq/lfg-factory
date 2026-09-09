@@ -1084,11 +1084,13 @@ ticketsApi.post("/:projectId/tickets/:ticketId/git/merge", async (c) => {
   const { mergePullRequest } = await import("../../services/git.ts");
 
   try {
-    const { mergeCommitSha } = await mergePullRequest({
-      repoOwner: repoOwner!,
-      repoName: repoName!,
-      prNumber: ticket.githubPrNumber,
-      githubToken: ghToken.accessToken,
+    const workspaceId = await ticketWorkspace(ticketId);
+    if (!workspaceId || !ticket.githubBranch) throw new Error("A live ticket sandbox and branch are required for integration validation. Rebuild the ticket first.");
+    const { anchorBranch, baseBranch } = await (await import("../../services/epics.ts")).resolveTicketAnchor(ticket);
+    const { sha: mergeCommitSha } = await (await import("../../services/git.ts")).mergeToAnchor({
+      workspaceId, projectDir: "/data/project", featureBranch: ticket.githubBranch,
+      repoUrl: `https://github.com/${repoOwner}/${repoName}.git`, githubToken: ghToken.accessToken,
+      targetBranch: anchorBranch, baseBranch, validation: { projectId, userId: user.id, ticketId, epicId: ticket.epicId ?? undefined },
     });
 
     await db
@@ -1179,6 +1181,7 @@ ticketsApi.post("/:projectId/tickets/:ticketId/git/push", async (c) => {
     // the remote — so keep the recorded sha and go straight to the merge.
     const sha = canCommit
       ? (await commitAndPush({
+          validation: { projectId, userId: user.id, ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: (await (await import("../../services/epics.ts")).resolveTicketAnchor(ticket)).baseBranch },
           workspaceId: workWorkspaceId,
           projectDir: "/data/project",
           commitMessage: `update: ${ticket.name}`,
@@ -1207,6 +1210,7 @@ ticketsApi.post("/:projectId/tickets/:ticketId/git/push", async (c) => {
     const { anchorBranch, baseBranch } = await resolveTicketAnchor(ticket);
     try {
       await mergeToAnchor({
+        validation: { projectId, userId: user.id, ticketId, epicId: ticket.epicId ?? undefined },
         workspaceId: workWorkspaceId,
         projectDir: "/data/project",
         featureBranch,
@@ -1235,6 +1239,7 @@ ticketsApi.post("/:projectId/tickets/:ticketId/git/push", async (c) => {
         `Open the **Preview** tab and pick \`${anchorBranch}\` to run the whole epic.`,
       ].filter(Boolean).join("\n"), "ai_response", user.id).catch(() => {});
     } catch (mergeErr) {
+      if ((mergeErr as Error).name === "ValidationFailure") throw mergeErr;
       // Conflicts and non-conflict git failures (shallow clone, dirty tree, a ref that
       // won't resolve) go to the SAME place: the coding agent in the sandbox, with a
       // shell and the error text. Splitting them into two code paths with different
@@ -1565,4 +1570,14 @@ ticketsApi.post("/:projectId/tickets/:ticketId/git/pr", async (c) => {
     await addTicketLog(ticketId!, `Raising the request failed: ${msg.slice(0, 300)}`, "cli_error", user.id).catch(() => {});
     return c.json({ error: `Couldn't raise it: ${msg.slice(0, 300)}` }, 500);
   }
+});
+
+// Durable runtime evidence, scoped by the same project access check as ticket logs.
+ticketsApi.get("/:projectId/tickets/:ticketId/runtime-validation", async c => {
+  const { projectId, ticketId } = c.req.param();
+  if (!await getProjectAccess(projectId, c.get("user").id)) return c.json({error:"Project not found"},404);
+  const { runtimeValidations } = await import("../../db/schema/runtime-validation.ts");
+  const { desc } = await import("drizzle-orm");
+  const rows = await db.select().from(runtimeValidations).where(and(eq(runtimeValidations.projectId,projectId),eq(runtimeValidations.ticketId,ticketId))).orderBy(desc(runtimeValidations.createdAt)).limit(20);
+  return c.json({validations:rows.map(row=>({...row,evidence:JSON.parse(row.evidence),steps:JSON.parse(row.steps)}))});
 });

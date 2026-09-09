@@ -5,7 +5,7 @@ export function branchDatabaseScript(dir: string, branch: string, engines: Array
   const payload = Buffer.from(JSON.stringify({ branch, engines })).toString("base64");
   return `python3 - ${shellQuote(dir)} ${shellQuote(payload)} <<'PYEOF'
 import os, sys, re, json, base64, hashlib, shlex, subprocess
-from urllib.parse import urlsplit, urlunsplit, unquote
+from urllib.parse import urlsplit, urlunsplit, unquote, quote
 base = os.path.realpath(sys.argv[1])
 config = json.loads(base64.b64decode(sys.argv[2]))
 engines = config["engines"]
@@ -18,7 +18,11 @@ def rewrite(value):
     global redis_port
     for e in engines:
         if e["engine"] == "redis":
-            if not value.startswith("redis://"): continue
+            keyvalue = not value.startswith("redis://")
+            if keyvalue:
+                match = re.match(r"^(127[.]0[.]0[.]1|localhost):([0-9]+),password=(.+)$", value)
+                if not match or match[3] != e["password"]: continue
+                value = "redis://default:"+quote(e["password"],safe="")+"@"+match[1]+":"+match[2]
             u = urlsplit(value)
             if u.hostname not in ("127.0.0.1", "localhost") or unquote(u.password or "") != e["password"]: continue
             name = "redis-pv-" + hashlib.sha256(config["branch"].encode()).hexdigest()[:16]
@@ -38,6 +42,7 @@ def rewrite(value):
                     if ready.returncode == 0 and "PONG" in ready.stdout: break
                     time.sleep(1)
                 else: raise SystemExit("Branch Redis did not become ready")
+            if keyvalue: return "127.0.0.1:"+str(redis_port)+",password="+e["password"]
             auth = u.netloc.rsplit("@", 1)[0]
             return urlunsplit((u.scheme, auth + "@127.0.0.1:" + str(redis_port), u.path, u.query, u.fragment))
         url = None

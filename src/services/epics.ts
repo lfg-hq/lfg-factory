@@ -473,12 +473,31 @@ export async function promoteEpicToMain(
     return { merged: false, prNumber, prUrl };
   }
 
-  const { mergeCommitSha } = await mergePullRequest({
-    repoOwner: auth.owner,
-    repoName: auth.repo,
-    prNumber,
-    githubToken: auth.token,
+  // A fresh disposable build VM tests the current base + epic, then publishes that
+  // exact merge commit with a lease. Provider branch protection remains authoritative.
+  const { newWorkspaceV2, deleteWorkspace } = await import("./mags.ts");
+  const { validationShell } = await import("./validation-sandbox.ts");
+  const { shellQuote } = await import("./preview-plan.ts");
+  const { publishValidatedMerge } = await import("./validated-git.ts");
+  const { workspaceId } = await newWorkspaceV2(`epic-validation-${crypto.randomUUID().slice(0,8)}`, {
+    vcpus: 4, memoryMb: 8192, diskGb: 20, keepAlive: true, noSync: true, rootfsType: "claude",
   });
+  let mergeCommitSha: string;
+  try {
+    let ready = false;
+    for(let i=0;i<30;i++) {
+      const r=await validationShell(workspaceId,"echo READY",10_000).catch(()=>null);
+      if(r?.output.trim()==="READY") {ready=true;break;}
+      await new Promise(r=>setTimeout(r,2000));
+    }
+    if(!ready) throw new Error("Epic validation sandbox did not become ready");
+    const clone=await validationShell(workspaceId,`git clone ${shellQuote(auth.authUrl)} /data/project`,120_000);
+    if(clone.exitCode!==0)throw new Error("Could not clone the epic validation repository");
+    const result=await publishValidatedMerge({workspaceId,projectDir:"/data/project",repoUrl:auth.repoUrl,
+      githubToken:auth.token,tokenUser:auth.tokenUser,featureBranch:epic.branch!,targetBranch,baseBranch:targetBranch,kind:"promotion",
+      validation:{projectId:project.id,userId:actingUserId,epicId,baselineBranch:targetBranch}});
+    mergeCommitSha=result.sha;
+  } finally { await deleteWorkspace(workspaceId); }
 
   await db
     .update(epics)
@@ -574,13 +593,24 @@ export async function maybeSubmitEpicForReview(epicId: string | null | undefined
   if (!epic || epic.status !== "building") return false;
 
   const tickets = await db
-    .select({ id: projectTickets.id, status: projectTickets.status })
+    .select({ id: projectTickets.id, status: projectTickets.status, mergeStatus: projectTickets.githubMergeStatus })
     .from(projectTickets)
     .where(eq(projectTickets.epicId, epicId));
   if (!tickets.length) return false;
 
   const DONE = new Set(["done", "review", "archived"]);
   if (!tickets.every((t) => DONE.has(t.status))) return false;
+  if (!tickets.every(t => t.mergeStatus === "merged" || t.mergeStatus === "merged_with_conflicts")) return false;
+  const [project] = await db.select().from(projects).where(eq(projects.id, epic.projectId)).limit(1);
+  if (!project || !epic.branch) return false;
+  const auth = await resolveRepoAuth(project, project.ownerId);
+  if (!auth) return false;
+  const revision = await getRemoteBranchSha({ ...auth, branch: epic.branch });
+  if (!revision) return false;
+  const { latestValidation } = await import("./runtime-validation.ts");
+  const evidence = await latestValidation(project.id, epic.branch, revision);
+  if (!evidence?.freshPassed || !evidence.upgradePassed || evidence.kind !== "integration") return false;
+
 
   await db
     .update(epics)

@@ -1,3 +1,4 @@
+import type { ValidationContext } from "./validation-contract.ts";
 /**
  * Git service — runs git operations inside Mags VMs via execOnWorkspace.
  *
@@ -46,6 +47,7 @@ export interface GitSetupOptions {
 }
 
 export interface GitCommitOptions {
+  validation?: ValidationContext;
   workspaceId: string;
   projectDir: string;
   commitMessage: string;
@@ -280,12 +282,13 @@ fi
 if git diff --cached --quiet; then
   echo "NO_CHANGES"
   git rev-parse HEAD
-  exit 0
+  ${opts.validation ? 'echo "CANDIDATE_READY"' : 'exit 0'}
 fi
 
 # Commit
 COMMIT_MSG=$(echo ${msgB64} | base64 -d)
-git commit -m "$COMMIT_MSG"
+if ! git diff --cached --quiet; then git commit -m "$COMMIT_MSG"; fi
+${opts.validation ? 'echo "CANDIDATE_READY"; exit 0' : ""}
 
 # Set remote with auth token
 git remote set-url origin "${authUrl}" 2>/dev/null || true
@@ -320,6 +323,12 @@ echo "COMMIT_SHA:$SHA"
   });
   console.log(`[git] commitAndPush output (${result.output.length} chars): ${result.output.slice(0, 500)}`);
   console.log(`[git] commitAndPush exitCode: ${result.exitCode}`);
+
+  if (opts.validation) {
+    if (result.exitCode !== 0 || !result.output.includes("CANDIDATE_READY")) throw new Error("Candidate commit failed: " + result.output);
+    const { publishValidatedTicket } = await import("./validated-git.ts");
+    return publishValidatedTicket({ ...opts, validation: opts.validation });
+  }
 
   const shaMatch = result.output.match(/COMMIT_SHA:([a-f0-9]{40})/);
   if (!shaMatch) {
@@ -374,6 +383,7 @@ echo "COMMIT_SHA:$SHA"
  * (an epic branch is materialized lazily on its first ticket merge).
  */
 export async function mergeToAnchor(opts: {
+  validation: ValidationContext;
   workspaceId: string;
   projectDir: string;
   featureBranch: string;
@@ -385,185 +395,8 @@ export async function mergeToAnchor(opts: {
   /** Branch the anchor is cut from when it doesn't exist yet. */
   baseBranch?: string;
 }): Promise<{ sha: string; files: string[] }> {
-  const { workspaceId, projectDir, featureBranch, repoUrl, githubToken } = opts;
-  const targetBranch = opts.targetBranch || LEGACY_ANCHOR_BRANCH;
-  const baseBranch = opts.baseBranch || "main";
-  const tokenUser = opts.tokenUser ?? "x-access-token";
-  const authUrl = repoUrl.replace("https://", `https://${tokenUser}:${githubToken}@`);
-
-  const script = `
-set -e
-exec 2>&1
-cd "${projectDir}"
-
-git config --global --add safe.directory "${projectDir}" 2>/dev/null || true
-git config --global --add safe.directory '*' 2>/dev/null || true
-git config user.email "ai@lfg.dev"
-git config user.name "LFG AI"
-git remote set-url origin "${authUrl}" 2>/dev/null || true
-
-# Fetch latest. Explicit refspecs for BOTH branches: the preview-sandbox fallback runs
-# in a clone that has never seen this ticket's feature branch, and a narrowed clone won't
-# create refs/remotes/origin/<branch> from a bare fetch.
-git fetch --prune origin
-
-# UNSHALLOW FIRST. We clone these sandboxes with --depth 1, so the commit the feature
-# branch and the epic branch both descend from was never downloaded — and git, finding no
-# common ancestor it can see, refuses the merge outright with "refusing to merge unrelated
-# histories". Nothing about the branches is wrong; the history is just missing. Fetch it
-# before merging. (--unshallow errors on an already-complete repo, hence the guard.)
-if [ -f .git/shallow ]; then
-  echo "shallow clone — fetching full history so the merge base exists…"
-  git fetch --no-tags --force --unshallow origin 2>/dev/null \
-    || git fetch --no-tags --force --deepen=1000 origin 2>/dev/null \
-    || true
-fi
-
-# Fetch both branches WITH history (no --depth here, for the same reason).
-git fetch --no-tags --force origin "+refs/heads/${featureBranch}:refs/remotes/origin/${featureBranch}" 2>/dev/null || true
-git fetch --no-tags --force origin "+refs/heads/${targetBranch}:refs/remotes/origin/${targetBranch}" 2>/dev/null || true
-
-# A repo can still lack the merge base if it was deepened rather than unshallowed.
-# Deepen until the two branches share one (bounded — this is cheap and it either works
-# in the first round or the branches genuinely have unrelated roots).
-if [ -f .git/shallow ]; then
-  for _d in 1000 5000 50000; do
-    git merge-base "origin/${featureBranch}" "origin/${targetBranch}" >/dev/null 2>&1 && break
-    git fetch --no-tags --force --deepen=$_d origin "${featureBranch}" "${targetBranch}" >/dev/null 2>&1 || break
-  done
-fi
-
-# Resolve the feature branch to a ref that actually EXISTS here. On the ticket's own build
-# VM it's a local branch; anywhere else only origin/<branch> exists, and a bare
-# a bare 'git merge feature/x' there fails with "not something we can merge" — which the conflict
-# guard below would then report as a conflict with no files.
-FEATURE_REF="${featureBranch}"
-git rev-parse --verify -q "${featureBranch}" >/dev/null 2>&1 || FEATURE_REF="origin/${featureBranch}"
-git rev-parse --verify -q "$FEATURE_REF" >/dev/null 2>&1 || { echo "NO_FEATURE_REF"; exit 0; }
-
-# CLEAN THE TREE FIRST. This runs in whatever checkout we could get, and the preview
-# sandbox's is never pristine: preview setup rewrites connection strings in
-# appsettings*.json on every run, and builds leave untracked assets behind. git checkout
-# then refuses outright ("Your local changes would be overwritten by checkout" /
-# "untracked working tree files would be overwritten"), which is a dirty tree, NOT a
-# merge conflict — no amount of conflict resolution fixes it.
-# Nothing here is precious: it's a throwaway working tree and the merge only needs refs.
-# stash -u keeps a copy of both tracked and untracked work anyway, and only the newest
-# entry is kept so these can't pile up on a long-lived box.
-git stash push -u -m lfg-merge-autostash >/dev/null 2>&1 || true
-while [ "$(git stash list 2>/dev/null | grep -cF 'lfg-merge-autostash')" -gt 1 ]; do
-  _old=$(git stash list 2>/dev/null | grep -F 'lfg-merge-autostash' | tail -1 | cut -d: -f1)
-  [ -n "$_old" ] || break
-  git stash drop "$_old" >/dev/null 2>&1 || break
-done
-git reset --hard >/dev/null 2>&1 || true
-git clean -fd >/dev/null 2>&1 || true
-
-# Checkout the anchor (create it from the base branch if it doesn't exist yet)
-if git rev-parse --verify origin/${targetBranch} 2>/dev/null; then
-  git checkout ${targetBranch} 2>/dev/null || git checkout -b ${targetBranch} origin/${targetBranch}
-  git reset --hard origin/${targetBranch}
-else
-  git checkout ${baseBranch} 2>/dev/null || git checkout -b ${baseBranch}
-  git checkout -b ${targetBranch}
-fi
-
-# What this ticket actually changed, relative to the anchor. Recorded on the epic
-# so a later epic touching the same files can be spotted without asking anyone.
-echo "CHANGED_FILES_START"
-git diff --name-only "HEAD...$FEATURE_REF" 2>/dev/null || true
-echo "CHANGED_FILES_END"
-
-# Merge feature branch into the anchor.
-# NOT bare under 'set -e': a conflicting merge would abort the script right here, leaving
-# the shared checkout sitting on the anchor with MERGE_HEAD set, conflict markers in the
-# tree and an unmerged index — the cleanup below never ran, and the next run inherited it
-# (git stash then refuses with "needs merge", so even the autostash net is dead there).
-# Report the conflicting paths, ABORT, and put the checkout back where it started.
-if ! git merge "$FEATURE_REF" -m "Merge ${featureBranch} into ${targetBranch}"; then
-  # Classify by UNMERGED PATHS, not by exit code. A failing merge is only a content
-  # conflict if git actually left conflicted files behind; everything else (a checkout it
-  # refused, a bad ref, a dirty tree) exits non-zero too. Calling those a conflict sent
-  # them to the conflict resolver with an EMPTY file list, which correctly refused
-  # ("no unmerged paths — nothing safe to act on") and dead-ended at the user instead of
-  # reaching the repair agent that handles exactly this class of failure.
-  UNMERGED=$(git diff --name-only --diff-filter=U 2>/dev/null)
-  git merge --abort 2>/dev/null || git reset --hard HEAD 2>/dev/null || true
-  git checkout ${featureBranch} 2>/dev/null || git checkout --detach "$FEATURE_REF" 2>/dev/null || true
-  if [ -n "$UNMERGED" ]; then
-    echo "CONFLICT_FILES_START"
-    echo "$UNMERGED"
-    echo "CONFLICT_FILES_END"
-    echo "MERGE_CONFLICT"
-  else
-    echo "MERGE_FAILED_NO_CONFLICT"
-  fi
-  exit 0
-fi
-
-# Push the anchor
-git push origin ${targetBranch} 2>&1
-
-# Switch back to feature branch
-git checkout ${featureBranch} 2>/dev/null || true
-
-SHA=$(git rev-parse ${targetBranch})
-echo "MERGE_SHA:$SHA"
-`;
-
-  const scriptB64 = Buffer.from(script).toString("base64");
-  const result = await execOnWorkspace(workspaceId, `echo ${scriptB64} | base64 -d | sh`, {
-    timeout: 120_000,
-  });
-
-  // Conflicts are a distinct, recoverable outcome — the checkout is already clean.
-  if (result.output.includes("MERGE_CONFLICT")) {
-    const cf = result.output.match(/CONFLICT_FILES_START\n([\s\S]*?)CONFLICT_FILES_END/);
-    const conflicted = (cf?.[1] ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
-    // Belt-and-braces: a "conflict" with no files isn't one. Fall through to the plain
-    // error path so the caller routes it to the repair agent rather than the conflict
-    // resolver, which has nothing to work with and will refuse.
-    if (conflicted.length) throw new MergeConflictError(targetBranch, conflicted);
-  }
-
-  if (result.output.includes("NO_FEATURE_REF")) {
-    throw new Error(`Merge to ${targetBranch} failed: the branch ${featureBranch} isn't on the remote (nothing was pushed for it yet).`);
-  }
-
-  const shaMatch = result.output.match(/MERGE_SHA:([a-f0-9]{40})/);
-  if (!shaMatch) {
-    // STDERR MATTERS HERE. The script redirects its own stderr with `exec 2>&1`, so
-    // anything git says lands in stdout — but if the inner shell dies BEFORE that line
-    // (a parse error, base64 -d failing, /bin/sh missing) nothing inside ever runs and
-    // the message goes to the OUTER shell's stderr instead. Reading only stdout turned
-    // every such failure into "Merge to X failed:" with nothing after the colon, which
-    // is exactly the dead end this has been hitting.
-    const parts = [
-      result.output?.trim(),
-      result.stderr?.trim() ? `stderr: ${result.stderr.trim()}` : "",
-      `exit ${result.exitCode}`,
-    ].filter(Boolean);
-    let detail = parts.join("\n");
-    if (!result.output?.trim() && !result.stderr?.trim()) {
-      // Both empty: the command never produced anything. Ask the box directly what state
-      // it's in rather than reporting a blank failure.
-      const d = await execOnWorkspace(
-        workspaceId,
-        `echo "--- pwd ---"; pwd 2>&1; echo "--- dir ---"; ls -d "${projectDir}" 2>&1; echo "--- git ---"; command -v git 2>&1; echo "--- sh ---"; command -v sh 2>&1; echo "--- head ---"; cd "${projectDir}" 2>&1 && git rev-parse --abbrev-ref HEAD 2>&1`,
-        { timeout: 30_000 },
-      ).catch((e) => ({ output: `diagnostic exec failed: ${(e as Error).message}`, exitCode: 1, stderr: "" }));
-      detail = `the merge command produced no output at all (exit ${result.exitCode}).\nSandbox state:\n${(d.output || "(nothing)").slice(0, 800)}`;
-    }
-    throw new Error(`Merge to ${targetBranch} failed: ${detail}`);
-  }
-
-  const block = result.output.match(/CHANGED_FILES_START\n([\s\S]*?)CHANGED_FILES_END/);
-  const files = (block?.[1] ?? "")
-    .split("\n")
-    .map((l) => l.trim())
-    .filter((l) => l && !l.startsWith("+") && !l.includes(" "));
-
-  return { sha: shaMatch[1]!, files };
+  const { publishValidatedMerge } = await import("./validated-git.ts");
+  return publishValidatedMerge({ ...opts, targetBranch: opts.targetBranch || LEGACY_ANCHOR_BRANCH });
 }
 
 /** @deprecated Use {@link mergeToAnchor} with an explicit `targetBranch`. */

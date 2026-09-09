@@ -1,3 +1,4 @@
+import { compileRuntimePlan } from "./runtime-plan.ts";
 import { branchDatabaseScript } from "./preview-isolation.ts";
 import { assetCaseCheck, schemaStepSchema, replayActionSchema, orderedSchema, mergeKnowledge, failureSummary, failureKey, executeSteps, shellQuote, type PlanStep } from "./preview-plan.ts";
 /**
@@ -86,6 +87,7 @@ export const manifestSchema = z.object({
   })).optional().describe("MULTIPLE runnable apps in ONE repo (monorepo — e.g. a public site + an admin portal that run on different ports). Populate this ONLY when the repo genuinely has 2+ separately-runnable web apps; OMIT it for a normal single-app repo (runCmd/port cover that). Skip class libraries. The primary runs by default; each companion is toggled on and gets its own subdomain bound to its port."),
   databases: z.array(z.object({
     engine: z.enum(["postgres", "mysql", "redis", "mssql"]).describe("The DB engine to provision — use the app's REAL engine. 'mssql' = Microsoft SQL Server (run via Docker) — pick it for EF Core SqlServer / T-SQL apps. Do NOT downgrade SQL Server to postgres; they are not wire-compatible."),
+    databaseName: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).optional(),
     connectionEnvVar: z.string().describe("The EXACT env var / .NET config key the app reads its connection from. ASP.NET Core with appsettings ConnectionStrings:DefaultConnection → 'ConnectionStrings__DefaultConnection'. Rails/Node/Django with a URL → 'DATABASE_URL'. Redis → 'REDIS_URL'."),
     connectionFormat: z.enum(CONN_FORMATS).describe("How to FORMAT the connection string for that var: 'url' = scheme://user:pw@host:port/db (Node/Python/Rails/Prisma); 'dotnet-npgsql' = 'Host=..;Port=..;Database=..;Username=..;Password=..' (.NET+Postgres); 'dotnet-mysql' = 'Server=..;Port=..;Database=..;Uid=..;Pwd=..'; 'dotnet-sqlserver'; 'keyvalue' generic."),
   })).describe("Every database the app connects to AND how it connects — read appsettings*.json ConnectionStrings, docker-compose services, ORM config (Prisma/EF/TypeORM/SQLAlchemy), DATABASE_URL in .env.example. [] if none."),
@@ -393,7 +395,7 @@ async function shouldUseProvidedDb(workspaceId: string, projectId: string, userI
  * the reconciled manifest so it sticks.
  */
 async function reconcileDatabases(projectId: string, userId: string, manifest: PreviewManifest, dir = PROJECT_DIR): Promise<PreviewManifest> {
-  const have = new Map<DbEngine, PlannedDb>(manifest.databases.map((d) => [d.engine, d]));
+  const have = new Map<string, PlannedDb>(manifest.databases.map((d) => [d.connectionEnvVar, d]));
   const before = have.size;
   const sticky = (await db.select({ engine: projectDatabases.engine }).from(projectDatabases).where(eq(projectDatabases.projectId, projectId))).map((r) => r.engine as DbEngine);
   const signals = await detectDbSignals(projectId, dir).catch(() => [] as DbEngine[]);
@@ -402,8 +404,8 @@ async function reconcileDatabases(projectId: string, userId: string, manifest: P
   const defEnvVar: Record<DbEngine, string> = { postgres: "DATABASE_URL", mysql: "DATABASE_URL", redis: "REDIS_URL", mssql: "ConnectionStrings__DefaultConnection" };
   const defFmt: Record<DbEngine, PlannedDb["connectionFormat"]> = { postgres: "url", mysql: "url", redis: "keyvalue", mssql: "dotnet-sqlserver" };
   for (const e of new Set([...sticky, ...signals])) {
-    if (have.has(e)) continue;
-    have.set(e, { engine: e, connectionEnvVar: defEnvVar[e], connectionFormat: defFmt[e] });
+    if ([...have.values()].some(d => d.engine === e)) continue;
+    have.set(defEnvVar[e], { engine: e, connectionEnvVar: defEnvVar[e], connectionFormat: defFmt[e] });
     plog(projectId, userId, `→ adding ${e} to the plan (${sticky.includes(e) ? "already provisioned" : "detected in code"}) — will provision it → ${defEnvVar[e]}.`);
   }
   if (have.size === before) return manifest;
@@ -695,7 +697,8 @@ ${fingerprint}`;
 // ── Env file ───────────────────────────────────────────────────────────────
 /** Format a provisioned DB connection the way the app expects to read it. */
 function formatConnection(db: PlannedDb, h: EngineHandle): string {
-  const { host, port, dbName, username, password, engine } = h;
+  const { host, port, username, password, engine } = h;
+  const dbName = db.databaseName ?? h.dbName;
   // SQL Server always uses the ADO.NET keyword syntax regardless of what format
   // the plan guessed — a url would be wrong for it.
   if (engine === "mssql") return `Server=${host},${port};Database=${dbName};User Id=${username};Password=${password};TrustServerCertificate=True`;
@@ -707,6 +710,7 @@ function formatConnection(db: PlannedDb, h: EngineHandle): string {
     case "dotnet-sqlserver":
       return `Server=${host},${port};Database=${dbName};User Id=${username};Password=${password};TrustServerCertificate=True`;
     case "keyvalue":
+      if (engine === "redis") return `${host}:${port},password=${password}`;
       return `Host=${host};Port=${port};Database=${dbName};Username=${username};Password=${password}`;
     case "url":
     default:
@@ -1278,32 +1282,12 @@ PYEOF`;
 
 /** Compile the manifest into an ordered runbook. */
 function buildRunbook(manifest: PreviewManifest, engines: EngineHandle[], dir = PROJECT_DIR): RunStep[] {
-  const steps: RunStep[] = [];
-  const add = (id: string, phase: RunStep["phase"], command: string, label = command, verify?: string) => {
-    steps.push({ id, phase, label, command: localizeCmd(command, dir), verify: verify ? localizeCmd(verify, dir) : undefined, status: "pending" });
-  };
-  const actions = (phase: string) => (manifest.replayActions ?? []).filter(a => a.phase === phase).forEach(a =>
-    add(`action-${a.id}`, phase === "verify" ? "verify" : "build", a.command, a.note || a.id, a.verify));
-  (manifest.toolchain || []).forEach((c, i) => add(`toolchain-${i}`, "toolchain", c));
-  add("configuration", "install", "", "Apply saved repairs and isolate branch databases");
-  if (manifest.installCmd) add("install", "install", manifest.installCmd);
-  actions("beforeBuild");
-  if (/dotnet|aspnet/i.test(manifest.runtime + manifest.framework)) {
-    add("asset-case", "build", assetCaseCheck(dir), "Check static assets for case collisions");
-  }
-  if (manifest.buildCmd) add("build", "build", manifest.buildCmd);
-  actions("afterBuild");
-  if (/dotnet|aspnet/i.test(manifest.runtime + manifest.framework)) add("asset-case-after-build", "build", assetCaseCheck(dir), "Verify build did not recreate case aliases");
-  actions("beforeSchema");
-  orderedSchema(manifest).forEach((step, i) => add(`schema-${i}`, "schema",
-    step.kind !== "migration" && !step.verify ? `echo "Schema script/seed requires a read-only verify assertion before it can be replayed safely"; exit 1` : step.kind === "sqlScript" ? sqlApplyCommand(engines, step.command) : step.command,
-    step.note || `${step.kind}: ${step.command}`, step.verify));
-  add("run", "run", appStartCommand(manifest, dir), `Start app: ${manifest.runCmd}`);
-  actions("verify");
-  for (const [i, path] of [...new Set(["/", ...(manifest.verificationPaths ?? [])])].entries()) {
-    add(`http-${i}`, "verify", `code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 ${shellQuote(`http://127.0.0.1:${manifest.port}${path}`)}); case "$code" in 2??|3??) exit 0;; *) echo "HTTP $code for ${path.replace(/[^a-zA-Z0-9/_-]/g, "")}"; exit 1;; esac`, `Verify route ${path}`);
-  }
-  add("assets", "verify", "", "Verify assets and database health");
+  const steps = compileRuntimePlan(manifest, {
+    dir, localize: c => localizeCmd(c, dir), configure: "", start: appStartCommand(manifest, dir),
+    sql: file => sqlApplyCommand(engines, file),
+    http: path => `code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 ${shellQuote(`http://127.0.0.1:${manifest.port}${path}`)}); case "$code" in 2??|3??) exit 0;; *) echo "HTTP $code"; exit 1;; esac`,
+  });
+  steps.push({ id: "assets", phase: "verify", label: "Verify assets and database health", command: "", status: "pending" });
   return steps;
 }
 
@@ -1362,7 +1346,7 @@ async function executeRunbook(
         await applyBranchEnvironment(workspaceId, profile.profile, executionDir);
         await applySavedPatches(projectId, userId, workspaceId, profile.profile, executionDir);
       }
-      if (branch !== "default") {
+      if (branch !== "default" || manifest.databases.some(d => d.databaseName)) {
         const isolated = await sh(workspaceId, branchDatabaseScript(executionDir, branch, engines), 180_000);
         if (isolated.exitCode !== 0) return isolated;
         const databases = JSON.parse(isolated.output.trim()) as Array<{engine:string;database:string}>;
@@ -2688,7 +2672,12 @@ fi`, 240_000);
     let manifest: PreviewManifest | null = null;
     let profile: AppProfile | null = null;
 
-    if (!opts.rebuildManifest) {
+    const committedRecipe = await sh(workspaceId, `git -C ${PROJECT_DIR} show HEAD:.lfg-validation.json`, 15_000);
+    if (committedRecipe.exitCode === 0 && committedRecipe.output.trim()) {
+      profile = appProfileSchema.parse(JSON.parse(committedRecipe.output));
+      plog(projectId, userId, "Using the runtime recipe committed with this branch.");
+    }
+    if (!profile && !opts.rebuildManifest) {
       const loaded = await loadAppProfile(projectId);
       if (loaded) {
         profile = loaded.profile;
@@ -3783,6 +3772,15 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) $(git log -1 --oneline
     const fingerprint = await sh(workspaceId, `git -C ${shellQuote(runDir)} rev-parse HEAD^{tree}`, 15_000);
     const inputs = fingerprint.output.trim();
     let scoped = await loadAppProfile(projectId, profileBranch);
+    const committedRecipe = await sh(workspaceId, `git -C ${shellQuote(runDir)} show HEAD:.lfg-validation.json`, 15_000);
+    if (committedRecipe.exitCode === 0 && committedRecipe.output.trim()) {
+      const recipe = appProfileSchema.parse(JSON.parse(committedRecipe.output));
+      recipe.inputFingerprint = inputs;
+      await saveAppProfile(projectId, recipe, profileBranch);
+      scoped = await loadAppProfile(projectId, profileBranch);
+      plog(projectId, userId, "Using the runtime recipe committed with this branch.");
+    }
+
     if (!scoped || scoped.profile.inputFingerprint !== inputs) {
       plog(projectId, userId, "Branch inputs changed — checking its run profile before replay.");
       const ac = new AbortController();

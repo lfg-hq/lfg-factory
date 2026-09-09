@@ -397,16 +397,18 @@ async function commitTests(
   if (!auth || !ticket.githubBranch) return undefined;
   try {
     const { sha } = await commitAndPush({
+      validation: { projectId: project.id, userId: ownerId, ticketId: ticket.id, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBranch },
       workspaceId, projectDir: cwd,
       commitMessage: `test(${ticket.ticketKey ?? "ticket"}): cover ${count} acceptance criteri${count === 1 ? "on" : "a"}`,
       featureBranch: ticket.githubBranch,
       repoUrl: auth.repoUrl, githubToken: auth.token, tokenUser: auth.tokenUser,
     });
     await mergeToAnchor({
+      validation: { projectId: project.id, userId: ownerId, ticketId: ticket.id, epicId: ticket.epicId ?? undefined },
       workspaceId, projectDir: cwd, featureBranch: ticket.githubBranch,
       repoUrl: auth.repoUrl, githubToken: auth.token, tokenUser: auth.tokenUser,
       targetBranch: anchorBranch, baseBranch: anchorBranch,
-    }).catch(() => {});
+    });
     return sha;
   } catch {
     return undefined; // the report still stands; the tests just didn't land
