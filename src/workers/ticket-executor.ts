@@ -1,3 +1,4 @@
+import { recoverSandboxStorage } from "../services/sandbox-storage-recovery.ts";
 import { runGitSetup, prepareBuildRuntime } from "../services/build-preflight.ts";
 import { CONTRACT_INSTRUCTION } from "../services/runtime-validation.ts";
 /**
@@ -3178,7 +3179,40 @@ git branch --show-current
     const gitSetupScript = useWorktree ? worktreeScript : cloneScript;
 
     try {
-      const gitResult = await runGitSetup(workspaceId, gitSetupScript, `${WORKING_DIR}/${projectDirName}`, featureBranch, [auth.token]);
+      const gitResult = await recoverSandboxStorage({
+        run: () => runGitSetup(workspaceId!, gitSetupScript, `${WORKING_DIR}/${projectDirName}`, featureBranch, [auth.token]),
+        onLog: async message => { await addLog(ticketId,message,"command",ownerId); },
+        discard: async () => {
+          // A ticket must never destroy a shared preview or another ticket's VM.
+          const id = workspaceId!;
+          const references = await db.select().from(sandboxes).where(eq(sandboxes.magsWorkspaceId,id));
+          const previews = await db.select({id:projectEnvironments.id}).from(projectEnvironments).where(eq(projectEnvironments.workspaceId,id));
+          if (!isolatedBuild || useWorktree || id.startsWith("pv-") || previews.length || !references.length ||
+              references.some(r=>r.ticketId!==ticketId || !["ticket","ticket-chat"].includes(r.workspaceType))) {
+            throw new Error("Storage failure in a shared or unowned sandbox; automatic destruction is blocked to protect other workloads.");
+          }
+          await addLog(ticketId,`Destroying failed isolated sandbox ${id}; the remote Git branch will be restored.`,"command",ownerId);
+          await deleteWorkspace(id);
+          await db.delete(sandboxes).where(and(eq(sandboxes.ticketId,ticketId),eq(sandboxes.magsWorkspaceId,id)));
+          sandboxRow = null;
+          workspaceId = null;
+        },
+        create: async () => {
+          const fresh = await newWorkspaceV2(`${ticketId.slice(0,8)}-${crypto.randomUUID().slice(0,8)}`, {
+            vcpus:4, memoryMb:parseInt(process.env.INSTANT_MEM_GB || "4",10)*1024,
+            diskGb:parseInt(process.env.INSTANT_DISK_GB || "8",10), keepAlive:true, noSync:true,
+            rootfsType:useBoilerplate ? BOILERPLATE_ROOTFS : (process.env.PREVIEW_ROOTFS || "pi"),
+          });
+          workspaceId = fresh.workspaceId;
+          const created = await db.insert(sandboxes).values({projectId:ticket.projectId,userId:ownerId,ticketId,
+            magsWorkspaceId:fresh.workspaceId,magsJobId:fresh.jobId,workspaceType:"ticket",status:"ready"}).returning();
+          sandboxRow = created[0] ?? null;
+          await sleep(8_000);
+          await ensureVmCerts(fresh.workspaceId);
+          if (!sandboxRow) throw new Error("Failed to register replacement sandbox");
+          emit({type:"ticket.execution_started",ticketId,sandboxId:sandboxRow.id,projectId:project.id});
+        },
+      });
 
       if (gitResult.output.includes("GIT_SETUP_COMPLETE")) {
         if (!ticket.githubBranch) {

@@ -8,6 +8,14 @@ CLI builds, API/Pi builds, and newly created chat repositories use the same chec
 
 The COH-25 incident's original cause remains unknown: its deployed caller discarded stderr and reported only empty stdout. These changes make a subsequent failure diagnosable; they do not establish a historical authentication or network cause.
 
+## Storage recovery update
+
+The September 10 retry exposed the actual failure: Git exited 128 because fsync of `/data/project/.git/objects/pack/tmp_pack_*` returned an I/O error. API/Pi ticket Git setup now recognizes filesystem-specific failures and destroys the failing isolated sandbox, removes its database registration, creates a uniquely named no-sync VM, and reruns Git setup from the remote branch. Existing SDK preparation and runtime validation then run in the replacement. Unpushed files in a broken sandbox are discarded; the remote branch is authoritative.
+
+There is one replacement per build attempt. If it also suffers a storage failure, it is removed and the ticket stops with a provider-storage blocker. A failed destruction prevents further allocation. Shared preview registrations and references belonging to other tickets block deletion. Authentication/network failures and generic Pi `EIO` without filesystem evidence do not trigger destructive recovery. This recovery handles Git setup; it does not yet restart arbitrary failures after the coding agent has started.
+
+Five recovery tests cover the observed error classification, destruction-before-creation ordering, retry exhaustion, failed deletion, and non-storage failures. Actual VM replacement still needs verification after deployment.
+
 ## SDK preparation
 
 Before CLI/API builds and ticket chat execution, a probe inspects the actual checkout and VM using saved ticket, anchor (when available), and default preview profiles as hints. Only stack, SDK version, toolchain commands, and directives are included. Preview secret overrides and source patches are not copied. Installation commands execute in order in the build VM, then a runtime check must succeed. .NET requires an installed SDK matching the detected major version, and `dotnet --version` also respects the checkout's global.json.
