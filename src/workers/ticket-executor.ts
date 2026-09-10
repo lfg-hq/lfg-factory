@@ -1,4 +1,4 @@
-import { recoverSandboxStorage } from "../services/sandbox-storage-recovery.ts";
+import { recoverSandboxStorage, destroyWorkspaceAfterStop } from "../services/sandbox-storage-recovery.ts";
 import { runGitSetup, prepareBuildRuntime } from "../services/build-preflight.ts";
 import { CONTRACT_INSTRUCTION } from "../services/runtime-validation.ts";
 /**
@@ -31,6 +31,7 @@ import {
   newWorkspaceV2,
   execOnWorkspace,
   deleteWorkspace,
+  stopWorkspace,
   setNoSleep,
 } from "../services/mags.ts";
 import {
@@ -3192,7 +3193,11 @@ git branch --show-current
             throw new Error("Storage failure in a shared or unowned sandbox; automatic destruction is blocked to protect other workloads.");
           }
           await addLog(ticketId,`Destroying failed isolated sandbox ${id}; the remote Git branch will be restored.`,"command",ownerId);
-          await deleteWorkspace(id);
+          await addLog(ticketId, "Stopping the failed sandbox job before deleting its storage…", "command", ownerId);
+          await destroyWorkspaceAfterStop({
+            stop: () => stopWorkspace(sandboxRow?.magsJobId || id),
+            remove: () => deleteWorkspace(id),
+          });
           await db.delete(sandboxes).where(and(eq(sandboxes.ticketId,ticketId),eq(sandboxes.magsWorkspaceId,id)));
           sandboxRow = null;
           workspaceId = null;

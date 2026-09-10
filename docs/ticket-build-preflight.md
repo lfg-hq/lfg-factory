@@ -16,6 +16,8 @@ There is one replacement per build attempt. If it also suffers a storage failure
 
 Five recovery tests cover the observed error classification, destruction-before-creation ordering, retry exhaustion, failed deletion, and non-storage failures. Actual VM replacement still needs verification after deployment.
 
+The next production retry exposed Magpie's deletion precondition: a workspace with an active job returns HTTP 409. Recovery now stops the recorded job first, then retries workspace deletion while the provider reports active jobs (up to 30 attempts, two seconds apart). Successful deletion confirms cleanup before database registration removal or replacement allocation. Stop failures and cleanup timeouts preserve the registration and block allocation. Missing jobs/workspaces (404) are handled idempotently. Four further tests cover asynchronous stop, stop failure, bounded cleanup, and already-removed resources.
+
 ## SDK preparation
 
 Before CLI/API builds and ticket chat execution, a probe inspects the actual checkout and VM using saved ticket, anchor (when available), and default preview profiles as hints. Only stack, SDK version, toolchain commands, and directives are included. Preview secret overrides and source patches are not copied. Installation commands execute in order in the build VM, then a runtime check must succeed. .NET requires an installed SDK matching the detected major version, and `dotnet --version` also respects the checkout's global.json.
