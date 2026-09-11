@@ -1,4 +1,4 @@
-import {mkdtempSync,rmSync} from "node:fs";
+import {mkdtempSync,rmSync,mkdirSync,writeFileSync} from "node:fs";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {execFileSync} from "node:child_process";
@@ -9,12 +9,12 @@ let probeInput: any;
 let executed: string[]=[];
 let sdkExit=0;
 mock.module("../src/services/app-profile.ts",()=>({
-  loadAppProfile:async()=>({profile:{stack:".NET 8",runtimeVersion:"net8.0",toolchain:["install-sdk"],directives:["Match Linux asset casing"],environmentOverrides:["must-not-copy"]}}),
+  loadAppProfile:async()=>({profile:{stack:".NET 8",runtime:"dotnet",runtimeVersion:"net8.0",toolchain:["install-sdk"],directives:["Match Linux asset casing"],environmentOverrides:["must-not-copy"]}}),
   probeAppProfile:async (opts:any)=>{probeInput=opts;return {stack:".NET 8",runtime:"dotnet",runtimeVersion:"net8.0",toolchain:["install-sdk"]};}
 }));
 mock.module("../src/services/background-command.ts",()=>({runBackgroundCommand:async (o:{command:string})=>{executed.push(o.command);return {exitCode:sdkExit,output:"SDK installation failed"};}}));
 mock.module("../src/services/mags.ts",()=>({execOnWorkspace:async (_:string,c:string)=>{command=c;return result;}}));
-const {runGitSetup,redactSetupOutput,runtimeCheck,prepareBuildRuntime,refreshOriginCommand}=await import("../src/services/build-preflight.ts");
+const {runGitSetup,redactSetupOutput,runtimeCheck,prepareBuildRuntime,refreshOriginCommand,savedDotnetCheck}=await import("../src/services/build-preflight.ts");
 describe("build preflight",()=>{
   test("preserves stderr-only failure and redacts credentials",async()=>{
     result={exitCode:128,output:"",stderr:"fatal: authentication failed for https://oauth2:secret@git.example/repo"};
@@ -74,4 +74,37 @@ test("GitLab auth failure gives reconnect guidance without exposing token",async
   result={exitCode:128,output:"REPO_EXISTS",stderr:"remote: HTTP Basic: Access denied. fatal: Authentication failed for https://oauth2:secret@gitlab.com/team/repo.git"};
   try {await runGitSetup("vm","true","/data/project","a",["secret"]);throw new Error("expected failure");}
   catch(e){expect((e as Error).message).toContain("Reconnect GitLab in Settings");expect((e as Error).message).not.toContain("secret");}
+});
+
+
+test("verified inherited SDK skips probing and installation", async()=>{
+  result={exitCode:0,output:"LFG_SAVED_SDK_VERIFIED\n",stderr:""};
+  executed=[];probeInput=undefined;
+  const logs:string[]=[];
+  await prepareBuildRuntime({workspaceId:"vm",projectId:"p",branch:"a",dir:"/data/project",userId:"u",onLog:s=>logs.push(s)});
+  expect(executed).toEqual([]);
+  expect(probeInput).toBeUndefined();
+  expect(logs.some(s=>s.includes("skipped probe and installation"))).toBe(true);
+});
+
+test("inherited SDK check rejects changed frameworks and missing SDK without editing source",()=>{
+  const dir=mkdtempSync(join(tmpdir(),"lfg-sdk-"));
+  try {
+    execFileSync("git",["init","-q",dir]);
+    mkdirSync(join(dir,"bin"));
+    const manifest=join(dir,"App.csproj");
+    writeFileSync(manifest,'<Project><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>');
+    execFileSync("git",["add","App.csproj"],{cwd:dir});
+    writeFileSync(join(dir,"bin/dotnet"),'#!/bin/sh\ncase "$1" in --version) echo 8.0.401;; --list-sdks) echo "8.0.401 [/sdk]";; esac\n',{mode:0o755});
+    const run=()=>execFileSync("sh",["-ec",savedDotnetCheck("net8.0")!],{cwd:dir,env:{...process.env,PATH:join(dir,"bin")+":"+process.env.PATH},encoding:"utf8"});
+    expect(run()).toContain("LFG_SAVED_SDK_VERIFIED");
+    writeFileSync(manifest,'<Project><PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup></Project>');
+    expect(run).toThrow();
+    writeFileSync(manifest,'<Project><PropertyGroup><TargetFramework>$(Framework)</TargetFramework></PropertyGroup></Project>');
+    expect(run).toThrow();
+    writeFileSync(manifest,'<Project><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>');
+    writeFileSync(join(dir,"bin/dotnet"),'#!/bin/sh\nexit 1\n',{mode:0o755});
+    expect(run).toThrow();
+    expect(savedDotnetCheck("unknown")).toBeNull();
+  } finally {rmSync(dir,{recursive:true,force:true});}
 });

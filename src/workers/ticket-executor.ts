@@ -1,3 +1,5 @@
+import { startBuildEnvironmentWorker } from "../services/build-environment-worker.ts";
+import { createTicketSandbox } from "../services/ticket-sandbox-clone.ts";
 import { recoverSandboxStorage, destroyWorkspaceAfterStop } from "../services/sandbox-storage-recovery.ts";
 import { runGitSetup, prepareBuildRuntime, refreshOriginCommand } from "../services/build-preflight.ts";
 import { CONTRACT_INSTRUCTION } from "../services/runtime-validation.ts";
@@ -1401,18 +1403,21 @@ async function executeTicket(ticketId: string, actorId?: string): Promise<void> 
 
     // Ticket build VM: persistent (v2 always) + noSync (no S3 mirror) + keepAlive
     // (no_sleep=true) so Mags can't idle-sleep a live build. Toggled off at build end.
-    const { jobId, workspaceId: wsId } = await newWorkspaceV2(workspaceName, {
+    const { jobId, workspaceId: wsId, cloneIntentId } = await createTicketSandbox({ projectId: project.id, ticketId, userId: ownerId,
+      log: message => addLog(ticketId, message, "command", ownerId),
+      fresh: () => newWorkspaceV2(workspaceName, {
       vcpus: 4,
       memoryMb: parseInt(process.env.INSTANT_MEM_GB || "4", 10) * 1024,
       diskGb: parseInt(process.env.INSTANT_DISK_GB || "8", 10),
       keepAlive: true,
       noSync: true,
       rootfsType: "claude",
+      }),
     });
     workspaceId = wsId;
 
     // Wait for VM to boot
-    await sleep(8_000);
+    if (!cloneIntentId) await sleep(8_000);
 
     const created = await db
       .insert(sandboxes)
@@ -1428,6 +1433,7 @@ async function executeTicket(ticketId: string, actorId?: string): Promise<void> 
       .returning();
 
     sandboxRow = (created[0] as any) ?? null;
+    if (cloneIntentId) await db.delete(sandboxes).where(eq(sandboxes.id,cloneIntentId));
   }
 
   if (!sandboxRow || !workspaceId) throw new Error("Failed to create or find sandbox");
@@ -1641,8 +1647,9 @@ echo "BRANCH_CREATED"
     await addLog(ticketId, "No GitHub token — code will not be persisted to a repository", "command", ownerId);
   }
 
+  let environmentWorker;
   try {
-    await prepareBuildRuntime({workspaceId,projectId:project.id,branch:featureBranch,anchorBranch,dir:`${WORKING_DIR}/${projectDirName}`,userId:ownerId,
+    environmentWorker = await startBuildEnvironmentWorker({workspaceId,projectId:project.id,branch:featureBranch,anchorBranch,dir:`${WORKING_DIR}/${projectDirName}`,userId:ownerId,
       onLog: message => { void addLog(ticketId,message,"command",ownerId).catch(() => {}); }});
   } catch (e) {
     await markTicketFailed(ticketId, `Build environment blocked — ${(e as Error).message}`, ownerId);
@@ -1869,6 +1876,12 @@ Before implementing, fix the git issue:
   }
 
   console.log(`[ticket-executor] Wait finished: status=${waitResult.status}, exitCode=${waitResult.exitCode}, implementationStatus=${implementationStatus}`);
+
+  const environmentError = await environmentWorker.done;
+  if (environmentError) {
+    await markTicketFailed(ticketId, `Build environment blocked — ${environmentError.message}`, ownerId);
+    return;
+  }
 
   // ── Step 8: Commit & finalize ───────────────────────────────────────
   const durationMs = Date.now() - startTime;
@@ -3014,7 +3027,9 @@ async function executeTicketApi(
     // preinstalled). The older newWorkspace routes rootfs via the __MAGS_ROOTFS_TYPE
     // env passthrough, which was silently landing on the DEFAULT rootfs (mags-vm,
     // node 20.15.1) → Pi exit 127.
-    const { jobId, workspaceId: wsId } = await newWorkspaceV2(workspaceName, {
+    const { jobId, workspaceId: wsId, cloneIntentId } = await createTicketSandbox({ projectId: project.id, ticketId, userId: ownerId,
+      log: message => addLog(ticketId, message, "command", ownerId),
+      fresh: () => newWorkspaceV2(workspaceName, {
       vcpus: 4,
       memoryMb: parseInt(process.env.INSTANT_MEM_GB || "4", 10) * 1024,
       diskGb: parseInt(process.env.INSTANT_DISK_GB || "8", 10),
@@ -3023,9 +3038,10 @@ async function executeTicketApi(
       // Empty projects → the pre-scaffolded boilerplate rootfs; everything else →
       // the "pi" rootfs (node 22 + Pi preinstalled), same base as the preview VM.
       rootfsType: useBoilerplate ? BOILERPLATE_ROOTFS : (process.env.PREVIEW_ROOTFS || "pi"),
+      }),
     });
     workspaceId = wsId;
-    await sleep(8_000);
+    if (!cloneIntentId) await sleep(8_000);
 
     const created = await db.insert(sandboxes).values({
       projectId: ticket.projectId,
@@ -3037,6 +3053,7 @@ async function executeTicketApi(
       status: "ready",
     }).returning();
     sandboxRow = (created[0] as any) ?? null;
+    if (cloneIntentId) await db.delete(sandboxes).where(eq(sandboxes.id,cloneIntentId));
   }
 
   if (!sandboxRow || !workspaceId) throw new Error("Failed to create or find sandbox");
@@ -3362,8 +3379,9 @@ git branch --show-current
   // idle-sleep a live build → "lost contact". Turned back off at build end.
   await wakeTicketVm(workspaceId);
   // Reuse preview discoveries, but verify/install the SDK in this build VM.
+  let environmentWorker;
   try {
-    await prepareBuildRuntime({workspaceId,projectId:project.id,branch:featureBranch,anchorBranch,dir:projectDir,userId:ownerId,
+    environmentWorker = await startBuildEnvironmentWorker({workspaceId,projectId:project.id,branch:featureBranch,anchorBranch,dir:projectDir,userId:ownerId,
       onLog: message => { void addLog(ticketId,message,"command",ownerId).catch(() => {}); }});
   } catch (e) {
     await markTicketFailed(ticketId, `Build environment blocked — ${(e as Error).message}`, ownerId);
@@ -3620,6 +3638,12 @@ git branch --show-current
   }
   }
 
+  const environmentError = await environmentWorker.done;
+  if (environmentError) {
+    await markTicketFailed(ticketId, `Build environment blocked — ${environmentError.message}`, ownerId);
+    return;
+  }
+
   // ── Finalize: commit, push, merge ───────────────────────────────────
   const durationMs = Date.now() - startTime;
 
@@ -3817,7 +3841,7 @@ async function findExistingSandbox(ticketId: string) {
   const result = await db
     .select()
     .from(sandboxes)
-    .where(eq(sandboxes.ticketId, ticketId))
+    .where(and(eq(sandboxes.ticketId, ticketId), inArray(sandboxes.workspaceType, ["ticket", "ticket-chat", "ticket-worktree"])))
     .orderBy(desc(sandboxes.updatedAt))
     .limit(1);
   return result[0] ?? null;

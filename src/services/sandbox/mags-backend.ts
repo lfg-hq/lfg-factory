@@ -197,7 +197,7 @@ export async function execOnWorkspace(
       const resp = await fetch(url, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ command }),
+        body: JSON.stringify({ command, timeout: Math.ceil(timeout / 1000) }),
         signal: ctrl.signal,
       });
       const json = (await resp.json().catch(() => ({}))) as { exit_code?: number; stdout?: string; stderr?: string; message?: string; error?: string };
