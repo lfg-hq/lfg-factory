@@ -12,7 +12,7 @@ mock.module("../src/services/app-profile.ts",()=>({
   loadAppProfile:async()=>({profile:{stack:".NET 8",runtimeVersion:"net8.0",toolchain:["install-sdk"],directives:["Match Linux asset casing"],environmentOverrides:["must-not-copy"]}}),
   probeAppProfile:async (opts:any)=>{probeInput=opts;return {stack:".NET 8",runtime:"dotnet",runtimeVersion:"net8.0",toolchain:["install-sdk"]};}
 }));
-mock.module("../src/services/validation-sandbox.ts",()=>({validationShell:async (_:string,s:string)=>{executed.push(s);return {exitCode:sdkExit,output:"SDK installation failed"};}}));
+mock.module("../src/services/background-command.ts",()=>({runBackgroundCommand:async (o:{command:string})=>{executed.push(o.command);return {exitCode:sdkExit,output:"SDK installation failed"};}}));
 mock.module("../src/services/mags.ts",()=>({execOnWorkspace:async (_:string,c:string)=>{command=c;return result;}}));
 const {runGitSetup,redactSetupOutput,runtimeCheck,prepareBuildRuntime,refreshOriginCommand}=await import("../src/services/build-preflight.ts");
 describe("build preflight",()=>{

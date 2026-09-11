@@ -43,7 +43,7 @@ export function runtimeCheck(runtime: string, version = ""): string {
 /** Re-probe the actual checkout with preview knowledge; never copy preview secrets or patches. */
 export async function prepareBuildRuntime(opts: {workspaceId:string; projectId:string; branch:string; anchorBranch?:string; dir:string; userId:string; onLog:(s:string)=>void}) {
   const { loadAppProfile, probeAppProfile } = await import("./app-profile.ts");
-  const { validationShell } = await import("./validation-sandbox.ts");
+  const { runBackgroundCommand } = await import("./background-command.ts");
   const profiles = await Promise.all([...new Set([opts.branch,opts.anchorBranch,"default"].filter((b):b is string=>!!b))].map(branch=>loadAppProfile(opts.projectId,branch)));
   const knowledge = profiles.filter(p=>p!==null).map(p=>JSON.stringify({stack:p.profile.stack,runtimeVersion:p.profile.runtimeVersion,toolchain:p.profile.toolchain,directives:p.profile.directives}));
   opts.onLog("Preparing build SDK from the ticket checkout and saved preview discoveries…");
@@ -53,7 +53,7 @@ export async function prepareBuildRuntime(opts: {workspaceId:string; projectId:s
   const commands = [...profile.toolchain, runtimeCheck(profile.runtime,profile.runtimeVersion)];
   for (const [i, command] of commands.entries()) {
     opts.onLog(i===commands.length-1 ? `Verifying ${profile.runtime} SDK (${profile.runtimeVersion})…` : `Installing build toolchain: step ${i+1}/${profile.toolchain.length}…`);
-    const result = await validationShell(opts.workspaceId,`set -e\ncd ${q(opts.dir)}\n${command}`,300_000);
+    const result = await runBackgroundCommand({workspaceId:opts.workspaceId,cwd:opts.dir,command:`set -e\n${command}`,timeoutMs:Number(process.env.BUILD_SETUP_TIMEOUT_MS || 1_800_000),log:opts.onLog});
     if(result.exitCode!==0) throw new Error(`Build SDK setup failed at step ${i+1} (exit ${result.exitCode}): ${redactSetupOutput(result.output).slice(-2000)}`);
   }
   opts.onLog(`Build runtime ready: ${profile.stack}`);

@@ -22,6 +22,14 @@ The next production retry exposed Magpie's deletion precondition: a workspace wi
 
 On September 11, Git setup reached `REPO_EXISTS` but GitLab denied authentication. The reused-repository path fetched with the origin saved by the earlier clone, even though the server had resolved current credentials. Both CLI and API builds now replace origin's URL with current authentication before fetching. This also removes duplicate stale origin URLs. A remaining authentication failure directs the user to reconnect the Git provider in Settings → Integrations and verify repository access. It does not destroy the sandbox. A real temporary Git repository test verifies replacement of stale credentials; another checks redacted GitLab reconnect guidance. Live token validity is not established by these local tests.
 
+## Background setup and validation
+
+SDK installation now launches a detached command and polls its recorded status every two seconds. Database provisioning and validation commands (restore/build/migrations/tests) use the same runner. HTTP requests only launch or inspect jobs; they no longer stay open for the installation duration. Each job has a private directory under `/data/lfg-jobs/<id>` containing the command, PID, output log, and atomically written exit status. Completion returns the exit code and last 24 KB of output; full logs remain in the sandbox.
+
+A repeated launch with the same ID cannot start another command. An ambiguous launch response or temporary polling failure checks that job again. Quiet output is not a failure condition. SDK setup has a 30-minute default maximum per command, configurable with `BUILD_SETUP_TIMEOUT_MS`; validation retains its configured limits. A sandbox-side timeout enforces the limit even if LFG loses contact. Cancellation is supported when the caller supplies a cancellation callback. Application server lifetime remains separate from setup commands.
+
+Job IDs can be supplied to reattach to a saved job. Automatic resumption across an LFG worker restart is not wired into the ticket database yet; this change handles HTTP interruptions during the running build. Short shell operations and Git setup still use their existing execution paths. Full AI probing before each build is also unchanged by this update.
+
 ## SDK preparation
 
 Before CLI/API builds and ticket chat execution, a probe inspects the actual checkout and VM using saved ticket, anchor (when available), and default preview profiles as hints. Only stack, SDK version, toolchain commands, and directives are included. Preview secret overrides and source patches are not copied. Installation commands execute in order in the build VM, then a runtime check must succeed. .NET requires an installed SDK matching the detected major version, and `dotnet --version` also respects the checkout's global.json.

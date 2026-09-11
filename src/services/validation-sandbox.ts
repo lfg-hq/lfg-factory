@@ -73,27 +73,10 @@ export async function runValidationCommand(o: {
   workspaceId: string; cwd: string; command: string; root: string; timeoutMs?: number;
   cancelled?: () => boolean; log?: (message:string) => void; vars?: Record<string,string>;
 }) {
-  const id = crypto.randomUUID(); const base = `${o.root}/cmd-${id}`;
+  const {runBackgroundCommand} = await import("./background-command.ts");
   const env = Object.entries(o.vars ?? {}).map(([k,v]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k) ? `export ${k}=${shellQuote(v)}` : "").join("\n");
-  const script = `set -e\ncd ${shellQuote(o.cwd)}\n${env}\n${o.command}\n`;
-  const body = Buffer.from(script).toString("base64");
-  const launch = await validationShell(o.workspaceId, `mkdir -p ${shellQuote(o.root)}; echo ${body} | base64 -d > ${shellQuote(base+'.sh')}; setsid bash -c ${shellQuote(`timeout -k 10 ${Math.ceil((o.timeoutMs ?? 1_800_000)/1000)} bash ${shellQuote(base+'.sh')} > ${shellQuote(base+'.log')} 2>&1; echo $? > ${shellQuote(base+'.exit')}`)} </dev/null >/dev/null 2>&1 & echo $! > ${shellQuote(base+'.pid')}; echo STARTED`);
-  if (launch.exitCode !== 0 || !launch.output.includes("STARTED")) throw new ValidationFailure("Could not launch validation command");
-  const stop = () => validationShell(o.workspaceId, `p=$(cat ${shellQuote(base+'.pid')}); case "$p" in ''|*[!0-9]*) exit 1;; esac; kill -TERM -- -"$p" 2>/dev/null || true; sleep 1; kill -KILL -- -"$p" 2>/dev/null || true`).catch(()=>{});
-  const deadline=Date.now()+(o.timeoutMs ?? 1_800_000); let heartbeat=0;
-  try {
-    while (Date.now()<deadline) {
-      if (o.cancelled?.()) throw new Error("__CANCELLED__");
-      const state=await validationShell(o.workspaceId, `test -f ${shellQuote(base+'.exit')} && { echo DONE; cat ${shellQuote(base+'.exit')}; } || echo RUNNING`,15_000);
-      if(state.output.startsWith('DONE')) {
-        const output=await validationShell(o.workspaceId, `head -c 12000 ${shellQuote(base+'.log')}; tail -c 6000 ${shellQuote(base+'.log')}`,15_000);
-        return {exitCode:Number(state.output.split('\n')[1]),output:output.output};
-      }
-      if(Date.now()-heartbeat>15_000) { heartbeat=Date.now();o.log?.("Validation command is running…"); }
-      await new Promise(r=>setTimeout(r,1500));
-    }
-    throw new ValidationFailure("Validation command timed out; its process group was stopped");
-  } finally { await stop(); }
+  return runBackgroundCommand({workspaceId:o.workspaceId,cwd:o.cwd,command:`set -e\n${env}\n${o.command}`,
+    timeoutMs:o.timeoutMs,cancelled:o.cancelled,log:o.log});
 }
 export function cleanupEnvironmentScript(scope: string, root: string) {
   if (!/^val-[a-f0-9-]+$/.test(scope) || root !== `/data/validation/${scope}`) throw new Error("Invalid validation cleanup scope");
