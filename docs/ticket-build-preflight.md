@@ -18,6 +18,10 @@ Five recovery tests cover the observed error classification, destruction-before-
 
 The next production retry exposed Magpie's deletion precondition: a workspace with an active job returns HTTP 409. Recovery now stops the recorded job first, then retries workspace deletion while the provider reports active jobs (up to 30 attempts, two seconds apart). Successful deletion confirms cleanup before database registration removal or replacement allocation. Stop failures and cleanup timeouts preserve the registration and block allocation. Missing jobs/workspaces (404) are handled idempotently. Four further tests cover asynchronous stop, stop failure, bounded cleanup, and already-removed resources.
 
+## Reused repository authentication
+
+On September 11, Git setup reached `REPO_EXISTS` but GitLab denied authentication. The reused-repository path fetched with the origin saved by the earlier clone, even though the server had resolved current credentials. Both CLI and API builds now replace origin's URL with current authentication before fetching. This also removes duplicate stale origin URLs. A remaining authentication failure directs the user to reconnect the Git provider in Settings → Integrations and verify repository access. It does not destroy the sandbox. A real temporary Git repository test verifies replacement of stale credentials; another checks redacted GitLab reconnect guidance. Live token validity is not established by these local tests.
+
 ## SDK preparation
 
 Before CLI/API builds and ticket chat execution, a probe inspects the actual checkout and VM using saved ticket, anchor (when available), and default preview profiles as hints. Only stack, SDK version, toolchain commands, and directives are included. Preview secret overrides and source patches are not copied. Installation commands execute in order in the build VM, then a runtime check must succeed. .NET requires an installed SDK matching the detected major version, and `dotnet --version` also respects the checkout's global.json.

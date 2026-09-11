@@ -1,5 +1,5 @@
 import { recoverSandboxStorage, destroyWorkspaceAfterStop } from "../services/sandbox-storage-recovery.ts";
-import { runGitSetup, prepareBuildRuntime } from "../services/build-preflight.ts";
+import { runGitSetup, prepareBuildRuntime, refreshOriginCommand } from "../services/build-preflight.ts";
 import { CONTRACT_INSTRUCTION } from "../services/runtime-validation.ts";
 /**
  * Ticket Executor Worker
@@ -1467,6 +1467,7 @@ cd ${WORKING_DIR}
 if [ -d "${projectDirName}/.git" ]; then
     echo "REPO_EXISTS"
     cd ${projectDirName}
+    ${refreshOriginCommand(`https://x-access-token:${githubToken}@github.com/${githubOwner}/${githubRepo}.git`)}
     git fetch --prune origin
     git reset --hard HEAD 2>/dev/null || true
     git clean -fd 2>/dev/null || true
@@ -3125,6 +3126,7 @@ cd ${WORKING_DIR}
 if [ -d "${projectDirName}/.git" ]; then
     echo "REPO_EXISTS"
     cd ${projectDirName}
+    ${refreshOriginCommand(auth.authUrl)}
     git fetch --prune origin
     git reset --hard HEAD 2>/dev/null || true
     git clean -fd 2>/dev/null || true

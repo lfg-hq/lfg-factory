@@ -1,5 +1,10 @@
 import { shellQuote as q } from "./preview-plan.ts";
 
+/** Replace any token saved by an earlier clone before contacting origin. */
+export function refreshOriginCommand(authUrl: string): string {
+  return `git config --local --replace-all remote.origin.url ${q(authUrl)}`;
+}
+
 export function redactSetupOutput(value: string, secrets: string[] = []): string {
   for (const secret of secrets.filter(Boolean).sort((a,b)=>b.length-a.length)) value = value.split(secret).join("[redacted]");
   return value.replace(/https?:\/\/[^\s/@]+:[^\s/@]+@/g, "https://[redacted]@");
@@ -18,6 +23,10 @@ export async function runGitSetup(workspaceId: string, script: string, dir: stri
   }
   const output = redactSetupOutput([result.output, result.stderr].filter(Boolean).join("\n"), secrets);
   if (result.exitCode !== 0 || !/^GIT_CHECKOUT_VERIFIED$/m.test(output)) {
+    if (/Authentication failed|HTTP Basic: Access denied/i.test(output)) {
+      const provider = /gitlab/i.test(output) ? "GitLab" : /github/i.test(output) ? "GitHub" : "your Git provider";
+      throw new Error(`Repository authentication failed. Reconnect ${provider} in Settings → Integrations and verify repository access, then retry. ${output.trim().slice(-2000)}`);
+    }
     throw new Error(`Git setup failed (exit ${result.exitCode ?? "unknown"}): ${output.trim().slice(-3000) || "No stdout or stderr returned by the sandbox; checkout could not be verified"}`);
   }
   return { ...result, output };
