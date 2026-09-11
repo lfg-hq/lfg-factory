@@ -35,7 +35,7 @@ export async function runBackgroundCommand(o: BackgroundOptions, deps?: {
     const {execOnWorkspace} = await import("./mags.ts");
     return execOnWorkspace(workspace, `echo ${Buffer.from(script).toString('base64')} | base64 -d | bash`, {timeout:20_000});
   });
-  const wait = deps?.wait ?? (()=>new Promise<void>(resolve=>setTimeout(resolve,2000)));
+  const wait = deps?.wait ?? (()=>new Promise<void>(resolve=>setTimeout(resolve,30_000)));
   const now = deps?.now ?? Date.now;
   const id = o.jobId ?? crypto.randomUUID();
   if (!/^[a-zA-Z0-9-]{1,80}$/.test(id)) throw new Error("Invalid background job ID");

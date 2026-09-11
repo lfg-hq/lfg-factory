@@ -24,7 +24,7 @@ On September 11, Git setup reached `REPO_EXISTS` but GitLab denied authenticatio
 
 ## Background setup and validation
 
-SDK installation now launches a detached command and polls its recorded status every two seconds. Database provisioning and validation commands (restore/build/migrations/tests) use the same runner. HTTP requests only launch or inspect jobs; they no longer stay open for the installation duration. Each job has a private directory under `/data/lfg-jobs/<id>` containing the command, PID, output log, and atomically written exit status. Completion returns the exit code and last 24 KB of output; full logs remain in the sandbox.
+SDK installation now launches a detached command and polls its recorded status every 30 seconds. Database provisioning and validation commands (restore/build/migrations/tests) use the same runner. HTTP requests only launch or inspect jobs; they no longer stay open for the installation duration. Each job has a private directory under `/data/lfg-jobs/<id>` containing the command, PID, output log, and atomically written exit status. Completion returns the exit code and last 24 KB of output; full logs remain in the sandbox.
 
 A repeated launch with the same ID cannot start another command. An ambiguous launch response or temporary polling failure checks that job again. Quiet output is not a failure condition. SDK setup has a 30-minute default maximum per command, configurable with `BUILD_SETUP_TIMEOUT_MS`; validation retains its configured limits. A sandbox-side timeout enforces the limit even if LFG loses contact. Cancellation is supported when the caller supplies a cancellation callback. Application server lifetime remains separate from setup commands.
 
