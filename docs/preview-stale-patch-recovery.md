@@ -48,3 +48,19 @@ Validation: local tests execute generated patch scripts and connection guards,
 exercise backup failure/recording failure/reset ordering, and run existing preview
 and runtime regression tests. A live Magpie/SQL Server backup/reset/replay has not
 been run locally. No production reset or deployment was performed.
+
+## Sandbox-only source repairs
+
+Preview setup and preview chat now allow source edits on the default checkout as
+well as ticket previews. Neither is instructed to commit or push. Direct Git
+publication commands are blocked in both run tools; this is a workflow guard, not
+an isolation boundary around arbitrary shell programs. Ticket implementation and
+its deliberate publication remain separate.
+
+The saved branch profile is the replay store, rather than git stash: source/config
+patches and reasons survive a VM replacement in LFG's database. General rules are
+recorded as directives. Literal patches remain branch-scoped and must match the
+selected checkout. Reload reapplies the saved patches and validates them; stale
+patches enter the replacement workflow above. For casing repairs, agents must
+correct rendered references, avoid duplicate aliases, and revise obsolete asset
+verification paths without dropping actual feature-route checks.

@@ -1,3 +1,4 @@
+import { PREVIEW_SOURCE_POLICY, previewPublicationBlocked } from "./preview-source-policy.ts";
 import { replaceVerifiedPatches } from "./preview-patch-recovery.ts";
 import { databaseRecoveryScripts, backupThenReset } from "./preview-db-recovery.ts";
 import { compileRuntimePlan } from "./runtime-plan.ts";
@@ -1847,7 +1848,7 @@ PERSISTING WHAT YOU LEARN (so the next run doesn't repeat your work):
 - Each \`run\` command starts a FRESH shell, so a bare \`export FOO=bar\` does NOT carry to the next command. For an environment fix that must stick (an env var, a cert/CA path, a package source), call the \`setEnv\` tool — it stores the var on the project (encrypted) AND writes it into .env now, so it is re-applied on every future setup and SURVIVES a VM rebuild. (Appending to ./.env only lasts while this VM lives — if the VM is recreated you'd have to rediscover the fix.)
 - When you discover the PLAN itself was wrong and found what works — a different toolchain install, install/build/run command, startup project, or port — call \`updatePlan\` to persist the corrected value. Do this AFTER you've confirmed the new command works. This is how the checklist self-heals: the next preview run skips straight to the working commands. IMPORTANT: in a build/run command you persist, use paths RELATIVE to the working dir (e.g. \`Cohire.Web/wwwroot/CohireFiles\`), NOT absolute \`${PROJECT_DIR}/...\` — the same command is later run in FEATURE-BRANCH worktrees, and a hardcoded ${PROJECT_DIR} path would touch main instead of the worktree.
 - When you learn a FACT that no plan field captures — a schema/ordering rule (migration MUST run before a SQL script), a missing client (\`sqlcmd\` isn't installed → use \`docker exec\`), a config gotcha — call \`noteLearning\` so the next run and every feature branch see it up front. Record it the moment you learn it; this is what stops the "figure the same thing out for 2 hours every run" loop.
-- When you EDIT A CONFIG FILE for the app to run (e.g. repoint a connection string in appsettings.json from a dead dev/prod host to the provisioned localhost DB, or a Serilog sink connection the app reads from the file), use \`persistConfigPatch\` — NOT a bare sed/echo. A plain edit is a change to a TRACKED file, so a git branch switch / fresh checkout / rebuild RESETS it and the app breaks again; persistConfigPatch re-applies it automatically after every checkout, so branches and rebuilds inherit it. (Env fixes → setEnv; tracked-file config fixes → persistConfigPatch.)
+- When you EDIT A SOURCE OR CONFIG FILE for the app to run (e.g. repoint a connection string in appsettings.json from a dead dev/prod host to the provisioned localhost DB, or a Serilog sink connection the app reads from the file), use \`persistConfigPatch\` — NOT a bare sed/echo. A plain edit is a change to a TRACKED file, so a git branch switch / fresh checkout / rebuild RESETS it and the app breaks again; persistConfigPatch re-applies it automatically after every checkout, so branches and rebuilds inherit it. (Env fixes → setEnv; tracked-file config fixes → persistConfigPatch.)
 
 RUNNING COMMANDS — IMPORTANT:
 - The \`run\` tool already runs each command DETACHED and polls it to completion, so restore/build/install take as long as they need — you do NOT need to background them, add \`&\`, nohup, or your own timeout wrapper. Just run the plain command (e.g. \`dotnet build Cohire.sln -c Release\`).
@@ -1860,7 +1861,7 @@ RUNNING COMMANDS — IMPORTANT:
   This avoids the wasteful "run → vague failure → re-run to see the error" cycle.
 
 RULES:
-- SQL schema/seed scripts may be repaired as saved preview patches on the default checkout too; inspect dependencies and identity handling, preserve the original schema using resetDevelopmentDatabase before a destructive reset, and persist executable fixes via persistConfigPatch plus ordered schemaSteps. Inspect scripts before execution and never hide database drops inside scripts to bypass the backup tool. Do not treat noteLearning or a successful second run on a partially seeded DB as a fix. Other source repairs are allowed ONLY in an isolated feature-branch worktree (not /data/project). Keep them minimal and persist each literal edit with persistConfigPatch in that branch profile so checkout replay reproduces it. Never commit/push/merge automatically. On the default checkout, finish failed with the exact non-SQL source blocker. Never disable migrations, suppress PendingModelChangesWarning, or mark unapplied migrations as applied; repair and validate the model/migration instead.
+- SQL schema/seed scripts may be repaired as saved preview patches on the default checkout too; inspect dependencies and identity handling, preserve the original schema using resetDevelopmentDatabase before a destructive reset, and persist executable fixes via persistConfigPatch plus ordered schemaSteps. Inspect scripts before execution and never hide database drops inside scripts to bypass the backup tool. Do not treat noteLearning or a successful second run on a partially seeded DB as a fix. ${PREVIEW_SOURCE_POLICY} Never disable migrations, suppress PendingModelChangesWarning, or mark unapplied migrations as applied; repair and validate the model/migration instead.
 - When a command genuinely fails (a real non-zero exit with an error), read the error and fix the ENVIRONMENT, then continue. Keep going until the app responds or it truly cannot run — do not give up after one failed attempt.
 - One command per \`run\` call. Never print secrets.`;
 }
@@ -2034,6 +2035,7 @@ async function driveSandbox(
         timeoutSec: z.number().optional().describe("How long to wait for THIS command before returning control (default 600, max 1800). For a big restore/build use ~1500. A timeout terminates the process before returning; do not launch duplicate work."),
       })),
       execute: async ({ command, timeoutSec }: { command: string; timeoutSec?: number }) => {
+        if (previewPublicationBlocked(command)) return {exitCode:1,output:"Preview repairs must never be checked in or pushed. Save the repair with persistConfigPatch instead."};
         if (/\bDROP\s+DATABASE\b|\bdropdb\b/i.test(command)) return {exitCode:1,output:"Direct database drops are blocked. Use resetDevelopmentDatabase so a verified original backup is saved first."};
         const state = await sh(workspaceId, `cd ${shellQuote(workDir)} && { git diff HEAD; sha256sum .env 2>/dev/null; } | sha256sum`, 15_000);
         const commandKey = command + state.output.trim();
@@ -2100,17 +2102,15 @@ async function driveSandbox(
       },
     }),
     persistConfigPatch: tool({
-      description: "Persist an edit to a CONFIG FILE so it SURVIVES a git branch switch, a fresh checkout, and a rebuild (like setEnv does for env vars, but for a tracked file that a checkout would otherwise reset). On isolated branches this also records minimal SOURCE repairs. Use this whenever you edit a file for the app to RUN in the sandbox: e.g. repoint a connection string in appsettings.json from a dead dev/prod host to the provisioned localhost DB, or a Serilog sink connection that the app reads from the file. Give the EXACT literal text to find + its replacement. It's applied NOW and auto-re-applied after every future checkout/branch-switch, so branches and rebuilds never rediscover it.",
+      description: "Persist an edit to a CONFIG FILE so it SURVIVES a git branch switch, a fresh checkout, and a rebuild (like setEnv does for env vars, but for a tracked file that a checkout would otherwise reset). This also records minimal SOURCE repairs on default and ticket previews; never commit these repairs. Use this whenever you edit a file for the app to RUN in the sandbox: e.g. repoint a connection string in appsettings.json from a dead dev/prod host to the provisioned localhost DB, or a Serilog sink connection that the app reads from the file. Give the EXACT literal text to find + its replacement. It's applied NOW and auto-re-applied after every future checkout/branch-switch, so branches and rebuilds never rediscover it.",
       inputSchema: zodSchema(z.object({
         file: z.string().describe("Path relative to the working dir, e.g. 'Cohire.Web/appsettings.json'."),
         find: z.string().describe("EXACT literal substring currently in the file to replace (copy it verbatim)."),
         replace: z.string().describe("The replacement text."),
         reason: z.string().optional(),
-        create: z.boolean().optional().describe("Create a new file, only on an isolated branch; find must be empty."),
+        create: z.boolean().optional().describe("Create a sandbox-only file; find must be empty."),
       })),
       execute: async ({ file, find, replace, reason, create }: { file: string; find: string; replace: string; reason?: string; create?: boolean }) => {
-        if (workDir === PROJECT_DIR && /\.(cs|cshtml|tsx?|jsx?|py|go|rs|java)$/i.test(file)) return "Source repairs require an isolated feature-branch checkout.";
-        if (create && workDir === PROJECT_DIR) return "Creating source files requires an isolated branch";
         const script = buildConfigPatchScript([{ file, find, replace, create }], workDir);
         if (script) { const r = await sh(workspaceId, script, 30_000); if (r.exitCode !== 0) return `Patch failed: ${failureSummary(r.output)}`; }
         const ok = await recordConfigPatch(projectId, { file, find, replace, note: reason, create }, profileBranch).catch(() => false);
@@ -2331,6 +2331,7 @@ export async function runPreviewChat(opts: {
         timeoutSec: z.number().optional().describe("Seconds to wait before returning control (default 600, max 1800)."),
       })),
       execute: async ({ command, timeoutSec }: { command: string; timeoutSec?: number }) => {
+        if (previewPublicationBlocked(command)) return {exitCode:1,output:"Preview repairs must never be checked in or pushed. Save the repair with persistConfigPatch instead."};
         opts.onActivity?.(); // proof-of-life for the caller's idle watchdog (each command = alive)
         const maxMs = Math.min(Math.max(timeoutSec ?? 600, 10), 1800) * 1000;
         plog(projectId, userId, `$ ${command}`);
@@ -2397,11 +2398,9 @@ export async function runPreviewChat(opts: {
       },
     }),
     persistConfigPatch: tool({
-      description: "Persist a CONFIG-FILE edit so it SURVIVES a git branch switch / fresh checkout / rebuild (like setEnv for env vars, but for a tracked file). Use whenever you must edit a config file (NOT app source) for the app to RUN — e.g. repoint an appsettings.json connection from a dead host to the provisioned localhost DB. Exact literal find + replace. Applied now AND re-applied after every future checkout, so branches inherit it.",
+      description: "Persist a CONFIG-FILE edit so it SURVIVES a git branch switch / fresh checkout / rebuild (like setEnv for env vars, but for a tracked file). Use whenever you must edit a config or source file for the app to RUN — e.g. repoint an appsettings.json connection from a dead host to the provisioned localhost DB. Exact literal find + replace. Applied now AND re-applied after every future checkout, so branches inherit it.",
       inputSchema: zodSchema(z.object({ file: z.string(), find: z.string(), replace: z.string(), reason: z.string().optional(), create: z.boolean().optional() })),
       execute: async ({ file, find, replace, reason, create }: { file: string; find: string; replace: string; reason?: string; create?: boolean }) => {
-        if (workDir === PROJECT_DIR && /\.(cs|cshtml|tsx?|jsx?|py|go|rs|java)$/i.test(file)) return "Source repairs require an isolated feature-branch checkout.";
-        if (create && workDir === PROJECT_DIR) return "Creating source files requires an isolated branch";
         const script = buildConfigPatchScript([{ file, find, replace, create }], workDir);
         if (script) { const applied = await sh(workspaceId, script, 30_000); if (applied.exitCode !== 0) return `Patch failed: ${failureSummary(applied.output)}`; }
         const ok = await recordConfigPatch(projectId, { file, find, replace, note: reason, create }, profileBranch).catch(() => false);
@@ -2443,11 +2442,7 @@ export async function runPreviewChat(opts: {
     : "";
   const system = `You are the LFG **Preview agent** for this project. You have FULL shell control of the project's LIVE Alpine sandbox (musl, apk, OpenRC/rc-service, busybox — Docker is available) via the \`run\` tool: one command per call, run detached + polled so long commands are fine. You are working in **${branchNote}** at ${workDir}; its .env is sourced before every command; the toolchain + /data caches are already on PATH.
 
-CODE CHANGES: ${canEditCode
-    ? (noCommit
-      ? `You ARE previewing a ticket's isolated feature branch (worktree at ${workDir}), so you MAY edit the app's SOURCE CODE here to fix the issue so the LIVE preview renders correctly. After editing: rebuild if it's a compiled stack (${manifest?.buildCmd || "the project's build command"}), restart the app (see below), and verify with curl. **DO NOT run git commit, git push, git merge, or git checkout of another branch** — this fix is for the live preview only; the user decides whether to persist it. In your reply, list exactly which files you changed so they can persist it if they want.`
-      : `You ARE previewing a ticket's isolated feature branch (worktree at ${workDir}), so you MAY edit the app's SOURCE CODE here to fulfil the request (e.g. fix a .cshtml/CSS/JS UI issue). After editing: rebuild if it's a compiled stack (${manifest?.buildCmd || "the project's build command"}), restart the app (see below), verify with curl, and then COMMIT so the change persists on the branch: \`cd ${workDir} && git add -A && git commit -m "preview: <what you changed>" && git push 2>&1 || true\`. Tell the user in your reply exactly which files you changed.`)
-    : `You are previewing the DEFAULT branch (${PROJECT_DIR}). Do NOT edit application SOURCE CODE here — code changes belong in a ticket/build, not on main. If the user asks for a code/UI change, say so in your reply and suggest they create/rebuild a ticket, or preview the ticket's branch (pick it in the branch selector) and ask again there.`}
+CODE CHANGES: ${PREVIEW_SOURCE_POLICY}
 
 ${manifest ? `${svcs.length > 1 ? "PRIMARY app" : "App"}: ${manifest.stack || `${manifest.runtime}/${manifest.framework}`}. Run command: \`${runCmd || "(unknown)"}\`. Port: ${port}. Databases: ${manifest.databases.length ? manifest.databases.map((d) => `${d.engine} (127.0.0.1, connection in .env as ${d.connectionEnvVar})`).join(", ") : "none"}.` : "This preview has not been fully set up yet — the app may not be running."}
 ${servicesBlock}
@@ -2469,10 +2464,10 @@ PERSIST YOUR FIXES (critical — otherwise they're lost and branches don't get t
 - When you fix something with an ENV var (a cert/CA path, ASPNETCORE_FORWARDEDHEADERS_ENABLED for a reverse-proxy/HTTPS asset issue, a base URL, a runtime flag), call \`setEnv\` — do NOT just \`echo >> .env\`. setEnv records it on the project so EVERY future setup AND every ticket branch inherits it. An echo-only fix works for this one live app and then vanishes.
 - When you find a plan command was wrong and confirm the right one, call \`updatePlan\`.
 - When you learn a FACT no field captures (a schema/ordering rule, a missing client like sqlcmd, a config gotcha), call \`noteLearning\` so the next run + branches see it.
-- When you EDIT A CONFIG FILE for the app to run (repoint an appsettings.json connection off a dead host, fix a Serilog sink connection), use \`persistConfigPatch\` — a bare edit is reset by a branch switch / checkout; persistConfigPatch re-applies it after every checkout so branches inherit it.
-- This is exactly how a fix you make on main automatically reaches the feature branches.
+- When you EDIT A SOURCE OR CONFIG FILE for the app to run (repoint an appsettings.json connection off a dead host, fix a Serilog sink connection), use \`persistConfigPatch\` — a bare edit is reset by a branch switch / checkout; persistConfigPatch re-applies it after every checkout so branches inherit it.
+- General rules are remembered via directives; literal patches stay branch-scoped and must be verified against each checkout.
 
-RULES: source-code edits follow the CODE CHANGES policy above (allowed only on a ticket branch). Installing tools/deps, editing ./.env and config is fine when asked. Verify with real commands — never claim success without checking. When finished, ALWAYS call \`reply\` with status (ok/error/stuck) + a short summary of what you found/did (and whether you persisted/committed it). Never print secrets.`;
+RULES: source-code edits follow the CODE CHANGES policy above (sandbox-only on default and ticket previews; never checked in). Installing tools/deps, editing ./.env and config is fine when asked. Verify with real commands — never claim success without checking. When finished, ALWAYS call \`reply\` with status (ok/error/stuck) + a short summary of what you found/did (and whether you persisted/committed it). Never print secrets.`;
 
   try {
     await generateText({ model: driver.model, tools, stopWhen: stepCountIs(40), system, prompt: agentPrompt, abortSignal, onStepFinish: () => opts.onActivity?.() });
