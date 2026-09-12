@@ -1,6 +1,6 @@
 import { shellQuote } from "./preview-plan.ts";
 import type { ConfigPatch } from "./app-profile.ts";
-export function buildConfigPatchScript(patches: ConfigPatch[] | undefined, dir: string): string {
+export function buildConfigPatchScript(patches: ConfigPatch[] | undefined, dir: string, dryRun = false): string {
   if (!patches || !patches.length) return "";
   const blob = Buffer.from(JSON.stringify(patches.map((p) => ({ file: p.file, find: p.find, replace: p.replace, create: p.create })))).toString("base64");
   return `python3 - ${shellQuote(dir)} ${shellQuote(blob)} <<'PYEOF'
@@ -27,9 +27,9 @@ for p in patches:
     elif p["replace"] and p["replace"] in s:
         print("Verified patch:", p["file"])
     else:
-        raise SystemExit("Config patch no longer matches: " + p["file"])
+        raise SystemExit("Stale config patch: exact original and replacement text are both absent: " + p["file"])
     contents[fp] = s
-for fp, s in contents.items():
+for fp, s in ([] if ${dryRun ? "True" : "False"} else contents.items()):
     os.makedirs(os.path.dirname(fp), exist_ok=True)
     with open(fp, "w", encoding="utf-8") as f:
         f.write(s)

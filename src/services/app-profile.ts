@@ -150,6 +150,7 @@ export const appProfileSchema = z.object({
   // Deployment edits to CONFIG files (not app source) that must be re-applied on
   // every checkout — e.g. repointing an appsettings.json connection from a dead
   // dev/prod host to the provisioned localhost DB. Auto-filled via persistConfigPatch.
+  recoveryBackups: z.array(z.object({id:z.string(),workspaceId:z.string(),database:z.string(),connectionKey:z.string().optional(),path:z.string(),createdAt:z.string(),reason:z.string()})).optional(),
   configPatches: z.array(z.object({
     file: z.string().describe("Path relative to the checkout, e.g. 'Cohire.Web/appsettings.json'."),
     find: z.string().describe("Exact literal text to replace."),

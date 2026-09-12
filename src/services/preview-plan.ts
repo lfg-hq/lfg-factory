@@ -31,12 +31,13 @@ export function orderedSchema(plan: { schemaSteps?: SchemaStep[]; migrations?: s
     ...(plan.seedCmd ? [{ kind: "seed" as const, command: plan.seedCmd, note: "" }] : []),
   ];
 }
-export function mergeKnowledge<T extends { learnings?: string[]; directives?: string[]; configPatches?: Array<{file:string;find:string}>; replayActions?: ReplayAction[]; environmentOverrides?: Array<{key:string;encryptedValue:string}> }>(next: T, previous?: T): T {
+export function mergeKnowledge<T extends { learnings?: string[]; directives?: string[]; recoveryBackups?: Array<{id:string}>; configPatches?: Array<{file:string;find:string}>; replayActions?: ReplayAction[]; environmentOverrides?: Array<{key:string;encryptedValue:string}> }>(next: T, previous?: T): T {
   if (!previous) return next;
   const keyed = <V>(a: V[], b: V[], key: (v: V) => string) => [...new Map([...a, ...b].map(v => [key(v), v])).values()];
   return { ...next,
     learnings: [...new Set([...(previous.learnings ?? []), ...(next.learnings ?? [])])],
     directives: [...new Set([...(previous.directives ?? []), ...(next.directives ?? [])])],
+    recoveryBackups: keyed(previous.recoveryBackups ?? [], next.recoveryBackups ?? [], p => p.id),
     configPatches: keyed(previous.configPatches ?? [], next.configPatches ?? [], p => `${p.file}\0${p.find}`),
     environmentOverrides: keyed(previous.environmentOverrides ?? [], next.environmentOverrides ?? [], p => p.key),
     replayActions: keyed(previous.replayActions ?? [], next.replayActions ?? [], p => p.id),

@@ -1,3 +1,5 @@
+import { replaceVerifiedPatches } from "./preview-patch-recovery.ts";
+import { databaseRecoveryScripts, backupThenReset } from "./preview-db-recovery.ts";
 import { compileRuntimePlan } from "./runtime-plan.ts";
 import { branchDatabaseScript } from "./preview-isolation.ts";
 import { assetCaseCheck, schemaStepSchema, replayActionSchema, orderedSchema, mergeKnowledge, failureSummary, failureKey, executeSteps, shellQuote, type PlanStep } from "./preview-plan.ts";
@@ -1404,7 +1406,7 @@ async function executeRunbook(
     steps.push(recovery); await persist();
     await sh(workspaceId, `fuser -k ${manifest.port}/tcp 2>/dev/null || true`, 20_000);
     const outcome = await driveSandbox(projectId, userId, workspaceId, manifest, engines, model, dir,
-      [...configNotes, `FAILED STEP ${failedStep.id}: ${failedStep.error}. Repair and PERSIST the recipe. The executor will replay it; merely starting a process is not sufficient.`]);
+      [...configNotes, `FAILED STEP ${failedStep.id}: ${failedStep.error}. For stale patches, FIRST inspectSavedPatches and replaceSavedPatches; do not start unrelated database work before reconciling configuration. For SQL failures fix the script order/identity handling and persist executable repairs, not just a note to rerun. Use resetDevelopmentDatabase when clean replay is needed; never drop a database without a verified backup. Repair and PERSIST the recipe. The executor will replay it; merely starting a process is not sufficient.`]);
     throwIfCancelled(projectId);
     recovery.status = outcome ? "done" : "failed"; recovery.finishedAt = new Date().toISOString();
     await persist();
@@ -1430,6 +1432,18 @@ async function executeRunbook(
       const rewrite = branch === "default" ? buildAppsettingsRewriteScript(engines, cleanDir) : "";
       if (rewrite) { const r = await sh(workspaceId, rewrite, 60_000); if (r.exitCode !== 0) throw new Error("Clean checkout configuration failed"); }
 
+      // A repair that needed reset must qualify against an empty database again;
+      // a successful warm run cannot prove that the saved schema recipe is complete.
+      const previousBackupIds = new Set((loaded?.profile.recoveryBackups ?? []).map(b=>b.id));
+      for (const backup of current?.profile.recoveryBackups ?? []) {
+        if(previousBackupIds.has(backup.id) || backup.workspaceId!==workspaceId) continue;
+        const engine=engines.find(e=>e.engine==="mssql");
+        if(!engine || !backup.connectionKey) throw new Error("Cannot qualify repaired database from its recorded backup");
+        const scripts=databaseRecoveryScripts({engine,database:backup.database,connectionKey:backup.connectionKey,dir:cleanDir,backupId:backup.id});
+        plog(projectId,userId,`Verifying repaired schema from an empty database; original backup retained at ${backup.path}`);
+        const reset=await runDetachedPolled(projectId,userId,workspaceId,scripts.reset,180_000,{stallMs:0,workDir:cleanDir});
+        if(reset.exitCode!==0 || !/^DATABASE_RESET$/m.test(reset.output)) throw new Error("Clean database qualification reset failed; verified backup retained");
+      }
       executionDir = cleanDir;
       const cleanSteps = buildRunbook(manifest, engines, cleanDir);
       const previousSteps = steps;
@@ -1846,7 +1860,7 @@ RUNNING COMMANDS — IMPORTANT:
   This avoids the wasteful "run → vague failure → re-run to see the error" cycle.
 
 RULES:
-- Source repairs are allowed ONLY in an isolated feature-branch worktree (not /data/project). Keep them minimal and persist each literal edit with persistConfigPatch in that branch profile so checkout replay reproduces it. Never commit/push/merge automatically. On the default checkout, finish failed with the exact source blocker. Never disable migrations, suppress PendingModelChangesWarning, or mark unapplied migrations as applied; repair and validate the model/migration instead.
+- SQL schema/seed scripts may be repaired as saved preview patches on the default checkout too; inspect dependencies and identity handling, preserve the original schema using resetDevelopmentDatabase before a destructive reset, and persist executable fixes via persistConfigPatch plus ordered schemaSteps. Inspect scripts before execution and never hide database drops inside scripts to bypass the backup tool. Do not treat noteLearning or a successful second run on a partially seeded DB as a fix. Other source repairs are allowed ONLY in an isolated feature-branch worktree (not /data/project). Keep them minimal and persist each literal edit with persistConfigPatch in that branch profile so checkout replay reproduces it. Never commit/push/merge automatically. On the default checkout, finish failed with the exact non-SQL source blocker. Never disable migrations, suppress PendingModelChangesWarning, or mark unapplied migrations as applied; repair and validate the model/migration instead.
 - When a command genuinely fails (a real non-zero exit with an error), read the error and fix the ENVIRONMENT, then continue. Keep going until the app responds or it truly cannot run — do not give up after one failed attempt.
 - One command per \`run\` call. Never print secrets.`;
 }
@@ -1938,7 +1952,81 @@ async function driveSandbox(
   const directives = (await loadAppProfile(projectId, profileBranch).catch(() => null))?.profile.directives ?? [];
 
   const failedCommands = new Set<string>();
+  const resets = new Set<string>();
+  const reconcilePatches = async (patches: NonNullable<AppProfile["configPatches"]>, reason: string) => {
+    const check = async (target: string) => {
+      const script = buildConfigPatchScript(patches, target, true);
+      if (!script) return;
+      const result = await sh(workspaceId, script, 60_000);
+      if (result.exitCode !== 0) throw new Error(failureSummary(result.output));
+    };
+    await replaceVerifiedPatches(patches, {
+      verifyClean: async () => {
+        const clean = `/data/patch-check-${crypto.randomUUID()}`;
+        try {
+          const created = await sh(workspaceId, `git -C ${shellQuote(workDir)} worktree add --detach ${shellQuote(clean)} HEAD`, 60_000);
+          if (created.exitCode !== 0) throw new Error("Cannot create patch verification checkout");
+          const rewrite = profileBranch === "default" ? buildAppsettingsRewriteScript(engines, clean) : "";
+          if (rewrite) {
+            const result = await sh(workspaceId, rewrite, 60_000);
+            if (result.exitCode !== 0) throw new Error("Cannot prepare clean configuration");
+          }
+          await check(clean);
+        } finally {
+          await sh(workspaceId, `git -C ${shellQuote(workDir)} worktree remove --force ${shellQuote(clean)}`, 30_000).catch(() => {});
+        }
+      },
+      verifyCurrent: async () => check(workDir),
+      save: async () => {
+        const loaded = await loadAppProfile(projectId, profileBranch);
+        if (!loaded) throw new Error("Profile disappeared during patch repair");
+        loaded.profile.configPatches = patches;
+        delete loaded.profile.blockedFailure; delete loaded.profile.verifiedRevision;
+        await saveAppProfile(projectId, loaded.profile, profileBranch);
+        await applySavedPatches(projectId, userId, workspaceId, loaded.profile, workDir);
+      },
+    });
+    plog(projectId, userId, "Replaced stale patch recipe; current and clean checkouts verified", {detail:reason});
+    return "Replacement saved. Full clean replay must still pass before preview is ready.";
+  };
   const tools = {
+    inspectSavedPatches: tool({
+      description: "Read this branch's saved patch list before repairing a stale patch. Compare it with the actual file; do not append a replacement behind an obsolete patch.",
+      inputSchema: zodSchema(z.object({})),
+      execute: async () => (await loadAppProfile(projectId, profileBranch))?.profile.configPatches ?? [],
+    }),
+    replaceSavedPatches: tool({
+      description: "Replace the FULL saved patch list after inspecting the current file and clean baseline. Preserve unrelated valid patches, retire obsolete ones with a reason, and consolidate to one patch per file. Include unchanged context for deletions. Both current and clean checkouts must verify before saving. An empty list explicitly retires all patches; full app validation still follows.",
+      inputSchema: zodSchema(z.object({patches:appProfileSchema.shape.configPatches.unwrap(),reason:z.string().min(1)})),
+      execute: async ({patches,reason}) => { try { return await reconcilePatches(patches,reason); } catch(e) { return `Patch replacement rejected: ${(e as Error).message}`; } },
+    }),
+    resetDevelopmentDatabase: tool({
+      description: "Back up and reset one managed local SQL Server development database when schema repair needs a clean replay. Specify its active .env connection key and exact database. Saves full schema+data backup plus original tracked source, verifies backup, persists location, then resets. External connections and system databases are refused. At most once per database per recovery. Afterward fix and persist SQL scripts/ordered schemaSteps, then replay the entire schema; do not mark success on a partially repaired database.",
+      inputSchema:zodSchema(z.object({database:z.string(),connectionKey:z.string(),reason:z.string().min(1)})),
+      execute: async ({database,connectionKey,reason}) => {
+        if(resets.has(database)) return "Database reset already attempted in this recovery; stop repeating it and repair the recipe.";
+        const engine = engines.find(e=>e.engine==="mssql");
+        if(!engine) return "No managed SQL Server engine available; automatic reset refused.";
+        try {
+          const id=crypto.randomUUID();
+          const scripts=databaseRecoveryScripts({engine,database,connectionKey,dir:workDir,backupId:id});
+          resets.add(database);
+          await backupThenReset({
+            backup:()=>runDetachedPolled(projectId,userId,workspaceId,scripts.backup,600_000,{stallMs:0,workDir}),
+            record:async()=>{
+              throwIfCancelled(projectId);
+              const loaded=await loadAppProfile(projectId,profileBranch);
+              if(!loaded) throw new Error("Cannot save backup location; reset blocked");
+              loaded.profile.recoveryBackups=[...(loaded.profile.recoveryBackups??[]),{id,workspaceId,database,connectionKey,path:scripts.path,createdAt:new Date().toISOString(),reason}];
+              await saveAppProfile(projectId,loaded.profile,profileBranch);
+              plog(projectId,userId,`Verified original schema and data backup: ${scripts.path}`,{detail:reason});
+            },
+            reset:async()=>{throwIfCancelled(projectId);return runDetachedPolled(projectId,userId,workspaceId,scripts.reset,180_000,{stallMs:0,workDir});},
+          });
+          return `Database reset. Original schema+data: ${scripts.path}/database.bak; source: ${scripts.path}/source.tar. Fix and persist the schema recipe, then replay it from the beginning.`;
+        } catch(e) { return `Database recovery blocked: ${(e as Error).message}`; }
+      },
+    }),
     run: tool({
       description: "Run one shell command in the Alpine sandbox (bash). The toolchain PATH, /data caches, and the project's .env are already set up. The command runs to completion no matter how long it takes (build/restore are fine) — we run it detached and poll, so you don't need to background it yourself. Returns exit code + combined stdout/stderr (last 6KB). exitCode -2 = terminated at the deadline; diagnose before retrying. exitCode -4 = we KILLED it because it produced no output for ~4 min (stuck, e.g. a hung network/TLS op) — do NOT re-run the same command, change the approach.",
       inputSchema: zodSchema(z.object({
@@ -1946,6 +2034,7 @@ async function driveSandbox(
         timeoutSec: z.number().optional().describe("How long to wait for THIS command before returning control (default 600, max 1800). For a big restore/build use ~1500. A timeout terminates the process before returning; do not launch duplicate work."),
       })),
       execute: async ({ command, timeoutSec }: { command: string; timeoutSec?: number }) => {
+        if (/\bDROP\s+DATABASE\b|\bdropdb\b/i.test(command)) return {exitCode:1,output:"Direct database drops are blocked. Use resetDevelopmentDatabase so a verified original backup is saved first."};
         const state = await sh(workspaceId, `cd ${shellQuote(workDir)} && { git diff HEAD; sha256sum .env 2>/dev/null; } | sha256sum`, 15_000);
         const commandKey = command + state.output.trim();
         if (failedCommands.has(commandKey)) return { exitCode: 1, output: "This exact command already failed with the same source/environment. Change the repair before retrying; no duplicate command was started." };
@@ -1972,7 +2061,7 @@ async function driveSandbox(
       execute: async ({ field, value, reason }: { field: string; value: string; reason: string }) => {
         if (field === "toolchain") manifest.toolchain = value.split("\n").map((s) => s.trim()).filter(Boolean);
         else if (field === "port") { const p = parseInt(value, 10); if (p > 0) manifest.port = p; }
-        else if (field === "configPatches") { appProfileSchema.shape.configPatches.parse(JSON.parse(value)); }
+        else if (field === "configPatches") { return await reconcilePatches(appProfileSchema.shape.configPatches.parse(JSON.parse(value)) ?? [], reason); }
         else if (field === "schemaSteps") manifest.schemaSteps = z.array(schemaStepSchema).parse(JSON.parse(value));
         else if (field === "replayActions") manifest.replayActions = z.array(replayActionSchema).parse(JSON.parse(value));
         else if (field === "verificationPaths") manifest.verificationPaths = z.array(z.string().regex(/^\/(?!\/)/)).parse(JSON.parse(value));
@@ -2093,7 +2182,7 @@ async function driveSandbox(
       tools,
       stopWhen: stepCountIs(40), // generous step budget — schema-heavy apps (30+ scripts) need room to repair AND start
       system: buildDriverSystemPrompt(manifest, engines, workDir, configNotes, directives),
-      prompt: `Profile scope: ${profileBranch}. schemaSteps/replayActions/verificationPaths corrections must be JSON arrays. Persist every repair; do not use unrecorded shell workarounds. Bring the app up and verify it serves on 0.0.0.0:${port} (working dir: ${workDir}). Begin.`,
+      prompt: `Profile scope: ${profileBranch}. schemaSteps/replayActions/verificationPaths corrections must be JSON arrays. Persist every repair; do not use unrecorded shell workarounds. Database drops must use resetDevelopmentDatabase so the original schema and data are backed up first. Repair schema script ordering and identity inserts at their source using saved patches; never rely on rerunning a partially failed script until it works. Never commit or push to main from preview recovery. Bring the app up and verify it serves on 0.0.0.0:${port} (working dir: ${workDir}). Begin.`,
       abortSignal: ac.signal,
     });
   } catch (e) {
