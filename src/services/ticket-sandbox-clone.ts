@@ -14,9 +14,15 @@ export async function createTicketSandbox(options: {
   if (process.env.SANDBOX_BACKEND === 'docker') return options.fresh();
   const [pending] = await db.select().from(sandboxes).where(and(
     eq(sandboxes.ticketId, options.ticketId), eq(sandboxes.workspaceType, 'ticket-clone'),
-    inArray(sandboxes.status, ['cloning','submitting']),
+    inArray(sandboxes.status, ['cloning','submitting','unconfirmed']),
   )).orderBy(desc(sandboxes.updatedAt)).limit(1);
   let intent = pending;
+  const recoverUnconfirmed = async () => {
+    await db.update(sandboxes).set({status:'unconfirmed',updatedAt:new Date()}).where(eq(sandboxes.id,intent!.id));
+    await options.log(`Clone intent ${intent!.id} is unconfirmed and retained for reconciliation. No clone will be resubmitted. Creating a fresh sandbox from Git; SDK setup may be required.`);
+    return options.fresh();
+  };
+  if (intent && !intent.magsJobId) return recoverUnconfirmed();
   if (!intent) {
     const [source] = await db.select().from(projectEnvironments).where(eq(projectEnvironments.projectId, options.projectId));
     if (!source?.workspaceId || !source.setupComplete || source.previewStatus === 'error') {
@@ -36,7 +42,8 @@ export async function createTicketSandbox(options: {
         await options.log('Preview cannot be cloned right now; creating a fresh build sandbox.');
         return options.fresh();
       }
-      throw error;
+      await options.log(`Clone submission could not be confirmed: ${(error as Error).message}`);
+      return recoverUnconfirmed();
     }
     await db.update(sandboxes).set({status:'cloning',magsJobId:requestId}).where(eq(sandboxes.id,intent.id));
     intent = {...intent,status:'cloning',magsJobId:requestId};

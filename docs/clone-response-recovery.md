@@ -17,3 +17,18 @@ redaction, successful acceptance, single POST behavior and pending clone resumpt
 This fixes LFG diagnostics and status delivery; it does not establish or repair the
 upstream cause of the previously received non-JSON response. No live clone was
 submitted during local verification.
+
+## Unconfirmed submission fallback
+
+Unconfirmed clone intents no longer prevent ticket execution. They are retained as
+`unconfirmed` for later operator reconciliation; subsequent attempts do not submit
+another clone. Instead, LFG creates a fresh build sandbox and restores source from
+Git through the normal SDK preparation path. Accepted requests with known IDs
+continue to resume by polling. A lost-response clone may still exist at Magpie:
+this fallback neither claims it was absent nor deletes an unidentified VM. Its
+possible resource usage still requires reconciliation. A failed fresh allocation
+preserves the intent and does not cause another clone POST on retry.
+
+The ticket chat's existing twelve-second log polling fallback now also fetches
+authoritative ticket state, allowing its build button to recover from missed
+WebSocket status events. No production records were modified locally.

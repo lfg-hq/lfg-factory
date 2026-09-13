@@ -691,7 +691,18 @@
       loadLog(); // authoritative refresh (folds tool output into its row)
     }
   }
-  function startPoll() { stopPoll(); timer = setInterval(loadLog, 12000); } // WS is primary; this is a backstop
+  async function refreshTicketState() {
+    const id = ticketId;
+    if (!id) return;
+    try {
+      const r = await fetch(`/api/projects/${PID()}/tickets/${id}`, { credentials: "same-origin" });
+      const d = r.ok ? await r.json() : null;
+      if (!d || !d.ticket || ticketId !== id) return;
+      curMeta = Object.assign({}, curMeta, d.ticket);
+      setBuildUI();
+    } catch (_) {}
+  }
+  function startPoll() { stopPoll(); timer = setInterval(() => { loadLog(); refreshTicketState(); }, 12000); } // WS is primary; this is a backstop
   function stopPoll() { if (timer) { clearInterval(timer); timer = null; } }
 
   window.TicketAgentChat = { open, close, send, onWs, isOpen, attachScreenshot, stop: stopTicket };
