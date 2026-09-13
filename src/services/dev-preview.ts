@@ -1,3 +1,4 @@
+import { PreviewRecoveryBudget } from "./preview-recovery-budget.ts";
 import { executeSandboxScript } from "./sandbox-script.ts";
 import { targetedSqlCommand } from "./preview-sql-target.ts";
 import { PREVIEW_SOURCE_POLICY, previewPublicationBlocked } from "./preview-source-policy.ts";
@@ -1342,7 +1343,7 @@ async function executeRunbook(
   // Include plan content so a corrected command/config invalidates a previous blocker.
   const envHash = await sh(workspaceId, `sha256sum ${shellQuote(dir + "/.env")} | cut -d ' ' -f1`, 15_000);
   // Invalidate blockers recorded before consolidated patch recovery was available.
-  const identity = "sql-target-v1:" + revision + envHash.output.trim() + JSON.stringify([manifest, loaded?.profile.configPatches, loaded?.profile.environmentOverrides]);
+  const identity = "replay-feedback-v1:" + revision + envHash.output.trim() + JSON.stringify([manifest, loaded?.profile.configPatches, loaded?.profile.environmentOverrides]);
   let executionDir = dir;
   let steps: RunStep[] = [...prelude, ...buildRunbook(manifest, engines, dir)];
   const persist = () => persistSteps(projectId, userId, steps);
@@ -1388,9 +1389,13 @@ async function executeRunbook(
     }
     return r;
   };
-  // Recovery is allowed once; success must survive an entire deterministic replay.
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const failedStep = await executeSteps(steps, { run, persist, cancelled: () => isCancelled(projectId) });
+  // Every failure, including qualification, returns through the same recovery gate.
+  const budget = new PreviewRecoveryBudget(3);
+  let pendingFailure: RunStep | null = null;
+  for (;;) {
+    throwIfCancelled(projectId);
+    const failedStep = pendingFailure ?? await executeSteps(steps, { run, persist, cancelled: () => isCancelled(projectId) });
+    pendingFailure = null;
     if (!failedStep) {
       const current = await loadAppProfile(projectId, branch);
       if (current) {
@@ -1400,21 +1405,25 @@ async function executeRunbook(
       }
       return { up: true, steps };
     }
-    const key = failureKey(identity, failedStep, failedStep.error ?? "");
-    if (attempt || !model || loaded?.profile.blockedFailure?.key === key) {
-      const detail = `${failedStep.label}: ${failedStep.error}`;
+    const latest = await loadAppProfile(projectId, branch);
+    const recipeIdentity = JSON.stringify([manifest, latest?.profile.configPatches, latest?.profile.environmentOverrides]);
+    const normalizedFailure = {...failedStep, command: failedStep.command.replace(/\/data\/preview-check-[a-f0-9-]+/g, dir)};
+    const key = failureKey(identity + recipeIdentity, normalizedFailure, (failedStep.error ?? "").replace(/\/data\/preview-check-[a-f0-9-]+/g, dir));
+    const stopReason = budget.next(key);
+    if (stopReason || !model || loaded?.profile.blockedFailure?.key === key) {
+      const detail = `${failedStep.error || failedStep.label}\n${stopReason || (!model ? "No recovery model is available." : "This unchanged failure was already investigated.")}`;
       const current = await loadAppProfile(projectId, branch);
       if (current) {
         current.profile.blockedFailure = { revision, key, detail };
         await saveAppProfile(projectId, current.profile, branch);
       }
-      return { up: false, steps, error: detail + (loaded?.profile.blockedFailure?.key === key ? "\nThis failure was already investigated for this revision and plan. Fix the branch or update/re-probe its profile before retrying recovery." : "") };
+      return { up: false, steps, error: detail };
     }
     const recovery: RunStep = { id: "recovery", phase: "recovery", label: `Repair ${failedStep.label}`, command: "", status: "running", startedAt: new Date().toISOString() };
     steps.push(recovery); await persist();
     await sh(workspaceId, `fuser -k ${manifest.port}/tcp 2>/dev/null || true`, 20_000);
     const outcome = await driveSandbox(projectId, userId, workspaceId, manifest, engines, model, dir,
-      [...configNotes, `FAILED STEP ${failedStep.id}: ${failedStep.error}. For SQL_TARGET_REQUIRED, FIRST persist schemaSteps with connectionKey on every raw SQL file, preserving migrations before dependent scripts and their verify assertions. Do not run ad-hoc migrations until the mapping is saved. For stale patches, FIRST inspectSavedPatches and replaceSavedPatches; do not start unrelated database work before reconciling configuration. For SQL failures fix the script order/identity handling and persist executable repairs, not just a note to rerun. Use resetDevelopmentDatabase when clean replay is needed; never drop a database without a verified backup. Repair and PERSIST the recipe. The executor will replay it; merely starting a process is not sufficient.`]);
+      [...configNotes, `FAILED STEP ${failedStep.id} (${failedStep.phase}): ${failedStep.error}. Failed command: ${failedStep.command}. If this came from clean replay, the working sandbox was insufficient: repair the persisted recipe or source patches that the fresh checkout needs. The failed scratch checkout has been removed; reproduce in this selected checkout and save the fix. Do not merely restart the server or claim ready without persisting the missing work. For SQL_TARGET_REQUIRED, FIRST persist schemaSteps with connectionKey on every raw SQL file, preserving migrations before dependent scripts and their verify assertions. Do not run ad-hoc migrations until the mapping is saved. For stale patches, FIRST inspectSavedPatches and replaceSavedPatches; do not start unrelated database work before reconciling configuration. For SQL failures fix the script order/identity handling and persist executable repairs, not just a note to rerun. Use resetDevelopmentDatabase when clean replay is needed; never drop a database without a verified backup. Repair and PERSIST the recipe. The executor will replay it; merely starting a process is not sufficient.`]);
     throwIfCancelled(projectId);
     recovery.status = outcome ? "done" : "failed"; recovery.finishedAt = new Date().toISOString();
     await persist();
@@ -1430,7 +1439,9 @@ async function executeRunbook(
       recovery.status = "failed";
       recovery.error = `Saved repair normalization failed: ${(error as Error).message}`;
       await persist();
-      return { up: false, steps, error: recovery.error };
+      pendingFailure = {id:"repair-normalization", phase:"install", command:"normalize saved repairs", label:"Normalize saved repairs", status:"failed", error:recovery.error};
+      plog(projectId,userId,"Saved repair verification failed — returning the error to recovery",{detail:recovery.error});
+      continue;
     }
     const current = await loadAppProfile(projectId, branch);
     if (current) {
@@ -1442,6 +1453,7 @@ async function executeRunbook(
     const cleanDir = `/data/preview-check-${crypto.randomUUID()}`;
     const clean: RunStep = { id: "clean-replay", phase: "recovery", label: "Verify saved repairs from a clean checkout", command: "", status: "running" };
     steps.push(clean); await persist();
+    let replayFailure: RunStep | null = null;
     try {
       const created = await sh(workspaceId, `git -C ${shellQuote(dir)} worktree add --detach ${shellQuote(cleanDir)} HEAD && cp ${shellQuote(dir + "/.env")} ${shellQuote(cleanDir + "/.env")}`, 60_000);
       if (created.exitCode !== 0) throw new Error(failureSummary(created.output));
@@ -1465,14 +1477,15 @@ async function executeRunbook(
       const previousSteps = steps;
       steps = [...prelude, recovery, clean, ...cleanSteps];
       const invalid = await executeSteps(cleanSteps, { run, persist, cancelled: () => isCancelled(projectId) });
-      if (invalid) throw new Error(`Saved repair did not replay: ${invalid.label}: ${invalid.error}`);
+      if (invalid) { replayFailure = {...invalid}; throw new Error(invalid.error || `Failed replay step: ${invalid.id}`); }
       steps = previousSteps;
       clean.status = "done";
     } catch (error) {
       if ((error as Error).message === "__CANCELLED__") throw error;
       clean.status = "failed"; clean.error = failureSummary((error as Error).message); await persist();
-      if (current) { current.profile.blockedFailure = { revision, key, detail: clean.error }; await saveAppProfile(projectId, current.profile, branch); }
-      return { up: false, steps, error: clean.error };
+      pendingFailure = replayFailure ?? {id:"clean-checkout",phase:"install",command:"prepare clean replay",label:"Prepare clean replay",status:"failed",error:clean.error};
+      plog(projectId,userId,"Clean replay failed — returning the failed step and error to recovery",{detail:clean.error});
+      continue;
     } finally {
       executionDir = dir;
       // Stop only the scratch app, then remove only our generated checkout.
@@ -1481,7 +1494,6 @@ async function executeRunbook(
     plog(projectId, userId, "Clean replay passed — restarting from the saved plan in the selected checkout.");
     steps = [...prelude, recovery, clean, ...buildRunbook(manifest, engines, dir)];
   }
-  return { up: false, steps, error: "Replay failed" };
 }
 const driverFailures = new Map<string, string>();
 

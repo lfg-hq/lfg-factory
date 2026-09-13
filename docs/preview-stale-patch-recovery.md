@@ -112,3 +112,21 @@ script rather than process arguments, removing the second argument-length limit.
 Local regression coverage includes normalization and repeated replay of a 400 KB
 file with an 800 KB before/after patch, checks every exec argument stays below
 25 KB, and verifies failed-transfer cleanup. No live sandbox deployment was made.
+
+## Recovery feedback from clean replay
+
+Initial execution, saved-patch normalization, clean qualification and final selected
+checkout replay now share one budget of three agent repair attempts. Clean failures
+are carried directly into the next recovery pass; a warm run cannot bypass failed
+qualification. The agent receives the failed step, actual error and command and
+must persist the missing repair. Scratch checkouts are still cleaned up on failure,
+success and cancellation. The selected checkout is the agent's repair workspace.
+
+Repeated failures with the same command, error and saved recipe stop early.
+Changed recipes may retry within the remaining budget. Scratch UUID paths are
+normalized for comparison. The UI retains the failing step and logs the handoff;
+terminal errors lead with the exception rather than a long migration command.
+Driver-declared failure remains terminal. This is bounded recovery, not a promise
+that every application migration can be fixed. Successful repair must still pass
+clean qualification and the final selected-checkout replay. No Git publication or
+live database operation was performed by these local tests.
