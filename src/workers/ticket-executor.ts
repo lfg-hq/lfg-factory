@@ -809,7 +809,7 @@ ${refBlock}${runBlock}${args.addenda ?? ""}${args.directives ?? ""}
 - **Trust the ticket + PRD as the source of truth for facts.** For DOCUMENTATION / marketing / copy / content tickets especially: the ticket already states which features exist, their limits, prices, etc. — do NOT audit the whole codebase to re-verify every claim (that wastes most of the run). At most do a couple of TARGETED checks only where the ticket is ambiguous or self-contradictory. Spend your effort writing/implementing, not exhaustively grepping to confirm things the ticket already told you.
 - Implement the ticket end to end so every acceptance criterion is met.${args.addenda ? "\n- If Addenda are listed above, they are the PRIMARY task this run — address every one, building on what was already done." : ""}${args.directives ? "\n- The MANDATORY DIRECTIVES above are non-negotiable — verify your change satisfies every one before finishing." : ""}
 - Make the app runnable: bind the dev server to 0.0.0.0 on port ${port}.
-- Do NOT run 'git commit', 'git push', or switch git branches — commit/push/merge is handled automatically after you finish.
+- Before running application code, builds, or tests, commit the ticket implementation locally with a descriptive checkpoint message. Commit subsequent fixes as separate checkpoints before rerunning. Never amend or squash these checkpoints. Never commit preview-only repairs, credentials, or generated files. Do NOT push or switch branches; publication is handled by the server after validation.
 - Before finishing, make sure the project builds/compiles.
 ${CONTRACT_INSTRUCTION}`;
 }
@@ -2545,7 +2545,7 @@ ${TICKET_CHAT_MODE_CONTRACT}
 ## Working rules
 - The repo is already cloned and set up at /data/${projectDirName}; explore it and reuse existing patterns.
 - Honor the acceptance criteria, notes, and MANDATORY DIRECTIVES above; do NOT regress work already done.
-- Do NOT run 'git commit', 'git push', or switch branches — commit/push is handled automatically.
+- Before running application code, builds, or tests, commit implementation changes locally. Record validation fixes in separate commits before rerunning; never amend or squash. Exclude preview-only repairs, secrets and generated files. Do NOT push or switch branches; the server handles validated publication.
 - In change mode: keep the change focused, and make sure the project still builds/compiles.`;
     try {
       const webhookReachable = !!cliApiKey && !/localhost|127\.0\.0\.1|\/\/0\.0\.0\.0/.test(CALLBACK_BASE_URL);

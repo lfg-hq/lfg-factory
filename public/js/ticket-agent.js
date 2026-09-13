@@ -397,6 +397,7 @@
 
   function open(id, key, name, meta, opts) {
     opts = opts || {};
+    if (ticketId !== id) currentLogRows = [];
     ticketId = id;
     curMeta = meta || null;
     curKey = key || "";
@@ -481,21 +482,50 @@
 
   async function loadLog() {
     if (!ticketId) return;
+    const requestedTicket = ticketId;
     try {
       const r = await fetch(`/api/projects/${PID()}/tickets/${ticketId}/logs`, { credentials: "same-origin" });
       if (!r.ok) return;
       const rows = await r.json();
-      if (Array.isArray(rows)) { renderAll(rows); applyAutoTab(rows.length); }
+      if (ticketId === requestedTicket && Array.isArray(rows)) { renderAll(rows); applyAutoTab(rows.length); }
     } catch (_) { /* keep last render — a later poll retries the auto-tab */ }
+  }
+
+  // Stable job identities fold polling snapshots without hiding distinct commands/retries.
+  let currentLogRows = [];
+  function groupOperations(rows) {
+    const result = [], jobs = new Map();
+    for (const row of rows) {
+      const match = String(row.message || "").match(/^Background job ([a-zA-Z0-9-]+) (.*)/s);
+      if (!match || (row.type && row.type !== "command")) {
+        if (["ai_response", "cli_error", "user_message"].includes(row.type)) {
+          for (const job of jobs.values()) if (job.jobStatus && job.jobStatus.startsWith("Running")) job.jobStatus = "Completion not recorded";
+          jobs.clear();
+        }
+        result.push(row); continue;
+      }
+      let job = jobs.get(match[1]);
+      if (!job) {
+        job = Object.assign({}, row, { id: "job-" + match[1], message: "Background operation", output: "", job: true });
+        jobs.set(match[1], job); result.push(job);
+      }
+      if (match[2].startsWith("started; command: ")) job.message = match[2].slice(18).split("; logs:")[0];
+      job.output = match[2];
+      job.jobStatus = match[2].startsWith("finished") ? (match[2].includes("exit 0,") ? "Completed" : "Failed") : "Running · waiting for completion";
+    }
+    return result;
   }
 
   function renderAll(rows) {
     const area = $("ta-log");
     if (!area) return;
+    currentLogRows = rows;
+    const expanded = new Set(Array.from(area.querySelectorAll(".ta-cmd-body")).filter(el => el.style.display !== "none").map(el => el.id));
     const atBottom = area.scrollHeight - area.scrollTop - area.clientHeight < 100;
     area.innerHTML = rows.length
-      ? rows.map(renderRow).join("")
+      ? groupOperations(rows).map(renderRow).join("")
       : '<div data-empty style="opacity:.55;padding:28px 20px;text-align:center;line-height:1.6;">No activity yet.<br>Send a message below to ask the agent to change this ticket.</div>';
+    for (const id of expanded) { const body = document.getElementById(id); if (body) body.style.display = "block"; }
     if (atBottom) area.scrollTop = area.scrollHeight;
   }
 
@@ -523,11 +553,12 @@
     const hasOut = out.length > 0;
     const bodyText = hasOut ? out : msg;
     const isAction = hasOut || msg.charAt(0) === "$" || msg.charCodeAt(0) > 255 || ACTION_RE.test(msg);
-    const id = "tarow-" + (++rowSeq);
+    const id = "tarow-" + String(row.id || (++rowSeq)).replace(/[^a-zA-Z0-9_-]/g, "_");
+    const status = row.jobStatus || (row.exitCode != null ? (row.exitCode === 0 ? "Completed" : "Failed") : hasOut ? "Result received" : "Activity");
     const label = esc(msg.length > 160 ? msg.slice(0, 160) + "…" : msg) || "(no output)";
     return `<div class="ta-cmdrow${isAction ? "" : " ta-outrow"}">
-      <div class="ta-cmd-header" data-ta-toggle="${id}"><i class="fas fa-chevron-right ta-chev"></i><i class="fas ${isAction ? "fa-terminal" : "fa-angle-right"}" style="opacity:.55;font-size:11px;"></i><span class="ta-cmd-text">${label}</span></div>
-      <div id="${id}" class="ta-cmd-body" style="display:none;">${esc(bodyText)}</div>
+      <div class="ta-cmd-header" data-ta-toggle="${id}"><i class="fas fa-chevron-right ta-chev"></i><i class="fas ${isAction ? "fa-terminal" : "fa-angle-right"}" style="opacity:.55;font-size:11px;"></i><span class="ta-cmd-text">${label}</span><small style="margin-left:auto;white-space:nowrap;opacity:.7">${esc(status)}</small></div>
+      <div id="${id}" class="ta-cmd-body" style="display:none;">${hasOut ? "<strong>Command</strong>\n" + esc(msg) + "\n\n<strong>Result / latest output</strong>\n" : ""}${esc(bodyText)}</div>
     </div>`;
   }
 
@@ -671,7 +702,9 @@
       const th = $("ta-thinking"); if (th) th.remove();
       const empty = area.querySelector("[data-empty]"); if (empty) area.innerHTML = "";
       const atBottom = area.scrollHeight - area.scrollTop - area.clientHeight < 120;
-      area.insertAdjacentHTML("beforeend", renderRow(msg.log));
+      const existing = currentLogRows.findIndex(row => row.id && row.id === msg.log.id);
+      if (existing >= 0) currentLogRows[existing] = msg.log; else currentLogRows.push(msg.log);
+      renderAll(currentLogRows);
       if (atBottom) area.scrollTop = area.scrollHeight;
       // Terminal row for a chat turn → the agent is done, hide Stop. A `question` ends
       // the turn too: the agent handed the conversation back and is waiting on you.

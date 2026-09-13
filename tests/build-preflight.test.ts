@@ -53,7 +53,8 @@ describe("build preflight",()=>{
   test("SDK installation failure blocks without claiming runtime ready",async()=>{
     executed=[];sdkExit=127;const logs:string[]=[];
     await expect(prepareBuildRuntime({workspaceId:"vm",projectId:"p",branch:"a",dir:"/data/project",userId:"u",onLog:s=>logs.push(s)})).rejects.toThrow("exit 127");
-    expect(executed.length).toBe(1);
+    expect(executed.length).toBe(2);
+    expect(probeInput.knowledge.join("\n")).toContain("SDK installation failed");
     expect(logs.some(s=>s.includes("runtime ready"))).toBe(false);
   });
 });

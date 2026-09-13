@@ -99,3 +99,14 @@ test('failure validating the documentation commit cannot publish an earlier pass
  await expect(publishValidatedTicket(o)).rejects.toThrow('final validation failed');
  expect(git(repo,'ls-remote --heads origin refs/heads/feature/ticket')).toBe('');
 }));
+test('repair checkpoint exists before rerunning validation and retains original history',()=>fixture(async(o,repo)=>{
+ const original=git(repo,'rev-parse HEAD');let calls=0;
+ repair=()=>{writeFileSync(join(repo,'fixed.txt'),'repair');};
+ validation=async(v)=>{
+   expect(git(repo,'status --porcelain')).toBe('');
+   if(calls++===0)throw new Error('needs repair');
+   expect(git(repo,'log -1 --format=%s')).toBe('fix: runtime validation checkpoint 1');
+   expect(git(repo,`merge-base --is-ancestor ${original} HEAD`)).toBe('');
+ };
+ await publishValidatedTicket(o);expect(calls).toBe(2);
+}));
