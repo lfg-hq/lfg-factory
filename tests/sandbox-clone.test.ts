@@ -24,3 +24,16 @@ test('clone POST is sent once without body, even if its outcome is uncertain',as
  try {await expect(submitClone('source')).rejects.toThrow('connection lost');expect(calls).toBe(1);}
  finally {globalThis.fetch=original;if(token===undefined)delete process.env.MAGS_API_TOKEN;else process.env.MAGS_API_TOKEN=token;}
 });
+
+test('clone errors preserve HTTP diagnostics for HTML, empty and JSON responses',async()=>{
+ const original=globalThis.fetch;const token=process.env.MAGS_API_TOKEN;process.env.MAGS_API_TOKEN='private-test-token';
+ try {
+  for(const [status,body,type,expected] of [[502,'<html>Bad gateway private-test-token</html>','text/html','Bad gateway'],[202,'','application/json','empty response body'],[401,'{"error":"denied"}','application/json','denied'],[200,'null','application/json','invalid response']] as const) {
+   let calls=0;globalThis.fetch=(async()=>{calls++;return new Response(body,{status,headers:{'content-type':type}});}) as any;
+   let failure:any;try{await submitClone('source');}catch(e){failure=e;}
+   expect(failure.statusCode).toBe(status);expect(failure.message).toContain(expected);expect(failure.message).not.toContain('private-test-token');expect(calls).toBe(1);
+  }
+  globalThis.fetch=(async()=>new Response('{"request_id":"accepted"}',{status:202})) as any;
+  expect(await submitClone('source')).toBe('accepted');
+ }finally{globalThis.fetch=original;if(token===undefined)delete process.env.MAGS_API_TOKEN;else process.env.MAGS_API_TOKEN=token;}
+});

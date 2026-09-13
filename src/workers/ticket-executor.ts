@@ -3884,6 +3884,12 @@ async function resolveProjectIdForTicket(ticketId: string): Promise<string | nul
 
 async function markTicketFailed(ticketId: string, reason: string, userId?: string, opts?: { emitEvent?: boolean }) {
   const projectId = await resolveProjectIdForTicket(ticketId);
+  // Early provisioning errors reach this helper before the worker has an owner ID.
+  // Still publish terminal status so connected ticket UIs stop their spinner.
+  if (!userId && projectId) {
+    const [owner] = await db.select({ownerId: projects.ownerId}).from(projects).where(eq(projects.id, projectId)).limit(1);
+    userId = owner?.ownerId;
+  }
   const failureStageId = projectId
     ? await moveTicketToStage(ticketId, projectId, "Failed / Blocked")
     : null;
@@ -3915,7 +3921,9 @@ async function markTicketFailed(ticketId: string, reason: string, userId?: strin
   const failMsg =
     `❌ **Build failed** — I couldn't finish this ticket.\n\n` +
     `**What went wrong:** ${reason}\n\n` +
-    `**How to proceed:** open the **Actions** log above and find the failing step, then either adjust the ticket and press **Build Ticket** again, or reply here with guidance and I'll retry. Your branch and build sandbox are preserved, so nothing is lost.`;
+    (/clone submission|clone response missing request_id/i.test(reason)
+      ? `**How to proceed:** the clone request was not confirmed. Check Magpie for an accepted clone before retrying; automatic resubmission is blocked to avoid duplicate sandboxes. Ticket implementation has not started.`
+      : `**How to proceed:** open the **Actions** log above and find the failing step, then either adjust the ticket and press **Build Ticket** again, or reply here with guidance and I'll retry. Your branch and build sandbox are preserved, so nothing is lost.`);
   await addLog(ticketId, failMsg, "ai_response", userId);
 
   // TELL THE CHAT THAT ASKED FOR IT. A failure used to live only in the ticket's
