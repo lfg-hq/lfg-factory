@@ -1,5 +1,5 @@
 import { PREVIEW_SOURCE_POLICY, previewPublicationBlocked } from "./preview-source-policy.ts";
-import { replaceVerifiedPatches } from "./preview-patch-recovery.ts";
+import { replaceVerifiedPatches, consolidatePatchScript } from "./preview-patch-recovery.ts";
 import { databaseRecoveryScripts, backupThenReset } from "./preview-db-recovery.ts";
 import { compileRuntimePlan } from "./runtime-plan.ts";
 import { branchDatabaseScript } from "./preview-isolation.ts";
@@ -36,7 +36,7 @@ import { decryptSecret, encryptSecret } from "../utils/crypto.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { enableHttpAccess, execOnWorkspace, setStableUrl, startBrowserSession, stopWorkspace } from "./mags.ts";
 import { ensureProjectSandbox, restartProjectSandbox, ensureEngine, ensureDocker, envWorkspaceId, checkEngineHealth, listSandboxEngines, ENGINES, type EngineHandle, type DbEngine } from "./project-sandbox.ts";
-import { probeAppProfile, saveAppProfile, loadAppProfile, deriveManifestFromProfile, syncDetectedEnv, applyProfileCorrection, recordProfileLearning, recordDirective, recordConfigPatch, buildConfigPatchScript, profileNotes, resolveUserModel, appProfileSchema, type AppProfile } from "./app-profile.ts";
+import { probeAppProfile, saveAppProfile, loadAppProfile, deriveManifestFromProfile, syncDetectedEnv, applyProfileCorrection, recordProfileLearning, recordDirective, buildConfigPatchScript, profileNotes, resolveUserModel, appProfileSchema, type AppProfile } from "./app-profile.ts";
 import { isS3Enabled, buildS3Key, uploadBinary, getPresignedGetUrl } from "./s3.ts";
 import { messages } from "../db/schema/chat.ts";
 import { projectTickets } from "../db/schema/tickets.ts";
@@ -1336,7 +1336,8 @@ async function executeRunbook(
   const loaded = await loadAppProfile(projectId, branch);
   // Include plan content so a corrected command/config invalidates a previous blocker.
   const envHash = await sh(workspaceId, `sha256sum ${shellQuote(dir + "/.env")} | cut -d ' ' -f1`, 15_000);
-  const identity = revision + envHash.output.trim() + JSON.stringify([manifest, loaded?.profile.configPatches, loaded?.profile.environmentOverrides]);
+  // Invalidate blockers recorded before consolidated patch recovery was available.
+  const identity = "consolidated-patches-v1:" + revision + envHash.output.trim() + JSON.stringify([manifest, loaded?.profile.configPatches, loaded?.profile.environmentOverrides]);
   let executionDir = dir;
   let steps: RunStep[] = [...prelude, ...buildRunbook(manifest, engines, dir)];
   const persist = () => persistSteps(projectId, userId, steps);
@@ -1417,6 +1418,14 @@ async function executeRunbook(
       if (current) { current.profile.blockedFailure = { revision, key, detail }; await saveAppProfile(projectId, current.profile, branch); }
       return { up: false, steps, error: detail };
     }
+    try {
+      await saveConsolidatedPatches(projectId,userId,workspaceId,branch,dir,engines);
+    } catch (error) {
+      recovery.status = "failed";
+      recovery.error = `Saved repair normalization failed: ${(error as Error).message}`;
+      await persist();
+      return { up: false, steps, error: recovery.error };
+    }
     const current = await loadAppProfile(projectId, branch);
     if (current) {
       Object.assign(manifest, deriveManifestFromProfile(current.profile));
@@ -1490,6 +1499,35 @@ lines = [line for line in open(path).read().splitlines() if line.split("=", 1)[0
 with open(path, "w") as f: f.write("\\n".join(lines + list(values.values())) + "\\n")
 PYEOF`, 30_000);
   if (r.exitCode !== 0) throw new Error("Could not apply branch environment overrides");
+}
+
+/** Normalize recorded edits against the same baseline used by clean replay. */
+async function saveConsolidatedPatches(projectId:string,userId:string,workspaceId:string,branch:string,dir:string,engines:EngineHandle[] | undefined, extra?:NonNullable<AppProfile["configPatches"]>[number]) {
+  if (!engines) {
+    const rows = await db.select().from(projectDatabases).where(and(eq(projectDatabases.projectId, projectId), eq(projectDatabases.workspaceId, workspaceId)));
+    engines = rows.filter(r => r.host && r.port && r.username && r.passwordEncrypted).map(r => ({engine:r.engine as DbEngine,host:r.host!,port:r.port!,username:r.username!,password:decryptSecret(r.passwordEncrypted!),dbName:r.dbName ?? "",connectionString:""}));
+  }
+  const loaded=await loadAppProfile(projectId,branch);
+  if(!loaded) throw new Error("No profile available to save preview repairs");
+  const patches=[...(loaded.profile.configPatches??[]),...(extra?[extra]:[])];
+  if(!patches.length) return;
+  const clean=`/data/patch-normalize-${crypto.randomUUID()}`;
+  try {
+    const created=await sh(workspaceId,`git -C ${shellQuote(dir)} worktree add --detach ${shellQuote(clean)} HEAD`,60000);
+    if(created.exitCode!==0) throw new Error("Cannot create patch normalization checkout");
+    const rewrite=branch==="default"?buildAppsettingsRewriteScript(engines,clean):"";
+    if(rewrite) { const r=await sh(workspaceId,rewrite,60000); if(r.exitCode!==0) throw new Error("Cannot prepare patch baseline"); }
+    const captured=await sh(workspaceId,consolidatePatchScript(patches,clean,dir),60000);
+    if(captured.exitCode!==0) throw new Error(failureSummary(captured.output));
+    const candidate=appProfileSchema.shape.configPatches.parse(JSON.parse(captured.output))??[];
+    const verify=async(target:string)=>{ const script=buildConfigPatchScript(candidate,target,true); if(!script)return; const r=await sh(workspaceId,script,60000); if(r.exitCode!==0)throw new Error(failureSummary(r.output)); };
+    await replaceVerifiedPatches(candidate,{verifyClean:()=>verify(clean),verifyCurrent:()=>verify(dir),save:async()=>{
+      loaded.profile.configPatches=candidate;
+      delete loaded.profile.verifiedRevision; delete loaded.profile.blockedFailure;
+      await saveAppProfile(projectId,loaded.profile,branch);
+    }});
+    plog(projectId,userId,`Saved ${candidate.length} consolidated preview repair(s); clean and current files verified`);
+  } finally { await sh(workspaceId,`git -C ${shellQuote(dir)} worktree remove --force ${shellQuote(clean)}`,30000).catch(()=>{}); }
 }
 
 async function applySavedPatches(projectId: string, userId: string, workspaceId: string, profile: AppProfile, dir: string) {
@@ -2113,7 +2151,10 @@ async function driveSandbox(
       execute: async ({ file, find, replace, reason, create }: { file: string; find: string; replace: string; reason?: string; create?: boolean }) => {
         const script = buildConfigPatchScript([{ file, find, replace, create }], workDir);
         if (script) { const r = await sh(workspaceId, script, 30_000); if (r.exitCode !== 0) return `Patch failed: ${failureSummary(r.output)}`; }
-        const ok = await recordConfigPatch(projectId, { file, find, replace, note: reason, create }, profileBranch).catch(() => false);
+        try {
+        await saveConsolidatedPatches(projectId,userId,workspaceId,profileBranch,workDir,engines,{file,find,replace,note:reason,create});
+        } catch (error) { return `Repair applied locally but NOT saved: ${(error as Error).message}. Reconcile the saved patches before reporting ready.`; }
+        const ok = true;
         plog(projectId, userId, `Persisted config patch to ${file}`, { detail: reason });
         return ok ? "applied + persisted — it re-applies after every checkout/branch-switch." : "applied now, but couldn't persist (no profile yet).";
       },
@@ -2403,7 +2444,10 @@ export async function runPreviewChat(opts: {
       execute: async ({ file, find, replace, reason, create }: { file: string; find: string; replace: string; reason?: string; create?: boolean }) => {
         const script = buildConfigPatchScript([{ file, find, replace, create }], workDir);
         if (script) { const applied = await sh(workspaceId, script, 30_000); if (applied.exitCode !== 0) return `Patch failed: ${failureSummary(applied.output)}`; }
-        const ok = await recordConfigPatch(projectId, { file, find, replace, note: reason, create }, profileBranch).catch(() => false);
+        try {
+        await saveConsolidatedPatches(projectId,userId,workspaceId,profileBranch,workDir,undefined,{file,find,replace,note:reason,create});
+        } catch (error) { return `Repair applied locally but NOT saved: ${(error as Error).message}. Reconcile the saved patches before reporting ready.`; }
+        const ok = true;
         plog(projectId, userId, `Persisted config patch to ${file}`, { detail: reason });
         return ok ? "applied + persisted — re-applies after every checkout/branch-switch." : "applied now (no profile to persist to yet).";
       },

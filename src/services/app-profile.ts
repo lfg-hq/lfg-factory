@@ -157,6 +157,8 @@ export const appProfileSchema = z.object({
     replace: z.string().describe("Replacement text."),
     note: z.string().optional(),
     create: z.boolean().optional(),
+    beforeHash: z.string().optional(),
+    afterHash: z.string().optional(),
   })).optional().describe("Leave EMPTY — auto-filled from runtime config fixes that must survive branch switches / rebuilds."),
 });
 export type AppProfile = z.infer<typeof appProfileSchema>;
@@ -486,7 +488,7 @@ export async function recordProfileLearning(projectId: string, note: string, bra
 }
 
 // ── Replayable config patches (survive branch switches / rebuilds) ───────────
-export type ConfigPatch = { file: string; find: string; replace: string; note?: string; create?: boolean };
+export type ConfigPatch = { file: string; find: string; replace: string; note?: string; create?: boolean; beforeHash?: string; afterHash?: string };
 
 /** Persist a config-file patch onto the profile (de-duped by file+find), so it's
  *  re-applied after every checkout. */

@@ -64,3 +64,19 @@ selected checkout. Reload reapplies the saved patches and validates them; stale
 patches enter the replacement workflow above. For casing repairs, agents must
 correct rendered references, avoid duplicate aliases, and revise obsolete asset
 verification paths without dropping actual feature-route checks.
+
+## Consolidated repair persistence
+
+Both preview tools now consolidate recorded edits against a temporary clean
+checkout before saving. Multiple edits to one recorded file become one baseline-to-final
+patch, replacing the obsolete intermediate patches. Only explicitly recorded files
+are captured. Default-branch connection rewriting is applied to that baseline too.
+The complete candidate list must validate on both clean and current files before
+replacing the saved list; a rejected save is returned to the agent as an error.
+Existing recorded patches are also consolidated after driver recovery, before the
+full clean replay. A failure prevents the preview being marked successful.
+
+Consolidated patches include before/after content fingerprints. Reload recognizes
+an already-applied repair even when its replacement contains its original text,
+and rejects changed baselines without partially applying the patch list. These
+remain sandbox-only repairs; this workflow never commits them to the client repo.

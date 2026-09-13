@@ -64,3 +64,32 @@ test('dry-run validates without writing and changed patches replay on clean and 
   expect(readFileSync(file,'utf8')).toContain('// keep comment');
  }finally{rmSync(dir,{recursive:true,force:true});}
 });
+
+test('consolidation replaces obsolete chains and replays idempotently without unrelated files',async()=>{
+ const {consolidatePatchScript}=await import('../src/services/preview-patch-recovery.ts');
+ const root=mkdtempSync(join(tmpdir(),'consolidation-'));const clean=join(root,'clean'),warm=join(root,'warm');
+ mkdirSync(clean);mkdirSync(warm);
+ try {
+  for (const [before,after] of [['alpha\nold\nfooter','alpha\nfinal\nfooter'],['abc','abcd'],['first\nmiddle\nlast','FIRST\nmiddle\nLAST']]) {
+   writeFileSync(join(clean,'config'),before);writeFileSync(join(warm,'config'),after);
+   writeFileSync(join(warm,'unrelated'),'do not capture');
+   const captured=spawnSync('bash',['-c',consolidatePatchScript([{file:'config',find:'old',replace:'intermediate'},{file:'config',find:'intermediate',replace:'final'}],clean,warm)],{encoding:'utf8'});
+   expect(captured.status).toBe(0);const patches=JSON.parse(captured.stdout);expect(patches.length).toBe(1);expect(patches[0].file).toBe('config');
+   for (const dir of [clean,warm,clean,warm]) {
+    expect(spawnSync('bash',['-c',buildConfigPatchScript(patches,dir)]).status).toBe(0);
+    expect(readFileSync(join(dir,'config'),'utf8')).toBe(after);
+   }
+   writeFileSync(join(clean,'config'),'new branch content');
+   expect(spawnSync('bash',['-c',buildConfigPatchScript(patches,clean)]).status).not.toBe(0);
+   expect(readFileSync(join(clean,'config'),'utf8')).toBe('new branch content');
+  }
+  writeFileSync(join(warm,'created'),'new settings');
+  const created=spawnSync('bash',['-c',consolidatePatchScript([{file:'created',find:'',replace:'new settings',create:true}],clean,warm)],{encoding:'utf8'});
+  expect(created.status).toBe(0);
+  for (const dir of [clean,warm]) expect(spawnSync('bash',['-c',buildConfigPatchScript(JSON.parse(created.stdout),dir)]).status).toBe(0);
+  expect(readFileSync(join(clean,'created'),'utf8')).toBe('new settings');
+  const noop=spawnSync('bash',['-c',consolidatePatchScript([{file:'unrelated',find:'x',replace:'y',create:true}],warm,warm)],{encoding:'utf8'});
+  expect(JSON.parse(noop.stdout)).toEqual([]);
+  expect(spawnSync('bash',['-c',consolidatePatchScript([{file:'../escape',find:'x',replace:'y'}],clean,warm)]).status).not.toBe(0);
+ } finally {rmSync(root,{recursive:true,force:true});}
+});
