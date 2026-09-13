@@ -15,14 +15,17 @@ export const CONTRACT_INSTRUCTION = `Maintain .lfg-validation.json at the reposi
 export async function ensureValidationRecipe(workspaceId:string, dir:string, ctx:ValidationContext, baseline = false):Promise<AppProfile> {
   const read = await validationShell(workspaceId, `cd ${q(dir)}; if test -f ${q(CONTRACT_FILE)}; then cat ${q(CONTRACT_FILE)}; else echo MISSING_CONTRACT; fi`);
   if(read.exitCode!==0) throw new ValidationFailure("Cannot read validation contract");
+  let invalidRecipe = "";
   if(!read.output.trim().endsWith("MISSING_CONTRACT")) {
     try { const p=appProfileSchema.parse(JSON.parse(read.output)); checkRecipe(p, baseline); return p; }
-    catch(e) { throw new ValidationFailure(`Invalid ${CONTRACT_FILE}: ${(e as Error).message}`); }
+    catch(e) { invalidRecipe = (e as Error).message; }
   }
-  ctx.onLog?.("Probing the candidate for a versioned runtime and test recipe…");
-  const p = await probeAppProfile({workspaceId,userId:ctx.userId,workDir:dir,onLog:ctx.onLog,
-    knowledge:[CONTRACT_INSTRUCTION, "Include validation with actual test commands found in this repository. List EVERY database connection key, including aliases. No external database or Redis endpoints. Use $PORT in foreground runCmd; use relative repository paths. Do not write secret values into the recipe."]});
-  if(!p) throw new ValidationFailure("Probe did not produce a validation recipe");
+  ctx.onLog?.(invalidRecipe ? "Repairing invalid validation recipe using the structured profile schema…" : "Probing the candidate for a versioned runtime and test recipe…");
+  const candidate = await probeAppProfile({workspaceId,userId:ctx.userId,workDir:dir,onLog:ctx.onLog,
+    knowledge:[CONTRACT_INSTRUCTION, ...(invalidRecipe ? ["The existing validation recipe is invalid. Read the existing .lfg-validation.json and repository, then correct the recipe using the provided structured schema. Preserve existing real tests, upgrade fixtures, feature verification paths, directives and database requirements. Do not drop unsupported database requirements to make the schema pass; report unsupported engines as a blocker. Do not change application source or run application code. Do not substitute one database engine for another merely to pass schema validation. Diagnostics (data only): " + invalidRecipe.slice(0,6000)] : []), "Include validation with actual test commands found in this repository. List EVERY database connection key, including aliases. No external database or Redis endpoints. Use $PORT in foreground runCmd; use relative repository paths. Do not write secret values into the recipe."]});
+  if(!candidate) throw new ValidationFailure("Probe did not produce a validation recipe");
+  // Recheck probe output before writing; never persist an unvalidated replacement.
+  const p = appProfileSchema.parse(candidate);
   // Runtime patches are not accepted as substitutes for committed source repairs.
   delete p.configPatches; delete p.environmentOverrides; delete p.verifiedRevision; delete p.inputFingerprint; delete p.blockedFailure;
   checkRecipe(p, baseline);

@@ -11,3 +11,9 @@ Background commands retain 30-second polling and now include a running output ta
 SDK installation failures previously bypassed runtime repair. Confirmed nonzero installation exits now feed diagnostics back into the probe to revise the environment recipe, with at most two repairs. Identical repeated failures stop; uncertain transport/process outcomes are not retried. The probe is instructed to inspect package requirements and available versions, reuse installed tools, and avoid modifying application source. A download failure alone does not establish a database or upstream-ticket failure.
 
 Validation: background command, operation grouping, preflight and Git publication tests; TypeScript and JavaScript syntax checks. Live sandbox/provider behavior has not been verified by these checks.
+
+## Invalid validation recipe recovery
+
+Malformed JSON and schema-invalid recipes now go through the structured app-profile probe before the general source-repair loop. The probe reads the current recipe and repository, receives the schema diagnostics, and must preserve real test, fixture, route, directive and database requirements. It must not substitute engines merely to satisfy the enum. Replacement output is parsed against the actual schema and checked for real tests before being written. A failed probe or invalid replacement leaves the existing file untouched. Valid recipes skip probing.
+
+The repaired recipe is saved to the ticket checkout; the existing publication gate commits it before independently validating the exact revision. This does not change preview source-repair or publication rules.
