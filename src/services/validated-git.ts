@@ -20,9 +20,22 @@ function client(o:PublicationOptions) {
   const sh=async(script:string)=>{const r=await validationShell(o.workspaceId,`set -e\ncd ${q(o.projectDir)}\n${script}`,120_000);if(r.exitCode!==0)throw new ValidationFailure(r.output.replaceAll(auth,'[remote]').replaceAll(o.githubToken||'__NO_TOKEN__','[token]')||'Git operation failed');return r.output.trim();};
   return {sh,auth};
 }
+/** Announce only a resolved commit, before starting execution of that revision. */
+async function announceCheckpoint(o:PublicationOptions,dir:string,branch:string,sha:string,baseline:string,phase:string) {
+  const {sh}=client(o);
+  const subjects=await sh(`git -C ${q(dir)} log --format=%s -4 ${q(baseline+'..'+sha)}`);
+  const plain=(value:string)=>value.replace(/[\\`*_{}\[\]<>]/g,'').slice(0,700);
+  const summary=subjects ? subjects.split('\n').map(s=>'- '+plain(s)).join('\n') : 'Using the existing committed revision.';
+  const message=`✅ **Committed — ${phase}.**\n\n${summary}\n\nCommit: \`${sha.slice(0,12)}\` · Branch: \`${plain(branch)}\`\n\n**Now verifying this commit in an isolated live validation environment.** Builds, database setup, and applicable runtime/tests must pass before publication.`;
+  if(o.validation.onCheckpoint) await o.validation.onCheckpoint(message);
+  else o.validation.onLog?.(message);
+}
 /** At most two source repairs; each is committed by the server and revalidated from scratch. */
 async function validateWithRepair(o:PublicationOptions,dir:string,branch:string,baseline:string,kind:ValidationEvidence['kind'], onDocument?: (document:{path:string;summary:string;message:string})=>void) {
   const {sh}=client(o); const ctx=o.validation;const seen=new Set<string>();
+  const initialSha=await sh(`git -C ${q(dir)} rev-parse HEAD`);
+  if(!/^[a-f0-9]{40}$/.test(initialSha))throw new ValidationFailure("Candidate commit could not be resolved");
+  await announceCheckpoint(o,dir,branch,initialSha,baseline,"implementation saved");
   for(let attempt=0;attempt<3;attempt++) {
     if(ctx.cancelled?.())throw new ValidationFailure('Validation cancelled');
     try {
@@ -42,6 +55,7 @@ async function validateWithRepair(o:PublicationOptions,dir:string,branch:string,
       let sha=await sh(`git -C ${q(dir)} add -A\nif ! git -C ${q(dir)} diff --cached --quiet; then git -C ${q(dir)} -c user.name='LFG Agent' -c user.email='agent@lfg.dev' commit -m ${q(attempt ? `fix: runtime validation checkpoint ${attempt}` : 'build: implementation validation checkpoint')} >/dev/null; fi\ngit -C ${q(dir)} rev-parse HEAD`);
       if(!/^[a-f0-9]{40}$/.test(sha))throw new ValidationFailure('Candidate commit could not be resolved');
       ctx.onLog?.(`Checkpoint ${sha.slice(0,12)} saved — ${attempt ? 'validation fixes' : 'implementation'}; starting ${kind} validation (attempt ${attempt+1}/3).`);
+      if(attempt || sha !== initialSha) await announceCheckpoint(o,dir,branch,sha,baseline,attempt ? "validation fixes saved" : "validation recipe saved");
       const evidence = await validateRevision({workspaceId:o.workspaceId,sourceDir:dir,revision:sha,branch,baseline,kind,context:ctx});
       assertEvidence(evidence, {projectId:ctx.projectId,branch,revision:sha,baseline});
       if(await sh(`git -C ${q(dir)} rev-parse HEAD`)!==sha)throw new ValidationFailure('Candidate changed during validation');
@@ -52,6 +66,7 @@ async function validateWithRepair(o:PublicationOptions,dir:string,branch:string,
         if (document.changed) {
           // The document is committed before the final gate, never appended after a tested SHA.
           sha=await sh(`git -C ${q(dir)} add -- ${q(document.path)}\ngit -C ${q(dir)} -c user.name='LFG Agent' -c user.email='agent@lfg.dev' commit -m 'docs: record ticket implementation and validation' >/dev/null\ngit -C ${q(dir)} rev-parse HEAD`);
+          await announceCheckpoint(o,dir,branch,sha,baseline,"implementation document saved");
           const finalEvidence=await validateRevision({workspaceId:o.workspaceId,sourceDir:dir,revision:sha,branch,baseline,kind,context:ctx});
           assertEvidence(finalEvidence,{projectId:ctx.projectId,branch,revision:sha,baseline});
         }

@@ -535,7 +535,7 @@
     const type = row.type || "command";
     const msg = (row.message || "").trim();
     if (type === "user_message") return `<div class="ta-user">${renderUserMsg(msg)}</div>`;
-    if (type === "ai_response") {
+    if (type === "ai_response" || type === "agent_progress") {
       const fail = msg.charAt(0) === "❌" || msg.indexOf("Build failed") === 0;
       return `<div class="ta-agent${fail ? " ta-agent-fail" : ""}"><div class="ta-agent-label">Agent</div><div class="markdown-content">${md(msg)}</div></div>`;
     }

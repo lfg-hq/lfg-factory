@@ -110,3 +110,10 @@ test('repair checkpoint exists before rerunning validation and retains original 
  };
  await publishValidatedTicket(o);expect(calls).toBe(2);
 }));
+test('commit announcement arrives before validation and identifies the committed work',()=>fixture(async(o,repo)=>{
+ const events:string[]=[];
+ o.validation.onCheckpoint=async(message:string)=>{events.push(message);expect(message).toContain(git(repo,'rev-parse HEAD').slice(0,12));expect(message).toContain('feature/ticket');expect(message).toContain('feature');};
+ validation=async()=>{expect(events.length).toBe(1);expect(events[0]).toContain('Now verifying this commit');};
+ await publishValidatedTicket(o);
+ expect(events[0]).toContain('Committed');
+}));

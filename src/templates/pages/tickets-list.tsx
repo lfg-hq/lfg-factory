@@ -1517,7 +1517,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     // not when they reached the browser.
     el.setAttribute('data-ts', String(Date.parse(row.createdAt || '') || 0));
 
-    if (type === 'ai_response') {
+    if (type === 'ai_response' || type === 'agent_progress') {
       // Agent — coloured left border (green for success, red for a failure
       // explanation), always expanded. Render markdown (bold, inline code, lists).
       var isFailMsg = msg.charAt(0) === '❌' || msg.indexOf('Build failed') === 0;

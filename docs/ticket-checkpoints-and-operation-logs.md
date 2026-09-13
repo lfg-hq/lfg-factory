@@ -17,3 +17,7 @@ Validation: background command, operation grouping, preflight and Git publicatio
 Malformed JSON and schema-invalid recipes now go through the structured app-profile probe before the general source-repair loop. The probe reads the current recipe and repository, receives the schema diagnostics, and must preserve real test, fixture, route, directive and database requirements. It must not substitute engines merely to satisfy the enum. Replacement output is parsed against the actual schema and checked for real tests before being written. A failed probe or invalid replacement leaves the existing file untouched. Valid recipes skip probing.
 
 The repaired recipe is saved to the ticket checkout; the existing publication gate commits it before independently validating the exact revision. This does not change preview source-repair or publication rules.
+
+## Visible commit confirmations
+
+The publication gate emits a persisted `agent_progress` card for the confirmed implementation commit before recipe preparation, so a subsequent recipe error cannot hide that checkpoint. The card lists the SHA, branch and up to four actual commit subjects, then announces live validation. Recipe/fix/document commits receive their own confirmations before execution. Both ticket views render these as Agent cards without treating them as terminal responses or clearing the running state. These messages confirm local commits, not successful validation or remote publication.
