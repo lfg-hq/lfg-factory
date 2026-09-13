@@ -115,7 +115,7 @@ export const appProfileSchema = z.object({
     connectionFormat: z.enum(CONN_FORMATS).describe("How to format the string: 'url' (Node/Python/Rails/Prisma), 'dotnet-npgsql', 'dotnet-mysql', 'dotnet-sqlserver', 'keyvalue'."),
   })).describe("Every database the app connects to AND how. Read appsettings*.json ConnectionStrings, docker-compose, ORM config, DATABASE_URL. [] if none."),
   // ── Schema build recipe (ORDERED — this is the part that keeps breaking) ──
-  schemaSteps: z.array(schemaStepSchema).describe("Complete schema recipe in dependency order. Migration commands must specify the context. SQL scripts use relative paths. Supply read-only verify commands for scripts/seeds so replay can safely skip applied work."),
+  schemaSteps: z.array(schemaStepSchema).describe("Complete schema recipe in dependency order. Migration commands must specify the context. SQL scripts use relative paths and connectionKey matching databases[].connectionEnvVar; always record the target when there are multiple databases. Supply read-only verify commands for scripts/seeds so replay can safely skip applied work."),
   replayActions: z.array(replayActionSchema).optional(),
   verificationPaths: z.array(z.string().regex(/^\/(?!\/)/)).optional().describe("Local feature routes to smoke-test, in addition to the homepage."),
   environmentOverrides: z.array(z.object({ key: z.string(), encryptedValue: z.string() })).optional(),

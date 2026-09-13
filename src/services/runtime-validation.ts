@@ -1,3 +1,5 @@
+import { validateSchemaTargets } from "./preview-plan.ts";
+import { targetedSqlCommand } from "./preview-sql-target.ts";
 import { eq, and, desc } from "drizzle-orm";
 import { db } from "../config/db.ts";
 import { runtimeValidations } from "../db/schema/runtime-validation.ts";
@@ -78,9 +80,15 @@ export async function validateRevision(o:{workspaceId:string;sourceDir:string;re
         const localize=(c:string)=>c.replaceAll('/data/project',dir);
         const app=p.runCmd.replace(new RegExp(`(:|--port[ =])${p.port}\\b`,'g'),`$1${env.port}`);
         const body=Buffer.from(`cd ${q(dir)}\n${Object.entries(vars).map(([k,v])=>/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)?`export ${k}=${q(v)}`:'').join('\n')}\nexec bash -c ${q(localize(app))}`).toString('base64');
+        validateSchemaTargets(p.schemaSteps,p.databases);
         const plan=compileRuntimePlan(p,{dir,localize,configure:"true",application:p.validation?.kind!=="library"&&p.validation?.kind!=="documents",
           start:`echo ${body} | base64 -d > ${q(root+'/app.sh')}; setsid bash ${q(root+'/app.sh')} > ${q(root+'/app.log')} 2>&1 </dev/null & echo $! > ${q(root+'/app.pid')}`,
-          sql:file=>{
+          sql:(file,step)=>{
+            if (step.connectionKey) {
+              const target=p.databases.find(d=>d.connectionEnvVar===step.connectionKey);
+              const service=env.engines.find(e=>e.engine===target?.engine);
+              return target && service ? targetedSqlCommand(file,step.connectionKey,target.engine,service.container,service.port) : "echo 'Unknown SQL target connection'; exit 1";
+            }
             const engines=env.engines.filter(e=>e.engine!=="redis");
             if(engines.length!==1 || new Set(p.databases.filter(d=>d.engine!=="redis").map(d=>d.databaseName??"app")).size>1) return "echo 'SQL script needs exactly one declared SQL engine; otherwise use an explicit migration command'; exit 1";
             const e=engines[0]!; const input=q(file); const database = p.databases.find(d=>d.engine===e.engine)?.databaseName??"app";

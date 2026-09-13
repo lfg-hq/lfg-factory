@@ -5,6 +5,7 @@ import { z } from "zod";
 export const schemaStepSchema = z.object({
   kind: z.enum(["migration", "sqlScript", "seed"]),
   command: z.string().min(1),
+  connectionKey: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).optional().describe("For SQL files: exact databases[].connectionEnvVar identifying the target connection. Required when multiple databases exist."),
   note: z.string().default(""),
   verify: z.string().optional().describe("Read-only command returning zero only if this schema step is already applied. Required for non-idempotent scripts/seeds."),
 });
@@ -111,3 +112,13 @@ if bad:
 PYEOF`;
 }
 
+
+export function validateSchemaTargets(steps: SchemaStep[], databases: Array<{connectionEnvVar:string;engine:string}>) {
+  const sql=databases.filter(d=>d.engine!=="redis");
+  for (const step of steps.filter(s=>s.kind==="sqlScript")) {
+    if (step.connectionKey && !sql.some(d=>d.connectionEnvVar===step.connectionKey))
+      throw new Error(`SQL_TARGET_REQUIRED: Unknown connectionKey for ${step.command}: ${step.connectionKey}`);
+    if (!step.connectionKey && sql.length>1)
+      throw new Error(`SQL_TARGET_REQUIRED: Set connectionKey for ${step.command} in schemaSteps. Available connections: ${sql.map(d=>d.connectionEnvVar).join(', ')}. Persist this mapping before schema repair; retain migrations before dependent scripts and target the same connection in verify.`);
+  }
+}

@@ -80,3 +80,24 @@ Consolidated patches include before/after content fingerprints. Reload recognize
 an already-applied repair even when its replacement contains its original text,
 and rejects changed baselines without partially applying the patch list. These
 remain sandbox-only repairs; this workflow never commits them to the client repo.
+
+## Explicit SQL database targets
+
+Schema SQL-file steps can now save `connectionKey`, matching a declared
+`databases[].connectionEnvVar`. Preview and ticket validation resolve that variable
+at execution time, after isolation, so branch-specific database names are retained.
+The native SQL client receives the selected connection's database and credentials.
+Targets must match the provisioned local service port. External connections require
+an explicit migration command. SQL files that visibly switch database context are
+rejected for repair rather than silently targeting a different database.
+
+Multi-database recipes without targets now fail with the script and available keys
+before setup work. Recovery is instructed to save the mapping first, preserving
+migration order and read-only assertions. Plan updates reject unknown or missing
+multi-database targets. Old single-database recipes remain compatible. Old cached
+blockers are invalidated once so recovery can correct the saved recipe. This does
+not guess the target from the first engine or claim existing profiles are repaired.
+
+Validation: generated SQL runner tested with a fake Docker client for branch
+selection, BOM handling, missing/external/wrong-port targets and context switches;
+preview and runtime validation regressions pass. Live SQL replay requires deployment.

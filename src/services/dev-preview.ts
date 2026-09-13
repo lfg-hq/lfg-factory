@@ -1,9 +1,10 @@
+import { targetedSqlCommand } from "./preview-sql-target.ts";
 import { PREVIEW_SOURCE_POLICY, previewPublicationBlocked } from "./preview-source-policy.ts";
 import { replaceVerifiedPatches, consolidatePatchScript } from "./preview-patch-recovery.ts";
 import { databaseRecoveryScripts, backupThenReset } from "./preview-db-recovery.ts";
 import { compileRuntimePlan } from "./runtime-plan.ts";
 import { branchDatabaseScript } from "./preview-isolation.ts";
-import { assetCaseCheck, schemaStepSchema, replayActionSchema, orderedSchema, mergeKnowledge, failureSummary, failureKey, executeSteps, shellQuote, type PlanStep } from "./preview-plan.ts";
+import { validateSchemaTargets, assetCaseCheck, schemaStepSchema, replayActionSchema, orderedSchema, mergeKnowledge, failureSummary, failureKey, executeSteps, shellQuote, type PlanStep } from "./preview-plan.ts";
 /**
  * Dev Preview — run a CLIENT project (the connected repo, not an Instant app)
  * inside its always-on project sandbox so a developer can see a live,
@@ -1287,7 +1288,11 @@ PYEOF`;
 function buildRunbook(manifest: PreviewManifest, engines: EngineHandle[], dir = PROJECT_DIR): RunStep[] {
   const steps = compileRuntimePlan(manifest, {
     dir, localize: c => localizeCmd(c, dir), configure: "", start: appStartCommand(manifest, dir),
-    sql: file => sqlApplyCommand(engines, file),
+    sql: (file, step) => {
+      if (!step.connectionKey) return sqlApplyCommand(engines, file);
+      const target = manifest.databases.find(d => d.connectionEnvVar === step.connectionKey);
+      return target ? targetedSqlCommand(file, step.connectionKey, target.engine, target.engine, engines.find(e=>e.engine===target.engine)?.port ?? 0) : "echo 'Unknown SQL connectionKey in schemaSteps'; exit 1";
+    },
     http: path => `code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 ${shellQuote(`http://127.0.0.1:${manifest.port}${path}`)}); case "$code" in 2??|3??) exit 0;; *) echo "HTTP $code"; exit 1;; esac`,
   });
   steps.push({ id: "assets", phase: "verify", label: "Verify assets and database health", command: "", status: "pending" });
@@ -1337,7 +1342,7 @@ async function executeRunbook(
   // Include plan content so a corrected command/config invalidates a previous blocker.
   const envHash = await sh(workspaceId, `sha256sum ${shellQuote(dir + "/.env")} | cut -d ' ' -f1`, 15_000);
   // Invalidate blockers recorded before consolidated patch recovery was available.
-  const identity = "consolidated-patches-v1:" + revision + envHash.output.trim() + JSON.stringify([manifest, loaded?.profile.configPatches, loaded?.profile.environmentOverrides]);
+  const identity = "sql-target-v1:" + revision + envHash.output.trim() + JSON.stringify([manifest, loaded?.profile.configPatches, loaded?.profile.environmentOverrides]);
   let executionDir = dir;
   let steps: RunStep[] = [...prelude, ...buildRunbook(manifest, engines, dir)];
   const persist = () => persistSteps(projectId, userId, steps);
@@ -1345,6 +1350,7 @@ async function executeRunbook(
     await setPreview(projectId, userId, { previewStatus: PHASE_STATUS[step.phase] }, step.label);
     plog(projectId, userId, `▶ ${step.phase}: ${step.label}`);
     if (step.id === "configuration") {
+      validateSchemaTargets(orderedSchema(manifest), manifest.databases);
       const profile = await loadAppProfile(projectId, branch);
       if (profile) {
         await applyBranchEnvironment(workspaceId, profile.profile, executionDir);
@@ -1357,7 +1363,7 @@ async function executeRunbook(
         for (const engine of engines) {
           const matches = databases.filter(d => d.engine === engine.engine);
           if (matches.length === 1) engine.dbName = matches[0]!.database;
-          else if (matches.length > 1 && orderedSchema(manifest).some(s => s.kind === "sqlScript")) throw new Error("Multiple logical databases detected. Record explicit context commands instead of ambiguous raw SQL scripts.");
+          else if (matches.length > 1 && orderedSchema(manifest).some(s => s.kind === "sqlScript" && !s.connectionKey)) throw new Error("SQL_TARGET_REQUIRED: Multiple logical databases detected. FIRST updatePlan schemaSteps: retain migration order and give EVERY sqlScript a connectionKey matching databases[].connectionEnvVar. Available keys: " + manifest.databases.map(d=>d.connectionEnvVar).join(", ") + ". Do not repair schemas until this routing is saved.");
         }
         plog(projectId, userId, "Branch databases isolated; external connections unchanged");
       }
@@ -1365,7 +1371,7 @@ async function executeRunbook(
     }
     if (step.id.startsWith("schema-") && command === step.command) {
       const recipe = orderedSchema(manifest)[Number(step.id.slice(7))];
-      if (recipe?.kind === "sqlScript" && recipe.verify) command = localizeCmd(sqlApplyCommand(engines, recipe.command), executionDir);
+      if (recipe?.kind === "sqlScript" && recipe.verify && !recipe.connectionKey) command = localizeCmd(sqlApplyCommand(engines, recipe.command), executionDir);
     }
     if (step.id === "assets") {
       const checked = await verifyPreview(projectId, userId, workspaceId, manifest, branch);
@@ -1408,7 +1414,7 @@ async function executeRunbook(
     steps.push(recovery); await persist();
     await sh(workspaceId, `fuser -k ${manifest.port}/tcp 2>/dev/null || true`, 20_000);
     const outcome = await driveSandbox(projectId, userId, workspaceId, manifest, engines, model, dir,
-      [...configNotes, `FAILED STEP ${failedStep.id}: ${failedStep.error}. For stale patches, FIRST inspectSavedPatches and replaceSavedPatches; do not start unrelated database work before reconciling configuration. For SQL failures fix the script order/identity handling and persist executable repairs, not just a note to rerun. Use resetDevelopmentDatabase when clean replay is needed; never drop a database without a verified backup. Repair and PERSIST the recipe. The executor will replay it; merely starting a process is not sufficient.`]);
+      [...configNotes, `FAILED STEP ${failedStep.id}: ${failedStep.error}. For SQL_TARGET_REQUIRED, FIRST persist schemaSteps with connectionKey on every raw SQL file, preserving migrations before dependent scripts and their verify assertions. Do not run ad-hoc migrations until the mapping is saved. For stale patches, FIRST inspectSavedPatches and replaceSavedPatches; do not start unrelated database work before reconciling configuration. For SQL failures fix the script order/identity handling and persist executable repairs, not just a note to rerun. Use resetDevelopmentDatabase when clean replay is needed; never drop a database without a verified backup. Repair and PERSIST the recipe. The executor will replay it; merely starting a process is not sufficient.`]);
     throwIfCancelled(projectId);
     recovery.status = outcome ? "done" : "failed"; recovery.finishedAt = new Date().toISOString();
     await persist();
@@ -2102,7 +2108,11 @@ async function driveSandbox(
         if (field === "toolchain") manifest.toolchain = value.split("\n").map((s) => s.trim()).filter(Boolean);
         else if (field === "port") { const p = parseInt(value, 10); if (p > 0) manifest.port = p; }
         else if (field === "configPatches") { return await reconcilePatches(appProfileSchema.shape.configPatches.parse(JSON.parse(value)) ?? [], reason); }
-        else if (field === "schemaSteps") manifest.schemaSteps = z.array(schemaStepSchema).parse(JSON.parse(value));
+        else if (field === "schemaSteps") {
+          const next=z.array(schemaStepSchema).parse(JSON.parse(value));
+          try { validateSchemaTargets(next,manifest.databases); } catch(error) { return (error as Error).message; }
+          manifest.schemaSteps=next;
+        }
         else if (field === "replayActions") manifest.replayActions = z.array(replayActionSchema).parse(JSON.parse(value));
         else if (field === "verificationPaths") manifest.verificationPaths = z.array(z.string().regex(/^\/(?!\/)/)).parse(JSON.parse(value));
         else (manifest as any)[field] = value;
