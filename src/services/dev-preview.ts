@@ -1,3 +1,4 @@
+import { executeSandboxScript } from "./sandbox-script.ts";
 import { targetedSqlCommand } from "./preview-sql-target.ts";
 import { PREVIEW_SOURCE_POLICY, previewPublicationBlocked } from "./preview-source-policy.ts";
 import { replaceVerifiedPatches, consolidatePatchScript } from "./preview-patch-recovery.ts";
@@ -113,8 +114,7 @@ export type ServiceSpec = NonNullable<PreviewManifest["services"]>[number];
 
 // ── Small helpers ────────────────────────────────────────────────────────
 async function sh(workspaceId: string, script: string, timeout = 180_000): Promise<{ output: string; exitCode: number }> {
-  const b64 = Buffer.from(script).toString("base64");
-  const r = await execOnWorkspace(workspaceId, `echo ${b64} | base64 -d | bash`, { timeout }).catch(
+  const r = await executeSandboxScript(script, timeout, (command, commandTimeout) => execOnWorkspace(workspaceId, command, { timeout: commandTimeout })).catch(
     (e: any) => ({ output: "", stderr: e?.message ?? String(e), exitCode: -1 })
   );
   return { output: (r.output || "") + (r.stderr ? "\n" + r.stderr : ""), exitCode: r.exitCode ?? 0 };

@@ -3,10 +3,10 @@ import type { ConfigPatch } from "./app-profile.ts";
 export function buildConfigPatchScript(patches: ConfigPatch[] | undefined, dir: string, dryRun = false): string {
   if (!patches || !patches.length) return "";
   const blob = Buffer.from(JSON.stringify(patches.map((p) => ({ file: p.file, find: p.find, replace: p.replace, create: p.create, beforeHash: p.beforeHash, afterHash: p.afterHash })))).toString("base64");
-  return `python3 - ${shellQuote(dir)} ${shellQuote(blob)} <<'PYEOF'
+  return `python3 - ${shellQuote(dir)} <<'PYEOF'
 import base64, json, os, sys, hashlib
 base = os.path.realpath(sys.argv[1])
-patches = json.loads(base64.b64decode(sys.argv[2]))
+patches = json.loads(base64.b64decode("${blob}"))
 contents = {}
 for p in patches:
     fp = os.path.realpath(os.path.join(base, p["file"]))

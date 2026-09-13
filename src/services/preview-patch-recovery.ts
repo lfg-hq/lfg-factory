@@ -20,9 +20,9 @@ export async function replaceVerifiedPatches(patches: ConfigPatch[], io: {
 /** Capture only explicitly recorded files; unrelated dirty files never enter the overlay. */
 export function consolidatePatchScript(patches: ConfigPatch[], clean: string, current: string): string {
   const payload=Buffer.from(JSON.stringify({patches,clean,current})).toString('base64');
-  return `python3 - '${payload}' <<'PY'
+  return `python3 - <<'PY'
 import base64,json,os,sys,hashlib
-p=json.loads(base64.b64decode(sys.argv[1])); result=[]
+p=json.loads(base64.b64decode("${payload}")); result=[]
 def path(root,file):
     root=os.path.realpath(root); full=os.path.realpath(os.path.join(root,file))
     if not full.startswith(root+os.sep) or file.split('/')[0] in ('.git','.env'):

@@ -101,3 +101,14 @@ not guess the target from the first engine or claim existing profiles are repair
 Validation: generated SQL runner tested with a fake Docker client for branch
 selection, BOM handling, missing/external/wrong-port targets and context switches;
 preview and runtime validation regressions pass. Live SQL replay requires deployment.
+
+## Large repair payloads
+
+Preview shell execution now transfers large scripts into a private temporary
+folder in bounded chunks, executes the completed file, and cleans it up. Small
+scripts retain the single-request path. A failed transfer never launches a partial
+script. Consolidation and patch replay embed their JSON payload in Python's input
+script rather than process arguments, removing the second argument-length limit.
+Local regression coverage includes normalization and repeated replay of a 400 KB
+file with an 800 KB before/after patch, checks every exec argument stays below
+25 KB, and verifies failed-transfer cleanup. No live sandbox deployment was made.
