@@ -21,3 +21,7 @@ The repaired recipe is saved to the ticket checkout; the existing publication ga
 ## Visible commit confirmations
 
 The publication gate emits a persisted `agent_progress` card for the confirmed implementation commit before recipe preparation, so a subsequent recipe error cannot hide that checkpoint. The card lists the SHA, branch and up to four actual commit subjects, then announces live validation. Recipe/fix/document commits receive their own confirmations before execution. Both ticket views render these as Agent cards without treating them as terminal responses or clearing the running state. These messages confirm local commits, not successful validation or remote publication.
+
+## Validation preparation jobs
+
+Validation utility installation, Docker startup, and candidate/baseline checkout creation now use single-launch background jobs with 30-second polling, cancellation and a 15-minute maximum runtime. These potentially slow steps previously used blocking exec calls even though builds and service provisioning already used background jobs. Preparation failures include their step label. Progress retains the job identity without exposing the setup script or raw output. The reported Magpie deadline error alone does not identify which earlier blocking call failed; live reproduction is still needed to establish that particular incident's command.

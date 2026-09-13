@@ -7,7 +7,7 @@ import { appProfileSchema, probeAppProfile, type AppProfile } from "./app-profil
 import { compileRuntimePlan } from "./runtime-plan.ts";
 import { executeSteps, shellQuote as q, type PlanStep } from "./preview-plan.ts";
 import { ValidationFailure, hashContract, type ValidationContext, type ValidationEvidence } from "./validation-contract.ts";
-import { validationShell, runValidationCommand, environmentScript, cleanupEnvironmentScript, type ValidationEnvironment } from "./validation-sandbox.ts";
+import { validationPreparation, validationShell, runValidationCommand, environmentScript, cleanupEnvironmentScript, type ValidationEnvironment } from "./validation-sandbox.ts";
 
 export const CONTRACT_FILE = ".lfg-validation.json";
 export const CONTRACT_INSTRUCTION = `Maintain .lfg-validation.json at the repository root using the app profile schema. Include validation.kind (application/library/documents), validation.tests (real regression/acceptance commands), validation.upgradeSetup (representative baseline data fixtures before migrations), all database connection environment keys, complete ordered schemaSteps, and verificationPaths for the changed feature. Tests must fail on regressions. Never suppress migration errors, fake migration history, skip tests, or create duplicate Linux asset case aliases. Source repairs and the recipe must be committed together. The server independently validates a clean commit with fresh and baseline-upgrade databases before publication. Do not push yourself. During implementation, create a local implementation checkpoint before builds/tests/application execution and separate fix checkpoints before rerunning. During server-requested repair, edit only: the server commits the repair before executing validation.`;
@@ -52,7 +52,8 @@ export async function validateRevision(o:{workspaceId:string;sourceDir:string;re
   const evidence:ValidationEvidence={id,projectId:ctx.projectId,branch:o.branch,revision:o.revision,tree:"",baseline:o.baseline??"",planHash:"",environmentHash:"",kind:o.kind??"ticket",status:"running",freshPassed:false,upgradePassed:false};
   await db.insert(runtimeValidations).values({id,projectId:ctx.projectId,ticketId:ctx.ticketId,epicId:ctx.epicId,branch:o.branch,revision:o.revision,baseline:evidence.baseline,kind:evidence.kind,status:"running",evidence:JSON.stringify(evidence)});
   const persist=async()=>{await db.update(runtimeValidations).set({status:evidence.status,evidence:JSON.stringify(evidence),steps:JSON.stringify(steps.map(s=>s.phase==="run"?{...s,command:"[isolated app launcher]"}:s)),...(evidence.status!=="running"?{completedAt:new Date()}: {})}).where(eq(runtimeValidations.id,id));};
-  const shell=async(script:string)=>{const r=await validationShell(o.workspaceId,script);if(r.exitCode!==0)throw new ValidationFailure(r.output||"Validation sandbox command failed",id);return r.output.trim();};
+  const shell=async(script:string)=>{let r;try { r=await validationShell(o.workspaceId,script); } catch(error) { throw new ValidationFailure(`Validation sandbox inspection failed: ${(error as Error).message}`,id); }if(r.exitCode!==0)throw new ValidationFailure(r.output||"Validation sandbox command failed",id);return r.output.trim();};
+  const prepare=(label:string,script:string)=>validationPreparation({workspaceId:o.workspaceId,script,label,cancelled:ctx.cancelled,onLog:ctx.onLog});
   const groups:Array<{scope:string;root:string;dirs:string[]}>=[];
   const cleanup = async (g: typeof groups[number]) => {
       await validationShell(o.workspaceId,`if test -f ${q(g.root+'/app.pid')}; then p=$(cat ${q(g.root+'/app.pid')}); case "$p" in ''|*[!0-9]*) ;; *) kill -TERM -- -"$p" 2>/dev/null || true; sleep 1; kill -KILL -- -"$p" 2>/dev/null || true;; esac; fi`).catch(()=>{});
@@ -61,7 +62,7 @@ export async function validateRevision(o:{workspaceId:string;sourceDir:string;re
   };
   try {
     if(!/^[a-f0-9]{40}$/.test(o.revision)|| (o.baseline && !/^[a-f0-9]{40}$/.test(o.baseline))) throw new ValidationFailure("Validation requires immutable commit IDs");
-    await shell(`command -v bash >/dev/null || apk add --no-cache bash; command -v python3 >/dev/null || apk add --no-cache python3; command -v curl >/dev/null || apk add --no-cache curl; command -v setsid >/dev/null || apk add --no-cache util-linux`);
+    await prepare("install validation utilities",`command -v bash >/dev/null || apk add --no-cache bash; command -v python3 >/dev/null || apk add --no-cache python3; command -v curl >/dev/null || apk add --no-cache curl; command -v setsid >/dev/null || apk add --no-cache util-linux`);
     evidence.tree=await shell(`git -C ${q(o.sourceDir)} rev-parse ${q(o.revision+'^{tree}')}`);
     const raw=await shell(`git -C ${q(o.sourceDir)} show ${q(o.revision+':'+CONTRACT_FILE)}`);
     const recipe=appProfileSchema.parse(JSON.parse(raw)); checkRecipe(recipe);
@@ -69,7 +70,7 @@ export async function validateRevision(o:{workspaceId:string;sourceDir:string;re
     const pass=async(upgrade:boolean)=>{
       const scope=`val-${crypto.randomUUID()}`;const root=`/data/validation/${scope}`;const group={scope,root,dirs:[] as string[]};groups.push(group);
       await shell(`mkdir -p ${q(root)}; chmod 700 ${q(root)}`);
-      if(recipe.databases.length) await shell(`if ! docker info >/dev/null 2>&1; then command -v docker >/dev/null || apk add --no-cache docker docker-cli; mkdir -p /data/docker /etc/docker; test -f /etc/docker/daemon.json || echo '{"data-root":"/data/docker"}' > /etc/docker/daemon.json; rc-service docker start >/dev/null 2>&1 || true; for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done; docker info >/dev/null 2>&1; fi`);
+      if(recipe.databases.length) await prepare("start Docker",`if ! docker info >/dev/null 2>&1; then command -v docker >/dev/null || apk add --no-cache docker docker-cli; mkdir -p /data/docker /etc/docker; test -f /etc/docker/daemon.json || echo '{"data-root":"/data/docker"}' > /etc/docker/daemon.json; rc-service docker start >/dev/null 2>&1 || true; for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done; docker info >/dev/null 2>&1; fi`);
       const provision=await runValidationCommand({workspaceId:o.workspaceId,cwd:root,root,command:environmentScript(root,scope,recipe.databases),timeoutMs:900_000,cancelled:ctx.cancelled,log:ctx.onLog});
       if(provision.exitCode!==0)throw new ValidationFailure(`Isolated services failed: ${provision.output}`,id);
       const env:ValidationEnvironment=JSON.parse(await shell(`cat ${q(root+'/environment.json')}`));
@@ -79,7 +80,7 @@ export async function validateRevision(o:{workspaceId:string;sourceDir:string;re
       const stopApp=()=>shell(`if test -f ${q(root+'/app.pid')}; then p=$(cat ${q(root+'/app.pid')}); case "$p" in ''|*[!0-9]*) exit 1;; esac; kill -TERM -- -"$p" 2>/dev/null || true; sleep 1; kill -KILL -- -"$p" 2>/dev/null || true; rm -f ${q(root+'/app.pid')}; fi`);
       const run=async(rev:string,p:AppProfile,stage:string,tests:boolean)=>{
         const dir=`${root}/${stage}`;group.dirs.push(dir);
-        await shell(`git -C ${q(o.sourceDir)} worktree add --detach ${q(dir)} ${q(rev)}`);
+        await prepare(`create ${stage} checkout`, `git -C ${q(o.sourceDir)} worktree add --detach ${q(dir)} ${q(rev)}`);
         const localize=(c:string)=>c.replaceAll('/data/project',dir);
         const app=p.runCmd.replace(new RegExp(`(:|--port[ =])${p.port}\\b`,'g'),`$1${env.port}`);
         const body=Buffer.from(`cd ${q(dir)}\n${Object.entries(vars).map(([k,v])=>/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)?`export ${k}=${q(v)}`:'').join('\n')}\nexec bash -c ${q(localize(app))}`).toString('base64');
@@ -118,7 +119,7 @@ export async function validateRevision(o:{workspaceId:string;sourceDir:string;re
       };
       if(upgrade && o.baseline) {
         const baselineDir=`${root}/baseline-probe`;group.dirs.push(baselineDir);
-        await shell(`git -C ${q(o.sourceDir)} worktree add --detach ${q(baselineDir)} ${q(o.baseline)}`);
+        await prepare("create baseline inspection checkout",`git -C ${q(o.sourceDir)} worktree add --detach ${q(baselineDir)} ${q(o.baseline)}`);
         const baseline=await ensureValidationRecipe(o.workspaceId,baselineDir,ctx,true);
         if(hashContract(baseline.databases)!==hashContract(recipe.databases))throw new ValidationFailure("Baseline and candidate service mappings differ. Record an explicit compatible upgrade environment before validation.",id);
         if(recipe.databases.some(d=>d.engine!=="redis") && !recipe.validation?.upgradeSetup && !baseline.schemaSteps.some(s=>s.kind==="seed"))

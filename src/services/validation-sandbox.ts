@@ -11,6 +11,25 @@ export async function validationShell(workspaceId: string, script: string, timeo
   return { exitCode: result.exitCode ?? -1, output: (result.output || "") + (result.stderr ? "\n" + result.stderr : "") };
 }
 
+/** Potentially slow preparation runs once, with the same 30-second polling as builds. */
+export async function validationPreparation(o: {workspaceId:string;script:string;label:string;cancelled?:()=>boolean;onLog?:(message:string)=>void}) {
+  const {runBackgroundCommand}=await import('./background-command.ts');
+  o.onLog?.(`Preparing validation: ${o.label}…`);
+  try {
+    const result=await runBackgroundCommand({workspaceId:o.workspaceId,cwd:'/data',command:`set -e\n${o.script}`,timeoutMs:900_000,cancelled:o.cancelled,
+      // Do not expose arbitrary setup scripts or credential-bearing output in progress logs.
+      log:message=>{
+        const job=message.match(/^Background job ([a-zA-Z0-9-]+) (started|is still running|finished)/);
+        if(job) o.onLog?.(`Background job ${job[1]} ${job[2]}${job[2]==='started' ? '; command: '+o.label : (' ' + (message.match(/\([^)]*\)/)?.[0] || ''))}`);
+      }});
+    if(result.exitCode!==0)throw new Error(`exit ${result.exitCode}: ${result.output.slice(-4000)}`);
+    o.onLog?.(`Validation preparation complete: ${o.label}.`);
+    return result.output.trim();
+  } catch(error) {
+    throw new ValidationFailure(`Validation preparation failed at ${o.label}: ${(error as Error).message}`);
+  }
+}
+
 /** No project lookup: provisioning always targets the caller's exact build workspace. */
 export function environmentScript(root: string, scope: string, databases: AppProfile["databases"]): string {
   if (!/^val-[a-f0-9-]+$/.test(scope)) throw new Error("Invalid validation scope");
