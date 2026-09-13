@@ -17,7 +17,25 @@ export function checkedRef(ref:string) { if(!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.tes
 function client(o:PublicationOptions) {
   const url=new URL(o.repoUrl);if(o.githubToken){url.username=o.tokenUser??'x-access-token';url.password=o.githubToken;}
   const auth=url.toString();
-  const sh=async(script:string)=>{const r=await validationShell(o.workspaceId,`set -e\ncd ${q(o.projectDir)}\n${script}`,120_000);if(r.exitCode!==0)throw new ValidationFailure(r.output.replaceAll(auth,'[remote]').replaceAll(o.githubToken||'__NO_TOKEN__','[token]')||'Git operation failed');return r.output.trim();};
+  const secrets=new Set([auth,o.githubToken || '__NO_TOKEN__']);
+  const redact=(output:string)=>{for(const secret of secrets)output=output.replaceAll(secret,'[credential]');return output;};
+  const sh=async(script:string)=>{
+    const remote=/\bgit\s+(?:fetch|push|ls-remote)\b/.test(script);
+    let currentAuth=auth, token=o.githubToken;
+    const refresh=async(rejected?:string)=>{
+      if(!remote || !o.validation.gitCredentialUserId || url.hostname!=='gitlab.com')return;
+      const {getValidGitlabToken}=await import('./gitlab-token.ts');
+      token=await getValidGitlabToken(o.validation.gitCredentialUserId,rejected) || undefined;
+      if(!token)throw new ValidationFailure('GitLab credentials could not be refreshed. Check the GitLab integration and OAuth configuration; committed work is preserved.');
+      const fresh=new URL(o.repoUrl);fresh.username='oauth2';fresh.password=token;currentAuth=fresh.toString();secrets.add(token);secrets.add(currentAuth);
+    };
+    const execute=()=>validationShell(o.workspaceId,`set -eo pipefail\ncd ${q(o.projectDir)}\n${remote ? `git remote set-url origin ${q(currentAuth)}\n` : ''}${script.replaceAll(auth,currentAuth)}`,120_000);
+    await refresh();let r=await execute();
+    if(r.exitCode!==0 && remote && o.validation.gitCredentialUserId && url.hostname==='gitlab.com' && /HTTP Basic: Access denied|Authentication failed/i.test(r.output)){
+      await refresh(token);r=await execute(); // Retry only an explicit authentication rejection, never a lost push response.
+    }
+    if(r.exitCode!==0)throw new ValidationFailure(redact(r.output)||'Git operation failed');return r.output.trim();
+  };
   return {sh,auth};
 }
 /** Announce only a resolved commit, before starting execution of that revision. */

@@ -25,3 +25,9 @@ The publication gate emits a persisted `agent_progress` card for the confirmed i
 ## Validation preparation jobs
 
 Validation utility installation, Docker startup, and candidate/baseline checkout creation now use single-launch background jobs with 30-second polling, cancellation and a 15-minute maximum runtime. These potentially slow steps previously used blocking exec calls even though builds and service provisioning already used background jobs. Preparation failures include their step label. Progress retains the job identity without exposing the setup script or raw output. The reported Magpie deadline error alone does not identify which earlier blocking call failed; live reproduction is still needed to establish that particular incident's command.
+
+## GitLab publication credentials
+
+Ticket publication now carries the selected Git credential owner's ID independently of the LLM actor. Before remote operations the validated Git client reloads/refreshes that user's token and resets origin. An explicit HTTP Basic authentication rejection forces one refresh/retry; transport loss never triggers a blind push retry. Output is redacted against both old and refreshed credentials. Pipeline failures propagate, including failed ls-remote calls.
+
+The token helper coalesces simultaneous refresh calls within one process, persists rotated refresh tokens and expiry, and refuses known-expired/rejected tokens when refresh configuration is unavailable. OAuth app configuration and the stored grant still need to be valid. This change does not verify production configuration or coordinate refreshes across separate server processes.
