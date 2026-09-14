@@ -7,10 +7,9 @@ COPY package.json bun.lock ./
 # --ignore-scripts skips better-sqlite3's native build (not needed in production — we use PostgreSQL)
 RUN bun install --frozen-lockfile --production --ignore-scripts
 
-# Build stage — install all deps (including dev) for type checking
-FROM base AS builder
-COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile
+# Check application imports using the same dependencies as the runtime image.
+# Bun performs this check itself; no second install or native postinstall is needed.
+FROM deps AS builder
 COPY . .
 RUN bun build src/index.ts --target=bun --packages=external --outdir=/tmp/lfg-import-check
 
