@@ -12,6 +12,7 @@ FROM base AS builder
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
 COPY . .
+RUN bun build src/index.ts --target=bun --packages=external --outdir=/tmp/lfg-import-check
 
 # Final runtime image
 FROM base AS runner
@@ -28,6 +29,7 @@ RUN addgroup --system --gid 1001 bunjs && \
 
 # Copy production deps and source
 COPY --from=deps /app/node_modules ./node_modules
+COPY --from=builder --chown=bunjs:bunjs /app/src ./src
 COPY --chown=bunjs:bunjs . .
 
 # Persistent volumes for SQLite db and user uploads
@@ -39,4 +41,4 @@ USER bunjs
 EXPOSE 8000
 
 # Run DB migrations then start server
-CMD ["sh", "-c", "bun run db:push && bun run src/index.ts"]
+CMD ["sh", "-c", "bun run scripts/safe-schema-push.ts && bun run src/index.ts"]
