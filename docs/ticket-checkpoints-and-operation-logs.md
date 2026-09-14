@@ -31,3 +31,9 @@ Validation utility installation, Docker startup, and candidate/baseline checkout
 Ticket publication now carries the selected Git credential owner's ID independently of the LLM actor. Before remote operations the validated Git client reloads/refreshes that user's token and resets origin. An explicit HTTP Basic authentication rejection forces one refresh/retry; transport loss never triggers a blind push retry. Output is redacted against both old and refreshed credentials. Pipeline failures propagate, including failed ls-remote calls.
 
 The token helper coalesces simultaneous refresh calls within one process, persists rotated refresh tokens and expiry, and refuses known-expired/rejected tokens when refresh configuration is unavailable. OAuth app configuration and the stored grant still need to be valid. This change does not verify production configuration or coordinate refreshes across separate server processes.
+
+## Environment repair during validation
+
+Toolchain and dependency-install step failures now retain a typed environment failure through evidence persistence. The publication loop routes these to an environment-specific agent prompt instead of the source/test repair prompt. It permits bounded installation diagnostics, checks installed tools and feed access, and requires an idempotent fix persisted in the validation recipe. Application builds/tests remain server-owned after the next commit checkpoint. The prompt preserves tests, mappings, schema steps, fixtures and routes.
+
+Environment repair has a separate two-attempt budget from source repair. An unchanged commit producing the same environment error stops rather than looping; changed recipe commits can be tested again within the budget. Unsupported packages or unavailable feeds still block publication. This change does not establish the cause of the reported NuGet download failure, or guarantee that external feeds are reachable.

@@ -6,7 +6,7 @@ import { runtimeValidations } from "../db/schema/runtime-validation.ts";
 import { appProfileSchema, probeAppProfile, type AppProfile } from "./app-profile.ts";
 import { compileRuntimePlan } from "./runtime-plan.ts";
 import { executeSteps, shellQuote as q, type PlanStep } from "./preview-plan.ts";
-import { ValidationFailure, hashContract, type ValidationContext, type ValidationEvidence } from "./validation-contract.ts";
+import { ValidationEnvironmentFailure, ValidationFailure, hashContract, type ValidationContext, type ValidationEvidence } from "./validation-contract.ts";
 import { validationPreparation, validationShell, runValidationCommand, environmentScript, cleanupEnvironmentScript, type ValidationEnvironment } from "./validation-sandbox.ts";
 
 export const CONTRACT_FILE = ".lfg-validation.json";
@@ -112,6 +112,7 @@ export async function validateRevision(o:{workspaceId:string;sourceDir:string;re
           for(const e of env.engines) r.output=r.output.replaceAll(e.password,'[redacted]');
           return r;
         }});
+        if(failed && (failed.phase==='toolchain' || failed.phase==='install'))throw new ValidationEnvironmentFailure(`${upgrade?'Upgrade':'Fresh'} environment failed at ${failed.label}: ${failed.error}`,id,stage);
         if(failed)throw new ValidationFailure(`${upgrade?'Upgrade':'Fresh'} validation failed at ${failed.label}: ${failed.error}`,id);
         const dirty=await shell(`git -C ${q(dir)} diff --name-only HEAD`);
         if(dirty)throw new ValidationFailure(`Runtime changed tracked source (${dirty}). Commit the repair and validate again.`,id);
@@ -135,7 +136,7 @@ export async function validateRevision(o:{workspaceId:string;sourceDir:string;re
     if(recipe.databases.length && o.baseline && o.baseline!==o.revision) await pass(true);
     else if(recipe.databases.length && !o.baseline)throw new ValidationFailure("Database upgrade validation requires an explicit baseline commit",id);
     evidence.upgradePassed=true;evidence.status="passed";await persist();ctx.onLog?.(`Runtime validation passed for ${o.revision.slice(0,12)} (evidence ${id}).`);return evidence;
-  } catch(e) {evidence.status="failed";evidence.error=(e as Error).message;await persist();throw new ValidationFailure(evidence.error,id);}
+  } catch(e) {evidence.status="failed";evidence.error=(e as Error).message;await persist();if(e instanceof ValidationEnvironmentFailure)throw e;throw new ValidationFailure(evidence.error,id);}
   finally {
     for(const g of groups) await cleanup(g);
   }

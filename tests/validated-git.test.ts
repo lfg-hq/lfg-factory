@@ -1,3 +1,4 @@
+import { ValidationEnvironmentFailure } from '../src/services/validation-contract.ts';
 import { test, expect, mock } from "bun:test";
 import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -7,6 +8,7 @@ import * as sandbox from "../src/services/validation-sandbox.ts";
 const originalSandbox = {...sandbox};
 import * as ticketDocument from "../src/services/ticket-document.ts";
 const originalTicketDocument = {...ticketDocument};
+let repairPrompt='';
 let root='';let validation: (o:any)=>Promise<void> = async()=>{};let repairs=0;let repair:()=>void=()=>{};
 const translate=(s:string)=>s.replaceAll('/data/validation-merge-',root+'/merge-');
 // The host's wrapped base64 opens /dev/stdout, which this filesystem sandbox
@@ -14,7 +16,7 @@ const translate=(s:string)=>s.replaceAll('/data/validation-merge-',root+'/merge-
 const shell=(script:string)=>{const command=translate(script).replaceAll("base64 -d", `python3 -c 'import base64,sys;sys.stdout.buffer.write(base64.b64decode(sys.stdin.buffer.read()))'`);const r=spawnSync('bash',['-c',command],{encoding:'utf8'});return {exitCode:r.status??1,output:r.stdout+'\n'+r.stderr};};
 mock.module('../src/services/validation-sandbox.ts',()=>({...originalSandbox,validationShell:async(_:string,s:string)=>shell(s)}));
 mock.module('../src/services/runtime-validation.ts',()=>({CONTRACT_INSTRUCTION:'repair source',ensureValidationRecipe:async(_:string,dir:string)=>{try{return JSON.parse(readFileSync(join(translate(dir),".lfg-validation.json"),"utf8"));}catch{return {};}},validateRevision:async(o:any)=>{await validation(o);return {id:"receipt",projectId:o.context.projectId,branch:o.branch,revision:o.revision,baseline:o.baseline,status:"passed",freshPassed:true,upgradePassed:true};}}));
-mock.module('../src/services/merge-resolver.ts',()=>({runValidationRepair:async()=>{repairs++;repair();}}));
+mock.module('../src/services/merge-resolver.ts',()=>({runValidationRepair:async(o:any)=>{repairPrompt=o.prompt;repairs++;repair();}}));
 mock.module('../src/services/ticket-document.ts',()=>({...originalTicketDocument,
  updateTicketDocument:async(o:any)=>{const path='docs/ticket.md';const fs=await import('node:fs');fs.mkdirSync(join(translate(o.dir),'docs'),{recursive:true});fs.writeFileSync(join(translate(o.dir),path),'# Implementation\nVerified source.');return {path,summary:'Implemented the ticket.',changed:true};},
  ticketDocumentMessage:()=> 'Implemented the ticket. [Details](docs/ticket.md)',
@@ -116,4 +118,23 @@ test('commit announcement arrives before validation and identifies the committed
  validation=async()=>{expect(events.length).toBe(1);expect(events[0]).toContain('Now verifying this commit');};
  await publishValidatedTicket(o);
  expect(events[0]).toContain('Committed');
+}));
+
+test('tool install failure selects environment repair and commits the corrected recipe before retry',()=>fixture(async(o,repo)=>{
+ let calls=0;
+ repair=()=>writeFileSync(join(repo,'.lfg-validation.json'),JSON.stringify({toolchain:['verify-compatible-ef || install-ef']}));
+ validation=async()=>{if(calls++===0)throw new ValidationEnvironmentFailure('Downloading dotnet-ef failed','evidence');expect(git(repo,'status --porcelain')).toBe('');};
+ await publishValidatedTicket(o);
+ expect(repairPrompt).toContain('ENVIRONMENT');expect(repairPrompt).toContain('bounded diagnostic and tool-install commands');expect(repairPrompt).toContain('Preserve database mappings');expect(calls).toBe(2);
+}));
+test('environment recovery has its own budget after a source repair',()=>fixture(async(o,repo)=>{
+ let calls=0;
+ repair=()=>writeFileSync(join(repo,'.lfg-validation.json'),JSON.stringify({toolchain:['repair-'+repairs]}));
+ validation=async()=>{calls++;if(calls===1)throw new Error('application error');if(calls<4)throw new ValidationEnvironmentFailure('download failed','evidence');};
+ await publishValidatedTicket(o);expect(calls).toBe(4);expect(repairs).toBe(3);
+}));
+test('unchanged repeated environment failure remains blocked from publication',()=>fixture(async(o,repo)=>{
+ validation=async()=>{throw new ValidationEnvironmentFailure('feed unreachable','evidence');};
+ await expect(publishValidatedTicket(o)).rejects.toThrow('feed unreachable');expect(repairs).toBe(1);
+ expect(git(repo,'ls-remote --heads origin refs/heads/feature/ticket')).toBe('');
 }));
