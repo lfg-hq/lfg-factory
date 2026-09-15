@@ -108,3 +108,46 @@ unchanged commits, bounded repair exhaustion, publication refusal, SQL diagnosti
 selection, and existing validation behavior. TypeScript and application bundling
 are checked. The actual CoHire procedure and live Magpie run have not been changed
 or verified; deploy LFG and retry to exercise the improved recovery workflow.
+
+## 2026-09-15 — Five HTTP probes and Retry validation
+
+HTTP route verification now makes at most five attempts, with a three-second curl
+limit and two-second gaps (no final sleep). The first 2xx/3xx response succeeds.
+Failure output includes the target URL, HTTP status and curl exit/error, app PID
+state, available listening sockets, focused/deduplicated application output,
+headers and a bounded response excerpt. Capture files live in the isolated
+validation directory and are removed by normal validation cleanup; diagnostics
+are returned through the existing step/log path. They are not durable standalone
+artifacts. Certificates are not bypassed.
+
+HTTP failures retain a dedicated type through repair exhaustion. Repair instructions
+use port, launch-profile, routing and exception evidence. The Agent message uses
+that type rather than finding the word "schema" inside a retry-budget sentence.
+
+The ticket drawer now has **Retry validation** next to Build. It posts to the
+project-scoped retry-validation endpoint, checks ticket and code-edit permission,
+rejects busy tickets, and uses the saved dedicated build sandbox and prior
+validation baseline. A missing sandbox, wrong branch, missing baseline or dirty
+checkout produces a blocker without resetting or overwriting source. Shared
+preview worktrees are not supported by this action. The operation shares the chat
+lock and build guard; queue admission uses a conditional update to avoid a race.
+
+This path bypasses implementation and tests the saved commit with the existing
+validator/repair loop. It still compiles a clean checkout and prepares isolated
+services so tests cannot accidentally use old binaries. Repairs are checkpointed
+locally and revalidated; this action does not push or merge and does not confer
+review readiness. Successful unpublished/previously failed work is left open.
+Publication/integration remains a separate build-finalization workflow. Server
+restart does not automatically resume an interrupted validation-only operation;
+the existing worker recovery clears its executing state, and the user can retry.
+
+Development uses the selected coding runner. Test execution is server-controlled
+commands, not an independent QA agent. On failure the server starts a separate
+repair-agent invocation using the configured model, then independently reruns
+validation. Optional QA is a separate opt-in workflow.
+
+Checks cover five-probe bounds, immediate HTTP success, HTTP 500/connection-refusal
+diagnostics, typed HTTP recovery, clean saved-commit retry without publication,
+wrong-branch and dirty-checkout refusal, plus existing publication/repair tests.
+TypeScript, generated inline JavaScript and application import bundling pass.
+Deployment and the live CoHire/Magpie rerun remain outstanding.

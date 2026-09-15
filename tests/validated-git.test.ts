@@ -182,3 +182,26 @@ test('changed candidates that still fail schema validation exhaust their budget 
  await expect(publishValidatedTicket(o)).rejects.toThrow('both source/schema repair attempts failed');
  expect(repairs).toBe(2);expect(git(repo,'ls-remote --heads origin refs/heads/feature/ticket')).toBe('');
 }));
+
+test('validation retry tests saved commits without publishing the ticket',()=>fixture(async(o,repo)=>{
+ const {retrySavedValidation}=await import('../src/services/retry-validation.ts');
+ const before=git(repo,'rev-parse HEAD');let calls=0;validation=async(v)=>{calls++;expect(v.revision).toBe(before);};
+ const result=await retrySavedValidation(o,git(repo,'rev-parse origin/main'));
+ expect(result).toBe(before);expect(calls).toBe(1);expect(repairs).toBe(0);expect(git(repo,'ls-remote --heads origin refs/heads/feature/ticket')).toBe('');
+}));
+test('validation retry preserves and refuses an uncommitted checkout',()=>fixture(async(o,repo)=>{
+ const {retrySavedValidation}=await import('../src/services/retry-validation.ts');
+ writeFileSync(join(repo,'unsaved.txt'),'keep me');let calls=0;validation=async()=>{calls++;};
+ await expect(retrySavedValidation(o,git(repo,'rev-parse origin/main'))).rejects.toThrow('uncommitted changes');
+ expect(readFileSync(join(repo,'unsaved.txt'),'utf8')).toBe('keep me');expect(calls).toBe(0);
+}));
+test('validation retry refuses a different branch instead of switching it',()=>fixture(async(o,repo)=>{
+ const {retrySavedValidation}=await import('../src/services/retry-validation.ts');
+ git(repo,'checkout main');await expect(retrySavedValidation(o,git(repo,'rev-parse HEAD'))).rejects.toThrow('different branch');expect(git(repo,'branch --show-current')).toBe('main');
+}));
+test('HTTP repair uses transport evidence and retains its failure type when exhausted',()=>fixture(async(o,repo)=>{
+ const {ValidationHttpFailure}=await import('../src/services/validation-contract.ts');
+ validation=async()=>{throw new ValidationHttpFailure('HTTP validation failed: connection refused','receipt');};
+ try{await publishValidatedTicket(o);throw new Error('unexpected publication');}catch(e){expect(e).toBeInstanceOf(ValidationHttpFailure);expect((e as InstanceType<typeof ValidationHttpFailure>).failureKind).toBe('http');}
+ expect(repairPrompt).toContain('listening sockets');expect(repairPrompt).toContain('Do not infer database failure');
+}));

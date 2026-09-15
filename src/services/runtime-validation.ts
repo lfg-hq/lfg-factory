@@ -1,3 +1,4 @@
+import { validationHttpCommand } from "./validation-http.ts";
 import { repairToolDownloadUrls, TOOL_DOWNLOAD_GUIDANCE } from "./tool-download-repair.ts";
 import { validationStepFailure } from "./validation-step-failure.ts";
 import { validateSchemaTargets } from "./preview-plan.ts";
@@ -8,7 +9,7 @@ import { runtimeValidations } from "../db/schema/runtime-validation.ts";
 import { appProfileSchema, probeAppProfile, type AppProfile } from "./app-profile.ts";
 import { compileRuntimePlan } from "./runtime-plan.ts";
 import { executeSteps, shellQuote as q, type PlanStep } from "./preview-plan.ts";
-import { ValidationEnvironmentFailure, ValidationSchemaFailure, ValidationFailure, hashContract, type ValidationContext, type ValidationEvidence } from "./validation-contract.ts";
+import { ValidationHttpFailure, ValidationEnvironmentFailure, ValidationSchemaFailure, ValidationFailure, hashContract, type ValidationContext, type ValidationEvidence } from "./validation-contract.ts";
 import { validationPreparation, validationShell, runValidationCommand, environmentScript, cleanupEnvironmentScript, type ValidationEnvironment } from "./validation-sandbox.ts";
 
 export const CONTRACT_FILE = ".lfg-validation.json";
@@ -117,7 +118,7 @@ export async function validateRevision(o:{workspaceId:string;sourceDir:string;re
             if(e.engine==="postgres")return `docker exec -i -e PGPASSWORD="$LFG_SQL_PASSWORD" ${q(e.container)} psql -v ON_ERROR_STOP=1 -U app -d ${q(database)} < ${input}`;
             return `docker exec -i -e MYSQL_PWD="$LFG_SQL_PASSWORD" ${q(e.container)} mysql -uapp ${q(database)} < ${input}`;
           },
-          http:path=>`for i in $(seq 1 60); do s=$(curl -s --max-time 3 -o /dev/null -w '%{http_code}' ${q(`http://127.0.0.1:${env.port}${path}`)} || true); case "$s" in 2??|3??) exit 0;; esac; sleep 1; done; tail -c 12000 ${q(root+'/app.log')}; exit 1`,
+          http:path=>validationHttpCommand(`http://127.0.0.1:${env.port}${path}`,root),
           beforeSchema: upgrade && tests && p.validation?.upgradeSetup ? [p.validation.upgradeSetup] : [],
           tests:tests?p.validation!.tests:[]});
         plan.forEach(s=>{s.id=`${upgrade?'upgrade':'fresh'}-${stage}-${s.id}`;});steps.push(...plan);
@@ -152,7 +153,7 @@ export async function validateRevision(o:{workspaceId:string;sourceDir:string;re
     if(recipe.databases.length && o.baseline && o.baseline!==o.revision) await pass(true);
     else if(recipe.databases.length && !o.baseline)throw new ValidationFailure("Database upgrade validation requires an explicit baseline commit",id);
     evidence.upgradePassed=true;evidence.status="passed";await persist();ctx.onLog?.(`Runtime validation passed for ${o.revision.slice(0,12)} (evidence ${id}).`);return evidence;
-  } catch(e) {evidence.status="failed";evidence.error=(e as Error).message;await persist();if(e instanceof ValidationEnvironmentFailure || e instanceof ValidationSchemaFailure)throw e;throw new ValidationFailure(evidence.error,id);}
+  } catch(e) {evidence.status="failed";evidence.error=(e as Error).message;await persist();if(e instanceof ValidationEnvironmentFailure || e instanceof ValidationSchemaFailure || e instanceof ValidationHttpFailure)throw e;throw new ValidationFailure(evidence.error,id);}
   finally {
     for(const g of groups) await cleanup(g);
   }

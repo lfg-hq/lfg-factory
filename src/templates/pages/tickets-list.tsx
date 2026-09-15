@@ -712,6 +712,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
         <button class="drawer-execute-btn" id="drawer-build-btn" onclick="buildCurrentTicket()">
           <i class="fas fa-bolt"></i> Build
         </button>
+        <button class="drawer-server-btn" id="drawer-validation-btn" onclick="retryCurrentValidation()" title="Test the saved code without rerunning development. Validation may compile and repair it; nothing is published."><i class="fas fa-check-circle"></i> Retry validation</button>
         <button class="drawer-server-btn" id="drawer-stop-btn" onclick="stopCurrentTicket()" style="display:none;color:#f87171;border-color:#5a2a30;"><i class="fas fa-stop"></i> Stop</button>
         <div class="drawer-more-menu">
           <button class="drawer-more-btn" onclick="toggleDrawerMore()">
@@ -1147,6 +1148,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
         // show only Stop (cleaner than a disabled "Building…" button).
         buildBtn.disabled = false;
         buildBtn.style.display = isActive ? 'none' : '';
+        document.getElementById('drawer-validation-btn').style.display = isActive ? 'none' : '';
         buildBtn.innerHTML = buildButtonLabel();
         var stopBtn = document.getElementById('drawer-stop-btn');
         if (stopBtn) stopBtn.style.display = isActive ? '' : 'none';
@@ -1308,6 +1310,26 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     }
   }
 
+  async function retryCurrentValidation() {
+    if (!_currentTicketId) return;
+    const ticketId = _currentTicketId;
+    const btn = document.getElementById('drawer-validation-btn');
+    if (btn.disabled) return;
+    btn.disabled = true;
+    try {
+      const res = await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + ticketId + '/retry-validation', {method:'POST'});
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not start validation');
+      if (_currentTicketId === ticketId) {
+        _lastFailureReason = '';
+        const banner = document.getElementById('actions-bottom-banner');
+        if (banner) {banner.style.display='none';banner.innerHTML='';}
+        switchDrawerTab('actions', document.querySelector('.drawer-tab[data-tab="actions"]'));
+      }
+    } catch(error) {alert(error.message);}
+    finally {btn.disabled=false;}
+  }
+
   // ── Stop a running build ─────────────────────────────────────────
   async function stopCurrentTicket() {
     if (!_currentTicketId) return;
@@ -1395,7 +1417,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     // (failure reason / success), pinned above the chat input like a result.
     var b = null;
     if (qs === 'executing' || qs === 'queued') {
-      b = { bg: 'rgba(59,130,246,.12)', fg: '#93c5fd', icon: 'fa-spinner fa-spin', where: 'top', text: qs === 'queued' ? 'Queued — waiting to build…' : 'Building this ticket…' };
+      b = { bg: 'rgba(59,130,246,.12)', fg: '#93c5fd', icon: 'fa-spinner fa-spin', where: 'top', text: qs === 'queued' ? 'Queued — waiting to build…' : 'Running ticket operation…' };
     } else if (merge === 'not_pushed') {
       b = { bg: 'rgba(248,113,113,.12)', fg: '#fca5a5', icon: 'fa-triangle-exclamation', where: 'bottom', text: 'Built but NOT pushed to git — reconnect the repo in Settings, then rebuild.' };
     } else if (st === 'failed' || qs === 'failed') {
@@ -1453,6 +1475,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
 
     if (ticketId !== _currentTicketId) return;
     updateTicketStatusBanner(msg);
+    var validationBtn = document.getElementById('drawer-validation-btn');
+    if (validationBtn) validationBtn.style.display = qs === 'queued' || qs === 'executing' ? 'none' : '';
     if (qs !== 'queued' && qs !== 'executing') {
       hideThinkingIndicator();
       var btn = document.getElementById('drawer-build-btn');

@@ -736,16 +736,34 @@ ticketsApi.post("/:projectId/tickets/:ticketId/queue", async (c) => {
     .limit(1);
 
   if (!ticket) return c.json({ error: "Ticket not found" }, 404);
+  if(isChatTurnActive(ticketId) || /^(queued|executing|stopping)$/.test(ticket.queueStatus))return c.json({error:"This ticket already has an active operation."},409);
 
-  await db
+  const claimed = await db
     .update(projectTickets)
     .set({ queueStatus: "queued", queuedAt: new Date(), updatedAt: new Date() })
-    .where(eq(projectTickets.id, ticketId));
+    .where(and(eq(projectTickets.id, ticketId),eq(projectTickets.queueStatus,ticket.queueStatus)))
+    .returning({id:projectTickets.id});
+  if(!claimed.length)return c.json({error:"Another operation claimed this ticket."},409);
 
   const { bus } = await import("../../events/bus.ts");
   bus.emit({ type: "ticket.queued", payload: { ticketId, projectId: project.id, notes: body.notes, actorId: user.id } });
 
   return c.json({ ok: true });
+});
+
+// Revalidate the saved candidate without dispatching the development agent.
+ticketsApi.post("/:projectId/tickets/:ticketId/retry-validation",async(c)=>{
+  const user=c.get("user");const {projectId,ticketId}=c.req.param();
+  const access=await getProjectAccess(projectId,user.id);
+  if(!access)return c.json({error:"Not found"},404);
+  if(!access.permissions.canManageTickets || !access.permissions.canEditFiles)return c.json({error:"Ticket management and code-edit permissions are required for validation with repair."},403);
+  const [ticket]=await db.select().from(projectTickets).where(and(eq(projectTickets.id,ticketId),eq(projectTickets.projectId,projectId))).limit(1);
+  if(!ticket)return c.json({error:"Ticket not found"},404);
+  try {
+    const {startTicketValidationRetry}=await import("../../workers/ticket-executor.ts");
+    await startTicketValidationRetry(ticketId,user.id);
+    return c.json({ok:true},202);
+  }catch(error){return c.json({error:(error as Error).message},409);}
 });
 
 // ── GET /:projectId/tickets/:ticketId/sandbox ───────────────────────

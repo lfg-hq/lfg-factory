@@ -22,13 +22,20 @@ export interface ValidationEvidence {
 }
 export class ValidationFailure extends Error {
   readonly code = "VALIDATION_FAILED";
+  readonly failureKind: "runtime" | "environment" | "schema" | "http" = "runtime";
   constructor(message: string, readonly evidenceId?: string) { super(message); this.name = "ValidationFailure"; }
 }
 export class ValidationEnvironmentFailure extends ValidationFailure {
+  override readonly failureKind = "environment" as const;
   constructor(message:string,evidenceId?:string,readonly stage='candidate'){super(message,evidenceId);this.name='ValidationEnvironmentFailure';}
 }
 export class ValidationSchemaFailure extends ValidationFailure {
+  override readonly failureKind = "schema" as const;
   constructor(message:string,evidenceId?:string,readonly stage='candidate'){super(message,evidenceId);this.name='ValidationSchemaFailure';}
+}
+export class ValidationHttpFailure extends ValidationFailure {
+  override readonly failureKind = "http" as const;
+  constructor(message:string,evidenceId?:string,readonly stage='candidate'){super(message,evidenceId);this.name='ValidationHttpFailure';}
 }
 export function hashContract(value: unknown): string { return createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
 export function assertEvidence(e: ValidationEvidence, expected: { projectId: string; branch: string; revision: string; baseline?: string; planHash?: string; environmentHash?: string }) {

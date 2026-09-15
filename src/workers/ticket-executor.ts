@@ -1,3 +1,4 @@
+import { ValidationFailure } from "../services/validation-contract.ts";
 import { failureSummary } from "../services/preview-plan.ts";
 import { startBuildEnvironmentWorker } from "../services/build-environment-worker.ts";
 import { createTicketSandbox } from "../services/ticket-sandbox-clone.ts";
@@ -154,6 +155,7 @@ import { generateText, stepCountIs } from "ai";
 import { resolveUserModel } from "../services/app-profile.ts";
 import { addLog } from "../services/ticket-logs.ts";
 import {
+  isChatTurnActive,
   runChatTurn,
   resolveTurnOutcome,
   encodeQuestionMeta,
@@ -1891,6 +1893,7 @@ Before implementing, fix the git issue:
   // repo/token) or the push throws, that's a FAILURE — don't mark it In Review.
   let commitFailed = false;
   let publicationFailure = "";
+  let publicationFailureKind: ValidationFailure["failureKind"] | undefined;
   let publicationDocumentation = "";
   if (implementationStatus === "complete" && !(githubOwner && githubRepo && githubToken)) {
     commitFailed = true;
@@ -2017,6 +2020,7 @@ Before implementing, fix the git issue:
     } catch (err) {
       // A thrown commit/push means the work is NOT on the remote → not a success.
       commitFailed = true;
+      publicationFailureKind = err instanceof ValidationFailure ? err.failureKind : undefined;
       publicationFailure = failureSummary((err as Error).message || String(err), 2400).split("\nFailed command:")[0] || "No diagnostic returned";
       await addLog(ticketId, `Publication/validation FAILED — candidate is not ready for review: ${publicationFailure}`, "cli_error", ownerId);
     }
@@ -2053,7 +2057,7 @@ Before implementing, fix the git issue:
       ? `publication or integration validation failed: ${publicationFailure || "No diagnostic returned"}`
       : (_detail ? `did not complete — ${_detail}` : "Implementation did not complete (the agent stopped without a specific error)");
     if (commitFailed) await db.update(projectTickets).set({ githubMergeStatus: "failed", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId)).catch(() => {});
-    await markTicketFailed(ticketId, reason, ownerId, { emitEvent: false });
+    await markTicketFailed(ticketId, reason, ownerId, { emitEvent: false, failureKind: publicationFailureKind });
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "failed", queueStatus: "none", mergeStatus: commitFailed ? "failed" : undefined });
   }
 
@@ -3653,6 +3657,7 @@ git branch --show-current
 
   let commitFailed = false;
   let publicationFailure = "";
+  let publicationFailureKind: ValidationFailure["failureKind"] | undefined;
   let publicationDocumentation = "";
   let completedSha = "";   // captured for the final completion summary
   let mergedOk = false;
@@ -3722,6 +3727,7 @@ git branch --show-current
     } catch (err) {
       // A failed commit/push means the work is NOT saved — do NOT report success.
       commitFailed = true;
+      publicationFailureKind = err instanceof ValidationFailure ? err.failureKind : undefined;
       publicationFailure = failureSummary((err as Error).message || String(err), 2400).split("\nFailed command:")[0] || "No diagnostic returned";
       const msg = publicationFailure;
       await addLog(ticketId, `Publication/validation FAILED — candidate is not ready for review: ${msg}`, "command", ownerId);
@@ -3781,7 +3787,7 @@ git branch --show-current
     // Persist a durable "not_pushed" merge state so the Git tab flags it (red)
     // even after refresh — not just a transient Actions-log line.
     if (commitFailed) await db.update(projectTickets).set({ githubMergeStatus: "failed", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId)).catch(() => {});
-    await markTicketFailed(ticketId, reason, ownerId, { emitEvent: false });
+    await markTicketFailed(ticketId, reason, ownerId, { emitEvent: false, failureKind: publicationFailureKind });
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "failed", queueStatus: "none", mergeStatus: commitFailed ? "failed" : undefined });
   }
 
@@ -3838,6 +3844,54 @@ function waitForCompletion(
   });
 }
 
+/** Start a validation-only run on an existing dedicated ticket checkout. */
+export async function startTicketValidationRetry(ticketId:string,actorId:string):Promise<void> {
+  if(executingTickets.has(ticketId) || isChatTurnActive(ticketId))throw new Error("This ticket already has an active operation.");
+  executingTickets.add(ticketId);
+  let launched=false;
+  try {
+    const [ticket]=await db.select().from(projectTickets).where(eq(projectTickets.id,ticketId)).limit(1);
+    if(!ticket || /^(queued|executing|stopping)$/.test(ticket.queueStatus))throw new Error("This ticket is unavailable or already running.");
+    const [project]=await db.select().from(projects).where(eq(projects.id,ticket.projectId)).limit(1);
+    if(!project)throw new Error("Project not found.");
+    const sb=await findExistingSandbox(ticketId);
+    if(!sb?.magsWorkspaceId || !["ticket","ticket-chat"].includes(sb.workspaceType) || sb.magsWorkspaceId.startsWith("pv-"))throw new Error("Retry validation requires the saved dedicated build sandbox. No new sandbox or development run was started.");
+    const branch=ticket.githubBranch || sb.currentBranch;
+    if(!branch)throw new Error("No saved ticket branch is available.");
+    const {runtimeValidations}=await import("../db/schema/runtime-validation.ts");
+    const [previous]=await db.select().from(runtimeValidations).where(and(eq(runtimeValidations.projectId,project.id),eq(runtimeValidations.ticketId,ticketId),eq(runtimeValidations.branch,branch))).orderBy(desc(runtimeValidations.createdAt)).limit(1);
+    if(!previous?.baseline)throw new Error("No saved validation baseline is available; build the ticket once first.");
+    const buildLlm=await resolveBuildLlm(project,actorId);
+    const {gitUserId}=resolveGitActor(project,actorId);
+    const auth=await resolveRepoAuth(project,gitUserId);
+    if(!auth)throw new Error("Repository access could not be resolved.");
+    cancelledTickets.delete(ticketId);
+    const claimed=await db.update(projectTickets).set({queueStatus:"executing",updatedAt:new Date()}).where(and(eq(projectTickets.id,ticketId),eq(projectTickets.queueStatus,ticket.queueStatus))).returning({id:projectTickets.id});
+    if(!claimed.length)throw new Error("Another operation claimed this ticket. Retry after it finishes.");
+    broadcastToUser(project.ownerId,{type:"ticket_status",ticketId,status:ticket.status,queueStatus:"executing"});
+    const workspaceId=sb.magsWorkspaceId;
+    const job=runChatTurn(ticketId,async()=>{
+      try {
+        await wakeTicketVm(workspaceId);
+        const {retrySavedValidation}=await import("../services/retry-validation.ts");
+        const sha=await retrySavedValidation({workspaceId,projectDir:"/data/project",featureBranch:branch,repoUrl:auth.repoUrl,githubToken:auth.token,tokenUser:auth.tokenUser,
+          validation:{projectId:project.id,userId:buildLlm.actorId,ticketId,gitCredentialUserId:gitUserId,cancelled:()=>cancelledTickets.has(ticketId),onLog:line=>{void addLog(ticketId,line,"command",project.ownerId).catch(()=>{});},onCheckpoint:async message=>{await addLog(ticketId,message,"agent_progress",project.ownerId);}}},previous.baseline);
+        await db.update(projectTickets).set({status:sha!==ticket.githubCommitSha || ticket.status==="failed" ? "open" : ticket.status,githubMergeStatus:sha!==ticket.githubCommitSha ? "pending" : ticket.githubMergeStatus,updatedAt:new Date()}).where(eq(projectTickets.id,ticketId));
+        await addLog(ticketId,`✅ **Validation passed** for saved commit \`${sha.slice(0,12)}\`. Development was skipped. Any repairs were committed locally; this action did not push, merge or mark the ticket ready for review.`,"ai_response",project.ownerId);
+      } catch(error) {
+        await markTicketFailed(ticketId,failureSummary((error as Error).message).split("\nFailed command:")[0] || "Validation failed",project.ownerId,{emitEvent:false,failureKind:error instanceof ValidationFailure?error.failureKind:undefined});
+      } finally {
+        await sleepTicketVm(workspaceId);
+        await db.update(projectTickets).set({queueStatus:"none",updatedAt:new Date()}).where(eq(projectTickets.id,ticketId));
+        const [current]=await db.select({status:projectTickets.status}).from(projectTickets).where(eq(projectTickets.id,ticketId)).limit(1);
+        broadcastToUser(project.ownerId,{type:"ticket_status",ticketId,status:current?.status||ticket.status,queueStatus:"none"});
+      }
+    });
+    launched=true;
+    void job.catch(error=>console.error("Validation retry failed",error)).finally(()=>executingTickets.delete(ticketId));
+  } finally {if(!launched)executingTickets.delete(ticketId);}
+}
+
 async function findExistingSandbox(ticketId: string) {
   // Match the ticket's sandbox regardless of workspaceType — worktree runs store
   // "ticket-worktree", so restricting to "ticket" meant retries never found the
@@ -3889,7 +3943,7 @@ async function resolveProjectIdForTicket(ticketId: string): Promise<string | nul
   return row?.projectId ?? null;
 }
 
-async function markTicketFailed(ticketId: string, reason: string, userId?: string, opts?: { emitEvent?: boolean }) {
+async function markTicketFailed(ticketId: string, reason: string, userId?: string, opts?: { emitEvent?: boolean; failureKind?: ValidationFailure["failureKind"] }) {
   const projectId = await resolveProjectIdForTicket(ticketId);
   // Early provisioning errors reach this helper before the worker has an owner ID.
   // Still publish terminal status so connected ticket UIs stop their spinner.
@@ -3930,7 +3984,9 @@ async function markTicketFailed(ticketId: string, reason: string, userId?: strin
     `**What went wrong:** ${reason}\n\n` +
     (/clone submission|clone response missing request_id/i.test(reason)
       ? `**How to proceed:** the clone request was not confirmed. Check Magpie for an accepted clone before retrying; automatic resubmission is blocked to avoid duplicate sandboxes. Ticket implementation has not started.`
-      : /schema|database setup|invalid object name|invalid column name/i.test(reason)
+      : opts?.failureKind === "http"
+        ? `**Next step:** the app did not pass its HTTP check. The connection/status diagnostic is shown above. Use Retry validation to test the saved code again, with automatic repair if needed.`
+      : opts?.failureKind === "schema"
         ? `**Next step:** database setup needs a repair before validation can pass. The failure is shown above. You can ask the agent to repair it using the message box below; repeating the same build without a repair may fail again.`
         : /validation failed|recovery stopped/i.test(reason)
           ? `**Next step:** the failure is shown above. You can ask the agent to repair it using the message box below. This attempt has stopped; another attempt must pass validation before the ticket is ready for review.`
