@@ -1,6 +1,6 @@
 import { validationHttpCommand } from "./validation-http.ts";
 import { repairToolDownloadUrls, TOOL_DOWNLOAD_GUIDANCE } from "./tool-download-repair.ts";
-import { validationStepFailure } from "./validation-step-failure.ts";
+import { isResourceFailure, validationStepFailure } from "./validation-step-failure.ts";
 import { validateSchemaTargets } from "./preview-plan.ts";
 import { targetedSqlCommand } from "./preview-sql-target.ts";
 import { eq, and, desc } from "drizzle-orm";
@@ -125,6 +125,10 @@ export async function validateRevision(o:{workspaceId:string;sourceDir:string;re
         const failed=await executeSteps(plan,{cancelled:ctx.cancelled??(()=>false),persist,run:async(s,command)=>{
           ctx.onLog?.(`${upgrade?'Upgrade':'Fresh'} / ${stage}: ${s.label}`);
           const r=await runValidationCommand({workspaceId:o.workspaceId,cwd:dir,root,command,vars,cancelled:ctx.cancelled,log:ctx.onLog});
+          if(r.exitCode !== 0 && (r.exitCode === 137 || isResourceFailure(r.output))) {
+            const diagnostic=await validationShell(o.workspaceId, `printf 'Memory diagnostics (post-failure; counters may include earlier events):\\n'; for f in /sys/fs/cgroup/memory.events /sys/fs/cgroup/memory.current /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory/memory.failcnt /sys/fs/cgroup/memory/memory.limit_in_bytes; do if [ -r "$f" ]; then printf '%s: ' "$f"; cat "$f"; fi; done; free -m 2>/dev/null || true`).catch(() => ({output:"Memory diagnostics unavailable", exitCode:1}));
+            r.output=`Resource failure: command exit ${r.exitCode}.\n${diagnostic.output.slice(0,1000)}\n${r.output}`;
+          }
           // Runtime service scripts run in their own process group and survive the command group cleanup.
           for(const value of Object.values(env.vars)) r.output=r.output.replaceAll(value,'[redacted connection]');
           for(const e of env.engines) r.output=r.output.replaceAll(e.password,'[redacted]');

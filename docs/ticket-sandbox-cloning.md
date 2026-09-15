@@ -178,3 +178,11 @@ setup and redeploy use this check; rollback is not blocked by local source damag
 The existing Docker import check remains in place for other missing imports.
 The new guard reports incomplete checkouts; it does not automatically overwrite
 intentional edits or prevent another process from deleting files later.
+
+## 2026-09-16 — Compiler termination during validation
+
+Compiler exit 137 and explicit memory allocation failures now enter bounded environment recovery, including when raised by acceptance tests. They no longer consume source/schema repair attempts. Exit 137 suggests SIGKILL; it does not establish an OOM kill.
+
+Failed resource commands capture available cgroup memory counters/limits and free memory before cleanup. These are post-failure snapshots, not proof that an accumulated OOM counter belongs to this attempt. Diagnostic collection cannot replace the original failure. Environment repair can persist lower MSBuild concurrency and disable compiler/node reuse in build/test recipe commands, while preserving required tests and analyzers. Capacity blockers must be reported rather than disguised as application defects.
+
+Validation: 12 focused tests passed, TypeScript check passed, server import bundle passed. The remote CoHire build has not been rerun; this change does not establish available sandbox memory or guarantee that its compiler will fit.
