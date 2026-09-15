@@ -77,3 +77,34 @@ Deploy this worktree's updated LFG image, then retry COH-25. No reprobe or datab
 reset is needed for this URL failure. Deployment and the complete live Magpie /
 CoHire validation sequence are not performed by this change. An unrelated later
 runtime failure must still pass recovery and validation before publication.
+
+## 2026-09-15 — Schema recovery and blocked-attempt messages
+
+The next COH-25 attempt reached SQL execution but returned SQL Server message 208:
+`Invalid object name 'dbo.GetBenchSalesPosts'`. The supplied output does not prove
+whether the object was omitted, a script ran out of order, or the connection was
+wrong. LFG now preserves schema failures as a distinct error through validation
+and supplies a database-specific repair prompt covering creation scripts, ALTER
+before CREATE, connection targets, migration order, and fresh/upgrade compatibility.
+The server continues to commit repairs before validating fresh isolated databases;
+no live or shared database is dropped by this change.
+
+The repeated-error check now includes the candidate commit for source/schema
+failures as it already did for environment failures. A changed candidate can use
+the remaining repair attempt even when it still produces the same error. An
+unchanged candidate stops, and two unsuccessful source/schema repairs exhaust the
+budget. Both paths explain the stop and cannot publish a failed revision.
+
+SQL message headers and missing-object/column diagnostics take precedence over
+row-count progress. The Agent card labels validation as blocked, identifies the
+failure, and refers to the message box below rather than telling users already in
+Actions to open Actions. It no longer tells them to adjust ticket requirements to
+fix infrastructure/schema errors. The environment sleep message distinguishes a
+stopped attempt from successful validation/publication and no longer calls a
+sleeping VM "kept warm."
+
+Verification: regression tests exercise identical SQL errors across changed and
+unchanged commits, bounded repair exhaustion, publication refusal, SQL diagnostic
+selection, and existing validation behavior. TypeScript and application bundling
+are checked. The actual CoHire procedure and live Magpie run have not been changed
+or verified; deploy LFG and retry to exercise the improved recovery workflow.

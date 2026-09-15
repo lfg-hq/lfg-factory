@@ -3792,7 +3792,7 @@ git branch --show-current
   // (or failed-but-kept) VM never burns compute sitting idle.
   // SAFETY: never touch the always-on preview VM ("pv-…"), which is keepAlive by design.
   if (isolatedBuild && !useWorktree && workspaceId && !workspaceId.startsWith("pv-")) {
-    await addLog(ticketId, "Build finished — sandbox will sleep when idle (kept warm for resume; removed when the ticket is approved).", "command", ownerId);
+    await addLog(ticketId, implementationStatus === "complete" && !commitFailed ? "Validation and publication passed. The build environment is being put to sleep; saved work is retained." : "This attempt has stopped. The build environment is being put to sleep; saved work is retained for a later attempt.", "command", ownerId);
     await sleepTicketVm(workspaceId);
     await db.update(sandboxes).set({ status: "sleeping", updatedAt: new Date() }).where(eq(sandboxes.ticketId, ticketId)).catch(() => {});
   }
@@ -3926,11 +3926,15 @@ async function markTicketFailed(ticketId: string, reason: string, userId?: strin
   // the success summary — so the user sees WHAT went wrong and HOW to proceed,
   // not just a buried "Execution failed" log line.
   const failMsg =
-    `❌ **Build failed** — I couldn't finish this ticket.\n\n` +
+    (/validation failed|recovery stopped/i.test(reason) ? `❌ **Validation blocked** — this ticket is not ready for review.\n\n` : `❌ **Build failed** — this attempt could not complete.\n\n`) +
     `**What went wrong:** ${reason}\n\n` +
     (/clone submission|clone response missing request_id/i.test(reason)
       ? `**How to proceed:** the clone request was not confirmed. Check Magpie for an accepted clone before retrying; automatic resubmission is blocked to avoid duplicate sandboxes. Ticket implementation has not started.`
-      : `**How to proceed:** open the **Actions** log above and find the failing step, then either adjust the ticket and press **Build Ticket** again, or reply here with guidance and I'll retry. Your branch and build sandbox are preserved, so nothing is lost.`);
+      : /schema|database setup|invalid object name|invalid column name/i.test(reason)
+        ? `**Next step:** database setup needs a repair before validation can pass. The failure is shown above. You can ask the agent to repair it using the message box below; repeating the same build without a repair may fail again.`
+        : /validation failed|recovery stopped/i.test(reason)
+          ? `**Next step:** the failure is shown above. You can ask the agent to repair it using the message box below. This attempt has stopped; another attempt must pass validation before the ticket is ready for review.`
+          : `**Next step:** the failure is shown above. Use the message box below to request a repair or provide missing details, then retry when the blocker has been resolved.`);
   await addLog(ticketId, failMsg, "ai_response", userId);
 
   // TELL THE CHAT THAT ASKED FOR IT. A failure used to live only in the ticket's

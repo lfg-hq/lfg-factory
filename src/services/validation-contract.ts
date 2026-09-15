@@ -27,6 +27,9 @@ export class ValidationFailure extends Error {
 export class ValidationEnvironmentFailure extends ValidationFailure {
   constructor(message:string,evidenceId?:string,readonly stage='candidate'){super(message,evidenceId);this.name='ValidationEnvironmentFailure';}
 }
+export class ValidationSchemaFailure extends ValidationFailure {
+  constructor(message:string,evidenceId?:string,readonly stage='candidate'){super(message,evidenceId);this.name='ValidationSchemaFailure';}
+}
 export function hashContract(value: unknown): string { return createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
 export function assertEvidence(e: ValidationEvidence, expected: { projectId: string; branch: string; revision: string; baseline?: string; planHash?: string; environmentHash?: string }) {
   if (e.status !== "passed" || !e.freshPassed || !e.upgradePassed || e.projectId !== expected.projectId || e.branch !== expected.branch ||

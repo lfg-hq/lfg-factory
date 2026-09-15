@@ -8,7 +8,7 @@ import { runtimeValidations } from "../db/schema/runtime-validation.ts";
 import { appProfileSchema, probeAppProfile, type AppProfile } from "./app-profile.ts";
 import { compileRuntimePlan } from "./runtime-plan.ts";
 import { executeSteps, shellQuote as q, type PlanStep } from "./preview-plan.ts";
-import { ValidationEnvironmentFailure, ValidationFailure, hashContract, type ValidationContext, type ValidationEvidence } from "./validation-contract.ts";
+import { ValidationEnvironmentFailure, ValidationSchemaFailure, ValidationFailure, hashContract, type ValidationContext, type ValidationEvidence } from "./validation-contract.ts";
 import { validationPreparation, validationShell, runValidationCommand, environmentScript, cleanupEnvironmentScript, type ValidationEnvironment } from "./validation-sandbox.ts";
 
 export const CONTRACT_FILE = ".lfg-validation.json";
@@ -152,7 +152,7 @@ export async function validateRevision(o:{workspaceId:string;sourceDir:string;re
     if(recipe.databases.length && o.baseline && o.baseline!==o.revision) await pass(true);
     else if(recipe.databases.length && !o.baseline)throw new ValidationFailure("Database upgrade validation requires an explicit baseline commit",id);
     evidence.upgradePassed=true;evidence.status="passed";await persist();ctx.onLog?.(`Runtime validation passed for ${o.revision.slice(0,12)} (evidence ${id}).`);return evidence;
-  } catch(e) {evidence.status="failed";evidence.error=(e as Error).message;await persist();if(e instanceof ValidationEnvironmentFailure)throw e;throw new ValidationFailure(evidence.error,id);}
+  } catch(e) {evidence.status="failed";evidence.error=(e as Error).message;await persist();if(e instanceof ValidationEnvironmentFailure || e instanceof ValidationSchemaFailure)throw e;throw new ValidationFailure(evidence.error,id);}
   finally {
     for(const g of groups) await cleanup(g);
   }

@@ -159,3 +159,26 @@ test('unchanged archive failure explains the recovery stop and never publishes',
  expect(logs.join('\n')).toContain('tar: invalid magic');expect(repairs).toBe(1);
  expect(git(repo,'ls-remote --heads origin refs/heads/feature/ticket')).toBe('');
 }));
+
+test('changed schema candidate can use second repair for the same SQL error before publication',()=>fixture(async(o,repo)=>{
+ const {ValidationSchemaFailure}=await import('../src/services/validation-contract.ts');
+ let calls=0;const tested:string[]=[];
+ repair=()=>writeFileSync(join(repo,'schema.sql'),`-- persisted repair ${repairs}`);
+ validation=async(v)=>{tested.push(v.revision);if(++calls<3)throw new ValidationSchemaFailure("Invalid object name 'dbo.GetBenchSalesPosts'",'receipt','candidate');};
+ const result=await publishValidatedTicket(o);
+ expect(repairs).toBe(2);expect(calls).toBe(3);expect(new Set(tested).size).toBe(3);expect(result.sha).toBe(tested[2]);
+ expect(repairPrompt).toContain('ALTER is being used before CREATE');expect(repairPrompt).toContain('connection key');expect(repairPrompt).toContain('Do not blindly replace all ALTER');
+}));
+test('schema recovery with no changes explains why it stopped and preserves the unpublished candidate',()=>fixture(async(o,repo)=>{
+ const {ValidationSchemaFailure}=await import('../src/services/validation-contract.ts');
+ validation=async()=>{throw new ValidationSchemaFailure("Invalid object name 'dbo.GetBenchSalesPosts'",'receipt','candidate');};
+ await expect(publishValidatedTicket(o)).rejects.toThrow('Database setup recovery stopped: the same failure repeated without a new committed repair');
+ expect(repairs).toBe(1);expect(git(repo,'ls-remote --heads origin refs/heads/feature/ticket')).toBe('');
+}));
+test('changed candidates that still fail schema validation exhaust their budget without publication',()=>fixture(async(o,repo)=>{
+ const {ValidationSchemaFailure}=await import('../src/services/validation-contract.ts');
+ repair=()=>writeFileSync(join(repo,'schema.sql'),`-- repair ${repairs}`);
+ validation=async()=>{throw new ValidationSchemaFailure('Missing required procedure','receipt','candidate');};
+ await expect(publishValidatedTicket(o)).rejects.toThrow('both source/schema repair attempts failed');
+ expect(repairs).toBe(2);expect(git(repo,'ls-remote --heads origin refs/heads/feature/ticket')).toBe('');
+}));

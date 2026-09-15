@@ -44,3 +44,12 @@ test('failure card summary retains recovery stopping reason and redacts URL cred
  expect(summary).not.toContain('curl');
  expect(failureSummary('error: download https://user:secret@example.com/tool')).not.toContain('user:secret');
 });
+
+test('SQL Server diagnostic excludes successful row counts and preserves object and line', async () => {
+ const output="Applying SQL to connection ConnectionStrings__App\n\n(2 rows affected)\n\n(9 rows affected)\n\n(7 rows affected)\nMsg 208, Level 16, State 6, Server abc, Procedure GetBenchSalesPosts, Line 2\nInvalid object name 'dbo.GetBenchSalesPosts'.";
+ const summary=failureSummary(output);
+ expect(summary).toStartWith('Msg 208');expect(summary).toContain("Invalid object name 'dbo.GetBenchSalesPosts'");expect(summary).not.toContain('rows affected');
+ const {ValidationSchemaFailure}=await import('../src/services/validation-contract.ts');
+ const error=validationStepFailure({id:'schema',phase:'schema',command:'apply scripts.sql',label:'Apply schema',error:summary,status:'failed'},false,'candidate');
+ expect(error).toBeInstanceOf(ValidationSchemaFailure);expect((error as InstanceType<typeof ValidationSchemaFailure>).stage).toBe('candidate');
+});
