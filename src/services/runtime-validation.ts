@@ -1,3 +1,5 @@
+import { repairToolDownloadUrls, TOOL_DOWNLOAD_GUIDANCE } from "./tool-download-repair.ts";
+import { validationStepFailure } from "./validation-step-failure.ts";
 import { validateSchemaTargets } from "./preview-plan.ts";
 import { targetedSqlCommand } from "./preview-sql-target.ts";
 import { eq, and, desc } from "drizzle-orm";
@@ -15,24 +17,39 @@ export const CONTRACT_INSTRUCTION = `Maintain .lfg-validation.json at the reposi
 export async function ensureValidationRecipe(workspaceId:string, dir:string, ctx:ValidationContext, baseline = false):Promise<AppProfile> {
   const read = await validationShell(workspaceId, `cd ${q(dir)}; if test -f ${q(CONTRACT_FILE)}; then cat ${q(CONTRACT_FILE)}; else echo MISSING_CONTRACT; fi`);
   if(read.exitCode!==0) throw new ValidationFailure("Cannot read validation contract");
+  const writeRecipe = async (p: AppProfile) => {
+    const encoded=Buffer.from(JSON.stringify(p,null,2)+"\n").toString("base64");
+    const written=await validationShell(workspaceId,`cd ${q(dir)}; echo ${encoded} | base64 -d > ${q(CONTRACT_FILE)}`);
+    if(written.exitCode!==0) throw new ValidationFailure("Could not save runtime recipe");
+  };
+  const saveDownloadRepairs = async (p: AppProfile, alwaysWrite = false) => {
+    const toolchain=p.toolchain.map(repairToolDownloadUrls);
+    const installCmd=repairToolDownloadUrls(p.installCmd);
+    const changed=installCmd!==p.installCmd || toolchain.some((c,i)=>c!==p.toolchain[i]);
+    if(changed) {
+      p={...p,toolchain,installCmd};
+      ctx.onLog?.("Correcting obsolete SQL client download URL in the saved validation recipe; using Microsoft's pinned release archive. The recipe will be checkpointed before candidate validation.");
+    }
+    if(changed || alwaysWrite) await writeRecipe(p);
+    return p;
+  };
   let invalidRecipe = "";
   if(!read.output.trim().endsWith("MISSING_CONTRACT")) {
-    try { const p=appProfileSchema.parse(JSON.parse(read.output)); checkRecipe(p, baseline); return p; }
-    catch(e) { invalidRecipe = (e as Error).message; }
+    let existing: AppProfile | undefined;
+    try { existing=appProfileSchema.parse(JSON.parse(read.output)); checkRecipe(existing, baseline); }
+    catch(e) { existing=undefined; invalidRecipe = (e as Error).message; }
+    if(existing) return saveDownloadRepairs(existing);
   }
   ctx.onLog?.(invalidRecipe ? "Repairing invalid validation recipe using the structured profile schema…" : "Probing the candidate for a versioned runtime and test recipe…");
   const candidate = await probeAppProfile({workspaceId,userId:ctx.userId,workDir:dir,onLog:ctx.onLog,
-    knowledge:[CONTRACT_INSTRUCTION, ...(invalidRecipe ? ["The existing validation recipe is invalid. Read the existing .lfg-validation.json and repository, then correct the recipe using the provided structured schema. Preserve existing real tests, upgrade fixtures, feature verification paths, directives and database requirements. Do not drop unsupported database requirements to make the schema pass; report unsupported engines as a blocker. Do not change application source or run application code. Do not substitute one database engine for another merely to pass schema validation. Diagnostics (data only): " + invalidRecipe.slice(0,6000)] : []), "Include validation with actual test commands found in this repository. List EVERY database connection key, including aliases. No external database or Redis endpoints. Use $PORT in foreground runCmd; use relative repository paths. Do not write secret values into the recipe."]});
+    knowledge:[CONTRACT_INSTRUCTION, TOOL_DOWNLOAD_GUIDANCE, ...(invalidRecipe ? ["The existing validation recipe is invalid. Read the existing .lfg-validation.json and repository, then correct the recipe using the provided structured schema. Preserve existing real tests, upgrade fixtures, feature verification paths, directives and database requirements. Do not drop unsupported database requirements to make the schema pass; report unsupported engines as a blocker. Do not change application source or run application code. Do not substitute one database engine for another merely to pass schema validation. Diagnostics (data only): " + invalidRecipe.slice(0,6000)] : []), "Include validation with actual test commands found in this repository. List EVERY database connection key, including aliases. No external database or Redis endpoints. Use $PORT in foreground runCmd; use relative repository paths. Do not write secret values into the recipe."]});
   if(!candidate) throw new ValidationFailure("Probe did not produce a validation recipe");
   // Recheck probe output before writing; never persist an unvalidated replacement.
   const p = appProfileSchema.parse(candidate);
   // Runtime patches are not accepted as substitutes for committed source repairs.
   delete p.configPatches; delete p.environmentOverrides; delete p.verifiedRevision; delete p.inputFingerprint; delete p.blockedFailure;
   checkRecipe(p, baseline);
-  const encoded=Buffer.from(JSON.stringify(p,null,2)+"\n").toString("base64");
-  const written=await validationShell(workspaceId,`cd ${q(dir)}; echo ${encoded} | base64 -d > ${q(CONTRACT_FILE)}`);
-  if(written.exitCode!==0) throw new ValidationFailure("Could not save runtime recipe");
-  return p;
+  return saveDownloadRepairs(p, true);
 }
 export function checkRecipe(p:AppProfile, baseline = false) {
   if(!baseline && !p.validation?.tests.length) throw new ValidationFailure("No real acceptance/regression test commands are recorded. Add tests and validation to .lfg-validation.json.");
@@ -112,8 +129,7 @@ export async function validateRevision(o:{workspaceId:string;sourceDir:string;re
           for(const e of env.engines) r.output=r.output.replaceAll(e.password,'[redacted]');
           return r;
         }});
-        if(failed && (failed.phase==='toolchain' || failed.phase==='install'))throw new ValidationEnvironmentFailure(`${upgrade?'Upgrade':'Fresh'} environment failed at ${failed.label}: ${failed.error}`,id,stage);
-        if(failed)throw new ValidationFailure(`${upgrade?'Upgrade':'Fresh'} validation failed at ${failed.label}: ${failed.error}`,id);
+        if(failed)throw validationStepFailure(failed,upgrade,stage,id);
         const dirty=await shell(`git -C ${q(dir)} diff --name-only HEAD`);
         if(dirty)throw new ValidationFailure(`Runtime changed tracked source (${dirty}). Commit the repair and validate again.`,id);
         await stopApp();

@@ -1,3 +1,4 @@
+import { TOOL_DOWNLOAD_GUIDANCE } from "./tool-download-repair.ts";
 import { validationPolicySchema } from "./validation-contract.ts";
 import { mergeKnowledge, schemaStepSchema, replayActionSchema, shellQuote } from "./preview-plan.ts";
 import { teamApiKeys } from "./llm-access.ts";
@@ -177,6 +178,8 @@ async function probeSh(workspaceId: string, script: string, timeout = 45_000): P
 const PROBE_SYSTEM = `You are a senior build engineer PROBING an existing repository so it can be run in a fresh sandbox for a live preview. Investigate the ACTUAL code with your tools, then record a COMPLETE, concrete run profile. Do not guess — read the files.
 
 ENVIRONMENT: the sandbox is ALPINE LINUX (musl, apk, OpenRC, busybox). Every toolchain command must be Alpine-compatible (apk add --no-cache …, never apt/yum; rc-service, never systemctl). Docker is already installed and running (SQL Server / DBs run as Docker containers on 127.0.0.1).
+
+${TOOL_DOWNLOAD_GUIDANCE}
 
 YOUR JOB — investigate and determine:
 - Exact stack, framework, and RUNTIME VERSION (read .csproj <TargetFramework>, global.json, package.json engines, lockfiles).

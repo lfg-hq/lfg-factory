@@ -1,3 +1,4 @@
+import { failureSummary } from "../services/preview-plan.ts";
 import { startBuildEnvironmentWorker } from "../services/build-environment-worker.ts";
 import { createTicketSandbox } from "../services/ticket-sandbox-clone.ts";
 import { recoverSandboxStorage, destroyWorkspaceAfterStop } from "../services/sandbox-storage-recovery.ts";
@@ -1889,9 +1890,11 @@ Before implementing, fix the git issue:
   // A build isn't "done" until the work is on the remote. If we can't push (no
   // repo/token) or the push throws, that's a FAILURE — don't mark it In Review.
   let commitFailed = false;
+  let publicationFailure = "";
   let publicationDocumentation = "";
   if (implementationStatus === "complete" && !(githubOwner && githubRepo && githubToken)) {
     commitFailed = true;
+    publicationFailure = "Repository or credentials are missing; connect the repository in Settings.";
     await addLog(ticketId, "Build finished but the work was NOT pushed — GitHub isn't connected (no repo/token). Connect GitHub in Settings and rebuild.", "cli_error", ownerId);
   }
   if (implementationStatus === "complete" && githubOwner && githubRepo && githubToken) {
@@ -2014,7 +2017,8 @@ Before implementing, fix the git issue:
     } catch (err) {
       // A thrown commit/push means the work is NOT on the remote → not a success.
       commitFailed = true;
-      await addLog(ticketId, `Publication/validation FAILED — candidate is not ready for review: ${err}`, "cli_error", ownerId);
+      publicationFailure = failureSummary((err as Error).message || String(err), 2400).split("\nFailed command:")[0] || "No diagnostic returned";
+      await addLog(ticketId, `Publication/validation FAILED — candidate is not ready for review: ${publicationFailure}`, "cli_error", ownerId);
     }
   }
 
@@ -2046,7 +2050,7 @@ Before implementing, fix the git issue:
   } else {
     const _detail = commitFailed ? "" : await lastErrorSnippet(ticketId);
     const reason = commitFailed
-      ? "publication or integration validation failed — see the exact blocker in the build log; rebuild after fixing it"
+      ? `publication or integration validation failed: ${publicationFailure || "No diagnostic returned"}`
       : (_detail ? `did not complete — ${_detail}` : "Implementation did not complete (the agent stopped without a specific error)");
     if (commitFailed) await db.update(projectTickets).set({ githubMergeStatus: "failed", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId)).catch(() => {});
     await markTicketFailed(ticketId, reason, ownerId, { emitEvent: false });
@@ -3648,6 +3652,7 @@ git branch --show-current
   const durationMs = Date.now() - startTime;
 
   let commitFailed = false;
+  let publicationFailure = "";
   let publicationDocumentation = "";
   let completedSha = "";   // captured for the final completion summary
   let mergedOk = false;
@@ -3658,6 +3663,7 @@ git branch --show-current
   // an actionable message instead.
   if (implementationStatus === "complete" && !pushAuth) {
     commitFailed = true;
+    publicationFailure = "Repository credentials could not be resolved; check the GitHub/GitLab integration in Settings.";
     await addLog(ticketId, "Build finished but the work was NOT pushed — no repository/credentials resolved (repo not linked, or the GitHub/GitLab token expired). Reconnect the repo in Settings and rebuild.", "cli_error", ownerId);
     console.error(`[ticket-executor-api] complete but pushAuth is null — cannot push ticket ${ticketId}`);
   }
@@ -3716,7 +3722,8 @@ git branch --show-current
     } catch (err) {
       // A failed commit/push means the work is NOT saved — do NOT report success.
       commitFailed = true;
-      const msg = (err as Error).message?.slice(0, 400) ?? String(err);
+      publicationFailure = failureSummary((err as Error).message || String(err), 2400).split("\nFailed command:")[0] || "No diagnostic returned";
+      const msg = publicationFailure;
       await addLog(ticketId, `Publication/validation FAILED — candidate is not ready for review: ${msg}`, "command", ownerId);
       console.error(`[ticket-executor-api] commit/push failed:`, err);
     }
@@ -3769,7 +3776,7 @@ git branch --show-current
   } else {
     const _lastErr = commitFailed ? "" : await lastErrorSnippet(ticketId);
     const reason = commitFailed
-      ? "publication or integration validation failed — see the exact blocker in the build log; the build sandbox is kept"
+      ? `publication or integration validation failed: ${publicationFailure || "No diagnostic returned"}; the build sandbox is kept`
       : `the agent finished without reporting completion${_lastErr ? ` — last error: ${_lastErr}` : ""}`;
     // Persist a durable "not_pushed" merge state so the Git tab flags it (red)
     // even after refresh — not just a transient Actions-log line.

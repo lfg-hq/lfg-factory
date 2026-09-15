@@ -31,3 +31,49 @@ maintain a separate golden-image sandbox. Existing ticket sandboxes are reused.
 Ticket-chat provisioning retains its existing flow. Magpie's clone endpoint and
 supporting agent binary must be deployed for cloning to work. Live clone behavior
 has not been exercised by local unit tests.
+
+## 2026-09-15 — SQL client download and validation recovery
+
+### Failure and cause
+
+COH-25 stopped in fresh candidate environment preparation, before its application
+validation could run. The saved toolchain used `https://aka.ms/sqlcmd-linux-amd64`.
+A direct check returned HTTP 200 with approximately 67 KB of HTML, redirected to
+Bing. `curl --fail` consequently reported success; extracting the response produced
+`tar: invalid magic` and `tar: short read`. This is an installer URL failure, not
+evidence of a CoHire schema failure.
+
+### Implementation
+
+- Before candidate validation, LFG repairs these known obsolete sqlcmd aliases in
+  toolchain and dependency-install commands to Microsoft's pinned v1.10.0 release
+  assets. Literal amd64/arm64 and shell architecture variables are preserved, as
+  are surrounding commands. Explicit versioned URLs and unrelated downloads are
+  unchanged. Existing recipes are corrected without reprobe; newly probed and
+  baseline recipes receive the same check.
+- Candidate recipe changes are written into `.lfg-validation.json` and included in
+  the existing server-owned commit checkpoint before validation. A write failure
+  blocks progress. No database mappings, migration order or tests are discarded.
+- Probe and environment-repair instructions now cover HTTP-200 HTML responses,
+  archive verification, architecture, executable checks and reuse of an existing
+  SQL client. Generic environment repair remains bounded to two attempts.
+- Archive diagnostics survive long curl progress output. Validation errors put the
+  cause before the command and retain environment/source classification. Exhausted
+  or unchanged recovery states explain why recovery stopped.
+- Both ticket execution paths pass the actual diagnostic into the Agent failure
+  card instead of replacing it with a generic publication failure. Commands stay
+  in operation details; credentials in HTTP URL diagnostics are redacted.
+
+### Validation and rollout
+
+Regression coverage checks URL preservation/idempotence, persisted recipe repair,
+write failure, archive-failure classification, commit-before-revalidation, and
+refusal to publish failed candidates. The official Linux amd64 release archive
+was downloaded, listed and extracted; `sqlcmd -?` reported v1.10.0 in a local
+Alpine 3.24 container (the ARM host executes the amd64 binary through emulation).
+TypeScript and the application import bundle are checked separately.
+
+Deploy this worktree's updated LFG image, then retry COH-25. No reprobe or database
+reset is needed for this URL failure. Deployment and the complete live Magpie /
+CoHire validation sequence are not performed by this change. An unrelated later
+runtime failure must still pass recovery and validation before publication.

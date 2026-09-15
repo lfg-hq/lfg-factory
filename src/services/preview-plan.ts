@@ -45,9 +45,9 @@ export function mergeKnowledge<T extends { learnings?: string[]; directives?: st
   };
 }
 export function failureSummary(output: string, limit = 2400): string {
-  const text = output.replace(/\x1b\[[0-9;]*m/g, "").replace(/(Password|Pwd|API_KEY|token)(\s*[=:]\s*)[^;\s"']+/gi, "$1$2[redacted]");
+  const text = output.replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, "$1[redacted]@").replace(/\x1b\[[0-9;]*m/g, "").replace(/(Password|Pwd|API_KEY|token)(\s*[=:]\s*)[^;\s"']+/gi, "$1$2[redacted]");
   const lines = text.split("\n");
-  const first = lines.findIndex(line => /(?:exception|error\b|failed|fatal|pendingmodelchanges|conflicting assets)/i.test(line) && !/^\s*at /.test(line));
+  const first = lines.findIndex(line => /(?:exception|error\b|failed|fatal|pendingmodelchanges|conflicting assets|recovery stopped|tar:|invalid magic|short read)/i.test(line) && !/^\s*at /.test(line));
   return (first >= 0 ? lines.slice(first, first + 16).join("\n") : text).slice(0, limit).trim();
 }
 export function failureKey(revision: string, step: PlanStep, output: string): string {

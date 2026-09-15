@@ -138,3 +138,24 @@ test('unchanged repeated environment failure remains blocked from publication',(
  await expect(publishValidatedTicket(o)).rejects.toThrow('feed unreachable');expect(repairs).toBe(1);
  expect(git(repo,'ls-remote --heads origin refs/heads/feature/ticket')).toBe('');
 }));
+
+test('archive failure repairs and commits the download recipe before a clean retry',()=>fixture(async(o,repo)=>{
+ let calls=0;
+ writeFileSync(join(repo,'.lfg-validation.json'),JSON.stringify({toolchain:['curl https://aka.ms/sqlcmd-linux-amd64']}));
+ git(repo,'add .');git(repo,'commit -qm recipe');
+ repair=()=>writeFileSync(join(repo,'.lfg-validation.json'),JSON.stringify({toolchain:['curl https://github.com/microsoft/go-sqlcmd/releases/download/v1.10.0/sqlcmd-linux-amd64.tar.bz2']}));
+ validation=async(v)=>{
+   if(calls++===0)throw new ValidationEnvironmentFailure('Fresh environment failed: tar: invalid magic\ntar: short read','evidence');
+   expect(git(repo,`show ${v.revision}:.lfg-validation.json`)).toContain('/v1.10.0/');
+ };
+ const result=await publishValidatedTicket(o);
+ expect(calls).toBe(2);expect(repairPrompt).toContain('HTTP 200 alone');expect(repairPrompt).toContain('tar -tjf');
+ expect(git(repo,'ls-remote --heads origin refs/heads/feature/ticket')).toContain(result.sha);
+}));
+test('unchanged archive failure explains the recovery stop and never publishes',()=>fixture(async(o,repo)=>{
+ const logs:string[]=[];o.validation.onLog=(message:string)=>logs.push(message);
+ validation=async()=>{throw new ValidationEnvironmentFailure('tar: invalid magic','evidence');};
+ await expect(publishValidatedTicket(o)).rejects.toThrow('same failure repeated without a new committed repair');
+ expect(logs.join('\n')).toContain('tar: invalid magic');expect(repairs).toBe(1);
+ expect(git(repo,'ls-remote --heads origin refs/heads/feature/ticket')).toBe('');
+}));
