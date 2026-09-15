@@ -757,7 +757,7 @@ ticketsApi.post("/:projectId/tickets/:ticketId/retry-validation",async(c)=>{
   const access=await getProjectAccess(projectId,user.id);
   if(!access)return c.json({error:"Not found"},404);
   if(!access.permissions.canManageTickets || !access.permissions.canEditFiles)return c.json({error:"Ticket management and code-edit permissions are required for validation with repair."},403);
-  const [ticket]=await db.select().from(projectTickets).where(and(eq(projectTickets.id,ticketId),eq(projectTickets.projectId,projectId))).limit(1);
+  const [ticket]=await db.select().from(projectTickets).where(and(eq(projectTickets.id,ticketId),eq(projectTickets.projectId,access.project.id))).limit(1);
   if(!ticket)return c.json({error:"Ticket not found"},404);
   try {
     const {startTicketValidationRetry}=await import("../../workers/ticket-executor.ts");

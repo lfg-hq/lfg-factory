@@ -151,3 +151,14 @@ diagnostics, typed HTTP recovery, clean saved-commit retry without publication,
 wrong-branch and dirty-checkout refusal, plus existing publication/repair tests.
 TypeScript, generated inline JavaScript and application import bundling pass.
 Deployment and the live CoHire/Magpie rerun remain outstanding.
+
+### Retry-validation project lookup correction
+
+The first deployed Retry validation endpoint incorrectly compared the URL's public
+project ID with `project_ticket.project_id`, which stores the internal project ID.
+It now uses `access.project.id`, matching the existing Build endpoint. The failure
+occurred before validation dispatch; it did not indicate a missing sandbox or lost
+code. An API regression test uses a real SQLite ticket lookup with different public
+and internal IDs, verifies successful dispatch, and rejects another project's
+ticket, missing tickets and callers without the required permissions. No schema
+migration is required.
