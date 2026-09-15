@@ -36,7 +36,7 @@ async function fixture(fn:(o:any,repo:string,bare:string)=>Promise<void>){
 test('failed runtime validation cannot publish a ticket, even when repair reports success',()=>fixture(async(o,repo,bare)=>{
  validation=async()=>{throw new Error('Migration mismatch');};
  await expect(publishValidatedTicket(o)).rejects.toThrow('Migration mismatch');
- expect(git(repo,'ls-remote --heads origin refs/heads/feature/ticket')).toBe('');expect(repairs).toBe(1);
+ expect(git(repo,'ls-remote --heads origin refs/heads/feature/ticket')).toBe('');expect(repairs).toBe(4);
 }));
 test('unchanged candidate still validates and publishes the exact tested SHA',()=>fixture(async(o,repo)=>{
  const calls:string[]=[];validation=async(v)=>{calls.push(v.revision);};
@@ -120,22 +120,23 @@ test('commit announcement arrives before validation and identifies the committed
  expect(events[0]).toContain('Committed');
 }));
 
-test('tool install failure selects environment repair and commits the corrected recipe before retry',()=>fixture(async(o,repo)=>{
+test('tool install failure selects cross-layer repair and commits the corrected recipe before retry',()=>fixture(async(o,repo)=>{
  let calls=0;
  repair=()=>writeFileSync(join(repo,'.lfg-validation.json'),JSON.stringify({toolchain:['verify-compatible-ef || install-ef']}));
  validation=async()=>{if(calls++===0)throw new ValidationEnvironmentFailure('Downloading dotnet-ef failed','evidence');expect(git(repo,'status --porcelain')).toBe('');};
  await publishValidatedTicket(o);
- expect(repairPrompt).toContain('ENVIRONMENT');expect(repairPrompt).toContain('bounded diagnostic and tool-install commands');expect(repairPrompt).toContain('Preserve database mappings');expect(calls).toBe(2);
+ expect(repairPrompt).toContain('You may repair application source');expect(repairPrompt).toContain('bounded diagnostics, builds, tests');expect(repairPrompt).toContain('schema steps, upgrade fixtures');expect(calls).toBe(2);
 }));
-test('environment recovery has its own budget after a source repair',()=>fixture(async(o,repo)=>{
+test('cross-layer recovery shares a budget and retains previous failure evidence',()=>fixture(async(o,repo)=>{
  let calls=0;
  repair=()=>writeFileSync(join(repo,'.lfg-validation.json'),JSON.stringify({toolchain:['repair-'+repairs]}));
  validation=async()=>{calls++;if(calls===1)throw new Error('application error');if(calls<4)throw new ValidationEnvironmentFailure('download failed','evidence');};
  await publishValidatedTicket(o);expect(calls).toBe(4);expect(repairs).toBe(3);
+ expect(repairPrompt).toContain("Attempt 1: application error");expect(repairPrompt).toContain("Attempt 2: download failed");
 }));
 test('unchanged repeated environment failure remains blocked from publication',()=>fixture(async(o,repo)=>{
  validation=async()=>{throw new ValidationEnvironmentFailure('feed unreachable','evidence');};
- await expect(publishValidatedTicket(o)).rejects.toThrow('feed unreachable');expect(repairs).toBe(1);
+ await expect(publishValidatedTicket(o)).rejects.toThrow('feed unreachable');expect(repairs).toBe(4);
  expect(git(repo,'ls-remote --heads origin refs/heads/feature/ticket')).toBe('');
 }));
 
@@ -155,8 +156,8 @@ test('archive failure repairs and commits the download recipe before a clean ret
 test('unchanged archive failure explains the recovery stop and never publishes',()=>fixture(async(o,repo)=>{
  const logs:string[]=[];o.validation.onLog=(message:string)=>logs.push(message);
  validation=async()=>{throw new ValidationEnvironmentFailure('tar: invalid magic','evidence');};
- await expect(publishValidatedTicket(o)).rejects.toThrow('same failure repeated without a new committed repair');
- expect(logs.join('\n')).toContain('tar: invalid magic');expect(repairs).toBe(1);
+ await expect(publishValidatedTicket(o)).rejects.toThrow('Automatic repair stopped after four repair attempts');
+ expect(logs.join('\n')).toContain('tar: invalid magic');expect(repairs).toBe(4);
  expect(git(repo,'ls-remote --heads origin refs/heads/feature/ticket')).toBe('');
 }));
 
@@ -167,20 +168,20 @@ test('changed schema candidate can use second repair for the same SQL error befo
  validation=async(v)=>{tested.push(v.revision);if(++calls<3)throw new ValidationSchemaFailure("Invalid object name 'dbo.GetBenchSalesPosts'",'receipt','candidate');};
  const result=await publishValidatedTicket(o);
  expect(repairs).toBe(2);expect(calls).toBe(3);expect(new Set(tested).size).toBe(3);expect(result.sha).toBe(tested[2]);
- expect(repairPrompt).toContain('ALTER is being used before CREATE');expect(repairPrompt).toContain('connection key');expect(repairPrompt).toContain('Do not blindly replace all ALTER');
+ expect(repairPrompt).toContain('creation order and fresh/upgrade requirements');expect(repairPrompt).toContain('Prior validation failures');
 }));
 test('schema recovery with no changes explains why it stopped and preserves the unpublished candidate',()=>fixture(async(o,repo)=>{
  const {ValidationSchemaFailure}=await import('../src/services/validation-contract.ts');
  validation=async()=>{throw new ValidationSchemaFailure("Invalid object name 'dbo.GetBenchSalesPosts'",'receipt','candidate');};
- await expect(publishValidatedTicket(o)).rejects.toThrow('Database setup recovery stopped: the same failure repeated without a new committed repair');
- expect(repairs).toBe(1);expect(git(repo,'ls-remote --heads origin refs/heads/feature/ticket')).toBe('');
+ await expect(publishValidatedTicket(o)).rejects.toThrow('Automatic repair stopped after four repair attempts');
+ expect(repairs).toBe(4);expect(git(repo,'ls-remote --heads origin refs/heads/feature/ticket')).toBe('');
 }));
 test('changed candidates that still fail schema validation exhaust their budget without publication',()=>fixture(async(o,repo)=>{
  const {ValidationSchemaFailure}=await import('../src/services/validation-contract.ts');
  repair=()=>writeFileSync(join(repo,'schema.sql'),`-- repair ${repairs}`);
  validation=async()=>{throw new ValidationSchemaFailure('Missing required procedure','receipt','candidate');};
- await expect(publishValidatedTicket(o)).rejects.toThrow('both source/schema repair attempts failed');
- expect(repairs).toBe(2);expect(git(repo,'ls-remote --heads origin refs/heads/feature/ticket')).toBe('');
+ await expect(publishValidatedTicket(o)).rejects.toThrow('Automatic repair stopped after four repair attempts');
+ expect(repairs).toBe(4);expect(git(repo,'ls-remote --heads origin refs/heads/feature/ticket')).toBe('');
 }));
 
 test('validation retry tests saved commits without publishing the ticket',()=>fixture(async(o,repo)=>{
@@ -203,5 +204,5 @@ test('HTTP repair uses transport evidence and retains its failure type when exha
  const {ValidationHttpFailure}=await import('../src/services/validation-contract.ts');
  validation=async()=>{throw new ValidationHttpFailure('HTTP validation failed: connection refused','receipt');};
  try{await publishValidatedTicket(o);throw new Error('unexpected publication');}catch(e){expect(e).toBeInstanceOf(ValidationHttpFailure);expect((e as InstanceType<typeof ValidationHttpFailure>).failureKind).toBe('http');}
- expect(repairPrompt).toContain('listening sockets');expect(repairPrompt).toContain('Do not infer database failure');
+ expect(repairPrompt).toContain('sockets');expect(repairPrompt).toContain('failure categories are clues, not limits');
 }));

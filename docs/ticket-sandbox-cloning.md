@@ -186,3 +186,9 @@ Compiler exit 137 and explicit memory allocation failures now enter bounded envi
 Failed resource commands capture available cgroup memory counters/limits and free memory before cleanup. These are post-failure snapshots, not proof that an accumulated OOM counter belongs to this attempt. Diagnostic collection cannot replace the original failure. Environment repair can persist lower MSBuild concurrency and disable compiler/node reuse in build/test recipe commands, while preserving required tests and analyzers. Capacity blockers must be reported rather than disguised as application defects.
 
 Validation: 12 focused tests passed, TypeScript check passed, server import bundle passed. The remote CoHire build has not been rerun; this change does not establish available sandbox memory or guarantee that its compiler will fit.
+
+## 2026-09-16 — Unified validation repair
+
+Recovery now invokes one cross-layer repair prompt for every validation failure. Failure types remain useful diagnostics but no longer constrain editing permissions or select a separate repair budget. The agent can repair application source, setup, dependencies, database scripts, runtime configuration and test defects, and run bounded diagnostic builds/tests against isolated resources in the ticket sandbox. Durable changes remain tracked; server validation of the clean committed revision is still required before publication.
+
+Four shared repairs replace the two-per-category budgets. Repeated diagnostics no longer immediately stop recovery, and prior failure evidence is supplied to help the agent change approach. Cancellation, agent time limits and the four-repair ceiling still bound execution. External capacity/access blockers remain real blockers; no tests or required validation may be bypassed.
