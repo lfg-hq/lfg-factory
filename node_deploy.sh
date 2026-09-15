@@ -9,6 +9,12 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+CMD="${1:-deploy}"
+case "$CMD" in
+  deploy|setup|redeploy)
+    bash scripts/check-deploy-checkout.sh
+    ;;
+esac
 
 # Load production env vars (must export KAMAL_REGISTRY_PASSWORD, etc.)
 if [ -f ".env.production" ]; then
@@ -36,8 +42,6 @@ done
 # Ensure persistent data/upload directories exist on the server
 echo ">>> Ensuring remote directories exist..."
 ssh "root@${DEPLOY_SERVER:?Set DEPLOY_SERVER to your server host/IP}" "mkdir -p /root/lfg-node/data /root/lfg-node/uploads"
-
-CMD="${1:-deploy}"
 
 echo ">>> Running: kamal $CMD"
 kamal "$CMD"

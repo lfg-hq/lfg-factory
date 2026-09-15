@@ -162,3 +162,19 @@ code. An API regression test uses a real SQLite ticket lookup with different pub
 and internal IDs, verifies successful dispatch, and rejects another project's
 ticket, missing tickets and callers without the required permissions. No schema
 migration is required.
+
+## 2026-09-16 — Restore incomplete deployment checkout
+
+The Docker import check correctly rejected the local deployment folder because
+`src/services/sandbox/mags-backend.ts` and
+`src/services/build-environment-worker.ts` were absent. Both were already tracked
+in HEAD. Their deletions, plus the missing worker test and preflight document,
+were restored exactly from HEAD. The available evidence does not identify the
+process that removed them.
+
+`node_deploy.sh` now checks Git metadata and missing tracked application/build
+files before loading production credentials or contacting the server. Deploy,
+setup and redeploy use this check; rollback is not blocked by local source damage.
+The existing Docker import check remains in place for other missing imports.
+The new guard reports incomplete checkouts; it does not automatically overwrite
+intentional edits or prevent another process from deleting files later.
