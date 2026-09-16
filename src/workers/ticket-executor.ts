@@ -932,7 +932,7 @@ export async function requestTicketStop(ticketId: string, projectId?: string): P
     // agent in the same box (and any install the preview is running). Kill only this
     // lane: its recorded agent pid, plus anything whose working directory is this
     // ticket's worktree — which is where the agent and every command it spawns live.
-    const sharedRows = sbs.filter((sb) => sb.ws && sb.type === "ticket-worktree" && sb.ws.startsWith("pv-"));
+    const sharedRows = sbs.filter((sb) => sb.ws && (sb.type === "ticket-worktree" || sb.ws.startsWith("pv-")));
     if (sharedRows.length) {
       const dir = `${WORKING_DIR}/${ticketWorktreeDirName(ticketId)}`;
       const b64 = Buffer.from(scopedStopScript(dir, laneOf(ticketId)?.pid)).toString("base64");
@@ -949,7 +949,7 @@ export async function requestTicketStop(ticketId: string, projectId?: string): P
     // would stop every other ticket working in the same box.)
     await Promise.all(
       sbs
-        .filter((sb) => !!sb.ws && !(sb.type === "ticket-worktree" && sb.ws.startsWith("pv-")))
+        .filter((sb) => !!sb.ws && !((sb.type === "ticket-worktree" || sb.ws.startsWith("pv-"))))
         .map((sb) =>
           execOnWorkspace(
             sb.ws!,
@@ -965,8 +965,8 @@ export async function requestTicketStop(ticketId: string, projectId?: string): P
   // inspecting every dedicated sandbox; never clear a lock on a transport failure.
   if(!executingTickets.has(ticketId) && !isChatTurnActive(ticketId)) {
     const rows=await db.select({ws:sandboxes.magsWorkspaceId,type:sandboxes.workspaceType}).from(sandboxes).where(eq(sandboxes.ticketId,ticketId));
-    await confirmTicketStopped(rows,async workspace=>{
-      const script=Buffer.from(ticketStopVerificationScript()).toString("base64");
+    await confirmTicketStopped(rows,async (workspace,shared)=>{
+      const script=Buffer.from(ticketStopVerificationScript(shared ? `${WORKING_DIR}/${ticketWorktreeDirName(ticketId)}` : undefined)).toString("base64");
       return execOnWorkspace(workspace,`echo ${script} | base64 -d | bash`,{timeout:20_000});
     });
     await db.update(projectTickets).set({status:"stopped",queueStatus:"none",updatedAt:new Date()}).where(and(eq(projectTickets.id,ticketId),eq(projectTickets.queueStatus,"stopping")));

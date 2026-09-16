@@ -10,13 +10,33 @@ test('live processes, failed inspections and network errors cannot unlock ticket
  for(const result of [{exitCode:1,output:'processes remain'},{exitCode:0,output:''}]) await expect(confirmTicketStopped(rows,async()=>result)).rejects.toThrow('not confirmed');
  await expect(confirmTicketStopped(rows,async()=>{throw new Error('unreachable');})).rejects.toThrow('unreachable');
 });
-test('shared and unknown workspaces are never inspected as dedicated VMs',async()=>{
- let calls=0;
- for(const row of [{ws:'pv-shared',type:'ticket-worktree'},{ws:null,type:'ticket'}])await expect(confirmTicketStopped([row],async()=>{calls++;return {exitCode:0,output:'TICKET_PROCESSES_STOPPED'};})).rejects.toThrow('scoped');
- expect(calls).toBe(0);
+test('shared and worktree sandboxes use scoped inspection while dedicated ones stay dedicated',async()=>{
+ const scopes:boolean[]=[];
+ await confirmTicketStopped([{ws:'pv-shared',type:'ticket-worktree'},{ws:'legacy',type:'ticket-worktree'},{ws:'dedicated',type:'ticket'}],async(_,shared)=>{scopes.push(shared);return {exitCode:0,output:'TICKET_PROCESSES_STOPPED'};});
+ expect(scopes).toEqual([true,true,false]);
+});
+test('missing workspace IDs and unknown types report the actual record problem',async()=>{
+ await expect(confirmTicketStopped([{ws:null,type:'ticket'}],async()=>({exitCode:0}))).rejects.toThrow('no workspace ID');
+ await expect(confirmTicketStopped([{ws:'vm',type:'unknown'}],async()=>({exitCode:0}))).rejects.toThrow('unsupported sandbox type unknown');
 });
 test('inspection script is valid Python',()=>{
  const script=ticketStopVerificationScript().split("\n").slice(1,-1).join('\n');
  const result=Bun.spawnSync(['python3','-c','import ast,sys;ast.parse(sys.stdin.read())'],{stdin:Buffer.from(script)});
  expect(result.exitCode).toBe(0);
+});
+
+test('scoped inspection ignores other ticket agents and catches this ticket process',async()=>{
+ const {mkdtempSync,mkdirSync,writeFileSync,symlinkSync,rmSync}=await import('node:fs');
+ const {tmpdir}=await import('node:os');
+ const {join}=await import('node:path');
+ const root=mkdtempSync(join(tmpdir(),'stop-proc-'));
+ try {
+  const proc=(pid:string,cwd:string,command:string)=>{const dir=join(root,pid);mkdirSync(dir);writeFileSync(join(dir,'stat'),pid+' (process) S 1 1');writeFileSync(join(dir,'cmdline'),command);symlinkSync(cwd,join(dir,'cwd'));};
+  proc('81001','/data/wt-ticket-other','pi-coding-agent');
+  const script=ticketStopVerificationScript('/data/wt-ticket-target').split('\n').slice(1,-1).join('\n').replaceAll("'/proc'",JSON.stringify(root)).replaceAll("'/proc/%s/stat'",JSON.stringify(root+'/%s/stat'));
+  const run=()=>Bun.spawnSync(['python3','-c',script]);
+  expect(run().exitCode).toBe(0);
+  proc('81002','/data/wt-ticket-target/subdir','dotnet build');
+  const blocked=run();expect(blocked.exitCode).not.toBe(0);expect(blocked.stderr.toString()).toContain('81002');
+ }finally{rmSync(root,{recursive:true,force:true});}
 });
