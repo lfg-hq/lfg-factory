@@ -14,8 +14,8 @@ sqlite.close();
 mock.module('../src/auth/middleware.ts',()=>({requireAuth:async(c:any,next:any)=>{c.set('user',{id:'owner'});return next();}}));
 let permitted=true, accessible=true;
 mock.module('../src/auth/project-access.ts',()=>({getProjectAccess:async(id:string)=>accessible && id==='public-project' ? {project:{id:'internal-project',projectId:'public-project'},permissions:{canManageTickets:permitted,canEditFiles:permitted}}:null,requirePermission:()=>true}));
-const started:string[]=[];let rejectStart=false;
-mock.module('../src/workers/ticket-executor.ts',()=>({startTicketValidationRetry:async(id:string)=>{if(rejectStart)throw new Error("Ticket operation is stopping.");started.push(id);}}));
+const stopped:string[]=[];const started:string[]=[];let rejectStart=false;
+mock.module('../src/workers/ticket-executor.ts',()=>({requestTicketStop:async(id:string)=>{stopped.push(id);},startTicketValidationRetry:async(id:string)=>{if(rejectStart)throw new Error("Ticket operation is stopping.");started.push(id);}}));
 const {db}=await import('../src/config/db.ts');
 const {users}=await import('../src/db/schema/users.ts');
 const {projects}=await import('../src/db/schema/projects.ts');
@@ -43,5 +43,10 @@ test('rejected retry returns authoritative queue state to resynchronize the draw
  rejectStart=true;
  try {const res=await post('ticket');expect(res.status).toBe(409);const data=await res.json() as any;expect(data.ticket.ticketId).toBe('ticket');expect(data.ticket.queueStatus).toBe('stopping');}
  finally{rejectStart=false;}
+});
+test('stop verifies ticket ownership and returns authoritative operation state',async()=>{
+ const stop=(id:string)=>routes.request('/public-project/tickets/'+id+'/stop',{method:'POST'});
+ expect((await stop('foreign-ticket')).status).toBe(404);expect(stopped).toEqual([]);
+ const res=await stop('ticket');expect(res.status).toBe(200);expect(stopped).toEqual(['ticket']);expect((await res.json() as any).ticket.queueStatus).toBe('stopping');
 });
 afterAll(()=>rmSync(root,{recursive:true,force:true}));

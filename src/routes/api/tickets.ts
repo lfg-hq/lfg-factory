@@ -861,9 +861,13 @@ ticketsApi.post("/:projectId/tickets/:ticketId/stop", async (c) => {
   const { projectId, ticketId } = c.req.param();
   const access = await getProjectAccess(projectId!, user.id);
   if (!access) return c.json({ error: "Not found" }, 404);
+  if(!access.permissions.canManageTickets)return c.json({error:"Ticket management permission is required."},403);
+  const [ticket]=await db.select().from(projectTickets).where(and(eq(projectTickets.id,ticketId!),eq(projectTickets.projectId,access.project.id))).limit(1);
+  if(!ticket)return c.json({error:"Ticket not found"},404);
   const { requestTicketStop } = await import("../../workers/ticket-executor.ts");
   await requestTicketStop(ticketId!, access.project.id);
-  return c.json({ ok: true });
+  const [current]=await db.select({status:projectTickets.status,queueStatus:projectTickets.queueStatus}).from(projectTickets).where(eq(projectTickets.id,ticketId!)).limit(1);
+  return c.json({ ok: true, ticket:{ticketId,...current} });
 });
 
 // ── POST /:projectId/tickets/:ticketId/demo ─────────────────────────

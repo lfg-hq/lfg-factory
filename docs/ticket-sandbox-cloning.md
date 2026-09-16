@@ -214,3 +214,9 @@ Verification: nine background-job tests and five validation-preparation tests pa
 The supplied screenshot shows retry controls while the backend rejects a busy ticket. It does not establish whether the saved busy state is stale or represents a live operation. The drawer omitted `stopping` from its busy states and did not resynchronize after a rejected retry.
 
 Retry conflicts now return the current authorized ticket status/queue state. The drawer applies that state immediately, treats queued/executing/stopping consistently, and switches to busy controls on accepted retries without waiting for WebSocket delivery. Server messages distinguish missing tickets from the actual busy state. No running operation is unlocked or duplicated based only on a stale browser view.
+
+## 2026-09-16 — Stop validation jobs and observe durable cancellation
+
+Stop previously killed coding agents and selected install processes, but omitted detached validation jobs. Validation retry only observed the local cancellation set, so a stop handled by another server process could be missed. The browser also showed idle controls regardless of whether Stop succeeded.
+
+Dedicated ticket sandbox stop now terminates recorded unfinished /data/lfg-jobs process groups; shared preview worktree lanes retain scoped cancellation. Validation retry polls the durable stopping flag, checks it before completion, and uses stopped-by-user handling instead of reporting validation failure. UI consumes the server's stop state and preserves stopping controls until terminal state is reported. Stop route verifies ticket project and management permission. These local changes do not establish that the existing live job has stopped.

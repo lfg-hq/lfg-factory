@@ -1340,14 +1340,17 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     var stopBtn = document.getElementById('drawer-stop-btn');
     if (stopBtn) { stopBtn.disabled = true; stopBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Stopping…'; }
     try {
-      await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + _currentTicketId + '/stop', {
+      const ticketId = _currentTicketId;
+      const res = await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + ticketId + '/stop', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }
       });
-    } catch(e) { /* best-effort */ }
-    _chatBusy = false; setChatBusyUI();
-    if (stopBtn) { stopBtn.disabled = false; stopBtn.innerHTML = '<i class="fas fa-stop"></i> Stop'; stopBtn.style.display = 'none'; }
-    var b = document.getElementById('drawer-build-btn');
-    if (b) { b.disabled = false; b.style.display = ''; b.innerHTML = buildButtonLabel(); }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not stop ticket');
+      if (data.ticket) handleTicketStatus(data.ticket);
+    } catch(e) {
+      alert(e.message || 'Could not stop ticket');
+      if (stopBtn) {stopBtn.disabled=false;stopBtn.innerHTML='Stop';}
+    }
   }
 
   // ── One agent turn at a time ─────────────────────────────────────

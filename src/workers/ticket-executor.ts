@@ -952,7 +952,7 @@ export async function requestTicketStop(ticketId: string, projectId?: string): P
         .map((sb) =>
           execOnWorkspace(
             sb.ws!,
-            "pkill -9 -f pi-coding-agent 2>/dev/null; pkill -9 -f 'mode json' 2>/dev/null; pkill -9 -f 'pi -p' 2>/dev/null; pkill -9 -f claude 2>/dev/null; pkill -9 -f 'pip install' 2>/dev/null; pkill -9 -f 'go build' 2>/dev/null; pkill -9 -f 'npm install' 2>/dev/null; pkill -9 -f 'apk add' 2>/dev/null; true",
+            "for f in /data/lfg-jobs/*/pid; do test -f \"$f\" || continue; test -f \"${f%/pid}/exit\" && continue; p=$(cat \"$f\"); case \"$p\" in ''|*[!0-9]*) continue;; esac; kill -TERM -- -\"$p\" 2>/dev/null || true; done; sleep 2; for f in /data/lfg-jobs/*/pid; do test -f \"$f\" || continue; test -f \"${f%/pid}/exit\" && continue; p=$(cat \"$f\"); case \"$p\" in ''|*[!0-9]*) continue;; esac; kill -KILL -- -\"$p\" 2>/dev/null || true; done; pkill -9 -f pi-coding-agent 2>/dev/null; pkill -9 -f 'mode json' 2>/dev/null; pkill -9 -f 'pi -p' 2>/dev/null; pkill -9 -f claude 2>/dev/null; pkill -9 -f 'pip install' 2>/dev/null; pkill -9 -f 'go build' 2>/dev/null; pkill -9 -f 'npm install' 2>/dev/null; pkill -9 -f 'apk add' 2>/dev/null; true",
             { timeout: 25_000 },
           ).catch(() => {}),
         ),
@@ -3872,16 +3872,30 @@ export async function startTicketValidationRetry(ticketId:string,actorId:string)
     broadcastToUser(project.ownerId,{type:"ticket_status",ticketId,status:ticket.status,queueStatus:"executing"});
     const workspaceId=sb.magsWorkspaceId;
     const job=runChatTurn(ticketId,async()=>{
+      let polling=false;
+      const refreshCancellation=async()=>{
+        if(polling)return;
+        polling=true;
+        try {const [current]=await db.select({q:projectTickets.queueStatus}).from(projectTickets).where(eq(projectTickets.id,ticketId)).limit(1);if(current?.q==="stopping")cancelledTickets.add(ticketId);}
+        finally {polling=false;}
+      };
+      const cancelPoll=setInterval(()=>{void refreshCancellation().catch(()=>{});},1000);
       try {
+        await refreshCancellation();
+        if(cancelledTickets.has(ticketId))throw new Error("Validation cancelled");
         await wakeTicketVm(workspaceId);
         const {retrySavedValidation}=await import("../services/retry-validation.ts");
         const sha=await retrySavedValidation({workspaceId,projectDir:"/data/project",featureBranch:branch,repoUrl:auth.repoUrl,githubToken:auth.token,tokenUser:auth.tokenUser,
           validation:{projectId:project.id,userId:buildLlm.actorId,ticketId,gitCredentialUserId:gitUserId,cancelled:()=>cancelledTickets.has(ticketId),onLog:line=>{void addLog(ticketId,line,"command",project.ownerId).catch(()=>{});},onCheckpoint:async message=>{await addLog(ticketId,message,"agent_progress",project.ownerId);}}},previous.baseline);
+        await refreshCancellation();
+        if(cancelledTickets.has(ticketId))throw new Error("Validation cancelled");
         await db.update(projectTickets).set({status:sha!==ticket.githubCommitSha || ticket.status==="failed" ? "open" : ticket.status,githubMergeStatus:sha!==ticket.githubCommitSha ? "pending" : ticket.githubMergeStatus,updatedAt:new Date()}).where(eq(projectTickets.id,ticketId));
         await addLog(ticketId,`✅ **Validation passed** for saved commit \`${sha.slice(0,12)}\`. Development was skipped. Any repairs were committed locally; this action did not push, merge or mark the ticket ready for review.`,"ai_response",project.ownerId);
       } catch(error) {
-        await markTicketFailed(ticketId,failureSummary((error as Error).message).split("\nFailed command:")[0] || "Validation failed",project.ownerId,{emitEvent:false,failureKind:error instanceof ValidationFailure?error.failureKind:undefined});
+        clearInterval(cancelPoll);
+        if(!await stoppedByUser(ticketId,project.ownerId)) await markTicketFailed(ticketId,failureSummary((error as Error).message).split("\nFailed command:")[0] || "Validation failed",project.ownerId,{emitEvent:false,failureKind:error instanceof ValidationFailure?error.failureKind:undefined});
       } finally {
+        clearInterval(cancelPoll);
         await sleepTicketVm(workspaceId);
         await db.update(projectTickets).set({queueStatus:"none",updatedAt:new Date()}).where(eq(projectTickets.id,ticketId));
         const [current]=await db.select({status:projectTickets.status}).from(projectTickets).where(eq(projectTickets.id,ticketId)).limit(1);
