@@ -1,3 +1,4 @@
+import { ticketStopVerificationScript, confirmTicketStopped } from "../services/ticket-stop-verification.ts";
 import { ValidationFailure } from "../services/validation-contract.ts";
 import { failureSummary } from "../services/preview-plan.ts";
 import { startBuildEnvironmentWorker } from "../services/build-environment-worker.ts";
@@ -952,13 +953,25 @@ export async function requestTicketStop(ticketId: string, projectId?: string): P
         .map((sb) =>
           execOnWorkspace(
             sb.ws!,
-            "for f in /data/lfg-jobs/*/pid; do test -f \"$f\" || continue; test -f \"${f%/pid}/exit\" && continue; p=$(cat \"$f\"); case \"$p\" in ''|*[!0-9]*) continue;; esac; kill -TERM -- -\"$p\" 2>/dev/null || true; done; sleep 2; for f in /data/lfg-jobs/*/pid; do test -f \"$f\" || continue; test -f \"${f%/pid}/exit\" && continue; p=$(cat \"$f\"); case \"$p\" in ''|*[!0-9]*) continue;; esac; kill -KILL -- -\"$p\" 2>/dev/null || true; done; pkill -9 -f pi-coding-agent 2>/dev/null; pkill -9 -f 'mode json' 2>/dev/null; pkill -9 -f 'pi -p' 2>/dev/null; pkill -9 -f claude 2>/dev/null; pkill -9 -f 'pip install' 2>/dev/null; pkill -9 -f 'go build' 2>/dev/null; pkill -9 -f 'npm install' 2>/dev/null; pkill -9 -f 'apk add' 2>/dev/null; true",
+            "for f in /data/lfg-jobs/*/pid /data/validation/*/app.pid; do test -f \"$f\" || continue; test -f \"${f%/pid}/exit\" && continue; p=$(cat \"$f\"); case \"$p\" in ''|*[!0-9]*) continue;; esac; kill -TERM -- -\"$p\" 2>/dev/null || true; done; sleep 2; for f in /data/lfg-jobs/*/pid /data/validation/*/app.pid; do test -f \"$f\" || continue; test -f \"${f%/pid}/exit\" && continue; p=$(cat \"$f\"); case \"$p\" in ''|*[!0-9]*) continue;; esac; kill -KILL -- -\"$p\" 2>/dev/null || true; done; pkill -9 -f pi-coding-agent 2>/dev/null; pkill -9 -f 'mode json' 2>/dev/null; pkill -9 -f 'pi -p' 2>/dev/null; pkill -9 -f claude 2>/dev/null; pkill -9 -f 'pip install' 2>/dev/null; pkill -9 -f 'go build' 2>/dev/null; pkill -9 -f 'npm install' 2>/dev/null; pkill -9 -f 'apk add' 2>/dev/null; true",
             { timeout: 25_000 },
           ).catch(() => {}),
         ),
     );
   } catch {
     /* best-effort */
+  }
+  // A restarted/finished worker cannot acknowledge stopping. Reconcile only after
+  // inspecting every dedicated sandbox; never clear a lock on a transport failure.
+  if(!executingTickets.has(ticketId) && !isChatTurnActive(ticketId)) {
+    const rows=await db.select({ws:sandboxes.magsWorkspaceId,type:sandboxes.workspaceType}).from(sandboxes).where(eq(sandboxes.ticketId,ticketId));
+    await confirmTicketStopped(rows,async workspace=>{
+      const script=Buffer.from(ticketStopVerificationScript()).toString("base64");
+      return execOnWorkspace(workspace,`echo ${script} | base64 -d | bash`,{timeout:20_000});
+    });
+    await db.update(projectTickets).set({status:"stopped",queueStatus:"none",updatedAt:new Date()}).where(and(eq(projectTickets.id,ticketId),eq(projectTickets.queueStatus,"stopping")));
+    const [owner]=await db.select({ownerId:projects.ownerId}).from(projectTickets).innerJoin(projects,eq(projects.id,projectTickets.projectId)).where(eq(projectTickets.id,ticketId)).limit(1);
+    if(owner)broadcastToUser(owner.ownerId,{type:"ticket_status",ticketId,status:"stopped",queueStatus:"none"});
   }
   // Unblock the Claude-path waiter (Pi returns on its own via shouldCancel).
   emit({ type: "ticket.execution_finished", ticketId, status: "failed", exitCode: 130, projectId });
@@ -987,12 +1000,12 @@ async function stoppedByUser(ticketId: string, ownerId: string): Promise<boolean
     // Cross-process: the stop request may have landed in another process, leaving
     // only the durable DB flag. Honour it so the executor still bails cleanly.
     const [t] = await db
-      .select({ q: projectTickets.queueStatus })
+      .select({ q: projectTickets.queueStatus, status:projectTickets.status })
       .from(projectTickets)
       .where(eq(projectTickets.id, ticketId))
       .limit(1)
-      .catch(() => [] as { q: string | null }[]);
-    cancelled = t?.q === "stopping";
+      .catch(() => [] as { q: string | null;status:string }[]);
+    cancelled = t?.q === "stopping" || t?.status === "stopped";
   }
   if (!cancelled) return false;
   cancelledTickets.delete(ticketId);
@@ -3867,7 +3880,8 @@ export async function startTicketValidationRetry(ticketId:string,actorId:string)
     const auth=await resolveRepoAuth(project,gitUserId);
     if(!auth)throw new Error("Repository access could not be resolved.");
     cancelledTickets.delete(ticketId);
-    const claimed=await db.update(projectTickets).set({queueStatus:"executing",updatedAt:new Date()}).where(and(eq(projectTickets.id,ticketId),eq(projectTickets.queueStatus,ticket.queueStatus))).returning({id:projectTickets.id});
+    if(ticket.status==="stopped")ticket.status="open";
+    const claimed=await db.update(projectTickets).set({status:ticket.status,queueStatus:"executing",updatedAt:new Date()}).where(and(eq(projectTickets.id,ticketId),eq(projectTickets.queueStatus,ticket.queueStatus))).returning({id:projectTickets.id});
     if(!claimed.length)throw new Error("Another operation claimed this ticket. Retry after it finishes.");
     broadcastToUser(project.ownerId,{type:"ticket_status",ticketId,status:ticket.status,queueStatus:"executing"});
     const workspaceId=sb.magsWorkspaceId;
@@ -3876,7 +3890,7 @@ export async function startTicketValidationRetry(ticketId:string,actorId:string)
       const refreshCancellation=async()=>{
         if(polling)return;
         polling=true;
-        try {const [current]=await db.select({q:projectTickets.queueStatus}).from(projectTickets).where(eq(projectTickets.id,ticketId)).limit(1);if(current?.q==="stopping")cancelledTickets.add(ticketId);}
+        try {const [current]=await db.select({q:projectTickets.queueStatus,status:projectTickets.status}).from(projectTickets).where(eq(projectTickets.id,ticketId)).limit(1);if(current?.q==="stopping" || current?.status==="stopped")cancelledTickets.add(ticketId);}
         finally {polling=false;}
       };
       const cancelPoll=setInterval(()=>{void refreshCancellation().catch(()=>{});},1000);

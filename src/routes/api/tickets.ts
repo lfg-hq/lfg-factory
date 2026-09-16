@@ -865,7 +865,8 @@ ticketsApi.post("/:projectId/tickets/:ticketId/stop", async (c) => {
   const [ticket]=await db.select().from(projectTickets).where(and(eq(projectTickets.id,ticketId!),eq(projectTickets.projectId,access.project.id))).limit(1);
   if(!ticket)return c.json({error:"Ticket not found"},404);
   const { requestTicketStop } = await import("../../workers/ticket-executor.ts");
-  await requestTicketStop(ticketId!, access.project.id);
+  try {await requestTicketStop(ticketId!, access.project.id);}
+  catch(error){return c.json({error:(error as Error).message},409);}
   const [current]=await db.select({status:projectTickets.status,queueStatus:projectTickets.queueStatus}).from(projectTickets).where(eq(projectTickets.id,ticketId!)).limit(1);
   return c.json({ ok: true, ticket:{ticketId,...current} });
 });
