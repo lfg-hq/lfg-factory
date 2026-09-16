@@ -5,6 +5,7 @@ import { projectEnvironmentVariables, projects } from "../../db/schema/projects.
 import { eq, and } from "drizzle-orm";
 import { env } from "../../config/env.ts";
 import pg from "pg";
+import { decryptSecret } from "../../utils/crypto.ts";
 
 function encrypt(value: string): string {
   if (!env.ENCRYPTION_KEY) return `plain:${value}`;
@@ -12,6 +13,7 @@ function encrypt(value: string): string {
 }
 
 export function decrypt(encrypted: string): string {
+  if (encrypted.startsWith("gcm:")) return decryptSecret(encrypted);
   if (encrypted.startsWith("plain:")) return encrypted.slice(6);
   if (encrypted.startsWith("b64:")) return Buffer.from(encrypted.slice(4), "base64").toString();
   return encrypted;
