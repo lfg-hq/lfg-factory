@@ -14,8 +14,8 @@ sqlite.close();
 mock.module('../src/auth/middleware.ts',()=>({requireAuth:async(c:any,next:any)=>{c.set('user',{id:'owner'});return next();}}));
 let permitted=true, accessible=true;
 mock.module('../src/auth/project-access.ts',()=>({getProjectAccess:async(id:string)=>accessible && id==='public-project' ? {project:{id:'internal-project',projectId:'public-project'},permissions:{canManageTickets:permitted,canEditFiles:permitted}}:null,requirePermission:()=>true}));
-const started:string[]=[];
-mock.module('../src/workers/ticket-executor.ts',()=>({startTicketValidationRetry:async(id:string)=>{started.push(id);}}));
+const started:string[]=[];let rejectStart=false;
+mock.module('../src/workers/ticket-executor.ts',()=>({startTicketValidationRetry:async(id:string)=>{if(rejectStart)throw new Error("Ticket operation is stopping.");started.push(id);}}));
 const {db}=await import('../src/config/db.ts');
 const {users}=await import('../src/db/schema/users.ts');
 const {projects}=await import('../src/db/schema/projects.ts');
@@ -36,5 +36,12 @@ test('missing tickets and insufficient permissions never dispatch',async()=>{
  permitted=false;try{expect((await post('ticket')).status).toBe(403);}finally{permitted=true;}
  accessible=false;try{expect((await post('ticket')).status).toBe(404);}finally{accessible=true;}
  expect(started.length).toBe(before);
+});
+test('rejected retry returns authoritative queue state to resynchronize the drawer',async()=>{
+ const {eq}=await import('drizzle-orm');
+ await db.update(projectTickets).set({queueStatus:'stopping'}).where(eq(projectTickets.id,'ticket'));
+ rejectStart=true;
+ try {const res=await post('ticket');expect(res.status).toBe(409);const data=await res.json() as any;expect(data.ticket.ticketId).toBe('ticket');expect(data.ticket.queueStatus).toBe('stopping');}
+ finally{rejectStart=false;}
 });
 afterAll(()=>rmSync(root,{recursive:true,force:true}));

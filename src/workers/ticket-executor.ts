@@ -3851,7 +3851,8 @@ export async function startTicketValidationRetry(ticketId:string,actorId:string)
   let launched=false;
   try {
     const [ticket]=await db.select().from(projectTickets).where(eq(projectTickets.id,ticketId)).limit(1);
-    if(!ticket || /^(queued|executing|stopping)$/.test(ticket.queueStatus))throw new Error("This ticket is unavailable or already running.");
+    if(!ticket)throw new Error("Ticket not found.");
+    if(/^(queued|executing|stopping)$/.test(ticket.queueStatus))throw new Error(`Ticket operation is ${ticket.queueStatus}. Wait for it to finish or stop it before retrying validation.`);
     const [project]=await db.select().from(projects).where(eq(projects.id,ticket.projectId)).limit(1);
     if(!project)throw new Error("Project not found.");
     const sb=await findExistingSandbox(ticketId);

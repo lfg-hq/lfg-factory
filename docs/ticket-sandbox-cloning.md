@@ -208,3 +208,9 @@ The supplied log shows one baseline restore job running for over 1,600 seconds w
 Validation commands now default to five minutes; explicitly bounded provisioning keeps its existing allowance. An explicit `error NU1301:` in running validation output terminates that job's process group on the next poll and returns the original error for generic repair, without waiting for the command deadline. Stop sends TERM then KILL after two seconds. Warnings and normal restore progress do not trigger this rule. Unchanged output tails are no longer logged on each poll. The sandbox-side timeout still bounds work if the controller disconnects. This does not diagnose whether the remote feed failure was DNS, TLS, network, proxy or access related, nor does it change an already-running deployed process.
 
 Verification: nine background-job tests and five validation-preparation tests pass; type check and server import bundle pass.
+
+## 2026-09-16 — Synchronize retry controls with operation state
+
+The supplied screenshot shows retry controls while the backend rejects a busy ticket. It does not establish whether the saved busy state is stale or represents a live operation. The drawer omitted `stopping` from its busy states and did not resynchronize after a rejected retry.
+
+Retry conflicts now return the current authorized ticket status/queue state. The drawer applies that state immediately, treats queued/executing/stopping consistently, and switches to busy controls on accepted retries without waiting for WebSocket delivery. Server messages distinguish missing tickets from the actual busy state. No running operation is unlocked or duplicated based only on a stale browser view.

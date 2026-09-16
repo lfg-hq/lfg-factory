@@ -1140,7 +1140,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
         renderDrawerDetails(ticketMap[ticketId]);
         var qs = live.queueStatus || live.queue_status || '';
         var st = live.status || (t && t.status) || 'open';
-        var isActive = qs === 'queued' || qs === 'executing';
+        var isActive = qs === 'queued' || qs === 'executing' || qs === 'stopping';
         // Persistent build-status banner (survives refresh — from the ticket row).
         updateTicketStatusBanner(live);
         var buildBtn = document.getElementById('drawer-build-btn');
@@ -1319,7 +1319,11 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     try {
       const res = await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + ticketId + '/retry-validation', {method:'POST'});
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Could not start validation');
+      if (!res.ok) {
+        if (data.ticket) handleTicketStatus(data.ticket);
+        throw new Error(data.error || 'Could not start validation');
+      }
+      handleTicketStatus({ticketId:ticketId,status:(ticketMap[ticketId] || {}).status,queueStatus:'executing'});
       if (_currentTicketId === ticketId) {
         _lastFailureReason = '';
         const banner = document.getElementById('actions-bottom-banner');
@@ -1416,8 +1420,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     // b.where: 'top' = live status (spinner) at the top; 'bottom' = the OUTCOME
     // (failure reason / success), pinned above the chat input like a result.
     var b = null;
-    if (qs === 'executing' || qs === 'queued') {
-      b = { bg: 'rgba(59,130,246,.12)', fg: '#93c5fd', icon: 'fa-spinner fa-spin', where: 'top', text: qs === 'queued' ? 'Queued — waiting to build…' : 'Running ticket operation…' };
+    if (qs === 'executing' || qs === 'queued' || qs === 'stopping') {
+      b = { bg: 'rgba(59,130,246,.12)', fg: '#93c5fd', icon: 'fa-spinner fa-spin', where: 'top', text: qs === 'queued' ? 'Queued — waiting to build…' : qs === 'stopping' ? 'Stopping ticket operation…' : 'Running ticket operation…' };
     } else if (merge === 'not_pushed') {
       b = { bg: 'rgba(248,113,113,.12)', fg: '#fca5a5', icon: 'fa-triangle-exclamation', where: 'bottom', text: 'Built but NOT pushed to git — reconnect the repo in Settings, then rebuild.' };
     } else if (st === 'failed' || qs === 'failed') {
@@ -1476,8 +1480,15 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     if (ticketId !== _currentTicketId) return;
     updateTicketStatusBanner(msg);
     var validationBtn = document.getElementById('drawer-validation-btn');
-    if (validationBtn) validationBtn.style.display = qs === 'queued' || qs === 'executing' ? 'none' : '';
-    if (qs !== 'queued' && qs !== 'executing') {
+    var busy = qs === 'queued' || qs === 'executing' || qs === 'stopping';
+    if (validationBtn) validationBtn.style.display = busy ? 'none' : '';
+    if (busy) {
+      var buildBtn = document.getElementById('drawer-build-btn');
+      if (buildBtn) buildBtn.style.display = 'none';
+      var stopBtn = document.getElementById('drawer-stop-btn');
+      if (stopBtn) {stopBtn.style.display = '';stopBtn.disabled = qs === 'stopping';stopBtn.innerHTML = qs === 'stopping' ? 'Stopping…' : 'Stop';}
+    }
+    if (!busy) {
       hideThinkingIndicator();
       var btn = document.getElementById('drawer-build-btn');
       if (btn) { btn.disabled = false; btn.style.display = ''; btn.innerHTML = buildButtonLabel(); }

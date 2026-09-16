@@ -763,7 +763,10 @@ ticketsApi.post("/:projectId/tickets/:ticketId/retry-validation",async(c)=>{
     const {startTicketValidationRetry}=await import("../../workers/ticket-executor.ts");
     await startTicketValidationRetry(ticketId,user.id);
     return c.json({ok:true},202);
-  }catch(error){return c.json({error:(error as Error).message},409);}
+  }catch(error){
+    const [current]=await db.select({status:projectTickets.status,queueStatus:projectTickets.queueStatus}).from(projectTickets).where(eq(projectTickets.id,ticketId)).limit(1);
+    return c.json({error:(error as Error).message,ticket:current ? {ticketId,...current} : undefined},409);
+  }
 });
 
 // ── GET /:projectId/tickets/:ticketId/sandbox ───────────────────────
