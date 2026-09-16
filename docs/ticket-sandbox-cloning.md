@@ -200,3 +200,11 @@ The reported candidate 0cfc851efde9 passed fresh build, schema, HTTP and listed 
 Upgrade validation now requires every baseline connection to remain available with the same engine, logical database and connection format. List ordering, an explicit default database name, and additional candidate connections do not invalidate compatibility. Removed/retargeted connections and duplicate keys remain blocked with per-key diagnostics, classified as environment failures. Fresh and baseline-upgrade runtime gates remain mandatory. Exhausted generic repair is displayed as validation blocked rather than a generic build failure.
 
 Verification: compatibility tests cover equivalent and additive mappings, omitted/retargeted connections, engine/format changes and duplicates. Remote validation has not been rerun.
+
+## 2026-09-16 — Stop failed restores and suppress repeated polling output
+
+The supplied log shows one baseline restore job running for over 1,600 seconds while reporting NU1301 for api.nuget.org. Background polling repeatedly printed the unchanged tail; this was not repeated launches of the job. Validation inherited the general background-command 30-minute limit.
+
+Validation commands now default to five minutes; explicitly bounded provisioning keeps its existing allowance. An explicit `error NU1301:` in running validation output terminates that job's process group on the next poll and returns the original error for generic repair, without waiting for the command deadline. Stop sends TERM then KILL after two seconds. Warnings and normal restore progress do not trigger this rule. Unchanged output tails are no longer logged on each poll. The sandbox-side timeout still bounds work if the controller disconnects. This does not diagnose whether the remote feed failure was DNS, TLS, network, proxy or access related, nor does it change an already-running deployed process.
+
+Verification: nine background-job tests and five validation-preparation tests pass; type check and server import bundle pass.

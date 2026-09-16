@@ -22,3 +22,13 @@ test('progress exposes job status without leaking script or output',async()=>{
  options.log('Background job abc finished (exit 0, 30s); secret output');
  expect(logs.join('\n')).not.toContain('secret');expect(logs.join('\n')).toContain('finished (exit 0, 30s)');
 });
+test('validation commands have a five minute limit and detect explicit NuGet errors',async()=>{
+ const {runValidationCommand}=await import('../src/services/validation-sandbox.ts');
+ await runValidationCommand({workspaceId:'vm',cwd:'/data/project',root:'/data/validation/test',command:'dotnet restore'});
+ expect(options.timeoutMs).toBe(300000);
+ expect(options.abortOnOutput('project.csproj : error NU1301: Unable to load the service index')).toContain('Dependency restore stopped');
+ expect(options.abortOnOutput('warning NU1301: retrying')).toBeUndefined();
+ expect(options.abortOnOutput('Determining projects to restore...')).toBeUndefined();
+ await runValidationCommand({workspaceId:'vm',cwd:'/data',root:'/data/validation/test',command:'provision',timeoutMs:900000});
+ expect(options.timeoutMs).toBe(900000);
+});

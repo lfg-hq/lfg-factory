@@ -95,9 +95,14 @@ export async function runValidationCommand(o: {
   const {runBackgroundCommand} = await import("./background-command.ts");
   const env = Object.entries(o.vars ?? {}).map(([k,v]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k) ? `export ${k}=${shellQuote(v)}` : "").join("\n");
   return runBackgroundCommand({workspaceId:o.workspaceId,cwd:o.cwd,command:`set -e\n${env}\n${o.command}`,
-    timeoutMs:o.timeoutMs,cancelled:o.cancelled,log:o.log});
+    timeoutMs:o.timeoutMs ?? 300_000,cancelled:o.cancelled,log:o.log,abortOnOutput:validationCommandFailure});
 }
 export function cleanupEnvironmentScript(scope: string, root: string) {
   if (!/^val-[a-f0-9-]+$/.test(scope) || root !== `/data/validation/${scope}`) throw new Error("Invalid validation cleanup scope");
   return `for c in $(docker ps -aq --filter ${shellQuote('label=lfg.validation='+scope)}); do docker rm -fv "$c" >/dev/null 2>&1 || true; done; rm -rf ${shellQuote(root)}`;
+}
+
+/** Stop only explicit terminal restore errors, never warnings or generic error-like output. */
+export function validationCommandFailure(output:string):string|undefined {
+  if(/\berror NU1301\s*:/i.test(output)) return "Dependency restore stopped: NuGet reported NU1301 (unable to load a package source service index). Diagnose package-feed connectivity, DNS, TLS, proxy and credentials before retrying; no more waiting on this failed restore.";
 }
