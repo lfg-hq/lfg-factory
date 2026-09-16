@@ -1,3 +1,4 @@
+import { upgradeServiceConflicts } from "./upgrade-service-compatibility.ts";
 import { validationHttpCommand } from "./validation-http.ts";
 import { repairToolDownloadUrls, TOOL_DOWNLOAD_GUIDANCE } from "./tool-download-repair.ts";
 import { isResourceFailure, validationStepFailure } from "./validation-step-failure.ts";
@@ -143,7 +144,8 @@ export async function validateRevision(o:{workspaceId:string;sourceDir:string;re
         const baselineDir=`${root}/baseline-probe`;group.dirs.push(baselineDir);
         await prepare("create baseline inspection checkout",`git -C ${q(o.sourceDir)} worktree add --detach ${q(baselineDir)} ${q(o.baseline)}`);
         const baseline=await ensureValidationRecipe(o.workspaceId,baselineDir,ctx,true);
-        if(hashContract(baseline.databases)!==hashContract(recipe.databases))throw new ValidationFailure("Baseline and candidate service mappings differ. Record an explicit compatible upgrade environment before validation.",id);
+        const conflicts=upgradeServiceConflicts(baseline.databases,recipe.databases);
+        if(conflicts.length)throw new ValidationEnvironmentFailure(`Upgrade service mappings are incompatible:\n${conflicts.join("\n")}\nPreserve baseline connection targets in the candidate recipe, or implement an explicit data migration. Do not discard baseline coverage.`,id,"baseline");
         if(recipe.databases.some(d=>d.engine!=="redis") && !recipe.validation?.upgradeSetup && !baseline.schemaSteps.some(s=>s.kind==="seed"))
           throw new ValidationFailure("SQL upgrade validation needs representative baseline data: add validation.upgradeSetup fixtures or a baseline seed step.",id);
         await run(o.baseline,baseline,'baseline',false);

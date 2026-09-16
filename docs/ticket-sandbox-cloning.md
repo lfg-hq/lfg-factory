@@ -192,3 +192,11 @@ Validation: 12 focused tests passed, TypeScript check passed, server import bund
 Recovery now invokes one cross-layer repair prompt for every validation failure. Failure types remain useful diagnostics but no longer constrain editing permissions or select a separate repair budget. The agent can repair application source, setup, dependencies, database scripts, runtime configuration and test defects, and run bounded diagnostic builds/tests against isolated resources in the ticket sandbox. Durable changes remain tracked; server validation of the clean committed revision is still required before publication.
 
 Four shared repairs replace the two-per-category budgets. Repeated diagnostics no longer immediately stop recovery, and prior failure evidence is supplied to help the agent change approach. Cancellation, agent time limits and the four-repair ceiling still bound execution. External capacity/access blockers remain real blockers; no tests or required validation may be bypassed.
+
+## 2026-09-16 — Compare upgrade service compatibility semantically
+
+The reported candidate 0cfc851efde9 passed fresh build, schema, HTTP and listed acceptance steps, then failed the exact-hash comparison of baseline/candidate database lists. The log did not include the actual lists, so it does not establish which mapping differed.
+
+Upgrade validation now requires every baseline connection to remain available with the same engine, logical database and connection format. List ordering, an explicit default database name, and additional candidate connections do not invalidate compatibility. Removed/retargeted connections and duplicate keys remain blocked with per-key diagnostics, classified as environment failures. Fresh and baseline-upgrade runtime gates remain mandatory. Exhausted generic repair is displayed as validation blocked rather than a generic build failure.
+
+Verification: compatibility tests cover equivalent and additive mappings, omitted/retargeted connections, engine/format changes and duplicates. Remote validation has not been rerun.

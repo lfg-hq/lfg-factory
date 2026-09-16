@@ -3980,7 +3980,7 @@ async function markTicketFailed(ticketId: string, reason: string, userId?: strin
   // the success summary — so the user sees WHAT went wrong and HOW to proceed,
   // not just a buried "Execution failed" log line.
   const failMsg =
-    (/validation failed|recovery stopped/i.test(reason) ? `❌ **Validation blocked** — this ticket is not ready for review.\n\n` : `❌ **Build failed** — this attempt could not complete.\n\n`) +
+    (/validation failed|recovery stopped|Automatic repair stopped/i.test(reason) ? `❌ **Validation blocked** — this ticket is not ready for review.\n\n` : `❌ **Build failed** — this attempt could not complete.\n\n`) +
     `**What went wrong:** ${reason}\n\n` +
     (/clone submission|clone response missing request_id/i.test(reason)
       ? `**How to proceed:** the clone request was not confirmed. Check Magpie for an accepted clone before retrying; automatic resubmission is blocked to avoid duplicate sandboxes. Ticket implementation has not started.`
@@ -3988,7 +3988,7 @@ async function markTicketFailed(ticketId: string, reason: string, userId?: strin
         ? `**Next step:** the app did not pass its HTTP check. The connection/status diagnostic is shown above. Use Retry validation to test the saved code again, with automatic repair if needed.`
       : opts?.failureKind === "schema"
         ? `**Next step:** database setup needs a repair before validation can pass. The failure is shown above. You can ask the agent to repair it using the message box below; repeating the same build without a repair may fail again.`
-        : /validation failed|recovery stopped/i.test(reason)
+        : /validation failed|recovery stopped|Automatic repair stopped/i.test(reason)
           ? `**Next step:** the failure is shown above. You can ask the agent to repair it using the message box below. This attempt has stopped; another attempt must pass validation before the ticket is ready for review.`
           : `**Next step:** the failure is shown above. Use the message box below to request a repair or provide missing details, then retry when the blocker has been resolved.`);
   await addLog(ticketId, failMsg, "ai_response", userId);
