@@ -40,3 +40,13 @@ test('scoped inspection ignores other ticket agents and catches this ticket proc
   const blocked=run();expect(blocked.exitCode).not.toBe(0);expect(blocked.stderr.toString()).toContain('81002');
  }finally{rmSync(root,{recursive:true,force:true});}
 });
+test('clone request without a workspace does not block stopping the real ticket sandbox',async()=>{
+ const checked:string[]=[];
+ await confirmTicketStopped([{ws:null,type:'ticket-clone'},{ws:'real-ticket',type:'ticket'}],async ws=>{checked.push(ws);return {exitCode:0,output:'TICKET_PROCESSES_STOPPED'};});
+ expect(checked).toEqual(['real-ticket']);
+});
+test('clone with an allocated workspace must also be confirmed stopped',async()=>{
+ const checked:string[]=[];
+ await expect(confirmTicketStopped([{ws:null,type:'ticket-clone'},{ws:'allocated-clone',type:'ticket-clone'}],async ws=>{checked.push(ws);return {exitCode:1,output:'process remains'};})).rejects.toThrow('process remains');
+ expect(checked).toEqual(['allocated-clone']);
+});

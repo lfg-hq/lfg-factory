@@ -228,3 +228,9 @@ The screenshot confirms Stop returned a failed ticket with queueStatus=stopping.
 A reconciled stop is persisted as stopped/none; retry cancellation and stopped-by-user checks recognize that durable terminal marker, and a deliberate new retry resets it when claiming the ticket. The live screenshot alone does not prove remote processes are absent, and this patch has not been deployed or used to unlock the live ticket.
 
 Validation: four stop-confirmation tests cover all-sandbox confirmation, inspection failure, shared sandbox exclusion and Python syntax; route tests, type check and server bundle pass.
+
+## 2026-09-16 — Exclude unallocated clone intents from process inspection
+
+The latest screenshot identifies the exact offending row: ticket-clone with no workspace ID. createTicketSandbox deliberately stores clone intents separately from runnable ticket registrations and retains unconfirmed/rejected intents when falling back to fresh provisioning. A null workspace on that intent is not a missing ID on the real running ticket sandbox.
+
+Stop confirmation skips only ticket-clone rows without an allocated workspace. It preserves those intent records for provider reconciliation, without deleting or resubmitting clone requests. Allocated clone workspaces are now included in both stop targeting and confirmation. Missing IDs on actual ticket/chat/worktree registrations still block confirmation. Regression tests cover the screenshot case alongside a real dedicated sandbox and an allocated clone with live processes.

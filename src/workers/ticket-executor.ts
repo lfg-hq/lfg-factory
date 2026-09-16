@@ -924,7 +924,7 @@ export async function requestTicketStop(ticketId: string, projectId?: string): P
       .where(
         and(
           eq(sandboxes.ticketId, ticketId),
-          inArray(sandboxes.workspaceType, ["ticket", "ticket-chat", "ticket-worktree"]),
+          inArray(sandboxes.workspaceType, ["ticket", "ticket-chat", "ticket-worktree", "ticket-clone"]),
         ),
       );
 

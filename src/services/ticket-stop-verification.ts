@@ -30,8 +30,11 @@ PY`;
 
 export async function confirmTicketStopped(rows:Array<{ws:string|null;type:string}>, inspect:(workspace:string,shared:boolean)=>Promise<{exitCode?:number;output?:string}>) {
   for(const row of rows) {
+    // Clone intents are bookkeeping, not executable workspaces. Unconfirmed
+    // requests remain recorded for provider reconciliation; do not delete/retry them.
+    if(row.type==="ticket-clone" && !row.ws)continue;
     if(!row.ws)throw new Error(`Stop is not confirmed: ${row.type} sandbox has no workspace ID; repair its sandbox record.`);
-    if(!["ticket","ticket-chat","ticket-worktree"].includes(row.type))throw new Error(`Stop is not confirmed: unsupported sandbox type ${row.type} for workspace ${row.ws}.`);
+    if(!["ticket","ticket-chat","ticket-worktree","ticket-clone"].includes(row.type))throw new Error(`Stop is not confirmed: unsupported sandbox type ${row.type} for workspace ${row.ws}.`);
     const result=await inspect(row.ws,row.ws.startsWith("pv-") || row.type==="ticket-worktree");
     if(result.exitCode!==0 || result.output?.trim()!=="TICKET_PROCESSES_STOPPED")throw new Error(`Stop is not confirmed in ${row.ws}: ${result.output?.trim().slice(0,500) || "sandbox inspection failed"}`);
   }
