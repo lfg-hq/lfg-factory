@@ -286,6 +286,7 @@ if git diff --cached --quiet; then
   ${opts.validation ? 'echo "CANDIDATE_READY"' : 'exit 0'}
 fi
 
+${opts.validation ? 'echo "CANDIDATE_READY"; exit 0' : ""}
 # Commit
 COMMIT_MSG=$(echo ${msgB64} | base64 -d)
 if ! git diff --cached --quiet; then git commit -m "$COMMIT_MSG"; fi

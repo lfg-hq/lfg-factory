@@ -104,7 +104,7 @@ async function resolveCli(userId: string, projectId: string) {
 
 export async function runValidationRepair(o: {
   projectId: string; userId: string; workspaceId: string; projectDir: string;
-  prompt: string; envVars?: Record<string,string>; onLog?: (line:string)=>void; cancelled?: () => boolean;
+  prompt: string; timeoutMs?:number; envVars?: Record<string,string>; onLog?: (line:string)=>void; cancelled?: () => boolean;
 }): Promise<string> {
   const log = o.onLog ?? (() => {});
   const dirName = o.projectDir.replace(/^\/(root|data)\//, "").replace(/^\//, "");
@@ -126,7 +126,7 @@ export async function runValidationRepair(o: {
       let lastLog = 0;
       const res = await streamPiToCompletion({
         workspaceId: o.workspaceId, outputFile: pi.outputFile, backgroundPid: pi.backgroundPid,
-        timeoutMs: MERGE_TIMEOUT_MS, progressMaxLen: 200, shouldCancel: o.cancelled,
+        timeoutMs: (o.timeoutMs ?? MERGE_TIMEOUT_MS), progressMaxLen: 200, shouldCancel: o.cancelled,
         onProgress: (m) => { const n = Date.now(); if (n - lastLog < 3_000) return; lastLog = n; log(`  ${m}`); },
       });
       account = (extractPiProgress(res.tail || "", 1200) || "").replace(/^Agent:\s*/, "").trim();
@@ -143,7 +143,7 @@ export async function runValidationRepair(o: {
         envVars: o.envVars ?? {},
       });
       let offset = 0, all = "", done = false, errs = 0, lastLog = 0;
-      const deadline = Date.now() + MERGE_TIMEOUT_MS;
+      const deadline = Date.now() + (o.timeoutMs ?? MERGE_TIMEOUT_MS);
       while (Date.now() < deadline && !done && !o.cancelled?.()) {
         await new Promise((r) => setTimeout(r, 5_000));
         let poll;

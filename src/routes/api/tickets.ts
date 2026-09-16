@@ -1603,9 +1603,10 @@ ticketsApi.post("/:projectId/tickets/:ticketId/git/pr", async (c) => {
 // Durable runtime evidence, scoped by the same project access check as ticket logs.
 ticketsApi.get("/:projectId/tickets/:ticketId/runtime-validation", async c => {
   const { projectId, ticketId } = c.req.param();
-  if (!await getProjectAccess(projectId, c.get("user").id)) return c.json({error:"Project not found"},404);
+  const access=await getProjectAccess(projectId,c.get("user").id);
+  if (!access) return c.json({error:"Project not found"},404);
   const { runtimeValidations } = await import("../../db/schema/runtime-validation.ts");
   const { desc } = await import("drizzle-orm");
-  const rows = await db.select().from(runtimeValidations).where(and(eq(runtimeValidations.projectId,projectId),eq(runtimeValidations.ticketId,ticketId))).orderBy(desc(runtimeValidations.createdAt)).limit(20);
+  const rows = await db.select().from(runtimeValidations).where(and(eq(runtimeValidations.projectId,access.project.id),eq(runtimeValidations.ticketId,ticketId))).orderBy(desc(runtimeValidations.createdAt)).limit(20);
   return c.json({validations:rows.map(row=>({...row,evidence:JSON.parse(row.evidence),steps:JSON.parse(row.steps)}))});
 });

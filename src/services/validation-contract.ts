@@ -18,6 +18,7 @@ export interface ValidationEvidence {
   id: string; projectId: string; branch: string; revision: string; tree: string;
   baseline: string; planHash: string; environmentHash: string;
   kind: "ticket" | "integration" | "promotion"; status: "passed" | "failed" | "running";
+  mode?: "existing-sandbox"; runtimePassed?:boolean;
   freshPassed: boolean; upgradePassed: boolean; error?: string;
 }
 export class ValidationFailure extends Error {

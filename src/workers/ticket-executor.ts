@@ -1,11 +1,10 @@
 import { ticketStopVerificationScript, confirmTicketStopped } from "../services/ticket-stop-verification.ts";
 import { ValidationFailure } from "../services/validation-contract.ts";
 import { failureSummary } from "../services/preview-plan.ts";
-import { startBuildEnvironmentWorker } from "../services/build-environment-worker.ts";
 import { createTicketSandbox } from "../services/ticket-sandbox-clone.ts";
 import { recoverSandboxStorage, destroyWorkspaceAfterStop } from "../services/sandbox-storage-recovery.ts";
-import { runGitSetup, prepareBuildRuntime, refreshOriginCommand } from "../services/build-preflight.ts";
-import { CONTRACT_INSTRUCTION } from "../services/runtime-validation.ts";
+import { runGitSetup, refreshOriginCommand } from "../services/build-preflight.ts";
+import { TICKET_RUNTIME_INSTRUCTION } from "../services/ticket-runtime.ts";
 /**
  * Ticket Executor Worker
  *
@@ -813,9 +812,9 @@ ${refBlock}${runBlock}${args.addenda ?? ""}${args.directives ?? ""}
 - **Trust the ticket + PRD as the source of truth for facts.** For DOCUMENTATION / marketing / copy / content tickets especially: the ticket already states which features exist, their limits, prices, etc. — do NOT audit the whole codebase to re-verify every claim (that wastes most of the run). At most do a couple of TARGETED checks only where the ticket is ambiguous or self-contradictory. Spend your effort writing/implementing, not exhaustively grepping to confirm things the ticket already told you.
 - Implement the ticket end to end so every acceptance criterion is met.${args.addenda ? "\n- If Addenda are listed above, they are the PRIMARY task this run — address every one, building on what was already done." : ""}${args.directives ? "\n- The MANDATORY DIRECTIVES above are non-negotiable — verify your change satisfies every one before finishing." : ""}
 - Make the app runnable: bind the dev server to 0.0.0.0 on port ${port}.
-- Before running application code, builds, or tests, commit the ticket implementation locally with a descriptive checkpoint message. Commit subsequent fixes as separate checkpoints before rerunning. Never amend or squash these checkpoints. Never commit preview-only repairs, credentials, or generated files. Do NOT push or switch branches; publication is handled by the server after validation.
+- Run the implementation and repair actual failures in this sandbox before committing. Do not commit or push; the server saves all changes together after runtime checks pass. Never commit credentials or generated files.
 - Before finishing, make sure the project builds/compiles.
-${CONTRACT_INSTRUCTION}`;
+${TICKET_RUNTIME_INSTRUCTION}`;
 }
 
 /**
@@ -1491,8 +1490,7 @@ if [ -d "${projectDirName}/.git" ]; then
     cd ${projectDirName}
     ${refreshOriginCommand(`https://x-access-token:${githubToken}@github.com/${githubOwner}/${githubRepo}.git`)}
     git fetch --prune origin
-    git reset --hard HEAD 2>/dev/null || true
-    git clean -fd 2>/dev/null || true
+    # Keep cloned local configuration and caches; branch setup below selects source.
 elif [ -d "${projectDirName}" ] && [ "$(ls -A ${projectDirName} 2>/dev/null)" ]; then
     echo "INIT_EXISTING_DIR"
     cd ${projectDirName}
@@ -1663,14 +1661,6 @@ echo "BRANCH_CREATED"
     await addLog(ticketId, "No GitHub token — code will not be persisted to a repository", "command", ownerId);
   }
 
-  let environmentWorker;
-  try {
-    environmentWorker = await startBuildEnvironmentWorker({workspaceId,projectId:project.id,branch:featureBranch,anchorBranch,dir:`${WORKING_DIR}/${projectDirName}`,userId:ownerId,
-      onLog: message => { void addLog(ticketId,message,"command",ownerId).catch(() => {}); }});
-  } catch (e) {
-    await markTicketFailed(ticketId, `Build environment blocked — ${(e as Error).message}`, ownerId);
-    return;
-  }
 
   // ── Step 4: Refresh + inject credentials ────────────────────────────
   if (useClaudeSubscription) {
@@ -1893,11 +1883,6 @@ Before implementing, fix the git issue:
 
   console.log(`[ticket-executor] Wait finished: status=${waitResult.status}, exitCode=${waitResult.exitCode}, implementationStatus=${implementationStatus}`);
 
-  const environmentError = await environmentWorker.done;
-  if (environmentError) {
-    await markTicketFailed(ticketId, `Build environment blocked — ${environmentError.message}`, ownerId);
-    return;
-  }
 
   // ── Step 8: Commit & finalize ───────────────────────────────────────
   const durationMs = Date.now() - startTime;
@@ -2456,13 +2441,6 @@ async function executeTicketChat(
     return;
   }
   const workspaceId = chatSb.workspaceId;
-  try {
-    await prepareBuildRuntime({workspaceId,projectId:ticket.projectId,branch:ticket.githubBranch || "default",dir:`${WORKING_DIR}/${chatSb.projectDir}`,userId:ownerId,
-      onLog: message => { void addLog(ticketId,message,"command",ownerId).catch(() => {}); }});
-  } catch (e) {
-    await addLog(ticketId, `Build environment blocked — ${(e as Error).message}`, "cli_error", ownerId);
-    return;
-  }
 
   // Resume the CLI session this ticket's chat has been using. This row is written by
   // the /api/v1/cli/output webhook on every turn; the chat used to hardcode null here,
@@ -2566,7 +2544,7 @@ ${TICKET_CHAT_MODE_CONTRACT}
 ## Working rules
 - The repo is already cloned and set up at /data/${projectDirName}; explore it and reuse existing patterns.
 - Honor the acceptance criteria, notes, and MANDATORY DIRECTIVES above; do NOT regress work already done.
-- Before running application code, builds, or tests, commit implementation changes locally. Record validation fixes in separate commits before rerunning; never amend or squash. Exclude preview-only repairs, secrets and generated files. Do NOT push or switch branches; the server handles validated publication.
+- Run and repair the app in this sandbox first. Do not commit, push or switch branches; the server commits the accumulated changes together only after runtime checks pass. Exclude secrets and generated files.
 - In change mode: keep the change focused, and make sure the project still builds/compiles.`;
     try {
       const webhookReachable = !!cliApiKey && !/localhost|127\.0\.0\.1|\/\/0\.0\.0\.0/.test(CALLBACK_BASE_URL);
@@ -3166,8 +3144,7 @@ if [ -d "${projectDirName}/.git" ]; then
     cd ${projectDirName}
     ${refreshOriginCommand(auth.authUrl)}
     git fetch --prune origin
-    git reset --hard HEAD 2>/dev/null || true
-    git clean -fd 2>/dev/null || true
+    # Keep cloned local configuration and caches; branch setup below selects source.
 elif [ -d "${projectDirName}" ] && [ "$(ls -A ${projectDirName} 2>/dev/null)" ]; then
     echo "INIT_EXISTING_DIR"
     cd ${projectDirName}
@@ -3400,14 +3377,6 @@ git branch --show-current
   // idle-sleep a live build → "lost contact". Turned back off at build end.
   await wakeTicketVm(workspaceId);
   // Reuse preview discoveries, but verify/install the SDK in this build VM.
-  let environmentWorker;
-  try {
-    environmentWorker = await startBuildEnvironmentWorker({workspaceId,projectId:project.id,branch:featureBranch,anchorBranch,dir:projectDir,userId:ownerId,
-      onLog: message => { void addLog(ticketId,message,"command",ownerId).catch(() => {}); }});
-  } catch (e) {
-    await markTicketFailed(ticketId, `Build environment blocked — ${(e as Error).message}`, ownerId);
-    return;
-  }
 
   // Direct API mode must stay on the provider API path. Pi (and therefore a
   // connected OpenAI Codex subscription) is reserved for Coding Agent mode.
@@ -3659,11 +3628,6 @@ git branch --show-current
   }
   }
 
-  const environmentError = await environmentWorker.done;
-  if (environmentError) {
-    await markTicketFailed(ticketId, `Build environment blocked — ${environmentError.message}`, ownerId);
-    return;
-  }
 
   // ── Finalize: commit, push, merge ───────────────────────────────────
   const durationMs = Date.now() - startTime;
@@ -3874,7 +3838,7 @@ export async function startTicketValidationRetry(ticketId:string,actorId:string)
     if(!branch)throw new Error("No saved ticket branch is available.");
     const {runtimeValidations}=await import("../db/schema/runtime-validation.ts");
     const [previous]=await db.select().from(runtimeValidations).where(and(eq(runtimeValidations.projectId,project.id),eq(runtimeValidations.ticketId,ticketId),eq(runtimeValidations.branch,branch))).orderBy(desc(runtimeValidations.createdAt)).limit(1);
-    if(!previous?.baseline)throw new Error("No saved validation baseline is available; build the ticket once first.");
+
     const buildLlm=await resolveBuildLlm(project,actorId);
     const {gitUserId}=resolveGitActor(project,actorId);
     const auth=await resolveRepoAuth(project,gitUserId);
@@ -3900,7 +3864,7 @@ export async function startTicketValidationRetry(ticketId:string,actorId:string)
         await wakeTicketVm(workspaceId);
         const {retrySavedValidation}=await import("../services/retry-validation.ts");
         const sha=await retrySavedValidation({workspaceId,projectDir:"/data/project",featureBranch:branch,repoUrl:auth.repoUrl,githubToken:auth.token,tokenUser:auth.tokenUser,
-          validation:{projectId:project.id,userId:buildLlm.actorId,ticketId,gitCredentialUserId:gitUserId,cancelled:()=>cancelledTickets.has(ticketId),onLog:line=>{void addLog(ticketId,line,"command",project.ownerId).catch(()=>{});},onCheckpoint:async message=>{await addLog(ticketId,message,"agent_progress",project.ownerId);}}},previous.baseline);
+          validation:{projectId:project.id,userId:buildLlm.actorId,ticketId,gitCredentialUserId:gitUserId,cancelled:()=>cancelledTickets.has(ticketId),onLog:line=>{void addLog(ticketId,line,"command",project.ownerId).catch(()=>{});},onCheckpoint:async message=>{await addLog(ticketId,message,"agent_progress",project.ownerId);}}},previous?.baseline ?? "");
         await refreshCancellation();
         if(cancelledTickets.has(ticketId))throw new Error("Validation cancelled");
         await db.update(projectTickets).set({status:sha!==ticket.githubCommitSha || ticket.status==="failed" ? "open" : ticket.status,githubMergeStatus:sha!==ticket.githubCommitSha ? "pending" : ticket.githubMergeStatus,updatedAt:new Date()}).where(eq(projectTickets.id,ticketId));
