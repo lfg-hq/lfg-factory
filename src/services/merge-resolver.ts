@@ -130,9 +130,9 @@ export async function runValidationRepair(o: {
         onProgress: (m) => { const n = Date.now(); if (n - lastLog < 3_000) return; lastLog = n; log(`  ${m}`); },
       });
       account = (extractPiProgress(res.tail || "", 1200) || "").replace(/^Agent:\s*/, "").trim();
-      if (res.fatalError) log(`Pi stopped: ${res.fatalError.slice(0, 200)}`);
+      if (res.fatalError) throw new Error(res.fatalError);
     } catch (e) {
-      log(`Pi could not start: ${(e as Error).message?.slice(0, 200)}`);
+      throw new Error(`Pi repair failed: ${(e as Error).message}`);
     }
   } else if (cli.claudeUsable) {
     log(`Repairing with Claude Code…`);
@@ -170,7 +170,7 @@ export async function runValidationRepair(o: {
       extractExitCode(all);
       account = lastAssistantText(all);
     } catch (e) {
-      log(`Claude Code could not start: ${(e as Error).message?.slice(0, 200)}`);
+      throw new Error(`Claude Code repair failed: ${(e as Error).message}`);
     }
   } else {
     const why = cli.credentialNote

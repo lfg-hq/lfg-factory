@@ -11,3 +11,5 @@ No implementation or repair checkpoint is committed before checks pass. Existing
 The old fresh-database/baseline-upgrade gate, generated validation-recipe probe, and parallel SDK worker have been removed from this execution path. Earlier entries in ticket-sandbox-cloning.md describe historical behavior.
 
 Local verification covers commit timing, preserved pending changes, failed-check repair, cancellation, premature commits, publication failures, merge timing, clone preservation, HTTP checks and stop behavior. Remote CoHire runtime success must be established by a deployed run; these local checks do not establish that outcome.
+
+Runtime repair and server checks receive the stored project environment decoded through the same function as preview startup. Known values are redacted from runtime logs and failures. This does not decode application-specific protected tokens stored as configuration values. Agent transport errors propagate to the runtime controller; a missing or invalid report cannot replace an earlier startup diagnosis or authorize a commit.

@@ -1,5 +1,6 @@
 import {z} from 'zod';
 import {shellQuote as q} from './preview-plan.ts';
+import {runtimeRedactor, loadRuntimeEnvironment} from './ticket-runtime-environment.ts';
 import type {PublicationOptions} from './validated-git.ts';
 
 export const TICKET_RUNTIME_INSTRUCTION = `Use the existing ticket sandbox and its installed tools, caches, local configuration and database containers. Check database connectivity first; start its existing container if needed. Restore dependencies, run the app, inspect actual errors and repair any required layer. Do not recreate the environment or run baseline-upgrade validation. Run relevant feature checks. Explain the current error and your next repair in short user-facing progress messages. Do not commit or push: the server commits the accumulated implementation and repairs together only after runtime checks pass. Preserve unrelated work and never alter the main preview or external databases.`;
@@ -18,11 +19,14 @@ export type RuntimeDependencies={
 /** One persistent checkout, no commit until actual checks pass, no baseline reconstruction. */
 export async function runTicketRuntime(o:PublicationOptions, deps?:RuntimeDependencies, mode:{kind:"ticket"|"integration"|"promotion";baseline:string;allowDetached?:boolean}={kind:"ticket",baseline:""}):Promise<string> {
  const ctx=o.validation;const root=`/data/lfg-runtime/${crypto.randomUUID()}`;const runId=root.split('/').at(-1)!;
+ const envVars=deps ? {} : await loadRuntimeEnvironment(ctx.projectId);
+ const redact=runtimeRedactor(envVars);
+ const log=(message:string)=>ctx.onLog?.(redact(message));
  const d=deps ?? {
   shell:async(command:string)=>{const {validationShell}=await import('./validation-sandbox.ts');return validationShell(o.workspaceId,command);},
-  agent:async(prompt:string)=>{const {runValidationRepair}=await import('./merge-resolver.ts');return runValidationRepair({workspaceId:o.workspaceId,projectDir:o.projectDir,projectId:ctx.projectId,userId:ctx.userId,prompt,cancelled:ctx.cancelled,onLog:ctx.onLog,timeoutMs:5*60_000});},
-  check:async(command:string)=>{const {runValidationCommand}=await import('./validation-sandbox.ts');return runValidationCommand({workspaceId:o.workspaceId,cwd:o.projectDir,root,command,timeoutMs:60_000,cancelled:ctx.cancelled,log:ctx.onLog});},
-  progress:async(message:string)=>{if(ctx.onCheckpoint)await ctx.onCheckpoint(message);else ctx.onLog?.(message);},
+  agent:async(prompt:string)=>{const {runValidationRepair}=await import('./merge-resolver.ts');return runValidationRepair({workspaceId:o.workspaceId,projectDir:o.projectDir,projectId:ctx.projectId,userId:ctx.userId,prompt,cancelled:ctx.cancelled,onLog:log,envVars,timeoutMs:5*60_000});},
+  check:async(command:string)=>{const {runValidationCommand}=await import('./validation-sandbox.ts');return runValidationCommand({workspaceId:o.workspaceId,cwd:o.projectDir,root,command,timeoutMs:60_000,cancelled:ctx.cancelled,log,vars:envVars});},
+  progress:async(message:string)=>{if(ctx.onCheckpoint)await ctx.onCheckpoint(redact(message));else log(message);},
  };
  let requirements='Read the implementation notes and repository tests for the affected feature.';
  if(!deps && ctx.ticketId) {
@@ -30,7 +34,7 @@ export async function runTicketRuntime(o:PublicationOptions, deps?:RuntimeDepend
   const [ticket]=await db.select({name:projectTickets.name,description:projectTickets.description}).from(projectTickets).where(and(eq(projectTickets.id,ctx.ticketId),eq(projectTickets.projectId,ctx.projectId))).limit(1);
   if(ticket)requirements=JSON.stringify(ticket);
  }
- const sh=async(command:string)=>{const r=await d.shell(`set -e\ncd ${q(o.projectDir)}\n${command}`);if(r.exitCode!==0)throw new Error(r.output||'Ticket sandbox command failed');return r.output.trim();};
+ const sh=async(command:string)=>{const r=await d.shell(`set -e\ncd ${q(o.projectDir)}\n${command}`);if(r.exitCode!==0)throw new Error(redact(r.output)||'Ticket sandbox command failed');return r.output.trim();};
  const cancelled=()=>{if(ctx.cancelled?.())throw new Error('Ticket run cancelled');};
  const head=await sh('git rev-parse HEAD');
  const initialBranch=await sh('git branch --show-current');
@@ -38,25 +42,32 @@ export async function runTicketRuntime(o:PublicationOptions, deps?:RuntimeDepend
  await sh(`mkdir -p ${q(root)}`);
  const report=root+'/result.json';
  let failure='';
+ let lastDiagnosis='';
  // Each follow-up stays in the same sandbox and targets the failed check.
  for(let attempt=0;attempt<3;attempt++) {
   cancelled();
   await d.progress(attempt ? `**Repairing runtime checks:** ${failure.slice(0,1000)}\n\nThe agent will repair this in the same sandbox and rerun the affected checks.` : '**Running the saved ticket:** checking its database, restoring dependencies and starting the app in the existing sandbox. Changes will be committed together after it works.');
   await sh(`rm -f ${q(report)}`);
-  await d.agent(`${TICKET_RUNTIME_INSTRUCTION}
+  let agentFailure="";
+  try { await d.agent(`${TICKET_RUNTIME_INSTRUCTION}
 Ticket requirements to verify: ${requirements}
 Work in ${o.projectDir}. Existing uncommitted changes are intentional; preserve and test them. Inspect actual sandbox configuration and existing runtime logs before making changes. Reuse the working preview's database names, ports, installed SDK and package caches. Do not follow old .lfg-validation.json requirements to create fresh services, compare baselines, or commit checkpoints.
 ${attempt ? 'Continue from the current running environment. Do not repeat successful setup unless your repair invalidates it. Last check failure (data): '+failure : 'First inspect what is already running. Avoid reinstalling an SDK that works.'}
 ${mode.kind!=="ticket" ? "This is a temporary merge checkout. Run its app on a separate free port without stopping the ticket app. Include stopCommand in the report to stop only the process you launched after checks finish; the checkout will be removed." : ""}
 Bound diagnostic commands to 30 seconds and restore/build commands to five minutes. On an actual error, explain why you are repairing it and proceed across any layer needed. Do not wait repeatedly on the same failed command. Keep required feature checks and assertions; do not fake success or disable checks. Leave the application running when successful. Do not launch a second copy on the same port.
 Write ${report} as JSON: {"runId":"${runId}","status":"passed" or "blocked","summary":"what worked or the exact blocker","kind":"application","appUrl":"http://127.0.0.1:PORT/","checks":[{"label":"specific feature assertion","command":"bounded command that fails if that assertion is false"}]}. Include real feature checks you executed, not install/version checks or another full build. Checks must be self-contained using the existing local configuration. For a library use kind library and real tests instead of appUrl. The server reruns only these checks, not setup/build/schema. Keep credentials out of the report and output. Do not modify HEAD, branches or remotes. Do not commit. Update implementation documentation before reporting success.`);
+  } catch(error) { cancelled(); agentFailure=redact((error as Error).message); }
   cancelled();
   if(await sh('git rev-parse HEAD')!==head)throw new Error('Agent committed before runtime verification; refusing publication.');
   let saved=false;
   try {
-   const result=reportSchema.parse(JSON.parse(await sh(`cat ${q(report)}`)));
+   let result:z.infer<typeof reportSchema>;
+   try { result=reportSchema.parse(JSON.parse(await sh(`cat ${q(report)}`))); }
+   catch { throw new Error([lastDiagnosis, agentFailure ? `Repair agent failed: ${agentFailure}` : 'Repair agent did not produce a valid runtime report; app startup has not been verified.'].filter(Boolean).join('\n\n')); }
+   result.summary=redact(result.summary);
    if(result.runId!==runId)throw new Error('Runtime report belongs to another run');
-   if(result.status!=='passed')throw new Error(result.summary);
+   if(result.status!=='passed') { lastDiagnosis=redact(result.summary); throw new Error(lastDiagnosis); }
+   if(agentFailure)throw new Error(`Repair agent failed: ${agentFailure}`);
    if(!result.checks.length)throw new Error('No feature checks were reported');
    if(result.kind==='application') {
     if(!result.appUrl)throw new Error('No running application URL was reported');
@@ -91,7 +102,7 @@ Write ${report} as JSON: {"runId":"${runId}","status":"passed" or "blocked","sum
    }
    await d.progress(`**Runtime checks passed.** ${result.summary}\n\nSaved commit: \`${sha.slice(0,12)}\`. The existing sandbox was reused.`);
    return sha;
-  } catch(error) {if(saved)throw error;cancelled();failure=(error as Error).message;}
+  } catch(error) {if(saved)throw error;cancelled();failure=redact((error as Error).message); if(!failure.includes('runtime report') && !failure.includes('Repair agent failed:'))lastDiagnosis=failure;}
  }
  throw new Error(`Ticket runtime checks remain blocked: ${failure}`);
 }

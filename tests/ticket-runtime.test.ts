@@ -55,3 +55,19 @@ test('cancellation during a feature check prevents commit and another repair',()
  await expect(runTicketRuntime(x.o,x.deps)).rejects.toThrow('cancelled');
  expect(x.exec('git rev-parse HEAD').output.trim()).toBe(x.original);expect(x.agents()).toBe(1);
 }));
+
+test('missing repair report retains the actual database failure and never commits',()=>fixture(async x=>{
+ const agent=x.deps.agent;const shell=x.deps.shell;
+ x.deps.agent=async(p:string)=>{if(x.agents()===0)await agent(p);else throw new Error('provider unavailable');};
+ let reports=0;
+ x.deps.shell=async(cmd:string)=>{
+  if(cmd.includes("cat '/data/lfg-runtime/")) {
+   if(reports++===0){const r=await shell(cmd);const report=JSON.parse(r.output);report.status='blocked';report.summary='SQL Client rejected the protected connection string';return {exitCode:0,output:JSON.stringify(report)};}
+   return {exitCode:1,output:'cat: result.json: No such file or directory'};
+  }
+  return shell(cmd);
+ };
+ try {await runTicketRuntime(x.o,x.deps);throw new Error('Unexpected pass');}
+ catch(error) {expect((error as Error).message).toContain('SQL Client rejected');expect((error as Error).message).toContain('provider unavailable');expect((error as Error).message).not.toContain('cat:');}
+ expect(x.exec('git rev-parse HEAD').output.trim()).toBe(x.original);expect(x.checks()).toBe(0);
+}));
