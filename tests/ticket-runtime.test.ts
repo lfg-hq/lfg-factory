@@ -71,3 +71,11 @@ test('missing repair report retains the actual database failure and never commit
  catch(error) {expect((error as Error).message).toContain('SQL Client rejected');expect((error as Error).message).toContain('provider unavailable');expect((error as Error).message).not.toContain('cat:');}
  expect(x.exec('git rev-parse HEAD').output.trim()).toBe(x.original);expect(x.checks()).toBe(0);
 }));
+
+test('resource recovery runs before each repair and failure prevents agent restart',()=>fixture(async x=>{
+ let recoveries=0;
+ x.deps.recover=async()=>{recoveries++;expect(x.agents()).toBe(recoveries-1);if(recoveries===2)throw new Error('resource inspection unavailable');return 'available memory';};
+ x.deps.check=async()=>({exitCode:1,output:'build failed'});
+ await expect(runTicketRuntime(x.o,x.deps)).rejects.toThrow('resource inspection unavailable');
+ expect(recoveries).toBe(2);expect(x.agents()).toBe(1);
+}));

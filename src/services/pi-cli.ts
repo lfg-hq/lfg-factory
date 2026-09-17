@@ -1,3 +1,4 @@
+import {piTerminationScript, missingPiExitReason} from './pi-termination.ts';
 /**
  * Pi coding-agent runner (pi.dev) — in-sandbox builder for non-Anthropic models.
  *
@@ -19,6 +20,11 @@ import { execOnWorkspace, findJob, syncWorkspaceClock } from "./mags.ts";
 async function execLite(workspaceId: string, script: string, timeout = 15_000) {
   const b64 = Buffer.from(script).toString("base64");
   return execOnWorkspace(workspaceId, `echo ${b64} | base64 -d | bash`, { timeout });
+}
+
+async function stopPiAttempt(workspaceId:string,pid:string) {
+  const result=await execLite(workspaceId,piTerminationScript(pid),15_000);
+  if(result.exitCode!==0)throw new Error('Could not confirm Pi process cleanup; retry must inspect the prior attempt before starting more work.');
 }
 
 // Project lives on the big /data volume (7.8GB), not /root (1.9GB) — avoids ENOSPC.
@@ -928,11 +934,7 @@ export async function streamPiToCompletion(params: {
     // marks the app "stopped" regardless.
     if (shouldCancel?.()) {
       console.log(`[pi-cli] cancel requested — killing Pi in workspace ${workspaceId}`);
-      if (backgroundPid) {
-        await execLite(workspaceId, `pkill -9 -P ${backgroundPid} 2>/dev/null; kill -9 ${backgroundPid} 2>/dev/null; pkill -9 -f 'pip install' 2>/dev/null; true`).catch(() => {});
-      } else {
-        await execLite(workspaceId, `pkill -9 -f '\\bpi\\b' 2>/dev/null; pkill -9 -f 'pip install' 2>/dev/null; true`).catch(() => {});
-      }
+      if (backgroundPid) await stopPiAttempt(workspaceId,String(backgroundPid));
       break;
     }
     // Lightweight status: alive + done marker + last 4KB tail only (NOT the full file).
@@ -1079,6 +1081,12 @@ printf 'TL=%s\\n' "$TL"`;
     if (done || !alive) break;
   }
 
+  const timedOut=Date.now() >= deadline;
+  if((timedOut || stalled || runaway) && backgroundPid) {
+    // Do not launch another repair while this agent's tools are still running.
+    await stopPiAttempt(workspaceId,String(backgroundPid));
+  }
+
   // Final analysis — cheap VM-side grep + a capped tail (256KB, well under the 4MB
   // gRPC cap) for diagnosis. Returns: exit code, fatal verdict, whether Pi did real
   // work (any tool call), tool-call count, and the tail.
@@ -1135,12 +1143,12 @@ printf 'TL=%s\\n' "$TL"`;
       const mem = b64(/MEM=([A-Za-z0-9+/=]*)/).trim();
       const inst = b64(/INST=([A-Za-z0-9+/=]*)/).trim();
       const diag = [
-        "── Pi died without an exit marker (process killed). Diagnostics: ──",
-        oom ? `OOM-killer log:\n${oom}` : "OOM-killer log: (none found — not an OOM kill)",
+        "── Pi has no exit marker. Diagnostics (kernel history may predate this run): ──",
+        oom ? `OOM-killer log:\n${oom}` : "OOM-killer log: no entries available",
         mem ? `Memory (MB):\n${mem}` : "",
         inst ? `npm install log tail:\n${inst}` : "",
       ].filter(Boolean).join("\n");
-      if (oom) { oomKilled = true; fatalError = fatalError ?? "Pi process was OOM-killed (out of memory) — see diagnostics."; }
+      fatalError = fatalError ?? missingPiExitReason(timedOut, oom);
       tail = `${diag}\n\n── output file tail (${tail ? "below" : "EMPTY"}) ──\n${tail}`;
     }
 
@@ -1156,6 +1164,7 @@ printf 'TL=%s\\n' "$TL"`;
 
   // A detected stall is a failure even if Pi did some work earlier — the build
   // never converged. Surface it so the caller marks the ticket failed.
+  if (timedOut && !fatalError) fatalError=missingPiExitReason(true, "");
   if (stalled && !fatalError) {
     fatalError = "agent stalled — repeated the same action for several minutes without progress";
   }

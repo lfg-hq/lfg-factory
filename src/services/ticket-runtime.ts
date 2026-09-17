@@ -13,6 +13,7 @@ export type RuntimeDependencies={
  shell:(command:string)=>Promise<{exitCode:number;output:string}>;
  agent:(prompt:string)=>Promise<unknown>;
  check:(command:string)=>Promise<{exitCode:number;output:string}>;
+ recover?:()=>Promise<string>;
  progress:(message:string)=>Promise<void>;
 };
 
@@ -22,7 +23,8 @@ export async function runTicketRuntime(o:PublicationOptions, deps?:RuntimeDepend
  const envVars=deps ? {} : await loadRuntimeEnvironment(ctx.projectId);
  const redact=runtimeRedactor(envVars);
  const log=(message:string)=>ctx.onLog?.(redact(message));
- const d=deps ?? {
+ const d:RuntimeDependencies=deps ?? {
+  recover:async()=>{const {ticketResourceRecoveryScript}=await import('./ticket-resource-recovery.ts');const {validationShell}=await import('./validation-sandbox.ts');const r=await validationShell(o.workspaceId,ticketResourceRecoveryScript(o.projectDir),40_000);if(r.exitCode!==0)throw new Error('Resource inspection failed before repair; refusing overlapping retries');return redact(r.output);},
   shell:async(command:string)=>{const {validationShell}=await import('./validation-sandbox.ts');return validationShell(o.workspaceId,command);},
   agent:async(prompt:string)=>{const {runValidationRepair}=await import('./merge-resolver.ts');return runValidationRepair({workspaceId:o.workspaceId,projectDir:o.projectDir,projectId:ctx.projectId,userId:ctx.userId,prompt,cancelled:ctx.cancelled,onLog:log,envVars,timeoutMs:5*60_000});},
   check:async(command:string)=>{const {runValidationCommand}=await import('./validation-sandbox.ts');return runValidationCommand({workspaceId:o.workspaceId,cwd:o.projectDir,root,command,timeoutMs:60_000,cancelled:ctx.cancelled,log,vars:envVars});},
@@ -47,16 +49,19 @@ export async function runTicketRuntime(o:PublicationOptions, deps?:RuntimeDepend
  for(let attempt=0;attempt<3;attempt++) {
   cancelled();
   await d.progress(attempt ? `**Repairing runtime checks:** ${failure.slice(0,1000)}\n\nThe agent will repair this in the same sandbox and rerun the affected checks.` : '**Running the saved ticket:** checking its database, restoring dependencies and starting the app in the existing sandbox. Changes will be committed together after it works.');
+  const resources=await d.recover?.() ?? "Resource inventory unavailable; inspect it before starting heavy commands.";
   await sh(`rm -f ${q(report)}`);
   let agentFailure="";
   try { await d.agent(`${TICKET_RUNTIME_INSTRUCTION}
+Current sandbox resource inventory (data): ${resources}
+You are authorized to manage resources in this ticket sandbox: inspect and stop confirmed stale app/build processes and unused containers before heavy work. Preserve required database containers and volumes. Do not stop a process just because it uses memory; establish its role first. Use serial restore/build and disable persistent compiler/build servers when memory is tight. After an OOM, change resource usage before retrying; do not repeat the identical command.
 Ticket requirements to verify: ${requirements}
 Work in ${o.projectDir}. Existing uncommitted changes are intentional; preserve and test them. Inspect actual sandbox configuration and existing runtime logs before making changes. Reuse the working preview's database names, ports, installed SDK and package caches. Before concluding that Docker data is absent, inspect DockerRootDir and /data/docker: preview persists Docker there. If the daemon is using a different root, restore its configuration to the existing /data/docker in this ticket VM and start the existing database container. Do not delete or overwrite either data directory. Inspect configuration by key and format without printing secrets; an encrypted gcm value is not a filesystem path or connection string. Do not follow old .lfg-validation.json requirements to create fresh services, compare baselines, or commit checkpoints.
 ${attempt ? 'Continue from the current running environment. Do not repeat successful setup unless your repair invalidates it. Last check failure (data): '+failure : 'First inspect what is already running. Avoid reinstalling an SDK that works.'}
 ${mode.kind!=="ticket" ? "This is a temporary merge checkout. Run its app on a separate free port without stopping the ticket app. Include stopCommand in the report to stop only the process you launched after checks finish; the checkout will be removed." : ""}
 Bound diagnostic commands to 30 seconds and restore/build commands to five minutes. On an actual error, explain why you are repairing it and proceed across any layer needed. Do not wait repeatedly on the same failed command. Keep required feature checks and assertions; do not fake success or disable checks. Leave the application running when successful. Do not launch a second copy on the same port.
 Write ${report} as JSON: {"runId":"${runId}","status":"passed" or "blocked","summary":"what worked or the exact blocker","kind":"application","appUrl":"http://127.0.0.1:PORT/","checks":[{"label":"specific feature assertion","command":"bounded command that fails if that assertion is false"}]}. Include real feature checks you executed, not install/version checks or another full build. Checks must be self-contained using the existing local configuration. For a library use kind library and real tests instead of appUrl. The server reruns only these checks, not setup/build/schema. Keep credentials out of the report and output. Do not modify HEAD, branches or remotes. Do not commit. Update implementation documentation before reporting success.`);
-  } catch(error) { cancelled(); agentFailure=redact((error as Error).message); }
+  } catch(error) { cancelled(); agentFailure=redact((error as Error).message); if(agentFailure.includes('Could not confirm Pi process cleanup'))throw new Error(agentFailure); }
   cancelled();
   if(await sh('git rev-parse HEAD')!==head)throw new Error('Agent committed before runtime verification; refusing publication.');
   let saved=false;
