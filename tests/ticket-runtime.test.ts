@@ -87,3 +87,15 @@ test('full data disk reaches repair agent before runtime directory allocation',(
  x.deps.agent=async(prompt:string)=>{expect(prompt).toContain('free=0');expect(prompt).toContain('git worktree remove');expect(prompt).toContain('2 GiB');await agent(prompt);};
  await runTicketRuntime(x.o,x.deps);expect(x.agents()).toBe(1);
 }));
+
+test('runtime agent receives authority to create a missing local development database',()=>fixture(async x=>{
+ const agent=x.deps.agent;
+ x.deps.agent=async(prompt:string)=>{
+  expect(prompt).toContain('you are authorized to create it inside this ticket development sandbox');
+  expect(prompt).toContain('checked-in migrations and seed data');
+  expect(prompt).toContain('supersede old validation notes');
+  expect(prompt).not.toContain('Do not recreate the environment');
+  await agent(prompt);
+ };
+ await runTicketRuntime(x.o,x.deps);
+}));
