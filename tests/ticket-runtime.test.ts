@@ -9,11 +9,12 @@ async function fixture(body:(x:any)=>Promise<void>) {
  const exec=(cmd:string)=>{const r=spawnSync('bash',['-c',cmd],{cwd:dir,encoding:'utf8'});return {exitCode:r.status??1,output:r.stdout+r.stderr};};
  exec("git init -q -b feature/test && git config user.name Test && git config user.email test@example.test");
  writeFileSync(join(dir,'app.txt'),'initial');exec('git add . && git commit -qm initial');
- const original=exec('git rev-parse HEAD').output.trim();let report:any;let agents=0;let checks=0;const messages:string[]=[];
+ const original=exec('git rev-parse HEAD').output.trim();let report:any;let agents=0;let clock=0;let checks=0;const messages:string[]=[];
  const o={workspaceId:'existing-vm',projectDir:dir,featureBranch:'feature/test',repoUrl:'https://example.test/repo.git',validation:{projectId:'p',userId:'u'}};
  const deps:RuntimeDependencies={
+ now:()=>clock,
  shell:async cmd=>cmd.includes('cat \'/data/lfg-runtime/') ? {exitCode:0,output:JSON.stringify(report)} : cmd.includes('mkdir -p \'/data/lfg-runtime/') || cmd.includes('rm -f \'/data/lfg-runtime/') ? {exitCode:0,output:''}:exec(cmd),
- agent:async prompt=>{agents++;expect(exec('git rev-parse HEAD').output.trim()).toBe(original);writeFileSync(join(dir,'app.txt'),'fixed-'+agents);report={runId:prompt.match(/"runId":"([^"]+)"/)![1],status:'passed',summary:'Feature verified',kind:'library',checks:[{label:'feature assertion',command:'test -s app.txt'}]};},
+ agent:async prompt=>{agents++;clock+=9*60_000;expect(exec('git rev-parse HEAD').output.trim()).toBe(original);writeFileSync(join(dir,'app.txt'),'fixed-'+agents);report={runId:prompt.match(/"runId":"([^"]+)"/)![1],status:'passed',summary:'Feature verified',kind:'library',checks:[{label:'feature assertion',command:'test -s app.txt'}]};},
  check:async cmd=>{checks++;expect(exec('git rev-parse HEAD').output.trim()).toBe(original);return exec(cmd);},
  progress:async msg=>{messages.push(msg);},
  };
@@ -37,7 +38,7 @@ test('failed check returns to agent without intermediate commits or environment 
 test('persistent runtime failure leaves repairs uncommitted and never publishes',()=>fixture(async x=>{
  x.deps.check=async()=>({exitCode:1,output:'assertion failed'});
  await expect(runTicketRuntime(x.o,x.deps)).rejects.toThrow('assertion failed');
- expect(x.exec('git rev-parse HEAD').output.trim()).toBe(x.original);expect(x.agents()).toBe(3);
+ expect(x.exec('git rev-parse HEAD').output.trim()).toBe(x.original);expect(x.agents()).toBe(4);
  expect(x.exec('git diff --cached --name-only').output).toContain('app.txt');
 }));
 test('wrong branch and cancellation do not run the agent',()=>fixture(async x=>{
@@ -57,8 +58,9 @@ test('cancellation during a feature check prevents commit and another repair',()
 }));
 
 test('missing repair report retains the actual database failure and never commits',()=>fixture(async x=>{
+ let time=0;x.deps.now=()=>time;
  const agent=x.deps.agent;const shell=x.deps.shell;
- x.deps.agent=async(p:string)=>{if(x.agents()===0)await agent(p);else throw new Error('provider unavailable');};
+ x.deps.agent=async(p:string)=>{time+=9*60_000;if(x.agents()===0)await agent(p);else throw new Error('provider unavailable');};
  let reports=0;
  x.deps.shell=async(cmd:string)=>{
   if(cmd.includes("cat '/data/lfg-runtime/")) {
@@ -98,4 +100,28 @@ test('runtime agent receives authority to create a missing local development dat
   await agent(prompt);
  };
  await runTicketRuntime(x.o,x.deps);
+}));
+
+test('CoHire cannot commit a static-only report',()=>fixture(async x=>{
+ x.exec('git branch -m feature/coh-25-workforce-organisation');x.o.featureBranch='feature/coh-25-workforce-organisation';
+ await expect(runTicketRuntime(x.o,x.deps)).rejects.toThrow('running application');
+ expect(x.checks()).toBe(0);expect(x.exec('git rev-parse HEAD').output.trim()).toBe(x.original);
+}));
+test('agent session closes after successful verification',()=>fixture(async x=>{
+ let closes=0;x.deps.close=async()=>{closes++;};await runTicketRuntime(x.o,x.deps);expect(closes).toBe(1);
+}));
+test('all required runtime assertions are re-executed and receipts checked before commit',()=>fixture(async x=>{
+ x.exec('git branch -m feature/coh-25-workforce-organisation');x.o.featureBranch='feature/coh-25-workforce-organisation';
+ const categories=['database','authentication','crud','persistence','tenant-isolation','hierarchy'];const shell=x.deps.shell;const check=x.deps.check;
+ x.deps.shell=async(cmd:string)=>{
+  const r=await shell(cmd);
+  if(cmd.includes("cat '/data/lfg-runtime/")){
+   const report=JSON.parse(r.output);report.kind='application';report.appUrl='http://127.0.0.1:3000/';
+   report.checks=categories.map(category=>({label:category,category,execution:'runtime',command:`test -s app.txt && printf '%s\\n' '${JSON.stringify({category,passed:true,execution:'runtime'})}'`}));
+   return {exitCode:0,output:JSON.stringify(report)};
+  }
+  return r;
+ };
+ x.deps.check=async(cmd:string)=>cmd.includes('LFG_HTTP') ? {exitCode:0,output:'HTTP passed'} : check(cmd);
+ await runTicketRuntime(x.o,x.deps);expect(x.checks()).toBe(6);expect(x.exec('git rev-list --count HEAD').output.trim()).toBe('2');
 }));

@@ -149,6 +149,7 @@ export interface PiRunOptions {
   envVars?: Record<string, string>; // app env vars to expose to the build
   outputFile?: string;
   controlDir?: "/data/.pi" | "/tmp/lfg-pi-recovery";
+  rpc?: {fifo:string;sessionFile:string;extensionSource:string};
   /** When set, an in-VM forwarder streams Pi's JSONL to LFG in real time (webhook
    *  push) instead of the server polling the VM. mode="instant" POSTs compact
    *  tool-call ops to /instant-progress (appId); mode="ticket" POSTs raw JSONL to
@@ -292,7 +293,7 @@ export async function startPiCli(opts: PiRunOptions): Promise<PiRunResult> {
   // RAM-backed tmpfs (~2GB) — after many builds it fills with leftover pi_* files, and
   // then Pi's `> /tmp/pi_output` write SILENTLY FAILS (no space), leaving an empty output
   // and a runner that never starts → "Pi produced no files (no tool calls)" forever.
-  // /data is a real 8GB disk that we also clean per build.
+  // Runtime recovery opts into /tmp so it can repair a full /data filesystem.
   const PI_DIR = opts.controlDir ?? "/data/.pi";
   const outputFile = opts.outputFile ?? `${PI_DIR}/pi_output_${ts}.jsonl`;
   const promptFile = `${PI_DIR}/pi_prompt_${ts}.txt`;
@@ -437,8 +438,13 @@ echo '${modelsB64}' | base64 -d > /root/.pi/agent/models.json`;
   // Pi launch line. When forwarding, pipe the JSON stream through tee (→ outputFile, so
   // the completion/analysis poll still works) AND the forwarder (→ live ops). Use bash
   // PIPESTATUS[0] to recover Pi's real exit code from the pipeline.
-  const piRun = `pi -p --provider ${cfg.piName} --model ${opts.modelId} --mode json "\${PI_AUTH_ARGS[@]}" "$(cat ${promptFile})"`;
-  const piLaunch = opts.forward
+  const rpc=opts.rpc;
+  if(rpc && ![rpc.fifo,rpc.sessionFile].every(p=>/^\/tmp\/lfg-pi-recovery\/[a-f0-9-]+\/[a-z.]+$/.test(p)))throw new Error('Invalid runtime session path');
+  const extensionFile=`${PI_DIR}/pi_policy_${ts}.mjs`;
+  const piRun = rpc
+    ? `pi --provider ${cfg.piName} --model ${opts.modelId} --mode rpc --session '${rpc.sessionFile}' --extension ${extensionFile} "\${PI_AUTH_ARGS[@]}" < '${rpc.fifo}'`
+    : `pi -p --provider ${cfg.piName} --model ${opts.modelId} --mode json "\${PI_AUTH_ARGS[@]}" "$(cat ${promptFile})"`;
+  const piLaunch = rpc ? `exec 3<> '${rpc.fifo}'\n${piRun} >> ${outputFile} 2>&1\nPI_EXIT=\$?` : opts.forward
     ? `${piRun} 2>&1 | tee -a ${outputFile} | node ${forwarderFile}\nPI_EXIT=\${PIPESTATUS[0]}`
     : `${piRun} >> ${outputFile} 2>&1\nPI_EXIT=\$?`;
 
@@ -628,6 +634,9 @@ export PATH=/root/node/current/bin:/root/.npm-global/bin:/usr/local/bin:/usr/bin
 # never accumulates. Also purge leftover pi_* from /tmp (a RAM tmpfs) to reclaim the RAM
 # a prior version leaked there — that full tmpfs is what silently ate Pi's output writes.
 mkdir -p ${PI_DIR}
+${rpc ? `mkdir -p '${rpc.fifo.slice(0,rpc.fifo.lastIndexOf('/'))}'
+test -p '${rpc.fifo}' || mkfifo '${rpc.fifo}'
+echo '${Buffer.from(rpc.extensionSource).toString('base64')}' | base64 -d > ${extensionFile}` : ''}
 find ${PI_DIR} -maxdepth 1 -name 'pi_*' -mmin +30 -delete 2>/dev/null || true
 rm -f /tmp/pi_* /tmp/node22.tar.gz 2>/dev/null || true
 echo '${promptB64}' | base64 -d > ${promptFile}

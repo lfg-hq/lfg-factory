@@ -217,3 +217,15 @@ function lastAssistantText(all: string): string {
   } catch { /* fall through */ }
   return "";
 }
+
+/** Persist one RPC process across runtime verification feedback. */
+export async function createRuntimeRepairSession(o:{projectId:string;userId:string;workspaceId:string;projectDir:string;runId:string;deadline:number;envVars:Record<string,string>;onLog?:(line:string)=>void;cancelled?:()=>boolean}) {
+ const [{PiRepairSession},{validationShell},{runtimeToolPolicySource}]=await Promise.all([import('./pi-rpc.ts'),import('./validation-sandbox.ts'),import('./runtime-tool-policy.ts')]);
+ const cli=await resolveCli(o.userId,o.projectId);
+ if(!cli.usePi || !cli.provider)throw new Error('Continuous ticket repair requires a configured Pi provider: '+(cli.credentialNote || 'no usable Pi credential'));
+ const dir='/tmp/lfg-pi-recovery/'+o.runId;
+ return new PiRepairSession(dir+'/input.fifo',o.deadline,{
+  start:()=>startPiCli({workspaceId:o.workspaceId,prompt:'',projectDir:o.projectDir.replace(/^\/(root|data)\//,''),provider:cli.provider!,modelId:cli.piModelId,apiKey:cli.apiKey,oauthAccessToken:cli.oauthAccessToken,envVars:o.envVars,controlDir:'/tmp/lfg-pi-recovery',rpc:{fifo:dir+'/input.fifo',sessionFile:dir+'/session.jsonl',extensionSource:runtimeToolPolicySource}}),
+  exec:script=>validationShell(o.workspaceId,script,15_000),wait:()=>new Promise(r=>setTimeout(r,2000)),now:()=>Date.now(),cancelled:o.cancelled,log:o.onLog,
+ });
+}
