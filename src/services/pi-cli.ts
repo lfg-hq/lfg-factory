@@ -148,6 +148,7 @@ export interface PiRunOptions {
   oauthAccessToken?: string;
   envVars?: Record<string, string>; // app env vars to expose to the build
   outputFile?: string;
+  controlDir?: "/data/.pi" | "/tmp/lfg-pi-recovery";
   /** When set, an in-VM forwarder streams Pi's JSONL to LFG in real time (webhook
    *  push) instead of the server polling the VM. mode="instant" POSTs compact
    *  tool-call ops to /instant-progress (appId); mode="ticket" POSTs raw JSONL to
@@ -292,7 +293,7 @@ export async function startPiCli(opts: PiRunOptions): Promise<PiRunResult> {
   // then Pi's `> /tmp/pi_output` write SILENTLY FAILS (no space), leaving an empty output
   // and a runner that never starts → "Pi produced no files (no tool calls)" forever.
   // /data is a real 8GB disk that we also clean per build.
-  const PI_DIR = "/data/.pi";
+  const PI_DIR = opts.controlDir ?? "/data/.pi";
   const outputFile = opts.outputFile ?? `${PI_DIR}/pi_output_${ts}.jsonl`;
   const promptFile = `${PI_DIR}/pi_prompt_${ts}.txt`;
   const envFile = `${PI_DIR}/pi_env_${ts}.sh`;

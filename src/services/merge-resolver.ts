@@ -104,7 +104,7 @@ async function resolveCli(userId: string, projectId: string) {
 
 export async function runValidationRepair(o: {
   projectId: string; userId: string; workspaceId: string; projectDir: string;
-  prompt: string; timeoutMs?:number; envVars?: Record<string,string>; onLog?: (line:string)=>void; cancelled?: () => boolean;
+  prompt: string; resourceRecovery?:boolean; timeoutMs?:number; envVars?: Record<string,string>; onLog?: (line:string)=>void; cancelled?: () => boolean;
 }): Promise<string> {
   const log = o.onLog ?? (() => {});
   const dirName = o.projectDir.replace(/^\/(root|data)\//, "").replace(/^\//, "");
@@ -119,6 +119,7 @@ export async function runValidationRepair(o: {
     try {
       const pi = await startPiCli({
         workspaceId: o.workspaceId, prompt, projectDir: dirName,
+        controlDir:o.resourceRecovery ? "/tmp/lfg-pi-recovery" : undefined,
         provider: cli.provider, modelId: cli.piModelId,
         apiKey: cli.apiKey, oauthAccessToken: cli.oauthAccessToken,
         envVars: o.envVars ?? {},

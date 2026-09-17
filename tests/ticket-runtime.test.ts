@@ -79,3 +79,11 @@ test('resource recovery runs before each repair and failure prevents agent resta
  await expect(runTicketRuntime(x.o,x.deps)).rejects.toThrow('resource inspection unavailable');
  expect(recoveries).toBe(2);expect(x.agents()).toBe(1);
 }));
+
+test('full data disk reaches repair agent before runtime directory allocation',()=>fixture(async x=>{
+ const shell=x.deps.shell;const agent=x.deps.agent;
+ x.deps.shell=async(cmd:string)=>cmd.includes('mkdir -p') ? {exitCode:1,output:'No space left on device'} : shell(cmd);
+ x.deps.recover=async()=> 'Disk bytes: free=0';
+ x.deps.agent=async(prompt:string)=>{expect(prompt).toContain('free=0');expect(prompt).toContain('git worktree remove');expect(prompt).toContain('2 GiB');await agent(prompt);};
+ await runTicketRuntime(x.o,x.deps);expect(x.agents()).toBe(1);
+}));

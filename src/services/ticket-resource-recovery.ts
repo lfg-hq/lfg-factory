@@ -2,7 +2,7 @@ import {shellQuote} from './preview-plan.ts';
 /** Inspect current resources; only orphaned compiler servers in this checkout are automatic cleanup. */
 export function ticketResourceRecoveryScript(projectDir:string):string {
  return `timeout 20 python3 - ${shellQuote(projectDir)} <<'PY'
-import os,sys,signal,json
+import os,sys,signal,json,shutil
 root=os.path.realpath(sys.argv[1]); processes=[]
 for name in os.listdir('/proc'):
  if not name.isdigit(): continue
@@ -18,6 +18,8 @@ for name in os.listdir('/proc'):
    print('Stopped orphan compiler PID '+name)
   processes.append({'pid':int(name),'name':open(base+'/comm').read().strip(),'rss_kb':int(fields[21])*os.sysconf('SC_PAGE_SIZE')//1024,'in_checkout':scoped})
  except (OSError,ValueError,IndexError): pass
+print('Disk bytes: '+str(shutil.disk_usage(root)))
+st=os.statvfs(root);print('Free inodes: '+str(st.f_favail))
 print(open('/proc/meminfo').read().split('SwapCached:')[0])
 print(json.dumps(sorted(processes,key=lambda p:p['rss_kb'],reverse=True)[:12]))
 PY
