@@ -909,6 +909,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
 <script src="/public/js/sidebar-chats.js"></script>
 <script src="/public/js/sharing.js"></script>
 <!-- Shared preview component — the SAME one the main chat Preview panel uses. -->
+<link rel="stylesheet" href="/public/css/ticket-action-phases.css" />
+<script src="/public/js/ticket-action-phases.js"></script>
 <script src="/public/js/preview-tab.js"></script>
 <script>
   const PROJECT_ID = document.body.dataset.projectId;
@@ -1693,20 +1695,15 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
 
   async function loadExecutionLogs() {
     if (!_currentTicketId) return;
+    var requestedTicket = _currentTicketId;
     try {
-      var res = await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + _currentTicketId + '/logs');
+      var res = await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + requestedTicket + '/logs');
+      if (!res.ok) return;
       var rows = await res.json();
+      if (requestedTicket !== _currentTicketId || !Array.isArray(rows)) return;
       var area = document.getElementById('actions-log-area');
       if (!area) return;
-      if (!rows.length) {
-        area.innerHTML = '<div class="log-placeholder">' +
-          '<i class="fas fa-terminal" style="font-size:1.5rem;margin-bottom:.75rem;display:block;opacity:.4;"></i>' +
-          'No execution logs yet.<br>Logs will appear here when the ticket is built.</div>';
-        _lastLogCount = 0;
-        _logsFirstLoad = true;
-        return;
-      }
-      var contentKey = rows.length + ':' + (rows[rows.length - 1].id || rows[rows.length - 1].createdAt || '');
+      var contentKey = JSON.stringify(rows) + JSON.stringify(ticketMap[_currentTicketId] || {});
       if (contentKey === _lastLogContent) return;
       _lastLogContent = contentKey;
       _lastLogCount = rows.length;
@@ -1715,11 +1712,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
 
       var scrollContainer = area /* the .execution-logs-container is the real overflow scroller */;
       var shouldScroll = _logsFirstLoad || (scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight < 60);
-      area.innerHTML = '';
-
-      rows.forEach(function(row, idx) {
-        area.appendChild(renderLogEntry(row, idx));
-      });
+      window.TicketActionPhases.render(area, rows, ticketMap[_currentTicketId], 'drawer:' + _currentTicketId, renderLogEntry);
 
       // Logs are now in the DOM — refresh the banner so a failed build shows its reason.
       if (ticketMap[_currentTicketId]) updateTicketStatusBanner(ticketMap[_currentTicketId]);
@@ -2673,32 +2666,9 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
         _chatBusy = false; setChatBusyUI();
       }
 
-      var placeholder = area.querySelector('.log-placeholder');
-      if (placeholder) area.innerHTML = '';
-
-      var idx = area.children.length;
-      var wasAtBottom = !area.children.length || (area.scrollHeight - area.scrollTop - area.clientHeight < 120);
-      var node = renderLogEntry(log, 'live-' + idx);
-
-      // Insert in timestamp order instead of always appending. The VM buffers its JSONL
-      // and forwards it over the webhook, so the tail of a build routinely arrives after
-      // the executor has already written "Ticket complete" — which is why the log kept
-      // scrolling on past the summary with dotnet restore output, looking like the build
-      // was still running when it had finished and merged.
-      var ts = Date.parse(log.createdAt || '') || 0;
-      var before = null;
-      if (ts) {
-        for (var i = area.children.length - 1; i >= 0; i--) {
-          var rowTs = Number(area.children[i].getAttribute('data-ts') || 0);
-          if (!rowTs || rowTs <= ts) break;   // rows before this one are older — stop
-          before = area.children[i];
-        }
-      }
-      if (before) area.insertBefore(node, before); else area.appendChild(node);
-
-      if (wasAtBottom) scrollActionsBottom();
-      _lastLogCount = area.children.length;
+      // Reload authoritative rows so phase boundaries and delayed webhook output stay ordered.
       _lastLogContent = '';
+      loadExecutionLogs();
     }
 
     connectWS();

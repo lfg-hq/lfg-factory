@@ -522,9 +522,10 @@
     currentLogRows = rows;
     const expanded = new Set(Array.from(area.querySelectorAll(".ta-cmd-body")).filter(el => el.style.display !== "none").map(el => el.id));
     const atBottom = area.scrollHeight - area.scrollTop - area.clientHeight < 100;
-    area.innerHTML = rows.length
-      ? groupOperations(rows).map(renderRow).join("")
-      : '<div data-empty style="opacity:.55;padding:28px 20px;text-align:center;line-height:1.6;">No activity yet.<br>Send a message below to ask the agent to change this ticket.</div>';
+    window.TicketActionPhases.render(area, groupOperations(rows), curMeta, 'chat:' + ticketId, row => {
+      const holder = document.createElement('div'); holder.innerHTML = renderRow(row);
+      return holder.firstElementChild;
+    });
     for (const id of expanded) { const body = document.getElementById(id); if (body) body.style.display = "block"; }
     if (atBottom) area.scrollTop = area.scrollHeight;
   }

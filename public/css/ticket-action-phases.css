@@ -1,0 +1,13 @@
+.ticket-action-phase { border:1px solid var(--border-color,#dce2ed); border-radius:10px; margin:10px 8px; overflow:hidden; }
+.ticket-action-phase > summary { cursor:pointer; padding:14px 16px; display:flex; align-items:center; gap:12px; background:var(--bg-secondary,#f5f6fa); color:var(--text-primary,#273247); list-style:none; }
+.ticket-action-phase > summary::-webkit-details-marker { display:none; }
+.ticket-action-phase > summary::before { content:'›'; font-size:22px; line-height:1; }
+.ticket-action-phase[open] > summary::before { transform:rotate(90deg); }
+.ticket-action-phase > summary:focus-visible { outline:2px solid #8452ef; outline-offset:-3px; }
+.phase-count { font-size:12px; opacity:.7; }
+.phase-status { margin-left:auto; font-size:12px; font-weight:600; border-radius:20px; padding:4px 10px; background:#e9edf3; color:#475569; }
+.phase-working { background:#eee6ff; color:#6532b7; }
+.phase-done { background:#def5e6; color:#186534; }
+.phase-error { background:#ffe5e5; color:#a92020; }
+.phase-empty { padding:12px 18px; opacity:.7; }
+.ticket-phase-body { min-width:0; }
