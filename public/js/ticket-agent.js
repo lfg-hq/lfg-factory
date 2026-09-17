@@ -484,9 +484,7 @@
     if (!ticketId) return;
     const requestedTicket = ticketId;
     try {
-      const r = await fetch(`/api/projects/${PID()}/tickets/${ticketId}/logs`, { credentials: "same-origin" });
-      if (!r.ok) return;
-      const rows = await r.json();
+      const rows = await window.TicketActionPhases.load(`/api/projects/${PID()}/tickets/${ticketId}/logs`);
       if (ticketId === requestedTicket && Array.isArray(rows)) { renderAll(rows); applyAutoTab(rows.length); }
     } catch (_) { /* keep last render — a later poll retries the auto-tab */ }
   }
@@ -525,7 +523,7 @@
     window.TicketActionPhases.render(area, groupOperations(rows), curMeta, 'chat:' + ticketId, row => {
       const holder = document.createElement('div'); holder.innerHTML = renderRow(row);
       return holder.firstElementChild;
-    });
+    }, `/api/projects/${PID()}/tickets/${ticketId}/logs`, loadLog);
     for (const id of expanded) { const body = document.getElementById(id); if (body) body.style.display = "block"; }
     if (atBottom) area.scrollTop = area.scrollHeight;
   }

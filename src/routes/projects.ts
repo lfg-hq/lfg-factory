@@ -674,6 +674,7 @@ projectsRouter.get("/projects/:projectId/tickets", async (c) => {
       complexity: projectTickets.complexity,
       queueStatus: projectTickets.queueStatus,
       description: projectTickets.description,
+      githubCommitSha: projectTickets.githubCommitSha,
       // When the build finished and the ticket moved to In Review — the board sorts on it.
       lastExecutionAt: projectTickets.lastExecutionAt,
     }).from(projectTickets)

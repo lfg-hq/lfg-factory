@@ -22,6 +22,7 @@ interface Ticket {
   updatedAt?: Date | string;
   /** When the build finished and the ticket moved to In Review; null = never built. */
   lastExecutionAt?: Date | string | null;
+  githubCommitSha?: string | null;
 }
 
 interface ExecutionModeConfig {
@@ -677,7 +678,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
                       <span class="kanban-card-title">${t.name}</span>
                     </div>
                     <div class="kanban-card-meta">
-                      <a class="ticket-code-link" href="/projects/${project.projectId}/tickets/${t.id}/diff" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open ticket code in a new window">&lt;/&gt; Code ↗</a>
+                      ${t.githubCommitSha ? html`<a class="ticket-code-link" href="/projects/${project.projectId}/tickets/${t.id}/diff" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open ticket code in a new window">&lt;/&gt; Code ↗</a>` : ""}
                       <span class="priority-label" style="color:${PRIORITY_COLOR[t.priority] ?? "#6b7280"};">
                         <span class="kanban-priority-dot" style="background:${PRIORITY_COLOR[t.priority] ?? "#6b7280"};"></span>
                         ${t.priority}
@@ -708,7 +709,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     </div>
     <div class="drawer-header-right">
       <div class="drawer-actions">
-        <a class="ticket-code-link" id="drawer-code-link" target="_blank" rel="noopener">&lt;/&gt; Code ↗</a>
+        <a class="ticket-code-link" id="drawer-code-link" style="display:none" target="_blank" rel="noopener">&lt;/&gt; Code ↗</a>
         <button class="drawer-execute-btn" id="drawer-build-btn" onclick="buildCurrentTicket()">
           <i class="fas fa-bolt"></i> Build
         </button>
@@ -1040,6 +1041,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     return '<i class="fas fa-bolt"></i> ' + (hasPreviousBuild(ticketMap[_currentTicketId]) ? 'Re-build' : 'Build');
   }
   function renderDrawerDetails(t) {
+    document.getElementById("drawer-code-link").style.display = (t.githubCommitSha || t.github_commit_sha) ? "" : "none";
     if (!t) return;
     document.getElementById('drawer-build-btn').innerHTML = buildButtonLabel();
     var key = t.ticketKey || t.ticket_key || ('TKT-' + (t.index != null ? t.index : ''));
@@ -1111,6 +1113,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     _chatBusy = false; setChatBusyUI();
     refreshChatBusy(); // a turn may already be running server-side (build, or another tab)
     const t = ticketMap[ticketId];
+    document.getElementById("drawer-code-link").style.display = t && (t.githubCommitSha || t.github_commit_sha) ? "" : "none";
     // Render from the local map if we have it; otherwise open with a placeholder
     // and let the live fetch below fill it in — NEVER silently return (that reads
     // as "the card isn't clickable").
@@ -1697,9 +1700,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     if (!_currentTicketId) return;
     var requestedTicket = _currentTicketId;
     try {
-      var res = await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + requestedTicket + '/logs');
-      if (!res.ok) return;
-      var rows = await res.json();
+      var historyUrl = '/api/projects/' + PROJECT_ID + '/tickets/' + requestedTicket + '/logs';
+      var rows = await window.TicketActionPhases.load(historyUrl);
       if (requestedTicket !== _currentTicketId || !Array.isArray(rows)) return;
       var area = document.getElementById('actions-log-area');
       if (!area) return;
@@ -1712,7 +1714,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
 
       var scrollContainer = area /* the .execution-logs-container is the real overflow scroller */;
       var shouldScroll = _logsFirstLoad || (scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight < 60);
-      window.TicketActionPhases.render(area, rows, ticketMap[_currentTicketId], 'drawer:' + _currentTicketId, renderLogEntry);
+      window.TicketActionPhases.render(area, rows, ticketMap[_currentTicketId], 'drawer:' + _currentTicketId, renderLogEntry, historyUrl, function() { _lastLogContent = ''; return loadExecutionLogs(); });
 
       // Logs are now in the DOM — refresh the banner so a failed build shows its reason.
       if (ticketMap[_currentTicketId]) updateTicketStatusBanner(ticketMap[_currentTicketId]);
@@ -1741,6 +1743,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       var ticket = resp && resp.ticket ? resp.ticket : resp;
       var branch = ticket.github_branch || ticket.githubBranch;
       var sha = ticket.github_commit_sha || ticket.githubCommitSha;
+      document.getElementById('drawer-code-link').style.display = sha ? '' : 'none';
       var banner = document.getElementById('actions-git-banner');
       if (banner && branch) {
         document.getElementById('actions-git-branch').textContent = branch;

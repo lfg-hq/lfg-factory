@@ -26,14 +26,38 @@
     if (ticket && !running && phases[active].status === 'working') {
       phases[active].status = ticket.status === 'failed' ? 'error' : ticket.status === 'stopped' ? 'stopped' : 'unknown';
     }
+    if (!phases[0].rows.length && (ticket?.githubCommitSha || ticket?.github_commit_sha || rows.some(r => /Retrying validation of saved commit|Validation passed.*saved commit/.test(String(r.message || '').replace(/\*\*/g, ''))))) phases[0].status = 'saved';
     return phases;
   }
+  const histories = new Map();
+  async function load(url, older = false) {
+    const history = histories.get(url) || { rows: [], more: false };
+    const cursor = older && history.rows[0]?.id;
+    const response = await fetch(url + (cursor ? '?before=' + encodeURIComponent(cursor) : ''), { credentials: 'same-origin' });
+    if (!response.ok) throw new Error('Could not load action history');
+    const rows = await response.json();
+    if (!Array.isArray(rows)) throw new Error('Invalid action history');
+    if (older || !histories.has(url)) history.more = rows.length === 500;
+    const merged = new Map(history.rows.map(row => [row.id, row]));
+    for (const row of rows) merged.set(row.id, row);
+    history.rows = Array.from(merged.values()).sort((a,b) => String(a.createdAt).localeCompare(String(b.createdAt)) || String(a.id).localeCompare(String(b.id)));
+    histories.set(url, history);
+    return history.rows;
+  }
   const choices = new Map();
-  function render(area, rows, ticket, key, renderRow) {
+  function render(area, rows, ticket, key, renderRow, historyUrl, refresh) {
     const phases = group(rows, ticket);
     // Capture immediately, including a toggle whose event has not fired yet.
     for (const old of area.querySelectorAll('details[data-phase-key]')) choices.set(old.dataset.phaseKey, old.open);
     const fragment = document.createDocumentFragment();
+    const navigation = document.createElement('nav'); navigation.className = 'phase-navigation'; navigation.setAttribute('aria-label', 'Action phases');
+    fragment.append(navigation);
+    const history = histories.get(historyUrl);
+    if (history?.more) {
+      const older = document.createElement('button'); older.className = 'phase-older'; older.textContent = 'Load earlier actions';
+      older.onclick = async () => { older.disabled = true; older.textContent = 'Loading…'; try { await load(historyUrl, true); await refresh(); } catch (_) { older.disabled = false; older.textContent = 'Could not load — try again'; } };
+      fragment.append(older);
+    }
     let index = 0;
     for (const phase of phases) {
       const section = document.createElement('details');
@@ -44,16 +68,20 @@
       section.addEventListener('toggle', () => { if (section.isConnected) choices.set(choiceKey, section.open); });
       const summary = document.createElement('summary');
       const label = document.createElement('strong'); label.textContent = phase.label;
-      const count = document.createElement('span'); count.className = 'phase-count'; count.textContent = phase.rows.length + ' actions';
+      const count = document.createElement('span'); count.className = 'phase-count'; count.textContent = phase.rows.length ? phase.rows.length + ' loaded entries' : 'Earlier logs not loaded';
+      if (!phase.rows.length && phase.status === 'pending') count.textContent = 'Not started';
       const badge = document.createElement('span'); badge.className = 'phase-status phase-' + phase.status;
-      badge.textContent = phase.status === 'unknown' ? 'Status unavailable' : phase.status[0].toUpperCase() + phase.status.slice(1);
+      badge.textContent = phase.status === 'saved' ? 'Saved code' : phase.status === 'unknown' ? 'Status unavailable' : phase.status[0].toUpperCase() + phase.status.slice(1);
       summary.append(label, count, badge); section.append(summary);
+      const jump = document.createElement('button'); jump.textContent = phase.label + ' · ' + badge.textContent;
+      jump.onclick = () => { section.open = true; choices.set(choiceKey, true); section.scrollIntoView({ block: 'start' }); };
+      navigation.append(jump);
       const body = document.createElement('div'); body.className = 'ticket-phase-body';
       for (const row of phase.rows) body.append(renderRow(row, index++));
-      if (!phase.rows.length) { const empty = document.createElement('p'); empty.className = 'phase-empty'; empty.textContent = phase.status === 'skipped' ? 'Development was skipped for this validation retry.' : 'No actions yet.'; body.append(empty); }
+      if (!phase.rows.length) { const empty = document.createElement('p'); empty.className = 'phase-empty'; empty.textContent = phase.status === 'saved' ? 'This ticket already has saved code. This retry reused it. Load earlier actions to view the original build history.' : phase.status === 'skipped' ? 'Development was skipped for this validation retry; this is not the ticket’s complete build history.' : 'No actions loaded for this phase.'; body.append(empty); }
       section.append(body); fragment.append(section);
     }
     area.replaceChildren(fragment);
   }
-  root.TicketActionPhases = { group, render };
+  root.TicketActionPhases = { group, render, load };
 })(typeof window === 'undefined' ? globalThis : window);

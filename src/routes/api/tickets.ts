@@ -10,7 +10,7 @@ import { githubTokens, users } from "../../db/schema/users.ts";
 import { sandboxes } from "../../db/schema/sandbox.ts";
 import { conversations } from "../../db/schema/chat.ts";
 import { instantApps } from "../../db/schema/instant.ts";
-import { eq, and, asc, desc, max, notExists } from "drizzle-orm";
+import { eq, and, asc, desc, max, notExists, lt } from "drizzle-orm";
 import { getProjectAccess, requirePermission } from "../../auth/project-access.ts";
 import { nextTicketKey } from "../../utils/ticket-keys.ts";
 import { notify } from "../../services/notify.ts";
@@ -406,15 +406,17 @@ ticketsApi.get("/:projectId/tickets/:ticketId/logs", async (c) => {
   if (!access) return c.json({ error: "Not found" }, 404);
   const project = access.project;
 
-  // Most-recent 500 (desc + limit), then flip back to chronological order. Using
-  // ASC+limit returned the OLDEST 500, so on a chatty ticket the user's latest
-  // message + latest activity fell off the end and never rendered.
-  const logs = await db
-    .select()
-    .from(ticketLogs)
-    .where(eq(ticketLogs.ticketId, ticketId))
-    .orderBy(desc(ticketLogs.createdAt))
-    .limit(500);
+  // Cursor pagination preserves older build history without downloading it on every poll.
+  const before = c.req.query("before");
+  let boundary;
+  if (before) {
+    const [anchor] = await db.select().from(ticketLogs).where(and(eq(ticketLogs.ticketId, ticketId), eq(ticketLogs.id, before))).limit(1);
+    if (!anchor) return c.json({ error: "Log cursor not found" }, 400);
+    boundary = or(lt(ticketLogs.createdAt, anchor.createdAt), and(eq(ticketLogs.createdAt, anchor.createdAt), lt(ticketLogs.id, anchor.id)));
+  }
+  const logs = await db.select().from(ticketLogs)
+    .where(and(eq(ticketLogs.ticketId, ticketId), boundary))
+    .orderBy(desc(ticketLogs.createdAt), desc(ticketLogs.id)).limit(500);
 
   return c.json(logs.reverse().map((l) => {
     // A question row carries its clickable options (and whether it blocks) as JSON in
