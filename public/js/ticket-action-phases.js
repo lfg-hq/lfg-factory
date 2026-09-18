@@ -51,11 +51,9 @@
     // Capture immediately, including a toggle whose event has not fired yet.
     for (const old of area.querySelectorAll('details[data-phase-key]')) choices.set(old.dataset.phaseKey, old.open);
     const fragment = document.createDocumentFragment();
-    const navigation = document.createElement('nav'); navigation.className = 'phase-navigation'; navigation.setAttribute('aria-label', 'Action phases');
-    fragment.append(navigation);
     const history = histories.get(historyUrl);
     if (history?.more) {
-      const older = document.createElement('button'); older.className = 'phase-older'; older.textContent = 'Load earlier actions';
+      const older = document.createElement('button'); older.className = 'phase-older'; older.title = 'Show the next 500 older log entries. This does not rerun the ticket.'; older.textContent = 'Load older logs';
       older.onclick = async () => { older.disabled = true; older.textContent = 'Loading…'; try { await load(historyUrl, true); await refresh(); } catch (_) { older.disabled = false; older.textContent = 'Could not load — try again'; } };
       fragment.append(older);
     }
@@ -74,12 +72,9 @@
       const badge = document.createElement('span'); badge.className = 'phase-status phase-' + phase.status;
       badge.textContent = phase.status === 'saved' ? 'Saved code' : phase.status === 'unknown' ? 'Status unavailable' : phase.status[0].toUpperCase() + phase.status.slice(1);
       summary.append(label, count, badge); section.append(summary);
-      const jump = document.createElement('button'); jump.textContent = 'Go to ' + phase.label + ' · ' + badge.textContent;
-      jump.onclick = () => { section.open = true; choices.set(choiceKey, true); section.scrollIntoView({ block: 'start' }); };
-      navigation.append(jump);
       const body = document.createElement('div'); body.className = 'ticket-phase-body';
       for (const row of phase.rows) body.append(renderRow(row, index++));
-      if (!phase.rows.length) { const empty = document.createElement('p'); empty.className = 'phase-empty'; empty.textContent = phase.status === 'saved' ? 'This ticket already has saved code. This retry reused it. Load earlier actions to view the original build history.' : phase.status === 'skipped' ? 'Development was skipped for this validation retry; this is not the ticket’s complete build history.' : 'No actions loaded for this phase.'; body.append(empty); }
+      if (!phase.rows.length) { const empty = document.createElement('p'); empty.className = 'phase-empty'; empty.textContent = phase.status === 'saved' ? 'This ticket already has saved code. This retry reused it. Load older logs to view the original build history.' : phase.status === 'skipped' ? 'Development was skipped for this validation retry; this is not the ticket’s complete build history.' : 'No actions loaded for this phase.'; body.append(empty); }
       section.append(body); fragment.append(section);
     }
     area.replaceChildren(fragment);

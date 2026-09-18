@@ -11,11 +11,10 @@
 .phase-error { background:#ffe5e5; color:#a92020; }
 .phase-empty { padding:12px 18px; opacity:.7; }
 .ticket-phase-body { min-width:0; }
-/* Keep navigation and the current phase reachable in long histories. */
-.ticket-action-phase { overflow:visible; scroll-margin-top:52px; }
-.ticket-action-phase > summary { position:sticky; top:48px; z-index:2; border-radius:10px; }
-.phase-navigation { position:sticky; top:0; z-index:3; display:flex; gap:8px; padding:8px; background:var(--bg-secondary,#f5f6fa); border-bottom:1px solid var(--border-color,#dce2ed); }
-.phase-navigation button, .phase-older { cursor:pointer; font:inherit; font-size:13px; padding:7px 12px; border:1px solid var(--border-color,#dce2ed); border-radius:8px; color:var(--text-primary,#273247); background:var(--bg-primary,#fff); }
+/* The actual expanded section header sticks inside the log scrollport. */
+.ticket-action-phase { overflow:visible; scroll-margin-top:0; }
+.ticket-action-phase > summary { position:sticky; top:0; z-index:2; border-radius:10px; }
+.phase-older { cursor:pointer; font:inherit; font-size:13px; padding:7px 12px; border:1px solid var(--border-color,#dce2ed); border-radius:8px; color:var(--text-primary,#273247); background:var(--bg-primary,#fff); }
 .phase-older { margin:8px; }
 .phase-saved { background:#def5e6; color:#186534; }
 
