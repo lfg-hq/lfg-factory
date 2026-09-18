@@ -50,29 +50,34 @@
     const phases = group(rows, ticket);
     area.dataset.phaseView = key;
     const history = histories.get(historyUrl);
-    let selected = choices.has(key) ? choices.get(key) : (phases[1].rows.length ? 'validation' : 'build');
+    let selected = choices.get(key) || (phases[1].rows.length ? 'validation' : 'build');
     const fragment = document.createDocumentFragment();
-    const headers = document.createElement('div'); headers.className = 'phase-headers';
+    const headers = document.createElement('div'); headers.className = 'phase-headers'; headers.setAttribute('role', 'tablist'); headers.setAttribute('aria-label', 'Ticket actions');
     const bodies = [];
     const buttons = [];
     function select(id) {
-      selected = selected === id ? null : id;
+      selected = id;
       choices.set(key, selected);
-      buttons.forEach((button, i) => button.setAttribute('aria-expanded', String(phases[i].id === selected)));
+      buttons.forEach((button, i) => { button.setAttribute('aria-selected', String(phases[i].id === selected)); button.tabIndex = phases[i].id === selected ? 0 : -1; });
       bodies.forEach((body, i) => { body.hidden = phases[i].id !== selected; });
       area.scrollTop = 0;
     }
     let index = 0;
     for (const phase of phases) {
       const button = document.createElement('button'); button.type = 'button'; button.className = 'phase-header';
-      button.setAttribute('aria-expanded', String(selected === phase.id));
+      button.setAttribute('role', 'tab'); button.setAttribute('aria-selected', String(selected === phase.id)); button.tabIndex = selected === phase.id ? 0 : -1;
       const body = document.createElement('div'); body.className = 'ticket-phase-body';
       body.id = 'phase-body-' + key.replace(/[^a-zA-Z0-9_-]/g, '-') + '-' + phase.id;
-      button.setAttribute('aria-controls', body.id);
+      button.id = body.id + '-tab'; button.setAttribute('aria-controls', body.id); body.setAttribute('role', 'tabpanel'); body.setAttribute('aria-labelledby', button.id); body.tabIndex = 0;
       const label = document.createElement('strong'); label.textContent = phase.label;
       const badge = document.createElement('span'); badge.className = 'phase-status phase-' + phase.status;
       badge.textContent = phase.status === 'saved' ? 'Saved code' : phase.status === 'unknown' ? 'Unknown' : phase.status[0].toUpperCase() + phase.status.slice(1);
       button.append(label, badge); button.onclick = () => select(phase.id);
+      button.onkeydown = event => {
+        const current = buttons.indexOf(button);
+        const target = event.key === 'ArrowRight' ? (current + 1) % phases.length : event.key === 'ArrowLeft' ? (current + phases.length - 1) % phases.length : event.key === 'Home' ? 0 : event.key === 'End' ? phases.length - 1 : -1;
+        if (target >= 0) { event.preventDefault(); select(phases[target].id); buttons[target].focus(); }
+      };
       headers.append(button); buttons.push(button);
       for (const row of phase.rows) body.append(renderRow(row, index++));
       if (!phase.rows.length) {

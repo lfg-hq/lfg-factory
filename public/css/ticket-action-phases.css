@@ -1,11 +1,9 @@
 /* Both phase controls live in one sticky row, outside the scrolling phase body. */
-.phase-headers { position:sticky; top:0; z-index:5; display:flex; gap:6px; padding:8px 12px; background:var(--card-bg,#17141d); border-bottom:1px solid var(--border-color,#dce2ed); }
-.phase-header { display:flex; align-items:center; gap:12px; min-height:36px; padding:6px 12px; border:1px solid transparent; border-radius:7px; color:var(--text-secondary,#94a3b8); background:transparent; font:inherit; font-size:13px; cursor:pointer; }
-.phase-header::before { content:''; width:6px; height:6px; border-right:1.5px solid currentColor; border-bottom:1.5px solid currentColor; transform:rotate(-45deg); }
-.phase-header[aria-expanded="true"] { color:var(--text-primary,#e2e8f0); background:rgba(139,92,246,.09); border-color:rgba(139,92,246,.2); }
-.phase-header[aria-expanded="true"]::before { transform:rotate(45deg); }
+.phase-headers { position:sticky; top:0; z-index:5; display:flex; gap:20px; padding:0 16px; background:var(--card-bg,#17141d); border-bottom:1px solid var(--border-color,#dce2ed); }
+.phase-header { display:flex; align-items:center; gap:12px; min-height:44px; padding:0 2px; border:0; border-bottom:2px solid transparent; border-radius:0; color:var(--text-secondary,#94a3b8); background:transparent; font:inherit; font-size:13px; cursor:pointer; }
+.phase-header[aria-selected="true"] { color:var(--text-primary,#e2e8f0); background:transparent; border-bottom-color:#8b5cf6; }
 .phase-header:hover { background:rgba(139,92,246,.12); }
-.phase-header:focus-visible { outline:2px solid #8452ef; outline-offset:1px; }
+.phase-header:focus-visible { outline:2px solid #8452ef; outline-offset:-4px; }
 .phase-status { font-size:11px; font-weight:500; border-radius:12px; padding:2px 7px; background:#e9edf3; color:#475569; white-space:nowrap; }
 .phase-working { background:#eee6ff; color:#6532b7; }
 .phase-done,.phase-saved { background:#def5e6; color:#186534; }
@@ -16,7 +14,7 @@
 .ticket-phase-body { min-width:0; }
 .ticket-phase-body[hidden] { display:none !important; }
 [data-theme="light"] .phase-headers { background:#fff; }
-[data-theme="light"] .phase-header[aria-expanded="true"] { color:#273247; }
+[data-theme="light"] .phase-header[aria-selected="true"] { color:#273247; }
 @media(max-width:480px) { .phase-headers { padding:6px; gap:4px; } .phase-header { flex:1; justify-content:space-between; gap:6px; padding:6px 8px; font-size:12px; } }
 
 /* A bounded flex chain gives the log its own scrollport; the composer never scrolls. */
