@@ -48,36 +48,69 @@
   const choices = new Map();
   function render(area, rows, ticket, key, renderRow, historyUrl, refresh) {
     const phases = group(rows, ticket);
-    // Capture immediately, including a toggle whose event has not fired yet.
-    for (const old of area.querySelectorAll('details[data-phase-key]')) choices.set(old.dataset.phaseKey, old.open);
-    const fragment = document.createDocumentFragment();
+    area.dataset.phaseView = key;
     const history = histories.get(historyUrl);
-    if (history?.more) {
-      const older = document.createElement('button'); older.className = 'phase-older'; older.title = 'Show the next 500 older log entries. This does not rerun the ticket.'; older.textContent = 'Load older logs';
-      older.onclick = async () => { older.disabled = true; older.textContent = 'Loading…'; try { await load(historyUrl, true); await refresh(); } catch (_) { older.disabled = false; older.textContent = 'Could not load — try again'; } };
-      fragment.append(older);
+    let selected = choices.has(key) ? choices.get(key) : (phases[1].rows.length ? 'validation' : 'build');
+    const fragment = document.createDocumentFragment();
+    const headers = document.createElement('div'); headers.className = 'phase-headers';
+    const bodies = [];
+    const buttons = [];
+    function select(id) {
+      selected = selected === id ? null : id;
+      choices.set(key, selected);
+      buttons.forEach((button, i) => button.setAttribute('aria-expanded', String(phases[i].id === selected)));
+      bodies.forEach((body, i) => { body.hidden = phases[i].id !== selected; });
+      area.scrollTop = 0;
     }
     let index = 0;
     for (const phase of phases) {
-      const section = document.createElement('details');
-      section.className = 'ticket-action-phase';
-      const choiceKey = key + ':' + phase.id;
-      section.dataset.phaseKey = choiceKey;
-      section.open = choices.has(choiceKey) ? choices.get(choiceKey) : phase.status === 'working' || phase.status === 'error' || phase.id === 'validation' && phase.rows.length > 0;
-      section.addEventListener('toggle', () => { if (section.isConnected) choices.set(choiceKey, section.open); });
-      const summary = document.createElement('summary');
-      const label = document.createElement('strong'); label.textContent = phase.label;
-      const count = document.createElement('span'); count.className = 'phase-count'; count.textContent = phase.rows.length ? phase.rows.length + ' loaded entries' : 'Earlier logs not loaded';
-      if (!phase.rows.length && phase.status === 'pending') count.textContent = 'Not started';
-      const badge = document.createElement('span'); badge.className = 'phase-status phase-' + phase.status;
-      badge.textContent = phase.status === 'saved' ? 'Saved code' : phase.status === 'unknown' ? 'Status unavailable' : phase.status[0].toUpperCase() + phase.status.slice(1);
-      summary.append(label, count, badge); section.append(summary);
+      const button = document.createElement('button'); button.type = 'button'; button.className = 'phase-header';
+      button.setAttribute('aria-expanded', String(selected === phase.id));
       const body = document.createElement('div'); body.className = 'ticket-phase-body';
+      body.id = 'phase-body-' + key.replace(/[^a-zA-Z0-9_-]/g, '-') + '-' + phase.id;
+      button.setAttribute('aria-controls', body.id);
+      const label = document.createElement('strong'); label.textContent = phase.label;
+      const badge = document.createElement('span'); badge.className = 'phase-status phase-' + phase.status;
+      badge.textContent = phase.status === 'saved' ? 'Saved code' : phase.status === 'unknown' ? 'Unknown' : phase.status[0].toUpperCase() + phase.status.slice(1);
+      button.append(label, badge); button.onclick = () => select(phase.id);
+      headers.append(button); buttons.push(button);
       for (const row of phase.rows) body.append(renderRow(row, index++));
-      if (!phase.rows.length) { const empty = document.createElement('p'); empty.className = 'phase-empty'; empty.textContent = phase.status === 'saved' ? 'This ticket already has saved code. This retry reused it. Load older logs to view the original build history.' : phase.status === 'skipped' ? 'Development was skipped for this validation retry; this is not the ticket’s complete build history.' : 'No actions loaded for this phase.'; body.append(empty); }
-      section.append(body); fragment.append(section);
+      if (!phase.rows.length) {
+        const empty = document.createElement('p'); empty.className = 'phase-empty';
+        empty.textContent = phase.status === 'saved' ? 'This ticket already has saved code. This retry reused it.' : 'No logs available for this phase.';
+        body.append(empty);
+      }
+      body.hidden = selected !== phase.id; bodies.push(body);
     }
+    fragment.append(headers);
+    if (history?.more) {
+      const note = document.createElement('div'); note.className = 'phase-history-note'; note.setAttribute('role', 'status');
+      note.textContent = history.error ? 'Older history could not load.' : 'Loading earlier history…';
+      if (history.error) {
+        const retry = document.createElement('button'); retry.textContent = 'Retry';
+        retry.onclick = () => { history.error = false; render(area, rows, ticket, key, renderRow, historyUrl, refresh); }; note.append(retry);
+      }
+      fragment.append(note);
+    }
+    for (const body of bodies) fragment.append(body);
     area.replaceChildren(fragment);
+    // Fetch each older page once, in the background. Viewing logs never runs the ticket.
+    if (history?.more && !history.loading && !history.error && refresh) {
+      history.loading = true;
+      (async () => {
+        try {
+          while (history.more && area.isConnected && area.dataset.phaseView === key) {
+            const first = history.rows[0]?.id;
+            await load(historyUrl, true);
+            if (history.more && history.rows[0]?.id === first) throw new Error('History cursor did not advance');
+          }
+        } catch (_) { history.error = true; }
+        finally {
+          history.loading = false;
+          if (area.isConnected && area.dataset.phaseView === key) await refresh();
+        }
+      })();
+    }
   }
   root.TicketActionPhases = { group, render, load };
 })(typeof window === 'undefined' ? globalThis : window);
