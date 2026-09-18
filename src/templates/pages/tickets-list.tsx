@@ -831,8 +831,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
         <div id="actions-attach-chip" style="display:none;align-items:center;gap:.4rem;margin:0 0 .4rem 0;font-size:.75rem;color:var(--text-secondary,#9ca3af);"></div>
         <div class="logs-chat-field">
           <input id="actions-file-input" type="file" style="display:none;" onchange="uploadTicketFile(this.files&&this.files[0])" />
-          <button onclick="document.getElementById('actions-file-input').click()" class="logs-chat-send-btn" title="Attach a file for the agent" style="background:transparent;">
-            <i class="fas fa-paperclip" style="font-size:.72rem;"></i>
+          <button onclick="document.getElementById('actions-file-input').click()" class="logs-chat-attach-btn" title="Attach a file for the agent" aria-label="Attach a file">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 11.5l-8.5 8.5a6 6 0 0 1-8.5-8.5l9-9a4 4 0 0 1 5.7 5.7l-9 9a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg>
           </button>
           <input id="actions-chat-input" type="text" placeholder="Send a message to the agent..."
             onkeydown="if(event.key==='Enter'){sendTicketChatMsg();}" />

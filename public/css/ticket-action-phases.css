@@ -18,3 +18,15 @@
 .phase-navigation button, .phase-older { cursor:pointer; font:inherit; font-size:13px; padding:7px 12px; border:1px solid var(--border-color,#dce2ed); border-radius:8px; color:var(--text-primary,#273247); background:var(--bg-primary,#fff); }
 .phase-older { margin:8px; }
 .phase-saved { background:#def5e6; color:#186534; }
+
+/* A bounded flex chain gives the log its own scrollport; the composer never scrolls. */
+#ticket-drawer .drawer-body:has(#tab-actions.active) { display:flex; flex-direction:column; overflow:hidden; min-height:0; padding:0; }
+#ticket-drawer #tab-actions.active { flex:1 1 0; min-height:0; overflow:hidden; }
+#ticket-drawer #actions-log-area { flex:1 1 0; min-height:0; overflow:auto; padding-bottom:12px; }
+#ticket-drawer #tab-actions .logs-chat-container { position:relative; inset:auto; flex:0 0 auto; background:var(--card-bg,#17141d); }
+#ticket-drawer .logs-chat-field input { min-width:0; border:0; outline:0; background:transparent; box-shadow:none; }
+.logs-chat-attach-btn { display:inline-flex; align-items:center; justify-content:center; flex:0 0 32px; width:32px; height:32px; padding:0; border:0; border-radius:6px; cursor:pointer; background:transparent; color:var(--text-secondary,#94a3b8); }
+.logs-chat-attach-btn:hover { background:rgba(139,92,246,.12); }
+[data-theme="light"] .logs-chat-attach-btn { color:#475569; }
+.logs-chat-attach-btn:focus-visible { outline:2px solid #8452ef; }
+#ticket-drawer .logs-chat-field #actions-chat-input { border:0 !important; box-shadow:none !important; background:transparent !important; }

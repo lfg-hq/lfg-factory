@@ -38,3 +38,9 @@ test('loading earlier history preserves it across refreshes and deduplicates row
  expect((await api.load('/test-history')).length).toBe(2);
  }finally{globalThis.fetch=original;}
 });
+test('a truncated setup log is not evidence that implementation completed',()=>{
+ const p=group(rows('Background job abc finished (exit 0, 31s): Environment ready','Fresh / candidate: checking schema','✅ Validation passed'),{githubCommitSha:'abc',status:'open'});
+ expect(p[0].status).toBe('saved');
+ const unknown=group(rows('Background job abc finished (exit 0, 31s): Environment ready','Fresh / candidate: checking schema'),{queueStatus:'executing'});
+ expect(unknown[0].status).toBe('unknown');
+});

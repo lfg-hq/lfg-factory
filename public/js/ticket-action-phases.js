@@ -3,15 +3,16 @@
   function group(rows, ticket) {
     const phases = [{ id: 'build', label: 'Build', status: 'pending', rows: [] }, { id: 'validation', label: 'Validation', status: 'pending', rows: [] }];
     let active = 0;
+    let buildStarted = false;
     for (const row of rows) {
       const text = String(row.message || '').replace(/\*\*/g, '').trim();
       const retry = /^Retrying validation of saved commit/i.test(text);
       const validation = retry || /^(Running the saved ticket:|Repairing runtime checks:|Checking:|Preparing validation:|Now verifying this commit|Fresh \/ candidate:|Runtime checks passed|✅\s*Validation passed)/i.test(text);
       const build = /^(Starting Pi build|Isolated build:|Starting (?:ticket )?build|Building ticket)/i.test(text);
-      if (build) { active = 0; phases[0].status = 'working'; phases[1].status = 'pending'; }
+      if (build) { buildStarted = true; active = 0; phases[0].status = 'working'; phases[1].status = 'pending'; }
       if (validation) {
         active = 1;
-        if (phases[0].status === 'working') phases[0].status = 'done';
+        if (phases[0].status === 'working') phases[0].status = buildStarted ? 'done' : 'unknown';
         if (retry && !phases[0].rows.length) phases[0].status = 'skipped';
         phases[1].status = 'working';
       }
@@ -26,7 +27,7 @@
     if (ticket && !running && phases[active].status === 'working') {
       phases[active].status = ticket.status === 'failed' ? 'error' : ticket.status === 'stopped' ? 'stopped' : 'unknown';
     }
-    if (!phases[0].rows.length && (ticket?.githubCommitSha || ticket?.github_commit_sha || rows.some(r => /Retrying validation of saved commit|Validation passed.*saved commit/.test(String(r.message || '').replace(/\*\*/g, ''))))) phases[0].status = 'saved';
+    if (!buildStarted && (ticket?.githubCommitSha || ticket?.github_commit_sha || rows.some(r => /Retrying validation of saved commit|Validation passed.*saved commit/.test(String(r.message || '').replace(/\*\*/g, ''))))) phases[0].status = 'saved';
     return phases;
   }
   const histories = new Map();
@@ -73,7 +74,7 @@
       const badge = document.createElement('span'); badge.className = 'phase-status phase-' + phase.status;
       badge.textContent = phase.status === 'saved' ? 'Saved code' : phase.status === 'unknown' ? 'Status unavailable' : phase.status[0].toUpperCase() + phase.status.slice(1);
       summary.append(label, count, badge); section.append(summary);
-      const jump = document.createElement('button'); jump.textContent = phase.label + ' · ' + badge.textContent;
+      const jump = document.createElement('button'); jump.textContent = 'Go to ' + phase.label + ' · ' + badge.textContent;
       jump.onclick = () => { section.open = true; choices.set(choiceKey, true); section.scrollIntoView({ block: 'start' }); };
       navigation.append(jump);
       const body = document.createElement('div'); body.className = 'ticket-phase-body';
