@@ -3867,8 +3867,16 @@ export async function startTicketValidationRetry(ticketId:string,actorId:string)
           validation:{projectId:project.id,userId:buildLlm.actorId,ticketId,gitCredentialUserId:gitUserId,cancelled:()=>cancelledTickets.has(ticketId),onLog:line=>{void addLog(ticketId,line,"command",project.ownerId).catch(()=>{});},onCheckpoint:async message=>{await addLog(ticketId,message,"agent_progress",project.ownerId);}}},previous?.baseline ?? "");
         await refreshCancellation();
         if(cancelledTickets.has(ticketId))throw new Error("Validation cancelled");
-        await db.update(projectTickets).set({status:sha!==ticket.githubCommitSha || ticket.status==="failed" ? "open" : ticket.status,githubMergeStatus:sha!==ticket.githubCommitSha ? "pending" : ticket.githubMergeStatus,updatedAt:new Date()}).where(eq(projectTickets.id,ticketId));
-        await addLog(ticketId,`✅ **Validation passed** for saved commit \`${sha.slice(0,12)}\`. Development was skipped. Any repairs were committed locally; this action did not push, merge or mark the ticket ready for review.`,"ai_response",project.ownerId);
+        const reviewStageId = await moveTicketToStage(ticketId, project.id, "In Review");
+        await db.update(projectTickets).set({
+          status: "review",
+          githubCommitSha: sha,
+          githubMergeStatus: sha !== ticket.githubCommitSha ? "pending" : ticket.githubMergeStatus,
+          lastExecutionAt: new Date(),
+          updatedAt: new Date(),
+        }).where(eq(projectTickets.id, ticketId));
+        broadcastToUser(project.ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "executing", stageId: reviewStageId });
+        await addLog(ticketId,`✅ **Validation passed** for saved commit \`${sha.slice(0,12)}\`. Moved to **In Review**. Development was skipped. Any repairs were committed locally; this action did not push or merge.`,"ai_response",project.ownerId);
       } catch(error) {
         clearInterval(cancelPoll);
         if(!await stoppedByUser(ticketId,project.ownerId)) await markTicketFailed(ticketId,failureSummary((error as Error).message).split("\nFailed command:")[0] || "Validation failed",project.ownerId,{emitEvent:false,failureKind:error instanceof ValidationFailure?error.failureKind:undefined});
@@ -3876,8 +3884,8 @@ export async function startTicketValidationRetry(ticketId:string,actorId:string)
         clearInterval(cancelPoll);
         await sleepTicketVm(workspaceId);
         await db.update(projectTickets).set({queueStatus:"none",updatedAt:new Date()}).where(eq(projectTickets.id,ticketId));
-        const [current]=await db.select({status:projectTickets.status}).from(projectTickets).where(eq(projectTickets.id,ticketId)).limit(1);
-        broadcastToUser(project.ownerId,{type:"ticket_status",ticketId,status:current?.status||ticket.status,queueStatus:"none"});
+        const [current]=await db.select({status:projectTickets.status,stageId:projectTickets.stageId}).from(projectTickets).where(eq(projectTickets.id,ticketId)).limit(1);
+        broadcastToUser(project.ownerId,{type:"ticket_status",ticketId,status:current?.status||ticket.status,stageId:current?.stageId,queueStatus:"none"});
       }
     });
     launched=true;
