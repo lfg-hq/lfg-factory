@@ -12,6 +12,7 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "typecheck": "tsc --noEmit",
+    "check:schema": "node scripts/check-schema-parity.mjs",
     "test:boards": "bun run scripts/test-board-sync.ts",
     "test:epics": "bun run scripts/test-epics-page.ts",
     "check:contrast": "node scripts/check-log-contrast.mjs",

@@ -1,3 +1,7 @@
-// Postgres-only schema shim for the free PRD requests table.
-// (This deployment runs DATABASE_DRIVER=postgresql; no sqlite variant needed.)
-export { freePrdRequests } from "./pg/free-prd.ts";
+import * as sq from "./sqlite/free-prd.ts";
+import * as pg from "./pg/free-prd.ts";
+
+type S = typeof sq;
+const m = (process.env.DATABASE_DRIVER === "postgresql" ? pg : sq) as S;
+
+export const freePrdRequests = m.freePrdRequests;

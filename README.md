@@ -5,12 +5,31 @@ scaffold, build, and iterate on real applications inside isolated sandboxes — 
 live previews, a ticket-based execution workflow, and real-time streaming of every
 step. It ships two flagship flows:
 
-- **Instant** — go from a prompt to a running, previewable web app in one shot.
+- **Instant** — go from a prompt to a running, previewable web app in a single pass.
 - **Tickets** — break work into tickets and let coding agents (Claude Code / pi)
-  execute them in sandboxes, with human-in-the-loop review.
+  execute them in sandboxes, with human review between the steps that matter.
+
+The intent is a delivery pipeline you can watch, not a black box: requirements,
+plan, tickets, and every agent step are visible and reviewable, the code lands in
+your own repositories, and a human approves the decisions that count.
 
 It runs on **Bun + Hono + TypeScript**, server-renders its UI, streams over
 WebSockets, and speaks to Anthropic / OpenAI / Google models via the Vercel AI SDK.
+
+### Scope — what this is and isn't
+
+Being straight with you, because it matters more than a pitch:
+
+- Agents write **real, runnable code** and you get a live preview. What they
+  produce still needs human review before it ships — the ticket flow is built
+  around that assumption, not around removing it.
+- Output quality tracks the **underlying model** and the clarity of the request.
+  This is orchestration, sandboxing, and workflow around frontier models; it is
+  not a model of our own.
+- It is **actively developed**. Expect rough edges, and read the code before you
+  put it in front of a customer.
+- Your code, repositories, and model accounts stay yours. LFG has no telemetry
+  and does not phone home.
 
 ---
 
@@ -19,14 +38,14 @@ WebSockets, and speaks to Anthropic / OpenAI / Google models via the Vercel AI S
 - [Stack](#stack)
 - [Quick start](#quick-start)
 - [Configuration](#configuration)
-- [Sandbox backends (Mags vs Docker self-host)](#sandbox-backends)
+- [Sandbox backends (Docker for local, Mags for hosted)](#sandbox-backends)
 - [File storage (local vs S3)](#file-storage)
 - [Email & integrations](#email--integrations)
 - [Deployment](#deployment)
 - [Project structure](#project-structure)
 - [Security](#security)
 - [Contributing](#contributing)
-- [License](#license)
+- [License](#license) · [Trademark policy](TRADEMARK.md)
 
 ## Stack
 
@@ -42,8 +61,10 @@ WebSockets, and speaks to Anthropic / OpenAI / Google models via the Vercel AI S
 
 ## Quick start
 
-**Prerequisites:** [Bun](https://bun.sh) ≥ 1.2. That's it for local dev — the default
-config uses SQLite and local file storage, so no external database is required.
+**Prerequisites:** [Bun](https://bun.sh) ≥ 1.2 to run the server — the default config
+uses SQLite and local file storage, so no external database is required. To actually
+*build* apps you also need Docker (for local sandboxes) and at least one AI provider
+key; see [Sandbox backends](#sandbox-backends).
 
 ```bash
 git clone <your-fork-url> lfg && cd lfg
@@ -54,6 +75,11 @@ cp example.env .env
 #   BETTER_AUTH_SECRET   (openssl rand -hex 32)
 #   BETTER_AUTH_URL      (http://localhost:3000)
 #   ANTHROPIC_API_KEY    (or another AI provider key)
+#
+# For local development, also switch the sandbox backend to Docker:
+#   SANDBOX_BACKEND=docker
+# The default is `mags`, a hosted service that needs an API token. Docker runs
+# sandboxes on your own machine with no third-party account. See below.
 
 bun run dev
 ```
@@ -87,16 +113,19 @@ stays off until you provide its key.
 Instant builds and ticket execution run coding agents inside **isolated sandboxes**.
 Pick a backend with `SANDBOX_BACKEND`:
 
-### `mags` (hosted, default)
+| Backend  | Default | Use it for                        | Needs                       |
+| -------- | ------- | --------------------------------- | --------------------------- |
+| `docker` |         | **local dev and self-hosting**    | Docker installed locally    |
+| `mags`   | ✓       | hosted deploys you don't operate  | a Magpie Cloud API token    |
 
-Uses [Magpie Cloud](https://www.npmjs.com/package/@magpiecloud/mags) Firecracker
-micro-VMs. Set `MAGS_API_TOKEN`. Best for a hosted deployment where you don't want
-to manage compute.
+> **Running locally? Set `SANDBOX_BACKEND=docker`.** The built-in default is `mags`,
+> which calls a hosted third-party service and will fail without `MAGS_API_TOKEN`.
+> Docker keeps everything on your own machine and needs no external account.
 
-### `docker` (self-hosted)
+### `docker` (local dev + self-hosting)
 
 Runs each sandbox as a local **Docker container** — ideal for running LFG entirely
-on your own server, no third-party sandbox provider.
+on your own machine or server, with no third-party sandbox provider.
 
 1. **Install Docker** (if needed): `./scripts/setup-docker.sh` (or
    <https://docs.docker.com/engine/install/>). The app also prints setup guidance if
@@ -125,6 +154,19 @@ backend if you need public preview URLs out of the box.)
 
 The image is defined in [`Dockerfile.sandbox`](Dockerfile.sandbox) — add language
 runtimes there as your generated stacks require.
+
+### `mags` (hosted — the built-in default)
+
+Uses [Magpie Cloud](https://www.npmjs.com/package/@magpiecloud/mags) Firecracker
+micro-VMs. Set `MAGS_API_TOKEN`. Best for a hosted deployment where you don't want
+to manage compute, and it gives you public preview URLs without a tunnel. It is a
+third-party paid service and is **not** required to run LFG — use `docker` if you
+would rather keep sandboxes on your own hardware.
+
+```bash
+SANDBOX_BACKEND=mags
+MAGS_API_TOKEN=your_token_here
+```
 
 ## File storage
 
@@ -200,8 +242,17 @@ drizzle/          # generated migrations
   unencrypted when `NODE_ENV=production`.
 - AI-generated code only ever runs **inside a sandbox** (Mags micro-VM or Docker
   container), never on the host.
+- **The "in-app links" preview proxy is same-origin by design.** `/preview-proxy/*`
+  serves the sandboxed app from LFG's own origin so links stay inside the panel,
+  which means that app's JavaScript runs on the LFG origin. It is access-controlled
+  to project members, but treat it as trusted-user-only and prefer the direct
+  (non-proxied) preview when previewing code you don't trust.
+- Multi-tenant deployments should sit behind a reverse proxy that terminates TLS
+  and applies rate limiting; the app itself only rate-limits the public
+  landing-page endpoints.
 
-Found a vulnerability? Please open a private report rather than a public issue.
+Found a vulnerability? Please report it privately to <hello@lfg.run> rather than
+opening a public issue.
 
 ## Contributing
 
@@ -210,4 +261,26 @@ before submitting.
 
 ## License
 
-[MIT](LICENSE)
+LFG is **[MIT licensed](LICENSE)**.
+
+**Self-use is free and ungated.** Run it for yourself, your team, or your company,
+on any infrastructure, commercially, with no seat limit and no call-home. Read it,
+fork it, modify it, and redistribute it under the MIT terms. You do not need to ask
+us, and there is nothing to sign.
+
+**The LFG name and logo are trademarks and are not covered by the MIT grant** —
+MIT licenses copyright, not brand. If you ship LFG to other people under *your* own
+branding, that is fine and needs no permission: remove our marks and use yours.
+What needs written permission is presenting a product or service as "LFG", or
+implying that your build is official or endorsed. See **[TRADEMARK.md](TRADEMARK.md)**
+for the full policy, including the nominative uses ("built on LFG") that are always
+allowed.
+
+**White-label.** If you want to deliver LFG to your customers under your own brand
+*with our involvement* — branded builds, a managed instance we operate, written
+trademark permission, upgrade support, and commercial terms your procurement team
+can sign — that arrangement is available on request:
+<hello@lfg.run> or <https://lfg.run/white-label/>.
+
+Third-party dependencies keep their own licenses; see `package.json` and the
+lockfile.
