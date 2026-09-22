@@ -65,7 +65,7 @@ const tabStart = src.indexOf('<div class="project-tabs"');
 if (tabStart < 0) { console.log("FAIL the tab row is missing"); process.exit(1); }
 const tabs = src.slice(tabStart, src.indexOf("<style>", tabStart));
 const labels = [...tabs.matchAll(/<\/i> (\w+)/g)].map((m) => m[1]);
-if (labels.join(",") === "Home,Agent,Config,Events,Settings") console.log("  ok  tab row is Home, Agent, Config, Events, Settings");
+if (labels.join(",") === "Home,Activity,Settings") console.log("  ok  tab row is Home, Activity, Settings");
 else { console.log("FAIL tab row is " + labels.join(",")); process.exit(1); }
 if (/display:flex/.test(tabs.slice(0, 200))) console.log("  ok  tab row has its flex container");
 else { console.log("FAIL tabs have no flex container"); process.exit(1); }

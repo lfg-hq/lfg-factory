@@ -5,6 +5,7 @@ import { z } from "zod";
 export const schemaStepSchema = z.object({
   kind: z.enum(["migration", "sqlScript", "seed"]),
   command: z.string().min(1),
+  connectionKey: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).optional().describe("For SQL files: exact databases[].connectionEnvVar identifying the target connection. Required when multiple databases exist."),
   note: z.string().default(""),
   verify: z.string().optional().describe("Read-only command returning zero only if this schema step is already applied. Required for non-idempotent scripts/seeds."),
 });
@@ -31,21 +32,22 @@ export function orderedSchema(plan: { schemaSteps?: SchemaStep[]; migrations?: s
     ...(plan.seedCmd ? [{ kind: "seed" as const, command: plan.seedCmd, note: "" }] : []),
   ];
 }
-export function mergeKnowledge<T extends { learnings?: string[]; directives?: string[]; configPatches?: Array<{file:string;find:string}>; replayActions?: ReplayAction[]; environmentOverrides?: Array<{key:string;encryptedValue:string}> }>(next: T, previous?: T): T {
+export function mergeKnowledge<T extends { learnings?: string[]; directives?: string[]; recoveryBackups?: Array<{id:string}>; configPatches?: Array<{file:string;find:string}>; replayActions?: ReplayAction[]; environmentOverrides?: Array<{key:string;encryptedValue:string}> }>(next: T, previous?: T): T {
   if (!previous) return next;
   const keyed = <V>(a: V[], b: V[], key: (v: V) => string) => [...new Map([...a, ...b].map(v => [key(v), v])).values()];
   return { ...next,
     learnings: [...new Set([...(previous.learnings ?? []), ...(next.learnings ?? [])])],
     directives: [...new Set([...(previous.directives ?? []), ...(next.directives ?? [])])],
+    recoveryBackups: keyed(previous.recoveryBackups ?? [], next.recoveryBackups ?? [], p => p.id),
     configPatches: keyed(previous.configPatches ?? [], next.configPatches ?? [], p => `${p.file}\0${p.find}`),
     environmentOverrides: keyed(previous.environmentOverrides ?? [], next.environmentOverrides ?? [], p => p.key),
     replayActions: keyed(previous.replayActions ?? [], next.replayActions ?? [], p => p.id),
   };
 }
 export function failureSummary(output: string, limit = 2400): string {
-  const text = output.replace(/\x1b\[[0-9;]*m/g, "").replace(/(Password|Pwd|API_KEY|token)(\s*[=:]\s*)[^;\s"']+/gi, "$1$2[redacted]");
+  const text = output.replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, "$1[redacted]@").replace(/\x1b\[[0-9;]*m/g, "").replace(/(Password|Pwd|API_KEY|token)(\s*[=:]\s*)[^;\s"']+/gi, "$1$2[redacted]");
   const lines = text.split("\n");
-  const first = lines.findIndex(line => /(?:exception|error\b|failed|fatal|pendingmodelchanges|conflicting assets)/i.test(line) && !/^\s*at /.test(line));
+  const first = lines.findIndex(line => /(?:exception|error\b|failed|fatal|pendingmodelchanges|conflicting assets|recovery stopped|^\s*Msg \d+, Level \d+|invalid object name|invalid column name|tar:|invalid magic|short read)/i.test(line) && !/^\s*at /.test(line));
   return (first >= 0 ? lines.slice(first, first + 16).join("\n") : text).slice(0, limit).trim();
 }
 export function failureKey(revision: string, step: PlanStep, output: string): string {
@@ -110,3 +112,13 @@ if bad:
 PYEOF`;
 }
 
+
+export function validateSchemaTargets(steps: SchemaStep[], databases: Array<{connectionEnvVar:string;engine:string}>) {
+  const sql=databases.filter(d=>d.engine!=="redis");
+  for (const step of steps.filter(s=>s.kind==="sqlScript")) {
+    if (step.connectionKey && !sql.some(d=>d.connectionEnvVar===step.connectionKey))
+      throw new Error(`SQL_TARGET_REQUIRED: Unknown connectionKey for ${step.command}: ${step.connectionKey}`);
+    if (!step.connectionKey && sql.length>1)
+      throw new Error(`SQL_TARGET_REQUIRED: Set connectionKey for ${step.command} in schemaSteps. Available connections: ${sql.map(d=>d.connectionEnvVar).join(', ')}. Persist this mapping before schema repair; retain migrations before dependent scripts and target the same connection in verify.`);
+  }
+}

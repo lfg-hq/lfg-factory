@@ -1,12 +1,12 @@
 import { shellQuote } from "./preview-plan.ts";
 import type { ConfigPatch } from "./app-profile.ts";
-export function buildConfigPatchScript(patches: ConfigPatch[] | undefined, dir: string): string {
+export function buildConfigPatchScript(patches: ConfigPatch[] | undefined, dir: string, dryRun = false): string {
   if (!patches || !patches.length) return "";
-  const blob = Buffer.from(JSON.stringify(patches.map((p) => ({ file: p.file, find: p.find, replace: p.replace, create: p.create })))).toString("base64");
-  return `python3 - ${shellQuote(dir)} ${shellQuote(blob)} <<'PYEOF'
-import base64, json, os, sys
+  const blob = Buffer.from(JSON.stringify(patches.map((p) => ({ file: p.file, find: p.find, replace: p.replace, create: p.create, beforeHash: p.beforeHash, afterHash: p.afterHash })))).toString("base64");
+  return `python3 - ${shellQuote(dir)} <<'PYEOF'
+import base64, json, os, sys, hashlib
 base = os.path.realpath(sys.argv[1])
-patches = json.loads(base64.b64decode(sys.argv[2]))
+patches = json.loads(base64.b64decode("${blob}"))
 contents = {}
 for p in patches:
     fp = os.path.realpath(os.path.join(base, p["file"]))
@@ -21,15 +21,23 @@ for p in patches:
     s = contents.get(fp)
     if s is None:
         s = open(fp, encoding="utf-8-sig").read()
+    digest = hashlib.sha256(s.encode()).hexdigest()
+    if p.get("afterHash") and digest == p["afterHash"]:
+        print("Verified patch:", p["file"])
+        continue
+    if p.get("beforeHash") and digest != p["beforeHash"]:
+        raise SystemExit("Stale config patch: baseline changed: " + p["file"])
     if p["find"] and p["find"] in s:
         s = s.replace(p["find"], p["replace"])
         print("Applied patch:", p["file"])
     elif p["replace"] and p["replace"] in s:
         print("Verified patch:", p["file"])
     else:
-        raise SystemExit("Config patch no longer matches: " + p["file"])
+        raise SystemExit("Stale config patch: exact original and replacement text are both absent: " + p["file"])
+    if p.get("afterHash") and hashlib.sha256(s.encode()).hexdigest() != p["afterHash"]:
+        raise SystemExit("Config patch result mismatch: " + p["file"])
     contents[fp] = s
-for fp, s in contents.items():
+for fp, s in ([] if ${dryRun ? "True" : "False"} else contents.items()):
     os.makedirs(os.path.dirname(fp), exist_ok=True)
     with open(fp, "w", encoding="utf-8") as f:
         f.write(s)

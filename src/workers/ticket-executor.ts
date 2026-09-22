@@ -1,6 +1,10 @@
+import { ticketStopVerificationScript, confirmTicketStopped } from "../services/ticket-stop-verification.ts";
+import { ValidationFailure } from "../services/validation-contract.ts";
+import { failureSummary } from "../services/preview-plan.ts";
+import { createTicketSandbox } from "../services/ticket-sandbox-clone.ts";
 import { recoverSandboxStorage, destroyWorkspaceAfterStop } from "../services/sandbox-storage-recovery.ts";
-import { runGitSetup, prepareBuildRuntime, refreshOriginCommand } from "../services/build-preflight.ts";
-import { CONTRACT_INSTRUCTION } from "../services/runtime-validation.ts";
+import { runGitSetup, refreshOriginCommand } from "../services/build-preflight.ts";
+import { TICKET_RUNTIME_INSTRUCTION } from "../services/ticket-runtime.ts";
 import { withTicketUsage } from "../services/usage-run.ts";
 import { currentUsage } from "../ai/usage-context.ts";
 /**
@@ -153,6 +157,7 @@ import { generateText, stepCountIs } from "ai";
 import { resolveUserModel } from "../services/app-profile.ts";
 import { addLog } from "../services/ticket-logs.ts";
 import {
+  isChatTurnActive,
   runChatTurn,
   resolveTurnOutcome,
   encodeQuestionMeta,
@@ -809,9 +814,9 @@ ${refBlock}${runBlock}${args.addenda ?? ""}${args.directives ?? ""}
 - **Trust the ticket + PRD as the source of truth for facts.** For DOCUMENTATION / marketing / copy / content tickets especially: the ticket already states which features exist, their limits, prices, etc. — do NOT audit the whole codebase to re-verify every claim (that wastes most of the run). At most do a couple of TARGETED checks only where the ticket is ambiguous or self-contradictory. Spend your effort writing/implementing, not exhaustively grepping to confirm things the ticket already told you.
 - Implement the ticket end to end so every acceptance criterion is met.${args.addenda ? "\n- If Addenda are listed above, they are the PRIMARY task this run — address every one, building on what was already done." : ""}${args.directives ? "\n- The MANDATORY DIRECTIVES above are non-negotiable — verify your change satisfies every one before finishing." : ""}
 - Make the app runnable: bind the dev server to 0.0.0.0 on port ${port}.
-- Do NOT run 'git commit', 'git push', or switch git branches — commit/push/merge is handled automatically after you finish.
+- Run the implementation and repair actual failures in this sandbox before committing. Do not commit or push; the server saves all changes together after runtime checks pass. Never commit credentials or generated files.
 - Before finishing, make sure the project builds/compiles.
-${CONTRACT_INSTRUCTION}`;
+${TICKET_RUNTIME_INSTRUCTION}`;
 }
 
 /**
@@ -920,7 +925,7 @@ export async function requestTicketStop(ticketId: string, projectId?: string): P
       .where(
         and(
           eq(sandboxes.ticketId, ticketId),
-          inArray(sandboxes.workspaceType, ["ticket", "ticket-chat", "ticket-worktree"]),
+          inArray(sandboxes.workspaceType, ["ticket", "ticket-chat", "ticket-worktree", "ticket-clone"]),
         ),
       );
 
@@ -928,7 +933,7 @@ export async function requestTicketStop(ticketId: string, projectId?: string): P
     // agent in the same box (and any install the preview is running). Kill only this
     // lane: its recorded agent pid, plus anything whose working directory is this
     // ticket's worktree — which is where the agent and every command it spawns live.
-    const sharedRows = sbs.filter((sb) => sb.ws && sb.type === "ticket-worktree" && sb.ws.startsWith("pv-"));
+    const sharedRows = sbs.filter((sb) => sb.ws && (sb.type === "ticket-worktree" || sb.ws.startsWith("pv-")));
     if (sharedRows.length) {
       const dir = `${WORKING_DIR}/${ticketWorktreeDirName(ticketId)}`;
       const b64 = Buffer.from(scopedStopScript(dir, laneOf(ticketId)?.pid)).toString("base64");
@@ -945,17 +950,29 @@ export async function requestTicketStop(ticketId: string, projectId?: string): P
     // would stop every other ticket working in the same box.)
     await Promise.all(
       sbs
-        .filter((sb) => !!sb.ws && !(sb.type === "ticket-worktree" && sb.ws.startsWith("pv-")))
+        .filter((sb) => !!sb.ws && !((sb.type === "ticket-worktree" || sb.ws.startsWith("pv-"))))
         .map((sb) =>
           execOnWorkspace(
             sb.ws!,
-            "pkill -9 -f pi-coding-agent 2>/dev/null; pkill -9 -f 'mode json' 2>/dev/null; pkill -9 -f 'pi -p' 2>/dev/null; pkill -9 -f claude 2>/dev/null; pkill -9 -f 'pip install' 2>/dev/null; pkill -9 -f 'go build' 2>/dev/null; pkill -9 -f 'npm install' 2>/dev/null; pkill -9 -f 'apk add' 2>/dev/null; true",
+            "for f in /data/lfg-jobs/*/pid /data/validation/*/app.pid; do test -f \"$f\" || continue; test -f \"${f%/pid}/exit\" && continue; p=$(cat \"$f\"); case \"$p\" in ''|*[!0-9]*) continue;; esac; kill -TERM -- -\"$p\" 2>/dev/null || true; done; sleep 2; for f in /data/lfg-jobs/*/pid /data/validation/*/app.pid; do test -f \"$f\" || continue; test -f \"${f%/pid}/exit\" && continue; p=$(cat \"$f\"); case \"$p\" in ''|*[!0-9]*) continue;; esac; kill -KILL -- -\"$p\" 2>/dev/null || true; done; pkill -9 -f pi-coding-agent 2>/dev/null; pkill -9 -f 'mode json' 2>/dev/null; pkill -9 -f 'pi -p' 2>/dev/null; pkill -9 -f claude 2>/dev/null; pkill -9 -f 'pip install' 2>/dev/null; pkill -9 -f 'go build' 2>/dev/null; pkill -9 -f 'npm install' 2>/dev/null; pkill -9 -f 'apk add' 2>/dev/null; true",
             { timeout: 25_000 },
           ).catch(() => {}),
         ),
     );
   } catch {
     /* best-effort */
+  }
+  // A restarted/finished worker cannot acknowledge stopping. Reconcile only after
+  // inspecting every dedicated sandbox; never clear a lock on a transport failure.
+  if(!executingTickets.has(ticketId) && !isChatTurnActive(ticketId)) {
+    const rows=await db.select({ws:sandboxes.magsWorkspaceId,type:sandboxes.workspaceType}).from(sandboxes).where(eq(sandboxes.ticketId,ticketId));
+    await confirmTicketStopped(rows,async (workspace,shared)=>{
+      const script=Buffer.from(ticketStopVerificationScript(shared ? `${WORKING_DIR}/${ticketWorktreeDirName(ticketId)}` : undefined)).toString("base64");
+      return execOnWorkspace(workspace,`echo ${script} | base64 -d | bash`,{timeout:20_000});
+    });
+    await db.update(projectTickets).set({status:"stopped",queueStatus:"none",updatedAt:new Date()}).where(and(eq(projectTickets.id,ticketId),eq(projectTickets.queueStatus,"stopping")));
+    const [owner]=await db.select({ownerId:projects.ownerId}).from(projectTickets).innerJoin(projects,eq(projects.id,projectTickets.projectId)).where(eq(projectTickets.id,ticketId)).limit(1);
+    if(owner)broadcastToUser(owner.ownerId,{type:"ticket_status",ticketId,status:"stopped",queueStatus:"none"});
   }
   // Unblock the Claude-path waiter (Pi returns on its own via shouldCancel).
   emit({ type: "ticket.execution_finished", ticketId, status: "failed", exitCode: 130, projectId });
@@ -984,12 +1001,12 @@ async function stoppedByUser(ticketId: string, ownerId: string): Promise<boolean
     // Cross-process: the stop request may have landed in another process, leaving
     // only the durable DB flag. Honour it so the executor still bails cleanly.
     const [t] = await db
-      .select({ q: projectTickets.queueStatus })
+      .select({ q: projectTickets.queueStatus, status:projectTickets.status })
       .from(projectTickets)
       .where(eq(projectTickets.id, ticketId))
       .limit(1)
-      .catch(() => [] as { q: string | null }[]);
-    cancelled = t?.q === "stopping";
+      .catch(() => [] as { q: string | null;status:string }[]);
+    cancelled = t?.q === "stopping" || t?.status === "stopped";
   }
   if (!cancelled) return false;
   cancelledTickets.delete(ticketId);
@@ -1404,18 +1421,21 @@ async function executeTicketInternal(ticketId: string, actorId?: string): Promis
 
     // Ticket build VM: persistent (v2 always) + noSync (no S3 mirror) + keepAlive
     // (no_sleep=true) so Mags can't idle-sleep a live build. Toggled off at build end.
-    const { jobId, workspaceId: wsId } = await newWorkspaceV2(workspaceName, {
+    const { jobId, workspaceId: wsId, cloneIntentId } = await createTicketSandbox({ projectId: project.id, ticketId, userId: ownerId,
+      log: message => addLog(ticketId, message, "command", ownerId),
+      fresh: () => newWorkspaceV2(workspaceName, {
       vcpus: 4,
       memoryMb: parseInt(process.env.INSTANT_MEM_GB || "4", 10) * 1024,
       diskGb: parseInt(process.env.INSTANT_DISK_GB || "8", 10),
       keepAlive: true,
       noSync: true,
       rootfsType: "claude",
+      }),
     });
     workspaceId = wsId;
 
     // Wait for VM to boot
-    await sleep(8_000);
+    if (!cloneIntentId) await sleep(8_000);
 
     const created = await db
       .insert(sandboxes)
@@ -1431,6 +1451,7 @@ async function executeTicketInternal(ticketId: string, actorId?: string): Promis
       .returning();
 
     sandboxRow = (created[0] as any) ?? null;
+    if (cloneIntentId) await db.delete(sandboxes).where(eq(sandboxes.id,cloneIntentId));
   }
 
   if (!sandboxRow || !workspaceId) throw new Error("Failed to create or find sandbox");
@@ -1472,8 +1493,7 @@ if [ -d "${projectDirName}/.git" ]; then
     cd ${projectDirName}
     ${refreshOriginCommand(`https://x-access-token:${githubToken}@github.com/${githubOwner}/${githubRepo}.git`)}
     git fetch --prune origin
-    git reset --hard HEAD 2>/dev/null || true
-    git clean -fd 2>/dev/null || true
+    # Keep cloned local configuration and caches; branch setup below selects source.
 elif [ -d "${projectDirName}" ] && [ "$(ls -A ${projectDirName} 2>/dev/null)" ]; then
     echo "INIT_EXISTING_DIR"
     cd ${projectDirName}
@@ -1644,13 +1664,6 @@ echo "BRANCH_CREATED"
     await addLog(ticketId, "No GitHub token — code will not be persisted to a repository", "command", ownerId);
   }
 
-  try {
-    await prepareBuildRuntime({workspaceId,projectId:project.id,branch:featureBranch,anchorBranch,dir:`${WORKING_DIR}/${projectDirName}`,userId:ownerId,
-      onLog: message => { void addLog(ticketId,message,"command",ownerId).catch(() => {}); }});
-  } catch (e) {
-    await markTicketFailed(ticketId, `Build environment blocked — ${(e as Error).message}`, ownerId);
-    return;
-  }
 
   // ── Step 4: Refresh + inject credentials ────────────────────────────
   if (useClaudeSubscription) {
@@ -1873,15 +1886,19 @@ Before implementing, fix the git issue:
 
   console.log(`[ticket-executor] Wait finished: status=${waitResult.status}, exitCode=${waitResult.exitCode}, implementationStatus=${implementationStatus}`);
 
+
   // ── Step 8: Commit & finalize ───────────────────────────────────────
   const durationMs = Date.now() - startTime;
 
   // A build isn't "done" until the work is on the remote. If we can't push (no
   // repo/token) or the push throws, that's a FAILURE — don't mark it In Review.
   let commitFailed = false;
+  let publicationFailure = "";
+  let publicationFailureKind: ValidationFailure["failureKind"] | undefined;
   let publicationDocumentation = "";
   if (implementationStatus === "complete" && !(githubOwner && githubRepo && githubToken)) {
     commitFailed = true;
+    publicationFailure = "Repository or credentials are missing; connect the repository in Settings.";
     await addLog(ticketId, "Build finished but the work was NOT pushed — GitHub isn't connected (no repo/token). Connect GitHub in Settings and rebuild.", "cli_error", ownerId);
   }
   if (implementationStatus === "complete" && githubOwner && githubRepo && githubToken) {
@@ -1891,7 +1908,7 @@ Before implementing, fix the git issue:
       // hardcode github.com regardless of where the repo actually lives.
       const gitAuth = await resolveRepoAuth(project, gitUserId).catch(() => null);
       const { sha, documentation } = await commitAndPush({
-      validation: { projectId: project.id, userId: buildLlm.actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, cancelled: () => cancelledTickets.has(ticketId), onLog: line => { addLog(ticketId, line, "command", ownerId).catch(() => {}); } },
+      validation: { gitCredentialUserId: gitUserId, projectId: project.id, userId: buildLlm.actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, cancelled: () => cancelledTickets.has(ticketId), onLog: line => { addLog(ticketId, line, "command", ownerId).catch(() => {}); }, onCheckpoint: async message => { await addLog(ticketId, message, "agent_progress", ownerId); } },
         workspaceId,
         projectDir: `${WORKING_DIR}/${projectDirName}`,
         commitMessage: `feat: ${ticket.ticketKey ? ticket.ticketKey + " " : ""}${ticket.name}`,
@@ -1932,7 +1949,7 @@ Before implementing, fix the git issue:
         // exist. resolveRepoAuth gives the right host, token and credential username.
         const mergeAuth = gitAuth;
         const { sha: mergeSha, files: mergedFiles } = await mergeToAnchor({
-      validation: { projectId: project.id, userId: buildLlm.actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, cancelled: () => cancelledTickets.has(ticketId), onLog: line => { addLog(ticketId, line, "command", ownerId).catch(() => {}); } },
+      validation: { gitCredentialUserId: gitUserId, projectId: project.id, userId: buildLlm.actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, cancelled: () => cancelledTickets.has(ticketId), onLog: line => { addLog(ticketId, line, "command", ownerId).catch(() => {}); }, onCheckpoint: async message => { await addLog(ticketId, message, "agent_progress", ownerId); } },
           workspaceId,
           projectDir: `${WORKING_DIR}/${projectDirName}`,
           featureBranch,
@@ -2004,7 +2021,9 @@ Before implementing, fix the git issue:
     } catch (err) {
       // A thrown commit/push means the work is NOT on the remote → not a success.
       commitFailed = true;
-      await addLog(ticketId, `Publication/validation FAILED — candidate is not ready for review: ${err}`, "cli_error", ownerId);
+      publicationFailureKind = err instanceof ValidationFailure ? err.failureKind : undefined;
+      publicationFailure = failureSummary((err as Error).message || String(err), 2400).split("\nFailed command:")[0] || "No diagnostic returned";
+      await addLog(ticketId, `Publication/validation FAILED — candidate is not ready for review: ${publicationFailure}`, "cli_error", ownerId);
     }
   }
 
@@ -2027,8 +2046,7 @@ Before implementing, fix the git issue:
     await maybeSubmitEpicForReview(ticket.epicId);
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId, mergeStatus: "merged" });
     emit({ type: "ticket.execution_finished", ticketId, projectId: project.id, status: "complete", exitCode: 0, durationMs: Date.now() - startTime });
-    // Auto-record a demo of the completed feature for the Preview tab (fire-and-forget).
-    void generateTicketDemo(ticketId, { ownerId, llmUserId: buildLlm.actorId, projectId: project.id });
+    // Feature testing and recording already completed inside runtime validation.
     // QA (opt-in, projects.qaMode = "tests"): write a test suite for the ticket's
     // acceptance criteria and verify it red/green against the branch point, in the
     // sandbox that just built it. Fire-and-forget like the demo — it never throws,
@@ -2037,10 +2055,10 @@ Before implementing, fix the git issue:
   } else {
     const _detail = commitFailed ? "" : await lastErrorSnippet(ticketId);
     const reason = commitFailed
-      ? "publication or integration validation failed — see the exact blocker in the build log; rebuild after fixing it"
+      ? `publication or integration validation failed: ${publicationFailure || "No diagnostic returned"}`
       : (_detail ? `did not complete — ${_detail}` : "Implementation did not complete (the agent stopped without a specific error)");
     if (commitFailed) await db.update(projectTickets).set({ githubMergeStatus: "failed", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId)).catch(() => {});
-    await markTicketFailed(ticketId, reason, ownerId);
+    await markTicketFailed(ticketId, reason, ownerId, { failureKind: publicationFailureKind });
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "failed", queueStatus: "none", mergeStatus: commitFailed ? "failed" : undefined });
   }
 
@@ -2427,13 +2445,6 @@ async function executeTicketChatInternal(
     return;
   }
   const workspaceId = chatSb.workspaceId;
-  try {
-    await prepareBuildRuntime({workspaceId,projectId:ticket.projectId,branch:ticket.githubBranch || "default",dir:`${WORKING_DIR}/${chatSb.projectDir}`,userId:ownerId,
-      onLog: message => { void addLog(ticketId,message,"command",ownerId).catch(() => {}); }});
-  } catch (e) {
-    await addLog(ticketId, `Build environment blocked — ${(e as Error).message}`, "cli_error", ownerId);
-    return;
-  }
 
   // Resume the CLI session this ticket's chat has been using. This row is written by
   // the /api/v1/cli/output webhook on every turn; the chat used to hardcode null here,
@@ -2537,7 +2548,7 @@ ${TICKET_CHAT_MODE_CONTRACT}
 ## Working rules
 - The repo is already cloned and set up at /data/${projectDirName}; explore it and reuse existing patterns.
 - Honor the acceptance criteria, notes, and MANDATORY DIRECTIVES above; do NOT regress work already done.
-- Do NOT run 'git commit', 'git push', or switch branches — commit/push is handled automatically.
+- Run and repair the app in this sandbox first. Do not commit, push or switch branches; the server commits the accumulated changes together only after runtime checks pass. Exclude secrets and generated files.
 - In change mode: keep the change focused, and make sure the project still builds/compiles.`;
     try {
       const webhookReachable = !!cliApiKey && !/localhost|127\.0\.0\.1|\/\/0\.0\.0\.0/.test(CALLBACK_BASE_URL);
@@ -2778,7 +2789,7 @@ async function finalizeTicketChat(
   try {
     await addLog(ticketId, "Committing chat changes…", "command", ownerId);
     const { sha, documentation } = await commitAndPush({
-      validation: { projectId: project.id, userId: actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, cancelled: () => cancelledTickets.has(ticketId), onLog: line => { addLog(ticketId, line, "command", ownerId).catch(() => {}); } },
+      validation: { gitCredentialUserId: gitUserId, projectId: project.id, userId: actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, cancelled: () => cancelledTickets.has(ticketId), onLog: line => { addLog(ticketId, line, "command", ownerId).catch(() => {}); }, onCheckpoint: async message => { await addLog(ticketId, message, "agent_progress", ownerId); } },
       workspaceId, projectDir,
       commitMessage: `chore: ${summary}`,
       featureBranch,
@@ -2791,7 +2802,7 @@ async function finalizeTicketChat(
     try {
       await addLog(ticketId, `Merging to ${anchorBranch}…`, "command", ownerId);
       const { sha: mergeSha } = await mergeToAnchor({
-      validation: { projectId: project.id, userId: actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, cancelled: () => cancelledTickets.has(ticketId), onLog: line => { addLog(ticketId, line, "command", ownerId).catch(() => {}); } },
+      validation: { gitCredentialUserId: gitUserId, projectId: project.id, userId: actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, cancelled: () => cancelledTickets.has(ticketId), onLog: line => { addLog(ticketId, line, "command", ownerId).catch(() => {}); }, onCheckpoint: async message => { await addLog(ticketId, message, "agent_progress", ownerId); } },
         workspaceId, projectDir, featureBranch,
         repoUrl: auth.repoUrl, githubToken: auth.token, tokenUser: auth.tokenUser,
         targetBranch: anchorBranch, baseBranch: anchorBase,
@@ -3020,7 +3031,9 @@ async function executeTicketApiInternal(
     // preinstalled). The older newWorkspace routes rootfs via the __MAGS_ROOTFS_TYPE
     // env passthrough, which was silently landing on the DEFAULT rootfs (mags-vm,
     // node 20.15.1) → Pi exit 127.
-    const { jobId, workspaceId: wsId } = await newWorkspaceV2(workspaceName, {
+    const { jobId, workspaceId: wsId, cloneIntentId } = await createTicketSandbox({ projectId: project.id, ticketId, userId: ownerId,
+      log: message => addLog(ticketId, message, "command", ownerId),
+      fresh: () => newWorkspaceV2(workspaceName, {
       vcpus: 4,
       memoryMb: parseInt(process.env.INSTANT_MEM_GB || "4", 10) * 1024,
       diskGb: parseInt(process.env.INSTANT_DISK_GB || "8", 10),
@@ -3029,9 +3042,10 @@ async function executeTicketApiInternal(
       // Empty projects → the pre-scaffolded boilerplate rootfs; everything else →
       // the "pi" rootfs (node 22 + Pi preinstalled), same base as the preview VM.
       rootfsType: useBoilerplate ? BOILERPLATE_ROOTFS : (process.env.PREVIEW_ROOTFS || "pi"),
+      }),
     });
     workspaceId = wsId;
-    await sleep(8_000);
+    if (!cloneIntentId) await sleep(8_000);
 
     const created = await db.insert(sandboxes).values({
       projectId: ticket.projectId,
@@ -3043,6 +3057,7 @@ async function executeTicketApiInternal(
       status: "ready",
     }).returning();
     sandboxRow = (created[0] as any) ?? null;
+    if (cloneIntentId) await db.delete(sandboxes).where(eq(sandboxes.id,cloneIntentId));
   }
 
   if (!sandboxRow || !workspaceId) throw new Error("Failed to create or find sandbox");
@@ -3134,8 +3149,7 @@ if [ -d "${projectDirName}/.git" ]; then
     cd ${projectDirName}
     ${refreshOriginCommand(auth.authUrl)}
     git fetch --prune origin
-    git reset --hard HEAD 2>/dev/null || true
-    git clean -fd 2>/dev/null || true
+    # Keep cloned local configuration and caches; branch setup below selects source.
 elif [ -d "${projectDirName}" ] && [ "$(ls -A ${projectDirName} 2>/dev/null)" ]; then
     echo "INIT_EXISTING_DIR"
     cd ${projectDirName}
@@ -3368,13 +3382,6 @@ git branch --show-current
   // idle-sleep a live build → "lost contact". Turned back off at build end.
   await wakeTicketVm(workspaceId);
   // Reuse preview discoveries, but verify/install the SDK in this build VM.
-  try {
-    await prepareBuildRuntime({workspaceId,projectId:project.id,branch:featureBranch,anchorBranch,dir:projectDir,userId:ownerId,
-      onLog: message => { void addLog(ticketId,message,"command",ownerId).catch(() => {}); }});
-  } catch (e) {
-    await markTicketFailed(ticketId, `Build environment blocked — ${(e as Error).message}`, ownerId);
-    return;
-  }
 
   // Direct API mode must stay on the provider API path. Pi (and therefore a
   // connected OpenAI Codex subscription) is reserved for Coding Agent mode.
@@ -3626,10 +3633,13 @@ git branch --show-current
   }
   }
 
+
   // ── Finalize: commit, push, merge ───────────────────────────────────
   const durationMs = Date.now() - startTime;
 
   let commitFailed = false;
+  let publicationFailure = "";
+  let publicationFailureKind: ValidationFailure["failureKind"] | undefined;
   let publicationDocumentation = "";
   let completedSha = "";   // captured for the final completion summary
   let mergedOk = false;
@@ -3640,6 +3650,7 @@ git branch --show-current
   // an actionable message instead.
   if (implementationStatus === "complete" && !pushAuth) {
     commitFailed = true;
+    publicationFailure = "Repository credentials could not be resolved; check the GitHub/GitLab integration in Settings.";
     await addLog(ticketId, "Build finished but the work was NOT pushed — no repository/credentials resolved (repo not linked, or the GitHub/GitLab token expired). Reconnect the repo in Settings and rebuild.", "cli_error", ownerId);
     console.error(`[ticket-executor-api] complete but pushAuth is null — cannot push ticket ${ticketId}`);
   }
@@ -3647,7 +3658,7 @@ git branch --show-current
     try {
       await addLog(ticketId, "Committing changes...", "command", ownerId);
       const { sha, documentation } = await commitAndPush({
-      validation: { projectId: project.id, userId: buildLlm.actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, cancelled: () => cancelledTickets.has(ticketId), onLog: line => { addLog(ticketId, line, "command", ownerId).catch(() => {}); } },
+      validation: { gitCredentialUserId: gitUserId, projectId: project.id, userId: buildLlm.actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, cancelled: () => cancelledTickets.has(ticketId), onLog: line => { addLog(ticketId, line, "command", ownerId).catch(() => {}); }, onCheckpoint: async message => { await addLog(ticketId, message, "agent_progress", ownerId); } },
         workspaceId,
         projectDir,
         commitMessage: `feat: ${ticket.ticketKey ? ticket.ticketKey + " " : ""}${ticket.name}`,
@@ -3675,7 +3686,7 @@ git branch --show-current
       try {
         await addLog(ticketId, `Merging to ${anchorBranch}...`, "command", ownerId);
         const { sha: mergeSha, files: mergedFiles } = await mergeToAnchor({
-      validation: { projectId: project.id, userId: buildLlm.actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, cancelled: () => cancelledTickets.has(ticketId), onLog: line => { addLog(ticketId, line, "command", ownerId).catch(() => {}); } },
+      validation: { gitCredentialUserId: gitUserId, projectId: project.id, userId: buildLlm.actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, cancelled: () => cancelledTickets.has(ticketId), onLog: line => { addLog(ticketId, line, "command", ownerId).catch(() => {}); }, onCheckpoint: async message => { await addLog(ticketId, message, "agent_progress", ownerId); } },
           workspaceId,
           projectDir,
           featureBranch,
@@ -3698,7 +3709,9 @@ git branch --show-current
     } catch (err) {
       // A failed commit/push means the work is NOT saved — do NOT report success.
       commitFailed = true;
-      const msg = (err as Error).message?.slice(0, 400) ?? String(err);
+      publicationFailureKind = err instanceof ValidationFailure ? err.failureKind : undefined;
+      publicationFailure = failureSummary((err as Error).message || String(err), 2400).split("\nFailed command:")[0] || "No diagnostic returned";
+      const msg = publicationFailure;
       await addLog(ticketId, `Publication/validation FAILED — candidate is not ready for review: ${msg}`, "command", ownerId);
       console.error(`[ticket-executor-api] commit/push failed:`, err);
     }
@@ -3741,8 +3754,7 @@ git branch --show-current
       exitCode: 0,
       projectId: project.id,
     });
-    // Auto-record a demo of the completed feature for the Preview tab (fire-and-forget).
-    void generateTicketDemo(ticketId, { ownerId, llmUserId: buildLlm.actorId, projectId: project.id });
+    // Feature testing and recording already completed inside runtime validation.
     // QA (opt-in, projects.qaMode = "tests"): write a test suite for the ticket's
     // acceptance criteria and verify it red/green against the branch point, in the
     // sandbox that just built it. Fire-and-forget like the demo — it never throws,
@@ -3751,12 +3763,12 @@ git branch --show-current
   } else {
     const _lastErr = commitFailed ? "" : await lastErrorSnippet(ticketId);
     const reason = commitFailed
-      ? "publication or integration validation failed — see the exact blocker in the build log; the build sandbox is kept"
+      ? `publication or integration validation failed: ${publicationFailure || "No diagnostic returned"}; the build sandbox is kept`
       : `the agent finished without reporting completion${_lastErr ? ` — last error: ${_lastErr}` : ""}`;
     // Persist a durable "not_pushed" merge state so the Git tab flags it (red)
     // even after refresh — not just a transient Actions-log line.
     if (commitFailed) await db.update(projectTickets).set({ githubMergeStatus: "failed", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId)).catch(() => {});
-    await markTicketFailed(ticketId, reason, ownerId);
+    await markTicketFailed(ticketId, reason, ownerId, { failureKind: publicationFailureKind });
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "failed", queueStatus: "none", mergeStatus: commitFailed ? "failed" : undefined });
   }
 
@@ -3767,7 +3779,7 @@ git branch --show-current
   // (or failed-but-kept) VM never burns compute sitting idle.
   // SAFETY: never touch the always-on preview VM ("pv-…"), which is keepAlive by design.
   if (isolatedBuild && !useWorktree && workspaceId && !workspaceId.startsWith("pv-")) {
-    await addLog(ticketId, "Build finished — sandbox will sleep when idle (kept warm for resume; removed when the ticket is approved).", "command", ownerId);
+    await addLog(ticketId, implementationStatus === "complete" && !commitFailed ? "Validation and publication passed. The build environment is being put to sleep; saved work is retained." : "This attempt has stopped. The build environment is being put to sleep; saved work is retained for a later attempt.", "command", ownerId);
     await sleepTicketVm(workspaceId);
     await db.update(sandboxes).set({ status: "sleeping", updatedAt: new Date() }).where(eq(sandboxes.ticketId, ticketId)).catch(() => {});
   }
@@ -3815,6 +3827,89 @@ function waitForCompletion(
   });
 }
 
+/** Start a validation-only run on an existing dedicated ticket checkout. */
+export async function startTicketValidationRetry(ticketId:string,actorId:string,phase:'validation'|'feature-testing'='validation'):Promise<void> {
+  if(executingTickets.has(ticketId) || isChatTurnActive(ticketId))throw new Error("This ticket already has an active operation.");
+  executingTickets.add(ticketId);
+  let launched=false;
+  try {
+    const [ticket]=await db.select().from(projectTickets).where(eq(projectTickets.id,ticketId)).limit(1);
+    if(!ticket)throw new Error("Ticket not found.");
+    if(/^(queued|executing|stopping)$/.test(ticket.queueStatus))throw new Error(`Ticket operation is ${ticket.queueStatus}. Wait for it to finish or stop it before retrying validation.`);
+    const [project]=await db.select().from(projects).where(eq(projects.id,ticket.projectId)).limit(1);
+    if(!project)throw new Error("Project not found.");
+    const sb=await findExistingSandbox(ticketId);
+    if(!sb?.magsWorkspaceId || !["ticket","ticket-chat"].includes(sb.workspaceType) || sb.magsWorkspaceId.startsWith("pv-"))throw new Error("Retry validation requires the saved dedicated build sandbox. No new sandbox or development run was started.");
+    const branch=ticket.githubBranch || sb.currentBranch;
+    if(!branch)throw new Error("No saved ticket branch is available.");
+    const {runtimeValidations}=await import("../db/schema/runtime-validation.ts");
+    const [previous]=await db.select().from(runtimeValidations).where(and(eq(runtimeValidations.projectId,project.id),eq(runtimeValidations.ticketId,ticketId),eq(runtimeValidations.branch,branch))).orderBy(desc(runtimeValidations.createdAt)).limit(1);
+
+    const buildLlm=await resolveBuildLlm(project,actorId);
+    const {gitUserId}=resolveGitActor(project,actorId);
+    const auth=await resolveRepoAuth(project,gitUserId);
+    if(!auth)throw new Error("Repository access could not be resolved.");
+    cancelledTickets.delete(ticketId);
+    if(ticket.status==="stopped")ticket.status="open";
+    const claimed=await db.update(projectTickets).set({status:ticket.status,queueStatus:"executing",updatedAt:new Date()}).where(and(eq(projectTickets.id,ticketId),eq(projectTickets.queueStatus,ticket.queueStatus))).returning({id:projectTickets.id});
+    if(!claimed.length)throw new Error("Another operation claimed this ticket. Retry after it finishes.");
+    broadcastToUser(project.ownerId,{type:"ticket_status",ticketId,status:ticket.status,queueStatus:"executing"});
+    const workspaceId=sb.magsWorkspaceId;
+    const job=runChatTurn(ticketId,async()=>{
+      let polling=false;
+      const refreshCancellation=async()=>{
+        if(polling)return;
+        polling=true;
+        try {const [current]=await db.select({q:projectTickets.queueStatus,status:projectTickets.status}).from(projectTickets).where(eq(projectTickets.id,ticketId)).limit(1);if(current?.q==="stopping" || current?.status==="stopped")cancelledTickets.add(ticketId);}
+        finally {polling=false;}
+      };
+      const cancelPoll=setInterval(()=>{void refreshCancellation().catch(()=>{});},1000);
+      try {
+        await refreshCancellation();
+        if(cancelledTickets.has(ticketId))throw new Error("Validation cancelled");
+        await wakeTicketVm(workspaceId);
+        const {retrySavedValidation}=await import("../services/retry-validation.ts");
+        const sha=await retrySavedValidation({workspaceId,projectDir:"/data/project",featureBranch:branch,repoUrl:auth.repoUrl,githubToken:auth.token,tokenUser:auth.tokenUser,
+          validation:{projectId:project.id,userId:buildLlm.actorId,ticketId,gitCredentialUserId:gitUserId,cancelled:()=>cancelledTickets.has(ticketId),onLog:line=>{void addLog(ticketId,line,"command",project.ownerId).catch(()=>{});},onCheckpoint:async message=>{await addLog(ticketId,message,"agent_progress",project.ownerId);}}},previous?.baseline ?? "",phase);
+        await refreshCancellation();
+        if(cancelledTickets.has(ticketId))throw new Error("Validation cancelled");
+        if(phase==='feature-testing') {
+          // A successful retry supersedes the previous operation failure. Preserve
+          // completed tickets and Git metadata; testing alone does not publish code.
+          const recovered = ticket.status === 'failed' || ticket.status === 'blocked';
+          const status = recovered ? 'review' : ticket.status;
+          const stageId = recovered ? await moveTicketToStage(ticketId, project.id, 'In Review') : ticket.stageId;
+          await db.update(projectTickets).set({status, lastExecutionAt:new Date(), updatedAt:new Date()}).where(eq(projectTickets.id,ticketId));
+          broadcastToUser(project.ownerId,{type:'ticket_status',ticketId,status,stageId,queueStatus:'executing'});
+          await addLog(ticketId,'Feature testing completed on the saved app. See the result in the Feature testing panel above. This run did not repeat build or validation.',"ai_response",project.ownerId);
+          return;
+        }
+        const reviewStageId = await moveTicketToStage(ticketId, project.id, "In Review");
+        await db.update(projectTickets).set({
+          status: "review",
+          githubCommitSha: sha,
+          githubMergeStatus: sha !== ticket.githubCommitSha ? "pending" : ticket.githubMergeStatus,
+          lastExecutionAt: new Date(),
+          updatedAt: new Date(),
+        }).where(eq(projectTickets.id, ticketId));
+        broadcastToUser(project.ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "executing", stageId: reviewStageId });
+        await addLog(ticketId,`✅ **Validation passed** for saved commit \`${sha.slice(0,12)}\`. Moved to **In Review**. Development was skipped. Any repairs were committed locally; this action did not push or merge.`,"ai_response",project.ownerId);
+      } catch(error) {
+        clearInterval(cancelPoll);
+        if(!await stoppedByUser(ticketId,project.ownerId)) await markTicketFailed(ticketId,(phase==='feature-testing'?'Feature testing failed: ':'Validation failed: ')+(failureSummary((error as Error).message).split("\nFailed command:")[0] || "No diagnostic returned"),project.ownerId,{emitEvent:false,failureKind:error instanceof ValidationFailure?error.failureKind:undefined});
+      } finally {
+        clearInterval(cancelPoll);
+        await sleepTicketVm(workspaceId);
+        await db.update(projectTickets).set({queueStatus:"none",updatedAt:new Date()}).where(eq(projectTickets.id,ticketId));
+        const [current]=await db.select({status:projectTickets.status,stageId:projectTickets.stageId}).from(projectTickets).where(eq(projectTickets.id,ticketId)).limit(1);
+        broadcastToUser(project.ownerId,{type:"ticket_status",ticketId,status:current?.status||ticket.status,stageId:current?.stageId,queueStatus:"none"});
+      }
+    });
+    launched=true;
+    void job.catch(error=>console.error("Validation retry failed",error)).finally(()=>executingTickets.delete(ticketId));
+  } finally {if(!launched)executingTickets.delete(ticketId);}
+}
+
 async function findExistingSandbox(ticketId: string) {
   // Match the ticket's sandbox regardless of workspaceType — worktree runs store
   // "ticket-worktree", so restricting to "ticket" meant retries never found the
@@ -3825,7 +3920,7 @@ async function findExistingSandbox(ticketId: string) {
   const result = await db
     .select()
     .from(sandboxes)
-    .where(eq(sandboxes.ticketId, ticketId))
+    .where(and(eq(sandboxes.ticketId, ticketId), inArray(sandboxes.workspaceType, ["ticket", "ticket-chat", "ticket-worktree"])))
     .orderBy(desc(sandboxes.updatedAt))
     .limit(1);
   return result[0] ?? null;
@@ -3866,8 +3961,14 @@ async function resolveProjectIdForTicket(ticketId: string): Promise<string | nul
   return row?.projectId ?? null;
 }
 
-async function markTicketFailed(ticketId: string, reason: string, userId?: string, opts?: { emitEvent?: boolean }) {
+async function markTicketFailed(ticketId: string, reason: string, userId?: string, opts?: { emitEvent?: boolean; failureKind?: ValidationFailure["failureKind"] }) {
   const projectId = await resolveProjectIdForTicket(ticketId);
+  // Early provisioning errors reach this helper before the worker has an owner ID.
+  // Still publish terminal status so connected ticket UIs stop their spinner.
+  if (!userId && projectId) {
+    const [owner] = await db.select({ownerId: projects.ownerId}).from(projects).where(eq(projects.id, projectId)).limit(1);
+    userId = owner?.ownerId;
+  }
   const failureStageId = projectId
     ? await moveTicketToStage(ticketId, projectId, "Failed / Blocked")
     : null;
@@ -3897,9 +3998,17 @@ async function markTicketFailed(ticketId: string, reason: string, userId?: strin
   // the success summary — so the user sees WHAT went wrong and HOW to proceed,
   // not just a buried "Execution failed" log line.
   const failMsg =
-    `❌ **Build failed** — I couldn't finish this ticket.\n\n` +
+    (/^Feature testing failed:/i.test(reason) ? `❌ **Feature testing failed** — see the browser attempt and diagnostics above.\n\n` : /validation failed|recovery stopped|Automatic repair stopped/i.test(reason) ? `❌ **Validation blocked** — this ticket is not ready for review.\n\n` : `❌ **Build failed** — this attempt could not complete.\n\n`) +
     `**What went wrong:** ${reason}\n\n` +
-    `**How to proceed:** open the **Actions** log above and find the failing step, then either adjust the ticket and press **Build Ticket** again, or reply here with guidance and I'll retry. Your branch and build sandbox are preserved, so nothing is lost.`;
+    (/clone submission|clone response missing request_id/i.test(reason)
+      ? `**How to proceed:** the clone request was not confirmed. Check Magpie for an accepted clone before retrying; automatic resubmission is blocked to avoid duplicate sandboxes. Ticket implementation has not started.`
+      : opts?.failureKind === "http"
+        ? `**Next step:** the app did not pass its HTTP check. The connection/status diagnostic is shown above. Use Retry validation to test the saved code again, with automatic repair if needed.`
+      : opts?.failureKind === "schema"
+        ? `**Next step:** database setup needs a repair before validation can pass. The failure is shown above. You can ask the agent to repair it using the message box below; repeating the same build without a repair may fail again.`
+        : /validation failed|recovery stopped|Automatic repair stopped/i.test(reason)
+          ? `**Next step:** the failure is shown above. You can ask the agent to repair it using the message box below. This attempt has stopped; another attempt must pass validation before the ticket is ready for review.`
+          : `**Next step:** the failure is shown above. Use the message box below to request a repair or provide missing details, then retry when the blocker has been resolved.`);
   await addLog(ticketId, failMsg, "ai_response", userId);
 
   // TELL THE CHAT THAT ASKED FOR IT. A failure used to live only in the ticket's
@@ -4082,7 +4191,7 @@ async function recoverUnpushedTickets() {
 
       try {
         const { sha, documentation } = await commitAndPush({
-      validation: { projectId: project.id, userId: project.ownerId, ticketId: ticket.id, epicId: ticket.epicId ?? undefined, baselineBranch: recoveryAnchor.baseBranch, cancelled: () => cancelledTickets.has(ticket.id), onLog: line => { addLog(ticket.id, line, "command", project.ownerId).catch(() => {}); } },
+      validation: { gitCredentialUserId: gitUserId, projectId: project.id, userId: project.ownerId, ticketId: ticket.id, epicId: ticket.epicId ?? undefined, baselineBranch: recoveryAnchor.baseBranch, cancelled: () => cancelledTickets.has(ticket.id), onLog: line => { addLog(ticket.id, line, "command", project.ownerId).catch(() => {}); }, onCheckpoint: async message => { await addLog(ticket.id, message, "agent_progress", project.ownerId); } },
           workspaceId,
           projectDir: `${WORKING_DIR}/${projectDirName}`,
           commitMessage: `feat: ${ticket.ticketKey ? ticket.ticketKey + " " : ""}${ticket.name}`,
@@ -4114,7 +4223,7 @@ async function recoverUnpushedTickets() {
         // Also attempt merge
         try {
           const { sha: mergeSha } = await mergeToAnchor({
-      validation: { projectId: project.id, userId: project.ownerId, ticketId: ticket.id, epicId: ticket.epicId ?? undefined, baselineBranch: recoveryAnchor.baseBranch, cancelled: () => cancelledTickets.has(ticket.id), onLog: line => { addLog(ticket.id, line, "command", project.ownerId).catch(() => {}); } },
+      validation: { gitCredentialUserId: gitUserId, projectId: project.id, userId: project.ownerId, ticketId: ticket.id, epicId: ticket.epicId ?? undefined, baselineBranch: recoveryAnchor.baseBranch, cancelled: () => cancelledTickets.has(ticket.id), onLog: line => { addLog(ticket.id, line, "command", project.ownerId).catch(() => {}); }, onCheckpoint: async message => { await addLog(ticket.id, message, "agent_progress", project.ownerId); } },
             workspaceId,
             projectDir: `${WORKING_DIR}/${projectDirName}`,
             featureBranch,

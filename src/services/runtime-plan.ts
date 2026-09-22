@@ -8,7 +8,7 @@ export interface RuntimeRecipe {
 }
 export function compileRuntimePlan(recipe: RuntimeRecipe, io: {
   dir: string; localize: (command: string) => string;
-  configure: string; start: string; sql: (file: string) => string;
+  configure: string; start: string; sql: (file: string, step: SchemaStep) => string;
   http: (path: string) => string; beforeSchema?: string[]; tests?: string[]; application?: boolean;
 }): PlanStep[] {
   const steps: PlanStep[] = [];
@@ -29,7 +29,7 @@ export function compileRuntimePlan(recipe: RuntimeRecipe, io: {
   (io.beforeSchema ?? []).forEach((command,i)=>add(`upgrade-fixture-${i}`, "schema", command, "Prepare representative baseline data"));
   orderedSchema(recipe).forEach((s, i) => add(`schema-${i}`, "schema",
     s.kind !== "migration" && !s.verify ? "echo 'Schema scripts and seeds require a read-only verify assertion'; exit 1"
-      : s.kind === "sqlScript" ? io.sql(s.command) : s.command,
+      : s.kind === "sqlScript" ? io.sql(s.command, s) : s.command,
     s.note || `${s.kind}: ${s.command}`, s.verify));
   if (io.application !== false) {
     add("run", "run", io.start, `Start app: ${recipe.runCmd}`);

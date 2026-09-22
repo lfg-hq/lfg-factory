@@ -104,7 +104,7 @@ async function resolveCli(userId: string, projectId: string) {
 
 export async function runValidationRepair(o: {
   projectId: string; userId: string; workspaceId: string; projectDir: string;
-  prompt: string; envVars?: Record<string,string>; onLog?: (line:string)=>void; cancelled?: () => boolean;
+  prompt: string; resourceRecovery?:boolean; timeoutMs?:number; envVars?: Record<string,string>; onLog?: (line:string)=>void; cancelled?: () => boolean;
 }): Promise<string> {
   const log = o.onLog ?? (() => {});
   const dirName = o.projectDir.replace(/^\/(root|data)\//, "").replace(/^\//, "");
@@ -119,6 +119,7 @@ export async function runValidationRepair(o: {
     try {
       const pi = await startPiCli({
         workspaceId: o.workspaceId, prompt, projectDir: dirName,
+        controlDir:o.resourceRecovery ? "/tmp/lfg-pi-recovery" : undefined,
         provider: cli.provider, modelId: cli.piModelId,
         apiKey: cli.apiKey, oauthAccessToken: cli.oauthAccessToken,
         envVars: o.envVars ?? {},
@@ -126,13 +127,13 @@ export async function runValidationRepair(o: {
       let lastLog = 0;
       const res = await streamPiToCompletion({
         workspaceId: o.workspaceId, outputFile: pi.outputFile, backgroundPid: pi.backgroundPid,
-        timeoutMs: MERGE_TIMEOUT_MS, progressMaxLen: 200, shouldCancel: o.cancelled,
+        timeoutMs: (o.timeoutMs ?? MERGE_TIMEOUT_MS), progressMaxLen: 200, shouldCancel: o.cancelled,
         onProgress: (m) => { const n = Date.now(); if (n - lastLog < 3_000) return; lastLog = n; log(`  ${m}`); },
       });
       account = (extractPiProgress(res.tail || "", 1200) || "").replace(/^Agent:\s*/, "").trim();
-      if (res.fatalError) log(`Pi stopped: ${res.fatalError.slice(0, 200)}`);
+      if (res.fatalError) throw new Error(res.fatalError);
     } catch (e) {
-      log(`Pi could not start: ${(e as Error).message?.slice(0, 200)}`);
+      throw new Error(`Pi repair failed: ${(e as Error).message}`);
     }
   } else if (cli.claudeUsable) {
     log(`Repairing with Claude Code…`);
@@ -143,7 +144,7 @@ export async function runValidationRepair(o: {
         envVars: o.envVars ?? {},
       });
       let offset = 0, all = "", done = false, errs = 0, lastLog = 0;
-      const deadline = Date.now() + MERGE_TIMEOUT_MS;
+      const deadline = Date.now() + (o.timeoutMs ?? MERGE_TIMEOUT_MS);
       while (Date.now() < deadline && !done && !o.cancelled?.()) {
         await new Promise((r) => setTimeout(r, 5_000));
         let poll;
@@ -170,7 +171,7 @@ export async function runValidationRepair(o: {
       extractExitCode(all);
       account = lastAssistantText(all);
     } catch (e) {
-      log(`Claude Code could not start: ${(e as Error).message?.slice(0, 200)}`);
+      throw new Error(`Claude Code repair failed: ${(e as Error).message}`);
     }
   } else {
     const why = cli.credentialNote
@@ -215,4 +216,16 @@ function lastAssistantText(all: string): string {
     }
   } catch { /* fall through */ }
   return "";
+}
+
+/** Persist one RPC process across runtime verification feedback. */
+export async function createRuntimeRepairSession(o:{projectId:string;userId:string;workspaceId:string;projectDir:string;runId:string;deadline:number;envVars:Record<string,string>;onLog?:(line:string)=>void;cancelled?:()=>boolean;browser?:(input:any)=>Promise<any>;preparationReady?:()=>boolean}) {
+ const [{PiRepairSession},{validationShell},{runtimeToolPolicySource}]=await Promise.all([import('./pi-rpc.ts'),import('./validation-sandbox.ts'),import('./runtime-tool-policy.ts')]);
+ const cli=await resolveCli(o.userId,o.projectId);
+ if(!cli.usePi || !cli.provider)throw new Error('Continuous ticket repair requires a configured Pi provider: '+(cli.credentialNote || 'no usable Pi credential'));
+ const dir='/tmp/lfg-pi-recovery/'+o.runId;
+ return new PiRepairSession(dir+'/input.fifo',o.deadline,{
+  start:async()=>startPiCli({workspaceId:o.workspaceId,prompt:'',projectDir:o.projectDir.replace(/^\/(root|data)\//,''),provider:cli.provider!,modelId:cli.piModelId,apiKey:cli.apiKey,oauthAccessToken:cli.oauthAccessToken,envVars:o.envVars,controlDir:'/tmp/lfg-pi-recovery',rpc:{fifo:dir+'/input.fifo',sessionFile:dir+'/session.jsonl',extensionSource:o.browser?(await import('./runtime-tool-policy.ts')).browserToolExtensionSource(dir+'/browser-replies'):runtimeToolPolicySource}}),
+  exec:script=>validationShell(o.workspaceId,script,15_000),wait:()=>new Promise(r=>setTimeout(r,2000)),now:()=>Date.now(),cancelled:o.cancelled,log:o.onLog,browser:o.browser,browserReplyDir:dir+'/browser-replies',preparationReady:o.preparationReady,
+ });
 }

@@ -7,11 +7,11 @@ COPY package.json bun.lock ./
 # --ignore-scripts skips better-sqlite3's native build (not needed in production — we use PostgreSQL)
 RUN bun install --frozen-lockfile --production --ignore-scripts
 
-# Build stage — install all deps (including dev) for type checking
-FROM base AS builder
-COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile
+# Check application imports using the same dependencies as the runtime image.
+# Bun performs this check itself; no second install or native postinstall is needed.
+FROM deps AS builder
 COPY . .
+RUN bun build src/index.ts --target=bun --packages=external --outdir=/tmp/lfg-import-check
 
 # Final runtime image
 FROM base AS runner
@@ -20,7 +20,10 @@ FROM base AS runner
 # scripts/screenshot-worker.mjs via `spawn("node", …)` — Playwright hangs under
 # Bun, so we drive the remote CDP browser with Node. Without node here the
 # screenshot feature fails with "spawn node ENOENT" in production.
-RUN apt-get update && apt-get install -y --no-install-recommends curl nodejs && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends curl nodejs ffmpeg ca-certificates && update-ca-certificates && rm -rf /var/lib/apt/lists/*
+
+# Node must use the maintained OS trust bundle for the Mags WSS connection.
+ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
 
 # Create non-root user
 RUN addgroup --system --gid 1001 bunjs && \
@@ -28,6 +31,7 @@ RUN addgroup --system --gid 1001 bunjs && \
 
 # Copy production deps and source
 COPY --from=deps /app/node_modules ./node_modules
+COPY --from=builder --chown=bunjs:bunjs /app/src ./src
 COPY --chown=bunjs:bunjs . .
 
 # Persistent volumes for SQLite db and user uploads
@@ -39,4 +43,4 @@ USER bunjs
 EXPOSE 8000
 
 # Run DB migrations then start server
-CMD ["sh", "-c", "bun run db:push && bun run src/index.ts"]
+CMD ["sh", "-c", "bun run scripts/safe-schema-push.ts && bun run src/index.ts"]

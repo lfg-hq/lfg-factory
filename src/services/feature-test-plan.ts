@@ -1,0 +1,23 @@
+import {z} from 'zod';
+const locator=z.object({role:z.string().optional(),name:z.string().optional(),label:z.string().optional(),text:z.string().optional(),selector:z.string().optional()}).refine(v=>!!(v.role||v.label||v.text||v.selector),'Provide an accessible locator or CSS selector');
+const path=z.string().startsWith('/').refine(s=>!s.startsWith('//')&&!s.includes('\\'),'Use an app-relative path');
+export const featureTestPlanSchema=z.object({
+ kind:z.enum(['browser','api','not_applicable']),reason:z.string().min(10),
+ applicability:z.array(z.object({criterion:z.string().min(1),applicable:z.boolean(),reason:z.string().min(1)})).min(1),
+ // Files stay inside the ticket VM; secret values are never written to action logs.
+ authStatePath:z.string().startsWith('/data/').optional(),cookieJarPath:z.string().startsWith('/data/').optional(),headerFilePath:z.string().startsWith('/data/').optional(),
+ steps:z.array(z.object({label:z.string().min(1),action:z.enum(['goto','click','fill','select','press','assertVisible','assertText','assertValue']),path:path.optional(),locator:locator.optional(),value:z.string().optional(),ignoreCase:z.boolean().optional()})).max(30).default([]),
+ calls:z.array(z.object({label:z.string().min(1),method:z.enum(['GET','POST','PUT','PATCH','DELETE']),path,body:z.string().optional(),expectedStatus:z.number().int().min(100).max(599),includes:z.string().min(1).optional(),jsonEquals:z.record(z.string(),z.unknown()).optional()})).max(20).default([]),
+}).superRefine((p,c)=>{
+ const issue=(message:string)=>c.addIssue({code:'custom',message});
+ if(p.kind==='not_applicable'){if(p.applicability.some(a=>a.applicable))issue('Not-applicable decision contradicts applicable criteria');return;}
+ if(!p.applicability.some(a=>a.applicable))issue('Testing requires applicable acceptance criteria');
+ if(p.kind==='browser'){
+  if(p.steps[0]?.action!=='goto')issue('Browser test must first navigate to its exact feature path');
+  if(!p.steps.some(s=>s.action.startsWith('assert')))issue('Browser test needs outcome assertions, not just clicks');
+  for(const s of p.steps){if(s.action==='goto'&&!s.path)issue('Navigation needs a path');if(s.action!=='goto'&&!s.locator)issue('Interaction/assertion needs a locator');if(['fill','select','press','assertText','assertValue'].includes(s.action)&&s.value===undefined)issue('Step needs an expected value');}
+ }
+ if(p.kind==='api'&&!p.calls.length)issue('API testing requires requests with expected responses');
+});
+export type FeatureTestPlan=z.infer<typeof featureTestPlanSchema>;
+export const FEATURE_TEST_INSTRUCTION=`Also prepare featureTest in the runtime report. Decide applicability against the ticket acceptance criteria and changed files; explain each criterion in applicability:[{criterion,applicable,reason}]. kind is browser for user-facing functionality, api for backend-only HTTP functionality, or not_applicable for schema-only/library/documentation changes with no UI or endpoint to exercise. Schema-only changes still require the real migration/database checks above; do not invent an HTTP test for them. Include reason explaining the choice. Browser plan: steps:[{label,action,path?,locator?:{role?,name?,label?,text?,selector?},value?}], actions goto/click/fill/select/press/assertVisible/assertText/assertValue. Start at the exact feature path; interact and assert real expected outcomes, including persisted changes where required. Prefer roles and accessible names, then labels, then stable CSS. Include assertion of authenticated identity or protected content. Establish a valid sandbox test-user session yourself (test login, supported cookie/session creation, or test-only cookie injection); write Playwright storageState JSON to authStatePath under /data if needed, never put credentials in the report. Support the app through its HTTPS preview origin as well as localhost: secure cookies/host checks/CSRF must work there. The controller remaps localhost cookie domains to the preview host. API plan: calls:[{label,method,path,body?,expectedStatus,includes?,jsonEquals?}]. Each call uses curl; assert expected statuses and relevant response fields. Optional cookieJarPath (curl cookies) or headerFilePath (one HTTP auth header per line) must reference secret files under /data. Test only this app and disposable development data, clean up created records, never alter unrelated records. Record not-applicable checks honestly; missing auth or broken infrastructure is a repair, not not_applicable. Browser failures, screenshots and accessible page snapshots will come back to this same session; repair the concrete failure and revise the plan if necessary. Do not claim the feature test passed yourself: the controller executes this plan before committing.`;

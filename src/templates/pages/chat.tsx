@@ -474,7 +474,9 @@ export function ChatPage({
   <script src="/public/js/artifacts-loader.js?v=20260908-lazy-pdf"></script>
   <script src="/public/js/document-comments.js"></script>
   <script src="/public/js/artifacts.js"></script>
-  <script src="/public/js/preview-tab.js"></script>
+  <link rel="stylesheet" href="/public/css/ticket-action-phases.css" />
+<script src="/public/js/ticket-action-phases.js"></script>
+<script src="/public/js/preview-tab.js"></script>
   <script src="/public/js/ticket-agent.js"></script>
   <script src="/public/js/env-tab.js"></script>
   <script src="/public/js/tab-overflow.js"></script>

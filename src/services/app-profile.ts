@@ -1,3 +1,4 @@
+import { TOOL_DOWNLOAD_GUIDANCE } from "./tool-download-repair.ts";
 import { validationPolicySchema } from "./validation-contract.ts";
 import { mergeKnowledge, schemaStepSchema, replayActionSchema, shellQuote } from "./preview-plan.ts";
 import { teamApiKeys } from "./llm-access.ts";
@@ -115,7 +116,7 @@ export const appProfileSchema = z.object({
     connectionFormat: z.enum(CONN_FORMATS).describe("How to format the string: 'url' (Node/Python/Rails/Prisma), 'dotnet-npgsql', 'dotnet-mysql', 'dotnet-sqlserver', 'keyvalue'."),
   })).describe("Every database the app connects to AND how. Read appsettings*.json ConnectionStrings, docker-compose, ORM config, DATABASE_URL. [] if none."),
   // ── Schema build recipe (ORDERED — this is the part that keeps breaking) ──
-  schemaSteps: z.array(schemaStepSchema).describe("Complete schema recipe in dependency order. Migration commands must specify the context. SQL scripts use relative paths. Supply read-only verify commands for scripts/seeds so replay can safely skip applied work."),
+  schemaSteps: z.array(schemaStepSchema).describe("Complete schema recipe in dependency order. Migration commands must specify the context. SQL scripts use relative paths and connectionKey matching databases[].connectionEnvVar; always record the target when there are multiple databases. Supply read-only verify commands for scripts/seeds so replay can safely skip applied work."),
   replayActions: z.array(replayActionSchema).optional(),
   verificationPaths: z.array(z.string().regex(/^\/(?!\/)/)).optional().describe("Local feature routes to smoke-test, in addition to the homepage."),
   environmentOverrides: z.array(z.object({ key: z.string(), encryptedValue: z.string() })).optional(),
@@ -150,12 +151,15 @@ export const appProfileSchema = z.object({
   // Deployment edits to CONFIG files (not app source) that must be re-applied on
   // every checkout — e.g. repointing an appsettings.json connection from a dead
   // dev/prod host to the provisioned localhost DB. Auto-filled via persistConfigPatch.
+  recoveryBackups: z.array(z.object({id:z.string(),workspaceId:z.string(),database:z.string(),connectionKey:z.string().optional(),path:z.string(),createdAt:z.string(),reason:z.string()})).optional(),
   configPatches: z.array(z.object({
     file: z.string().describe("Path relative to the checkout, e.g. 'Cohire.Web/appsettings.json'."),
     find: z.string().describe("Exact literal text to replace."),
     replace: z.string().describe("Replacement text."),
     note: z.string().optional(),
     create: z.boolean().optional(),
+    beforeHash: z.string().optional(),
+    afterHash: z.string().optional(),
   })).optional().describe("Leave EMPTY — auto-filled from runtime config fixes that must survive branch switches / rebuilds."),
 });
 export type AppProfile = z.infer<typeof appProfileSchema>;
@@ -174,6 +178,8 @@ async function probeSh(workspaceId: string, script: string, timeout = 45_000): P
 const PROBE_SYSTEM = `You are a senior build engineer PROBING an existing repository so it can be run in a fresh sandbox for a live preview. Investigate the ACTUAL code with your tools, then record a COMPLETE, concrete run profile. Do not guess — read the files.
 
 ENVIRONMENT: the sandbox is ALPINE LINUX (musl, apk, OpenRC, busybox). Every toolchain command must be Alpine-compatible (apk add --no-cache …, never apt/yum; rc-service, never systemctl). Docker is already installed and running (SQL Server / DBs run as Docker containers on 127.0.0.1).
+
+${TOOL_DOWNLOAD_GUIDANCE}
 
 YOUR JOB — investigate and determine:
 - Exact stack, framework, and RUNTIME VERSION (read .csproj <TargetFramework>, global.json, package.json engines, lockfiles).
@@ -485,7 +491,7 @@ export async function recordProfileLearning(projectId: string, note: string, bra
 }
 
 // ── Replayable config patches (survive branch switches / rebuilds) ───────────
-export type ConfigPatch = { file: string; find: string; replace: string; note?: string; create?: boolean };
+export type ConfigPatch = { file: string; find: string; replace: string; note?: string; create?: boolean; beforeHash?: string; afterHash?: string };
 
 /** Persist a config-file patch onto the profile (de-duped by file+find), so it's
  *  re-applied after every checkout. */

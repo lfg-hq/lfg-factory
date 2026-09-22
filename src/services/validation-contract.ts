@@ -8,19 +8,35 @@ export const validationPolicySchema = z.object({
 });
 export interface ValidationContext {
   projectId: string; userId: string; ticketId?: string; epicId?: string;
+  gitCredentialUserId?: string;
   baselineBranch?: string;
   onLog?: (message: string) => void;
+  onCheckpoint?: (message: string) => Promise<void> | void;
   cancelled?: () => boolean;
 }
 export interface ValidationEvidence {
   id: string; projectId: string; branch: string; revision: string; tree: string;
   baseline: string; planHash: string; environmentHash: string;
   kind: "ticket" | "integration" | "promotion"; status: "passed" | "failed" | "running";
+  mode?: "existing-sandbox"; runtimePassed?:boolean;
   freshPassed: boolean; upgradePassed: boolean; error?: string;
 }
 export class ValidationFailure extends Error {
   readonly code = "VALIDATION_FAILED";
+  readonly failureKind: "runtime" | "environment" | "schema" | "http" = "runtime";
   constructor(message: string, readonly evidenceId?: string) { super(message); this.name = "ValidationFailure"; }
+}
+export class ValidationEnvironmentFailure extends ValidationFailure {
+  override readonly failureKind = "environment" as const;
+  constructor(message:string,evidenceId?:string,readonly stage='candidate'){super(message,evidenceId);this.name='ValidationEnvironmentFailure';}
+}
+export class ValidationSchemaFailure extends ValidationFailure {
+  override readonly failureKind = "schema" as const;
+  constructor(message:string,evidenceId?:string,readonly stage='candidate'){super(message,evidenceId);this.name='ValidationSchemaFailure';}
+}
+export class ValidationHttpFailure extends ValidationFailure {
+  override readonly failureKind = "http" as const;
+  constructor(message:string,evidenceId?:string,readonly stage='candidate'){super(message,evidenceId);this.name='ValidationHttpFailure';}
 }
 export function hashContract(value: unknown): string { return createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
 export function assertEvidence(e: ValidationEvidence, expected: { projectId: string; branch: string; revision: string; baseline?: string; planHash?: string; environmentHash?: string }) {

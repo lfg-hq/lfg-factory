@@ -41,3 +41,22 @@ test("missing completion record fails explicitly rather than becoming success",a
   const h=harness(["LOST\nprocess terminated"]);
   await expect(runBackgroundCommand({workspaceId:"vm",command:"install"},h.deps)).rejects.toThrow("without a completion record");
 });
+test("completion log identifies command and exit status",async()=>{
+ const h=harness(["DONE\n7\nfailed download"]);const logs:string[]=[];
+ await runBackgroundCommand({workspaceId:"vm",command:"install-sdk",jobId:"sdk",log:s=>logs.push(s)},h.deps);
+ expect(logs[0]).toContain("command: install-sdk");expect(logs.at(-1)).toContain("finished (exit 7,");
+});
+test('terminal output stops only the current process group and returns failure immediately', async()=>{
+ const h=harness(['RUNNING\nerror NU1301: Unable to load service index']);
+ const r=await runBackgroundCommand({workspaceId:'vm',command:'restore',abortOnOutput:output=>output.includes('error NU1301:')?'Package source unavailable':undefined},h.deps);
+ expect(r.exitCode).toBe(1);expect(r.output).toContain('NU1301');
+ expect(h.calls.filter(c=>c.includes('mkdir -p /data/lfg-jobs'))).toHaveLength(1);
+ expect(h.calls.some(c=>c.includes('kill -TERM --') && c.includes('kill -KILL --'))).toBe(true);
+});
+test('unchanged polled output is logged once, while changed output is reported', async()=>{
+ const h=harness([...Array(20).fill('RUNNING\nsame output'),...Array(20).fill('RUNNING\nnew output'),'DONE\n0\nfinished']);
+ const logs:string[]=[];
+ await runBackgroundCommand({workspaceId:'vm',command:'work',log:s=>logs.push(s)},h.deps);
+ expect(logs.filter(s=>s.includes('still running')&&s.includes('same output'))).toHaveLength(1);
+ expect(logs.filter(s=>s.includes('still running')&&s.includes('new output'))).toHaveLength(1);
+});

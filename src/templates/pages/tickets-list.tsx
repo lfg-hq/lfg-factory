@@ -22,6 +22,7 @@ interface Ticket {
   updatedAt?: Date | string;
   /** When the build finished and the ticket moved to In Review; null = never built. */
   lastExecutionAt?: Date | string | null;
+  githubCommitSha?: string | null;
 }
 
 interface ExecutionModeConfig {
@@ -677,7 +678,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
                       <span class="kanban-card-title">${t.name}</span>
                     </div>
                     <div class="kanban-card-meta">
-                      <a class="ticket-code-link" href="/projects/${project.projectId}/tickets/${t.id}/diff" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open ticket code in a new window"><svg class="ticket-code-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 7-5 5 5 5m8-10 5 5-5 5m-3-13-2 16" /></svg><span>Code</span><svg class="ticket-code-external" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6m0-6L10 14M10 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5" /></svg></a>
+                      ${t.githubCommitSha ? html`<a class="ticket-code-link" href="/projects/${project.projectId}/tickets/${t.id}/diff" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open ticket code in a new window"><svg class="ticket-code-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 7-5 5 5 5m8-10 5 5-5 5m-3-13-2 16" /></svg><span>Code</span><svg class="ticket-code-external" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6m0-6L10 14M10 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5" /></svg></a>` : ""}
                       <span class="priority-label" style="color:${PRIORITY_COLOR[t.priority] ?? "#6b7280"};">
                         <span class="kanban-priority-dot" style="background:${PRIORITY_COLOR[t.priority] ?? "#6b7280"};"></span>
                         ${t.priority}
@@ -709,9 +710,15 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     <div class="drawer-header-right">
       <div class="drawer-actions">
         <a class="ticket-code-link ticket-code-link--toolbar" title="Open code workspace in a new window" id="drawer-code-link" target="_blank" rel="noopener"><svg class="ticket-code-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 7-5 5 5 5m8-10 5 5-5 5m-3-13-2 16" /></svg><span>Code</span><svg class="ticket-code-external" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6m0-6L10 14M10 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5" /></svg></a>
-        <button class="drawer-execute-btn" id="drawer-build-btn" onclick="buildCurrentTicket()">
-          <i class="fas fa-bolt"></i> Build
+        <select id="drawer-run-phase" class="drawer-run-phase" aria-label="Choose ticket action">
+          <option value="build">Build &amp; check all</option>
+          <option value="validation">Validation only</option>
+          <option value="feature-testing">Feature testing only</option>
+        </select>
+        <button class="drawer-execute-btn" id="drawer-build-btn" onclick="runSelectedTicketPhase()">
+          <i class="fas fa-play"></i> Run
         </button>
+        <button class="drawer-server-btn" id="drawer-validation-btn" hidden onclick="retryCurrentValidation()" title="Test the saved code without rerunning development. Validation may compile and repair it; nothing is published."><i class="fas fa-check-circle"></i> Retry validation</button>
         <button class="drawer-server-btn" id="drawer-stop-btn" onclick="stopCurrentTicket()" style="display:none;color:#f87171;border-color:#5a2a30;"><i class="fas fa-stop"></i> Stop</button>
         <div class="drawer-more-menu">
           <button class="drawer-more-btn" onclick="toggleDrawerMore()">
@@ -829,8 +836,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
         <div id="actions-attach-chip" style="display:none;align-items:center;gap:.4rem;margin:0 0 .4rem 0;font-size:.75rem;color:var(--text-secondary,#9ca3af);"></div>
         <div class="logs-chat-field">
           <input id="actions-file-input" type="file" style="display:none;" onchange="uploadTicketFile(this.files&&this.files[0])" />
-          <button onclick="document.getElementById('actions-file-input').click()" class="logs-chat-send-btn" title="Attach a file for the agent" style="background:transparent;">
-            <i class="fas fa-paperclip" style="font-size:.72rem;"></i>
+          <button onclick="document.getElementById('actions-file-input').click()" class="logs-chat-attach-btn" title="Attach a file for the agent" aria-label="Attach a file">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 11.5l-8.5 8.5a6 6 0 0 1-8.5-8.5l9-9a4 4 0 0 1 5.7 5.7l-9 9a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg>
           </button>
           <input id="actions-chat-input" type="text" placeholder="Send a message to the agent..."
             onkeydown="if(event.key==='Enter'){sendTicketChatMsg();}" />
@@ -908,6 +915,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
 <script src="/public/js/sidebar-chats.js?v=20260908-initials"></script>
 <script src="/public/js/sharing.js"></script>
 <!-- Shared preview component — the SAME one the main chat Preview panel uses. -->
+<link rel="stylesheet" href="/public/css/ticket-action-phases.css" />
+<script src="/public/js/ticket-action-phases.js"></script>
 <script src="/public/js/preview-tab.js"></script>
 <script>
   const PROJECT_ID = document.body.dataset.projectId;
@@ -1034,9 +1043,10 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       || /^(review|in_review|done|completed|archived)$/.test(String(t.status || '').toLowerCase());
   }
   function buildButtonLabel() {
-    return '<i class="fas fa-bolt"></i> ' + (hasPreviousBuild(ticketMap[_currentTicketId]) ? 'Re-build' : 'Build');
+    return '<i class="fas fa-play"></i> Run';
   }
   function renderDrawerDetails(t) {
+    document.getElementById("drawer-code-link").style.display = (t.githubCommitSha || t.github_commit_sha) ? "" : "none";
     if (!t) return;
     document.getElementById('drawer-build-btn').innerHTML = buildButtonLabel();
     var key = t.ticketKey || t.ticket_key || ('TKT-' + (t.index != null ? t.index : ''));
@@ -1108,6 +1118,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     _chatBusy = false; setChatBusyUI();
     refreshChatBusy(); // a turn may already be running server-side (build, or another tab)
     const t = ticketMap[ticketId];
+    document.getElementById("drawer-code-link").style.display = t && (t.githubCommitSha || t.github_commit_sha) ? "" : "none";
     // Render from the local map if we have it; otherwise open with a placeholder
     // and let the live fetch below fill it in — NEVER silently return (that reads
     // as "the card isn't clickable").
@@ -1139,7 +1150,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
         renderDrawerDetails(ticketMap[ticketId]);
         var qs = live.queueStatus || live.queue_status || '';
         var st = live.status || (t && t.status) || 'open';
-        var isActive = qs === 'queued' || qs === 'executing';
+        var isActive = qs === 'queued' || qs === 'executing' || qs === 'stopping';
         // Persistent build-status banner (survives refresh — from the ticket row).
         updateTicketStatusBanner(live);
         var buildBtn = document.getElementById('drawer-build-btn');
@@ -1147,6 +1158,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
         // show only Stop (cleaner than a disabled "Building…" button).
         buildBtn.disabled = false;
         buildBtn.style.display = isActive ? 'none' : '';
+        document.getElementById('drawer-validation-btn').style.display = 'none';
+        document.getElementById('drawer-run-phase').disabled = isActive;
         buildBtn.innerHTML = buildButtonLabel();
         var stopBtn = document.getElementById('drawer-stop-btn');
         if (stopBtn) stopBtn.style.display = isActive ? '' : 'none';
@@ -1308,20 +1321,52 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     }
   }
 
+  function runSelectedTicketPhase() {
+    const phase = document.getElementById('drawer-run-phase').value;
+    if (phase === 'build') return buildCurrentTicket();
+    return retryCurrentValidation(phase);
+  }
+  async function retryCurrentValidation(phase = 'validation') {
+    if (!_currentTicketId) return;
+    const ticketId = _currentTicketId;
+    const btn = document.getElementById('drawer-validation-btn');
+    if (btn.disabled) return;
+    btn.disabled = true;
+    try {
+      const res = await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + ticketId + '/retry-validation', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phase:phase})});
+      const data = await res.json();
+      if (!res.ok) {
+        if (data.ticket) handleTicketStatus(data.ticket);
+        throw new Error(data.error || 'Could not start validation');
+      }
+      handleTicketStatus({ticketId:ticketId,status:(ticketMap[ticketId] || {}).status,queueStatus:'executing'});
+      if (_currentTicketId === ticketId) {
+        _lastFailureReason = '';
+        const banner = document.getElementById('actions-bottom-banner');
+        if (banner) {banner.style.display='none';banner.innerHTML='';}
+        switchDrawerTab('actions', document.querySelector('.drawer-tab[data-tab="actions"]'));
+      }
+    } catch(error) {alert(error.message);}
+    finally {btn.disabled=false;}
+  }
+
   // ── Stop a running build ─────────────────────────────────────────
   async function stopCurrentTicket() {
     if (!_currentTicketId) return;
     var stopBtn = document.getElementById('drawer-stop-btn');
     if (stopBtn) { stopBtn.disabled = true; stopBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Stopping…'; }
     try {
-      await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + _currentTicketId + '/stop', {
+      const ticketId = _currentTicketId;
+      const res = await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + ticketId + '/stop', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }
       });
-    } catch(e) { /* best-effort */ }
-    _chatBusy = false; setChatBusyUI();
-    if (stopBtn) { stopBtn.disabled = false; stopBtn.innerHTML = '<i class="fas fa-stop"></i> Stop'; stopBtn.style.display = 'none'; }
-    var b = document.getElementById('drawer-build-btn');
-    if (b) { b.disabled = false; b.style.display = ''; b.innerHTML = buildButtonLabel(); }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not stop ticket');
+      if (data.ticket) handleTicketStatus(data.ticket);
+    } catch(e) {
+      alert(e.message || 'Could not stop ticket');
+      if (stopBtn) {stopBtn.disabled=false;stopBtn.innerHTML='Stop';}
+    }
   }
 
   // ── One agent turn at a time ─────────────────────────────────────
@@ -1362,6 +1407,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
   // ── Actions tab: execution logs + agent chat ─────────────────────
   let _lastLogCount = 0;
   let _lastLogContent = '';
+  let _featureCompletedTicket = '';
   let _lastFailureReason = ''; // clean failure reason captured from the "Execution failed:" log row
 
   /**
@@ -1394,14 +1440,16 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     // b.where: 'top' = live status (spinner) at the top; 'bottom' = the OUTCOME
     // (failure reason / success), pinned above the chat input like a result.
     var b = null;
-    if (qs === 'executing' || qs === 'queued') {
-      b = { bg: 'rgba(59,130,246,.12)', fg: '#93c5fd', icon: 'fa-spinner fa-spin', where: 'top', text: qs === 'queued' ? 'Queued — waiting to build…' : 'Building this ticket…' };
+    if (qs === 'executing' || qs === 'queued' || qs === 'stopping') {
+      b = { bg: 'rgba(59,130,246,.12)', fg: '#93c5fd', icon: 'fa-spinner fa-spin', where: 'top', text: qs === 'queued' ? 'Queued — waiting to build…' : qs === 'stopping' ? 'Stopping ticket operation…' : 'Running ticket operation…' };
+    } else if (_featureCompletedTicket === _currentTicketId) {
+      b = { bg: 'rgba(16,185,129,.12)', fg: '#6ee7b7', icon: 'fa-circle-check', where: 'bottom', text: 'Feature testing passed — latest run completed successfully.' };
     } else if (merge === 'not_pushed') {
       b = { bg: 'rgba(248,113,113,.12)', fg: '#fca5a5', icon: 'fa-triangle-exclamation', where: 'bottom', text: 'Built but NOT pushed to git — reconnect the repo in Settings, then rebuild.' };
     } else if (st === 'failed' || qs === 'failed') {
       var reason = (fields && fields.reason) || _findFailureReasonFromLogs();
       b = { bg: 'rgba(239,68,68,.14)', fg: '#fca5a5', icon: 'fa-circle-exclamation', where: 'bottom',
-            text: reason ? ('Build failed — ' + reason) : 'Build failed — check the logs above and rebuild.' };
+            text: reason ? ('Ticket operation failed — ' + reason) : 'Ticket operation failed — check the active phase for details.' };
     } else if (merge === 'merged' || st === 'done' || st === 'completed' || st === 'merged') {
       var anchor = fields.anchorBranch || fields.anchor_branch || _ticketAnchorBranch || '';
       b = { bg: 'rgba(16,185,129,.12)', fg: '#6ee7b7', icon: 'fa-circle-check', where: 'bottom',
@@ -1453,7 +1501,17 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
 
     if (ticketId !== _currentTicketId) return;
     updateTicketStatusBanner(msg);
-    if (qs !== 'queued' && qs !== 'executing') {
+    var validationBtn = document.getElementById('drawer-validation-btn');
+    var busy = qs === 'queued' || qs === 'executing' || qs === 'stopping';
+    if (validationBtn) validationBtn.style.display = 'none';
+    document.getElementById('drawer-run-phase').disabled = busy;
+    if (busy) {
+      var buildBtn = document.getElementById('drawer-build-btn');
+      if (buildBtn) buildBtn.style.display = 'none';
+      var stopBtn = document.getElementById('drawer-stop-btn');
+      if (stopBtn) {stopBtn.style.display = '';stopBtn.disabled = qs === 'stopping';stopBtn.innerHTML = qs === 'stopping' ? 'Stopping…' : 'Stop';}
+    }
+    if (!busy) {
       hideThinkingIndicator();
       var btn = document.getElementById('drawer-build-btn');
       if (btn) { btn.disabled = false; btn.style.display = ''; btn.innerHTML = buildButtonLabel(); }
@@ -1517,7 +1575,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     // not when they reached the browser.
     el.setAttribute('data-ts', String(Date.parse(row.createdAt || '') || 0));
 
-    if (type === 'ai_response') {
+    if (type === 'ai_response' || type === 'agent_progress') {
       // Agent — coloured left border (green for success, red for a failure
       // explanation), always expanded. Render markdown (bold, inline code, lists).
       var isFailMsg = msg.charAt(0) === '❌' || msg.indexOf('Build failed') === 0;
@@ -1595,7 +1653,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       var _actionVerbs = ['Running','Reading','Editing','Writing','Creating','Searching','Listing','Merging','Merged','Committing','Committed','Pushed','Pushing','Building','Build','Installing','Started','Starting','Cloning','Fetching','Continuing','Spinning','Restarting','Setting up','Verifying'];
       // Emoji-prefixed tool labels (📄 Read, ✏️ Write, 🔍 Grep…) are actions too.
       var isAction = hasOut || msg.charAt(0) === '$' || msg.charCodeAt(0) > 255 || _actionVerbs.some(function(v){ return msg.indexOf(v) === 0; });
-      var desc = describeCmd(msg, explanation);
+      var desc = explanation || msg.split('\\n')[0];
       el.className += isAction ? ' log-cmd' : ' log-cmd log-output';
       var iconHtml = isAction
         ? '<i class="fas fa-terminal log-row-ico"></i>'
@@ -1655,20 +1713,14 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
 
   async function loadExecutionLogs() {
     if (!_currentTicketId) return;
+    var requestedTicket = _currentTicketId;
     try {
-      var res = await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + _currentTicketId + '/logs');
-      var rows = await res.json();
+      var historyUrl = '/api/projects/' + PROJECT_ID + '/tickets/' + requestedTicket + '/logs';
+      var rows = await window.TicketActionPhases.load(historyUrl);
+      if (requestedTicket !== _currentTicketId || !Array.isArray(rows)) return;
       var area = document.getElementById('actions-log-area');
       if (!area) return;
-      if (!rows.length) {
-        area.innerHTML = '<div class="log-placeholder">' +
-          '<i class="fas fa-terminal" style="font-size:1.5rem;margin-bottom:.75rem;display:block;opacity:.4;"></i>' +
-          'No execution logs yet.<br>Logs will appear here when the ticket is built.</div>';
-        _lastLogCount = 0;
-        _logsFirstLoad = true;
-        return;
-      }
-      var contentKey = rows.length + ':' + (rows[rows.length - 1].id || rows[rows.length - 1].createdAt || '');
+      var contentKey = JSON.stringify(rows) + JSON.stringify(ticketMap[_currentTicketId] || {});
       if (contentKey === _lastLogContent) return;
       _lastLogContent = contentKey;
       _lastLogCount = rows.length;
@@ -1677,12 +1729,9 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
 
       var scrollContainer = area /* the .execution-logs-container is the real overflow scroller */;
       var shouldScroll = _logsFirstLoad || (scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight < 60);
-      area.innerHTML = '';
+      window.TicketActionPhases.render(area, rows, ticketMap[_currentTicketId], 'drawer:' + _currentTicketId, renderLogEntry, historyUrl, function() { _lastLogContent = ''; return loadExecutionLogs(); });
 
-      rows.forEach(function(row, idx) {
-        area.appendChild(renderLogEntry(row, idx));
-      });
-
+      _featureCompletedTicket = window.TicketActionPhases.latestFeatureRunCompleted(rows) ? requestedTicket : '';
       // Logs are now in the DOM — refresh the banner so a failed build shows its reason.
       if (ticketMap[_currentTicketId]) updateTicketStatusBanner(ticketMap[_currentTicketId]);
 
@@ -1710,6 +1759,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       var ticket = resp && resp.ticket ? resp.ticket : resp;
       var branch = ticket.github_branch || ticket.githubBranch;
       var sha = ticket.github_commit_sha || ticket.githubCommitSha;
+      document.getElementById('drawer-code-link').style.display = sha ? '' : 'none';
       var banner = document.getElementById('actions-git-banner');
       if (banner && branch) {
         document.getElementById('actions-git-branch').textContent = branch;
@@ -2635,32 +2685,9 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
         _chatBusy = false; setChatBusyUI();
       }
 
-      var placeholder = area.querySelector('.log-placeholder');
-      if (placeholder) area.innerHTML = '';
-
-      var idx = area.children.length;
-      var wasAtBottom = !area.children.length || (area.scrollHeight - area.scrollTop - area.clientHeight < 120);
-      var node = renderLogEntry(log, 'live-' + idx);
-
-      // Insert in timestamp order instead of always appending. The VM buffers its JSONL
-      // and forwards it over the webhook, so the tail of a build routinely arrives after
-      // the executor has already written "Ticket complete" — which is why the log kept
-      // scrolling on past the summary with dotnet restore output, looking like the build
-      // was still running when it had finished and merged.
-      var ts = Date.parse(log.createdAt || '') || 0;
-      var before = null;
-      if (ts) {
-        for (var i = area.children.length - 1; i >= 0; i--) {
-          var rowTs = Number(area.children[i].getAttribute('data-ts') || 0);
-          if (!rowTs || rowTs <= ts) break;   // rows before this one are older — stop
-          before = area.children[i];
-        }
-      }
-      if (before) area.insertBefore(node, before); else area.appendChild(node);
-
-      if (wasAtBottom) scrollActionsBottom();
-      _lastLogCount = area.children.length;
+      // Reload authoritative rows so phase boundaries and delayed webhook output stay ordered.
       _lastLogContent = '';
+      loadExecutionLogs();
     }
 
     connectWS();

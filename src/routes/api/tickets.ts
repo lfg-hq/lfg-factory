@@ -10,7 +10,7 @@ import { githubTokens, users } from "../../db/schema/users.ts";
 import { sandboxes } from "../../db/schema/sandbox.ts";
 import { conversations } from "../../db/schema/chat.ts";
 import { instantApps } from "../../db/schema/instant.ts";
-import { eq, and, asc, desc, max, notExists } from "drizzle-orm";
+import { eq, and, asc, desc, max, notExists, lt } from "drizzle-orm";
 import { getProjectAccess, requirePermission } from "../../auth/project-access.ts";
 import { nextTicketKey } from "../../utils/ticket-keys.ts";
 import { notify } from "../../services/notify.ts";
@@ -406,15 +406,17 @@ ticketsApi.get("/:projectId/tickets/:ticketId/logs", async (c) => {
   if (!access) return c.json({ error: "Not found" }, 404);
   const project = access.project;
 
-  // Most-recent 500 (desc + limit), then flip back to chronological order. Using
-  // ASC+limit returned the OLDEST 500, so on a chatty ticket the user's latest
-  // message + latest activity fell off the end and never rendered.
-  const logs = await db
-    .select()
-    .from(ticketLogs)
-    .where(eq(ticketLogs.ticketId, ticketId))
-    .orderBy(desc(ticketLogs.createdAt))
-    .limit(500);
+  // Cursor pagination preserves older build history without downloading it on every poll.
+  const before = c.req.query("before");
+  let boundary;
+  if (before) {
+    const [anchor] = await db.select().from(ticketLogs).where(and(eq(ticketLogs.ticketId, ticketId), eq(ticketLogs.id, before))).limit(1);
+    if (!anchor) return c.json({ error: "Log cursor not found" }, 400);
+    boundary = or(lt(ticketLogs.createdAt, anchor.createdAt), and(eq(ticketLogs.createdAt, anchor.createdAt), lt(ticketLogs.id, anchor.id)));
+  }
+  const logs = await db.select().from(ticketLogs)
+    .where(and(eq(ticketLogs.ticketId, ticketId), boundary))
+    .orderBy(desc(ticketLogs.createdAt), desc(ticketLogs.id)).limit(500);
 
   return c.json(logs.reverse().map((l) => {
     // A question row carries its clickable options (and whether it blocks) as JSON in
@@ -736,16 +738,40 @@ ticketsApi.post("/:projectId/tickets/:ticketId/queue", async (c) => {
     .limit(1);
 
   if (!ticket) return c.json({ error: "Ticket not found" }, 404);
+  if(isChatTurnActive(ticketId) || /^(queued|executing|stopping)$/.test(ticket.queueStatus))return c.json({error:"This ticket already has an active operation."},409);
 
-  await db
+  const claimed = await db
     .update(projectTickets)
     .set({ queueStatus: "queued", queuedAt: new Date(), updatedAt: new Date() })
-    .where(eq(projectTickets.id, ticketId));
+    .where(and(eq(projectTickets.id, ticketId),eq(projectTickets.queueStatus,ticket.queueStatus)))
+    .returning({id:projectTickets.id});
+  if(!claimed.length)return c.json({error:"Another operation claimed this ticket."},409);
 
   const { bus } = await import("../../events/bus.ts");
   bus.emit({ type: "ticket.queued", payload: { ticketId, projectId: project.id, notes: body.notes, actorId: user.id } });
 
   return c.json({ ok: true });
+});
+
+// Revalidate the saved candidate without dispatching the development agent.
+ticketsApi.post("/:projectId/tickets/:ticketId/retry-validation",async(c)=>{
+  const user=c.get("user");const {projectId,ticketId}=c.req.param();
+  const access=await getProjectAccess(projectId,user.id);
+  if(!access)return c.json({error:"Not found"},404);
+  if(!access.permissions.canManageTickets || !access.permissions.canEditFiles)return c.json({error:"Ticket management and code-edit permissions are required for validation with repair."},403);
+  const [ticket]=await db.select().from(projectTickets).where(and(eq(projectTickets.id,ticketId),eq(projectTickets.projectId,access.project.id))).limit(1);
+  if(!ticket)return c.json({error:"Ticket not found"},404);
+  try {
+    const {startTicketValidationRetry}=await import("../../workers/ticket-executor.ts");
+    const body=await c.req.json().catch(()=>({}));
+    const phase=body.phase ?? 'validation';
+    if(!['validation','feature-testing'].includes(phase))return c.json({error:'Invalid run phase'},400);
+    await startTicketValidationRetry(ticketId,user.id,phase);
+    return c.json({ok:true},202);
+  }catch(error){
+    const [current]=await db.select({status:projectTickets.status,queueStatus:projectTickets.queueStatus}).from(projectTickets).where(eq(projectTickets.id,ticketId)).limit(1);
+    return c.json({error:(error as Error).message,ticket:current ? {ticketId,...current} : undefined},409);
+  }
 });
 
 // ── GET /:projectId/tickets/:ticketId/sandbox ───────────────────────
@@ -840,9 +866,14 @@ ticketsApi.post("/:projectId/tickets/:ticketId/stop", async (c) => {
   const { projectId, ticketId } = c.req.param();
   const access = await getProjectAccess(projectId!, user.id);
   if (!access) return c.json({ error: "Not found" }, 404);
+  if(!access.permissions.canManageTickets)return c.json({error:"Ticket management permission is required."},403);
+  const [ticket]=await db.select().from(projectTickets).where(and(eq(projectTickets.id,ticketId!),eq(projectTickets.projectId,access.project.id))).limit(1);
+  if(!ticket)return c.json({error:"Ticket not found"},404);
   const { requestTicketStop } = await import("../../workers/ticket-executor.ts");
-  await requestTicketStop(ticketId!, access.project.id);
-  return c.json({ ok: true });
+  try {await requestTicketStop(ticketId!, access.project.id);}
+  catch(error){return c.json({error:(error as Error).message},409);}
+  const [current]=await db.select({status:projectTickets.status,queueStatus:projectTickets.queueStatus}).from(projectTickets).where(eq(projectTickets.id,ticketId!)).limit(1);
+  return c.json({ ok: true, ticket:{ticketId,...current} });
 });
 
 // ── POST /:projectId/tickets/:ticketId/demo ─────────────────────────
@@ -1577,9 +1608,10 @@ ticketsApi.post("/:projectId/tickets/:ticketId/git/pr", async (c) => {
 // Durable runtime evidence, scoped by the same project access check as ticket logs.
 ticketsApi.get("/:projectId/tickets/:ticketId/runtime-validation", async c => {
   const { projectId, ticketId } = c.req.param();
-  if (!await getProjectAccess(projectId, c.get("user").id)) return c.json({error:"Project not found"},404);
+  const access=await getProjectAccess(projectId,c.get("user").id);
+  if (!access) return c.json({error:"Project not found"},404);
   const { runtimeValidations } = await import("../../db/schema/runtime-validation.ts");
   const { desc } = await import("drizzle-orm");
-  const rows = await db.select().from(runtimeValidations).where(and(eq(runtimeValidations.projectId,projectId),eq(runtimeValidations.ticketId,ticketId))).orderBy(desc(runtimeValidations.createdAt)).limit(20);
+  const rows = await db.select().from(runtimeValidations).where(and(eq(runtimeValidations.projectId,access.project.id),eq(runtimeValidations.ticketId,ticketId))).orderBy(desc(runtimeValidations.createdAt)).limit(20);
   return c.json({validations:rows.map(row=>({...row,evidence:JSON.parse(row.evidence),steps:JSON.parse(row.steps)}))});
 });

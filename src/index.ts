@@ -129,6 +129,33 @@ app.use("/public/*", async (c, next) => {
 });
 app.use("/vendor/monaco/*", serveStatic({ root: "./node_modules/monaco-editor/min", rewriteRequestPath: (path) => path.replace("/vendor/monaco", "") }));
 app.use("/public/*", serveStatic({ root: "./" }));
+// Feature recordings can contain authenticated development screens.
+app.use("/uploads/*", async (c, next) => {
+  let artifactPath: string;
+  try { artifactPath = decodeURIComponent(c.req.path); } catch { return c.text("Invalid path", 400); }
+  if (!artifactPath.startsWith("/uploads/ticket-tests/")) return next();
+  if (!/^\/uploads\/ticket-tests\/[a-zA-Z0-9-]+\/[a-zA-Z0-9-]+\/(recording\.mp4|step-[0-9]+\.jpg|failure\.jpg|live\.jpg|status\.json)$/.test(artifactPath)) return c.text("Not found", 404);
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  if (!session) return c.text("Unauthorized", 401);
+  const ticketId = artifactPath.split("/")[3];
+  const {canReadTicketRecording}=await import("./services/ticket-recording-access.ts");
+  if(!await canReadTicketRecording(ticketId!,session.user.id))return c.text("Not found",404);
+  c.header("Cache-Control", "private, no-store");
+  const {isS3Enabled,getPresignedGetUrl}=await import("./services/s3.ts");
+  if(!isS3Enabled)return c.text("Recording object storage is not configured",503);
+  try {
+    const signed=await getPresignedGetUrl(artifactPath.slice("/uploads/".length),300);
+    const headers:Record<string,string>={};
+    if(c.req.header("Range"))headers.Range=c.req.header("Range")!;
+    const upstream=await fetch(signed,{headers});
+    if(!upstream.ok && upstream.status!==416){await upstream.body?.cancel();return c.text("Recording artifact unavailable",upstream.status===404?404:502);}
+    const responseHeaders=new Headers({"Cache-Control":"private, no-store"});
+    for(const name of ["Content-Type","Content-Length","Content-Range","Accept-Ranges"])if(upstream.headers.has(name))responseHeaders.set(name,upstream.headers.get(name)!);
+    if(c.req.method==="HEAD")await upstream.body?.cancel();
+    return new Response(c.req.method==="HEAD"?null:upstream.body,{status:upstream.status,headers:responseHeaders});
+  }catch{return c.text("Recording storage unavailable",503);}
+
+});
 app.use("/uploads/*", serveStatic({ root: "./" }));
 // Local file storage (FILE_STORAGE_TYPE=local): serve binaries written under
 // LOCAL_STORAGE_DIR back at /storage/<key> so getPresignedGetUrl() works off-S3.

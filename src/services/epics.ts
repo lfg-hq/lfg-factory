@@ -609,7 +609,7 @@ export async function maybeSubmitEpicForReview(epicId: string | null | undefined
   if (!revision) return false;
   const { latestValidation } = await import("./runtime-validation.ts");
   const evidence = await latestValidation(project.id, epic.branch, revision);
-  if (!evidence?.freshPassed || !evidence.upgradePassed || evidence.kind !== "integration") return false;
+  if (!evidence || !(evidence.mode === "existing-sandbox" ? evidence.runtimePassed : evidence.freshPassed && evidence.upgradePassed) || evidence.kind !== "integration") return false;
 
 
   await db

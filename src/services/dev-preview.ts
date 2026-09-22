@@ -1,6 +1,12 @@
+import { PreviewRecoveryBudget } from "./preview-recovery-budget.ts";
+import { executeSandboxScript } from "./sandbox-script.ts";
+import { targetedSqlCommand } from "./preview-sql-target.ts";
+import { PREVIEW_SOURCE_POLICY, previewPublicationBlocked } from "./preview-source-policy.ts";
+import { replaceVerifiedPatches, consolidatePatchScript } from "./preview-patch-recovery.ts";
+import { databaseRecoveryScripts, backupThenReset } from "./preview-db-recovery.ts";
 import { compileRuntimePlan } from "./runtime-plan.ts";
 import { branchDatabaseScript } from "./preview-isolation.ts";
-import { assetCaseCheck, schemaStepSchema, replayActionSchema, orderedSchema, mergeKnowledge, failureSummary, failureKey, executeSteps, shellQuote, type PlanStep } from "./preview-plan.ts";
+import { validateSchemaTargets, assetCaseCheck, schemaStepSchema, replayActionSchema, orderedSchema, mergeKnowledge, failureSummary, failureKey, executeSteps, shellQuote, type PlanStep } from "./preview-plan.ts";
 /**
  * Dev Preview — run a CLIENT project (the connected repo, not an Instant app)
  * inside its always-on project sandbox so a developer can see a live,
@@ -33,7 +39,7 @@ import { decryptSecret, encryptSecret } from "../utils/crypto.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { enableHttpAccess, execOnWorkspace, setStableUrl, startBrowserSession, stopWorkspace } from "./mags.ts";
 import { ensureProjectSandbox, restartProjectSandbox, ensureEngine, ensureDocker, envWorkspaceId, checkEngineHealth, listSandboxEngines, ENGINES, type EngineHandle, type DbEngine } from "./project-sandbox.ts";
-import { probeAppProfile, saveAppProfile, loadAppProfile, deriveManifestFromProfile, syncDetectedEnv, applyProfileCorrection, recordProfileLearning, recordDirective, recordConfigPatch, buildConfigPatchScript, profileNotes, resolveUserModel, appProfileSchema, type AppProfile } from "./app-profile.ts";
+import { probeAppProfile, saveAppProfile, loadAppProfile, deriveManifestFromProfile, syncDetectedEnv, applyProfileCorrection, recordProfileLearning, recordDirective, buildConfigPatchScript, profileNotes, resolveUserModel, appProfileSchema, type AppProfile } from "./app-profile.ts";
 import { isS3Enabled, buildS3Key, uploadBinary, getPresignedGetUrl } from "./s3.ts";
 import { messages } from "../db/schema/chat.ts";
 import { projectTickets } from "../db/schema/tickets.ts";
@@ -109,8 +115,7 @@ export type ServiceSpec = NonNullable<PreviewManifest["services"]>[number];
 
 // ── Small helpers ────────────────────────────────────────────────────────
 async function sh(workspaceId: string, script: string, timeout = 180_000): Promise<{ output: string; exitCode: number }> {
-  const b64 = Buffer.from(script).toString("base64");
-  const r = await execOnWorkspace(workspaceId, `echo ${b64} | base64 -d | bash`, { timeout }).catch(
+  const r = await executeSandboxScript(script, timeout, (command, commandTimeout) => execOnWorkspace(workspaceId, command, { timeout: commandTimeout })).catch(
     (e: any) => ({ output: "", stderr: e?.message ?? String(e), exitCode: -1 })
   );
   return { output: (r.output || "") + (r.stderr ? "\n" + r.stderr : ""), exitCode: r.exitCode ?? 0 };
@@ -1284,7 +1289,11 @@ PYEOF`;
 function buildRunbook(manifest: PreviewManifest, engines: EngineHandle[], dir = PROJECT_DIR): RunStep[] {
   const steps = compileRuntimePlan(manifest, {
     dir, localize: c => localizeCmd(c, dir), configure: "", start: appStartCommand(manifest, dir),
-    sql: file => sqlApplyCommand(engines, file),
+    sql: (file, step) => {
+      if (!step.connectionKey) return sqlApplyCommand(engines, file);
+      const target = manifest.databases.find(d => d.connectionEnvVar === step.connectionKey);
+      return target ? targetedSqlCommand(file, step.connectionKey, target.engine, target.engine, engines.find(e=>e.engine===target.engine)?.port ?? 0) : "echo 'Unknown SQL connectionKey in schemaSteps'; exit 1";
+    },
     http: path => `code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 ${shellQuote(`http://127.0.0.1:${manifest.port}${path}`)}); case "$code" in 2??|3??) exit 0;; *) echo "HTTP $code"; exit 1;; esac`,
   });
   steps.push({ id: "assets", phase: "verify", label: "Verify assets and database health", command: "", status: "pending" });
@@ -1333,7 +1342,8 @@ async function executeRunbook(
   const loaded = await loadAppProfile(projectId, branch);
   // Include plan content so a corrected command/config invalidates a previous blocker.
   const envHash = await sh(workspaceId, `sha256sum ${shellQuote(dir + "/.env")} | cut -d ' ' -f1`, 15_000);
-  const identity = revision + envHash.output.trim() + JSON.stringify([manifest, loaded?.profile.configPatches, loaded?.profile.environmentOverrides]);
+  // Invalidate blockers recorded before consolidated patch recovery was available.
+  const identity = "replay-feedback-v1:" + revision + envHash.output.trim() + JSON.stringify([manifest, loaded?.profile.configPatches, loaded?.profile.environmentOverrides]);
   let executionDir = dir;
   let steps: RunStep[] = [...prelude, ...buildRunbook(manifest, engines, dir)];
   const persist = () => persistSteps(projectId, userId, steps);
@@ -1341,6 +1351,7 @@ async function executeRunbook(
     await setPreview(projectId, userId, { previewStatus: PHASE_STATUS[step.phase] }, step.label);
     plog(projectId, userId, `▶ ${step.phase}: ${step.label}`);
     if (step.id === "configuration") {
+      validateSchemaTargets(orderedSchema(manifest), manifest.databases);
       const profile = await loadAppProfile(projectId, branch);
       if (profile) {
         await applyBranchEnvironment(workspaceId, profile.profile, executionDir);
@@ -1353,7 +1364,7 @@ async function executeRunbook(
         for (const engine of engines) {
           const matches = databases.filter(d => d.engine === engine.engine);
           if (matches.length === 1) engine.dbName = matches[0]!.database;
-          else if (matches.length > 1 && orderedSchema(manifest).some(s => s.kind === "sqlScript")) throw new Error("Multiple logical databases detected. Record explicit context commands instead of ambiguous raw SQL scripts.");
+          else if (matches.length > 1 && orderedSchema(manifest).some(s => s.kind === "sqlScript" && !s.connectionKey)) throw new Error("SQL_TARGET_REQUIRED: Multiple logical databases detected. FIRST updatePlan schemaSteps: retain migration order and give EVERY sqlScript a connectionKey matching databases[].connectionEnvVar. Available keys: " + manifest.databases.map(d=>d.connectionEnvVar).join(", ") + ". Do not repair schemas until this routing is saved.");
         }
         plog(projectId, userId, "Branch databases isolated; external connections unchanged");
       }
@@ -1361,7 +1372,7 @@ async function executeRunbook(
     }
     if (step.id.startsWith("schema-") && command === step.command) {
       const recipe = orderedSchema(manifest)[Number(step.id.slice(7))];
-      if (recipe?.kind === "sqlScript" && recipe.verify) command = localizeCmd(sqlApplyCommand(engines, recipe.command), executionDir);
+      if (recipe?.kind === "sqlScript" && recipe.verify && !recipe.connectionKey) command = localizeCmd(sqlApplyCommand(engines, recipe.command), executionDir);
     }
     if (step.id === "assets") {
       const checked = await verifyPreview(projectId, userId, workspaceId, manifest, branch);
@@ -1378,9 +1389,13 @@ async function executeRunbook(
     }
     return r;
   };
-  // Recovery is allowed once; success must survive an entire deterministic replay.
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const failedStep = await executeSteps(steps, { run, persist, cancelled: () => isCancelled(projectId) });
+  // Every failure, including qualification, returns through the same recovery gate.
+  const budget = new PreviewRecoveryBudget(3);
+  let pendingFailure: RunStep | null = null;
+  for (;;) {
+    throwIfCancelled(projectId);
+    const failedStep = pendingFailure ?? await executeSteps(steps, { run, persist, cancelled: () => isCancelled(projectId) });
+    pendingFailure = null;
     if (!failedStep) {
       const current = await loadAppProfile(projectId, branch);
       if (current) {
@@ -1390,21 +1405,25 @@ async function executeRunbook(
       }
       return { up: true, steps };
     }
-    const key = failureKey(identity, failedStep, failedStep.error ?? "");
-    if (attempt || !model || loaded?.profile.blockedFailure?.key === key) {
-      const detail = `${failedStep.label}: ${failedStep.error}`;
+    const latest = await loadAppProfile(projectId, branch);
+    const recipeIdentity = JSON.stringify([manifest, latest?.profile.configPatches, latest?.profile.environmentOverrides]);
+    const normalizedFailure = {...failedStep, command: failedStep.command.replace(/\/data\/preview-check-[a-f0-9-]+/g, dir)};
+    const key = failureKey(identity + recipeIdentity, normalizedFailure, (failedStep.error ?? "").replace(/\/data\/preview-check-[a-f0-9-]+/g, dir));
+    const stopReason = budget.next(key);
+    if (stopReason || !model || loaded?.profile.blockedFailure?.key === key) {
+      const detail = `${failedStep.error || failedStep.label}\n${stopReason || (!model ? "No recovery model is available." : "This unchanged failure was already investigated.")}`;
       const current = await loadAppProfile(projectId, branch);
       if (current) {
         current.profile.blockedFailure = { revision, key, detail };
         await saveAppProfile(projectId, current.profile, branch);
       }
-      return { up: false, steps, error: detail + (loaded?.profile.blockedFailure?.key === key ? "\nThis failure was already investigated for this revision and plan. Fix the branch or update/re-probe its profile before retrying recovery." : "") };
+      return { up: false, steps, error: detail };
     }
     const recovery: RunStep = { id: "recovery", phase: "recovery", label: `Repair ${failedStep.label}`, command: "", status: "running", startedAt: new Date().toISOString() };
     steps.push(recovery); await persist();
     await sh(workspaceId, `fuser -k ${manifest.port}/tcp 2>/dev/null || true`, 20_000);
     const outcome = await driveSandbox(projectId, userId, workspaceId, manifest, engines, model, dir,
-      [...configNotes, `FAILED STEP ${failedStep.id}: ${failedStep.error}. Repair and PERSIST the recipe. The executor will replay it; merely starting a process is not sufficient.`]);
+      [...configNotes, `FAILED STEP ${failedStep.id} (${failedStep.phase}): ${failedStep.error}. Failed command: ${failedStep.command}. If this came from clean replay, the working sandbox was insufficient: repair the persisted recipe or source patches that the fresh checkout needs. The failed scratch checkout has been removed; reproduce in this selected checkout and save the fix. Do not merely restart the server or claim ready without persisting the missing work. For SQL_TARGET_REQUIRED, FIRST persist schemaSteps with connectionKey on every raw SQL file, preserving migrations before dependent scripts and their verify assertions. Do not run ad-hoc migrations until the mapping is saved. For stale patches, FIRST inspectSavedPatches and replaceSavedPatches; do not start unrelated database work before reconciling configuration. For SQL failures fix the script order/identity handling and persist executable repairs, not just a note to rerun. Use resetDevelopmentDatabase when clean replay is needed; never drop a database without a verified backup. Repair and PERSIST the recipe. The executor will replay it; merely starting a process is not sufficient.`]);
     throwIfCancelled(projectId);
     recovery.status = outcome ? "done" : "failed"; recovery.finishedAt = new Date().toISOString();
     await persist();
@@ -1413,6 +1432,16 @@ async function executeRunbook(
       const detail = driverFailures.get(projectId) || failedStep.error || "Recovery failed";
       if (current) { current.profile.blockedFailure = { revision, key, detail }; await saveAppProfile(projectId, current.profile, branch); }
       return { up: false, steps, error: detail };
+    }
+    try {
+      await saveConsolidatedPatches(projectId,userId,workspaceId,branch,dir,engines);
+    } catch (error) {
+      recovery.status = "failed";
+      recovery.error = `Saved repair normalization failed: ${(error as Error).message}`;
+      await persist();
+      pendingFailure = {id:"repair-normalization", phase:"install", command:"normalize saved repairs", label:"Normalize saved repairs", status:"failed", error:recovery.error};
+      plog(projectId,userId,"Saved repair verification failed — returning the error to recovery",{detail:recovery.error});
+      continue;
     }
     const current = await loadAppProfile(projectId, branch);
     if (current) {
@@ -1424,25 +1453,39 @@ async function executeRunbook(
     const cleanDir = `/data/preview-check-${crypto.randomUUID()}`;
     const clean: RunStep = { id: "clean-replay", phase: "recovery", label: "Verify saved repairs from a clean checkout", command: "", status: "running" };
     steps.push(clean); await persist();
+    let replayFailure: RunStep | null = null;
     try {
       const created = await sh(workspaceId, `git -C ${shellQuote(dir)} worktree add --detach ${shellQuote(cleanDir)} HEAD && cp ${shellQuote(dir + "/.env")} ${shellQuote(cleanDir + "/.env")}`, 60_000);
       if (created.exitCode !== 0) throw new Error(failureSummary(created.output));
       const rewrite = branch === "default" ? buildAppsettingsRewriteScript(engines, cleanDir) : "";
       if (rewrite) { const r = await sh(workspaceId, rewrite, 60_000); if (r.exitCode !== 0) throw new Error("Clean checkout configuration failed"); }
 
+      // A repair that needed reset must qualify against an empty database again;
+      // a successful warm run cannot prove that the saved schema recipe is complete.
+      const previousBackupIds = new Set((loaded?.profile.recoveryBackups ?? []).map(b=>b.id));
+      for (const backup of current?.profile.recoveryBackups ?? []) {
+        if(previousBackupIds.has(backup.id) || backup.workspaceId!==workspaceId) continue;
+        const engine=engines.find(e=>e.engine==="mssql");
+        if(!engine || !backup.connectionKey) throw new Error("Cannot qualify repaired database from its recorded backup");
+        const scripts=databaseRecoveryScripts({engine,database:backup.database,connectionKey:backup.connectionKey,dir:cleanDir,backupId:backup.id});
+        plog(projectId,userId,`Verifying repaired schema from an empty database; original backup retained at ${backup.path}`);
+        const reset=await runDetachedPolled(projectId,userId,workspaceId,scripts.reset,180_000,{stallMs:0,workDir:cleanDir});
+        if(reset.exitCode!==0 || !/^DATABASE_RESET$/m.test(reset.output)) throw new Error("Clean database qualification reset failed; verified backup retained");
+      }
       executionDir = cleanDir;
       const cleanSteps = buildRunbook(manifest, engines, cleanDir);
       const previousSteps = steps;
       steps = [...prelude, recovery, clean, ...cleanSteps];
       const invalid = await executeSteps(cleanSteps, { run, persist, cancelled: () => isCancelled(projectId) });
-      if (invalid) throw new Error(`Saved repair did not replay: ${invalid.label}: ${invalid.error}`);
+      if (invalid) { replayFailure = {...invalid}; throw new Error(invalid.error || `Failed replay step: ${invalid.id}`); }
       steps = previousSteps;
       clean.status = "done";
     } catch (error) {
       if ((error as Error).message === "__CANCELLED__") throw error;
       clean.status = "failed"; clean.error = failureSummary((error as Error).message); await persist();
-      if (current) { current.profile.blockedFailure = { revision, key, detail: clean.error }; await saveAppProfile(projectId, current.profile, branch); }
-      return { up: false, steps, error: clean.error };
+      pendingFailure = replayFailure ?? {id:"clean-checkout",phase:"install",command:"prepare clean replay",label:"Prepare clean replay",status:"failed",error:clean.error};
+      plog(projectId,userId,"Clean replay failed — returning the failed step and error to recovery",{detail:clean.error});
+      continue;
     } finally {
       executionDir = dir;
       // Stop only the scratch app, then remove only our generated checkout.
@@ -1451,7 +1494,6 @@ async function executeRunbook(
     plog(projectId, userId, "Clean replay passed — restarting from the saved plan in the selected checkout.");
     steps = [...prelude, recovery, clean, ...buildRunbook(manifest, engines, dir)];
   }
-  return { up: false, steps, error: "Replay failed" };
 }
 const driverFailures = new Map<string, string>();
 
@@ -1475,6 +1517,35 @@ lines = [line for line in open(path).read().splitlines() if line.split("=", 1)[0
 with open(path, "w") as f: f.write("\\n".join(lines + list(values.values())) + "\\n")
 PYEOF`, 30_000);
   if (r.exitCode !== 0) throw new Error("Could not apply branch environment overrides");
+}
+
+/** Normalize recorded edits against the same baseline used by clean replay. */
+async function saveConsolidatedPatches(projectId:string,userId:string,workspaceId:string,branch:string,dir:string,engines:EngineHandle[] | undefined, extra?:NonNullable<AppProfile["configPatches"]>[number]) {
+  if (!engines) {
+    const rows = await db.select().from(projectDatabases).where(and(eq(projectDatabases.projectId, projectId), eq(projectDatabases.workspaceId, workspaceId)));
+    engines = rows.filter(r => r.host && r.port && r.username && r.passwordEncrypted).map(r => ({engine:r.engine as DbEngine,host:r.host!,port:r.port!,username:r.username!,password:decryptSecret(r.passwordEncrypted!),dbName:r.dbName ?? "",connectionString:""}));
+  }
+  const loaded=await loadAppProfile(projectId,branch);
+  if(!loaded) throw new Error("No profile available to save preview repairs");
+  const patches=[...(loaded.profile.configPatches??[]),...(extra?[extra]:[])];
+  if(!patches.length) return;
+  const clean=`/data/patch-normalize-${crypto.randomUUID()}`;
+  try {
+    const created=await sh(workspaceId,`git -C ${shellQuote(dir)} worktree add --detach ${shellQuote(clean)} HEAD`,60000);
+    if(created.exitCode!==0) throw new Error("Cannot create patch normalization checkout");
+    const rewrite=branch==="default"?buildAppsettingsRewriteScript(engines,clean):"";
+    if(rewrite) { const r=await sh(workspaceId,rewrite,60000); if(r.exitCode!==0) throw new Error("Cannot prepare patch baseline"); }
+    const captured=await sh(workspaceId,consolidatePatchScript(patches,clean,dir),60000);
+    if(captured.exitCode!==0) throw new Error(failureSummary(captured.output));
+    const candidate=appProfileSchema.shape.configPatches.parse(JSON.parse(captured.output))??[];
+    const verify=async(target:string)=>{ const script=buildConfigPatchScript(candidate,target,true); if(!script)return; const r=await sh(workspaceId,script,60000); if(r.exitCode!==0)throw new Error(failureSummary(r.output)); };
+    await replaceVerifiedPatches(candidate,{verifyClean:()=>verify(clean),verifyCurrent:()=>verify(dir),save:async()=>{
+      loaded.profile.configPatches=candidate;
+      delete loaded.profile.verifiedRevision; delete loaded.profile.blockedFailure;
+      await saveAppProfile(projectId,loaded.profile,branch);
+    }});
+    plog(projectId,userId,`Saved ${candidate.length} consolidated preview repair(s); clean and current files verified`);
+  } finally { await sh(workspaceId,`git -C ${shellQuote(dir)} worktree remove --force ${shellQuote(clean)}`,30000).catch(()=>{}); }
 }
 
 async function applySavedPatches(projectId: string, userId: string, workspaceId: string, profile: AppProfile, dir: string) {
@@ -1833,7 +1904,7 @@ PERSISTING WHAT YOU LEARN (so the next run doesn't repeat your work):
 - Each \`run\` command starts a FRESH shell, so a bare \`export FOO=bar\` does NOT carry to the next command. For an environment fix that must stick (an env var, a cert/CA path, a package source), call the \`setEnv\` tool — it stores the var on the project (encrypted) AND writes it into .env now, so it is re-applied on every future setup and SURVIVES a VM rebuild. (Appending to ./.env only lasts while this VM lives — if the VM is recreated you'd have to rediscover the fix.)
 - When you discover the PLAN itself was wrong and found what works — a different toolchain install, install/build/run command, startup project, or port — call \`updatePlan\` to persist the corrected value. Do this AFTER you've confirmed the new command works. This is how the checklist self-heals: the next preview run skips straight to the working commands. IMPORTANT: in a build/run command you persist, use paths RELATIVE to the working dir (e.g. \`Cohire.Web/wwwroot/CohireFiles\`), NOT absolute \`${PROJECT_DIR}/...\` — the same command is later run in FEATURE-BRANCH worktrees, and a hardcoded ${PROJECT_DIR} path would touch main instead of the worktree.
 - When you learn a FACT that no plan field captures — a schema/ordering rule (migration MUST run before a SQL script), a missing client (\`sqlcmd\` isn't installed → use \`docker exec\`), a config gotcha — call \`noteLearning\` so the next run and every feature branch see it up front. Record it the moment you learn it; this is what stops the "figure the same thing out for 2 hours every run" loop.
-- When you EDIT A CONFIG FILE for the app to run (e.g. repoint a connection string in appsettings.json from a dead dev/prod host to the provisioned localhost DB, or a Serilog sink connection the app reads from the file), use \`persistConfigPatch\` — NOT a bare sed/echo. A plain edit is a change to a TRACKED file, so a git branch switch / fresh checkout / rebuild RESETS it and the app breaks again; persistConfigPatch re-applies it automatically after every checkout, so branches and rebuilds inherit it. (Env fixes → setEnv; tracked-file config fixes → persistConfigPatch.)
+- When you EDIT A SOURCE OR CONFIG FILE for the app to run (e.g. repoint a connection string in appsettings.json from a dead dev/prod host to the provisioned localhost DB, or a Serilog sink connection the app reads from the file), use \`persistConfigPatch\` — NOT a bare sed/echo. A plain edit is a change to a TRACKED file, so a git branch switch / fresh checkout / rebuild RESETS it and the app breaks again; persistConfigPatch re-applies it automatically after every checkout, so branches and rebuilds inherit it. (Env fixes → setEnv; tracked-file config fixes → persistConfigPatch.)
 
 RUNNING COMMANDS — IMPORTANT:
 - The \`run\` tool already runs each command DETACHED and polls it to completion, so restore/build/install take as long as they need — you do NOT need to background them, add \`&\`, nohup, or your own timeout wrapper. Just run the plain command (e.g. \`dotnet build Cohire.sln -c Release\`).
@@ -1846,7 +1917,7 @@ RUNNING COMMANDS — IMPORTANT:
   This avoids the wasteful "run → vague failure → re-run to see the error" cycle.
 
 RULES:
-- Source repairs are allowed ONLY in an isolated feature-branch worktree (not /data/project). Keep them minimal and persist each literal edit with persistConfigPatch in that branch profile so checkout replay reproduces it. Never commit/push/merge automatically. On the default checkout, finish failed with the exact source blocker. Never disable migrations, suppress PendingModelChangesWarning, or mark unapplied migrations as applied; repair and validate the model/migration instead.
+- SQL schema/seed scripts may be repaired as saved preview patches on the default checkout too; inspect dependencies and identity handling, preserve the original schema using resetDevelopmentDatabase before a destructive reset, and persist executable fixes via persistConfigPatch plus ordered schemaSteps. Inspect scripts before execution and never hide database drops inside scripts to bypass the backup tool. Do not treat noteLearning or a successful second run on a partially seeded DB as a fix. ${PREVIEW_SOURCE_POLICY} Never disable migrations, suppress PendingModelChangesWarning, or mark unapplied migrations as applied; repair and validate the model/migration instead.
 - When a command genuinely fails (a real non-zero exit with an error), read the error and fix the ENVIRONMENT, then continue. Keep going until the app responds or it truly cannot run — do not give up after one failed attempt.
 - One command per \`run\` call. Never print secrets.`;
 }
@@ -1938,7 +2009,81 @@ async function driveSandbox(
   const directives = (await loadAppProfile(projectId, profileBranch).catch(() => null))?.profile.directives ?? [];
 
   const failedCommands = new Set<string>();
+  const resets = new Set<string>();
+  const reconcilePatches = async (patches: NonNullable<AppProfile["configPatches"]>, reason: string) => {
+    const check = async (target: string) => {
+      const script = buildConfigPatchScript(patches, target, true);
+      if (!script) return;
+      const result = await sh(workspaceId, script, 60_000);
+      if (result.exitCode !== 0) throw new Error(failureSummary(result.output));
+    };
+    await replaceVerifiedPatches(patches, {
+      verifyClean: async () => {
+        const clean = `/data/patch-check-${crypto.randomUUID()}`;
+        try {
+          const created = await sh(workspaceId, `git -C ${shellQuote(workDir)} worktree add --detach ${shellQuote(clean)} HEAD`, 60_000);
+          if (created.exitCode !== 0) throw new Error("Cannot create patch verification checkout");
+          const rewrite = profileBranch === "default" ? buildAppsettingsRewriteScript(engines, clean) : "";
+          if (rewrite) {
+            const result = await sh(workspaceId, rewrite, 60_000);
+            if (result.exitCode !== 0) throw new Error("Cannot prepare clean configuration");
+          }
+          await check(clean);
+        } finally {
+          await sh(workspaceId, `git -C ${shellQuote(workDir)} worktree remove --force ${shellQuote(clean)}`, 30_000).catch(() => {});
+        }
+      },
+      verifyCurrent: async () => check(workDir),
+      save: async () => {
+        const loaded = await loadAppProfile(projectId, profileBranch);
+        if (!loaded) throw new Error("Profile disappeared during patch repair");
+        loaded.profile.configPatches = patches;
+        delete loaded.profile.blockedFailure; delete loaded.profile.verifiedRevision;
+        await saveAppProfile(projectId, loaded.profile, profileBranch);
+        await applySavedPatches(projectId, userId, workspaceId, loaded.profile, workDir);
+      },
+    });
+    plog(projectId, userId, "Replaced stale patch recipe; current and clean checkouts verified", {detail:reason});
+    return "Replacement saved. Full clean replay must still pass before preview is ready.";
+  };
   const tools = {
+    inspectSavedPatches: tool({
+      description: "Read this branch's saved patch list before repairing a stale patch. Compare it with the actual file; do not append a replacement behind an obsolete patch.",
+      inputSchema: zodSchema(z.object({})),
+      execute: async () => (await loadAppProfile(projectId, profileBranch))?.profile.configPatches ?? [],
+    }),
+    replaceSavedPatches: tool({
+      description: "Replace the FULL saved patch list after inspecting the current file and clean baseline. Preserve unrelated valid patches, retire obsolete ones with a reason, and consolidate to one patch per file. Include unchanged context for deletions. Both current and clean checkouts must verify before saving. An empty list explicitly retires all patches; full app validation still follows.",
+      inputSchema: zodSchema(z.object({patches:appProfileSchema.shape.configPatches.unwrap(),reason:z.string().min(1)})),
+      execute: async ({patches,reason}) => { try { return await reconcilePatches(patches,reason); } catch(e) { return `Patch replacement rejected: ${(e as Error).message}`; } },
+    }),
+    resetDevelopmentDatabase: tool({
+      description: "Back up and reset one managed local SQL Server development database when schema repair needs a clean replay. Specify its active .env connection key and exact database. Saves full schema+data backup plus original tracked source, verifies backup, persists location, then resets. External connections and system databases are refused. At most once per database per recovery. Afterward fix and persist SQL scripts/ordered schemaSteps, then replay the entire schema; do not mark success on a partially repaired database.",
+      inputSchema:zodSchema(z.object({database:z.string(),connectionKey:z.string(),reason:z.string().min(1)})),
+      execute: async ({database,connectionKey,reason}) => {
+        if(resets.has(database)) return "Database reset already attempted in this recovery; stop repeating it and repair the recipe.";
+        const engine = engines.find(e=>e.engine==="mssql");
+        if(!engine) return "No managed SQL Server engine available; automatic reset refused.";
+        try {
+          const id=crypto.randomUUID();
+          const scripts=databaseRecoveryScripts({engine,database,connectionKey,dir:workDir,backupId:id});
+          resets.add(database);
+          await backupThenReset({
+            backup:()=>runDetachedPolled(projectId,userId,workspaceId,scripts.backup,600_000,{stallMs:0,workDir}),
+            record:async()=>{
+              throwIfCancelled(projectId);
+              const loaded=await loadAppProfile(projectId,profileBranch);
+              if(!loaded) throw new Error("Cannot save backup location; reset blocked");
+              loaded.profile.recoveryBackups=[...(loaded.profile.recoveryBackups??[]),{id,workspaceId,database,connectionKey,path:scripts.path,createdAt:new Date().toISOString(),reason}];
+              await saveAppProfile(projectId,loaded.profile,profileBranch);
+              plog(projectId,userId,`Verified original schema and data backup: ${scripts.path}`,{detail:reason});
+            },
+            reset:async()=>{throwIfCancelled(projectId);return runDetachedPolled(projectId,userId,workspaceId,scripts.reset,180_000,{stallMs:0,workDir});},
+          });
+          return `Database reset. Original schema+data: ${scripts.path}/database.bak; source: ${scripts.path}/source.tar. Fix and persist the schema recipe, then replay it from the beginning.`;
+        } catch(e) { return `Database recovery blocked: ${(e as Error).message}`; }
+      },
+    }),
     run: tool({
       description: "Run one shell command in the Alpine sandbox (bash). The toolchain PATH, /data caches, and the project's .env are already set up. The command runs to completion no matter how long it takes (build/restore are fine) — we run it detached and poll, so you don't need to background it yourself. Returns exit code + combined stdout/stderr (last 6KB). exitCode -2 = terminated at the deadline; diagnose before retrying. exitCode -4 = we KILLED it because it produced no output for ~4 min (stuck, e.g. a hung network/TLS op) — do NOT re-run the same command, change the approach.",
       inputSchema: zodSchema(z.object({
@@ -1946,6 +2091,8 @@ async function driveSandbox(
         timeoutSec: z.number().optional().describe("How long to wait for THIS command before returning control (default 600, max 1800). For a big restore/build use ~1500. A timeout terminates the process before returning; do not launch duplicate work."),
       })),
       execute: async ({ command, timeoutSec }: { command: string; timeoutSec?: number }) => {
+        if (previewPublicationBlocked(command)) return {exitCode:1,output:"Preview repairs must never be checked in or pushed. Save the repair with persistConfigPatch instead."};
+        if (/\bDROP\s+DATABASE\b|\bdropdb\b/i.test(command)) return {exitCode:1,output:"Direct database drops are blocked. Use resetDevelopmentDatabase so a verified original backup is saved first."};
         const state = await sh(workspaceId, `cd ${shellQuote(workDir)} && { git diff HEAD; sha256sum .env 2>/dev/null; } | sha256sum`, 15_000);
         const commandKey = command + state.output.trim();
         if (failedCommands.has(commandKey)) return { exitCode: 1, output: "This exact command already failed with the same source/environment. Change the repair before retrying; no duplicate command was started." };
@@ -1972,8 +2119,12 @@ async function driveSandbox(
       execute: async ({ field, value, reason }: { field: string; value: string; reason: string }) => {
         if (field === "toolchain") manifest.toolchain = value.split("\n").map((s) => s.trim()).filter(Boolean);
         else if (field === "port") { const p = parseInt(value, 10); if (p > 0) manifest.port = p; }
-        else if (field === "configPatches") { appProfileSchema.shape.configPatches.parse(JSON.parse(value)); }
-        else if (field === "schemaSteps") manifest.schemaSteps = z.array(schemaStepSchema).parse(JSON.parse(value));
+        else if (field === "configPatches") { return await reconcilePatches(appProfileSchema.shape.configPatches.parse(JSON.parse(value)) ?? [], reason); }
+        else if (field === "schemaSteps") {
+          const next=z.array(schemaStepSchema).parse(JSON.parse(value));
+          try { validateSchemaTargets(next,manifest.databases); } catch(error) { return (error as Error).message; }
+          manifest.schemaSteps=next;
+        }
         else if (field === "replayActions") manifest.replayActions = z.array(replayActionSchema).parse(JSON.parse(value));
         else if (field === "verificationPaths") manifest.verificationPaths = z.array(z.string().regex(/^\/(?!\/)/)).parse(JSON.parse(value));
         else (manifest as any)[field] = value;
@@ -2011,20 +2162,21 @@ async function driveSandbox(
       },
     }),
     persistConfigPatch: tool({
-      description: "Persist an edit to a CONFIG FILE so it SURVIVES a git branch switch, a fresh checkout, and a rebuild (like setEnv does for env vars, but for a tracked file that a checkout would otherwise reset). On isolated branches this also records minimal SOURCE repairs. Use this whenever you edit a file for the app to RUN in the sandbox: e.g. repoint a connection string in appsettings.json from a dead dev/prod host to the provisioned localhost DB, or a Serilog sink connection that the app reads from the file. Give the EXACT literal text to find + its replacement. It's applied NOW and auto-re-applied after every future checkout/branch-switch, so branches and rebuilds never rediscover it.",
+      description: "Persist an edit to a CONFIG FILE so it SURVIVES a git branch switch, a fresh checkout, and a rebuild (like setEnv does for env vars, but for a tracked file that a checkout would otherwise reset). This also records minimal SOURCE repairs on default and ticket previews; never commit these repairs. Use this whenever you edit a file for the app to RUN in the sandbox: e.g. repoint a connection string in appsettings.json from a dead dev/prod host to the provisioned localhost DB, or a Serilog sink connection that the app reads from the file. Give the EXACT literal text to find + its replacement. It's applied NOW and auto-re-applied after every future checkout/branch-switch, so branches and rebuilds never rediscover it.",
       inputSchema: zodSchema(z.object({
         file: z.string().describe("Path relative to the working dir, e.g. 'Cohire.Web/appsettings.json'."),
         find: z.string().describe("EXACT literal substring currently in the file to replace (copy it verbatim)."),
         replace: z.string().describe("The replacement text."),
         reason: z.string().optional(),
-        create: z.boolean().optional().describe("Create a new file, only on an isolated branch; find must be empty."),
+        create: z.boolean().optional().describe("Create a sandbox-only file; find must be empty."),
       })),
       execute: async ({ file, find, replace, reason, create }: { file: string; find: string; replace: string; reason?: string; create?: boolean }) => {
-        if (workDir === PROJECT_DIR && /\.(cs|cshtml|tsx?|jsx?|py|go|rs|java)$/i.test(file)) return "Source repairs require an isolated feature-branch checkout.";
-        if (create && workDir === PROJECT_DIR) return "Creating source files requires an isolated branch";
         const script = buildConfigPatchScript([{ file, find, replace, create }], workDir);
         if (script) { const r = await sh(workspaceId, script, 30_000); if (r.exitCode !== 0) return `Patch failed: ${failureSummary(r.output)}`; }
-        const ok = await recordConfigPatch(projectId, { file, find, replace, note: reason, create }, profileBranch).catch(() => false);
+        try {
+        await saveConsolidatedPatches(projectId,userId,workspaceId,profileBranch,workDir,engines,{file,find,replace,note:reason,create});
+        } catch (error) { return `Repair applied locally but NOT saved: ${(error as Error).message}. Reconcile the saved patches before reporting ready.`; }
+        const ok = true;
         plog(projectId, userId, `Persisted config patch to ${file}`, { detail: reason });
         return ok ? "applied + persisted — it re-applies after every checkout/branch-switch." : "applied now, but couldn't persist (no profile yet).";
       },
@@ -2093,7 +2245,7 @@ async function driveSandbox(
       tools,
       stopWhen: stepCountIs(40), // generous step budget — schema-heavy apps (30+ scripts) need room to repair AND start
       system: buildDriverSystemPrompt(manifest, engines, workDir, configNotes, directives),
-      prompt: `Profile scope: ${profileBranch}. schemaSteps/replayActions/verificationPaths corrections must be JSON arrays. Persist every repair; do not use unrecorded shell workarounds. Bring the app up and verify it serves on 0.0.0.0:${port} (working dir: ${workDir}). Begin.`,
+      prompt: `Profile scope: ${profileBranch}. schemaSteps/replayActions/verificationPaths corrections must be JSON arrays. Persist every repair; do not use unrecorded shell workarounds. Database drops must use resetDevelopmentDatabase so the original schema and data are backed up first. Repair schema script ordering and identity inserts at their source using saved patches; never rely on rerunning a partially failed script until it works. Never commit or push to main from preview recovery. Bring the app up and verify it serves on 0.0.0.0:${port} (working dir: ${workDir}). Begin.`,
       abortSignal: ac.signal,
     });
   } catch (e) {
@@ -2242,6 +2394,7 @@ export async function runPreviewChat(opts: {
         timeoutSec: z.number().optional().describe("Seconds to wait before returning control (default 600, max 1800)."),
       })),
       execute: async ({ command, timeoutSec }: { command: string; timeoutSec?: number }) => {
+        if (previewPublicationBlocked(command)) return {exitCode:1,output:"Preview repairs must never be checked in or pushed. Save the repair with persistConfigPatch instead."};
         opts.onActivity?.(); // proof-of-life for the caller's idle watchdog (each command = alive)
         const maxMs = Math.min(Math.max(timeoutSec ?? 600, 10), 1800) * 1000;
         plog(projectId, userId, `$ ${command}`);
@@ -2308,14 +2461,15 @@ export async function runPreviewChat(opts: {
       },
     }),
     persistConfigPatch: tool({
-      description: "Persist a CONFIG-FILE edit so it SURVIVES a git branch switch / fresh checkout / rebuild (like setEnv for env vars, but for a tracked file). Use whenever you must edit a config file (NOT app source) for the app to RUN — e.g. repoint an appsettings.json connection from a dead host to the provisioned localhost DB. Exact literal find + replace. Applied now AND re-applied after every future checkout, so branches inherit it.",
+      description: "Persist a CONFIG-FILE edit so it SURVIVES a git branch switch / fresh checkout / rebuild (like setEnv for env vars, but for a tracked file). Use whenever you must edit a config or source file for the app to RUN — e.g. repoint an appsettings.json connection from a dead host to the provisioned localhost DB. Exact literal find + replace. Applied now AND re-applied after every future checkout, so branches inherit it.",
       inputSchema: zodSchema(z.object({ file: z.string(), find: z.string(), replace: z.string(), reason: z.string().optional(), create: z.boolean().optional() })),
       execute: async ({ file, find, replace, reason, create }: { file: string; find: string; replace: string; reason?: string; create?: boolean }) => {
-        if (workDir === PROJECT_DIR && /\.(cs|cshtml|tsx?|jsx?|py|go|rs|java)$/i.test(file)) return "Source repairs require an isolated feature-branch checkout.";
-        if (create && workDir === PROJECT_DIR) return "Creating source files requires an isolated branch";
         const script = buildConfigPatchScript([{ file, find, replace, create }], workDir);
         if (script) { const applied = await sh(workspaceId, script, 30_000); if (applied.exitCode !== 0) return `Patch failed: ${failureSummary(applied.output)}`; }
-        const ok = await recordConfigPatch(projectId, { file, find, replace, note: reason, create }, profileBranch).catch(() => false);
+        try {
+        await saveConsolidatedPatches(projectId,userId,workspaceId,profileBranch,workDir,undefined,{file,find,replace,note:reason,create});
+        } catch (error) { return `Repair applied locally but NOT saved: ${(error as Error).message}. Reconcile the saved patches before reporting ready.`; }
+        const ok = true;
         plog(projectId, userId, `Persisted config patch to ${file}`, { detail: reason });
         return ok ? "applied + persisted — re-applies after every checkout/branch-switch." : "applied now (no profile to persist to yet).";
       },
@@ -2354,11 +2508,7 @@ export async function runPreviewChat(opts: {
     : "";
   const system = `You are the LFG **Preview agent** for this project. You have FULL shell control of the project's LIVE Alpine sandbox (musl, apk, OpenRC/rc-service, busybox — Docker is available) via the \`run\` tool: one command per call, run detached + polled so long commands are fine. You are working in **${branchNote}** at ${workDir}; its .env is sourced before every command; the toolchain + /data caches are already on PATH.
 
-CODE CHANGES: ${canEditCode
-    ? (noCommit
-      ? `You ARE previewing a ticket's isolated feature branch (worktree at ${workDir}), so you MAY edit the app's SOURCE CODE here to fix the issue so the LIVE preview renders correctly. After editing: rebuild if it's a compiled stack (${manifest?.buildCmd || "the project's build command"}), restart the app (see below), and verify with curl. **DO NOT run git commit, git push, git merge, or git checkout of another branch** — this fix is for the live preview only; the user decides whether to persist it. In your reply, list exactly which files you changed so they can persist it if they want.`
-      : `You ARE previewing a ticket's isolated feature branch (worktree at ${workDir}), so you MAY edit the app's SOURCE CODE here to fulfil the request (e.g. fix a .cshtml/CSS/JS UI issue). After editing: rebuild if it's a compiled stack (${manifest?.buildCmd || "the project's build command"}), restart the app (see below), verify with curl, and then COMMIT so the change persists on the branch: \`cd ${workDir} && git add -A && git commit -m "preview: <what you changed>" && git push 2>&1 || true\`. Tell the user in your reply exactly which files you changed.`)
-    : `You are previewing the DEFAULT branch (${PROJECT_DIR}). Do NOT edit application SOURCE CODE here — code changes belong in a ticket/build, not on main. If the user asks for a code/UI change, say so in your reply and suggest they create/rebuild a ticket, or preview the ticket's branch (pick it in the branch selector) and ask again there.`}
+CODE CHANGES: ${PREVIEW_SOURCE_POLICY}
 
 ${manifest ? `${svcs.length > 1 ? "PRIMARY app" : "App"}: ${manifest.stack || `${manifest.runtime}/${manifest.framework}`}. Run command: \`${runCmd || "(unknown)"}\`. Port: ${port}. Databases: ${manifest.databases.length ? manifest.databases.map((d) => `${d.engine} (127.0.0.1, connection in .env as ${d.connectionEnvVar})`).join(", ") : "none"}.` : "This preview has not been fully set up yet — the app may not be running."}
 ${servicesBlock}
@@ -2380,10 +2530,10 @@ PERSIST YOUR FIXES (critical — otherwise they're lost and branches don't get t
 - When you fix something with an ENV var (a cert/CA path, ASPNETCORE_FORWARDEDHEADERS_ENABLED for a reverse-proxy/HTTPS asset issue, a base URL, a runtime flag), call \`setEnv\` — do NOT just \`echo >> .env\`. setEnv records it on the project so EVERY future setup AND every ticket branch inherits it. An echo-only fix works for this one live app and then vanishes.
 - When you find a plan command was wrong and confirm the right one, call \`updatePlan\`.
 - When you learn a FACT no field captures (a schema/ordering rule, a missing client like sqlcmd, a config gotcha), call \`noteLearning\` so the next run + branches see it.
-- When you EDIT A CONFIG FILE for the app to run (repoint an appsettings.json connection off a dead host, fix a Serilog sink connection), use \`persistConfigPatch\` — a bare edit is reset by a branch switch / checkout; persistConfigPatch re-applies it after every checkout so branches inherit it.
-- This is exactly how a fix you make on main automatically reaches the feature branches.
+- When you EDIT A SOURCE OR CONFIG FILE for the app to run (repoint an appsettings.json connection off a dead host, fix a Serilog sink connection), use \`persistConfigPatch\` — a bare edit is reset by a branch switch / checkout; persistConfigPatch re-applies it after every checkout so branches inherit it.
+- General rules are remembered via directives; literal patches stay branch-scoped and must be verified against each checkout.
 
-RULES: source-code edits follow the CODE CHANGES policy above (allowed only on a ticket branch). Installing tools/deps, editing ./.env and config is fine when asked. Verify with real commands — never claim success without checking. When finished, ALWAYS call \`reply\` with status (ok/error/stuck) + a short summary of what you found/did (and whether you persisted/committed it). Never print secrets.`;
+RULES: source-code edits follow the CODE CHANGES policy above (sandbox-only on default and ticket previews; never checked in). Installing tools/deps, editing ./.env and config is fine when asked. Verify with real commands — never claim success without checking. When finished, ALWAYS call \`reply\` with status (ok/error/stuck) + a short summary of what you found/did (and whether you persisted/committed it). Never print secrets.`;
 
   try {
     await generateText({ model: driver.model, tools, stopWhen: stepCountIs(40), system, prompt: agentPrompt, abortSignal, onStepFinish: () => opts.onActivity?.() });

@@ -197,7 +197,7 @@ export async function execOnWorkspace(
       const resp = await fetch(url, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ command }),
+        body: JSON.stringify({ command, timeout: Math.ceil(timeout / 1000) }),
         signal: ctrl.signal,
       });
       const json = (await resp.json().catch(() => ({}))) as { exit_code?: number; stdout?: string; stderr?: string; message?: string; error?: string };
@@ -314,7 +314,7 @@ export async function setStableUrl(
       await magsApi("PUT", `/api/v2/mags-url-aliases/${encodeURIComponent(subdomain)}`, body);
     } catch {
       await magsApi("DELETE", `/api/v2/mags-url-aliases/${encodeURIComponent(subdomain)}`).catch(() => {});
-      await create().catch((e2) => console.warn(`[mags] re-register alias ${subdomain} failed: ${(e2 as Error).message?.slice(0, 120)}`));
+      await create();
     }
   }
   return `https://${subdomain}.${appDomain}`;

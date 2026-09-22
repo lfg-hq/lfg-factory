@@ -1,0 +1,10 @@
+/** Known broken download aliases only; preserve every surrounding recipe command. */
+export const SQLCMD_RELEASE = "https://github.com/microsoft/go-sqlcmd/releases/download/v1.10.0";
+// The aka.ms aliases return an HTTP-200 HTML search page, so curl --fail accepts them.
+// Preserve shell architecture expansion, quotes, redirects and extraction flags.
+const brokenSqlcmdUrl = /https:\/\/aka\.ms\/sqlcmd-linux-(amd64|arm64|\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*)(?:\.tar\.bz2)?(?=[\s"';|&)\x60]|$)/g;
+export function repairToolDownloadUrls(command: string): string {
+  return command.replace(brokenSqlcmdUrl, (_, arch: string) => `${SQLCMD_RELEASE}/sqlcmd-linux-${arch}.tar.bz2`);
+}
+export const TOOL_DOWNLOAD_GUIDANCE = `For downloaded tools, verify the actual release asset URL, HTTP status, content type, archive integrity and the installed executable. HTTP 200 alone does not establish that a download is a binary: invalid aliases can return HTML. Use curl --fail --location --silent --show-error with connection/runtime limits and bounded retries; download to a temporary file, verify the archive before extraction, then check the executable before reporting success. Never pipe an unverified download into a shell or tar. Do not print response bodies that may contain credentials.
+For sqlcmd on Alpine Linux, never use aka.ms/sqlcmd-linux-* (these aliases return HTML). Official pinned assets are ${SQLCMD_RELEASE}/sqlcmd-linux-amd64.tar.bz2 and ${SQLCMD_RELEASE}/sqlcmd-linux-arm64.tar.bz2. Choose the actual uname -m architecture, use tar -tjf to verify and tar -xjf to extract the bzip2 archive, and verify sqlcmd -? before reuse or installation success. Preserve requested version constraints; these assets are version 1.10.0. If only managed SQL script execution needs sqlcmd, prefer the existing SQL Server container's /opt/mssql-tools18/bin/sqlcmd (or /opt/mssql-tools/bin/sqlcmd) through the server's SQL-step executor instead of an unnecessary host install. Do not drop commands needed by explicit tests or migrations.`;

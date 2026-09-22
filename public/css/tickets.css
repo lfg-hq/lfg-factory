@@ -2035,14 +2035,14 @@
     padding-bottom: 1rem;
     flex: 1;
     min-height: 0;
-    /* Hide scrollbar */
-    scrollbar-width: none;
-    -ms-overflow-style: none;
+    scrollbar-width: auto;
+    scrollbar-color: #94a3b8 transparent;
 }
 
-.kanban-board::-webkit-scrollbar {
-    display: none;
-}
+.kanban-board::-webkit-scrollbar { height: 12px; }
+.kanban-board::-webkit-scrollbar-track { background: rgba(148,163,184,.12); border-radius: 8px; }
+.kanban-board::-webkit-scrollbar-thumb { background: #94a3b8; border: 2px solid transparent; background-clip: padding-box; border-radius: 8px; }
+.kanban-board::-webkit-scrollbar-thumb:hover { background-color: #64748b; }
 
 .kanban-column {
     flex: 1 1 280px;

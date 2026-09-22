@@ -1,5 +1,6 @@
 import { currentUsage } from "../ai/usage-context.ts";
 import { registerUsageOutput } from "./usage-cli.ts";
+import {piTerminationScript, missingPiExitReason} from './pi-termination.ts';
 /**
  * Pi coding-agent runner (pi.dev) — in-sandbox builder for non-Anthropic models.
  *
@@ -21,6 +22,11 @@ import { execOnWorkspace, findJob, syncWorkspaceClock } from "./mags.ts";
 async function execLite(workspaceId: string, script: string, timeout = 15_000) {
   const b64 = Buffer.from(script).toString("base64");
   return execOnWorkspace(workspaceId, `echo ${b64} | base64 -d | bash`, { timeout });
+}
+
+async function stopPiAttempt(workspaceId:string,pid:string) {
+  const result=await execLite(workspaceId,piTerminationScript(pid),15_000);
+  if(result.exitCode!==0)throw new Error('Could not confirm Pi process cleanup; retry must inspect the prior attempt before starting more work.');
 }
 
 // Project lives on the big /data volume (7.8GB), not /root (1.9GB) — avoids ENOSPC.
@@ -144,6 +150,8 @@ export interface PiRunOptions {
   oauthAccessToken?: string;
   envVars?: Record<string, string>; // app env vars to expose to the build
   outputFile?: string;
+  controlDir?: "/data/.pi" | "/tmp/lfg-pi-recovery";
+  rpc?: {fifo:string;sessionFile:string;extensionSource:string};
   /** When set, an in-VM forwarder streams Pi's JSONL to LFG in real time (webhook
    *  push) instead of the server polling the VM. mode="instant" POSTs compact
    *  tool-call ops to /instant-progress (appId); mode="ticket" POSTs raw JSONL to
@@ -287,8 +295,8 @@ export async function startPiCli(opts: PiRunOptions): Promise<PiRunResult> {
   // RAM-backed tmpfs (~2GB) — after many builds it fills with leftover pi_* files, and
   // then Pi's `> /tmp/pi_output` write SILENTLY FAILS (no space), leaving an empty output
   // and a runner that never starts → "Pi produced no files (no tool calls)" forever.
-  // /data is a real 8GB disk that we also clean per build.
-  const PI_DIR = "/data/.pi";
+  // Runtime recovery opts into /tmp so it can repair a full /data filesystem.
+  const PI_DIR = opts.controlDir ?? "/data/.pi";
   const outputFile = opts.outputFile ?? `${PI_DIR}/pi_output_${ts}.jsonl`;
   await registerUsageOutput(opts.workspaceId, outputFile);
   const promptFile = `${PI_DIR}/pi_prompt_${ts}.txt`;
@@ -433,8 +441,13 @@ echo '${modelsB64}' | base64 -d > /root/.pi/agent/models.json`;
   // Pi launch line. When forwarding, pipe the JSON stream through tee (→ outputFile, so
   // the completion/analysis poll still works) AND the forwarder (→ live ops). Use bash
   // PIPESTATUS[0] to recover Pi's real exit code from the pipeline.
-  const piRun = `pi -p --provider ${cfg.piName} --model ${opts.modelId} --mode json "\${PI_AUTH_ARGS[@]}" "$(cat ${promptFile})"`;
-  const piLaunch = opts.forward
+  const rpc=opts.rpc;
+  if(rpc && ![rpc.fifo,rpc.sessionFile].every(p=>/^\/tmp\/lfg-pi-recovery\/[a-f0-9-]+\/[a-z.]+$/.test(p)))throw new Error('Invalid runtime session path');
+  const extensionFile=`${PI_DIR}/pi_policy_${ts}.mjs`;
+  const piRun = rpc
+    ? `pi --provider ${cfg.piName} --model ${opts.modelId} --mode rpc --session '${rpc.sessionFile}' --extension ${extensionFile} "\${PI_AUTH_ARGS[@]}" < '${rpc.fifo}'`
+    : `pi -p --provider ${cfg.piName} --model ${opts.modelId} --mode json "\${PI_AUTH_ARGS[@]}" "$(cat ${promptFile})"`;
+  const piLaunch = rpc ? `exec 3<> '${rpc.fifo}'\n${piRun} >> ${outputFile} 2>&1\nPI_EXIT=\$?` : opts.forward
     ? `${piRun} 2>&1 | tee -a ${outputFile} | node ${forwarderFile}\nPI_EXIT=\${PIPESTATUS[0]}`
     : `${piRun} >> ${outputFile} 2>&1\nPI_EXIT=\$?`;
 
@@ -624,6 +637,9 @@ export PATH=/root/node/current/bin:/root/.npm-global/bin:/usr/local/bin:/usr/bin
 # never accumulates. Also purge leftover pi_* from /tmp (a RAM tmpfs) to reclaim the RAM
 # a prior version leaked there — that full tmpfs is what silently ate Pi's output writes.
 mkdir -p ${PI_DIR}
+${rpc ? `mkdir -p '${rpc.fifo.slice(0,rpc.fifo.lastIndexOf('/'))}'
+test -p '${rpc.fifo}' || mkfifo '${rpc.fifo}'
+echo '${Buffer.from(rpc.extensionSource).toString('base64')}' | base64 -d > ${extensionFile}` : ''}
 find ${PI_DIR} -maxdepth 1 -name 'pi_*' -mmin +30 -delete 2>/dev/null || true
 rm -f /tmp/pi_* /tmp/node22.tar.gz 2>/dev/null || true
 echo '${promptB64}' | base64 -d > ${promptFile}
@@ -931,11 +947,7 @@ export async function streamPiToCompletion(params: {
     // marks the app "stopped" regardless.
     if (shouldCancel?.()) {
       console.log(`[pi-cli] cancel requested — killing Pi in workspace ${workspaceId}`);
-      if (backgroundPid) {
-        await execLite(workspaceId, `pkill -9 -P ${backgroundPid} 2>/dev/null; kill -9 ${backgroundPid} 2>/dev/null; pkill -9 -f 'pip install' 2>/dev/null; true`).catch(() => {});
-      } else {
-        await execLite(workspaceId, `pkill -9 -f '\\bpi\\b' 2>/dev/null; pkill -9 -f 'pip install' 2>/dev/null; true`).catch(() => {});
-      }
+      if (backgroundPid) await stopPiAttempt(workspaceId,String(backgroundPid));
       break;
     }
     // Lightweight status: alive + done marker + last 4KB tail only (NOT the full file).
@@ -1082,6 +1094,12 @@ printf 'TL=%s\\n' "$TL"`;
     if (done || !alive) break;
   }
 
+  const timedOut=Date.now() >= deadline;
+  if((timedOut || stalled || runaway) && backgroundPid) {
+    // Do not launch another repair while this agent's tools are still running.
+    await stopPiAttempt(workspaceId,String(backgroundPid));
+  }
+
   // Final analysis — cheap VM-side grep + a capped tail (256KB, well under the 4MB
   // gRPC cap) for diagnosis. Returns: exit code, fatal verdict, whether Pi did real
   // work (any tool call), tool-call count, and the tail.
@@ -1138,12 +1156,12 @@ printf 'TL=%s\\n' "$TL"`;
       const mem = b64(/MEM=([A-Za-z0-9+/=]*)/).trim();
       const inst = b64(/INST=([A-Za-z0-9+/=]*)/).trim();
       const diag = [
-        "── Pi died without an exit marker (process killed). Diagnostics: ──",
-        oom ? `OOM-killer log:\n${oom}` : "OOM-killer log: (none found — not an OOM kill)",
+        "── Pi has no exit marker. Diagnostics (kernel history may predate this run): ──",
+        oom ? `OOM-killer log:\n${oom}` : "OOM-killer log: no entries available",
         mem ? `Memory (MB):\n${mem}` : "",
         inst ? `npm install log tail:\n${inst}` : "",
       ].filter(Boolean).join("\n");
-      if (oom) { oomKilled = true; fatalError = fatalError ?? "Pi process was OOM-killed (out of memory) — see diagnostics."; }
+      fatalError = fatalError ?? missingPiExitReason(timedOut, oom);
       tail = `${diag}\n\n── output file tail (${tail ? "below" : "EMPTY"}) ──\n${tail}`;
     }
 
@@ -1159,6 +1177,7 @@ printf 'TL=%s\\n' "$TL"`;
 
   // A detected stall is a failure even if Pi did some work earlier — the build
   // never converged. Surface it so the caller marks the ticket failed.
+  if (timedOut && !fatalError) fatalError=missingPiExitReason(true, "");
   if (stalled && !fatalError) {
     fatalError = "agent stalled — repeated the same action for several minutes without progress";
   }

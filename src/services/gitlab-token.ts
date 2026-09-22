@@ -14,26 +14,33 @@ import { env } from "../config/env.ts";
 
 const GITLAB_BASE = (env.GITLAB_BASE_URL || "https://gitlab.com").replace(/\/$/, "");
 
-export async function getValidGitlabToken(userId: string): Promise<string | null> {
+const refreshes = new Map<string, Promise<string | null>>();
+export async function getValidGitlabToken(userId: string, rejectedToken?: string): Promise<string | null> {
+  const active=refreshes.get(userId);if(active)return active;
+  const pending=resolveToken(userId,rejectedToken);refreshes.set(userId,pending);
+  try{return await pending;}finally{if(refreshes.get(userId)===pending)refreshes.delete(userId);}
+}
+async function resolveToken(userId: string, rejectedToken?: string): Promise<string | null> {
   const [row] = await db.select().from(gitlabTokens).where(eq(gitlabTokens.userId, userId));
   if (!row?.accessToken) return null;
 
   const expMs = row.tokenExpiresAt ? new Date(row.tokenExpiresAt as unknown as string).getTime() : 0;
 
   // No expiry recorded (older/long-lived token) → use as-is.
-  if (!expMs) return row.accessToken;
+  if (!expMs && !rejectedToken) return row.accessToken;
   // Still valid for >60s → use as-is.
-  if (expMs - Date.now() > 60_000) return row.accessToken;
+  if (expMs - Date.now() > 60_000 && row.accessToken !== rejectedToken) return row.accessToken;
 
   // Expired / about to expire → refresh.
   if (!row.refreshToken || !env.GITLAB_CLIENT_ID || !env.GITLAB_CLIENT_SECRET) {
-    return row.accessToken; // best effort; may 401 and the caller handles it
+    return null; // Never knowingly reuse an expired or rejected credential.
   }
 
   try {
     const resp = await fetch(`${GITLAB_BASE}/oauth/token`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
+      signal: AbortSignal.timeout(30_000),
       body: JSON.stringify({
         client_id: env.GITLAB_CLIENT_ID,
         client_secret: env.GITLAB_CLIENT_SECRET,
@@ -42,7 +49,7 @@ export async function getValidGitlabToken(userId: string): Promise<string | null
       }),
     });
     if (!resp.ok) {
-      console.error(`[gitlab-token] refresh failed ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
+      console.error(`[gitlab-token] refresh failed: HTTP ${resp.status}`);
       return null; // refresh token likely revoked → user must reconnect
     }
     const data = (await resp.json()) as {

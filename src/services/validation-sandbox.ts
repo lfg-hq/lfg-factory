@@ -11,6 +11,25 @@ export async function validationShell(workspaceId: string, script: string, timeo
   return { exitCode: result.exitCode ?? -1, output: (result.output || "") + (result.stderr ? "\n" + result.stderr : "") };
 }
 
+/** Potentially slow preparation runs once, with the same 30-second polling as builds. */
+export async function validationPreparation(o: {workspaceId:string;script:string;label:string;cancelled?:()=>boolean;onLog?:(message:string)=>void}) {
+  const {runBackgroundCommand}=await import('./background-command.ts');
+  o.onLog?.(`Preparing validation: ${o.label}…`);
+  try {
+    const result=await runBackgroundCommand({workspaceId:o.workspaceId,cwd:'/data',command:`set -e\n${o.script}`,timeoutMs:900_000,cancelled:o.cancelled,
+      // Do not expose arbitrary setup scripts or credential-bearing output in progress logs.
+      log:message=>{
+        const job=message.match(/^Background job ([a-zA-Z0-9-]+) (started|is still running|finished)/);
+        if(job) o.onLog?.(`Background job ${job[1]} ${job[2]}${job[2]==='started' ? '; command: '+o.label : (' ' + (message.match(/\([^)]*\)/)?.[0] || ''))}`);
+      }});
+    if(result.exitCode!==0)throw new Error(`exit ${result.exitCode}: ${result.output.slice(-4000)}`);
+    o.onLog?.(`Validation preparation complete: ${o.label}.`);
+    return result.output.trim();
+  } catch(error) {
+    throw new ValidationFailure(`Validation preparation failed at ${o.label}: ${(error as Error).message}`);
+  }
+}
+
 /** No project lookup: provisioning always targets the caller's exact build workspace. */
 export function environmentScript(root: string, scope: string, databases: AppProfile["databases"]): string {
   if (!/^val-[a-f0-9-]+$/.test(scope)) throw new Error("Invalid validation scope");
@@ -76,9 +95,14 @@ export async function runValidationCommand(o: {
   const {runBackgroundCommand} = await import("./background-command.ts");
   const env = Object.entries(o.vars ?? {}).map(([k,v]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k) ? `export ${k}=${shellQuote(v)}` : "").join("\n");
   return runBackgroundCommand({workspaceId:o.workspaceId,cwd:o.cwd,command:`set -e\n${env}\n${o.command}`,
-    timeoutMs:o.timeoutMs,cancelled:o.cancelled,log:o.log});
+    timeoutMs:o.timeoutMs ?? 300_000,cancelled:o.cancelled,log:o.log,abortOnOutput:validationCommandFailure});
 }
 export function cleanupEnvironmentScript(scope: string, root: string) {
   if (!/^val-[a-f0-9-]+$/.test(scope) || root !== `/data/validation/${scope}`) throw new Error("Invalid validation cleanup scope");
   return `for c in $(docker ps -aq --filter ${shellQuote('label=lfg.validation='+scope)}); do docker rm -fv "$c" >/dev/null 2>&1 || true; done; rm -rf ${shellQuote(root)}`;
+}
+
+/** Stop only explicit terminal restore errors, never warnings or generic error-like output. */
+export function validationCommandFailure(output:string):string|undefined {
+  if(/\berror NU1301\s*:/i.test(output)) return "Dependency restore stopped: NuGet reported NU1301 (unable to load a package source service index). Diagnose package-feed connectivity, DNS, TLS, proxy and credentials before retrying; no more waiting on this failed restore.";
 }

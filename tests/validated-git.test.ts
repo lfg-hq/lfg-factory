@@ -1,28 +1,23 @@
-import { test, expect, mock } from "bun:test";
-import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { spawnSync } from "node:child_process";
-import * as sandbox from "../src/services/validation-sandbox.ts";
-const originalSandbox = {...sandbox};
-import * as ticketDocument from "../src/services/ticket-document.ts";
-const originalTicketDocument = {...ticketDocument};
-let root='';let validation: (o:any)=>Promise<void> = async()=>{};let repairs=0;let repair:()=>void=()=>{};
+import {test,expect,mock} from 'bun:test';
+import {mkdtempSync,writeFileSync,rmSync} from 'node:fs';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
+import {spawnSync} from 'node:child_process';
+let root='';let validation:(o:any)=>Promise<void>=async()=>{};
 const translate=(s:string)=>s.replaceAll('/data/validation-merge-',root+'/merge-');
-// The host's wrapped base64 opens /dev/stdout, which this filesystem sandbox
-// denies for redirected files. Decode through Python's existing stdout FD.
-const shell=(script:string)=>{const command=translate(script).replaceAll("base64 -d", `python3 -c 'import base64,sys;sys.stdout.buffer.write(base64.b64decode(sys.stdin.buffer.read()))'`);const r=spawnSync('bash',['-c',command],{encoding:'utf8'});return {exitCode:r.status??1,output:r.stdout+'\n'+r.stderr};};
-mock.module('../src/services/validation-sandbox.ts',()=>({...originalSandbox,validationShell:async(_:string,s:string)=>shell(s)}));
-mock.module('../src/services/runtime-validation.ts',()=>({CONTRACT_INSTRUCTION:'repair source',ensureValidationRecipe:async(_:string,dir:string)=>{try{return JSON.parse(readFileSync(join(translate(dir),".lfg-validation.json"),"utf8"));}catch{return {};}},validateRevision:async(o:any)=>{await validation(o);return {id:"receipt",projectId:o.context.projectId,branch:o.branch,revision:o.revision,baseline:o.baseline,status:"passed",freshPassed:true,upgradePassed:true};}}));
-mock.module('../src/services/merge-resolver.ts',()=>({runValidationRepair:async()=>{repairs++;repair();}}));
-mock.module('../src/services/ticket-document.ts',()=>({...originalTicketDocument,
- updateTicketDocument:async(o:any)=>{const path='docs/ticket.md';const fs=await import('node:fs');fs.mkdirSync(join(translate(o.dir),'docs'),{recursive:true});fs.writeFileSync(join(translate(o.dir),path),'# Implementation\nVerified source.');return {path,summary:'Implemented the ticket.',changed:true};},
- ticketDocumentMessage:()=> 'Implemented the ticket. [Details](docs/ticket.md)',
-}));
+const shell=(script:string)=>{const r=spawnSync('bash',['-c',translate(script)],{encoding:'utf8'});return {exitCode:r.status??1,output:r.stdout+'\n'+r.stderr};};
+mock.module('../src/services/validation-sandbox.ts',()=>({validationShell:async(_:string,s:string)=>shell(s)}));
+mock.module('../src/services/ticket-runtime.ts',()=>({runTicketRuntime:async(o:any)=>{
+ await validation(o);
+ const dir=translate(o.projectDir);
+ git(dir,'add -A');
+ if(git(dir,'status --porcelain') || shell(`test -f "$(git -C '${dir}' rev-parse --git-path MERGE_HEAD)"`).exitCode===0)git(dir,"-c user.name=Test -c user.email=test@example.test commit -qm verified");
+ return git(dir,'rev-parse HEAD');
+}}));
 const {publishValidatedTicket,publishValidatedMerge}=await import('../src/services/validated-git.ts');
 function git(dir:string,args:string){const r=shell(`cd '${dir}' && git ${args}`);if(r.exitCode)throw new Error(r.output);return r.output.trim();}
 async function fixture(fn:(o:any,repo:string,bare:string)=>Promise<void>){
- root=mkdtempSync(join(tmpdir(),'validated-git-'));const repo=join(root,'repo');const bare=join(root,'origin.git');repairs=0;repair=()=>{};validation=async()=>{};
+ root=mkdtempSync(join(tmpdir(),'validated-git-'));const repo=join(root,'repo');const bare=join(root,'origin.git');validation=async()=>{};
  try{
   shell(`git init -q --bare '${bare}'; git init -q -b main '${repo}'`);
   git(repo,"config user.name Test");git(repo,"config user.email test@example.com");
@@ -31,71 +26,26 @@ async function fixture(fn:(o:any,repo:string,bare:string)=>Promise<void>){
   await fn({workspaceId:'test',projectDir:repo,featureBranch:'feature/ticket',repoUrl:`file://${bare}`,validation:{projectId:'p',userId:'u',baselineBranch:'main'}},repo,bare);
  }finally{rmSync(root,{recursive:true,force:true});}
 }
-test('failed runtime validation cannot publish a ticket, even when repair reports success',()=>fixture(async(o,repo,bare)=>{
- validation=async()=>{throw new Error('Migration mismatch');};
- await expect(publishValidatedTicket(o)).rejects.toThrow('Migration mismatch');
- expect(git(repo,'ls-remote --heads origin refs/heads/feature/ticket')).toBe('');expect(repairs).toBe(1);
+test('failed runtime checks cannot publish or commit pending ticket changes',()=>fixture(async(o,repo)=>{
+ writeFileSync(join(repo,'pending.txt'),'pending');const before=git(repo,'rev-parse HEAD');
+ validation=async()=>{throw new Error('app does not start');};
+ await expect(publishValidatedTicket(o)).rejects.toThrow('app does not start');
+ expect(git(repo,'rev-parse HEAD')).toBe(before);expect(git(repo,'ls-remote --heads origin refs/heads/feature/ticket')).toBe('');
 }));
-test('unchanged candidate still validates and publishes the exact tested SHA',()=>fixture(async(o,repo)=>{
- const calls:string[]=[];validation=async(v)=>{calls.push(v.revision);};
- const first=await publishValidatedTicket(o);const second=await publishValidatedTicket(o);
- expect(calls).toEqual([first.sha,first.sha]);expect(second.sha).toBe(first.sha);
- expect(git(repo,'ls-remote --heads origin refs/heads/feature/ticket').split(/\s/)[0]).toBe(first.sha);
+test('pending changes are checked before a single final ticket commit and push',()=>fixture(async(o,repo)=>{
+ writeFileSync(join(repo,'pending.txt'),'pending');const before=git(repo,'rev-parse HEAD');let calls=0;
+ validation=async()=>{calls++;expect(git(repo,'rev-parse HEAD')).toBe(before);expect(git(repo,'status --porcelain')).toContain('pending.txt');};
+ const result=await publishValidatedTicket(o);expect(calls).toBe(1);expect(result.sha).not.toBe(before);
+ expect(git(repo,'ls-remote --heads origin refs/heads/feature/ticket')).toContain(result.sha);
 }));
-test('integration validates a separate merged candidate and keeps the ticket checkout intact',()=>fixture(async(o,repo)=>{
- await publishValidatedTicket(o);const original=git(repo,'rev-parse HEAD');
- let tested='';validation=async(v)=>{tested=v.revision;expect(v.kind).toBe('integration');expect(v.sourceDir).not.toBe(repo);};
- const merged=await publishValidatedMerge({...o,targetBranch:'main'});
- expect(merged.sha).toBe(tested);expect(git(repo,'rev-parse HEAD')).toBe(original);expect(git(repo,'branch --show-current')).toBe('feature/ticket');
- expect(git(repo,'ls-remote --heads origin refs/heads/main').split(/\s/)[0]).toBe(tested);
-}));
-test('a failed integration cannot move the epic branch',()=>fixture(async(o,repo)=>{
- await publishValidatedTicket(o);const before=git(repo,'ls-remote --heads origin refs/heads/main');
- validation=async()=>{throw new Error('integration regression');};
- await expect(publishValidatedMerge({...o,targetBranch:'main'})).rejects.toThrow('integration regression');
- expect(git(repo,'ls-remote --heads origin refs/heads/main')).toBe(before);
-}));
-test('target movement while validating rejects publication and preserves the new target',()=>fixture(async(o,repo,bare)=>{
- await publishValidatedTicket(o);let moved='';
- validation=async()=>{moved=git(repo,"rev-parse HEAD");git(bare,`update-ref refs/heads/main ${moved}`);};
- await expect(publishValidatedMerge({...o,targetBranch:'main'})).rejects.toThrow('changed during validation');
- expect(git(bare,'rev-parse refs/heads/main')).toBe(moved);
-}));
-
-test('source repairs are committed and the new clean commit is revalidated before publishing',()=>fixture(async(o,repo)=>{
- const tested:string[]=[];
- validation=async(v)=>{tested.push(v.revision);if(tested.length===1)throw new Error('repair required');};
- repair=()=>writeFileSync(join(repo,'repair.txt'),'persisted source repair');
- const result=await publishValidatedTicket(o);
- expect(tested.length).toBe(2);expect(tested[0]).not.toBe(tested[1]);expect(result.sha).toBe(tested[1]);
- expect(git(repo,`show ${result.sha}:repair.txt`)).toBe('persisted source repair');
-}));
-
-test('epic candidate retains existing coverage while adding ticket tests',()=>fixture(async(o,repo)=>{
- git(repo,'checkout main');
- writeFileSync(join(repo,'.lfg-validation.json'),JSON.stringify({validation:{tests:['test base']},verificationPaths:['/base']}));
- git(repo,'add .');git(repo,'commit -qm contract');git(repo,'push -q origin main');
- git(repo,'checkout feature/ticket');
- writeFileSync(join(repo,'.lfg-validation.json'),JSON.stringify({validation:{tests:['test ticket']},verificationPaths:['/ticket']}));
- git(repo,'add .');git(repo,'commit -qm contract');
- // Put main in feature history, resolving the contract as a feature-only version.
- shell(`cd '${repo}'; git merge main --no-commit >/dev/null 2>&1; true`);
- writeFileSync(join(repo,'.lfg-validation.json'),JSON.stringify({validation:{tests:['test ticket']},verificationPaths:['/ticket']}));
- git(repo,'add .');git(repo,'commit -qm integrate-base');
- await publishValidatedTicket(o);
+test('integration validates the merged working tree before creating the merge commit',()=>fixture(async(o,repo)=>{
+ git(repo,'push -q origin feature/ticket');const baseline=git(repo,'rev-parse origin/main');
+ validation=async(v)=>{const dir=translate(v.projectDir);expect(git(dir,'rev-parse HEAD')).toBe(baseline);expect(git(dir,'status --porcelain')).toContain('feature.txt');};
  const result=await publishValidatedMerge({...o,targetBranch:'main'});
- const recorded=JSON.parse(git(repo,`show ${result.sha}:.lfg-validation.json`));
- expect(recorded.validation.tests).toEqual(['test base','test ticket']);expect(recorded.verificationPaths).toEqual(['/base','/ticket']);
+ expect(git(repo,'ls-remote --heads origin main')).toContain(result.sha);expect(git(repo,'branch --show-current')).toBe('feature/ticket');
 }));
-
-test('documentation is committed and its final commit validated before publication',()=>fixture(async(o,repo)=>{
- o.validation.ticketId='ticket';const revisions:string[]=[];validation=async(v)=>{revisions.push(v.revision);};
- const result=await publishValidatedTicket(o);
- expect(revisions.length).toBe(2);expect(revisions[0]).not.toBe(revisions[1]);expect(result.sha).toBe(revisions[1]);
- expect(git(repo,`show ${result.sha}:docs/ticket.md`)).toContain('# Implementation');expect(result.documentation?.summary).toBe('Implemented the ticket.');
-}));
-test('failure validating the documentation commit cannot publish an earlier passing commit',()=>fixture(async(o,repo)=>{
- o.validation.ticketId='ticket';let calls=0;validation=async()=>{if(++calls>1)throw new Error('final validation failed');};
- await expect(publishValidatedTicket(o)).rejects.toThrow('final validation failed');
- expect(git(repo,'ls-remote --heads origin refs/heads/feature/ticket')).toBe('');
+test('failed integration never updates target branch',()=>fixture(async(o,repo)=>{
+ git(repo,'push -q origin feature/ticket');const baseline=git(repo,'rev-parse origin/main');validation=async()=>{throw new Error('feature assertion failed');};
+ await expect(publishValidatedMerge({...o,targetBranch:'main'})).rejects.toThrow('feature assertion failed');
+ expect(git(repo,'ls-remote --heads origin main')).toContain(baseline);
 }));

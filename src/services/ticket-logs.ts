@@ -16,7 +16,7 @@ import { broadcastToUser } from "../ws/connection-manager.ts";
 export async function addLog(
   ticketId: string,
   message: string,
-  logType: "command" | "ai_response" | "user_message" | "cli_error" | "question",
+  logType: "command" | "ai_response" | "agent_progress" | "user_message" | "cli_error" | "question",
   userId?: string,
   metadata?: Record<string, unknown>,
   extra?: { output?: string; explanation?: string; exitCode?: number }
