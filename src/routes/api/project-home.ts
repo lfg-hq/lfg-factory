@@ -28,8 +28,8 @@ homeApi.get("/:projectId/home", async (c) => {
   const p = access.project;
   const canManagePins = access.role === "owner" || access.role === "admin";
 
-  const [activities, notifs, memberRows, owner, pinRows] = await Promise.all([
-    getProjectActivities(p.id, { limit: 12 }),
+  const [activities, notifs, memberRows, owner, pinRows, workTickets] = await Promise.all([
+    getProjectActivities(p.id, { limit: 6 }),
     db
       .select({
         id: notifications.id,
@@ -52,6 +52,10 @@ homeApi.get("/:projectId/home", async (c) => {
       .where(and(eq(projectMembers.projectId, p.id), eq(projectMembers.status, "active"))),
     db.select({ id: users.id, name: users.name, email: users.email }).from(users).where(eq(users.id, p.ownerId)).then((r) => r[0]),
     db.select().from(projectPins).where(eq(projectPins.projectId, p.id)).orderBy(asc(projectPins.order), asc(projectPins.createdAt)),
+    db.select({ id: projectTickets.id, name: projectTickets.name, ticketKey: projectTickets.ticketKey,
+      status: projectTickets.status, queueStatus: projectTickets.queueStatus,
+      conversationId: projectTickets.conversationId, updatedAt: projectTickets.updatedAt })
+      .from(projectTickets).where(eq(projectTickets.projectId, p.id)).orderBy(desc(projectTickets.updatedAt)),
   ]);
 
   // Resolve pin names/links (docs/tickets can be renamed).
@@ -78,6 +82,7 @@ homeApi.get("/:projectId/home", async (c) => {
 
   return c.json({
     activities,
+    workTickets,
     notifications: notifs,
     unreadCount,
     members: {

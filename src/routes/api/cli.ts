@@ -1,3 +1,5 @@
+import { tokenUsageRuns } from "../../db/schema/tokens.ts";
+import { recordCliUsage } from "../../services/token-usage.ts";
 /**
  * CLI Callback API
  *
@@ -406,7 +408,7 @@ cliRouter.post("/ticket-chat", async (c) => {
 /**
  * Receives pushed JSONL output chunks from the VM forwarder loop.
  * Decodes base64 data, parses JSONL events, logs to DB, broadcasts via WS.
- * When done=true, emits ticket.execution_finished event.
+ * When done=true, emits ticket.cli_finished (the executor finalizes Git before announcing build completion).
  */
 cliRouter.post("/output", async (c) => {
   let body: { ticket_id: string; data: string; done?: boolean; exit_code?: number };
@@ -459,6 +461,11 @@ cliRouter.post("/output", async (c) => {
   // try Claude parsing first and fall back to a Pi-aware per-line parser. `logged`
   // tracks whether anything was surfaced so the fallback only runs when needed.
   const events = parseJsonlEvents(rawText);
+  const usageRunId = c.req.header("X-Usage-Run-Id");
+  if (usageRunId) {
+    const [run] = await db.select().from(tokenUsageRuns).where(and(eq(tokenUsageRuns.id, usageRunId), eq(tokenUsageRuns.ticketId, ticket_id))).limit(1);
+    if (run) await recordCliUsage({ ...run, runId: run.id }, events.filter(e => (e as any).type === "message_end"));
+  }
   let logged = 0;
 
   if (events.length > 0) {
@@ -594,7 +601,7 @@ cliRouter.post("/output", async (c) => {
   // If VM signals completion, emit the event
   if (done) {
     emit({
-      type: "ticket.execution_finished",
+      type: "ticket.cli_finished",
       ticketId: ticket_id,
       status: exit_code === 0 ? "complete" : "failed",
       exitCode: exit_code,

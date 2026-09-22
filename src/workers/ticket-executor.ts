@@ -1,6 +1,8 @@
 import { recoverSandboxStorage, destroyWorkspaceAfterStop } from "../services/sandbox-storage-recovery.ts";
 import { runGitSetup, prepareBuildRuntime, refreshOriginCommand } from "../services/build-preflight.ts";
 import { CONTRACT_INSTRUCTION } from "../services/runtime-validation.ts";
+import { withTicketUsage } from "../services/usage-run.ts";
+import { currentUsage } from "../ai/usage-context.ts";
 /**
  * Ticket Executor Worker
  *
@@ -1252,7 +1254,7 @@ function ticketBranchName(ticket: { ticketKey?: string | null; name?: string | n
   return key ? `feature/${key}${title ? `-${title}` : ""}` : `feature/ticket-${ticket.id}`;
 }
 
-async function executeTicket(ticketId: string, actorId?: string): Promise<void> {
+async function executeTicketInternal(ticketId: string, actorId?: string): Promise<void> {
   const startTime = Date.now();
 
   // ── Step 1: Load data ───────────────────────────────────────────────
@@ -1275,6 +1277,7 @@ async function executeTicket(ticketId: string, actorId?: string): Promise<void> 
 
   const ownerId = project.ownerId;
   const buildLlm = await resolveBuildLlm(project!, actorId ?? ticket.assigneeId ?? ownerId);
+  if (currentUsage()) { currentUsage()!.userId = buildLlm.actorId; currentUsage()!.billingMode = buildLlm.mode === "api_key" ? "api" : "subscription"; }
 
   if (buildLlm.mode === "subscription") return executeTicketApi(ticketId, true, buildLlm.actorId);
 
@@ -1543,7 +1546,7 @@ git branch --show-current
         // against an empty dir is the "round and round" flailing; fail cleanly.
         const reason = `repository clone failed (network/TLS/auth) — no code in the build VM for ${githubOwner}/${githubRepo}`;
         console.error(`[ticket-executor] ${reason}`);
-        await markTicketFailed(ticketId, `Git setup failed — ${reason}`, ownerId, { emitEvent: false });
+        await markTicketFailed(ticketId, `Git setup failed — ${reason}`, ownerId);
         return;
       } else {
         gitSetupError = `Git setup issue: ${gitResult.output.slice(0, 200)}`;
@@ -1552,7 +1555,7 @@ git branch --show-current
     } catch (err) {
       gitSetupError = `Git setup failed: ${err}`;
       console.error(`[ticket-executor] ${gitSetupError}`);
-      await markTicketFailed(ticketId, gitSetupError, ownerId, { emitEvent: false });
+      await markTicketFailed(ticketId, gitSetupError, ownerId);
       return;
     }
   } else if (githubToken) {
@@ -1825,7 +1828,7 @@ Before implementing, fix the git issue:
   // ── Step 7: Wait for completion via push-based output streaming ─────
   // The VM's runner script pushes JSONL output to POST /api/v1/cli/output/
   // which handles all log parsing, DB inserts, and WS broadcasting.
-  // The executor just waits for the ticket.execution_finished event.
+  // The executor waits for ticket.cli_finished, then commits and publishes the final build result.
   console.log(`[ticket-executor] Waiting for VM to push output via callback API...`);
 
   const waitResult = await waitForCompletion(ticketId, MAX_WAIT_DURATION_MS);
@@ -2023,6 +2026,7 @@ Before implementing, fix the git issue:
     await resolveTicketAddenda(ticketId, cliAddendaCtx.pendingIds);
     await maybeSubmitEpicForReview(ticket.epicId);
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId, mergeStatus: "merged" });
+    emit({ type: "ticket.execution_finished", ticketId, projectId: project.id, status: "complete", exitCode: 0, durationMs: Date.now() - startTime });
     // Auto-record a demo of the completed feature for the Preview tab (fire-and-forget).
     void generateTicketDemo(ticketId, { ownerId, llmUserId: buildLlm.actorId, projectId: project.id });
     // QA (opt-in, projects.qaMode = "tests"): write a test suite for the ticket's
@@ -2036,7 +2040,7 @@ Before implementing, fix the git issue:
       ? "publication or integration validation failed — see the exact blocker in the build log; rebuild after fixing it"
       : (_detail ? `did not complete — ${_detail}` : "Implementation did not complete (the agent stopped without a specific error)");
     if (commitFailed) await db.update(projectTickets).set({ githubMergeStatus: "failed", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId)).catch(() => {});
-    await markTicketFailed(ticketId, reason, ownerId, { emitEvent: false });
+    await markTicketFailed(ticketId, reason, ownerId);
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "failed", queueStatus: "none", mergeStatus: commitFailed ? "failed" : undefined });
   }
 
@@ -2342,7 +2346,7 @@ async function concludeChatTurn(params: {
   await addLog(ticketId, text || "Done — no code changes were needed.", "ai_response", ownerId);
 }
 
-async function executeTicketChat(
+async function executeTicketChatInternal(
   ticketId: string,
   message: string,
   sender: string,
@@ -2364,6 +2368,7 @@ async function executeTicketChat(
 
   const ownerId = project!.ownerId;
   const buildLlm = await resolveBuildLlm(project!, actorId ?? ticket.assigneeId ?? ownerId);
+  if (currentUsage()) { currentUsage()!.userId = buildLlm.actorId; currentUsage()!.billingMode = buildLlm.mode === "api_key" ? "api" : "subscription"; }
 
   // Fine-grained Git: the person CHATTING is the actor (fallback: the ticket's assignee).
   // Owner → owner's token; a collaborator → the owner's token only if shareGitAccess is
@@ -2853,7 +2858,7 @@ async function getBuilderProvider(projectId: string | null, actorId?: string): P
 }
 
 /** Execute with direct provider tools, or with Pi when Coding Agent mode is requested. */
-async function executeTicketApi(
+async function executeTicketApiInternal(
   ticketId: string,
   useCodingAgent: boolean,
   actorId?: string,
@@ -2873,6 +2878,7 @@ async function executeTicketApi(
 
   const ownerId = project.ownerId;
   const buildLlm = await resolveBuildLlm(project!, actorId ?? ticket.assigneeId ?? ownerId);
+  if (currentUsage()) { currentUsage()!.userId = buildLlm.actorId; currentUsage()!.billingMode = buildLlm.mode === "api_key" ? "api" : "subscription"; }
 
   // Fine-grained Git: owner → owner's token; a collaborator → owner's token only if
   // shareGitAccess is ON, else their OWN connected Git. Actor = trigger (fallback: assignee).
@@ -3236,7 +3242,7 @@ git branch --show-current
       }
     } catch (err) {
       console.error(`[ticket-executor-api] Git setup failed:`, err);
-      await markTicketFailed(ticketId, `Git setup failed — ${(err as Error).message}`, ownerId, { emitEvent: false });
+      await markTicketFailed(ticketId, `Git setup failed — ${(err as Error).message}`, ownerId);
       return;
     }
   } else if (githubToken) {
@@ -3750,7 +3756,7 @@ git branch --show-current
     // Persist a durable "not_pushed" merge state so the Git tab flags it (red)
     // even after refresh — not just a transient Actions-log line.
     if (commitFailed) await db.update(projectTickets).set({ githubMergeStatus: "failed", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId)).catch(() => {});
-    await markTicketFailed(ticketId, reason, ownerId, { emitEvent: false });
+    await markTicketFailed(ticketId, reason, ownerId);
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "failed", queueStatus: "none", mergeStatus: commitFailed ? "failed" : undefined });
   }
 
@@ -3776,7 +3782,7 @@ git branch --show-current
 /**
  * Wait for a ticket's execution to finish via the event bus.
  * The VM pushes output to /api/v1/cli/output/ which emits
- * ticket.execution_finished when done=true is received.
+ * ticket.cli_finished when done=true is received. Stop also wakes this waiter.
  * Returns when the event fires or when timeout is reached.
  */
 function waitForCompletion(
@@ -3800,9 +3806,11 @@ function waitForCompletion(
 
     const cleanup = () => {
       clearTimeout(timeout);
+      bus.off("ticket.cli_finished", handler);
       bus.off("ticket.execution_finished", handler);
     };
 
+    bus.on("ticket.cli_finished", handler);
     bus.on("ticket.execution_finished", handler);
   });
 }
@@ -3903,8 +3911,8 @@ async function markTicketFailed(ticketId: string, reason: string, userId?: strin
   });
 
   // Emit execution_finished so the handler chain continues (auto-queue next ticket).
-  // Only emit when the caller hasn't already triggered this event (e.g., early failures
-  // before the CLI starts). Normal-flow failures already have the event from the CLI callback.
+  // Startup recovery can suppress queue advancement explicitly; normal build failures
+  // must emit here because CLI exit is a separate, non-final event.
   if (opts?.emitEvent !== false) {
     emit({
       type: "ticket.execution_finished",
@@ -4172,4 +4180,16 @@ async function recoverUnpushedTickets() {
   } catch (err) {
     console.error("[ticket-executor] recoverUnpushedTickets error:", err);
   }
+}
+
+async function executeTicket(ticketId: string, actorId?: string): Promise<void> {
+  return withTicketUsage(ticketId, actorId, "ticket_build", () => executeTicketInternal(ticketId, actorId));
+}
+
+async function executeTicketApi(ticketId: string, useCodingAgent: boolean, actorId?: string, placement?: BuildPlacement): Promise<void> {
+  return withTicketUsage(ticketId, actorId, "ticket_build", () => executeTicketApiInternal(ticketId, useCodingAgent, actorId, placement));
+}
+
+async function executeTicketChat(ticketId: string, message: string, sender: string, actorId?: string): Promise<void> {
+  return withTicketUsage(ticketId, actorId, "ticket_chat", () => executeTicketChatInternal(ticketId, message, sender, actorId));
 }

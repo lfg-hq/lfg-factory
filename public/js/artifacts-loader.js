@@ -1,3 +1,25 @@
+// PDF export is optional: do not block conversation startup on these large libraries.
+const pdfLibraryLoads = new Map();
+function ensurePdfExportLibraries() {
+    return Promise.all([
+        ['/public/js/jspdf.umd.min.js', () => typeof window.jspdf?.jsPDF === 'function'],
+        ['/public/js/html2canvas.min.js', () => typeof window.html2canvas === 'function'],
+    ].map(([src, ready]) => {
+        if (ready()) return Promise.resolve();
+        if (!pdfLibraryLoads.has(src)) {
+            const pending = new Promise((resolve, reject) => {
+                const script = document.createElement('script');
+                script.src = src;
+                script.onload = () => ready() ? resolve() : reject(new Error('PDF library failed to initialize'));
+                script.onerror = () => { script.remove(); reject(new Error('Could not load PDF export libraries. Please try again.')); };
+                document.head.appendChild(script);
+            }).catch(error => { pdfLibraryLoads.delete(src); throw error; });
+            pdfLibraryLoads.set(src, pending);
+        }
+        return pdfLibraryLoads.get(src);
+    }));
+}
+
 /**
  * Artifacts Loader JavaScript
  * Handles loading artifact data from the server and updating the artifacts panel
@@ -6145,7 +6167,13 @@ document.addEventListener('DOMContentLoaded', function() {
          * @param {string} title - The title of the document
          * @param {string} content - The markdown content
          */
-        downloadFileAsPDF: function(projectId, title, content) {
+        downloadFileAsPDF: async function(projectId, title, content) {
+            try {
+                await ensurePdfExportLibraries();
+            } catch (error) {
+                alert(error.message);
+                return;
+            }
             
             // Check if jsPDF is available
             if (typeof window.jspdf === 'undefined' || typeof window.jspdf.jsPDF === 'undefined') {

@@ -1,3 +1,4 @@
+import { associateUsageDocument } from "../../services/token-usage.ts";
 import { tool, zodSchema } from "ai";
 import { z } from "zod";
 import { db } from "../../config/db.ts";
@@ -41,7 +42,7 @@ export const streamDocumentContent = tool({
       ),
     })
   ),
-  execute: async ({ projectId, userId, name, fileType, content, epicId }) => {
+  execute: async ({ projectId, userId, name, fileType, content, epicId }, options) => {
     const { s3Key, dbContent } = await saveContent(projectId, fileType, name, content);
 
     // Docs always live at PROJECT scope so they stay visible and editable. An epic
@@ -61,6 +62,7 @@ export const streamDocumentContent = tool({
       );
     }
 
+    await associateUsageDocument(file!.id, options.toolCallId);
     emitFileCreated({ projectId, documentId: file!.id, documentType: fileType, name });
 
     if (_wsBroadcast) {
@@ -106,7 +108,7 @@ export const previewPage = tool({
         ),
     })
   ),
-  execute: async ({ projectId, userId, name, html }) => {
+  execute: async ({ projectId, userId, name, html }, options) => {
     const fileType = "page_preview";
     const { s3Key, dbContent } = await saveContent(projectId, fileType, name, html);
 
@@ -119,6 +121,7 @@ export const previewPage = tool({
       })
       .returning();
 
+    await associateUsageDocument(file!.id, options.toolCallId);
     emitFileCreated({ projectId, documentId: file!.id, documentType: fileType, name });
 
     // The card is pushed by the stream handler on tool-result, NOT from here.
@@ -159,9 +162,10 @@ export const getFileList = tool({
 export const getFileContent = tool({
   description: "Get the content of a specific project document/file by its ID.",
   inputSchema: zodSchema(z.object({ fileId: z.string() })),
-  execute: async ({ fileId }) => {
+  execute: async ({ fileId }, options) => {
     const [file] = await db.select().from(projectFiles).where(eq(projectFiles.id, fileId));
     if (!file) return { found: false as const };
+    await associateUsageDocument(file.id, options.toolCallId);
     const content = await getContent(file.s3Key, file.content);
     return {
       found: true as const,
@@ -186,9 +190,10 @@ export const updateFileContent = tool({
       content: z.string().describe("New full document content in Markdown"),
     })
   ),
-  execute: async ({ fileId, userId, content }) => {
+  execute: async ({ fileId, userId, content }, options) => {
     const [existing] = await db.select().from(projectFiles).where(eq(projectFiles.id, fileId));
     if (!existing) return { success: false, error: "File not found" };
+    await associateUsageDocument(existing.id, options.toolCallId);
 
     const { s3Key, dbContent } = await saveContent(existing.projectId, existing.fileType, existing.name, content);
     const [file] = await db
@@ -241,9 +246,10 @@ export const patchFileContent = tool({
         .describe("List of find-and-replace edits to apply in order"),
     })
   ),
-  execute: async ({ fileId, userId, edits }) => {
+  execute: async ({ fileId, userId, edits }, options) => {
     const [existing] = await db.select().from(projectFiles).where(eq(projectFiles.id, fileId));
     if (!existing) return { success: false, error: "File not found" };
+    await associateUsageDocument(existing.id, options.toolCallId);
 
     // Get current content
     let content = await getContent(existing.s3Key, existing.content);

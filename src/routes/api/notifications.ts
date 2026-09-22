@@ -7,7 +7,7 @@ import { requireAuth } from "../../auth/middleware.ts";
 import { db } from "../../config/db.ts";
 import { notifications } from "../../db/schema/notifications.ts";
 import { users } from "../../db/schema/users.ts";
-import { and, eq, desc, isNull, inArray } from "drizzle-orm";
+import { and, eq, desc, isNull, inArray, count, sql } from "drizzle-orm";
 import { getProjectAccess } from "../../auth/project-access.ts";
 import { notify } from "../../services/notify.ts";
 import { sendEmail } from "../../utils/email.ts";
@@ -33,6 +33,25 @@ function parseRefs(raw: string | null): { type: string; id: string; name: string
 type Env = { Variables: { user: typeof auth.$Infer.Session.user } };
 const notificationsApi = new Hono<Env>();
 notificationsApi.use("*", requireAuth as any);
+
+// Global build inbox, independent of the currently open project/conversation.
+const buildTypes = ["build_complete", "build_failed", "build_attention"];
+notificationsApi.get("/build-notifications", async (c) => {
+  const scope = and(eq(notifications.userId, c.get("user").id), inArray(notifications.type, buildTypes));
+  const rows = await db.select().from(notifications).where(scope)
+    .orderBy(desc(sql`${notifications.readAt} is null`), desc(notifications.createdAt)).limit(100);
+  const [total] = await db.select({ value: count() }).from(notifications)
+    .where(and(scope, isNull(notifications.readAt)));
+  return c.json({ notifications: rows, unread: total?.value ?? 0 });
+});
+notificationsApi.post("/build-notifications/read", async (c) => {
+  const body = await c.req.json<{ id?: string }>().catch(() => ({} as { id?: string }));
+  await db.update(notifications).set({ readAt: new Date() }).where(and(
+    eq(notifications.userId, c.get("user").id), inArray(notifications.type, buildTypes),
+    isNull(notifications.readAt), body.id ? eq(notifications.id, body.id) : undefined,
+  ));
+  return c.json({ ok: true });
+});
 
 // GET /api/projects/:projectId/notifications — current user's items for a project
 notificationsApi.get("/:projectId/notifications", async (c) => {

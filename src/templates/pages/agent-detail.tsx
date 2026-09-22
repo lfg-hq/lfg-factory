@@ -67,8 +67,8 @@ export function AgentDetailPage({
   <script>(function(){if(localStorage.getItem('sidebarMinimized')==='true'){document.documentElement.classList.add('sidebar-minimized-preload');}})()</script>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
-  <link rel="stylesheet" href="/public/css/sidebar.css" />
-  <link rel="stylesheet" href="/public/css/chat.css" />
+  <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
+  <link rel="stylesheet" href="/public/css/chat.css?v=20260908-hover-copy" />
   <link rel="stylesheet" href="/public/css/artifacts.css" />
   <link rel="stylesheet" href="/public/css/agents.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
@@ -511,8 +511,8 @@ export function AgentDetailPage({
   </script>
   <script src="/public/js/marked.min.js"></script>
   <script src="/public/js/markdown-config.js"></script>
-  <script src="/public/js/sidebar.js"></script>
-  <script src="/public/js/chat.js"></script>
+  <script src="/public/js/sidebar.js?v=20260908-startup"></script>
+  <script src="/public/js/chat.js?v=20260908-hover-copy"></script>
   <script src="/public/js/agents.js"></script>
 
   <script>
@@ -538,7 +538,7 @@ export function AgentDetailPage({
       const label = document.getElementById('current-model-left');
       if (label) label.textContent = selectedModelBtn.querySelector('span').textContent.trim();
     }
-    requestAnimationFrame(()=>requestAnimationFrame(()=>document.documentElement.classList.remove('sidebar-minimized-preload')));
+    
   </script>
 
   <!-- Connectors Modal -->

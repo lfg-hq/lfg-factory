@@ -127,7 +127,7 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
   <script>(function(){if(localStorage.getItem('sidebarMinimized')==='true'){document.documentElement.classList.add('sidebar-minimized-preload');}})()</script>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
-  <link rel="stylesheet" href="/public/css/sidebar.css" />
+  <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
   <link rel="stylesheet" href="/public/css/tickets.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
@@ -485,8 +485,8 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
 
 <script src="/public/js/marked.min.js"></script>
 <script src="/public/js/markdown-config.js"></script>
-<script src="/public/js/sidebar.js"></script>
-<script src="/public/js/sidebar-chats.js"></script>
+<script src="/public/js/sidebar.js?v=20260908-startup"></script>
+<script src="/public/js/sidebar-chats.js?v=20260908-initials"></script>
 <script>
   var PROJECT_ID = '${project.projectId}';
 

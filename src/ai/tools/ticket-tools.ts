@@ -1,3 +1,4 @@
+import { associateUsageTicket } from "../../services/token-usage.ts";
 import { tool, zodSchema } from "ai";
 import { z } from "zod";
 import { db } from "../../config/db.ts";
@@ -70,7 +71,7 @@ export const createTickets = tool({
       ),
     })),
   })),
-  execute: async ({ projectId, userId, epicId, epicName, conversationId, tickets }) => {
+  execute: async ({ projectId, userId, epicId, epicName, conversationId, tickets }, options) => {
     // Fetch all stages for this project so we can validate stageId
     const allStages = await db.select().from(ticketStages)
       .where(eq(ticketStages.projectId, projectId));
@@ -125,6 +126,7 @@ export const createTickets = tool({
         conversationId: conversationId ?? null,
         notes: t.notes ?? "",
       }).returning();
+      if (row) await associateUsageTicket(row.id, options.toolCallId);
 
       // Attach any images the user shared this turn (referenced by id) to the ticket, so
       // the coding agent — and the ticket view — get the actual screenshot, not just prose.
@@ -191,9 +193,10 @@ export const getPendingTickets = tool({
 export const getTicketDetails = tool({
   description: "Get full details of a specific ticket including description, acceptance criteria, and logs.",
   inputSchema: zodSchema(z.object({ ticketId: z.string() })),
-  execute: async ({ ticketId }) => {
+  execute: async ({ ticketId }, options) => {
     const [ticket] = await db.select().from(projectTickets).where(eq(projectTickets.id, ticketId));
     if (!ticket) return { found: false as const };
+    await associateUsageTicket(ticket.id, options.toolCallId);
     const [logs, todos] = await Promise.all([
       db.select().from(ticketLogs).where(eq(ticketLogs.ticketId, ticketId)).orderBy(ticketLogs.createdAt),
       db.select().from(projectTodoLists).where(eq(projectTodoLists.ticketId, ticketId)).orderBy(projectTodoLists.order),
@@ -243,15 +246,16 @@ export const updateTicketDetails = tool({
     complexity: z.enum(["simple", "medium", "complex"]).optional(),
     notes: z.string().optional(),
   })),
-  execute: async ({ ticketId, name, description, acceptanceCriteria, complexity, notes }) => {
+  execute: async ({ ticketId, name, description, acceptanceCriteria, complexity, notes }, options) => {
     const u: Record<string, unknown> = { updatedAt: new Date() };
     if (name) u.name = name;
     if (description) u.description = description;
     if (acceptanceCriteria) u.acceptanceCriteria = acceptanceCriteria;
     if (complexity) u.complexity = complexity;
     if (notes != null) u.notes = notes;
-    await db.update(projectTickets).set(u).where(eq(projectTickets.id, ticketId));
-    return { success: true };
+    const changed = await db.update(projectTickets).set(u).where(eq(projectTickets.id, ticketId)).returning({ id: projectTickets.id });
+    if (changed[0]) await associateUsageTicket(changed[0].id, options.toolCallId);
+    return { success: changed.length > 0 };
   },
 });
 

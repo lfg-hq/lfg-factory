@@ -1083,6 +1083,10 @@ document.addEventListener('DOMContentLoaded', () => {
         
         socket.onmessage = function(event) {
             const data = JSON.parse(event.data);
+            if (data.type === "notification") {
+                window.dispatchEvent(new CustomEvent("build-notification", { detail: data.notification }));
+                return;
+            }
 
             // ANY message from the server proves the socket is alive — not just a
             // heartbeat. The monitor below force-closes a socket that looks dead, and
@@ -1347,8 +1351,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     const isFailure = data.status === 'failed';
                     ticketMsg.className = `system-message ticket-${isFailure ? 'failed' : 'complete'}`;
                     ticketMsg.innerHTML = isFailure
-                        ? `<strong>⚠ Ticket Failed</strong><br>${data.message}`
-                        : `<strong>✓ Ticket Complete</strong><br>${data.message}`;
+                        ? `<strong>⚠ Ticket Failed</strong><br>${escapeHtmlSafe(data.message || "")}`
+                        : `<strong>✓ Ticket Complete</strong><br>${escapeHtmlSafe(data.message || "")}`;
                     messageContainer.appendChild(ticketMsg);
                     scrollToBottom();
                     break;
@@ -1362,8 +1366,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     const hasFails = data.status === 'partial';
                     batchMsg.className = `system-message batch-complete ${hasFails ? 'has-failures' : ''}`;
                     batchMsg.innerHTML = hasFails
-                        ? `<strong>⚠ Build Chain Finished</strong><br>${data.message}`
-                        : `<strong>✓ Build Complete</strong><br>${data.message}`;
+                        ? `<strong>⚠ Build Chain Finished</strong><br>${escapeHtmlSafe(data.message || "")}`
+                        : `<strong>✓ Build Complete</strong><br>${escapeHtmlSafe(data.message || "")}`;
                     messageContainer.appendChild(batchMsg);
                     scrollToBottom();
                     break;
@@ -3721,9 +3725,11 @@ document.addEventListener('DOMContentLoaded', () => {
         // Create a message actions container
         const messageActions = document.createElement('div');
         messageActions.className = 'message-actions';
+        if (role === 'user' || role === 'assistant') messageActions.hidden = true;
         messageActions.appendChild(copyButton);
         
         // Append elements
+        if (role === 'user') messageDiv.classList.add('user-external-actions');
         messageDiv.appendChild(contentDiv);
         messageDiv.appendChild(messageActions);
         if (role === 'user' || role === 'assistant') {
@@ -3739,7 +3745,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateMessageDisplay(messageDiv);
             };
             const bottomCopy = copyButton.cloneNode(true);
-            bottomCopy.innerHTML = '<i class="fas fa-copy" aria-hidden="true"></i> Copy';
+            bottomCopy.innerHTML = '<i class="fas fa-copy" aria-hidden="true"></i>';
             bottomCopy.onclick = function() { copyMessageToClipboard(contentDiv.getAttribute('data-raw-content') || '', this); };
             footer.appendChild(toggle);
             footer.appendChild(bottomCopy);
@@ -3776,6 +3782,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const toggle = message.querySelector('.message-expand-btn');
         if (!content || !toggle) return;
         const long = content.scrollHeight > 360;
+        message.classList.toggle('message-long', long);
+        const topActions = message.querySelector('.message-actions');
+        if (topActions) topActions.hidden = !long;
         const streaming = message.dataset.streaming === 'true';
         const collapsed = long && !streaming && message.dataset.expanded !== 'true';
         message.classList.toggle('message-collapsed', collapsed);
@@ -4732,6 +4741,16 @@ document.addEventListener('DOMContentLoaded', () => {
     
     function loadDraftMessage() {
         try {
+            const homeDraftKey = 'home-chat-draft:' + currentProjectId;
+            const homeDraft = sessionStorage.getItem(homeDraftKey);
+            if (homeDraft && new URLSearchParams(location.search).get('new') === '1') {
+                chatInput.value = homeDraft;
+                sessionStorage.removeItem(homeDraftKey);
+                saveDraftMessage(homeDraft);
+                chatInput.dispatchEvent(new Event('input', { bubbles: true }));
+                chatInput.focus();
+                return;
+            }
             const draftJson = localStorage.getItem('chat_draft');
             if (draftJson) {
                 const draftData = JSON.parse(draftJson);
@@ -4917,8 +4936,13 @@ document.addEventListener('DOMContentLoaded', () => {
             // Clear the conversation list
             conversationList.innerHTML = '';
             
-            // Add conversations to the list
-            conversations.forEach(conversation => {
+            // Pinned chats lead on the chat page too. Keep the server's recency
+            // order within each group, matching sidebar-chats.js on other pages.
+            const orderedConversations = [
+                ...conversations.filter(conversation => conversation.pinned),
+                ...conversations.filter(conversation => !conversation.pinned),
+            ];
+            orderedConversations.forEach(conversation => {
                 const conversationItem = createCompactConversationItem(conversation);
                 
                 // Add active class if this is the current conversation
@@ -5226,12 +5250,17 @@ document.addEventListener('DOMContentLoaded', () => {
         conversationItem.className = 'conversation-item';
         conversationItem.dataset.id = conversation.id;
         
-        // Truncate title to be compact
-        let title = conversation.title || `Chat ${conversation.id}`;
-        if (title.length > 25) { // Allow slightly longer titles
-            title = title.substring(0, 25) + '...';
-        }
-        
+        // Preserve the complete title; the shared rail clamps it to two lines.
+        const title = conversation.title || 'Untitled chat';
+        conversationItem.setAttribute('tabindex', '0');
+        conversationItem.setAttribute('role', 'link');
+        conversationItem.setAttribute('aria-label', title);
+        conversationItem.addEventListener('keydown', (event) => {
+            if (event.target === conversationItem && event.key === 'Enter') {
+                event.preventDefault(); conversationItem.click();
+            }
+        });
+
         // Format timestamp
         const timestamp = conversation.created_at ? new Date(conversation.created_at) : new Date();
         const timeStr = formatTimestamp(timestamp);
@@ -5240,7 +5269,10 @@ document.addEventListener('DOMContentLoaded', () => {
         // is labelled with its author and is read-only — no delete button, since
         // only the author may delete their own conversation.
         const isMine = conversation.is_mine !== false;
-        const author = conversation.author;
+        const author = (conversation.author || 'Teammate').trim();
+        const authorWords = author.split(/\s+/).filter(Boolean);
+        const authorInitials = authorWords.length ? (Array.from(authorWords[0])[0] + (authorWords.length > 1 ? Array.from(authorWords[authorWords.length - 1])[0] : '')).toUpperCase() : '?';
+        if (!isMine) conversationItem.setAttribute('aria-label', title + ' — ' + author);
 
         const esc = (v) => String(v == null ? '' : v)
             .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -5255,7 +5287,7 @@ document.addEventListener('DOMContentLoaded', () => {
             ${isMine
                 ? '<button class="conversation-pin" title="' + (pinned ? 'Unpin' : 'Pin to top') + '" data-pin="' + esc(conversation.id) + '" data-pinned="' + (pinned ? '1' : '') + '"><i class="fas fa-thumbtack"></i></button>'
                   + '<button class="delete-conversation" title="Delete"><i class="fas fa-trash"></i></button>'
-                : '<span class="conversation-author" title="' + esc(author) + "'s chat (read-only)\">" + esc(author) + '</span>'}
+                : '<span class="conversation-author" title="' + esc(author) + "'s chat (read-only)\">" + esc(authorInitials) + '</span>'}
         `;
         const pinBtn = conversationItem.querySelector('[data-pin]');
         if (pinBtn) {

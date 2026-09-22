@@ -1,3 +1,4 @@
+import { registerUsageOutput } from "./usage-cli.ts";
 import { userLlmAccess } from "./llm-access.ts";
 /**
  * Claude Code CLI runner
@@ -190,6 +191,7 @@ export async function startClaudeCli(
 ): Promise<ClaudeRunResult> {
   const ts = Date.now();
   const outputFile = opts.outputFile ?? `/tmp/claude_output_${ts}.jsonl`;
+  await registerUsageOutput(opts.workspaceId, outputFile);
   const promptFile = `/tmp/claude_prompt_${ts}.txt`;
   const envFile = `/tmp/claude_env_${ts}.sh`;
   const runnerScript = `/tmp/claude_runner_${ts}.sh`;
@@ -486,6 +488,7 @@ export async function startClaudeCliChat(
 ): Promise<ClaudeRunResult> {
   const ts = Date.now();
   const outputFile = opts.outputFile ?? `/tmp/claude_output_${ts}.jsonl`;
+  await registerUsageOutput(opts.workspaceId, outputFile);
   const promptFile = `/tmp/claude_prompt_${ts}.txt`;
   const envFile = `/tmp/claude_env_${ts}.sh`;
   const runnerScript = `/tmp/claude_runner_${ts}.sh`;

@@ -1,3 +1,4 @@
+import { currentUsage, withUsage } from "../ai/usage-context.ts";
 /**
  * In-process codebase query (no sandbox).
  *
@@ -79,6 +80,8 @@ function lowReasoningOptions(provider: ProviderName | null): Record<string, any>
 }
 
 export interface CodebaseQueryOptions {
+  projectId?: string;
+  ticketId?: string;
   owner: string;
   repo: string;
   question: string;
@@ -167,6 +170,13 @@ export function deriveAnswer(
 export async function queryCodebaseInProcess(
   opts: CodebaseQueryOptions
 ): Promise<CodebaseQueryResult> {
+  if (!currentUsage() && opts.userId) return withUsage({ userId: opts.userId, operation: "codebase_read" }, () => queryCodebaseInProcess(opts));
+  const context = currentUsage();
+  return context ? withUsage({ ...context, projectId: opts.projectId ?? context.projectId,
+    ticketId: opts.ticketId ?? context.ticketId, operation: "codebase_read" }, () => queryCodebaseWithUsage(opts)) : queryCodebaseWithUsage(opts);
+}
+
+async function queryCodebaseWithUsage(opts: CodebaseQueryOptions): Promise<CodebaseQueryResult> {
   const budget = readingBudget(opts.abortSignal);
   const collected: QueryStep[] = [];
   let partialText = '';

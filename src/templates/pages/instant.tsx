@@ -112,9 +112,9 @@ export function InstantPage({
   <script>(function(){if(localStorage.getItem('sidebarMinimized')==='true'){document.documentElement.classList.add('sidebar-minimized-preload');}})()</script>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
-  <link rel="stylesheet" href="/public/css/sidebar.css" />
+  <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
   <link rel="stylesheet" href="/public/css/styles.css" />
-  <link rel="stylesheet" href="/public/css/chat.css" />
+  <link rel="stylesheet" href="/public/css/chat.css?v=20260908-hover-copy" />
   <link rel="stylesheet" href="/public/css/instant.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
@@ -491,12 +491,12 @@ export function InstantPage({
     }))};
     window.__WS_PATH__ = '/ws/chat';
   </script>
-  <script src="/public/js/sidebar.js"></script>
+  <script src="/public/js/sidebar.js?v=20260908-startup"></script>
   <script src="/public/js/marked.min.js"></script>
   <script src="/public/js/markdown-config.js"></script>
   <script src="/public/js/custom-dropdown.js"></script>
   <script src="/public/js/instant.js?v=${Date.now()}"></script>
-  <script>requestAnimationFrame(()=>requestAnimationFrame(()=>document.documentElement.classList.remove('sidebar-minimized-preload')));</script>
+  <script></script>
   <script>
     // Auto-fill prompt saved from /build landing page
     (function() {

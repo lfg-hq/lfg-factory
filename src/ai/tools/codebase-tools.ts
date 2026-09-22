@@ -149,6 +149,8 @@ export const queryCodebase = tool({
     // 4. Run the in-process query (streams chunks to the user via WS)
     try {
       const result = await queryCodebaseInProcess({
+        projectId: project.id,
+        ticketId,
         owner: repo.owner,
         repo: repo.repo,
         question,

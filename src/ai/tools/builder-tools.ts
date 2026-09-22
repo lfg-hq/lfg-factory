@@ -349,13 +349,7 @@ export function createBuilderTools(ctx: BuilderToolContext) {
           ctx.userId
         );
 
-        emit({
-          type: "ticket.execution_finished",
-          ticketId: ctx.ticketId,
-          projectId: ctx.projectId,
-          status: status === "complete" ? "complete" : "failed",
-          exitCode: status === "complete" ? 0 : 1,
-        });
+        // The executor emits completion after commit/push and final status persist.
 
         return { reported: true, status, message };
       },

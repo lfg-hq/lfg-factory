@@ -1,3 +1,4 @@
+import { trackModel } from "./usage-model.ts";
 import type { LanguageModelV3, LanguageModelV3CallOptions, LanguageModelV3Content, LanguageModelV3StreamPart, LanguageModelV3Usage } from "@ai-sdk/provider";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
 import { stream as codexStream } from "@earendil-works/pi-ai/api/openai-codex-responses";
@@ -202,5 +203,5 @@ export function createPiSubscriptionModel(
       return { content, finishReason: finish.finishReason, usage: finish.usage, warnings };
     },
   };
-  return model;
+  return trackModel(model, { provider: "openai", billingMode: "subscription", modelTier: /luna|haiku|mini|flash/i.test(modelId) ? "lite" : "pro" });
 }

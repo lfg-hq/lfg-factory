@@ -30,10 +30,10 @@ export function ChatPage({
   <script>(function(){if(localStorage.getItem('sidebarMinimized')==='true'){document.documentElement.classList.add('sidebar-minimized-preload');}})()</script>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
-  <link rel="stylesheet" href="/public/css/sidebar.css" />
+  <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
   <link rel="stylesheet" href="/public/css/artifacts.css" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
-  <link rel="stylesheet" href="/public/css/chat.css" />
+  <link rel="stylesheet" href="/public/css/chat.css?v=20260908-hover-copy" />
   <link rel="stylesheet" href="/public/css/artifacts-fix.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
@@ -470,22 +470,17 @@ export function ChatPage({
   </script>
   <script src="/public/js/marked.min.js"></script>
   <script src="/public/js/markdown-config.js"></script>
-  <!-- jsPDF + html2canvas power the Docs "Download -> PDF" export (artifacts-loader.js).
-       These were ONLY included on project-detail.tsx, so on the chat page window.jspdf was
-       never defined ("PDF generation library not loaded"). Self-hosted, loaded BEFORE
-       artifacts-loader.js so the export always has them. -->
-  <script src="/public/js/jspdf.umd.min.js"></script>
-  <script src="/public/js/html2canvas.min.js"></script>
-  <script src="/public/js/artifacts-loader.js"></script>
+  <!-- PDF libraries load on demand when exporting a document. -->
+  <script src="/public/js/artifacts-loader.js?v=20260908-lazy-pdf"></script>
   <script src="/public/js/document-comments.js"></script>
   <script src="/public/js/artifacts.js"></script>
   <script src="/public/js/preview-tab.js"></script>
   <script src="/public/js/ticket-agent.js"></script>
   <script src="/public/js/env-tab.js"></script>
   <script src="/public/js/tab-overflow.js"></script>
-  <script src="/public/js/sidebar.js"></script>
+  <script src="/public/js/sidebar.js?v=20260908-startup"></script>
   <script src="/public/js/custom-dropdown.js"></script>
-  <script src="/public/js/chat.js"></script>
+  <script src="/public/js/chat.js?v=20260908-hover-copy"></script>
   <script src="/public/js/mobile-menu.js"></script>
 
   <script>
@@ -513,7 +508,7 @@ export function ChatPage({
     }
 
     // Artifacts panel toggle is handled by artifacts.js (uses #artifacts-toggle and #resize-handle)
-    requestAnimationFrame(()=>requestAnimationFrame(()=>document.documentElement.classList.remove('sidebar-minimized-preload')));
+    
   </script>
 
   <script src="/public/js/connectors.js"></script>

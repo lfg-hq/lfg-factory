@@ -1,3 +1,5 @@
+import { currentUsage } from "../ai/usage-context.ts";
+import { registerUsageOutput } from "./usage-cli.ts";
 /**
  * Pi coding-agent runner (pi.dev) — in-sandbox builder for non-Anthropic models.
  *
@@ -288,6 +290,7 @@ export async function startPiCli(opts: PiRunOptions): Promise<PiRunResult> {
   // /data is a real 8GB disk that we also clean per build.
   const PI_DIR = "/data/.pi";
   const outputFile = opts.outputFile ?? `${PI_DIR}/pi_output_${ts}.jsonl`;
+  await registerUsageOutput(opts.workspaceId, outputFile);
   const promptFile = `${PI_DIR}/pi_prompt_${ts}.txt`;
   const envFile = `${PI_DIR}/pi_env_${ts}.sh`;
   const oauthTokenFile = `${PI_DIR}/pi_oauth_${ts}.token`;
@@ -377,7 +380,7 @@ async function flush(){
   flushing=true;
   const chunk=batch.join('\\n'); batch=[];
   const data=Buffer.from(chunk).toString('base64');
-  try{ await fetch(API+'/api/v1/cli/output',{method:'POST',headers:{'X-CLI-API-Key':KEY,'Content-Type':'application/json','ngrok-skip-browser-warning':'true'},body:JSON.stringify({ticket_id:TID,data})}); }catch{}
+  try{ await fetch(API+'/api/v1/cli/output',{method:'POST',headers:{'X-CLI-API-Key':KEY,'X-Usage-Run-Id':'${currentUsage()?.runId ?? ""}','Content-Type':'application/json','ngrok-skip-browser-warning':'true'},body:JSON.stringify({ticket_id:TID,data})}); }catch{}
   flushing=false;
 }
 const timer=setInterval(flush,800);

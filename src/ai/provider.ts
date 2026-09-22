@@ -1,3 +1,4 @@
+import { trackModel } from "./usage-model.ts";
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
@@ -194,19 +195,19 @@ export function getModel(
       const apiKey = userApiKeys?.anthropic || (allowEnvFallback ? env.ANTHROPIC_API_KEY : "");
       if (!apiKey) throw new Error(`No Anthropic API key configured. ${noKeyMsg}`);
       const anthropic = createAnthropic({ apiKey, fetch: llmFetch });
-      return anthropic(model);
+      return trackModel(anthropic(model), { provider, modelTier: entry.tier });
     }
     case "openai": {
       const apiKey = userApiKeys?.openai || (allowEnvFallback ? env.OPENAI_API_KEY : "");
       if (!apiKey) throw new Error(`No OpenAI API key configured. ${noKeyMsg}`);
       const openai = createOpenAI({ apiKey, fetch: llmFetch });
-      return openai(model);
+      return trackModel(openai(model), { provider, modelTier: entry.tier });
     }
     case "google": {
       const apiKey = userApiKeys?.google || (allowEnvFallback ? env.GOOGLE_AI_API_KEY : "");
       if (!apiKey) throw new Error(`No Google AI API key configured. ${noKeyMsg}`);
       const google = createGoogleGenerativeAI({ apiKey, fetch: llmFetch });
-      return google(model);
+      return trackModel(google(model), { provider, modelTier: entry.tier });
     }
     case "kimi": {
       const apiKey = userApiKeys?.kimi;
@@ -216,7 +217,7 @@ export function getModel(
         baseURL: "https://api.moonshot.ai/v1",
         fetch: kimiFetch as unknown as typeof fetch,
       });
-      return kimi.chat(model);
+      return trackModel(kimi.chat(model), { provider, modelTier: entry.tier });
     }
     case "deepseek": {
       const apiKey = userApiKeys?.deepseek;
@@ -226,7 +227,7 @@ export function getModel(
         baseURL: "https://api.deepseek.com/v1",
         fetch: llmFetch,
       });
-      return deepseek.chat(model);
+      return trackModel(deepseek.chat(model), { provider, modelTier: entry.tier });
     }
     case "glm": {
       const apiKey = userApiKeys?.glm;
@@ -236,7 +237,7 @@ export function getModel(
         baseURL: "https://api.z.ai/api/paas/v4",
         fetch: llmFetch,
       });
-      return glm.chat(model);
+      return trackModel(glm.chat(model), { provider, modelTier: entry.tier });
     }
     default:
       throw new Error(`Unknown provider: ${provider}`);
@@ -263,7 +264,7 @@ export function getGoogleVisionModel(
   // gemini-3.5-flash-lite by default: low-latency, cheapest multimodal Gemini (Text/Image/
   // Video/Audio/PDF), current-gen (2.5-flash-lite was deprecated for new keys). Overridable
   // via GEMINI_VISION_MODEL so a future deprecation is a config change, not a code change.
-  return google(env.GEMINI_VISION_MODEL || "gemini-3.5-flash-lite");
+  return trackModel(google(env.GEMINI_VISION_MODEL || "gemini-3.5-flash-lite"), { provider: "google", modelTier: "lite" });
 }
 
 /** Get the provider name for a given model key */
@@ -305,7 +306,7 @@ export function getModelWithSearch(
       if (!apiKey) throw new Error(`No OpenAI API key configured. ${noKeyMsg}`);
       const openai = createOpenAI({ apiKey, fetch: llmFetch });
       return {
-        model: openai(modelId),
+        model: trackModel(openai(modelId), { provider, modelTier: entry.tier }),
         searchTools: { web_search: openai.tools.webSearch({ searchContextSize: "medium" }) },
       };
     }
@@ -314,7 +315,7 @@ export function getModelWithSearch(
       if (!apiKey) throw new Error(`No Anthropic API key configured. ${noKeyMsg}`);
       const anthropic = createAnthropic({ apiKey, fetch: llmFetch });
       return {
-        model: anthropic(modelId),
+        model: trackModel(anthropic(modelId), { provider, modelTier: entry.tier }),
         searchTools: { web_search: anthropic.tools.webSearch_20250305({ maxUses: 5 }) },
       };
     }
@@ -323,7 +324,7 @@ export function getModelWithSearch(
       if (!apiKey) throw new Error(`No Google AI API key configured. ${noKeyMsg}`);
       const google = createGoogleGenerativeAI({ apiKey, fetch: llmFetch });
       return {
-        model: google(modelId),
+        model: trackModel(google(modelId), { provider, modelTier: entry.tier }),
         searchTools: { google_search: google.tools.googleSearch({}) },
       };
     }
@@ -336,7 +337,7 @@ export function getModelWithSearch(
         fetch: kimiFetch as unknown as typeof fetch,
       });
       return {
-        model: kimi.chat(modelId),
+        model: trackModel(kimi.chat(modelId), { provider, modelTier: entry.tier }),
         searchTools: {},
       };
     }
@@ -349,7 +350,7 @@ export function getModelWithSearch(
         fetch: llmFetch,
       });
       return {
-        model: deepseek.chat(modelId),
+        model: trackModel(deepseek.chat(modelId), { provider, modelTier: entry.tier }),
         searchTools: {},
       };
     }
@@ -362,7 +363,7 @@ export function getModelWithSearch(
         fetch: llmFetch,
       });
       return {
-        model: glm.chat(modelId),
+        model: trackModel(glm.chat(modelId), { provider, modelTier: entry.tier }),
         searchTools: {},
       };
     }

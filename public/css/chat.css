@@ -3058,3 +3058,47 @@ input:checked + .turbo-slider + .turbo-label,
     border-color: rgba(124, 58, 237, 0.45);
     color: #7c3aed;
 }
+
+/* User actions sit below the colored bubble, like a compact message toolbar. */
+.message.user.user-external-actions {
+  padding:0 !important; background:transparent !important; border:0 !important; box-shadow:none !important;
+}
+.message.user.user-external-actions > .message-content {
+  padding:12px 16px; border-radius:14px 14px 3px 14px;
+  background:var(--primary-color); color:var(--text-inverse,#fff);
+}
+.message.user.user-external-actions.message-long > .message-content { padding-right:48px; }
+.message-actions[hidden] { display:none !important; }
+.message:not(.message-long) > .message-content { padding-right:0; }
+.message.user.user-external-actions > .message-footer {
+  margin-top:5px; padding:0 2px; color:var(--text-secondary); gap:8px;
+}
+.message.user.user-external-actions > .message-footer .message-copy-btn {
+  display:inline-flex; align-items:center; justify-content:center;
+  width:30px; height:30px; min-height:30px; padding:0; border:0 !important;
+  border-radius:8px; background:transparent !important; color:var(--text-secondary) !important;
+}
+.message.user.user-external-actions > .message-footer .message-copy-btn:hover {
+  background:rgba(127,127,127,.09) !important; color:var(--primary-color) !important; transform:none;
+}
+.message.user.user-external-actions > .message-footer .message-copy-btn.copied { color:var(--secondary-color,#10b981) !important; }
+
+/* Keep the action strip outside the user bubble in BOTH themes. */
+[data-theme] .message.user.user-external-actions {
+  background:transparent !important; background-color:transparent !important;
+}
+.message > .message-footer .message-copy-btn {
+  opacity:0; pointer-events:none; transition:opacity .12s ease;
+  width:30px; height:30px; min-height:30px; padding:0; justify-content:center;
+  border:0 !important; border-radius:8px; color:var(--text-secondary);
+}
+.message:hover > .message-footer .message-copy-btn,
+.message:focus-within > .message-footer .message-copy-btn {
+  opacity:1; pointer-events:auto;
+}
+.message > .message-footer .message-copy-btn:hover {
+  background:rgba(127,127,127,.09); transform:none;
+}
+@media(hover:none) {
+  .message > .message-footer .message-copy-btn { opacity:1; pointer-events:auto; }
+}

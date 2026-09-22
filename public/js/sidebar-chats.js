@@ -38,10 +38,18 @@
     item.dataset.id = conv.id;
 
     var title = conv.title || "Untitled";
-    var short = title.length > 25 ? title.slice(0, 25) + "..." : title;
+    var author = (conv.author || "Teammate").trim();
+    var words = author.split(/\s+/).filter(Boolean);
+    var initials = words.length ? (Array.from(words[0])[0] + (words.length > 1 ? Array.from(words[words.length - 1])[0] : '')).toUpperCase() : '?';
+    item.setAttribute("tabindex", "0");
+    item.setAttribute("role", "link");
+    item.setAttribute("aria-label", title + (conv.is_mine ? "" : " — " + author));
+    item.addEventListener("keydown", function (e) {
+      if (e.target === item && e.key === "Enter") { e.preventDefault(); item.click(); }
+    });
 
     item.innerHTML =
-      '<div class="conversation-title" title="' + esc(title) + '">' + esc(short) + "</div>" +
+      '<div class="conversation-title" title="' + esc(title) + '">' + esc(title) + "</div>" +
       (conv.is_mine
         // Pin AND delete, the same pair the chat page shows — otherwise the rail is a
         // different component depending on which page you're standing on.
@@ -50,19 +58,13 @@
           '<i class="fas fa-thumbtack"></i></button>' +
           '<button class="delete-conversation" title="Delete" data-del="' + esc(conv.id) + '">' +
           '<i class="fas fa-trash"></i></button>'
-        : '<span class="conversation-author" title="' + esc(conv.author || "") + '">' + esc(conv.author || "") + "</span>");
+        : '<span class="conversation-author" title="' + esc(author) + '" aria-label="' + esc(author) + '">' + esc(initials) + "</span>");
 
-    item.addEventListener("click", function () {
+    item.addEventListener("click", function (e) {
+      if (e.target.closest && e.target.closest("button")) return;
       window.location.href = "/chat/project/" + projectId + "/conversation/" + conv.id;
     });
     return item;
-  }
-
-  function heading(text) {
-    var h = document.createElement("div");
-    h.className = "conversation-group-label";
-    h.textContent = text;
-    return h;
   }
 
   function note(text) {
@@ -79,13 +81,8 @@
 
     var pinned = convs.filter(function (c) { return c.pinned; });
     var rest = convs.filter(function (c) { return !c.pinned; });
-    // A "Pinned" heading only earns its space when something is pinned; the section
-    // already carries a "Recent chats" heading above it.
-    if (pinned.length) {
-      listEl.appendChild(heading("Pinned"));
-      pinned.forEach(function (c) { listEl.appendChild(row(c)); });
-      if (rest.length) listEl.appendChild(heading("Recent"));
-    }
+    // The persistent pin icon identifies pinned chats without extra section rows.
+    pinned.forEach(function (c) { listEl.appendChild(row(c)); });
     rest.forEach(function (c) { listEl.appendChild(row(c)); });
 
     var here = window.location.pathname;
@@ -127,7 +124,7 @@
     e.preventDefault();
     e.stopPropagation();
     var id = btn.getAttribute("data-pin");
-    var next = !btn.getAttribute("data-pinned");
+    var next = btn.getAttribute("data-pinned") !== "1";
     btn.disabled = true;
     fetch("/api/conversations/" + id + "/pin", {
       method: "POST",

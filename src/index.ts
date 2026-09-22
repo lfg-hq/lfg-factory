@@ -1,3 +1,4 @@
+import tokenUsageApi from "./routes/api/token-usage.ts";
 import { Hono } from "hono";
 import { logger } from "hono/logger";
 import { trimTrailingSlash } from "hono/trailing-slash";
@@ -169,6 +170,7 @@ app.route("/", agentsRoutes);
 app.route("/", invitationRoutes);
 app.route("/", shareRoutes);
 app.route("/api/files", filesApi);
+app.route("/api/token-usage", tokenUsageApi);
 app.route("/api/settings", settingsApi);
 app.route("/api/projects", ticketCodeApi);
 app.route("/api/projects", ticketsApi);

@@ -93,6 +93,8 @@ export function ProjectDetailPage({
   activeTab = "conversations",
   modelConfig,
 }: ProjectDetailPageProps) {
+  const readyPreview = instantApps.find((app) => app.status === "running" && app.previewUrl && /^https?:\/\//.test(app.previewUrl));
+  const continueUrl = conversations.length ? `/chat/project/${project.projectId}/conversation/${conversations[0]!.id}` : `/chat/project/${project.projectId}?new=1`;
   const totalTickets = Object.values(ticketCounts).reduce((a, b) => a + b, 0);
 
   // The tabs that ARE the project dashboard. They share the project header and the
@@ -101,6 +103,7 @@ export function ProjectDetailPage({
   // neither — a tab row on the Docs page pointed at a view the page wasn't part of.
   const DASHBOARD_TABS = ["home", "agent", "events", "settings", "config"];
   const isDashboardTab = DASHBOARD_TABS.includes(activeTab);
+  const isSettingsTab = ["settings", "agent", "config"].includes(activeTab);
   const avatarLetter = (user.name?.[0] ?? user.email?.[0] ?? "?").toUpperCase();
   // Human labels: an invited "member" is shown as a Collaborator.
   const roleLabel = ({ owner: "Owner", admin: "Admin", member: "Collaborator", viewer: "Viewer", guest: "Guest" }[role] ?? role);
@@ -115,9 +118,10 @@ export function ProjectDetailPage({
   <script>(function(){if(localStorage.getItem('sidebarMinimized')==='true'){document.documentElement.classList.add('sidebar-minimized-preload');}})()</script>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
-  <link rel="stylesheet" href="/public/css/sidebar.css" />
+  <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
   <link rel="stylesheet" href="/public/css/projects.css" />
   <link rel="stylesheet" href="/public/css/project_detail.css" />
+  <link rel="stylesheet" href="/public/css/project-home.css?v=4" />
   <link rel="stylesheet" href="/public/css/artifacts.css" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
@@ -264,17 +268,9 @@ export function ProjectDetailPage({
           </div>
         </div>
         <div style="display:flex;align-items:center;gap:0.75rem;flex:0 0 auto;">
-          ${!project.repoUrl ? html`
-            <button onclick="showCodebaseModal()" class="btn btn-secondary" style="display:flex;align-items:center;gap:0.5rem;font-size:0.8125rem;white-space:nowrap;">
-              <i class="fas fa-link"></i> Link Repository
-            </button>
-          ` : html`
-            <button onclick="showCodebaseModal()" class="btn btn-secondary" style="display:flex;align-items:center;gap:0.5rem;font-size:0.8125rem;white-space:nowrap;">
-              <i class="fab ${project.repoProvider === "gitlab" ? "fa-gitlab" : "fa-github"}"></i> Change Repo
-            </button>
-          `}
-          <a href="/chat/project/${project.projectId}" class="btn btn-primary" style="display:flex;align-items:center;gap:0.5rem;white-space:nowrap;">
-            <i class="fas fa-arrow-left"></i> Back to Workspace
+          ${readyPreview ? html`<a href="${readyPreview.previewUrl}" target="_blank" rel="noopener" class="btn btn-secondary"><i class="fas fa-arrow-up-right-from-square"></i> Open preview</a>` : ""}
+          <a href="${continueUrl}" class="btn btn-primary" style="display:flex;align-items:center;gap:0.5rem;white-space:nowrap;">
+            <i class="fas fa-comments"></i> ${conversations.length ? "Continue working" : "Open chat"}
           </a>
         </div>
       </div>` : ""}
@@ -287,16 +283,10 @@ export function ProjectDetailPage({
         <a href="/projects/${project.projectId}" class="tab-item${activeTab === "home" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "home" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "home" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
           <i class="fas fa-house"></i> Home
         </a>
-        <a href="/projects/${project.projectId}?tab=agent" class="tab-item${activeTab === "agent" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "agent" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "agent" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
-          <i class="fas fa-robot"></i> Agent
-        </a>
-        <a href="/projects/${project.projectId}?tab=config" class="tab-item${activeTab === "config" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "config" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "config" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
-          <i class="fas fa-sliders-h"></i> Config
-        </a>
         <a href="/projects/${project.projectId}?tab=events" class="tab-item${activeTab === "events" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "events" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "events" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
-          <i class="fas fa-stream"></i> Events
+          <i class="fas fa-stream"></i> Activity
         </a>
-        <a href="/projects/${project.projectId}?tab=settings" class="tab-item${activeTab === "settings" ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${activeTab === "settings" ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${activeTab === "settings" ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
+        <a href="/projects/${project.projectId}?tab=settings" class="tab-item${isSettingsTab ? " active" : ""}" style="display:flex;align-items:center;gap:0.5rem;padding:0.875rem 1.25rem;text-decoration:none;font-size:0.875rem;font-weight:500;color:${isSettingsTab ? "var(--text-color)" : "var(--text-secondary)"};border-bottom:2px solid ${isSettingsTab ? "var(--primary-color)" : "transparent"};margin-bottom:-1px;transition:color 0.15s;">
           <i class="fas fa-cog"></i> Settings
         </a>
       </div>` : ""}
@@ -322,6 +312,20 @@ export function ProjectDetailPage({
 
       <!-- Tab content -->
       <div style="padding:2rem;max-width:1200px;margin:0 auto;">
+        ${isSettingsTab ? html`
+          <header class="project-settings-heading">
+            <h2>Project settings</h2>
+            <p>Manage your project, guide your agents, and choose how they work.</p>
+          </header>
+          <nav class="project-settings-nav" aria-label="Project settings sections">
+            ${[
+              { tab: "settings", label: "General", icon: "fa-sliders" },
+              { tab: "agent", label: "Instructions & workflows", icon: "fa-list-check" },
+              { tab: "config", label: "Models & AI", icon: "fa-wand-magic-sparkles" },
+            ].map((item) => html`<a href="/projects/${project.projectId}?tab=${item.tab}" target="_self" aria-current="${activeTab === item.tab ? "page" : "false"}"><i class="fas ${item.icon}" aria-hidden="true"></i>${item.label}</a>`)}
+          </nav>
+        ` : ""}
+
       <!-- Page styles are emitted for EVERY tab. They used to be nested inside the
            home/inbox branch, so opening Agent, Events or Settings rendered their
            markup with no stylesheet at all — unstyled radios, a browser-default
@@ -465,44 +469,16 @@ export function ProjectDetailPage({
         ${(activeTab === "home" || activeTab === "inbox") ? html`
 
           ${activeTab === "home" ? html`
-          <!-- Project summary -->
-          <div class="home-card" style="margin-bottom:1rem;padding:1rem 1.25rem;">
-            <div style="display:flex;align-items:center;gap:0.75rem;min-width:0;">
-              <span style="font-size:1.35rem;">${project.icon}</span>
-              <div style="min-width:0;flex:1;">
-                <div style="display:flex;align-items:center;gap:0.55rem;flex-wrap:wrap;">
-                  <h2 style="margin:0;font-size:1.08rem;font-weight:700;color:var(--text-color);">${project.name}</h2>
-                  <span style="font-size:0.7rem;padding:0.12rem 0.45rem;border-radius:9999px;background:${project.status === "active" ? "rgba(34,197,94,0.12)" : "rgba(156,163,175,0.12)"};color:${project.status === "active" ? "#22c55e" : "var(--text-secondary)"};">${project.status}</span>
-                </div>
-                <div style="display:flex;gap:1.15rem;flex-wrap:wrap;margin-top:0.5rem;font-size:0.78rem;color:var(--text-secondary);">
-                  <span><i class="fas fa-file-lines" style="margin-right:0.32rem;opacity:0.7;"></i>${docsCount} doc${docsCount === 1 ? "" : "s"}</span>
-                  <span><i class="fas fa-list-check" style="margin-right:0.32rem;opacity:0.7;"></i>${openTicketCount} ticket${openTicketCount === 1 ? "" : "s"}</span>
-                  <span><i class="fas fa-users" style="margin-right:0.32rem;opacity:0.7;"></i>${memberCount} member${memberCount === 1 ? "" : "s"}</span>
-                  ${project.repoUrl ? html`<a href="${project.repoUrl}" target="_blank" style="color:var(--text-secondary);text-decoration:none;"><i class="fab ${project.repoProvider === "gitlab" ? "fa-gitlab" : "fa-github"}" style="margin-right:0.32rem;"></i>${project.repoOwner}/${project.repoName}</a>` : html`<span style="opacity:0.8;"><i class="fas fa-code-branch" style="margin-right:0.32rem;"></i>No repo linked</span>`}
-                </div>
-              </div>
-              ${!project.repoUrl && (isOwner || role === "admin") ? html`<button onclick="showCodebaseModal()" class="home-team-action" style="flex:none;"><i class="fas fa-link"></i> Connect repo</button>` : ""}
-            </div>
+          <script src="/public/js/project-home.js?v=2"></script>
+          <div class="home-overview" data-project="${project.projectId}" data-user="${user.id}">
+            <div><p class="home-eyebrow">PROJECT OVERVIEW</p><h2>Pick up where you left off</h2><p id="home-work-summary">Checking the latest project status…</p></div>
+            <a href="/projects/${project.projectId}/tickets" class="home-quiet-link">All tickets <i class="fas fa-arrow-right"></i></a>
           </div>
-
-          ${role !== "viewer" ? html`
-          <!-- Guided work entry point -->
-          <section class="home-card start-work-card" aria-labelledby="start-work-title">
-            <div class="start-work-eyebrow"><i class="fas fa-location-arrow"></i> Start here</div>
-            <h2 class="start-work-title" id="start-work-title">What would you like to work on?</h2>
-            <p class="start-work-intro">Not sure where to begin? Start with a chat. You can turn the result into tickets once the work is clear.</p>
-            <div class="start-work-options">
-              <a href="/chat/project/${project.projectId}?new=1" class="start-choice start-choice-primary">
-                <span class="start-choice-icon"><i class="fas fa-comments"></i></span>
-                <span class="start-choice-body">
-                  <span class="start-choice-title">Describe what you need</span>
-                  <span class="start-choice-copy">Start with an idea, problem, or outcome—even if it is vague. The AI will ask questions, inspect the project, and help shape the work.</span>
-                  <span class="start-choice-cta">Start a chat <i class="fas fa-arrow-right"></i></span>
-                </span>
-              </a>
-            </div>
+          <div class="home-work-stats" id="home-work-stats" aria-label="Ticket overview"></div>
+          <section class="home-card home-attention" aria-labelledby="home-attention-title">
+            <div class="home-section-heading"><h3 id="home-attention-title">Needs your attention</h3><span class="home-eyebrow">NEXT STEPS</span></div>
+            <div id="home-ticket-attention" aria-live="polite"><p class="home-muted">Loading ticket status…</p></div>
           </section>
-          ` : ""}
 
           <!-- Two-column: (required actions + activity) | team + pins -->
           <div class="home-grid" style="display:grid;grid-template-columns:1fr 340px;gap:1.5rem;align-items:start;">
@@ -516,10 +492,14 @@ export function ProjectDetailPage({
                 <div id="home-actions-list" style="margin-top:0.5rem;"></div>
               </div>
 
+              <section class="home-card" id="home-builds" hidden>
+                <div class="home-section-heading"><h3>Builds in progress</h3><span class="home-eyebrow">LIVE</span></div>
+                <div id="home-builds-list"></div>
+              </section>
               <!-- Recent chats -->
-              <div class="home-card">
+              <div class="home-card home-recent-chats">
                 <div style="display:flex;justify-content:space-between;align-items:center;">
-                  <h3 class="home-sec-title" style="margin:0;">Recent chats</h3>
+                  <h3 class="home-sec-title" style="margin:0;">Continue working</h3>
                   <a href="/projects/${project.projectId}?tab=conversations" style="font-size:0.78rem;color:var(--primary-color);text-decoration:none;">See all</a>
                 </div>
                 ${conversations.length === 0 ? html`
@@ -527,7 +507,7 @@ export function ProjectDetailPage({
                 ` : html`
                   <div class="lfg-list" style="margin-top:0.6rem;">
                     ${conversations.slice(0, 5).map((cv) => html`
-                      <a href="/chat/project/${project.projectId}/conversation/${cv.id}" class="lfg-row">
+                      <a href="/chat/project/${project.projectId}/conversation/${cv.id}" class="lfg-row" data-home-conversation="${cv.id}">
                         <span style="flex:1;font-size:0.875rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${cv.title ?? "Untitled conversation"}</span>
                         <span style="font-size:0.72rem;color:var(--text-secondary);flex:none;">${new Date(cv.updatedAt).toLocaleDateString()}</span>
                       </a>
@@ -536,6 +516,15 @@ export function ProjectDetailPage({
                 `}
               </div>
 
+              ${role !== "viewer" && role !== "guest" ? html`
+              <section class="home-card home-new-work">
+                <h3>Start something new</h3>
+                <form id="home-start-form" data-project="${project.projectId}">
+                  <label class="home-muted" for="home-start-input">What would you like to build or improve?</label>
+                  <div class="home-compose"><textarea id="home-start-input" rows="2" maxlength="10000" required placeholder="Describe a feature, a fix, or an idea…"></textarea><button type="submit" class="btn btn-primary" aria-label="Continue in a new chat"><i class="fas fa-arrow-right"></i></button></div>
+                  <span id="home-start-error" role="status" class="home-muted"></span>
+                </form>
+              </section>` : ""}
               <!-- Activity feed -->
               <div class="home-card">
                 <div style="display:flex;justify-content:space-between;align-items:center;">
@@ -548,6 +537,12 @@ export function ProjectDetailPage({
 
             <!-- Sidebar -->
             <div style="display:flex;flex-direction:column;gap:1.5rem;">
+              <div class="home-card home-resources">
+                <h3 class="home-sec-title">Project details</h3>
+                <a href="/projects/${project.projectId}?tab=documents">${docsCount} documents <i class="fas fa-arrow-right"></i></a>
+                <a href="/projects/${project.projectId}?tab=settings">Repository &amp; settings <i class="fas fa-arrow-right"></i></a>
+                <p class="home-muted">${readyPreview ? "Preview is running" : "No running preview"}</p>
+              </div>
               <!-- Team -->
               <div class="home-card">
                 <div style="display:flex;justify-content:space-between;align-items:center;">
@@ -572,7 +567,7 @@ export function ProjectDetailPage({
               <!-- Pinned "Start here" -->
               <div class="home-card">
                 <div style="display:flex;justify-content:space-between;align-items:center;">
-                  <h3 class="home-sec-title" style="margin:0;">📌 Start here</h3>
+                  <h3 class="home-sec-title" style="margin:0;">Resources</h3>
                   <button id="home-pin-add" onclick="openPinModal()" style="display:none;background:none;border:none;color:var(--primary-color);cursor:pointer;font-size:0.78rem;"><i class="fas fa-plus"></i> Pin</button>
                 </div>
                 <div id="home-pins" style="margin-top:0.6rem;"><div style="color:var(--text-secondary);font-size:0.85rem;">Loading…</div></div>
@@ -892,9 +887,9 @@ export function ProjectDetailPage({
                 }).join('');
               }
               function renderActions(notifs){
-                var unread = (notifs||[]).filter(function(n){ return !n.readAt; });
+                var unread = (notifs||[]).filter(function(n){ return !n.readAt && !/^build_/.test(n.type || ''); });
                 var card = document.getElementById('home-actions'), list = document.getElementById('home-actions-list');
-                if (!card || !list || !unread.length) return;
+                if (!card || !list) return; if (!unread.length) { card.style.display='none'; return; }
                 list.innerHTML = unread.slice(0,6).map(function(n){
                   var body = (n.message||'').split(' — re: ')[0];
                   return '<a href="'+(n.link||('/projects/'+HM_PID+'?tab=inbox'))+'" style="display:flex;align-items:center;gap:0.6rem;padding:0.5rem 0;border-bottom:1px solid var(--border-color);text-decoration:none;color:var(--text-color);">'
@@ -939,13 +934,19 @@ export function ProjectDetailPage({
 
               // One combined request for the whole Home (activities + notifications
               // + members + pins) instead of four separate round-trips.
-              fetch('/api/projects/'+HM_PID+'/home').then(function(r){return r.json();}).then(function(d){
+              function refreshHome(){ return fetch('/api/projects/'+HM_PID+'/home').then(function(r){if(!r.ok) throw new Error('Home unavailable'); return r.json();}).then(function(d){
+                if (window.renderHomeWork) window.renderHomeWork(d.workTickets || []);
                 renderActivity(d.activities);
                 renderActions(d.notifications);
                 renderTeam(d.members || {});
                 renderPins(d.pins, d.canManagePins);
                 var b = document.getElementById('inbox-tab-badge'); if (b && d.unreadCount){ b.textContent = d.unreadCount; b.style.display = ''; }
-              }).catch(function(){ var el=document.getElementById('home-activity'); if(el) el.innerHTML='<div style="color:var(--text-secondary);font-size:0.85rem;">Couldn\\'t load.</div>'; });
+              }).catch(function(){ document.getElementById('home-work-summary').textContent='Could not refresh project status. Retrying shortly…'; var loading=document.getElementById('home-ticket-attention'); if(loading && loading.textContent.indexOf('Loading')>=0) loading.textContent='Ticket status unavailable. Open All tickets or try again shortly.'; var el=document.getElementById('home-activity'); if(el) el.innerHTML='<div style="color:var(--text-secondary);font-size:0.85rem;">Couldn\\'t load.</div>'; });
+
+              }
+              refreshHome();
+              setInterval(function(){ if (!document.hidden) refreshHome(); }, 15000);
+              window.addEventListener('focus', refreshHome);
 
               window.deletePin = function(id){
                 if (!confirm('Unpin this?')) return;
@@ -1009,8 +1010,18 @@ export function ProjectDetailPage({
 
         ${activeTab === "events" ? html`
           <div id="events-tab-container" data-project-id="${project.projectId}">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem;">
-              <h2 style="font-size:1.1rem;font-weight:600;color:var(--text-color);margin:0;">Events Timeline</h2>
+            <header class="activity-heading">
+              <div><h2>Activity</h2><p>Builds, changes, and updates across your project.</p></div>
+              <span id="activity-sync" role="status">Connecting…</span>
+            </header>
+            <div class="activity-toolbar">
+              <div class="activity-filters" role="group" aria-label="Filter activity">
+                <button type="button" data-activity-filter="all" aria-pressed="true">All activity</button>
+                <button type="button" data-activity-filter="builds" aria-pressed="false">Builds</button>
+                <button type="button" data-activity-filter="git" aria-pressed="false">Git changes</button>
+                <button type="button" data-activity-filter="attention" aria-pressed="false">Needs attention</button>
+              </div>
+              <button type="button" id="activity-refresh" aria-label="Refresh activity"><i class="fas fa-rotate-right" aria-hidden="true"></i> Refresh</button>
             </div>
             <div id="events-timeline-container">
               <div style="text-align:center;padding:2rem;color:var(--text-secondary);">
@@ -1019,8 +1030,8 @@ export function ProjectDetailPage({
               </div>
             </div>
           </div>
-          <link rel="stylesheet" href="/public/css/events-timeline.css" />
-          <script src="/public/js/events-timeline.js"></script>
+          <link rel="stylesheet" href="/public/css/events-timeline.css?v=2" />
+          <script src="/public/js/events-timeline.js?v=2"></script>
         ` : ""}
 
         ${activeTab === "documents" ? html`
@@ -1102,12 +1113,8 @@ export function ProjectDetailPage({
           </div>
           <script src="/public/js/marked.min.js"></script>
           <script src="/public/js/markdown-config.js"></script>
-          <!-- jsPDF + html2canvas — power "Download → PDF" (renders tables/code faithfully).
-               SELF-HOSTED (was cdnjs): a blocked/slow CDN left window.jspdf undefined →
-               "PDF generation library not loaded". Same-origin can't be blocked. -->
-          <script src="/public/js/jspdf.umd.min.js"></script>
-          <script src="/public/js/html2canvas.min.js"></script>
-          <script src="/public/js/artifacts-loader.js"></script>
+  <!-- PDF libraries load on demand when exporting a document. -->
+          <script src="/public/js/artifacts-loader.js?v=20260908-lazy-pdf"></script>
           <script src="/public/js/document-comments.js"></script>
           <script>
             // Reuse the SAME docs module as the chat Docs panel (window.ArtifactsLoader),
@@ -1605,7 +1612,10 @@ export function ProjectDetailPage({
 
         ${activeTab === "settings" ? html`
           <div>
-            <h2 style="font-size:1.1rem;font-weight:600;color:var(--text-color);margin:0 0 1.5rem;">Project Settings</h2>
+            <div class="project-general-heading">
+              <h3>General</h3>
+              ${(isOwner || role === "admin") ? html`<button class="btn btn-secondary" onclick="showCodebaseModal()">${project.repoUrl ? "Change repository" : "Connect repository"}</button>` : ""}
+            </div>
             ${isOwner ? html`
             <form method="POST" action="/projects/${project.projectId}/update">
               <div style="margin-bottom:1rem;">
@@ -1810,10 +1820,10 @@ export function ProjectDetailPage({
     </div>
   </div>
 
-  <script src="/public/js/sidebar.js"></script>
-<script src="/public/js/sidebar-chats.js"></script>
+  <script src="/public/js/sidebar.js?v=20260908-startup"></script>
+<script src="/public/js/sidebar-chats.js?v=20260908-initials"></script>
   <script src="/public/js/board-sync.js"></script>
-  <script>requestAnimationFrame(()=>requestAnimationFrame(()=>document.documentElement.classList.remove('sidebar-minimized-preload')));</script>
+  <script></script>
   <script>
     // Codebase modal open/close. The shared .modal-overlay class hides via
     // visibility/opacity and reveals with the .active class — toggling display

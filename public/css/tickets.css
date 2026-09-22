@@ -4180,4 +4180,51 @@
 }
 .pr-hint { margin: 0.7rem 0 0; font-size: 0.75rem; line-height: 1.5; color: var(--text-secondary); }
 
-.ticket-code-link{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid #8470ba55;border-radius:6px;color:#bba6ed;background:#a98ce812;font-size:11px;font-weight:600;text-decoration:none;white-space:nowrap}.ticket-code-link:hover{background:#a98ce829;color:#d6c4ff}.kanban-card-meta .ticket-code-link{margin-right:auto}[data-theme="light"] .ticket-code-link{color:#6846a4;background:#f0eafb}
+/* Code workspace actions: a quiet card action and a full-height toolbar button. */
+a.ticket-code-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    gap: 6px;
+    box-sizing: border-box;
+    height: 26px;
+    padding: 0 8px;
+    border: 1px solid rgba(148, 163, 184, .2);
+    border-radius: 7px;
+    background: rgba(148, 163, 184, .06);
+    color: #bbc3d1;
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1;
+    text-decoration: none;
+    white-space: nowrap;
+    transition: background .15s ease, border-color .15s ease, color .15s ease;
+}
+a.ticket-code-link svg { flex: none; display: block; }
+a.ticket-code-link .ticket-code-external { opacity: .55; margin-left: 2px; }
+a.ticket-code-link:hover {
+    color: #ddd2ff;
+    border-color: rgba(167, 139, 250, .4);
+    background: rgba(167, 139, 250, .12);
+    text-decoration: none;
+}
+a.ticket-code-link:focus-visible {
+    outline: 2px solid #a78bfa;
+    outline-offset: 3px;
+}
+.kanban-card-meta .ticket-code-link { margin-left: auto; order: 2; }
+.kanban-card-meta:has(.ticket-code-link) { margin-top: 12px; justify-content: space-between; }
+a.ticket-code-link--toolbar { height: 32px; padding: 0 11px; font-size: .78rem; font-weight: 500; border-radius: 8px; }
+[data-theme="light"] a.ticket-code-link {
+    color: #526078;
+    background: #f8fafc;
+    border-color: #e2e8f0;
+}
+[data-theme="light"] a.ticket-code-link:hover {
+    color: #6d28d9;
+    background: #f5f0ff;
+    border-color: #d5c5f4;
+}
+[data-theme="light"] a.ticket-code-link--toolbar { background: #fff; box-shadow: 0 1px 2px rgba(15, 23, 42, .03); }

@@ -13,6 +13,7 @@ import { projects } from "../db/schema/projects.ts";
 import { eq, and, asc, inArray } from "drizzle-orm";
 import { logActivity } from "../services/activity-log.ts";
 import { ACTIVITY_TYPES } from "../db/schema/activities.ts";
+import { notify } from "../services/notify.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 
 // ── Resolve projectId from ticketId (for events that lack it) ─────────
@@ -158,6 +159,8 @@ export function registerEventHandlers(): void {
   // ticket.execution_started → log activity
   bus.on("ticket.execution_started", async (event) => {
     const { ticketId } = event.payload;
+    recentFinishes.delete(`${ticketId}:complete`);
+    recentFinishes.delete(`${ticketId}:failed`);
     const projectId = event.payload.projectId ?? await resolveProjectId(ticketId);
     if (!projectId) return;
     const name = await getTicketName(ticketId);
@@ -199,6 +202,19 @@ export function registerEventHandlers(): void {
       .limit(1);
     const ownerId = project?.ownerId;
     const publicProjectId = project?.publicProjectId;
+
+    // Save before pushing: users can recover missed events from any chat/page.
+    if (ownerId && publicProjectId) {
+      await notify({
+        userId: ownerId, projectId: publicProjectId,
+        type: status === "complete" ? "build_complete" : "build_failed",
+        targetType: "ticket", targetId: ticketId,
+        message: status === "complete"
+          ? `${name} — build finished, ready for review.`
+          : `${name} — build failed. Open the ticket to see the error and retry.`,
+        link: `/projects/${publicProjectId}/tickets?ticket=${encodeURIComponent(ticketId)}`,
+      }).catch((error) => console.error("[handlers] Could not save build notification:", error));
+    }
 
     if (status === "complete") {
       const durationStr = durationMs ? ` in ${Math.round(durationMs / 1000)}s` : "";
@@ -242,7 +258,7 @@ export function registerEventHandlers(): void {
           projectId,
           publicProjectId,
           status: "failed",
-          message: `Ticket "${name}" failed (exit code ${exitCode ?? "unknown"}). The build chain will continue with the next ticket.`,
+          message: `Ticket "${name}" failed (exit code ${exitCode ?? "unknown"}). Open the ticket logs for details and retry.`,
         });
       }
     }
@@ -253,7 +269,7 @@ export function registerEventHandlers(): void {
     // project-wide "next open ticket" reflex.
     const { onTicketFinished } = await import("../services/build-queue.ts");
     const handledByRun = await onTicketFinished(ticketId, status === "complete" ? "complete" : "failed")
-      .catch((e) => { console.warn("[handlers] build-run advance failed:", (e as Error).message); return false; });
+      .catch((e) => { console.warn("[handlers] build-run advance failed:", (e as Error).message); return true; });
     if (!handledByRun) await autoQueueNextTicket(projectId, ticketId);
   });
 
@@ -263,6 +279,14 @@ export function registerEventHandlers(): void {
     const projectId = await resolveProjectId(ticketId);
     if (!projectId) return;
     const name = await getTicketName(ticketId);
+    const [project] = await db.select({ ownerId: projects.ownerId, publicProjectId: projects.projectId })
+      .from(projects).where(eq(projects.id, projectId)).limit(1);
+    if (project) await notify({
+      userId: project.ownerId, projectId: project.publicProjectId,
+      type: "build_attention", targetType: "ticket", targetId: ticketId,
+      message: `${name} — ${question || reason}`,
+      link: `/projects/${project.publicProjectId}/tickets?ticket=${encodeURIComponent(ticketId)}`,
+    }).catch((error) => console.error("[handlers] Could not save attention notification:", error));
     await logActivity({
       projectId,
       ticketId,

@@ -491,7 +491,7 @@ projectsRouter.get("/projects/:projectId", async (c) => {
         createdAt: a.createdAt,
       })),
       activeTab: tab,
-      modelConfig: await loadModelConfig(user.id, project),
+      modelConfig: tab === "config" ? await loadModelConfig(user.id, project) : undefined,
     })
   );
 });

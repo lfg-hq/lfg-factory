@@ -1,3 +1,4 @@
+import { currentUsage, withUsage, withUsageOperation } from "./usage-context.ts";
 import { availableChatModels } from "../services/available-models.ts";
 import { streamText, stepCountIs, generateText } from "ai";
 import { promises as fs } from "node:fs";
@@ -395,7 +396,7 @@ export async function describeAttachedImages(
 }
 
 export async function handleStream(req: StreamRequest): Promise<{ conversationId: string }> {
-  return withUserSubscription(req.userId, req.projectId, () => handleStreamInternal(req));
+  return withUsage({ userId: req.userId, operation: "chat" }, () => withUserSubscription(req.userId, req.projectId, () => handleStreamInternal(req)));
 }
 
 async function handleStreamInternal(req: StreamRequest): Promise<{ conversationId: string }> {
@@ -450,6 +451,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   const agentRecord = convId ? await getAgentByConversation(convId) : null;
 
   // ── 2. Save user message ─────────────────────────────────────────────────────
+  if (currentUsage()) currentUsage()!.conversationId = convId;
   const [userMsgRow] = await db.insert(messages).values({
     conversationId: convId,
     role: "user",
@@ -642,6 +644,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
       .from(projects)
       .where(eq(projects.projectId, projectId));
     if (proj) internalProjectId = proj.id;
+    if (currentUsage()) currentUsage()!.projectId = internalProjectId;
   }
 
   // ── Branch awareness — pin the model to the branch the Preview is showing ──────
@@ -1426,7 +1429,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     } catch {
       // keep the full model
     }
-    generateTitle(convId, userMessage, fullResponse, titleModel).catch(() => {});
+    withUsageOperation("title", () => generateTitle(convId, userMessage, fullResponse, titleModel)).catch(() => {});
   }
 
   return { conversationId: convId };

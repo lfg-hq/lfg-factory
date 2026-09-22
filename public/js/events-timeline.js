@@ -1,129 +1,88 @@
-/**
- * Events Timeline — fetches and renders project activities.
- * Polls every 10s for new events.
- */
+/** Project activity: latest 50 events, grouped by local date and kept current. */
 (function () {
-  const container = document.getElementById("events-timeline-container");
-  const tabContainer = document.getElementById("events-tab-container");
-  if (!container || !tabContainer) return;
-
-  const projectId = tabContainer.dataset.projectId;
-  if (!projectId) return;
-
-  const POLL_INTERVAL = 10_000;
-  let knownIds = new Set();
-  let pollTimer = null;
-
-  // Icon + dot-class mapping per activity type
-  const TYPE_CONFIG = {
-    ticket_queued:          { icon: "fa-clock",        dotClass: "event-dot--queued" },
-    ticket_started:         { icon: "fa-play",         dotClass: "event-dot--started" },
-    ticket_completed:       { icon: "fa-check-circle", dotClass: "event-dot--completed" },
-    ticket_failed:          { icon: "fa-times-circle", dotClass: "event-dot--failed" },
-    ticket_stuck:           { icon: "fa-exclamation-triangle", dotClass: "event-dot--stuck" },
-    git_pushed:             { icon: "fa-code-branch",  dotClass: "event-dot--git_pushed" },
-    git_merged:             { icon: "fa-code-merge",   dotClass: "event-dot--git_merged" },
-    orchestrator_queued_next: { icon: "fa-forward",    dotClass: "event-dot--auto_queued" },
-    user_action_required:   { icon: "fa-hand-paper",   dotClass: "event-dot--user_action" },
+  const container = document.getElementById('events-timeline-container');
+  const host = document.getElementById('events-tab-container');
+  if (!container || !host?.dataset.projectId) return;
+  const projectId = host.dataset.projectId;
+  const sync = document.getElementById('activity-sync');
+  const refresh = document.getElementById('activity-refresh');
+  let activities = [], filter = 'all', loading = false, signature = null;
+  const config = {
+    ticket_queued: ['Queued', 'clock', 'builds', 'neutral'],
+    ticket_started: ['Build started', 'play', 'builds', 'purple'],
+    ticket_completed: ['Build completed', 'check', 'builds', 'success'],
+    ticket_failed: ['Build failed', 'exclamation', 'attention', 'error'],
+    ticket_stuck: ['Needs input', 'question', 'attention', 'warning'],
+    user_action_required: ['Action required', 'exclamation', 'attention', 'warning'],
+    git_pushed: ['Changes pushed', 'code-branch', 'git', 'purple'],
+    git_merged: ['Changes merged', 'code-merge', 'git', 'success'],
+    orchestrator_queued_next: ['Auto-queued', 'forward', 'builds', 'neutral'],
   };
-
-  function getConfig(activityType) {
-    return TYPE_CONFIG[activityType] || { icon: "fa-info-circle", dotClass: "event-dot--queued" };
+  function el(tag, cls, text) { const n = document.createElement(tag); n.className = cls; if (text) n.textContent = text; return n; }
+  function date(value) { return new Date(typeof value === 'number' && value < 1e12 ? value * 1000 : value); }
+  function info(a) { return config[a.activityType] || ['Project update', 'circle-info', 'other', 'neutral']; }
+  function dayLabel(d) {
+    const today = new Date(), yesterday = new Date(); yesterday.setDate(today.getDate() - 1);
+    if (d.toDateString() === today.toDateString()) return 'Today';
+    if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
+    return d.toLocaleDateString(undefined, { weekday:'short', month:'short', day:'numeric', year:'numeric' });
   }
-
-  function formatTime(dateVal) {
-    const d = new Date(typeof dateVal === "number" ? dateVal * 1000 : dateVal);
-    const now = new Date();
-    const diffMs = now - d;
-    const diffMin = Math.floor(diffMs / 60000);
-
-    if (diffMin < 1) return "Just now";
-    if (diffMin < 60) return `${diffMin}m ago`;
-    const diffHr = Math.floor(diffMin / 60);
-    if (diffHr < 24) return `${diffHr}h ago`;
-    return d.toLocaleDateString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-  }
-
-  function renderActivity(activity) {
-    const config = getConfig(activity.activityType);
-    const item = document.createElement("div");
-    item.className = "event-item";
-    item.dataset.activityId = activity.id;
-
-    item.innerHTML = `
-      <div class="event-dot ${config.dotClass}">
-        <i class="fas ${config.icon}"></i>
-      </div>
-      <div class="event-card">
-        <p class="event-card__title">
-          <i class="fas ${config.icon}"></i>
-          ${escapeHtml(activity.title)}
-        </p>
-        ${activity.description ? `<p class="event-card__description">${escapeHtml(activity.description)}</p>` : ""}
-        <div class="event-card__time">${formatTime(activity.createdAt)}</div>
-      </div>
-    `;
-    return item;
-  }
-
-  function renderTimeline(activities) {
-    if (activities.length === 0) {
-      container.innerHTML = `
-        <div class="events-empty">
-          <i class="fas fa-stream"></i>
-          <p style="margin:0 0 0.5rem;">No events yet.</p>
-          <p style="font-size:0.85rem;margin:0;">Queue a ticket to see activity here.</p>
-        </div>
-      `;
-      return;
+  function render() {
+    container.replaceChildren();
+    const visible = activities.filter(a => filter === 'all' || info(a)[2] === filter || (filter === 'builds' && a.activityType.startsWith('ticket_')));
+    if (!visible.length) {
+      const empty = el('div', 'events-empty');
+      empty.append(el('strong', '', activities.length ? 'No matching activity' : 'Your project history starts here'), el('p', '', activities.length ? 'Try another filter to see more updates.' : 'Builds and project changes will appear as they happen.'));
+      container.append(empty); return;
     }
-
-    // Build or reuse timeline wrapper
-    let timeline = container.querySelector(".events-timeline");
-    if (!timeline) {
-      container.innerHTML = "";
-      timeline = document.createElement("div");
-      timeline.className = "events-timeline";
-      container.appendChild(timeline);
-    }
-
-    // Render newest-first
-    for (const activity of activities) {
-      if (knownIds.has(activity.id)) continue;
-      knownIds.add(activity.id);
-      const el = renderActivity(activity);
-      timeline.prepend(el);
-    }
-  }
-
-  async function fetchActivities() {
-    try {
-      const res = await fetch(`/projects/${projectId}/api/activities?limit=50`);
-      if (!res.ok) return;
-      const data = await res.json();
-      if (data.activities) {
-        // Reverse so we prepend oldest first (newest ends up on top)
-        renderTimeline(data.activities.reverse());
+    let previousDay, group;
+    for (const a of visible) {
+      const d = date(a.createdAt), key = d.toDateString();
+      if (key !== previousDay) {
+        const section = el('section', 'activity-day');
+        section.append(el('h3', 'activity-date', dayLabel(d)));
+        group = el('div', 'activity-day-list'); section.append(group); container.append(section); previousDay = key;
       }
-    } catch (err) {
-      console.error("[events-timeline] Fetch error:", err);
+      const [label, icon, , tone] = info(a);
+      const row = el('article', 'activity-row');
+      const marker = el('span', 'activity-icon'); marker.dataset.tone = tone; marker.setAttribute('aria-hidden','true'); marker.append(el('i','fas fa-' + icon));
+      const body = el('div', 'activity-body');
+      const meta = el('div','activity-meta'); meta.append(el('span','activity-label',label));
+      const time = el('time','', d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'}));
+      time.dateTime = d.toISOString(); time.title = d.toLocaleString(); meta.append(time); body.append(meta);
+      const title = el(a.ticketId ? 'a' : 'div','activity-title', (a.title || 'Project update').replace(/^(Build started|Ticket queued|Completed|Failed|Auto-queued):\s*/i, ''));
+      if (a.ticketId) title.href = '/projects/' + encodeURIComponent(projectId) + '/tickets?ticket=' + encodeURIComponent(a.ticketId);
+      body.append(title);
+      if (a.description) body.append(el('p','activity-description',a.description));
+      row.append(marker,body); group.append(row);
     }
+    container.append(el('p','activity-footnote', `Showing ${visible.length} of the latest ${activities.length} events · Newest first`));
   }
-
-  function escapeHtml(str) {
-    const div = document.createElement("div");
-    div.textContent = str;
-    return div.innerHTML;
+  async function fetchActivities() {
+    if (loading) return; loading = true; refresh.disabled = true;
+    try {
+      const response = await fetch('/projects/' + encodeURIComponent(projectId) + '/api/activities?limit=50', {cache:'no-store'});
+      if (!response.ok) throw new Error('Request failed');
+      const data = await response.json();
+      if (!Array.isArray(data.activities)) throw new Error('Invalid response');
+      const next = data.activities.filter(a => !Number.isNaN(date(a.createdAt).getTime())).sort((a,b) => date(b.createdAt) - date(a.createdAt));
+      const nextSignature = JSON.stringify(next);
+      activities = next;
+      if (signature !== nextSignature) { signature = nextSignature; render(); }
+      sync.textContent = 'Updated just now'; sync.dataset.state = 'live';
+    } catch (_) {
+      sync.textContent = 'Couldn’t refresh · Try again'; sync.dataset.state = 'error';
+      if (signature === null) { container.replaceChildren(el('p','events-empty','Activity is unavailable. Use Refresh to try again.')); }
+    } finally { loading = false; refresh.disabled = false; }
   }
-
-  // Initial fetch
+  host.querySelectorAll('[data-activity-filter]').forEach(button => button.addEventListener('click', () => {
+    filter = button.dataset.activityFilter;
+    host.querySelectorAll('[data-activity-filter]').forEach(b => b.setAttribute('aria-pressed', String(b === button)));
+    render();
+  }));
+  refresh.addEventListener('click', fetchActivities);
+  window.addEventListener('focus', fetchActivities);
+  const timer = setInterval(() => { if (!document.hidden) fetchActivities(); }, 10000);
+  window.addEventListener('beforeunload', () => clearInterval(timer));
   fetchActivities();
-
-  // Poll for new events
-  pollTimer = setInterval(fetchActivities, POLL_INTERVAL);
-
-  // Clean up on navigation (if SPA-like behavior)
-  window.addEventListener("beforeunload", () => {
-    if (pollTimer) clearInterval(pollTimer);
-  });
 })();

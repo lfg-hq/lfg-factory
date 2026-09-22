@@ -43,7 +43,7 @@ export function AgentsCentralPage({ user, agents, messages }: AgentsCentralPageP
   <script>(function(){if(localStorage.getItem('sidebarMinimized')==='true'){document.documentElement.classList.add('sidebar-minimized-preload');}})()</script>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
-  <link rel="stylesheet" href="/public/css/sidebar.css" />
+  <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
   <link rel="stylesheet" href="/public/css/agents.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
@@ -186,7 +186,7 @@ export function AgentsCentralPage({ user, agents, messages }: AgentsCentralPageP
     </div>
   </div>
 
-  <script src="/public/js/sidebar.js"></script>
+  <script src="/public/js/sidebar.js?v=20260908-startup"></script>
   <script src="/public/js/agents.js"></script>
 </body>
 </html>`;

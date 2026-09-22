@@ -113,8 +113,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
   <script>(function(){if(localStorage.getItem('sidebarMinimized')==='true'){document.documentElement.classList.add('sidebar-minimized-preload');}})()</script>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
-  <link rel="stylesheet" href="/public/css/sidebar.css" />
-  <link rel="stylesheet" href="/public/css/tickets.css" />
+  <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
+  <link rel="stylesheet" href="/public/css/tickets.css?v=code-actions-2" />
   <link rel="stylesheet" href="/public/css/polish.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
@@ -677,7 +677,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
                       <span class="kanban-card-title">${t.name}</span>
                     </div>
                     <div class="kanban-card-meta">
-                      <a class="ticket-code-link" href="/projects/${project.projectId}/tickets/${t.id}/diff" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open ticket code in a new window">&lt;/&gt; Code ↗</a>
+                      <a class="ticket-code-link" href="/projects/${project.projectId}/tickets/${t.id}/diff" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Open ticket code in a new window"><svg class="ticket-code-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 7-5 5 5 5m8-10 5 5-5 5m-3-13-2 16" /></svg><span>Code</span><svg class="ticket-code-external" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6m0-6L10 14M10 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5" /></svg></a>
                       <span class="priority-label" style="color:${PRIORITY_COLOR[t.priority] ?? "#6b7280"};">
                         <span class="kanban-priority-dot" style="background:${PRIORITY_COLOR[t.priority] ?? "#6b7280"};"></span>
                         ${t.priority}
@@ -708,7 +708,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     </div>
     <div class="drawer-header-right">
       <div class="drawer-actions">
-        <a class="ticket-code-link" id="drawer-code-link" target="_blank" rel="noopener">&lt;/&gt; Code ↗</a>
+        <a class="ticket-code-link ticket-code-link--toolbar" title="Open code workspace in a new window" id="drawer-code-link" target="_blank" rel="noopener"><svg class="ticket-code-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 7-5 5 5 5m8-10 5 5-5 5m-3-13-2 16" /></svg><span>Code</span><svg class="ticket-code-external" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6m0-6L10 14M10 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5" /></svg></a>
         <button class="drawer-execute-btn" id="drawer-build-btn" onclick="buildCurrentTicket()">
           <i class="fas fa-bolt"></i> Build
         </button>
@@ -904,8 +904,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
   </div>
 </div>
 
-<script src="/public/js/sidebar.js"></script>
-<script src="/public/js/sidebar-chats.js"></script>
+<script src="/public/js/sidebar.js?v=20260908-startup"></script>
+<script src="/public/js/sidebar-chats.js?v=20260908-initials"></script>
 <script src="/public/js/sharing.js"></script>
 <!-- Shared preview component — the SAME one the main chat Preview panel uses. -->
 <script src="/public/js/preview-tab.js"></script>

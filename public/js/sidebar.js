@@ -1,3 +1,10 @@
+// Shared inbox stays available across projects and conversations.
+(() => {
+    const script = document.createElement('script');
+    script.src = '/public/js/build-notifications.js?v=4';
+    document.head.appendChild(script);
+})();
+
 document.addEventListener('DOMContentLoaded', () => {
     const sidebar = document.getElementById('sidebar');
     const appContainer = document.querySelector('.app-container');
@@ -17,6 +24,9 @@ document.addEventListener('DOMContentLoaded', () => {
         sidebar.classList.add('minimized');
         appContainer.classList.add('sidebar-minimized');
     }
+
+    // Hand off the first-paint state only after the real sidebar state is installed.
+    requestAnimationFrame(() => document.documentElement.classList.remove('sidebar-minimized-preload'));
 
     // Toggle sidebar minimized state
     function toggleMinimized() {
@@ -48,27 +58,56 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
     
-    // User dropdown toggle
-    if (userInfoButton) {
+    // The account menu is a full-width popover even when the rail is collapsed.
+    function positionAccountMenu() {
+        if (!userInfoButton || !userDropdown) return;
+        const rect = userInfoButton.getBoundingClientRect();
+        userDropdown.style.setProperty('--account-menu-left', Math.max(8, Math.min(rect.left + 10, innerWidth - 248)) + 'px');
+        userDropdown.style.setProperty('--account-menu-bottom', Math.max(8, innerHeight - rect.top + 8) + 'px');
+    }
+    function closeAccountMenu() {
+        userInfo?.classList.remove('open');
+        userInfoButton?.setAttribute('aria-expanded', 'false');
+    }
+    if (userInfoButton && userDropdown) {
+        userInfoButton.setAttribute('aria-expanded', 'false');
+        userInfoButton.setAttribute('aria-controls', 'user-dropdown');
+        userInfoButton.setAttribute('aria-label', 'Account settings and appearance');
         userInfoButton.addEventListener('click', (e) => {
             e.stopPropagation();
-            userInfo.classList.toggle('open');
+            positionAccountMenu();
+            const open = userInfo.classList.toggle('open');
+            userInfoButton.setAttribute('aria-expanded', String(open));
         });
+        // Move the existing toggle, preserving the theme switcher's event binding.
+        const themeToggle = sidebar.querySelector('[data-theme-toggle]');
+        if (themeToggle) {
+            const formerGroup = themeToggle.parentElement;
+            themeToggle.classList.remove('nav-link', 'theme-toggle-sidebar');
+            themeToggle.classList.add('dropdown-item', 'account-theme-toggle');
+            userDropdown.insertBefore(themeToggle, userDropdown.querySelector('.dropdown-divider'));
+            if (formerGroup.classList.contains('bottom-nav') && !formerGroup.children.length) formerGroup.remove();
+            function updateAppearanceLabel() {
+                const dark = document.documentElement.getAttribute('data-theme') !== 'light';
+                const label = themeToggle.querySelector('.theme-text, .nav-text, span');
+                if (label) label.textContent = dark ? 'Light mode' : 'Dark mode';
+                themeToggle.setAttribute('aria-label', dark ? 'Switch to light mode' : 'Switch to dark mode');
+                themeToggle.title = dark ? 'Switch to light mode' : 'Switch to dark mode';
+            }
+            updateAppearanceLabel();
+            window.addEventListener('themechange', updateAppearanceLabel);
+        }
+        userDropdown.addEventListener('click', e => e.stopPropagation());
     }
-    
-    // Close dropdown when clicking outside
-    document.addEventListener('click', (e) => {
-        if (!userInfo.contains(e.target)) {
-            userInfo.classList.remove('open');
+    document.addEventListener('click', e => {
+        if (userInfo && !userInfo.contains(e.target)) closeAccountMenu();
+    });
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && userInfo?.classList.contains('open')) {
+            closeAccountMenu(); userInfoButton.focus();
         }
     });
-    
-    // Prevent dropdown from closing when clicking inside it
-    if (userDropdown) {
-        userDropdown.addEventListener('click', (e) => {
-            e.stopPropagation();
-        });
-    }
+    window.addEventListener('resize', positionAccountMenu);
 
     // Project dropdown toggle
     const projectDropdownTrigger = document.getElementById('projectDropdownTrigger');

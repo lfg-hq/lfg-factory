@@ -58,8 +58,8 @@ const rows = listEl.children.filter((c) => c.className.includes("conversation-it
 const labels = listEl.children.filter((c) => c.className.includes("group-label")).map((c) => c.textContent);
 if (rows.length === 3) ok("renders every conversation");
 else fail(`expected 3 rows, got ${rows.length}`);
-if (labels.join(",") === "Pinned,Recent") ok("pinned group first, then recent");
-else fail("group headings wrong: " + labels.join(","));
+if (labels.length === 0) ok("no extra headings between chat rows");
+else fail("unexpected group headings: " + labels.join(","));
 if (rows[0].className.includes("is-pinned")) ok("the pinned chat leads");
 else fail("pinned chat is not first");
 if (rows[0].innerHTML.includes('class="conversation-title"')) ok("uses the chat page's own row markup");

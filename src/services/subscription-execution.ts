@@ -1,3 +1,4 @@
+import { currentUsage, withUsage } from "../ai/usage-context.ts";
 import { availableChatModels } from "./available-models.ts";
 import { eq } from "drizzle-orm";
 import { db } from "../config/db.ts";
@@ -16,6 +17,7 @@ export async function subscriptionOwner(userId: string, projectId?: string | nul
 
 /** New background runs re-resolve the acting user's persisted choice. */
 export async function withUserSubscription<T>(userId: string, projectId: string | null | undefined, run: () => Promise<T>): Promise<T> {
+  if (!currentUsage()) return withUsage({ userId, projectId }, () => withUserSubscription(userId, projectId, run));
   const [selection] = await db.select().from(modelSelections).where(eq(modelSelections.userId, userId)).limit(1);
   const allowed = await availableChatModels(userId, projectId);
   let selected = selection?.selectedModel;
