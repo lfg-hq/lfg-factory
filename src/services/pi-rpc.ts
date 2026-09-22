@@ -10,6 +10,9 @@ export type RpcDependencies={
  now:()=>number;
  cancelled?:()=>boolean;
  log?:(message:string)=>void;
+ browser?:(input:any)=>Promise<any>;
+ browserReplyDir?:string;
+ preparationReady?:()=>boolean;
 };
 
 /** One live Pi process, one persisted session, one budget across verification feedback. */
@@ -57,9 +60,10 @@ PY`);
     await this.d.wait();
    }
   }
-  let answer='';let error='';let lastProgress=this.d.now();
+  let answer='';let error='';let lastProgress=this.d.now();let lastActivity=this.d.now();let current='Waiting for agent response';let lastLabel='';const preparationStarted=this.d.now();
   while(true){
    this.guard();
+   if(this.d.preparationReady && !this.d.preparationReady() && this.d.now()-preparationStarted>=120000){await this.close();throw new Error('Feature preparation stalled: no browser started or API/schema applicability decision after two minutes.');}
    const r=await this.d.exec(rpcPollScript(this.process,this.offset));
    if(r.exitCode!==0)throw new Error('Unable to inspect the existing Pi session; no replacement agent was launched');
    const state=JSON.parse(r.output) as {offset:number;chunk:string;alive:boolean};
@@ -68,6 +72,13 @@ PY`);
    const lines=this.pending.split('\n');this.pending=lines.pop()!;
    for(const line of lines){
     let event:any;try{event=JSON.parse(line);}catch{continue;}
+    if(['tool_execution_start','tool_execution_end','message_update','message_end','lfg_browser_request'].includes(event.type))lastActivity=this.d.now();
+    if(event.type==='lfg_browser_request' && this.d.browser && this.d.browserReplyDir && /^[a-f0-9-]{36}$/.test(event.id)){
+     let reply;try{reply=await this.d.browser(event.input);}catch(e){if(['RecordingStorageError','BrowserInfrastructureError','BrowserRetryLimitError'].includes((e as Error).name)){await this.close();throw e;}reply={passed:false,failure:(e as Error).message};}
+     const path=this.d.browserReplyDir+'/'+event.id+'.json';const data=Buffer.from(JSON.stringify(reply)).toString('base64');
+     await this.d.exec(`mkdir -p ${q(this.d.browserReplyDir)}; printf %s ${q(data)} | base64 -d > ${q(path+'.tmp')}; mv ${q(path+'.tmp')} ${q(path)}`);
+     lastActivity=this.d.now();
+    }
     if(event.type==='response' && event.id===id && event.success===false)throw new Error('Pi rejected verification feedback: '+event.error);
     if(event.type==='message_end' && event.message?.role==='assistant'){
      const msg=event.message;
@@ -75,7 +86,7 @@ PY`);
      error=msg.stopReason==='error' ? msg.errorMessage || 'Model request failed' : '';
      if(answer)this.d.log?.(answer.slice(-2000));
     }
-    if(event.type==='tool_execution_start')this.d.log?.('Agent is running '+event.toolName);
+    if(event.type==='tool_execution_start'){const label=rpcOperationLabel(event);if(label){current=label;if(label!==lastLabel)this.d.log?.(label);lastLabel=label;}}
     if(event.type==='tool_execution_end' && event.isError)this.d.log?.('Command failed; its result was returned to the same agent for repair.');
     if(event.type==='agent_end'){
      if(error)throw new Error(error);
@@ -88,7 +99,9 @@ PY`);
     this.d.log?.('Pi exited. Resuming its saved conversation without restarting development.');
     return this.ask('The prior Pi process exited. Resume the saved work and inspect any in-flight command before rerunning it. Current controller request:\n'+message);
    }
-   if(this.d.now()-lastProgress>=20_000){this.d.log?.('The same repair session is still active.');lastProgress=this.d.now();}
+   const idle=this.d.now()-lastActivity;
+   if(idle>=360_000){await this.close();throw new Error('Agent stalled: no tool or model activity for six minutes. Last operation: '+current);}
+   if(idle>=60_000 && this.d.now()-lastProgress>=60_000){this.d.log?.(current+' — no new activity for '+Math.floor(idle/1000)+' seconds.');lastProgress=this.d.now();}
    await this.d.wait();
   }
  }
@@ -109,4 +122,15 @@ try:
 except (OSError,IndexError):alive=False
 print(json.dumps(dict(offset=offset,chunk=base64.b64encode(chunk).decode(),alive=alive)))
 PY`;
+}
+
+export function rpcOperationLabel(event:any):string {
+ const input=event.args || event.input || {};
+ if(event.toolName==='lfg_browser')return 'Browser: '+String(input.label || input.action || 'inspecting page').slice(0,120);
+ if(event.toolName==='bash'){
+  const command=String(input.command || '');
+  const labels:[RegExp,string][]=[[/dotnet\s+restore/,'Restoring .NET dependencies'],[/dotnet\s+(build|publish)/,'Compiling the application'],[/docker\s+(start|run|compose)/,'Starting development services'],[/docker\s+(ps|inspect|logs)/,'Inspecting database containers'],[/curl\b/,'Checking an HTTP response'],[/sqlcmd\b/,'Checking the database'],[/git\b/,'Inspecting the saved checkout'],[/\b(ss|netstat)\b/,'Checking app listeners'],[/\b(df|du|free|ps)\b/,'Checking sandbox resources']];
+  return labels.find(([pattern])=>pattern.test(command))?.[1] || '';
+ }
+ return ({read:'Reading application files',edit:'Editing a file',write:'Writing a file',grep:'Searching application code',find:'Locating files'} as Record<string,string>)[event.toolName] || 'Running '+event.toolName;
 }

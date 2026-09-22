@@ -710,10 +710,15 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     <div class="drawer-header-right">
       <div class="drawer-actions">
         <a class="ticket-code-link" id="drawer-code-link" style="display:none" target="_blank" rel="noopener">&lt;/&gt; Code ↗</a>
-        <button class="drawer-execute-btn" id="drawer-build-btn" onclick="buildCurrentTicket()">
-          <i class="fas fa-bolt"></i> Build
+        <select id="drawer-run-phase" class="drawer-run-phase" aria-label="Choose ticket action">
+          <option value="build">Build &amp; check all</option>
+          <option value="validation">Validation only</option>
+          <option value="feature-testing">Feature testing only</option>
+        </select>
+        <button class="drawer-execute-btn" id="drawer-build-btn" onclick="runSelectedTicketPhase()">
+          <i class="fas fa-play"></i> Run
         </button>
-        <button class="drawer-server-btn" id="drawer-validation-btn" onclick="retryCurrentValidation()" title="Test the saved code without rerunning development. Validation may compile and repair it; nothing is published."><i class="fas fa-check-circle"></i> Retry validation</button>
+        <button class="drawer-server-btn" id="drawer-validation-btn" hidden onclick="retryCurrentValidation()" title="Test the saved code without rerunning development. Validation may compile and repair it; nothing is published."><i class="fas fa-check-circle"></i> Retry validation</button>
         <button class="drawer-server-btn" id="drawer-stop-btn" onclick="stopCurrentTicket()" style="display:none;color:#f87171;border-color:#5a2a30;"><i class="fas fa-stop"></i> Stop</button>
         <div class="drawer-more-menu">
           <button class="drawer-more-btn" onclick="toggleDrawerMore()">
@@ -1038,7 +1043,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       || /^(review|in_review|done|completed|archived)$/.test(String(t.status || '').toLowerCase());
   }
   function buildButtonLabel() {
-    return '<i class="fas fa-bolt"></i> ' + (hasPreviousBuild(ticketMap[_currentTicketId]) ? 'Re-build' : 'Build');
+    return '<i class="fas fa-play"></i> Run';
   }
   function renderDrawerDetails(t) {
     document.getElementById("drawer-code-link").style.display = (t.githubCommitSha || t.github_commit_sha) ? "" : "none";
@@ -1153,7 +1158,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
         // show only Stop (cleaner than a disabled "Building…" button).
         buildBtn.disabled = false;
         buildBtn.style.display = isActive ? 'none' : '';
-        document.getElementById('drawer-validation-btn').style.display = isActive ? 'none' : '';
+        document.getElementById('drawer-validation-btn').style.display = 'none';
+        document.getElementById('drawer-run-phase').disabled = isActive;
         buildBtn.innerHTML = buildButtonLabel();
         var stopBtn = document.getElementById('drawer-stop-btn');
         if (stopBtn) stopBtn.style.display = isActive ? '' : 'none';
@@ -1315,14 +1321,19 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     }
   }
 
-  async function retryCurrentValidation() {
+  function runSelectedTicketPhase() {
+    const phase = document.getElementById('drawer-run-phase').value;
+    if (phase === 'build') return buildCurrentTicket();
+    return retryCurrentValidation(phase);
+  }
+  async function retryCurrentValidation(phase = 'validation') {
     if (!_currentTicketId) return;
     const ticketId = _currentTicketId;
     const btn = document.getElementById('drawer-validation-btn');
     if (btn.disabled) return;
     btn.disabled = true;
     try {
-      const res = await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + ticketId + '/retry-validation', {method:'POST'});
+      const res = await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + ticketId + '/retry-validation', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phase:phase})});
       const data = await res.json();
       if (!res.ok) {
         if (data.ticket) handleTicketStatus(data.ticket);
@@ -1396,6 +1407,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
   // ── Actions tab: execution logs + agent chat ─────────────────────
   let _lastLogCount = 0;
   let _lastLogContent = '';
+  let _featureCompletedTicket = '';
   let _lastFailureReason = ''; // clean failure reason captured from the "Execution failed:" log row
 
   /**
@@ -1430,12 +1442,14 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     var b = null;
     if (qs === 'executing' || qs === 'queued' || qs === 'stopping') {
       b = { bg: 'rgba(59,130,246,.12)', fg: '#93c5fd', icon: 'fa-spinner fa-spin', where: 'top', text: qs === 'queued' ? 'Queued — waiting to build…' : qs === 'stopping' ? 'Stopping ticket operation…' : 'Running ticket operation…' };
+    } else if (_featureCompletedTicket === _currentTicketId) {
+      b = { bg: 'rgba(16,185,129,.12)', fg: '#6ee7b7', icon: 'fa-circle-check', where: 'bottom', text: 'Feature testing passed — latest run completed successfully.' };
     } else if (merge === 'not_pushed') {
       b = { bg: 'rgba(248,113,113,.12)', fg: '#fca5a5', icon: 'fa-triangle-exclamation', where: 'bottom', text: 'Built but NOT pushed to git — reconnect the repo in Settings, then rebuild.' };
     } else if (st === 'failed' || qs === 'failed') {
       var reason = (fields && fields.reason) || _findFailureReasonFromLogs();
       b = { bg: 'rgba(239,68,68,.14)', fg: '#fca5a5', icon: 'fa-circle-exclamation', where: 'bottom',
-            text: reason ? ('Build failed — ' + reason) : 'Build failed — check the logs above and rebuild.' };
+            text: reason ? ('Ticket operation failed — ' + reason) : 'Ticket operation failed — check the active phase for details.' };
     } else if (merge === 'merged' || st === 'done' || st === 'completed' || st === 'merged') {
       var anchor = fields.anchorBranch || fields.anchor_branch || _ticketAnchorBranch || '';
       b = { bg: 'rgba(16,185,129,.12)', fg: '#6ee7b7', icon: 'fa-circle-check', where: 'bottom',
@@ -1489,7 +1503,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     updateTicketStatusBanner(msg);
     var validationBtn = document.getElementById('drawer-validation-btn');
     var busy = qs === 'queued' || qs === 'executing' || qs === 'stopping';
-    if (validationBtn) validationBtn.style.display = busy ? 'none' : '';
+    if (validationBtn) validationBtn.style.display = 'none';
+    document.getElementById('drawer-run-phase').disabled = busy;
     if (busy) {
       var buildBtn = document.getElementById('drawer-build-btn');
       if (buildBtn) buildBtn.style.display = 'none';
@@ -1638,7 +1653,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       var _actionVerbs = ['Running','Reading','Editing','Writing','Creating','Searching','Listing','Merging','Merged','Committing','Committed','Pushed','Pushing','Building','Build','Installing','Started','Starting','Cloning','Fetching','Continuing','Spinning','Restarting','Setting up','Verifying'];
       // Emoji-prefixed tool labels (📄 Read, ✏️ Write, 🔍 Grep…) are actions too.
       var isAction = hasOut || msg.charAt(0) === '$' || msg.charCodeAt(0) > 255 || _actionVerbs.some(function(v){ return msg.indexOf(v) === 0; });
-      var desc = describeCmd(msg, explanation);
+      var desc = explanation || msg.split('\\n')[0];
       el.className += isAction ? ' log-cmd' : ' log-cmd log-output';
       var iconHtml = isAction
         ? '<i class="fas fa-terminal log-row-ico"></i>'
@@ -1716,6 +1731,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       var shouldScroll = _logsFirstLoad || (scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight < 60);
       window.TicketActionPhases.render(area, rows, ticketMap[_currentTicketId], 'drawer:' + _currentTicketId, renderLogEntry, historyUrl, function() { _lastLogContent = ''; return loadExecutionLogs(); });
 
+      _featureCompletedTicket = window.TicketActionPhases.latestFeatureRunCompleted(rows) ? requestedTicket : '';
       // Logs are now in the DOM — refresh the banner so a failed build shows its reason.
       if (ticketMap[_currentTicketId]) updateTicketStatusBanner(ticketMap[_currentTicketId]);
 

@@ -125,3 +125,32 @@ test('all required runtime assertions are re-executed and receipts checked befor
  x.deps.check=async(cmd:string)=>cmd.includes('LFG_HTTP') ? {exitCode:0,output:'HTTP passed'} : check(cmd);
  await runTicketRuntime(x.o,x.deps);expect(x.checks()).toBe(6);expect(x.exec('git rev-list --count HEAD').output.trim()).toBe('2');
 }));
+
+test('browser failure returns to same repair loop and blocks commit until feature testing passes',()=>fixture(async x=>{
+ x.o.validation.ticketId='ticket';
+ const shell=x.deps.shell;
+ x.deps.shell=async(cmd:string)=>{
+  const r=await shell(cmd);
+  if(cmd.includes("cat '/data/lfg-runtime/")){
+   const report=JSON.parse(r.output);report.featureTest={kind:'browser',reason:'Exercise changed UI',applicability:[{criterion:'Save',applicable:true,reason:'UI changed'}],steps:[{label:'Open',action:'goto',path:'/teams'},{label:'Verify',action:'assertVisible',locator:{role:'heading',name:'Teams'}}]};r.output=JSON.stringify(report);
+  }
+  return r;
+ };
+ let runs=0;x.deps.featureTest=async()=>{runs++;expect(x.exec('git rev-parse HEAD').output.trim()).toBe(x.original);if(runs===1)throw Error('Browser assertion failed: saved team missing');};
+ await runTicketRuntime(x.o,x.deps);
+ expect(runs).toBe(2);expect(x.agents()).toBe(2);expect(x.messages.join('\n')).toContain('saved team missing');expect(x.exec('git rev-list --count HEAD').output.trim()).toBe('2');
+}));
+
+test('validation-only does not invoke browser testing',()=>fixture(async x=>{
+ x.o.validation.ticketId='ticket';x.deps.featureTest=async()=>{throw Error('Browser must not run')};
+ await runTicketRuntime(x.o,x.deps,{kind:'ticket',baseline:'',phase:'validation'});
+ expect(x.checks()).toBe(1);
+}));
+test('feature-only skips validation checks and does not commit',()=>fixture(async x=>{
+ x.o.validation.ticketId='ticket';const agent=x.deps.agent;const shell=x.deps.shell;let featureRuns=0;
+ x.deps.agent=async(p:string)=>{await agent(p);writeFileSync(join(x.dir,'app.txt'),'initial');};
+ x.deps.shell=async(cmd:string)=>{const r=await shell(cmd);if(cmd.includes("cat '/data/lfg-runtime/")){const report=JSON.parse(r.output);report.featureTest={kind:'not_applicable',reason:'Schema checks only',applicability:[{criterion:'Schema',applicable:false,reason:'No UI'}]};r.output=JSON.stringify(report);}return r;};
+ x.deps.featureTest=async()=>{featureRuns++};
+ const sha=await runTicketRuntime(x.o,x.deps,{kind:'ticket',baseline:'',phase:'feature-testing'});
+ expect(sha).toBe(x.original);expect(x.checks()).toBe(0);expect(featureRuns).toBe(1);
+}));

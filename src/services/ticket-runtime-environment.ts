@@ -13,8 +13,12 @@ export async function loadRuntimeEnvironment(projectId:string):Promise<Record<st
 
 /** Background commands include exports in progress messages; redact before persisting them. */
 export function runtimeRedactor(vars:Record<string,string>):(message:string)=>string {
- const values=[...new Set(Object.values(vars).filter(Boolean).flatMap(value=>[value,shellQuote(value),JSON.stringify(value).slice(1,-1)]))].sort((a,b)=>b.length-a.length);
- return message=>values.reduce((text,value)=>text.split(value).join('[redacted]'),message);
+ const values=[...new Set(Object.entries(vars).filter(([key,value])=>Boolean(value) && /secret|password|passwd|token|credential|authorization|(?:database|db|redis|mongo).*url|dsn|connectionstrings?|(?:api|access|private|encryption|signing)[_-]?key/i.test(key)).map(([,value])=>value).filter(value=>value.length>=4 && !/^(?:\d+|true|false)$/i.test(value)).flatMap(value=>[value,shellQuote(value),JSON.stringify(value).slice(1,-1)]))].sort((a,b)=>b.length-a.length);
+ return message=>{
+  let text=values.reduce((text,value)=>text.split(value).join('[redacted]'),message);
+  for(const [key,value] of Object.entries(vars)){if(!value || (value.length>=4 && !/^(?:\d+|true|false)$/i.test(value)) || !/secret|password|passwd|token|credential|key/i.test(key))continue;const escaped=key.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');text=text.replace(new RegExp('('+escaped+'[\\s]*[=:][\\s]*)([\"\']?)'+value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\2(?=$|[\\s;,])','g'),'$1[redacted]');}
+  return text;
+ };
 }
 
 /** Never pass an unreadable stored secret through as application configuration. */

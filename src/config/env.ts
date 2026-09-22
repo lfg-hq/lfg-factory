@@ -60,6 +60,7 @@ const envSchema = z.object({
   AWS_S3_BUCKET_NAME: z.string().optional().default(""),
   AWS_ACCESS_KEY_ID: z.string().optional().default(""),
   AWS_SECRET_ACCESS_KEY: z.string().optional().default(""),
+  AWS_S3_ENDPOINT: z.string().url().optional(),
   AWS_S3_REGION: z.string().optional().default("us-east-1"),
 
   // PostgreSQL provisioning (optional: a separate server used to spin up

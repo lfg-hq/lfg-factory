@@ -763,7 +763,10 @@ ticketsApi.post("/:projectId/tickets/:ticketId/retry-validation",async(c)=>{
   if(!ticket)return c.json({error:"Ticket not found"},404);
   try {
     const {startTicketValidationRetry}=await import("../../workers/ticket-executor.ts");
-    await startTicketValidationRetry(ticketId,user.id);
+    const body=await c.req.json().catch(()=>({}));
+    const phase=body.phase ?? 'validation';
+    if(!['validation','feature-testing'].includes(phase))return c.json({error:'Invalid run phase'},400);
+    await startTicketValidationRetry(ticketId,user.id,phase);
     return c.json({ok:true},202);
   }catch(error){
     const [current]=await db.select({status:projectTickets.status,queueStatus:projectTickets.queueStatus}).from(projectTickets).where(eq(projectTickets.id,ticketId)).limit(1);

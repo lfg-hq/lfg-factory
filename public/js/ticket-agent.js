@@ -554,7 +554,7 @@
     const isAction = hasOut || msg.charAt(0) === "$" || msg.charCodeAt(0) > 255 || ACTION_RE.test(msg);
     const id = "tarow-" + String(row.id || (++rowSeq)).replace(/[^a-zA-Z0-9_-]/g, "_");
     const status = row.jobStatus || (row.exitCode != null ? (row.exitCode === 0 ? "Completed" : "Failed") : hasOut ? "Result received" : "Activity");
-    const label = esc(msg.length > 160 ? msg.slice(0, 160) + "…" : msg) || "(no output)";
+    const label = esc(msg.split("\n")[0]) || "(no output)";
     return `<div class="ta-cmdrow${isAction ? "" : " ta-outrow"}">
       <div class="ta-cmd-header" data-ta-toggle="${id}"><i class="fas fa-chevron-right ta-chev"></i><i class="fas ${isAction ? "fa-terminal" : "fa-angle-right"}" style="opacity:.55;font-size:11px;"></i><span class="ta-cmd-text">${label}</span><small style="margin-left:auto;white-space:nowrap;opacity:.7">${esc(status)}</small></div>
       <div id="${id}" class="ta-cmd-body" style="display:none;">${hasOut ? "<strong>Command</strong>\n" + esc(msg) + "\n\n<strong>Result / latest output</strong>\n" : ""}${esc(bodyText)}</div>

@@ -34,6 +34,9 @@ env:
     PORT: "8000"
     NODE_ENV: production
     DATABASE_DRIVER: postgresql
+<% if ENV["AWS_S3_ENDPOINT"] && !ENV["AWS_S3_ENDPOINT"].empty? %>
+    AWS_S3_ENDPOINT: <%= ENV["AWS_S3_ENDPOINT"].inspect %>
+<% end %>
   secret:
     - BETTER_AUTH_SECRET
     - BETTER_AUTH_URL

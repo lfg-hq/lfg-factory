@@ -28,3 +28,120 @@
 [data-theme="light"] .logs-chat-attach-btn { color:#475569; }
 .logs-chat-attach-btn:focus-visible { outline:2px solid #8452ef; }
 #ticket-drawer .logs-chat-field #actions-chat-input { border:0 !important; box-shadow:none !important; background:transparent !important; }
+
+/* Scroll long commands inside the ticket, keeping phase tabs and composer in place. */
+.ticket-phase-body { overflow-x:scroll; scrollbar-width:auto; scrollbar-color:#94a3b8 transparent; }
+.ticket-phase-body::-webkit-scrollbar { height:12px; }
+.ticket-phase-body::-webkit-scrollbar-thumb { background:#94a3b8; border:3px solid var(--card-bg,#fff); border-radius:8px; }
+.ticket-phase-body .log-cmd-header,.ticket-phase-body .ta-cmd-header { width:max-content; min-width:100%; box-sizing:border-box; }
+.ticket-phase-body .log-cmd-text,.ticket-phase-body .ta-cmd-text { flex:none; overflow:visible; text-overflow:clip; max-width:none; white-space:nowrap; }
+.feature-test-video { display:block; width:min(100%,960px); max-height:540px; margin:12px auto; background:#111; border-radius:8px; }
+.phase-headers { overflow-x:auto; flex-shrink:0; }
+.phase-header { flex-shrink:0; white-space:nowrap; }
+/* Keep the horizontal scrollbar reachable above the message composer. */
+[data-phase-view] { display:flex; flex-direction:column; overflow:hidden !important; }
+[data-phase-view] .ticket-phase-body { flex:1 1 0; min-height:0; overflow:scroll; }
+[data-phase-view] .phase-history-note { flex-shrink:0; }
+
+.drawer-run-phase { max-width:185px; height:38px; padding:0 28px 0 10px; border:1px solid var(--border-color,#dce2ed); border-radius:8px; background:var(--card-bg,#fff); color:var(--text-primary,#273247); font:inherit; font-size:13px; cursor:pointer; }
+#drawer-validation-btn[hidden] { display:none !important; }
+
+.feature-live { margin:12px 16px; padding:12px; border:1px solid var(--border-color,#dce2ed); border-radius:10px; background:var(--card-bg,#fff); max-width:960px; }
+.feature-live p { margin:0 0 10px; white-space:pre-wrap; overflow-wrap:anywhere; font-size:13px; color:var(--text-primary,#273247); }
+.feature-live img { display:block; width:100%; max-height:480px; object-fit:contain; background:#111; }
+.feature-live [hidden] { display:none !important; }
+
+.feature-stage-summary { margin:12px 16px; padding:12px 16px; border-left:3px solid #8b5cf6; background:rgba(139,92,246,.06); white-space:pre-wrap; overflow-wrap:anywhere; font-size:13px; line-height:1.6; }
+
+/* The current browser sits outside both log scroll axes, directly under the tabs. */
+.feature-browser-dock { flex:0 1 auto; min-height:0; max-height:45%; overflow:auto; background:var(--card-bg,#fff); border-bottom:1px solid var(--border-color,#dce2ed); }
+.feature-browser-dock[hidden] { display:none !important; }
+.feature-browser-dock .feature-live { margin:8px auto; width:calc(100% - 32px); box-sizing:border-box; }
+.feature-browser-dock img,.feature-browser-dock video { max-height:min(30vh,320px); object-fit:contain; }
+.feature-browser-dock .feature-test-video { margin:0 auto; }
+.feature-live img,.feature-live video { max-height:320px; }
+.feature-stage-summary { position:sticky; top:0; z-index:2; background:var(--card-bg,#fff); }
+
+/* Reserve the browser's space while frames reconnect; logs scroll independently. */
+.feature-browser-dock { flex:0 0 auto; max-height:48%; }
+.feature-browser-content { display:grid; grid-template-columns:minmax(0,2fr) minmax(180px,1fr); gap:12px; margin-top:8px; }
+.feature-browser-viewport { position:relative; height:clamp(160px,27vh,300px); background:#111; border-radius:6px; overflow:hidden; display:flex; align-items:center; justify-content:center; }
+.feature-browser-viewport p { color:#d1d5db; padding:16px; }
+.feature-browser-viewport img,.feature-browser-viewport video { width:100%; height:100%; max-height:100%; object-fit:contain; }
+.feature-browser-checks { margin:0; padding:0 4px 0 22px; max-height:27vh; overflow:auto; color:var(--text-primary,#273247); font-size:12px; }
+.feature-browser-checks li { padding:5px 0; overflow-wrap:anywhere; }
+.feature-browser-checks [data-status="passed"] { color:#168044; }
+.feature-browser-checks [data-status="failed"] { color:#d33131; }
+.feature-browser-checks [data-status="working"] { color:#8452ef; font-weight:600; }
+@media(max-width:640px){.feature-browser-content{grid-template-columns:1fr}.feature-browser-checks{max-height:90px}}
+.feature-browser-checks .feature-checklist-note { list-style:none; color:var(--text-secondary,#64748b); }
+.feature-run-log > summary { padding:12px 16px; cursor:pointer; color:var(--text-secondary,#64748b); font-size:13px; }
+.feature-run-log[open] > summary { border-bottom:1px solid var(--border-color,#dce2ed); }
+
+.feature-browser-checks {list-style:none;padding:0 4px 0 0;}
+.feature-browser-checks > li {border-bottom:1px solid var(--border-color,#dce2ed);}
+.feature-browser-checks summary {cursor:pointer;line-height:1.5;padding:8px 0;color:var(--text-primary,#273247);}
+.assertion-outcome {display:inline-block;font-size:11px;margin-right:8px;color:var(--text-secondary,#64748b);}
+[data-status="passed"] .assertion-outcome {color:#168044;}
+[data-status="failed"] .assertion-outcome {color:#d33131;}
+[data-status="working"] .assertion-outcome {color:#8452ef;}
+.assertion-evidence {padding:4px 8px 10px;color:var(--text-primary,#273247);font-weight:400;}
+.assertion-steps {padding-left:20px;}
+.assertion-steps small {display:block;color:var(--text-secondary,#64748b);}
+
+/* Browser and assertions are stacked; only assertions scroll in the main view. */
+.feature-browser-dock {flex:1 1 0;min-height:0;max-height:none;overflow:hidden;}
+.feature-browser-dock .feature-live {height:calc(100% - 16px);min-height:0;max-width:none;margin:8px 16px;display:flex;flex-direction:column;}
+.feature-browser-content {display:flex;flex-direction:column;flex:1;min-height:0;margin-top:0;gap:12px;overflow:hidden;}
+.feature-browser-viewport {flex:0 0 48%;height:auto;min-height:0;}
+.feature-browser-details {display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden;}
+.feature-browser-details > [role="status"] {flex-shrink:0;margin-bottom:6px;}
+.feature-browser-checks {flex:1;min-height:0;max-height:none;overflow:auto;overscroll-behavior:contain;padding-right:8px;}
+[data-phase-view] .feature-log-toolbar {flex:0 0 auto;overflow:hidden;padding:8px 16px;}
+.feature-show-logs,.feature-log-dialog button {padding:7px 12px;border:1px solid var(--border-color,#dce2ed);border-radius:6px;background:var(--card-bg,#fff);color:var(--text-primary,#273247);cursor:pointer;}
+.feature-log-dialog {width:min(900px,90vw);height:70vh;max-height:85vh;padding:0;border:1px solid var(--border-color,#dce2ed);border-radius:10px;background:var(--card-bg,#fff);color:var(--text-primary,#273247);}
+.feature-log-dialog[open] {display:flex;flex-direction:column;}
+.feature-log-dialog::backdrop {background:rgba(0,0,0,.45);}
+.feature-log-dialog header {display:flex;justify-content:space-between;align-items:center;flex-shrink:0;padding:12px 16px;border-bottom:1px solid var(--border-color,#dce2ed);}
+.feature-log-dialog .feature-run-log {flex:1;min-height:0;overflow:auto;padding:12px;overscroll-behavior:contain;}
+
+/* Logs replace the test content inside this ticket rather than escaping into a modal. */
+.feature-log-dialog {width:100%;height:100%;max-height:none;border:0;border-radius:0;display:flex;flex-direction:column;min-height:0;box-sizing:border-box;}
+.feature-log-dialog[hidden] {display:none!important;}
+.feature-logs-open .feature-browser-dock {display:none!important;}
+[data-phase-view].feature-logs-open .feature-log-toolbar {flex:1 1 0;min-height:0;padding:0;display:flex;flex-direction:column;}
+.feature-browser-viewport {flex-basis:68%;}
+.feature-enlarge {align-self:flex-end;flex-shrink:0;margin-bottom:6px;border:1px solid var(--border-color,#dce2ed);border-radius:6px;padding:5px 10px;background:var(--card-bg,#fff);color:var(--text-primary,#273247);cursor:pointer;}
+.browser-expanded .feature-browser-viewport {flex:1;}
+.browser-expanded .feature-browser-details {display:none;}
+
+/* Assertion review: stable navigation on the left, browser and selected evidence on the right. */
+.feature-browser-content {display:grid;grid-template-columns:minmax(240px,35%) minmax(0,1fr);gap:16px;}
+.feature-browser-details {min-width:0;border-right:1px solid var(--border-color,#dce2ed);padding-right:12px;}
+.feature-review-stage {display:flex;flex-direction:column;min-width:0;min-height:0;overflow:hidden;}
+.feature-review-stage > [role="status"] {flex:0 0 auto;max-height:60px;overflow:auto;}
+.feature-review-stage .feature-browser-viewport {flex:1 1 0;min-height:0;}
+.feature-selected-evidence {flex:0 1 26%;min-height:0;overflow:auto;overscroll-behavior:contain;margin-top:12px;border-top:1px solid var(--border-color,#dce2ed);}
+.feature-selected-evidence h3 {font-size:13px;margin:10px 8px;font-weight:600;color:var(--text-primary,#273247);}
+.feature-assertion-select {display:flex;flex-direction:column;gap:4px;text-align:left;width:100%;padding:12px 10px;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--text-primary,#273247);font:inherit;cursor:pointer;}
+.feature-assertion-select:hover {background:rgba(139,92,246,.06);}
+.feature-assertion-select[aria-pressed="true"] {border-color:#8b5cf6;background:rgba(139,92,246,.09);}
+.feature-browser-checks > li {border-bottom:0;}
+.browser-expanded .feature-browser-content {grid-template-columns:minmax(0,1fr);}
+.browser-expanded .feature-selected-evidence {display:none;}
+@media(max-width:640px){.feature-browser-content{grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);gap:8px}.feature-browser-details{border-right:0;padding-right:0}.feature-browser-checks{display:flex;gap:8px;max-height:100px;overflow:auto}.feature-browser-checks>li{flex:0 0 160px}.feature-browser-checks>.feature-checklist-note{flex-basis:90px}.browser-expanded .feature-browser-content{grid-template-rows:minmax(0,1fr)}}
+
+/* Case evidence expands in the case rail; the browser gets the entire stage. */
+.feature-assertion-select[aria-expanded="true"] {border-color:#8b5cf6;background:rgba(139,92,246,.09);}
+.feature-assertion-select > span:last-child::before {content:'▸ ';}
+.feature-assertion-select[aria-expanded="true"] > span:last-child::before {content:'▾ ';}
+.feature-browser-checks .assertion-evidence {overflow-wrap:anywhere;}
+.feature-review-stage .feature-browser-viewport {background:var(--card-bg,#fff);}
+.feature-review-stage .feature-browser-viewport img,.feature-review-stage .feature-browser-viewport video {width:100%;height:100%;max-width:100%;max-height:100%;object-fit:contain;flex-shrink:1;background:var(--card-bg,#fff);margin:0;}
+.feature-review-stage .feature-browser-viewport video {height:100%;}
+.feature-review-stage .feature-browser-viewport > p {color:var(--text-secondary,#64748b);}
+
+/* Keep preview controls together and return the former log toolbar height to the browser. */
+.feature-browser-actions {display:flex;justify-content:flex-end;align-items:center;gap:8px;flex-shrink:0;margin-bottom:6px;}
+.feature-browser-actions .feature-enlarge {margin-bottom:0;padding:7px 12px;}
+[data-phase-view]:not(.feature-logs-open) .feature-logs-in-header {display:none;}

@@ -20,7 +20,10 @@ FROM base AS runner
 # scripts/screenshot-worker.mjs via `spawn("node", …)` — Playwright hangs under
 # Bun, so we drive the remote CDP browser with Node. Without node here the
 # screenshot feature fails with "spawn node ENOENT" in production.
-RUN apt-get update && apt-get install -y --no-install-recommends curl nodejs && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends curl nodejs ffmpeg ca-certificates && update-ca-certificates && rm -rf /var/lib/apt/lists/*
+
+# Node must use the maintained OS trust bundle for the Mags WSS connection.
+ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
 
 # Create non-root user
 RUN addgroup --system --gid 1001 bunjs && \

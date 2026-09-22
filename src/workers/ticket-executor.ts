@@ -2042,8 +2042,7 @@ Before implementing, fix the git issue:
     await resolveTicketAddenda(ticketId, cliAddendaCtx.pendingIds);
     await maybeSubmitEpicForReview(ticket.epicId);
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId, mergeStatus: "merged" });
-    // Auto-record a demo of the completed feature for the Preview tab (fire-and-forget).
-    void generateTicketDemo(ticketId, { ownerId, llmUserId: buildLlm.actorId, projectId: project.id });
+    // Feature testing and recording already completed inside runtime validation.
     // QA (opt-in, projects.qaMode = "tests"): write a test suite for the ticket's
     // acceptance criteria and verify it red/green against the branch point, in the
     // sandbox that just built it. Fire-and-forget like the demo — it never throws,
@@ -3749,8 +3748,7 @@ git branch --show-current
       exitCode: 0,
       projectId: project.id,
     });
-    // Auto-record a demo of the completed feature for the Preview tab (fire-and-forget).
-    void generateTicketDemo(ticketId, { ownerId, llmUserId: buildLlm.actorId, projectId: project.id });
+    // Feature testing and recording already completed inside runtime validation.
     // QA (opt-in, projects.qaMode = "tests"): write a test suite for the ticket's
     // acceptance criteria and verify it red/green against the branch point, in the
     // sandbox that just built it. Fire-and-forget like the demo — it never throws,
@@ -3822,7 +3820,7 @@ function waitForCompletion(
 }
 
 /** Start a validation-only run on an existing dedicated ticket checkout. */
-export async function startTicketValidationRetry(ticketId:string,actorId:string):Promise<void> {
+export async function startTicketValidationRetry(ticketId:string,actorId:string,phase:'validation'|'feature-testing'='validation'):Promise<void> {
   if(executingTickets.has(ticketId) || isChatTurnActive(ticketId))throw new Error("This ticket already has an active operation.");
   executingTickets.add(ticketId);
   let launched=false;
@@ -3864,9 +3862,20 @@ export async function startTicketValidationRetry(ticketId:string,actorId:string)
         await wakeTicketVm(workspaceId);
         const {retrySavedValidation}=await import("../services/retry-validation.ts");
         const sha=await retrySavedValidation({workspaceId,projectDir:"/data/project",featureBranch:branch,repoUrl:auth.repoUrl,githubToken:auth.token,tokenUser:auth.tokenUser,
-          validation:{projectId:project.id,userId:buildLlm.actorId,ticketId,gitCredentialUserId:gitUserId,cancelled:()=>cancelledTickets.has(ticketId),onLog:line=>{void addLog(ticketId,line,"command",project.ownerId).catch(()=>{});},onCheckpoint:async message=>{await addLog(ticketId,message,"agent_progress",project.ownerId);}}},previous?.baseline ?? "");
+          validation:{projectId:project.id,userId:buildLlm.actorId,ticketId,gitCredentialUserId:gitUserId,cancelled:()=>cancelledTickets.has(ticketId),onLog:line=>{void addLog(ticketId,line,"command",project.ownerId).catch(()=>{});},onCheckpoint:async message=>{await addLog(ticketId,message,"agent_progress",project.ownerId);}}},previous?.baseline ?? "",phase);
         await refreshCancellation();
         if(cancelledTickets.has(ticketId))throw new Error("Validation cancelled");
+        if(phase==='feature-testing') {
+          // A successful retry supersedes the previous operation failure. Preserve
+          // completed tickets and Git metadata; testing alone does not publish code.
+          const recovered = ticket.status === 'failed' || ticket.status === 'blocked';
+          const status = recovered ? 'review' : ticket.status;
+          const stageId = recovered ? await moveTicketToStage(ticketId, project.id, 'In Review') : ticket.stageId;
+          await db.update(projectTickets).set({status, lastExecutionAt:new Date(), updatedAt:new Date()}).where(eq(projectTickets.id,ticketId));
+          broadcastToUser(project.ownerId,{type:'ticket_status',ticketId,status,stageId,queueStatus:'executing'});
+          await addLog(ticketId,'Feature testing completed on the saved app. See the result in the Feature testing panel above. This run did not repeat build or validation.',"ai_response",project.ownerId);
+          return;
+        }
         const reviewStageId = await moveTicketToStage(ticketId, project.id, "In Review");
         await db.update(projectTickets).set({
           status: "review",
@@ -3879,7 +3888,7 @@ export async function startTicketValidationRetry(ticketId:string,actorId:string)
         await addLog(ticketId,`✅ **Validation passed** for saved commit \`${sha.slice(0,12)}\`. Moved to **In Review**. Development was skipped. Any repairs were committed locally; this action did not push or merge.`,"ai_response",project.ownerId);
       } catch(error) {
         clearInterval(cancelPoll);
-        if(!await stoppedByUser(ticketId,project.ownerId)) await markTicketFailed(ticketId,failureSummary((error as Error).message).split("\nFailed command:")[0] || "Validation failed",project.ownerId,{emitEvent:false,failureKind:error instanceof ValidationFailure?error.failureKind:undefined});
+        if(!await stoppedByUser(ticketId,project.ownerId)) await markTicketFailed(ticketId,(phase==='feature-testing'?'Feature testing failed: ':'Validation failed: ')+(failureSummary((error as Error).message).split("\nFailed command:")[0] || "No diagnostic returned"),project.ownerId,{emitEvent:false,failureKind:error instanceof ValidationFailure?error.failureKind:undefined});
       } finally {
         clearInterval(cancelPoll);
         await sleepTicketVm(workspaceId);
@@ -3981,7 +3990,7 @@ async function markTicketFailed(ticketId: string, reason: string, userId?: strin
   // the success summary — so the user sees WHAT went wrong and HOW to proceed,
   // not just a buried "Execution failed" log line.
   const failMsg =
-    (/validation failed|recovery stopped|Automatic repair stopped/i.test(reason) ? `❌ **Validation blocked** — this ticket is not ready for review.\n\n` : `❌ **Build failed** — this attempt could not complete.\n\n`) +
+    (/^Feature testing failed:/i.test(reason) ? `❌ **Feature testing failed** — see the browser attempt and diagnostics above.\n\n` : /validation failed|recovery stopped|Automatic repair stopped/i.test(reason) ? `❌ **Validation blocked** — this ticket is not ready for review.\n\n` : `❌ **Build failed** — this attempt could not complete.\n\n`) +
     `**What went wrong:** ${reason}\n\n` +
     (/clone submission|clone response missing request_id/i.test(reason)
       ? `**How to proceed:** the clone request was not confirmed. Check Magpie for an accepted clone before retrying; automatic resubmission is blocked to avoid duplicate sandboxes. Ticket implementation has not started.`

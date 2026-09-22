@@ -314,7 +314,7 @@ export async function setStableUrl(
       await magsApi("PUT", `/api/v2/mags-url-aliases/${encodeURIComponent(subdomain)}`, body);
     } catch {
       await magsApi("DELETE", `/api/v2/mags-url-aliases/${encodeURIComponent(subdomain)}`).catch(() => {});
-      await create().catch((e2) => console.warn(`[mags] re-register alias ${subdomain} failed: ${(e2 as Error).message?.slice(0, 120)}`));
+      await create();
     }
   }
   return `https://${subdomain}.${appDomain}`;

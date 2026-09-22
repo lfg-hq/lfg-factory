@@ -1,3 +1,4 @@
+import {createReadStream} from 'node:fs';
 /**
  * S3 storage service for project files.
  * Mirrors the Django ProjectFile.save_content() / file_content behaviour:
@@ -53,6 +54,7 @@ function getClient(): S3Client {
   if (!_client) {
     _client = new S3Client({
       region: env.AWS_S3_REGION,
+      endpoint: env.AWS_S3_ENDPOINT,
       credentials: {
         accessKeyId: env.AWS_ACCESS_KEY_ID,
         secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
@@ -280,4 +282,11 @@ export async function deleteContent(s3Key: string | null | undefined): Promise<v
       console.error("[S3] Delete failed:", err);
     }
   }
+}
+
+/** Stream large recorder output without loading the complete video into memory. */
+export async function uploadBinaryFile(key:string,path:string,contentType:string):Promise<void>{
+ if(!isS3Enabled)throw Error('Object storage is required for recording artifacts');
+ const info=await fs.stat(path);
+ await getClient().send(new PutObjectCommand({Bucket:env.AWS_S3_BUCKET_NAME,Key:key,Body:createReadStream(path),ContentLength:info.size,ContentType:contentType}));
 }

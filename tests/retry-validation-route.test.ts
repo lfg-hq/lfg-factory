@@ -14,8 +14,8 @@ sqlite.close();
 mock.module('../src/auth/middleware.ts',()=>({requireAuth:async(c:any,next:any)=>{c.set('user',{id:'owner'});return next();}}));
 let permitted=true, accessible=true;
 mock.module('../src/auth/project-access.ts',()=>({getProjectAccess:async(id:string)=>accessible && id==='public-project' ? {project:{id:'internal-project',projectId:'public-project'},permissions:{canManageTickets:permitted,canEditFiles:permitted}}:null,requirePermission:()=>true}));
-const stopped:string[]=[];const started:string[]=[];let rejectStart=false;
-mock.module('../src/workers/ticket-executor.ts',()=>({requestTicketStop:async(id:string)=>{stopped.push(id);},startTicketValidationRetry:async(id:string)=>{if(rejectStart)throw new Error("Ticket operation is stopping.");started.push(id);}}));
+const phases:string[]=[];const stopped:string[]=[];const started:string[]=[];let rejectStart=false;
+mock.module('../src/workers/ticket-executor.ts',()=>({requestTicketStop:async(id:string)=>{stopped.push(id);},startTicketValidationRetry:async(id:string,_actor:string,phase:string)=>{phases.push(phase);if(rejectStart)throw new Error("Ticket operation is stopping.");started.push(id);}}));
 const {db}=await import('../src/config/db.ts');
 const {users}=await import('../src/db/schema/users.ts');
 const {projects}=await import('../src/db/schema/projects.ts');
@@ -50,3 +50,11 @@ test('stop verifies ticket ownership and returns authoritative operation state',
  const res=await stop('ticket');expect(res.status).toBe(200);expect(stopped).toEqual(['ticket']);expect((await res.json() as any).ticket.queueStatus).toBe('stopping');
 });
 afterAll(()=>rmSync(root,{recursive:true,force:true}));
+
+test('dispatches feature testing separately and rejects unknown phases',async()=>{
+ const r=await routes.request('/public-project/tickets/ticket/retry-validation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phase:'feature-testing'})});
+ expect(r.status).toBe(202);expect(phases.at(-1)).toBe('feature-testing');
+ const before=started.length;
+ const invalid=await routes.request('/public-project/tickets/ticket/retry-validation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phase:'unknown'})});
+ expect(invalid.status).toBe(400);expect(started.length).toBe(before);
+});
