@@ -1,3 +1,4 @@
+import { NotificationNav } from "../components/notification-nav.tsx";
 import { html } from "hono/html";
 
 interface Conversation {
@@ -121,14 +122,15 @@ export function ProjectDetailPage({
   <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
   <link rel="stylesheet" href="/public/css/projects.css" />
   <link rel="stylesheet" href="/public/css/project_detail.css" />
-  <link rel="stylesheet" href="/public/css/project-home.css?v=4" />
-  <link rel="stylesheet" href="/public/css/artifacts.css" />
+  <link rel="stylesheet" href="/public/css/project-home.css?v=20260923-epic-dashboard" />
+  <link rel="stylesheet" href="/public/css/artifacts.css?v=20260923-compact-docs" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
   <script src="/public/js/theme-switcher.js"></script>
 <link rel="stylesheet" href="/public/css/project-team.css">
+<link rel="stylesheet" href="/public/css/build-notifications.css?v=4" />
 </head>
 <body data-user-id="${user.id}" data-user-name="${user.name}" data-project-id="${project.projectId}">
 
@@ -146,18 +148,12 @@ export function ProjectDetailPage({
           </button>
         </div>
         <div class="project-selector-section">
-          <div class="nav-dropdown-container" id="projectDropdownContainer">
-            <button class="project-dropdown-trigger" id="projectDropdownTrigger" title="Project Options">
-              <i class="fas fa-folder-open"></i>
-              <span class="project-name-text">${project.name}</span>
-              <i class="fas fa-chevron-down dropdown-arrow"></i>
-            </button>
-            <div class="nav-dropdown" id="projectDropdown">
-              <a href="/projects" class="nav-dropdown-item">
-                <i class="fas fa-th-large"></i>
-                <span>All Projects</span>
-              </a>
-            </div>
+          <div class="project-back-container">
+            <a class="project-dropdown-trigger" href="/projects" aria-label="Back to projects" style="text-decoration:none">
+              <i class="fas fa-folder-open" aria-hidden="true"></i>
+              <span class="project-name-text">Back to projects</span>
+            </a>
+
           </div>
         </div>
         <div class="new-chat-section">
@@ -167,6 +163,7 @@ export function ProjectDetailPage({
           </a>
         </div>
         <div class="sidebar-nav">
+          ${NotificationNav()}
           <a href="/projects/${project.projectId}" class="nav-link${activeTab === "home" ? " active" : ""}">
             <i class="fas fa-tachometer-alt"></i>
             <span class="nav-text">Dashboard</span>
@@ -268,10 +265,10 @@ export function ProjectDetailPage({
           </div>
         </div>
         <div style="display:flex;align-items:center;gap:0.75rem;flex:0 0 auto;">
-          ${readyPreview ? html`<a href="${readyPreview.previewUrl}" target="_blank" rel="noopener" class="btn btn-secondary"><i class="fas fa-arrow-up-right-from-square"></i> Open preview</a>` : ""}
-          <a href="${continueUrl}" class="btn btn-primary" style="display:flex;align-items:center;gap:0.5rem;white-space:nowrap;">
+          ${activeTab !== "home" && readyPreview ? html`<a href="${readyPreview.previewUrl}" target="_blank" rel="noopener" class="btn btn-secondary"><i class="fas fa-arrow-up-right-from-square"></i> Open preview</a>` : ""}
+          ${activeTab !== "home" ? html`<a href="${continueUrl}" class="btn btn-primary" style="display:flex;align-items:center;gap:0.5rem;white-space:nowrap;">
             <i class="fas fa-comments"></i> ${conversations.length ? "Continue working" : "Open chat"}
-          </a>
+          </a>` : ""}
         </div>
       </div>` : ""}
 
@@ -469,110 +466,37 @@ export function ProjectDetailPage({
         ${(activeTab === "home" || activeTab === "inbox") ? html`
 
           ${activeTab === "home" ? html`
-          <script src="/public/js/project-home.js?v=2"></script>
-          <div class="home-overview" data-project="${project.projectId}" data-user="${user.id}">
-            <div><p class="home-eyebrow">PROJECT OVERVIEW</p><h2>Pick up where you left off</h2><p id="home-work-summary">Checking the latest project status…</p></div>
-            <a href="/projects/${project.projectId}/tickets" class="home-quiet-link">All tickets <i class="fas fa-arrow-right"></i></a>
-          </div>
-          <div class="home-work-stats" id="home-work-stats" aria-label="Ticket overview"></div>
-          <section class="home-card home-attention" aria-labelledby="home-attention-title">
-            <div class="home-section-heading"><h3 id="home-attention-title">Needs your attention</h3><span class="home-eyebrow">NEXT STEPS</span></div>
-            <div id="home-ticket-attention" aria-live="polite"><p class="home-muted">Loading ticket status…</p></div>
-          </section>
-
-          <!-- Two-column: (required actions + activity) | team + pins -->
-          <div class="home-grid" style="display:grid;grid-template-columns:1fr 340px;gap:1.5rem;align-items:start;">
-            <div style="display:flex;flex-direction:column;gap:1.5rem;">
-              <!-- Required actions (unread inbox items) -->
-              <div class="home-card" id="home-actions" style="display:none;border-color:var(--primary-color);background:rgba(139,92,246,0.05);">
-                <div style="display:flex;justify-content:space-between;align-items:center;">
-                  <h3 class="home-sec-title" style="margin:0;color:var(--primary-color);"><i class="fas fa-bell" style="margin-right:0.35rem;"></i>Needs your attention</h3>
-                  <a href="/projects/${project.projectId}?tab=inbox" style="font-size:0.78rem;color:var(--primary-color);text-decoration:none;">Open inbox</a>
-                </div>
-                <div id="home-actions-list" style="margin-top:0.5rem;"></div>
-              </div>
-
-              <section class="home-card" id="home-builds" hidden>
-                <div class="home-section-heading"><h3>Builds in progress</h3><span class="home-eyebrow">LIVE</span></div>
-                <div id="home-builds-list"></div>
+          <script src="/public/js/project-home.js?v=20260923-epic-dashboard"></script>
+          <div class="home-dashboard" data-project="${project.projectId}">
+            ${role !== "viewer" && role !== "guest" ? html`
+            <form id="home-start-form" data-project="${project.projectId}" class="home-new-requirement">
+              <div class="home-compose"><i class="fas fa-wand-magic-sparkles" aria-hidden="true"></i><textarea id="home-start-input" rows="1" maxlength="10000" required aria-label="New requirement" placeholder="What would you like to build or improve?"></textarea><button type="submit" class="btn btn-primary" aria-label="Start a new chat"><i class="fas fa-arrow-right" aria-hidden="true"></i></button></div>
+              <span id="home-start-error" role="status" class="home-muted"></span>
+            </form>` : ""}
+            <section aria-labelledby="home-epics-title">
+              <div class="home-section-heading"><div><h2 id="home-epics-title">Latest epics</h2><p class="home-muted">Newest first · Progress counts tickets ready for review or completed</p></div><a href="/projects/${project.projectId}/epics" class="home-quiet-link">View all →</a></div>
+              <div id="home-epics" class="home-epics" aria-live="polite"><p class="home-muted home-epics-empty">Loading epics…</p></div>
+              <p id="home-refresh-status" role="status" class="home-muted" hidden></p>
+            </section>
+            <div class="home-dashboard-lower">
+              <section class="home-recent-chats">
+                <div class="home-section-heading"><h2>Recent conversations</h2><a href="/projects/${project.projectId}?tab=conversations" class="home-quiet-link">View all →</a></div>
+                ${conversations.length ? conversations.slice(0,3).map(cv => html`
+                  <a href="/chat/project/${project.projectId}/conversation/${cv.id}" class="home-conversation">
+                    <span><span class="home-conversation-title">${(cv.title || "Untitled conversation").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")}</span><small>${new Date(cv.updatedAt).toLocaleDateString(undefined,{month:"short",day:"numeric"})}</small></span><span class="home-quiet-link">Continue →</span>
+                  </a>`) : html`<p class="home-muted">Your project conversations will appear here.</p>`}
               </section>
-              <!-- Recent chats -->
-              <div class="home-card home-recent-chats">
-                <div style="display:flex;justify-content:space-between;align-items:center;">
-                  <h3 class="home-sec-title" style="margin:0;">Continue working</h3>
-                  <a href="/projects/${project.projectId}?tab=conversations" style="font-size:0.78rem;color:var(--primary-color);text-decoration:none;">See all</a>
-                </div>
-                ${conversations.length === 0 ? html`
-                  <div style="margin-top:0.5rem;color:var(--text-secondary);font-size:0.85rem;padding:0.5rem 0;">No chats yet. <a href="/chat/project/${project.projectId}" style="color:var(--primary-color);text-decoration:none;">Start one →</a></div>
-                ` : html`
-                  <div class="lfg-list" style="margin-top:0.6rem;">
-                    ${conversations.slice(0, 5).map((cv) => html`
-                      <a href="/chat/project/${project.projectId}/conversation/${cv.id}" class="lfg-row" data-home-conversation="${cv.id}">
-                        <span style="flex:1;font-size:0.875rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${cv.title ?? "Untitled conversation"}</span>
-                        <span style="font-size:0.72rem;color:var(--text-secondary);flex:none;">${new Date(cv.updatedAt).toLocaleDateString()}</span>
-                      </a>
-                    `)}
-                  </div>
-                `}
-              </div>
-
-              ${role !== "viewer" && role !== "guest" ? html`
-              <section class="home-card home-new-work">
-                <h3>Start something new</h3>
-                <form id="home-start-form" data-project="${project.projectId}">
-                  <label class="home-muted" for="home-start-input">What would you like to build or improve?</label>
-                  <div class="home-compose"><textarea id="home-start-input" rows="2" maxlength="10000" required placeholder="Describe a feature, a fix, or an idea…"></textarea><button type="submit" class="btn btn-primary" aria-label="Continue in a new chat"><i class="fas fa-arrow-right"></i></button></div>
-                  <span id="home-start-error" role="status" class="home-muted"></span>
-                </form>
-              </section>` : ""}
-              <!-- Activity feed -->
-              <div class="home-card">
-                <div style="display:flex;justify-content:space-between;align-items:center;">
-                  <h3 class="home-sec-title" style="margin:0;">Activity</h3>
-                  <a href="/projects/${project.projectId}?tab=events" style="font-size:0.78rem;color:var(--primary-color);text-decoration:none;">See all</a>
-                </div>
-                <div id="home-activity" style="margin-top:0.5rem;"><div style="color:var(--text-secondary);font-size:0.85rem;padding:0.75rem 0;">Loading…</div></div>
-              </div>
+              <aside class="home-dashboard-side" aria-label="Project resources and team">
+                <section class="home-resources">
+                  <div class="home-section-heading"><h2>Project resources</h2><button id="home-pin-add" onclick="openPinModal()" class="home-team-action" style="display:none" aria-label="Pin a resource"><i class="fas fa-plus" aria-hidden="true"></i></button></div>
+                  <a href="/projects/${project.projectId}?tab=documents"><span><i class="fas fa-file-lines" aria-hidden="true"></i> Documents</span><span>${docsCount} ↗</span></a>
+                  <a href="/projects/${project.projectId}?tab=settings"><span><i class="fas fa-code-branch" aria-hidden="true"></i> Repository &amp; settings</span><span>↗</span></a>
+                  <div id="home-pins"></div>
+                </section>
+                <section><div class="home-section-heading"><h2>Team</h2><a href="/projects/${project.projectId}?tab=settings" class="home-quiet-link">${isOwner || role === "admin" ? "Manage" : "View"} →</a></div><div id="home-team"><span class="home-muted">Loading members…</span></div></section>
+              </aside>
             </div>
-
-            <!-- Sidebar -->
-            <div style="display:flex;flex-direction:column;gap:1.5rem;">
-              <div class="home-card home-resources">
-                <h3 class="home-sec-title">Project details</h3>
-                <a href="/projects/${project.projectId}?tab=documents">${docsCount} documents <i class="fas fa-arrow-right"></i></a>
-                <a href="/projects/${project.projectId}?tab=settings">Repository &amp; settings <i class="fas fa-arrow-right"></i></a>
-                <p class="home-muted">${readyPreview ? "Preview is running" : "No running preview"}</p>
-              </div>
-              <!-- Team -->
-              <div class="home-card">
-                <div style="display:flex;justify-content:space-between;align-items:center;">
-                  <h3 class="home-sec-title" style="margin:0;">Team</h3>
-                  <div class="home-team-actions">
-                    ${memberCount > 1 ? html`<button onclick="openRequestModal()" class="home-team-action"><i class="fas fa-paper-plane"></i> Message</button>` : ""}
-                    ${(isOwner || role === "admin") ? html`<a href="/projects/${project.projectId}?tab=settings" class="home-team-action"><i class="fas fa-user-plus"></i> Invite</a>` : ""}
-                  </div>
-                </div>
-                <div id="home-team" style="margin-top:0.6rem;"><div style="color:var(--text-secondary);font-size:0.85rem;">Loading…</div></div>
-              </div>
-
-              <!-- Issue tracker (Jira / Linear) -->
-              <div class="home-card" id="board-card" data-project="${project.projectId}" data-canmanage="${(isOwner || role === "admin" || role === "member") ? "1" : ""}">
-                <div style="display:flex;justify-content:space-between;align-items:center;">
-                  <h3 class="home-sec-title" style="margin:0;">Issue tracker</h3>
-                  <a href="/settings/integrations" class="home-team-action" title="Manage connections"><i class="fas fa-gear"></i></a>
-                </div>
-                <div id="board-body" style="margin-top:0.6rem;color:var(--text-secondary);font-size:0.85rem;">Loading…</div>
-              </div>
-
-              <!-- Pinned "Start here" -->
-              <div class="home-card">
-                <div style="display:flex;justify-content:space-between;align-items:center;">
-                  <h3 class="home-sec-title" style="margin:0;">Resources</h3>
-                  <button id="home-pin-add" onclick="openPinModal()" style="display:none;background:none;border:none;color:var(--primary-color);cursor:pointer;font-size:0.78rem;"><i class="fas fa-plus"></i> Pin</button>
-                </div>
-                <div id="home-pins" style="margin-top:0.6rem;"><div style="color:var(--text-secondary);font-size:0.85rem;">Loading…</div></div>
-              </div>
-            </div>
+            <footer class="home-dashboard-footer"><span>${project.name} project overview</span><a href="/projects/${project.projectId}?tab=events" class="home-quiet-link">View project activity →</a></footer>
           </div>
 
           <!-- Pin modal (owner/admin) -->
@@ -904,20 +828,17 @@ export function ProjectDetailPage({
                 if (m && m.owner) people.push({ name:m.owner.name, email:m.owner.email, role:'owner' });
                 ((m&&m.members)||[]).forEach(function(x){ people.push({ name:x.userName, email:x.userEmail, role:x.role }); });
                 var el = document.getElementById('home-team'); if(!el) return;
-                el.innerHTML = people.map(function(p){
-                  return '<div style="display:flex;align-items:center;gap:0.6rem;padding:0.35rem 0;">'
-                    + '<span style="width:28px;height:28px;border-radius:50%;background:rgba(139,92,246,0.15);color:var(--primary-color);display:inline-flex;align-items:center;justify-content:center;font-size:0.72rem;font-weight:600;flex:none;">'+hEsc(initials(p.name||p.email))+'</span>'
-                    + '<div style="flex:1;min-width:0;"><div style="font-size:0.85rem;color:var(--text-color);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+hEsc(p.name||p.email||'Member')+'</div></div>'
-                    + '<span style="font-size:0.7rem;color:var(--text-secondary);flex:none;">'+roleLabel(p.role)+'</span>'
-                    + '</div>';
-                }).join('');
+                var seen = new Set();
+                people = people.filter(function(p){var key=p.email||p.name;if(seen.has(key))return false;seen.add(key);return true;});
+                el.innerHTML = '<div class="home-team-avatars">'+people.slice(0,5).map(function(p){return '<span class="home-team-avatar" title="'+hEsc((p.name||p.email||'Member')+' · '+roleLabel(p.role))+'">'+hEsc(initials(p.name||p.email))+'</span>';}).join('')+'</div><p class="home-muted">'+people.length+' member'+(people.length===1?'':'s')+'</p>';
+
               }
               function renderPins(pins, canManage){
                 window.__pinCanManage = !!canManage;
                 var addBtn = document.getElementById('home-pin-add'); if (addBtn) addBtn.style.display = canManage ? '' : 'none';
                 var el = document.getElementById('home-pins'); if(!el) return;
                 pins = pins || [];
-                if (!pins.length){ el.innerHTML = '<div style="color:var(--text-secondary);font-size:0.82rem;">'+(canManage?'Pin key docs or links so everyone knows where to start.':'Nothing pinned yet.')+'</div>'; return; }
+                if (!pins.length){ el.replaceChildren(); return; }
                 el.innerHTML = pins.map(function(p){
                   var icon = p.targetType==='link'?'fa-link':(p.targetType==='ticket'?'fa-list-check':'fa-file-lines');
                   var ext = p.targetType==='link' ? ' target="_blank"' : '';
@@ -935,13 +856,13 @@ export function ProjectDetailPage({
               // One combined request for the whole Home (activities + notifications
               // + members + pins) instead of four separate round-trips.
               function refreshHome(){ return fetch('/api/projects/'+HM_PID+'/home').then(function(r){if(!r.ok) throw new Error('Home unavailable'); return r.json();}).then(function(d){
-                if (window.renderHomeWork) window.renderHomeWork(d.workTickets || []);
+                if (window.renderHomeWork) window.renderHomeWork(d.workTickets || [], d.epics || []);
                 renderActivity(d.activities);
                 renderActions(d.notifications);
                 renderTeam(d.members || {});
                 renderPins(d.pins, d.canManagePins);
                 var b = document.getElementById('inbox-tab-badge'); if (b && d.unreadCount){ b.textContent = d.unreadCount; b.style.display = ''; }
-              }).catch(function(){ document.getElementById('home-work-summary').textContent='Could not refresh project status. Retrying shortly…'; var loading=document.getElementById('home-ticket-attention'); if(loading && loading.textContent.indexOf('Loading')>=0) loading.textContent='Ticket status unavailable. Open All tickets or try again shortly.'; var el=document.getElementById('home-activity'); if(el) el.innerHTML='<div style="color:var(--text-secondary);font-size:0.85rem;">Couldn\\'t load.</div>'; });
+              }).catch(function(){ var el=document.getElementById('home-refresh-status'); if(el){el.hidden=false;el.textContent='Could not refresh the dashboard. Displayed status may be out of date.';} });
 
               }
               refreshHome();
@@ -1064,24 +985,15 @@ export function ProjectDetailPage({
           </style>
           <div id="filebrowser" class="filebrowser-container" style="position:relative;display:flex;flex-direction:column;">
             <div id="filebrowser-main" style="display:flex;flex-direction:column;">
-              <div class="filebrowser-header" style="padding-bottom:1rem;border-bottom:1px solid var(--border-color);margin-bottom:1rem;">
-                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:0.5rem;">
-                  <h2 style="color:var(--text-color);margin:0;font-size:1.1rem;font-weight:600;">Documents</h2>
-                  <div style="display:flex;gap:0.5rem;align-items:center;">
-                    <select id="file-type-filter" class="input" style="padding:0.4rem 0.6rem;font-size:0.8125rem;">
-                      <option value="">All Types</option>
-                    </select>
-                    <select id="file-epic-filter" class="input" title="Filter documents by epic" style="max-width:15rem;padding:0.4rem 0.6rem;font-size:0.8125rem;">
-                      <option value="">All Epics</option>
-                    </select>
-                    <button id="refresh-filebrowser" class="btn btn-secondary" style="font-size:0.8125rem;display:flex;align-items:center;gap:0.4rem;">
-                      <i class="fas fa-sync-alt"></i> Refresh
-                    </button>
-                  </div>
+              <div class="filebrowser-header">
+                <div class="filebrowser-title-row">
+                  <div><h3>Documents</h3><span class="filebrowser-subtitle">Grouped by epic · Newest first</span></div>
+                  <button id="refresh-filebrowser" type="button" aria-label="Refresh documents" title="Refresh documents"><i class="fas fa-sync-alt" aria-hidden="true"></i></button>
                 </div>
-                <div style="position:relative;">
-                  <input type="text" id="file-search" placeholder="Search documents..." class="input" style="width:100%;box-sizing:border-box;padding-left:2.25rem;" />
-                  <i class="fas fa-search" style="position:absolute;left:0.85rem;top:50%;transform:translateY(-50%);color:var(--text-secondary);font-size:0.85rem;"></i>
+                <div class="filebrowser-toolbar">
+                  <label class="filebrowser-search"><i class="fas fa-search" aria-hidden="true"></i><input type="search" id="file-search" placeholder="Search documents…" aria-label="Search documents" /></label>
+                  <select id="file-type-filter" aria-label="Filter document type"><option value="">All types</option></select>
+                  <select id="file-epic-filter" aria-label="Filter epic"><option value="">All epics</option></select>
                 </div>
               </div>
               <div class="filebrowser-content" style="flex:1;overflow-y:auto;">
@@ -1114,7 +1026,7 @@ export function ProjectDetailPage({
           <script src="/public/js/marked.min.js"></script>
           <script src="/public/js/markdown-config.js"></script>
   <!-- PDF libraries load on demand when exporting a document. -->
-          <script src="/public/js/artifacts-loader.js?v=20260908-lazy-pdf"></script>
+          <script src="/public/js/artifacts-loader.js?v=20260923-compact-docs"></script>
           <script src="/public/js/document-comments.js"></script>
           <script>
             // Reuse the SAME docs module as the chat Docs panel (window.ArtifactsLoader),
@@ -1820,7 +1732,7 @@ export function ProjectDetailPage({
     </div>
   </div>
 
-  <script src="/public/js/sidebar.js?v=20260908-startup"></script>
+  <script src="/public/js/sidebar.js?v=20260923-tooltip-theme"></script>
 <script src="/public/js/sidebar-chats.js?v=20260908-initials"></script>
   <script src="/public/js/board-sync.js"></script>
   <script></script>

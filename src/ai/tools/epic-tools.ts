@@ -10,6 +10,7 @@ import {
   listUnapprovedEpics,
   assignTicketsToEpic,
   linkDocsToEpic,
+  listEpicDocs,
   getEpic as getEpicById,
   UNAPPROVED_STATUSES,
 } from "../../services/epics.ts";
@@ -273,15 +274,7 @@ export const getEpicStatus = tool({
         })
         .from(projectTickets)
         .where(inArray(projectTickets.epicId, ids)),
-      db
-        .select({
-          id: projectFiles.id,
-          epicId: projectFiles.epicId,
-          name: projectFiles.name,
-          fileType: projectFiles.fileType,
-        })
-        .from(projectFiles)
-        .where(inArray(projectFiles.epicId, ids)),
+      Promise.all(ids.map(async epicId => (await listEpicDocs(epicId)).map(doc => ({...doc, epicId})))).then(groups => groups.flat()),
     ]);
 
     return {

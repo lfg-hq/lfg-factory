@@ -1,3 +1,4 @@
+import { NotificationNav } from "../components/notification-nav.tsx";
 import { html, raw } from "hono/html";
 
 interface TicketStage {
@@ -9,6 +10,7 @@ interface TicketStage {
 }
 
 interface Ticket {
+  epicId?: string | null;
   id: string;
   ticketKey: string | null;
   name: string;
@@ -40,6 +42,7 @@ interface TicketsListPageProps {
   project: { id: string; projectId: string; name: string; icon: string; ticketBuildIsolation?: string; previewBranchMode?: string; qaMode?: string };
   stages: TicketStage[];
   tickets: Ticket[];
+  epics?: Array<{ id: string; name: string; epicKey: string | null }>;
   executionMode?: ExecutionModeConfig;
   /** When set (a ticketId), render DRAWER-ONLY for the chat's embedded ticket sidebar —
    *  the body carries `embed-drawer` from the SERVER so the nav + kanban are hidden before
@@ -63,7 +66,7 @@ const STAGE_STATUS: Record<string, string> = {
   "Archive": "archived",
 };
 
-export function TicketsListPage({ user, project, stages, tickets, executionMode, embed }: TicketsListPageProps) {
+export function TicketsListPage({ user, project, stages, tickets, epics = [], executionMode, embed }: TicketsListPageProps) {
   const avatarLetter = (user.name?.[0] ?? user.email?.[0] ?? "?").toUpperCase();
   const subscriptionProviders = new Set<string>();
   if (executionMode?.openAICodexConnected) subscriptionProviders.add("openai");
@@ -115,7 +118,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
   <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
-  <link rel="stylesheet" href="/public/css/tickets.css?v=code-actions-2" />
+  <link rel="stylesheet" href="/public/css/tickets.css?v=20260923-neutral-code" />
   <link rel="stylesheet" href="/public/css/polish.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
@@ -144,7 +147,9 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
       min-width: 0;
       gap: 0.5rem;
     }
-    .toolbar-discovery { flex: 1 1 430px; }
+    .toolbar-discovery { flex: 1 1 600px; flex-wrap:wrap; }
+    .tickets-toolbar #filter-epic { max-width:240px; }
+    .tickets-toolbar .filter-select { flex:0 1 auto; max-width:100%; }
     .toolbar-actions { flex: 0 1 auto; justify-content: flex-end; }
     .tickets-toolbar .filter-search,
     .tickets-toolbar .filter-select {
@@ -154,6 +159,8 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     }
     .tickets-toolbar .filter-search { width: min(260px, 28vw); min-width: 190px; }
     .tickets-toolbar .filter-select { min-width: 126px; }
+    #clear-ticket-filters { border:0; background:transparent; color:var(--text-secondary); font-size:12px; cursor:pointer; white-space:nowrap; }
+    #clear-ticket-filters[hidden] { display:none; }
     .toolbar-divider {
       width: 1px;
       height: 24px;
@@ -462,6 +469,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     body.embed-drawer .drawer-close,
     body.embed-drawer .drawer-resize-handle { display: none !important; }
   </style>
+<link rel="stylesheet" href="/public/css/build-notifications.css?v=4" />
 </head>
 <body data-user-id="${user.id}" data-project-id="${project.projectId}"${embed ? ' class="embed-drawer"' : ""}>
 
@@ -479,17 +487,12 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
         </button>
       </div>
       <div class="project-selector-section">
-        <div class="nav-dropdown-container" id="projectDropdownContainer">
-          <button class="project-dropdown-trigger" id="projectDropdownTrigger" title="Project Options">
-            <i class="fas fa-folder-open"></i>
-            <span class="project-name-text">${project.name}</span>
-            <i class="fas fa-chevron-down dropdown-arrow"></i>
-          </button>
-          <div class="nav-dropdown" id="projectDropdown">
-            <a href="/projects" class="nav-dropdown-item">
-              <i class="fas fa-th-large"></i><span>All Projects</span>
+        <div class="project-back-container">
+          <a class="project-dropdown-trigger" href="/projects" aria-label="Back to projects" style="text-decoration:none">
+              <i class="fas fa-folder-open" aria-hidden="true"></i>
+              <span class="project-name-text">Back to projects</span>
             </a>
-          </div>
+
         </div>
       </div>
       <div class="new-chat-section">
@@ -499,6 +502,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
         </a>
       </div>
       <div class="sidebar-nav">
+          ${NotificationNav()}
         <a href="/projects/${project.projectId}" class="nav-link">
           <i class="fas fa-tachometer-alt"></i><span class="nav-text">Dashboard</span>
         </a>
@@ -571,6 +575,10 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     <div class="tickets-toolbar">
       <div class="toolbar-discovery" aria-label="Find and filter tickets">
         <input class="filter-search" type="text" placeholder="Search tickets..." aria-label="Search tickets" id="ticket-search" oninput="filterTickets()" />
+        <select class="filter-select" aria-label="Filter by epic" id="filter-epic" onchange="filterTickets()">
+          <option value="">All epics</option><option value="unassigned">No epic</option>
+          ${epics.map(e => html`<option value="${e.id}">${e.epicKey ? e.epicKey + " · " : ""}${e.name}</option>`)}
+        </select>
         <select class="filter-select" aria-label="Filter by status" id="filter-status" onchange="filterTickets()">
           <option value="">All statuses</option>
           <option value="open">Open</option>
@@ -588,6 +596,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
           <option value="Low">Low</option>
         </select>
       </div>
+      <button type="button" id="clear-ticket-filters" hidden onclick="clearTicketFilters()">Clear filters</button>
       <div class="toolbar-actions">
         <!-- "Build with" moved to the project's Config tab. It wrote to YOUR account
              settings while builds read the project owner's, so a collaborator changing
@@ -671,7 +680,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
                 ${stageTickets.length === 0 ? html`
                   <div style="text-align:center;padding:1.5rem;color:var(--text-secondary);font-size:0.8rem;opacity:0.4;">No tickets</div>
                 ` : stageTickets.map((t) => html`
-                  <div class="kanban-card" data-ticket-id="${t.id}" data-status="${t.status}" data-priority="${t.priority}"
+                  <div class="kanban-card" data-ticket-id="${t.id}" data-epic="${t.epicId || "unassigned"}" data-status="${t.status}" data-priority="${t.priority}"
                        draggable="true" onclick="openTicketDrawer('${t.id}')">
                     <div class="kanban-card-header">
                       ${t.ticketKey ? html`<span style="font-size:0.7rem;color:var(--text-secondary);font-weight:600;font-family:monospace;letter-spacing:0.02em;">${t.ticketKey}</span>` : ""}
@@ -911,12 +920,12 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
   </div>
 </div>
 
-<script src="/public/js/sidebar.js?v=20260908-startup"></script>
+<script src="/public/js/sidebar.js?v=20260923-tooltip-theme"></script>
 <script src="/public/js/sidebar-chats.js?v=20260908-initials"></script>
 <script src="/public/js/sharing.js"></script>
 <!-- Shared preview component — the SAME one the main chat Preview panel uses. -->
-<link rel="stylesheet" href="/public/css/ticket-action-phases.css" />
-<script src="/public/js/ticket-action-phases.js"></script>
+<link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20260923-inline-history" />
+<script src="/public/js/ticket-action-phases.js?v=20260923-inline-history"></script>
 <script src="/public/js/preview-tab.js"></script>
 <script>
   const PROJECT_ID = document.body.dataset.projectId;
@@ -1003,7 +1012,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
 
   // Restore drawer state from sessionStorage on page load (skipped in embed mode)
   (function restoreDrawer() {
-    if (EMBED_TICKET) return;
+    if (EMBED_TICKET || new URLSearchParams(location.search).has("ticket") || new URLSearchParams(location.search).has("epic")) return;
     var saved = sessionStorage.getItem('lfg_drawer_ticket_' + PROJECT_ID);
     if (saved) {
       // Defer so DOM is ready and ticketMap is populated
@@ -1134,6 +1143,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
 
     // Show drawer immediately with Details tab as default
     document.getElementById('ticket-drawer').classList.add('active');
+    if (new URLSearchParams(location.search).get('tab') === 'actions') openPreferredDrawerTab();
 
     // Fetch LIVE ticket status to detect executing tickets (ticketMap is stale)
     fetch('/api/projects/' + PROJECT_ID + '/tickets/' + ticketId)
@@ -1236,6 +1246,7 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     try { sessionStorage.setItem(DRAWER_TAB_KEY, tabId); } catch (e) {}
   }
   function preferredDrawerTab() {
+    if (new URLSearchParams(location.search).get("tab") === "actions") return "actions";
     try { return sessionStorage.getItem(DRAWER_TAB_KEY) || 'details'; } catch (e) { return 'details'; }
   }
   function openPreferredDrawerTab() {
@@ -2497,14 +2508,33 @@ export function TicketsListPage({ user, project, stages, tickets, executionMode,
     const q = document.getElementById('ticket-search').value.toLowerCase();
     const status = document.getElementById('filter-status').value;
     const priority = document.getElementById('filter-priority').value;
+    const epic = document.getElementById('filter-epic').value;
     document.querySelectorAll('.kanban-card').forEach(card => {
-      const name = card.querySelector('.kanban-card-title')?.textContent?.toLowerCase() || '';
+      const name = card.textContent.toLowerCase();
       const s = card.dataset.status;
       const p = card.dataset.priority;
-      const show = (!q || name.includes(q)) && (!status || s === status) && (!priority || p === priority);
+      const show = (!q || name.includes(q)) && (!status || s === status) && (!priority || p === priority) && (!epic || card.dataset.epic === epic);
       card.style.display = show ? '' : 'none';
     });
+    document.querySelectorAll('.kanban-column').forEach(column => {
+      column.querySelector('.ticket-count').textContent = Array.from(column.querySelectorAll('.kanban-card')).filter(c => c.style.display !== 'none').length;
+    });
+    document.getElementById('clear-ticket-filters').hidden = !(q || status || priority || epic);
+    const url = new URL(location.href);
+    [['epic',epic],['status',status],['priority',priority],['q',q]].forEach(([key,value]) => value ? url.searchParams.set(key,value) : url.searchParams.delete(key));
+    history.replaceState(null,'',url);
   }
+  function clearTicketFilters() {
+    ['ticket-search','filter-epic','filter-status','filter-priority'].forEach(id => document.getElementById(id).value = '');
+    filterTickets();
+  }
+  function restoreTicketFilters() {
+    const params = new URLSearchParams(location.search);
+    [['filter-epic','epic'],['filter-status','status'],['filter-priority','priority'],['ticket-search','q']].forEach(([id,key]) => { document.getElementById(id).value = params.get(key) || ''; });
+    filterTickets();
+  }
+  restoreTicketFilters();
+  window.addEventListener('popstate', restoreTicketFilters);
 
   // Drag & drop
   let _dragId = null;

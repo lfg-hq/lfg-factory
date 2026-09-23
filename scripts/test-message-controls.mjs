@@ -4,12 +4,12 @@ const src = fs.readFileSync('public/js/chat.js', 'utf8');
 const start = src.indexOf('    function updateMessageDisplay(');
 const end = src.indexOf('    function finishMessageDisplay(', start);
 const update = new Function(src.slice(start, end) + '; return updateMessageDisplay;')();
-const classes = new Set();
+const classes = new Set(['user']);
 const content = { scrollHeight: 700 };
 const toggle = { setAttribute(k, v) { this[k] = v; } };
 const message = {
   isConnected: true, dataset: {},
-  classList: { toggle: (key, yes) => yes ? classes.add(key) : classes.delete(key) },
+  classList: { contains: key => classes.has(key), toggle: (key, yes) => yes ? classes.add(key) : classes.delete(key) },
   querySelector: selector => selector === '.message-content' ? content : toggle,
 };
 update(message);
@@ -29,6 +29,11 @@ message.dataset.streaming = 'false';
 update(message);
 assert(classes.has('message-collapsed'));
 content.scrollHeight = 80;
+update(message);
+assert(!classes.has('message-collapsed'));
+assert.equal(toggle.hidden, true);
+content.scrollHeight = 700;
+classes.delete('user');
 update(message);
 assert(!classes.has('message-collapsed'));
 assert.equal(toggle.hidden, true);

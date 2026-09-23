@@ -927,8 +927,9 @@ async function healBrokenAssets(
  *  MUST carry conversation_id + project_id so the client can scope it to the right chat —
  *  without them a Kitereach summary leaked into whatever project's chat was open. */
 async function publishSummary(userId: string, conversationId: string | null | undefined, content: string, publicProjectId?: string): Promise<void> {
-  if (conversationId) await db.insert(messages).values({ conversationId, role: "assistant", content }).catch(() => {});
-  broadcastToUser(userId, { type: "message", sender: "assistant", message: content, conversation_id: conversationId ?? undefined, project_id: publicProjectId });
+  if (!conversationId) return;
+  await db.insert(messages).values({ conversationId, role: "assistant", content }).catch(() => {});
+  broadcastToUser(userId, { type: "message", sender: "assistant", message: content, conversation_id: conversationId, project_id: publicProjectId, build_status: true });
 }
 
 /** Run the asset check and log a clear warning listing any broken/mixed-content assets. */

@@ -6,7 +6,7 @@ import { projectTickets } from "../../db/schema/tickets.ts";
 import { projectFiles } from "../../db/schema/documents.ts";
 import { projects } from "../../db/schema/projects.ts";
 import { users } from "../../db/schema/users.ts";
-import { eq, and, asc, inArray } from "drizzle-orm";
+import { desc, eq, and, asc, inArray } from "drizzle-orm";
 import { getProjectAccess } from "../../auth/project-access.ts";
 import {
   createEpic,
@@ -71,7 +71,7 @@ epicsApi.get("/projects/:projectId/epics", async (c) => {
     .select()
     .from(epics)
     .where(eq(epics.projectId, access.project.id))
-    .orderBy(asc(epics.createdAt));
+    .orderBy(desc(epics.createdAt));
 
   if (!rows.length) return c.json({ epics: [] });
 
@@ -203,6 +203,7 @@ epicsApi.post("/epics/:epicId/docs", async (c) => {
   const loaded = await loadEpic(epicId!, user.id);
   if (!loaded) return c.json({ error: "Epic not found" }, 404);
 
+  if (!loaded.access.permissions.canEditFiles) return c.json({error:"Document editing permission required"},403);
   const body = await c.req.json<{ fileIds?: string[] }>();
   if (!body.fileIds?.length) return c.json({ error: "fileIds is required" }, 400);
 

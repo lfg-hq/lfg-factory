@@ -1,3 +1,4 @@
+import { NotificationNav } from "../components/notification-nav.tsx";
 import { html } from "hono/html";
 import { ChatInput } from "../components/chat-input.tsx";
 
@@ -31,9 +32,9 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
   <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
-  <link rel="stylesheet" href="/public/css/artifacts.css" />
+  <link rel="stylesheet" href="/public/css/artifacts.css?v=20260923-compact-docs" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
-  <link rel="stylesheet" href="/public/css/chat.css?v=20260908-hover-copy" />
+  <link rel="stylesheet" href="/public/css/chat.css?v=20260923-model-picker" />
   <link rel="stylesheet" href="/public/css/artifacts-fix.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
@@ -64,6 +65,7 @@ export function ChatPage({
     #ta-log .ta-cmd-body { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; color:var(--text-color,#cbd5e1); background:var(--background-surface,#141414); border:1px solid var(--border-color,#2a2a2a); border-radius:6px; padding:8px 10px; margin:4px 0 0 20px; white-space:pre-wrap; word-break:break-word; max-height:260px; overflow:auto; }
   </style>
   <script src="/public/js/theme-switcher.js"></script>
+<link rel="stylesheet" href="/public/css/build-notifications.css?v=4" />
 </head>
 <body
   data-user-id="${user.id}"
@@ -88,18 +90,12 @@ export function ChatPage({
           </button>
         </div>
         <div class="project-selector-section">
-          <div class="nav-dropdown-container" id="projectDropdownContainer">
-            <button class="project-dropdown-trigger" id="projectDropdownTrigger" title="Project Options">
-              <i class="fas fa-folder-open"></i>
-              <span class="project-name-text">${projectName}</span>
-              <i class="fas fa-chevron-down dropdown-arrow"></i>
-            </button>
-            <div class="nav-dropdown" id="projectDropdown">
-              <a href="/projects" class="nav-dropdown-item">
-                <i class="fas fa-th-large"></i>
-                <span>All Projects</span>
-              </a>
-            </div>
+          <div class="project-back-container">
+            <a class="project-dropdown-trigger" href="/projects" aria-label="Back to projects" style="text-decoration:none">
+              <i class="fas fa-folder-open" aria-hidden="true"></i>
+              <span class="project-name-text">Back to projects</span>
+            </a>
+
           </div>
         </div>
         <div class="new-chat-section">
@@ -109,6 +105,7 @@ export function ChatPage({
           </a>
         </div>
         <div class="sidebar-nav">
+          ${NotificationNav()}
           <a href="/projects/${projectId}" class="nav-link">
             <i class="fas fa-tachometer-alt"></i>
             <span class="nav-text">Dashboard</span>
@@ -234,9 +231,11 @@ export function ChatPage({
           <div class="project-name-container" id="project-name-container">
             <h1 class="project-name" id="project-name-display">${projectName}</h1>
           </div>
-          <button id="artifacts-button" class="artifacts-button" title="Toggle Artifacts Panel">
-            <i class="fas fa-cube"></i>
-          </button>
+          <div class="chat-header-actions">
+            <button id="artifacts-button" class="artifacts-button" type="button" title="Toggle workspace panel" aria-label="Toggle workspace panel">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -364,24 +363,15 @@ export function ChatPage({
           <div class="filebrowser-container" style="height:92%;display:flex;flex-direction:column;">
             <!-- Browser View -->
             <div id="filebrowser-main" style="height:100%;display:flex;flex-direction:column;">
-              <div class="filebrowser-header" style="padding:16px 20px 14px;border-bottom:1px solid var(--border-color,#2a2a2a);">
-                <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;">
-                  <h3 style="color:var(--text-color,#e2e8f0);margin:0;font-size:16px;font-weight:600;">Documents</h3>
-                  <div style="display:flex;gap:8px;align-items:center;">
-                    <select id="file-type-filter" style="height:32px;padding:0 12px;background:var(--card-bg,#161616);border:1px solid var(--border-color,#333);border-radius:8px;color:var(--text-color,#e2e8f0);font-size:12.5px;font-weight:500;cursor:pointer;">
-                      <option value="">All Types</option>
-                    </select>
-                    <select id="file-epic-filter" title="Filter documents by epic" style="max-width:15rem;height:32px;padding:0 12px;background:var(--card-bg,#161616);border:1px solid var(--border-color,#333);border-radius:8px;color:var(--text-color,#e2e8f0);font-size:12.5px;font-weight:500;cursor:pointer;">
-                      <option value="">All Epics</option>
-                    </select>
-                    <button id="refresh-filebrowser" class="btn btn-sm" style="height:32px;padding:0 13px;background:var(--card-bg,#161616);color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:500;">
-                      <i class="fas fa-rotate-right" style="font-size:11px;"></i> Refresh
-                    </button>
-                  </div>
+              <div class="filebrowser-header">
+                <div class="filebrowser-title-row">
+                  <div><h3>Documents</h3><span class="filebrowser-subtitle">Grouped by epic · Newest first</span></div>
+                  <button id="refresh-filebrowser" type="button" aria-label="Refresh documents" title="Refresh documents"><i class="fas fa-sync-alt" aria-hidden="true"></i></button>
                 </div>
-                <div style="position:relative;">
-                  <input type="text" id="file-search" placeholder="Search documents…" style="width:100%;height:38px;box-sizing:border-box;padding:0 14px 0 38px;background:var(--background-surface,#141414);border:1px solid var(--border-color,#333);border-radius:9px;color:var(--text-color,#e2e8f0);font-size:13.5px;" />
-                  <i class="fas fa-magnifying-glass" style="position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--text-secondary,#9ca3af);font-size:13px;"></i>
+                <div class="filebrowser-toolbar">
+                  <label class="filebrowser-search"><i class="fas fa-search" aria-hidden="true"></i><input type="search" id="file-search" placeholder="Search documents…" aria-label="Search documents" /></label>
+                  <select id="file-type-filter" aria-label="Filter document type"><option value="">All types</option></select>
+                  <select id="file-epic-filter" aria-label="Filter epic"><option value="">All epics</option></select>
                 </div>
               </div>
               <div class="filebrowser-content" style="flex:1;overflow-y:auto;">
@@ -471,18 +461,18 @@ export function ChatPage({
   <script src="/public/js/marked.min.js"></script>
   <script src="/public/js/markdown-config.js"></script>
   <!-- PDF libraries load on demand when exporting a document. -->
-  <script src="/public/js/artifacts-loader.js?v=20260908-lazy-pdf"></script>
+  <script src="/public/js/artifacts-loader.js?v=20260923-compact-docs"></script>
   <script src="/public/js/document-comments.js"></script>
   <script src="/public/js/artifacts.js"></script>
-  <link rel="stylesheet" href="/public/css/ticket-action-phases.css" />
-<script src="/public/js/ticket-action-phases.js"></script>
+  <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20260923-inline-history" />
+<script src="/public/js/ticket-action-phases.js?v=20260923-inline-history"></script>
 <script src="/public/js/preview-tab.js"></script>
   <script src="/public/js/ticket-agent.js"></script>
   <script src="/public/js/env-tab.js"></script>
   <script src="/public/js/tab-overflow.js"></script>
-  <script src="/public/js/sidebar.js?v=20260908-startup"></script>
+  <script src="/public/js/sidebar.js?v=20260923-tooltip-theme"></script>
   <script src="/public/js/custom-dropdown.js"></script>
-  <script src="/public/js/chat.js?v=20260908-hover-copy"></script>
+  <script src="/public/js/chat.js?v=20260923-collapsed-work"></script>
   <script src="/public/js/mobile-menu.js"></script>
 
   <script>
@@ -499,14 +489,14 @@ export function ChatPage({
         if (!response.ok) { const error = await response.json(); alert(error.error || 'Could not change model'); return; }
         document.querySelectorAll('#model-submenu .submenu-option').forEach(b => b.classList.remove('selected'));
         btn.classList.add('selected');
-        document.getElementById('current-model-left').textContent = btn.querySelector('span').textContent.trim();
+        document.getElementById('current-model-left').textContent = btn.dataset.label || btn.querySelector('span').textContent.trim();
       });
     });
 
     // Set initial model label
     const selectedModelBtn = document.querySelector('#model-submenu .submenu-option.selected');
     if (selectedModelBtn) {
-      document.getElementById('current-model-left').textContent = selectedModelBtn.querySelector('span').textContent.trim();
+      document.getElementById('current-model-left').textContent = selectedModelBtn.dataset.label || selectedModelBtn.querySelector('span').textContent.trim();
     }
 
     // Artifacts panel toggle is handled by artifacts.js (uses #artifacts-toggle and #resize-handle)

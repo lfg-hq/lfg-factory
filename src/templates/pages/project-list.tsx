@@ -1,3 +1,4 @@
+import { NotificationNav } from "../components/notification-nav.tsx";
 import { WorkspacePicker, type WorkspaceContext } from '../components/workspace-picker.ts';
 import { html } from "hono/html";
 
@@ -79,6 +80,7 @@ export function ProjectListPage({ workspaceContext, user, projects, projectStats
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
   <script src="/public/js/theme-switcher.js"></script>
 <link rel="stylesheet" href="/public/css/workspace-picker.css" />
+<link rel="stylesheet" href="/public/css/build-notifications.css?v=4" />
 </head>
 <body data-user-id="${user.id}" data-user-name="${user.name}">
   ${error ? html`<div class="messages"><div class="alert alert-danger">${error}</div></div>` : ""}
@@ -104,6 +106,7 @@ export function ProjectListPage({ workspaceContext, user, projects, projectStats
           </a>
         </div>
         <div class="sidebar-nav">
+          ${NotificationNav()}
           <a href="/instant/" class="nav-link">
             <i class="fas fa-bolt"></i>
             <span class="nav-text">Instant Apps</span>
@@ -522,7 +525,7 @@ export function ProjectListPage({ workspaceContext, user, projects, projectStats
     </div>
   </div>
 
-  <script src="/public/js/sidebar.js?v=20260908-startup"></script>
+  <script src="/public/js/sidebar.js?v=20260923-tooltip-theme"></script>
   <script src="/public/js/projects.js"></script>
   <script src="/public/js/agents.js"></script>
   <script>

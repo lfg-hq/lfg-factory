@@ -2144,7 +2144,7 @@ document.addEventListener('DOMContentLoaded', function() {
          * Load tickets from the API for the current project
          * @param {number} projectId - The ID of the current project
          */
-        loadTickets: function(projectId) {
+        loadTickets: function(projectId, append = false) {
 
             if (!projectId) {
                 console.warn('[ArtifactsLoader] No project ID provided for loading tickets');
@@ -2206,7 +2206,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
             ticketsTab.innerHTML = '<div class="loading-state"><div class="spinner"></div><div>Loading tickets...</div></div>';
 
-            const url = `/projects/${projectId}/api/checklist/`;
+            const previous = append && this._ticketPage?.projectId === projectId ? this._ticketPage : null;
+            const url = `/projects/${projectId}/api/checklist/?limit=20&offset=${previous?.nextOffset || 0}`;
 
             fetch(url)
                 .then(response => {
@@ -2216,7 +2217,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     return response.json();
                 })
                 .then(data => {
-                    const tickets = data.tickets || [];
+                    const tickets = Array.from(new Map([...(previous?.tickets || []), ...(data.tickets || [])].map(ticket => [ticket.id,ticket])).values());
+                    this._ticketPage = {projectId,tickets,nextOffset:data.nextOffset};
 
                     if (tickets.length === 0) {
                         ticketsTab.innerHTML = `
@@ -2446,6 +2448,12 @@ document.addEventListener('DOMContentLoaded', function() {
                     }
 
                     renderTickets();
+                    if (data.hasMore) {
+                        const more = document.createElement('button'); more.type = 'button'; more.className = 'btn btn-secondary';
+                        more.textContent = `Load 20 more (${tickets.length} loaded; filters apply to loaded tickets)`;
+                        more.onclick = () => { more.disabled = true; this.loadTickets(projectId, true); };
+                        ticketsTab.prepend(more);
+                    }
                 })
                 .catch(error => {
                     console.error('Error fetching tickets:', error);
@@ -2665,7 +2673,7 @@ document.addEventListener('DOMContentLoaded', function() {
          * Load checklist items from the API for the current project
          * @param {number} projectId - The ID of the current project
          */
-        loadChecklist: function(projectId) {
+        loadChecklist: function(projectId, append = false) {
             
             if (!projectId) {
                 console.warn('[ArtifactsLoader] No project ID provided for loading checklist');
@@ -2702,7 +2710,10 @@ document.addEventListener('DOMContentLoaded', function() {
             }
 
             // Fetch checklist from API
-            const checklistUrl = `/projects/${projectId}/api/checklist/`;
+            const previous = append && this._checklistPage?.projectId === projectId ? this._checklistPage : null;
+            const offset = previous?.nextOffset || 0;
+            const requestId = this._checklistRequestId = (this._checklistRequestId || 0) + 1;
+            const checklistUrl = `/projects/${projectId}/api/checklist/?limit=20&offset=${offset}`;
             
             fetch(checklistUrl)
                 .then(response => {
@@ -2713,7 +2724,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 })
                 .then(data => {
                     // Process checklist data
-                    const checklist = data.tickets || [];
+                    if (requestId !== this._checklistRequestId) return;
+                    const checklist = Array.from(new Map([...(previous?.tickets || []), ...(data.tickets || [])].map(ticket => [ticket.id, ticket])).values());
+                    this._checklistPage = {projectId, tickets:checklist, nextOffset:data.nextOffset};
 
                     const modalHelpers = this.getTicketModalHelpers();
                     modalHelpers.setProjectId(projectId);
@@ -2741,11 +2754,12 @@ document.addEventListener('DOMContentLoaded', function() {
                             if (it.epic_id && !seen.has(it.epic_id)) {
                                 seen.set(it.epic_id, {
                                     id: it.epic_id,
+                                    createdAt: it.epic_created_at,
                                     label: (it.epic_key ? it.epic_key + ' · ' : '') + (it.epic_name || 'Epic'),
                                 });
                             }
                         });
-                        return [...seen.values()].sort((a, b) => a.label.localeCompare(b.label));
+                        return [...seen.values()].sort((a, b) => (new Date(b.createdAt || 0) - new Date(a.createdAt || 0)) || b.label.localeCompare(a.label, undefined, {numeric:true}));
                     })();
 
                     const statuses = [...new Set(checklist.map(item => item.status || 'open'))].sort();
@@ -3064,6 +3078,16 @@ document.addEventListener('DOMContentLoaded', function() {
                     `;
 
                     checklistTab.innerHTML = checklistHTML;
+                    if (data.hasMore) {
+                        const paging = document.createElement('div');
+                        paging.style.cssText = 'padding:12px;display:flex;align-items:center;gap:12px;color:var(--text-secondary);font-size:12px';
+                        const hint = document.createElement('span');
+                        hint.textContent = `${checklist.length} tickets loaded. Filters apply to loaded tickets.`;
+                        const more = document.createElement('button');
+                        more.type = 'button'; more.className = 'btn btn-secondary'; more.textContent = 'Load 20 more';
+                        more.onclick = () => { more.disabled = true; more.textContent = 'Loading…'; this.loadChecklist(projectId, true); };
+                        paging.append(hint, more); checklistTab.prepend(paging);
+                    }
 
                     // Get filter elements and content container
                     const checklistContent = document.getElementById('checklist-content');
@@ -3277,7 +3301,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                 if (ae !== be) {
                                     if (ae === 'No epic') return 1;
                                     if (be === 'No epic') return -1;
-                                    return ae.localeCompare(be);
+                                    return (new Date(b.epic_created_at || 0) - new Date(a.epic_created_at || 0)) || be.localeCompare(ae, undefined, {numeric:true});
                                 }
                                 // Within an epic: what's running now, then newest completion,
                                 // then build order for whatever hasn't been built yet.
@@ -3319,7 +3343,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                     : '';
                                 // Close the previous group's body before opening the next.
                                 if (lfgCurGid) itemsHTML += `</div>`;
-                                itemsHTML += `<div class="lfg-date-group${lfgGroupBy === 'epic' ? ' lfg-group-toggle' : ''}" data-group="${gid}">`
+                                itemsHTML += `<div class="lfg-date-group${lfgGroupBy === 'epic' ? ' lfg-group-toggle' : ''}" data-epic-drop="${isEpicGroup ? item.epic_id : ''}" data-group="${gid}">`
                                     + chevron
                                     + `<span class="lfg-group-name">${modalHelpers.escapeHtml(bk)}</span>`
                                     + st
@@ -4460,6 +4484,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     renderChecklist();
                 })
                 .catch(error => {
+                    if (requestId !== this._checklistRequestId) return;
                     console.error('[ArtifactsLoader] Error fetching checklist:', error);
                     checklistTab.innerHTML = `
                         <div class="error-state">
@@ -6974,6 +6999,19 @@ document.addEventListener('DOMContentLoaded', function() {
             let currentOrder = 'desc';
             let currentEpic = '';   // '' = all, '__none__' = docs not linked to any epic
             let searchTimeout = null;
+            const collapsedDocGroups = new Set();
+            const displayDocumentName = (file, epic) => {
+                const original = file.name || file.type_display || 'Untitled document';
+                if (!epic?.epicName) return original;
+                // Only remove a matching epic prefix/suffix; preserve distinctive titles.
+                const escape = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const epicPattern = epic.epicName.split(/[\s—–-]+/).filter(Boolean).map(escape).join('[\\s—–-]+');
+                let name = original.replace(new RegExp('^' + epicPattern + '(?:[\\s—–:|-]+|$)', 'i'), '')
+                    .replace(new RegExp('[\\s—–:|-]+' + epicPattern + '$', 'i'), '').trim();
+                if (!name) name = file.type === 'page_preview' ? 'Preview' : original;
+                return /^prd$/i.test(name) ? 'Requirements' : name;
+            };
+
             
             // Function to fetch and display files
             const fetchFiles = (page = 1) => {
@@ -7018,6 +7056,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
                     // Docs are LINKED to epics, never moved into them — so filtering
                     // by epic narrows the view without a doc ever leaving this list.
+                    if (data.files) {
+                        data.files = data.files.filter(f => (!currentType || f.type === currentType) && (!currentSearch || (f.name || "").toLowerCase().includes(currentSearch.toLowerCase())));
+                        data.files.forEach(f => (f.epics || []).sort((a,b) => new Date(b.epicCreatedAt || 0) - new Date(a.epicCreatedAt || 0)));
+                    }
                     if (data.files && currentEpic) {
                         data.files = currentEpic === '__none__'
                             ? data.files.filter(f => !(f.epics && f.epics.length))
@@ -7053,60 +7095,73 @@ document.addEventListener('DOMContentLoaded', function() {
                             if (al === bl) return 0;
                             if (al === 'No epic') return 1;
                             if (bl === 'No epic') return -1;
-                            return al.localeCompare(bl);
+                            return (new Date(b.epics?.[0]?.epicCreatedAt || 0) - new Date(a.epics?.[0]?.epicCreatedAt || 0)) || bl.localeCompare(al, undefined, {numeric:true});
                         });
                         let curDocGroup = null;
+                        let groupBody = null;
+                        let groupCount = null;
+                        let groupSize = 0;
 
-                        // Create file items with table-like layout
-                        const showDocGroups = currentEpic === '';
                         data.files.forEach(file => {
-                            if (showDocGroups) {
-                                const g = docEpicLabel(file);
-                                if (g !== curDocGroup) {
-                                    curDocGroup = g;
-                                    const hdr = document.createElement('div');
-                                    hdr.className = 'lfg-doc-group';
-                                    // Inline: the Docs tab doesn't load tickets.css, and the
-                                    // panel's injected <style> only exists once the Tickets
-                                    // tab has rendered at least once.
-                                    hdr.style.cssText = 'display:flex;align-items:center;gap:8px;'
-                                        + 'padding:14px 12px 6px;font-size:11px;font-weight:600;'
-                                        + 'letter-spacing:.05em;text-transform:uppercase;'
-                                        + 'color:var(--text-secondary,#8a93a2);';
-                                    hdr.textContent = g;
-                                    fileBrowserList.appendChild(hdr);
-                                }
+                            const epic = (currentEpic && currentEpic !== '__none__'
+                                ? file.epics?.find(e => e.epicId === currentEpic) : null) || file.epics?.[0];
+                            const groupId = epic?.epicId || '__none__';
+                            if (groupId !== curDocGroup) {
+                                curDocGroup = groupId;
+                                groupSize = 0;
+                                const group = document.createElement('details');
+                                group.className = 'document-epic-group';
+                                group.open = !collapsedDocGroups.has(groupId) || !!currentSearch;
+                                group.addEventListener('toggle', () => {
+                                    if (group.open) collapsedDocGroups.delete(groupId);
+                                    else collapsedDocGroups.add(groupId);
+                                });
+                                const hdr = document.createElement('summary');
+                                hdr.className = 'lfg-doc-group';
+                                hdr.dataset.epicDrop = epic?.epicId || '';
+                                const arrow = document.createElement('i');
+                                arrow.className = 'fas fa-chevron-right document-group-chevron';
+                                arrow.setAttribute('aria-hidden', 'true');
+                                const label = document.createElement('span');
+                                label.className = 'document-group-name';
+                                label.textContent = epic?.epicName || 'Unassigned';
+                                const key = document.createElement('span');
+                                key.className = 'document-group-key';
+                                key.textContent = epic?.epicKey || '';
+                                groupCount = document.createElement('span');
+                                groupCount.className = 'document-group-count';
+                                hdr.append(arrow, label, key, groupCount);
+                                groupBody = document.createElement('div');
+                                group.append(hdr, groupBody);
+                                fileBrowserList.appendChild(group);
                             }
+                            groupCount.textContent = String(++groupSize);
+                            groupCount.setAttribute('aria-label', groupSize + ' documents on this page');
                             const icon = getFileIcon(file.type);
                             const typeClass = `file-type-${file.type}`;
                             
                             // Create the main container
                             const fileItem = document.createElement('div');
                             fileItem.className = `file-list-item ${typeClass}`;
+                            fileItem.draggable = true;
                             fileItem.dataset.fileId = file.id;
                             fileItem.dataset.fileType = file.type;
                             fileItem.dataset.fileName = file.name;
+                            fileItem.dataset.epicDrop = file.epics?.[0]?.epicId || '';
                             
                             // Create icon
                             const fileIcon = document.createElement('div');
                             fileIcon.className = 'file-icon';
-                            fileIcon.innerHTML = `<i class="${icon}"></i>`;
+                            fileIcon.innerHTML = `<i class="${icon}" aria-hidden="true"></i><span class="file-drag-handle" aria-hidden="true">⠿</span>`;
+                            fileIcon.title = "Drag to an epic or into chat";
                             
                             // Create name element
-                            const fileName = document.createElement('div');
+                            const fileName = document.createElement('button');
+                            fileName.type = 'button';
                             fileName.className = 'file-name';
-                            fileName.textContent = file.name || file.type_display || 'Unnamed File';
+                            fileName.textContent = displayDocumentName(file, epic);
+                            fileName.title = file.name || fileName.textContent;
                             
-                            // Create type cell with badge
-                            const fileType = document.createElement('div');
-                            fileType.className = 'file-type-cell';
-                            const typeBadge = document.createElement('span');
-                            typeBadge.className = 'file-type-badge';
-                            // Use the raw type if type_display is not available
-                            const displayType = file.type_display || file.type || 'Unknown';
-                            typeBadge.textContent = displayType;
-                            typeBadge.title = displayType;
-                            fileType.appendChild(typeBadge);
                             // Which epics this doc feeds goes in the row's tooltip, not as
                             // extra chips — the type cell is a fixed grid column and chips
                             // overflowed it into the neighbouring column.
@@ -7116,11 +7171,8 @@ document.addEventListener('DOMContentLoaded', function() {
                                     .join(', ');
                             }
                             
-                            // Create owner cell
-                            const fileOwner = document.createElement('div');
-                            fileOwner.className = 'file-owner-cell';
-                            fileOwner.textContent = file.owner || 'System';
-                            
+                            if (file.owner) fileName.title += ` — Created by ${file.owner}`;
+
                             // Create date cell
                             const fileDate = document.createElement('div');
                             fileDate.className = 'file-date-cell';
@@ -7130,41 +7182,9 @@ document.addEventListener('DOMContentLoaded', function() {
                             const contextMenuBtn = document.createElement('button');
                             contextMenuBtn.className = 'file-context-menu-btn';
                             contextMenuBtn.innerHTML = '<i class="fas fa-ellipsis-v"></i>';
-                            contextMenuBtn.style.cssText = `
-                                background: none;
-                                border: none;
-                                color: #9ca3af;
-                                cursor: pointer;
-                                padding: 4px 8px;
-                                opacity: 0;
-                                transition: opacity 0.2s;
-                                position: absolute;
-                                right: 10px;
-                                top: 50%;
-                                transform: translateY(-50%);
-                            `;
-                            
-                            // Show context button on hover
-                            fileItem.addEventListener('mouseenter', () => {
-                                contextMenuBtn.style.opacity = '0.7';
-                            });
-                            fileItem.addEventListener('mouseleave', (e) => {
-                                // Check if we're moving to the context menu or its button
-                                const relatedTarget = e.relatedTarget;
-                                const contextMenu = document.querySelector('.file-context-dropdown');
-                                
-                                // Don't hide if moving to context button or menu
-                                if (relatedTarget && (
-                                    relatedTarget === contextMenuBtn ||
-                                    relatedTarget.closest('.file-context-dropdown') ||
-                                    (contextMenu && contextMenu.contains(relatedTarget))
-                                )) {
-                                    return;
-                                }
-                                
-                                contextMenuBtn.style.opacity = '0';
-                            });
-                            
+                            contextMenuBtn.type = 'button';
+                            contextMenuBtn.setAttribute('aria-label', 'Options for ' + (file.name || 'document'));
+
                             // Context menu click handler
                             contextMenuBtn.addEventListener('click', (e) => {
                                 e.stopPropagation();
@@ -7197,6 +7217,61 @@ document.addEventListener('DOMContentLoaded', function() {
                                     padding: 4px;
                                 `;
                                 
+                                contextMenu.style.background = 'var(--card-bg, #fff)';
+                                contextMenu.style.borderColor = 'var(--border-color, #ddd)';
+                                contextMenu.style.color = 'var(--text-color, #263247)';
+                                const addEpic = document.createElement('button');
+                                addEpic.type = 'button';
+                                addEpic.textContent = 'Add to epic';
+                                addEpic.style.cssText = 'display:block;width:100%;padding:9px 12px;border:0;border-radius:4px;background:transparent;color:inherit;text-align:left;cursor:pointer;font:inherit;font-size:14px';
+                                contextMenu.appendChild(addEpic);
+                                addEpic.addEventListener('click', event => {
+                                    event.stopPropagation();
+                                    contextMenu.replaceChildren();
+                                    contextMenu.style.width = '300px';
+                                    contextMenu.style.left = Math.max(8, Math.min(btnRect.right - 300, window.innerWidth - 308)) + 'px';
+                                    contextMenu.style.maxHeight = Math.max(120, window.innerHeight - btnRect.bottom - 20) + 'px';
+                                    contextMenu.style.overflowY = 'auto';
+                                    const heading = document.createElement('div');
+                                    heading.textContent = 'Add to epic';
+                                    heading.style.cssText = 'padding:8px 12px;font-size:12px;font-weight:600;color:var(--text-secondary)';
+                                    contextMenu.appendChild(heading);
+                                    const choices = Array.from(fileEpicFilter?.options || []).filter(option => option.value && option.value !== '__none__');
+                                    if (!choices.length) heading.textContent = 'No epics yet. Create an epic first.';
+                                    for (const option of choices) {
+                                        const choice = document.createElement('button');
+                                        choice.type = 'button'; choice.textContent = option.textContent;
+                                        choice.style.cssText = addEpic.style.cssText;
+                                        const linked = (file.epics || []).some(epic => epic.epicId === option.value);
+                                        choice.disabled = linked;
+                                        if (linked) { choice.textContent += ' ✓'; choice.style.opacity = '.55'; }
+                                        choice.addEventListener('click', async event => {
+                                            event.stopPropagation();
+                                            const buttons = contextMenu.querySelectorAll('button');
+                                            buttons.forEach(button => button.disabled = true);
+                                            heading.textContent = 'Adding…';
+                                            try {
+                                                const response = await fetch('/api/epics/' + encodeURIComponent(option.value) + '/docs', {
+                                                    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({fileIds:[file.id]})
+                                                });
+                                                const result = await response.json();
+                                                if (!response.ok || !result.linked) throw new Error(result.error || 'Could not add document.');
+                                                contextMenu.remove();
+                                                fetchFiles(1);
+                                                document.dispatchEvent(new CustomEvent('lfg-document-linked'));
+                                            } catch (error) {
+                                                heading.textContent = error.message || 'Could not add document.';
+                                                buttons.forEach(button => button.disabled = button.textContent.endsWith(' ✓'));
+                                            }
+                                        });
+                                        contextMenu.appendChild(choice);
+                                    }
+                                    contextMenu.querySelector('button:not(:disabled)')?.focus();
+                                });
+                                contextMenu.addEventListener('keydown', event => {
+                                    if (event.key === 'Escape') { contextMenu.remove(); contextMenuBtn.focus(); }
+                                });
+
                                 // Delete option
                                 const deleteOption = document.createElement('button');
                                 deleteOption.style.cssText = `
@@ -7256,13 +7331,11 @@ document.addEventListener('DOMContentLoaded', function() {
                             // Assemble the structure
                             fileItem.appendChild(fileIcon);
                             fileItem.appendChild(fileName);
-                            fileItem.appendChild(fileType);
-                            fileItem.appendChild(fileOwner);
                             fileItem.appendChild(fileDate);
                             fileItem.appendChild(contextMenuBtn);
                             
                             // Add to list
-                            fileBrowserList.appendChild(fileItem);
+                            groupBody.appendChild(fileItem);
                         });
                         
                         // Show pagination if needed
@@ -7290,7 +7363,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                         const badge = document.createElement('span');
                                         badge.className = 'file-comment-badge';
                                         badge.title = n + ' open comment' + (n > 1 ? 's' : '');
-                                        badge.style.cssText = 'display:inline-flex;align-items:center;gap:3px;margin-left:8px;padding:1px 7px;border-radius:10px;background:var(--primary-color);color:#fff;font-size:0.7rem;font-weight:600;vertical-align:middle;';
+                                        badge.style.cssText = 'display:inline-flex;align-items:center;gap:4px;margin-left:8px;color:var(--text-secondary);font-size:11px;vertical-align:middle;';
                                         badge.innerHTML = '<i class="fas fa-comment" style="font-size:0.62rem;"></i>' + n;
                                         row.appendChild(badge);
                                     }
@@ -7334,18 +7407,21 @@ document.addEventListener('DOMContentLoaded', function() {
                     'analysis': 'fas fa-chart-line',
                     'documentation': 'fas fa-book',
                     'readme': 'fas fa-info-circle',
-                    'report': 'fas fa-file-contract',
+                    'report': 'fas fa-chart-bar',
+                    'sow': 'fas fa-file-contract',
+                    'architecture': 'fas fa-project-diagram',
+                    'test_plan': 'fas fa-tasks',
                     'research': 'fas fa-microscope',
                     'spec': 'fas fa-clipboard-list',
                     // A saved page preview is a rendered page, not prose — give it an
                     // icon that says so in a list of documents.
                     'page_preview': 'fas fa-window-maximize',
-                    'tech_analysis': 'fas fa-microscope',
+                    'tech_analysis': 'fas fa-code',
                     'design_language': 'fas fa-palette',
                     'other': 'fas fa-file'
                 };
                 // Return specific icon if available, otherwise return generic file icon
-                return icons[type.toLowerCase()] || icons.other;
+                return icons[String(type || '').toLowerCase()] || icons.other;
             };
             
             // Helper function to escape HTML
@@ -7375,13 +7451,26 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (!fileEpicFilter) return;
                 const prev = fileEpicFilter.value;
                 let html = '<option value="">All Epics</option>';
-                (epicList || []).forEach(e => {
+                (epicList || []).sort((a,b) => (new Date(b.createdAt || 0) - new Date(a.createdAt || 0)) || (b.epicKey || "").localeCompare(a.epicKey || "", undefined, {numeric:true})).forEach(e => {
                     const label = (e.epicKey ? e.epicKey + ' · ' : '') + e.name;
                     html += `<option value="${e.id}">${label}</option>`;
                 });
-                html += '<option value="__none__">No epic</option>';
+                html += '<option value="__none__">Unassigned</option>';
                 fileEpicFilter.innerHTML = html;
                 fileEpicFilter.value = prev || '';
+                let targets = document.getElementById('doc-epic-drop-targets');
+                if (!targets) {
+                    targets = document.createElement('div'); targets.id = 'doc-epic-drop-targets';
+                    targets.hidden = true; fileEpicFilter.parentElement.after(targets);
+                }
+                targets.replaceChildren();
+                for (const epic of epicList || []) {
+                    const target = document.createElement('button'); target.type = 'button';
+                    target.dataset.epicDrop = epic.id;
+                    target.textContent = 'Link to ' + (epic.epicKey || epic.name);
+                    targets.appendChild(target);
+                }
+
             };
 
             if (fileEpicFilter) {
@@ -7392,11 +7481,14 @@ document.addEventListener('DOMContentLoaded', function() {
             }
 
             const updateTypeFilterOptions = (types) => {
-                let html = '<option value="">All Types</option>';
-                Object.keys(types).forEach(type => {
-                    html += `<option value="${type}">${types[type].name} (${types[type].count})</option>`;
-                });
-                fileTypeFilter.innerHTML = html;
+                fileTypeFilter.replaceChildren(new Option('All Types', ''));
+                const entries = Array.isArray(types) ? types.map(type => [type, {name:type.replace(/_/g, ' ')}]) : Object.entries(types || {});
+                for (const [type, info] of entries) {
+                    const labels = { prd:'Requirements', tech_analysis:'Technical analysis', page_preview:'Preview', design_language:'Design language' };
+                    const label = labels[type] || String(info.name || type).replace(/_/g, ' ').replace(/^./, char => char.toUpperCase());
+                    fileTypeFilter.add(new Option(label + (info.count == null ? '' : ` (${info.count})`), type));
+                }
+                fileTypeFilter.value = currentType;
             };
             
             // Build pagination HTML
@@ -7450,7 +7542,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 document.querySelectorAll('.file-list-item').forEach(item => {
                     item.addEventListener('click', function(e) {
                         const fileId = this.dataset.fileId;
-                        const fileName = this.querySelector('.file-name').textContent;
+                        const fileName = this.dataset.fileName;
                         viewFileContent(fileId, fileName);
                     });
                     
@@ -7458,7 +7550,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     item.addEventListener('contextmenu', function(e) {
                         e.preventDefault();
                         const fileId = this.dataset.fileId;
-                        const fileName = this.querySelector('.file-name').textContent;
+                        const fileName = this.dataset.fileName;
                         showContextMenu(e.pageX, e.pageY, fileId, fileName);
                     });
                 });
@@ -10155,3 +10247,69 @@ window.toggleChecklistStatus = function(itemId, currentStatus) {
         }
     });
 };
+
+// Internal project document dragging uses references, never uploads or sends a message.
+(() => {
+    const mime = 'application/x-lfg-document';
+    const showDropStatus = (message, failed = false) => {
+        let status = document.getElementById('document-drop-status');
+        if (!status) { status = document.createElement('div'); status.id = 'document-drop-status';
+            status.setAttribute('role','status');
+            (document.getElementById('file-browser-list') || document.getElementById('artifacts-panel') || document.body).prepend(status);
+        }
+        status.textContent = message; status.style.cssText = 'padding:10px;color:' + (failed ? 'var(--danger-color,#dc2626)' : 'var(--text-primary,inherit)');
+    };
+
+    let dragged = null;
+    const clear = () => {
+        dragged = null;
+        const targets = document.getElementById('doc-epic-drop-targets');
+        if (targets) targets.hidden = true;
+        document.querySelectorAll('.lfg-file-drop-hover').forEach(el => el.classList.remove('lfg-file-drop-hover'));
+    };
+    document.addEventListener('dragstart', event => {
+        const row = event.target.closest('[data-file-id][draggable="true"]');
+        if (!row) return;
+        dragged = {id:row.dataset.fileId,name:row.dataset.fileName,type:row.dataset.fileType};
+        event.dataTransfer.setData(mime, JSON.stringify(dragged));
+        event.dataTransfer.setData('text/plain', dragged.name);
+        event.dataTransfer.effectAllowed = 'copy';
+        const targets = document.getElementById('doc-epic-drop-targets');
+        requestAnimationFrame(() => { if (targets && dragged) targets.hidden = false; });
+    });
+    const targetOf = event => event.target.closest('[data-epic-drop]:not([data-epic-drop=""]), #chat-input, .chat-input-container');
+    document.addEventListener('dragover', event => {
+        if (!event.dataTransfer.types.includes(mime)) return;
+        const target = targetOf(event); if (!target) return;
+        event.preventDefault(); event.dataTransfer.dropEffect = 'copy';
+        target.classList.add('lfg-file-drop-hover');
+    });
+    document.addEventListener('dragleave', event => event.target.classList?.remove('lfg-file-drop-hover'));
+    document.addEventListener('dragend', clear);
+    document.addEventListener('drop', async event => {
+        if (!event.dataTransfer.types.includes(mime)) return;
+        const target = targetOf(event); if (!target) return;
+        event.preventDefault(); event.stopPropagation();
+        let file;
+        try { file = JSON.parse(event.dataTransfer.getData(mime)); } catch { clear(); return; }
+        clear();
+        if (!file?.id || !file?.name) return;
+        if (target.id === 'chat-input' || target.classList.contains('chat-input-container')) {
+            document.dispatchEvent(new CustomEvent('lfg-file-chat-drop', {detail:file})); return;
+        }
+        try {
+            const response = await fetch(`/api/epics/${encodeURIComponent(target.dataset.epicDrop)}/docs`, {
+                method:'POST', headers:{'Content-Type':'application/json'},body:JSON.stringify({fileIds:[file.id]})
+            });
+            const result = await response.json();
+            if (!response.ok || !result.linked) throw new Error(result.error || 'Could not link this document to the epic.');
+            const refresh = document.getElementById('refresh-filebrowser');
+            if (refresh) refresh.click();
+            document.dispatchEvent(new CustomEvent('lfg-document-linked'));
+            showDropStatus(`“${file.name}” linked to the epic.`);
+        } catch (error) { showDropStatus(error.message || 'Could not link document.', true); }
+    });
+    const style = document.createElement('style');
+    style.textContent = '.lfg-file-drop-hover{outline:2px solid #8b5cf6!important;outline-offset:-2px;background:rgba(139,92,246,.08)!important}#doc-epic-drop-targets:not([hidden]){position:fixed;right:24px;bottom:24px;z-index:10000;max-width:min(520px,90vw);max-height:35vh;overflow:auto;background:var(--background-surface,#fff);border:1px solid var(--border-color,#ddd);border-radius:12px;box-shadow:0 8px 24px #0002;display:flex;flex-wrap:wrap;gap:8px;padding:12px}#doc-epic-drop-targets button{padding:8px 12px;border:1px dashed #8b5cf6;border-radius:8px;color:inherit;background:transparent}';
+    document.head.appendChild(style);
+})();

@@ -1,3 +1,4 @@
+import { NotificationNav } from "../components/notification-nav.tsx";
 import { html, raw } from "hono/html";
 import { ChatInput } from "../components/chat-input.tsx";
 
@@ -119,6 +120,7 @@ export function InstantPage({
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
   <script src="/public/js/theme-switcher.js"></script>
+<link rel="stylesheet" href="/public/css/build-notifications.css?v=4" />
 </head>
 <body data-theme="dark" data-model-key="${modelKey}" data-role-key="${roleKey}">
   <div class="app-container">
@@ -135,26 +137,12 @@ export function InstantPage({
         </div>
 
         <div class="project-selector-section">
-          <div class="nav-dropdown-container" id="projectDropdownContainer">
-            <button class="project-dropdown-trigger" id="projectDropdownTrigger" title="Project Options">
-              <i class="fas fa-folder-open"></i>
-              <span class="project-name-text">${projectName ?? "Instant Mode"}</span>
-              <i class="fas fa-chevron-down dropdown-arrow"></i>
-            </button>
-            <div class="nav-dropdown" id="projectDropdown">
-              <a href="/projects" class="nav-dropdown-item">
-                <i class="fas fa-th-large"></i>
-                <span>All Projects</span>
-              </a>
-              ${canShowProjectNav
-                ? html`
-                    <a href="/chat/project/${projectId}" class="nav-dropdown-item">
-                      <i class="fas fa-comments"></i>
-                      <span>Open Chat</span>
-                    </a>
-                  `
-                : ""}
-            </div>
+          <div class="project-back-container">
+            <a class="project-dropdown-trigger" href="/projects" aria-label="Back to projects" style="text-decoration:none">
+              <i class="fas fa-folder-open" aria-hidden="true"></i>
+              <span class="project-name-text">Back to projects</span>
+            </a>
+
           </div>
         </div>
 
@@ -170,6 +158,7 @@ export function InstantPage({
         </div>
 
         <div class="sidebar-nav">
+          ${NotificationNav()}
           ${canShowProjectNav
             ? html`
                 <a href="/projects/${projectId}" class="nav-link">
@@ -494,7 +483,7 @@ export function InstantPage({
     }).replace(/</g, "\\u003c"))};
     window.__WS_PATH__ = '/ws/chat';
   </script>
-  <script src="/public/js/sidebar.js?v=20260908-startup"></script>
+  <script src="/public/js/sidebar.js?v=20260923-tooltip-theme"></script>
   <script src="/public/js/marked.min.js"></script>
   <script src="/public/js/markdown-config.js"></script>
   <script src="/public/js/custom-dropdown.js"></script>

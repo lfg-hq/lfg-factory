@@ -1,3 +1,5 @@
+import { getBuildOrigin, setBuildOrigin, reportBuildStatus } from "./build-reporting.ts";
+import { notify } from "./notify.ts";
 /**
  * Build runs: "build them all" as a DURABLE, dependency-aware queue.
  *
@@ -130,6 +132,13 @@ export async function onTicketFinished(ticketId: string, status: "complete" | "f
   const item = await liveItemForTicket(ticketId);
   if (!item) return false;
 
+  // A retry may come from a different chat or the ticket view. Subsequent chain
+  // responses follow that latest request instead of reviving the old destination.
+  const origin = await getBuildOrigin(ticketId);
+  await db.update(agentRuns).set({ conversationId: origin.conversationId || "",
+    ...(origin.userId ? {userId: origin.userId} : {}), updatedAt: new Date(),
+  }).where(eq(agentRuns.id, item.agentRunId));
+
   await db.update(ticketExecutions)
     .set({ status: status === "complete" ? "done" : "failed", completedAt: new Date() })
     .where(eq(ticketExecutions.id, item.id));
@@ -202,6 +211,8 @@ async function dispatchNext(runId: string): Promise<string | null> {
       .set({ queueStatus: "queued", queuedAt: new Date(), updatedAt: new Date() })
       .where(eq(projectTickets.id, item.ticketId));
     await logRunEvent(runId, item.id, "ticket_queued", { ticketId: item.ticketId });
+    await setBuildOrigin(item.ticketId, run.conversationId || null, run.userId);
+    await reportBuildStatus(item.ticketId, "queued", "Build queued.");
     emit({ type: "ticket.queued", ticketId: item.ticketId, projectId: run.projectId });
     return item.ticketId;
   }
@@ -403,11 +414,15 @@ async function announce(runId: string, content: string): Promise<void> {
   const [run] = await db.select().from(agentRuns).where(eq(agentRuns.id, runId)).limit(1);
   if (!run) return;
   const [proj] = await db.select({ pub: projects.projectId }).from(projects).where(eq(projects.id, run.projectId)).limit(1);
+  await notify({ userId: run.userId, projectId: proj?.pub, type: "build_update", targetType: "build_run", targetId: runId,
+    message: content, link: proj ? `/projects/${proj.pub}/tickets` : null,
+  }).catch(error => console.error("[build-queue] Notification failed:", error));
+  if (!run.conversationId) return;
   if (run.conversationId) {
     await db.insert(messages).values({ conversationId: run.conversationId, role: "assistant", content }).catch(() => {});
   }
   broadcastToUser(run.userId, {
-    type: "message", sender: "assistant", message: content,
+    type: "message", sender: "assistant", message: content, build_status: true,
     conversation_id: run.conversationId || undefined, project_id: proj?.pub,
   });
 }

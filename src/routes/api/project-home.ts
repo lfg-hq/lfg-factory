@@ -10,6 +10,7 @@ import { users } from "../../db/schema/users.ts";
 import { projectMembers } from "../../db/schema/projects.ts";
 import { projectPins } from "../../db/schema/pins.ts";
 import { projectFiles } from "../../db/schema/documents.ts";
+import { epics } from "../../db/schema/epics.ts";
 import { projectTickets } from "../../db/schema/tickets.ts";
 import { and, eq, desc, asc, isNull, inArray } from "drizzle-orm";
 import { getProjectAccess } from "../../auth/project-access.ts";
@@ -28,7 +29,7 @@ homeApi.get("/:projectId/home", async (c) => {
   const p = access.project;
   const canManagePins = access.role === "owner" || access.role === "admin";
 
-  const [activities, notifs, memberRows, owner, pinRows, workTickets] = await Promise.all([
+  const [activities, notifs, memberRows, owner, pinRows, workTickets, latestEpics] = await Promise.all([
     getProjectActivities(p.id, { limit: 6 }),
     db
       .select({
@@ -54,8 +55,10 @@ homeApi.get("/:projectId/home", async (c) => {
     db.select().from(projectPins).where(eq(projectPins.projectId, p.id)).orderBy(asc(projectPins.order), asc(projectPins.createdAt)),
     db.select({ id: projectTickets.id, name: projectTickets.name, ticketKey: projectTickets.ticketKey,
       status: projectTickets.status, queueStatus: projectTickets.queueStatus,
-      conversationId: projectTickets.conversationId, updatedAt: projectTickets.updatedAt })
+      epicId: projectTickets.epicId, conversationId: projectTickets.conversationId, updatedAt: projectTickets.updatedAt })
       .from(projectTickets).where(eq(projectTickets.projectId, p.id)).orderBy(desc(projectTickets.updatedAt)),
+    db.select({ id:epics.id, name:epics.name, epicKey:epics.epicKey, status:epics.status, previewUrl:epics.previewUrl, createdAt:epics.createdAt })
+      .from(epics).where(eq(epics.projectId, p.id)).orderBy(desc(epics.createdAt), desc(epics.id)).limit(4),
   ]);
 
   // Resolve pin names/links (docs/tickets can be renamed).
@@ -83,6 +86,7 @@ homeApi.get("/:projectId/home", async (c) => {
   return c.json({
     activities,
     workTickets,
+    epics: latestEpics,
     notifications: notifs,
     unreadCount,
     members: {

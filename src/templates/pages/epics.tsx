@@ -1,3 +1,4 @@
+import { NotificationNav } from "../components/notification-nav.tsx";
 import { html } from "hono/html";
 
 /**
@@ -29,6 +30,7 @@ interface EpicRow {
 }
 
 interface EpicTicket {
+  description?: string | null;
   id: string;
   epicId: string | null;
   ticketKey: string | null;
@@ -79,6 +81,8 @@ const TICKET_STATUS_COLOR: Record<string, string> = {
   done: "#10b981",
   failed: "#ef4444",
   blocked: "#ef4444",
+  stopped: "#ef4444",
+  queued: "#f59e0b",
 };
 
 export function EpicsPage({ project, user, epics, tickets, docs, conversations }: Props) {
@@ -253,7 +257,70 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
     .epic-doc blockquote { margin: 0 0 1rem; padding-left: 0.9rem; border-left: 3px solid var(--border-color); color: var(--text-secondary); }
     .epic-doc a { color: var(--primary-color, #8b5cf6); }
     .epic-doc img { max-width: 100%; }
+
+    /* Match the document library's centered toolbar and quiet list rows. */
+    .epics-list { box-sizing:border-box; padding:64px 32px 48px; max-width:1264px; margin:0 auto; scrollbar-width:thin; }
+    .epics-toolbar { display:flex; align-items:center; justify-content:space-between; gap:20px; margin-bottom:18px; }
+    .epics-toolbar h1 { margin:0; font-size:18px; font-weight:600; color:var(--text-color); }
+    #epics-count { margin-left:8px; font-size:12px; font-weight:400; color:var(--text-secondary); }
+    .epics-controls { display:flex; gap:8px; }
+    .epics-controls { align-items:center; }
+    .epics-controls .input { padding:0.4rem 0.6rem; font-size:0.8125rem; max-width:15rem; }
+    .epics-controls .btn { font-size:0.8125rem; display:flex; align-items:center; gap:0.4rem; }
+    .epics-search { position:relative; padding-bottom:1rem; border-bottom:1px solid var(--border-color); margin-bottom:1rem; }
+    .epics-search .input { width:100%; box-sizing:border-box; padding-left:2.25rem; }
+    .epics-search i { position:absolute; left:0.85rem; top:calc(50% - 0.5rem); transform:translateY(-50%); color:var(--text-secondary); font-size:0.85rem; pointer-events:none; }
+    .epic-item { border-color:color-mix(in srgb,var(--border-color) 55%,transparent); }
+    .epic-summary { padding:16px 12px; }
+    .epic-list-icon { width:24px; flex:none; color:var(--text-secondary); text-align:center; }
+    .epic-name { font-size:14px; font-weight:500; }
+    .epic-goal { margin-left:34px; max-width:none; white-space:nowrap; display:block; text-overflow:ellipsis; font-size:12px; }
+    .epic-counts { margin-left:34px; margin-top:6px; font-size:11px; }
+    #epics-no-results { text-align:center; color:var(--text-secondary); padding:40px 0; }
+    .epics-body.has-panel .epics-list { padding:24px 16px; margin:0; }
+    .epics-body.has-panel .epics-toolbar { flex-wrap:wrap; }
+    .epics-body.has-panel .epic-ident { flex-direction:column; gap:3px; align-items:stretch; }
+    @media(max-width:700px) {
+      .epics-list { padding:28px 16px; }
+      .epics-toolbar { flex-wrap:wrap; }
+      .epics-controls select { min-width:0; }
+      .epic-ident { flex-direction:column; align-items:stretch; gap:3px; }
+    }
+    .epics-list { padding-top:32px; }
+    .epic-summary { padding:20px 14px; }
+    .epic-ident { flex-direction:column; align-items:flex-start; gap:4px; }
+    .epic-name { font-weight:600; font-size:15px; }
+    .epic-goal { margin-top:8px; max-width:90ch; }
+    .epic-progress { display:flex; align-items:center; gap:10px; margin:12px 0 0 34px; font-size:12px; color:var(--text-secondary); }
+    .epic-progress progress { appearance:none; border:0; width:150px; max-width:45%; height:5px; border-radius:6px; overflow:hidden; background:var(--border-color); }
+    .epic-progress progress::-webkit-progress-bar { background:var(--border-color); }
+    .epic-progress progress::-webkit-progress-value { background:var(--primary-color,#8b5cf6); border-radius:6px; }
+    .epic-progress progress::-moz-progress-bar { background:var(--primary-color,#8b5cf6); }
+    .epic-detail { max-width:1000px; margin:auto; padding:24px; }
+    .epic-detail-head { gap:14px; margin-bottom:18px; }
+    .epic-detail .epic-sec { padding:18px 0; margin:0; border-top:1px solid var(--border-color); }
+    .epic-detail .epic-row { padding:12px 8px; border-radius:6px; }
+    .epic-detail .epic-row-name { white-space:normal; line-height:1.5; }
+    .epic-panel .epic-row:hover { background:color-mix(in srgb,var(--primary-color,#8b5cf6) 6%,transparent); }
+    .epic-panel-back[hidden] { display:none; }
+    .epic-panel-title { white-space:normal; line-height:1.5; }
+    .epic-branches summary { cursor:pointer; font-size:12px; color:var(--text-secondary); }
+    .epic-branch { overflow-wrap:anywhere; white-space:normal; }
+    .epic-ticket-summary { padding:24px; max-width:85ch; margin:auto; }
+    .epic-ticket-summary h2 { font-size:20px; line-height:1.4; margin:16px 0; }
+    .epic-ticket-meta { display:flex; gap:16px; flex-wrap:wrap; color:var(--text-secondary); font-size:12px; }
+    .epic-ticket-description { white-space:pre-wrap; overflow-wrap:anywhere; font-size:14px; line-height:1.75; margin-bottom:24px; }
+    .epic-ticket-dot { width:8px; height:8px; border-radius:50%; flex:none; }
+    .epic-ticket-key { padding:3px 6px; border:1px solid color-mix(in srgb,var(--primary-color,#8b5cf6) 30%,transparent); border-radius:5px; background:color-mix(in srgb,var(--primary-color,#8b5cf6) 8%,transparent); }
+    .epic-ticket-status,.epic-ticket-priority { color:var(--text-secondary); font-size:11px; white-space:nowrap; }
+    .epic-ticket-actions { display:inline-flex; margin:0 0 18px; }
+    .epic-ticket-description.epic-doc { white-space:normal; padding:0; margin:0; max-width:none; }
+    .epic-doc :not(pre)>code { color:var(--text-color); background:color-mix(in srgb,var(--border-color) 40%,transparent); overflow-wrap:anywhere; }
+    .epic-page-preview { height:100%; min-height:500px; }
+    .epic-page-preview iframe { width:100%; height:100%; border:0; display:block; background:white; }
+    @media(max-width:600px) { .epic-ticket-status { display:none; } }
   </style>
+<link rel="stylesheet" href="/public/css/build-notifications.css?v=4" />
 </head>
 <body>
   <div class="app-container">
@@ -269,17 +336,12 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
         </button>
       </div>
       <div class="project-selector-section">
-        <div class="nav-dropdown-container" id="projectDropdownContainer">
-          <button class="project-dropdown-trigger" id="projectDropdownTrigger" title="Project Options">
-            <i class="fas fa-folder-open"></i>
-            <span class="project-name-text">${project.name}</span>
-            <i class="fas fa-chevron-down dropdown-arrow"></i>
-          </button>
-          <div class="nav-dropdown" id="projectDropdown">
-            <a href="/projects" class="nav-dropdown-item">
-              <i class="fas fa-th-large"></i><span>All Projects</span>
+        <div class="project-back-container">
+          <a class="project-dropdown-trigger" href="/projects" aria-label="Back to projects" style="text-decoration:none">
+              <i class="fas fa-folder-open" aria-hidden="true"></i>
+              <span class="project-name-text">Back to projects</span>
             </a>
-          </div>
+
         </div>
       </div>
       <div class="new-chat-section">
@@ -289,6 +351,7 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
         </a>
       </div>
       <div class="sidebar-nav">
+          ${NotificationNav()}
         <a href="/projects/${project.projectId}" class="nav-link">
           <i class="fas fa-tachometer-alt"></i><span class="nav-text">Dashboard</span>
         </a>
@@ -358,15 +421,20 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
        past the sidebar. Outside it, the page sat under the rail with its left edge
        clipped and the sidebar's bottom block stranded at the top of the content. -->
   <div class="epics-page">
-    <div style="padding:1.1rem 1.5rem 0;display:flex;align-items:baseline;gap:0.75rem;flex-wrap:wrap;">
-      <h1 style="margin:0;font-size:1.15rem;font-weight:600;color:var(--text-color);">Epics</h1>
-      <span style="font-size:0.8rem;color:var(--text-secondary);">
-        ${epics.length === 0 ? "No epics yet" : `${epics.length} delivery ${epics.length === 1 ? "unit" : "units"}`}
-      </span>
-    </div>
-
     <div class="epics-body" id="epics-body">
     <div class="epics-list">
+      <div class="epics-toolbar">
+        <h1>Epics <span id="epics-count">${epics.length}</span></h1>
+        <div class="epics-controls">
+          <select class="input" id="epics-status" aria-label="Filter epics by status">
+            <option value="">All statuses</option>
+            ${Object.keys(EPIC_STATUS_COLOR).map(status => html`<option value="${status}">${status.replace("_", " ").replace(/^./, c => c.toUpperCase())}</option>`)}
+          </select>
+          <button class="btn btn-secondary" type="button" id="epics-refresh"><i class="fas fa-sync-alt" aria-hidden="true"></i> Refresh</button>
+        </div>
+      </div>
+      <div class="epics-search"><input class="input" id="epics-search" type="search" placeholder="Search epics…" aria-label="Search epics" /><i class="fas fa-search" aria-hidden="true"></i></div>
+      <p id="epics-no-results" hidden>No epics match your search.</p>
       ${epics.length === 0 ? html`
         <div class="epics-empty">
           <i class="fas fa-layer-group"></i>
@@ -384,9 +452,10 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
         const color = EPIC_STATUS_COLOR[e.status] ?? "#94a3b8";
         const done = ets.filter((t) => t.status === "done" || t.status === "review").length;
         return html`
-          <div class="epic-item" data-epic-item="${e.id}">
+          <div class="epic-item" data-epic-item="${e.id}" data-status="${e.status}" data-search="${[e.epicKey, e.name, e.goal].filter(Boolean).join(" ").toLowerCase()}">
             <button class="epic-summary" data-epic-open="${e.id}">
               <span class="epic-summary-top">
+                <i class="fas fa-layer-group epic-list-icon" aria-hidden="true"></i>
                 <span class="epic-ident">
                   ${e.epicKey ? html`<span class="epic-key">${e.epicKey}</span>` : ""}
                   <span class="epic-name">${e.name}</span>
@@ -395,8 +464,9 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
                 <i class="fas fa-chevron-right epic-dim" style="font-size:0.7rem;"></i>
               </span>
               ${e.goal ? html`<span class="epic-goal">${e.goal}</span>` : ""}
+              <span class="epic-progress"><progress max="${ets.length || 1}" value="${done}" aria-label="Tickets ready for review or completed"></progress><span>${done} of ${ets.length} ready</span></span>
               <span class="epic-counts">
-                <span>${ets.length} ${ets.length === 1 ? "ticket" : "tickets"}${ets.length ? html` <span class="epic-dim">(${done} done)</span>` : ""}</span>
+                <span>${ets.length} ${ets.length === 1 ? "ticket" : "tickets"}${ets.length ? html` <span class="epic-dim">(${done} ready)</span>` : ""}</span>
                 <span class="sep">·</span>
                 <span>${eds.length} ${eds.length === 1 ? "doc" : "docs"}</span>
                 <span class="sep">·</span>
@@ -410,12 +480,8 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
             <template data-epic-detail="${e.id}" data-epic-title="${(e.epicKey ? e.epicKey + " · " : "") + e.name}">
               <div class="epic-detail">
                 <div class="epic-detail-head">
-                  ${e.branch ? html`
-                  <span class="epic-branch-line">
-                    <i class="fas fa-code-branch"></i>
-                    <code class="epic-branch">${e.branch}</code>
-                    <span class="epic-dim">from ${e.baseBranch}</span>
-                  </span>` : html`<span class="epic-dim">No branch cut yet</span>`}
+                  <span class="epic-pill" style="color:${color};">${e.status.replaceAll("_", " ")}</span>
+                  <a class="epic-link" href="/projects/${project.projectId}/tickets?epic=${e.id}">View tickets →</a>
                   ${e.previewUrl ? html`<a href="${e.previewUrl}" target="_blank" rel="noopener" class="epic-link"><i class="fas fa-play"></i> Preview</a>` : ""}
                   ${e.prUrl ? html`<a href="${e.prUrl}" target="_blank" rel="noopener" class="epic-link"><i class="fas fa-code-pull-request"></i> Request</a>` : ""}
                   ${e.mergedAt ? html`<span class="epic-merged">Merged ${fmt(e.mergedAt)}</span>` : ""}
@@ -432,19 +498,20 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
                   <h4>Tickets <span class="epic-dim">${ets.length}</span></h4>
                   ${ets.length === 0 ? html`<p class="epic-dim" style="font-size:0.8rem;">None yet.</p>` : ets.map((t) => html`
                     <button class="epic-row" data-open-ticket="${t.id}" title="${t.name}">
-                      ${t.ticketKey ? html`<span class="epic-key">${t.ticketKey}</span>` : ""}
+                      <span class="epic-ticket-dot" style="background:${TICKET_STATUS_COLOR[t.status] || "#94a3b8"}" title="${t.status.replaceAll("_", " ")}" aria-label="Status: ${t.status.replaceAll("_", " ")}"></span>
+                      ${t.ticketKey ? html`<span class="epic-key epic-ticket-key">${t.ticketKey}</span>` : ""}
                       <span class="epic-row-name">${t.name}</span>
-                      <span class="epic-dim" style="color:${TICKET_STATUS_COLOR[t.status] ?? "#94a3b8"};">${t.status.replace("_", " ")}</span>
+                      <span class="epic-ticket-status">${t.status.replaceAll("_", " ")}</span><span class="epic-ticket-priority">${t.priority}</span>
                     </button>`)}
                 </section>
 
                 <section class="epic-sec">
                   <h4>Documents <span class="epic-dim">${eds.length}</span></h4>
                   ${eds.length === 0 ? html`<p class="epic-dim" style="font-size:0.8rem;">None linked.</p>` : eds.map((d) => html`
-                    <button class="epic-row" data-open-doc="${d.id}" data-doc-name="${d.name}" title="${d.name}">
-                      <i class="fas fa-file-lines epic-dim"></i>
+                    <button class="epic-row" data-open-doc="${d.id}" data-doc-name="${d.name}" data-doc-type="${d.fileType}" title="${d.name}">
+                      <i class="fas ${d.fileType === "tech_analysis" ? "fa-code" : d.fileType === "design_language" ? "fa-palette" : "fa-file-lines"} epic-dim"></i>
                       <span class="epic-row-name">${d.name}</span>
-                      <span class="epic-dim">${d.owned ? "draft" : d.fileType}</span>
+                      <span class="epic-dim">${d.owned ? "Draft" : ({ tech_analysis: "Technical analysis", design_language: "Design", prd: "Requirements", page_preview: "Preview", spec: "Specification", research: "Research" } as Record<string, string>)[d.fileType] || d.fileType.replaceAll("_", " ")}</span>
                     </button>`)}
                 </section>
 
@@ -458,17 +525,25 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
                     </a>`)}
                 </section>
 
-                <section class="epic-sec">
-                  <h4>Branches <span class="epic-dim">${branches.length + (e.branch ? 1 : 0)}</span></h4>
+                <details class="epic-sec epic-branches">
+                  <summary>Branches <span class="epic-dim">${branches.length + (e.branch ? 1 : 0)}</span></summary>
                   ${e.branch ? html`<div class="epic-row"><code class="epic-branch">${e.branch}</code><span class="epic-dim">epic</span></div>` : ""}
                   ${branches.map((b) => html`<div class="epic-row"><code class="epic-branch">${b}</code></div>`)}
-                </section>
+                </details>
               </div>
             </template>
           </div>`;
       })}
     </div>
 
+    ${tickets.map(t => html`<template data-ticket-summary="${t.id}">
+      <article class="epic-ticket-summary">
+        <div class="epic-ticket-meta"><span>${t.ticketKey || "Ticket"}</span><span>${t.status.replaceAll("_", " ")}</span><span>${t.priority} priority</span></div>
+        <h2>${t.name}</h2>
+        <a class="epic-link epic-ticket-actions" href="/projects/${project.projectId}/tickets?epic=${t.epicId || ""}&ticket=${t.id}&tab=actions">View ticket actions →</a>
+        <div class="epic-ticket-description epic-doc">${t.description || "No description has been added yet."}</div>
+      </article>
+    </template>`)}
     <!-- Opens only when an epic is picked; a permanently-mounted empty "Details" pane
          reads as something broken, which is exactly how it looked. -->
     <aside class="epic-panel" id="epic-panel" hidden>
@@ -485,9 +560,24 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
 
 <script src="/public/js/marked.min.js"></script>
 <script src="/public/js/markdown-config.js"></script>
-<script src="/public/js/sidebar.js?v=20260908-startup"></script>
+<script src="/public/js/epic-content.js?v=20260923-reader"></script>
+<script src="/public/js/sidebar.js?v=20260923-tooltip-theme"></script>
 <script src="/public/js/sidebar-chats.js?v=20260908-initials"></script>
 <script>
+  function filterEpics() {
+    var query = document.getElementById('epics-search').value.trim().toLowerCase();
+    var status = document.getElementById('epics-status').value;
+    var count = 0;
+    document.querySelectorAll('[data-epic-item]').forEach(function(item) {
+      item.hidden = !(item.dataset.search.includes(query) && (!status || item.dataset.status === status));
+      if (!item.hidden) count++;
+    });
+    document.getElementById('epics-count').textContent = count;
+    document.getElementById('epics-no-results').hidden = count > 0;
+  }
+  document.getElementById('epics-search').addEventListener('input', filterEpics);
+  document.getElementById('epics-status').addEventListener('change', filterEpics);
+  document.getElementById('epics-refresh').addEventListener('click', function() { location.reload(); });
   var PROJECT_ID = '${project.projectId}';
 
   var panel = document.getElementById('epic-panel');
@@ -534,6 +624,9 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
     panelBody.scrollTop = 0;
   }
 
+  var requestedEpic = new URLSearchParams(location.search).get('epic');
+  if (requestedEpic && Array.from(document.querySelectorAll('[data-epic-detail]')).some(el => el.dataset.epicDetail === requestedEpic)) openEpic(requestedEpic);
+
   document.getElementById('epic-panel-close').addEventListener('click', closePanel);
   panelBack.addEventListener('click', function () { if (currentEpic) openEpic(currentEpic); });
   document.addEventListener('keydown', function (e) {
@@ -545,15 +638,17 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
     var open = ev.target.closest ? ev.target.closest('[data-epic-open]') : null;
     if (open) { openEpic(open.getAttribute('data-epic-open')); return; }
 
-    // A ticket opens IN the panel using the board's existing embed render, so you keep
-    // your place instead of being thrown back to the tickets screen.
+    // Show the ticket summary locally; actions explicitly navigate to the board.
     var tk = ev.target.closest ? ev.target.closest('[data-open-ticket]') : null;
     if (tk) {
       var tid = tk.getAttribute('data-open-ticket');
       var nameEl = tk.querySelector('.epic-row-name');
-      var frame = document.createElement('iframe');
-      frame.src = '/projects/' + PROJECT_ID + '/tickets?embed=' + encodeURIComponent(tid);
-      pushIntoPanel(nameEl ? nameEl.textContent : 'Ticket', frame);
+      var template = Array.from(document.querySelectorAll('[data-ticket-summary]')).find(el => el.dataset.ticketSummary === tid);
+      if (template) {
+        pushIntoPanel(nameEl ? nameEl.textContent : 'Ticket', template.content.cloneNode(true));
+        var description = panelBody.querySelector('.epic-ticket-description');
+        renderEpicMarkdown(description, description.textContent);
+      }
       return;
     }
 
@@ -570,14 +665,16 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
         .then(function (j) {
           var raw = (j && j.content) || '';
           if (!raw.trim()) { wrap.textContent = 'This document is empty.'; return; }
-          if (typeof marked !== 'undefined') {
-            wrap.innerHTML = marked.parse(raw);
+          if (dc.getAttribute('data-doc-type') === 'page_preview' || j.type === 'page_preview') {
+            var frame = document.createElement('iframe');
+            frame.title = dname;
+            frame.setAttribute('sandbox', '');
+            frame.referrerPolicy = 'no-referrer';
+            frame.srcdoc = raw;
+            wrap.className = 'epic-page-preview';
+            wrap.replaceChildren(frame);
           } else {
-            // No renderer loaded — show the text readably rather than as one long line.
-            var pre = document.createElement('pre');
-            pre.textContent = raw;
-            wrap.textContent = '';
-            wrap.appendChild(pre);
+            renderEpicMarkdown(wrap, raw);
           }
         })
         .catch(function () { wrap.textContent = 'Could not load this document.'; });

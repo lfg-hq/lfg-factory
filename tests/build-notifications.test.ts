@@ -1,13 +1,15 @@
 import { test, expect, mock } from "bun:test";
+import { projects } from '../src/db/schema/projects.ts';
 
 const saved: any[] = [];
 const advanced: any[] = [];
 let rejectNotification = false;
 mock.module('../src/config/db.ts', () => ({ db: {
   select() {
+    let table: any;
     const query: any = {
-      from() { return query; }, where() { return query; },
-      limit() { return Promise.resolve([{ name: 'Ticket', projectId: 'internal', ownerId: 'owner', publicProjectId: 'public' }]); },
+      from(t: any) { table = t; return query; }, where() { return query; },
+      limit() { return Promise.resolve([{ name: 'Ticket', projectId: table === projects ? 'public' : 'internal', ownerId: 'owner', publicProjectId: 'public' }]); },
     };
     return query;
   },
@@ -44,7 +46,7 @@ test('failure is actionable and a fast retry can notify again', async () => {
   await settle();
   emit({ type: 'ticket.execution_finished', ticketId: 'retry', status: 'failed', exitCode: 1 });
   await settle();
-  expect(saved.filter(n => n.targetId === 'retry')).toHaveLength(2);
+  expect(saved.filter(n => n.targetId === 'retry')).toHaveLength(3);
   expect(saved.at(-1).type).toBe('build_failed');
 });
 test('notification failure cannot strand the build queue', async () => {
@@ -57,5 +59,5 @@ test('notification failure cannot strand the build queue', async () => {
 test('needs-attention events reach the saved inbox', async () => {
   emit({ type: 'ticket.needs_attention', ticketId: 'question', reason: 'Waiting', question: 'Which environment?' });
   await settle();
-  expect(saved.at(-1)).toMatchObject({ type: 'build_attention', targetId: 'question', message: 'Ticket — Which environment?' });
+  expect(saved.at(-1)).toMatchObject({ type: 'build_attention', targetId: 'question', message: 'Ticket: Which environment?' });
 });

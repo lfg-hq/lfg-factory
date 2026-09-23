@@ -596,6 +596,7 @@ projectsRouter.get("/projects/:projectId/epics", async (c) => {
       githubBranch: projectTickets.githubBranch,
       conversationId: projectTickets.conversationId,
       lastExecutionAt: projectTickets.lastExecutionAt,
+      description: projectTickets.description,
     }).from(projectTickets)
       .where(eq(projectTickets.projectId, project.id))
       .orderBy(asc(projectTickets.executionOrder), asc(projectTickets.createdAt)),
@@ -667,6 +668,7 @@ projectsRouter.get("/projects/:projectId/tickets", async (c) => {
     db.select({
       id: projectTickets.id,
       ticketKey: projectTickets.ticketKey,
+      epicId: projectTickets.epicId,
       name: projectTickets.name,
       status: projectTickets.status,
       priority: projectTickets.priority,
@@ -703,6 +705,7 @@ projectsRouter.get("/projects/:projectId/tickets", async (c) => {
       .limit(1),
   ]);
 
+  const epicRows = await db.select({ id: epics.id, name: epics.name, epicKey: epics.epicKey }).from(epics).where(eq(epics.projectId, project.id)).orderBy(desc(epics.createdAt));
   const grants = await resolveLlmGrants(project, user.id);
   const appState = appStateRows[0];
   const profile = profileRows[0];
@@ -723,6 +726,7 @@ projectsRouter.get("/projects/:projectId/tickets", async (c) => {
       },
       stages: stageRows,
       tickets: ticketRows,
+      epics: epicRows,
       // Drawer-only render for the chat's ticket sidebar (?embed=<ticketId>): skips the
       // nav + kanban so the grid never flashes before the ticket details.
       embed: c.req.query("embed") ?? undefined,
@@ -843,12 +847,18 @@ projectsRouter.get("/projects/:projectId/api/checklist", async (c) => {
   if (!access) return c.json({ tickets: [] });
   const project = access.project;
 
-  const [stageRows, ticketRows, epicRows] = await Promise.all([
+  const paged = c.req.query("limit") !== undefined;
+  const limit = Math.min(100, Math.max(1, Number(c.req.query("limit")) || 20));
+  const rawOffset = Number(c.req.query("offset"));
+  const offset = Number.isFinite(rawOffset) ? Math.max(0, Math.floor(rawOffset)) : 0;
+  const [stageRows, fetchedTickets, epicRows] = await Promise.all([
     db.select().from(ticketStages).where(eq(ticketStages.projectId, project.id)).orderBy(asc(ticketStages.order)),
-    db.select().from(projectTickets).where(eq(projectTickets.projectId, project.id)).orderBy(asc(projectTickets.createdAt)),
+    db.select().from(projectTickets).where(eq(projectTickets.projectId, project.id)).orderBy(desc(projectTickets.createdAt), desc(projectTickets.id)).limit(paged ? limit + 1 : 2147483647).offset(paged ? offset : 0),
     db.select().from(epics).where(eq(epics.projectId, project.id)),
   ]);
 
+  const hasMore = paged && fetchedTickets.length > limit;
+  const ticketRows = paged ? fetchedTickets.slice(0, limit) : fetchedTickets;
   const stageMap = Object.fromEntries(stageRows.map((s) => [s.id, s.name]));
   // Epic per ticket, so the list can group by delivery unit instead of by date.
   const epicMap = Object.fromEntries(epicRows.map((e) => [e.id, e]));
@@ -886,6 +896,7 @@ projectsRouter.get("/projects/:projectId/api/checklist", async (c) => {
     conversation_id: t.conversationId ?? null,
     epic_id: t.epicId ?? null,
     epic_key: epic?.epicKey ?? null,
+    epic_created_at: epic?.createdAt ?? null,
     epic_name: epic?.name ?? null,
     epic_status: epic?.status ?? null,
     // The epic's anchor branch — every ticket in it is cut from here and merged
@@ -894,7 +905,7 @@ projectsRouter.get("/projects/:projectId/api/checklist", async (c) => {
     };
   });
 
-  return c.json({ tickets });
+  return c.json({ tickets, hasMore, nextOffset: offset + ticketRows.length });
 });
 
 // ── GET /projects/:projectId/api/files/mentions/ ── @file autocomplete ──
@@ -1009,7 +1020,7 @@ projectsRouter.get("/projects/:projectId/api/files/browser", async (c) => {
     () => ({} as Awaited<ReturnType<typeof epicLinksForDocs>>)
   );
   const epicRows = await db
-    .select({ id: epics.id, epicKey: epics.epicKey, name: epics.name, status: epics.status })
+    .select({ id: epics.id, epicKey: epics.epicKey, name: epics.name, status: epics.status, createdAt: epics.createdAt })
     .from(epics)
     .where(eq(epics.projectId, project.id))
     .catch(() => []);
@@ -1028,7 +1039,7 @@ projectsRouter.get("/projects/:projectId/api/files/browser", async (c) => {
     total: files.length,
     pages: 1,
     filters: {
-      types: [...new Set(files.map((f) => f.type))],
+      types: Object.fromEntries([...new Set(files.map(f => f.type))].map(type => [type, { name: type.replace(/_/g, " "), count: files.filter(f => f.type === type).length }])),
       epics: epicRows,
     },
   });

@@ -1,3 +1,4 @@
+import { getBuildOrigin, setBuildOrigin, reportBuildStatus } from "../services/build-reporting.ts";
 /**
  * Orchestrator Event Handlers
  *
@@ -13,8 +14,6 @@ import { projects } from "../db/schema/projects.ts";
 import { eq, and, asc, inArray } from "drizzle-orm";
 import { logActivity } from "../services/activity-log.ts";
 import { ACTIVITY_TYPES } from "../db/schema/activities.ts";
-import { notify } from "../services/notify.ts";
-import { broadcastToUser } from "../ws/connection-manager.ts";
 
 // ── Resolve projectId from ticketId (for events that lack it) ─────────
 
@@ -91,14 +90,7 @@ async function autoQueueNextTicket(projectId: string, completedTicketId: string)
         metadata: { failedCount, failedTicketIds: failedTickets.map((t) => t.id) },
       });
 
-      broadcastToUser(project.ownerId, {
-        type: "batch_complete",
-        projectId,
-        publicProjectId: project.publicProjectId,
-        status: "partial",
-        failedCount,
-        message: `Build chain finished for "${project.name}" but ${failedCount} ticket(s) failed: ${failedNames}. Check the ticket logs for details — you can retry them from the dashboard.`,
-      });
+      await reportBuildStatus(completedTicketId, "attention", `Build chain finished with ${failedCount} failed ticket(s).`);
     } else {
       await logActivity({
         projectId,
@@ -108,13 +100,7 @@ async function autoQueueNextTicket(projectId: string, completedTicketId: string)
         description: `All queued tickets for ${project.name} have been built.`,
       });
 
-      broadcastToUser(project.ownerId, {
-        type: "batch_complete",
-        projectId,
-        publicProjectId: project.publicProjectId,
-        status: "success",
-        message: `All tickets for "${project.name}" have been built successfully! Review them in the dashboard.`,
-      });
+      await reportBuildStatus(completedTicketId, "complete", "Build chain finished.");
     }
     return;
   }
@@ -136,6 +122,9 @@ async function autoQueueNextTicket(projectId: string, completedTicketId: string)
     metadata: { previousTicketId: completedTicketId },
   });
 
+  const origin = await getBuildOrigin(completedTicketId);
+  await setBuildOrigin(nextTicket.id, origin.conversationId, origin.userId);
+  await reportBuildStatus(nextTicket.id, "queued", "Build queued.");
   // Emit ticket.queued to trigger the executor
   emit({ type: "ticket.queued", ticketId: nextTicket.id, projectId });
 }
@@ -159,6 +148,7 @@ export function registerEventHandlers(): void {
   // ticket.execution_started → log activity
   bus.on("ticket.execution_started", async (event) => {
     const { ticketId } = event.payload;
+    await reportBuildStatus(ticketId, "started", "Build started.");
     recentFinishes.delete(`${ticketId}:complete`);
     recentFinishes.delete(`${ticketId}:failed`);
     const projectId = event.payload.projectId ?? await resolveProjectId(ticketId);
@@ -191,30 +181,9 @@ export function registerEventHandlers(): void {
     if (!projectId) return;
     const name = await getTicketName(ticketId);
 
-    // Look up project owner + PUBLIC projectId for chat notifications. The public id is
-    // what the chat client knows (currentProjectId), so include it so the client can scope
-    // the card to the right project — otherwise a ticket-failed card leaked into whatever
-    // project's chat was open.
-    const [project] = await db
-      .select({ ownerId: projects.ownerId, publicProjectId: projects.projectId })
-      .from(projects)
-      .where(eq(projects.id, projectId))
-      .limit(1);
-    const ownerId = project?.ownerId;
-    const publicProjectId = project?.publicProjectId;
-
-    // Save before pushing: users can recover missed events from any chat/page.
-    if (ownerId && publicProjectId) {
-      await notify({
-        userId: ownerId, projectId: publicProjectId,
-        type: status === "complete" ? "build_complete" : "build_failed",
-        targetType: "ticket", targetId: ticketId,
-        message: status === "complete"
-          ? `${name} — build finished, ready for review.`
-          : `${name} — build failed. Open the ticket to see the error and retry.`,
-        link: `/projects/${publicProjectId}/tickets?ticket=${encodeURIComponent(ticketId)}`,
-      }).catch((error) => console.error("[handlers] Could not save build notification:", error));
-    }
+    await reportBuildStatus(ticketId, exitCode === 130 ? "stopped" : status,
+      exitCode === 130 ? "Build stopped." : status === "complete"
+        ? "Build finished, ready for review." : "Build failed. Open the ticket’s Actions log for details and retry.");
 
     if (status === "complete") {
       const durationStr = durationMs ? ` in ${Math.round(durationMs / 1000)}s` : "";
@@ -227,18 +196,6 @@ export function registerEventHandlers(): void {
         description: `Ticket implementation finished successfully${durationStr}.`,
         metadata: { durationMs, exitCode },
       });
-
-      // Notify user in chat
-      if (ownerId) {
-        broadcastToUser(ownerId, {
-          type: "ticket_finished",
-          ticketId,
-          projectId,
-          publicProjectId,
-          status: "complete",
-          message: `Ticket "${name}" completed successfully${durationStr}.`,
-        });
-      }
     } else {
       await logActivity({
         projectId,
@@ -249,18 +206,6 @@ export function registerEventHandlers(): void {
         description: `Execution failed with exit code ${exitCode ?? "unknown"}.`,
         metadata: { exitCode, durationMs },
       });
-
-      // Notify user in chat about the failure
-      if (ownerId) {
-        broadcastToUser(ownerId, {
-          type: "ticket_finished",
-          ticketId,
-          projectId,
-          publicProjectId,
-          status: "failed",
-          message: `Ticket "${name}" failed (exit code ${exitCode ?? "unknown"}). Open the ticket logs for details and retry.`,
-        });
-      }
     }
 
     // A ticket that belongs to a BUILD RUN is advanced by that run — it knows the
@@ -279,14 +224,7 @@ export function registerEventHandlers(): void {
     const projectId = await resolveProjectId(ticketId);
     if (!projectId) return;
     const name = await getTicketName(ticketId);
-    const [project] = await db.select({ ownerId: projects.ownerId, publicProjectId: projects.projectId })
-      .from(projects).where(eq(projects.id, projectId)).limit(1);
-    if (project) await notify({
-      userId: project.ownerId, projectId: project.publicProjectId,
-      type: "build_attention", targetType: "ticket", targetId: ticketId,
-      message: `${name} — ${question || reason}`,
-      link: `/projects/${project.publicProjectId}/tickets?ticket=${encodeURIComponent(ticketId)}`,
-    }).catch((error) => console.error("[handlers] Could not save attention notification:", error));
+    await reportBuildStatus(ticketId, "attention", question || reason);
     await logActivity({
       projectId,
       ticketId,

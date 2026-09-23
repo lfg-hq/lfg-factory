@@ -5,11 +5,13 @@ execFileSync('bun',['-e',`import {TicketCodePage} from './src/templates/pages/ti
 (async()=>{
  const browser=await chromium.launch({executablePath:process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',headless:true});
  const page=await browser.newPage({viewport:{width:1440,height:1000}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
- let saved='export const count = 2;\n',commits=0, canEdit=true, failSave=false;
+ let saved='export const count = 2;\n',commits=0, canEdit=true, failSave=false, preparing=1, treeError=false;
  await page.route('**/*',async route=>{
   const u=new URL(route.request().url()); let local;
   if(u.pathname.includes('/code/')) {
    const action=u.pathname.split('/').pop(),body=route.request().postDataJSON();
+   if(action==='tree' && treeError)return route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({error:'Workspace recovery failed. Retry shortly.'})});
+   if(action==='tree' && preparing-->0)return route.fulfill({status:202,contentType:'application/json',body:JSON.stringify({preparing:true,message:'Restoring ticket code…'})});
    if(action==='save' && failSave)return route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({error:'File changed in the sandbox. Reopen it and reconcile your edits before saving.'})});
    const data=action==='tree'?{branch:'feature/analytics-dashboard',base:'main',canEdit,files:[{path:'src/dashboard.ts',changed:true},{path:'src/styles.css',changed:true},{path:'package.json',changed:false}]}:action==='file'?{original:'export const count = 1;\n',content:saved,version:'v1',exists:true}:action==='save'?(saved=body.content,{version:'v2'}):action==='commit'?(commits++,{sha:'a'.repeat(40)}):{output:'src/dashboard.ts\n',exitCode:0};
    return route.fulfill({contentType:'application/json',body:JSON.stringify(data)});
@@ -37,5 +39,6 @@ execFileSync('bun',['-e',`import {TicketCodePage} from './src/templates/pages/ti
  // Start a clean page as a read-only user.
  canEdit=false;page.on('dialog',d=>d.accept());await page.reload();await page.waitForFunction(()=>document.querySelector('#status').textContent==='Read-only');
  assert.equal(await page.locator('#save').isDisabled(),true);assert.equal(await page.locator('#command').isDisabled(),true);
+ treeError=true;await page.reload();await page.waitForFunction(()=>document.querySelector('#status').textContent==='Checkout unavailable');assert.equal(await page.locator('#change-count').textContent(),'—');assert.match(await page.locator('#file-list').textContent(),/Could not load/);
  assert.deepEqual(errors,[]);console.log('Screenshots: '+temp);console.log('PASS: Monaco load, diff, edit, save, defer/confirm commit, terminal, search, mobile layout; no browser errors');await browser.close();
 })().catch(e=>{console.error(e);process.exit(1)});

@@ -1,3 +1,5 @@
+import { openTicketWorkspace, preserveTicketWorkspaceBeforeSleep, latestTicketWorkspace } from '../services/ticket-workspace.ts';
+import { setBuildOrigin, reportBuildStatus } from "../services/build-reporting.ts";
 import { ticketStopVerificationScript, confirmTicketStopped } from "../services/ticket-stop-verification.ts";
 import { ValidationFailure } from "../services/validation-contract.ts";
 import { failureSummary } from "../services/preview-plan.ts";
@@ -62,7 +64,7 @@ import {
 import { buildApiBuilderPrompt } from "../ai/prompts/builder-api.ts";
 import { createBuilderTools } from "../ai/tools/builder-tools.ts";
 import { getModel, getProviderName, getProviderModel, DEFAULT_MODEL_KEY, type ProviderName } from "../ai/provider.ts";
-import { modelSelections, messages } from "../db/schema/chat.ts";
+import { modelSelections } from "../db/schema/chat.ts";
 import { resolveRepoAuth, extractRepoUrl, type RepoAuth } from "../services/repo-auth.ts";
 import {
   resolveTicketAnchor,
@@ -401,9 +403,15 @@ async function wakeTicketVm(workspaceId: string | null | undefined): Promise<voi
   if (!workspaceId || workspaceId.startsWith("pv-")) return;
   await setNoSleep(workspaceId, true).catch((e) => console.warn(`[ticket-executor] pin-awake (no_sleep=true) failed for ${workspaceId}:`, (e as Error).message));
 }
-async function sleepTicketVm(workspaceId: string | null | undefined): Promise<void> {
-  if (!workspaceId || workspaceId.startsWith("pv-")) return;
-  await setNoSleep(workspaceId, false).catch((e) => console.warn(`[ticket-executor] allow-sleep (no_sleep=false) failed for ${workspaceId}:`, (e as Error).message));
+async function sleepTicketVm(workspaceId: string | null | undefined): Promise<boolean> {
+  if (!workspaceId || workspaceId.startsWith("pv-")) return false;
+  try { await preserveTicketWorkspaceBeforeSleep(workspaceId); }
+  catch (error) {
+    console.error('[ticket-executor] Checkpoint failed; keeping ticket sandbox awake', workspaceId, error);
+    return false;
+  }
+  await setNoSleep(workspaceId, false);
+  return true;
 }
 
 // API-mode ticket builds run the Pi in-sandbox coding agent (model-agnostic,
@@ -2172,43 +2180,36 @@ async function ensureIsolatedChatSandbox(
     if ("error" in wt) return wt;
     return { workspaceId: sharedWorkspaceId, projectDir: wt.dir };
   }
+  // Continue from the same verified checkout/checkpoint without resetting or cleaning edits.
+  const [savedTicket] = await db.select().from(projectTickets).where(eq(projectTickets.id,ticket.id));
+  const [savedProject] = await db.select().from(projects).where(eq(projects.id,project.id));
+  if (!savedTicket || !savedProject) return {error:'Ticket or project not found.'};
+  if (!savedTicket.githubBranch) return provisionInitialChatSandbox(ticket,project,ownerId,gitUserId,usingOwnGit);
+  try {
+    const workspace = await openTicketWorkspace({ticket:savedTicket,project:savedProject,actorId:gitUserId,canRestore:true,continuation:true,
+      progress:message=>{void addLog(ticket.id,message,'command',ownerId);}});
+    await wakeTicketVm(workspace.workspaceId);
+    return {workspaceId:workspace.workspaceId,projectDir:workspace.root.replace(/^\/data\//,'')};
+  } catch (error) { return {error: error instanceof Error ? error.message : 'Could not open ticket workspace'}; }
+
+}
+
+async function provisionInitialChatSandbox(
+  ticket: { id: string; projectId: string; githubBranch: string | null; epicId?: string | null },
+  project: { id: string; repoOwner: string | null; repoName: string | null; repoUrl: string | null; repoProvider?: string | null; stack?: string | null },
+  ownerId: string,
+  // Whose Git token clones the repo here (fine-grained sharing) + whether it's the
+  // collaborator's OWN token, so a missing token yields the right "connect/ask owner" text.
+  gitUserId: string = ownerId,
+  usingOwnGit: boolean = false,
+  // SHARED PREVIEW VM (opt-in): chat runs in the ticket's worktree inside the preview
+  // VM instead of a dedicated clone — same box the build used, so an "answer" turn can
+  // look at the branch (and the running app + its databases) with no VM boot at all.
+  sharedWorkspaceId: string | null = null,
+): Promise<{ workspaceId: string; projectDir: string } | { error: string }> {
   const projectDirName = "project";
   const featureBranch = ticket.githubBranch ?? ticketBranchName(ticket);
   const { anchorBranch } = await resolveTicketAnchor(ticket);
-
-  // 1) SAME TICKET → SAME SANDBOX. Reuse the ticket's existing dedicated VM — the
-  //    BUILD VM ("ticket") or a prior chat VM ("ticket-chat"), whichever exists. The
-  //    build VM now persists (sleeps between runs), so chat just continues in it — no
-  //    reason for a second VM. We only ever avoid the shared preview VM ("pv-…"),
-  //    whose config hacks would pollute a chat's `git add -A`.
-  const existingRows = await db.select().from(sandboxes)
-    .where(and(
-      eq(sandboxes.ticketId, ticket.id),
-      inArray(sandboxes.workspaceType, ["ticket", "ticket-chat"]),
-    ))
-    .orderBy(desc(sandboxes.updatedAt));
-  const existing = existingRows.find((r) => r.magsWorkspaceId && !r.magsWorkspaceId.startsWith("pv-"));
-  if (existing?.magsWorkspaceId) {
-    try {
-      // Wake it (the build VM idle-sleeps after a run) AND re-sync to the latest pushed
-      // commit — a build or a prior chat may have pushed since it was last used.
-      await wakeTicketVm(existing.magsWorkspaceId);
-      const sync = await execOnWorkspace(existing.magsWorkspaceId,
-        `cd ${WORKING_DIR}/${projectDirName} 2>/dev/null && git config --global --add safe.directory '*' 2>/dev/null; git fetch --prune origin 2>&1 | tail -1; git checkout -B ${featureBranch} origin/${featureBranch} 2>/dev/null || git checkout ${featureBranch} 2>/dev/null; git reset --hard origin/${featureBranch} 2>/dev/null; git clean -fd 2>/dev/null; echo READY`,
-        { timeout: 90_000 });
-      if (sync.output.includes("READY")) {
-        // Drop any REDUNDANT dedicated rows for this ticket so we converge on one.
-        for (const r of existingRows) {
-          if (r.id !== existing.id && r.magsWorkspaceId && !r.magsWorkspaceId.startsWith("pv-")) {
-            await deleteWorkspace(r.magsWorkspaceId).catch(() => {});
-            await db.delete(sandboxes).where(eq(sandboxes.id, r.id)).catch(() => {});
-          }
-        }
-        return { workspaceId: existing.magsWorkspaceId, projectDir: projectDirName };
-      }
-    } catch { /* dead — reprovision below */ }
-    await db.delete(sandboxes).where(eq(sandboxes.id, existing.id)).catch(() => {});
-  }
 
   const auth = await resolveRepoAuth(project, gitUserId);
   if (!auth) return { error: usingOwnGit ? NO_SHARED_GIT_MESSAGE : "No repository/credentials configured — connect the repo in Settings, then chat with the agent." };
@@ -3005,7 +3006,16 @@ async function executeTicketApiInternal(
     }
   }
 
-  if (!useWorktree && workspaceId) {
+  let preserveCheckout = false;
+  if (isolatedBuild && !useWorktree && ticket.githubBranch && (sandboxRow || ticket.githubCommitSha)) {
+    const recovered = await openTicketWorkspace({project,ticket,actorId:gitUserId,canRestore:true,continuation:true,
+      progress:message=>{void addLog(ticketId,message,'command',ownerId);}});
+    workspaceId = recovered.workspaceId;
+    sandboxRow = await latestTicketWorkspace(project.id,ticketId) ?? null;
+    preserveCheckout = true;
+  }
+
+  if (!useWorktree && workspaceId && !preserveCheckout) {
     await addLog(ticketId, "Reconnecting to existing workspace...", "command", ownerId);
     try {
       const probe = await execOnWorkspace(workspaceId, 'echo "WORKSPACE_READY"', { timeout: 60_000 });
@@ -3199,11 +3209,13 @@ pwd
 git branch --show-current
 `.trim();
 
-    const gitSetupScript = useWorktree ? worktreeScript : cloneScript;
+    const gitSetupScript = preserveCheckout
+      ? `set -eu\ncd ${WORKING_DIR}/${projectDirName}\n${refreshOriginCommand(auth.authUrl)}\ngit fetch origin\necho GIT_SETUP_COMPLETE`
+      : useWorktree ? worktreeScript : cloneScript;
 
     try {
       const gitResult = await recoverSandboxStorage({
-        run: () => runGitSetup(workspaceId!, gitSetupScript, `${WORKING_DIR}/${projectDirName}`, featureBranch, [auth.token]),
+        run: () => runGitSetup(workspaceId!, preserveCheckout ? gitSetupScript : (useWorktree ? worktreeScript : cloneScript), `${WORKING_DIR}/${projectDirName}`, featureBranch, [auth.token]),
         onLog: async message => { await addLog(ticketId,message,"command",ownerId); },
         discard: async () => {
           // A ticket must never destroy a shared preview or another ticket's VM.
@@ -3223,6 +3235,7 @@ git branch --show-current
           await db.delete(sandboxes).where(and(eq(sandboxes.ticketId,ticketId),eq(sandboxes.magsWorkspaceId,id)));
           sandboxRow = null;
           workspaceId = null;
+          preserveCheckout = false;
         },
         create: async () => {
           const fresh = await newWorkspaceV2(`${ticketId.slice(0,8)}-${crypto.randomUUID().slice(0,8)}`, {
@@ -3779,9 +3792,9 @@ git branch --show-current
   // (or failed-but-kept) VM never burns compute sitting idle.
   // SAFETY: never touch the always-on preview VM ("pv-…"), which is keepAlive by design.
   if (isolatedBuild && !useWorktree && workspaceId && !workspaceId.startsWith("pv-")) {
-    await addLog(ticketId, implementationStatus === "complete" && !commitFailed ? "Validation and publication passed. The build environment is being put to sleep; saved work is retained." : "This attempt has stopped. The build environment is being put to sleep; saved work is retained for a later attempt.", "command", ownerId);
-    await sleepTicketVm(workspaceId);
-    await db.update(sandboxes).set({ status: "sleeping", updatedAt: new Date() }).where(eq(sandboxes.ticketId, ticketId)).catch(() => {});
+    await addLog(ticketId, implementationStatus === "complete" && !commitFailed ? "Validation and publication passed. Saving a recovery checkpoint before allowing the build environment to sleep." : "This attempt has stopped. Saving a recovery checkpoint before allowing the build environment to sleep.", "command", ownerId);
+    if (await sleepTicketVm(workspaceId)) await db.update(sandboxes).set({ status: "sleeping", updatedAt: new Date() }).where(eq(sandboxes.ticketId, ticketId)).catch(() => {});
+    else await addLog(ticketId,"Recovery checkpoint could not be saved. The sandbox is being kept awake to preserve this work.","cli_error",ownerId);
   }
   // SHARED build: the ticket's git worktree + sandbox row are intentionally KEPT.
   // They are cleaned up only when the ticket is approved and moved to Done (via
@@ -3853,6 +3866,8 @@ export async function startTicketValidationRetry(ticketId:string,actorId:string,
     if(ticket.status==="stopped")ticket.status="open";
     const claimed=await db.update(projectTickets).set({status:ticket.status,queueStatus:"executing",updatedAt:new Date()}).where(and(eq(projectTickets.id,ticketId),eq(projectTickets.queueStatus,ticket.queueStatus))).returning({id:projectTickets.id});
     if(!claimed.length)throw new Error("Another operation claimed this ticket. Retry after it finishes.");
+    await setBuildOrigin(ticketId, null, actorId);
+    await reportBuildStatus(ticketId, "started", `${phase === "feature-testing" ? "Feature testing" : "Validation"} started.`);
     broadcastToUser(project.ownerId,{type:"ticket_status",ticketId,status:ticket.status,queueStatus:"executing"});
     const workspaceId=sb.magsWorkspaceId;
     const job=runChatTurn(ticketId,async()=>{
@@ -3881,6 +3896,7 @@ export async function startTicketValidationRetry(ticketId:string,actorId:string,
           const stageId = recovered ? await moveTicketToStage(ticketId, project.id, 'In Review') : ticket.stageId;
           await db.update(projectTickets).set({status, lastExecutionAt:new Date(), updatedAt:new Date()}).where(eq(projectTickets.id,ticketId));
           broadcastToUser(project.ownerId,{type:'ticket_status',ticketId,status,stageId,queueStatus:'executing'});
+          await reportBuildStatus(ticketId, "complete", "Feature testing passed on the saved app. Build and validation were not repeated.");
           await addLog(ticketId,'Feature testing completed on the saved app. See the result in the Feature testing panel above. This run did not repeat build or validation.',"ai_response",project.ownerId);
           return;
         }
@@ -3893,6 +3909,7 @@ export async function startTicketValidationRetry(ticketId:string,actorId:string,
           updatedAt: new Date(),
         }).where(eq(projectTickets.id, ticketId));
         broadcastToUser(project.ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "executing", stageId: reviewStageId });
+        await reportBuildStatus(ticketId, "complete", "Validation passed on the saved code. This action did not push or merge.");
         await addLog(ticketId,`✅ **Validation passed** for saved commit \`${sha.slice(0,12)}\`. Moved to **In Review**. Development was skipped. Any repairs were committed locally; this action did not push or merge.`,"ai_response",project.ownerId);
       } catch(error) {
         clearInterval(cancelPoll);
@@ -4011,13 +4028,7 @@ async function markTicketFailed(ticketId: string, reason: string, userId?: strin
           : `**Next step:** the failure is shown above. Use the message box below to request a repair or provide missing details, then retry when the blocker has been resolved.`);
   await addLog(ticketId, failMsg, "ai_response", userId);
 
-  // TELL THE CHAT THAT ASKED FOR IT. A failure used to live only in the ticket's
-  // Actions log, so the conversation that queued the build carried on as if the work
-  // had landed — and the next preview summary in that thread read like a delivery.
-  // Anyone reading the chat (a client, say) had no way to know the ticket was dead.
-  await announceFailureToChat(ticketId, reason).catch((e) => {
-    console.warn("[ticket-executor] could not post the failure to chat:", e);
-  });
+  if (opts?.emitEvent === false) await reportBuildStatus(ticketId, "failed", reason);
 
   // Emit execution_finished so the handler chain continues (auto-queue next ticket).
   // Startup recovery can suppress queue advancement explicitly; normal build failures
@@ -4031,44 +4042,6 @@ async function markTicketFailed(ticketId: string, reason: string, userId?: strin
       exitCode: 1,
     });
   }
-}
-
-/**
- * Post a build failure into the conversation that queued the ticket.
- *
- * The ticket already carries `conversationId` (the server injects it when the chat
- * creates the ticket), so the failure can be reported where the request was made
- * rather than only on a tab nobody had open.
- */
-async function announceFailureToChat(ticketId: string, reason: string): Promise<void> {
-  const [t] = await db
-    .select({
-      conversationId: projectTickets.conversationId,
-      key: projectTickets.ticketKey,
-      name: projectTickets.name,
-      branch: projectTickets.githubBranch,
-      sha: projectTickets.githubCommitSha,
-    })
-    .from(projectTickets)
-    .where(eq(projectTickets.id, ticketId))
-    .limit(1);
-  if (!t?.conversationId) return; // nothing linked it to a chat
-
-  const label = t.key ? `${t.key} — ${t.name}` : t.name;
-  const pushed = t.sha
-    ? `The branch \`${t.branch ?? "?"}\` has the commit, so the code is safe on the remote.`
-    : `**Nothing was pushed** — the work is only in the build sandbox, and \`${t.branch ?? "its branch"}\` does not exist on the remote. Previewing this ticket will not work until it does.`;
-
-  const content =
-    `❌ **${label} failed to build.**\n\n` +
-    `${reason}\n\n${pushed}\n\n` +
-    `Open the ticket's **Actions** log for the failing step. Fix the cause and rebuild, or tell me what to change and I'll retry.`;
-
-  await db.insert(messages).values({
-    conversationId: t.conversationId,
-    role: "assistant",
-    content,
-  });
 }
 
 function sleep(ms: number) {

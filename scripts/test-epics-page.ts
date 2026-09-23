@@ -101,7 +101,7 @@ if (/\.epic-counts \{[^}]*margin-top/.test(out)) ok("counts on their own line, n
 else fail("counts still packed into the title row");
 if (/\.epic-panel \{[^}]*flex: 1 1 auto/.test(out)) ok("panel grows to fill the row (no dead strip on the right)");
 else fail("panel still has a fixed basis");
-if (/marked\.min\.js/.test(out) && /marked\.parse\(raw\)/.test(out)) ok("documents render as markdown");
+if (/marked\.min\.js/.test(out) && /renderEpicMarkdown\(wrap, raw\)/.test(out)) ok("documents render as markdown");
 else fail("documents still dumped as raw text");
 if (/\.epic-doc table \{/.test(out) && /\.epic-doc h2 \{/.test(out)) ok("prose styles for headings and tables");
 else fail("no prose styles");

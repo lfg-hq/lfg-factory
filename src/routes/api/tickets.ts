@@ -1,3 +1,4 @@
+import { setBuildOrigin, reportBuildStatus } from "../../services/build-reporting.ts";
 import { teamApiKeys } from "../../services/llm-access.ts";
 import { selectedSubscriptionModel } from "../../services/subscription-execution.ts";
 import { Hono } from "hono";
@@ -10,7 +11,7 @@ import { githubTokens, users } from "../../db/schema/users.ts";
 import { sandboxes } from "../../db/schema/sandbox.ts";
 import { conversations } from "../../db/schema/chat.ts";
 import { instantApps } from "../../db/schema/instant.ts";
-import { eq, and, asc, desc, max, notExists, lt } from "drizzle-orm";
+import { eq, ne, and, asc, desc, max, notExists, lt } from "drizzle-orm";
 import { getProjectAccess, requirePermission } from "../../auth/project-access.ts";
 import { nextTicketKey } from "../../utils/ticket-keys.ts";
 import { notify } from "../../services/notify.ts";
@@ -133,7 +134,7 @@ ticketsApi.get("/:projectId/tickets/:ticketId", async (c) => {
   const logs = await db
     .select()
     .from(ticketLogs)
-    .where(eq(ticketLogs.ticketId, ticket.id))
+    .where(and(eq(ticketLogs.ticketId, ticket.id), ne(ticketLogs.logType, "execution_origin")))
     .orderBy(desc(ticketLogs.createdAt))
     .limit(50);
 
@@ -415,8 +416,8 @@ ticketsApi.get("/:projectId/tickets/:ticketId/logs", async (c) => {
     boundary = or(lt(ticketLogs.createdAt, anchor.createdAt), and(eq(ticketLogs.createdAt, anchor.createdAt), lt(ticketLogs.id, anchor.id)));
   }
   const logs = await db.select().from(ticketLogs)
-    .where(and(eq(ticketLogs.ticketId, ticketId), boundary))
-    .orderBy(desc(ticketLogs.createdAt), desc(ticketLogs.id)).limit(500);
+    .where(and(eq(ticketLogs.ticketId, ticketId), ne(ticketLogs.logType, "execution_origin"), boundary))
+    .orderBy(desc(ticketLogs.createdAt), desc(ticketLogs.id)).limit(20);
 
   return c.json(logs.reverse().map((l) => {
     // A question row carries its clickable options (and whether it blocks) as JSON in
@@ -747,6 +748,8 @@ ticketsApi.post("/:projectId/tickets/:ticketId/queue", async (c) => {
     .returning({id:projectTickets.id});
   if(!claimed.length)return c.json({error:"Another operation claimed this ticket."},409);
 
+  await setBuildOrigin(ticketId, null, user.id);
+  await reportBuildStatus(ticketId, "queued", "Build queued.");
   const { bus } = await import("../../events/bus.ts");
   bus.emit({ type: "ticket.queued", payload: { ticketId, projectId: project.id, notes: body.notes, actorId: user.id } });
 

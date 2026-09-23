@@ -58,7 +58,7 @@
     if (!response.ok) throw new Error('Could not load action history');
     const rows = await response.json();
     if (!Array.isArray(rows)) throw new Error('Invalid action history');
-    if (older || !histories.has(url)) history.more = rows.length === 500;
+    if (older || !histories.has(url)) history.more = rows.length === 20;
     const merged = new Map(history.rows.map(row => [row.id, row]));
     for (const row of rows) merged.set(row.id, row);
     history.rows = Array.from(merged.values()).sort((a,b) => String(a.createdAt).localeCompare(String(b.createdAt)) || String(a.id).localeCompare(String(b.id)));
@@ -97,7 +97,17 @@
       button.id = body.id + '-tab'; button.setAttribute('aria-controls', body.id); body.setAttribute('role', 'tabpanel'); body.setAttribute('aria-labelledby', button.id); body.tabIndex = 0;
       const label = document.createElement('strong'); label.textContent = phase.label;
       const badge = document.createElement('span'); badge.className = 'phase-status phase-' + phase.status;
-      badge.textContent = phase.status === 'not-applicable' ? 'Not applicable' : phase.status === 'saved' ? 'Saved code' : phase.status === 'unknown' ? 'Unknown' : phase.status[0].toUpperCase() + phase.status.slice(1);
+      const statusLabel = phase.status === 'not-applicable' ? 'Not applicable' : phase.status === 'saved' ? 'Saved code' : phase.status[0].toUpperCase() + phase.status.slice(1);
+      badge.title = statusLabel; badge.setAttribute('aria-label', statusLabel); badge.setAttribute('role', 'img');
+      const paths = {
+        done: '<path d="m5 12 4 4L19 6"/>', saved: '<path d="m5 12 4 4L19 6"/>',
+        pending: '<circle cx="12" cy="12" r="9"/><path d="M12 7v6m0 4h.01"/>',
+        error: '<path d="m6 6 12 12M18 6 6 18"/>',
+        working: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+        unknown: '<circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 0 1 6 0c0 2-3 2-3 4m0 4h.01"/>',
+        'not-applicable': '<path d="M5 12h14"/>'
+      };
+      badge.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (paths[phase.status] || paths.unknown) + '</svg>';
       button.append(label, badge); button.onclick = () => select(phase.id);
       button.onkeydown = event => {
         const current = buttons.indexOf(button);
@@ -219,12 +229,21 @@
     fragment.append(headers, dock);
     if (history?.more) {
       const note = document.createElement('div'); note.className = 'phase-history-note'; note.setAttribute('role', 'status');
-      note.textContent = history.error ? 'Older history could not load.' : 'Loading earlier history…';
-      if (history.error) {
-        const retry = document.createElement('button'); retry.textContent = 'Retry';
-        retry.onclick = () => { history.error = false; render(area, rows, ticket, key, renderRow, historyUrl, refresh); }; note.append(retry);
-      }
-      fragment.append(note);
+      const more = document.createElement('button'); more.type = 'button';
+      more.textContent = history.loading ? 'Loading…' : history.error ? 'Retry loading earlier logs' : 'Load 20 earlier logs';
+      more.disabled = !!history.loading;
+      more.onclick = async () => {
+        if (history.loading) return;
+        history.loading = true; history.error = false; more.disabled = true; more.textContent = 'Loading…';
+        try { await load(historyUrl, true); }
+        catch (_) { history.error = true; }
+        finally {
+          history.loading = false;
+          if (area.isConnected && area.dataset.phaseView === key) render(area, history.rows, ticket, key, renderRow, historyUrl, refresh);
+        }
+      };
+      note.append(more);
+      headers.append(note);
     }
     for (const body of bodies) fragment.append(body);
     const restoreLogs=area.classList.contains('feature-logs-open');
@@ -233,23 +252,7 @@
     if(restoreLogs&&selected==='feature-testing')area.querySelector('.feature-show-logs')?.click();
     const visible = bodies.find(body => !body.hidden);
     if (visible && scroll) { visible.scrollTop = scroll.bottom ? visible.scrollHeight : scroll.top; visible.scrollLeft = scroll.left; }
-    // Fetch each older page once, in the background. Viewing logs never runs the ticket.
-    if (history?.more && !history.loading && !history.error && refresh) {
-      history.loading = true;
-      (async () => {
-        try {
-          while (history.more && area.isConnected && area.dataset.phaseView === key) {
-            const first = history.rows[0]?.id;
-            await load(historyUrl, true);
-            if (history.more && history.rows[0]?.id === first) throw new Error('History cursor did not advance');
-          }
-        } catch (_) { history.error = true; }
-        finally {
-          history.loading = false;
-          if (area.isConnected && area.dataset.phaseView === key) await refresh();
-        }
-      })();
-    }
+
   }
   root.TicketActionPhases = { group, render, load, latestFeatureRunCompleted };
 })(typeof window === 'undefined' ? globalThis : window);

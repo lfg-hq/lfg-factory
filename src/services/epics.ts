@@ -516,17 +516,16 @@ export async function promoteEpicToMain(
  * Docs tab so it can be read and improved while the epic is in flight.
  */
 export async function listEpicDocs(epicId: string) {
-  return db
-    .select({
-      id: projectFiles.id,
-      name: projectFiles.name,
-      fileType: projectFiles.fileType,
-      updatedAt: projectFiles.updatedAt,
-      linkedAt: epicDocuments.createdAt,
-    })
-    .from(epicDocuments)
-    .innerJoin(projectFiles, eq(projectFiles.id, epicDocuments.fileId))
-    .where(eq(epicDocuments.epicId, epicId));
+  const [linked, owned] = await Promise.all([
+    db.select({id:projectFiles.id,name:projectFiles.name,fileType:projectFiles.fileType,
+      updatedAt:projectFiles.updatedAt,linkedAt:epicDocuments.createdAt})
+      .from(epicDocuments).innerJoin(projectFiles,eq(projectFiles.id,epicDocuments.fileId))
+      .where(eq(epicDocuments.epicId,epicId)),
+    db.select({id:projectFiles.id,name:projectFiles.name,fileType:projectFiles.fileType,
+      updatedAt:projectFiles.updatedAt,linkedAt:projectFiles.createdAt})
+      .from(projectFiles).where(eq(projectFiles.epicId,epicId)),
+  ]);
+  return [...new Map([...owned,...linked].map(doc => [doc.id,doc])).values()];
 }
 
 /** Point an epic at project docs. Idempotent — re-linking the same doc is a no-op. */
@@ -571,14 +570,15 @@ export async function epicLinksForDocs(projectId: string) {
       epicKey: epics.epicKey,
       epicName: epics.name,
       epicStatus: epics.status,
+      epicCreatedAt: epics.createdAt,
     })
     .from(epicDocuments)
     .innerJoin(epics, eq(epics.id, epicDocuments.epicId))
     .where(eq(epics.projectId, projectId));
 
-  const byFile: Record<string, Array<{ epicId: string; epicKey: string | null; epicName: string; epicStatus: string }>> = {};
+  const byFile: Record<string, Array<{ epicId: string; epicKey: string | null; epicName: string; epicStatus: string; epicCreatedAt: Date }>> = {};
   for (const r of rows) {
-    (byFile[r.fileId] ||= []).push({ epicId: r.epicId, epicKey: r.epicKey, epicName: r.epicName, epicStatus: r.epicStatus });
+    (byFile[r.fileId] ||= []).push({ epicId: r.epicId, epicKey: r.epicKey, epicName: r.epicName, epicStatus: r.epicStatus, epicCreatedAt: r.epicCreatedAt });
   }
   return byFile;
 }

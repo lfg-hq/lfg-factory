@@ -1,3 +1,4 @@
+import { setBuildOrigin, reportBuildStatus } from "../../services/build-reporting.ts";
 import { associateUsageTicket } from "../../services/token-usage.ts";
 import { tool, zodSchema } from "ai";
 import { z } from "zod";
@@ -315,14 +316,21 @@ export const retryTicket = tool({
   description: "Reset a failed ticket and immediately queue it for execution.",
   inputSchema: zodSchema(z.object({
     ticketId: z.string(),
+    conversationId: z.string().optional(),
+    userId: z.string().optional(),
     reason: z.string().optional(),
   })),
-  execute: async ({ ticketId, reason }) => {
-    const [row] = await db.select({ projectId: projectTickets.projectId }).from(projectTickets).where(eq(projectTickets.id, ticketId));
-    await db.update(projectTickets).set({ status: "open", queueStatus: "queued", queuedAt: new Date(), updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
+  execute: async ({ ticketId, reason, conversationId, userId }) => {
+    const [row] = await db.select({ projectId: projectTickets.projectId, queueStatus: projectTickets.queueStatus }).from(projectTickets).where(eq(projectTickets.id, ticketId));
+    if (!row) throw new Error("Ticket not found");
+    if (/^(queued|executing|stopping)$/.test(row.queueStatus)) throw new Error("This ticket already has an active operation.");
+    const claimed = await db.update(projectTickets).set({ status: "open", queueStatus: "queued", queuedAt: new Date(), updatedAt: new Date() }).where(and(eq(projectTickets.id, ticketId), eq(projectTickets.queueStatus, row.queueStatus))).returning({id:projectTickets.id});
+    if (!claimed.length) throw new Error("Another operation claimed this ticket.");
+    await setBuildOrigin(ticketId, conversationId ?? null, userId ?? null);
     if (reason) {
       await db.insert(ticketLogs).values({ ticketId, logType: "agent_action", command: `Retry: ${reason}`, explanation: reason });
     }
+    await reportBuildStatus(ticketId, "queued", "Build queued.");
     // Emit queued event to trigger execution
     const { emit } = await import("../../events/bus.ts");
     emit({ type: "ticket.queued", ticketId, projectId: row?.projectId ?? "" });
@@ -416,12 +424,19 @@ export const queueTicketExecution = tool({
   description: "Mark a ticket as queued for background execution by the coding agent.",
   inputSchema: zodSchema(z.object({
     ticketId: z.string(),
+    conversationId: z.string().optional(),
+    userId: z.string().optional(),
     notes: z.string().optional(),
   })),
-  execute: async ({ ticketId, notes }) => {
-    const [row] = await db.select({ projectId: projectTickets.projectId }).from(projectTickets).where(eq(projectTickets.id, ticketId));
-    await db.update(projectTickets).set({ queueStatus: "queued", queuedAt: new Date(), notes: notes ?? undefined, updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
+  execute: async ({ ticketId, notes, conversationId, userId }) => {
+    const [row] = await db.select({ projectId: projectTickets.projectId, queueStatus: projectTickets.queueStatus }).from(projectTickets).where(eq(projectTickets.id, ticketId));
+    if (!row) throw new Error("Ticket not found");
+    if (/^(queued|executing|stopping)$/.test(row.queueStatus)) throw new Error("This ticket already has an active operation.");
+    const claimed = await db.update(projectTickets).set({ queueStatus: "queued", queuedAt: new Date(), notes: notes ?? undefined, updatedAt: new Date() }).where(and(eq(projectTickets.id, ticketId), eq(projectTickets.queueStatus, row.queueStatus))).returning({id:projectTickets.id});
+    if (!claimed.length) throw new Error("Another operation claimed this ticket.");
+    await setBuildOrigin(ticketId, conversationId ?? null, userId ?? null);
     await db.insert(ticketLogs).values({ ticketId, logType: "user_message", command: notes ? `Queued: ${notes}` : "Queued for execution" });
+    await reportBuildStatus(ticketId, "queued", "Build queued.");
     emitTicketQueued({ ticketId, projectId: row?.projectId ?? "", notes });
     return { success: true };
   },

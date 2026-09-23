@@ -1,7 +1,7 @@
 // Shared inbox stays available across projects and conversations.
 (() => {
     const script = document.createElement('script');
-    script.src = '/public/js/build-notifications.js?v=4';
+    script.src = '/public/js/build-notifications.js?v=11';
     document.head.appendChild(script);
 })();
 
@@ -109,38 +109,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     window.addEventListener('resize', positionAccountMenu);
 
-    // Project dropdown toggle
-    const projectDropdownTrigger = document.getElementById('projectDropdownTrigger');
-    const projectDropdownContainer = document.getElementById('projectDropdownContainer');
-    const projectDropdown = document.getElementById('projectDropdown');
-
-    if (projectDropdownTrigger && projectDropdownContainer) {
-        projectDropdownTrigger.addEventListener('click', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            projectDropdownContainer.classList.toggle('open');
-            // Close user dropdown if open
-            userInfo?.classList.remove('open');
-        });
-    }
-
-    // Close project dropdown when clicking outside
-    document.addEventListener('click', (e) => {
-        if (projectDropdownContainer && !projectDropdownContainer.contains(e.target)) {
-            projectDropdownContainer.classList.remove('open');
-        }
-    });
-
-    // Prevent project dropdown from closing when clicking inside it
-    if (projectDropdown) {
-        projectDropdown.addEventListener('click', (e) => {
-            // Don't stop propagation for links - let them navigate
-            if (!e.target.closest('a')) {
-                e.stopPropagation();
-            }
-        });
-    }
-
     // Handle window resize
     let resizeTimer;
     window.addEventListener('resize', () => {
@@ -212,4 +180,52 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
   else init();
+})();
+
+// Render collapsed-menu labels outside the scrolling rail so they cannot be clipped.
+(() => {
+    function initLabels() {
+        const sidebar = document.getElementById('sidebar');
+        if (!sidebar) return;
+        const tooltip = document.createElement('div');
+        tooltip.id = 'sidebar-menu-label'; tooltip.setAttribute('role', 'tooltip'); tooltip.hidden = true;
+        tooltip.style.cssText = 'position:fixed;z-index:10000;pointer-events:none;padding:7px 11px;border-radius:7px;background:var(--card-bg,#fff)!important;color:var(--text-color,#1e293b)!important;border:1px solid var(--border-color,#dbe2ea);box-shadow:0 3px 12px #0002;font:500 13px/1.4 system-ui;max-width:240px;overflow-wrap:anywhere';
+        document.body.appendChild(tooltip);
+        let active;
+        const hide = () => {
+            tooltip.hidden = true;
+            if (active) {
+                const ids = (active.getAttribute('aria-describedby') || '').split(/\s+/).filter(id => id && id !== tooltip.id);
+                if (ids.length) active.setAttribute('aria-describedby', ids.join(' '));
+                else active.removeAttribute('aria-describedby');
+            }
+            active = null;
+        };
+        const show = event => {
+            const item = event.target.closest('.nav-link, .new-chat-link, .project-dropdown-trigger, .logo-section, #user-info-button');
+            if (!item || !sidebar.contains(item) || !sidebar.classList.contains('minimized')) return;
+            if (active === item && !tooltip.hidden) return;
+            hide();
+            const label = item.matches('.logo-section') ? 'Expand sidebar'
+                : item.querySelector('.nav-text, .button-text, .project-name-text, .user-name')?.textContent?.trim()
+                    || item.getAttribute('aria-label') || item.getAttribute('title');
+            if (!label) return;
+            active = item; tooltip.textContent = label; tooltip.hidden = false;
+            item.setAttribute('aria-describedby', [item.getAttribute('aria-describedby'), tooltip.id].filter(Boolean).join(' '));
+            const rect = item.getBoundingClientRect();
+            tooltip.style.left = Math.max(8, Math.min(sidebar.getBoundingClientRect().right + 8, innerWidth - tooltip.offsetWidth - 8)) + 'px';
+            tooltip.style.top = Math.max(8, Math.min(rect.top + (rect.height - tooltip.offsetHeight) / 2, innerHeight - tooltip.offsetHeight - 8)) + 'px';
+        };
+        sidebar.addEventListener('pointerover', show);
+        sidebar.addEventListener('focusin', show);
+        sidebar.addEventListener('pointerout', event => { if (active && !active.contains(event.relatedTarget)) hide(); });
+        sidebar.addEventListener('focusout', hide);
+        sidebar.addEventListener('click', hide);
+        document.addEventListener('keydown', event => { if (event.key === 'Escape') hide(); });
+        window.addEventListener('resize', hide);
+        document.addEventListener('scroll', hide, true);
+        new MutationObserver(() => { if (!sidebar.classList.contains('minimized')) hide(); }).observe(sidebar, {attributes:true,attributeFilter:['class']});
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initLabels);
+    else initLabels();
 })();

@@ -1,3 +1,4 @@
+import { NotificationNav } from "../components/notification-nav.tsx";
 import { html } from "hono/html";
 import { ChatInput } from "../components/chat-input.tsx";
 
@@ -75,6 +76,7 @@ export function AgentDetailPage({
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
   <script src="/public/js/theme-switcher.js"></script>
+<link rel="stylesheet" href="/public/css/build-notifications.css?v=4" />
 </head>
 <body
   data-user-id="${user.id}"
@@ -105,6 +107,7 @@ export function AgentDetailPage({
           </a>
         </div>
         <div class="sidebar-nav">
+          ${NotificationNav()}
           <a href="/instant/" class="nav-link">
             <i class="fas fa-bolt"></i>
             <span class="nav-text">Instant Apps</span>
@@ -511,7 +514,7 @@ export function AgentDetailPage({
   </script>
   <script src="/public/js/marked.min.js"></script>
   <script src="/public/js/markdown-config.js"></script>
-  <script src="/public/js/sidebar.js?v=20260908-startup"></script>
+  <script src="/public/js/sidebar.js?v=20260923-tooltip-theme"></script>
   <script src="/public/js/chat.js?v=20260908-hover-copy"></script>
   <script src="/public/js/agents.js"></script>
 
@@ -530,13 +533,13 @@ export function AgentDetailPage({
         document.querySelectorAll('#model-submenu .submenu-option').forEach(b => b.classList.remove('selected'));
         btn.classList.add('selected');
         const label = document.getElementById('current-model-left');
-        if (label) label.textContent = btn.querySelector('span').textContent.trim();
+        if (label) label.textContent = btn.dataset.label || btn.querySelector('span').textContent.trim();
       });
     });
     const selectedModelBtn = document.querySelector('#model-submenu .submenu-option.selected');
     if (selectedModelBtn) {
       const label = document.getElementById('current-model-left');
-      if (label) label.textContent = selectedModelBtn.querySelector('span').textContent.trim();
+      if (label) label.textContent = selectedModelBtn.dataset.label || selectedModelBtn.querySelector('span').textContent.trim();
     }
     
   </script>

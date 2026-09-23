@@ -1206,6 +1206,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     break;
 
                 case 'message':
+                    if (data.build_status && (!data.conversation_id || data.conversation_id !== currentConversationId)) break;
                     // Scope guard: a complete message (e.g. a preview launch summary) is
                     // broadcast to ALL of the user's connections. Only render it if it
                     // belongs to THIS project/conversation — otherwise a preview summary
@@ -1342,6 +1343,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     break;
 
                 case 'ticket_finished':
+                    if (!data.conversation_id || data.conversation_id !== currentConversationId) break;
                     // Scope guard: ticket cards broadcast to ALL of the user's connections.
                     // Only render for the project whose chat is open — otherwise another
                     // project's "Ticket Failed" card leaked into this conversation.
@@ -1358,6 +1360,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     break;
 
                 case 'batch_complete':
+                    if (!data.conversation_id || data.conversation_id !== currentConversationId) break;
                     // Scope guard (see ticket_finished) — don't leak another project's
                     // build-chain summary into this conversation.
                     if (data.publicProjectId && currentProjectId && data.publicProjectId !== currentProjectId) break;
@@ -3714,7 +3717,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Create copy button
         const copyButton = document.createElement('button');
         copyButton.className = 'message-copy-btn';
-        copyButton.innerHTML = '<i class="fas fa-copy"></i>';
+        copyButton.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="9" y="9" width="11" height="12" rx="2"/><path d="M6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1"/></svg>';
         copyButton.title = 'Copy message';
         copyButton.type = 'button';
         copyButton.setAttribute('aria-label', 'Copy full message');
@@ -3745,7 +3748,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateMessageDisplay(messageDiv);
             };
             const bottomCopy = copyButton.cloneNode(true);
-            bottomCopy.innerHTML = '<i class="fas fa-copy" aria-hidden="true"></i>';
+            bottomCopy.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="9" y="9" width="11" height="12" rx="2"/><path d="M6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1"/></svg>';
             bottomCopy.onclick = function() { copyMessageToClipboard(contentDiv.getAttribute('data-raw-content') || '', this); };
             footer.appendChild(toggle);
             footer.appendChild(bottomCopy);
@@ -3786,9 +3789,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const topActions = message.querySelector('.message-actions');
         if (topActions) topActions.hidden = !long;
         const streaming = message.dataset.streaming === 'true';
-        const collapsed = long && !streaming && message.dataset.expanded !== 'true';
+        const collapsible = message.classList.contains('user');
+        const collapsed = collapsible && long && !streaming && message.dataset.expanded !== 'true';
         message.classList.toggle('message-collapsed', collapsed);
-        toggle.hidden = !long || streaming;
+        toggle.hidden = !collapsible || !long || streaming;
         toggle.textContent = collapsed ? 'Show more' : 'Show less';
         toggle.setAttribute('aria-expanded', String(!collapsed));
     }
@@ -3850,7 +3854,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function showMessageCopied(button) {
         if (!button._copyOriginal) button._copyOriginal = button.innerHTML;
         clearTimeout(button._copyTimer);
-        button.innerHTML = '<i class="fas fa-check" aria-hidden="true"></i> Copied';
+        button.textContent = 'Copied';
         button.setAttribute('aria-label', 'Message copied');
         button.classList.add('copied');
         button._copyTimer = setTimeout(() => {
@@ -3927,7 +3931,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (step.tool && TRAIL_ICONS[step.tool]) step.icon = TRAIL_ICONS[step.tool];
         if (!activeTrail || !activeTrail.isConnected) {
             activeTrail = document.createElement('div');
-            activeTrail.className = 'agent-trail is-running';
+            activeTrail.className = 'agent-trail is-running is-collapsed';
             activeTrail.dataset.started = String(Date.now());
             activeTrail.dataset.lastActivity = String(Date.now());
             clearInterval(trailTimer);
@@ -3940,7 +3944,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateTrailMeta(activeTrail);
             }, 1000);
             activeTrail.innerHTML = `
-                <button type="button" class="agent-trail-head" aria-expanded="true">
+                <button type="button" class="agent-trail-head" aria-expanded="false">
                     <span class="agent-trail-spinner"></span>
                     <span class="agent-trail-title">Working</span>
                     <span class="agent-trail-meta"></span>
@@ -6135,6 +6139,11 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
     
+    document.addEventListener('lfg-file-chat-drop', event => {
+        mentionStartIndex = chatInput.selectionStart ?? chatInput.value.length;
+        void selectMentionFile(event.detail);
+    });
+
     async function selectMentionFile(file) {
         if (!file) return;
         

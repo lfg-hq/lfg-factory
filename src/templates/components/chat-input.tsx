@@ -30,7 +30,9 @@ function groupModels(models: ChatInputModelOption[]) {
     if (!grouped[model.providerLabel]) grouped[model.providerLabel] = [];
     grouped[model.providerLabel]!.push(model);
   }
-  return grouped;
+  return Object.fromEntries(Object.entries(grouped).sort(([a], [b]) =>
+    Number(b.toLowerCase().includes("subscription")) - Number(a.toLowerCase().includes("subscription"))
+  ));
 }
 
 export function ChatInput({
@@ -114,17 +116,18 @@ export function ChatInput({
                   <div class="submenu" id="model-submenu">
                     ${Object.entries(groupedModels).map(
                       ([providerLabel, providerModels]) => html`
-                        <div class="submenu-group${providerModels.some((model) => model.available !== false) ? "" : " unavailable"}">${providerLabel}</div>
+                        <div class="submenu-group${providerModels.some((model) => model.available !== false) ? "" : " unavailable"}">${providerLabel}${providerModels.every((model) => model.key.startsWith("chatgpt/")) ? "" : " · API key"}</div>
                         ${providerModels.map(
                           (model) => html`
                             <button
                               type="button"
                               class="submenu-option${model.key === selectedModelKey ? " selected" : ""}${model.available === false ? " unavailable" : ""}"
                               data-value="${model.key}"
+                              data-label="${model.label ?? model.key}"
                               ${model.available === false ? "disabled" : ""}
                               title="${model.available === false ? (model.key.startsWith("chatgpt/") ? "Connect ChatGPT in Settings to use subscription models" : `Add a ${model.providerLabel} API key in Settings to use this model`) : (model.key.startsWith("chatgpt/") ? "Uses your connected ChatGPT subscription; account limits apply" : "Uses provider API tokens")}"
                             >
-                              <span>${model.label ?? model.key}</span>
+                              <span>${(model.label ?? model.key).replace(/ · Subscription$/, "")}</span>
                               <i class="fas fa-check"></i>
                             </button>
                           `

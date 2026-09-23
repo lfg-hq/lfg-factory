@@ -8,6 +8,16 @@
 #build-inbox-button[aria-expanded="true"] { background:rgba(139,92,246,.09) !important; }
 #build-inbox-button[aria-expanded="true"] i { color:#8b5cf6 !important; }
 .build-unread { position:absolute; right:8px; top:4px; min-width:16px; height:16px; box-sizing:border-box; padding:0 4px; border:2px solid var(--bg-primary,#fff); border-radius:10px; background:#8552eb; color:white; font:600 9px/12px system-ui,sans-serif; text-align:center; }
+/* Expanded navigation uses a centered count, not a floating icon badge. */
+.sidebar:not(.minimized) #build-inbox-button .build-unread {
+  position:static; margin-left:auto; flex-shrink:0;
+  min-width:20px; height:20px; padding:0 6px; border:0;
+  font-size:11px; line-height:20px;
+}
+.sidebar-minimized-preload .sidebar:not(.minimized) #build-inbox-button .build-unread {
+  position:absolute; margin-left:0; min-width:16px; height:16px;
+  padding:0 4px; border:2px solid var(--bg-primary,#fff); font-size:9px; line-height:12px;
+}
 #build-inbox {
   --inbox-surface:#fff; --inbox-text:#263247; --inbox-muted:#7c879a; --inbox-line:#edf0f5; --inbox-hover:#f8f6fd;
   position:fixed; left:76px; top:80px; width:min(390px,calc(100vw - 100px)); max-height:calc(100dvh - 104px);

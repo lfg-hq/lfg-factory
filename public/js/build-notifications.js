@@ -1,16 +1,16 @@
 (() => {
     function init() {
         const nav = document.querySelector('#sidebar .sidebar-nav');
-        if (!nav || document.getElementById('build-inbox-button')) return;
+        if (!nav || document.getElementById('build-inbox')) return;
         const css = document.createElement('link');
-        css.rel = 'stylesheet'; css.href = '/public/css/build-notifications.css?v=3';
-        document.head.appendChild(css);
-        const button = document.createElement('button');
+        css.rel = 'stylesheet'; css.href = '/public/css/build-notifications.css?v=4';
+        if (!document.querySelector('link[href*="build-notifications.css"]')) document.head.appendChild(css);
+        const button = document.getElementById('build-inbox-button') || document.createElement('button');
         button.id = 'build-inbox-button'; button.className = 'nav-link'; button.type = 'button';
-        button.title = 'Notifications'; button.setAttribute('aria-expanded', 'false');
+        button.removeAttribute('title'); button.setAttribute('aria-label', 'Notifications'); button.setAttribute('aria-expanded', 'false');
         button.setAttribute('aria-controls', 'build-inbox');
-        button.innerHTML = '<i class="fas fa-bell" aria-hidden="true"></i><span class="nav-text">Notifications</span><span class="build-unread" hidden></span>';
-        nav.prepend(button);
+        if (!button.childElementCount) button.innerHTML = '<i class="fas fa-bell" aria-hidden="true"></i><span class="nav-text">Notifications</span><span class="build-unread" hidden></span>';
+        if (!button.isConnected) nav.prepend(button);
         const panel = document.createElement('section');
         panel.id = 'build-inbox'; panel.hidden = true; panel.setAttribute('aria-label', 'Notifications');
         panel.innerHTML = '<header><strong>Notifications</strong><button type="button" class="build-read-all">Mark all read</button><button type="button" class="build-close" aria-label="Close notifications">×</button></header><div class="build-inbox-list"></div><footer><button type="button" class="build-desktop">Enable desktop notifications</button><span class="build-inbox-status" role="status"></span></footer>';
@@ -23,7 +23,7 @@
         const status = panel.querySelector('.build-inbox-status');
         const desktop = panel.querySelector('.build-desktop');
         const seen = new Set();
-        let initialized = false, loading = false, toastTimer;
+        let initialized = false, loading = false, refreshPending = false, toastTimer;
         function setOpen(open) {
             panel.hidden = !open; button.setAttribute('aria-expanded', String(open));
             if (open) {
@@ -31,9 +31,9 @@
             }
         }
         function positionPanel() {
-            const rail = document.getElementById('sidebar').getBoundingClientRect();
+            const rail = document.getElementById('sidebar')?.getBoundingClientRect();
             const trigger = button.getBoundingClientRect();
-            panel.style.left = window.innerWidth <= 600 ? '12px' : Math.max(12, Math.min(rail.right + 12, window.innerWidth - 414)) + 'px';
+            panel.style.left = window.innerWidth <= 600 ? '12px' : Math.max(12, Math.min((rail?.right || 0) + 12, window.innerWidth - 414)) + 'px';
             panel.style.top = Math.max(16, Math.min(trigger.top, window.innerHeight - 520)) + 'px';
         }
         window.addEventListener('resize', () => { if (!panel.hidden) positionPanel(); });
@@ -60,13 +60,13 @@
             clearTimeout(toastTimer); toastTimer = setTimeout(() => { live.hidden = true; }, 10000);
             if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
                 try {
-                    const notice = new Notification(n.type === 'build_complete' ? 'Build ready for review' : 'Build needs attention', { body: n.message, tag: n.id });
+                    const notice = new Notification(n.type === 'build_complete' ? 'Build ready for review' : 'Build update', { body: n.message, tag: n.id });
                     notice.onclick = () => { window.focus(); window.location.assign(safeLink(n)); notice.close(); };
                 } catch (_) { /* Some browsers require a service worker; the inbox still works. */ }
             }
         }
         async function refresh() {
-            if (loading) return;
+            if (loading) { refreshPending = true; return; }
             loading = true;
             try {
                 const response = await fetch('/api/projects/build-notifications', { cache: 'no-store' });
@@ -78,7 +78,7 @@
                     seen.add(n.id);
                     const row = document.createElement('article'); row.className = n.readAt ? '' : 'unread'; row.dataset.state = n.type;
                     const label = document.createElement('strong');
-                    label.textContent = n.type === 'build_complete' ? 'Ready for review' : n.type === 'build_failed' ? 'Build failed' : 'Needs your input';
+                    label.textContent = ({build_complete:'Ready for review',build_failed:'Build failed',build_queued:'Queued',build_started:'Building',build_stopped:'Stopped',build_attention:'Needs your input',build_update:'Build update'})[n.type] || 'Build update';
                     const time = document.createElement('time'); time.textContent = new Date(n.createdAt).toLocaleString();
                     row.append(label, linkFor(n), time);
                     if (!n.readAt) {
@@ -93,7 +93,7 @@
                 button.setAttribute('aria-label', `Notifications, ${data.unread} unread`);
                 status.textContent = ''; initialized = true;
             } catch (e) { status.textContent = e.message; }
-            finally { loading = false; }
+            finally { loading = false; if (refreshPending) { refreshPending = false; void refresh(); } }
         }
         panel.querySelector('.build-read-all').onclick = async () => {
             try { await markRead(); await refresh(); } catch (e) { status.textContent = e.message; }
@@ -107,11 +107,31 @@
         }
         desktop.onclick = async () => { try { await Notification.requestPermission(); desktopLabel(); } catch (_) { status.textContent = 'Desktop notifications unavailable.'; } };
         desktopLabel();
-        window.addEventListener('build-notification', () => refresh());
         window.addEventListener('focus', refresh);
         window.addEventListener('online', refresh);
-        // Polling recovers dropped WebSocket messages and supports non-chat pages.
-        setInterval(refresh, 15000);
+        // A user-scoped socket has no conversation, so it never loads chat history.
+        let socket, reconnectTimer, stopped = false, retry = 1000, lastMessage = Date.now();
+        function connect() {
+            if (stopped || socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) return;
+            clearTimeout(reconnectTimer);
+            socket = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/chat');
+            socket.onopen = () => { retry = 1000; lastMessage = Date.now(); refresh(); };
+            socket.onmessage = event => {
+                lastMessage = Date.now();
+                try { const data = JSON.parse(event.data); if (data.type === 'notification') refresh(); } catch (_) {}
+            };
+            socket.onerror = () => socket.close();
+            socket.onclose = () => {
+                if (!stopped) { reconnectTimer = setTimeout(connect, retry + Math.random() * 500); retry = Math.min(retry * 2, 30000); }
+            };
+        }
+        const heartbeat = setInterval(() => {
+            if (socket?.readyState === WebSocket.OPEN && Date.now() - lastMessage > 90000) socket.close();
+        }, 30000);
+        window.addEventListener('pagehide', () => { stopped = true; clearTimeout(reconnectTimer); socket?.close(); });
+        window.addEventListener('pageshow', event => { if (event.persisted) { stopped = false; connect(); } });
+        window.addEventListener('online', connect);
+        connect();
         refresh();
     }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

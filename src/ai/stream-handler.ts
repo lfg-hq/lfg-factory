@@ -1,3 +1,4 @@
+import { withConversationContext } from "./tools/conversation-context.ts";
 import { currentUsage, withUsage, withUsageOperation } from "./usage-context.ts";
 import { availableChatModels } from "../services/available-models.ts";
 import { streamText, stepCountIs, generateText } from "ai";
@@ -657,23 +658,6 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     if (branchCtx) contextMessages.push({ role: "system", content: branchCtx });
   }
 
-  // Polymorphic tool bag: composition varies by mode (agent / instant / product).
-  // The tools that record which chat produced a ticket or an epic take conversationId as
-  // a MODEL-supplied argument, and the model frequently omits it — which is why work built
-  // from a chat shows up with no conversation linked anywhere. The server always knows
-  // which conversation this is, so inject it rather than hoping: an explicit value from
-  // the model still wins, this only fills the blank.
-  const withConversation = (t: Record<string, any>): Record<string, any> => {
-    for (const name of ["createTickets", "startEpic", "addToEpic", "createTicket"]) {
-      const tool = t[name];
-      if (!tool || typeof tool.execute !== "function") continue;
-      const original = tool.execute.bind(tool);
-      tool.execute = (args: Record<string, unknown>, opts: unknown) =>
-        original({ ...args, conversationId: (args?.conversationId as string) || convId }, opts);
-    }
-    return t;
-  };
-
   let tools: Record<string, any> = instantMode
     ? createInstantTools({
         userId,
@@ -901,7 +885,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   // tools) and the last message (caches the growing history prefix). For every
   // other provider caching is automatic given our stable [system][tools][history]
   // ordering, so this is a no-op that returns the inputs unchanged.
-  tools = readingTools(tools, userMessage);
+  tools = withConversationContext(readingTools(tools, userMessage), convId, userId);
   const repositoryCache = new Map<string, Response>();
   systemPrompt += READING_INSTRUCTIONS;
   const cached = withCaching(modelKey, { system: systemPrompt, messages: contextMessages });

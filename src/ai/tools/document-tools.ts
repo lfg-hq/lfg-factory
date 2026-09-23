@@ -57,9 +57,7 @@ export const streamDocumentContent = tool({
       .returning();
 
     if (epicId) {
-      await linkDocsToEpic(epicId, [file!.id], userId).catch((e) =>
-        console.warn("[streamDocumentContent] epic link failed:", (e as Error).message?.slice(0, 160))
-      );
+      await linkDocsToEpic(epicId, [file!.id], userId);
     }
 
     await associateUsageDocument(file!.id, options.toolCallId);
@@ -99,6 +97,7 @@ export const previewPage = tool({
       projectId: z.string(),
       userId: z.string().describe("The user's ID — used to push the preview into their chat"),
       name: z.string().describe("What this page is, e.g. 'RingDesk landing page'"),
+      epicId: z.string().optional().describe("Related epic; links this preview to the feature."),
       html: z
         .string()
         .describe(
@@ -108,7 +107,7 @@ export const previewPage = tool({
         ),
     })
   ),
-  execute: async ({ projectId, userId, name, html }, options) => {
+  execute: async ({ projectId, userId, name, html, epicId }, options) => {
     const fileType = "page_preview";
     const { s3Key, dbContent } = await saveContent(projectId, fileType, name, html);
 
@@ -121,6 +120,7 @@ export const previewPage = tool({
       })
       .returning();
 
+    if (epicId) await linkDocsToEpic(epicId, [file!.id], userId);
     await associateUsageDocument(file!.id, options.toolCallId);
     emitFileCreated({ projectId, documentId: file!.id, documentType: fileType, name });
 

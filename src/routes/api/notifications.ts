@@ -10,6 +10,7 @@ import { users } from "../../db/schema/users.ts";
 import { and, eq, desc, isNull, inArray, count, sql } from "drizzle-orm";
 import { getProjectAccess } from "../../auth/project-access.ts";
 import { notify } from "../../services/notify.ts";
+import { broadcastToUser } from "../../ws/connection-manager.ts";
 import { sendEmail } from "../../utils/email.ts";
 import { env } from "../../config/env.ts";
 import { projectFiles } from "../../db/schema/documents.ts";
@@ -35,7 +36,7 @@ const notificationsApi = new Hono<Env>();
 notificationsApi.use("*", requireAuth as any);
 
 // Global build inbox, independent of the currently open project/conversation.
-const buildTypes = ["build_complete", "build_failed", "build_attention"];
+const buildTypes = ["build_complete", "build_failed", "build_attention", "build_queued", "build_started", "build_stopped", "build_update"];
 notificationsApi.get("/build-notifications", async (c) => {
   const scope = and(eq(notifications.userId, c.get("user").id), inArray(notifications.type, buildTypes));
   const rows = await db.select().from(notifications).where(scope)
@@ -50,6 +51,7 @@ notificationsApi.post("/build-notifications/read", async (c) => {
     eq(notifications.userId, c.get("user").id), inArray(notifications.type, buildTypes),
     isNull(notifications.readAt), body.id ? eq(notifications.id, body.id) : undefined,
   ));
+  broadcastToUser(c.get("user").id, { type: "notification" });
   return c.json({ ok: true });
 });
 

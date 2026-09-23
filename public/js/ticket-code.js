@@ -14,6 +14,7 @@
     const q = new URLSearchParams({ base, ...extra });
     const r = await fetch(api + action + '?' + q, { credentials: 'same-origin', ...(body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}) });
     const data = await r.json();
+    if (r.status === 202 && data.preparing) { status(data.message || 'Restoring ticket workspace…'); $('connection').textContent = '◌ Restoring'; await new Promise(resolve => setTimeout(resolve, 2000)); return request(action, body, extra); }
     if (!r.ok || data.error) throw new Error(data.error || 'Request failed');
     return data;
   }
@@ -37,7 +38,7 @@
   function discard() { return !dirty || window.confirm('Discard your unsaved edits and continue?'); }
   async function refresh(initial = false) {
     if (busy || (!initial && !discard())) return;
-    busy = true; controls(); status('Reading ticket checkout…'); message('');
+    busy = true; controls(); status('Opening ticket workspace…'); message(''); $('connection').textContent = '◌ Connecting';
     try {
       const data = await request('tree'); files = data.files; canEdit = data.canEdit;
       $('branch').textContent = data.branch; $('branch').title = data.branch;
@@ -51,7 +52,7 @@
       busy = false;
       if (next) await openFile(next.path, true);
       controls();
-    } catch (e) { busy = false; canEdit = false; controls(); message(e.message); status('Checkout unavailable'); $('connection').textContent = '◌ Unavailable'; $('command').disabled = $('run-command').disabled = true; }
+    } catch (e) { busy = false; canEdit = false; controls(); message(e.message); status('Checkout unavailable'); if (!files.length) { $('change-count').textContent = '—'; $('file-list').textContent = 'Could not load ticket files. Refresh to retry.'; } $('connection').textContent = '◌ Unavailable'; $('command').disabled = $('run-command').disabled = true; }
   }
   async function openFile(path, force = false) {
     if (busy || (!force && !discard())) return;

@@ -3102,3 +3102,60 @@ input:checked + .turbo-slider + .turbo-label,
 @media(hover:none) {
   .message > .message-footer .message-copy-btn { opacity:1; pointer-events:auto; }
 }
+
+/* Header tools stay in the header instead of covering the conversation. */
+.chat-header-actions {display:flex;align-items:center;gap:8px;flex-shrink:0;}
+.chat-header-actions .artifacts-button,
+.chat-header-actions #build-inbox-button {position:relative;inset:auto;width:36px;height:36px;display:flex;align-items:center;justify-content:center;padding:0;border:1px solid var(--border-color);border-radius:8px;background:transparent;color:var(--text-color);box-shadow:none;font-size:16px;transform:none;}
+.chat-header-actions .artifacts-button:hover,
+.chat-header-actions #build-inbox-button:hover {background:rgba(139,92,246,.08);transform:none;box-shadow:none;}
+.chat-header-actions #build-inbox-button .nav-text {display:none;}
+.chat-header-actions .build-unread {right:-5px;top:-5px;}
+.message .message-copy-btn.copied {width:auto!important;min-width:64px;padding:0 8px!important;white-space:nowrap;}
+.message.assistant.message-collapsed > .message-content {max-height:none;overflow:visible;}
+
+/* Override legacy floating-button theme rules for the inline chat tools. */
+[data-theme] .chat-container .project-header {border-bottom:0!important;box-shadow:none!important;}
+[data-theme] .chat-header-actions .artifacts-button,
+[data-theme] .chat-header-actions .artifacts-button:hover,
+[data-theme] .chat-header-actions .artifacts-button.active,
+[data-theme] .chat-header-actions #build-inbox-button {background:transparent!important;color:var(--text-secondary,#64748b)!important;border:1px solid var(--border-color,#dce2ed)!important;box-shadow:none!important;transform:none!important;animation:none!important;transition:none!important;}
+[data-theme] .chat-header-actions .artifacts-button:hover,
+[data-theme] .chat-header-actions #build-inbox-button:hover {background:rgba(127,127,127,.08)!important;}
+[data-theme] .chat-header-actions svg {color:inherit!important;transform:none!important;animation:none!important;transition:none!important;}
+
+/* Compact composer model picker: one scroll axis, no overflowing group rules. */
+#model-submenu {
+    box-sizing: border-box;
+    width: 280px;
+    min-width: 0;
+    max-width: calc(100vw - 32px);
+    max-height: min(420px, 60vh);
+    padding: 6px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-color, #cbd5e1) transparent;
+}
+#model-submenu .submenu-group {
+    margin: 6px 0 3px;
+    padding: 10px 10px 5px;
+    font-size: 10px;
+    letter-spacing: .07em;
+}
+#model-submenu .submenu-group:first-child { margin-top: 0; border-top: 0; }
+#model-submenu .submenu-option {
+    box-sizing: border-box;
+    min-height: 36px;
+    padding: 8px 10px;
+    margin-bottom: 2px;
+    gap: 12px;
+    font-size: 13px;
+    line-height: 20px;
+}
+#model-submenu .submenu-option span { min-width: 0; overflow-wrap: anywhere; }
+#model-submenu .submenu-option i { flex: 0 0 12px; }
+#model-submenu::-webkit-scrollbar { width: 5px; height: 0; }
+#model-submenu::-webkit-scrollbar-track { background: transparent; }
+#model-submenu::-webkit-scrollbar-thumb { background: var(--border-color, #cbd5e1); border-radius: 8px; }

@@ -4050,16 +4050,17 @@
     display: block;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
-/* Inline code: subtle accent chip, wraps so it never overflows the panel */
+/* Inline code is neutral reference text, not an action or syntax highlight. */
 #drawer-description :not(pre) > code {
-    background: rgba(124, 58, 237, 0.10);
-    color: #7c3aed;
+    background: rgba(127, 127, 127, 0.10);
+    color: var(--text-color, #e2e8f0);
+    border: 1px solid rgba(127, 127, 127, 0.20);
     padding: 1px 5px;
     border-radius: 4px;
     font-size: 0.86em;
     word-break: break-word;
 }
-[data-theme="light"] #drawer-description :not(pre) > code { color: #6d28d9; }
+
 #drawer-description table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; display: block; overflow-x: auto; }
 #drawer-description th,
 #drawer-description td { border: 1px solid rgba(127, 127, 127, 0.25); padding: 6px 10px; text-align: left; }

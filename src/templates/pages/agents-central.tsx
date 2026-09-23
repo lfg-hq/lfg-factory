@@ -1,3 +1,4 @@
+import { NotificationNav } from "../components/notification-nav.tsx";
 import { html } from "hono/html";
 
 interface AgentSummary {
@@ -49,6 +50,7 @@ export function AgentsCentralPage({ user, agents, messages }: AgentsCentralPageP
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
   <script src="/public/js/theme-switcher.js"></script>
+<link rel="stylesheet" href="/public/css/build-notifications.css?v=4" />
 </head>
 <body data-user-id="${user.id}">
   <div class="app-container">
@@ -71,6 +73,7 @@ export function AgentsCentralPage({ user, agents, messages }: AgentsCentralPageP
           </a>
         </div>
         <div class="sidebar-nav">
+          ${NotificationNav()}
           <a href="/instant/" class="nav-link">
             <i class="fas fa-bolt"></i>
             <span class="nav-text">Instant Apps</span>
@@ -186,7 +189,7 @@ export function AgentsCentralPage({ user, agents, messages }: AgentsCentralPageP
     </div>
   </div>
 
-  <script src="/public/js/sidebar.js?v=20260908-startup"></script>
+  <script src="/public/js/sidebar.js?v=20260923-tooltip-theme"></script>
   <script src="/public/js/agents.js"></script>
 </body>
 </html>`;
