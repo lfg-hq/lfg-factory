@@ -275,8 +275,10 @@ previewApi.get("/:projectId/preview/build-settings", async (c) => {
   const user = c.get("user");
   const access = await getProjectAccess(c.req.param("projectId")!, user.id);
   if (!access) return c.json({ error: "Project not found" }, 404);
-  const p = access.project as { qaMode?: string; lockedBuilderModel?: string | null; lockedBuilderAuthMode?: string | null; lockedChatModel?: string | null; ticketBuildIsolation?: string; previewBranchMode?: string; dbMode?: string; shareGitAccess?: boolean; shareChatHistory?: boolean; customInstructions?: string | null; agentShellAccess?: boolean };
+  const p = access.project as { epicBuildsEnabled?: boolean; qaMode?: string; lockedBuilderModel?: string | null; lockedBuilderAuthMode?: string | null; lockedChatModel?: string | null; ticketBuildIsolation?: string; previewBranchMode?: string; dbMode?: string; shareGitAccess?: boolean; shareChatHistory?: boolean; customInstructions?: string | null; agentShellAccess?: boolean };
   return c.json({
+    epicBuildsEnabled: !!p.epicBuildsEnabled,
+    canChangeEpicBuilds: access.role === "owner",
     customInstructions: p.customInstructions ?? "",
     agentShellAccess: !!p.agentShellAccess,
     canGrantShell: access.role === "owner",
@@ -302,6 +304,10 @@ previewApi.post("/:projectId/preview/build-settings", async (c) => {
   if (!access) return c.json({ error: "Project not found" }, 404);
   const body = await c.req.json().catch(() => ({}));
   const patch: Record<string, unknown> = {};
+  if (typeof body.epicBuildsEnabled === "boolean") {
+    if (access.role !== "owner") return c.json({ error: "Only the project owner can change the build workflow." }, 403);
+    patch.epicBuildsEnabled = body.epicBuildsEnabled;
+  }
   if (body.ticketBuildIsolation === "isolated" || body.ticketBuildIsolation === "shared") patch.ticketBuildIsolation = body.ticketBuildIsolation;
   if (body.previewBranchMode === "worktree" || body.previewBranchMode === "checkout") patch.previewBranchMode = body.previewBranchMode;
   if (body.qaMode === "off" || body.qaMode === "tests") patch.qaMode = body.qaMode;

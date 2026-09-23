@@ -2674,6 +2674,7 @@ document.addEventListener('DOMContentLoaded', function() {
          * @param {number} projectId - The ID of the current project
          */
         loadChecklist: function(projectId, append = false) {
+            if (document.body.dataset.epicBuilds === "true") return window.loadChatEpics(projectId);
             
             if (!projectId) {
                 console.warn('[ArtifactsLoader] No project ID provided for loading checklist');

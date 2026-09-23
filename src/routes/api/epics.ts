@@ -73,7 +73,8 @@ epicsApi.get("/projects/:projectId/epics", async (c) => {
     .where(eq(epics.projectId, access.project.id))
     .orderBy(desc(epics.createdAt));
 
-  if (!rows.length) return c.json({ epics: [] });
+  const workflow = { epicBuildsEnabled: !!access.project.epicBuildsEnabled, canBuildEpics: access.permissions.canManageTickets && access.permissions.canChat };
+  if (!rows.length) return c.json({ epics: [], ...workflow });
 
   // Ticket counts per epic, so the list can show progress without N queries.
   const tickets = await db
@@ -81,16 +82,21 @@ epicsApi.get("/projects/:projectId/epics", async (c) => {
       epicId: projectTickets.epicId,
       id: projectTickets.id,
       status: projectTickets.status,
+      queueStatus: projectTickets.queueStatus,
+      name: projectTickets.name,
     })
     .from(projectTickets)
     .where(inArray(projectTickets.epicId, rows.map((e) => e.id)));
 
   const DONE = new Set(["done", "review", "archived"]);
   return c.json({
+    ...workflow,
     epics: rows.map((e) => {
       const mine = tickets.filter((t) => t.epicId === e.id);
       return {
         ...e,
+        currentActivity: mine.find(t => t.queueStatus === "executing")?.name ?? null,
+        buildStatus: mine.some(t => ["queued","executing","stopping"].includes(t.queueStatus)) ? "Building" : mine.some(t => ["failed","blocked","stopped"].includes(t.status)) ? "Needs attention" : mine.length && mine.every(t => DONE.has(t.status)) ? "Ready for review" : "Planning",
         ticketCount: mine.length,
         ticketsBuilt: mine.filter((t) => DONE.has(t.status)).length,
       };

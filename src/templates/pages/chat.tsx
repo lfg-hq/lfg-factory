@@ -6,6 +6,7 @@ interface ChatPageProps {
   user: { id: string; name: string; email: string };
   projectId: string;
   projectName: string;
+  epicBuildsEnabled?: boolean;
   conversationId?: string;
   modelKey?: string;
   roleKey?: string;
@@ -16,6 +17,7 @@ export function ChatPage({
   user,
   projectId,
   projectName,
+  epicBuildsEnabled = false,
   conversationId,
   modelKey = "claude_4.5_sonnet",
   roleKey = "product_analyst",
@@ -32,7 +34,7 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
   <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
-  <link rel="stylesheet" href="/public/css/artifacts.css?v=20260923-compact-docs" />
+  <link rel="stylesheet" href="/public/css/artifacts.css?v=20260924-epic-builds" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
   <link rel="stylesheet" href="/public/css/chat.css?v=20260923-model-picker" />
   <link rel="stylesheet" href="/public/css/artifacts-fix.css" />
@@ -67,7 +69,7 @@ export function ChatPage({
   <script src="/public/js/theme-switcher.js"></script>
 <link rel="stylesheet" href="/public/css/build-notifications.css?v=4" />
 </head>
-<body
+<body data-epic-builds="${epicBuildsEnabled ? "true" : "false"}"
   data-user-id="${user.id}"
   data-user-name="${user.name}"
   data-project-id="${projectId}"
@@ -272,7 +274,7 @@ export function ChatPage({
     <div class="artifacts-tabs artifacts-tabs-managed" style="display:flex;justify-content:space-between;align-items:center;">
       <div class="artifacts-tabs-list" id="artifacts-tabs-list">
         <button class="tab-button active" data-tab="filebrowser">Docs</button>
-        <button class="tab-button" data-tab="checklist">Tickets</button>
+        <button class="tab-button" data-tab="checklist">${epicBuildsEnabled ? "Epics" : "Tickets"}</button>
         <button class="tab-button" data-tab="preview">Preview</button>
         <button class="tab-button" data-tab="env">Env</button>
       </div>
@@ -294,7 +296,7 @@ export function ChatPage({
         <div class="tab-pane" id="checklist">
           <div class="empty-state">
             <div class="empty-state-icon"><i class="fas fa-check-square"></i></div>
-            <div class="empty-state-text">No checklist items created yet.</div>
+            <div class="empty-state-text">${epicBuildsEnabled ? "Describe a feature in chat to start an epic." : "No checklist items created yet."}</div>
           </div>
         </div>
 
@@ -461,7 +463,8 @@ export function ChatPage({
   <script src="/public/js/marked.min.js"></script>
   <script src="/public/js/markdown-config.js"></script>
   <!-- PDF libraries load on demand when exporting a document. -->
-  <script src="/public/js/artifacts-loader.js?v=20260923-compact-docs"></script>
+  <script src="/public/js/chat-epics.js"></script>
+  <script src="/public/js/artifacts-loader.js?v=20260924-epic-builds"></script>
   <script src="/public/js/document-comments.js"></script>
   <script src="/public/js/artifacts.js"></script>
   <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20260923-inline-history" />
@@ -472,7 +475,7 @@ export function ChatPage({
   <script src="/public/js/tab-overflow.js"></script>
   <script src="/public/js/sidebar.js?v=20260923-tooltip-theme"></script>
   <script src="/public/js/custom-dropdown.js"></script>
-  <script src="/public/js/chat.js?v=20260923-collapsed-work"></script>
+  <script src="/public/js/chat.js?v=20260924-epic-builds"></script>
   <script src="/public/js/mobile-menu.js"></script>
 
   <script>

@@ -33,7 +33,7 @@ async function handleChatPage(c: import("hono").Context, conversationId?: string
   if (!projectId) return c.text("Missing projectId", 400);
 
   const [project] = await db
-    .select({ id: projects.id, name: projects.name })
+    .select({ id: projects.id, name: projects.name, epicBuildsEnabled: projects.epicBuildsEnabled })
     .from(projects)
     .where(eq(projects.projectId, projectId));
 
@@ -52,6 +52,7 @@ async function handleChatPage(c: import("hono").Context, conversationId?: string
       user: { id: user.id, name: user.name, email: user.email ?? "" },
       projectId,
       projectName: project.name,
+      epicBuildsEnabled: project.epicBuildsEnabled,
       conversationId,
       modelKey: models.some(m => m.key === modelSel?.selectedModel) ? modelSel!.selectedModel : models[0]?.key ?? "",
       roleKey: roleRow?.name ?? "product_analyst",

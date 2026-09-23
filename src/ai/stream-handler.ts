@@ -242,6 +242,7 @@ const TOOL_LABELS: Record<string, string> = {
   retryTicket: "Retrying a ticket",
   sendTicketMessage: "Messaging the ticket agent",
   startEpic: "Starting an epic",
+  buildEpic: "Building the feature",
   addToEpic: "Adding to the epic",
   checkEpicOverlap: "Checking for overlapping work",
   getEpicStatus: "Checking epic status",
@@ -720,6 +721,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   }
 
   // ── Query project context flags (for product prompt) ──────────────────────
+  let epicBuildsEnabled = false;
   let projectFlags: {
     hasTickets: boolean;
     hasDocs: boolean;
@@ -730,10 +732,11 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
 
   if (!instantMode && internalProjectId) {
     const [proj, files, tickets] = await Promise.all([
-      db.select({ repoUrl: projects.repoUrl }).from(projects).where(eq(projects.id, internalProjectId)).then(r => r[0]),
+      db.select({ repoUrl: projects.repoUrl, epicBuildsEnabled: projects.epicBuildsEnabled }).from(projects).where(eq(projects.id, internalProjectId)).then(r => r[0]),
       db.select({ fileType: projectFiles.fileType }).from(projectFiles).where(eq(projectFiles.projectId, internalProjectId)),
       db.select({ id: projectTickets.id }).from(projectTickets).where(eq(projectTickets.projectId, internalProjectId)).limit(1),
     ]);
+    epicBuildsEnabled = !!proj?.epicBuildsEnabled && !agentRecord;
     const fileTypes = new Set(files.map(f => f.fileType));
     projectFlags = {
       hasTickets: tickets.length > 0,
@@ -886,6 +889,13 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   // other provider caching is automatic given our stable [system][tools][history]
   // ordering, so this is a no-op that returns the inputs unchanged.
   tools = withConversationContext(readingTools(tools, userMessage), convId, userId);
+  if (epicBuildsEnabled && internalProjectId) {
+    const { buildEpicTool, EPIC_BUILD_PROMPT } = await import('./tools/epic-build-tools.ts');
+    tools = { ...tools, buildEpic: buildEpicTool({ projectId: internalProjectId, userId, conversationId: convId }) };
+    for (const name of ['createTickets','createTicket','queueTicketExecution','retryTicket','startBuildRun','getPendingTickets','getNextTicket','scheduleTickets','listTicketsForEpic','getBuildRunStatus','getTicketDetails','updateTicket','updateTicketDetails','updateAllTickets','sendTicketMessage']) delete tools[name];
+    systemPrompt += EPIC_BUILD_PROMPT;
+  }
+
   const repositoryCache = new Map<string, Response>();
   systemPrompt += READING_INSTRUCTIONS;
   const cached = withCaching(modelKey, { system: systemPrompt, messages: contextMessages });

@@ -29,6 +29,7 @@ import { messages } from "../db/schema/chat.ts";
 import { emit } from "../events/bus.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { getEpic } from "./epics.ts";
+import { epics } from "../db/schema/epics.ts";
 
 /** run_type marker so these rows are distinguishable from other agent runs. */
 const RUN_TYPE = "ticket_build_chain";
@@ -38,6 +39,7 @@ const EXEC_TYPE = "code_implementation";
 export type AfterBuild = "preview" | "none";
 
 interface RunPlan {
+  epicBuild?: boolean;
   epicId?: string | null;
   afterBuild: AfterBuild;
   /** Ticket keys in order, purely so the plan reads sensibly in the database. */
@@ -63,6 +65,7 @@ export async function createBuildRun(opts: {
   epicId?: string | null;
   afterBuild?: AfterBuild;
   triggerMessage?: string;
+  epicBuild?: boolean;
 }): Promise<{ runId: string; queued: number; firstTicketId: string | null }> {
   const ids = [...new Set(opts.ticketIds.filter(Boolean))];
   if (!ids.length) return { runId: "", queued: 0, firstTicketId: null };
@@ -78,6 +81,7 @@ export async function createBuildRun(opts: {
 
   const epicId = opts.epicId ?? byId.get(ordered[0]!)?.epicId ?? null;
   const plan: RunPlan = {
+    epicBuild: opts.epicBuild ?? false,
     epicId,
     afterBuild: opts.afterBuild ?? "preview",
     order: ordered.map((id) => byId.get(id)?.key ?? id.slice(0, 8)),
@@ -151,7 +155,7 @@ export async function onTicketFinished(ticketId: string, status: "complete" | "f
     if (run?.status === "blocked") {
       await db.update(agentRuns).set({ status: "running", updatedAt: new Date() }).where(eq(agentRuns.id, item.agentRunId));
       await logRunEvent(item.agentRunId, item.id, "run_unblocked", { ticketId });
-      await announce(item.agentRunId, `▶️ **${item.title || "That ticket"} passed on retry — resuming the chain.**`);
+      await announce(item.agentRunId, `▶️ **${item.title || "That ticket"} passed on retry — resuming the chain.**`, "The issue is resolved. Resuming the feature build.");
     }
   }
 
@@ -164,7 +168,7 @@ export async function onTicketFinished(ticketId: string, status: "complete" | "f
     await announce(item.agentRunId,
       `⛔ **Build chain paused** — ${item.title || "a ticket"} failed.\n\n` +
       `${remaining.length} ticket${remaining.length === 1 ? "" : "s"} still queued behind it. ` +
-      `Open the ticket's Actions tab for the failure, then retry it — the chain picks up from there.`);
+      `Open the ticket's Actions tab for the failure, then retry it — the chain picks up from there.`, "The feature build paused because an implementation step failed. Review the feature and ask me to retry when you’re ready.");
     return true;
   }
 
@@ -211,7 +215,7 @@ async function dispatchNext(runId: string): Promise<string | null> {
       .set({ queueStatus: "queued", queuedAt: new Date(), updatedAt: new Date() })
       .where(eq(projectTickets.id, item.ticketId));
     await logRunEvent(runId, item.id, "ticket_queued", { ticketId: item.ticketId });
-    await setBuildOrigin(item.ticketId, run.conversationId || null, run.userId);
+    await setBuildOrigin(item.ticketId, run.conversationId || null, run.userId, !!(run.plan as RunPlan)?.epicBuild);
     await reportBuildStatus(item.ticketId, "queued", "Build queued.");
     emit({ type: "ticket.queued", ticketId: item.ticketId, projectId: run.projectId });
     return item.ticketId;
@@ -234,7 +238,7 @@ async function finishRun(runId: string): Promise<void> {
   const list = built.map((b) => `- ${b.title}`).join("\n");
 
   if (plan.afterBuild !== "preview") {
-    await announce(runId, `✅ **All ${built.length} ticket${built.length === 1 ? "" : "s"} built.**\n\n${list}`);
+    await announce(runId, `✅ **All ${built.length} ticket${built.length === 1 ? "" : "s"} built.**\n\n${list}`, "The feature build is complete and ready for review.");
     return;
   }
 
@@ -242,11 +246,11 @@ async function finishRun(runId: string): Promise<void> {
   const epic = plan.epicId ? await getEpic(plan.epicId).catch(() => null) : null;
   const branch = epic?.branch;
   if (!branch) {
-    await announce(runId, `✅ **All ${built.length} ticket${built.length === 1 ? "" : "s"} built.**\n\n${list}\n\nOpen the **Preview** tab to run the branch.`);
+    await announce(runId, `✅ **All ${built.length} ticket${built.length === 1 ? "" : "s"} built.**\n\n${list}\n\nOpen the **Preview** tab to run the branch.`, "The feature is built. Open Preview to start it.");
     return;
   }
 
-  await announce(runId, `✅ **All ${built.length} ticket${built.length === 1 ? "" : "s"} built.**\n\n${list}\n\n🚀 Starting the preview for \`${branch}\` — I'll post the URL here when it's up.`);
+  await announce(runId, `✅ **All ${built.length} ticket${built.length === 1 ? "" : "s"} built.**\n\n${list}\n\n🚀 Starting the preview for \`${branch}\` — I'll post the URL here when it's up.`, "The feature is built. Starting its preview now.");
   await logRunEvent(runId, null, "preview_starting", { branch });
 
   try {
@@ -261,10 +265,12 @@ async function finishRun(runId: string): Promise<void> {
       await announce(runId, `⚠️ The build finished, but the preview didn't start: ${res.error}\n\nYou can retry it from the **Preview** tab.`);
       return;
     }
+    if (!res.previewUrl) throw new Error("Preview did not return a URL");
+    if (plan.epicBuild && epic) await db.update(epics).set({ previewUrl:res.previewUrl, updatedAt:new Date() }).where(eq(epics.id,epic.id));
     await logRunEvent(runId, null, "preview_ready", { branch, url: res.previewUrl });
     await announce(runId,
       `🔗 **${epic?.name ?? "The epic"} is live on \`${branch}\`**\n\n${res.previewUrl}\n\n` +
-      `That's all ${built.length} ticket${built.length === 1 ? "" : "s"} running together — try it and tell me what to change.`);
+      `That's all ${built.length} ticket${built.length === 1 ? "" : "s"} running together — try it and tell me what to change.`, `**${epic?.name ?? "Your feature"} is ready to try.**\n\n${res.previewUrl}\n\nTest the preview and tell me what to change.`);
   } catch (err) {
     await logRunEvent(runId, null, "preview_failed", { branch, error: String(err) }, true);
     await announce(runId, `⚠️ The build finished, but starting the preview threw: ${(err as Error).message?.slice(0, 200)}`);
@@ -410,12 +416,14 @@ async function logRunEvent(
 }
 
 /** Post a message from the run into the conversation that started it. */
-async function announce(runId: string, content: string): Promise<void> {
+async function announce(runId: string, content: string, epicContent?: string): Promise<void> {
   const [run] = await db.select().from(agentRuns).where(eq(agentRuns.id, runId)).limit(1);
   if (!run) return;
+  const plan = (run.plan ?? {}) as RunPlan;
+  if (plan.epicBuild && epicContent) content = epicContent;
   const [proj] = await db.select({ pub: projects.projectId }).from(projects).where(eq(projects.id, run.projectId)).limit(1);
   await notify({ userId: run.userId, projectId: proj?.pub, type: "build_update", targetType: "build_run", targetId: runId,
-    message: content, link: proj ? `/projects/${proj.pub}/tickets` : null,
+    message: content, link: proj ? (plan.epicBuild ? `/projects/${proj.pub}/epics?epic=${encodeURIComponent(plan.epicId || "")}` : `/projects/${proj.pub}/tickets`) : null,
   }).catch(error => console.error("[build-queue] Notification failed:", error));
   if (!run.conversationId) return;
   if (run.conversationId) {

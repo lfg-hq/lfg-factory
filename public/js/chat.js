@@ -1083,6 +1083,7 @@ document.addEventListener('DOMContentLoaded', () => {
         
         socket.onmessage = function(event) {
             const data = JSON.parse(event.data);
+            if ((data.build_status || data.type === "epic_build_update") && document.body.dataset.epicBuilds === "true") window.dispatchEvent(new Event("epic-build-update"));
             if (data.type === "notification") {
                 window.dispatchEvent(new CustomEvent("build-notification", { detail: data.notification }));
                 return;
@@ -2049,6 +2050,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // ── Ticket streaming: switch to Task List tab and reload the proper ticket list ──
             if (data.notification_type === 'ticket_stream' && data.ticket) {
+                if (document.body.dataset.epicBuilds === 'true') { window.loadChatEpics?.(document.body.dataset.projectId); return; }
                 // Open panel + switch to checklist tab
                 if (window.ArtifactsPanel && typeof window.ArtifactsPanel.toggle === 'function') {
                     window.ArtifactsPanel.toggle(true);

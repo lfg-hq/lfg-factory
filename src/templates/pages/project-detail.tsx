@@ -1325,6 +1325,12 @@ export function ProjectDetailPage({
         ${activeTab === "config" && modelConfig ? html`
         <div style="max-width:820px;">
           <div class="agent-card">
+            <div class="agent-card-head"><div><h3>Build workflow</h3><p>Build a whole feature from its approved requirements. Chat shows epics and previews; implementation tickets remain available in Tickets.</p></div></div>
+            <label style="display:flex;gap:10px;align-items:center;"><input id="cfg-epic-builds" type="checkbox" disabled /> Build features as epics</label>
+            <p id="cfg-epic-builds-status" role="status" style="font-size:12px;color:var(--text-secondary)">Loading setting…</p>
+          </div>
+          <script src="/public/js/epic-build-settings.js"></script>
+          <div class="agent-card">
             <div class="agent-card-head">
               <div>
                 <h3>Ticket builds</h3>

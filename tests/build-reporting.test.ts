@@ -1,6 +1,7 @@
 import { test, expect, mock } from 'bun:test';
 import { ticketLogs, projectTickets } from '../src/db/schema/tickets.ts';
 import { projects } from '../src/db/schema/projects.ts';
+import { epics } from '../src/db/schema/epics.ts';
 import { messages } from '../src/db/schema/chat.ts';
 
 let origin: any;
@@ -10,8 +11,8 @@ mock.module('../src/config/db.ts', () => ({ db: {
   select() { let table: any; const q: any = {
     from(t: any) { table = t; return q; }, where() { return q; },
     limit() { return Promise.resolve(table === ticketLogs ? (origin ? [origin] : []) : table === projectTickets
-      ? [{name:'Example', ticketKey:'T-1', projectId:'internal', conversationId:'creation-chat'}]
-      : table === projects ? [{ownerId:'owner', projectId:'public'}] : []); },
+      ? [{name:'Example', ticketKey:'T-1', projectId:'internal', epicId:'epic', conversationId:'creation-chat'}]
+      : table === projects ? [{ownerId:'owner', projectId:'public'}] : table === epics ? [{name:'Feature'}] : []); },
   }; return q; },
   insert(table: any) { return { values(value: any) {
     if (table === ticketLogs) return {onConflictDoUpdate() { origin = value; return Promise.resolve(); }};
@@ -46,4 +47,15 @@ test('unavailable chat cannot fail the build and the notification is already sav
   await setBuildOrigin('ticket','request-chat','requester'); rejectChat = true;
   await expect(reportBuildStatus('ticket','complete','Passed')).resolves.toBeUndefined();
   expect(notices.at(-1).type).toBe('build_complete');
+});
+
+test('epic builds persist their presentation mode and report feature updates without ticket chat messages', async () => {
+  const count=chats.length;
+  await setBuildOrigin('ticket','epic-chat','requester',true);
+  expect(await getBuildOrigin('ticket')).toMatchObject({epicBuild:true,conversationId:'epic-chat'});
+  await reportBuildStatus('ticket','started','Build started');
+  await reportBuildStatus('ticket','failed','T-1 failed');
+  expect(chats.length).toBe(count);
+  expect(sockets.at(-1)).toMatchObject({type:'epic_build_update',epic_id:'epic'});
+  expect(notices.at(-1)).toMatchObject({targetType:'epic',message:'Feature: Needs attention'});
 });
