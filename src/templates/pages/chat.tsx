@@ -464,6 +464,7 @@ export function ChatPage({
   <script src="/public/js/markdown-config.js"></script>
   <!-- PDF libraries load on demand when exporting a document. -->
   <script src="/public/js/chat-epics.js"></script>
+  <script src="/public/js/design-preview.js"></script>
   <script src="/public/js/artifacts-loader.js?v=20260924-epic-builds"></script>
   <script src="/public/js/document-comments.js"></script>
   <script src="/public/js/artifacts.js"></script>

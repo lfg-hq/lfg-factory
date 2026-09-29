@@ -1,0 +1,45 @@
+import { Database } from 'bun:sqlite';
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import assert from 'node:assert/strict';
+import { eq } from 'drizzle-orm';
+const root=mkdtempSync(join(tmpdir(),'design-recovery-test-'));
+process.env.DATABASE_URL=join(root,'test.db');
+process.env.DATABASE_DRIVER='sqlite';process.env.BETTER_AUTH_SECRET='design-test-only';process.env.BETTER_AUTH_URL='http://localhost:8000';process.env.FILE_STORAGE_TYPE='local';
+try {
+ const generation=Bun.spawnSync(['bun','node_modules/drizzle-kit/bin.cjs','generate','--dialect','sqlite','--schema','./src/db/schema/sqlite/index.ts','--out',join(root,'schema')]);
+ if(generation.exitCode)throw new Error(generation.stderr.toString());
+ const sqlite=new Database(process.env.DATABASE_URL);
+ for(const file of readdirSync(join(root,'schema')).filter(f=>f.endsWith('.sql')))sqlite.exec(readFileSync(join(root,'schema',file),'utf8'));
+ sqlite.close();
+ const {db}=await import('../src/config/db.ts');
+ const {users}=await import('../src/db/schema/users.ts');
+ const {projects}=await import('../src/db/schema/projects.ts');
+ const {epics}=await import('../src/db/schema/epics.ts');
+ const {projectFiles}=await import('../src/db/schema/documents.ts');
+ const {projectTickets}=await import('../src/db/schema/tickets.ts');
+ const {previewPage}=await import('../src/ai/tools/document-tools.ts');
+ const {createTickets}=await import('../src/ai/tools/ticket-tools.ts');
+ await db.insert(users).values({id:'owner',name:'Owner',email:'owner@example.test'});
+ for(const id of ['project','other'])await db.insert(projects).values({id,projectId:id,name:id,ownerId:'owner'});
+ await db.insert(epics).values({id:'epic',projectId:'project',name:'Design',createdById:'owner'});
+ const html='<!doctype html><html><head><title>Screen</title></head><body><button>Save</button></body></html>';
+ const preview=(args:any)=>previewPage.execute!(args,{} as any) as Promise<any>;
+ const create=(ids:string[]=[])=>createTickets.execute!({projectId:'project',userId:'owner',epicId:'epic',tickets:[{name:'Screens',description:'Match approved screens',acceptanceCriteria:['Match layout','Use real data'],priority:'Medium',complexity:'medium',approvedDesignDocumentIds:ids}]},{} as any) as Promise<any>;
+ const drafts=[];
+ for(let i=0;i<6;i++)drafts.push(await preview({projectId:'project',userId:'owner',name:`Screen ${i}`,html,css:'button{color:red}',js:'document.title=window.mockData.title',data:{title:'Dummy'}}));
+ const result=await create([...drafts.map(d=>d.id),drafts[0].id]);
+ const [ticket]=await db.select().from(projectTickets).where(eq(projectTickets.id,result.tickets[0].id));
+ const ids=ticket!.description!.match(/[0-9a-f]{8}-[0-9a-f-]{27}/g)!;
+ assert.equal(ids.length,6);
+ for(const id of ids){assert.ok(!drafts.some(d=>d.id===id));const [copy]=await db.select().from(projectFiles).where(eq(projectFiles.id,id));assert.ok(copy!.content!.includes('window.mockData'));assert.ok(copy!.content!.includes('button{color:red}'));}
+ await preview({projectId:'project',userId:'owner',name:'Screen 0',html:html.replace('Save','Changed')});
+ const [copy]=await db.select().from(projectFiles).where(eq(projectFiles.id,ids[0]!));assert.ok(copy!.content!.includes('Save'));assert.ok(!copy!.content!.includes('Changed'));
+ const foreign=await preview({projectId:'other',userId:'owner',name:'Foreign',html});
+ await assert.rejects(()=>create([foreign.id]),/not a preview in this project/);
+ await assert.rejects(()=>create([crypto.randomUUID()]),/not a preview in this project/);
+ assert.equal((await db.select().from(projectTickets)).length,1);
+ assert.equal((await create()).created,1);
+ console.log('PASS: six screens, preserved assets, deduplication, stable accepted copies, project isolation, no-design path');
+}finally{rmSync(root,{recursive:true,force:true});}

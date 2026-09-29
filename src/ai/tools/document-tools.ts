@@ -6,6 +6,7 @@ import { projectFiles, projectFileVersions } from "../../db/schema/documents.ts"
 import { eq } from "drizzle-orm";
 import { emitFileCreated, emitFileUpdated } from "../../events/emitters.ts";
 import { saveContent, getContent } from "../../services/s3.ts";
+import { composeDesignPreview } from "../../services/design-preview.ts";
 import { linkDocsToEpic } from "../../services/epics.ts";
 
 let _wsBroadcast: ((userId: string, data: object) => void) | null = null;
@@ -82,6 +83,7 @@ export const streamDocumentContent = tool({
 
 export const previewPage = tool({
   description:
+    "Show a page or app screen; call once per named screen for multi-screen features. Follow the design-feature skill for app UI. " +
     "Show the user a REAL, rendered preview of a page — a self-contained HTML document " +
     "(all CSS inline in a <style> block, no external files, no build step) that appears " +
     "as an expandable card in the chat. " +
@@ -90,12 +92,14 @@ export const previewPage = tool({
     "chat first — settle the words, ask 'want me to render a preview?', then call this. " +
     "Do not call it again for every small text edit; batch them, or wait to be asked. " +
     "Match the app's existing palette and typography when the project has one. " +
-    "The preview is saved as a project document, and the id it returns MUST be quoted in " +
-    "the ticket you create so the build agent works from the approved design.",
+    "The preview is saved as a draft. After acceptance, pass its ID in createTickets.approvedDesignDocumentIds to preserve the accepted design.",
   inputSchema: zodSchema(
     z.object({
       projectId: z.string(),
       userId: z.string().describe("The user's ID — used to push the preview into their chat"),
+      css: z.string().optional().describe("App-matching CSS embedded in a style block"),
+      js: z.string().optional().describe("Local mock interactions; no network or real mutations"),
+      data: z.unknown().optional().describe("Synthetic JSON exposed as window.mockData"),
       name: z.string().describe("What this page is, e.g. 'RingDesk landing page'"),
       epicId: z.string().optional().describe("Related epic; links this preview to the feature."),
       html: z
@@ -107,7 +111,8 @@ export const previewPage = tool({
         ),
     })
   ),
-  execute: async ({ projectId, userId, name, html, epicId }, options) => {
+  execute: async ({ projectId, userId, name, html, css, js, data, epicId }, options) => {
+    html = composeDesignPreview({ html, css, js, data });
     const fileType = "page_preview";
     const { s3Key, dbContent } = await saveContent(projectId, fileType, name, html);
 
@@ -132,6 +137,8 @@ export const previewPage = tool({
       saved: true,
       id: file!.id,
       name,
+      status: "draft",
+      approvalRequired: "Wait for user acceptance before passing this ID in approvedDesignDocumentIds to createTickets.",
       // Say it plainly so the model quotes the id in the ticket rather than paraphrasing.
       referenceForTicket: `Approved design preview: document ${file!.id} ("${name}") — build the page to match it.`,
     };

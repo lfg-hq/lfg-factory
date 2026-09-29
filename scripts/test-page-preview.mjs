@@ -45,6 +45,7 @@ globalThis.document = {
 };
 globalThis.scrollToBottom = () => {};
 globalThis.window = { currentProjectId: "pub-1", open: () => {} };
+new Function(fs.readFileSync("public/js/design-preview.js", "utf8"))();
 globalThis.extractProjectIdFromPath = () => "pub-1";
 globalThis.Blob = class {};
 globalThis.URL = { createObjectURL: () => "blob:x" };
