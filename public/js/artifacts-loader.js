@@ -8060,10 +8060,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
                         const showRender = () => {
                             const frame = document.createElement('iframe');
-                            // Sandboxed with no flags: model-authored markup gets no
-                            // scripts, no forms and no access to this origin.
-                            frame.setAttribute('sandbox', '');
-                            frame.srcdoc = content;
+                            window.DesignPreview.configure(frame, content);
                             frame.className = 'pv-doc-frame';
                             body.innerHTML = '';
                             body.appendChild(frame);
@@ -8082,10 +8079,7 @@ document.addEventListener('DOMContentLoaded', function() {
                             if (!btn) return;
                             const mode = btn.getAttribute('data-pvdoc');
                             if (mode === 'open') {
-                                // Blob URL, so the page opens on its own opaque origin
-                                // rather than inheriting this one.
-                                const blob = new Blob([content], { type: 'text/html' });
-                                window.open(URL.createObjectURL(blob), '_blank', 'noopener');
+                                window.DesignPreview.open(content);
                                 return;
                             }
                             wrap.querySelectorAll('.pv-doc-tab').forEach((t) => t.classList.remove('is-on'));

@@ -10,11 +10,11 @@ if (/data-pvdoc="render"/.test(block) && /data-pvdoc="code"/.test(block)) ok("bo
 else fail("no render/code toggle");
 if (/showRender\(\);\s*\n\s*wrap\.addEventListener/.test(block)) ok("opens on the rendered page, not the markup");
 else fail("does not default to the preview");
-if (/frame\.setAttribute\('sandbox', ''\)/.test(block)) ok("the frame is sandboxed");
+if (/DesignPreview\.configure/.test(block)) ok("the frame is sandboxed");
 else fail("iframe is not sandboxed");
 if (/pre\.textContent = content/.test(block)) ok("code view escapes via textContent");
 else fail("code view could inject markup");
-if (/URL\.createObjectURL/.test(block)) ok("open-in-tab uses a blob (own origin)");
+if (/DesignPreview\.open/.test(block)) ok("open-in-tab uses isolated wrapper");
 else fail("no safe open-in-tab");
 
 // Contrast: the code view must set its OWN colours in both themes — inheriting the

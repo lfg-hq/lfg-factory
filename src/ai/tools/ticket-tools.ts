@@ -8,6 +8,8 @@ import {
   projectTodoLists,
   projectTicketAttachments,
 } from "../../db/schema/tickets.ts";
+import { projectFiles } from "../../db/schema/documents.ts";
+import { readApprovedDesigns, approvedDesignReferences } from "../../services/approved-designs.ts";
 import { projects } from "../../db/schema/projects.ts";
 import { chatFiles } from "../../db/schema/chat.ts";
 import { eq, and, inArray } from "drizzle-orm";
@@ -62,6 +64,7 @@ export const createTickets = tool({
       complexity: z.enum(["simple", "medium", "complex"]).default("medium"),
       stageId: z.string().optional(),
       sourceDocumentId: z.string().optional(),
+      approvedDesignDocumentIds: z.array(z.string().uuid()).max(20).optional().describe("Preview IDs explicitly accepted by the user. Include all relevant screens; never drafts. Independent copies are referenced in the ticket."),
       notes: z.string().optional(),
       attachmentImageIds: z.array(z.string()).optional().describe(
         "Image/file ids of attachments the user provided THIS turn to attach to this ticket. " +
@@ -71,6 +74,8 @@ export const createTickets = tool({
     })),
   })),
   execute: async ({ projectId, userId, epicId, epicName, conversationId, tickets }) => {
+    const approvedDesigns = await readApprovedDesigns(projectId, tickets.flatMap((t) => t.approvedDesignDocumentIds ?? []));
+
     // Fetch all stages for this project so we can validate stageId
     const allStages = await db.select().from(ticketStages)
       .where(eq(ticketStages.projectId, projectId));
@@ -109,12 +114,25 @@ export const createTickets = tool({
 
       const ticketKey = await nextTicketKey(projectId, projectName);
 
+      // Copy accepted screens so future draft refreshes do not change this ticket.
+      const accepted = [...new Set(t.approvedDesignDocumentIds ?? [])].map((id) => approvedDesigns.find((design) => design.id === id)!);
+      const snapshots = [];
+      for (const design of accepted) {
+        const id = crypto.randomUUID();
+        const [snapshot] = await db.insert(projectFiles).values({
+          id, projectId, epicId: "", fileType: "page_preview",
+          name: `${design.name} — accepted ${ticketKey} (${id})`,
+          content: design.content, s3Key: null,
+        }).returning();
+        snapshots.push({ id: snapshot!.id, name: design.name });
+      }
+      const description = t.description + approvedDesignReferences(snapshots);
       const [row] = await db.insert(projectTickets).values({
         projectId,
         epicId: resolvedEpicId,
         ticketKey,
         name: t.name,
-        description: t.description,
+        description,
         acceptanceCriteria: t.acceptanceCriteria,
         priority: t.priority,
         complexity: t.complexity,
@@ -153,7 +171,7 @@ export const createTickets = tool({
           ticket: {
             id: row!.id,
             name: row!.name,
-            description: t.description,
+            description,
             priority: t.priority,
             complexity: t.complexity,
             stage: backlog?.name ?? "Backlog",

@@ -2688,11 +2688,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 const html = (j && j.content) || '';
                 if (!html.trim()) { body.innerHTML = '<div class="page-preview-loading">This preview is empty.</div>'; return; }
                 const frame = document.createElement('iframe');
-                // Sandboxed: this is model-authored markup rendering inside the app, so it
-                // gets no scripts, no forms and no access back to this origin.
-                frame.setAttribute('sandbox', '');
+                window.DesignPreview.configure(frame, html);
                 frame.setAttribute('loading', 'lazy');
-                frame.srcdoc = html;
                 body.innerHTML = '';
                 body.appendChild(frame);
                 card.dataset.html = html;
@@ -2724,10 +2721,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 card.classList.toggle('is-full');
                 syncPreviewChrome(card);
             } else if (act === 'open') {
-                // A blob URL rather than document.write, so the page opens on its own
-                // opaque origin instead of inheriting this one.
-                const blob = new Blob([card.dataset.html || ''], { type: 'text/html' });
-                window.open(URL.createObjectURL(blob), '_blank', 'noopener');
+                window.DesignPreview.open(card.dataset.html || '');
             }
         });
         return card;

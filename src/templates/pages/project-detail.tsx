@@ -1107,6 +1107,7 @@ export function ProjectDetailPage({
                "PDF generation library not loaded". Same-origin can't be blocked. -->
           <script src="/public/js/jspdf.umd.min.js"></script>
           <script src="/public/js/html2canvas.min.js"></script>
+          <script src="/public/js/design-preview.js"></script>
           <script src="/public/js/artifacts-loader.js"></script>
           <script src="/public/js/document-comments.js"></script>
           <script>

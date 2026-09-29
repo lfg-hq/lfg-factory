@@ -702,12 +702,12 @@ async function materializeTicketDocs(args: {
     if (!rows.length) return [];
 
     const out: Array<{ name: string; fileType: string; path: string }> = [];
-    for (const f of rows.slice(0, 4)) {           // a ticket referencing more is a smell
+    for (const f of rows) {
       const content = await getContent(f.s3Key, f.content).catch(() => "");
       if (!content || content.length > 400_000) continue;
       const ext = f.fileType === "page_preview" ? "html" : "md";
       const slug = (f.name || f.id).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) || f.id;
-      const path = `${args.projectDir}/.lfg/design/${slug}.${ext}`;
+      const path = `${args.projectDir}/.lfg/design/${slug}-${f.id}.${ext}`;
       const b64 = Buffer.from(content).toString("base64");
       const script = `mkdir -p ${args.projectDir}/.lfg/design && echo ${b64} | base64 -d > ${path} && wc -c < ${path}`;
       const scriptB64 = Buffer.from(script).toString("base64");

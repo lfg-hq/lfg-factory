@@ -476,6 +476,7 @@ export function ChatPage({
        artifacts-loader.js so the export always has them. -->
   <script src="/public/js/jspdf.umd.min.js"></script>
   <script src="/public/js/html2canvas.min.js"></script>
+  <script src="/public/js/design-preview.js"></script>
   <script src="/public/js/artifacts-loader.js"></script>
   <script src="/public/js/document-comments.js"></script>
   <script src="/public/js/artifacts.js"></script>
