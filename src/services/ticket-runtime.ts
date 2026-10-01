@@ -1,3 +1,5 @@
+import {PiSessionInfrastructureError} from './pi-rpc.ts';
+import {runtimePrerequisiteSchema,RUNTIME_PREREQUISITES_INSTRUCTION} from './runtime-prerequisites.ts';
 import {LiveFeatureBrowser,LIVE_BROWSER_INSTRUCTION} from './live-feature-browser.ts';
 import {z} from 'zod';
 import {featureTestPlanSchema,FEATURE_TEST_INSTRUCTION} from './feature-test-plan.ts';
@@ -6,9 +8,12 @@ import {shellQuote as q} from './preview-plan.ts';
 import {runtimeRedactor, loadRuntimeEnvironment} from './ticket-runtime-environment.ts';
 import type {PublicationOptions} from './validated-git.ts';
 
-export const TICKET_RUNTIME_INSTRUCTION = `Use the existing ticket sandbox and its installed tools, caches, local configuration and database containers. Check database connectivity first; start its existing container if needed. If the required local database container or database is absent, you are authorized to create it inside this ticket development sandbox, using the installed engine or cached Docker image, the intended database names and checked-in migrations and seed data. Configure sandbox-local credentials securely and verify connectivity before running migrations. Preserve any existing database data. Missing local services are repair work, not a reason to stop and ask the user. Restore dependencies, run the app, inspect actual errors and repair any required layer. Reuse the current VM and checkout; do not reconstruct a separate baseline-upgrade validation environment. Repair or provision missing local services in this VM as needed. Run relevant feature checks. Explain the current error and your next repair in short user-facing progress messages. Do not commit or push: the server commits the accumulated implementation and repairs together only after runtime checks pass. Preserve unrelated work and never alter the main preview or external databases.`;
+export const TICKET_RUNTIME_INSTRUCTION = `Use the existing ticket sandbox and its installed tools, caches, local configuration and database containers. When the feature requires a database, check its connectivity and start its existing service if needed. If the required local database container or database is absent, you are authorized to create it inside this ticket development sandbox, using the supported local service tooling, the intended database names and checked-in migrations and seed data. Configure sandbox-local credentials securely and verify connectivity before running migrations. Preserve any existing database data. Missing local services are repair work, not a reason to stop and ask the user. Restore dependencies, run the app, inspect actual errors and repair any required layer. Reuse the current VM and checkout; do not reconstruct a separate baseline-upgrade validation environment. Repair or provision missing local services in this VM as needed. Run relevant feature checks. Explain the current error and your next repair in short user-facing progress messages. Do not commit or push: the server commits the accumulated implementation and repairs together only after runtime checks pass. Preserve unrelated work and never alter the main preview or external databases.
+${RUNTIME_PREREQUISITES_INSTRUCTION}`;
 const reportSchema=z.object({
  runId:z.string(), status:z.enum(['passed','blocked']), summary:z.string().min(1),
+ blocker:z.object({kind:z.literal('environment'),capability:z.string().min(1),diagnostic:z.string().min(1)}).optional(),
+ prerequisites:z.array(runtimePrerequisiteSchema),
  checks:z.array(z.object({label:z.string().min(1),command:z.string().min(1),category:z.string().optional(),execution:z.enum(['runtime','static']).optional()})),
  featureTest:featureTestPlanSchema.optional(),
  repairSummary:z.string().optional(),
@@ -17,30 +22,33 @@ const reportSchema=z.object({
 export type RuntimeDependencies={
  shell:(command:string)=>Promise<{exitCode:number;output:string}>;
  agent:(prompt:string)=>Promise<unknown>;
- check:(command:string)=>Promise<{exitCode:number;output:string}>;
+ check:(command:string,timeoutMs?:number)=>Promise<{exitCode:number;output:string}>;
  featureTest?:typeof import('./ticket-feature-testing.ts').runTicketFeatureTesting;
  recover?:()=>Promise<string>;
  close?:()=>Promise<void>;
  now?:()=>number;
+ budgetMs?:number;
  progress:(message:string)=>Promise<void>;
 };
 
 /** One persistent checkout, no commit until actual checks pass, no baseline reconstruction. */
 export async function runTicketRuntime(o:PublicationOptions, deps?:RuntimeDependencies, mode:{kind:"ticket"|"integration"|"promotion";baseline:string;allowDetached?:boolean;phase?:'validation'|'feature-testing'}={kind:"ticket",baseline:""}):Promise<string> {
  const now=deps?.now ?? Date.now;
- const deadline=now()+30*60_000;
+ const configured=Number(process.env.TICKET_RUNTIME_BUDGET_MINUTES || 60);
+ const budgetMs=deps?.budgetMs ?? (Number.isFinite(configured) && configured>=1 && configured<=240 ? configured : 60)*60_000;
+ const deadline=now()+budgetMs;
  let session:Awaited<ReturnType<typeof import('./merge-resolver.ts').createRuntimeRepairSession>>|undefined;
  const ctx=o.validation;const root=`/data/lfg-runtime/${crypto.randomUUID()}`;const runId=root.split('/').at(-1)!;
  const envVars=deps ? {} : await loadRuntimeEnvironment(ctx.projectId);
  const redact=runtimeRedactor(envVars);
- const log=(message:string)=>ctx.onLog?.(redact(message));
+ const log=(message:string)=>ctx.onLog?.('['+(mode.phase==='feature-testing'?'Feature testing':'Validation')+'] '+redact(message));
  let browser:LiveFeatureBrowser|undefined;
  const d:RuntimeDependencies=deps ?? {
   recover:async()=>{const {ticketResourceRecoveryScript}=await import('./ticket-resource-recovery.ts');const {validationShell}=await import('./validation-sandbox.ts');const r=await validationShell(o.workspaceId,ticketResourceRecoveryScript(o.projectDir),40_000);if(r.exitCode!==0)throw new Error('Resource inspection failed before repair; refusing overlapping retries');return redact(r.output);},
   shell:async(command:string)=>{const {validationShell}=await import('./validation-sandbox.ts');return validationShell(o.workspaceId,command);},
   agent:async(prompt:string)=>{if(!session){const {createRuntimeRepairSession}=await import('./merge-resolver.ts');session=await createRuntimeRepairSession({workspaceId:o.workspaceId,projectDir:o.projectDir,projectId:ctx.projectId,userId:ctx.userId,runId,deadline,envVars,onLog:log,cancelled:ctx.cancelled,preparationReady:mode.phase==='feature-testing'?()=>!!(browser?.started || browser?.applicabilityDecided):undefined,browser:mode.kind==='ticket' && mode.phase!=='validation' && ctx.ticketId ? input=>{browser??=new LiveFeatureBrowser({workspaceId:o.workspaceId,ticketId:ctx.ticketId!,shell:d.shell,progress:d.progress,redact});return browser.command(input);} : undefined});}return session.ask(prompt);},
   close:async()=>{await session?.close();},
-  check:async(command:string)=>{const {runValidationCommand}=await import('./validation-sandbox.ts');return runValidationCommand({workspaceId:o.workspaceId,cwd:o.projectDir,root,command,timeoutMs:Math.min(120_000,Math.max(1000,deadline-now())),cancelled:()=>!!ctx.cancelled?.() || now()>=deadline,log,vars:envVars});},
+  check:async(command:string,timeoutMs=120_000)=>{const {runValidationCommand}=await import('./validation-sandbox.ts');return runValidationCommand({workspaceId:o.workspaceId,cwd:o.projectDir,root,command,timeoutMs:Math.min(timeoutMs,Math.max(1000,deadline-now())),cancelled:()=>!!ctx.cancelled?.() || now()>=deadline,log,vars:envVars});},
   progress:async(message:string)=>{if(ctx.onCheckpoint)await ctx.onCheckpoint(redact(message));else log(message);},
  };
  let requirements='Read the implementation notes and repository tests for the affected feature.';
@@ -58,6 +66,18 @@ export async function runTicketRuntime(o:PublicationOptions, deps?:RuntimeDepend
  const initialBranch=await sh('git branch --show-current');
  if(initialBranch!==o.featureBranch && !(mode.allowDetached && initialBranch===''))throw new Error('Ticket checkout is on a different branch; refusing to overwrite it.');
 
+ const checkProgress=async(id:string,label:string,status:string)=>d.progress('Validation check: '+JSON.stringify({id,label,status}));
+ const verifiedCheck=async(id:string,label:string,command:string,timeoutMs?:number)=>{
+  await checkProgress(id,label,'running');
+  try{
+   const result=await d.check(command,timeoutMs);
+   await checkProgress(id,label,result.exitCode===0?'passed':'failed');
+   return result;
+  }catch(error){
+   await checkProgress(id,label,'blocked');
+   throw new PiSessionInfrastructureError('Validation runner could not complete “'+label+'”: '+redact((error as Error).message)+'. No feature failure was established. Saved work is retained.');
+  }
+ };
  const report=root+'/result.json';
  let failure='';
  let lastDiagnosis='';
@@ -78,45 +98,57 @@ Ticket requirements to verify: ${requirements}
 ${mode.phase!=='validation' ? LIVE_BROWSER_INSTRUCTION : ''}
 ${mode.phase!=='validation' && (!deps || d.featureTest) && mode.kind==='ticket' && ctx.ticketId ? FEATURE_TEST_INSTRUCTION : ''}
 Required runtime categories: ${JSON.stringify(required)}. For each required category report at least one check with category set to that exact name and execution="runtime". Database: query the actual database and verify migrations. Authentication: establish a real authenticated session and verify an unauthenticated request is denied. CRUD: create, read, update and delete a test record over authenticated HTTP. Persistence: verify the write with an independent database query or fresh session. Tenant isolation: verify another tenant cannot read or mutate that record. Hierarchy: exercise invalid parent/cycle rejection and valid relationships through the app. Static source inspection cannot substitute for these runtime assertions. Use disposable test records and clean them up. When repairing a failed server check, set repairSummary in the report to the concrete change and why it addresses that failure. Each required check must print a final JSON line {"category":"...","passed":true,"execution":"runtime"} only after all its assertions succeed; otherwise exit nonzero.
-Work in ${o.projectDir}. Existing uncommitted changes are intentional; preserve and test them. Inspect actual sandbox configuration and existing runtime logs before making changes. Reuse the working preview's database names, ports, installed SDK and package caches. Before concluding that Docker data is absent, inspect DockerRootDir and /data/docker: preview persists Docker there. If the daemon is using a different root, restore its configuration to the existing /data/docker in this ticket VM and start the existing database container. Do not delete or overwrite either data directory. Inspect configuration by key and format without printing secrets; an encrypted gcm value is not a filesystem path or connection string. These current instructions supersede old validation notes or previous repair summaries that forbid replacement development databases. Do not follow old .lfg-validation.json requirements to construct separate baseline/candidate environments, compare baselines, or commit checkpoints. If a local database must be created, use its real schema and necessary development seed data; do not disable migrations, mock the database, or claim previous data was restored.
+Work in ${o.projectDir}. Existing uncommitted changes are intentional; preserve and test them. Inspect actual sandbox configuration and existing runtime logs before making changes. Reuse the working preview's database names, ports, installed SDK and package caches. Before concluding that a service or its data is absent, inspect its actual configuration, data directories and process state. Restore the existing sandbox-local service configuration where appropriate; do not delete or overwrite existing data. Inspect configuration by key and format without printing secrets; an encrypted gcm value is not a filesystem path or connection string. These current instructions supersede old validation notes or previous repair summaries that forbid replacement development databases. Do not follow old .lfg-validation.json requirements to construct separate baseline/candidate environments, compare baselines, or commit checkpoints. If a local database must be created, use its real schema and necessary development seed data; do not disable migrations, mock the database, or claim previous data was restored.
 ${attempt ? 'Continue from the current running environment. Do not repeat successful setup unless your repair invalidates it. Last check failure (data): '+failure : 'First inspect what is already running. Avoid reinstalling an SDK that works.'}
 ${mode.kind!=="ticket" ? "This is a temporary merge checkout. Run its app on a separate free port without stopping the ticket app. Include stopCommand in the report to stop only the process you launched after checks finish; the checkout will be removed." : ""}
-This is one continuous session with a 30-minute total budget. Shell-tool timeouts are enforced: diagnostics 30 seconds, restore/build five minutes, tests two minutes. A command failure/timeout is a tool result to repair within this session, not a reason to stop. Reuse successful build output while source/dependencies are unchanged; record build inputs and successful steps in ${root}/progress.json after disk cleanup. For UI testing, open lfg_browser before detailed planning. When live browser assertions have passed and finish has returned success, include featureTest applicability and steps as evidence; the controller will not replay them. Only rebuild what your repair invalidates. Keep this progress file and session context current so process recovery resumes instead of restarting setup. Repeating a failed command without a repair is blocked by the tool policy. Explain your diagnosis and concrete intervening change before retrying. On an actual error, explain why you are repairing it and proceed across any layer needed. Do not wait repeatedly on the same failed command. Keep required feature checks and assertions; do not fake success or disable checks. Leave the application running when successful. Do not launch a second copy on the same port.
-After reclaiming space, create ${root} and write ${report} as JSON: {"runId":"${runId}","status":"passed" or "blocked","summary":"what worked or the exact blocker","kind":"application","appUrl":"http://127.0.0.1:PORT/","checks":[{"label":"specific feature assertion","command":"bounded command that fails if that assertion is false","category":"required category where applicable","execution":"runtime"}]}. Include real feature checks you executed, not install/version checks or another full build. Checks must be self-contained using the existing local configuration. For a library use kind library and real tests instead of appUrl. The server reruns only these checks, not setup/build/schema. Keep credentials out of the report and output. Do not modify HEAD, branches or remotes. Do not commit. Update implementation documentation before reporting success. ${featureOnly ? 'For this FEATURE-ONLY run, the preceding full validation and documentation instructions do not apply: leave source and documentation unchanged, skip all validation commands, report checks:[], and prepare only featureTest. Reuse the running app. Missing setup is not a reason to rebuild all code.' : ''}`);
-  } catch(error) { cancelled(); agentFailure=redact((error as Error).message); if(agentFailure.includes('Browser retry limit reached') || agentFailure.includes('LFG browser connection unavailable') || agentFailure.includes('LFG recorder storage unavailable') || agentFailure.includes('Could not confirm Pi process cleanup') || agentFailure.includes('Agent stalled:') || agentFailure.includes('Feature preparation stalled:'))throw new Error(agentFailure); }
+This is one continuous session with a ${budgetMs/60_000}-minute total budget. Shell-tool timeouts are enforced: diagnostics 30 seconds, restore/build five minutes, tests two minutes. A command failure/timeout is a tool result to repair within this session, not a reason to stop. Reuse successful build output while source/dependencies are unchanged; record build inputs and successful steps in ${root}/progress.json after disk cleanup. For UI testing, open lfg_browser before detailed planning. When live browser assertions have passed and finish has returned success, include featureTest applicability and steps as evidence; the controller will not replay them. Only rebuild what your repair invalidates. Keep this progress file and session context current so process recovery resumes instead of restarting setup. Repeating a failed command without a repair is blocked by the tool policy. Explain your diagnosis and concrete intervening change before retrying. On an actual error, explain why you are repairing it and proceed across any layer needed. Do not wait repeatedly on the same failed command. Keep required feature checks and assertions; do not fake success or disable checks. Leave the application running when successful. Do not launch a second copy on the same port.
+After reclaiming space, create ${root} and write ${report} as JSON: {"runId":"${runId}","status":"passed" or "blocked","summary":"what worked or the exact blocker","kind":"application","appUrl":"http://127.0.0.1:PORT/","prerequisites":[],"checks":[{"label":"specific feature assertion","command":"bounded command that fails if that assertion is false","category":"required category where applicable","execution":"runtime"}]}. Include real feature checks you executed, not install/version checks or another full build. Checks must be self-contained using the existing local configuration. For a library use kind library and real tests instead of appUrl. The server reruns only these checks, not setup/build/schema. Keep credentials out of the report and output. Do not modify HEAD, branches or remotes. Do not commit. Update implementation documentation before reporting success. ${featureOnly ? 'For this FEATURE-ONLY run, the preceding full validation and documentation instructions do not apply: leave source and documentation unchanged, skip all validation commands, report checks:[], and prepare only featureTest. Reuse the running app. Missing setup is not a reason to rebuild all code.' : ''}`);
+  } catch(error) { cancelled(); if(error instanceof PiSessionInfrastructureError){await d.progress("**Validation connection interrupted:** "+redact(error.message));throw error;} agentFailure=redact((error as Error).message); if(agentFailure.includes('Browser retry limit reached') || agentFailure.includes('LFG browser connection unavailable') || agentFailure.includes('LFG recorder storage unavailable') || agentFailure.includes('Could not confirm Pi process cleanup') || agentFailure.includes('Agent stalled:') || agentFailure.includes('Feature preparation stalled:'))throw new Error(agentFailure); }
   cancelled();
   if(await sh('git rev-parse HEAD')!==head)throw new Error('Agent committed before runtime verification; refusing publication.');
   let saved=false;
   try {
    let result:z.infer<typeof reportSchema>;
    try { result=reportSchema.parse(JSON.parse(await sh(`cat ${q(report)}`))); }
-   catch { throw new Error([lastDiagnosis, agentFailure ? `Repair agent failed: ${agentFailure}` : 'Repair agent did not produce a valid runtime report; app startup has not been verified.'].filter(Boolean).join('\n\n')); }
+   catch(error) {
+    const diagnosis=error instanceof z.ZodError ? 'Invalid runtime report: '+error.issues.map(i=>i.path.join('.')+': '+i.message).join('; ') : 'Repair agent did not produce readable runtime JSON';
+    throw new Error([lastDiagnosis, diagnosis, agentFailure ? `Repair agent failed: ${agentFailure}` : ''].filter(Boolean).join('\n\n')); }
    result.summary=redact(result.summary);
    if(result.runId!==runId)throw new Error('Runtime report belongs to another run');
+   if(result.status==='blocked' && result.blocker) {const error=new Error('Runtime validation blocked: required environment capability '+result.blocker.capability+'. '+redact(result.blocker.diagnostic));error.name='RuntimeEnvironmentBlocked';throw error;}
    if(result.status!=='passed') { lastDiagnosis=redact(result.summary); throw new Error(lastDiagnosis); }
    if(agentFailure)throw new Error([lastDiagnosis, `Repair agent failed: ${agentFailure}`].filter(Boolean).join('\n\n'));
    if(!featureOnly)verifyRuntimeCoverage(required,result);
+   // Bind verification to the staged source tree, without committing it.
+   const tree=await sh('git add -A\ngit write-tree');
+   for(const p of result.prerequisites)await checkProgress('prerequisite:'+p.name,p.name,'pending');
+   if(result.kind==='application')await checkProgress('app-health','Application responds over HTTP','pending');
+   for(const c of featureOnly?[]:result.checks)await checkProgress('feature:'+c.label,c.label,'pending');
+   for(const prerequisite of result.prerequisites) {
+    await d.progress('**Checking prerequisite:** '+prerequisite.name);
+    const verified=await verifiedCheck('prerequisite:'+prerequisite.name,prerequisite.name,`set -e\ncd ${q(o.projectDir)}\n${prerequisite.verificationCommand}`,prerequisite.timeoutSeconds*1000);
+    if(verified.exitCode!==0)throw new Error('Required prerequisite '+prerequisite.name+' is not ready: '+redact(verified.output));
+   }
    if(!featureOnly && !result.checks.length)throw new Error('No feature checks were reported');
    if(result.kind==='application') {
     if(!result.appUrl)throw new Error('No running application URL was reported');
     const url=new URL(result.appUrl);
     if(!['127.0.0.1','localhost','[::1]'].includes(url.hostname)||url.protocol!=='http:'||url.username||url.password)throw new Error('Application check must target the local ticket sandbox');
     const {validationHttpCommand}=await import('./validation-http.ts');
-    const r=await d.check(validationHttpCommand(url.toString(),root));
+    const r=await verifiedCheck('app-health','Application responds over HTTP',validationHttpCommand(url.toString(),root));
     if(r.exitCode!==0)throw new Error(r.output||'Application HTTP check failed');
    }
-   // Stage without committing, then ensure the checks do not change the source tree.
-   const tree=await sh('git add -A\ngit write-tree');
+   // Check commands must not change the source tree tested above.
    for(const check of featureOnly ? [] : result.checks) {
     cancelled();
     if(/^\s*(true|echo\b|exit\s+0\b)|\|\|\s*(true|exit\s+0)\s*$/.test(check.command))throw new Error('A reported check suppresses failures');
     const previous=failedChecks.get(check.command);
     if(previous && previous.tree===tree && previous.repair===(result.repairSummary??''))throw new Error(`${previous.error}\nThis unchanged check is paused until the agent makes a source change or documents a new environment repair in repairSummary.`);
     await d.progress(`**Checking:** ${check.label}`);
-    const r=await d.check(check.command);if(r.exitCode!==0){const error=`${check.label}: ${r.output}`;failedChecks.set(check.command,{tree,repair:result.repairSummary??'',error});throw new Error(error);}
+    const r=await verifiedCheck('feature:'+check.label,check.label,check.command);if(r.exitCode!==0){const error=`${check.label}: ${r.output}`;failedChecks.set(check.command,{tree,repair:result.repairSummary??'',error});throw new Error(error);}
     if(required.includes(check.category ?? '')) {
      let receipt:any;try{receipt=JSON.parse(r.output.trim().split('\n').at(-1)!);}catch{}
-     if(receipt?.category!==check.category || receipt?.passed!==true || receipt?.execution!=='runtime')throw new Error(`${check.label}: missing successful runtime assertion receipt`);
+     if(receipt?.category!==check.category || receipt?.passed!==true || receipt?.execution!=='runtime'){await checkProgress('feature:'+check.label,check.label,'failed');throw new Error(`${check.label}: missing successful runtime assertion receipt`);}
     }
    }
    if(mode.phase!=='validation' && (!deps || d.featureTest) && mode.kind==="ticket" && ctx.ticketId) {
@@ -149,8 +181,8 @@ After reclaiming space, create ${root} and write ${report} as JSON: {"runId":"${
    }
    await d.progress(`**Runtime checks passed.** ${result.summary}\n\nSaved commit: \`${sha.slice(0,12)}\`. The existing sandbox was reused.`);
    return sha;
-  } catch(error) {if(saved || (error as Error).name==='RecordingStorageError')throw error;cancelled();failure=redact((error as Error).message); if(!failure.includes('runtime report') && !failure.includes('Repair agent failed:'))lastDiagnosis=failure;}
+  } catch(error) {if(saved || error instanceof PiSessionInfrastructureError || ['RecordingStorageError','RuntimeEnvironmentBlocked'].includes((error as Error).name))throw error;cancelled();failure=redact((error as Error).message); if(!failure.includes('Repair agent failed:'))lastDiagnosis=failure;}
  }
- throw new Error(`Ticket runtime checks remain blocked after the 30-minute session budget: ${failure || lastDiagnosis || 'No verified runtime result'}`);
+ throw new Error(`Runtime validation paused after ${budgetMs/60_000} minutes; uncommitted work is retained in the ticket sandbox. Resume validation from this work. Last blocker: ${failure || lastDiagnosis || 'Validation did not finish before the deadline'}`);
  } finally { try{await browser?.close();}finally{await d.close?.();} }
 }

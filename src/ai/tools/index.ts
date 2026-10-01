@@ -1,3 +1,4 @@
+import { readDesignSource, captureDesignLayout } from './design-context-tools.ts';
 // ── Tool Collections ──────────────────────────────────────────────────────────
 
 export { getProjectDashboard, setProjectStack, captureProjectName } from "./project-tools.ts";
@@ -68,6 +69,8 @@ import { loadSkill } from "./skill-tools.ts";
 import { loadDocumentTemplate } from "./doc-template-tools.ts";
 
 export const toolsProduct = {
+  readDesignSource,
+  captureDesignLayout,
   startEpic,
   checkEpicOverlap,
   getEpicStatus,

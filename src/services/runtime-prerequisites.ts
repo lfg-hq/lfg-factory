@@ -1,0 +1,13 @@
+import {z} from 'zod';
+
+export const runtimePrerequisiteSchema=z.object({
+ name:z.string().min(1),
+ reason:z.string().min(1),
+ verificationCommand:z.string().min(1),
+ timeoutSeconds:z.number().int().min(1).max(300).default(30),
+});
+
+export const RUNTIME_PREREQUISITES_INSTRUCTION=`Before implementation, inspect the approved requirements and repository to identify the tools, language runtimes, libraries, system packages and services actually needed to build and verify this feature. Do not assume a particular tool or deployment technology is required. Record this prerequisite inventory and progress in the session notes so validation can reuse it.
+For each prerequisite: check its installed version and functional availability in the environment where it must run; inspect service connectivity when applicable. Reuse working installations and caches. If missing or incompatible, install, configure or repair it inside the ticket sandbox using the appropriate package manager and supported versions. You are authorized to perform these sandbox-local setup steps without asking for routine installation approval. Verify the actual capability after setup; a successful installer or a binary on PATH is not sufficient. Do not change the host's privileges, attach host control sockets, modify external systems, delete existing data, or silently substitute an unapproved architecture. Explain the current prerequisite, attempted repair and result in short progress updates.
+If setup cannot succeed after investigating the actual error and sandbox capabilities, preserve work and report status blocked with blocker:{kind:"environment",capability:"required capability",diagnostic:"exact failed command/error and attempted remedy"}. Do not assume installation is impossible merely because a tool is absent. Never skip a required verification or call it not_applicable because its dependency is missing.
+Every runtime report must include prerequisites:[{name:"tool or service",reason:"requirement it supports",verificationCommand:"bounded command that exits nonzero if the required capability is unavailable",timeoutSeconds:30}]. Use an empty array only when no prerequisites apply. Carry all required entries from your inventory into this report; do not remove a failed entry to pass validation. The controller reruns these verification commands in the existing ticket sandbox before committing. Checks must exercise the real target environment and required capability, not source text or a substitute environment. Keep credentials out of reports. Verification commands must clean up temporary resources and leave source files unchanged. Put full feature assertions in checks separately. The controller has no fixed list of tools or hard-coded installer commands.`;

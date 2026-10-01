@@ -15,6 +15,10 @@ export type RpcDependencies={
  preparationReady?:()=>boolean;
 };
 
+export class PiSessionInfrastructureError extends Error {
+ constructor(message:string){super(message);this.name='PiSessionInfrastructureError';}
+}
+
 /** One live Pi process, one persisted session, one budget across verification feedback. */
 export class PiRepairSession {
  private process?:RpcProcess;
@@ -22,16 +26,41 @@ export class PiRepairSession {
  private pending='';
  private decoder=new StringDecoder('utf8');
  private restarts=0;
+ private asking=false;
+ private uncertain=false;
  constructor(private fifo:string,private deadline:number,private d:RpcDependencies){}
- private guard(){if(this.d.cancelled?.())throw new Error('Ticket run cancelled');if(this.d.now()>=this.deadline)throw new Error('Ticket repair reached its 30-minute session deadline');}
+ private guard(){if(this.d.cancelled?.())throw new Error('Ticket run cancelled');if(this.d.now()>=this.deadline)throw new Error('Ticket repair reached its configured session deadline');}
  async close(){
   if(!this.process)return;
   if(!this.process.backgroundPid)throw new Error('Could not confirm Pi process cleanup: launcher PID missing');
   const r=await this.d.exec(piTerminationScript(this.process.backgroundPid));
   if(r.exitCode!==0)throw new Error('Could not confirm Pi process cleanup');
-  this.process=undefined;
+  this.process=undefined;this.uncertain=false;
  }
  async ask(message:string):Promise<string>{
+  if(this.asking || this.uncertain)throw new PiSessionInfrastructureError('Validation connection is busy or uncertain. No additional repair request was sent.');
+  this.asking=true;
+  try{return await this.turn(message);}catch(error){this.uncertain=true;throw error;}finally{this.asking=false;}
+ }
+ private async poll():Promise<{offset:number;chunk:string;alive:boolean}>{
+  // Reading the same offset is safe to retry. Never resend a prompt on a read timeout.
+  for(let attempt=0;attempt<3;attempt++){
+   this.guard();
+   try{
+    const r=await this.d.exec(rpcPollScript(this.process!,this.offset));
+    if(r.exitCode!==0)throw new Error('Agent output could not be read');
+    const state=JSON.parse(r.output);
+    if(!Number.isSafeInteger(state.offset)||state.offset<this.offset||typeof state.chunk!=='string'||typeof state.alive!=='boolean')throw new Error('Invalid agent output response');
+    return state;
+   }catch(error){
+    if(attempt===2)throw new PiSessionInfrastructureError('Validation connection interrupted: could not read the existing agent after three attempts. This is a controller connection problem, not a failed feature check. Saved work is retained; no additional repair request was sent.');
+    this.d.log?.('Reconnecting to the existing validation agent; waiting for its current work.');
+    await this.d.wait();
+   }
+  }
+  throw new PiSessionInfrastructureError('Validation connection interrupted');
+ }
+ private async turn(message:string):Promise<string>{
   this.guard();
   if(!this.process){this.process=await this.d.start();this.offset=0;this.pending='';this.decoder=new StringDecoder('utf8');}
   const id=crypto.randomUUID();
@@ -39,7 +68,8 @@ export class PiRepairSession {
   let sent=false;
   while(!sent){
    this.guard();
-   const r=await this.d.exec(`python3 - ${q(this.fifo)} ${q(payload)} <<'PY'
+   let r;
+   try{r=await this.d.exec(`python3 - ${q(this.fifo)} ${q(payload)} <<'PY'
 import os,sys,base64,errno
 try:
  fd=os.open(sys.argv[1],os.O_WRONLY|os.O_NONBLOCK)
@@ -48,14 +78,14 @@ try:
  os.close(fd)
 except OSError as e:
  sys.exit(75 if e.errno in (errno.ENXIO,errno.ENOENT) else 1)
-PY`);
+PY`);}catch{throw new PiSessionInfrastructureError('Validation request delivery could not be confirmed. The agent may still be working; no duplicate request was sent.');}
    if(r.exitCode===0)sent=true;
-   else if(r.exitCode!==75)throw new Error('Unable to send feedback to the Pi session');
+   else if(r.exitCode!==75)throw new PiSessionInfrastructureError('Validation request delivery could not be confirmed; no duplicate request was sent.');
    else {
-    const state=await this.d.exec(rpcPollScript(this.process,this.offset));
-    if(state.exitCode===0 && !JSON.parse(state.output).alive){
+    const state=await this.poll();
+    if(!state.alive){
      if(this.restarts++>=2)throw new Error('Pi process exited repeatedly before accepting feedback');
-     await this.close();return this.ask(message);
+     await this.close();return this.turn(message);
     }
     await this.d.wait();
    }
@@ -64,9 +94,7 @@ PY`);
   while(true){
    this.guard();
    if(this.d.preparationReady && !this.d.preparationReady() && this.d.now()-preparationStarted>=120000){await this.close();throw new Error('Feature preparation stalled: no browser started or API/schema applicability decision after two minutes.');}
-   const r=await this.d.exec(rpcPollScript(this.process,this.offset));
-   if(r.exitCode!==0)throw new Error('Unable to inspect the existing Pi session; no replacement agent was launched');
-   const state=JSON.parse(r.output) as {offset:number;chunk:string;alive:boolean};
+   const state=await this.poll();
    this.offset=state.offset;
    this.pending+=this.decoder.write(Buffer.from(state.chunk,'base64'));
    const lines=this.pending.split('\n');this.pending=lines.pop()!;
@@ -79,7 +107,7 @@ PY`);
      await this.d.exec(`mkdir -p ${q(this.d.browserReplyDir)}; printf %s ${q(data)} | base64 -d > ${q(path+'.tmp')}; mv ${q(path+'.tmp')} ${q(path)}`);
      lastActivity=this.d.now();
     }
-    if(event.type==='response' && event.id===id && event.success===false)throw new Error('Pi rejected verification feedback: '+event.error);
+    if(event.type==='response' && event.id===id && event.success===false)throw new PiSessionInfrastructureError('Validation request rejected by the agent: '+event.error+'. No further repair request was sent.');
     if(event.type==='message_end' && event.message?.role==='assistant'){
      const msg=event.message;
      answer=(msg.content??[]).filter((c:any)=>c.type==='text').map((c:any)=>c.text).join('\n');
@@ -97,7 +125,7 @@ PY`);
     if(this.restarts++>=2)throw new Error('Pi process exited repeatedly; saved session and work are retained');
     await this.close();
     this.d.log?.('Pi exited. Resuming its saved conversation without restarting development.');
-    return this.ask('The prior Pi process exited. Resume the saved work and inspect any in-flight command before rerunning it. Current controller request:\n'+message);
+    return this.turn('The prior Pi process exited. Resume the saved work and inspect any in-flight command before rerunning it. Current controller request:\n'+message);
    }
    const idle=this.d.now()-lastActivity;
    if(idle>=360_000){await this.close();throw new Error('Agent stalled: no tool or model activity for six minutes. Last operation: '+current);}

@@ -211,7 +211,7 @@ const CALLBACK_BASE_URL = process.env.APP_URL ?? "http://localhost:3000";
  * Best-effort: any failure here is swallowed so it never blocks a build.
  */
 async function seedTasksIfEmpty(
-  ticket: { id: string; name: string; description: string | null; acceptanceCriteria?: unknown },
+  ticket: { id: string; name: string; description: string | null; acceptanceCriteria?: unknown; details?: unknown },
   ownerId: string,
 ): Promise<void> {
   try {
@@ -224,12 +224,15 @@ async function seedTasksIfEmpty(
       .where(eq(projectTodoLists.ticketId, ticket.id));
     if (existing.length > 0) return; // agent/user already created tasks
 
-    let descriptions: string[] = [];
+    const details=ticket.details as {epicBuildMode?:string;implementationPlan?:unknown} | undefined;
+    let descriptions: string[] = details?.epicBuildMode==='single-ticket' && Array.isArray(details.implementationPlan)
+      ? details.implementationPlan.filter((s):s is string=>typeof s==='string' && !!s.trim()) : [];
 
     // Primary: ask the user's model to decompose the ticket. Use plain text +
     // JSON parse (not generateObject) so weak models (Kimi/DeepSeek/GLM) that
     // reject structured-output negotiation still work.
     try {
+      if(!descriptions.length){
       const { model } = await resolveUserModel(ownerId);
       const ac = acceptanceCriteria.map((c, i) => `${i + 1}. ${c}`).join("\n");
       const prompt =
@@ -250,6 +253,7 @@ async function seedTasksIfEmpty(
             .filter(Boolean)
             .slice(0, 7);
         }
+      }
       }
     } catch (err) {
       console.warn(`[ticket-executor] task seeding via model failed for ${ticket.id}:`, err);
@@ -1359,7 +1363,7 @@ async function executeTicketInternal(ticketId: string, actorId?: string): Promis
   // Seed subtasks up-front (idempotent) so the Tasks tab is populated the moment
   // the build starts, even if the agent skips createTasks or the build fails.
   await seedTasksIfEmpty(ticket, ownerId);
-  await markBuildTasksStarted(ticketId);
+  if((ticket.details as any)?.epicBuildMode!=='single-ticket')await markBuildTasksStarted(ticketId);
 
   // Load tasks
   const tasks = await db
@@ -2067,7 +2071,7 @@ Before implementing, fix the git issue:
       : (_detail ? `did not complete — ${_detail}` : "Implementation did not complete (the agent stopped without a specific error)");
     if (commitFailed) await db.update(projectTickets).set({ githubMergeStatus: "failed", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId)).catch(() => {});
     await markTicketFailed(ticketId, reason, ownerId, { failureKind: publicationFailureKind });
-    broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "failed", queueStatus: "none", mergeStatus: commitFailed ? "failed" : undefined });
+    broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: /Runtime validation (paused|blocked: required environment)/.test(reason) ? "blocked" : "failed", queueStatus: "none", mergeStatus: commitFailed ? "failed" : undefined });
   }
 
   // Session ID is now saved by the /api/v1/cli/output/ endpoint
@@ -2906,7 +2910,7 @@ async function executeTicketApiInternal(
   // Seed subtasks up-front (idempotent) so the Tasks tab is populated the moment
   // the build starts — this is the Pi/DeepSeek/Kimi path, the common one.
   await seedTasksIfEmpty(ticket, ownerId);
-  await markBuildTasksStarted(ticketId);
+  if((ticket.details as any)?.epicBuildMode!=='single-ticket')await markBuildTasksStarted(ticketId);
 
   const tasks = await db.select().from(projectTodoLists).where(eq(projectTodoLists.ticketId, ticketId));
 
@@ -3425,10 +3429,12 @@ git branch --show-current
     const ticketAttachments = ticketAttRows
       .filter((a) => !a.fileType || /^image\//.test(a.fileType))
       .map((a) => ({ url: /^https?:\/\//.test(a.filePath) ? a.filePath : `${CALLBACK_BASE_URL}${a.filePath}`, name: a.originalFilename ?? "image" }));
+    const epicProgressPath=(ticket.details as any)?.epicBuildMode==='single-ticket' ? `/data/lfg-epic-progress-${ticket.id}.json` : null;
+    const taskStates=new Map(tasks.map(t=>[t.id,t.status]));
     const piPrompt = buildPiTicketPrompt({
       ticket: {
         name: ticket.name,
-        description: ticket.description,
+        description: ticket.description + (epicProgressPath ? `\n\n## Implementation progress\nKeep this existing checklist current while you work. Write an atomic JSON array to ${epicProgressPath} using a temporary file then rename: [{"id":"task ID","status":"pending|in_progress|success|failed"}]. Only mark a milestone success after implementing and checking it; this does not approve the entire feature. Reuse these task IDs and saved progress on resume:\n${JSON.stringify(tasks.map(t=>({id:t.id,description:t.description,status:t.status})))}` : ''),
         notes: ticket.notes,
         acceptanceCriteria: (ticket.acceptanceCriteria as string[] | null) ?? [],
       },
@@ -3509,6 +3515,16 @@ git branch --show-current
           outputFile: pi.outputFile,
           backgroundPid: pi.backgroundPid,
           timeoutMs: BUILD_TIMEOUT_MS,
+          taskProgress:epicProgressPath ? {path:epicProgressPath,receive:async json=>{
+            const {parseEpicTaskProgress}=await import('../services/epic-task-progress.ts');
+            const changed=[];
+            for(const task of parseEpicTaskProgress(json,new Set(taskStates.keys()))){
+              if(taskStates.get(task.id)===task.status)continue;
+              await db.update(projectTodoLists).set({status:task.status,updatedAt:new Date()}).where(and(eq(projectTodoLists.id,task.id),eq(projectTodoLists.ticketId,ticketId)));
+              taskStates.set(task.id,task.status);changed.push(task.id);
+            }
+            if(changed.length)emit({type:'ticket.tasks_updated',ticketId,taskIds:changed});
+          }} : undefined,
           ticketId, // webhook output = proof-of-life (don't fail a live, streaming build)
           shouldCancel: () => cancelledTickets.has(ticketId),
           // Webhook active → poll is completion-only. Otherwise poll → logs.
@@ -3782,7 +3798,7 @@ git branch --show-current
     // even after refresh — not just a transient Actions-log line.
     if (commitFailed) await db.update(projectTickets).set({ githubMergeStatus: "failed", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId)).catch(() => {});
     await markTicketFailed(ticketId, reason, ownerId, { failureKind: publicationFailureKind });
-    broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "failed", queueStatus: "none", mergeStatus: commitFailed ? "failed" : undefined });
+    broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: /Runtime validation (paused|blocked: required environment)/.test(reason) ? "blocked" : "failed", queueStatus: "none", mergeStatus: commitFailed ? "failed" : undefined });
   }
 
   // ISOLATED build: the dedicated VM is KEPT (not destroyed here) and allowed to
@@ -3979,6 +3995,8 @@ async function resolveProjectIdForTicket(ticketId: string): Promise<string | nul
 }
 
 async function markTicketFailed(ticketId: string, reason: string, userId?: string, opts?: { emitEvent?: boolean; failureKind?: ValidationFailure["failureKind"] }) {
+  const paused = /Runtime validation (paused|blocked: required environment)/.test(reason);
+  const terminalStatus = paused ? "blocked" : "failed";
   const projectId = await resolveProjectIdForTicket(ticketId);
   // Early provisioning errors reach this helper before the worker has an owner ID.
   // Still publish terminal status so connected ticket UIs stop their spinner.
@@ -3992,7 +4010,7 @@ async function markTicketFailed(ticketId: string, reason: string, userId?: strin
   await db
     .update(projectTickets)
     .set({
-      status: "failed",
+      status: terminalStatus,
       queueStatus: "none",
       updatedAt: new Date(),
     })
@@ -4002,7 +4020,7 @@ async function markTicketFailed(ticketId: string, reason: string, userId?: strin
     broadcastToUser(userId, {
       type: "ticket_status",
       ticketId,
-      status: "failed",
+      status: terminalStatus,
       queueStatus: "none",
       stageId: failureStageId,
     });
@@ -4015,9 +4033,9 @@ async function markTicketFailed(ticketId: string, reason: string, userId?: strin
   // the success summary — so the user sees WHAT went wrong and HOW to proceed,
   // not just a buried "Execution failed" log line.
   const failMsg =
-    (/^Feature testing failed:/i.test(reason) ? `❌ **Feature testing failed** — see the browser attempt and diagnostics above.\n\n` : /validation failed|recovery stopped|Automatic repair stopped/i.test(reason) ? `❌ **Validation blocked** — this ticket is not ready for review.\n\n` : `❌ **Build failed** — this attempt could not complete.\n\n`) +
+    (paused ? `⏸ **Validation paused** — saved code still needs verification.\n\n` : /^Feature testing failed:/i.test(reason) ? `❌ **Feature testing failed** — see the browser attempt and diagnostics above.\n\n` : /validation failed|recovery stopped|Automatic repair stopped/i.test(reason) ? `❌ **Validation blocked** — this ticket is not ready for review.\n\n` : `❌ **Build failed** — this attempt could not complete.\n\n`) +
     `**What went wrong:** ${reason}\n\n` +
-    (/clone submission|clone response missing request_id/i.test(reason)
+    (paused ? `**Next step:** resume validation on the saved ticket sandbox. Implementation changes are retained; no successful validation or commit is implied by this pause.` : /clone submission|clone response missing request_id/i.test(reason)
       ? `**How to proceed:** the clone request was not confirmed. Check Magpie for an accepted clone before retrying; automatic resubmission is blocked to avoid duplicate sandboxes. Ticket implementation has not started.`
       : opts?.failureKind === "http"
         ? `**Next step:** the app did not pass its HTTP check. The connection/status diagnostic is shown above. Use Retry validation to test the saved code again, with automatic repair if needed.`

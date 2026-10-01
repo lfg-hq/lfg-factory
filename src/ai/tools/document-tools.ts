@@ -1,3 +1,6 @@
+import { env } from '../../config/env.ts';
+import { designProject } from './design-context-tools.ts';
+import { composeCapturedDesign, openDesignBaseline } from '../../services/design-baseline.ts';
 import { associateUsageDocument } from "../../services/token-usage.ts";
 import { tool, zodSchema } from "ai";
 import { z } from "zod";
@@ -44,6 +47,7 @@ export const streamDocumentContent = tool({
     })
   ),
   execute: async ({ projectId, userId, name, fileType, content, epicId }, options) => {
+    if (fileType === "design_baseline") throw new Error("Use captureDesignLayout to create a verified layout capture.");
     const { s3Key, dbContent } = await saveContent(projectId, fileType, name, content);
 
     // Docs always live at PROJECT scope so they stay visible and editable. An epic
@@ -84,19 +88,21 @@ export const streamDocumentContent = tool({
 export const previewPage = tool({
   description:
     "Show a page or app screen; call once per named screen for multi-screen features. Follow the design-feature skill for app UI. " +
+    "For existing apps read the actual files with readDesignSource, then generate self-contained HTML reusing their layout and styles. No running app or sandbox is required. captureDesignLayout is optional. " +
     "Show the user a REAL, rendered preview of a page — a self-contained HTML document " +
     "(all CSS inline in a <style> block, no external files, no build step) that appears " +
     "as an expandable card in the chat. " +
-    "CALL THIS ONLY WHEN THE CONTENT IS SETTLED AND THE USER HAS AGREED TO A PREVIEW. " +
-    "It re-renders the whole page and takes about a minute, so copy changes belong in " +
-    "chat first — settle the words, ask 'want me to render a preview?', then call this. " +
-    "Do not call it again for every small text edit; batch them, or wait to be asked. " +
-    "Match the app's existing palette and typography when the project has one. " +
+    "A request to design/show/preview the UI already authorizes rendering; do not ask again or emit text wireframes first. " +
+    "Read and reuse the actual app layout, navigation and affected screen: preserve menu labels, order, icons and flows. " +
+    "Embed all CSS and inline SVG icons; external stylesheets, fonts and scripts are blocked. Style links/buttons explicitly. " +
+    "Batch small copy changes. Use concise chat captions rather than duplicating previews as ASCII diagrams. " +
     "The preview is saved as a draft. After acceptance, pass its ID in createTickets.approvedDesignDocumentIds to preserve the accepted design.",
   inputSchema: zodSchema(
     z.object({
       projectId: z.string(),
       userId: z.string().describe("The user's ID — used to push the preview into their chat"),
+      approximateReason: z.string().min(12).optional().describe("Only when the user accepts an approximate standalone mockup: explain which source files or visual references were unavailable. Do not silently fall back."),
+      baselineId: z.string().optional().describe("Immutable actual app layout from captureDesignLayout. With this set, html/css/js describe ONLY the feature region, never the sidebar or app shell."),
       css: z.string().optional().describe("App-matching CSS embedded in a style block"),
       js: z.string().optional().describe("Local mock interactions; no network or real mutations"),
       data: z.unknown().optional().describe("Synthetic JSON exposed as window.mockData"),
@@ -111,8 +117,27 @@ export const previewPage = tool({
         ),
     })
   ),
-  execute: async ({ projectId, userId, name, html, css, js, data, epicId }, options) => {
+  execute: async ({ projectId, userId, name, html, css, js, data, epicId, baselineId, approximateReason }, options) => {
+    const designApp = await designProject(projectId, userId);
+    const sourceRead = (options as unknown as { designSourceRead?: boolean }).designSourceRead === true;
+    if ((designApp.repoUrl || designApp.repoName) && !sourceRead && !baselineId && !approximateReason) {
+      return { saved: false, error: 'Read the actual layout, navigation, affected page and styles with readDesignSource before rendering. No sandbox or capture is required. Reload the design-feature skill. If source is unavailable, explain the gap and agree an approximate mockup; then pass approximateReason.' };
+    }
     html = composeDesignPreview({ html, css, js, data });
+    let fidelity = 'Approximate mockup — app layout not verified';
+    if (baselineId) {
+      const [baselineFile] = await db.select().from(projectFiles).where(eq(projectFiles.id, baselineId));
+      if (!baselineFile || baselineFile.projectId !== projectId || baselineFile.fileType !== 'design_baseline') throw new Error('Layout capture must belong to this project.');
+      const baseline = openDesignBaseline(await getContent(baselineFile.s3Key, baselineFile.content), env.BETTER_AUTH_SECRET);
+      if (baseline.projectId !== projectId) throw new Error('Layout capture project mismatch.');
+      html = composeCapturedDesign(baseline, html);
+      fidelity = 'Captured app layout · interactive sample feature · static navigation';
+    } else if (sourceRead) {
+      fidelity = "Source-based design · sample data · not verified against the running app";
+      html = html.replace(/<head[^>]*>/i, '$&<meta name="lfg-design-fidelity" content="source-based">');
+    } else {
+      html = html.replace(/<head[^>]*>/i, '$&<meta name="lfg-design-fidelity" content="approximate">');
+    }
     const fileType = "page_preview";
     const { s3Key, dbContent } = await saveContent(projectId, fileType, name, html);
 
@@ -138,6 +163,7 @@ export const previewPage = tool({
       id: file!.id,
       name,
       status: "draft",
+      fidelity,
       approvalRequired: "Wait for user acceptance before passing this ID in approvedDesignDocumentIds to createTickets.",
       // Say it plainly so the model quotes the id in the ticket rather than paraphrasing.
       referenceForTicket: `Approved design preview: document ${file!.id} ("${name}") — build the page to match it.`,
@@ -200,6 +226,7 @@ export const updateFileContent = tool({
   execute: async ({ fileId, userId, content }, options) => {
     const [existing] = await db.select().from(projectFiles).where(eq(projectFiles.id, fileId));
     if (!existing) return { success: false, error: "File not found" };
+    if (existing.fileType === "design_baseline") return { success: false, error: "Layout captures are immutable. Capture a new version." };
     await associateUsageDocument(existing.id, options.toolCallId);
 
     const { s3Key, dbContent } = await saveContent(existing.projectId, existing.fileType, existing.name, content);
@@ -256,6 +283,7 @@ export const patchFileContent = tool({
   execute: async ({ fileId, userId, edits }, options) => {
     const [existing] = await db.select().from(projectFiles).where(eq(projectFiles.id, fileId));
     if (!existing) return { success: false, error: "File not found" };
+    if (existing.fileType === "design_baseline") return { success: false, error: "Layout captures are immutable. Capture a new version." };
     await associateUsageDocument(existing.id, options.toolCallId);
 
     // Get current content

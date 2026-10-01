@@ -7058,7 +7058,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     // Docs are LINKED to epics, never moved into them — so filtering
                     // by epic narrows the view without a doc ever leaving this list.
                     if (data.files) {
-                        data.files = data.files.filter(f => (!currentType || f.type === currentType) && (!currentSearch || (f.name || "").toLowerCase().includes(currentSearch.toLowerCase())));
+                        data.files = data.files.filter(f => f.type !== 'design_baseline' && (!currentType || f.type === currentType) && (!currentSearch || (f.name || "").toLowerCase().includes(currentSearch.toLowerCase())));
                         data.files.forEach(f => (f.epics || []).sort((a,b) => new Date(b.epicCreatedAt || 0) - new Date(a.epicCreatedAt || 0)));
                     }
                     if (data.files && currentEpic) {
@@ -7091,13 +7091,80 @@ document.addEventListener('DOMContentLoaded', function() {
                                 ? es.find(x => x.epicId === currentEpic) : null) || es[0];
                             return (e.epicKey ? e.epicKey + ' · ' : '') + e.epicName;
                         };
+                        const isDesign = f => f.type === 'page_preview';
                         data.files.sort((a, b) => {
+                            if (isDesign(a) !== isDesign(b)) return isDesign(a) ? 1 : -1;
                             const al = docEpicLabel(a), bl = docEpicLabel(b);
                             if (al === bl) return 0;
                             if (al === 'No epic') return 1;
                             if (bl === 'No epic') return -1;
                             return (new Date(b.epics?.[0]?.epicCreatedAt || 0) - new Date(a.epics?.[0]?.epicCreatedAt || 0)) || bl.localeCompare(al, undefined, {numeric:true});
                         });
+                        const folderHeader = (title, keyText, count, isEpic = false) => {
+                            const header = document.createElement('summary');
+                            header.className = 'lfg-doc-group';
+                            header.innerHTML = '<svg class="document-group-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m6 4 4 4-4 4"/></svg><svg class="document-group-folder" viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 5.5a1 1 0 0 1 1-1h5l2 2h6a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-13a1 1 0 0 1-1-1z"/></svg>';
+                            if (isEpic) {
+                                const icon = header.querySelector('.document-group-folder');
+                                icon.classList.add('document-group-epic');
+                                icon.innerHTML = '<path d="m11.5 2-7 9h5l-1 7 7-10h-5z"/>';
+                            }
+                            const label = document.createElement('span');
+                            label.className = 'document-group-name';
+                            label.textContent = title;
+                            const key = document.createElement('span');
+                            key.className = 'document-group-key';
+                            key.textContent = keyText || '';
+                            const badge = document.createElement('span');
+                            badge.className = 'document-group-count';
+                            badge.textContent = String(count);
+                            header.append(label, key, badge);
+                            return header;
+                        };
+                        const uploads = data.files.filter(f => f.type === 'upload');
+                        if (uploads.length) {
+                            const folder = document.createElement('details');
+                            folder.className = 'document-uploads-folder';
+                            folder.open = !!currentSearch || currentType === 'upload' || collapsedDocGroups.has('uploads-root-open');
+                            folder.addEventListener('toggle', () => {
+                                if (folder.open) collapsedDocGroups.add('uploads-root-open');
+                                else collapsedDocGroups.delete('uploads-root-open');
+                            });
+                            folder.append(folderHeader('Uploads', '', uploads.length));
+                            const body = document.createElement('div');
+                            body.className = 'document-group-files';
+                            for (const file of uploads) {
+                                const row = document.createElement('div');
+                                row.className = 'file-list-item';
+                                const icon = document.createElement('span');
+                                icon.className = 'file-icon';
+                                icon.innerHTML = '<i class="fas fa-paperclip" aria-hidden="true"></i>';
+                                const link = document.createElement('a');
+                                link.className = 'file-name';
+                                link.textContent = file.name;
+                                link.href = '/api/files/' + encodeURIComponent(file.id);
+                                link.download = file.name;
+                                link.title = 'Download ' + file.name;
+                                row.append(icon, link);
+                                body.append(row);
+                            }
+                            folder.append(body);
+                            fileBrowserList.append(folder);
+                        }
+                        data.files = data.files.filter(f => f.type !== 'upload');
+                        let designFolder = null;
+                        if (data.files.some(isDesign)) {
+                            designFolder = document.createElement('details');
+                            designFolder.className = 'document-design-folder';
+                            designFolder.open = !!currentSearch || !!currentType || collapsedDocGroups.has('design-root-open');
+                            designFolder.addEventListener('toggle', () => {
+                                if (designFolder.open) collapsedDocGroups.add('design-root-open');
+                                else collapsedDocGroups.delete('design-root-open');
+                            });
+                            const summary = folderHeader('Design Previews', '', data.files.filter(isDesign).length);
+                            designFolder.appendChild(summary);
+                            fileBrowserList.appendChild(designFolder);
+                        }
                         let curDocGroup = null;
                         let groupBody = null;
                         let groupCount = null;
@@ -7106,7 +7173,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         data.files.forEach(file => {
                             const epic = (currentEpic && currentEpic !== '__none__'
                                 ? file.epics?.find(e => e.epicId === currentEpic) : null) || file.epics?.[0];
-                            const groupId = epic?.epicId || '__none__';
+                            const groupId = (isDesign(file) ? 'design:' : '') + (epic?.epicId || '__none__');
                             if (groupId !== curDocGroup) {
                                 curDocGroup = groupId;
                                 groupSize = 0;
@@ -7117,24 +7184,13 @@ document.addEventListener('DOMContentLoaded', function() {
                                     if (group.open) collapsedDocGroups.delete(groupId);
                                     else collapsedDocGroups.add(groupId);
                                 });
-                                const hdr = document.createElement('summary');
-                                hdr.className = 'lfg-doc-group';
+                                const hdr = folderHeader(epic?.epicName || 'Unassigned', epic?.epicKey, 0, true);
                                 hdr.dataset.epicDrop = epic?.epicId || '';
-                                const arrow = document.createElement('i');
-                                arrow.className = 'fas fa-chevron-right document-group-chevron';
-                                arrow.setAttribute('aria-hidden', 'true');
-                                const label = document.createElement('span');
-                                label.className = 'document-group-name';
-                                label.textContent = epic?.epicName || 'Unassigned';
-                                const key = document.createElement('span');
-                                key.className = 'document-group-key';
-                                key.textContent = epic?.epicKey || '';
-                                groupCount = document.createElement('span');
-                                groupCount.className = 'document-group-count';
-                                hdr.append(arrow, label, key, groupCount);
+                                groupCount = hdr.querySelector('.document-group-count');
                                 groupBody = document.createElement('div');
+                                groupBody.className = 'document-group-files';
                                 group.append(hdr, groupBody);
-                                fileBrowserList.appendChild(group);
+                                (isDesign(file) ? designFolder : fileBrowserList).appendChild(group);
                             }
                             groupCount.textContent = String(++groupSize);
                             groupCount.setAttribute('aria-label', groupSize + ' documents on this page');

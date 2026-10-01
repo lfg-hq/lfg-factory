@@ -12,9 +12,10 @@ async function fixture(body:(x:any)=>Promise<void>) {
  const original=exec('git rev-parse HEAD').output.trim();let report:any;let agents=0;let clock=0;let checks=0;const messages:string[]=[];
  const o={workspaceId:'existing-vm',projectDir:dir,featureBranch:'feature/test',repoUrl:'https://example.test/repo.git',validation:{projectId:'p',userId:'u'}};
  const deps:RuntimeDependencies={
+ budgetMs:30*60_000,
  now:()=>clock,
  shell:async cmd=>cmd.includes('cat \'/data/lfg-runtime/') ? {exitCode:0,output:JSON.stringify(report)} : cmd.includes('mkdir -p \'/data/lfg-runtime/') || cmd.includes('rm -f \'/data/lfg-runtime/') ? {exitCode:0,output:''}:exec(cmd),
- agent:async prompt=>{agents++;clock+=9*60_000;expect(exec('git rev-parse HEAD').output.trim()).toBe(original);writeFileSync(join(dir,'app.txt'),'fixed-'+agents);report={runId:prompt.match(/"runId":"([^"]+)"/)![1],status:'passed',summary:'Feature verified',kind:'library',checks:[{label:'feature assertion',command:'test -s app.txt'}]};},
+ agent:async prompt=>{agents++;clock+=9*60_000;expect(exec('git rev-parse HEAD').output.trim()).toBe(original);writeFileSync(join(dir,'app.txt'),'fixed-'+agents);report={runId:prompt.match(/"runId":"([^"]+)"/)![1],status:'passed',summary:'Feature verified',kind:'library',prerequisites:[],checks:[{label:'feature assertion',command:'test -s app.txt'}]};},
  check:async cmd=>{checks++;expect(exec('git rev-parse HEAD').output.trim()).toBe(original);return exec(cmd);},
  progress:async msg=>{messages.push(msg);},
  };
@@ -153,4 +154,63 @@ test('feature-only skips validation checks and does not commit',()=>fixture(asyn
  x.deps.featureTest=async()=>{featureRuns++};
  const sha=await runTicketRuntime(x.o,x.deps,{kind:'ticket',baseline:'',phase:'feature-testing'});
  expect(sha).toBe(x.original);expect(x.checks()).toBe(0);expect(featureRuns).toBe(1);
+}));
+
+test('invalid feature applicability returns the precise schema error for repair',()=>fixture(async x=>{
+ const shell=x.deps.shell;let reports=0;const agent=x.deps.agent;
+ x.deps.shell=async(cmd:string)=>{
+  const r=await shell(cmd);
+  if(cmd.includes("cat '/data/lfg-runtime/") && reports++===0){const report=JSON.parse(r.output);report.featureTest={kind:'not_applicable',reason:'Runtime-only ticket, no user interface',applicability:[{criterion:'config',applicable:true,reason:'unit test'}]};return {exitCode:0,output:JSON.stringify(report)};}
+  return r;
+ };
+ x.deps.agent=async(p:string)=>{if(x.agents())expect(p).toContain('Not-applicable decision contradicts applicable criteria');await agent(p);};
+ await runTicketRuntime(x.o,x.deps);expect(x.agents()).toBe(2);
+}));
+test('custom validation budget expires without committing and retains edits',()=>fixture(async x=>{
+ x.deps.budgetMs=60_000;
+ await expect(runTicketRuntime(x.o,x.deps)).rejects.toThrow('Runtime validation paused after 1 minutes');
+ expect(x.exec('git rev-parse HEAD').output.trim()).toBe(x.original);
+ expect(readFileSync(join(x.dir,'app.txt'),'utf8')).toContain('fixed');
+}));
+test('unsupported environment pauses immediately instead of consuming the budget',()=>fixture(async x=>{
+ const shell=x.deps.shell;
+ x.deps.shell=async(cmd:string)=>{const r=await shell(cmd);if(cmd.includes("cat '/data/lfg-runtime/")){const report=JSON.parse(r.output);report.status='blocked';report.blocker={kind:'environment',capability:'Required service',diagnostic:'service probe failed; required sandbox capability unavailable'};return {exitCode:0,output:JSON.stringify(report)};}return r;};
+ await expect(runTicketRuntime(x.o,x.deps)).rejects.toThrow('required environment capability Required service');
+ expect(x.agents()).toBe(1);expect(x.exec('git rev-parse HEAD').output.trim()).toBe(x.original);
+}));
+
+test('missing prerequisite returns to builder for repair before committing',()=>fixture(async x=>{
+ const shell=x.deps.shell;const agent=x.deps.agent;
+ x.deps.shell=async(cmd:string)=>{
+  const r=await shell(cmd);
+  if(cmd.includes("cat '/data/lfg-runtime/")){const report=JSON.parse(r.output);report.prerequisites=[{name:'Required runtime',reason:'Compile the approved feature',verificationCommand:'test -f runtime-ready || { echo "runtime not installed"; exit 1; }'}];return {exitCode:0,output:JSON.stringify(report)};}
+  return r;
+ };
+ x.deps.agent=async(p:string)=>{if(x.agents()){expect(p).toContain('runtime not installed');writeFileSync(join(x.dir,'runtime-ready'),'installed');}await agent(p);};
+ await runTicketRuntime(x.o,x.deps);expect(x.agents()).toBe(2);expect(x.exec('git rev-list --count HEAD').output.trim()).toBe('2');
+}));
+test('unavailable service prevents commit despite a passed agent report',()=>fixture(async x=>{
+ const shell=x.deps.shell;
+ x.deps.shell=async(cmd:string)=>{const r=await shell(cmd);if(cmd.includes("cat '/data/lfg-runtime/")){const report=JSON.parse(r.output);report.prerequisites=[{name:'Search service',reason:'Required for indexing',verificationCommand:'echo "service unreachable"; exit 1'}];return {exitCode:0,output:JSON.stringify(report)};}return r;};
+ await expect(runTicketRuntime(x.o,x.deps)).rejects.toThrow('Search service is not ready: service unreachable');
+ expect(x.exec('git rev-parse HEAD').output.trim()).toBe(x.original);
+}));
+test('missing prerequisite inventory returns explicit report feedback',()=>fixture(async x=>{
+ const shell=x.deps.shell;const agent=x.deps.agent;let reports=0;
+ x.deps.shell=async(cmd:string)=>{const r=await shell(cmd);if(cmd.includes("cat '/data/lfg-runtime/") && reports++===0){const report=JSON.parse(r.output);delete report.prerequisites;return {exitCode:0,output:JSON.stringify(report)};}return r;};
+ x.deps.agent=async(p:string)=>{if(x.agents())expect(p).toContain('prerequisites:');await agent(p);};
+ await runTicketRuntime(x.o,x.deps);expect(x.agents()).toBe(2);
+}));
+
+test('runner transport failure preserves code and does not ask for an app repair',()=>fixture(async x=>{
+ x.deps.check=async()=>{throw new Error('sandbox transport timed out');};
+ await expect(runTicketRuntime(x.o,x.deps)).rejects.toThrow('No feature failure was established');
+ expect(x.agents()).toBe(1);expect(x.exec('git rev-parse HEAD').output.trim()).toBe(x.original);
+ expect(x.messages.join('\n')).toContain('"status":"blocked"');
+}));
+test('validation reports named pending running and passed checks',()=>fixture(async x=>{
+ await runTicketRuntime(x.o,x.deps);
+ const checks=x.messages.filter((m:string)=>m.startsWith('Validation check: ')).map((m:string)=>JSON.parse(m.slice(18)));
+ expect(checks.map((c:any)=>c.status)).toEqual(['pending','running','passed']);
+ expect(checks.every((c:any)=>c.label==='feature assertion')).toBe(true);
 }));

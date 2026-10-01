@@ -361,11 +361,26 @@ export async function getActiveRun(projectId: string): Promise<{
   };
 }
 
+/** Release an explicitly superseded blocked run, preserving its work and history. */
+export async function cancelBlockedRun(projectId: string, runId: string): Promise<boolean> {
+  const active = await getActiveRun(projectId);
+  if (!active || active.runId !== runId || active.status !== "blocked") return false;
+  if (active.items.some(item => ["running", "queued"].includes(item.status))) return false;
+  const changed = await db.update(agentRuns).set({status:"cancelled", updatedAt:new Date()})
+    .where(and(eq(agentRuns.id,runId),eq(agentRuns.projectId,projectId),eq(agentRuns.status,"blocked"))).returning({id:agentRuns.id});
+  if (!changed.length) return false;
+  await db.update(ticketExecutions).set({status:"cancelled",completedAt:new Date()})
+    .where(and(eq(ticketExecutions.agentRunId,runId),inArray(ticketExecutions.status,["pending","ready","blocked"])));
+  await logRunEvent(runId, null, "blocked_run_replaced", {});
+  return true;
+}
+
 /** Un-block a run after the user retries the failed ticket. */
 export async function resumeBlockedRun(projectId: string): Promise<boolean> {
   const active = await getActiveRun(projectId);
   if (!active || active.status !== "blocked") return false;
-  await db.update(agentRuns).set({ status: "running", updatedAt: new Date() }).where(eq(agentRuns.id, active.runId));
+  const changed = await db.update(agentRuns).set({ status: "running", updatedAt: new Date() }).where(and(eq(agentRuns.id, active.runId),eq(agentRuns.status,"blocked"))).returning({id:agentRuns.id});
+  if (!changed.length) return false;
   // The failed item goes back in the queue; its dependents follow.
   await db.update(ticketExecutions).set({ status: "pending", completedAt: null })
     .where(and(eq(ticketExecutions.agentRunId, active.runId), eq(ticketExecutions.status, "failed")));

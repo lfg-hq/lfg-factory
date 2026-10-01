@@ -98,6 +98,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Track whether messages have been loaded to prevent duplicate loading
     let conversationLoadedViaRest = false;
+    let conversationLoadVersion = 0;
 
     // Extract project ID from path
     const pathProjectId = extractProjectIdFromPath();
@@ -353,9 +354,11 @@ document.addEventListener('DOMContentLoaded', () => {
     newChatBtn?.addEventListener('click', (e) => {
         e.preventDefault();  // Prevent <a href="#"> from firing
 
+        ++conversationLoadVersion;
         // Reset conversation ID but keep project ID
         currentConversationId = null;
         window.currentConversationId = null;  // Sync to global
+        window.dispatchEvent(new Event('chat-conversation-changed'));
         conversationLoadedViaRest = false;
 
         // Project ID should always be available from path
@@ -1038,6 +1041,7 @@ document.addEventListener('DOMContentLoaded', () => {
         socket = new WebSocket(wsUrlWithParams);
         
         socket.onopen = function(e) {
+            if (e.target !== socket) return;
             console.log('WebSocket connection established');
             isSocketConnected = true;
             reconnectAttempts = 0;  // Reset reconnect attempts
@@ -1082,8 +1086,26 @@ document.addEventListener('DOMContentLoaded', () => {
         };
         
         socket.onmessage = function(event) {
+            if (event.target && event.target !== socket) return;
             const data = JSON.parse(event.data);
-            if ((data.build_status || data.type === "epic_build_update") && document.body.dataset.epicBuilds === "true") window.dispatchEvent(new Event("epic-build-update"));
+            if (data.type === 'conversation_created' && data.conversationId) {
+                currentConversationId = data.conversationId;
+                window.currentConversationId = currentConversationId;
+                window.dispatchEvent(new Event('chat-conversation-changed'));
+                return;
+            }
+            if (data.type === 'background_resume') {
+                resetStreamingState();
+                currentStreamingEl = null;
+                activeTrail = null;
+                const loaded = conversationLoadedViaRest;
+                conversationLoadedViaRest = false;
+                socket.onmessage({data: JSON.stringify({type:'chat_history', messages:data.messages})});
+                conversationLoadedViaRest = loaded;
+                data.events.forEach(item => socket.onmessage({data: JSON.stringify(item)}));
+                return;
+            }
+            if ((data.build_status || data.type === "epic_build_update" || (data.type === "ticket_status" || data.type === "tasks_updated")) && document.body.dataset.epicBuilds === "true") window.dispatchEvent(new Event("epic-build-update"));
             if (data.type === "notification") {
                 window.dispatchEvent(new CustomEvent("build-notification", { detail: data.notification }));
                 return;
@@ -1201,6 +1223,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         } else if (msg.content && msg.content.trim() !== '') {
                             // Regular text messages
                             addMessageToChat(msg.role, msg.content, null, null, msg.is_partial);
+                        }
+                        if (msg.role === 'assistant') {
+                            (msg.page_previews || msg.pagePreviews || []).forEach(p => p?.id && renderPagePreview(p.id, p.name, {replay:true}));
                         }
                     });
                     scrollToBottom(true); // Force scroll when loading history
@@ -1386,6 +1411,7 @@ document.addEventListener('DOMContentLoaded', () => {
         };
         
         socket.onclose = function(event) {
+            if (event.target !== socket) return;
             stopHeartbeat();
             stopConnectionMonitor();
             isSocketConnected = false;
@@ -1538,6 +1564,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (data.conversation_id) {
                 currentConversationId = data.conversation_id;
                 window.currentConversationId = currentConversationId;  // Sync to global
+                window.dispatchEvent(new Event('chat-conversation-changed'));
 
                 // Update URL with conversation ID
                 const url = new URL(window.location);
@@ -2642,6 +2669,14 @@ document.addEventListener('DOMContentLoaded', () => {
      */
     function syncPreviewChrome(card) {
         const full = card.classList.contains('is-full');
+        const cards = Array.from(messageContainer.querySelectorAll('.page-preview-card'));
+        const index = cards.indexOf(card);
+        const position = card.querySelector('.page-preview-position');
+        if (position) position.textContent = `${index + 1} of ${cards.length} · ${cards.length - index - 1} more`;
+        const previous = card.querySelector('[data-pv="previous"]');
+        const next = card.querySelector('[data-pv="next"]');
+        if (previous) previous.disabled = index <= 0;
+        if (next) next.disabled = index >= cards.length - 1;
         const toggle = card.querySelector('[data-pv="toggle"]');
         const expand = card.querySelector('[data-pv="expand"]');
         if (toggle) {
@@ -2669,10 +2704,16 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!fileId) return;
         const card = document.createElement('div');
         card.className = 'page-preview-card';
+        card.dataset.previewId = fileId;
         card.innerHTML = `
             <div class="page-preview-head">
                 <i class="fas fa-window-maximize"></i>
                 <span class="page-preview-name"></span>
+                <span class="page-preview-navigation">
+                  <button class="page-preview-btn" data-pv="previous" aria-label="Previous preview">←</button>
+                  <span class="page-preview-position" aria-live="polite"></span>
+                  <button class="page-preview-btn" data-pv="next" aria-label="Next preview">→</button>
+                </span>
                 <button class="page-preview-btn" data-pv="expand" title="Full screen"><i class="fas fa-up-right-and-down-left-from-center"></i></button>
                 <button class="page-preview-btn" data-pv="open" title="Open in a new tab"><i class="fas fa-arrow-up-right-from-square"></i></button>
                 <button class="page-preview-btn" data-pv="toggle" title="Collapse"><i class="fas fa-chevron-down"></i></button>
@@ -2682,6 +2723,7 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>`;
         card.querySelector('.page-preview-name').textContent = fileName || 'Page preview';
         messageContainer.appendChild(card);
+        messageContainer.querySelectorAll('.page-preview-card.is-full').forEach(syncPreviewChrome);
         scrollToBottom();
         // Say where it went. The card scrolls away with the conversation, but the page
         // is a saved document — people should know to look in Docs for it later.
@@ -2696,11 +2738,33 @@ document.addEventListener('DOMContentLoaded', () => {
             .then((j) => {
                 const html = (j && j.content) || '';
                 if (!html.trim()) { body.innerHTML = '<div class="page-preview-loading">This preview is empty.</div>'; return; }
+                const metadata = new DOMParser().parseFromString(html, 'text/html');
+                const fidelity = metadata.querySelector('meta[name="lfg-design-fidelity"]')?.content;
+                const captured = fidelity === 'captured-layout';
+                const label = document.createElement('div');
+                label.className = 'page-preview-fidelity';
+                label.textContent = captured ? 'Captured app layout · sample feature · navigation is a static reference' : fidelity === 'source-based' ? 'Source-based design · sample data · not verified against the running app' : 'Approximate mockup · app layout not verified';
+                card.querySelector('.page-preview-head').after(label);
                 const frame = document.createElement('iframe');
                 window.DesignPreview.configure(frame, html);
+                frame.title = fileName || 'Design preview';
+                frame.classList.add('page-preview-desktop');
+                if (captured) frame.classList.add('page-preview-captured');
                 frame.setAttribute('loading', 'lazy');
                 body.innerHTML = '';
                 body.appendChild(frame);
+                // Keep desktop navigation intact inside a narrow chat column.
+                const resize = new ResizeObserver(() => {
+                    if (card.classList.contains('is-full')) {
+                        body.style.height = '';
+                        if (captured) body.style.setProperty('--preview-scale', String(Math.min(body.clientWidth / 1440, body.clientHeight / 900)));
+                        return;
+                    }
+                    const scale = Math.min(1, body.clientWidth / 1440);
+                    body.style.setProperty('--preview-scale', String(scale));
+                    body.style.height = (900 * scale) + 'px';
+                });
+                resize.observe(body);
                 card.dataset.html = html;
             })
             .catch(() => { body.innerHTML = '<div class="page-preview-loading">Could not load this preview.</div>'; });
@@ -2716,7 +2780,18 @@ document.addEventListener('DOMContentLoaded', () => {
             const btn = e.target.closest('[data-pv]');
             if (!btn) return;
             const act = btn.getAttribute('data-pv');
-            if (act === 'toggle') {
+            if (act === 'previous' || act === 'next') {
+                const cards = Array.from(messageContainer.querySelectorAll('.page-preview-card'));
+                const target = cards[cards.indexOf(card) + (act === 'next' ? 1 : -1)];
+                if (target) {
+                    card.classList.remove('is-full');
+                    syncPreviewChrome(card);
+                    target.classList.remove('is-collapsed');
+                    target.classList.add('is-full');
+                    syncPreviewChrome(target);
+                    target.querySelector(`[data-pv="${act}"]`).focus();
+                }
+            } else if (act === 'toggle') {
                 // Full screen: this button MEANS "dismiss" — leave the takeover, don't
                 // fold the card away underneath it.
                 if (card.classList.contains('is-full')) {
@@ -3673,11 +3748,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 } else if (fd.name) {
                     const fileAttachment = document.createElement('div');
                     fileAttachment.className = 'file-attachment';
-                    fileAttachment.innerHTML = `
-                        <i class="fas fa-paperclip"></i>
-                        <span class="file-name">${fd.name}</span>
-                        <span class="file-type">${fd.type}</span>
-                    `;
+                    const icon = document.createElement('i');
+                    icon.className = 'fas fa-paperclip';
+                    icon.setAttribute('aria-hidden', 'true');
+                    const name = document.createElement('span');
+                    name.className = 'file-name';
+                    name.textContent = fd.name;
+                    const type = document.createElement('span');
+                    type.className = 'file-type';
+                    type.textContent = fd.name.includes('.') ? fd.name.split('.').pop().toUpperCase() : 'File';
+                    fileAttachment.append(icon, name, type);
                     contentDiv.appendChild(document.createElement('br'));
                     contentDiv.appendChild(fileAttachment);
                 }
@@ -3961,7 +4041,9 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!step.key) step.key = 'warning-' + Date.now();
         }
         const steps = activeTrail.querySelector('.agent-trail-steps');
-        const text = step.detail || step.label || 'Working';
+        const text = step.detail || step.label || 'Thinking…';
+        activeTrail.dataset.action = text;
+        updateTrailMeta(activeTrail);
 
         // The same tool CALL reporting again refines its own row instead of adding
         // another: a file is requested by id, so the first line can only say "Reading a
@@ -4029,7 +4111,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const title = trail.querySelector('.agent-trail-title');
             if (title) title.textContent = silent >= 30
                 ? 'Waiting for a response — no update for ' + silent + 's'
-                : 'Working';
+                : (trail.dataset.action || 'Thinking…');
         }
     }
 
@@ -4981,6 +5063,8 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Function to load a specific conversation
     async function loadConversation(conversationId) {
+        const loadVersion = ++conversationLoadVersion;
+        if (socket) { socket.onclose = null; socket.close(); socket = null; isSocketConnected = false; }
         try {
             console.log('[loadConversation] fetching:', `/api/conversations/${conversationId}`);
             const response = await fetch(`/api/conversations/${conversationId}`);
@@ -4990,6 +5074,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             const data = await response.json();
+            if (loadVersion !== conversationLoadVersion) return;
+            resetStreamingState();
+            currentStreamingEl = null;
             console.log('[loadConversation] got data, messages:', data.messages?.length);
             if (!data || !data.messages) {
                 console.error('[loadConversation] Invalid data:', data);
@@ -4999,6 +5086,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // Set current conversation ID
             currentConversationId = conversationId;
             window.currentConversationId = currentConversationId;  // Sync to global
+                window.dispatchEvent(new Event('chat-conversation-changed'));
             conversationLoadedViaRest = true;
 
             // Clear chat
@@ -5045,6 +5133,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             });
             console.log('[loadConversation] rendered', rendered, 'messages');
+            connectWebSocket();
             
             // Load files for this conversation
             loadMessageFiles(conversationId);
@@ -5079,6 +5168,8 @@ document.addEventListener('DOMContentLoaded', () => {
             scrollToBottom(true);
         } catch (error) {
             console.error('Error loading conversation:', error);
+        } finally {
+            if (loadVersion === conversationLoadVersion && !socket) connectWebSocket();
         }
     }
 

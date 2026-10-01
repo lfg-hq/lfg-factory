@@ -34,9 +34,9 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
   <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
-  <link rel="stylesheet" href="/public/css/artifacts.css?v=20260924-epic-builds" />
+  <link rel="stylesheet" href="/public/css/artifacts.css?v=20260924-epic-live-progress" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
-  <link rel="stylesheet" href="/public/css/chat.css?v=20260923-model-picker" />
+  <link rel="stylesheet" href="/public/css/chat.css?v=20260929-single-ticket-20260924-epic-live-progress" />
   <link rel="stylesheet" href="/public/css/artifacts-fix.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
@@ -463,20 +463,20 @@ export function ChatPage({
   <script src="/public/js/marked.min.js"></script>
   <script src="/public/js/markdown-config.js"></script>
   <!-- PDF libraries load on demand when exporting a document. -->
-  <script src="/public/js/chat-epics.js"></script>
+  <script src="/public/js/chat-epics.js?v=20260929-single-ticket"></script>
   <script src="/public/js/design-preview.js"></script>
-  <script src="/public/js/artifacts-loader.js?v=20260924-epic-builds"></script>
+  <script src="/public/js/artifacts-loader.js?v=20260924-epic-live-progress"></script>
   <script src="/public/js/document-comments.js"></script>
   <script src="/public/js/artifacts.js"></script>
   <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20260923-inline-history" />
-<script src="/public/js/ticket-action-phases.js?v=20260923-inline-history"></script>
+<script src="/public/js/ticket-action-phases.js?v=20260928-validation-checks"></script>
 <script src="/public/js/preview-tab.js"></script>
   <script src="/public/js/ticket-agent.js"></script>
   <script src="/public/js/env-tab.js"></script>
   <script src="/public/js/tab-overflow.js"></script>
   <script src="/public/js/sidebar.js?v=20260923-tooltip-theme"></script>
   <script src="/public/js/custom-dropdown.js"></script>
-  <script src="/public/js/chat.js?v=20260924-epic-builds"></script>
+  <script src="/public/js/chat.js?v=20260924-epic-live-progress"></script>
   <script src="/public/js/mobile-menu.js"></script>
 
   <script>

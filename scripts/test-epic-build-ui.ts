@@ -12,27 +12,78 @@ try {
  let requests=0,saved:any=null;
  await page.route('**/*',async route=>{
   const u=new URL(route.request().url());
-  if(u.pathname==='/projects/demo')return route.fulfill({contentType:'text/html',body:'<body data-epic-builds="true" data-project-id="demo"><div id="checklist"></div><input id="cfg-epic-builds" type="checkbox" disabled><p id="cfg-epic-builds-status"></p></body>'});
-  if(u.pathname.endsWith('/epics')){requests++;return route.fulfill({json:{epicBuildsEnabled:true,canBuildEpics:true,epics:[{id:'e',epicKey:'E1',name:'Feature',goal:'Build something useful',status:'draft',ticketCount:0,ticketsBuilt:0,buildStatus:'Planning'},{id:'r',name:'Ready feature',status:'in_review',ticketCount:2,ticketsBuilt:2,buildStatus:'Ready for review',previewUrl:'https://preview.example.com'}]}});}
+  if(u.pathname==='/projects/demo')return route.fulfill({contentType:'text/html',body:'<body data-epic-builds="true" data-project-id="demo"><button data-tab="preview">Preview</button><div id="chat-messages"><div class="message-container"></div></div><div id="checklist"></div><input id="cfg-epic-builds" type="checkbox" disabled><p id="cfg-epic-builds-status"></p></body>'});
+  if(u.pathname.endsWith('/epics')){requests++;return route.fulfill({json:{epicBuildsEnabled:true,canBuildEpics:true,epics:[{id:'e',conversationId:'chat-a',epicKey:'E1',name:'Feature',docs:[{id:'doc1',name:'Feature PRD'}],activity:[{id:'log1',message:'Creating VM workspace',type:'command',createdAt:new Date().toISOString()}],tickets:[{id:'t1',ticketKey:'KIT-11',name:'Runtime setup',status:'failed',description:'Runtime details'},{id:'t2',ticketKey:'KIT-12',name:'Renderer',status:'open'},{id:'t3',ticketKey:'KIT-13',name:'Storage',status:'open',queueStatus:'executing'},{id:'t4',ticketKey:'KIT-14',name:'Endpoints',status:'review'}],goal:'Build something useful',status:'draft',ticketCount:0,ticketsBuilt:0,buildStatus:'Planning'},{id:'r',conversationId:'chat-b',name:'Ready feature',status:'in_review',ticketCount:2,ticketsBuilt:2,buildStatus:'Ready for review',previewUrl:'https://preview.example.com'}]}});}
   if(u.pathname.endsWith('/build-settings')){if(route.request().method()==='POST') saved=route.request().postDataJSON();return route.fulfill({json:{epicBuildsEnabled:false,canChangeEpicBuilds:true}});}
   return route.fulfill({body:''});
  });
  await page.goto('http://test.local/projects/demo');
- for(const file of ['theme-variables.css','artifacts.css'])await page.addStyleTag({content:await readFile('public/css/'+file,'utf8')});
- await page.evaluate(()=>{(window as any).__sendChatMessage__=(text:string)=>(window as any).sent=text;});
+ for(const file of ['theme-variables.css','common.css','artifacts.css','chat.css','artifacts-fix.css','polish.css','light/light-mode.css'])await page.addStyleTag({content:await readFile('public/css/'+file,'utf8')});
+ await page.evaluate(()=>{(window as any).TicketAgentChat={open:(...args:any[])=>(window as any).openedTicket=args};(window as any).viewFileContent=(id:string)=>(window as any).openedDoc=id;(window as any).currentConversationId='chat-a';(window as any).PreviewTab={open:()=>{(window as any).previewOpened=true;}};(window as any).__sendChatMessage__=(text:string)=>(window as any).sent=text;});
  await page.addScriptTag({content:await readFile('public/js/chat-epics.js','utf8')});
+ await page.evaluate(()=>document.dispatchEvent(new Event('DOMContentLoaded')));
  await page.evaluate(()=>(window as any).loadChatEpics('demo'));
+ assert.equal(await page.locator('.chat-epic').count(),1);
+ assert.equal(await page.getByLabel('Filter epics').inputValue(),'chat');
+ assert(await page.locator('.chat-epic').textContent().then(t=>t?.includes('Feature')));
+ await page.getByRole('button',{name:'Feature PRD'}).click();
+ assert.equal(await page.evaluate(()=>(window as any).openedDoc),'doc1');
+ assert.equal(await page.getByText('Creating VM workspace',{exact:true}).count(),1);
+ await page.getByLabel('Filter epics').selectOption('all');
  assert.equal(await page.locator('.chat-epic').count(),2);
- assert(!(await page.locator('#checklist').textContent())?.toLowerCase().includes('ticket'));
- await page.getByRole('button',{name:'Build feature'}).first().click();
- assert((await page.evaluate(()=>(window as any).sent)).includes('I approve building'));
- assert.equal(await page.getByRole('link',{name:'Test preview ↗'}).getAttribute('href'),'https://preview.example.com/');
- await page.screenshot({path:'/tmp/epic-builds-chat.png'});
+ assert.equal(await page.locator('.epic-chat-progress').count(),1);
+ for(const state of ['pending','active','done','failed']) assert.equal(await page.locator('#checklist .epic-ticket-row[data-state="'+state+'"]').count(),1);
+ await page.locator('#checklist .epic-ticket-row').first().click();
+ assert.deepEqual((await page.evaluate(()=>(window as any).openedTicket)).slice(0,3),['t1','KIT-11','Runtime setup']);
+ assert.equal((await page.evaluate(()=>(window as any).openedTicket))[3].description,'Runtime details');
+ await page.evaluate(()=>(window as any).loadChatEpics('demo'));
+ assert.equal(await page.locator('.epic-chat-progress').count(),1);
+ await page.evaluate(()=>{document.querySelector('.message-container')!.replaceChildren();});
+ await page.waitForSelector('.epic-chat-progress');
+ assert.equal(await page.locator('.epic-chat-progress').count(),1);
+ await page.getByRole('button',{name:'Discuss requirements'}).first().click();
+ assert((await page.evaluate(()=>(window as any).sent)).includes('Ask for my approval'));
+ const location=page.url();
+ await page.getByRole('button',{name:'Open preview'}).click();
+ assert.equal(page.url(),location);
+ assert(await page.evaluate(()=>(window as any).previewOpened));
+ assert.equal(await page.locator('#checklist a').count(),0);
+ // A new chat defaults to its own epics, including an empty unsaved chat.
+ await page.evaluate(()=>{(window as any).currentConversationId='chat-b';});
+ await page.evaluate(()=>(window as any).loadChatEpics('demo'));
+ assert.equal(await page.getByLabel('Filter epics').inputValue(),'chat');
+ assert.equal(await page.locator('.epic-chat-progress').count(),0);
+ assert.equal(await page.locator('.chat-epic').count(),1);
+ assert((await page.locator('.chat-epic').textContent())?.includes('Ready feature'));
+ await page.evaluate(()=>{(window as any).currentConversationId=null;});
+ await page.evaluate(()=>(window as any).loadChatEpics('demo'));
+ assert.equal(await page.locator('.chat-epic').count(),0);
+ assert(await page.getByText('No epics created in this chat yet.',{exact:false}).count());
+ await page.getByLabel('Filter epics').selectOption('all');
+ assert.equal(await page.getByText('View feature',{exact:true}).count(),0);
+ for (const theme of ['light','dark']) {
+  await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);
+  await page.screenshot({path:'/tmp/epic-builds-chat-'+theme+'.png'});
+  const colors=await page.locator('.chat-epic h4').first().evaluate(el=>({text:getComputedStyle(el).color,bg:getComputedStyle(el.parentElement!).backgroundColor}));
+  assert.notEqual(colors.text,colors.bg);
+ }
+ await page.setViewportSize({width:380,height:900});
+ assert(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth));
  await page.addScriptTag({content:await readFile('public/js/epic-build-settings.js','utf8')});
  await page.waitForFunction(()=>!(document.getElementById('cfg-epic-builds') as HTMLInputElement).disabled);
  await page.locator('#cfg-epic-builds').check();
  await page.waitForFunction(()=>document.getElementById('cfg-epic-builds-status')?.textContent?.startsWith('Saved'));
  assert.deepEqual(saved,{epicBuildsEnabled:true});
+ await page.route('**/api/projects/demo/epics',route=>route.fulfill({json:{epicBuildsEnabled:true,canBuildEpics:true,epics:[{id:'single',name:'Complete feature',conversationId:'chat-a',status:'building',buildStatus:'Validating',buildMode:'single-ticket',ticketCount:1,ticketsBuilt:0,tickets:[{id:'whole',ticketKey:'KIT-50',name:'Complete feature',status:'in_progress',queueStatus:'executing'}],implementationTasks:[{id:'a',description:'Build the data flow',status:'success'},{id:'b',description:'Verify the complete experience',status:'in_progress'}]}]}}));
+ await page.evaluate(()=>{(window as any).currentConversationId='chat-a';});
+ await page.evaluate(()=>(window as any).loadChatEpics('demo'));
+ assert.equal(await page.locator('#checklist .epic-ticket-row').count(),1);
+ assert.equal(await page.locator('#checklist .epic-implementation-tasks li').count(),2);
+ assert.equal(await page.locator('#chat-messages .epic-implementation-tasks li').count(),2);
+ assert.equal(await page.locator('#checklist progress').count(),0);
+ assert.equal(await page.getByRole('button',{name:'Discuss requirements'}).count(),0);
+ await page.locator('#checklist .epic-ticket-row').click();
+ assert.equal((await page.evaluate(()=>(window as any).openedTicket))[0],'whole');
  await page.evaluate(()=>{document.body.dataset.epicBuilds='false';});
  const count=requests;await page.evaluate(()=>(window as any).loadChatEpics('demo'));assert.equal(requests,count);
  console.log('PASS: default ticket mode, opt-in Epics panel, build approval action, preview, setting save, off-mode guard');

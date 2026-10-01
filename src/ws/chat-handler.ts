@@ -1,3 +1,4 @@
+import { BackgroundTurn, findBackgroundTurn, detachBackgroundSocket } from './background-turns.ts';
 import type { ServerWebSocket } from "bun";
 import type { WsData, WSIncoming, WsConnection } from "./types.ts";
 import {
@@ -23,8 +24,9 @@ const HEARTBEAT_INTERVAL_MS = parseInt(process.env.WS_HEARTBEAT_MS || "20000", 1
 // tab cleared whichever timer the key currently held — usually the OTHER tab's,
 // the one still working. That tab stopped receiving heartbeats, its client-side
 // connection monitor concluded the socket was dead after 120s, and force-closed
-// it — which aborts the in-flight turn server-side. A reply would simply stop
+// it. Turns now survive these socket closures. A reply would simply stop
 // mid-sentence because a DIFFERENT tab had been closed.
+const syncedSockets = new WeakSet<ServerWebSocket<WsData>>();
 const heartbeatTimers = new WeakMap<ServerWebSocket<WsData>, ReturnType<typeof setInterval>>();
 
 export function onOpen(ws: ServerWebSocket<WsData>): void {
@@ -41,7 +43,7 @@ export function onOpen(ws: ServerWebSocket<WsData>): void {
 
   // Send chat history if conversation_id was provided in the WS URL
   console.log("[ws] onOpen - conversationId:", ws.data.conversationId, "userId:", ws.data.userId);
-  if (ws.data.conversationId) {
+  if (ws.data.conversationId && !findBackgroundTurn(conn.userId, ws.data.conversationId)) {
     sendHistory(ws, ws.data.conversationId).catch((err) => {
       console.warn("[ws] Failed to send chat history:", err);
     });
@@ -67,13 +69,7 @@ export function onClose(ws: ServerWebSocket<WsData>): void {
     heartbeatTimers.delete(ws);
   }
 
-  // Abort any in-flight generation. Tag WHY first: a turn cut off because the
-  // laptop slept must not be saved as though the assistant had finished.
-  const conn = getConnection(ws);
-  if (conn?.abortController) {
-    conn.endReason = "disconnect";
-    conn.abortController.abort();
-  }
+  detachBackgroundSocket(ws);
 
   unregisterConnection(ws);
 }
@@ -93,18 +89,29 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
   if (msg.type === "heartbeat_ack") return;
 
   if (msg.type === "sync_state") {
+    const turn = findBackgroundTurn(conn.userId, conn.conversationId);
+    if (conn.conversationId && !syncedSockets.has(ws) && (!turn || !turn.subscribers.has(ws))) {
+      syncedSockets.add(ws);
+      let rows = await db.select().from(messages).where(eq(messages.conversationId, conn.conversationId!)).orderBy(asc(messages.createdAt));
+      const active = findBackgroundTurn(conn.userId, conn.conversationId);
+      if (!active) rows = await db.select().from(messages).where(eq(messages.conversationId, conn.conversationId!)).orderBy(asc(messages.createdAt));
+      if (active?.subscribers.has(ws) || !getConnection(ws)) return;
+      send(ws, { type: "background_resume", messages: rows.filter(m => !active || m.id !== active.assistantMessageId).map(m => ({ ...m, page_previews: m.pagePreviews ?? null, activity_trail: m.activityTrail, end_reason: m.endReason, is_partial: m.isPartial })), events: active?.events.map(e => JSON.parse(e)) ?? [] });
+      active?.subscribers.add(ws);
+    }
     send(ws, {
       type: "sync_state_response",
-      is_streaming: conn.isStreaming,
+      is_streaming: !!findBackgroundTurn(conn.userId, conn.conversationId),
       conversation_id: conn.conversationId,
     });
     return;
   }
 
   if (msg.type === "stop_generation") {
-    conn.stopRequested = true;
-    conn.endReason = "stopped";
-    conn.abortController?.abort();
+    const owner = findBackgroundTurn(conn.userId, conn.conversationId)?.owner ?? conn;
+    owner.stopRequested = true;
+    owner.endReason = "stopped";
+    owner.abortController?.abort();
     send(ws, { type: "stop_confirmed" });
     return;
   }
@@ -130,7 +137,7 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
       return;
     }
 
-    if (conn.isStreaming) {
+    if (conn.isStreaming || findBackgroundTurn(conn.userId, conversation_id || conn.conversationId)) {
       // Silently drop a duplicate send while we're already streaming.
       // Showing a "response is already being generated" toast is more
       // annoying than helpful — the user can see the assistant is mid-
@@ -150,6 +157,9 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
     conn.isStreaming = true;
     conn.stopRequested = false;
     conn.abortController = new AbortController();
+    conn.endReason = undefined;
+    const turn = new BackgroundTurn(conn);
+    const output = turn.transport;
 
     // Watchdog: if the model stream HANGS (provider stops responding with no output),
     // handleStream never returns → the finally never runs → isStreaming stays true →
@@ -183,7 +193,7 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
       conn.isStreaming = false;
       // For @preview the aborted run produces its OWN graceful "paused — reply continue"
       // message; a second generic error toast would just be noise, so skip it there.
-      if (!isPreviewCmd) send(ws, { type: "error", message: "The assistant stopped responding — please try again." });
+      if (!isPreviewCmd) send(output, { type: "error", message: "The assistant stopped responding — please try again." });
       clearInterval(watchdog);
     }, 15_000);
 
@@ -191,7 +201,7 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
       // "@preview …" → route to the interactive Preview agent (full control of the
       // project's live sandbox) instead of the normal chat model.
       if (/^\s*@preview\b/i.test(normalizedMessage) && conn.projectId) {
-        await handlePreviewChat(ws, conn, normalizedMessage, resolvedFiles, bumpActivity);
+        await handlePreviewChat(output, conn, normalizedMessage, resolvedFiles, bumpActivity);
       } else {
         // @ticket:… referenced → switch the Preview to the FIRST ticket's branch,
         // but ONLY if a preview is already LIVE and on a DIFFERENT branch. Asking a
@@ -212,7 +222,7 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
           }).catch(() => {});
         }
         const result = await handleStream({
-          ws,
+          ws: output,
           userId: conn.userId,
           userMessage: normalizedMessage,
           conversationId: conn.conversationId,
@@ -227,12 +237,14 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
           abortController: conn.abortController,
           abortReason: () => conn.endReason,
           onActivity: bumpActivity,
+          onAssistantMessageId: id => { turn.assistantMessageId = id; },
         });
 
         // Update connection with resolved conversationId
         conn.conversationId = result.conversationId;
       }
     } finally {
+      turn.finish();
       clearInterval(watchdog);
       if (!watchdogFired) conn.isStreaming = false;
       conn.abortController = undefined;
@@ -316,6 +328,7 @@ async function sendHistory(ws: ServerWebSocket<WsData>, conversationId: string):
       content: m.content,
       createdAt: m.createdAt,
       activity_trail: m.activityTrail ?? null,
+      page_previews: m.pagePreviews ?? null,
       end_reason: m.endReason ?? null,
       is_partial: m.isPartial ?? false,
     })),

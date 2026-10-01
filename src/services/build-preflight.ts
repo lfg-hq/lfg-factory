@@ -13,7 +13,7 @@ export function redactSetupOutput(value: string, secrets: string[] = []): string
 /** Fail closed on stderr-only failures and on a checkout of the wrong branch. */
 export async function runGitSetup(workspaceId: string, script: string, dir: string, branch: string, secrets: string[] = []) {
   const { execOnWorkspace } = await import("./mags.ts");
-  const checked = `set -e\nexport GIT_TERMINAL_PROMPT=0\necho GIT_SETUP_STARTED\n${script}\ncd ${q(dir)}\ngit rev-parse --verify HEAD\ntest "$(git branch --show-current)" = ${q(branch)}\necho GIT_CHECKOUT_VERIFIED`;
+  const checked = `set -e\nexport GIT_TERMINAL_PROMPT=0\necho GIT_SETUP_STARTED\nmkdir -p "$(dirname ${q(dir)})"\n${script}\ncd ${q(dir)}\ngit rev-parse --verify HEAD\ntest "$(git branch --show-current)" = ${q(branch)}\necho GIT_CHECKOUT_VERIFIED`;
   const encoded = Buffer.from(checked).toString("base64");
   let result;
   try {

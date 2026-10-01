@@ -72,3 +72,9 @@ test('only full feature completion supersedes a previous operation failure',()=>
  expect(completed(rows('Feature testing completed on the saved app.','Execution failed: new failure'))).toBe(false);
  expect(completed(rows('Feature testing completed on the saved app.','Feature testing: Preparing tests for the existing app.'))).toBe(false);
 });
+
+test('persisted phase labels classify a partial page without earlier markers',()=>{
+ const p=group(rows('[Validation] Inspecting the saved checkout','Validation check: {"id":"a","label":"Startup","status":"running"}'),{queueStatus:'executing'});
+ expect(p[0].rows).toHaveLength(0);expect(p[1].rows).toHaveLength(2);
+ expect(p[1].rows[0].message).toBe('Inspecting the saved checkout');
+});

@@ -13,7 +13,7 @@ import {
 } from "../db/schema/projects.ts";
 import { llmApiKeys, profiles, users } from "../db/schema/users.ts";
 import { projectFiles, projectFileVersions } from "../db/schema/documents.ts";
-import { conversations } from "../db/schema/chat.ts";
+import { conversations, chatFiles } from "../db/schema/chat.ts";
 import { ticketStages, projectTickets, projectTicketAttachments } from "../db/schema/tickets.ts";
 import { cleanupTicketWorktree } from "../workers/ticket-executor.ts";
 import { applicationState, githubTokens, gitlabTokens } from "../db/schema/users.ts";
@@ -1033,6 +1033,12 @@ projectsRouter.get("/projects/:projectId/api/files/browser", async (c) => {
     created_at: f.createdAt,
     epics: linksByFile[f.id] ?? [],
   }));
+
+  const uploads = await db.select({id:chatFiles.id,name:chatFiles.originalFilename,updated_at:chatFiles.uploadedAt,created_at:chatFiles.uploadedAt})
+    .from(chatFiles).innerJoin(conversations,eq(conversations.id,chatFiles.conversationId))
+    .where(and(eq(conversations.projectId,project.projectId),eq(conversations.userId,user.id)))
+    .orderBy(desc(chatFiles.uploadedAt));
+  files.push(...uploads.map(f=>({...f,type:'upload',epics:[]})));
 
   return c.json({
     files,

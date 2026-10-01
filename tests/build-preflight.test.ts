@@ -109,3 +109,14 @@ test("inherited SDK check rejects changed frameworks and missing SDK without edi
     expect(savedDotnetCheck("unknown")).toBeNull();
   } finally {rmSync(dir,{recursive:true,force:true});}
 });
+
+test('fresh sandbox creates missing checkout parent before Git setup', async()=>{
+  const root=mkdtempSync(join(tmpdir(),'epic-git-'));
+  const dir=join(root,'missing-data','project');
+  try {
+    result={exitCode:0,output:'GIT_CHECKOUT_VERIFIED',stderr:''};
+    await runGitSetup('vm',`cd '${root}/missing-data'\nmkdir project\ncd project\ngit init -b feature/test\ngit -c user.name=Test -c user.email=test@example.com commit --allow-empty -m initial`,dir,'feature/test');
+    const output=execFileSync('sh',['-c',Buffer.from(command.split(' ')[1]!, 'base64').toString()],{encoding:'utf8'});
+    expect(output).toContain('GIT_CHECKOUT_VERIFIED');
+  } finally {rmSync(root,{recursive:true,force:true});}
+});

@@ -1,3 +1,4 @@
+import {shellQuote as quotePath} from './preview-plan.ts';
 import { currentUsage } from "../ai/usage-context.ts";
 import { registerUsageOutput } from "./usage-cli.ts";
 import {piTerminationScript, missingPiExitReason} from './pi-termination.ts';
@@ -885,6 +886,7 @@ export async function streamPiToCompletion(params: {
   backgroundPid?: string;
   timeoutMs: number;
   onProgress?: (message: string) => void;
+  taskProgress?: {path:string;receive:(json:string)=>Promise<void>};
   /** Polled each cycle; when it returns true the run is torn down (in-VM agent killed)
    *  and streaming stops promptly so the caller can mark the build stopped. */
   shouldCancel?: () => boolean;
@@ -961,13 +963,18 @@ TL=$(tail -c 4000 "$F" 2>/dev/null | base64 | tr -d '\\n')
 PROC=$(for c in /proc/[0-9]*/cmdline; do tr '\\0' ' ' < "$c" 2>/dev/null; echo; done | grep -Ei '${BUILD_PROC_RE}' | grep -viE 'grep| pi | /pi | tee | node .*forward' | head -1 | cut -c1-60 | base64 | tr -d '\\n')
 printf 'PISTAT AL=%s DN=%s TC=%s\\n' "$AL" "$DN" "\${TC:-0}"
 printf 'PROC=%s\\n' "$PROC"
-printf 'TL=%s\\n' "$TL"`;
+printf 'TL=%s\\n' "$TL"
+${params.taskProgress ? `printf 'TASKS='; head -c 32768 ${quotePath(params.taskProgress.path)} 2>/dev/null | base64 | tr -d '\\n'; printf '\\n'` : ''}`;
     let out = "";
     try {
       // 30s (not the 15s default): a busy VM under a heavy build can be slow to answer a
       // control-plane exec — a short timeout turns load into a false "build failed".
       const res = await execLite(workspaceId, statusScript, 30_000);
       out = res.output || "";
+      if(params.taskProgress){
+        const snapshot=out.match(/^TASKS=(.*)$/m)?.[1];
+        if(snapshot)try{await params.taskProgress.receive(Buffer.from(snapshot,'base64').toString('utf8'));}catch{/* Progress must not interrupt a build. */}
+      }
       consecutiveErrors = 0;
       blindSince = 0;
     } catch (err) {
@@ -1132,7 +1139,8 @@ printf 'ERR=%s\\n' "$ERR"
 printf 'OOM=%s\\n' "$OOM"
 printf 'MEM=%s\\n' "$MEM"
 printf 'INST=%s\\n' "$INST"
-printf 'TL=%s\\n' "$TL"`;
+printf 'TL=%s\\n' "$TL"
+${params.taskProgress ? `printf 'TASKS='; head -c 32768 ${quotePath(params.taskProgress.path)} 2>/dev/null | base64 | tr -d '\\n'; printf '\\n'` : ''}`;
     const res = await execLite(workspaceId, analysisScript, 30_000);
     const out = res.output || "";
     const b64 = (re: RegExp) => {

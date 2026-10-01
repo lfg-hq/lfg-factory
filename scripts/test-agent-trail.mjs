@@ -186,7 +186,7 @@ else fail('missing stale-progress label');
 if (t3.querySelector('.agent-trail-meta').textContent.includes('31s')) ok('timer advances without another tool event');
 else fail('elapsed time is frozen');
 api.touchTrail();
-if (t3.querySelector('.agent-trail-title').textContent === 'Working') ok('real activity clears stale status');
+if (t3.querySelector('.agent-trail-title').textContent === t3.dataset.action) ok('real activity restores current action');
 else fail('stale status persists after activity');
 api.trailStep({ detail: 'Repository scan failed', tool: 'queryCodebase', warning: true });
 api.trailStep({ detail: 'Retrying repository scan', tool: 'queryCodebase' });

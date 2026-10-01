@@ -1,3 +1,4 @@
+import { chatDocumentContext } from '../services/chat-document-text.ts';
 import { withConversationContext } from "./tools/conversation-context.ts";
 import { currentUsage, withUsage, withUsageOperation } from "./usage-context.ts";
 import { availableChatModels } from "../services/available-models.ts";
@@ -198,6 +199,7 @@ export interface StreamRequest {
    *  watchdog treat this as an IDLE timer (fires only when the model truly goes
    *  silent) instead of killing a long-but-active agentic run at a fixed wall clock. */
   onActivity?: () => void;
+  onAssistantMessageId?: (id: string) => void;
 }
 
 // Providers whose configured models can view images directly (multimodal) — these get
@@ -478,6 +480,12 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   // ran and what they returned — leading to "I need that doc" right after
   // it just fetched it.
   const contextMessages: any[] = [];
+  const attachmentContexts = new Map<string, Promise<string>>();
+  const documentContext = (ids: string[]) => {
+    const key = ids.join(",");
+    if (!attachmentContexts.has(key)) attachmentContexts.set(key, chatDocumentContext(ids, userId));
+    return attachmentContexts.get(key)!;
+  };
   for (const m of history.reverse()) {
     const steps = (m as any).toolSteps as any[] | null | undefined;
     if (m.role === "assistant" && Array.isArray(steps) && steps.length > 0) {
@@ -488,7 +496,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     } else {
       contextMessages.push({
         role: m.role as "user" | "assistant" | "system",
-        content: m.content,
+        content: m.content + (m.role === "user" && Array.isArray(m.contentIfFile) ? await documentContext((m.contentIfFile as Array<{id:string}>).map(f=>f.id)) : ""),
       });
     }
   }
@@ -625,6 +633,17 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
           : `[The user attached an image "${x.f.name}" (imageId: ${x.f.id}), but the selected model can't view images and the Google (Gemini) vision pre-pass couldn't run — the Google AI key is missing or was rejected. Tell them to add a valid Google key in Settings → LLM Keys (or switch to a vision-native model) — do NOT guess what the image shows.]`;
       }));
       setLastUser(`${userMessage}\n\n${descs.join("\n\n")}${idNote}`);
+    }
+  }
+
+  const missingUploads = allFiles.filter(f => !f.id).map(f => JSON.stringify({attachment:f.name,readError:'The upload did not finish successfully. Explain that the file was selected but is not available to read; ask the user to retry the upload.'})).join('\n');
+  const attachedText = (await documentContext(allFiles.filter(f => f.id && !(f.type || '').startsWith('image/')).map(f => f.id!))) + (missingUploads ? '\nAttachment upload errors:\n' + missingUploads : '');
+  if (attachedText) {
+    for (let i = contextMessages.length - 1; i >= 0; i--) {
+      if (contextMessages[i].role !== 'user') continue;
+      const content = contextMessages[i].content;
+      contextMessages[i].content = Array.isArray(content) ? [...content, {type:'text',text:attachedText}] : content + attachedText;
+      break;
     }
   }
 
@@ -853,7 +872,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     opts: { steps?: any[] | null; final?: boolean; endReason?: string } = {},
   ): Promise<void> => {
     const final = opts.final ?? false;
-    if (!content && !final) return; // nothing meaningful to save yet
+    if (!content && !final && !pagePreviews.length) return; // nothing meaningful to save yet
     try {
       if (assistantMsgId) {
         await db.update(messages).set({
@@ -877,6 +896,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
           pagePreviews: pagePreviews.length ? pagePreviews : null,
         }).returning({ id: messages.id });
         assistantMsgId = row?.id ?? null;
+        if (assistantMsgId) req.onAssistantMessageId?.(assistantMsgId);
       }
     } catch (err) {
       console.warn("[stream-handler] assistant checkpoint failed:", (err as Error).message);
@@ -888,7 +908,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   // tools) and the last message (caches the growing history prefix). For every
   // other provider caching is automatic given our stable [system][tools][history]
   // ordering, so this is a no-op that returns the inputs unchanged.
-  tools = withConversationContext(readingTools(tools, userMessage), convId, userId);
+  tools = withConversationContext(readingTools(tools, userMessage), convId, userId, internalProjectId);
   if (epicBuildsEnabled && internalProjectId) {
     const { buildEpicTool, EPIC_BUILD_PROMPT } = await import('./tools/epic-build-tools.ts');
     tools = { ...tools, buildEpic: buildEpicTool({ projectId: internalProjectId, userId, conversationId: convId }) };
@@ -1258,6 +1278,8 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
               const at = pagePreviews.findIndex((p) => p.id === id || p.name === previewName);
               if (at >= 0) pagePreviews[at] = { id, name: previewName };
               else pagePreviews.push({ id, name: previewName });
+              if (checkpointPromise) await checkpointPromise.catch(() => {});
+              await persistAssistant(stripCitations(fullResponse));
               flush();
               ws.send(JSON.stringify({
                 type: "ai_chunk", chunk: "", is_final: false, is_notification: true,

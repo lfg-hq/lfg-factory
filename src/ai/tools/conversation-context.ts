@@ -1,20 +1,23 @@
 /** Bind request context without mutating shared tool definitions across chats. */
-export function withConversationContext(tools: Record<string, any>, conversationId: string, userId: string): Record<string, any> {
+export function withConversationContext(tools: Record<string, any>, conversationId: string, userId: string, projectId?: string | null): Record<string, any> {
   const bound = { ...tools };
   const activeEpics = new Map<string, string>();
   const builds = new Set(['queueTicketExecution', 'retryTicket', 'startBuildRun']);
-  for (const name of ['createTickets', 'startEpic', 'addToEpic', 'createTicket', ...builds, 'streamDocumentContent', 'previewPage']) {
+  const designSourcesRead = new Set<string>();
+  for (const name of Object.keys(tools)) {
     const tool = tools[name];
     if (!tool || typeof tool.execute !== 'function') continue;
     bound[name] = { ...tool, execute: async (args: Record<string, any>, opts: unknown) => {
+      args = { ...args, ...(projectId && 'projectId' in args ? { projectId } : {}) };
       const isDoc = name === 'streamDocumentContent' || name === 'previewPage';
       const context = isDoc || name === 'startEpic' ? await import('../../services/document-epic-context.ts') : null;
       const epicId = args.epicId || activeEpics.get(args.projectId) || (isDoc && args.projectId
         ? await context!.conversationEpic(args.projectId, conversationId) : undefined);
       const result = await tool.execute({ ...args, conversationId,
-        ...(builds.has(name) || isDoc || name === 'startEpic' ? {userId} : {}),
+        ...(builds.has(name) || isDoc || name === 'startEpic' || name === 'readDesignSource' || name === 'captureDesignLayout' || name === 'queryCodebase' ? {userId} : {}),
         ...(isDoc && epicId ? {epicId} : {}),
-      }, opts);
+      }, { ...(opts as object), designSourceRead: designSourcesRead.has(args.projectId) });
+      if (name === 'readDesignSource' && result?.commit && result.files?.length && result.files.every((file: any) => typeof file.content === 'string' && file.content.trim())) designSourcesRead.add(args.projectId);
       if (isDoc && result?.saved && result.id && !epicId) {
         await context!.rememberPendingDocument(args.projectId, conversationId, result.id);
       }

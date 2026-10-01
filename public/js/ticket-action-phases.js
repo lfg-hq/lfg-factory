@@ -4,11 +4,14 @@
     const phases = [{ id: 'build', label: 'Build', status: 'pending', rows: [] }, { id: 'validation', label: 'Validation', status: 'pending', rows: [] }, { id: 'feature-testing', label: 'Feature testing', status: 'pending', rows: [] }];
     let active = 0;
     let buildStarted = false;
-    for (const row of rows) {
+    for (const original of rows) {
+      const tag=String(original.message||'').match(/^\[(Validation|Feature testing)\] /);
+      const row=tag?{...original,message:original.message.slice(tag[0].length)}:original;
+      if(tag)active=tag[1]==='Validation'?1:2;
       const text = String(row.message || '').replace(/\*\*/g, '').trim();
       if (/^(Running a sandbox command|The same repair session is still active\.)$/.test(text)) continue;
       const retry = /^Retrying validation of saved commit/i.test(text);
-      const validation = retry || /^(Running the saved ticket:|Repairing runtime checks:|Checking:|Preparing validation:|Now verifying this commit|Fresh \/ candidate:|Runtime checks passed|✅\s*Validation passed)/i.test(text);
+      const validation = tag?.[1]==='Validation' || /^Validation check:|^Validation connection interrupted:|^Checking prerequisite:/i.test(text) || retry || /^(Running the saved ticket:|Repairing runtime checks:|Checking:|Preparing validation:|Now verifying this commit|Fresh \/ candidate:|Runtime checks passed|✅\s*Validation passed)/i.test(text);
       const build = /^(Starting Pi build|Isolated build:|Starting (?:ticket )?build|Building ticket)/i.test(text);
       if (build) { buildStarted = true; active = 0; phases[0].status = 'working'; phases[1].status = 'pending'; phases[2].status = 'pending'; }
       if (validation) {
@@ -28,6 +31,7 @@
       }
       if (/^(Feature testing|API test result)/i.test(text)) { active = 2; if(phases[1].status === 'working') phases[1].status = 'done'; phases[2].status = /^Feature testing passed/i.test(text) ? 'done' : /^Feature testing failed/i.test(text) ? 'error' : /^Feature testing not applicable/i.test(text) ? 'not-applicable' : 'working'; }
       phases[active].rows.push(row);
+      if(/^Validation connection interrupted:/i.test(text))phases[active].status='error';
       if (phases[active].status === 'pending') phases[active].status = 'working';
       if (/^(Execution failed:|❌|Pi build failed:|Pi build error:)/.test(text)) phases[active].status = 'error';
       if (/^(Runtime checks passed|✅\s*Validation passed|Validation and publication passed)/i.test(text)) phases[1].status = 'done';
@@ -122,9 +126,31 @@
         body.append(summary);
       }
       const latestLive=phase.rows.slice().reverse().find(r=>/\[(?:Live browser|Watch recording)\]\(/.test(String(r.message||'')));
-      const displayRows=phase.rows;
+      const checks=new Map();
+      for(const row of phase.rows){
+        if(!String(row.message||'').startsWith('Validation check: '))continue;
+        try{const c=JSON.parse(row.message.slice(18));if(typeof c.id==='string'&&typeof c.label==='string'&&['pending','running','passed','failed','blocked'].includes(c.status))checks.set(c.id,c);}catch{}
+      }
+      if(phase.id==='validation'){
+        const intro=document.createElement('p');intro.className='phase-empty';intro.textContent='Checks the saved implementation: required tools, app startup, and the ticket’s specific requirements. Connection problems pause verification; they do not mean the feature failed.';body.append(intro);
+      }
+      if(checks.size){
+        const list=document.createElement('ul');list.className='validation-checklist';list.setAttribute('aria-label','Validation checks');
+        for(const check of checks.values()){
+          const item=document.createElement('li');item.dataset.status=check.status;
+          const icon=document.createElement('span');icon.textContent=({pending:'○',running:'…',passed:'✓',failed:'×',blocked:'!'})[check.status];icon.setAttribute('aria-hidden','true');
+          const name=document.createElement('span');name.textContent=check.label;
+          const state=document.createElement('small');state.textContent=check.status==='blocked'?'Connection problem':check.status;
+          item.append(icon,name,state);list.append(item);
+        }
+        body.append(list);
+      }
+      const displayRows=phase.rows.filter(row=>!String(row.message||'').startsWith('Validation check: '));
       let logHost=body;
       let showLogs=null;
+      if(phase.id==='validation'&&displayRows.length){
+        const details=document.createElement('details');const summary=document.createElement('summary');summary.textContent='Technical activity and diagnostics';details.append(summary);const logs=document.createElement('div');details.append(logs);body.append(details);logHost=logs;
+      }
       if(phase.id==='feature-testing' && displayRows.length){
         body.classList.add('feature-log-toolbar');
         const show=document.createElement('button');show.type='button';show.className='feature-show-logs';show.textContent='Show logs';showLogs=show;

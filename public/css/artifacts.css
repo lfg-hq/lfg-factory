@@ -4940,7 +4940,7 @@ body.ticket-modal-open {
     #filebrowser #file-search { font-size:16px; }
 }
 
-.chat-epics { padding:24px; color:var(--text-color); }
+.chat-epics { padding:24px; color:var(--text-primary); }
 .chat-epics-header,.chat-epic-actions { display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap; }
 .chat-epics-header h3 { margin:0; }
 .chat-epic { padding:24px 0;border-bottom:1px solid var(--border-color); }
@@ -4948,3 +4948,69 @@ body.ticket-modal-open {
 .chat-epic p,.chat-epic small,.chat-epic-status { color:var(--text-secondary);font-size:13px;line-height:1.5; }
 .chat-epic progress { display:block;width:100%;height:6px;margin:12px 0 4px;accent-color:var(--primary-color,#8b5cf6); }
 .chat-epic-actions { justify-content:flex-start;margin-top:16px;font-size:13px; }
+
+.chat-epics { padding:20px; max-width:920px; margin:0 auto; }
+.chat-epics-header h3 { font-size:16px; }
+.chat-epics-header .btn { padding:6px 10px; font-size:12px; background:transparent; }
+.chat-epics-intro { color:var(--text-secondary); font-size:13px; line-height:1.5; margin:8px 0 20px; }
+.chat-epic { padding:18px; margin:12px 0; border:1px solid var(--border-color); border-radius:10px; background:var(--card-bg); }
+.chat-epic h4 { line-height:1.4; overflow-wrap:anywhere; }
+.chat-epic-status { display:inline-block; font-size:11px; font-weight:600; padding:3px 8px; background:var(--hover-bg); border-radius:5px; }
+.chat-epic .chat-epic-hint { margin:12px 0 0; font-size:12px; }
+.chat-epic-review { color:var(--primary-color,#8b5cf6); background:transparent; border:0; padding:4px 0; font:inherit; cursor:pointer; }
+.chat-epic-review:hover { text-decoration:underline; }
+.chat-epic-review:focus-visible { outline:2px solid currentColor; outline-offset:4px; }
+
+.chat-epic h4 { color:var(--text-primary); }
+.chat-epic-actions a { color:var(--text-link); text-decoration:none; }
+
+.chat-epics { background:var(--background-color); }
+.chat-epics-header .btn { color:var(--text-secondary); border:1px solid var(--border-color); }
+
+.chat-epics-header select { margin-left:auto; min-height:34px; max-width:100%; padding:6px 10px; font:inherit; font-size:13px; color:var(--text-primary); background:var(--input-bg); border:1px solid var(--border-color); border-radius:6px; }
+.chat-epics-empty { font-size:13px; line-height:1.6; color:var(--text-secondary); padding:16px 0; }
+
+.chat-epic progress { appearance:none; border:none; border-radius:8px; overflow:hidden; background:var(--border-color); }
+.chat-epic progress::-webkit-progress-bar { background:var(--border-color); border-radius:8px; }
+.chat-epic progress::-webkit-progress-value { background:var(--primary-color); border-radius:8px; transition:width .3s; }
+.chat-epic[data-status="Building"] .chat-epic-status { color:var(--primary-color); }
+.chat-epic[data-status="Needs attention"] .chat-epic-status { color:var(--warning-color); }
+.chat-epic-docs,.chat-epic-activity { margin-top:16px; border-top:1px solid var(--border-color); padding-top:12px; }
+.chat-epic h5 { margin:0 0 8px; color:var(--text-secondary); font-size:11px; text-transform:uppercase; letter-spacing:.06em; }
+.chat-epic-document { display:block; background:transparent; border:0; color:var(--text-link); font:inherit; font-size:13px; padding:6px 0; cursor:pointer; text-align:left; }
+.chat-epic-event { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:6px 12px; font-size:12px; line-height:1.6; padding:8px 0 8px 12px; border-left:2px solid var(--border-color); color:var(--text-secondary); overflow-wrap:anywhere; }
+.chat-epic-event:last-child { color:var(--text-primary); border-left-color:var(--primary-color); }
+.chat-epic-event[data-failed="true"] { border-left-color:var(--warning-color); }
+.chat-epic-event time { font-size:10px; color:var(--text-secondary); }
+.chat-epic-event details { grid-column:1/-1; }
+.chat-epic-event summary { cursor:pointer; }
+.chat-epic-event pre { white-space:pre-wrap; overflow-wrap:anywhere; max-height:200px; overflow:auto; font-size:11px; }
+
+.validation-checklist { list-style:none; padding:0; margin:16px 0; }
+.validation-checklist li { display:flex; gap:12px; align-items:center; padding:12px; border-bottom:1px solid var(--border-color,#e2e8f0); }
+.validation-checklist li > span:nth-child(2) { flex:1; }
+.validation-checklist small { text-transform:capitalize; }
+.validation-checklist [data-status="passed"] > span:first-child { color:#10b981; }
+.validation-checklist [data-status="failed"] > span:first-child { color:#ef4444; }
+.validation-checklist [data-status="blocked"] > span:first-child { color:#d97706; }
+.validation-checklist [data-status="running"] > span:first-child { color:var(--accent-color,#8b5cf6); }
+
+/* Shared folder rows: clear nesting without full-width focus outlines. */
+#filebrowser-list { box-sizing:border-box; min-width:0; padding:10px 16px 20px; }
+#filebrowser .document-design-folder,
+#filebrowser .document-epic-group { min-width:0; margin:0 0 4px; }
+#filebrowser .lfg-doc-group { box-sizing:border-box; min-height:42px; padding:9px 10px; gap:8px; border-radius:7px; line-height:1.4; }
+#filebrowser .lfg-doc-group:hover { background:var(--hover-bg, #f5f3ff); }
+#filebrowser .lfg-doc-group:focus { outline:none; }
+#filebrowser .lfg-doc-group:focus-visible { outline:2px solid var(--primary-color, #8b5cf6); outline-offset:-2px; }
+#filebrowser .document-group-chevron { width:14px; height:14px; flex:0 0 14px; fill:none; stroke:currentColor; stroke-width:1.5; transition:transform .15s; }
+#filebrowser .document-group-folder { width:18px; height:18px; flex:0 0 18px; fill:none; stroke:var(--text-secondary, #64748b); stroke-width:1.4; }
+#filebrowser .document-group-name { flex:0 1 auto; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+#filebrowser .document-group-key:empty { display:none; }
+#filebrowser .document-group-count { flex:0 0 auto; min-width:24px; padding:2px 6px; box-sizing:border-box; border-radius:5px; text-align:center; background:var(--hover-bg, #f1f5f9); font-size:11px; font-variant-numeric:tabular-nums; }
+#filebrowser .document-design-folder > .document-epic-group { margin-left:17px; padding-left:12px; border-left:1px solid var(--border-color, #e2e8f0); }
+#filebrowser .document-group-files { margin-left:24px; padding-left:10px; border-left:1px solid var(--border-color, #e2e8f0); }
+#filebrowser .document-group-files .file-list-item { padding-left:8px; }
+
+#filebrowser .document-uploads-folder { min-width:0; margin:0 0 4px; }
+#filebrowser .document-group-epic { stroke:var(--primary-color, #8b5cf6); }

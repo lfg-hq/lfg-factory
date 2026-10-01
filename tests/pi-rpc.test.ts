@@ -27,7 +27,7 @@ test('only process death starts a replacement with recovery context',async()=>{
 });
 test('one shared deadline covers subsequent turns',async()=>{
  const f=fixture();await f.session.ask('first');f.d.now=()=>101;
- await expect(f.session.ask('next')).rejects.toThrow('30-minute');expect(f.starts()).toBe(1);
+ await expect(f.session.ask('next')).rejects.toThrow('configured session deadline');expect(f.starts()).toBe(1);
 });
 test('cancellation refuses another prompt and cleanup remains available',async()=>{
  const f=fixture();await f.session.ask('first');f.d.cancelled=()=>true;
@@ -72,4 +72,28 @@ test('unknown shell activity is quiet and repeated known activity is coalesced',
  const f=fixture();const messages:string[]=[];f.d.log=m=>messages.push(m);
  f.states.push({events:[{type:'tool_execution_start',toolName:'bash',args:{command:'python3 inspect.py'}},{type:'tool_execution_start',toolName:'bash',args:{command:'ss -ltn'}},{type:'tool_execution_start',toolName:'bash',args:{command:'ss -ltn'}},{type:'agent_end'}],alive:true});
  await f.session.ask('inspect');expect(messages).toEqual(['Checking app listeners']);
+});
+
+test('poll timeout retries the same output offset without another prompt',async()=>{
+ const f=fixture();const exec=f.d.exec;let polls=0;
+ f.d.exec=async script=>{if(script.includes('f.seek(offset)')&&polls++===0)throw new Error('transport timeout');return exec(script);};
+ await f.session.ask('verify');expect(f.sent).toEqual(['verify']);expect(f.starts()).toBe(1);expect(polls).toBe(2);
+});
+test('persistent output failures stop retries without sending repair feedback',async()=>{
+ const f=fixture();const exec=f.d.exec;
+ f.d.exec=async script=>{if(script.includes('f.seek(offset)'))throw new Error('transport timeout');return exec(script);};
+ await expect(f.session.ask('verify')).rejects.toThrow('controller connection problem');
+ await expect(f.session.ask('repair')).rejects.toThrow('busy or uncertain');expect(f.sent).toEqual(['verify']);
+});
+test('uncertain prompt delivery is never resent',async()=>{
+ const f=fixture();const exec=f.d.exec;
+ f.d.exec=async script=>{const r=await exec(script);if(script.includes('os.open'))throw new Error('timeout after delivery');return r;};
+ await expect(f.session.ask('verify')).rejects.toThrow('delivery could not be confirmed');
+ expect(f.sent).toEqual(['verify']);expect(f.starts()).toBe(1);
+});
+test('concurrent callers cannot interrupt an outstanding request',async()=>{
+ const f=fixture();const exec=f.d.exec;let unblock!:()=>void;const blocked=new Promise<void>(resolve=>unblock=resolve);
+ f.d.exec=async script=>{if(script.includes('f.seek(offset)'))await blocked;return exec(script);};
+ const first=f.session.ask('first');await expect(f.session.ask('second')).rejects.toThrow('busy or uncertain');unblock();await first;
+ expect(f.sent).toEqual(['first']);
 });
