@@ -6,7 +6,6 @@ interface ChatPageProps {
   user: { id: string; name: string; email: string };
   projectId: string;
   projectName: string;
-  epicBuildsEnabled?: boolean;
   conversationId?: string;
   modelKey?: string;
   roleKey?: string;
@@ -17,7 +16,6 @@ export function ChatPage({
   user,
   projectId,
   projectName,
-  epicBuildsEnabled = false,
   conversationId,
   modelKey = "claude_4.5_sonnet",
   roleKey = "product_analyst",
@@ -31,12 +29,16 @@ export function ChatPage({
   <link rel="icon" type="image/x-icon" href="/public/images/favicon.ico" />
   <title>${projectName} — LFG</title>
   <script>(function(){if(localStorage.getItem('sidebarMinimized')==='true'){document.documentElement.classList.add('sidebar-minimized-preload');}})()</script>
+  <link rel="stylesheet" href="/public/css/document-graph.css?v=20261015-map-groups" />
+  <script src="/public/js/document-graph.js?v=20261015-map-groups" defer></script>
+  <script src="/public/js/ticket-map.js?v=20261015-map-groups" defer></script>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
   <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
-  <link rel="stylesheet" href="/public/css/artifacts.css?v=20260924-epic-live-progress" />
+  <link rel="stylesheet" href="/public/css/artifacts.css?v=20261004-dark-folders" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
-  <link rel="stylesheet" href="/public/css/chat.css?v=20260929-single-ticket-20260924-epic-live-progress" />
+  <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261018-document-actions" />
+  <link rel="stylesheet" href="/public/css/chat.css?v=20261018-connection-check" />
   <link rel="stylesheet" href="/public/css/artifacts-fix.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
@@ -69,8 +71,7 @@ export function ChatPage({
   <script src="/public/js/theme-switcher.js"></script>
 <link rel="stylesheet" href="/public/css/build-notifications.css?v=4" />
 </head>
-<body data-epic-builds="${epicBuildsEnabled ? "true" : "false"}"
-  data-user-id="${user.id}"
+<body data-user-id="${user.id}"
   data-user-name="${user.name}"
   data-project-id="${projectId}"
   data-model-key="${modelKey}"
@@ -182,6 +183,20 @@ export function ChatPage({
 
     <!-- Main Chat Area -->
     <div class="chat-container" style="position:relative;">
+      <!-- Workspace controls always remain above the ticket's own header. -->
+      <div class="project-header">
+        <div class="project-header-content">
+          <div class="project-name-container" id="project-name-container">
+            <h1 class="project-name" id="project-name-display">${projectName}</h1>
+          </div>
+          <div class="chat-header-actions">
+            <button id="artifacts-button" class="artifacts-button" type="button" title="Toggle workspace panel" aria-label="Toggle workspace panel">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+      <div class="chat-body">
       <!-- "Chat with ticket" — a FLOATING layer that sticks to the left over the main
            chat (not a replacement). Distinct card (shadow + rounded) with a close button;
            the main chat stays visible at the edges. Right panel keeps the live preview. -->
@@ -189,7 +204,7 @@ export function ChatPage({
         <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--border-color,#2a2a2a);flex:none;background:var(--background-surface,#191919);">
           <i class="fas fa-comments" style="color:#a78bfa;"></i>
           <span id="ta-title" style="font-weight:600;color:var(--text-color,#e2e8f0);font-size:14px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Ticket</span>
-          <button id="ta-exit" title="Close this layer (back to main chat)" style="width:30px;height:30px;border-radius:8px;cursor:pointer;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);display:inline-flex;align-items:center;justify-content:center;"><i class="fas fa-times"></i></button>
+          <button id="ta-exit" type="button" title="Close ticket and return to chat" aria-label="Close ticket and return to chat" style="flex:none;height:32px;padding:0 10px;gap:6px;border-radius:8px;cursor:pointer;background:transparent;color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);display:inline-flex;align-items:center;justify-content:center;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg><span>Close</span></button>
         </div>
         <div id="ta-resize" title="Drag to resize the split" style="position:absolute;top:0;right:-4px;width:10px;height:100%;cursor:ew-resize;z-index:7;"></div>
         <div id="ta-actionbar" style="display:flex;align-items:center;gap:8px;padding:9px 14px;flex:none;border-bottom:1px solid var(--border-color,#2a2a2a);background:var(--background-surface,#191919);">
@@ -227,20 +242,6 @@ export function ChatPage({
           </div>
         </div>
       </div>
-      <!-- Project Header -->
-      <div class="project-header">
-        <div class="project-header-content">
-          <div class="project-name-container" id="project-name-container">
-            <h1 class="project-name" id="project-name-display">${projectName}</h1>
-          </div>
-          <div class="chat-header-actions">
-            <button id="artifacts-button" class="artifacts-button" type="button" title="Toggle workspace panel" aria-label="Toggle workspace panel">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>
-            </button>
-          </div>
-        </div>
-      </div>
-
       <!-- Messages -->
       <div class="chat-messages" id="chat-messages">
         <div class="message-container">
@@ -249,6 +250,7 @@ export function ChatPage({
             <p>Start a conversation with the AI assistant below.</p>
           </div>` : html`<div class="loading-messages" style="text-align:center;padding:2rem;opacity:0.5;">Loading conversation...</div>`}
         </div>
+        <section id="chat-ticket-activity" aria-label="Project ticket activity" hidden></section>
       </div>
 
       <!-- Input Area -->
@@ -262,6 +264,7 @@ export function ChatPage({
         turboEnabled: false,
         showMic: true,
       })}
+      </div>
     </div>
   </div>
 
@@ -274,7 +277,7 @@ export function ChatPage({
     <div class="artifacts-tabs artifacts-tabs-managed" style="display:flex;justify-content:space-between;align-items:center;">
       <div class="artifacts-tabs-list" id="artifacts-tabs-list">
         <button class="tab-button active" data-tab="filebrowser">Docs</button>
-        <button class="tab-button" data-tab="checklist">${epicBuildsEnabled ? "Epics" : "Tickets"}</button>
+        <button class="tab-button" data-tab="checklist">Tickets</button>
         <button class="tab-button" data-tab="preview">Preview</button>
         <button class="tab-button" data-tab="env">Env</button>
       </div>
@@ -296,7 +299,7 @@ export function ChatPage({
         <div class="tab-pane" id="checklist">
           <div class="empty-state">
             <div class="empty-state-icon"><i class="fas fa-check-square"></i></div>
-            <div class="empty-state-text">${epicBuildsEnabled ? "Describe a feature in chat to start an epic." : "No checklist items created yet."}</div>
+            <div class="empty-state-text">No checklist items created yet.</div>
           </div>
         </div>
 
@@ -461,22 +464,26 @@ export function ChatPage({
     window.__WS_PATH__ = '/ws/chat';
   </script>
   <script src="/public/js/marked.min.js"></script>
-  <script src="/public/js/markdown-config.js"></script>
+  <script src="/public/js/markdown-config.js?v=20261015-horizontal-default"></script>
   <!-- PDF libraries load on demand when exporting a document. -->
-  <script src="/public/js/chat-epics.js?v=20260929-single-ticket"></script>
   <script src="/public/js/design-preview.js"></script>
-  <script src="/public/js/artifacts-loader.js?v=20260924-epic-live-progress"></script>
+  <script src="/public/js/artifacts-loader.js?v=20261015-map-groups"></script>
   <script src="/public/js/document-comments.js"></script>
   <script src="/public/js/artifacts.js"></script>
-  <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20260923-inline-history" />
-<script src="/public/js/ticket-action-phases.js?v=20260928-validation-checks"></script>
-<script src="/public/js/preview-tab.js"></script>
-  <script src="/public/js/ticket-agent.js"></script>
-  <script src="/public/js/env-tab.js"></script>
+  <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261004-log-layout" />
+<script src="/public/js/ticket-action-phases.js?v=20261002-optional-stages"></script>
+<script src="/public/js/preview-tab.js?v=20261005-start-state"></script>
+    <script src="/public/js/ticket-agent.js?v=20261005-followup-tasks"></script>
+  <script src="/public/js/ticket-activity.js?v=20261004-ticket-activity"></script>
+  <script src="/public/js/env-tab.js?v=20261004-env-apply"></script>
   <script src="/public/js/tab-overflow.js"></script>
-  <script src="/public/js/sidebar.js?v=20260923-tooltip-theme"></script>
+  <script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
   <script src="/public/js/custom-dropdown.js"></script>
-  <script src="/public/js/chat.js?v=20260924-epic-live-progress"></script>
+  <script src="/public/js/dictation.js?v=20261018-dictation-composer"></script>
+  <script src="/public/js/chat-artifacts.js?v=20261018-document-actions"></script>
+  <script src="/public/js/chatgpt-connection.js?v=20261018"></script>
+  <script src="/public/js/chat.js?v=20261018-connection-check"></script>
+  <script src="/public/js/voice-mode.js?v=20261016-voice-hidden" data-disabled="true"></script>
   <script src="/public/js/mobile-menu.js"></script>
 
   <script>

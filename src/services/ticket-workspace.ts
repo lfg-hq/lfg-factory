@@ -68,7 +68,7 @@ export async function openTicketWorkspace(options:{project:typeof projects.$infe
     const checkpoint = await readTicketCheckpoint(ticket.id);
     if (checkpoint && checkpoint.branch !== branch) throw new Error('Saved checkpoint branch does not match this ticket. Recovery stopped.');
     progress('Starting workspace from the prepared project environment…');
-    const created = await createTicketSandbox({projectId:project.id,ticketId:ticket.id,userId:actorId,log:async message=>progress(message),fresh:()=>newWorkspaceV2(`code-${ticket.id.slice(0,8)}-${crypto.randomUUID().slice(0,8)}`,{vcpus:4,memoryMb:4096,diskGb:20,keepAlive:true,rootfsType:process.env.PREVIEW_ROOTFS || 'pi'})});
+    const created = await createTicketSandbox({projectId:project.id,ticketId:ticket.id,userId:actorId,allowPreparedPreviewWithAppError:true,log:async message=>progress(message),fresh:()=>newWorkspaceV2(`code-${ticket.id.slice(0,8)}-${crypto.randomUUID().slice(0,8)}`,{vcpus:4,memoryMb:4096,diskGb:20,keepAlive:true,rootfsType:process.env.PREVIEW_ROOTFS || 'pi'})});
     progress('Restoring ticket code and saved edits…');
     // The clone is a new VM. Do not modify the source preview or an old ticket VM.
     const temp = '/data/lfg-code-' + crypto.randomUUID();

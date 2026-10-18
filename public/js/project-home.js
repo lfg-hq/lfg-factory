@@ -16,9 +16,9 @@
         list.replaceChildren();
         if (!epics.length) {
             const empty = element('div', 'home-epics-empty');
-            empty.append(element('p', 'home-muted', 'No epics yet. Start a conversation to plan your first feature.'));
-            const link = element('a', 'home-quiet-link', 'View all tickets →');
-            link.href = '/projects/' + project + '/tickets'; empty.append(link); list.append(empty);
+            const icon=element('i','far fa-file-lines');icon.setAttribute('aria-hidden','true');
+            empty.append(icon,element('strong','','No epics yet'),element('p','home-muted','Your planned features will appear here.'));
+            list.append(empty);
             return;
         }
         epics.forEach(epic => {
@@ -67,15 +67,4 @@
         });
         if (focused) Array.from(list.querySelectorAll('a')).find(a => a.getAttribute('href') === focused)?.focus({preventScroll:true});
     };
-    document.addEventListener('DOMContentLoaded', () => {
-        const form = document.getElementById('home-start-form'); if (!form) return;
-        form.addEventListener('submit', e => {
-            e.preventDefault();
-            const draft = document.getElementById('home-start-input').value.trim(); if (!draft) return;
-            try {
-                sessionStorage.setItem('home-chat-draft:' + form.dataset.project, draft);
-                location.assign('/chat/project/' + encodeURIComponent(form.dataset.project) + '?new=1');
-            } catch (_) { document.getElementById('home-start-error').textContent = 'Could not save your draft. Please enable browser storage and try again.'; }
-        });
-    });
 })();

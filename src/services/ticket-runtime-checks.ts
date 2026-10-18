@@ -1,6 +1,6 @@
-export const COHIRE_RUNTIME_CHECKS=['database','authentication','crud','persistence','tenant-isolation','hierarchy'] as const;
-export function requiredRuntimeChecks(requirements:string,branch:string):string[]{
- return /coh-25|workforce.organisation|workforce.organization/i.test(branch+' '+requirements) ? [...COHIRE_RUNTIME_CHECKS] : [];
+/** Required categories are explicit project/ticket policy, never customer-name matches. */
+export function requiredRuntimeChecks(_requirements:string,_branch:string,categories:string[]=[]):string[]{
+ return [...new Set(categories.map(c=>c.trim()).filter(Boolean))];
 }
 export function verifyRuntimeCoverage(required:string[],report:{kind:string;checks:{category?:string;execution?:string}[]}){
  if(!required.length)return;

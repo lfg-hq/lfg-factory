@@ -17,6 +17,16 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { DEVELOPMENT_ACCESS_INSTRUCTION } from '../prompts/development-access.ts';
+import { DELIVERY_INSTRUCTION, CONFIGURATION_TOOLS_INSTRUCTION } from '../prompts/delivery.ts';
+
+// Reuse canonical contracts; the catalogue exposes descriptions, not these bodies.
+const workflowContracts: Record<string, string> = {
+  'preview-operations': DEVELOPMENT_ACCESS_INSTRUCTION,
+  'environment-configuration': CONFIGURATION_TOOLS_INSTRUCTION,
+  'ticket-delivery': DELIVERY_INSTRUCTION,
+};
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export interface Skill {
@@ -44,7 +54,7 @@ function parse(file: string, raw: string): Skill | null {
   if (!meta.description) {
     console.warn(`[skills] ${file} has no description — the agent won't know when to use it`);
   }
-  return { id, description: meta.description ?? "", body: (m[2] ?? "").trim() };
+  return { id, description: meta.description ?? "", body: [(m[2] ?? "").trim(), workflowContracts[id]].filter(Boolean).join("\n\n") };
 }
 
 export function allSkills(): Skill[] {
@@ -76,16 +86,11 @@ export function skillCatalogue(): string {
   const lines = skills.map((s) => `- \`${s.id}\` — ${s.description}`).join("\n");
   return `## Skills
 
-Detailed workflows you can load when they apply. Each is a full set of steps that
-REPLACES improvising:
+Load a workflow before specialized work:
 
 ${lines}
 
-Call \`loadSkill({ id })\` the moment you recognise the work as one of these — BEFORE
-you start it — and then follow what it says. Load it once per conversation; you keep
-it for the rest of the turn and the ones after. If a skill covers the work, following
-it is not optional: skipping ahead (straight to \`createTickets\`, say) is exactly what
-these exist to prevent.`;
+Call \`loadSkill({ id })\` before applying a listed workflow. Reuse loaded instructions; reload after compaction. Skills never grant authorization.`;
 }
 
 // ── Project skills ──────────────────────────────────────────────────────────
@@ -134,14 +139,9 @@ export async function skillCatalogueFor(projectId?: string): Promise<string> {
   const lines = skills.map((s) => `- \`${s.id}\` — ${s.description}`).join("\n");
   return `## Skills
 
-Detailed workflows you can load when they apply. Each is a full set of steps that
-REPLACES improvising:
+Load a workflow before specialized work:
 
 ${lines}
 
-Call \`loadSkill({ id })\` the moment you recognise the work as one of these — BEFORE
-you start it — and then follow what it says. Load it once per conversation; you keep
-it for the rest of the turn and the ones after. If a skill covers the work, following
-it is not optional: skipping ahead (straight to \`createTickets\`, say) is exactly what
-these exist to prevent.`;
+Call \`loadSkill({ id })\` before applying a listed workflow. Reuse loaded instructions; reload after compaction. Skills never grant authorization.`;
 }

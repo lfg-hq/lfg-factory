@@ -12,7 +12,10 @@
  */
 (function () {
   let projectId = null;
-  let loadedOnce = false;
+  let application = null;
+  let applying = false;
+  let rebuildApp = false;
+  let renderedApplication = null;
   let vars = [];
   let editingId = null;   // row whose value is being edited
   let confirmingId = null; // row awaiting delete confirmation
@@ -41,6 +44,68 @@
     el.hidden = false;
     el.textContent = text;
     el.classList.toggle("ok", !!ok);
+  }
+
+  function renderApplication() {
+    let el = $("env-application");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "env-application";
+      el.className = "env-application";
+      el.setAttribute("aria-live", "polite");
+      $("env-list")?.before(el);
+    }
+    if (!application) { el.hidden = true; return; }
+    const signature = JSON.stringify([application, applying, rebuildApp]);
+    if (renderedApplication === signature) return;
+    renderedApplication = signature;
+    el.hidden = false;
+    const busy = applying || ["detecting", "provisioning", "installing", "seeding", "starting"].includes(application.status);
+    const pending = application.pending;
+    el.replaceChildren();
+    const text = document.createElement("p");
+    text.textContent = busy ? "Preview is updating…" : application.requiresPreparation
+      ? "Database settings changed. Use Update & rebuild in Preview to apply them." : application.status === "error" && pending
+      ? "Changes are still pending. Check Preview for the error, then retry." : pending
+      ? "Changes pending · " + (application.requiresBuild ? "A build and restart are needed." : "Restart to apply saved settings.")
+      : application.appliedAt ? "Saved settings applied to this preview." : "Settings will be applied when the preview starts.";
+    el.append(text);
+    if (pending && application.prepared) {
+      const button = document.createElement("button");
+      button.className = "env-mini env-mini-primary";
+      button.textContent = application.requiresPreparation ? "Open Preview" : (application.requiresBuild || rebuildApp) ? "Apply & rebuild app" : "Apply & restart app";
+      button.disabled = busy;
+      button.addEventListener("click", application.requiresPreparation ? () => window.switchTab?.("preview") : applyEnvironment);
+      if (!application.requiresPreparation && !application.requiresBuild) {
+        const label = document.createElement("label");
+        label.className = "env-rebuild-option";
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox"; checkbox.checked = rebuildApp; checkbox.disabled = busy;
+        checkbox.addEventListener("change", () => { rebuildApp = checkbox.checked; renderApplication(); });
+        label.append(checkbox, " Also rebuild app (custom build-time settings)");
+        el.append(label);
+      }
+      el.append(button);
+    }
+    const note = document.createElement("p");
+    note.className = "env-apply-note";
+    note.textContent = "Keeps the current branch, installed dependencies and preview database connections.";
+    el.append(note);
+  }
+
+  async function applyEnvironment() {
+    if (applying) return;
+    applying = true; renderApplication(); msg("");
+    try {
+      const r = await fetch("/api/projects/" + projectId + "/preview/restart", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        credentials: "same-origin", body: JSON.stringify({ refresh: false, rebuildApp }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.error || "Could not apply settings.");
+      msg("Applying settings. Progress is available in Preview.", true);
+    } catch (e) { msg(e.message); }
+    finally { applying = false; await load(); }
   }
 
   // ── Rendering ──────────────────────────────────────────────────────────────
@@ -89,6 +154,7 @@
         : "No variables yet";
     }
     updatePreviewBadge();
+    renderApplication();
 
     if (!vars.length) {
       list.innerHTML =
@@ -134,10 +200,12 @@
   }
 
   // ── Data ───────────────────────────────────────────────────────────────────
-  async function load() {
+  async function load(statusOnly) {
     if (!projectId) return;
     try {
       const d = await api("");
+      application = d.application || null;
+      if (statusOnly) { renderApplication(); return; }
       vars = (d && d.envVars) || [];
       render();
     } catch (e) {
@@ -257,8 +325,6 @@
   }
 
   function ensureLoaded() {
-    if (loadedOnce) return;
-    loadedOnce = true;
     load();
   }
 
@@ -310,6 +376,11 @@
       new MutationObserver(() => { if (pane.classList.contains("active")) ensureLoaded(); })
         .observe(pane, { attributes: true, attributeFilter: ["class"] });
     }
+
+    // Refresh status without replacing an in-progress value edit.
+    setInterval(() => {
+      if (!document.hidden && $("env")?.classList.contains("active")) load(true);
+    }, 5000);
 
     // Narrow panel → drop the description column (see .env-panel.is-narrow).
     if (window.ResizeObserver) {

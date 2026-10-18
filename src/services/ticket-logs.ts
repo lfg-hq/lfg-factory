@@ -7,7 +7,7 @@
 
 import { eq } from "drizzle-orm";
 import { db } from "../config/db.ts";
-import { ticketLogs, projectTickets } from "../db/schema/tickets.ts";
+import { ticketLogs } from "../db/schema/tickets.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 
 /**
@@ -43,13 +43,6 @@ export async function addLog(
         ...metadata,
       },
     });
-  }
-  if (userId) {
-    // Reuse persisted executor/Pi progress; no synthetic stage or percentage.
-    try {
-      const [ticket] = await db.select({epicId:projectTickets.epicId}).from(projectTickets).where(eq(projectTickets.id,ticketId)).limit(1);
-      if (ticket?.epicId) broadcastToUser(userId,{type:'epic_build_update',epic_id:ticket.epicId});
-    } catch { /* Progress delivery must never stop execution. */ }
   }
   return inserted?.id;
 }

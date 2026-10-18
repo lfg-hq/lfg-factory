@@ -53,7 +53,10 @@ export const projects = pgTable(
     // criteria and verify it red/green against the branch point. "off" (default) |
     // "tests". Opt-in because it costs a second agent run per ticket.
     qaMode: text("qa_mode").notNull().default("off"),
+    // Unused: epic build mode was removed. Kept so schema push does not drop the column.
     epicBuildsEnabled: boolean("epic_builds_enabled").notNull().default(false),
+    validationEnabled: boolean("validation_enabled").notNull().default(true),
+    featureTestingEnabled: boolean("feature_testing_enabled").notNull().default(true),
     // How this repo runs its tests, detected once (or set up once) rather than
     // rediscovered per ticket. Null until the first QA run resolves it.
     testCommand: text("test_command"),

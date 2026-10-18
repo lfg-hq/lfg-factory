@@ -35,10 +35,14 @@ type Env = { Variables: { user: typeof auth.$Infer.Session.user } };
 const notificationsApi = new Hono<Env>();
 notificationsApi.use("*", requireAuth as any);
 
-// Global build inbox, independent of the currently open project/conversation.
+// Build inbox: scoped to the active project when supplied, global on the project overview.
 const buildTypes = ["build_complete", "build_failed", "build_attention", "build_queued", "build_started", "build_stopped", "build_update"];
 notificationsApi.get("/build-notifications", async (c) => {
-  const scope = and(eq(notifications.userId, c.get("user").id), inArray(notifications.type, buildTypes));
+  const projectId = c.req.query("projectId");
+  if (projectId !== undefined && (!projectId || !await getProjectAccess(projectId, c.get("user").id)))
+    return c.json({error:"Project not found"},404);
+  const scope = and(eq(notifications.userId, c.get("user").id), inArray(notifications.type, buildTypes),
+    projectId ? eq(notifications.projectId, projectId) : undefined);
   const rows = await db.select().from(notifications).where(scope)
     .orderBy(desc(sql`${notifications.readAt} is null`), desc(notifications.createdAt)).limit(100);
   const [total] = await db.select({ value: count() }).from(notifications)
@@ -46,10 +50,16 @@ notificationsApi.get("/build-notifications", async (c) => {
   return c.json({ notifications: rows, unread: total?.value ?? 0 });
 });
 notificationsApi.post("/build-notifications/read", async (c) => {
-  const body = await c.req.json<{ id?: string }>().catch(() => ({} as { id?: string }));
+  const body = await c.req.json<{ id?: string; projectId?: string }>().catch(() => null);
+  if (!body || typeof body !== 'object' || Array.isArray(body) || (body.id !== undefined && (typeof body.id !== 'string' || !body.id)) ||
+      (body.projectId !== undefined && (typeof body.projectId !== 'string' || !body.projectId)))
+    return c.json({error:"Invalid notification request"},400);
+  if (body.projectId && !await getProjectAccess(body.projectId, c.get("user").id))
+    return c.json({error:"Project not found"},404);
   await db.update(notifications).set({ readAt: new Date() }).where(and(
     eq(notifications.userId, c.get("user").id), inArray(notifications.type, buildTypes),
     isNull(notifications.readAt), body.id ? eq(notifications.id, body.id) : undefined,
+    body.projectId ? eq(notifications.projectId, body.projectId) : undefined,
   ));
   broadcastToUser(c.get("user").id, { type: "notification" });
   return c.json({ ok: true });

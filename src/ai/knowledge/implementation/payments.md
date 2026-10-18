@@ -27,7 +27,7 @@ NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_live_...   # Next.js
 VITE_STRIPE_PUBLISHABLE_KEY=pk_live_...          # Vite / React SPA
 ```
 
-> Never commit real keys. Use `.env.local` (Next.js) or `.env` (dotenv). The secret key must only ever exist on the server.
+> Never commit real keys. Use the platform-seeded `.env` file for all frameworks, including Next.js; never create `.env.local`. The secret key must only ever exist on the server.
 
 ---
 

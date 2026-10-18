@@ -23,3 +23,5 @@ Validation:
 - `python3 scripts/test-ticket-checkpoint.py` — actual Git checkpoint round trips, staged/unstaged files, local commits, deletions, untracked binary files, and failure guards.
 - `python3 scripts/test-ticket-code.py` — real temporary Git repositories, diff scope, file-only commits, stale saves, invalid paths, binary files, and wrong branches.
 - `node scripts/test-ticket-code-browser.cjs` — Node 20+, Chrome (override with `CHROME_PATH`); local mocked sandbox API with the actual Monaco assets. Tests diff/editor views, save/optional commit, terminal, filtering, responsive layout, conflict preservation, and read-only mode. Screenshots are written to a temporary directory.
+
+The Coding script URL includes its content hash so deployments cannot reuse an older cached client against the recovery API. Tree responses are validated before replacing the current file list. For workspace recovery only, a prepared preview with an app/branch error can still be cloned after its `/data/project` checkout passes a live Git probe; ordinary build provisioning retains its working-preview requirement.

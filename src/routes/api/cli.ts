@@ -330,6 +330,8 @@ cliRouter.post("/request-input", async (c) => {
     { options },
     { explanation: encodeQuestionMeta({ blocking: true, options: Array.isArray(options) ? options : [] }) });
 
+  await (await import('../../services/ticket-operations.ts')).noteTicketOperationInput(ticket_id,question,options).catch(error=>console.error('[ticket-input] chat delivery failed',error));
+
   // Emit needs_attention for orchestrator consumption
   emit({
     type: "ticket.needs_attention",

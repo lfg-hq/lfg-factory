@@ -9,3 +9,5 @@ export const conversations = m.conversations;
 export const messages = m.messages;
 export const chatFiles = m.chatFiles;
 export const modelSelections = m.modelSelections;
+
+export const conversationContexts = m.conversationContexts;

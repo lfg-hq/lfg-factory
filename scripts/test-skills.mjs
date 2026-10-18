@@ -33,7 +33,7 @@ if (cat.includes("landing-page") && cat.includes("loadSkill")) ok("the catalogue
 else fail("catalogue incomplete");
 if (!cat.includes("Sketch a loose wireframe")) ok("the catalogue does NOT inline the workflow");
 else fail("the whole skill is still in the prompt");
-if (cat.length < 1200) ok(`catalogue is small (${cat.length} chars) vs the skill body (${lp.body.length})`);
+if (cat.length < 2000) ok(`catalogue is small (${cat.length} chars) vs the skill body (${lp.body.length})`);
 else fail(`catalogue is ${cat.length} chars — too heavy for every turn`);
 
 console.log("\nthe tool:");
@@ -43,6 +43,18 @@ else fail("tool did not return the instructions");
 const bad1 = await loadSkill.execute({ id: "nope" }, {});
 if (!bad1.found && Array.isArray(bad1.available) && bad1.available.length) ok("an unknown id lists the real options");
 else fail("unknown id fails without guidance");
+
+console.log("\nthe diagram workflow:");
+const diagram = getSkill("diagram-mapping");
+const loadedDiagram = await loadSkill.execute({ id: "diagram-mapping" }, {});
+if (diagram && loadedDiagram.found && loadedDiagram.instructions === diagram.body) ok("diagram skill is discoverable and loads without truncation");
+else fail("diagram skill did not load completely");
+if (cat.includes("diagram-mapping") && !cat.includes("Inventory before drawing")) ok("only the diagram description enters the base catalogue");
+else fail("diagram workflow was inlined or omitted");
+const { buildLoadSkillTool } = await import("../src/ai/tools/skill-tools.ts");
+const projectTool = await buildLoadSkillTool().execute({ id: "diagram-mapping" }, {});
+if (projectTool.found && projectTool.instructions === diagram?.body) ok("the project-aware loader returns the same built-in workflow");
+else fail("project-aware diagram loading differs");
 
 console.log("\nthe flow the skill teaches:");
 const body = lp.body;

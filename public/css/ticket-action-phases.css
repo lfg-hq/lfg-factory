@@ -42,17 +42,20 @@
 #ticket-drawer .logs-chat-field #actions-chat-input { border:0 !important; box-shadow:none !important; background:transparent !important; }
 
 /* Scroll long commands inside the ticket, keeping phase tabs and composer in place. */
-.ticket-phase-body { overflow-x:scroll; scrollbar-width:auto; scrollbar-color:#94a3b8 transparent; }
+.ticket-phase-body { overflow-x:auto; scrollbar-width:auto; scrollbar-color:#94a3b8 transparent; }
 .ticket-phase-body::-webkit-scrollbar { height:12px; }
 .ticket-phase-body::-webkit-scrollbar-thumb { background:#94a3b8; border:3px solid var(--card-bg,#fff); border-radius:8px; }
-.ticket-phase-body .log-cmd-header,.ticket-phase-body .ta-cmd-header { width:max-content; min-width:100%; box-sizing:border-box; }
-.ticket-phase-body .log-cmd-text,.ticket-phase-body .ta-cmd-text { flex:none; overflow:visible; text-overflow:clip; max-width:none; white-space:nowrap; }
+.ticket-phase-body .log-cmd-header,.ticket-phase-body .ta-cmd-header { width:100%; min-width:0; box-sizing:border-box; }
+.ticket-phase-body .log-cmd-text,.ticket-phase-body .ta-cmd-text { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ticket-phase-body .ta-cmd-header > small { flex:none; }
+.ticket-phase-body .ta-cmdrow,.ticket-phase-body .log-cmd-row { min-width:0; max-width:100%; }
+.ticket-phase-body .markdown-content { min-width:0; overflow-x:auto; overflow-wrap:anywhere; }
 .feature-test-video { display:block; width:min(100%,960px); max-height:540px; margin:12px auto; background:#111; border-radius:8px; }
 .phase-headers { overflow-x:auto; flex-shrink:0; }
 .phase-header { flex-shrink:0; white-space:nowrap; }
 /* Keep the horizontal scrollbar reachable above the message composer. */
 [data-phase-view] { display:flex; flex-direction:column; overflow:hidden !important; }
-[data-phase-view] .ticket-phase-body { flex:1 1 0; min-height:0; overflow:scroll; }
+[data-phase-view] .ticket-phase-body { flex:1 1 0; min-height:0; overflow:auto; }
 [data-phase-view] .phase-history-note { flex-shrink:0; }
 
 .drawer-run-phase { max-width:185px; height:38px; padding:0 28px 0 10px; border:1px solid var(--border-color,#dce2ed); border-radius:8px; background:var(--card-bg,#fff); color:var(--text-primary,#273247); font:inherit; font-size:13px; cursor:pointer; }

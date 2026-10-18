@@ -1,3 +1,5 @@
+import { ensureDocumentGraph } from "../../services/document-graph.ts";
+import { projects } from "../../db/schema/projects.ts";
 import { Hono } from "hono";
 import { requireAuth } from "../../auth/middleware.ts";
 import { db } from "../../config/db.ts";
@@ -66,7 +68,7 @@ files.post("/upload", async (c) => {
     // instead of an opaque FK 500.
     let fileRecord = null;
     if (conversationId) {
-      const [conv] = await db.select({ id: conversations.id, userId: conversations.userId })
+      const [conv] = await db.select({ id: conversations.id, userId: conversations.userId, projectId: conversations.projectId })
         .from(conversations).where(eq(conversations.id, conversationId));
       if (!conv || conv.userId !== user.id) {
         return c.json({ error: "Conversation not found — send a message first, then attach the file." }, 400);
@@ -79,6 +81,10 @@ files.post("/upload", async (c) => {
         fileSize: file.size,
       }).returning();
       fileRecord = row;
+      if (conv.projectId) {
+        const [project] = await db.select().from(projects).where(eq(projects.projectId,conv.projectId));
+        if (project) void ensureDocumentGraph(project.id,user.id).catch(()=>console.warn('[document-graph] upload enqueue failed'));
+      }
     }
 
     return c.json({

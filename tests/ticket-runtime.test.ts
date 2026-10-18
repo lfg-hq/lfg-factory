@@ -103,8 +103,8 @@ test('runtime agent receives authority to create a missing local development dat
  await runTicketRuntime(x.o,x.deps);
 }));
 
-test('CoHire cannot commit a static-only report',()=>fixture(async x=>{
- x.exec('git branch -m feature/coh-25-workforce-organisation');x.o.featureBranch='feature/coh-25-workforce-organisation';
+test('Explicit runtime policy cannot commit a static-only report',()=>fixture(async x=>{
+ x.o.validation.requiredChecks=['database','authentication','crud','persistence','tenant-isolation','hierarchy'];
  await expect(runTicketRuntime(x.o,x.deps)).rejects.toThrow('running application');
  expect(x.checks()).toBe(0);expect(x.exec('git rev-parse HEAD').output.trim()).toBe(x.original);
 }));
@@ -112,7 +112,7 @@ test('agent session closes after successful verification',()=>fixture(async x=>{
  let closes=0;x.deps.close=async()=>{closes++;};await runTicketRuntime(x.o,x.deps);expect(closes).toBe(1);
 }));
 test('all required runtime assertions are re-executed and receipts checked before commit',()=>fixture(async x=>{
- x.exec('git branch -m feature/coh-25-workforce-organisation');x.o.featureBranch='feature/coh-25-workforce-organisation';
+ x.o.validation.requiredChecks=['database','authentication','crud','persistence','tenant-isolation','hierarchy'];
  const categories=['database','authentication','crud','persistence','tenant-isolation','hierarchy'];const shell=x.deps.shell;const check=x.deps.check;
  x.deps.shell=async(cmd:string)=>{
   const r=await shell(cmd);
@@ -213,4 +213,40 @@ test('validation reports named pending running and passed checks',()=>fixture(as
  const checks=x.messages.filter((m:string)=>m.startsWith('Validation check: ')).map((m:string)=>JSON.parse(m.slice(18)));
  expect(checks.map((c:any)=>c.status)).toEqual(['pending','running','passed']);
  expect(checks.every((c:any)=>c.label==='feature assertion')).toBe(true);
+}));
+
+test('both disabled saves implementation without starting a repair agent or checks',()=>fixture(async x=>{
+ x.deps.settings={validationEnabled:false,featureTestingEnabled:false};
+ writeFileSync(join(x.dir,'app.txt'),'implemented');
+ const sha=await runTicketRuntime(x.o,x.deps);
+ expect(sha).not.toBe(x.original);expect(x.agents()).toBe(0);expect(x.checks()).toBe(0);
+ expect(x.messages.join('\n')).toContain('has not been verified');
+}));
+test('disabled validation still protects cancellation and branch identity',()=>fixture(async x=>{
+ x.deps.settings={validationEnabled:false,featureTestingEnabled:false};
+ await expect(runTicketRuntime({...x.o,featureBranch:'wrong'},x.deps)).rejects.toThrow('different branch');
+ x.o.validation.cancelled=()=>true;
+ await expect(runTicketRuntime(x.o,x.deps)).rejects.toThrow('cancelled');
+ expect(x.exec('git rev-parse HEAD').output.trim()).toBe(x.original);
+}));
+test('feature testing can be disabled independently during publication',()=>fixture(async x=>{
+ x.o.validation.ticketId='ticket';x.deps.settings={featureTestingEnabled:false};
+ x.deps.featureTest=async()=>{throw Error('Disabled browser ran')};
+ await runTicketRuntime(x.o,x.deps);expect(x.checks()).toBe(1);
+}));
+test('validation disabled still runs feature testing then commits implementation',()=>fixture(async x=>{
+ x.o.validation.ticketId='ticket';x.deps.settings={validationEnabled:false};
+ writeFileSync(join(x.dir,'pending.txt'),'implementation');
+ const agent=x.deps.agent;const shell=x.deps.shell;let features=0;
+ x.deps.agent=async(p:string)=>{await agent(p);writeFileSync(join(x.dir,'app.txt'),'initial');};
+ x.deps.shell=async(cmd:string)=>{const r=await shell(cmd);if(cmd.includes("cat '/data/lfg-runtime/")){const report=JSON.parse(r.output);report.checks=[];report.featureTest={kind:'not_applicable',reason:'No user interface in this ticket',applicability:[{criterion:'Schema',applicable:false,reason:'No UI'}]};r.output=JSON.stringify(report);}return r;};
+ x.deps.featureTest=async()=>{features++};
+ const sha=await runTicketRuntime(x.o,x.deps);
+ expect(sha).not.toBe(x.original);expect(features).toBe(1);expect(x.checks()).toBe(0);
+ expect(x.messages.join('\n')).toContain('Validation was skipped');
+}));
+test('explicit disabled stage cannot be started',()=>fixture(async x=>{
+ x.o.validation.ticketId='ticket';x.deps.settings={validationEnabled:false,featureTestingEnabled:false};
+ for(const phase of ['validation','feature-testing'] as const) await expect(runTicketRuntime(x.o,x.deps,{kind:'ticket',baseline:'',phase})).rejects.toThrow('disabled');
+ expect(x.agents()).toBe(0);
 }));

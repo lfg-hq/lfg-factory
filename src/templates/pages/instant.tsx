@@ -483,7 +483,7 @@ export function InstantPage({
     }).replace(/</g, "\\u003c"))};
     window.__WS_PATH__ = '/ws/chat';
   </script>
-  <script src="/public/js/sidebar.js?v=20260923-tooltip-theme"></script>
+  <script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
   <script src="/public/js/marked.min.js"></script>
   <script src="/public/js/markdown-config.js"></script>
   <script src="/public/js/custom-dropdown.js"></script>

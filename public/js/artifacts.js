@@ -24,15 +24,23 @@ document.addEventListener('DOMContentLoaded', function() {
     let lastDownX = 0;
     let panelWidth = parseInt(getComputedStyle(artifactsPanel).width) || 350;
     
-    // Check if panel should start expanded (from localStorage)
-    const shouldBeExpanded = localStorage.getItem('artifacts_expanded') === 'true';
-    if (shouldBeExpanded) {
-        artifactsPanel.classList.add('expanded');
-        appContainer.classList.add('artifacts-expanded');
-        artifactsButton.classList.add('active');
-        updateChatContainerPosition(true);
+    // Each chat starts closed. Open only for a user action or a relevant artifact.
+    function closeChatPanel() {
+        closeTicketDetail();
+        artifactsPanel.classList.remove('expanded', 'open');
+        appContainer.classList.remove('artifacts-expanded');
+        artifactsButton.classList.remove('active');
+        localStorage.removeItem('artifacts_expanded');
+        updateChatContainerPosition(false);
     }
-    
+    closeChatPanel();
+    let panelConversation = window.currentConversationId || null;
+    window.addEventListener('chat-conversation-changed', () => {
+        const next = window.currentConversationId || null;
+        if (next !== panelConversation) closeChatPanel();
+        panelConversation = next;
+    });
+
     // The ticket detail overlay lives in the CHAT column but is opened from THIS panel
     // (Tickets tab → click a ticket). So closing the panel has to close it too — left
     // behind on its own it stretches across the full width with the list it came from
@@ -715,7 +723,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // If panel was open when the page loaded, reload the active tab's data
         // so files/tickets appear immediately without needing a tab click.
-        const panelOpen = localStorage.getItem('artifacts_expanded') === 'true';
+        const panelOpen = artifactsPanel.classList.contains('expanded');
         if (panelOpen && (savedTabId === 'filebrowser' || savedTabId === 'checklist')) {
             const projectId = getCurrentProjectId();
             if (projectId) {

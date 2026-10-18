@@ -16,13 +16,20 @@ case "$CMD" in
     ;;
 esac
 
-# Load production env vars (must export KAMAL_REGISTRY_PASSWORD, etc.)
-if [ -f ".env.production" ]; then
+# Prefer the production file used by this checkout; retain the legacy filename.
+DEPLOY_ENV_FILE=""
+if [ -f ".env.prod" ]; then
+  DEPLOY_ENV_FILE=".env.prod"
+elif [ -f ".env.production" ]; then
+  DEPLOY_ENV_FILE=".env.production"
+fi
+if [ -n "$DEPLOY_ENV_FILE" ]; then
+  echo ">>> Loading deployment environment from $DEPLOY_ENV_FILE"
   set -a
-  source .env.production
+  source "$DEPLOY_ENV_FILE"
   set +a
 else
-  echo "Warning: .env.production not found. Ensure secrets are exported in the environment."
+  echo "Warning: neither .env.prod nor .env.production found. Using exported environment variables."
 fi
 
 # Ensure required secrets are present
@@ -49,7 +56,7 @@ kamal "$CMD"
 # ── Purge Cloudflare cache after a deploy ────────────────────────────────────
 # Static assets (CSS/JS) are served with long edge-cache headers, so Cloudflare
 # would keep serving the previous build until it expires. Purge on every deploy
-# so changes go live immediately. Requires (set in .env.production or env):
+# so changes go live immediately. Requires (set in .env.prod or env):
 #   CLOUDFLARE_ZONE_ID     — the zone id for lfg.run
 #   CLOUDFLARE_PURGE_TOKEN — an API token with "Zone → Cache Purge" permission
 if [ "$CMD" = "deploy" ] || [ "$CMD" = "redeploy" ]; then

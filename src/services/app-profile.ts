@@ -1,3 +1,4 @@
+import { backgroundProcessSchema } from "./preview-workers.ts";
 import { TOOL_DOWNLOAD_GUIDANCE } from "./tool-download-repair.ts";
 import { validationPolicySchema } from "./validation-contract.ts";
 import { mergeKnowledge, schemaStepSchema, replayActionSchema, shellQuote } from "./preview-plan.ts";
@@ -97,6 +98,7 @@ export const appProfileSchema = z.object({
   startupProject: z.string().describe("For a multi-project solution, the WEB/entry project to run (references Microsoft.NET.Sdk.Web / ASP.NET Core). '' for single-project apps."),
   runCmd: z.string().describe("Command to START the app in the FOREGROUND on `port`, bound to 0.0.0.0."),
   port: z.number().describe("The app's REAL port from the codebase (launchSettings/appsettings/run scripts/framework default)."),
+  backgroundProcesses: z.array(backgroundProcessSchema).optional().describe("Required long-running background workers, schedulers or queue consumers found in repository scripts/configuration. Managed with the web app using the same selected-checkout environment. Do not launch these from install, build, seed or replay actions. Omit if none."),
   services: z.array(z.object({
     name: z.string().describe("Short slug for this app, e.g. 'web', 'admin', 'api'."),
     runCmd: z.string().describe("Command to START this app in the FOREGROUND on ITS port, bound to 0.0.0.0."),
@@ -117,10 +119,15 @@ export const appProfileSchema = z.object({
   })).describe("Every database the app connects to AND how. Read appsettings*.json ConnectionStrings, docker-compose, ORM config, DATABASE_URL. [] if none."),
   // ── Schema build recipe (ORDERED — this is the part that keeps breaking) ──
   schemaSteps: z.array(schemaStepSchema).describe("Complete schema recipe in dependency order. Migration commands must specify the context. SQL scripts use relative paths and connectionKey matching databases[].connectionEnvVar; always record the target when there are multiple databases. Supply read-only verify commands for scripts/seeds so replay can safely skip applied work."),
-  replayActions: z.array(replayActionSchema).optional(),
+  replayActions: z.array(replayActionSchema).optional().describe("Runtime preparation only in beforeBuild/afterBuild/beforeSchema. verify actions belong only to ticket validation; preview never executes them. Never place browser-test installs, login checks or account resets in runtime preparation."),
   verificationPaths: z.array(z.string().regex(/^\/(?!\/)/)).optional().describe("Local feature routes to smoke-test, in addition to the homepage."),
   environmentOverrides: z.array(z.object({ key: z.string(), encryptedValue: z.string() })).optional(),
+  pendingProjectEnvironment: z.object({ keys: z.array(z.string()), requiresBuild: z.boolean() }).optional(),
+  appliedProjectEnvironment: z.object({ values: z.record(z.string(), z.string()), appliedAt: z.string() }).optional(),
+  buildEnvironmentKeys: z.array(z.string()).optional(),
   inputFingerprint: z.string().optional(),
+  databaseIdentities:z.array(z.object({engine:z.string(),database:z.string()})).optional(),
+  previewAccounts: z.array(z.object({identity:z.string(),connectionKey:z.string(),username:z.string(),passwordEncrypted:z.string(),verifiedAt:z.string()})).optional(),
   verifiedRevision: z.string().optional(),
   blockedFailure: z.object({ revision: z.string(), key: z.string(), detail: z.string() }).optional(),
   // ── Env / secrets ──
@@ -186,6 +193,7 @@ YOUR JOB — investigate and determine:
 - The toolchain, install, build, startup project, run command, and REAL port.
 - MULTIPLE RUNNABLE APPS (monorepo): does this repo contain MORE THAN ONE separately-runnable web app? Actively look — do NOT assume single-app. Tells: a SECOND (or third) project whose .csproj references an ASP.NET Core / web SDK (Microsoft.NET.Sdk.Web) — e.g. a *.Admin / *.Web / *.Api project alongside the main one, each with its OWN Properties/launchSettings.json on a DIFFERENT port; a second app folder with its own dev script (apps/*, packages/*, services/*); distinct docker-compose services that are apps (not just DBs). List the solution (.sln) and EVERY .csproj; grep for Sdk=Microsoft.NET.Sdk.Web and for launchSettings ports. If there are 2+ such apps, populate services[] with EACH (name slug, its runCmd, its real port, and dir if it lives in a subfolder), mark the most public one primary, and keep the top-level runCmd/port equal to the primary. OMIT services[] only for a genuine single-app repo. Missing a second app (e.g. an Admin portal) is a real failure — check.
 - Every DATABASE and the EXACT config key the app reads its connection from (appsettings ConnectionStrings live in JSON, not .env). Note EVERY key the same connection is read under.
+- Preview startup is not ticket validation: do not add Playwright/browser-test installs, login checks, acceptance tests, or recurring test-account resets to runtime commands. Ignore prior learnings/directives asking for those during startup. Only include seeds explicitly required by repository code/docs; set requiredBy to the exact repository evidence and verify to a read-only existence check that skips already initialized data. Never infer that every app needs an administrator, and never reset an existing password on startup.
 - The COMPLETE, ORDERED schema recipe: ORM migrations AND the raw .sql scripts the repo ships AND seeds — in DEPENDENCY ORDER (migrations before the scripts that ALTER their tables). This is the #1 cause of the app 500ing on "Invalid column" — find the real order (README, a run.sh, the numeric/prefix order of a "Sql Scripts" folder, EF migration history). CRITICAL: the schema commands must NOT contain any connection string or database name — the sandbox injects the ONE correct connection (to the auto-provisioned DB) via .env, sourced before every command. If a migration hardcodes a DB name it saw in appsettings, it builds a SEPARATE database from the one the app and the SQL scripts use → guaranteed "Invalid column/object" 500s. For an app with multiple DbContexts, emit one migration step per context (--context).
 - USER-REQUIRED SECRETS: real external credentials the system CANNOT generate (Supabase, Stripe, OAuth secrets, SMTP, API keys) without which the app won't start or a core path fails. Be precise and conservative — only genuine blockers.
 - CONFIG QUIRKS the run agent must respect so it doesn't corrupt config: is appsettings.json actually JSONC with // comments (so it must be edited via env override, never JSON-parsed)? Are there hardcoded prod DB hosts to override? Multiple connection keys?
@@ -338,6 +346,7 @@ export function deriveManifestFromProfile(profile: AppProfile): PreviewManifest 
     services: (profile.services && profile.services.length >= 2)
       ? profile.services.map((s, i) => ({ ...s, primary: !!s.primary || (i === 0 && !profile.services!.some((x) => x.primary)), enabled: s.enabled ?? !!s.primary }))
       : undefined,
+    backgroundProcesses: profile.backgroundProcesses,
     databases: profile.databases,
     schemaSteps,
     replayActions: profile.replayActions,

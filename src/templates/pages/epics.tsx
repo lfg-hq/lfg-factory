@@ -561,7 +561,7 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
 <script src="/public/js/marked.min.js"></script>
 <script src="/public/js/markdown-config.js"></script>
 <script src="/public/js/epic-content.js?v=20260923-reader"></script>
-<script src="/public/js/sidebar.js?v=20260923-tooltip-theme"></script>
+<script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
 <script src="/public/js/sidebar-chats.js?v=20260908-initials"></script>
 <script>
   function filterEpics() {

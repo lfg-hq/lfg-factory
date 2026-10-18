@@ -15,7 +15,7 @@ import { db } from "../../config/db.ts";
 import { projectEnvironments } from "../../db/schema/project-environments.ts";
 import { projects, projectEnvironmentVariables } from "../../db/schema/projects.ts";
 import { encryptSecret, decryptSecret } from "../../utils/crypto.ts";
-import { getPreviewState, setupPreview, restartPreview, stopPreview, detectManifest, manifestSchema, capturePreviewScreenshot, getPreviewBranches, reprobeProfile, getAppRuntimeLog, getDbLogs, resetDatabase, setServiceEnabled, addService, removeService, rebuildPreviewSandbox } from "../../services/dev-preview.ts";
+import { getEnvironmentApplyStatus, getPreviewState, setupPreview, restartPreview, restartPreviewApp, stopPreview, detectManifest, manifestSchema, capturePreviewScreenshot, getPreviewBranches, reprobeProfile, getAppRuntimeLog, getDbLogs, resetDatabase, setServiceEnabled, addService, removeService, rebuildPreviewSandbox } from "../../services/dev-preview.ts";
 import { loadAppProfile, saveAppProfile, appProfileSchema } from "../../services/app-profile.ts";
 import type { auth } from "../../auth/index.ts";
 
@@ -59,7 +59,12 @@ previewApi.post("/:projectId/preview/restart", async (c) => {
   // ticket. Ignored when a ticketId is present; that resolves its own branch.
   const branch = typeof body.branch === "string" && body.branch ? body.branch : undefined;
   const conversationId = typeof body.conversationId === "string" ? body.conversationId : null;
-  restartPreview(access.project.id, { userId: user.id, ticketId, branch, conversationId }).catch((e) => console.error("[preview] restart failed:", e));
+  // A plain restart preserves the active checkout. Branch selection/update explicitly
+  // opts into the full preparation pipeline, including fetch/install/build/schema.
+  const run = body.refresh === true
+    ? restartPreview(access.project.id, { userId: user.id, ticketId, branch, conversationId, cleanBuild: body.cleanBuild === true })
+    : restartPreviewApp(access.project.id, { userId: user.id, rebuildApp: body.rebuildApp === true });
+  run.catch((e) => console.error("[preview] restart failed:", e));
   return c.json({ ok: true, status: "starting" }, 202);
 });
 
@@ -275,13 +280,14 @@ previewApi.get("/:projectId/preview/build-settings", async (c) => {
   const user = c.get("user");
   const access = await getProjectAccess(c.req.param("projectId")!, user.id);
   if (!access) return c.json({ error: "Project not found" }, 404);
-  const p = access.project as { epicBuildsEnabled?: boolean; qaMode?: string; lockedBuilderModel?: string | null; lockedBuilderAuthMode?: string | null; lockedChatModel?: string | null; ticketBuildIsolation?: string; previewBranchMode?: string; dbMode?: string; shareGitAccess?: boolean; shareChatHistory?: boolean; customInstructions?: string | null; agentShellAccess?: boolean };
+  const p = access.project as { qaMode?: string; lockedBuilderModel?: string | null; lockedBuilderAuthMode?: string | null; lockedChatModel?: string | null; ticketBuildIsolation?: string; previewBranchMode?: string; dbMode?: string; shareGitAccess?: boolean; shareChatHistory?: boolean; customInstructions?: string | null; agentShellAccess?: boolean };
   return c.json({
-    epicBuildsEnabled: !!p.epicBuildsEnabled,
-    canChangeEpicBuilds: access.role === "owner",
+    validationEnabled: access.project.validationEnabled !== false,
+    featureTestingEnabled: access.project.featureTestingEnabled !== false,
+    canChangeBuildStages: access.role === "owner",
     customInstructions: p.customInstructions ?? "",
-    agentShellAccess: !!p.agentShellAccess,
-    canGrantShell: access.role === "owner",
+    agentShellAccess: false,
+    canGrantShell: false,
     ticketBuildIsolation: p.ticketBuildIsolation ?? "isolated",
     qaMode: p.qaMode ?? "off",
     lockedBuilderModel: p.lockedBuilderModel ?? null,
@@ -304,9 +310,11 @@ previewApi.post("/:projectId/preview/build-settings", async (c) => {
   if (!access) return c.json({ error: "Project not found" }, 404);
   const body = await c.req.json().catch(() => ({}));
   const patch: Record<string, unknown> = {};
-  if (typeof body.epicBuildsEnabled === "boolean") {
-    if (access.role !== "owner") return c.json({ error: "Only the project owner can change the build workflow." }, 403);
-    patch.epicBuildsEnabled = body.epicBuildsEnabled;
+  for (const field of ["validationEnabled", "featureTestingEnabled"] as const) {
+    if (body[field] === undefined) continue;
+    if (access.role !== "owner") return c.json({ error: "Only the project owner can change build stages." }, 403);
+    if (typeof body[field] !== "boolean") return c.json({ error: "Build stage settings must be true or false." }, 400);
+    patch[field] = body[field];
   }
   if (body.ticketBuildIsolation === "isolated" || body.ticketBuildIsolation === "shared") patch.ticketBuildIsolation = body.ticketBuildIsolation;
   if (body.previewBranchMode === "worktree" || body.previewBranchMode === "checkout") patch.previewBranchMode = body.previewBranchMode;
@@ -338,13 +346,9 @@ previewApi.post("/:projectId/preview/build-settings", async (c) => {
     catch { return c.json({ error: "You don't have permission to change agent instructions" }, 403); }
     patch.customInstructions = body.customInstructions.slice(0, 4000);
   }
-  // Lets the chat agent RUN things on the preview VM rather than only reading it —
-  // owner-only, same as the other two settings that widen what someone else's session
-  // can reach. Off unless deliberately turned on.
-  if (typeof body.agentShellAccess === "boolean") {
-    if (access.role !== "owner") return c.json({ error: "Only the project owner can grant the agent shell access." }, 403);
-    patch.agentShellAccess = body.agentShellAccess;
-  }
+  // Legacy clients cannot re-enable direct chat writes to the preview.
+  if (body.agentShellAccess === true) return c.json({ error: "Chat preview inspection is read-only. Route application changes through tickets." }, 400);
+  if (body.agentShellAccess === false) patch.agentShellAccess = false;
   if (!Object.keys(patch).length) return c.json({ error: "Nothing valid to update" }, 400);
   patch.updatedAt = new Date();
   await db.update(projects).set(patch).where(eq(projects.id, access.project.id));
@@ -364,6 +368,7 @@ previewApi.get("/:projectId/env-vars", async (c) => {
     .where(eq(projectEnvironmentVariables.projectId, access.project.id))
     .orderBy(asc(projectEnvironmentVariables.key));
   return c.json({
+    application: await getEnvironmentApplyStatus(access.project.id),
     envVars: rows.map((e) => ({
       id: e.id,
       key: e.key,

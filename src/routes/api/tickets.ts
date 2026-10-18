@@ -11,7 +11,7 @@ import { githubTokens, users } from "../../db/schema/users.ts";
 import { sandboxes } from "../../db/schema/sandbox.ts";
 import { conversations } from "../../db/schema/chat.ts";
 import { instantApps } from "../../db/schema/instant.ts";
-import { eq, ne, and, asc, desc, max, notExists, lt } from "drizzle-orm";
+import { eq, ne, and, asc, desc, max, notExists, lt, inArray } from "drizzle-orm";
 import { getProjectAccess, requirePermission } from "../../auth/project-access.ts";
 import { nextTicketKey } from "../../utils/ticket-keys.ts";
 import { notify } from "../../services/notify.ts";
@@ -46,7 +46,13 @@ ticketsApi.get("/:projectId/tickets", async (c) => {
     .where(eq(projectTickets.projectId, project.id))
     .orderBy(asc(projectTickets.createdAt));
 
-  return c.json({ tickets: rows });
+  const origins = rows.length ? await db.select({ticketId:ticketLogs.ticketId,output:ticketLogs.output})
+    .from(ticketLogs).where(inArray(ticketLogs.id, rows.map(t => `build-origin:${t.id}`))) : [];
+  const originConversations = new Map(origins.map(row => {
+    try { return [row.ticketId, JSON.parse(row.output || '{}').conversationId ?? null] as const; }
+    catch { return [row.ticketId, null] as const; }
+  }));
+  return c.json({ tickets: rows.map(ticket => ({...ticket, activityConversationId: originConversations.get(ticket.id) ?? null, agentBusy: isChatTurnActive(ticket.id), validationEnabled: access.project.validationEnabled !== false, featureTestingEnabled: access.project.featureTestingEnabled !== false})) });
 });
 
 // ── POST /api/projects/:projectId/tickets ────────────────────────────
@@ -152,6 +158,9 @@ ticketsApi.get("/:projectId/tickets/:ticketId", async (c) => {
   return c.json({
     ticket: {
       ...ticket,
+      agentBusy: isChatTurnActive(ticket.id),
+      validationEnabled: project.validationEnabled !== false,
+      featureTestingEnabled: project.featureTestingEnabled !== false,
       anchorBranch: anchor.anchorBranch,
       epicBranch: anchor.epic?.branch ?? null,
       epicKey: anchor.epic?.epicKey ?? null,
@@ -728,6 +737,7 @@ ticketsApi.post("/:projectId/tickets/:ticketId/queue", async (c) => {
 
   const access = await getProjectAccess(projectId, user.id);
   if (!access) return c.json({ error: "Not found" }, 404);
+  if (!access.permissions.canManageTickets || !access.permissions.canEditFiles) return c.json({ error: "Ticket management and code-edit permissions are required." }, 403);
   const project = access.project;
 
   const body = await c.req.json<{ notes?: string }>().catch(() => ({} as { notes?: string }));
@@ -740,6 +750,15 @@ ticketsApi.post("/:projectId/tickets/:ticketId/queue", async (c) => {
 
   if (!ticket) return c.json({ error: "Ticket not found" }, 404);
   if(isChatTurnActive(ticketId) || /^(queued|executing|stopping)$/.test(ticket.queueStatus))return c.json({error:"This ticket already has an active operation."},409);
+
+  // Retrying a failed integration must not replay the original implementation.
+  if (!body.notes?.trim() && ticket.githubMergeStatus === 'pushed' && ticket.githubCommitSha && ['failed', 'blocked'].includes(ticket.status)) {
+    try {
+      const { startTicketMergeRetry } = await import('../../workers/ticket-executor.ts');
+      await startTicketMergeRetry(ticketId, user.id);
+      return c.json({ ok: true, operation: 'merge' }, 202);
+    } catch (error) { return c.json({ error: (error as Error).message }, 409); }
+  }
 
   const claimed = await db
     .update(projectTickets)
@@ -769,6 +788,7 @@ ticketsApi.post("/:projectId/tickets/:ticketId/retry-validation",async(c)=>{
     const body=await c.req.json().catch(()=>({}));
     const phase=body.phase ?? 'validation';
     if(!['validation','feature-testing'].includes(phase))return c.json({error:'Invalid run phase'},400);
+    if ((phase === 'validation' && access.project.validationEnabled === false) || (phase === 'feature-testing' && access.project.featureTestingEnabled === false)) return c.json({error:'This stage is disabled in Project Settings.'},409);
     await startTicketValidationRetry(ticketId,user.id,phase);
     return c.json({ok:true},202);
   }catch(error){

@@ -49,13 +49,3 @@ test('unavailable chat cannot fail the build and the notification is already sav
   expect(notices.at(-1).type).toBe('build_complete');
 });
 
-test('epic builds persist their presentation mode and report feature updates without ticket chat messages', async () => {
-  const count=chats.length;
-  await setBuildOrigin('ticket','epic-chat','requester',true);
-  expect(await getBuildOrigin('ticket')).toMatchObject({epicBuild:true,conversationId:'epic-chat'});
-  await reportBuildStatus('ticket','started','Build started');
-  await reportBuildStatus('ticket','failed','T-1 failed');
-  expect(chats.length).toBe(count);
-  expect(sockets.at(-1)).toMatchObject({type:'epic_build_update',epic_id:'epic'});
-  expect(notices.at(-1)).toMatchObject({targetType:'epic',message:'Feature: Needs attention'});
-});

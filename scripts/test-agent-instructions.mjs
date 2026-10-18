@@ -78,44 +78,26 @@ if (/skillCatalogueFor\(internalProjectId/.test(handler)) ok("the prompt catalog
 else fail("catalogue is still global");
 
 const page2 = fs.readFileSync("src/templates/pages/project-detail.tsx", "utf8");
-if (/tab=agent/.test(page2) && /activeTab === "agent" \? html`/.test(page2)) ok("Agent has its own tab");
+if (/activeTab === "agent" \? html`/.test(page2)) ok("Agent has its own tab");
 else fail("no Agent tab");
 if (/function saveSkill\(ev\)/.test(page2) && /function deleteSkill\(/.test(page2)) ok("the tab can add and remove skills");
 else fail("UI can't manage skills");
 if (/skill-tag/.test(page2) && /Built in/.test(page2)) ok("built-in vs project is visible at a glance");
 else fail("no source badge");
 
-console.log("\nagent shell access:");
-for (const [d, f] of [["pg", "src/db/schema/pg/projects.ts"], ["sqlite", "src/db/schema/sqlite/projects.ts"]]) {
-  const src = fs.readFileSync(f, "utf8");
-  if (/agent_shell_access/.test(src) && /default\(false\)/.test(src.slice(src.indexOf("agent_shell_access")))) ok(`${d}: column, defaulting OFF`);
-  else fail(`${d}: column missing or not off by default`);
-}
-if (/agentShellAccess: !!p\.agentShellAccess/.test(api)) ok("the settings endpoint reports it");
-else fail("UI can't read the flag");
-const shellPost = api.slice(api.indexOf("if (typeof body.agentShellAccess"));
-if (/access\.role !== "owner"/.test(shellPost.slice(0, 400))) ok("only the owner can grant it");
-else fail("a collaborator could grant it");
-
+console.log("\nchat preview boundary:");
 const dp = fs.readFileSync("src/services/dev-preview.ts", "utf8");
-if (/export async function createPreviewInspectTool/.test(dp)) ok("the tool is built per project");
-else fail("still a static tool");
-if (/if \(shellAccess\) return \{ inspectPreview: previewShellTool/.test(dp)) ok("granting it swaps in the write-capable tool");
-else fail("the flag doesn't change the tool");
-const shellTool = dp.slice(dp.indexOf("function previewShellTool"));
-if (!/classifyReadonlyPreviewCmd/.test(shellTool.slice(0, 3000))) ok("...which skips the read-only classifier");
-else fail("the granted tool still refuses writes");
-if (/so you can both diagnose AND FIX/.test(dp)) ok("and says so in its description — the agent knows it may fix");
-else fail("description still promises read-only");
-if (/resolvePreviewWorkDir/.test(shellTool.slice(0, 3000))) ok("same checkout resolution as the read-only one");
-else fail("granted tool resolves workdir differently");
-if (/await createPreviewInspectTool/.test(handler)) ok("the stream handler awaits the async factory");
-else fail("factory result would be a Promise spread into tools");
-
-if (/access-opt/.test(page2) && /Full shell/.test(page2) && /Read only/.test(page2)) ok("the Agent tab offers the choice");
-else fail("no UI for it");
-if (/function saveShellAccess/.test(page2) && /paintShellAccess\(!!d\.agentShellAccess/.test(page2)) ok("...and reflects what's saved");
-else fail("toggle doesn't round-trip");
-
+const inspect = dp.slice(dp.indexOf("export async function createPreviewInspectTool"),dp.indexOf("function buildDriverSystemPrompt"));
+if (!/previewShellTool|agentShellAccess/.test(inspect) && /compilePreviewInspection\(command\)/.test(inspect)) ok("chat inspection cannot upgrade to shell access or switch branches");
+else fail("chat inspection can bypass tickets");
+const ws = fs.readFileSync("src/ws/chat-handler.ts", "utf8");
+if (!/runPreviewChat|handlePreviewChat/.test(ws)) ok("@preview uses normal orchestration");
+else fail("@preview still bypasses ticket orchestration");
+if (/agentShellAccess: false/.test(api) && /body.agentShellAccess === true/.test(api)) ok("legacy settings cannot enable writable chat inspection");
+else fail("legacy setting can re-enable the bypass");
+if (!/Full shell|saveShellAccess/.test(page2)) ok("settings no longer offer direct chat shell edits");
+else fail("settings advertise an unavailable bypass");
+if (/createPreviewInspectTool\(\{ projectId/.test(handler)) ok("chat uses the read-only inspection factory");
+else fail("chat inspection factory missing");
 console.log(bad ? `\n${bad} FAILED` : "\nall checks pass");
 process.exit(bad ? 1 : 0);

@@ -1,3 +1,4 @@
+import { chatDiagnostic, chatStage } from './chat-diagnostics.ts';
 import { trackModel } from "./usage-model.ts";
 import type { LanguageModelV3, LanguageModelV3CallOptions, LanguageModelV3Content, LanguageModelV3StreamPart, LanguageModelV3Usage } from "@ai-sdk/provider";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
@@ -102,14 +103,26 @@ export function createPiSubscriptionModel(
       }
       options.abortSignal?.throwIfAborted();
       // Resolve per generation: no refresh token in this adapter, no global auth state.
+      chatStage('subscription_access');
       const token = await getAccessToken();
+      chatDiagnostic('subscription_access_ready');
       if (!token) throw new Error("Connect ChatGPT in Settings before selecting subscription models.");
       options.abortSignal?.throwIfAborted();
       const abort = new AbortController();
       const signal = options.abortSignal ? AbortSignal.any([options.abortSignal, abort.signal]) : abort.signal;
+      chatStage('subscription_connection');
+      let firstProviderEvent = true;
       const events = transport(piModel, context, {
         apiKey: token, signal, transport: "sse", maxRetries: 0,
-        fetch: ((url, init) => globalThis.fetch(url, { ...init, timeout: false } as unknown as RequestInit)) as typeof fetch,
+        fetch: (async (url, init) => {
+          chatDiagnostic('provider_request_started', {model:modelId});
+          try {
+            const response = await globalThis.fetch(url, { ...init, timeout: false } as unknown as RequestInit);
+            chatDiagnostic('provider_headers_received', {model:modelId, status:response.status});
+            chatStage('subscription_stream');
+            return response;
+          } catch(error) { chatDiagnostic('provider_request_failed', {outcome:signal.aborted?'cancelled':'error'}); throw error; }
+        }) as typeof fetch,
         toolChoice: structured || options.toolChoice?.type === "tool" ? "required" : options.toolChoice?.type,
         // The Codex backend does not accept max_output_tokens. Report this below.
         temperature: options.temperature,
@@ -123,6 +136,7 @@ export function createPiSubscriptionModel(
           try {
             let finished = false;
             for await (const event of events) {
+              if (firstProviderEvent) { chatDiagnostic('first_provider_event', {model:modelId}); firstProviderEvent=false; }
               signal.throwIfAborted();
               if (event.type === "error") {
                 // Upstream error payloads can echo request data. Do not forward them.

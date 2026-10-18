@@ -45,6 +45,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let isSocketConnected = false;
     let messageQueue = [];
     let isStreaming = false; // Track whether we're currently streaming a response
+    let voiceReplyText = ''; // Complete spoken reply across tool-separated text bubbles.
     let currentStreamingEl = null; // The .message.assistant element for the CURRENT response
     let messageContentSequence = 0;
     let stopRequested = false; // Track if user has already requested to stop generation
@@ -476,14 +477,16 @@ document.addEventListener('DOMContentLoaded', () => {
             window.attachedFile = window.attachedFiles[0] || null;
         };
 
-        // The chips render in a flex row ABOVE the input box (position handled in CSS).
+        // Keep uploads inside the composer so their height reserves real space.
         function getAttachmentChipsContainer() {
-            const inputWrapper = document.querySelector('.input-wrapper');
+            const inputBox = document.getElementById('chat-input-box');
             let c = document.querySelector('.input-file-attachments');
-            if (!c && inputWrapper) {
+            if (!c && inputBox) {
                 c = document.createElement('div');
                 c.className = 'input-file-attachments';
-                inputWrapper.appendChild(c);
+                c.setAttribute('role', 'group');
+                c.setAttribute('aria-label', 'Attached files');
+                inputBox.prepend(c);
             }
             return c;
         }
@@ -504,27 +507,57 @@ document.addEventListener('DOMContentLoaded', () => {
             const container = getAttachmentChipsContainer();
             const chip = document.createElement('div');
             chip.className = 'input-file-attachment uploading';
-            chip.innerHTML = '<i class="fas fa-sync fa-spin"></i><span>Uploading ' + file.name + '…</span>';
             if (container) container.appendChild(chip);
 
             const entry = { file: file, name: file.name, type: file.type, size: file.size, id: null, uploading: true, chip: chip };
             window.attachedFiles.push(entry);
             window.syncPrimaryAttachedFile();
 
+            // Keep one local thumbnail across upload state changes; never inject filenames as HTML.
+            const thumbnail = /^image\/(png|jpeg|webp|gif|avif)$/.test(file.type) ? document.createElement('img') : null;
+            let previewUrl = thumbnail ? URL.createObjectURL(file) : null;
+            entry.releasePreview = () => {
+                if (previewUrl) URL.revokeObjectURL(previewUrl);
+                previewUrl = null;
+            };
+            if (thumbnail) {
+                thumbnail.alt = '';
+                thumbnail.src = previewUrl;
+                thumbnail.onload = entry.releasePreview;
+                thumbnail.onerror = () => { entry.releasePreview(); thumbnail.hidden = true; };
+            }
             const removeEntry = () => {
+                entry.releasePreview();
                 const i = window.attachedFiles.indexOf(entry);
                 if (i >= 0) window.attachedFiles.splice(i, 1);
                 chip.remove();
                 window.syncPrimaryAttachedFile();
                 removeAttachmentChipsContainerIfEmpty();
+                if (!window.attachedFiles.some((f) => f.uploading)) {
+                    const sendBtn = document.querySelector('.send-message-btn, .send-button, [type="submit"]');
+                    if (sendBtn) sendBtn.disabled = false;
+                }
             };
             const renderChip = (stateCls, iconCls, label) => {
                 chip.className = 'input-file-attachment ' + stateCls;
-                chip.innerHTML = '<i class="' + iconCls + '"></i><span>' + label + '</span>' +
-                    '<button type="button" class="remove-file-btn" title="Remove file"><i class="fas fa-times"></i></button>';
-                const btn = chip.querySelector('.remove-file-btn');
-                if (btn) btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); removeEntry(); });
+                const icon = document.createElement('i');
+                icon.className = iconCls;
+                icon.setAttribute('aria-hidden', 'true');
+                const name = document.createElement('span');
+                name.textContent = file.name;
+                name.title = label;
+                chip.setAttribute('aria-label', label);
+                chip.setAttribute('aria-busy', String(stateCls === 'uploading'));
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'remove-file-btn';
+                btn.title = 'Remove ' + file.name;
+                btn.setAttribute('aria-label', btn.title);
+                btn.textContent = '×';
+                btn.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); removeEntry(); });
+                chip.replaceChildren(stateCls === 'uploaded' && thumbnail && !thumbnail.hidden ? thumbnail : icon, name, btn);
             };
+            renderChip('uploading', 'fas fa-sync fa-spin', 'Uploading ' + file.name + '…');
 
             const uploadFile = async () => {
                 try {
@@ -629,357 +662,21 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Audio recording functionality
-    const recordAudioBtn = document.getElementById('record-audio-btn');
-    let mediaRecorder = null;
-    let audioChunks = [];
-    let recordingStartTime = null;
-    let recordingTimer = null;
-    let recordingIndicator = null;
-    
-    if (recordAudioBtn) {
-        recordAudioBtn.addEventListener('click', async () => {
-            if (!mediaRecorder || mediaRecorder.state === 'inactive') {
-                // Start recording
-                try {
-                    const stream = await navigator.mediaDevices.getUserMedia({ 
-                        audio: {
-                            echoCancellation: false,
-                            noiseSuppression: false,
-                            autoGainControl: false
-                        }
-                    });
-                    
-                    console.log('🎙️ Got audio stream:', {
-                        active: stream.active,
-                        tracks: stream.getTracks().map(t => ({
-                            kind: t.kind,
-                            enabled: t.enabled,
-                            muted: t.muted,
-                            readyState: t.readyState
-                        }))
-                    });
-                    
-                    mediaRecorder = new MediaRecorder(stream);
-                    audioChunks = [];
-                    
-                    // Create and show waveform indicator
-                    recordingIndicator = createRecordingIndicator();
-                    const messagesContainer = document.getElementById('chat-messages');
-                    messagesContainer.appendChild(recordingIndicator);
-                    messagesContainer.scrollTop = messagesContainer.scrollHeight;
-                    
-                    // Set up Web Speech API for live transcription
-                    let recognition = null;
-                    let finalTranscript = '';
-                    let interimTranscript = '';
-                    
-                    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-                        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-                        recognition = new SpeechRecognition();
-                        
-                        recognition.continuous = true;
-                        recognition.interimResults = true;
-                        recognition.lang = 'en-US';
-                        
-                        recognition.onstart = () => {
-                            console.log('Speech recognition started');
-                        };
-                        
-                        recognition.onresult = (event) => {
-                            interimTranscript = '';
-                            
-                            for (let i = event.resultIndex; i < event.results.length; i++) {
-                                const transcript = event.results[i][0].transcript;
-                                
-                                if (event.results[i].isFinal) {
-                                    finalTranscript += transcript + ' ';
-                                } else {
-                                    interimTranscript += transcript;
-                                }
-                            }
-                            
-                            // Update transcription display
-                            if (recordingIndicator && recordingIndicator.transcriptionArea) {
-                                const displayText = finalTranscript + '<span style="opacity:.55; font-style: italic;">' + interimTranscript + '</span>';
-                                recordingIndicator.transcriptionArea.innerHTML = displayText || '<span style="opacity:.55; font-style: italic;">Listening…</span>';
-                                
-                                // Show send button if there's any transcribed text
-                                if (finalTranscript.trim() || interimTranscript.trim()) {
-                                    recordingIndicator.sendBtn.style.display = 'block';
-                                }
-                            }
-                        };
-                        
-                        recognition.onerror = (event) => {
-                            console.error('Speech recognition error:', event.error);
-                            if (recordingIndicator && recordingIndicator.transcriptionArea) {
-                                recordingIndicator.transcriptionArea.innerHTML = '<span style="color: #ef4444;">Error: ' + event.error + '</span>';
-                            }
-                        };
-                        
-                        recognition.onend = () => {
-                            console.log('Speech recognition ended');
-                        };
-                        
-                        // Start recognition
-                        try {
-                            recognition.start();
-                        } catch (e) {
-                            console.error('Failed to start speech recognition:', e);
-                        }
-                        
-                        // Store recognition instance for cleanup
-                        window.currentRecognition = recognition;
-                    } else {
-                        console.warn('Web Speech API not supported');
-                        if (recordingIndicator && recordingIndicator.transcriptionArea) {
-                            recordingIndicator.transcriptionArea.innerHTML = '<span style="color: #f59e0b;">Live transcription not supported in this browser</span>';
-                        }
-                    }
-                    
-                    // Set up audio analysis for voice-reactive waveform
-                    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                    console.log('AudioContext created, state:', audioContext.state);
-                    
-                    // Resume audio context if suspended (browser security)
-                    if (audioContext.state === 'suspended') {
-                        console.log('AudioContext suspended, resuming...');
-                        await audioContext.resume();
-                        console.log('AudioContext resumed, new state:', audioContext.state);
-                    }
-                    
-                    const analyser = audioContext.createAnalyser();
-                    const microphone = audioContext.createMediaStreamSource(stream);
-                    
-                    // Store analyser globally for debugging
-                    window.debugAnalyser = analyser;
-                    window.debugMicrophone = microphone;
-                    
-                    console.log('Audio analysis setup:', {
-                        analyserCreated: !!analyser,
-                        microphoneCreated: !!microphone,
-                        frequencyBinCount: analyser.frequencyBinCount,
-                        streamActive: stream.active,
-                        audioTracks: stream.getAudioTracks().length
-                    });
-                    
-                    analyser.smoothingTimeConstant = 0.8;
-                    analyser.fftSize = 256; // Increase for better frequency resolution
-                    analyser.minDecibels = -90;
-                    analyser.maxDecibels = -10;
-                    
-                    // Connect microphone -> analyser
-                    microphone.connect(analyser);
-                    
-                    // Test the audio by checking if we're getting data
-                    setTimeout(() => {
-                        const testArray = new Uint8Array(analyser.frequencyBinCount);
-                        analyser.getByteFrequencyData(testArray);
-                        const testSum = testArray.reduce((a, b) => a + b, 0);
-                        console.log('🔊 Audio routing test:', {
-                            sum: testSum,
-                            avg: testSum / testArray.length,
-                            contextState: audioContext.state,
-                            analyserConnected: true
-                        });
-                    }, 100);
-                    
-                    console.log('Audio routing established:', {
-                        microphoneConnected: true,
-                        analyserFftSize: analyser.fftSize,
-                        frequencyBinCount: analyser.frequencyBinCount
-                    });
-                    
-                    // Store audio context for cleanup
-                    window.currentAudioContext = audioContext;
-                    
-                    // Simple waveform animation
-                    let frameCount = 0;
-                    let animationRunning = false;
-                    
-                    function animateWaveform() {
-                        // Debug first frame
-                        if (!animationRunning) {
-                            console.log('🚀 First animation frame:', {
-                                hasIndicator: !!recordingIndicator,
-                                hasRecorder: !!mediaRecorder,
-                                recorderState: mediaRecorder?.state,
-                                hasAnalyser: !!analyser,
-                                analyserBinCount: analyser?.frequencyBinCount
-                            });
-                            animationRunning = true;
-                        }
-                        
-                        if (!recordingIndicator || !mediaRecorder || mediaRecorder.state !== 'recording') {
-                            animationRunning = false;
-                            return;
-                        }
-                        
-                        try {
-                            const dataArray = new Uint8Array(analyser.frequencyBinCount);
-                            analyser.getByteFrequencyData(dataArray);
-                            
-                            // Get average volume
-                            let sum = 0;
-                            let max = 0;
-                            for (let i = 0; i < dataArray.length; i++) {
-                                sum += dataArray[i];
-                                max = Math.max(max, dataArray[i]);
-                            }
-                            const average = sum / dataArray.length;
-                            
-                            // Log every 30 frames (0.5 second)
-                            if (frameCount % 30 === 0) {
-                                console.log('🎤 Audio:', {
-                                    avg: average.toFixed(1),
-                                    max: max,
-                                    frame: frameCount,
-                                    firstValues: dataArray.slice(0, 5).join(',')
-                                });
-                            }
-                            frameCount++;
-                            
-                            // Update bars
-                            const bars = recordingIndicator.querySelectorAll('.waveform-bar');
-                            if (bars.length === 0) {
-                                console.error('❌ No waveform bars found!');
-                                return;
-                            }
-                            
-                            bars.forEach((bar, i) => {
-                                const index = Math.floor((i / bars.length) * dataArray.length);
-                                const value = dataArray[index] || 0;
-                                const height = 3 + (value / 255) * 30;
-                                bar.style.height = height + 'px';
-                            });
-                            
-                            requestAnimationFrame(animateWaveform);
-                        } catch (error) {
-                            console.error('❌ Animation error:', error);
-                            animationRunning = false;
-                        }
-                    }
-                    
-                    // Start the animation loop
-                    
-                    // Add test function to window for debugging
-                    window.testAudioLevel = () => {
-                        const testData = new Uint8Array(analyser.frequencyBinCount);
-                        analyser.getByteFrequencyData(testData);
-                        const sum = testData.reduce((a, b) => a + b, 0);
-                        const avg = sum / testData.length;
-                        console.log('Manual audio test:', {
-                            average: avg,
-                            max: Math.max(...testData),
-                            analyserState: analyser.context.state,
-                            dataLength: testData.length
-                        });
-                        return avg;
-                    };
-                    
-                    mediaRecorder.ondataavailable = (event) => {
-                        audioChunks.push(event.data);
-                    };
-                    
-                    mediaRecorder.onstop = async () => {
-                        // Stop all tracks
-                        stream.getTracks().forEach(track => track.stop());
-                        
-                        // Clean up audio context
-                        if (window.currentAudioContext) {
-                            window.currentAudioContext.close();
-                            window.currentAudioContext = null;
-                        }
-                        
-                        // Stop speech recognition
-                        if (window.currentRecognition) {
-                            window.currentRecognition.stop();
-                            window.currentRecognition = null;
-                        }
-                        
-                        // Get final transcript before removing indicator
-                        let transcriptToSend = '';
-                        if (recordingIndicator && recordingIndicator.transcriptionArea) {
-                            // Extract text content without HTML
-                            const tempDiv = document.createElement('div');
-                            tempDiv.innerHTML = recordingIndicator.transcriptionArea.innerHTML;
-                            transcriptToSend = tempDiv.textContent || tempDiv.innerText || '';
-                            transcriptToSend = transcriptToSend.replace('Listening...', '').trim();
-                        }
-                        
-                        // Remove recording indicator
-                        if (recordingIndicator) {
-                            recordingIndicator.remove();
-                            recordingIndicator = null;
-                        }
-                        
-                        // Check if recording was cancelled
-                        if (window.recordingCancelled) {
-                            window.recordingCancelled = false;
-                            console.log('Recording cancelled by user');
-                        } else {
-                            // Always create the audio blob for consistency
-                            const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-                            const audioFile = new File([audioBlob], `recording_${Date.now()}.webm`, { type: 'audio/webm' });
-                            
-                            console.log('Audio recording completed:', audioFile.name, 'size:', audioFile.size);
-                            
-                            // Send audio message with transcript (if available)
-                            await sendAudioMessage(audioFile, transcriptToSend);
-                        }
-                        
-                        // Reset button state
-                        recordAudioBtn.classList.remove('recording');
-                        recordAudioBtn.innerHTML = '<i class="fas fa-microphone"></i>';
-                        
-                        // Clear timer
-                        if (recordingTimer) {
-                            clearInterval(recordingTimer);
-                            recordingTimer = null;
-                        }
-                    };
-                    
-                    mediaRecorder.start();
-                    recordingStartTime = Date.now();
-                    
-                    // Update button state
-                    recordAudioBtn.classList.add('recording');
-                    recordAudioBtn.innerHTML = '<i class="fas fa-stop"></i>';
-                    
-                    // Start the waveform animation after recorder is started
-                    animateWaveform();
-                    
-                    // Update timer in waveform indicator
-                    recordingTimer = setInterval(() => {
-                        const elapsed = Math.floor((Date.now() - recordingStartTime) / 1000);
-                        const minutes = Math.floor(elapsed / 60).toString().padStart(2, '0');
-                        const seconds = (elapsed % 60).toString().padStart(2, '0');
-                        
-                        if (recordingIndicator) {
-                            const timeDisplay = recordingIndicator.querySelector('.recording-time');
-                            if (timeDisplay) {
-                                timeDisplay.textContent = `${minutes}:${seconds}`;
-                            }
-                        }
-                        
-                        // Auto-stop after 5 minutes
-                        if (elapsed >= 300) {
-                            mediaRecorder.stop();
-                        }
-                    }, 1000);
-                    
-                } catch (error) {
-                    console.error('Error accessing microphone:', error);
-                    alert('Unable to access microphone. Please check your permissions.');
-                }
-            } else {
-                // Stop recording
-                mediaRecorder.stop();
-            }
-        });
-    }
-    
+    // Stop inserts a draft; the explicit recording Send button finalizes then submits.
+    const dictation = window.createDictation?.({
+        onSend: () => chatForm.requestSubmit(),
+        button: document.getElementById('record-audio-btn'), input: chatInput,
+        wrapper: document.querySelector('#chat-form .input-wrapper'),
+        getScope: () => `${currentProjectId}:${conversationLoadVersion}`,
+        getContext: () => {
+            const project = document.getElementById('project-name-display')?.textContent?.trim() || '';
+            const keywords = [project, ...Object.values(window.mentionedTickets || {}).map(t => t.key || t.title || ''),
+                ...Object.values(window.mentionedFiles || {}).map(f => f.name || '')]
+                .map(v => String(v).replace(/[<>\r\n]/g,' ').trim().slice(0,80)).filter(Boolean).slice(0,30);
+            return {projectId:currentProjectId, prompt:project ? `A user dictating a message about the project ${project.slice(0,160)}.` : 'A user dictating a message about software development.', keywords};
+        }
+    });
+
     // Connection management variables
     let reconnectAttempts = 0;
     const maxReconnectAttempts = 5;
@@ -991,8 +688,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // Function to connect WebSocket and receive messages
     function connectWebSocket() {
         // Check if already connected
-        if (socket && socket.readyState === WebSocket.OPEN) {
-            console.log('WebSocket already connected');
+        if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+            console.log('WebSocket already connected or connecting');
             return;
         }
         
@@ -1094,6 +791,29 @@ document.addEventListener('DOMContentLoaded', () => {
                 window.dispatchEvent(new Event('chat-conversation-changed'));
                 return;
             }
+            if (data.type === 'message_rejected') {
+                restoreUnsentMessage(data.message, data.files || []);
+                alert(data.reason);
+                return;
+            }
+            if (data.type === 'chat_queue') {
+                renderChatQueue(data.items || []);
+                return;
+            }
+            if (data.type === 'message_started') {
+                currentStreamingEl = null;
+                stopRequested = false;
+                if (data.render_on_start) {
+                    const userMessage = addMessageToChat('user',data.message,data.files?.length ? data.files : null);
+                    // Sending creates a provisional activity trail before the server
+                    // acknowledges the user bubble. Keep that trail after its prompt.
+                    if (userMessage && activeTrail?.isConnected && activeTrail.parentNode === userMessage.parentNode) {
+                        userMessage.parentNode.insertBefore(userMessage, activeTrail);
+                    }
+                }
+                showStopButton();
+                return;
+            }
             if (data.type === 'background_resume') {
                 resetStreamingState();
                 currentStreamingEl = null;
@@ -1105,7 +825,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 data.events.forEach(item => socket.onmessage({data: JSON.stringify(item)}));
                 return;
             }
-            if ((data.build_status || data.type === "epic_build_update" || (data.type === "ticket_status" || data.type === "tasks_updated")) && document.body.dataset.epicBuilds === "true") window.dispatchEvent(new Event("epic-build-update"));
             if (data.type === "notification") {
                 window.dispatchEvent(new CustomEvent("build-notification", { detail: data.notification }));
                 return;
@@ -1150,11 +869,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             // "Chat with ticket" live updates (native left panel).
-            if (data.type === 'ticket_log' || data.type === 'ticket_log_output' || data.type === 'ticket_status' || data.type === 'ticket_chat_state') {
+            if (data.type === 'ticket_log' || data.type === 'ticket_log_output' || data.type === 'ticket_status' || data.type === 'ticket_chat_state' || data.type === 'tasks_updated') {
                 if (window.TicketAgentChat && window.TicketAgentChat.onWs) window.TicketAgentChat.onWs(data);
+                window.dispatchEvent(new CustomEvent('ticket-activity', { detail: data }));
                 // A build state change → refresh the Task List so its row indicator updates
                 // live (spinner on/off), even when the ticket panel is closed.
-                if (data.type === 'ticket_status' && window.ArtifactsLoader && window.ArtifactsLoader._checklistProjectId) {
+                if ((data.type === 'ticket_status' || data.type === 'ticket_chat_state') && window.ArtifactsLoader && window.ArtifactsLoader._checklistProjectId) {
                     try { window.ArtifactsLoader.loadChecklist(window.ArtifactsLoader._checklistProjectId); } catch (_) {}
                 }
                 return;
@@ -1181,6 +901,7 @@ document.addEventListener('DOMContentLoaded', () => {
             
             // Log message content for troubleshooting empty messages
             if (data.type === 'ai_chunk' && data.is_final) {
+                window.ChatArtifacts?.finish(messageContainer);
                 console.log('Final AI chunk received - conversation saved');
             } else if (data.type === 'ai_chunk' && data.chunk === '') {
                 console.log('Empty AI chunk received - this may be a typing indicator');
@@ -1221,11 +942,13 @@ document.addEventListener('DOMContentLoaded', () => {
                         } else if (msg.role === 'assistant' && renderAssistantTimeline(msg)) {
                             // Ordered text/action phases restored from the saved offsets.
                         } else if (msg.content && msg.content.trim() !== '') {
-                            // Regular text messages
+                            // Restore inline documents before their final summary, as in the live turn.
+                            if (msg.role === 'assistant') renderSavedInlineArtifacts(msg);
                             addMessageToChat(msg.role, msg.content, null, null, msg.is_partial);
                         }
                         if (msg.role === 'assistant') {
-                            (msg.page_previews || msg.pagePreviews || []).forEach(p => p?.id && renderPagePreview(p.id, p.name, {replay:true}));
+                            if (!msg.content?.trim() && !assistantTimelineParts(msg)) renderSavedInlineArtifacts(msg);
+                            (msg.page_previews || msg.pagePreviews || []).forEach(p => p?.id && !p.kind && renderChatArtifact(p, {replay:true}));
                         }
                     });
                     scrollToBottom(true); // Force scroll when loading history
@@ -1241,7 +964,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (data.conversation_id && currentConversationId && data.conversation_id !== currentConversationId) break;
                     // Handle complete message
                     addMessageToChat(data.sender, data.message);
-                    scrollToBottom(true); // Force scroll for complete messages
+                    scrollToBottom(); // Incoming messages respect the reader’s scroll position
                     break;
                     
                 case 'ai_chunk':
@@ -1262,6 +985,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     break;
                 
                 case 'stop_confirmed':
+                    window.ChatArtifacts?.finish(messageContainer);
                     finalizeTrail('Stopped');
                     // Handle confirmation that generation was stopped
                     console.log('Generation stopped by server');
@@ -1315,10 +1039,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     
                     if (data.is_streaming) {
                         // Server says it's streaming but client isn't aware
-                        if (!isStreaming) {
-                            console.log('Server is streaming but client was unaware - updating UI');
+                        {
+                            // Reconcile the actual button DOM even if local state says active.
                             isStreaming = true;
-                            chatInput.disabled = true;
+                            chatInput.disabled = false;
                             showStopButton();
                         }
                     } else {
@@ -1331,6 +1055,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     break;
                     
                 case 'error':
+                    window.dispatchEvent(new Event('chat-voice-stop'));
                     finalizeTrail('Failed');
                     console.error('WebSocket error:', data.message);
                     
@@ -1412,6 +1137,7 @@ document.addEventListener('DOMContentLoaded', () => {
         
         socket.onclose = function(event) {
             if (event.target !== socket) return;
+            window.dispatchEvent(new CustomEvent('chat-voice-stop', {detail:{reason:'disconnected'}}));
             stopHeartbeat();
             stopConnectionMonitor();
             isSocketConnected = false;
@@ -1538,8 +1264,11 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log("Notification:", data.notification_type, isEarlyNotification ? "(early)" : "", data.function_name || "");
         }
         
+        if (!isNotification && typeof chunk === 'string') voiceReplyText += chunk;
+
         if (isFinal) {
             const reason = data.end_reason;
+            if (data.check_chatgpt_connection) window.ChatGPTConnection?.check(document.querySelector('#chat-form'));
             finalizeTrail(reason === 'error' ? 'Failed'
                 : reason === 'stop' || reason === 'user_stop' || reason === 'stopped' ? 'Stopped'
                 : reason && reason !== 'complete' ? 'Interrupted — ' + reason
@@ -1639,6 +1368,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Restore send button
                 hideStopButton();
 
+                window.dispatchEvent(new CustomEvent('chat-voice-reply', { detail: {
+                    text: voiceReplyText || finalMsg?.querySelector('.message-content')?.getAttribute('data-raw-content') || '',
+                    reason: data.end_reason,
+                    error: data.error_message
+                }}));
+                voiceReplyText = '';
+
                 // Turn complete → clear the persistent working indicator.
                 removeFunctionCallIndicator(false, true);
 
@@ -1663,6 +1399,8 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         if (isEarlyNotification && data.function_name) {
+            window.dispatchEvent(new CustomEvent('chat-voice-progress', {detail:{tool:data.function_name}}));
+            showStopButton();
             finishMessageDisplay(currentStreamingEl);
             currentStreamingEl = null;
             // Remove typing indicator — the tool pill replaces it
@@ -1693,6 +1431,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Specific action of the current tool (args now known) → update the live indicator.
         if (data.notification_type === 'tool_detail') {
+            showStopButton();
             if (data.warning) {
                 trailStep({ detail: data.detail, tool: data.function_name, warning: true });
                 return;
@@ -2075,25 +1814,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 return; // Don't process further
             }
 
-            // ── Ticket streaming: switch to Task List tab and reload the proper ticket list ──
-            if (data.notification_type === 'ticket_stream' && data.ticket) {
-                if (document.body.dataset.epicBuilds === 'true') { window.loadChatEpics?.(document.body.dataset.projectId); return; }
-                // Open panel + switch to checklist tab
-                if (window.ArtifactsPanel && typeof window.ArtifactsPanel.toggle === 'function') {
-                    window.ArtifactsPanel.toggle(true);
-                }
-                document.querySelectorAll('.tab-button').forEach(b => b.classList.remove('active'));
-                document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
-                const clBtn = document.querySelector('.tab-button[data-tab="checklist"]');
-                const clPane = document.getElementById('checklist');
-                if (clBtn) clBtn.classList.add('active');
-                if (clPane) clPane.classList.add('active');
-
-                // Reload the full ticket list UI so it matches what you see after refresh
-                const pid = currentProjectId || window.extractProjectIdFromPath?.();
-                if (pid && window.ArtifactsLoader && typeof window.ArtifactsLoader.loadChecklist === 'function') {
-                    window.ArtifactsLoader.loadChecklist(pid);
-                }
+            // Legacy broadcasts only refresh saved collections; cards arrive on this chat's stream.
+            if (data.notification_type === 'ticket_stream' || data.notification_type === 'file_stream') {
+                const pid = currentProjectId || extractProjectIdFromPath();
+                if (data.notification_type === 'ticket_stream') window.ArtifactsLoader?.loadChecklist?.(pid);
+                else if (data.is_complete) window.ArtifactsLoader?.loadFileBrowser?.(pid);
+                return;
+            }
+            if (data.notification_type === 'document_stream') {
+                window.ChatArtifacts?.stream(messageContainer, data, currentProjectId || extractProjectIdFromPath());
+                scrollToBottom();
+                return;
+            }
+            if (data.notification_type === 'chat_artifact' && data.artifact) {
+                renderChatArtifact(data.artifact, {callId: data.tool_call_id});
                 return;
             }
 
@@ -2700,6 +2434,17 @@ document.addEventListener('DOMContentLoaded', () => {
      * what a client actually reacts to. The HTML is a saved project document, so the
      * ticket can reference the exact thing that was approved.
      */
+    function renderChatArtifact(artifact, opts) {
+        if (!artifact.kind || artifact.fileType === 'page_preview') return renderPagePreview(artifact.id, artifact.name, opts);
+        window.ChatArtifacts?.render(messageContainer, artifact, currentProjectId || extractProjectIdFromPath(), opts);
+        if (!opts?.replay) {
+            const pid = currentProjectId || extractProjectIdFromPath();
+            if (artifact.kind === 'document') window.ArtifactsLoader?.loadFileBrowser?.(pid);
+            else window.ArtifactsLoader?.loadChecklist?.(pid);
+            scrollToBottom();
+        }
+    }
+
     function renderPagePreview(fileId, fileName, opts) {
         if (!fileId) return;
         const card = document.createElement('div');
@@ -2854,7 +2599,7 @@ document.addEventListener('DOMContentLoaded', () => {
         wrapper.className = 'message assistant orchestrator-msg';
         wrapper.appendChild(card);
         messageContainer.appendChild(wrapper);
-        scrollToBottom(true);
+        scrollToBottom();
     }
 
     /**
@@ -2902,7 +2647,7 @@ document.addEventListener('DOMContentLoaded', () => {
         wrapper.className = 'message assistant orchestrator-msg';
         wrapper.appendChild(card);
         messageContainer.appendChild(wrapper);
-        scrollToBottom(true);
+        scrollToBottom();
     }
 
     // Function to create message container if it doesn't exist
@@ -2931,28 +2676,44 @@ document.addEventListener('DOMContentLoaded', () => {
         return btn;
     }
     
+    function renderChatQueue(items) {
+        let tray = document.getElementById('chat-followup-queue');
+        if (!tray) {
+            tray = document.createElement('div');
+            tray.id = 'chat-followup-queue';
+            tray.setAttribute('aria-label', 'Queued messages');
+            chatForm.prepend(tray);
+        }
+        tray.replaceChildren();
+        tray.hidden = !items.length;
+        for (const [index,item] of items.entries()) {
+            const row = document.createElement('div'); row.className = 'chat-queued-message';
+            const copy = document.createElement('div'); copy.className = 'chat-queued-copy';
+            const label = document.createElement('small'); label.textContent = index===0 ? 'Up next' : 'Queued';
+            const text = document.createElement('span');
+            text.textContent = item.message || (item.files || []).map(f=>f.name).join(', ');
+            text.title = text.textContent;
+            copy.append(label,text);
+            if (item.files?.length) {const files=document.createElement('small');files.textContent=item.files.length+' attachment'+(item.files.length===1?'':'s');copy.append(files);}
+            const steer = document.createElement('button');steer.type='button';steer.textContent=item.steering?'Steering…':'Steer now';steer.disabled=!!item.steering;steer.title='Stop the current response and send this message next';
+            steer.onclick=()=>{if(socket?.readyState===WebSocket.OPEN){socket.send(JSON.stringify({type:'queue_steer',id:item.id}));steer.disabled=true;steer.textContent='Steering…';}};
+            const remove = document.createElement('button');remove.type='button';remove.textContent='×';remove.setAttribute('aria-label','Remove queued message');
+            remove.onclick=()=>{if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:'queue_remove',id:item.id}));};
+            row.append(copy,steer,remove);tray.append(row);
+        }
+    }
+    window.addEventListener('chat-conversation-changed',()=>renderChatQueue([]));
+
     // Function to create and show stop button
     // The assistant is mid-turn. While this is true the working indicator is
     // PERSISTENT: individual tool notifications update its text but must not
     // remove it, otherwise the pill blinks out between every tool call.
     let turnActive = false;
 
-    function showStopButton() {
+    function showStopButton(showActivity = true) {
         turnActive = true;
         document.querySelector('.typing-indicator')?.remove();
-        if (!activeTrail) trailStep({ detail: 'Waiting for the agent', icon: 'fa-hourglass' });
-        // Check if we're already in the process of transitioning
-        if (currentButtonState === ButtonState.TRANSITIONING) {
-            console.log('Button transition in progress, skipping showStopButton');
-            return;
-        }
-        
-        // If already showing stop button, nothing to do
-        if (currentButtonState === ButtonState.STOP) {
-            console.log('Stop button already visible');
-            return;
-        }
-        
+        if (showActivity && !activeTrail) trailStep({ detail: 'Checking…', icon: 'fa-magnifying-glass' });
         // Clear any pending transition
         if (buttonTransitionTimeout) {
             clearTimeout(buttonTransitionTimeout);
@@ -2974,36 +2735,31 @@ document.addEventListener('DOMContentLoaded', () => {
             stopBtn.addEventListener('click', stopGeneration);
         }
         
-        // Handle the input actions container
+        // Reused buttons may have been hidden by a previous fallback/reset.
+        stopBtn.style.display = '';
+        stopBtn.disabled = false;
+        stopBtn.setAttribute('aria-label', 'Stop generating');
         const inputActions = document.querySelector('.input-actions');
-        const sendBtnContainer = sendBtn.parentElement;
-        
-        if (inputActions && sendBtnContainer === inputActions) {
-            // If send button is in input actions, replace it with stop button
-            inputActions.replaceChild(stopBtn, sendBtn);
-        } else {
-            // Otherwise just append to form
-            chatForm.appendChild(stopBtn);
-            sendBtn.style.display = 'none';
-        }
-        
+        (inputActions || chatForm).appendChild(stopBtn);
+        if (!sendBtn.parentElement) (inputActions || chatForm).appendChild(sendBtn);
+        sendBtn.style.display = '';
+        sendBtn.disabled = false;
+        sendBtn.title = 'Queue message';
+        sendBtn.setAttribute('aria-label', 'Queue message');
+        chatInput.placeholder = 'Add a follow-up while the agent works…';
         isStreaming = true;
         window.__isAgentStreaming__ = true;
         currentButtonState = ButtonState.STOP;
         
-        // Set a timeout to prevent stuck states
-        buttonTransitionTimeout = setTimeout(() => {
-            if (currentButtonState === ButtonState.STOP && !isStreaming) {
-                console.log('Stuck in stop state, forcing reset');
-                resetStreamingState();
-            }
-        }, 30000); // 30 seconds timeout
+
     }
     
     // Function to hide stop button and show send button
     function hideStopButton() {
         messageContainer.querySelectorAll('.message[data-streaming="true"]').forEach(finishMessageDisplay);
         turnActive = false;
+        isStreaming = false;
+        window.__isAgentStreaming__ = false;
         // Check if we're already in the process of transitioning
         if (currentButtonState === ButtonState.TRANSITIONING) {
             console.log('Button transition in progress, skipping hideStopButton');
@@ -3024,12 +2780,14 @@ document.addEventListener('DOMContentLoaded', () => {
         
         currentButtonState = ButtonState.TRANSITIONING;
         
+        sendBtn.style.display = '';
         const inputActions = document.querySelector('.input-actions');
         
         if (stopBtn) {
             if (inputActions && stopBtn.parentElement === inputActions) {
                 // If stop button is in input actions, replace it with send button
-                inputActions.replaceChild(sendBtn, stopBtn);
+                stopBtn.remove();
+                if (!sendBtn.parentElement) inputActions.appendChild(sendBtn);
             } else {
                 stopBtn.style.display = 'none';
                 sendBtn.style.display = 'block';
@@ -3039,6 +2797,9 @@ document.addEventListener('DOMContentLoaded', () => {
         isStreaming = false;
         window.__isAgentStreaming__ = false;
         currentButtonState = ButtonState.SEND;
+        sendBtn.title = 'Send message';
+        sendBtn.setAttribute('aria-label', 'Send message');
+        chatInput.placeholder = 'Type your message here…';
     }
     
     // Function to reset streaming state completely
@@ -3073,11 +2834,13 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         // Force send button to be shown
+        sendBtn.style.display = '';
         const inputActions = document.querySelector('.input-actions');
         if (stopBtn && inputActions && stopBtn.parentElement === inputActions) {
             // If stop button is in input actions, replace it with send button
             try {
-                inputActions.replaceChild(sendBtn, stopBtn);
+                stopBtn.remove();
+                if (!sendBtn.parentElement) inputActions.appendChild(sendBtn);
             } catch (e) {
                 console.warn('Error replacing stop button:', e);
                 // Fallback: ensure send button is visible
@@ -3105,6 +2868,7 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Function to stop the generation
     function stopGeneration() {
+        window.dispatchEvent(new Event('chat-voice-stop'));
         if (socket && socket.readyState === WebSocket.OPEN && !stopRequested) {
             // Set flag to indicate stop has been requested
             stopRequested = true;
@@ -3147,102 +2911,124 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     // Function to send message using WebSocket
-    async function sendMessage(message) {
-        console.log('sendMessage: Starting to send message:', message);
-
-        // Check if we have a message or any attached file(s)
-        if (!message && !(window.attachedFiles && window.attachedFiles.length)) {
-            console.log('No message or file to send');
-            return;
-        }
-
-        // Tagging @preview routes to the Preview agent — auto-open the Preview tab
-        // so its live activity (commands/logs) is visible right away.
-        if (typeof message === 'string' && /^\s*@preview\b/i.test(message) && typeof window.switchTab === 'function') {
-            try { window.switchTab('preview'); } catch (_) {}
-            // Open the live log overlay shortly after the tab mounts so the agent's
-            // commands stream into view automatically.
-            setTimeout(() => { try { window.PreviewTab && window.PreviewTab.showLogs && window.PreviewTab.showLogs(); } catch (_) {} }, 400);
-        }
-
-        // Snapshot the attached files up front (composer state is cleared below, so a
-        // second click can't double-send). Each entry may still be uploading; we wait
-        // for all of them so the WS payload carries every file's id.
-        const attachments = (window.attachedFiles || []).slice();
-        const buildFilesData = () => attachments.map((a) => {
-            const fd = { name: a.name, type: a.type, size: a.size };
-            if (a.id) fd.id = a.id;
-            // Image → show it inline immediately (local object URL).
-            if ((a.type || '').startsWith('image/') && a.file) fd.previewUrl = URL.createObjectURL(a.file);
-            return fd;
-        });
-
-        // Optimistically render the user bubble RIGHT NOW (with ALL attachment chips) so
-        // it doesn't vanish between click and upload-settle.
-        let alreadyRenderedBubble = false;
-        if (attachments.length) {
-            addMessageToChat('user', message, buildFilesData());
-            alreadyRenderedBubble = true;
-        }
-
-        // Wait for any uploads still in flight (otherwise the WS payload goes out before
-        // we know each file's id and the LLM sees the message with no file context).
-        const pendingUploads = attachments.filter((a) => a.uploading && a.uploadPromise);
-        if (pendingUploads.length) {
-            console.log('[sendMessage] waiting for ' + pendingUploads.length + ' upload(s) to finish before sending');
-            try { await Promise.allSettled(pendingUploads.map((a) => a.uploadPromise)); } catch (_) {}
-        }
-
-        // Reset stop requested flag
-        stopRequested = false;
-        currentStreamingEl = null; // Reset for new response
-        
-        // Get selected role from dropdown if it exists
-        let userRole = 'default';
-        
-        // First check the left menu submenu
-        const roleSubmenu = document.getElementById('role-submenu');
-        if (roleSubmenu) {
-            const selectedRole = roleSubmenu.querySelector('.submenu-option.selected');
-            if (selectedRole) {
-                userRole = selectedRole.getAttribute('data-value') || 'default';
+    let composerSubmission = Promise.resolve();
+    function restoreUnsentMessage(message, attachments) {
+        chatInput.value = [message, chatInput.value].filter(Boolean).join('\n\n');
+        const box = document.getElementById('chat-input-box');
+        let tray = box.querySelector('.input-file-attachments');
+        if (attachments.length && !tray) {tray=document.createElement('div');tray.className='input-file-attachments';box.prepend(tray);}
+        for (const entry of attachments) {
+            window.attachedFiles.push(entry);
+            if (!entry.chip) {
+                entry.chip=document.createElement('div');entry.chip.className='input-file-attachment';
+                const name=document.createElement('span');name.textContent=entry.name;
+                const remove=document.createElement('button');remove.type='button';remove.textContent='×';remove.setAttribute('aria-label','Remove '+entry.name);
+                remove.onclick=()=>{window.attachedFiles=window.attachedFiles.filter(a=>a!==entry);entry.chip.remove();window.syncPrimaryAttachedFile?.();};
+                entry.chip.append(name,remove);
             }
-        } else if (typeof getCustomDropdownValue === 'function' && document.getElementById('role-dropdown')) {
-            userRole = getCustomDropdownValue('role-dropdown') || 'default';
-        } else {
-            // Fallback for old select dropdown
-            const roleDropdown = document.getElementById('role-dropdown');
-            if (roleDropdown && roleDropdown.tagName === 'SELECT') {
-                userRole = roleDropdown.value;
-            }
+            tray.append(entry.chip);
         }
-        console.log('Selected role:', userRole);
-        
-        // Build the final files payload (ids now resolved after the wait) and clear the
-        // composer's attachment state + chips.
-        const filesData = buildFilesData();
-        window.attachedFiles = [];
-        if (window.syncPrimaryAttachedFile) window.syncPrimaryAttachedFile();
-        const chipsContainer = document.querySelector('.input-file-attachments');
-        if (chipsContainer) chipsContainer.remove();
-
-        // Render the user bubble if we didn't already do it optimistically.
-        if (!alreadyRenderedBubble) {
-            addMessageToChat('user', message, filesData.length ? filesData : null, userRole);
-        }
-
-        // Send with all attachments (uploads that errored simply have no id; the backend
-        // ignores those and describes/attaches the ones that uploaded).
-        sendMessageToServer(message, filesData);
+        window.syncPrimaryAttachedFile?.();
     }
-    
+    async function sendMessage(message) {
+        const attachments = (window.attachedFiles || []).slice();
+        if (!message && !attachments.length) return;
+        // Detach this submission immediately so a second follow-up cannot reuse
+        // its files, and uploads added during the wait stay in the composer.
+        window.attachedFiles = [];
+        window.syncPrimaryAttachedFile?.();
+        document.querySelector('.input-file-attachments')?.remove();
+        const previousSubmission = composerSubmission;
+        let releaseSubmission;
+        composerSubmission = new Promise(resolve=>{releaseSubmission=resolve;});
+        const scope = currentConversationId;
+        const navigationVersion = conversationLoadVersion;
+        const project = currentProjectId;
+        const mentions = {files:window.mentionedFiles, tickets:window.mentionedTickets};
+        window.mentionedFiles = {}; window.mentionedTickets = {};
+        await previousSubmission;
+        try {
+        await Promise.allSettled(attachments.filter(a=>a.uploadPromise).map(a=>a.uploadPromise));
+        const failed = attachments.filter(a=>!a.id);
+        if (failed.length || navigationVersion !== conversationLoadVersion || scope !== currentConversationId && scope !== null || project !== currentProjectId) {
+            // Don't silently drop an attachment or send it into a different chat.
+            restoreUnsentMessage(message, attachments);
+            alert(failed.length ? 'An attachment could not upload. Please retry before sending.' : 'The chat changed before this message was sent. Your draft has been restored.');
+            return false;
+        }
+        const filesData = attachments.map(a=>({id:a.id,name:a.name,type:a.type,size:a.size}));
+        attachments.forEach(a=>a.releasePreview?.());
+        sendMessageToServer(message,filesData,{renderOnStart:true,mentions});
+        } finally { releaseSubmission(); }
+    }
+
+    // Voice may be started before the initial socket handshake finishes.
+    function ensureVoiceChatConnected({signal, timeoutMs = 10000} = {}) {
+        if (signal?.aborted) return Promise.resolve(false);
+        if (socket?.readyState === WebSocket.OPEN) return Promise.resolve(true);
+        return new Promise(resolve => {
+            let timer;
+            let pendingSocket;
+            const finish = connected => {
+                clearTimeout(timer);
+                signal?.removeEventListener('abort', aborted);
+                pendingSocket?.removeEventListener('open', opened);
+                pendingSocket?.removeEventListener('close', closed);
+                pendingSocket?.removeEventListener('error', closed);
+                resolve(connected);
+            };
+            const opened = () => finish(pendingSocket === socket && socket.readyState === WebSocket.OPEN);
+            const closed = () => finish(false);
+            const aborted = () => finish(false);
+            try {
+                connectWebSocket();
+                pendingSocket = socket;
+                if (!pendingSocket) return finish(false);
+                pendingSocket.addEventListener('open', opened);
+                pendingSocket.addEventListener('close', closed);
+                pendingSocket.addEventListener('error', closed);
+                signal?.addEventListener('abort', aborted, {once:true});
+                timer = setTimeout(closed, timeoutMs);
+            } catch (_) { finish(false); }
+        });
+    }
+
+    window.chatVoice = {
+        ensureConnected: ensureVoiceChatConnected,
+        context() {
+            return Array.from(document.querySelectorAll('#chat-messages .message')).slice(-6).map(message => ({
+                role: message.classList.contains('assistant') ? 'assistant' : 'user',
+                text: (message.querySelector('.message-content')?.getAttribute('data-raw-content') || message.querySelector('.message-content')?.textContent || '').slice(0,2500)
+            })).filter(message => message.text);
+        },
+        status() {
+            return {
+                connected: !!socket && socket.readyState === WebSocket.OPEN,
+                busy: isStreaming || turnActive,
+                recording: !!dictation?.active
+            };
+        },
+        lastReply() {
+            const message = getLastAssistantMessage();
+            if (!message || message.dataset.streaming === 'true') return '';
+            return message.querySelector('.message-content')?.getAttribute('data-raw-content') || '';
+        },
+        ready: () => !!socket && socket.readyState === WebSocket.OPEN && !isStreaming && !turnActive,
+        send(text) {
+            if (!this.ready()) return false;
+            voiceReplyText = '';
+            sendMessageToServer(text, null, { voice: true, renderOnStart: true });
+            return true;
+        }
+    };
+
     // Function to handle the actual WebSocket message sending
     function sendMessageToServer(message, filesData = null, opts = {}) {
         // Accept either an array of files (multi-attach) or a single object (legacy).
         const filesArr = Array.isArray(filesData) ? filesData.filter(Boolean) : (filesData ? [filesData] : []);
         const fileData = filesArr[0] || null; // primary — legacy single-file references below
-        // Show typing indicator if not already present
-        if (!document.querySelector('.typing-indicator')) {
+        // A queued follow-up must not change the current response's UI.
+        if (!opts.renderOnStart && !isStreaming && !document.querySelector('.typing-indicator')) {
             const typingIndicator = document.createElement('div');
             typingIndicator.className = 'typing-indicator';
             // Label + 3-dot pulse — pure dots were too subtle and users
@@ -3256,14 +3042,13 @@ document.addEventListener('DOMContentLoaded', () => {
             console.log('sendMessageToServer: Added typing indicator');
         }
 
-        // Force scroll to bottom when user sends a message (they expect to see response)
-        scrollToBottom(true);
+        if (!isStreaming) scrollToBottom(true);
 
         // Disable input while waiting for response (if not already disabled)
-        chatInput.disabled = true;
+        chatInput.disabled = false;
 
         // Show stop button since we're about to start streaming
-        showStopButton();
+        showStopButton(!opts.renderOnStart);
         
         // Get selected role from dropdown if it exists
         let userRole = 'default';
@@ -3301,6 +3086,9 @@ document.addEventListener('DOMContentLoaded', () => {
         // Prepare message data
         const messageData = {
             type: 'message',
+            client_message_id: crypto.randomUUID(),
+            display_message: message,
+            render_on_start: !!opts.renderOnStart,
             message: outgoingMessage,
             conversation_id: currentConversationId,
             provider: currentProvider,
@@ -3324,8 +3112,12 @@ document.addEventListener('DOMContentLoaded', () => {
             messageData.file = fileData;
         }
         
+        if (opts.mentions) {
+            messageData.mentioned_files = opts.mentions.files;
+            messageData.mentioned_tickets = Object.values(opts.mentions.tickets || {});
+        }
         // Add mentioned files if any
-        if (window.mentionedFiles && Object.keys(window.mentionedFiles).length > 0) {
+        if (!opts.mentions && window.mentionedFiles && Object.keys(window.mentionedFiles).length > 0) {
             messageData.mentioned_files = window.mentionedFiles;
             // Clear mentioned files after adding to message
             window.mentionedFiles = {};
@@ -3333,7 +3125,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Add mentioned tickets (@ticket:KEY) — the server injects each ticket's
         // context and switches the Preview to the first ticket's branch.
-        if (window.mentionedTickets && Object.keys(window.mentionedTickets).length > 0) {
+        if (!opts.mentions && window.mentionedTickets && Object.keys(window.mentionedTickets).length > 0) {
             messageData.mentioned_tickets = Object.values(window.mentionedTickets);
             window.mentionedTickets = {};
         }
@@ -3383,7 +3175,7 @@ document.addEventListener('DOMContentLoaded', () => {
             scrollToBottom(true);
         }
         showStopButton();
-        chatInput.disabled = true;
+        chatInput.disabled = false;
         const payload = {
             type: 'message',
             message: message,
@@ -3631,6 +3423,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     function addMessageToChat(role, content, fileData = null, userRole = null, isPartial = false) {
+        // Older automatic launch summaries were saved as assistant messages.
+        // Hide that exact generated format on replay too, without deleting history.
+        if (role === 'assistant' && !fileData && typeof content === 'string'
+            && content.startsWith('🚀 **Preview launch summary** — branch: `')
+            && content.includes('**Assets**') && content.includes('**Databases**')) return;
         // History messages may close a replayed trail; live text must not close it.
         // Intermediate assistant text is not proof that the turn has ended.
         if (!turnActive && role === 'assistant' && content && content.trim()) finalizeTrail();
@@ -3756,7 +3553,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     name.textContent = fd.name;
                     const type = document.createElement('span');
                     type.className = 'file-type';
-                    type.textContent = fd.name.includes('.') ? fd.name.split('.').pop().toUpperCase() : 'File';
+                    const extension = fd.name.includes('.') ? fd.name.split('.').pop() : '';
+                    type.textContent = /^[a-z0-9]{1,8}$/i.test(extension) ? extension.toUpperCase() : 'FILE';
+                    name.title = fd.name;
                     fileAttachment.append(icon, name, type);
                     contentDiv.appendChild(document.createElement('br'));
                     contentDiv.appendChild(fileAttachment);
@@ -4152,14 +3951,23 @@ document.addEventListener('DOMContentLoaded', () => {
         return parts;
     }
 
+    function renderSavedInlineArtifacts(message) {
+        (message.page_previews || message.pagePreviews || []).forEach(artifact => {
+            if (artifact?.id && artifact.kind) renderChatArtifact(artifact, {replay:true});
+        });
+    }
+
     function renderAssistantTimeline(message) {
         const parts = assistantTimelineParts(message);
         if (!parts) return false;
         let lastMessage = null;
+        const finalTextIndex = parts.findLastIndex(part => part.kind === 'message');
         parts.forEach((part, index) => {
+            if (index === finalTextIndex) renderSavedInlineArtifacts(message);
             if (part.kind === 'message') lastMessage = addMessageToChat('assistant', part.text);
             else renderSavedTrail(part.steps, message.end_reason, index < parts.length - 1);
         });
+        if (finalTextIndex < 0) renderSavedInlineArtifacts(message);
         if (lastMessage && message.end_reason) markMessageEndReason(lastMessage, message.end_reason);
         return true;
     }
@@ -4489,7 +4297,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 color: '#fb923c',
             },
             'sendTicketMessage': {
-                label: 'Messaging ticket',
+                label: 'Sending instructions to the ticket agent',
                 icon: 'fa-comment-dots',
                 color: '#fb923c',
             },
@@ -4607,23 +4415,36 @@ document.addEventListener('DOMContentLoaded', () => {
     let userScrolledUp = false;
     let lastScrollTop = 0;
     let scrollPending = false;
-    const SCROLL_THRESHOLD = 100;
-
-    // Detect user scroll intent
+    // Pause before the next streaming frame, including small wheel/trackpad steps.
+    let upwardIntent = false;
+    function pauseFollowing() { upwardIntent = true; userScrolledUp = true; }
+    chatMessages.addEventListener('wheel', event => {
+        if (event.deltaY < 0) pauseFollowing();
+        else if (event.deltaY > 0) upwardIntent = false;
+    }, { passive: true });
+    chatMessages.addEventListener('pointerdown', () => { upwardIntent = false; }, { passive: true });
+    let touchY = null;
+    chatMessages.addEventListener('touchstart', event => { touchY = event.touches[0]?.clientY ?? null; }, { passive: true });
+    chatMessages.addEventListener('touchmove', event => {
+        const y = event.touches[0]?.clientY;
+        if (touchY !== null && y !== undefined) {
+            if (y > touchY) pauseFollowing();
+            else if (y < touchY) upwardIntent = false;
+        }
+        touchY = y ?? null;
+    }, { passive: true });
+    chatMessages.addEventListener('keydown', event => {
+        if (event.target.closest('input, textarea, [contenteditable="true"]')) return;
+        if (['ArrowUp', 'PageUp', 'Home'].includes(event.key) || (event.key === ' ' && event.shiftKey)) pauseFollowing();
+        else if (['ArrowDown', 'PageDown', 'End', ' '].includes(event.key)) upwardIntent = false;
+    });
     chatMessages.addEventListener('scroll', function() {
-        const currentScrollTop = chatMessages.scrollTop;
-        const distanceFromBottom = chatMessages.scrollHeight - currentScrollTop - chatMessages.clientHeight;
-
-        // User scrolled UP (away from bottom)
-        if (currentScrollTop < lastScrollTop && distanceFromBottom > SCROLL_THRESHOLD) {
-            userScrolledUp = true;
-        }
-        // User scrolled back to bottom
-        else if (distanceFromBottom < 50) {
-            userScrolledUp = false;
-        }
-
-        lastScrollTop = currentScrollTop;
+        const top = chatMessages.scrollTop;
+        const distance = chatMessages.scrollHeight - top - chatMessages.clientHeight;
+        if (top < lastScrollTop) userScrolledUp = true;
+        // Resume only when the reader actually returns to the bottom.
+        else if (!upwardIntent && distance <= 2) userScrolledUp = false;
+        lastScrollTop = top;
     });
 
     // Function to scroll to the bottom of the chat
@@ -4636,6 +4457,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function scrollToBottom(force = false) {
         if (force) {
+            upwardIntent = false;
             userScrolledUp = false;
             chatMessages.scrollTop = chatMessages.scrollHeight;
             lastScrollTop = chatMessages.scrollTop;
@@ -5063,7 +4885,9 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Function to load a specific conversation
     async function loadConversation(conversationId) {
+        window.dispatchEvent(new Event('chat-voice-stop'));
         const loadVersion = ++conversationLoadVersion;
+        dictation?.cancel();
         if (socket) { socket.onclose = null; socket.close(); socket = null; isSocketConnected = false; }
         try {
             console.log('[loadConversation] fetching:', `/api/conversations/${conversationId}`);
@@ -5122,6 +4946,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!renderedTimeline && message.role === 'assistant' && Array.isArray(message.activity_trail) && message.activity_trail.length) {
                     renderSavedTrail(message.activity_trail, message.end_reason);
                 }
+                if (!renderedTimeline && message.role === 'assistant') renderSavedInlineArtifacts(message);
                 if (!renderedTimeline && ((message.content && message.content.trim() !== '') || fileData)) {
                     const el = addMessageToChat(message.role, message.content || '', fileData);
                     if (message.role === 'assistant' && message.end_reason) markMessageEndReason(el, message.end_reason);
@@ -5129,7 +4954,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 // Any page preview this turn produced, rebuilt from the saved document.
                 if (message.role === 'assistant' && Array.isArray(message.page_previews)) {
-                    message.page_previews.forEach((p) => p && p.id && renderPagePreview(p.id, p.name, { replay: true }));
+                    message.page_previews.forEach((p) => p && p.id && !p.kind && renderChatArtifact(p, { replay: true }));
                 }
             });
             console.log('[loadConversation] rendered', rendered, 'messages');
@@ -5698,86 +5523,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     updateArtifactsForInstantMode(isInstantModeEnabled());
     
-    // Helper function to create recording indicator
-    function createRecordingIndicator() {
-        const indicator = document.createElement('div');
-        indicator.className = 'audio-recording-indicator';
-        
-        // Create top row with waveform and controls
-        const topRow = document.createElement('div');
-        topRow.style.cssText = 'display: flex; align-items: center; gap: 8px; width: 100%;';
-        
-        // Create waveform
-        const waveform = document.createElement('div');
-        waveform.className = 'audio-waveform';
-        
-        // Add 20 bars for the waveform
-        for (let i = 0; i < 20; i++) {
-            const bar = document.createElement('div');
-            bar.className = 'waveform-bar';
-            bar.style.height = '4px'; // Set smaller initial height
-            waveform.appendChild(bar);
-        }
-        
-        // Create time display
-        const timeDisplay = document.createElement('div');
-        timeDisplay.className = 'recording-time';
-        timeDisplay.textContent = '00:00';
-        
-        // Create cancel button
-        const cancelBtn = document.createElement('button');
-        cancelBtn.className = 'recording-cancel-btn';
-        cancelBtn.innerHTML = '<i class="fas fa-times"></i>';
-        cancelBtn.title = 'Cancel recording';
-        cancelBtn.onclick = () => {
-            // Stop recording without saving
-            if (mediaRecorder && mediaRecorder.state === 'recording') {
-                // Set flag to indicate cancellation
-                window.recordingCancelled = true;
-                mediaRecorder.stop();
-            }
-        };
-        
-        topRow.appendChild(waveform);
-        topRow.appendChild(timeDisplay);
-        topRow.appendChild(cancelBtn);
-        
-        // Create transcription row
-        const transcriptionRow = document.createElement('div');
-        transcriptionRow.style.cssText = 'display: flex; align-items: center; gap: 8px; margin-top: 12px;';
-        
-        // Create transcription area
-        const transcriptionArea = document.createElement('div');
-        transcriptionArea.className = 'live-transcription';
-        // Theme tokens, not hardcoded dark values — this panel renders in light mode too.
-        transcriptionArea.style.cssText = 'flex: 1; padding: 8px 12px; background: color-mix(in srgb, var(--border-color, #2a2a2a) 35%, transparent); border-radius: 6px; min-height: 40px; color: var(--text-color, #e2e8f0); font-size: 14px; line-height: 1.4;';
-        transcriptionArea.innerHTML = '<span style="opacity:.55; font-style: italic;">Listening…</span>';
-        
-        // Create send button (initially hidden)
-        const sendBtn = document.createElement('button');
-        sendBtn.className = 'recording-send-btn';
-        sendBtn.style.cssText = 'width: 32px; height: 32px; padding: 0; background: var(--primary-color, #8b5cf6); color: #fff; border: none; border-radius: 50%; font-size: 13px; cursor: pointer; display: none; align-self: center; flex-shrink: 0;';
-        sendBtn.innerHTML = '<i class="fas fa-paper-plane"></i>';
-        sendBtn.title = 'Send message';
-        sendBtn.onclick = () => {
-            if (mediaRecorder && mediaRecorder.state === 'recording') {
-                mediaRecorder.stop();
-            }
-        };
-        
-        transcriptionRow.appendChild(transcriptionArea);
-        transcriptionRow.appendChild(sendBtn);
-        
-        indicator.appendChild(topRow);
-        indicator.appendChild(transcriptionRow);
-        
-        // Store references for easy access
-        indicator.transcriptionArea = transcriptionArea;
-        indicator.sendBtn = sendBtn;
-        
-        return indicator;
-    }
-    
     /** Put a small "Voice message" line above a message bubble's text. */
 
     // ── Interrupted / stalled turns ──────────────────────────────────────────
@@ -5821,169 +5566,6 @@ document.addEventListener('DOMContentLoaded', () => {
         content.insertBefore(tag, content.firstChild);
     }
 
-    // Helper function to send audio message
-    async function sendAudioMessage(audioFile, liveTranscript = '') {
-        // Add user message with audio indicator
-        const audioIndicator = document.createElement('div');
-        audioIndicator.className = 'message-audio';
-        audioIndicator.innerHTML = `
-            <div class="message-audio-container">
-                <div class="message-audio-header">
-                    <i class="fas fa-microphone" style="font-size: 14px;"></i>
-                    Voice message
-                </div>
-                ${liveTranscript ? `
-                    <div class="audio-transcription">
-                        ${liveTranscript}
-                    </div>
-                ` : `
-                    <div class="audio-transcription" style="display: none;">
-                        Transcribing...
-                    </div>
-                `}
-            </div>
-        `;
-        
-        // If we have a live transcript, send it as a message with audio styling
-        if (liveTranscript && liveTranscript.trim()) {
-            // Render the transcript as the message text with a mic marker, rather than
-            // an empty bubble holding a separate indicator element — that is what
-            // produced the tall empty block.
-            const messageElement = addMessageToChat('user', liveTranscript);
-            markMessageAsVoice(messageElement);
-
-            // Send the transcribed text to the server, flagged as dictated.
-            sendMessageToServer(liveTranscript, null, { voice: true });
-            return;
-        }
-        
-        // Otherwise, proceed with file upload
-        const messageElement = addMessageToChat('user', '', { 
-            audioIndicator: audioIndicator,
-            file: audioFile 
-        });
-        
-        // Store reference to update transcription later
-        if (messageElement) {
-            window.lastAudioMessageElement = messageElement;
-        }
-        
-        // Upload audio file
-        const formData = new FormData();
-        formData.append('file', audioFile);
-        formData.append('conversation_id', currentConversationId || '');
-        
-        try {
-            const response = await fetch('/api/files/upload/', {
-                method: 'POST',
-                headers: {
-                    'X-CSRFToken': getCookie('csrftoken'),
-                    'X-Requested-With': 'XMLHttpRequest'
-                },
-                body: formData
-            });
-            
-            if (!response.ok) {
-                throw new Error('Failed to upload audio file');
-            }
-            
-            const fileData = await response.json();
-            console.log('Audio file uploaded:', fileData);
-            
-            // Show transcription loading state
-            if (window.lastAudioMessageElement) {
-                const transcriptionDiv = window.lastAudioMessageElement.querySelector('.audio-transcription');
-                if (transcriptionDiv) {
-                    transcriptionDiv.style.display = 'block';
-                }
-            }
-            
-            // Get transcription from the API
-            let transcription = null;
-            try {
-                console.log('Fetching transcription for file:', fileData.id);
-                const transcriptionResponse = await fetch(`/api/files/transcribe/${fileData.id}/`, {
-                    method: 'GET',
-                    headers: {
-                        'X-CSRFToken': getCookie('csrftoken'),
-                        'X-Requested-With': 'XMLHttpRequest'
-                    }
-                });
-                
-                console.log('Transcription response status:', transcriptionResponse.status);
-                
-                if (transcriptionResponse.ok) {
-                    const transcriptionData = await transcriptionResponse.json();
-                    console.log('Transcription received:', transcriptionData);
-                    transcription = transcriptionData.transcription;
-                    
-                    // Update the audio message with transcription
-                    if (window.lastAudioMessageElement) {
-                        const transcriptionDiv = window.lastAudioMessageElement.querySelector('.audio-transcription');
-                        console.log('Found transcription div:', transcriptionDiv);
-                        if (transcriptionDiv && transcription) {
-                            transcriptionDiv.innerHTML = transcription;
-                            transcriptionDiv.style.display = 'block';
-                            console.log('Updated transcription display with:', transcription);
-                        }
-                    } else {
-                        console.log('No lastAudioMessageElement found');
-                    }
-                } else {
-                    const errorData = await transcriptionResponse.text();
-                    console.error('Transcription failed:', transcriptionResponse.status, errorData);
-                    // Show error in UI
-                    if (window.lastAudioMessageElement) {
-                        const transcriptionDiv = window.lastAudioMessageElement.querySelector('.audio-transcription');
-                        if (transcriptionDiv) {
-                            transcriptionDiv.textContent = 'Transcription failed';
-                            transcriptionDiv.style.display = 'block';
-                            transcriptionDiv.style.color = '#ef4444';
-                        }
-                    }
-                }
-            } catch (error) {
-                console.error('Error getting transcription:', error);
-                // Show error in UI
-                if (window.lastAudioMessageElement) {
-                    const transcriptionDiv = window.lastAudioMessageElement.querySelector('.audio-transcription');
-                    if (transcriptionDiv) {
-                        transcriptionDiv.textContent = 'Transcription error';
-                        transcriptionDiv.style.display = 'block';
-                        transcriptionDiv.style.color = '#ef4444';
-                    }
-                }
-            }
-            
-            // Send message via WebSocket with audio file reference
-            if (socket && isSocketConnected) {
-                // Use transcription as message content if available
-                const messageContent = transcription || '[Voice Message]';
-                
-                const messageData = {
-                    type: 'message',
-                    message: messageContent,
-                    conversation_id: currentConversationId,
-                    project_id: currentProjectId,
-                    file: {
-                        id: fileData.id,
-                        name: audioFile.name,
-                        type: audioFile.type,
-                        size: audioFile.size
-                    },
-                    user_role: getCurrentUserRole(),
-                    turbo_mode: document.getElementById('turbo-mode-toggle')?.checked || false
-                };
-                
-                socket.send(JSON.stringify(messageData));
-            }
-            
-        } catch (error) {
-            console.error('Error sending audio message:', error);
-            alert('Failed to send audio message');
-        }
-    }
-    
     // Helper function to format file size
     function formatFileSize(bytes) {
         if (bytes < 1024) return bytes + ' B';

@@ -5,7 +5,8 @@ import assert from 'node:assert/strict';
 const props = { user: { id: 'u', name: 'Jitin' }, project: { id: 'internal', projectId: 'demo', name: 'CoHire', icon: '🚀', status: 'active', description: null, stack: null, repoUrl: 'https://example.com/repo', repoOwner: 'cohire', repoName: 'cohire' }, githubConnected: true, conversations: [{ id: 'chat1', title: 'Training institutions page redesign', updatedAt: new Date() }], stages: [], ticketCounts: {}, envVars: [], instantApps: [], activeTab: 'home', docsCount: 3, memberCount: 2 };
 const markup = String(await ProjectDetailPage(props));
 const viewerMarkup = String(await ProjectDetailPage({...props,role:'viewer'}));
-assert(!viewerMarkup.includes('id="home-start-form"'));
+assert(!viewerMarkup.includes('class="home-start-card"'));
+assert(!markup.includes('id="home-start-input"'));
 assert(!markup.includes('Pick up where you left off'));
 assert(!markup.includes('id="home-activity"'));
 let epics = [
@@ -56,15 +57,9 @@ try {
  assert.equal(await page.getByRole('link',{name:'Test partial preview ↗'}).count(),1);
  assert.equal(await page.locator('a[href^="javascript:"]').count(),0);
  assert.equal(await page.locator('.home-epic-track').nth(1).getAttribute('aria-valuenow'),'0');
- for (const focused of [false, true]) {
-  if (focused) await page.locator('#home-start-input').focus();
-  const style = await page.locator('#home-start-input').evaluate(el => {
-   const s = getComputedStyle(el); return { background:s.backgroundColor, border:s.borderTopWidth, shadow:s.boxShadow };
-  });
-  assert.deepEqual(style,{background:'rgba(0, 0, 0, 0)',border:'0px',shadow:'none'},'Composer has a single outer surface, including focus');
- }
+ assert.equal(await page.locator('.home-start-link').getAttribute('href'),'/chat/project/demo?new=1');
  assert.equal(await page.locator('#build-inbox-button .nav-text').textContent(), 'Notifications');
- await page.locator('.home-new-requirement').screenshot({path:'/tmp/lfg-home-compose-light.png'});
+ await page.locator('.home-start-card').screenshot({path:'/tmp/lfg-home-compose-light.png'});
  await page.screenshot({ path:'/tmp/lfg-home-light.png', fullPage:true });
  await page.evaluate(() => { document.documentElement.dataset.theme='dark'; document.body.dataset.theme='dark'; });
  await page.screenshot({ path:'/tmp/lfg-home-dark.png', fullPage:true });
@@ -77,10 +72,9 @@ try {
  await page.setViewportSize({width:390,height:844});
  await page.screenshot({path:'/tmp/lfg-home-mobile.png',fullPage:true});
  assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'No mobile horizontal overflow');
- await page.locator('#home-start-input').fill('Improve the signup flow');
- await page.locator('#home-start-form button').click();
+ await page.locator('.home-start-link').click();
  await page.waitForURL('**/chat/project/demo?new=1');
- assert.equal(await page.evaluate(() => sessionStorage.getItem('home-chat-draft:demo')), 'Improve the signup flow');
+ assert.equal(await page.evaluate(() => sessionStorage.getItem('home-chat-draft:demo')), null);
  assert.deepEqual(errors,[]);
- console.log('PASS: rendered scripts, epic progress, partial previews, unsafe URL rejection, queue precedence, empty state, mobile layout, draft handoff');
+ console.log('PASS: rendered scripts, epic progress, partial previews, unsafe URL rejection, queue precedence, empty state, mobile layout, direct new chat navigation');
 } finally { await browser.close(); }

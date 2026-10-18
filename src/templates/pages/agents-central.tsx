@@ -189,7 +189,7 @@ export function AgentsCentralPage({ user, agents, messages }: AgentsCentralPageP
     </div>
   </div>
 
-  <script src="/public/js/sidebar.js?v=20260923-tooltip-theme"></script>
+  <script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
   <script src="/public/js/agents.js"></script>
 </body>
 </html>`;

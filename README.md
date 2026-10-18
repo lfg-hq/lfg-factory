@@ -217,6 +217,26 @@ cp .kamal/secrets.example .kamal/secrets         # pulls values from your env
 The real `config/deploy.yml` and `.kamal/secrets` are gitignored so your infra stays
 private.
 
+### Live voice
+
+Voice uses OpenAI Realtime over WebRTC with Coral. Set `OPENAI_API_KEY` in
+`.env.prod`; `node_deploy.sh` loads that file before invoking Kamal. The key stays
+on the server. In `.kamal/secrets`, use `OPENAI_API_KEY=$OPENAI_API_KEY` (Kamal's
+dotenv parser does not support shell `${VAR:-}` default syntax).
+
+The browser starts silently and delegates project work through the existing chat
+agent and its permissions. Speaking interrupts audio, not project work. Mute stops
+microphone input; End, refresh, navigation, or hiding the page closes voice. Sessions
+also end after 15 minutes. The full project-agent result remains in chat; conversational
+voice context lasts only for the session.
+
+Run `bun test tests/voice-realtime.test.ts` and
+`node scripts/test-realtime-voice.mjs` for mocked regression checks. The optional
+`node scripts/smoke-realtime-voice.mjs` uses an exported `OPENAI_API_KEY`, installed
+Chrome and Bun to make a real, billable short audio request. It checks transport and
+received audio, not subjective voice quality. Test real microphone turn-taking,
+interruptions, and project tool results manually before release.
+
 ## Project structure
 
 ```

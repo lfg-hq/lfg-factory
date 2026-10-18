@@ -1,7 +1,13 @@
-// Shared inbox stays available across projects and conversations.
+// Shared project switcher, including collapsed sidebar layouts.
+(() => {
+    const style = document.createElement('link'); style.rel = 'stylesheet'; style.href = '/public/css/project-switcher.css?v=2'; document.head.appendChild(style);
+    const script = document.createElement('script'); script.src = '/public/js/project-switcher.js?v=2'; document.head.appendChild(script);
+})();
+
+// Inbox follows the active project; overview pages retain the all-project view.
 (() => {
     const script = document.createElement('script');
-    script.src = '/public/js/build-notifications.js?v=11';
+    script.src = '/public/js/build-notifications.js?v=12';
     document.head.appendChild(script);
 })();
 

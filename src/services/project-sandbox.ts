@@ -11,7 +11,8 @@
  * DBs run co-located over 127.0.0.1 as official DOCKER images (postgres/mysql/
  * redis/mssql) — uniform + robust, no musl/locale/init quirks of native Alpine
  * installs; dockerd is bootstrapped in-VM. Ports publish to 127.0.0.1 only; data
- * persists on /data while the VM is up; a hard VM loss means a fresh setup.
+ * persists on the workspace disk. VM replacement must not attach that disk while
+ * another VM owns it; a job's terminal status does not prove disk release.
  */
 import { db } from "../config/db.ts";
 import { projectEnvironments } from "../db/schema/project-environments.ts";
@@ -19,6 +20,9 @@ import { projectDatabases } from "../db/schema/project-databases.ts";
 import { and, eq } from "drizzle-orm";
 import { encryptSecret, decryptSecret } from "../utils/crypto.ts";
 import { newWorkspaceV2, execOnWorkspace, findJob, stopWorkspace } from "./mags.ts";
+import { dockerBringup } from "./database-bringup.ts";
+import { env } from "../config/env.ts";
+import { ensureProjectVm, singleFlight } from "./sandbox/project-lifecycle.ts";
 
 export type DbEngine = "postgres" | "mysql" | "redis" | "mssql";
 
@@ -47,61 +51,6 @@ export interface EngineSpec {
 // surfaces instead of an opaque timeout). `restart=unless-stopped` survives a VM
 // reboot. First run pulls the image (blocking) — the outer poll budget accounts
 // for that.
-function dockerBringup(o: {
-  name: string; image: string; port: number; volume: string;
-  env?: string[];       // -e flags (KEY=VAL)
-  cmd?: string;         // args appended after the image (e.g. redis-server ...)
-  readyProbe: string;   // a `docker exec <name> …` command
-  readyGrep: string;    // string that must appear in the probe's output when ready
-  authProbe?: string;   // a `docker exec …` that exits 0 ONLY if OUR credentials work
-  // Extended-regex matching the probe output when the engine is UP but REJECTING our
-  // credentials (e.g. redis "NOAUTH"). Without it a wrong password is indistinguishable
-  // from "still starting", so we'd burn the whole readiness budget before self-healing.
-  // Must NOT match a still-loading engine (redis "LOADING") — that one deserves the wait.
-  authFailGrep?: string;
-}): string {
-  const envFlags = (o.env ?? []).map((e) => `-e ${e}`).join(" ");
-  const dataDir = o.volume.split(":")[0];
-  const runCmd = `docker run -d --name ${o.name} --restart unless-stopped ${envFlags} -p 127.0.0.1:${o.port}:${o.port} -v ${o.volume} ${o.image} ${o.cmd ?? ""}`;
-  return `mkdir -p ${dataDir} 2>/dev/null || true
-for i in $(seq 1 40); do docker info >/dev/null 2>&1 && break; sleep 3; done
-docker info >/dev/null 2>&1 || { echo "docker daemon unavailable"; echo ENGINE_ERROR; exit 1; }
-if docker ps -a --format '{{.Names}}' | grep -qx ${o.name}; then
-  docker start ${o.name} >/dev/null 2>&1 || true
-else
-  # Free the port from any leftover NATIVE daemon (older sandboxes ran these
-  # engines natively) so the container's port publish doesn't collide.
-  fuser -k ${o.port}/tcp >/dev/null 2>&1 || true; sleep 1
-  ${runCmd} >/dev/null 2>&1
-fi
-# Wait until the server accepts connections. A probe that comes back with an explicit
-# "your credentials are wrong" ends the wait NOW — the answer will never change, and the
-# re-init below is what fixes it.
-for i in $(seq 1 90); do
-  PROBE_OUT=$(${o.readyProbe} 2>&1)
-  echo "$PROBE_OUT" | grep -q "${o.readyGrep}" && break
-${o.authFailGrep ? `  echo "$PROBE_OUT" | grep -qE '${o.authFailGrep}' && { echo "${o.name} is up but rejected our credentials — re-initializing"; break; }` : ""}
-  sleep 3
-done
-${o.authProbe ? `
-# Verify OUR credentials actually work. A data dir created OUTSIDE our provisioning
-# makes the image "Skipping initialization", so our POSTGRES_/MYSQL_ USER+PASSWORD are
-# IGNORED and every app query dies with FATAL: role "app" does not exist. If our creds
-# are rejected, the cluster isn't ours — wipe the data dir + re-init a fresh one with
-# our creds (preview data is disposable; migrations reseed the schema).
-AUTH_OK=""
-for i in $(seq 1 12); do ${o.authProbe} >/dev/null 2>&1 && { AUTH_OK=1; break; }; sleep 2; done
-if [ -z "$AUTH_OK" ]; then
-  echo "existing ${o.name} cluster rejects our credentials (foreign/legacy data dir) — reinitializing a fresh one"
-  docker rm -f ${o.name} >/dev/null 2>&1 || true
-  rm -rf ${dataDir}/* ${dataDir}/.[!.]* 2>/dev/null || true
-  fuser -k ${o.port}/tcp >/dev/null 2>&1 || true; sleep 1
-  ${runCmd} >/dev/null 2>&1
-  for i in $(seq 1 90); do ${o.readyProbe} 2>/dev/null | grep -q "${o.readyGrep}" && break; sleep 3; done
-fi` : ""}
-${o.readyProbe} 2>/dev/null | grep -q "${o.readyGrep}" && { echo ENGINE_READY; exit 0; }
-echo "--- ${o.name} container logs ---"; docker logs --tail 25 ${o.name} 2>&1; echo ENGINE_ERROR`;
-}
 
 export const ENGINES: Record<DbEngine, EngineSpec> = {
   postgres: {
@@ -117,8 +66,8 @@ export const ENGINES: Record<DbEngine, EngineSpec> = {
       readyProbe: `docker exec postgres pg_isready -U app -d app`,
       readyGrep: "accepting connections",
       // pg_isready doesn't authenticate — a REAL query as our role catches a foreign
-      // cluster (role "app" does not exist) so it gets re-initialized fresh.
-      authProbe: `docker exec -e PGPASSWORD='${pw}' postgres psql -U app -d app -tAc 'select 1'`,
+      // cluster (role "app" does not exist) so startup fails without changing existing data.
+      authProbe: `docker exec -e PGPASSWORD='${pw}' postgres psql -h 127.0.0.1 -U app -d app -tAc 'select 1'`,
     }),
     connectionString: (c) => `postgresql://${c.user}:${c.pw}@127.0.0.1:${c.port}/${c.db}`,
   },
@@ -133,7 +82,7 @@ export const ENGINES: Record<DbEngine, EngineSpec> = {
       cmd: "--default-authentication-plugin=mysql_native_password",
       readyProbe: `docker exec mysql mysqladmin ping -uroot -p${pw}`,
       readyGrep: "alive",
-      // Real query as our app user — catches a foreign cluster (unknown user) → reinit.
+      // Real query as our app user — checks access without changing an existing cluster.
       authProbe: `docker exec mysql mysql -uapp -p'${pw}' app -e 'select 1'`,
     }),
     connectionString: (c) => `mysql://${c.user}:${c.pw}@127.0.0.1:${c.port}/${c.db}`,
@@ -160,14 +109,13 @@ export const ENGINES: Record<DbEngine, EngineSpec> = {
     container: "mssql", port: 1433, defaultDb: "app", username: "sa", dataDir: "/data/db-mssql",
     // Readiness from the container log (sqlcmd isn't reliably on PATH inside the
     // image at first boot); the SA login is what apps use.
-    bringup: (pw) => `mkdir -p /data/db-mssql && chmod 777 /data/db-mssql
-for i in $(seq 1 40); do docker info >/dev/null 2>&1 && break; sleep 3; done
-docker info >/dev/null 2>&1 || { echo "docker daemon unavailable"; echo ENGINE_ERROR; exit 1; }
-if docker ps -a --format '{{.Names}}' | grep -qx mssql; then docker start mssql >/dev/null 2>&1 || true; else
-  docker run -d --name mssql --restart unless-stopped -e ACCEPT_EULA=Y -e "MSSQL_SA_PASSWORD=${pw}" -e MSSQL_PID=Developer -p 127.0.0.1:1433:1433 -v /data/db-mssql:/var/opt/mssql mcr.microsoft.com/mssql/server:2022-latest >/dev/null 2>&1
-fi
-for i in $(seq 1 90); do docker logs mssql 2>&1 | grep -q "SQL Server is now ready for client connections" && break; sleep 4; done
-docker logs mssql 2>&1 | grep -q "SQL Server is now ready for client connections" && echo ENGINE_READY || { echo "--- mssql container logs ---"; docker logs --tail 25 mssql 2>&1; echo ENGINE_ERROR; }`,
+    bringup: (pw) => dockerBringup({
+      name: "mssql", image: "mcr.microsoft.com/mssql/server:2022-latest", port: 1433,
+      volume: "/data/db-mssql:/var/opt/mssql",
+      env: ["ACCEPT_EULA=Y", `MSSQL_SA_PASSWORD=${pw}`, "MSSQL_PID=Developer"],
+      readyProbe: "docker logs --tail 100 mssql", readyGrep: "SQL Server is now ready for client connections",
+      prepareNewDirectory: "chmod 777 /data/db-mssql",
+    }),
     connectionString: (c) => `Server=127.0.0.1,${c.port};Database=${c.db};User Id=${c.user};Password=${c.pw};TrustServerCertificate=True`,
   },
 };
@@ -210,109 +158,43 @@ export async function envWorkspaceId(projectId: string): Promise<string> {
   return row.w;
 }
 
-/**
- * Ensure the project's single always-on sandbox exists and is running. ALL runs
- * (main + every ticket branch/worktree) share this ONE VM — we never spin a VM per
- * branch. `created` is true when the VM was NOT already running and we had to
- * launch a fresh one; `recreated` additionally means a sandbox existed before but
- * its VM was gone — so /data (the DB + installed toolchain) was RESET.
- */
-export async function ensureProjectSandbox(projectId: string): Promise<{ workspaceId: string; created: boolean; recreated: boolean }> {
-  const [existing] = await db.select().from(projectEnvironments).where(eq(projectEnvironments.projectId, projectId));
-  // Use a RANDOM, unguessable workspace name (not env-<projectId>, which is
-  // derivable from the project URL and would let a motivated actor target the VM
-  // / its exposed URL). Generated once, then persisted + reused.
-  const candidateWorkspaceId = existing?.workspaceId || `pv-${crypto.randomUUID().replace(/-/g, "")}${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
+/** Reuse or wake the existing VM. Only the first DB claimant may create one. */
+const ensureProjectFlight = singleFlight<{ workspaceId: string; created: boolean; recreated: boolean }>();
+export function ensureProjectSandbox(projectId: string): Promise<{ workspaceId: string; created: boolean; recreated: boolean }> {
+  return ensureProjectFlight(projectId, () => ensureProjectSandboxOnce(projectId));
+}
 
-  // Atomically CLAIM the single project_environment row (unique on projectId) BEFORE
-  // touching the VM. This makes ensureProjectSandbox idempotent + race-safe: setup,
-  // ensureEngine, and @preview all call it, so a plain insert would hit the unique
-  // constraint (the error you saw). onConflictDoUpdate converges everyone on the
-  // SAME workspace instead of racing to insert.
+async function ensureProjectSandboxOnce(projectId: string): Promise<{ workspaceId: string; created: boolean; recreated: boolean }> {
+  const candidateWorkspaceId = `pv-${crypto.randomUUID().replace(/-/g, "")}${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
+  // Persist the creation intent BEFORE the provider call. A crash/timeout must not
+  // let a later request submit another creation for the same persistent disk.
   const [claimed] = await db.insert(projectEnvironments)
-    .values({ projectId, workspaceId: candidateWorkspaceId, memGb: 8, diskGb: 20, status: "running", lastAwakeAt: new Date() })
-    .onConflictDoUpdate({ target: projectEnvironments.projectId, set: { status: "running", lastAwakeAt: new Date(), updatedAt: new Date() } })
-    .returning();
-  const workspaceId = claimed?.workspaceId ?? candidateWorkspaceId; // the winner's workspace
-
-  // Resolve the workspace by NAME (findJob), not getJobStatus — the name is
-  // long/dashed and getJobStatus would misread it as a request_id.
-  const job = await findJob(workspaceId).catch(() => null);
-  let alive = job?.status === "running";
-
-  // PHANTOM-VM guard: Mags can reap the underlying microVM (OOM, disk-full, host
-  // eviction) while leaving the JOB record reporting "running". We'd then "reuse" a VM
-  // that isn't there and every exec fails with "no VM associated with this job" (Docker
-  // won't start, `git fetch` dies → "Could not fetch the repo"). So when the job claims
-  // running, actually PROBE it; if the probe fails, treat it as dead, clear the zombie
-  // job, and fall through to respawn. NOTE: a respawn may come back with a BLANK
-  // /data — see the `recreated` note below.
-  if (alive) {
-    const probe = await execOnWorkspace(workspaceId, "echo __vm_alive__", { timeout: 15_000 })
-      .then((r) => ({ ok: /__vm_alive__/.test(r?.output || ""), detail: r?.output || "" }))
-      .catch((e) => ({ ok: false, detail: (e as Error)?.message || String(e) }));
-    if (!probe.ok) {
-      console.warn(`[project-sandbox] Job ${workspaceId} reports running but exec failed (phantom VM — reaped microVM + zombie job): ${probe.detail.slice(0, 120)}. Forcing respawn.`);
-      alive = false;
-      await stopWorkspace(workspaceId).catch(() => {}); // clear the zombie job before recreate
-      await sleep(2000);
-    }
-  }
-
-  // DO NOT ASSUME /data SURVIVES A RESPAWN. `recreated` means "we had a VM, it wasn't
-  // running, so we're booting a new one" — and /data is a PER-VM ext4 volume (`disk_gb`
-  // → /dev/vdb). The `workspace_id` we pass to newWorkspaceV2 syncs the SEPARATE
-  // /workspace tree via JuiceFS; it does NOT back /data (see the verified note in
-  // instant-app.ts's ensureSandbox, and the header of schema/pg/project-environments.ts:
-  // data survives "as long as the VM is up"). A sleep/wake keeps the disk; a respawn can
-  // hand back a blank one — no checkout, no toolchain, no DB volumes.
-  //
-  // Callers must therefore PROBE rather than trust: dev-preview's checkoutMissing() +
-  // clearSetupCheckpoint() guard does exactly that, and re-runs the full setup (which
-  // rebuilds from the repo + app profile + manifest + DB creds held in Postgres) when
-  // the disk came back empty. Treating a blank disk as "reattached" is what previously
-  // sent a restart into the AI driver with no source and no toolchain on the box.
-  const recreated = !alive && !!existing?.workspaceId;
-  if (alive) {
-    console.log(`[project-sandbox] REUSING running sandbox VM ${workspaceId} for project ${projectId}`);
-  } else if (recreated) {
-    console.log(`[project-sandbox] Sandbox VM ${workspaceId} was not running (status: ${job?.status ?? "gone"}) — RESPAWNING it. Its /data may come back EMPTY (per-VM volume); callers must probe. project ${projectId}`);
-  } else {
-    console.log(`[project-sandbox] Creating the project's first sandbox VM ${workspaceId} for project ${projectId}`);
-  }
-  if (!alive) {
-    // Big always-on box via the raw v2 API (the SDK caps RAM at 4GB): 4 vCPU /
-    // 8GB / 20GB disk — enough for SQL Server + a .NET build without OOM. keepAlive
-    // keeps it up (it hosts the DBs). Data lives on the /data volume.
-    // Boot the "pi" rootfs (node 22 + Pi preinstalled), same base as tickets +
-    // instant apps — a richer, consistent starting image than the bare default.
-    const opts = { vcpus: 4, memoryMb: 8192, diskGb: 20, keepAlive: true, rootfsType: process.env.PREVIEW_ROOTFS || "pi" } as const;
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        await newWorkspaceV2(workspaceId, opts);
-        break;
-      } catch (err) {
-        const msg = (err as Error)?.message ?? String(err);
-        // Already up → success (that's the goal).
-        if (/already exists/i.test(msg)) break;
-        // Transient Mags provisioning failure (VM ended with status: error /
-        // completed, or never started) — terminate the bad VM job and retry.
-        // CRITICAL: use stopWorkspace (kills the VM), NOT deleteWorkspace — deleting
-        // drops the workspace record itself (its name is the respawn key, and it backs
-        // the /workspace JuiceFS tree + the stable URL alias), so a transient hiccup
-        // would tear down the whole project sandbox. A plain retry keeps the workspace
-        // and reboots into it. (It does NOT guarantee the same /data — that's a per-VM
-        // volume; see the `recreated` note above.)
-        if (attempt < 3 && /status: error|status: completed|did not start/i.test(msg)) {
-          console.warn(`[project-sandbox] VM ${workspaceId} attempt ${attempt} failed (${msg.slice(0, 80)}); stopping the bad VM and retrying (workspace kept)…`);
-          await stopWorkspace(workspaceId).catch(() => {});
-          await sleep(3000);
-          continue;
-        }
-        throw err;
+    .values({ projectId, workspaceId: candidateWorkspaceId, memGb: 8, diskGb: 20, status: "provisioning", lastAwakeAt: new Date() })
+    .onConflictDoNothing({ target: projectEnvironments.projectId }).returning();
+  const existing = claimed ?? (await db.select().from(projectEnvironments).where(eq(projectEnvironments.projectId, projectId)))[0];
+  if (!existing) throw new Error("Could not resolve the project's sandbox record");
+  const workspaceId = existing.workspaceId;
+  const { created } = await ensureProjectVm({
+    mayCreate: !!claimed || env.SANDBOX_BACKEND === "docker",
+    find: async () => {
+      const job = await findJob(workspaceId);
+      // Local containers have no Magpie disk-attachment lifecycle.
+      return env.SANDBOX_BACKEND === "docker" && job?.status !== "running" ? null : job;
+    },
+    probe: async (job) => {
+      console.log(`[project-sandbox] Reusing ${job.status} VM ${job.jobId} for ${workspaceId}`);
+      const result = await execOnWorkspace(job.jobId, "echo __vm_alive__", { timeout: 60_000 });
+      if (result.exitCode !== 0 || !result.output.includes("__vm_alive__")) {
+        throw new Error(`Sandbox wake/health check failed; no replacement was created. ${result.stderr || result.output}`);
       }
-    }
-  }
+    },
+    create: () => newWorkspaceV2(workspaceId, {
+      vcpus: 4, memoryMb: 8192, diskGb: 20, keepAlive: true,
+      rootfsType: process.env.PREVIEW_ROOTFS || "pi",
+    }),
+  });
+  await db.update(projectEnvironments).set({ status: "running", lastAwakeAt: new Date(), updatedAt: new Date() })
+    .where(eq(projectEnvironments.projectId, projectId));
 
   // Move /tmp onto the big /data volume (the 1.9GB root fills up during a .NET
   // build — MSBuild writes scratch to /tmp). Redirect via a symlink so even tools
@@ -320,32 +202,18 @@ export async function ensureProjectSandbox(projectId: string): Promise<{ workspa
   await execOnWorkspace(workspaceId, `sh -c 'mkdir -p /data/tmp && chmod 1777 /data/tmp; if [ ! -L /tmp ]; then rm -rf /tmp && ln -s /data/tmp /tmp; fi; echo tmp_ok'`, { timeout: 30_000 }).catch(() => {});
 
   // (The project_environment row was already claimed/updated via the upsert above.)
-  return { workspaceId, created: !alive, recreated };
+  return { workspaceId, created, recreated: false };
 }
 
-/**
- * Force a FRESH VM boot for the project, keeping the workspace (its name, /workspace
- * tree and stable URL). Use when the VM is reachable but its runtime is degraded —
- * e.g. after an OOM cascade `git-remote-https` starts segfaulting (signal 11) on every
- * fresh fetch. A phantom-guard `echo` probe passes on such a VM, so we can't rely on
- * ensureProjectSandbox's liveness check; this kills the VM outright and respawns it
- * with clean RAM.
- *
- * The new VM may boot a BLANK /data (per-VM volume — see the `recreated` note above),
- * so the caller must probe for the checkout afterwards and fall back to a full setup.
- * rebuildPreviewSandbox does this by routing through restartPreview's guard.
- */
+/** Provider job status alone does not prove that the underlying disk is released. */
 export async function restartProjectSandbox(projectId: string): Promise<{ workspaceId: string }> {
-  const [existing] = await db.select().from(projectEnvironments).where(eq(projectEnvironments.projectId, projectId));
-  if (existing?.workspaceId) {
-    // stopWorkspace (NOT deleteWorkspace) kills the VM but keeps the workspace, so the
-    // respawn reuses the same name/URL instead of tearing the sandbox down.
-    await stopWorkspace(existing.workspaceId).catch(() => {});
-    await db.update(projectEnvironments).set({ status: "stopped", updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId)).catch(() => {});
-    await sleep(3000); // let Mags settle the job to a non-running state before respawn
+  if (env.SANDBOX_BACKEND !== "docker") {
+    throw new Error("Automatic VM replacement is disabled: Magpie must confirm the old VM has released the workspace disk. A completed job or successful stop response is not sufficient. Sleeping sandboxes are woken by the normal preview start.");
   }
-  // ensureProjectSandbox now sees it as not-running → respawns a fresh VM (same name).
-  const { workspaceId } = await ensureProjectSandbox(projectId);
+  // Local Docker containers do not use Magpie's shared-disk replacement path.
+  const workspaceId = await envWorkspaceId(projectId);
+  await stopWorkspace(workspaceId);
+  await newWorkspaceV2(workspaceId, { vcpus: 4, memoryMb: 8192, diskGb: 20 });
   return { workspaceId };
 }
 
@@ -417,7 +285,7 @@ export interface EngineHandle {
 // Lines the bring-up script itself prints when it knows what went wrong. These beat the
 // container's own log, which describes what the engine was DOING, not why we gave up —
 // the reason "Ready to accept connections" ended up presented as a failure.
-const BRINGUP_DIAGNOSTICS = /rejected our credentials|docker daemon unavailable|reinitializing|no space left|cannot allocate|permission denied/i;
+const BRINGUP_DIAGNOSTICS = /ENGINE_FAILURE:|port is already allocated|address already in use|docker daemon unavailable|no space left|cannot allocate|permission denied/i;
 
 function failureReason(raw: string | undefined): string {
   const lines = (raw || "")
@@ -460,9 +328,10 @@ export async function ensureEngine(projectId: string, engine: DbEngine, opts?: {
 
   // Run the idempotent bring-up in the background; poll a marker (avoids the
   // exec socket timeout on apk install / init / image pull).
-  const logf = `/data/bringup-${engine}.log`;
-  const scriptf = `/data/bringup-${engine}.sh`;
-  await execOnWorkspace(workspaceId, `cat > ${scriptf} <<'EOSH'\n${spec.bringup(password)}\nEOSH\n: > ${logf}; nohup sh ${scriptf} >> ${logf} 2>&1 & echo launched`, { timeout: 60_000 });
+  const attempt = crypto.randomUUID();
+  const logf = `/data/bringup-${engine}-${attempt}.log`;
+  const scriptf = `/data/bringup-${engine}-${attempt}.sh`;
+  await execOnWorkspace(workspaceId, `umask 077\ncat > ${scriptf} <<'EOSH'\n${spec.bringup(password)}\nEOSH\n: > ${logf}; nohup sh ${scriptf} >> ${logf} 2>&1 & echo launched`, { timeout: 60_000 });
 
   // First run pulls the image (blocking inside the bring-up) — budget for it.
   // mssql ~1.5GB, mysql ~600MB, postgres ~150MB, redis ~40MB (poll = 8s each).
@@ -477,12 +346,12 @@ export async function ensureEngine(projectId: string, engine: DbEngine, opts?: {
     if ((r.output || "").includes("ENGINE_READY")) { ready = true; break; }
     if ((r.output || "").includes("ENGINE_ERROR")) {
       const log = await execOnWorkspace(workspaceId, `tail -12 ${logf} 2>/dev/null`, { timeout: 20_000 }).catch(() => ({ output: "" } as any));
-      throw new Error(`${engine} bring-up failed — ${failureReason(log.output)}`);
+      throw new Error(`${engine} bring-up failed — ${failureReason((log.output || "").split(password).join("[redacted]"))}`);
     }
   }
   if (!ready) {
     const log = await execOnWorkspace(workspaceId, `tail -12 ${logf} 2>/dev/null`, { timeout: 20_000 }).catch(() => ({ output: "" } as any));
-    throw new Error(`${engine} bring-up timed out — ${failureReason(log.output)}`);
+    throw new Error(`${engine} bring-up timed out — ${failureReason((log.output || "").split(password).join("[redacted]"))}`);
   }
 
   const values = {

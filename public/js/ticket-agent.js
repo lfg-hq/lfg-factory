@@ -25,22 +25,15 @@
   let curKey = "";         // ticket key (e.g. CAL-10) for the title
   let activeTab = "details";
   let tasksLoaded = false, gitLoaded = false; // lazy-load Tasks/Git on first view
+  let taskRequest = 0;
   // The opening tab is chosen from whether the ticket HAS activity, but the log count
   // isn't known until the first fetch returns. Stays true from open() until either that
   // fetch reconciles the tab or the user picks one themselves (whichever comes first).
   let autoTabPending = false;
 
-  // The preview panel (#artifacts-panel) is a FIXED slide-over on the right, so the popup
-  // must stop at its LEFT edge (else it hides behind the preview + its ✕ is unreachable).
-  // Recompute the popup's right inset from the overlay's live width.
-  function fitToChatArea() {
-    const p = panel();
-    if (!p || p.style.display === "none") return;
-    const art = document.getElementById("artifacts-panel");
-    const overlayW = (art && art.classList.contains("expanded")) ? Math.max(0, window.innerWidth - art.getBoundingClientRect().left) : 0;
-    p.style.right = (overlayW + 12) + "px";
-  }
-
+  // The ticket is positioned inside .chat-body, which already excludes the right
+  // panel through its parent's padding. Keep the template's 12px inset: subtracting
+  // the panel width here again collapses the ticket when the workspace is open.
   // The artifacts (preview) panel's width is COUPLED to .chat-container's padding-right
   // (artifacts.js reserves that space so the chat reflows to meet the panel). We resize the
   // panel directly for the split, so we must keep that padding in sync — otherwise the chat
@@ -76,7 +69,6 @@
       let w = window.innerWidth - e.clientX;                       // preview width = distance from cursor to the right edge
       w = Math.max(360, Math.min(window.innerWidth - 360, w));     // keep both panes usable
       art.style.width = w + "px";
-      fitToChatArea();
       syncChatPadding();
     });
     window.addEventListener("mouseup", () => {
@@ -99,6 +91,8 @@
     const prColor = /high|urgent/.test(pr) ? ["rgba(239,68,68,.14)", "#f87171"] : /low/.test(pr) ? ["rgba(59,130,246,.14)", "#60a5fa"] : ["rgba(245,158,11,.16)", "#fbbf24"];
     const created = meta.createdAt ? new Date(meta.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "";
     const desc = String(meta.description || "").trim();
+    const savedCriteria = meta.acceptanceCriteria ?? meta.acceptance_criteria;
+    const criteria = Array.isArray(savedCriteria) ? savedCriteria.filter(c => typeof c === "string" && c.trim()) : [];
     const atts = Array.isArray(meta.attachments) ? meta.attachments : [];
     const imgAtts = atts.filter((a) => a && a.url && (!a.type || /^image\//.test(a.type) || /\.(png|jpe?g|gif|webp)$/i.test(a.url)));
     el.innerHTML =
@@ -111,6 +105,11 @@
         imgAtts.map((a) => `<a href="${esc(a.url)}" target="_blank" rel="noopener" title="${esc(a.name || "attachment")}"><img src="${esc(a.url)}" loading="lazy" style="max-width:180px;max-height:150px;border-radius:8px;border:1px solid var(--border-color,#2a2a2a);display:block;"></a>`).join("") +
       `</div>` : "") +
       (desc ? `<div class="markdown-content" style="margin-top:14px;font-size:13px;color:var(--text-color,#cbd5e1);line-height:1.6;">${md(desc)}</div>` : '<div style="margin-top:14px;opacity:.5;font-size:12.5px;">No description.</div>') +
+      `<section aria-label="Acceptance criteria" style="margin-top:18px;font-size:13px;line-height:1.6;">` +
+        `<h3 style="font-size:13px;margin:0 0 8px;">Acceptance criteria</h3>` +
+        (criteria.length ? `<ol style="margin:0;padding-left:22px;">${criteria.map(c => `<li style="margin-bottom:6px;">${esc(c)}</li>`).join("")}</ol>` :
+          `<p style="margin:0;color:var(--text-secondary,#9ca3af);">No acceptance criteria have been saved for this ticket.</p>`) +
+      `</section>` +
       `<div id="ta-refs" style="margin-top:14px;"></div>`;
     renderDocRefs(meta);
   }
@@ -126,6 +125,8 @@
     const text = [meta.name || "", meta.description || "", meta.notes || ""].join("\n");
     let ids = (text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) || [])
       .map((x) => x.toLowerCase());
+    const linkedIds = meta.details && Array.isArray(meta.details.sourceDocumentIds) ? meta.details.sourceDocumentIds : [];
+    ids = [...ids, meta.sourceDocumentId, ...linkedIds].filter(x => typeof x === "string" && x).map(x => x.toLowerCase());
     ids = ids.filter((x, i) => ids.indexOf(x) === i);
     if (!ids.length) return;
 
@@ -169,7 +170,7 @@
   }
   // A chat message runs the agent WITHOUT moving queueStatus, so isBuilding() can't
   // see it. Track that turn locally so "Stop" is offered for a message too — not just
-  // for a queued build. Cleared on the turn's terminal log (ai_response / cli_error).
+  // for a queued build. Cleared by executor state after the whole turn finishes.
   let chatBusy = false;
   function isBusy() { return chatBusy || isBuilding(); }
   function hasPreviousBuild(m) {
@@ -196,7 +197,7 @@
       input.placeholder = isBusy() ? "Agent is working — press ■ to stop and send…" : "Send a message to the agent…";
     }
     const b = $("ta-build"); if (!b) return;
-    if (isBuilding()) { b.disabled = true; b.style.opacity = ".9"; b.innerHTML = '<i class="fas fa-spinner fa-spin" style="font-size:10px;"></i>Building…'; }
+    if (isBusy()) { b.disabled = true; b.style.opacity = ".9"; b.innerHTML = '<i class="fas fa-spinner fa-spin" style="font-size:10px;"></i>' + (isBuilding() ? "Building…" : "Working…"); }
     else { b.disabled = chatBusy || buildPending; b.style.opacity = b.disabled ? ".55" : "1"; b.innerHTML = '<i class="fas fa-play" style="font-size:10px;"></i>' + (hasPreviousBuild(curMeta) ? "Re-build" : "Build"); b.title = hasPreviousBuild(curMeta) ? "Re-build this ticket" : "Build this ticket"; }
   }
   // Stop whatever the agent is doing right now (build OR the in-flight chat turn).
@@ -353,18 +354,21 @@
     c.textContent = String(n);
   }
 
-  async function loadTasks() {
+  async function loadTasks(quiet = false) {
     const el = $("ta-pane-tasks");
     if (!el || !ticketId) return;
-    el.innerHTML = '<div style="opacity:.5;padding:20px;text-align:center;">Loading tasks…</div>';
+    const id = ticketId, request = ++taskRequest;
+    if (!quiet) el.innerHTML = '<div style="opacity:.5;padding:20px;text-align:center;">Loading tasks…</div>';
     try {
-      const r = await fetch(`/api/projects/${PID()}/tickets/${ticketId}/tasks`, { credentials: "same-origin" });
+      const r = await fetch(`/api/projects/${PID()}/tickets/${id}/tasks`, { credentials: "same-origin" });
+      if (!r.ok) throw new Error('Task request failed');
       const rows = await r.json();
+      if (ticketId !== id || request !== taskRequest) return;
       if (!Array.isArray(rows) || !rows.length) { el.innerHTML = '<div style="opacity:.55;padding:24px;text-align:center;">No tasks yet.</div>'; setTabCount("tasks", 0); return; }
       const dot = (s) => { s = (s || "").toLowerCase(); const c = s === "success" ? "#22c55e" : s === "in_progress" ? "#3b82f6" : s === "fail" ? "#ef4444" : "#6b7280"; return `<span style="width:8px;height:8px;border-radius:50%;background:${c};flex:none;margin-top:5px;"></span>`; };
       el.innerHTML = rows.map((t) => `<div style="display:flex;gap:9px;padding:8px 0;border-bottom:1px solid var(--border-color,#2a2a2a);">${dot(t.status)}<span style="font-size:13px;color:var(--text-color,#cbd5e1);line-height:1.45;${/success/i.test(t.status) ? "opacity:.55;text-decoration:line-through;" : ""}">${esc(t.description || "")}</span></div>`).join("");
       setTabCount("tasks", rows.length);
-    } catch (e) { el.innerHTML = '<div style="opacity:.55;padding:24px;text-align:center;">Couldn\'t load tasks.</div>'; }
+    } catch (e) { if (!quiet && ticketId === id && request === taskRequest) el.innerHTML = '<div style="opacity:.55;padding:24px;text-align:center;">Couldn\'t load tasks.</div>'; }
   }
 
   function renderDiff(diff) {
@@ -397,14 +401,14 @@
 
   function open(id, key, name, meta, opts) {
     opts = opts || {};
-    if (ticketId !== id) currentLogRows = [];
     ticketId = id;
     curMeta = meta || null;
+    currentLogRows = [];
     curKey = key || "";
     editing = false;
     const eb0 = $("ta-edit"); if (eb0) eb0.innerHTML = '<i class="fas fa-pen" style="font-size:11px;"></i>Edit';
     tasksLoaded = false; gitLoaded = false;
-    chatBusy = false; // per-ticket state — a previous ticket's in-flight turn isn't this one's
+    chatBusy = meta?.agentBusy === true;
     setBuildUI();
     // A turn started before this page loaded is still running server-side — ask, so the
     // button opens as Stop instead of inviting a second message that would be rejected.
@@ -427,6 +431,7 @@
           curMeta = Object.assign({}, curMeta, t, { attachments: (curMeta && curMeta.attachments) || [] });
           if (!editing) renderMeta(curMeta);
           setBuildUI();
+          renderAll(currentLogRows);
         }).catch(() => {});
     }
     p.style.display = "flex";
@@ -458,11 +463,9 @@
     if (art) { if (prevArtWidth === null) prevArtWidth = art.style.width || ""; art.style.width = preferredArtWidth(); }
     setupResize();
     syncChatPadding();
-    // Fit to the visible chat area (left of the preview overlay), and keep it fitted as the
-    // preview is toggled (class) or its width dragged (style).
-    setTimeout(() => { fitToChatArea(); syncChatPadding(); }, 60);
-    if (art && !fitObs) { fitObs = new MutationObserver(fitToChatArea); fitObs.observe(art, { attributes: true, attributeFilter: ["class", "style"] }); }
-    window.addEventListener("resize", fitToChatArea);
+    // Track actual size changes, including CSS transitions and either resize handle.
+    if (art && !fitObs) { fitObs = new ResizeObserver(syncChatPadding); fitObs.observe(art); }
+    window.addEventListener("resize", syncChatPadding);
     const input = $("ta-input");
     if (input) setTimeout(() => input.focus(), 80);
   }
@@ -473,7 +476,7 @@
     renderMeta(null);
     stopPoll();
     if (fitObs) { fitObs.disconnect(); fitObs = null; }
-    window.removeEventListener("resize", fitToChatArea);
+    window.removeEventListener("resize", syncChatPadding);
     const art = document.getElementById("artifacts-panel");
     if (art && prevArtWidth !== null) { art.style.width = prevArtWidth; prevArtWidth = null; } // restore the preview width
     syncChatPadding(); // reflow the chat to the restored panel width (no dead gap)
@@ -695,7 +698,10 @@
   function onWs(msg) {
     if (!msg || !ticketId) return;
     if (msg.ticketId && msg.ticketId !== ticketId) return;
-    if (msg.type === "ticket_log" && msg.log) {
+    if (msg.type === "tasks_updated") {
+      tasksLoaded = false;
+      if (activeTab === "tasks") { tasksLoaded = true; loadTasks(true); }
+    } else if (msg.type === "ticket_log" && msg.log) {
       const area = $("ta-log");
       if (!area) return;
       const th = $("ta-thinking"); if (th) th.remove();
@@ -705,10 +711,8 @@
       if (existing >= 0) currentLogRows[existing] = msg.log; else currentLogRows.push(msg.log);
       renderAll(currentLogRows);
       if (atBottom) area.scrollTop = area.scrollHeight;
-      // Terminal row for a chat turn → the agent is done, hide Stop. A `question` ends
-      // the turn too: the agent handed the conversation back and is waiting on you.
-      const lt = msg.log.type || "";
-      if (lt === "ai_response" || lt === "cli_error" || lt === "question") { chatBusy = false; setBuildUI(); }
+      // A reply can precede commit/cleanup. The authoritative activity event (or
+      // the polling backstop) ends the spinner and Stop control.
     } else if (msg.type === "ticket_chat_state") {
       // Authoritative busy signal from the executor (a chat turn never moves
       // queueStatus, so this is the only way the button knows it's over).
@@ -730,11 +734,15 @@
       const r = await fetch(`/api/projects/${PID()}/tickets/${id}`, { credentials: "same-origin" });
       const d = r.ok ? await r.json() : null;
       if (!d || !d.ticket || ticketId !== id) return;
+      const settingsChanged = curMeta?.validationEnabled !== d.ticket.validationEnabled || curMeta?.featureTestingEnabled !== d.ticket.featureTestingEnabled;
       curMeta = Object.assign({}, curMeta, d.ticket);
+      if (typeof d.ticket.agentBusy === "boolean") chatBusy = d.ticket.agentBusy;
       setBuildUI();
+      if (settingsChanged) renderAll(currentLogRows);
     } catch (_) {}
   }
-  function startPoll() { stopPoll(); timer = setInterval(() => { loadLog(); refreshTicketState(); }, 12000); } // WS is primary; this is a backstop
+  window.addEventListener('focus', () => { if (ticketId) refreshTicketState(); });
+  function startPoll() { stopPoll(); timer = setInterval(() => { loadLog(); refreshTicketState(); if (activeTab === "tasks") loadTasks(true); }, 12000); } // WS is primary; this is a backstop
   function stopPoll() { if (timer) { clearInterval(timer); timer = null; } }
 
   window.TicketAgentChat = { open, close, send, onWs, isOpen, attachScreenshot, stop: stopTicket };

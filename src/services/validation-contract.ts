@@ -10,6 +10,7 @@ export interface ValidationContext {
   projectId: string; userId: string; ticketId?: string; epicId?: string;
   gitCredentialUserId?: string;
   baselineBranch?: string;
+  requiredChecks?: string[];
   onLog?: (message: string) => void;
   onCheckpoint?: (message: string) => Promise<void> | void;
   cancelled?: () => boolean;

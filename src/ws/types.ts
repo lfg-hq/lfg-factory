@@ -3,6 +3,9 @@
 export type WSIncoming =
   | {
       type: "message";
+      client_message_id?: string;
+      display_message?: string;
+      render_on_start?: boolean;
       message: string;
       conversation_id?: string;
       project_id?: string;
@@ -13,6 +16,7 @@ export type WSIncoming =
       file_data?: { id?: string; name?: string; type?: string; size?: number };
       files?: Array<{ id?: string; name?: string; type?: string; size?: number }>;
     }
+  | { type: "queue_remove" | "queue_steer"; id: string }
   | { type: "stop_generation"; conversation_id?: string }
   | { type: "heartbeat_ack" }
   | { type: "sync_state"; conversation_id?: string };

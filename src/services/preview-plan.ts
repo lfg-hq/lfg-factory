@@ -4,6 +4,7 @@ import { z } from "zod";
 
 export const schemaStepSchema = z.object({
   kind: z.enum(["migration", "sqlScript", "seed"]),
+  requiredBy: z.string().min(1).optional().describe("For a runtime seed: repository file/path and requirement proving the application needs this initial data. Do not infer an admin account or test fixtures are required. Pair with a read-only existence assertion; never reset existing passwords on startup."),
   command: z.string().min(1),
   connectionKey: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).optional().describe("For SQL files: exact databases[].connectionEnvVar identifying the target connection. Required when multiple databases exist."),
   note: z.string().default(""),
@@ -11,7 +12,7 @@ export const schemaStepSchema = z.object({
 });
 export const replayActionSchema = z.object({
   id: z.string().regex(/^[a-zA-Z0-9_-]+$/),
-  phase: z.enum(["beforeBuild", "afterBuild", "beforeSchema", "verify"]),
+  phase: z.enum(["beforeBuild", "afterBuild", "beforeSchema", "verify"]).describe("verify actions are ticket validation only, never preview startup. Required initial data belongs in schemaSteps as a seed with requiredBy evidence and a read-only existence assertion."),
   command: z.string(),
   verify: z.string().min(1).describe("Read-only assertion returning zero only when the required outcome holds."),
   note: z.string().default(""),
@@ -32,10 +33,15 @@ export function orderedSchema(plan: { schemaSteps?: SchemaStep[]; migrations?: s
     ...(plan.seedCmd ? [{ kind: "seed" as const, command: plan.seedCmd, note: "" }] : []),
   ];
 }
-export function mergeKnowledge<T extends { learnings?: string[]; directives?: string[]; recoveryBackups?: Array<{id:string}>; configPatches?: Array<{file:string;find:string}>; replayActions?: ReplayAction[]; environmentOverrides?: Array<{key:string;encryptedValue:string}> }>(next: T, previous?: T): T {
+export function mergeKnowledge<T extends { learnings?: string[]; directives?: string[]; services?: Array<{name:string;enabled?:boolean;manual?:boolean}>; previewAccounts?: Array<{identity:string;username:string}>; recoveryBackups?: Array<{id:string}>; configPatches?: Array<{file:string;find:string}>; replayActions?: ReplayAction[]; environmentOverrides?: Array<{key:string;encryptedValue:string}> }>(next: T, previous?: T): T {
   if (!previous) return next;
   const keyed = <V>(a: V[], b: V[], key: (v: V) => string) => [...new Map([...a, ...b].map(v => [key(v), v])).values()];
   return { ...next,
+    previewAccounts: previous.previewAccounts,
+    services: next.services ? [
+      ...next.services.map(service=>({...service,enabled:previous.services?.find(old=>old.name===service.name)?.enabled ?? service.enabled})),
+      ...(previous.services||[]).filter(old=>old.manual && !next.services!.some(service=>service.name===old.name)),
+    ] : previous.services?.filter(service=>service.manual),
     learnings: [...new Set([...(previous.learnings ?? []), ...(next.learnings ?? [])])],
     directives: [...new Set([...(previous.directives ?? []), ...(next.directives ?? [])])],
     recoveryBackups: keyed(previous.recoveryBackups ?? [], next.recoveryBackups ?? [], p => p.id),

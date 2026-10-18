@@ -1388,7 +1388,7 @@ export function SettingsPage({ workspaceContext, teamAccess, teamContent, user, 
   </div><!-- /settings-main -->
 </div>
 
-<script src="/public/js/sidebar.js?v=20260923-tooltip-theme"></script>
+<script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
 </body>
 </html>`;
 }

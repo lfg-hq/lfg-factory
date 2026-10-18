@@ -1,3 +1,6 @@
+import voiceApi from './routes/api/voice.ts';
+import documentGraphApi from "./routes/api/document-graph.ts";
+import { registerDocumentGraphWorker } from "./services/document-graph.ts";
 import tokenUsageApi from "./routes/api/token-usage.ts";
 import { Hono } from "hono";
 import { logger } from "hono/logger";
@@ -77,6 +80,10 @@ const COMPRESSIBLE = /^(?:text\/|application\/(?:javascript|json|xml|manifest)|i
 
 app.use("/public/*", async (c, next) => {
   const rel = decodeURIComponent(new URL(c.req.url).pathname);
+  // These scripts coordinate live chat/voice state. Revalidate on page loads so
+  // a deploy cannot leave the two halves on different cached versions.
+  const cacheControl = ['/public/js/chat.js', '/public/js/voice-mode.js'].includes(rel)
+    ? 'public, no-cache, must-revalidate' : STATIC_CACHE;
   // The tag comes from mtime+size: one stat, and it changes by itself on deploy.
   let tag = "";
   if (!rel.includes("..")) {
@@ -88,12 +95,12 @@ app.use("/public/*", async (c, next) => {
   }
   // Unchanged since the browser last fetched it — send no body at all.
   if (tag && c.req.header("If-None-Match") === tag) {
-    return c.body(null, 304, { ETag: tag, "Cache-Control": STATIC_CACHE });
+    return c.body(null, 304, { ETag: tag, "Cache-Control": cacheControl });
   }
 
   const wantsGzip = (c.req.header("Accept-Encoding") || "").includes("gzip");
   const headers = () => ({
-    "Cache-Control": STATIC_CACHE,
+    "Cache-Control": cacheControl,
     // gzip and identity are different representations of one URL; without Vary a
     // shared cache can hand a gzip body to a client that never asked for one.
     Vary: "Accept-Encoding",
@@ -197,10 +204,12 @@ app.route("/", agentsRoutes);
 app.route("/", invitationRoutes);
 app.route("/", shareRoutes);
 app.route("/api/files", filesApi);
+app.route("/api/voice", voiceApi);
 app.route("/api/token-usage", tokenUsageApi);
 app.route("/api/settings", settingsApi);
 app.route("/api/projects", ticketCodeApi);
 app.route("/api/projects", ticketsApi);
+app.route("/api/projects", documentGraphApi);
 app.route("/api/conversations", conversationsApi);
 app.route("/api/instant", instantApi);
 app.route("/api/v1/cli", cliRouter);
@@ -335,6 +344,7 @@ async function handleFetch(req: Request, server: import("bun").Server<WsData>): 
 
 // ── Start background workers ─────────────────────────────────────────
 registerEventHandlers();
+registerDocumentGraphWorker();
 registerAgentNotifier();
 registerAgentReflector();
 startTicketWorker();

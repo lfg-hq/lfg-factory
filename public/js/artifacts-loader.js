@@ -826,9 +826,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
 
                 if (modalElements.acceptanceSection) {
-                    if (ticket.acceptance_criteria && ticket.acceptance_criteria.length > 0) {
+                    const criteria = ticket.acceptanceCriteria ?? ticket.acceptance_criteria;
+                    if (Array.isArray(criteria) && criteria.length > 0) {
                         modalElements.acceptanceSection.style.display = '';
-                        modalElements.acceptance.innerHTML = `<ul>${ticket.acceptance_criteria.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
+                        modalElements.acceptance.innerHTML = `<ul>${criteria.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
                     } else {
                         modalElements.acceptanceSection.style.display = 'none';
                         modalElements.acceptance.innerHTML = '';
@@ -2674,8 +2675,6 @@ document.addEventListener('DOMContentLoaded', function() {
          * @param {number} projectId - The ID of the current project
          */
         loadChecklist: function(projectId, append = false) {
-            if (document.body.dataset.epicBuilds === "true") return window.loadChatEpics(projectId);
-            
             if (!projectId) {
                 console.warn('[ArtifactsLoader] No project ID provided for loading checklist');
                 return;
@@ -3079,6 +3078,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     `;
 
                     checklistTab.innerHTML = checklistHTML;
+                    window.TicketMap?.mount(projectId, checklistTab);
                     if (data.hasMore) {
                         const paging = document.createElement('div');
                         paging.style.cssText = 'padding:12px;display:flex;align-items:center;gap:12px;color:var(--text-secondary);font-size:12px';
@@ -3289,7 +3289,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         const lfgLive = (it) => {
                             const st = String(it.status || '').toLowerCase();
                             const q = String(it.queue_status || '').toLowerCase();
-                            if (st === 'in_progress' || st === 'building' || q === 'running') return 0;
+                            if (it.agentBusy || st === 'in_progress' || st === 'building' || q === 'running') return 0;
                             if (q === 'queued' || q === 'pending') return 1;
                             return 2;
                         };
@@ -3410,11 +3410,11 @@ document.addEventListener('DOMContentLoaded', function() {
                             }
                             
                             const lfgKey = item.ticketKey || item.ticket_key || '';
-                            const lfgBuilding = /in_progress|building/i.test(item.status || '') || /queued|executing|building|running/i.test(item.queue_status || item.queueStatus || '');
+                            const lfgBuilding = item.agentBusy === true || /in_progress|building/i.test(item.status || '') || /queued|executing|building|running/i.test(item.queue_status || item.queueStatus || '');
                             const lfgMarker = lfgBuilding
-                                ? `<i class="fas fa-spinner fa-spin" title="Building…" style="color:#3b82f6;font-size:10px;flex:none;width:8px;text-align:center;"></i>`
+                                ? `<i class="fas fa-spinner fa-spin" title="${item.agentBusy ? 'Agent working…' : 'Building…'}" style="color:#3b82f6;font-size:10px;flex:none;width:8px;text-align:center;"></i>`
                                 : `<span class="lfg-row-dot" style="background:${lfgStatusColor(item.status)};" title="${modalHelpers.escapeHtml(item.status || 'open')}"></span>`;
-                            const lfgBuildChip = lfgBuilding ? `<span style="flex:none;font-size:9.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:2px 7px;border-radius:5px;background:rgba(59,130,246,0.15);color:#60a5fa;">Building</span>` : '';
+                            const lfgBuildChip = lfgBuilding ? `<span style="flex:none;font-size:9.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:2px 7px;border-radius:5px;background:rgba(59,130,246,0.15);color:#60a5fa;">${item.agentBusy ? 'Working' : 'Building'}</span>` : '';
                             itemsHTML += `
                                 <div class="checklist-card ${statusClass} lfg-row" data-id="${item.id}" data-in-group="${lfgCurGid}">
                                     <input type="checkbox" class="ticket-select-checkbox" data-ticket-id="${item.id}" style="display: none; width: 14px; height: 14px; accent-color: #8b5cf6; cursor: pointer;" onclick="event.stopPropagation();">
@@ -6229,6 +6229,21 @@ document.addEventListener('DOMContentLoaded', function() {
                 document.body.appendChild(overlay);
                 const cleanup = () => [holder, pstyle, overlay].forEach(n => { if (n && n.parentNode) n.parentNode.removeChild(n); });
 
+                try {
+                    await window.mermaidRendererReady;
+                    await window.prepareMermaidForExport?.(holder);
+                } catch (error) {
+                    cleanup();
+                    alert('Unable to prepare diagrams for PDF. Please retry.');
+                    return;
+                }
+
+                // Keep page-sized diagrams together instead of cutting through their nodes.
+                const holderRect = holder.getBoundingClientRect();
+                const diagramBounds = [...holder.querySelectorAll('.lfg-diagram')].map(el => {
+                    const rect = el.getBoundingClientRect();
+                    return { top: rect.top - holderRect.top, bottom: rect.bottom - holderRect.top };
+                });
                 window.html2canvas(holder, { scale: 2, backgroundColor: '#ffffff', useCORS: true, windowWidth: 800 }).then((canvas) => {
                     try {
                         const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
@@ -6267,6 +6282,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
                         // Pass 1: compute page slices (variable heights, breaking on blank rows).
                         const slices = [];
+                        const scale = canvas.width / holderRect.width;
+                        const diagrams = diagramBounds.map(rect => ({ top: Math.floor(rect.top * scale), bottom: Math.ceil(rect.bottom * scale) }));
                         let cursor = 0;
                         while (cursor < canvas.height) {
                             let h;
@@ -6277,6 +6294,8 @@ document.addEventListener('DOMContentLoaded', function() {
                                 h = brk - cursor;
                                 if (h < pageContentPx * 0.4) h = pageContentPx; // avoid near-empty pages
                             }
+                            const crossing = diagrams.find(rect => rect.top > cursor && rect.top < cursor + h && rect.bottom > cursor + h && rect.bottom - rect.top <= pageContentPx);
+                            if (crossing) h = crossing.top - cursor;
                             slices.push({ y: cursor, h });
                             cursor += h;
                         }
@@ -6965,6 +6984,7 @@ document.addEventListener('DOMContentLoaded', function() {
             
             // Store project ID for use in file operations
             window.currentFileBrowserProjectId = projectId;
+            window.DocumentGraph?.mount(projectId);
             
             const fileBrowserContainer = document.getElementById('filebrowser');
             const fileBrowserMain = document.getElementById('filebrowser-main');

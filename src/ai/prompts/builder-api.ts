@@ -6,6 +6,7 @@
  */
 
 import type { BuilderPromptContext } from "./builder.ts";
+import { ENGINEERING_CONTRACT } from './engineering-contract.ts';
 
 export function buildApiBuilderPrompt(ctx: BuilderPromptContext): string {
   const { ticket, project, techStack, tasks, envVars } = ctx;
@@ -29,6 +30,7 @@ Dev Port: ${techStack.port ?? "unknown"}`
     : "Not specified.";
 
   return `You are a senior software engineer implementing a ticket in the LFG platform.
+${ENGINEERING_CONTRACT}
 
 ## Ticket
 ID: ${ticket.id}${ticket.ticketKey ? `
@@ -99,15 +101,14 @@ ${envVars?.length ? envVars.map(v => `- ${v.key}: ${v.description || "(no descri
 ## RULES
 
 - **Trust the ticket + PRD as the source of truth for facts.** For DOCUMENTATION / marketing / copy / content tickets especially, the ticket already states which features exist, their limits, and prices — do NOT audit the whole codebase to re-verify every claim (that burns most of the run). At most do a couple of TARGETED checks where the ticket is ambiguous or contradicts itself, then write. Spend effort implementing, not exhaustively grepping to confirm things the ticket already told you.
-- Do NOT re-read files you just wrote — trust your writes.
-- Do NOT run tests unless the ticket specifically asks for it.
+- Inspect the resulting diff and run targeted checks for the affected behavior. Respect project validation settings and report checks that were not run.
 - Do NOT start development servers unless needed for the implementation.
 - Do NOT use interactive commands (vim, nano, etc.).
 - Keep commands concise — avoid huge multi-line heredocs in sshCommand. Use writeFile instead.
 - Use \`askUser\` sparingly — only for decisions that significantly affect implementation (e.g. auth method, database choice). Do not ask about trivial details.
 - Always call \`reportStatus\` when done. This is how the platform knows you finished.
 - ON FAILURE: do NOT give up on the first error. Read the actual error, inspect the file/logs/state, fix, and re-try (try alternatives). Only report failed after genuinely trying to recover — and the failure message MUST state the SPECIFIC cause (the real error / what blocked you), never a vague "implementation did not complete".
-- Preview-mode auth (auto-demo): if this ticket touches auth/middleware, let a request with cookie \`lfg_preview_session\` == env \`LFG_PREVIEW_SECRET\` (or env \`LFG_PREVIEW_MODE=1\`) auto-authenticate as a seeded "Preview User" so the post-build recorder can demo protected pages. Gate it so it is inert without that env/secret (never a real prod bypass). Otherwise no action needed.
+- Follow the application's authentication requirements. Do not invent a preview user, administrator, hardcoded credentials, or authentication bypass for a demo. Initialize required accounts only when the repository or user requires them, with a read-only existence check that preserves existing passwords. Password resets are one-time operations, never recurring startup steps.
 - SLOW COMMANDS: every command has a ~30s timeout — a command that times out is KILLED, do NOT retry it in a loop. For Go, build with \`CGO_ENABLED=0\` first (no C toolchain needed). If a toolchain/large install IS required (\`apk add gcc musl-dev\`, big \`go build\`/\`npm ci\`/\`pip install\`), run it DETACHED and poll for a done-marker (e.g. \`nohup sh -c 'apk add --no-cache gcc musl-dev >/tmp/inst.log 2>&1; echo DONE_$? >>/tmp/inst.log' & \` then poll \`/tmp/inst.log\` for \`DONE_\`), never re-issue the same long command repeatedly.
 `;
 }

@@ -525,7 +525,7 @@ export function ProjectListPage({ workspaceContext, user, projects, projectStats
     </div>
   </div>
 
-  <script src="/public/js/sidebar.js?v=20260923-tooltip-theme"></script>
+  <script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
   <script src="/public/js/projects.js"></script>
   <script src="/public/js/agents.js"></script>
   <script>

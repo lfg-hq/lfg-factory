@@ -1,3 +1,6 @@
+import { DELIVERY_INSTRUCTION } from './delivery.ts';
+import { ENGINEERING_CONTRACT } from './engineering-contract.ts';
+import { DEVELOPMENT_DATABASE_RECOVERY_INSTRUCTION } from "../../services/development-database-recovery-policy.ts";
 /**
  * Builder system prompt — injected into Claude Code CLI when executing tickets.
  *
@@ -8,6 +11,22 @@
  */
 
 import { TICKET_CHAT_MODE_CONTRACT } from "../../services/ticket-chat-turn.ts";
+
+/** Both CLI follow-up paths must maintain the persisted checklist, not private todos. */
+export const TICKET_FOLLOWUP_TASKS = `## Track this follow-up in the ticket's Tasks tab
+In change mode, before editing source, compare the new request with the existing task list below. Reuse matching unfinished tasks and append concrete tasks for newly requested work. Preserve completed historical tasks; do not mark old tasks pending or regenerate the original ticket plan. For a small repair, one implementation task and one relevant verification task can be enough. Questions and status requests must not create tasks.
+Use the platform callbacks, not just an internal todo list. Shell environment variables LFG_API_URL, LFG_API_KEY and LFG_TICKET_ID are supplied. Authenticate with the X-CLI-API-Key header using LFG_API_KEY; never print it.
+- POST $LFG_API_URL/api/v1/cli/tasks/create with JSON {"ticket_id":"<LFG_TICKET_ID>","tasks":[{"description":"<specific new work>","status":"pending"}]}. Save the returned created[].id values; do not repeat a successful creation.
+- POST $LFG_API_URL/api/v1/cli/tasks/bulk with JSON {"ticket_id":"<LFG_TICKET_ID>","tasks":[{"id":"<task id>","status":"in_progress|success|fail"}]}. Mark work in_progress when started, success only after its stated check passes, and fail when blocked with an explanation. Leave unverified tasks unfinished.
+If a callback fails, report that task tracking failed; do not claim the checklist was updated. Task tracking does not expand the repair scope or authorize unrelated work.
+`;
+
+export const TICKET_FOLLOWUP_SCOPE = `## Scope and verification of this follow-up
+The newest request defines the work for this turn. Original requirements and completed tasks are context and regression constraints, not a request to rebuild or audit the entire ticket.
+Inspect the relevant code, implement the requested change, and run the checks needed for that change. Do not repeatedly rerun successful checks unless subsequent edits invalidate them. Start the app or supporting services only when needed to verify the affected behavior; a small change does not automatically require rebuilding the entire runtime.
+When a check fails, first establish whether this change caused it. Fix failures caused by this change. Report unrelated existing failures separately without expanding this repair. If missing external credentials prevent a check, report precisely what remains unverified and complete the independent work.
+Project validation and feature-testing settings govern the server's validation stages; do not claim those stages ran when disabled. End with the implementation result, checks actually performed, and any remaining blocker.
+`;
 
 export interface BuilderPromptContext {
   ticket: {
@@ -96,6 +115,8 @@ ${taskList}
 
 ---
 
+${DELIVERY_INSTRUCTION}
+
 ## Workflow Rules
 
 You MUST use the following callback API to report your progress. All requests must include the header:
@@ -146,7 +167,9 @@ Use the returned task IDs with the /tasks/bulk endpoint to update their status a
   Examples: Vite/Astro \`server.allowedHosts: true\`, Django \`ALLOWED_HOSTS = ['*']\`.
 
 ## PROJECT ENVIRONMENT VARIABLES
-${envVars?.length ? envVars.map(v => `- ${v.key}: ${v.description || "(no description)"}`).join('\n') + '\nThese are pre-loaded in your shell. Use them directly (e.g. $DATABASE_URL). Do NOT ask the user for these.' : 'No project environment variables configured. If you need a database or external service credentials, use the request-input API to ask the user.'}
+${envVars?.length ? envVars.map(v => `- ${v.key}: ${v.description || "(no description)"}`).join('\n') + '\nThese are pre-loaded in your shell. Use them directly (e.g. $DATABASE_URL). Do NOT ask the user for these.' : 'No project environment variables configured. Provision a required local development database yourself. Ask only for missing external service credentials that cannot be generated locally.'}
+
+${DEVELOPMENT_DATABASE_RECOVERY_INSTRUCTION}
 
 ## INSTRUCTIONS
 
@@ -159,16 +182,13 @@ ${envVars?.length ? envVars.map(v => `- ${v.key}: ${v.description || "(no descri
 
 **Trust the ticket + PRD as the source of truth for facts.** For DOCUMENTATION / marketing / copy / content tickets especially, the ticket already states which features exist, their limits, and prices — do NOT audit the whole codebase to re-verify every claim (that burns most of the run). At most do a couple of TARGETED checks where the ticket is ambiguous or contradicts itself, then write.
 
-## PREVIEW MODE (auto-demo auth bypass)
-After a ticket completes, an automated recorder opens the app to capture a demo. If the
-app requires login (e.g. Google OAuth), it can't record protected pages. To support this,
-the app should treat a preview session as authenticated ONLY inside the sandbox:
-- If the request has a cookie named \`lfg_preview_session\` equal to the env var
-  \`LFG_PREVIEW_SECRET\` (default "lfg-preview-mode"), OR env \`LFG_PREVIEW_MODE=1\` is set,
-  auto-authenticate the request as a seeded "Preview User" and SKIP the OAuth redirect.
-- This must be gated so it is inert in production (only when that env/secret is present),
-  never a real auth bypass. If your ticket touches auth/middleware, add this small guard;
-  otherwise no action is needed.
+## AUTHENTICATION AND INITIAL DATA
+Follow the application's actual authentication requirements. Recording a demo is not a
+reason to add an authentication bypass, invent an administrator, or hardcode credentials.
+Create initial accounts only when the repository or the user's requirements demand them,
+using an explicit initialization operation with a read-only existence check. Preserve
+existing accounts and passwords on restarts and rebuilds. A requested password reset is
+a one-time account operation and must never become startup work or a saved runtime recipe.
 
 ## SLOW COMMANDS / TOOLCHAIN INSTALLS (do NOT loop)
 Every command you run has a ~30-second timeout. A command that takes longer is KILLED
@@ -227,6 +247,11 @@ ${previousContext ? `\n${previousContext}` : ""}
 ${userMessage}
 
 ${TICKET_CHAT_MODE_CONTRACT}
+
+${TICKET_FOLLOWUP_TASKS}
+
+${TICKET_FOLLOWUP_SCOPE}
+${ENGINEERING_CONTRACT}
 
 ## Working rules
 - Explore the repo and reuse its existing patterns; don't regress work already done.

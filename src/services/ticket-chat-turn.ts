@@ -18,6 +18,7 @@
  */
 
 import { execOnWorkspace } from "./mags.ts";
+import { shellQuote } from "./preview-plan.ts";
 
 // ── Turn modes ────────────────────────────────────────────────────────
 
@@ -30,15 +31,14 @@ This is a CHAT message about the ticket, not an order to build. Pick ONE mode:
 
 - **answer** — the message is a question or a request for information. Explore the
   repo as much as you need, then answer it. Do NOT edit, create or delete any file.
-- **question** — the message asks for a change, but something you'd have to GUESS at
-  would change what you write (which page/component, what the copy or design should
-  be, which of several plausible approaches). Ask up to 3 short, specific questions
-  and stop. Do NOT edit any file. Never guess and build the wrong thing.
-- **change** — the message is an unambiguous, actionable instruction. Implement it.
+- **question** — essential information or authorization is missing and cannot be
+  resolved from the repository or conversation. Ask the specific question and stop.
+  Do NOT edit any file. Routine implementation choices are yours to make.
+- **change** — the message asks for a change. Implement the requested scope using
+  the repository and conversation for context, and reasonable engineering judgment.
 
-Choosing: if you can satisfy the message without editing files → answer. If you'd
-have to guess at anything that changes what you'd write → question. Only use
-change when you know exactly what to do.
+Choosing: answer information requests; act on authorized change requests. Ask only
+when missing information would materially change the requested outcome.
 
 End your final message with the mode on its own last line, exactly:
 
@@ -49,8 +49,8 @@ more line offering choices the user can click:
 
 LFG_OPTIONS: ["Restyle the hero only", "Restyle the whole page"]
 
-In answer and question mode the working tree MUST stay clean — any edits you leave
-behind are discarded, and nothing is committed.`;
+In answer and question mode do not change the working tree or publish anything.
+Preserve any existing edits from earlier work.`;
 
 /** Everything we learned about how the turn ended. */
 export interface TurnOutcome {
@@ -189,7 +189,7 @@ export async function workingTreeDirty(workspaceId: string, projectDir: string):
   try {
     const r = await execOnWorkspace(
       workspaceId,
-      `cd ${projectDir} 2>/dev/null && git status --porcelain 2>/dev/null | head -50`,
+      `cd ${shellQuote(projectDir)} 2>/dev/null && git status --porcelain 2>/dev/null | head -50`,
       { timeout: 60_000 },
     );
     return (r.output || "").trim().length > 0;
@@ -200,20 +200,12 @@ export async function workingTreeDirty(workspaceId: string, projectDir: string):
   }
 }
 
-/** Throw away edits an answer/question turn left behind, so Q&A is truly read-only. */
-export async function revertWorkingTree(workspaceId: string, projectDir: string): Promise<void> {
-  await execOnWorkspace(
-    workspaceId,
-    `cd ${projectDir} 2>/dev/null && git checkout -- . 2>/dev/null; git clean -fd 2>/dev/null; echo REVERTED`,
-    { timeout: 90_000 },
-  ).catch(() => {});
-}
-
 /**
  * Decide what a finished chat turn actually was, from the agent's declared mode
  * AND the working tree. The tree is the tie-breaker: no diff means nothing is
  * committed no matter what the agent claimed, and a diff left by an answer/
- * question turn is reverted rather than shipped.
+ * question turn is preserved without being published. Existing edits may belong to
+ * an earlier interrupted turn; a question must never discard them.
  */
 export async function resolveTurnOutcome(params: {
   ticketId: string;
@@ -221,7 +213,7 @@ export async function resolveTurnOutcome(params: {
   projectDir: string;
   /** The agent's final message, when this path has it (Pi's extracted summary). */
   replyText?: string;
-}): Promise<{ mode: TurnMode; reply: TurnOutcome; revertedEdits: boolean; repliedInStream: boolean }> {
+}): Promise<{ mode: TurnMode; reply: TurnOutcome; preservedEdits: boolean; repliedInStream: boolean }> {
   const { ticketId, workspaceId, projectDir, replyText } = params;
   const observed = observedTurn(ticketId);
   const fromTail = parseTurnMarkers(replyText);
@@ -233,11 +225,7 @@ export async function resolveTurnOutcome(params: {
   // to the evidence — edits mean it changed something, otherwise it answered.
   const declared: TurnMode = mode ?? (dirty ? "change" : "answer");
 
-  let revertedEdits = false;
-  if (declared !== "change" && dirty) {
-    await revertWorkingTree(workspaceId, projectDir);
-    revertedEdits = true;
-  }
+  const preservedEdits = declared !== "change" && dirty;
 
   // Claimed a change but touched nothing → it didn't change anything. Report it as
   // an answer so the UI stops saying "Update applied" over an empty commit.
@@ -246,7 +234,7 @@ export async function resolveTurnOutcome(params: {
   return {
     mode: effective,
     reply: { mode: effective, options, text: fromTail.text },
-    revertedEdits,
+    preservedEdits,
     repliedInStream: !!observed?.repliedInStream,
   };
 }

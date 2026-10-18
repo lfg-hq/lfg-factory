@@ -1,20 +1,24 @@
+import { FollowupQueue } from './followup-queue.ts';
 import type { ServerWebSocket } from 'bun';
 import type { WsData, WsConnection } from './types.ts';
 
 // Turn lifetime belongs to the conversation, not the browser connection.
 const turns = new Set<BackgroundTurn>();
 export class BackgroundTurn {
+  private finished = false;
   assistantMessageId?: string;
+  clientMessageId?: string;
   readonly events: string[] = [];
   readonly subscribers = new Set<ServerWebSocket<WsData>>();
   readonly transport: ServerWebSocket<WsData>;
-  constructor(readonly owner: WsConnection) {
+  constructor(readonly owner: WsConnection, readonly followups = new FollowupQueue()) {
     this.subscribers.add(owner.ws);
     this.transport = new Proxy(owner.ws, { get: (target, property) => {
       if (property === 'send') return (text: string) => {
+        if (this.finished) return 0;
         const event = JSON.parse(text);
         if (event.type === 'conversation_created') owner.conversationId = event.conversationId;
-        this.events.push(text);
+        if (event.type !== 'message_started' && event.type !== 'chat_queue') this.events.push(text);
         for (const socket of this.subscribers) {
           try { socket.send(text); } catch { this.subscribers.delete(socket); }
         }
@@ -25,7 +29,7 @@ export class BackgroundTurn {
     }});
     turns.add(this);
   }
-  finish() { turns.delete(this); this.subscribers.clear(); this.events.length = 0; }
+  finish() { this.finished = true; turns.delete(this); this.subscribers.clear(); this.events.length = 0; }
 }
 export function findBackgroundTurn(userId: string, conversationId?: string) {
   if (!conversationId) return undefined;
@@ -34,3 +38,5 @@ export function findBackgroundTurn(userId: string, conversationId?: string) {
 export function detachBackgroundSocket(socket: ServerWebSocket<WsData>) {
   for (const turn of turns) turn.subscribers.delete(socket);
 }
+
+export function findConnectionTurn(conn:WsConnection) { return [...turns].find(turn=>turn.owner===conn); }

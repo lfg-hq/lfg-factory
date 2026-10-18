@@ -55,7 +55,7 @@ export const createTickets = tool({
         "## Overview, ## Implementation Notes (stack, data model, API routes, edge cases), " +
         "## UI / UX (screens, states, design references), ## Out of Scope. " +
         "Use `inline code` for identifiers, endpoints, and hex values. " +
-        "CRITICAL: this ticket is handed to a SEPARATE coding agent that has ONLY this ticket " +
+        "CRITICAL: this ticket is handed to a SEPARATE coding agent that receives this ticket and linked saved documents " +
         "as context (it does NOT see this conversation). So make it SELF-CONTAINED: name the exact " +
         "files/modules/components to touch (with paths), the precise change, relevant existing " +
         "patterns/functions to reuse, data shapes, and any gotchas — enough that the agent can " +
@@ -184,7 +184,7 @@ export const createTickets = tool({
       created.push({ id: row!.id, ticketKey: row!.ticketKey, name: row!.name });
     }
 
-    return { created: created.length, tickets: created, epicId: resolvedEpicId };
+    return { created: created.length, tickets: created, epicId: resolvedEpicId, name: resolvedEpicId ? (await getEpic(resolvedEpicId))?.name || "Created tickets" : "Created tickets" };
   },
 });
 
@@ -330,17 +330,24 @@ export const scheduleTickets = tool({
 });
 
 export const retryTicket = tool({
-  description: "Reset a failed ticket and immediately queue it for execution.",
+  description: "Retry a failed ticket. Automatically resume integration when its code is already pushed; otherwise queue implementation. Use build only when implementation must be repeated, or merge to retry only integration.",
   inputSchema: zodSchema(z.object({
     ticketId: z.string(),
     conversationId: z.string().optional(),
     userId: z.string().optional(),
     reason: z.string().optional(),
+    mode: z.enum(['auto', 'merge', 'build']).optional(),
   })),
-  execute: async ({ ticketId, reason, conversationId, userId }) => {
-    const [row] = await db.select({ projectId: projectTickets.projectId, queueStatus: projectTickets.queueStatus }).from(projectTickets).where(eq(projectTickets.id, ticketId));
+  execute: async ({ ticketId, reason, conversationId, userId, mode }) => {
+    const [row] = await db.select({ projectId: projectTickets.projectId, queueStatus: projectTickets.queueStatus, githubMergeStatus: projectTickets.githubMergeStatus, githubCommitSha: projectTickets.githubCommitSha }).from(projectTickets).where(eq(projectTickets.id, ticketId));
     if (!row) throw new Error("Ticket not found");
     if (/^(queued|executing|stopping)$/.test(row.queueStatus)) throw new Error("This ticket already has an active operation.");
+    const { ticketRetryMode } = await import('../../services/ticket-retry-mode.ts');
+    if (ticketRetryMode(row, mode) === 'merge') {
+      const { startTicketMergeRetry } = await import('../../workers/ticket-executor.ts');
+      await startTicketMergeRetry(ticketId, userId, conversationId);
+      return { success: true, note: 'Merge retry started from the published ticket branch. Implementation is not being repeated.' };
+    }
     const claimed = await db.update(projectTickets).set({ status: "open", queueStatus: "queued", queuedAt: new Date(), updatedAt: new Date() }).where(and(eq(projectTickets.id, ticketId), eq(projectTickets.queueStatus, row.queueStatus))).returning({id:projectTickets.id});
     if (!claimed.length) throw new Error("Another operation claimed this ticket.");
     await setBuildOrigin(ticketId, conversationId ?? null, userId ?? null);
@@ -359,17 +366,21 @@ export const sendTicketMessage = tool({
   description: "Send a message to the coding agent currently working on a ticket. If a Claude session is active, it resumes that session with the message. Otherwise it starts a new session with context.",
   inputSchema: zodSchema(z.object({
     ticketId: z.string(),
+    conversationId: z.string().optional().describe("Current conversation ID supplied in your context; associates activity with this chat."),
     message: z.string().describe("The instruction or question to send to the ticket agent"),
   })),
-  execute: async ({ ticketId, message }) => {
-    const [row] = await db.select({ projectId: projectTickets.projectId }).from(projectTickets).where(eq(projectTickets.id, ticketId));
-    // Log the message as an agent action (sent by LFG agent, not the user)
-    await db.insert(ticketLogs).values({ ticketId, logType: "agent_action", command: message });
-    emitTicketCommented({ ticketId, projectId: row?.projectId ?? "", message, logType: "agent_action" });
-    // Dispatch to ticket chat executor (picks up active session or starts new one)
-    const { bus } = await import("../../events/bus.ts");
-    bus.emit({ type: "ticket.chat_message", payload: { ticketId, message, sender: "orchestrator" } });
-    return { success: true, note: "Message dispatched to ticket agent" };
+  execute: async (args: {ticketId:string;message:string;conversationId?:string;projectId?:string;userId?:string;turnId?:string}) => {
+    const {ticketId,message,conversationId,projectId,userId,turnId}=args;
+    if(!conversationId || !projectId || !userId || !turnId)return {error:'Server-owned conversation, project, actor and turn context are required.'};
+    const {createTicketOperation}=await import('../../services/ticket-operations.ts');
+    const {operation,created}=await createTicketOperation({ticketId,message,conversationId,projectId,userId,turnId});
+    if(created){
+      await db.insert(ticketLogs).values({ticketId,logType:'agent_action',command:message});
+      emitTicketCommented({ticketId,projectId,message,logType:'agent_action'});
+      const {bus}=await import('../../events/bus.ts');
+      bus.emit({type:'ticket.chat_message',payload:{ticketId,message,sender:'orchestrator',actorId:userId,operationId:operation.id}});
+    }
+    return {success:true,operationId:operation.id,status:operation.status,detail:operation.detail};
   },
 });
 
@@ -457,4 +468,16 @@ export const queueTicketExecution = tool({
     emitTicketQueued({ ticketId, projectId: row?.projectId ?? "", notes });
     return { success: true };
   },
+});
+
+export const getTicketOperationStatus = tool({
+ description:'Read the durable status and result of a ticket follow-up dispatched from this conversation.',
+ inputSchema:zodSchema(z.object({operationId:z.string()})),
+ execute:async(args:{operationId:string;projectId?:string;userId?:string;conversationId?:string})=>{
+  const {readTicketOperation,authorizeTicketOperation}=await import('../../services/ticket-operations.ts');
+  const op=await readTicketOperation(args.operationId);
+  if(!op || !args.projectId || !args.userId || args.conversationId!==op.conversationId)return {error:'Operation is not available in this conversation.'};
+  await authorizeTicketOperation(op.ticketId,args.projectId,args.userId,args.conversationId);
+  return op;
+ }
 });

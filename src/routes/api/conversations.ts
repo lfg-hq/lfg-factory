@@ -96,7 +96,8 @@ conversationsApi.get("/:id", async (c) => {
     // owner/admin — the UI hides the composer when read_only.
     is_mine: access.isAuthor,
     read_only: !access.canWrite,
-    messages: msgs.map((m) => ({
+    // Build events wake the agent but are not something the user said.
+    messages: msgs.filter((m) => m.userRole !== "build_event").map((m) => ({
       id: m.id,
       role: m.role,
       content: m.content,

@@ -22,7 +22,12 @@
         const list = panel.querySelector('.build-inbox-list');
         const status = panel.querySelector('.build-inbox-status');
         const desktop = panel.querySelector('.build-desktop');
+        const projectId = () => {
+            const match = location.pathname.match(/^\/(?:chat\/project|projects)\/([^/]+)/);
+            return match ? decodeURIComponent(match[1]) : (document.querySelector('#sidebar')?.dataset.currentProjectId || '');
+        };
         const seen = new Set();
+        let currentScope = projectId();
         let initialized = false, loading = false, refreshPending = false, toastTimer;
         function setOpen(open) {
             panel.hidden = !open; button.setAttribute('aria-expanded', String(open));
@@ -46,7 +51,7 @@
         }
         async function markRead(id) {
             const response = await fetch('/api/projects/build-notifications/read', {
-                method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(id ? { id } : {})
+                method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({...(id ? {id} : {}), ...(projectId() ? {projectId:projectId()} : {})})
             });
             if (!response.ok) throw new Error('Could not mark notifications read.');
         }
@@ -68,10 +73,18 @@
         async function refresh() {
             if (loading) { refreshPending = true; return; }
             loading = true;
+            const requestedScope = projectId();
+            if (requestedScope !== currentScope) {
+                currentScope = requestedScope; initialized = false; seen.clear();
+                badge.hidden = true; badge.textContent = ''; list.replaceChildren(); live.hidden = true;
+            }
             try {
-                const response = await fetch('/api/projects/build-notifications', { cache: 'no-store' });
+                const response = await fetch('/api/projects/build-notifications' +
+                    (requestedScope ? '?projectId=' + encodeURIComponent(requestedScope) : ''), { cache: 'no-store' });
                 if (!response.ok) throw new Error('Notifications unavailable. Retrying…');
                 const data = await response.json();
+                if (requestedScope !== projectId()) { refreshPending = true; return; }
+                window.dispatchEvent(new Event('project-notifications-changed'));
                 list.replaceChildren();
                 for (const n of data.notifications) {
                     if (initialized && !seen.has(n.id) && !n.readAt) announce(n);
@@ -108,6 +121,8 @@
         desktop.onclick = async () => { try { await Notification.requestPermission(); desktopLabel(); } catch (_) { status.textContent = 'Desktop notifications unavailable.'; } };
         desktopLabel();
         window.addEventListener('focus', refresh);
+        window.addEventListener('popstate', refresh);
+        window.addEventListener('chat-conversation-changed', refresh);
         window.addEventListener('online', refresh);
         // A user-scoped socket has no conversation, so it never loads chat history.
         let socket, reconnectTimer, stopped = false, retry = 1000, lastMessage = Date.now();

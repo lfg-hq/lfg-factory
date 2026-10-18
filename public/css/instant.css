@@ -337,7 +337,7 @@
 
 .instant-chat-panel #chat-input-box {
     min-height: 60px;
-    max-height: 180px;
+    max-height: 320px;
     overflow: hidden;
     padding: 12px 14px;
     padding-bottom: 36px; /* space for the bottom bar */

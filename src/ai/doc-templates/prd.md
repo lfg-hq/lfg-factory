@@ -25,6 +25,11 @@ screens, controls, defaults and optional choices. Explain waiting/progress, succ
 empty/unavailable states, errors and retry. Explain how users find previous results
 after re-running the feature. Describe how it fits the existing app on narrow screens.
 
+## User flow
+A Mermaid `flowchart` of the main journey above: entry point, key screens and
+decisions, success, and the error/retry branches. Product language only; no
+components or code.
+
 ## Users
 Who this is for. Where more than one kind of user is affected, say how their needs differ.
 

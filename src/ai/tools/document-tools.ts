@@ -6,7 +6,7 @@ import { tool, zodSchema } from "ai";
 import { z } from "zod";
 import { db } from "../../config/db.ts";
 import { projectFiles, projectFileVersions } from "../../db/schema/documents.ts";
-import { eq } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import { emitFileCreated, emitFileUpdated } from "../../events/emitters.ts";
 import { saveContent, getContent } from "../../services/s3.ts";
 import { composeDesignPreview } from "../../services/design-preview.ts";
@@ -17,16 +17,33 @@ export function setWsBroadcast(fn: (userId: string, data: object) => void) {
   _wsBroadcast = fn;
 }
 
+// Keep agent revisions in the same version history as manual document edits.
+async function preserveDocumentVersion(file: {id: string; s3Key: string | null; content: string | null}, nextContent: string, userId: string) {
+  const previous = await getContent(file.s3Key, file.content);
+  if (previous === nextContent) return;
+  // Retry the unique version slot if a simultaneous editor saved first.
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const [latest] = await db.select({version: projectFileVersions.versionNumber}).from(projectFileVersions)
+      .where(eq(projectFileVersions.fileId, file.id)).orderBy(desc(projectFileVersions.versionNumber)).limit(1);
+    const saved = await db.insert(projectFileVersions).values({fileId: file.id, versionNumber: (latest?.version ?? 0) + 1,
+      content: previous, createdById: userId, changeDescription: "Agent revision"})
+      .onConflictDoNothing().returning({id: projectFileVersions.id});
+    if (saved.length) return;
+  }
+  throw new Error("Could not preserve the previous document version. Please retry.");
+}
+
 // ── streamDocumentContent ─────────────────────────────────────────────────────
 // Single tool for ALL document types (prd, implementation, spec, etc.).
-// Streams content live to the right panel, then upserts into project_file.
+// Streams content live to the chat, then upserts into project_file.
 
 export const streamDocumentContent = tool({
   description:
-    "Write any document (PRD, implementation plan, spec, roadmap, etc.) and stream it live to the user's right panel. " +
-    "Use fileType='prd' for product requirements, 'implementation' for technical plans, or any descriptive type. " +
+    "Write any document (PRD, implementation plan, spec, roadmap, etc.) and stream it live into an expandable card in the chat. " +
+    "Use fileType='prd' for product requirements, 'tech_analysis' for technical analysis / implementation plans, or any descriptive type. " +
     "If your prompt lists a template for this fileType, call loadDocumentTemplate FIRST and follow its skeleton — " +
     "a document written in the wrong shape has to be rewritten. "  +
+    "Write standalone product/technical content: decisions, rationale, requirements and open questions. Keep user commands, approval transcripts and agent execution instructions in chat, never in the document. Do not turn chat quotes into authorization. " +
     "If a file with the same name+type already exists it will be updated in-place. " +
     "Pass `epicId` when the doc relates to a feature you're building — the doc is LINKED " +
     "to that epic so the epic shows the full picture. The doc still lives in the project's " +
@@ -48,6 +65,8 @@ export const streamDocumentContent = tool({
   ),
   execute: async ({ projectId, userId, name, fileType, content, epicId }, options) => {
     if (fileType === "design_baseline") throw new Error("Use captureDesignLayout to create a verified layout capture.");
+    const [previous] = await db.select().from(projectFiles).where(and(eq(projectFiles.projectId, projectId), eq(projectFiles.epicId, ""), eq(projectFiles.name, name), eq(projectFiles.fileType, fileType)));
+    if (previous) await preserveDocumentVersion(previous, content, userId);
     const { s3Key, dbContent } = await saveContent(projectId, fileType, name, content);
 
     // Docs always live at PROJECT scope so they stay visible and editable. An epic
@@ -229,6 +248,7 @@ export const updateFileContent = tool({
     if (existing.fileType === "design_baseline") return { success: false, error: "Layout captures are immutable. Capture a new version." };
     await associateUsageDocument(existing.id, options.toolCallId);
 
+    await preserveDocumentVersion(existing, content, userId);
     const { s3Key, dbContent } = await saveContent(existing.projectId, existing.fileType, existing.name, content);
     const [file] = await db
       .update(projectFiles)
@@ -306,6 +326,7 @@ export const patchFileContent = tool({
     }
 
     // Save updated content
+    await preserveDocumentVersion(existing, content, userId);
     const { s3Key, dbContent } = await saveContent(existing.projectId, existing.fileType, existing.name, content);
     const [file] = await db
       .update(projectFiles)
@@ -331,6 +352,6 @@ export const patchFileContent = tool({
 
     const applied = results.filter((r) => r.applied).length;
     const failed = results.filter((r) => !r.applied).length;
-    return { success: true, id: file.id, name: file.name, editsApplied: applied, editsFailed: failed, details: results };
+    return { success: true, id: file.id, name: file.name, fileType: file.fileType, editsApplied: applied, editsFailed: failed, details: results };
   },
 });

@@ -1,4 +1,5 @@
-import { BackgroundTurn, findBackgroundTurn, detachBackgroundSocket } from './background-turns.ts';
+import type { FollowupQueue } from './followup-queue.ts';
+import { BackgroundTurn, findConnectionTurn, findBackgroundTurn, detachBackgroundSocket } from './background-turns.ts';
 import type { ServerWebSocket } from "bun";
 import type { WsData, WSIncoming, WsConnection } from "./types.ts";
 import {
@@ -7,11 +8,11 @@ import {
   getConnection,
   send,
 } from "./connection-manager.ts";
-import { handleStream, describeAttachedImages } from "../ai/stream-handler.ts";
+import { handleStream } from "../ai/stream-handler.ts";
 import { db } from "../config/db.ts";
 import { messages, conversations } from "../db/schema/chat.ts";
 import { eq, asc, desc } from "drizzle-orm";
-import { runPreviewChat, restartPreview, getPreviewState } from "../services/dev-preview.ts";
+import { restartPreview, getPreviewState } from "../services/dev-preview.ts";
 import { getProjectAccess } from "../auth/project-access.ts";
 
 const HEARTBEAT_INTERVAL_MS = parseInt(process.env.WS_HEARTBEAT_MS || "20000", 10);
@@ -74,8 +75,8 @@ export function onClose(ws: ServerWebSocket<WsData>): void {
   unregisterConnection(ws);
 }
 
-export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | Buffer): Promise<void> {
-  const conn = getConnection(ws);
+export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | Buffer, continuation?: {conn:WsConnection;queue:FollowupQueue;subscribers:Set<ServerWebSocket<WsData>>}): Promise<void> {
+  const conn = continuation?.conn ?? getConnection(ws);
   if (!conn) return;
 
   let msg: WSIncoming;
@@ -99,11 +100,25 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
       send(ws, { type: "background_resume", messages: rows.filter(m => !active || m.id !== active.assistantMessageId).map(m => ({ ...m, page_previews: m.pagePreviews ?? null, activity_trail: m.activityTrail, end_reason: m.endReason, is_partial: m.isPartial })), events: active?.events.map(e => JSON.parse(e)) ?? [] });
       active?.subscribers.add(ws);
     }
+    send(ws, { type: "chat_queue", items: turn?.followups.snapshot() ?? [] });
     send(ws, {
       type: "sync_state_response",
       is_streaming: !!findBackgroundTurn(conn.userId, conn.conversationId),
       conversation_id: conn.conversationId,
     });
+    return;
+  }
+
+  if (msg.type === "queue_remove" || msg.type === "queue_steer") {
+    const active=findBackgroundTurn(conn.userId,conn.conversationId) ?? findConnectionTurn(conn);
+    if(!active)return;
+    if(msg.type==='queue_remove')active.followups.remove(msg.id);
+    else if(active.followups.steer(msg.id)) {
+      active.owner.stopRequested=true;
+      active.owner.endReason='stopped';
+      active.owner.abortController?.abort();
+    }
+    send(active.transport,{type:'chat_queue',items:active.followups.snapshot()});
     return;
   }
 
@@ -137,13 +152,15 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
       return;
     }
 
-    if (conn.isStreaming || findBackgroundTurn(conn.userId, conversation_id || conn.conversationId)) {
-      // Silently drop a duplicate send while we're already streaming.
-      // Showing a "response is already being generated" toast is more
-      // annoying than helpful — the user can see the assistant is mid-
-      // reply, and a stray duplicate (e.g. from auto-resend or a fast
-      // double-click) just gets ignored.
-      console.log("[chat-handler] ignoring send while already streaming");
+    const active = findBackgroundTurn(conn.userId, conversation_id || conn.conversationId) ?? findConnectionTurn(conn);
+    if (active || conn.isStreaming) {
+      if (!active) { send(ws,{type:'error',message:'The current response is still stopping. Please retry your message.'}); return; }
+      if (msg.client_message_id && msg.client_message_id === active.clientMessageId) return;
+      try {
+        active.followups.add({...msg, message:normalizedMessage});
+        active.subscribers.add(ws);
+        send(active.transport,{type:'chat_queue',items:active.followups.snapshot()});
+      } catch(e) { send(ws,{type:'message_rejected',reason:(e as Error).message,message:msg.display_message ?? msg.message,files:resolvedFiles}); }
       return;
     }
 
@@ -158,8 +175,12 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
     conn.stopRequested = false;
     conn.abortController = new AbortController();
     conn.endReason = undefined;
-    const turn = new BackgroundTurn(conn);
+    const turn = new BackgroundTurn(conn, continuation?.queue);
+    if(continuation) for(const subscriber of continuation.subscribers) turn.subscribers.add(subscriber);
+    turn.clientMessageId = msg.client_message_id;
     const output = turn.transport;
+    send(output,{type:'chat_queue',items:turn.followups.snapshot()});
+    send(output,{type:'message_started',message:msg.display_message ?? normalizedMessage,files:resolvedFiles,render_on_start:!!msg.render_on_start,client_message_id:msg.client_message_id});
 
     // Watchdog: if the model stream HANGS (provider stops responding with no output),
     // handleStream never returns → the finally never runs → isStreaming stays true →
@@ -171,14 +192,7 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
     // streaming tool calls the whole time. A fixed timer killed those mid-work. So we
     // fire only after CHAT_STREAM_IDLE_TIMEOUT_MIN with NO output — onActivity (passed to
     // handleStream) bumps lastActivity on every stream event.
-    // @preview is an interactive shell agent doing real work (build/scan/fix). It's more
-    // forgiving on idle, and — crucially — when the watchdog DOES fire, we don't spam a
-    // generic "stopped responding" toast: aborting makes runPreviewChat emit a graceful,
-    // RESUMABLE summary ("here's where I got to — reply 'continue'"), which is the message
-    // the user should see instead of a bare kill.
-    const isPreviewCmd = /^\s*@preview\b/i.test(normalizedMessage) && !!conn.projectId;
-    const idleMs = parseInt(process.env.CHAT_STREAM_IDLE_TIMEOUT_MIN || process.env.CHAT_STREAM_TIMEOUT_MIN || "4", 10) * 60_000
-      * (isPreviewCmd ? 2 : 1);
+    const idleMs = parseInt(process.env.CHAT_STREAM_IDLE_TIMEOUT_MIN || process.env.CHAT_STREAM_TIMEOUT_MIN || "4", 10) * 60_000;
     let watchdogFired = false;
     let lastActivity = Date.now();
     const bumpActivity = () => { lastActivity = Date.now(); };
@@ -191,36 +205,14 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
       // Reset the guard immediately so a hung provider can't wedge the connection even if
       // the abort doesn't unblock the underlying socket.
       conn.isStreaming = false;
-      // For @preview the aborted run produces its OWN graceful "paused — reply continue"
-      // message; a second generic error toast would just be noise, so skip it there.
-      if (!isPreviewCmd) send(output, { type: "error", message: "The assistant stopped responding — please try again." });
+      send(output, { type: "error", message: "The assistant stopped responding — please try again." });
       clearInterval(watchdog);
     }, 15_000);
 
     try {
-      // "@preview …" → route to the interactive Preview agent (full control of the
-      // project's live sandbox) instead of the normal chat model.
-      if (/^\s*@preview\b/i.test(normalizedMessage) && conn.projectId) {
-        await handlePreviewChat(output, conn, normalizedMessage, resolvedFiles, bumpActivity);
-      } else {
-        // @ticket:… referenced → switch the Preview to the FIRST ticket's branch,
-        // but ONLY if a preview is already LIVE and on a DIFFERENT branch. Asking a
-        // QUESTION about the ticket you're already previewing must NOT rebuild it
-        // (and a question shouldn't boot a preview from scratch). Fire-and-forget.
-        if (mentionedTickets?.length && conn.projectId) {
-          const first = mentionedTickets[0];
-          getProjectAccess(conn.projectId, conn.userId).then(async (access) => {
-            if (!access || !first?.id) return;
-            const target = first.branch || `feature/ticket-${first.id}`;
-            const st = await getPreviewState(access.project.id).catch(() => null);
-            const isLive = st && (st.previewStatus === "running" || st.previewStatus === "starting");
-            const alreadyOn = st && st.branch && (st.branch === target);
-            if (isLive && !alreadyOn) {
-              restartPreview(access.project.id, { userId: conn.userId, ticketId: first.id, conversationId: conn.conversationId ?? null })
-                .catch((e) => console.warn("[chat-handler] @ticket branch switch failed:", (e as Error).message));
-            }
-          }).catch(() => {});
-        }
+      // Legacy @preview requests use the same ticket-aware orchestrator and attachments.
+      {
+        // Ticket mentions supply context only. Preview selection is an explicit action.
         const result = await handleStream({
           ws: output,
           userId: conn.userId,
@@ -244,69 +236,18 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
         conn.conversationId = result.conversationId;
       }
     } finally {
+      const subscribers = new Set(turn.subscribers);
       turn.finish();
       clearInterval(watchdog);
       if (!watchdogFired) conn.isStreaming = false;
       conn.abortController = undefined;
+      const next = turn.followups.next();
+      if(next) {
+        // Carry the queue and live subscribers into the next turn, even if the
+        // original socket closed. Never overlap tool execution with the prior turn.
+        await onMessage(ws,JSON.stringify({...next.request,conversation_id:conn.conversationId}),{conn,queue:turn.followups,subscribers});
+      }
     }
-  }
-}
-
-/**
- * Route a "@preview …" chat message to the interactive Preview agent, which has
- * full shell control of the project's LIVE sandbox. Detailed command output
- * streams into the Preview tab log; a concise summary comes back inline in chat.
- * Ends with an is_final ai_chunk so the chat input re-enables like a normal reply.
- */
-async function handlePreviewChat(ws: ServerWebSocket<WsData>, conn: WsConnection, rawMessage: string, files?: Array<{ id?: string; name?: string; type?: string; size?: number }>, onActivity?: () => void): Promise<void> {
-  const userId = conn.userId;
-  const publicProjectId = conn.projectId as string;
-  const conversationId = conn.conversationId ?? null;
-  let instruction = rawMessage.replace(/^\s*@preview\b[:\s]*/i, "").trim();
-
-  // The preview agent is a text/shell agent — it can't view images. Run the Gemini vision
-  // pre-pass over any screenshot the user attached and inject the description, so "@preview
-  // fix this error" + a screenshot of the error actually gives the agent the error text.
-  const imageFiles = (files || []).filter((f) => f.id && (f.type || "").startsWith("image/"));
-  if (imageFiles.length) {
-    const desc = await describeAttachedImages(imageFiles).catch(() => "");
-    if (desc) instruction = `${instruction}\n\n${desc}`.trim();
-  }
-
-  // Persist the user's message (normal chat persists it server-side too).
-  if (conversationId) {
-    await db.insert(messages).values({ conversationId, role: "user", content: rawMessage }).catch(() => {});
-  }
-
-  const finish = async (content: string) => {
-    if (conversationId) await db.insert(messages).values({ conversationId, role: "assistant", content }).catch(() => {});
-    // is_final ai_chunk → renders the bubble AND re-enables the chat input.
-    send(ws, { type: "ai_chunk", chunk: content, is_final: true, conversation_id: conversationId, provider: "preview-agent" });
-  };
-
-  if (!instruction) {
-    await finish("🔧 **Preview agent** — tell me what to do, e.g. `@preview restart the app`, `@preview why is postgres failing?`, or `@preview tail the last 50 lines of the app log`.");
-    return;
-  }
-
-  const access = await getProjectAccess(publicProjectId, userId).catch(() => null);
-  if (!access) { await finish("I couldn't find this project to work on its preview."); return; }
-
-  try {
-    const { reply, status } = await runPreviewChat({
-      projectId: access.project.id,
-      publicProjectId,
-      userId,
-      conversationId,
-      instruction,
-      abortSignal: conn.abortController?.signal,
-      onActivity,
-    });
-    // Colour-coded status banner: green = ok, red = error, yellow = stuck.
-    const badge = status === "ok" ? "🟢 **Preview agent — done**" : status === "error" ? "🔴 **Preview agent — failed**" : "🟡 **Preview agent — needs attention**";
-    await finish(`${badge}\n\n${reply}`);
-  } catch (e) {
-    await finish(`🔴 **Preview agent — failed**\n\n${(e as Error).message?.slice(0, 300) || "unknown error"}`);
   }
 }
 

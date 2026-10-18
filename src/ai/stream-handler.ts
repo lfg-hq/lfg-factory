@@ -1,8 +1,22 @@
+import { savedChatArtifact } from "./chat-artifacts.ts";
+import { providerErrorMessage } from './provider-error.ts';
+import { wrapGraphConnectorTools } from "../services/document-graph-connectors.ts";
+import { withChatDiagnostics, chatStage, chatDiagnostic, chatConversation } from './chat-diagnostics.ts';
+import { abortable, cancellableStream, trackTurnTools } from './stream-cancellation.ts';
+import { compactContext, contextBudget, estimateContextTokens, HANDOFF_INSTRUCTION } from './context-compaction.ts';
+import { loadConversationHandoff } from './conversation-handoff.ts';
+import { BUILD_EVENT_ROLE } from '../services/build-summary-turn.ts';
+import {compactToolSteps} from './history-budget.ts';
+import { emptyTurnContent, shouldContinuePromise, continuationMessages } from './turn-completion.ts';
+export { endsOnUnkeptPromise } from './turn-completion.ts';
+import {linkTicketDocumentsTool} from "./tools/ticket-document-tools.ts";
+import { previewActionTool } from './tools/preview-action-tools.ts';
 import { chatDocumentContext } from '../services/chat-document-text.ts';
 import { withConversationContext } from "./tools/conversation-context.ts";
 import { currentUsage, withUsage, withUsageOperation } from "./usage-context.ts";
 import { availableChatModels } from "../services/available-models.ts";
-import { streamText, stepCountIs, generateText } from "ai";
+import { streamText, stepCountIs, generateText, asSchema } from "ai";
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { db } from "../config/db.ts";
@@ -15,7 +29,7 @@ import { projectFiles } from "../db/schema/documents.ts";
 import { readingTools, READING_INSTRUCTIONS } from './reading-policy.ts';
 import { projectTickets, ticketLogs, ticketAddenda } from "../db/schema/tickets.ts";
 import { projectEnvironments } from "../db/schema/project-environments.ts";
-import { eq, and, desc, inArray } from "drizzle-orm";
+import { eq, and, desc, inArray, sql } from "drizzle-orm";
 import { getModel, getModelWithSearch, getProviderName, getLiteModel, getGoogleVisionModel, DEFAULT_MODEL_KEY } from "./provider.ts";
 import { withCaching } from "./prompt-cache.ts";
 import { toolsProduct, toolsTurbo } from "./tools/index.ts";
@@ -37,7 +51,7 @@ import type { WsData } from "../ws/types.ts";
 import { withUserSubscription } from "../services/subscription-execution.ts";
 import { currentSubscription } from "./subscription-context.ts";
 
-const MAX_HISTORY = 20; // messages to load for context
+const MAX_HISTORY = 40; // messages to load for context
 const FLUSH_CHARS = 80;
 const FLUSH_MS = 80;
 
@@ -78,44 +92,11 @@ const CITATION_PATTERNS = [
 /** Sent as a user turn ONLY inside the retry pass — never stored in the transcript. */
 const CONTINUE_NUDGE =
   "You ended your turn describing what you were about to do, but you didn't do it — " +
-  "no tool was called, so nothing happened and the user is left waiting. " +
-  "Carry on now: call the tool you said you'd call and then answer. " +
+  "Earlier tool calls do not complete the next action you explicitly promised. " +
+  "Continue only work already authorized by the user. Reuse the tool results below; do not repeat completed writes. If the next action needs missing input or approval, ask for it instead. " +
   "Do not restate the plan, do not apologise, and do not end another turn without either " +
   "calling a tool or giving the complete answer.";
 
-/**
- * Did this turn end by ANNOUNCING an action it never took?
- *
- * The failure looks like: "The codebase query came back empty — let me retry with more
- * targeted questions." … and then the turn ends. The SDK's agent loop keeps going only
- * while the model emits tool calls, so a promise-then-stop is a legitimate end of turn
- * and the user gets a dead half-thought.
- *
- * Deliberately conservative: it only matches a FINAL sentence that is a first-person
- * statement of intent. A turn that ends by answering, asking the user something, or
- * offering a choice ("Want me to build it?") is a normal, complete turn and must not be
- * nudged — a false positive costs a wasted model round-trip and a confusing double reply.
- */
-export function endsOnUnkeptPromise(text: string): boolean {
-  const trimmed = (text ?? "").trim();
-  if (!trimmed) return false;
-  // A question back to the user is a complete turn: the ball is in their court.
-  if (/[?]\s*$/.test(trimmed)) return false;
-  // Take the last sentence/line with content.
-  const last = trimmed
-    .split(/\n+/).pop()!
-    .split(/(?<=[.!])\s+/).filter((s) => s.trim()).pop()!
-    .trim()
-    .replace(/^[-*>\s]+/, "");
-  if (!last || last.length > 200) return false;
-  // "Let me …", "I'll …", "Now let me …", "Let's check …", "One moment while I …"
-  const intent =
-    /^(now\s+)?(let me\b|let's\b|i'?ll\b|i am going to\b|i'?m going to\b|i will\b|give me a (moment|second)\b|one (moment|sec)\b|checking\b|looking\b|searching\b|hold on\b)/i;
-  if (!intent.test(last)) return false;
-  // "I'll need you to …" / "Let me know …" are requests TO THE USER, not self-directed.
-  if (/\b(let me know|i'?ll need (you|your)|tell me|send me|share)\b/i.test(last)) return false;
-  return true;
-}
 
 function stripCitations(text: string): string {
   let cleaned = text;
@@ -224,11 +205,14 @@ export const INVESTIGATION_TOOLS = new Set([
  * string, so a turn the user watched run nine steps replayed as one after a refresh.
  */
 const TOOL_LABELS: Record<string, string> = {
+  loadSkill: "Loading skill",
   getProjectDashboard: "Loading project dashboard",
   getFileList: "Listing the project files",
   getFileContent: "Reading a file",
   queryCodebase: "Reading the codebase",
+  getPreviewDiagnostics: "Reading app and worker logs",
   inspectPreview: "Inspecting the live preview",
+  handlePreview: "Restarting the preview app",
   streamDocumentContent: "Writing a document",
   patchFileContent: "Editing a document",
   updateFileContent: "Updating a document",
@@ -242,9 +226,8 @@ const TOOL_LABELS: Record<string, string> = {
   scheduleTickets: "Scheduling the build",
   queueTicketExecution: "Queueing a build",
   retryTicket: "Retrying a ticket",
-  sendTicketMessage: "Messaging the ticket agent",
+  sendTicketMessage: "Sending instructions to the ticket agent",
   startEpic: "Starting an epic",
-  buildEpic: "Building the feature",
   addToEpic: "Adding to the epic",
   checkEpicOverlap: "Checking for overlapping work",
   getEpicStatus: "Checking epic status",
@@ -271,6 +254,7 @@ export function toolActionDetail(toolName: string, input: unknown): string {
   const clip = (v: string, n = 72) => (v.length > n ? v.slice(0, n).trimEnd() + "…" : v);
   try {
     switch (toolName) {
+      case "loadSkill": return `Loading skill: ${clip(s(o.id) || "unknown", 72)}`;
       case "queryCodebase": {
         const q = clip(s(o.question), 64);
         const br = s(o.branch) || (o.ticketId ? `ticket ${clip(s(o.ticketId), 10)}` : "");
@@ -319,14 +303,14 @@ async function buildTicketMentionContext(ticketIds: string[]): Promise<string> {
     ]);
     parts.push(
       `### ${t.ticketKey ? t.ticketKey + " — " : ""}${t.name}\n` +
-      `- Status: ${t.status} · Branch: \`${branch}\` (the Preview has been switched to this branch)\n` +
+      `- Status: ${t.status} · Branch: \`${branch}\` (ticket branch; mentioning it does not change the selected Preview)\n` +
       (t.description ? `- Spec: ${String(t.description).replace(/\s+/g, " ").slice(0, 1200)}\n` : "") +
       (ac.length ? `- Acceptance criteria: ${ac.map((c) => `(${c})`).join(" ")}\n` : "") +
       (addenda.length ? `- Pending change requests: ${addenda.map((a) => a.d).join(" | ")}\n` : "") +
       (done.length ? `- Recently done: ${done.map((x) => (x.m ?? "").replace(/\s+/g, " ").slice(0, 200)).join(" || ")}\n` : "")
     );
   }
-  return `The user is asking about the following ticket(s). Answer in this context; the live Preview is showing the first ticket's branch.\n\n${parts.join("\n")}`;
+  return `The user is asking about the following ticket(s). Answer in this context. Ticket mentions do not select a preview; inspect the current preview state before making claims about it.\n\n${parts.join("\n")}`;
 }
 
 /** If the live Preview is serving a ticket's branch, return a system note pinning the
@@ -400,12 +384,13 @@ export async function describeAttachedImages(
 }
 
 export async function handleStream(req: StreamRequest): Promise<{ conversationId: string }> {
-  return withUsage({ userId: req.userId, operation: "chat" }, () => withUserSubscription(req.userId, req.projectId, () => handleStreamInternal(req)));
+  return withChatDiagnostics({conversationId:req.conversationId, projectId:req.projectId, signal:req.abortController.signal}, () => withUsage({ userId: req.userId, operation: "chat" }, () => withUserSubscription(req.userId, req.projectId, () => handleStreamInternal(req))));
 }
 
 async function handleStreamInternal(req: StreamRequest): Promise<{ conversationId: string }> {
   const { ws, userId, userMessage, projectId, turboMode, instantMode, abortController, isVoice } = req;
 
+  chatStage('conversation_setup');
   // ── 1. Resolve or create conversation ───────────────────────────────────────
   let convId = req.conversationId;
   // Whether this turn is an owner/admin continuing SOMEONE ELSE's shared chat.
@@ -451,6 +436,8 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   const _conn = getConnection(ws);
   if (_conn) _conn.conversationId = convId;
 
+  chatConversation(convId!);
+  chatStage('history_and_context');
   // ── 1b. Detect agent conversation ────────────────────────────────────────────
   const agentRecord = convId ? await getAgentByConversation(convId) : null;
 
@@ -461,6 +448,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     role: "user",
     content: userMessage,
     isVoice: !!isVoice,
+    ...(req.userRole === BUILD_EVENT_ROLE ? { userRole: BUILD_EVENT_ROLE } : {}),
     // Only stamped when someone OTHER than the conversation's author wrote it.
     authorId: writingAsGuest ? userId : null,
   }).returning({ id: messages.id });
@@ -469,8 +457,8 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   const history = await db
     .select()
     .from(messages)
-    .where(eq(messages.conversationId, convId))
-    .orderBy(desc(messages.createdAt))
+    .where(and(eq(messages.conversationId, convId), sql`coalesce(${messages.userRole}, '') <> 'operation_status'`))
+    .orderBy(desc(messages.createdAt), desc(messages.id))
     .limit(MAX_HISTORY);
 
   // Expand assistant rows that have stored tool_steps into the full AI SDK
@@ -480,6 +468,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   // ran and what they returned — leading to "I need that doc" right after
   // it just fetched it.
   const contextMessages: any[] = [];
+  const historyRanges: Array<{ id:string; createdAt:Date; end:number }> = [];
   const attachmentContexts = new Map<string, Promise<string>>();
   const documentContext = (ids: string[]) => {
     const key = ids.join(",");
@@ -492,14 +481,22 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
       // Replay the captured AI SDK response.messages sequence verbatim.
       // These rows include intermediate assistant tool-call + tool result
       // messages plus the final assistant text.
-      for (const step of steps) contextMessages.push(step);
+      for (const step of compactToolSteps(steps, 16_000)) contextMessages.push(step);
     } else {
       contextMessages.push({
         role: m.role as "user" | "assistant" | "system",
         content: m.content + (m.role === "user" && Array.isArray(m.contentIfFile) ? await documentContext((m.contentIfFile as Array<{id:string}>).map(f=>f.id)) : ""),
       });
     }
+    historyRanges.push({id:m.id, createdAt:m.createdAt, end:contextMessages.length});
   }
+
+  // Status events do not consume conversation slots, but recent results/questions
+  // remain visible as bounded historical evidence for follow-up answers.
+  const operationMessages=await db.select({id:messages.id,content:messages.content}).from(messages)
+    .where(and(eq(messages.conversationId,convId),eq(messages.userRole,'operation_status')))
+    .orderBy(desc(messages.createdAt)).limit(5);
+  if(operationMessages.length)contextMessages.push({role:'assistant',content:'Recent background operation results (historical context):\n'+operationMessages.reverse().map(m=>(m.id.startsWith('ticket-operation:') ? 'Operation '+m.id.split(':').slice(0,2).join(':')+': ' : '')+m.content.slice(0,2000)).join('\n\n')});
 
   // ── 3b. @ticket context — inject each referenced ticket's spec/branch/history ──
   if (req.mentionedTickets?.length) {
@@ -507,6 +504,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     if (block) contextMessages.push({ role: "system", content: block });
   }
 
+  chatStage('model_selection');
   // ── 4. Resolve model & API keys ──────────────────────────────────────────────
   const [modelSel] = await db
     .select()
@@ -576,6 +574,8 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     return { conversationId: convId };
   }
 
+  chatDiagnostic('model_selected', {model:modelKey});
+  chatStage('attachments');
   // ── 4b. Attach an uploaded IMAGE to the model turn ──────────────────────────
   // Vision-native models (Claude/GPT/Gemini) get the image directly. Text-only
   // models (DeepSeek's hosted API is text-only) can't view images, so we run a
@@ -647,11 +647,23 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     }
   }
 
+  chatStage('tools_and_project_context');
   // ── 5. Select system prompt & tools ─────────────────────────────────────────
-  const [role] = await db
-    .select()
-    .from(agentRoles)
-    .where(eq(agentRoles.userId, userId));
+  // Independent lookups start together and are awaited where they are used, so the
+  // first token is not held behind a chain of sequential round trips.
+  // Composio: for agent chats, scope strictly to the toolkits the user enabled on that
+  // agent (an agent with nothing toggled on gets none); other chats get the connected set.
+  const enabledToolkits = agentRecord ? (agentRecord.composioToolkits ?? []) : undefined;
+  const composioPromise = Promise.race([
+    getComposioTools(userId, enabledToolkits),
+    new Promise<Record<string, never>>((resolve) => setTimeout(() => resolve({}), 10_000)),
+  ]);
+  const [[role], [projRef]] = await Promise.all([
+    db.select().from(agentRoles).where(eq(agentRoles.userId, userId)),
+    projectId
+      ? db.select({ id: projects.id }).from(projects).where(eq(projects.projectId, projectId))
+      : Promise.resolve([] as Array<{ id: string }>),
+  ]);
 
   const isTurbo = turboMode ?? role?.turboMode ?? false;
 
@@ -660,23 +672,37 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   // projects.id, not the public-facing projects.projectId).
   let internalProjectId = projectId;
   if (projectId) {
-    const [proj] = await db
-      .select({ id: projects.id })
-      .from(projects)
-      .where(eq(projects.projectId, projectId));
-    if (proj) internalProjectId = proj.id;
+    if (projRef) internalProjectId = projRef.id;
     if (currentUsage()) currentUsage()!.projectId = internalProjectId;
   }
+  const productChat = !instantMode && !agentRecord;
+  const projectContextPromise = !instantMode && internalProjectId
+    ? Promise.all([
+        db.select({ repoUrl: projects.repoUrl, customInstructions: projects.customInstructions }).from(projects).where(eq(projects.id, internalProjectId)).then(r => r[0]),
+        db.select({ fileType: projectFiles.fileType }).from(projectFiles).where(eq(projectFiles.projectId, internalProjectId)),
+        db.select({ id: projectTickets.id }).from(projectTickets).where(eq(projectTickets.projectId, internalProjectId)).limit(1),
+      ])
+    : Promise.resolve(null);
+  const cataloguesPromise = productChat
+    ? Promise.all([
+        import("./skills/index.ts").then(m => m.skillCatalogueFor(internalProjectId ?? undefined)),
+        import("./doc-templates/index.ts").then(m => m.templateCatalogueFor(internalProjectId ?? undefined)),
+      ])
+    : Promise.resolve(["", ""] as const);
+  const branchCtxPromise = internalProjectId && !req.mentionedTickets?.length
+    ? buildPreviewBranchContext(internalProjectId)
+    : Promise.resolve("");
+  const previewInspectPromise = productChat && internalProjectId
+    ? createPreviewInspectTool({ projectId: internalProjectId })
+    : Promise.resolve({});
 
   // ── Branch awareness — pin the model to the branch the Preview is showing ──────
   // If the live preview is serving a ticket branch, tell the model so it reads THAT
   // branch (worktree for the preview, feature branch for the codebase) instead of the
   // default — otherwise a screenshot/bug question gets answered against the wrong code.
   // Skipped when @ticket already pinned the context.
-  if (internalProjectId && !req.mentionedTickets?.length) {
-    const branchCtx = await buildPreviewBranchContext(internalProjectId);
-    if (branchCtx) contextMessages.push({ role: "system", content: branchCtx });
-  }
+  const branchCtx = await branchCtxPromise;
+  if (branchCtx) contextMessages.push({ role: "system", content: branchCtx });
 
   let tools: Record<string, any> = instantMode
     ? createInstantTools({
@@ -696,17 +722,10 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     tools = { ...tools, loadSkill: buildLoadSkillTool(internalProjectId ?? undefined) };
   }
 
-  // Merge Composio tools. For agent chats, scope strictly to the toolkits
-  // the user has explicitly enabled on that agent (agent.composioToolkits).
-  // A new agent with nothing toggled on gets no Composio tools at all.
-  // For non-agent chat (no agentRecord), load the full connected set.
-  const enabledToolkits = agentRecord ? (agentRecord.composioToolkits ?? []) : undefined;
-  const composioTools = await Promise.race([
-    getComposioTools(userId, enabledToolkits),
-    new Promise<Record<string, never>>((resolve) => setTimeout(() => resolve({}), 10_000)),
-  ]);
+  // Merge Composio tools (started above).
+  const composioTools = await composioPromise;
   if (Object.keys(composioTools).length > 0) {
-    tools = { ...tools, ...composioTools };
+    tools = { ...tools, ...(internalProjectId ? wrapGraphConnectorTools(composioTools, internalProjectId, userId) : composioTools) };
   }
 
   // Add web search tools based on the active provider (Anthropic/OpenAI/Google native).
@@ -721,14 +740,26 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   }
 
   // A window into the LIVE preview sandbox so the product/Analyst agent can DIAGNOSE
-  // runtime issues (DB migration errors, 500s) with real evidence instead of guessing
-  // from source. Read-only unless this project turned on Agent shell access, in which
-  // case the same tool can fix what it finds. Needs the INTERNAL id:
+  // runtime issues with real evidence. Conversation inspection is always read-only;
+  // code repairs use ticket execution. Needs the INTERNAL id:
   // projectEnvironments.projectId is a FK to projects.id, not the public projectId —
   // passing the public one made every lookup miss, so the agent always reported "no
   // preview sandbox exists" even with a healthy running preview. Not for instant/agent chats.
-  if (!instantMode && !agentRecord && internalProjectId) {
-    tools = { ...tools, ...(await createPreviewInspectTool({ projectId: internalProjectId })) };
+  if (productChat && internalProjectId) {
+    tools = { ...tools, ...(await previewInspectPromise) };
+    if (projectId) {
+      const { previewDiagnosticsTool } = await import('./tools/preview-diagnostics.ts');
+      tools.getPreviewDiagnostics = previewDiagnosticsTool({projectId:internalProjectId,publicProjectId:projectId,userId});
+    }
+    if (projectId) tools.linkTicketDocuments = linkTicketDocumentsTool({projectId:internalProjectId,publicProjectId:projectId,userId});
+    if (projectId) tools.handlePreview = previewActionTool({projectId:internalProjectId,publicProjectId:projectId,userId,conversationId:convId!,abortSignal:abortController.signal,onActivity:req.onActivity,
+      onProgress: (detail) => {
+        if (abortController.signal.aborted) return;
+        req.onActivity?.();
+        noteActivity(detail, "handlePreview");
+        ws.send(JSON.stringify({type:"ai_chunk",chunk:"",is_final:false,is_notification:true,notification_type:"tool_detail",function_name:"handlePreview",detail}));
+      }
+    });
   }
 
   // Add agent-specific tools (sandbox, memory, self-config).
@@ -739,8 +770,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     tools = { ...tools, ...agentTools };
   }
 
-  // ── Query project context flags (for product prompt) ──────────────────────
-  let epicBuildsEnabled = false;
+  // ── Project context flags (for product prompt) ────────────────────────────
   let projectFlags: {
     hasTickets: boolean;
     hasDocs: boolean;
@@ -749,13 +779,9 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     hasDesignLanguage: boolean;
   } | undefined;
 
-  if (!instantMode && internalProjectId) {
-    const [proj, files, tickets] = await Promise.all([
-      db.select({ repoUrl: projects.repoUrl, epicBuildsEnabled: projects.epicBuildsEnabled }).from(projects).where(eq(projects.id, internalProjectId)).then(r => r[0]),
-      db.select({ fileType: projectFiles.fileType }).from(projectFiles).where(eq(projectFiles.projectId, internalProjectId)),
-      db.select({ id: projectTickets.id }).from(projectTickets).where(eq(projectTickets.projectId, internalProjectId)).limit(1),
-    ]);
-    epicBuildsEnabled = !!proj?.epicBuildsEnabled && !agentRecord;
+  const projectContext = await projectContextPromise;
+  if (projectContext) {
+    const [proj, files, tickets] = projectContext;
     const fileTypes = new Set(files.map(f => f.fileType));
     projectFlags = {
       hasTickets: tickets.length > 0,
@@ -793,30 +819,18 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     // conversation and got it wrong in both directions.
     systemPrompt = getProductSystemPrompt({ userId, projectId: internalProjectId, conversationId: convId, projectFlags });
 
-    // The catalogue is per-project: built-in skills plus anything this project added.
-    const { skillCatalogueFor } = await import("./skills/index.ts");
+    // The skill catalogue is per-project: built-in skills plus anything this project
+    // added. The template catalogue lists document types only — the bodies are long and
+    // most turns write no document, so the agent pulls one with loadDocumentTemplate.
     const { SKILLS_PLACEHOLDER, DOC_TEMPLATES_PLACEHOLDER } = await import("./prompts/product.ts");
-    systemPrompt = systemPrompt.replace(SKILLS_PLACEHOLDER, await skillCatalogueFor(internalProjectId ?? undefined));
-
-    // Which document types have a template here. Types only — the bodies are long and
-    // most turns write no document, so the agent pulls one with loadDocumentTemplate
-    // when it is actually about to write.
-    const { templateCatalogueFor } = await import("./doc-templates/index.ts");
-    systemPrompt = systemPrompt.replace(DOC_TEMPLATES_PLACEHOLDER, await templateCatalogueFor(internalProjectId ?? undefined));
+    const [skillCatalogue, templateCatalogue] = await cataloguesPromise;
+    systemPrompt = systemPrompt.replace(SKILLS_PLACEHOLDER, skillCatalogue).replace(DOC_TEMPLATES_PLACEHOLDER, templateCatalogue);
 
     // Whatever the project owner told every agent here to do. Appended last so it
     // outranks the defaults it contradicts.
-    if (internalProjectId) {
-      const [projRow] = await db
-        .select({ ci: projects.customInstructions })
-        .from(projects)
-        .where(eq(projects.id, internalProjectId))
-        .limit(1)
-        .catch(() => [] as Array<{ ci: string | null }>);
-      const ci = (projRow?.ci ?? "").trim();
-      if (ci) {
-        systemPrompt += `\n\n---\n\n## Project instructions (from this project's settings)\n\n${ci}\n\nThese come from the people who own this project. Where they conflict with your defaults, follow these.`;
-      }
+    const ci = (projectContext?.[0]?.customInstructions ?? "").trim();
+    if (ci) {
+      systemPrompt += `\n\n---\n\n## Project instructions (from this project's settings)\n\n${ci}\n\nThese come from the people who own this project. Where they conflict with your defaults, follow these.`;
     }
   }
 
@@ -828,9 +842,10 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   // Hoisted so we can read .response after the stream completes (for
   // tool-step persistence).
   let streamTextResult: ReturnType<typeof streamText> | null = null;
+  let savedPassMessages: any[] | null = null;
   // Turn-outcome bookkeeping (see endReason on the message row).
-  let sawToolCallThisPass = false;   // did this pass actually DO something?
   let stalledMidPromise = false;     // ended announcing an action it never took
+  let waitingForUserInput = false;
   let nudgeUsed = false;             // we spent a second pass trying to rescue it
 
   const flush = () => {
@@ -857,7 +872,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   const activityTrail: Array<{ text: string; tool?: string; warning?: boolean; afterText?: number }> = [];
   // Previews rendered this turn, saved with the message so a refresh brings the card
   // back — it used to exist only in the socket message that announced it.
-  const pagePreviews: Array<{ id: string; name: string }> = [];
+  const pagePreviews: import("../types/chat-artifact.ts").ChatArtifact[] = [];
   const noteActivity = (text: string, tool?: string, warning = false) => {
     if (!text) return;
     const last = activityTrail[activityTrail.length - 1];
@@ -908,19 +923,43 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   // tools) and the last message (caches the growing history prefix). For every
   // other provider caching is automatic given our stable [system][tools][history]
   // ordering, so this is a no-op that returns the inputs unchanged.
-  tools = withConversationContext(readingTools(tools, userMessage), convId, userId, internalProjectId);
-  if (epicBuildsEnabled && internalProjectId) {
-    const { buildEpicTool, EPIC_BUILD_PROMPT } = await import('./tools/epic-build-tools.ts');
-    tools = { ...tools, buildEpic: buildEpicTool({ projectId: internalProjectId, userId, conversationId: convId }) };
-    for (const name of ['createTickets','createTicket','queueTicketExecution','retryTicket','startBuildRun','getPendingTickets','getNextTicket','scheduleTickets','listTicketsForEpic','getBuildRunStatus','getTicketDetails','updateTicket','updateTicketDetails','updateAllTickets','sendTicketMessage']) delete tools[name];
-    systemPrompt += EPIC_BUILD_PROMPT;
-  }
+  tools = withConversationContext(readingTools(tools, userMessage), convId, userId, internalProjectId, userMsgRow?.id);
 
+  if(internalProjectId && userMsgRow?.id) {
+    const {quickChangeTool}=await import('./tools/quick-change-tools.ts');
+    tools.quickChange=quickChangeTool({projectId:internalProjectId,userId,conversationId:convId,turnId:userMsgRow.id});
+  }
+  const turnTools = trackTurnTools(tools, abortController.signal);
+  tools = turnTools.tools;
   const repositoryCache = new Map<string, Response>();
   systemPrompt += READING_INSTRUCTIONS;
+  try {
+  const summaryCache = new Map<string, Promise<string>>();
+  const summarize = (evidence: string): Promise<string> => {
+    const key = createHash('sha256').update(evidence).digest('hex');
+    if (!summaryCache.has(key)) summaryCache.set(key, (async () => {
+      const result = await generateText({model, system:HANDOFF_INSTRUCTION, prompt:evidence,
+        maxOutputTokens:2200, abortSignal:abortController.signal, maxRetries:1});
+      return result.text;
+    })());
+    return summaryCache.get(key)!;
+  };
+  // Read the saved checkpoint only; summarizing older history waits until after the turn.
+  const handoff = await loadConversationHandoff(convId!, summarize, undefined, { compact: false });
+  if (handoff) {
+    const covered = historyRanges.filter(r => r.createdAt < handoff.throughAt ||
+      (+r.createdAt === +handoff.throughAt && r.id <= handoff.throughId));
+    contextMessages.splice(0, covered.at(-1)?.end ?? 0, handoff.message);
+  }
+  // Reserve room for system instructions, tool schemas, output and new tool evidence.
+  // This is an application budget, not a claim about the provider's context limit.
+  const toolSchemas = await Promise.all(Object.entries(tools).map(async ([name, tool]) => ({
+    name, description:(tool as any).description,
+    schema: await asSchema((tool as any).inputSchema).jsonSchema,
+  })));
+  const fixedTokens = estimateContextTokens(systemPrompt) + estimateContextTokens(toolSchemas);
   const cached = withCaching(modelKey, { system: systemPrompt, messages: contextMessages });
 
-  try {
    // Up to TWO passes. The second only happens when the model ends a turn having
    // ANNOUNCED an action it never took ("let me check X." → stop). Every provider
    // does it; DeepSeek and Kimi do it often. The SDK's loop only continues while
@@ -928,15 +967,26 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
    // and the user is handed a dead half-thought. One nudge, then we give up and
    // say so rather than nudging forever.
    let passMessages: any[] = cached.messages as any[];
+   const completedPassMessages: any[] = [];
    for (let pass = 0; pass < 2; pass++) {
-    sawToolCallThisPass = false;
+    abortController.signal.throwIfAborted();
     const textBeforePass = fullResponse;
+    chatStage('model_response');
+    let firstEvent = true;
+    let firstText = true;
     const result = streamText({
       model,
       system: cached.system,
       messages: passMessages,
       tools,
       stopWhen: stepCountIs(80),
+      maxOutputTokens: Math.min(12000, Math.floor(contextBudget() * .2)),
+      prepareStep: async ({messages: stepMessages}) => {
+        const bounded = await compactContext(stepMessages, fixedTokens, summarize);
+        chatDiagnostic('context_budget', {estimatedTokens:fixedTokens + estimateContextTokens(bounded),
+          budgetTokens:contextBudget(), compacted:bounded !== stepMessages});
+        return {messages:bounded};
+      },
       abortSignal: abortController.signal,
       experimental_context: {
         repositoryCache,
@@ -951,14 +1001,19 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
           }));
         },
       },
-      onStepFinish: ({ toolCalls }) => {
+      onError: ({ error }) => {
+        // The SDK's default logger dumps the full provider request. Keep safe metadata only.
+        chatDiagnostic('stream_error', {outcome:'error', model:modelKey, status: typeof (error as any)?.statusCode === 'number' ? (error as any).statusCode : undefined});
+      },
+      onStepFinish: ({ toolCalls, usage }) => {
+        chatDiagnostic('context_usage', {inputTokens:usage.inputTokens, outputTokens:usage.outputTokens});
+        if (abortController.signal.aborted) return;
         if (!toolCalls?.length) return;
-        sawToolCallThisPass = true; // this pass did real work, not just talk
         flush();
         for (const tc of toolCalls) {
           // Skip tools that handle their own WS notifications — a generic
           // notification here would cause duplicates.
-          if (DOCUMENT_STREAM_TOOLS.has(tc.toolName)) continue;
+          if (DOCUMENT_STREAM_TOOLS.has(tc.toolName) || tc.toolName === "loadSkill") continue;
           // askUser / confirmAction are handled in the tool-call fullStream event
           if (tc.toolName === "askUser" || tc.toolName === "confirmAction") continue;
           ws.send(JSON.stringify({
@@ -986,14 +1041,19 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     let turnClosedByCard = false; // a propose_*/create_instant_app card fired — drop trailing text
     let beginsTextBlock = true;
 
-    for await (const event of result.fullStream) {
+    for await (const event of cancellableStream(result.fullStream, abortController.signal)) {
       if (abortController.signal.aborted) break;
       // Proof-of-life for the caller's idle watchdog: every event (text delta, tool
       // call/step) counts as activity, so a long agentic run (many codebase queries)
       // isn't mistaken for a hang and aborted mid-work.
       req.onActivity?.();
 
+      if (firstEvent) { chatDiagnostic('first_stream_event'); firstEvent = false; }
+      if (firstText && event.type === 'text-delta') { chatDiagnostic('first_text'); firstText = false; }
       switch (event.type) {
+        case "error":
+          // Preserve the actual API error before result.response replaces it with NoOutputGeneratedError.
+          throw event.error;
         case "text-start":
           beginsTextBlock = true;
           break;
@@ -1096,7 +1156,9 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
               ws.send(JSON.stringify({
                 type: "ai_chunk",
                 is_notification: true,
-                notification_type: "file_stream",
+                notification_type: "document_stream",
+                tool_call_id: event.id,
+                file_name: (() => { try { return JSON.parse(st.accumulated.match(/"name"\s*:\s*("(?:[^"\\]|\\.)*")/)?.[1] || '"Document"'); } catch { return "Document"; } })(),
                 file_type: detectedType,
                 content_chunk: "",
                 is_complete: false,
@@ -1122,7 +1184,9 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
               ws.send(JSON.stringify({
                 type: "ai_chunk",
                 is_notification: true,
-                notification_type: "file_stream",
+                notification_type: "document_stream",
+                tool_call_id: event.id,
+                file_name: (() => { try { return JSON.parse(st.accumulated.match(/"name"\s*:\s*("(?:[^"\\]|\\.)*")/)?.[1] || '"Document"'); } catch { return "Document"; } })(),
                 file_type: toolFileType(st.toolName, st.accumulated),
                 content_chunk: "",
                 is_complete: false,
@@ -1132,7 +1196,9 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
             ws.send(JSON.stringify({
               type: "ai_chunk",
               is_notification: true,
-              notification_type: "file_stream",
+              notification_type: "document_stream",
+                tool_call_id: event.id,
+                file_name: (() => { try { return JSON.parse(st.accumulated.match(/"name"\s*:\s*("(?:[^"\\]|\\.)*")/)?.[1] || '"Document"'); } catch { return "Document"; } })(),
               file_type: toolFileType(st.toolName, st.accumulated),
               content_chunk: chunk,
               is_complete: false,
@@ -1187,7 +1253,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
 
             if (questions.length > 0) {
               flush();
-              askUserCardSent = true;
+              askUserCardSent = true; waitingForUserInput = true;
               ws.send(JSON.stringify({
                 type: "ai_chunk",
                 chunk: "",
@@ -1215,7 +1281,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
 
             if (title) {
               flush();
-              confirmCardSent = true;
+              confirmCardSent = true; waitingForUserInput = true;
               ws.send(JSON.stringify({
                 type: "ai_chunk",
                 chunk: "",
@@ -1255,6 +1321,23 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
             const v = e.output ?? e.result;
             return v && typeof v === "object" ? (v as Record<string, unknown>) : undefined;
           };
+          if (event.toolName === "loadSkill") {
+            const output = toolOutput(event);
+            if (output?.found === true && typeof output.id === "string") {
+              const detail = `Loaded skill: ${output.id.slice(0, 72)}`;
+              for (let i = activityTrail.length - 1; i >= 0; i--) {
+                if (activityTrail[i]!.tool === "loadSkill" && activityTrail[i]!.text === `Loading skill: ${output.id.slice(0, 72)}`) {
+                  activityTrail[i] = { ...activityTrail[i]!, text: detail };
+                  break;
+                }
+              }
+              ws.send(JSON.stringify({
+                type: "ai_chunk", chunk: "", is_final: false, is_notification: true,
+                notification_type: "tool_detail", function_name: "loadSkill",
+                tool_call_id: event.toolCallId, detail,
+              }));
+            }
+          }
           if (toolOutput(event)?.error || toolOutput(event)?.warning) {
             const detail = `${toolLabel(event.toolName)} incomplete — using available findings`;
             noteActivity(detail, event.toolName, true);
@@ -1263,6 +1346,17 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
               notification_type: "tool_detail", function_name: event.toolName,
               detail, warning: true,
             }));
+          }
+
+          // Persist inline artifacts through the existing JSON reference column.
+          const artifact = savedChatArtifact(event.toolName, toolOutput(event), event.toolCallId);
+          if (artifact) {
+            const at = pagePreviews.findIndex(p => p.kind === artifact.kind && p.id === artifact.id);
+            if (at >= 0) pagePreviews[at] = artifact; else pagePreviews.push(artifact);
+            if (checkpointPromise) await checkpointPromise.catch(() => {});
+            await persistAssistant(stripCitations(fullResponse));
+            flush();
+            ws.send(JSON.stringify({ type: "ai_chunk", is_notification: true, notification_type: "chat_artifact", tool_call_id: event.toolCallId, artifact }));
           }
 
           // The rendered page goes down the SAME channel as every other chat
@@ -1322,7 +1416,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
               );
               if (qList.length > 0) {
                 flush();
-                askUserCardSent = true;
+                askUserCardSent = true; waitingForUserInput = true;
                 ws.send(JSON.stringify({
                   type: "ai_chunk",
                   chunk: "",
@@ -1346,34 +1440,43 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
 
     // Did this pass end mid-promise? Only then is a second pass worth the tokens.
     const producedThisPass = fullResponse.slice(textBeforePass.length);
-    stalledMidPromise =
-      !abortController.signal.aborted &&
-      !sawToolCallThisPass &&
-      endsOnUnkeptPromise(producedThisPass);
+    const responseMessages = (await abortable(result.response, abortController.signal)).messages;
+    completedPassMessages.push(...responseMessages);
+    savedPassMessages = completedPassMessages;
+    stalledMidPromise = shouldContinuePromise(producedThisPass, {
+      aborted: abortController.signal.aborted,
+      waitingForUser: askUserCardSent || confirmCardSent,
+      closedByCard: turnClosedByCard,
+    });
     if (!stalledMidPromise || pass === 1) break;
 
     // Nudge: replay what it just said and tell it to act. Kept OUT of the stored
     // transcript — this is scaffolding for the model, not part of the conversation.
     nudgeUsed = true;
-    passMessages = [
-      ...passMessages,
-      { role: "assistant", content: producedThisPass },
-      { role: "user", content: CONTINUE_NUDGE },
-    ];
+    passMessages = continuationMessages(passMessages, responseMessages, CONTINUE_NUDGE);
    }
   } catch (err: any) {
     if (err?.name !== "AbortError") {
-      streamError = err;
+      chatDiagnostic('stream_error', {outcome:'error'});
+      streamError = new Error(providerErrorMessage(err, getProviderName(modelKey)));
     }
   } finally {
-    // Composio tools are stateless — no client cleanup needed
+    // Do not overlap a steered follow-up with a tool still changing app state.
+    chatStage('settling_tools');
+    await turnTools.drain();
   }
 
+  // Refresh the history checkpoint off the critical path, for the next turn.
+  void loadConversationHandoff(convId!, (evidence) => generateText({model, system:HANDOFF_INSTRUCTION, prompt:evidence,
+    maxOutputTokens:2200, maxRetries:1}).then(r => r.text))
+    .catch(error => console.warn('[stream-handler] handoff refresh failed:', (error as Error).message));
+
+  chatStage('persisting_response');
   // ── 7. Save assistant response ───────────────────────────────────────────────
   const cleanedResponse = stripCitations(fullResponse);
   const finalContent = streamError
     ? `${cleanedResponse}\n\n*Error: ${streamError.message}*`
-    : cleanedResponse || "*Generation stopped*";
+    : cleanedResponse || emptyTurnContent(waitingForUserInput, abortController.signal.aborted);
 
   // Capture the full AI SDK response sequence (intermediate assistant
   // text + tool-call + tool-result steps) so the next turn replays the
@@ -1383,19 +1486,12 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   let savedSteps: any[] | null = null;
   try {
     if (streamTextResult) {
-      const resp = await streamTextResult.response;
-      const rawMessages: any[] = (resp as any)?.messages ?? [];
+      const resp = await abortable(streamTextResult.response, abortController.signal);
+      const rawMessages: any[] = savedPassMessages ?? (resp as any)?.messages ?? [];
       // Hard cap to avoid storing megabytes of tool output. Per-result
       // tool-result content is already capped at 8KB upstream; cap whole
       // turn at ~200KB to keep history loads cheap.
-      const serialized = JSON.stringify(rawMessages);
-      if (serialized.length <= 200_000) {
-        savedSteps = rawMessages;
-      } else {
-        console.warn(
-          `[stream-handler] toolSteps too large (${serialized.length}B), dropping for conv ${convId}`
-        );
-      }
+      savedSteps = compactToolSteps(rawMessages);
     }
   } catch (err) {
     console.warn("[stream-handler] failed to capture response.messages:", (err as Error).message);
@@ -1429,6 +1525,8 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     is_final: true,
     conversation_id: convId,
     end_reason: endReason,
+    error_message: streamError?.message,
+    check_chatgpt_connection: !!streamError && modelKey.startsWith("chatgpt/"),
     projectId: projectId ?? null,
   }));
 

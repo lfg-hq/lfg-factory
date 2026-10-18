@@ -8,11 +8,11 @@ for name in os.listdir('/proc'):
  if not name.isdigit(): continue
  try:
   fields=open('/proc/'+name+'/stat').read().rsplit(')',1)[1].split()
-  records[int(name)]=(int(fields[1]),fields[19])
+  records[int(name)]=(int(fields[1]),fields[19],int(fields[2]))
  except (OSError,ValueError,IndexError): pass
-selected={root} if root in records else set()
+selected={pid for pid,(_,_,group) in records.items() if pid==root or group==root}
 while True:
- more={pid for pid,(parent,_) in records.items() if parent in selected}
+ more={pid for pid,(parent,_,_) in records.items() if parent in selected}
  if more <= selected: break
  selected |= more
 def same(pid):

@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { requireAuth } from "../../auth/middleware.ts";
 import { db } from "../../config/db.ts";
 import { epics } from "../../db/schema/epics.ts";
-import { projectTickets, ticketLogs, projectTodoLists } from "../../db/schema/tickets.ts";
+import { projectTickets, ticketLogs } from "../../db/schema/tickets.ts";
 import { projectFiles } from "../../db/schema/documents.ts";
 import { projects } from "../../db/schema/projects.ts";
 import { users } from "../../db/schema/users.ts";
@@ -73,14 +73,12 @@ epicsApi.get("/projects/:projectId/epics", async (c) => {
     .where(eq(epics.projectId, access.project.id))
     .orderBy(desc(epics.createdAt));
 
-  const workflow = { epicBuildsEnabled: !!access.project.epicBuildsEnabled, canBuildEpics: access.permissions.canManageTickets && access.permissions.canChat };
-  if (!rows.length) return c.json({ epics: [], ...workflow });
+  if (!rows.length) return c.json({ epics: [] });
 
   // Ticket counts per epic, so the list can show progress without N queries.
   const tickets = await db
     .select({
       epicId: projectTickets.epicId,
-      details: projectTickets.details,
       id: projectTickets.id,
       status: projectTickets.status,
       queueStatus: projectTickets.queueStatus,
@@ -95,10 +93,8 @@ epicsApi.get("/projects/:projectId/epics", async (c) => {
     .from(projectTickets)
     .where(inArray(projectTickets.epicId, rows.map((e) => e.id)));
 
-  const tasks=tickets.length ? await db.select().from(projectTodoLists).where(inArray(projectTodoLists.ticketId,tickets.map(t=>t.id))).orderBy(asc(projectTodoLists.order)) : [];
   const DONE = new Set(["done", "review", "archived"]);
   return c.json({
-    ...workflow,
     epics: await Promise.all(rows.map(async (e) => {
       const mine = tickets.filter((t) => t.epicId === e.id);
       const [docs, activity] = await Promise.all([
@@ -107,14 +103,11 @@ epicsApi.get("/projects/:projectId/epics", async (c) => {
           .from(ticketLogs).where(and(inArray(ticketLogs.ticketId,mine.map(t=>t.id)),inArray(ticketLogs.logType,['command','agent_progress','ai_response','cli_error'])))
           .orderBy(desc(ticketLogs.createdAt),desc(ticketLogs.id)).limit(8) : Promise.resolve([]),
       ]);
-      const single=mine.length===1 && (mine[0]!.details as any)?.epicBuildMode==='single-ticket';
       const recent=activity[0]?.message || '';
       const running=mine.some(t=>['queued','executing','stopping'].includes(t.queueStatus));
       const validating=running && /\[Validation\]|Validation check:|Running the saved ticket|Repairing runtime checks|Feature testing/i.test(recent);
       return {
         ...e,
-        buildMode:single?'single-ticket':'legacy',
-        implementationTasks:single?tasks.filter(t=>t.ticketId===mine[0]!.id):[],
         docs,
         tickets: mine.sort((a,b) => a.executionOrder - b.executionOrder || (a.ticketKey || "").localeCompare(b.ticketKey || "", undefined, {numeric:true})),
         activity: activity.reverse(),

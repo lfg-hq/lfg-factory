@@ -16,6 +16,7 @@
 
   let projectId = null;
   let pollTimer = null;
+  let stateVersion = 0; // Discard polls started before a newer action or live status.
   let current = null; // last known state
   let loadedOnce = false;
   let logText = ""; // accumulated setup log
@@ -690,7 +691,7 @@
 
     if (status === "running" && state.previewUrl) {
       currentView = "running";
-      setSub("Live" + (state.branch ? ` · ${state.branch}` : ""));
+      setSub("Live" + (state.branch ? ` · ${state.branch}` : "") + ((state.databaseIdentities || []).length ? " · DB: " + state.databaseIdentities.map(d => d.database).join(", ") : ""));
       syncBranchFromState(state); // reflect the actually-running branch
       renderRunningActions();
       // Multi-app: show the selected app's URL (falls back to the primary appUrl).
@@ -708,13 +709,12 @@
       syncBranchFromState(state);
       const eopts = branchOptions();
       const eBranchSel = branches.length > 1 ? `<select data-branch title="Run a branch" style="padding:6px 8px;border-radius:6px;font-size:12.5px;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);max-width:200px;">${eopts}</select>` : "";
-      // "Run default branch" (fast restart of main — the known-good state) is the
-      // clear way back after a ticket-branch attempt failed. Re-setup rebuilds from
-      // scratch; the dropdown re-runs a specific ticket.
+      // Rebuild the selected branch without silently falling back to main.
       const eActions = () => (branches.length > 1
         ? `<select data-branch title="Run a branch" style="padding:6px 8px;border-radius:6px;font-size:12.5px;background:var(--border-color,#2a2a2a);color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);max-width:200px;">${branchOptions()}</select>`
         : "")
-        + btn("Run default branch", { action: "rundefault", primary: true, icon: "fa-house" })
+        + btn("Update & rebuild", { action: "refreshbranch", primary: true, icon: "fa-rotate" })
+        + btn("Run default branch", { action: "rundefault", icon: "fa-house" })
         + btn("Re-setup", { action: "setup", icon: "fa-rotate" });
       renderActions(eActions());
       // Load branches so the selector can offer "Default branch" / other tickets.
@@ -766,10 +766,12 @@
 
   async function load() {
     if (!projectId) return;
+    const version = stateVersion;
     try {
       const r = await api("");
       if (!r.ok) throw new Error("state " + r.status);
       const state = await r.json();
+      if (version !== stateVersion) return;
       // Never SHRINK the log — WS may have appended newer lines than the DB copy.
       if (typeof state.log === "string" && state.log.length > logText.length) logText = state.log;
       if (state.manifest) manifest = state.manifest;
@@ -806,6 +808,7 @@
   }
 
   async function doSetup(rebuildManifest) {
+    stateVersion++;
     logText = ""; // fresh run → fresh log
     bTabs = []; bBase = null; bActive = null; // fresh browser on a new build
     render({ previewStatus: "detecting" });
@@ -826,7 +829,7 @@
     m.id = "preview-more-menu";
     m.style.cssText = "position:fixed;z-index:100;min-width:180px;background:var(--card-bg,#161616);border:1px solid var(--border-color,#333);border-radius:10px;box-shadow:0 12px 34px rgba(0,0,0,.45);padding:5px;display:flex;flex-direction:column;gap:2px;";
     const item = (label, act, icon, danger) => `<button data-menu="${act}" style="text-align:left;padding:9px 11px;border-radius:7px;cursor:pointer;font-size:12.5px;background:transparent;color:${danger ? "#f87171" : "var(--text-color,#e2e8f0)"};border:none;display:flex;align-items:center;gap:10px;"><i class="fas ${icon}" style="width:14px;text-align:center;opacity:.85;"></i>${label}</button>`;
-    m.innerHTML = item("App routes", "routes", "fa-diagram-project") + item("Env Profile", "profile", "fa-list-check") + item("Restart", "restart", "fa-power-off") + item("Rebuild sandbox", "rebuildvm", "fa-server") + item("Stop", "stop", "fa-stop", true);
+    m.innerHTML = item("App routes", "routes", "fa-diagram-project") + item("Env Profile", "profile", "fa-list-check") + item("Restart app", "restart", "fa-power-off") + item("Update & rebuild", "refreshbranch", "fa-rotate") + item("Clean build", "cleanbuild", "fa-hammer") + item("Rebuild sandbox", "rebuildvm", "fa-server") + item("Stop", "stop", "fa-stop", true);
     document.body.appendChild(m);
     const r = anchor.getBoundingClientRect();
     m.style.top = (r.bottom + 6) + "px";
@@ -836,7 +839,7 @@
     m.addEventListener("click", (e) => {
       const it = e.target.closest("[data-menu]"); if (!it) return;
       const a = it.getAttribute("data-menu"); m.remove();
-      if (a === "routes") showRoutes(anchor); else if (a === "profile") togglePlan(); else if (a === "restart") doRestart(); else if (a === "rebuildvm") doRebuildVm(); else if (a === "stop") doStop();
+      if (a === "routes") showRoutes(anchor); else if (a === "profile") togglePlan(); else if (a === "restart") doRestart(); else if (a === "refreshbranch") doRestart(true); else if (a === "cleanbuild") doRestart(true, true); else if (a === "rebuildvm") doRebuildVm(); else if (a === "stop") doStop();
     });
     setTimeout(() => document.addEventListener("click", function onDoc(ev) { if (!m.contains(ev.target) && ev.target !== anchor && !anchor.contains(ev.target)) { m.remove(); document.removeEventListener("click", onDoc); } }), 0);
   }
@@ -1048,6 +1051,7 @@
   }
 
   async function doStop() {
+    stateVersion++;
     setSub("Stopping…");
     try { await api("/stop", { method: "POST" }); } catch (_) {}
     load();
@@ -1055,8 +1059,9 @@
 
   // Restart = restart the app SERVER (fast: reuses install/build). Different from
   // "reload" (which just refreshes the current page in the in-app browser).
-  async function doRestart() {
-    // The API restarts by TICKET id, so map the selection back through the list
+  async function doRestart(refresh = false, cleanBuild = false) {
+    stateVersion++;
+    // A refresh resolves the selected TICKET id, so map it back through the list
     // (synthetic "branch:<name>" entries carry the ticket id when we could infer it).
     const entry = branches.find((b) => b.id === branchId);
     // An EPIC selection has no ticket — it carries a branch instead, which the server
@@ -1064,11 +1069,14 @@
     const isEpic = !!(entry && String(entry.id || "").indexOf("epic:") === 0);
     const ticketId = !isEpic && branchId && branchId !== "default" ? (entry ? entry.ticketId : branchId) : null;
     const branch = isEpic ? entry.branch : null;
-    setSub(ticketId || branch ? "Running branch…" : "Restarting the app…");
+    setSub(refresh ? "Updating and rebuilding the selected branch…" : "Restarting the current app…");
     logText = "";
     render({ previewStatus: "starting" });
     managePolling("starting");
-    try { await api("/restart", { method: "POST", body: JSON.stringify({ ticketId, branch, conversationId: window.currentConversationId || null }) }); }
+    try {
+      const response = await api("/restart", { method: "POST", body: JSON.stringify({ refresh, cleanBuild, ticketId, branch, conversationId: window.currentConversationId || null }) });
+      if (!response.ok) { const result = await response.json(); throw new Error(result.error || "Could not restart the app"); }
+    }
     catch (e) { render({ previewStatus: "error", error: "Restart failed: " + e.message }); }
   }
 
@@ -1079,6 +1087,7 @@
   async function doRebuildVm() {
     if (!confirm("Rebuild the preview sandbox?\n\nUse this when the app still loads but Logs / @preview say \"No VM found\" — it force-restarts the VM and re-runs the app.\n\nThe fresh VM may come back with an empty disk. If so the code is re-cloned and rebuilt automatically, but any DATABASE CONTENT not reproduced by your migrations/seed scripts will be gone. Takes a few minutes.")) return;
     setSub("Rebuilding the sandbox VM…");
+    stateVersion++;
     logText = "";
     render({ previewStatus: "starting" });
     managePolling("starting");
@@ -1157,7 +1166,7 @@
     if (currentView === "progress") {
       try { await api("/stop", { method: "POST" }); } catch (_) {}
     }
-    doRestart();
+    return doRestart(true);
   }
 
   function onActionClick(e) {
@@ -1188,7 +1197,8 @@
     else if (action === "prevmenu") togglePrevMenu(b);
     else if (action === "profile") togglePlan();
     else if (action === "restart") doRestart();
-    else if (action === "rundefault") { branchId = "default"; doRestart(); } // back to main (fast path)
+    else if (action === "refreshbranch") doRestart(true);
+    else if (action === "rundefault") doRunBranch("default");
     else if (action === "stop") doStop();
     else if (action === "togglelog") toggleLog();
     else if (action === "shellrun") runShell();
@@ -1397,6 +1407,7 @@
   window.PreviewTab = {
     onStatus(data) {
       if (forOther(data)) return;
+      stateVersion++;
       const nextStatus = data.status || (current && current.previewStatus) || "idle";
       const nextView = viewOf(nextStatus);
       // Terminal transitions (→ running/error/stopped) need authoritative state.

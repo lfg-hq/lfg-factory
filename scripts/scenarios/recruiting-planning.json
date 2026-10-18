@@ -1,0 +1,30 @@
+{
+  "name": "Recruiting requirements to draft tickets",
+  "projectId": "0df5e7e4-5cb5-4f0e-b284-ac1df5a7f04e",
+  "turns": [
+    "I want to plan a role-agnostic AI phone-screening app for recruiters in India. A recruiter provides a job description and shares an application link. Candidates upload their own resumes and explicitly agree to an AI screening call. Questions use both the JD and resume. Help brainstorm the first version and identify important unknowns. Discuss in chat first; do not save documents or build yet.",
+    "For the first version: English only; candidates upload their own resumes, confirm their phone number and explicitly consent to an AI call. Use Exotel for telephony. Recruiters receive evidence-based summaries and make hiring decisions themselves; no automatic rejection. Research material feasibility questions if needed, then give me a short requirements overview for confirmation. Do not build or make real calls.",
+    "Confirm the requirements overview only insofar as it matches these requirements: candidate self-upload via a role link, JD-and-resume-driven English screening, explicit call consent, Exotel, and recruiter-reviewed summaries. Save a separate test requirements document and epic using the test-run label given earlier. Preserve all existing documents and tickets. If your proposal changes this scope, explain the difference before saving. This approves documentation, not implementation.",
+    "Now prepare and save the technical analysis for that test scope. Recommend a practical architecture and explain material tradeoffs using primary sources where needed. You may choose routine implementation details; ask about material unresolved choices. Include integration prerequisites and verification criteria. Do not create code, deploy, start a build or place real calls.",
+    "Create draft, unscheduled tickets for the documented test scope, with acceptance criteria, source-document links and dependencies. Do not execute or schedule them.",
+    "Give me a final review of what you actually created: document names and IDs, epic and ticket keys, dependencies, open decisions and what remains unverified. Distinguish a proposed ticket plan from saved tickets. Stop here; do not start implementation."
+  ],
+  "answers": [
+    {
+      "pattern": "language",
+      "answer": "English only for the first version."
+    },
+    {
+      "pattern": "consent|authoriz.*call|upload|candidate.*apply",
+      "answer": "Candidates upload their own resumes through a role-specific link, confirm their phone number and explicitly agree to an AI screening call. Do not place real calls during this test."
+    },
+    {
+      "pattern": "telephony|calling provider|exotel",
+      "answer": "Use Exotel. Document required credentials without requesting or creating secrets. Do not place real calls."
+    },
+    {
+      "pattern": "which roles|what roles|role.*screen",
+      "answer": "Support any role using the JD and resume; recruiter makes the final hiring decision."
+    }
+  ]
+}

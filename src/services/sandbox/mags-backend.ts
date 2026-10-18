@@ -18,6 +18,7 @@
 
 // @ts-ignore — CJS module, no bundled types
 import MagsClient from "@magpiecloud/mags";
+import { lookupJob } from "./job-lookup.ts";
 
 export interface MagsExecResult {
   exitCode: number;
@@ -161,7 +162,7 @@ export async function newWorkspaceV2(
     }
     await sleep(1000);
   }
-  throw new Error(`VM '${name}' did not start within 60s (polls=${polls})`);
+  throw new Error(`VM '${name}' creation is unresolved after 60s (job ${requestId}, polls=${polls}). Check this job before retrying; a timeout does not mean creation stopped.`);
 }
 
 /**
@@ -238,14 +239,7 @@ export async function findJob(nameOrId: string): Promise<{
   workspaceId: string;
   status: string;
 } | null> {
-  const client = getClient();
-  const job = await client.findJob(nameOrId);
-  if (!job) return null;
-  return {
-    jobId: (job.request_id ?? job.id ?? "") as string,
-    workspaceId: (job.workspace_id ?? nameOrId) as string,
-    status: job.status as string,
-  };
+  return lookupJob(nameOrId, (page) => magsApi("GET", `/api/v2/mags-jobs?page=${page}&page_size=50`));
 }
 
 /**
@@ -262,6 +256,7 @@ async function magsApi(method: string, path: string, body?: unknown): Promise<an
   const base = (process.env.MAGS_API_URL || "https://api.magpiecloud.com").replace(/\/+$/, "");
   const resp = await fetch(`${base}${path}`, {
     method,
+    signal: AbortSignal.timeout(30_000),
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
@@ -324,8 +319,8 @@ export async function setStableUrl(
  * Stop a workspace VM.
  */
 export async function stopWorkspace(nameOrId: string): Promise<void> {
-  const client = getClient();
-  await client.stop(nameOrId);
+  const jobId = await resolveJobId(nameOrId);
+  await magsApi("POST", `/api/v2/mags-jobs/${encodeURIComponent(jobId)}/stop`);
 }
 
 /**
@@ -337,9 +332,7 @@ export async function stopWorkspace(nameOrId: string): Promise<void> {
  */
 export async function setNoSleep(nameOrId: string, noSleep: boolean): Promise<void> {
   const client = getClient();
-  const jobId = nameOrId.includes("-") && nameOrId.length >= 32
-    ? nameOrId
-    : (await findJob(nameOrId))?.jobId ?? nameOrId;
+  const jobId = await resolveJobId(nameOrId);
   await client.updateJob(jobId, { noSleep });
 }
 
@@ -383,12 +376,18 @@ export async function getJobStatus(nameOrId: string): Promise<{
   [key: string]: unknown;
 }> {
   const client = getClient();
-  const jobId = nameOrId.includes("-") && nameOrId.length >= 32
-    ? nameOrId
-    : (await findJob(nameOrId))?.jobId ?? nameOrId;
+  const jobId = await resolveJobId(nameOrId);
   return client.status(jobId);
 }
 
 function sleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+/** Workspace names such as pv-<hex> are not request UUIDs. */
+async function resolveJobId(nameOrId: string): Promise<string> {
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(nameOrId)) return nameOrId;
+  const job = await findJob(nameOrId);
+  if (!job) throw new Error(`No sandbox job found for ${nameOrId}`);
+  return job.jobId;
 }

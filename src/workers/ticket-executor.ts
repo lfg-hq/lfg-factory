@@ -1,3 +1,6 @@
+import { withTicketOperation, updateTicketOperation, publishTicketOperation } from '../services/ticket-operations.ts';
+import { selectTicketContextDocuments, ticketDocumentInstructions } from "../services/ticket-context-documents.ts";
+import {emptyRepoBootstrap} from '../services/empty-repo-bootstrap.ts';
 import { openTicketWorkspace, preserveTicketWorkspaceBeforeSleep, latestTicketWorkspace } from '../services/ticket-workspace.ts';
 import { setBuildOrigin, reportBuildStatus } from "../services/build-reporting.ts";
 import { ticketStopVerificationScript, confirmTicketStopped } from "../services/ticket-stop-verification.ts";
@@ -8,6 +11,7 @@ import { recoverSandboxStorage, destroyWorkspaceAfterStop } from "../services/sa
 import { runGitSetup, refreshOriginCommand } from "../services/build-preflight.ts";
 import { TICKET_RUNTIME_INSTRUCTION } from "../services/ticket-runtime.ts";
 import { withTicketUsage } from "../services/usage-run.ts";
+import { ENGINEERING_CONTRACT } from '../ai/prompts/engineering-contract.ts';
 import { currentUsage } from "../ai/usage-context.ts";
 /**
  * Ticket Executor Worker
@@ -60,8 +64,11 @@ import { resolveLlmGrants, NO_LLM_ACCESS_MESSAGE } from "../services/llm-access.
 import {
   buildBuilderPrompt,
   buildTicketChatPrompt,
+  TICKET_FOLLOWUP_TASKS,
+  TICKET_FOLLOWUP_SCOPE,
 } from "../ai/prompts/builder.ts";
 import { buildApiBuilderPrompt } from "../ai/prompts/builder-api.ts";
+import { shellQuote } from '../services/preview-plan.ts';
 import { createBuilderTools } from "../ai/tools/builder-tools.ts";
 import { getModel, getProviderName, getProviderModel, DEFAULT_MODEL_KEY, type ProviderName } from "../ai/provider.ts";
 import { modelSelections } from "../db/schema/chat.ts";
@@ -178,7 +185,6 @@ import {
   topDiskConsumers,
   planWorktreeEviction,
 } from "../services/shared-lanes.ts";
-import { generateTicketDemo } from "../services/ticket-demo.ts";
 import { runTicketQa } from "../services/qa-agent.ts";
 import { matchKnowledgeForPrompt } from "../ai/knowledge/matcher.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
@@ -224,9 +230,7 @@ async function seedTasksIfEmpty(
       .where(eq(projectTodoLists.ticketId, ticket.id));
     if (existing.length > 0) return; // agent/user already created tasks
 
-    const details=ticket.details as {epicBuildMode?:string;implementationPlan?:unknown} | undefined;
-    let descriptions: string[] = details?.epicBuildMode==='single-ticket' && Array.isArray(details.implementationPlan)
-      ? details.implementationPlan.filter((s):s is string=>typeof s==='string' && !!s.trim()) : [];
+    let descriptions: string[] = [];
 
     // Primary: ask the user's model to decompose the ticket. Use plain text +
     // JSON parse (not generateObject) so weak models (Kimi/DeepSeek/GLM) that
@@ -670,14 +674,14 @@ async function resolveTicketAddenda(ticketId: string, pendingIds: string[]): Pro
 }
 
 /** The project's mandatory directives (app_profile) as a prompt block, or "". */
-async function directivesBlock(projectId: string, branch = "default"): Promise<string> {
+async function directivesBlock(projectId: string, branch = "default", followup = false): Promise<string> {
   let out = "";
   try {
     const { loadAppProfile } = await import("../services/app-profile.ts");
     const profiles = await Promise.all([...new Set([branch,"default"])].map(b=>loadAppProfile(projectId,b)));
     const d = [...new Set(profiles.flatMap(p=>p?.profile.directives ?? []))];
     if (d.length) {
-      out += `\n## MANDATORY DIRECTIVES — always enforce (fixing a violation is part of the task)\n${d.map((x, i) => `${i + 1}. ${x}`).join("\n")}\n`;
+      out += `\n## ${followup ? 'Project constraints for the affected code — preserve these while making the requested change; report unrelated existing violations separately' : 'MANDATORY DIRECTIVES — always enforce (fixing a violation is part of the task)'}\n${d.map((x, i) => `${i + 1}. ${x}`).join("\n")}\n`;
     }
   } catch { /* profile is optional */ }
   try {
@@ -690,60 +694,41 @@ async function directivesBlock(projectId: string, branch = "default"): Promise<s
   return out;
 }
 
-/**
- * Put any project document the ticket REFERENCES into the build sandbox.
- *
- * The product agent writes "Approved design preview: document <uuid>" into the ticket,
- * but the build prompt only ever carried the ticket's own text — the document lives in
- * the LFG database, not the repo, so that id was a dead reference and the agent had to
- * reinvent the design from prose. Now the file is written into the sandbox (under the
- * already-gitignored .lfg/) and the prompt points at the path.
- */
+function ticketDocumentIds(details:unknown):string[] {
+  const ids=(details as {sourceDocumentIds?:unknown}|null)?.sourceDocumentIds;
+  return Array.isArray(ids) ? ids.filter((id):id is string=>typeof id==='string') : [];
+}
+
+/** Copy the saved requirements into every builder's checkout, not just UUIDs in prose. */
 async function materializeTicketDocs(args: {
-  projectId: string;
-  workspaceId: string;
-  projectDir: string;
-  text: string;
+  projectId: string; workspaceId: string; projectDir: string; text: string;
+  epicId?: string | null; sourceDocumentId?: string | null; sourceDocumentIds?: string[];
 }): Promise<Array<{ name: string; fileType: string; path: string }>> {
-  const ids = [...new Set(
-    (args.text.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) ?? [])
-      .map((x) => x.toLowerCase())
-  )];
-  if (!ids.length) return [];
-
-  try {
-    const { projectFiles } = await import("../db/schema/documents.ts");
-    const { getContent } = await import("../services/s3.ts");
-    const rows = await db
-      .select()
-      .from(projectFiles)
-      .where(and(eq(projectFiles.projectId, args.projectId), inArray(projectFiles.id, ids)));
-    if (!rows.length) return [];
-
-    const out: Array<{ name: string; fileType: string; path: string }> = [];
-    for (const f of rows) {
-      const content = await getContent(f.s3Key, f.content).catch(() => "");
-      if (!content || content.length > 400_000) continue;
-      const ext = f.fileType === "page_preview" ? "html" : "md";
-      const slug = (f.name || f.id).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) || f.id;
-      const path = `${args.projectDir}/.lfg/design/${slug}-${f.id}.${ext}`;
-      const b64 = Buffer.from(content).toString("base64");
-      const script = `mkdir -p ${args.projectDir}/.lfg/design && echo ${b64} | base64 -d > ${path} && wc -c < ${path}`;
-      const scriptB64 = Buffer.from(script).toString("base64");
-      const r = await execOnWorkspace(args.workspaceId, `echo ${scriptB64} | base64 -d | sh`, { timeout: 60_000 })
-        .catch((e) => ({ output: `EXEC_FAILED: ${(e as Error).message}`, exitCode: 1 }));
-      if ((r.exitCode ?? 0) === 0) {
-        out.push({ name: f.name, fileType: f.fileType, path });
-        console.log(`[ticket-executor] materialized doc "${f.name}" (${f.fileType}) → ${path}`);
-      } else {
-        console.warn(`[ticket-executor] could not write ${path}: ${(r.output || "").slice(0, 160)}`);
-      }
-    }
-    return out;
-  } catch (e) {
-    console.warn("[ticket-executor] materializeTicketDocs failed:", (e as Error).message);
-    return [];
+  const { projectFiles } = await import("../db/schema/documents.ts");
+  const { epicDocuments } = await import("../db/schema/epic-documents.ts");
+  const { getContent } = await import("../services/s3.ts");
+  const rows = await db.select().from(projectFiles).where(eq(projectFiles.projectId, args.projectId));
+  const links = args.epicId ? await db.select({fileId:epicDocuments.fileId}).from(epicDocuments).where(eq(epicDocuments.epicId,args.epicId)) : [];
+  const selected = selectTicketContextDocuments(rows, {...args,linkedIds:links.map(row=>row.fileId)});
+  const out: Array<{ name: string; fileType: string; path: string }> = [];
+  const quote = (value:string) => "'" + value.replace(/'/g, "'\\''") + "'";
+  for (const f of selected) {
+    const content = await getContent(f.s3Key, f.content);
+    if (!content?.trim() || content.length > 400_000) throw new Error(`Cannot prepare build context: document "${f.name}" is empty, unreadable or exceeds 400,000 characters.`);
+    const ext = f.fileType === "page_preview" ? "html" : "md";
+    const path = `${args.projectDir}/.lfg/context/${f.id}.${ext}`;
+    const b64 = Buffer.from(content).toString("base64");
+    const script = `mkdir -p ${quote(args.projectDir+'/.lfg/context')} && echo ${b64} | base64 -d > ${quote(path)}`;
+    const r = await execOnWorkspace(args.workspaceId, `echo ${Buffer.from(script).toString("base64")} | base64 -d | sh`, {timeout:60_000});
+    if (r.exitCode !== 0) throw new Error(`Could not copy build context document "${f.name}" into the workspace.`);
+    out.push({name:f.name,fileType:f.fileType,path});
   }
+  const indexPath = `${args.projectDir}/.lfg/context/README.md`;
+  const indexContent = ticketDocumentInstructions(out);
+  const indexScript = `mkdir -p ${quote(args.projectDir+'/.lfg/context')} && echo ${Buffer.from(indexContent).toString("base64")} | base64 -d > ${quote(indexPath)}`;
+  const written = await execOnWorkspace(args.workspaceId, `echo ${Buffer.from(indexScript).toString("base64")} | base64 -d | sh`, {timeout:60_000});
+  if (written.exitCode !== 0) throw new Error("Could not write the build document context index.");
+  return out;
 }
 
 function buildPiTicketPrompt(args: {
@@ -769,18 +754,7 @@ function buildPiTicketPrompt(args: {
     ? `\n## Attached screenshots\nThe user attached ${args.attachments.length} image(s) to this ticket — the description above reflects them. If you can view images, fetch them:\n` +
       args.attachments.map((a) => `- ${a.name || "image"}: ${a.url}`).join("\n") + "\n"
     : "";
-  // An approved design preview is a rendered HTML page sitting in the sandbox. Say so
-  // plainly: the agent should OPEN it, not guess from the prose description.
-  const refBlock = (args.designRefs && args.designRefs.length)
-    ? `\n## Design reference — READ THIS FIRST\n` +
-      args.designRefs.map((d) => {
-        const what = d.fileType === "page_preview"
-          ? "the APPROVED page design, already signed off by the user"
-          : `a project document (${d.fileType})`;
-        return `- \`${d.path}\` — ${what}: "${d.name}"`;
-      }).join("\n") +
-      `\nOpen these before writing any code. Where a page design is given, match its structure, copy, spacing and colours — it is what the user approved, not a suggestion. Port it into this project's own components and styling conventions rather than pasting the file in.\n`
-    : "";
+  const refBlock = ticketDocumentInstructions(args.designRefs ?? []);
   const port = args.runInfo?.port ?? args.techStack?.port ?? 8080;
   const runBlock = args.runInfo && (args.runInfo.installCmd || args.runInfo.buildCmd || args.runInfo.runCmd)
     ? `\n## How to build & run this project\n` +
@@ -799,6 +773,7 @@ function buildPiTicketPrompt(args: {
     ? `Language: ${args.techStack.language ?? "?"}, Framework: ${args.techStack.framework ?? "?"}, Package manager: ${args.techStack.packageManager ?? "?"}, Dev port: ${port}`
     : "Use the stack already present in the project.";
   return `You are a senior software engineer implementing a ticket.
+${ENGINEERING_CONTRACT}
 
 ## Project setup
 ${setup}
@@ -1076,6 +1051,8 @@ export async function startTicketWorker() {
   // Recover tickets that completed execution but never got pushed to git.
   // These have status='in_progress', queueStatus='none', a sandbox, but no githubCommitSha.
   // This happens when the server restarts between code completion and git push.
+  const operationRecoveryBefore=Date.now();
+  void import('../services/ticket-operations.ts').then(m=>m.recoverTicketOperations(operationRecoveryBefore)).catch(console.error);
   setTimeout(() => recoverUnpushedTickets(), 5_000);
 
   // Resume multi-ticket build runs that a restart or deploy interrupted. Runs live
@@ -1227,7 +1204,7 @@ export async function startTicketWorker() {
   });
 
   bus.on("ticket.chat_message", async (event) => {
-    const { ticketId, message, sender, actorId } = event.payload;
+    const { ticketId, message, sender, actorId, operationId } = event.payload;
     // ONE TURN AT A TIME. Builds have had a concurrency guard forever; chat had none,
     // so two messages sent back to back started two agents in the SAME sandbox on the
     // same branch — interleaved edits and two commits for one request. The user-facing
@@ -1236,14 +1213,14 @@ export async function startTicketWorker() {
     try {
       await runChatTurn(ticketId, async () => {
         await broadcastChatState(ticketId, true);
-        try {
-          await executeTicketChat(ticketId, message, sender, actorId);
-        } finally {
-          await broadcastChatState(ticketId, false);
-        }
+        await withTicketOperation(operationId, () => executeTicketChat(ticketId, message, sender, actorId));
       });
     } catch (err) {
       console.error(`[ticket-executor] Chat failed for ticket ${ticketId}:`, err);
+    } finally {
+      // Publish after releasing the turn lock; a subsequent read must agree with
+      // this event, and an already queued follow-up must remain visibly active.
+      await broadcastChatState(ticketId, isChatTurnActive(ticketId));
     }
   });
 
@@ -1363,7 +1340,7 @@ async function executeTicketInternal(ticketId: string, actorId?: string): Promis
   // Seed subtasks up-front (idempotent) so the Tasks tab is populated the moment
   // the build starts, even if the agent skips createTasks or the build fails.
   await seedTasksIfEmpty(ticket, ownerId);
-  if((ticket.details as any)?.epicBuildMode!=='single-ticket')await markBuildTasksStarted(ticketId);
+  await markBuildTasksStarted(ticketId);
 
   // Load tasks
   const tasks = await db
@@ -1526,6 +1503,7 @@ fi
 # Ensure the ANCHOR branch exists (the epic's branch, or the legacy global one).
 # It is cut from the epic's recorded base — normally the repo default branch — so
 # a new epic starts from approved code, never from another epic's pending work.
+${emptyRepoBootstrap(anchorBase)}
 if ! git rev-parse --verify origin/${anchorBranch} 2>/dev/null; then
     echo "CREATING_ANCHOR_BRANCH"
     ANCHOR_BASE="${anchorBase}"
@@ -1790,6 +1768,12 @@ Before implementing, fix the git issue:
     prompt += `\n\nPROJECT PATH: ${WORKING_DIR}/${projectDirName}\n`;
     if (gitErrorContext) prompt += gitErrorContext;
   }
+
+  prompt += ticketDocumentInstructions(await materializeTicketDocs({
+    projectId:project.id,workspaceId,projectDir:`${WORKING_DIR}/${projectDirName}`,
+    epicId:ticket.epicId,sourceDocumentId:ticket.sourceDocumentId,sourceDocumentIds:ticketDocumentIds(ticket.details),
+    text:[ticket.name,ticket.description,ticket.notes].join('\n'),
+  }));
 
   // LFG env vars passed to the runner script
   const envVars: Record<string, string> = {
@@ -2133,8 +2117,7 @@ git remote set-url origin "${auth.authUrl}" 2>/dev/null || true
 git fetch --prune origin 2>&1 | tail -1
 if [ -e "${WORKING_DIR}/${dir}/.git" ]; then
     cd ${WORKING_DIR}/${dir} || { echo WT_FAILED; exit 1; }
-    git checkout -B ${featureBranch} origin/${featureBranch} 2>/dev/null || git checkout ${featureBranch} 2>/dev/null || true
-    git reset --hard origin/${featureBranch} 2>/dev/null || true
+    test "$(git symbolic-ref --short HEAD)" = ${shellQuote(featureBranch)} || { echo WT_FAILED; exit 1; }
 else
     git worktree prune 2>/dev/null || true
     if git rev-parse --verify origin/${featureBranch} 2>/dev/null; then
@@ -2288,6 +2271,7 @@ async function buildChatContext(
     notes?: string | null;
     githubBranch?: string | null;
     githubCommitSha?: string | null;
+    epicId?: string | null;
   },
   projectId: string,
   currentMessage: string,
@@ -2309,9 +2293,12 @@ async function buildChatContext(
   const convoBlock = convo.length
     ? `\n## Conversation so far (oldest first)\n${convo.map((r) => `${speaker(r.t)}: ${(r.m ?? "").slice(0, 800)}`).join("\n")}\n`
     : "";
-  const dirBlock = await directivesBlock(projectId);
+  const dirBlock = await directivesBlock(projectId, (await resolveTicketAnchor(ticket)).anchorBranch, true);
   const addBlock = (await ticketAddendaContext(ticket.id)).block; // pending addenda + history
-  return `${acBlock}${notesBlock}${statusBlock}${convoBlock}${addBlock}${dirBlock}`;
+  const tasks = await db.select({id:projectTodoLists.id,description:projectTodoLists.description,status:projectTodoLists.status})
+    .from(projectTodoLists).where(eq(projectTodoLists.ticketId,ticket.id)).orderBy(projectTodoLists.order);
+  const taskBlock = `\n## Existing ticket tasks (preserve completed history)\n${JSON.stringify(tasks)}\n`;
+  return `${acBlock}${notesBlock}${statusBlock}${convoBlock}${addBlock}${dirBlock}${taskBlock}`;
 }
 
 /**
@@ -2319,7 +2306,7 @@ async function buildChatContext(
  * what happens. Only a turn that actually changed files commits/pushes/merges and
  * moves the ticket; an answer or a question is just logged (a question as a tagged
  * `question` row, so the UI shows it as ACTION REQUIRED), and any stray edits an
- * answer left behind are reverted so Q&A never leaks into the branch.
+ * answer left behind are preserved without publishing or deleting earlier work.
  */
 async function concludeChatTurn(params: {
   actorId?: string;
@@ -2334,10 +2321,16 @@ async function concludeChatTurn(params: {
   /** The agent's final message, when this path has it in hand (Pi's summary — the
    *  raw tail is JSONL, so the human text has to be extracted before it gets here). */
   replyText?: string;
+  baselineProblem?: string;
 }): Promise<void> {
   const { ticketId, ownerId, project, ticket, workspaceId, projectPath, message, gitUserId, replyText } = params;
 
   const outcome = await resolveTurnOutcome({ ticketId, workspaceId, projectDir: projectPath, replyText });
+
+  if (outcome.mode === "change" && params.baselineProblem) {
+    await addLog(ticketId, `Changes were preserved without publication because the ticket baseline is not ready: ${params.baselineProblem}`, "cli_error", ownerId);
+    return;
+  }
 
   if (outcome.mode === "change") {
     // Strip the mode markers out of the summary — they're protocol, not prose.
@@ -2346,15 +2339,19 @@ async function concludeChatTurn(params: {
     return;
   }
 
-  if (outcome.revertedEdits) {
-    await addLog(ticketId, "Discarded the edits made while answering — nothing was committed to the branch.", "command", ownerId);
+  if (outcome.preservedEdits) {
+    await addLog(ticketId, "Existing working-tree changes were preserved. This answer did not commit or publish them.", "command", ownerId);
   }
 
   // The streamed output already surfaced the reply (and typed it correctly, question
   // included) — don't post it twice.
+  let text = outcome.reply.text.trim();
+  if(!text && outcome.repliedInStream) {
+    const [reply]=await db.select().from(ticketLogs).where(and(eq(ticketLogs.ticketId,ticketId),inArray(ticketLogs.logType,['ai_response','question']))).orderBy(desc(ticketLogs.createdAt)).limit(1);
+    text=reply?.command || reply?.output || '';
+  }
+  await updateTicketOperation(outcome.mode === 'question' ? 'needs_input' : 'completed', text || (outcome.mode === 'question' ? 'The ticket needs more information; open its question.' : 'Ticket investigation completed; no source changes were needed.'));
   if (outcome.repliedInStream) return;
-
-  const text = outcome.reply.text.trim();
   if (outcome.mode === "question") {
     await addLog(
       ticketId,
@@ -2437,11 +2434,12 @@ async function executeTicketChatInternal(
       (reason) => { void addLog(ticketId, `Waiting for a slot in the preview VM — ${reason}.`, "command", ownerId).catch(() => {}); },
     );
     if (d.ok) chatLane = d;
+    else throw new Error("The shared sandbox is busy: " + d.reason);
   }
 
   try {
   const chatSb = await ensureIsolatedChatSandbox(
-    { id: ticket.id, projectId: ticket.projectId, githubBranch: ticket.githubBranch },
+    { id: ticket.id, projectId: ticket.projectId, githubBranch: ticket.githubBranch, epicId: ticket.epicId },
     project!, ownerId, gitUserId, usingOwnCollaboratorToken,
     chatPlacement.shared ? chatPlacement.workspaceId : null,
   );
@@ -2471,10 +2469,41 @@ async function executeTicketChatInternal(
   const projectPath = `${WORKING_DIR}/${projectDirName}`;
   let sessionId = sandbox.cliSessionId ?? undefined;
 
+  // An old ticket VM can predate repairs already merged by other tickets. Refresh
+  // before implementation so a small follow-up does not rebuild obsolete code.
+  const { anchorBranch: followupAnchor } = await resolveTicketAnchor(ticket);
+  let baselineProblem = '';
+  try {
+    const followupAuth = await resolveRepoAuth(project!, gitUserId);
+    if (!followupAuth) throw new Error('Repository access is required to refresh the ticket baseline. Existing work is preserved.');
+    await addLog(ticketId, `Refreshing ticket from ${followupAnchor}…`, 'command', ownerId);
+    const { ticketFollowupBaselineScript } = await import('../services/ticket-followup-baseline.ts');
+    const baseline = await execOnWorkspace(workspaceId, ticketFollowupBaselineScript(projectPath, ticket.githubBranch ?? ticketBranchName(ticket), followupAnchor, followupAuth.authUrl), {timeout:120_000});
+    if (baseline.exitCode !== 0) {
+      const reason = baseline.output.includes('BASELINE_LOCAL_EDITS') ? 'The epic has newer code and this ticket has saved uncommitted edits. Reconcile those edits before starting another repair.'
+        : baseline.output.includes('BASELINE_CONFLICT') ? 'The ticket conflicts with the latest epic. Existing work is preserved. Retry integration of the published ticket branch before starting another implementation.'
+        : 'Could not fetch the latest epic baseline. Check repository access; existing work is preserved.';
+      throw new Error(reason);
+    }
+    if (baseline.output.includes('BASELINE_UPDATED')) {
+      sessionId = undefined; // A resumed agent must not rely on obsolete checkout state.
+      await addLog(ticketId, 'Ticket checkout updated to include the latest epic code.', 'command', ownerId);
+    }
+  } catch (error) {
+    // Keep questions and diagnosis available, but never silently publish another
+    // implementation based on a checkout we could not synchronize.
+    baselineProblem = (error as Error).message;
+    sessionId = undefined;
+    await addLog(ticketId, `Baseline refresh needs attention: ${baselineProblem} This turn can inspect and answer; publication is paused.`, 'command', ownerId);
+  }
+
   // Shared context for BOTH agent paths (Pi and Claude Code): the requirements, what
   // was already built, and the conversation so far — so a follow-up isn't blind and a
   // question can be answered from what the ticket actually is.
-  const chatContext = await buildChatContext(ticket, project!.id, message);
+  const chatContext = (baselineProblem ? `## Current checkout limitation\n${baselineProblem}\nThis turn is read-only: inspect and answer the request, state the concrete synchronization problem if implementation is requested, and preserve all existing edits. Do not implement or publish code on this stale baseline.\n\n` : '') + await buildChatContext(ticket, project!.id, message) + ticketDocumentInstructions(await materializeTicketDocs({
+    projectId:project!.id,workspaceId,projectDir:projectPath,epicId:ticket.epicId,sourceDocumentId:ticket.sourceDocumentId,sourceDocumentIds:ticketDocumentIds(ticket.details),
+    text:[ticket.name,ticket.description,ticket.notes,message].join('\n'),
+  }));
 
   // ── Route to Pi for non-Claude models (mirror the BUILD path) ───────────
   // The chat used to be hardcoded to Claude Code — a DeepSeek/OpenAI/GLM user
@@ -2550,10 +2579,15 @@ ${message}
 
 ${TICKET_CHAT_MODE_CONTRACT}
 
+${TICKET_FOLLOWUP_TASKS}
+
+${TICKET_FOLLOWUP_SCOPE}
+${ENGINEERING_CONTRACT}
+
 ## Working rules
 - The repo is already cloned and set up at /data/${projectDirName}; explore it and reuse existing patterns.
 - Honor the acceptance criteria, notes, and MANDATORY DIRECTIVES above; do NOT regress work already done.
-- Run and repair the app in this sandbox first. Do not commit, push or switch branches; the server commits the accumulated changes together only after runtime checks pass. Exclude secrets and generated files.
+- Do not commit, push or switch branches; the server handles publication and configured validation stages. Exclude secrets and generated files.
 - In change mode: keep the change focused, and make sure the project still builds/compiles.`;
     try {
       const webhookReachable = !!cliApiKey && !/localhost|127\.0\.0\.1|\/\/0\.0\.0\.0/.test(CALLBACK_BASE_URL);
@@ -2591,7 +2625,7 @@ ${TICKET_CHAT_MODE_CONTRACT}
         // gating the commit on it turned every question into a commit + merge + "✅
         // Update applied". The declared mode plus the actual working tree decide.
         await concludeChatTurn({
-          ticketId, ownerId, actorId: buildLlm.actorId, project: project!, ticket, workspaceId, projectPath, message, gitUserId,
+          ticketId, ownerId, actorId: buildLlm.actorId, project: project!, ticket, workspaceId, projectPath, message, gitUserId, baselineProblem,
           replyText: piWorkSummary(piResult.tail), // the agent's prose, pulled out of Pi's JSONL
         });
       }
@@ -2735,7 +2769,7 @@ ${TICKET_CHAT_MODE_CONTRACT}
   // shared finalize (commit → push → merge → In Review → "Update applied").
   if (waitResult.status === "complete") {
     await concludeChatTurn({
-      ticketId, ownerId, actorId: buildLlm.actorId, project: project!, ticket, workspaceId, projectPath, message, gitUserId,
+      ticketId, ownerId, actorId: buildLlm.actorId, project: project!, ticket, workspaceId, projectPath, message, gitUserId, baselineProblem,
     });
   }
 
@@ -2791,6 +2825,8 @@ async function finalizeTicketChat(
   }
   // Commit summary from the user's instruction (first line, trimmed).
   const summary = (message.split("\n")[0] || "update").trim().slice(0, 72);
+  let publishedSha = '';
+  let integrated = false;
   try {
     await addLog(ticketId, "Committing chat changes…", "command", ownerId);
     const { sha, documentation } = await commitAndPush({
@@ -2800,6 +2836,7 @@ async function finalizeTicketChat(
       featureBranch,
       repoUrl: auth.repoUrl, githubToken: auth.token, tokenUser: auth.tokenUser,
     });
+    publishedSha = sha;
     await db.update(projectTickets).set({ githubBranch: featureBranch, githubCommitSha: sha, githubMergeStatus: "pushed", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
     await addLog(ticketId, `Committed + pushed ${sha.slice(0, 7)} to ${featureBranch}.`, "command", ownerId);
 
@@ -2812,6 +2849,7 @@ async function finalizeTicketChat(
         repoUrl: auth.repoUrl, githubToken: auth.token, tokenUser: auth.tokenUser,
         targetBranch: anchorBranch, baseBranch: anchorBase,
       });
+      integrated = true;
       mergedOk = true;
       await db.update(projectTickets).set({ githubMergeStatus: "merged", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
       await addLog(ticketId, `Merged to ${anchorBranch} (${mergeSha.slice(0, 7)}).`, "command", ownerId);
@@ -2830,21 +2868,25 @@ async function finalizeTicketChat(
       (documentation ? documentation.message + "\n\n" : workSummary ? `**What I did:**\n${workSummary}\n\n` : "") +
       `- Branch: \`${featureBranch}\`\n- Commit: \`${sha.slice(0, 7)}\`\n${mergedOk ? `- Merged to \`${anchorBranch}\` ✓\n` : ""}\nRe-run the **Preview** to see the change, or open the **Git** tab for the diff.`;
     await addLog(ticketId, done, "ai_response", ownerId);
-    // A chat/update turn that COMMITS is a completion too — flip the subtasks done
-    // (the build success paths do this; the chat finalize was missing it, so tasks
-    // stayed pending after an "Update applied").
-    await markBuildTasksComplete(ticketId);
+    await publishTicketOperation(featureBranch, anchorBranch, sha, done);
+    // A published follow-up does not prove every historical or verification task
+    // succeeded. Preserve the individual task outcomes reported by the agent.
     await maybeSubmitEpicForReview(ticket.epicId);
     broadcastToUser(ownerId, { type: "ticket_status", ticketId, status: "review", queueStatus: "none", stageId: reviewStageId, mergeStatus: mergedOk ? "merged" : "pushed" });
-    // Auto-record a demo of the applied change for the Preview tab (fire-and-forget).
-    void generateTicketDemo(ticketId, { ownerId, llmUserId: actorId, projectId: project.id });
+    // Configured feature testing/recording already ran during publication. Do not
+    // start a second background recorder or bypass disabled project stages.
     // QA (opt-in, projects.qaMode = "tests"): write a test suite for the ticket's
     // acceptance criteria and verify it red/green against the branch point, in the
     // sandbox that just built it. Fire-and-forget like the demo — it never throws,
     // never fails the ticket, and reports into the ticket's log.
     void runTicketQa(ticketId, { ownerId, llmUserId: actorId, projectId: project.id });
   } catch (err) {
-    await addLog(ticketId, `Commit/push FAILED — chat changes were NOT saved to the remote: ${(err as Error).message?.slice(0, 300)}`, "cli_error", ownerId);
+    const state = integrated ? `Changes were pushed and merged into ${anchorBranch}, but final bookkeeping failed`
+      : publishedSha ? `Changes are saved on ${featureBranch} (${publishedSha.slice(0,7)}); integration into ${anchorBranch} did not complete`
+      : 'Publication did not complete; inspect the saved checkout and remote branch before retrying';
+    const reason = `${state}: ${(err as Error).message?.slice(0, 300)}`;
+    await addLog(ticketId, reason, "cli_error", ownerId);
+    if (!integrated) await markTicketFailed(ticketId, reason, ownerId, {emitEvent:false});
   }
 }
 
@@ -2910,7 +2952,7 @@ async function executeTicketApiInternal(
   // Seed subtasks up-front (idempotent) so the Tasks tab is populated the moment
   // the build starts — this is the Pi/DeepSeek/Kimi path, the common one.
   await seedTasksIfEmpty(ticket, ownerId);
-  if((ticket.details as any)?.epicBuildMode!=='single-ticket')await markBuildTasksStarted(ticketId);
+  await markBuildTasksStarted(ticketId);
 
   const tasks = await db.select().from(projectTodoLists).where(eq(projectTodoLists.ticketId, ticketId));
 
@@ -3115,6 +3157,7 @@ cd ${WORKING_DIR}/project || { echo "GIT_SETUP_FAILED_NO_GIT"; exit 1; }
 git config user.email "ai@lfg.dev"; git config user.name "LFG AI"
 git remote set-url origin "${auth.authUrl}" 2>/dev/null || git remote add origin "${auth.authUrl}" 2>/dev/null || true
 git fetch --prune origin 2>&1 || true
+${emptyRepoBootstrap(anchorBase)}
 if ! git rev-parse --verify origin/${anchorBranch} 2>/dev/null; then
     echo "CREATING_ANCHOR_BRANCH"
     ANCHOR_BASE="${anchorBase}"
@@ -3181,6 +3224,7 @@ else
     [ -d ".git" ] || { echo "GIT_CLONE_FAILED"; exit 1; }
 fi
 
+${emptyRepoBootstrap(anchorBase)}
 if ! git rev-parse --verify origin/${anchorBranch} 2>/dev/null; then
     echo "CREATING_ANCHOR_BRANCH"
     ANCHOR_BASE="${anchorBase}"
@@ -3429,12 +3473,10 @@ git branch --show-current
     const ticketAttachments = ticketAttRows
       .filter((a) => !a.fileType || /^image\//.test(a.fileType))
       .map((a) => ({ url: /^https?:\/\//.test(a.filePath) ? a.filePath : `${CALLBACK_BASE_URL}${a.filePath}`, name: a.originalFilename ?? "image" }));
-    const epicProgressPath=(ticket.details as any)?.epicBuildMode==='single-ticket' ? `/data/lfg-epic-progress-${ticket.id}.json` : null;
-    const taskStates=new Map(tasks.map(t=>[t.id,t.status]));
     const piPrompt = buildPiTicketPrompt({
       ticket: {
         name: ticket.name,
-        description: ticket.description + (epicProgressPath ? `\n\n## Implementation progress\nKeep this existing checklist current while you work. Write an atomic JSON array to ${epicProgressPath} using a temporary file then rename: [{"id":"task ID","status":"pending|in_progress|success|failed"}]. Only mark a milestone success after implementing and checking it; this does not approve the entire feature. Reuse these task IDs and saved progress on resume:\n${JSON.stringify(tasks.map(t=>({id:t.id,description:t.description,status:t.status})))}` : ''),
+        description: ticket.description,
         notes: ticket.notes,
         acceptanceCriteria: (ticket.acceptanceCriteria as string[] | null) ?? [],
       },
@@ -3445,12 +3487,12 @@ git branch --show-current
       directives: await directivesBlock(project.id, featureBranch),
       addenda: addendaCtx.block,
       attachments: ticketAttachments,
-      // Any document the ticket cites (an approved page preview, most often) is written
-      // into the sandbox first, so the reference resolves to a file the agent can open.
+      // Saved project/epic requirements and explicit design references are readable files.
       designRefs: await materializeTicketDocs({
         projectId: project.id,
         workspaceId,
         projectDir,
+        epicId: ticket.epicId, sourceDocumentId: ticket.sourceDocumentId, sourceDocumentIds:ticketDocumentIds(ticket.details),
         text: [ticket.name, ticket.description ?? "", ticket.notes ?? ""].join("\n"),
       }),
     });
@@ -3515,16 +3557,6 @@ git branch --show-current
           outputFile: pi.outputFile,
           backgroundPid: pi.backgroundPid,
           timeoutMs: BUILD_TIMEOUT_MS,
-          taskProgress:epicProgressPath ? {path:epicProgressPath,receive:async json=>{
-            const {parseEpicTaskProgress}=await import('../services/epic-task-progress.ts');
-            const changed=[];
-            for(const task of parseEpicTaskProgress(json,new Set(taskStates.keys()))){
-              if(taskStates.get(task.id)===task.status)continue;
-              await db.update(projectTodoLists).set({status:task.status,updatedAt:new Date()}).where(and(eq(projectTodoLists.id,task.id),eq(projectTodoLists.ticketId,ticketId)));
-              taskStates.set(task.id,task.status);changed.push(task.id);
-            }
-            if(changed.length)emit({type:'ticket.tasks_updated',ticketId,taskIds:changed});
-          }} : undefined,
           ticketId, // webhook output = proof-of-life (don't fail a live, streaming build)
           shouldCancel: () => cancelledTickets.has(ticketId),
           // Webhook active → poll is completion-only. Otherwise poll → logs.
@@ -3808,7 +3840,7 @@ git branch --show-current
   // (or failed-but-kept) VM never burns compute sitting idle.
   // SAFETY: never touch the always-on preview VM ("pv-…"), which is keepAlive by design.
   if (isolatedBuild && !useWorktree && workspaceId && !workspaceId.startsWith("pv-")) {
-    await addLog(ticketId, implementationStatus === "complete" && !commitFailed ? "Validation and publication passed. Saving a recovery checkpoint before allowing the build environment to sleep." : "This attempt has stopped. Saving a recovery checkpoint before allowing the build environment to sleep.", "command", ownerId);
+    await addLog(ticketId, implementationStatus === "complete" && !commitFailed ? "Build publication completed. Saving a recovery checkpoint before allowing the build environment to sleep." : "This attempt has stopped. Saving a recovery checkpoint before allowing the build environment to sleep.", "command", ownerId);
     if (await sleepTicketVm(workspaceId)) await db.update(sandboxes).set({ status: "sleeping", updatedAt: new Date() }).where(eq(sandboxes.ticketId, ticketId)).catch(() => {});
     else await addLog(ticketId,"Recovery checkpoint could not be saved. The sandbox is being kept awake to preserve this work.","cli_error",ownerId);
   }
@@ -3856,6 +3888,80 @@ function waitForCompletion(
   });
 }
 
+/** Retry publication of saved code without asking the builder to implement again. */
+export async function startTicketMergeRetry(ticketId: string, actorId?: string, conversationId?: string): Promise<void> {
+  if (executingTickets.has(ticketId) || isChatTurnActive(ticketId)) throw new Error('This ticket already has an active operation.');
+  executingTickets.add(ticketId);
+  let launched = false;
+  try {
+    const [ticket] = await db.select().from(projectTickets).where(eq(projectTickets.id, ticketId)).limit(1);
+    if (!ticket?.githubBranch || !ticket.githubCommitSha) throw new Error('No saved ticket commit is available to merge.');
+    if (/^(queued|executing|stopping)$/.test(ticket.queueStatus)) throw new Error('This ticket already has an active operation.');
+    const [project] = await db.select().from(projects).where(eq(projects.id, ticket.projectId)).limit(1);
+    if (!project) throw new Error('Project not found.');
+    const actor = actorId ?? ticket.assigneeId ?? project.ownerId;
+    const { gitUserId, usingOwnCollaboratorToken } = resolveGitActor(project, actor);
+    const auth = await resolveRepoAuth(project, gitUserId);
+    if (!auth) throw new Error('Repository access could not be resolved. The published ticket commit is preserved.');
+    const anchor = await resolveTicketAnchor(ticket);
+    const claimed = await db.update(projectTickets).set({ queueStatus: 'executing', updatedAt: new Date() })
+      .where(and(eq(projectTickets.id, ticketId), eq(projectTickets.queueStatus, ticket.queueStatus))).returning({ id: projectTickets.id });
+    if (!claimed.length) throw new Error('Another operation claimed this ticket.');
+    cancelledTickets.delete(ticketId);
+    const job = runChatTurn(ticketId, () => withTicketUsage(ticketId, actor, 'ticket_build', async () => {
+      let workspaceId: string | undefined;
+      let mergedSha: string | undefined;
+      try {
+        await setBuildOrigin(ticketId, conversationId ?? null, actor);
+        await reportBuildStatus(ticketId, 'started', 'Retrying the merge of saved ticket changes.');
+        broadcastToUser(project.ownerId, { type: 'ticket_status', ticketId, status: ticket.status, queueStatus: 'executing' });
+        // Reuse the ticket checkout (and saved merge candidate). If the VM was
+        // lost, a dedicated clone can integrate the already-published branch.
+        const sb = await ensureIsolatedChatSandbox(ticket, project, project.ownerId, gitUserId, usingOwnCollaboratorToken, null);
+        if ('error' in sb) throw new Error(sb.error);
+        workspaceId = sb.workspaceId;
+        await wakeTicketVm(workspaceId);
+        if (cancelledTickets.has(ticketId)) throw new Error('Merge cancelled.');
+        await addLog(ticketId, `Retrying merge of ${ticket.githubBranch} into ${anchor.anchorBranch}; implementation is already saved.`, 'command', project.ownerId);
+        const result = await mergeToAnchor({
+          workspaceId, projectDir: `${WORKING_DIR}/${sb.projectDir}`, featureBranch: ticket.githubBranch!,
+          repoUrl: auth.repoUrl, githubToken: auth.token, tokenUser: auth.tokenUser,
+          targetBranch: anchor.anchorBranch, baseBranch: anchor.baseBranch,
+          validation: { projectId: project.id, userId: actor, gitCredentialUserId: gitUserId, ticketId,
+            epicId: ticket.epicId ?? undefined, baselineBranch: anchor.baseBranch,
+            cancelled: () => cancelledTickets.has(ticketId),
+            onLog: line => { void addLog(ticketId, line, 'command', project.ownerId).catch(() => {}); },
+            onCheckpoint: async message => { await addLog(ticketId, message, 'agent_progress', project.ownerId); } },
+        });
+        mergedSha = result.sha;
+        // Persist publication evidence before any subsequent UI/bookkeeping work.
+        await db.update(projectTickets).set({ githubMergeStatus: 'merged', githubMergeCommitSha: result.sha, updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
+        const stageId = await moveTicketToStage(ticketId, project.id, 'In Review');
+        await db.update(projectTickets).set({ status: 'review', lastExecutionAt: new Date(), updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
+        await addLog(ticketId, `Saved ticket changes merged into ${anchor.anchorBranch} (${result.sha.slice(0, 7)}).`, 'ai_response', project.ownerId);
+        await reportBuildStatus(ticketId, 'complete', 'Saved ticket changes merged successfully.');
+        broadcastToUser(project.ownerId, { type: 'ticket_status', ticketId, status: 'review', stageId, queueStatus: 'executing', mergeStatus: 'merged' });
+        await maybeSubmitEpicForReview(ticket.epicId);
+      } catch (error) {
+        if (mergedSha) {
+          await addLog(ticketId, `Merged into ${anchor.anchorBranch} (${mergedSha.slice(0, 7)}), but final status reporting failed: ${(error as Error).message}`, 'cli_error', project.ownerId);
+        } else if (!await stoppedByUser(ticketId, project.ownerId)) {
+          await markTicketFailed(ticketId, `Merge retry failed; the ticket commit remains saved: ${(error as Error).message}`, project.ownerId, { emitEvent: false });
+        }
+      } finally {
+        if (workspaceId) await sleepTicketVm(workspaceId).catch(() => {});
+        await db.update(projectTickets).set({ queueStatus: 'none', updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
+        const [current] = await db.select().from(projectTickets).where(eq(projectTickets.id, ticketId)).limit(1);
+        broadcastToUser(project.ownerId, { type: 'ticket_status', ticketId, status: current?.status ?? ticket.status, queueStatus: 'none', mergeStatus: current?.githubMergeStatus });
+      }
+    }));
+    launched = true;
+    void job.catch(error => console.error('Merge retry failed', error)).finally(() => executingTickets.delete(ticketId));
+  } finally {
+    if (!launched) executingTickets.delete(ticketId);
+  }
+}
+
 /** Start a validation-only run on an existing dedicated ticket checkout. */
 export async function startTicketValidationRetry(ticketId:string,actorId:string,phase:'validation'|'feature-testing'='validation'):Promise<void> {
   if(executingTickets.has(ticketId) || isChatTurnActive(ticketId))throw new Error("This ticket already has an active operation.");
@@ -3867,6 +3973,7 @@ export async function startTicketValidationRetry(ticketId:string,actorId:string,
     if(/^(queued|executing|stopping)$/.test(ticket.queueStatus))throw new Error(`Ticket operation is ${ticket.queueStatus}. Wait for it to finish or stop it before retrying validation.`);
     const [project]=await db.select().from(projects).where(eq(projects.id,ticket.projectId)).limit(1);
     if(!project)throw new Error("Project not found.");
+    if ((phase === "validation" && project.validationEnabled === false) || (phase === "feature-testing" && project.featureTestingEnabled === false)) throw new Error("This stage is disabled in Project Settings.");
     const sb=await findExistingSandbox(ticketId);
     if(!sb?.magsWorkspaceId || !["ticket","ticket-chat"].includes(sb.workspaceType) || sb.magsWorkspaceId.startsWith("pv-"))throw new Error("Retry validation requires the saved dedicated build sandbox. No new sandbox or development run was started.");
     const branch=ticket.githubBranch || sb.currentBranch;

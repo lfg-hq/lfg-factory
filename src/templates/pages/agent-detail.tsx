@@ -69,7 +69,7 @@ export function AgentDetailPage({
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
   <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
-  <link rel="stylesheet" href="/public/css/chat.css?v=20260908-hover-copy" />
+  <link rel="stylesheet" href="/public/css/chat.css?v=20261018-connection-check" />
   <link rel="stylesheet" href="/public/css/artifacts.css" />
   <link rel="stylesheet" href="/public/css/agents.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
@@ -514,8 +514,11 @@ export function AgentDetailPage({
   </script>
   <script src="/public/js/marked.min.js"></script>
   <script src="/public/js/markdown-config.js"></script>
-  <script src="/public/js/sidebar.js?v=20260923-tooltip-theme"></script>
-  <script src="/public/js/chat.js?v=20260908-hover-copy"></script>
+  <script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
+  <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261018-document-actions" />
+  <script src="/public/js/chat-artifacts.js?v=20261018-document-actions"></script>
+  <script src="/public/js/chatgpt-connection.js?v=20261018"></script>
+  <script src="/public/js/chat.js?v=20261018-connection-check"></script>
   <script src="/public/js/agents.js"></script>
 
   <script>

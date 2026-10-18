@@ -1,0 +1,26 @@
+// Isolated SQLite proof: no production database, model or network calls.
+import {Database} from 'bun:sqlite';
+import {drizzle} from 'drizzle-orm/bun-sqlite';
+import {strict as assert} from 'node:assert';
+import {loadConversationHandoff} from '../src/ai/conversation-handoff.ts';
+const sqlite=new Database(':memory:');
+sqlite.exec(`CREATE TABLE message (id TEXT PRIMARY KEY, conversation_id TEXT, role TEXT, content TEXT, created_at INTEGER, user_role TEXT, content_if_file TEXT);
+CREATE TABLE conversation_context (conversation_id TEXT PRIMARY KEY, summary TEXT, through_id TEXT, through_at INTEGER);`);
+const store=drizzle(sqlite) as any;
+const insert=sqlite.prepare('INSERT INTO message VALUES (?, ?, ?, ?, ?, ?, ?)');
+for(let i=0;i<41;i++)insert.run(String(i).padStart(3,'0'),'one',i%2?'assistant':'user','evidence '+i,100+i,'default','[]');
+insert.run('private','two','user','other user private content',1,'default','[]');
+let evidence='';let calls=0;
+const summarize=async(text:string)=>{calls++; evidence+=text; return 'User constraints and ticket IDs; pending work.';};
+const first=await loadConversationHandoff('one',summarize,store);
+assert.equal(first?.throughId,'020');assert(!evidence.includes('other user private content'));
+assert(evidence.includes('evidence 0'));assert(evidence.includes('evidence 20'));assert(!evidence.includes('evidence 40'));
+const before=calls;
+assert.deepEqual(await loadConversationHandoff('one',summarize,store),first);assert.equal(calls,before);
+assert.equal(sqlite.query('SELECT count(*) as n FROM message').get()!.n,42);
+for(let i=41;i<62;i++)insert.run(String(i).padStart(3,'0'),'one','user','next '+i,100+i,'default','[]');
+await assert.rejects(loadConversationHandoff('one',async()=>{throw Error('provider unavailable');},store));
+assert.equal(sqlite.query('SELECT through_id FROM conversation_context').get()!.through_id,'020');
+const next=await loadConversationHandoff('one',summarize,store);assert.equal(next?.throughId,'041');
+console.log('PASS: private durable handoff, reload, incremental update, failure retention and untouched history');
+sqlite.close();

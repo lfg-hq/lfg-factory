@@ -1,5 +1,5 @@
 /** Bind request context without mutating shared tool definitions across chats. */
-export function withConversationContext(tools: Record<string, any>, conversationId: string, userId: string, projectId?: string | null): Record<string, any> {
+export function withConversationContext(tools: Record<string, any>, conversationId: string, userId: string, projectId?: string | null, turnId?: string): Record<string, any> {
   const bound = { ...tools };
   const activeEpics = new Map<string, string>();
   const builds = new Set(['queueTicketExecution', 'retryTicket', 'startBuildRun']);
@@ -7,6 +7,10 @@ export function withConversationContext(tools: Record<string, any>, conversation
   for (const name of Object.keys(tools)) {
     const tool = tools[name];
     if (!tool || typeof tool.execute !== 'function') continue;
+    // This tool already captures server-owned identity in previewActionTool's
+    // closure. Injecting context into its strict operation payload rejects valid
+    // requests (including password resets) before they reach the executor.
+    if (name === 'handlePreview') continue;
     bound[name] = { ...tool, execute: async (args: Record<string, any>, opts: unknown) => {
       args = { ...args, ...(projectId && 'projectId' in args ? { projectId } : {}) };
       const isDoc = name === 'streamDocumentContent' || name === 'previewPage';
@@ -14,6 +18,7 @@ export function withConversationContext(tools: Record<string, any>, conversation
       const epicId = args.epicId || activeEpics.get(args.projectId) || (isDoc && args.projectId
         ? await context!.conversationEpic(args.projectId, conversationId) : undefined);
       const result = await tool.execute({ ...args, conversationId,
+        ...(['sendTicketMessage','getTicketOperationStatus'].includes(name) ? {projectId,userId,turnId} : {}),
         ...(builds.has(name) || isDoc || name === 'startEpic' || name === 'readDesignSource' || name === 'captureDesignLayout' || name === 'queryCodebase' ? {userId} : {}),
         ...(isDoc && epicId ? {epicId} : {}),
       }, { ...(opts as object), designSourceRead: designSourcesRead.has(args.projectId) });

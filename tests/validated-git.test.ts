@@ -1,12 +1,14 @@
 import {test,expect,mock} from 'bun:test';
-import {mkdtempSync,writeFileSync,rmSync} from 'node:fs';
+import {mkdtempSync,writeFileSync,readFileSync,existsSync,rmSync} from 'node:fs';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {spawnSync} from 'node:child_process';
 let root='';let validation:(o:any)=>Promise<void>=async()=>{};
+let repair:(o:any)=>Promise<void>=async()=>{};
 const translate=(s:string)=>s.replaceAll('/data/validation-merge-',root+'/merge-');
 const shell=(script:string)=>{const r=spawnSync('bash',['-c',translate(script)],{encoding:'utf8'});return {exitCode:r.status??1,output:r.stdout+'\n'+r.stderr};};
 mock.module('../src/services/validation-sandbox.ts',()=>({validationShell:async(_:string,s:string)=>shell(s)}));
+mock.module('../src/services/merge-resolver.ts',()=>({runValidationRepair:async(o:any)=>repair(o)}));
 mock.module('../src/services/ticket-runtime.ts',()=>({runTicketRuntime:async(o:any)=>{
  await validation(o);
  const dir=translate(o.projectDir);
@@ -17,7 +19,7 @@ mock.module('../src/services/ticket-runtime.ts',()=>({runTicketRuntime:async(o:a
 const {publishValidatedTicket,publishValidatedMerge}=await import('../src/services/validated-git.ts');
 function git(dir:string,args:string){const r=shell(`cd '${dir}' && git ${args}`);if(r.exitCode)throw new Error(r.output);return r.output.trim();}
 async function fixture(fn:(o:any,repo:string,bare:string)=>Promise<void>){
- root=mkdtempSync(join(tmpdir(),'validated-git-'));const repo=join(root,'repo');const bare=join(root,'origin.git');validation=async()=>{};
+ root=mkdtempSync(join(tmpdir(),'validated-git-'));const repo=join(root,'repo');const bare=join(root,'origin.git');validation=async()=>{};repair=async()=>{};
  try{
   shell(`git init -q --bare '${bare}'; git init -q -b main '${repo}'`);
   git(repo,"config user.name Test");git(repo,"config user.email test@example.com");
@@ -48,4 +50,31 @@ test('failed integration never updates target branch',()=>fixture(async(o,repo)=
  git(repo,'push -q origin feature/ticket');const baseline=git(repo,'rev-parse origin/main');validation=async()=>{throw new Error('feature assertion failed');};
  await expect(publishValidatedMerge({...o,targetBranch:'main'})).rejects.toThrow('feature assertion failed');
  expect(git(repo,'ls-remote --heads origin main')).toContain(baseline);
+}));
+
+function conflictingBranches(repo:string) {
+ writeFileSync(join(repo,'base.txt'),'ticket change\n');git(repo,'commit -qam ticket');git(repo,'push -q origin feature/ticket');
+ git(repo,'checkout -q main');writeFileSync(join(repo,'base.txt'),'epic change\n');git(repo,'commit -qam epic');git(repo,'push -q origin main');git(repo,'checkout -q feature/ticket');
+ return git(repo,'rev-parse origin/main');
+}
+test('interrupted merge preserves partial repairs and retry resumes them without reimplementing',()=>fixture(async(o,repo)=>{
+ const baseline=conflictingBranches(repo);let dir='';let attempts=0;
+ repair=async(r)=>{dir=translate(r.projectDir);attempts++;writeFileSync(join(dir,'partial.txt'),'saved repair');throw Error('agent disconnected');};
+ await expect(publishValidatedMerge({...o,targetBranch:'main'})).rejects.toThrow('agent disconnected');
+ expect(existsSync(join(dir,'.git'))).toBe(true);expect(git(repo,'ls-remote --heads origin main')).toContain(baseline);
+ repair=async(r)=>{attempts++;expect(translate(r.projectDir)).toBe(dir);expect(readFileSync(join(dir,'partial.txt'),'utf8')).toBe('saved repair');writeFileSync(join(dir,'base.txt'),'ticket and epic resolved\n');git(dir,'add base.txt partial.txt');};
+ const result=await publishValidatedMerge({...o,targetBranch:'main'});
+ expect(attempts).toBe(2);expect(git(repo,'ls-remote --heads origin main')).toContain(result.sha);expect(existsSync(dir)).toBe(false);
+}));
+test('unresolved merge gets one focused retry and cannot publish conflict markers',()=>fixture(async(o,repo)=>{
+ const baseline=conflictingBranches(repo);let attempts=0;
+ repair=async()=>{attempts++;};
+ await expect(publishValidatedMerge({...o,targetBranch:'main'})).rejects.toThrow('unresolved paths');
+ expect(attempts).toBe(2);expect(git(repo,'ls-remote --heads origin main')).toContain(baseline);
+}));
+test('staging unresolved markers cannot bypass the merge gate when runtime checks are disabled',()=>fixture(async(o,repo)=>{
+ const baseline=conflictingBranches(repo);let checks=0;validation=async()=>{checks++;};
+ repair=async(r)=>{git(translate(r.projectDir),'add -A');};
+ await expect(publishValidatedMerge({...o,targetBranch:'main'})).rejects.toThrow();
+ expect(checks).toBe(0);expect(git(repo,'ls-remote --heads origin main')).toContain(baseline);
 }));

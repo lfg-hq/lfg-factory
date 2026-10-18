@@ -24,7 +24,7 @@ export {
   getNextTicket,
   scheduleTickets,
   retryTicket,
-  sendTicketMessage,
+  sendTicketMessage, getTicketOperationStatus,
   queueTicketExecution,
   startBuildRun,
   getBuildRunStatus,
@@ -57,7 +57,7 @@ import { streamDocumentContent, getFileList, getFileContent, updateFileContent, 
 import {
   createTickets, getPendingTickets, getTicketDetails,
   updateTicket, updateTicketDetails, updateAllTickets,
-  getNextTicket, scheduleTickets, retryTicket, sendTicketMessage, queueTicketExecution,
+  getNextTicket, scheduleTickets, retryTicket, sendTicketMessage, getTicketOperationStatus, queueTicketExecution,
   startBuildRun, getBuildRunStatus,
 } from "./ticket-tools.ts";
 import { startEpic, checkEpicOverlap, getEpicStatus, addToEpic, listTicketsForEpic } from "./epic-tools.ts";
@@ -94,7 +94,7 @@ export const toolsProduct = {
   getNextTicket,
   scheduleTickets,
   retryTicket,
-  sendTicketMessage,
+  sendTicketMessage, getTicketOperationStatus,
   queueTicketExecution,
   startBuildRun,
   getBuildRunStatus,
@@ -120,6 +120,6 @@ export const toolsTurbo = {
   getPendingTickets,
   getTicketDetails,
   updateTicket,
-  sendTicketMessage,
+  sendTicketMessage, getTicketOperationStatus,
   broadcastToUser,
 };

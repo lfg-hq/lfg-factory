@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 const recipe={runtime:'node',framework:'express',toolchain:[],installCmd:'install',buildCmd:'build',runCmd:'start',schemaSteps:[{kind:'migration' as const,command:'migrate',note:''}],verificationPaths:['/feature']};
-const compile=()=>compileRuntimePlan(recipe,{dir:'/repo',localize:c=>c,configure:'config',start:'start',sql:f=>f,http:p=>'http '+p,tests:['test feature']});
+const compile=()=>compileRuntimePlan(recipe,{purpose:'validation',dir:'/repo',localize:c=>c,configure:'config',start:'start',sql:f=>f,http:p=>'http '+p,tests:['test feature']});
 test('runtime failure stops before HTTP and acceptance, never grants a pass from build alone',async()=>{
  const steps=compile();const calls:string[]=[];
  const failure=await executeSteps(steps,{cancelled:()=>false,persist:async()=>{},run:async(_,c)=>{calls.push(c);return {exitCode:c==='start'?1:0,output:'Startup migration model mismatch'}}});
@@ -53,7 +53,7 @@ test('cleanup refuses foreign roots and only removes containers bearing its exac
 });
 
 test('upgrade fixtures execute after build and before migrations',()=>{
- const steps=compileRuntimePlan(recipe,{dir:'/repo',localize:c=>c,configure:'config',start:'start',sql:f=>f,http:p=>p,beforeSchema:['seed old rows'],tests:['assert retained rows']});
+ const steps=compileRuntimePlan(recipe,{purpose:'validation',dir:'/repo',localize:c=>c,configure:'config',start:'start',sql:f=>f,http:p=>p,beforeSchema:['seed old rows'],tests:['assert retained rows']});
  const commands=steps.map(s=>s.command);
  expect(commands.indexOf('seed old rows')).toBeGreaterThan(commands.indexOf('build'));
  expect(commands.indexOf('seed old rows')).toBeLessThan(commands.indexOf('migrate'));

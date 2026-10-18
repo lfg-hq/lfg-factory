@@ -42,6 +42,12 @@ interface Lane extends LaneRequest {
   pid?: number;
 }
 
+const previewReservations = new Set<string>();
+const pendingAdmissions = new Map<string,number>();
+export function reservePreviewProject(projectId:string):()=>void {
+ if(previewReservations.has(projectId) || pendingAdmissions.has(projectId) || [...lanes.values()].some(l=>l.projectId===projectId))throw Error('A ticket or preview is using this sandbox. Retry when it finishes; saved work is preserved.');
+ previewReservations.add(projectId);return ()=>previewReservations.delete(projectId);
+}
 const lanes = new Map<string, Lane>(); // ticketId → lane
 
 /** How many tickets may work in one preview VM at once. */
@@ -100,6 +106,7 @@ export async function tryAcquireLane(
   req: LaneRequest,
   onLowDisk?: () => Promise<void>,
 ): Promise<LaneDecision> {
+  if(previewReservations.has(req.projectId))return {ok:false,reason:"The preview is refreshing this sandbox"};
   // Already in a lane (a retry, or a chat turn while its build runs) → reuse it.
   const existing = lanes.get(req.ticketId);
   if (existing) return { ok: true, release: () => { /* the original holder releases */ } };
@@ -115,6 +122,8 @@ export async function tryAcquireLane(
     return { ok: false, reason: "another ticket is building with a different model/key in this VM (they share one Pi config file)" };
   }
 
+  pendingAdmissions.set(req.projectId,(pendingAdmissions.get(req.projectId)||0)+1);
+  try {
   let free = await freeDiskGb(req.workspaceId);
   if (free !== null && free < laneMinFreeGb() && onLowDisk) {
     await onLowDisk().catch(() => {});
@@ -124,8 +133,16 @@ export async function tryAcquireLane(
     return { ok: false, reason: `the preview VM is low on disk (${free.toFixed(1)} GB free, needs ${laneMinFreeGb()} GB)` };
   }
 
+  if(previewReservations.has(req.projectId))return {ok:false,reason:"The preview is refreshing this sandbox"};
+  const current=activeLanes(req.workspaceId);
+  if(lanes.has(req.ticketId))return {ok:true,release:()=>{}};
+  if(current.length>=laneCapacity() || current.some(l=>(l.exclusiveConfig||req.exclusiveConfig)&&l.credKey!==req.credKey))return {ok:false,reason:'Another ticket claimed the shared sandbox while resources were checked'};
   lanes.set(req.ticketId, { ...req, startedAt: Date.now() });
   return { ok: true, release: () => releaseLane(req.ticketId) };
+  } finally {
+    const left=(pendingAdmissions.get(req.projectId)||1)-1;
+    if(left)pendingAdmissions.set(req.projectId,left);else pendingAdmissions.delete(req.projectId);
+  }
 }
 
 /** One ticket worktree living in the shared VM, as far as eviction is concerned. */

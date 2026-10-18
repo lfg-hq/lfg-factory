@@ -1,3 +1,19 @@
+// Content links leave the chat/doc open. In-page anchors and app controls retain their behavior.
+function openContentLinkInNewTab(link) {
+    const href = (link.getAttribute('href') || '').trim();
+    if (!href || href.startsWith('#') || link.hasAttribute('download')) return;
+    let url;
+    try { url = new URL(href, document.baseURI); } catch { return; }
+    if (!['http:', 'https:'].includes(url.protocol)) return;
+    link.target = '_blank';
+    link.rel = [...new Set((link.rel + ' noopener noreferrer').trim().split(/\s+/))].join(' ');
+}
+// Also covers server-rendered documents and raw HTML links added after streaming.
+for (const event of ['click', 'auxclick']) document.addEventListener(event, e => {
+    const link = e.target.closest?.('.message-content a[href], .markdown-content a[href], .prd-content a[href]');
+    if (link) openContentLinkInNewTab(link);
+}, true);
+
 // Configure the marked library for proper markdown rendering including tables
 
 // Strikethrough: require DOUBLE tildes.
@@ -13,6 +29,14 @@
 // before the rule is in place. marked.min.js is loaded before this file.
 if (typeof marked !== 'undefined' && typeof marked.use === 'function') {
     marked.use({
+        hooks: {
+            postprocess(html) {
+                const template = document.createElement('template');
+                template.innerHTML = html;
+                template.content.querySelectorAll('a[href]').forEach(openContentLinkInNewTab);
+                return template.innerHTML;
+            },
+        },
         tokenizer: {
             del(src) {
                 const match = /^~~(?=[^\s~])([\s\S]*?[^\s~])~~(?=[^~]|$)/.exec(src);
@@ -55,4 +79,13 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
         console.error('Marked.js library not found. Markdown may not render correctly.');
     }
-}); 
+});
+// One shared renderer for chat, document previews and PDF export.
+window.mermaidRendererReady = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = '/public/js/mermaid-renderer.js?v=20261015-horizontal-default';
+    script.onload = resolve;
+    script.onerror = () => reject(new Error('Diagram renderer could not load'));
+    document.head.appendChild(script);
+});
+window.mermaidRendererReady.catch(() => {});

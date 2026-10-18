@@ -76,7 +76,7 @@ export const messages = sqliteTable(
     // See ../pg/chat.ts — the UI's record of the working trail.
     activityTrail: text("activity_trail", { mode: "json" }).$type<Array<{ text: string; tool?: string }> | null>(),
     // See ../pg/chat.ts — previews rendered in this turn.
-    pagePreviews: text("page_previews", { mode: "json" }).$type<Array<{ id: string; name: string }> | null>(),
+    pagePreviews: text("page_previews", { mode: "json" }).$type<Array<import("../../../types/chat-artifact.ts").ChatArtifact> | null>(),
     // See ../pg/chat.ts — dictated message marker.
     // HOW this assistant turn ended. Recorded on every turn, surfaced in the UI only
     // when it is not "complete" — a reply that was cut off used to be saved as though
@@ -137,4 +137,12 @@ export const modelSelections = sqliteTable("model_selection", {
     .default("gpt-5.6-luna"),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
+});
+
+/** Private per-conversation handoff; never a shared project memory or chat message. */
+export const conversationContexts = sqliteTable("conversation_context", {
+  conversationId: text("conversation_id").primaryKey().references(() => conversations.id, { onDelete: "cascade" }),
+  summary: text("summary").notNull(),
+  throughId: text("through_id").notNull(),
+  throughAt: integer("through_at", { mode: "timestamp" }).notNull(),
 });

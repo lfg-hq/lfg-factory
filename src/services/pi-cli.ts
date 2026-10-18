@@ -2,6 +2,7 @@ import {shellQuote as quotePath} from './preview-plan.ts';
 import { currentUsage } from "../ai/usage-context.ts";
 import { registerUsageOutput } from "./usage-cli.ts";
 import {piTerminationScript, missingPiExitReason} from './pi-termination.ts';
+import {piLogCompactorSource} from './pi-log-compact.ts';
 /**
  * Pi coding-agent runner (pi.dev) — in-sandbox builder for non-Anthropic models.
  *
@@ -25,7 +26,7 @@ async function execLite(workspaceId: string, script: string, timeout = 15_000) {
   return execOnWorkspace(workspaceId, `echo ${b64} | base64 -d | bash`, { timeout });
 }
 
-async function stopPiAttempt(workspaceId:string,pid:string) {
+export async function stopPiAttempt(workspaceId:string,pid:string) {
   const result=await execLite(workspaceId,piTerminationScript(pid),15_000);
   if(result.exitCode!==0)throw new Error('Could not confirm Pi process cleanup; retry must inspect the prior attempt before starting more work.');
 }
@@ -262,13 +263,6 @@ printf 'RW=%s\\n' "$RW"`;
   return { busy: proc.length > 0 || recentWrite, proc, recentWrite };
 }
 
-/** Compact elapsed-time label, e.g. "45s" or "2m 05s". */
-function fmtElapsed(ms: number): string {
-  const s = Math.max(0, Math.round(ms / 1000));
-  const m = Math.floor(s / 60);
-  return m > 0 ? `${m}m ${String(s % 60).padStart(2, "0")}s` : `${s}s`;
-}
-
 function sleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
@@ -439,18 +433,18 @@ mkdir -p /root/.pi/agent
 echo '${modelsB64}' | base64 -d > /root/.pi/agent/models.json`;
   }
 
-  // Pi launch line. When forwarding, pipe the JSON stream through tee (→ outputFile, so
-  // the completion/analysis poll still works) AND the forwarder (→ live ops). Use bash
-  // PIPESTATUS[0] to recover Pi's real exit code from the pipeline.
+  // Keep completed events in the log, compact repeated partial snapshots, and pass
+  // the original stream to the live forwarder. Preserve Pi/compactor exit codes.
   const rpc=opts.rpc;
   if(rpc && ![rpc.fifo,rpc.sessionFile].every(p=>/^\/tmp\/lfg-pi-recovery\/[a-f0-9-]+\/[a-z.]+$/.test(p)))throw new Error('Invalid runtime session path');
   const extensionFile=`${PI_DIR}/pi_policy_${ts}.mjs`;
+  const compactFile = `${PI_DIR}/pi_compact_${ts}.cjs`;
   const piRun = rpc
     ? `pi --provider ${cfg.piName} --model ${opts.modelId} --mode rpc --session '${rpc.sessionFile}' --extension ${extensionFile} "\${PI_AUTH_ARGS[@]}" < '${rpc.fifo}'`
     : `pi -p --provider ${cfg.piName} --model ${opts.modelId} --mode json "\${PI_AUTH_ARGS[@]}" "$(cat ${promptFile})"`;
   const piLaunch = rpc ? `exec 3<> '${rpc.fifo}'\n${piRun} >> ${outputFile} 2>&1\nPI_EXIT=\$?` : opts.forward
-    ? `${piRun} 2>&1 | tee -a ${outputFile} | node ${forwarderFile}\nPI_EXIT=\${PIPESTATUS[0]}`
-    : `${piRun} >> ${outputFile} 2>&1\nPI_EXIT=\$?`;
+    ? `${piRun} 2>&1 | node ${compactFile} ${outputFile} --forward | node ${forwarderFile}\nPI_CODES=(\"\${PIPESTATUS[@]}\")\nPI_EXIT=\${PI_CODES[0]}\nif [ \"\${PI_CODES[1]}\" != 0 ]; then PI_EXIT=\${PI_CODES[1]}; fi`
+    : `${piRun} 2>&1 | node ${compactFile} ${outputFile}\nPI_CODES=(\"\${PIPESTATUS[@]}\")\nPI_EXIT=\${PI_CODES[0]}\nif [ \"\${PI_CODES[1]}\" != 0 ]; then PI_EXIT=\${PI_CODES[1]}; fi`;
 
   // Runner script — runs as root inside the VM.
   // pi installs into a global prefix on the big /data disk (root is only 1.9GB).
@@ -648,6 +642,7 @@ echo '${envB64}' | base64 -d > ${envFile}
 ${opts.oauthAccessToken ? `echo '${oauthTokenB64}' | base64 -d > ${oauthTokenFile}; chmod 600 ${oauthTokenFile}` : `rm -f ${oauthTokenFile}`}
 ${modelsJsonInject}
 ${forwarderInject}
+echo '${Buffer.from(piLogCompactorSource).toString('base64')}' | base64 -d > ${compactFile}
 echo '${runnerB64}' | base64 -d > ${runnerScript}
 chmod 755 ${runnerScript}
 touch ${outputFile}
@@ -846,7 +841,10 @@ export function extractPiProgress(data: string, maxLen = 90): string | null {
     // Shape 1: top-level tool call event.
     const topName = evt.toolName ?? evt.tool ?? evt.name;
     const topArgs = evt.input ?? evt.arguments ?? evt.args;
-    if (typeof topName === "string") return describePiTool(topName, topArgs, maxLen);
+    if (typeof topName === "string") {
+      if (evt.type === 'tool_execution_end') return `${evt.isError ? 'Failed' : 'Completed'} ${topName}`;
+      return describePiTool(topName, topArgs, maxLen);
+    }
 
     // Shape 2: tool_use block inside an assistant message's content array.
     const content = evt.message?.content;
@@ -920,17 +918,10 @@ export async function streamPiToCompletion(params: {
   let blindSince = 0;
   let lastProgressAt = 0;
   let lastEmittedProgress: string | null = null;
-  // When a SINGLE activity line persists (e.g. a multi-minute `pip install docling`),
-  // re-emit it with an elapsed-time suffix on this cadence so the UI keeps showing
-  // liveness instead of freezing on the same message.
-  const HEARTBEAT_MS = 20_000;
   let polls = 0;
   let loggedVersions = false;
-  // Stall guard: if the SAME progress line persists this many polls with nothing
-  // new, the agent is stuck (e.g. re-running a failing command in a loop). The
-  // threshold is deliberately high (~7.5 min at 5s polls) so a legitimately slow
-  // single step never trips it — it only catches a genuine stall, well before the
-  // full timeout. Defense-in-depth; the deterministic scaffold is the real fix.
+  // No-output guard. Repeated display labels alone are not evidence of a stall:
+  // the model may be emitting new events for the same action.
   const STALL_LIMIT = 90;
   let lastStallSig: string | null = null;
   let stallCount = 0;
@@ -955,13 +946,12 @@ export async function streamPiToCompletion(params: {
     // Lightweight status: alive + done marker + last 4KB tail only (NOT the full file).
     const statusScript = `F=${f}
 SZ=$(wc -c < "$F" 2>/dev/null || echo 0)
-if [ "\${SZ:-0}" -gt 314572800 ]; then tail -c 52428800 "$F" > "$F.trim" 2>/dev/null && cat "$F.trim" > "$F" 2>/dev/null; rm -f "$F.trim" 2>/dev/null; fi
 AL=$(${aliveCheck})
 DN=$(grep -q ___PI_EXIT_CODE "$F" 2>/dev/null && echo yes || echo no)
 TC=$(grep -oE '"id":"[^"]+"' "$F" 2>/dev/null | sort -u | wc -l | tr -d ' ')
 TL=$(tail -c 4000 "$F" 2>/dev/null | base64 | tr -d '\\n')
 PROC=$(for c in /proc/[0-9]*/cmdline; do tr '\\0' ' ' < "$c" 2>/dev/null; echo; done | grep -Ei '${BUILD_PROC_RE}' | grep -viE 'grep| pi | /pi | tee | node .*forward' | head -1 | cut -c1-60 | base64 | tr -d '\\n')
-printf 'PISTAT AL=%s DN=%s TC=%s\\n' "$AL" "$DN" "\${TC:-0}"
+printf 'PISTAT AL=%s DN=%s TC=%s SZ=%s\\n' "$AL" "$DN" "\${TC:-0}" "\${SZ:-0}"
 printf 'PROC=%s\\n' "$PROC"
 printf 'TL=%s\\n' "$TL"
 ${params.taskProgress ? `printf 'TASKS='; head -c 32768 ${quotePath(params.taskProgress.path)} 2>/dev/null | base64 | tr -d '\\n'; printf '\\n'` : ''}`;
@@ -1043,7 +1033,6 @@ ${params.taskProgress ? `printf 'TASKS='; head -c 32768 ${quotePath(params.taskP
     const procMatch = out.match(/PROC=([A-Za-z0-9+/=]*)/);
     const busyProc = procMatch?.[1] ? Buffer.from(procMatch[1], "base64").toString("utf8").trim() : "";
     const busy = busyProc.length > 0;
-    const procShort = busy ? (busyProc.split(/\s+/)[0]?.split("/").pop() || "").slice(0, 20) : "";
 
     // Surface the pre-launch node+pi confirmation to the server console, once.
     if (!loggedVersions) {
@@ -1061,18 +1050,19 @@ ${params.taskProgress ? `printf 'TASKS='; head -c 32768 ${quotePath(params.taskP
 
     const progress = tail ? extractPiProgress(tail, progressMaxLen) : null;
 
-    // Stall detection: the same progress line repeating AND nothing running underneath.
+    // Stall detection: no new stream output AND nothing running underneath.
     // A live build subprocess (busy) resets the counter — a 15-min `pip install` or
     // `npm ci` is slow, not stalled, so it must never trip this.
-    if (progress) {
-      if (progress === lastStallSig && !busy) {
+    const activitySignature = out.match(/\bSZ=(\d+)/)?.[1] ?? progress;
+    if (activitySignature) {
+      if (activitySignature === lastStallSig && !busy) {
         if (++stallCount >= STALL_LIMIT) {
           stalled = true;
-          console.warn(`[pi-cli] agent stalled — "${progress.slice(0, 80)}" repeated ${stallCount}× (~${Math.round((stallCount * POLL_INTERVAL_MS) / 60000)}min) with no live build process; aborting.`);
+          console.warn(`[pi-cli] agent stalled — no new output for ${stallCount} polls with no live build process; aborting.`);
           break;
         }
       } else {
-        lastStallSig = progress;
+        lastStallSig = activitySignature;
         stallCount = 0;
       }
     }
@@ -1084,15 +1074,6 @@ ${params.taskProgress ? `printf 'TASKS='; head -c 32768 ${quotePath(params.taskP
         lastEmittedProgress = progress;
         lastProgressAt = now;
         onProgress(progress);
-      } else if (lastEmittedProgress && alive && now - lastProgressAt > HEARTBEAT_MS) {
-        // Same op still running after a while (e.g. a multi-minute `pip install docling`
-        // or `npm ci`) — emit a heartbeat with elapsed time (and the live subprocess, when
-        // known) so the UI shows the build is alive instead of freezing. The " — still
-        // working" suffix lets the client refresh the current step in place (no line spam).
-        lastProgressAt = now;
-        const base = progress ?? lastEmittedProgress;
-        const suffix = procShort ? `${fmtElapsed(now - startedAt)}, ${procShort} running` : fmtElapsed(now - startedAt);
-        onProgress(`${base} — still working (${suffix})`);
       }
     }
 

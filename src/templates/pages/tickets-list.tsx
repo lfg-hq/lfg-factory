@@ -720,7 +720,7 @@ export function TicketsListPage({ user, project, stages, tickets, epics = [], ex
       <div class="drawer-actions">
         <a class="ticket-code-link ticket-code-link--toolbar" title="Open code workspace in a new window" id="drawer-code-link" target="_blank" rel="noopener"><svg class="ticket-code-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 7-5 5 5 5m8-10 5 5-5 5m-3-13-2 16" /></svg><span>Code</span><svg class="ticket-code-external" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6m0-6L10 14M10 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5" /></svg></a>
         <select id="drawer-run-phase" class="drawer-run-phase" aria-label="Choose ticket action">
-          <option value="build">Build &amp; check all</option>
+          <option value="build">Build &amp; run enabled checks</option>
           <option value="validation">Validation only</option>
           <option value="feature-testing">Feature testing only</option>
         </select>
@@ -920,13 +920,13 @@ export function TicketsListPage({ user, project, stages, tickets, epics = [], ex
   </div>
 </div>
 
-<script src="/public/js/sidebar.js?v=20260923-tooltip-theme"></script>
+<script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
 <script src="/public/js/sidebar-chats.js?v=20260908-initials"></script>
 <script src="/public/js/sharing.js"></script>
 <!-- Shared preview component — the SAME one the main chat Preview panel uses. -->
-<link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20260923-inline-history" />
-<script src="/public/js/ticket-action-phases.js?v=20260928-validation-checks"></script>
-<script src="/public/js/preview-tab.js"></script>
+<link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261004-log-layout" />
+<script src="/public/js/ticket-action-phases.js?v=20261002-optional-stages"></script>
+<script src="/public/js/preview-tab.js?v=20261005-start-state"></script>
 <script>
   const PROJECT_ID = document.body.dataset.projectId;
   let _currentTicketId = null;
@@ -1158,6 +1158,12 @@ export function TicketsListPage({ user, project, stages, tickets, epics = [], ex
         // this ticket actually merges into, instead of assuming lfg-agent.
         _ticketAnchorBranch = live.anchorBranch || live.anchor_branch || '';
         renderDrawerDetails(ticketMap[ticketId]);
+        var phaseSelect = document.getElementById('drawer-run-phase');
+        for (var option of phaseSelect.options) {
+          option.hidden = option.disabled = (option.value === 'validation' && live.validationEnabled === false) || (option.value === 'feature-testing' && live.featureTestingEnabled === false);
+        }
+        if (phaseSelect.selectedOptions[0]?.disabled) phaseSelect.value = 'build';
+
         var qs = live.queueStatus || live.queue_status || '';
         var st = live.status || (t && t.status) || 'open';
         var isActive = qs === 'queued' || qs === 'executing' || qs === 'stopping';

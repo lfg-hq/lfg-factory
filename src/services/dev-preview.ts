@@ -1,10 +1,21 @@
+import {assertPreviewBranch,previewCheckoutDir,refreshPreviewCheckout,runtimeFingerprintCommand,cleanPreviewBuildCommand,cachedInstallCommand} from './preview-checkout.ts';
+import { backgroundProcessSchema, discoverBackgroundProcesses, previewWorkerCommand } from "./preview-workers.ts";
+import { compilePreviewInspection } from './preview-inspection-command.ts';
+import {DEVELOPMENT_ACCESS_INSTRUCTION} from '../ai/prompts/development-access.ts';
+import { ensureManagedDatabaseWithRecovery } from "./managed-database-recovery.ts";
+import { DEVELOPMENT_DATABASE_RECOVERY_INSTRUCTION } from "./development-database-recovery-policy.ts";
 import { PreviewRecoveryBudget } from "./preview-recovery-budget.ts";
 import { executeSandboxScript } from "./sandbox-script.ts";
 import { targetedSqlCommand } from "./preview-sql-target.ts";
-import { PREVIEW_SOURCE_POLICY, previewPublicationBlocked } from "./preview-source-policy.ts";
+import { PREVIEW_SOURCE_POLICY, previewPublicationBlocked, assertPreviewRuntimePatches } from "./preview-source-policy.ts";
 import { replaceVerifiedPatches, consolidatePatchScript } from "./preview-patch-recovery.ts";
 import { databaseRecoveryScripts, backupThenReset } from "./preview-db-recovery.ts";
-import { compileRuntimePlan } from "./runtime-plan.ts";
+import { compileRuntimePlan, previewAvailabilityCommand } from "./runtime-plan.ts";
+import { UNSAFE_ENV_KEYS, environmentFingerprint, environmentChanges, requiresEnvironmentBuild, environmentPatchCommand } from "./preview-environment.ts";
+import { restartWorktree, restartServerCommand, waitForRestart } from "./preview-restart.ts";
+import { PreviewRunQueue } from "./preview-run-queue.ts";
+import { previewDataTools, previewDataWorkspaceCommand, PREVIEW_DATA_INSTRUCTION, PREVIEW_DATA_MAINTENANCE_INSTRUCTION } from "./preview-data-operations.ts";
+import { PreviewWorkerMaintenance } from './preview-worker-maintenance.ts';
 import { branchDatabaseScript } from "./preview-isolation.ts";
 import { validateSchemaTargets, assetCaseCheck, schemaStepSchema, replayActionSchema, orderedSchema, mergeKnowledge, failureSummary, failureKey, executeSteps, shellQuote, type PlanStep } from "./preview-plan.ts";
 /**
@@ -38,7 +49,7 @@ import { getModel, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
 import { decryptSecret, encryptSecret } from "../utils/crypto.ts";
 import { broadcastToUser } from "../ws/connection-manager.ts";
 import { enableHttpAccess, execOnWorkspace, setStableUrl, startBrowserSession, stopWorkspace } from "./mags.ts";
-import { ensureProjectSandbox, restartProjectSandbox, ensureEngine, ensureDocker, envWorkspaceId, checkEngineHealth, listSandboxEngines, ENGINES, type EngineHandle, type DbEngine } from "./project-sandbox.ts";
+import { ensureProjectSandbox, restartProjectSandbox, ensureDocker, envWorkspaceId, checkEngineHealth, listSandboxEngines, ENGINES, type EngineHandle, type DbEngine } from "./project-sandbox.ts";
 import { probeAppProfile, saveAppProfile, loadAppProfile, deriveManifestFromProfile, syncDetectedEnv, applyProfileCorrection, recordProfileLearning, recordDirective, buildConfigPatchScript, profileNotes, resolveUserModel, appProfileSchema, type AppProfile } from "./app-profile.ts";
 import { isS3Enabled, buildS3Key, uploadBinary, getPresignedGetUrl } from "./s3.ts";
 import { messages } from "../db/schema/chat.ts";
@@ -53,7 +64,7 @@ const DEFAULT_PORT = 8080; // fallback ONLY — the real port is decided by the 
 // value like PATH="/data/.dotnet:…" (as a driver once did) and re-writing it into
 // .env / another VM's shells clobbers the real PATH → `ls`/`node`/`apk` "not found".
 // The toolchain PATH is set deterministically by envPrefix instead.
-const UNSAFE_ENV_KEYS = new Set(["PATH", "HOME", "PWD", "OLDPWD", "SHELL", "USER", "LOGNAME", "TERM", "HOSTNAME", "SHLVL", "_", "LD_LIBRARY_PATH", "LD_PRELOAD"]);
+
 
 /** A random, unguessable public subdomain for the preview URL — so preview URLs
  *  can't be enumerated from the project id (preview-<hex>.app.lfg.run). Persisted
@@ -81,6 +92,7 @@ export const manifestSchema = z.object({
   startupProject: z.string().describe("For a multi-project solution, the WEB/entry project to actually run (e.g. 'Cohire.Web' — the one referencing an ASP.NET Core / web SDK). '' for single-project apps."),
   runCmd: z.string().describe("Command to START the app in the FOREGROUND on `port`, bound to 0.0.0.0. Use the startup project — e.g. 'dotnet run --project Cohire.Web --urls http://0.0.0.0:5000', 'python manage.py runserver 0.0.0.0:8000', 'npm start'."),
   port: z.number().describe("The app's real port, detected from the codebase (launchSettings/appsettings, run scripts, docker-compose, framework default). This exact port is exposed publicly."),
+  backgroundProcesses: z.array(backgroundProcessSchema).optional().describe("Required long-running background workers, schedulers or queue consumers found in repository scripts/configuration. Managed with the web app using the same selected-checkout environment. Do not launch these from install, build, seed or replay actions. Omit if none."),
   services: z.array(z.object({
     name: z.string().describe("Short slug for this app, e.g. 'web', 'admin', 'api'. Used for its subdomain (preview-<hash>-<name>) and env var (<NAME>_BASE_URL)."),
     runCmd: z.string().describe("Command to START this app in the FOREGROUND on ITS port, bound to 0.0.0.0."),
@@ -224,16 +236,20 @@ function throwIfCancelled(projectId: string) { if (cancelledProjects.has(project
 // must signal the current one to abort, WAIT for it to actually unwind, and only then
 // take over. The cancel flag is cleared for the new run ONLY after the old one has
 // released — otherwise the new run's clear revives the run it just cancelled.
-const previewRunLocks = new Map<string, Promise<void>>();
+const previewRunQueue = new PreviewRunQueue();
+async function acquirePreviewAccess(projectId:string):Promise<()=>void> {
+  const release=await previewRunQueue.acquire(projectId);
+  try {
+    const releaseShared=(await import('./shared-lanes.ts')).reservePreviewProject(projectId);
+    return ()=>{releaseShared();release();};
+  }catch(e){release();throw e;}
+}
 async function acquirePreviewRun(projectId: string): Promise<() => void> {
   cancelledProjects.add(projectId);                 // tell the in-flight run (if any) to abort
-  const prev = previewRunLocks.get(projectId);
-  if (prev) { try { await prev; } catch { /* prior run's own failure is its problem */ } }
+  let release:()=>void;
+  try { release=await acquirePreviewAccess(projectId); } catch(e) {cancelledProjects.delete(projectId);throw e;}
   cancelledProjects.delete(projectId);              // fresh flag for OUR run
-  let release!: () => void;
-  const mine = new Promise<void>((r) => { release = r; });
-  previewRunLocks.set(projectId, mine);
-  return () => { release(); if (previewRunLocks.get(projectId) === mine) previewRunLocks.delete(projectId); };
+  return release;
 }
 
 // ── Analyze: read the ACTUAL codebase (not a shallow fingerprint) so the plan
@@ -442,7 +458,7 @@ async function reapplyEnv(projectId: string, userId: string, workspaceId: string
       const useProvided = await shouldUseProvidedDb(workspaceId, projectId, userId, dbSpec, providedVal, dbMode);
       if (useProvided) continue;
       plog(projectId, userId, `Starting ${dbSpec.engine} (docker) — pulling image + creating the container if needed…`);
-      const h = await ensurePreviewEngine(projectId, userId, dbSpec.engine);
+      const h = await ensurePreviewEngine(projectId, userId, dbSpec.engine, dbSpec);
       if (h) { provisioned[dbSpec.connectionEnvVar] = formatConnection(dbSpec, h); plog(projectId, userId, `${dbSpec.engine} running ✓ (127.0.0.1:${h.port}) → ${dbSpec.connectionEnvVar} injected.`); }
     }
   }
@@ -467,16 +483,12 @@ async function reapplyEnv(projectId: string, userId: string, workspaceId: string
 export async function getAppRuntimeLog(projectId: string, lines = 500, service?: string): Promise<string> {
   try {
     const workspaceId = await envWorkspaceId(projectId);
-    // A companion app logs to preview-<name>.log; the primary to preview.log.
-    const svc = service && service !== "app" ? service.replace(/[^\w-]/g, "") : "";
-    const glob = svc
-      ? `${PROJECT_DIR}/preview-${svc}.log /data/*/preview-${svc}.log`
-      : `${PROJECT_DIR}/preview.log /data/*/preview.log`;
-    const { output } = await sh(
-      workspaceId,
-      `f=$(ls -t ${glob} 2>/dev/null | head -1); [ -n "$f" ] && tail -n ${lines} "$f" 2>/dev/null || echo "(no ${svc ? svc + " " : ""}app log yet — the app may not have started, or hasn't printed anything)"`,
-      20_000,
-    );
+    const {dir}=await resolvePreviewWorkDir(projectId,workspaceId);
+    const row=await getEnv(projectId);const manifest=row?.setupManifest?JSON.parse(row.setupManifest) as PreviewManifest:null;
+    const svc=service&&service!=='app'?service.replace(/[^\w-]/g,''):'';
+    const files=[{label:svc||'Web server',file:svc?`preview-${svc}.log`:'preview.log'},...(!svc?(manifest?.backgroundProcesses||[]).map(w=>({label:`Worker: ${w.name}`,file:`preview-worker-${w.name}.log`})) :[])];
+    const command=files.map(f=>`printf '%s\\n' ${shellQuote('── '+f.label+' ──')}; tail -n ${Math.min(1000,Math.max(1,lines))} ${shellQuote(dir+'/'+f.file)} 2>/dev/null || true`).join('\n');
+    const {output}=await sh(workspaceId,command,20000);
     // The microVM was reaped (OOM/eviction) while the stored workspace id lingers → the exec
     // layer returns "no ... VM found". Make it actionable instead of cryptic.
     if (/no (running|sleeping|associated).*VM|no VM associated/i.test(output || "")) {
@@ -724,10 +736,51 @@ function formatConnection(db: PlannedDb, h: EngineHandle): string {
   }
 }
 
+// Capture the exact settings read for a run, never whatever happens to be saved
+// when that run finishes. A concurrent edit must remain pending.
+const preparedEnvironment = new WeakMap<PreviewManifest, Record<string, string>>();
+function environmentBranch(branch?: string | null) { return !branch || branch === "(default)" ? "default" : branch; }
+async function readProjectEnvironment(projectId: string) {
+  const rows = await db.select().from(projectEnvironmentVariables).where(eq(projectEnvironmentVariables.projectId, projectId));
+  const values: Record<string, string> = Object.create(null);
+  for (const row of rows) {
+    if (!row.hasValue || UNSAFE_ENV_KEYS.has(row.key)) continue;
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(row.key)) throw new Error("Invalid saved environment variable name");
+    try { values[row.key] = decryptSecret(row.encryptedValue); }
+    catch { throw new Error(`Could not read saved variable ${row.key}. Save its value again.`); }
+  }
+  return values;
+}
+async function recordAppliedEnvironment(projectId: string, branch: string, values?: Record<string, string>) {
+  if (!values) return;
+  const loaded = await loadAppProfile(projectId, branch) || await loadAppProfile(projectId);
+  if (!loaded) throw new Error("Could not record the applied environment; runtime profile is missing.");
+  loaded.profile.appliedProjectEnvironment = { values, appliedAt: new Date().toISOString() };
+  delete loaded.profile.pendingProjectEnvironment;
+  await saveAppProfile(projectId, loaded.profile, branch);
+}
+export async function getEnvironmentApplyStatus(projectId: string) {
+  const row = await getEnv(projectId);
+  const loaded = await loadAppProfile(projectId, environmentBranch(row?.previewBranch));
+  const current = environmentFingerprint(await readProjectEnvironment(projectId));
+  const previous = loaded?.profile.appliedProjectEnvironment;
+  const changedKeys = [...new Set([...environmentChanges(current, previous), ...(loaded?.profile.pendingProjectEnvironment?.keys || [])])];
+  const databaseKeys = new Set((loaded?.profile.databases || []).map(d => d.connectionEnvVar));
+  return {
+    pending: changedKeys.length > 0 || !!loaded?.profile.pendingProjectEnvironment,
+    changedKeys,
+    requiresPreparation: !!previous && changedKeys.some(key => databaseKeys.has(key)),
+    requiresBuild: !!loaded?.profile.pendingProjectEnvironment?.requiresBuild || requiresEnvironmentBuild(changedKeys, loaded?.profile.buildEnvironmentKeys),
+    appliedAt: previous?.appliedAt || null,
+    prepared: !!(row?.setupManifest && row?.runCommand),
+    status: row?.previewStatus || "idle",
+  };
+}
+
 async function writeEnvFile(workspaceId: string, projectId: string, manifest: PreviewManifest, provisioned: Record<string, string>) {
   const port = manifest.port;
   // Stored project env vars (decrypted) + provisioned DB creds + generic run hints.
-  const stored = await db.select().from(projectEnvironmentVariables).where(eq(projectEnvironmentVariables.projectId, projectId));
+  const savedValues = await readProjectEnvironment(projectId);
   // PORT/HOST are near-universal hints (frameworks that don't read them ignore
   // them); the manifest runCmd is authoritative for the actual bind. Anything
   // stack-specific is only added when that stack is actually detected.
@@ -760,11 +813,7 @@ async function writeEnvFile(workspaceId: string, projectId: string, manifest: Pr
     // content (broken images) and redirects bounce. No app code change needed.
     vars.ASPNETCORE_FORWARDEDHEADERS_ENABLED = "true";
   }
-  for (const v of stored) {
-    if (!v.hasValue) continue;
-    if (UNSAFE_ENV_KEYS.has(v.key)) continue; // never let a persisted PATH etc. clobber envPrefix's PATH
-    try { vars[v.key] = decryptSecret(v.encryptedValue); } catch { /* skip unreadable */ }
-  }
+  Object.assign(vars, savedValues);
   // Provisioned DB connection strings WIN over a stored value — when we provisioned a
   // local DB it's because the stored one was a placeholder / unreachable, so our fresh
   // connection (matching creds) must override it. Applied last on purpose.
@@ -775,7 +824,19 @@ async function writeEnvFile(workspaceId: string, projectId: string, manifest: Pr
     .map(([k, val]) => `${k}="${String(val).replace(/(["\\$`])/g, "\\$1")}"`)
     .join("\n");
   const b64 = Buffer.from(body).toString("base64");
-  await sh(workspaceId, `cd ${PROJECT_DIR} && echo ${b64} | base64 -d > .env && echo WROTE_ENV`, 30_000);
+  const snapshot = environmentFingerprint(savedValues);
+  const branch = environmentBranch((await getEnv(projectId))?.previewBranch);
+  const loaded = await loadAppProfile(projectId, branch) || await loadAppProfile(projectId);
+  if (loaded) {
+    loaded.profile.pendingProjectEnvironment = {
+      keys: [...new Set([...environmentChanges(snapshot, loaded.profile.appliedProjectEnvironment), ...(loaded.profile.pendingProjectEnvironment?.keys || [])])],
+      requiresBuild: !!manifest.buildCmd || !!loaded.profile.pendingProjectEnvironment?.requiresBuild,
+    };
+    await saveAppProfile(projectId, loaded.profile, branch);
+  }
+  const written = await sh(workspaceId, `cd ${PROJECT_DIR} && umask 077 && echo ${b64} | base64 -d > .env && echo WROTE_ENV`, 30_000);
+  if (written.exitCode !== 0) throw new Error("Could not write preview environment settings.");
+  preparedEnvironment.set(manifest, snapshot);
 }
 
 // ── Run the app (detached, survives exec teardown) ──────────────────────────
@@ -838,7 +899,7 @@ echo "CHECKED:$CHECKED"
 
 /**
  * Post-run verification: (1) URL responds, (2) images/CSS/JS load, (3) DB
- * connections intact. Builds a chat-ready launch summary and an overall verdict.
+ * connections intact. Builds a preview-log summary and an overall verdict.
  * Assets are skipped when the page is a 5xx (a code/data error, not an asset issue).
  */
 async function verifyPreview(projectId: string, userId: string, workspaceId: string, manifest: PreviewManifest, branchLabel: string): Promise<{ summary: string; overall: "ok" | "degraded" | "error"; broken: string[] }> {
@@ -884,49 +945,23 @@ async function verifyPreview(projectId: string, userId: string, workspaceId: str
     : overall === "error" ? "🔴 **Failed — the app is not responding**"
     : `🟡 **Degraded** — ${[urlErr ? "URL returns a server error" : "", assetsBad ? "some assets broken" : "", dbBad ? "a database is unreachable" : ""].filter(Boolean).join(", ")}`;
 
-  const summary = `🚀 **Preview launch summary** — branch: \`${branchLabel === "(default)" ? "main" : branchLabel}\`\n\n${urlLine}\n${assetLine}\n${dbLine}\n\n${verdict}`;
+  const summary = `🚀 **Preview launch summary** — branch: \`${branchLabel === "(default)" ? "repository default" : branchLabel}\`\n\n${urlLine}\n${assetLine}\n${dbLine}\n\n${verdict}`;
   plog(projectId, userId, `Verification: ${overall}`, overall === "ok" ? undefined : { level: "error", detail: summary.replace(/\*\*/g, "") });
   return { summary, overall, broken: brokenAssets };
 }
 
-/**
- * Self-heal broken assets WITHOUT hardcoding a fix. If the preview audit found
- * 404 assets AND the project has mandatory directives (i.e. the user opted into
- * enforcement — e.g. "assets are case-sensitive on .NET"), hand the broken list
- * to the preview AGENT and let IT investigate the real filenames and fix the
- * references (or rename files), rebuild, and verify. Runs at most ONCE per preview
- * so it can't loop. Returns the re-verified summary if it changed anything.
- */
+/** Preview audits report source defects; only a ticket may implement their repair. */
 async function healBrokenAssets(
-  projectId: string, userId: string, conversationId: string | null | undefined,
-  workspaceId: string, manifest: PreviewManifest, branchLabel: string, broken: string[],
+  projectId: string, userId: string, _conversationId: string | null | undefined,
+  _workspaceId: string, _manifest: PreviewManifest, _branchLabel: string, broken: string[],
 ): Promise<{ summary: string } | null> {
-  if (!broken.length) return null;
-  const directives = (await loadAppProfile(projectId).catch(() => null))?.profile.directives ?? [];
-  if (!directives.length) return null; // enforcement is opt-in via directives
-
-  plog(projectId, userId, `Assets broken (${broken.length}) — handing to the agent to fix per your directives…`);
-  const list = broken.slice(0, 15).map((u) => `- ${u}`).join("\n");
-  const instruction = `The running app has BROKEN assets — these URLs return 404 on the homepage:\n${list}\n\n` +
-    `Your MANDATORY DIRECTIVES (which you MUST satisfy) include rules about assets. The most common cause is a case mismatch between the reference and the real filename (this stack is case-sensitive). For EACH broken asset: find the actual file on disk (search case-insensitively under the web root), then fix the REFERENCE in the source (.cshtml/.css/.js/layout) to match the real filename EXACTLY — or rename the file if that's clearly correct. Do not touch unrelated code. ` +
-    `If a rebuild is needed for the change to take effect, rebuild and restart the app. Then re-fetch each formerly-broken URL and confirm it now returns 200. Report exactly which references you fixed.`;
-
-  try {
-    const res = await runPreviewChat({ projectId, publicProjectId: pub(projectId), userId, conversationId: conversationId ?? null, instruction, noCommit: true });
-    plog(projectId, userId, `Asset self-heal: ${res.status}`, res.reply ? { detail: res.reply.slice(0, 800) } : undefined);
-    // Re-verify so the summary reflects reality after the fix.
-    const again = await verifyPreview(projectId, userId, workspaceId, manifest, branchLabel).catch(() => null);
-    if (again) return { summary: again.summary };
-  } catch (e) {
-    plog(projectId, userId, `Asset self-heal failed: ${(e as Error).message}`, { level: "error" });
-  }
+  if (broken.length) plog(projectId, userId, `Assets broken (${broken.length}) — source repair requires ticket execution.`, {
+    level: "error", detail: broken.slice(0, 15).join("\n"),
+  });
   return null;
 }
 
-/** Post the launch summary into the main chat (persist if a conversation is known).
- *  MUST carry conversation_id + project_id so the client can scope it to the right chat —
- *  without them a Kitereach summary leaked into whatever project's chat was open. */
-async function publishSummary(userId: string, conversationId: string | null | undefined, content: string, publicProjectId?: string): Promise<void> {
+async function publishConfigurationNotice(userId: string, conversationId: string | null | undefined, content: string, publicProjectId?: string): Promise<void> {
   if (!conversationId) return;
   await db.insert(messages).values({ conversationId, role: "assistant", content }).catch(() => {});
   broadcastToUser(userId, { type: "message", sender: "assistant", message: content, conversation_id: conversationId, project_id: publicProjectId, build_status: true });
@@ -1154,7 +1189,10 @@ async function exposeService(
     const bc = localizeCmd(service.buildCmd, buildDir);
     const br = await runDetachedPolled(projectId, userId, workspaceId, bc, 1_800_000, { stallMs: 900_000, workDir: buildDir })
       .catch(() => ({ exitCode: -1, output: "" }));
-    if (br.exitCode !== 0) plog(projectId, userId, `Companion "${service.name}" build failed (exit ${br.exitCode})`, { level: "error", detail: br.output.slice(-800) });
+    if (br.exitCode !== 0) {
+      plog(projectId, userId, `Companion "${service.name}" build failed (exit ${br.exitCode})`, { level: "error", detail: br.output.slice(-800) });
+      return {name:service.name,url:"",port:service.port,ok:false};
+    }
   }
   plog(projectId, userId, `Starting companion "${service.name}" on :${service.port}…`);
   await runDetachedPolled(projectId, userId, workspaceId, serviceStartCommand(service, runDir), 30_000);
@@ -1173,29 +1211,29 @@ async function exposeService(
 
 /** Write/replace a single var in the live sandbox .env (so a sibling app picks it up on
  *  its next start). Value is quote-escaped for `set -a; . ./.env` sourcing. */
-async function writeLiveEnvVar(workspaceId: string, key: string, value: string): Promise<void> {
+async function writeLiveEnvVar(workspaceId: string, key: string, value: string, runDir = PROJECT_DIR): Promise<void> {
   const line = `${key}="${value.replace(/(["\\$`])/g, "\\$1")}"`;
   const b64 = Buffer.from(line).toString("base64");
-  await sh(workspaceId, `cd ${PROJECT_DIR} && (grep -v '^${key}=' .env 2>/dev/null > .env.tmp || true); echo ${b64} | base64 -d >> .env.tmp; mv .env.tmp .env; echo OK`, 20_000);
+  await sh(workspaceId, `cd ${shellQuote(runDir)} || exit 1; (grep -v '^${key}=' .env 2>/dev/null > .env.tmp || true); echo ${b64} | base64 -d >> .env.tmp; mv .env.tmp .env; echo OK`, 20_000);
 }
 
 /** Inject <NAME>_BASE_URL for a companion so sibling apps that read a base URL from config
  *  reach the PREVIEW URL, not prod. Respects a value the user set themselves; persists it
  *  (survives restarts) and writes it to the live .env now. */
-async function persistServiceBaseUrl(projectId: string, workspaceId: string, name: string, url: string): Promise<void> {
+async function persistServiceBaseUrl(projectId: string, workspaceId: string, name: string, url: string, runDir = PROJECT_DIR): Promise<void> {
   const key = `${name.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}_BASE_URL`;
   const [existing] = await db.select().from(projectEnvironmentVariables)
     .where(and(eq(projectEnvironmentVariables.projectId, projectId), eq(projectEnvironmentVariables.key, key))).limit(1);
   if (existing?.hasValue) {
     // User override wins — but make sure the current value is in the live .env.
     const cur = (() => { try { return decryptSecret(existing.encryptedValue); } catch { return url; } })();
-    await writeLiveEnvVar(workspaceId, key, cur).catch(() => {});
+    await writeLiveEnvVar(workspaceId, key, cur, runDir).catch(() => {});
     return;
   }
   await db.insert(projectEnvironmentVariables)
     .values({ projectId, key, encryptedValue: encryptSecret(url), isSecret: false, hasValue: true, description: `Preview base URL for the ${name} app (auto-injected)` })
     .onConflictDoUpdate({ target: [projectEnvironmentVariables.projectId, projectEnvironmentVariables.key], set: { encryptedValue: encryptSecret(url), hasValue: true, updatedAt: new Date() } });
-  await writeLiveEnvVar(workspaceId, key, url).catch(() => {});
+  await writeLiveEnvVar(workspaceId, key, url, runDir).catch(() => {});
 }
 
 /** After the primary is live, bring up every ENABLED companion + expose each on its own
@@ -1216,7 +1254,7 @@ async function runEnabledCompanions(
   for (const c of companions) {
     const r = await exposeService(projectId, userId, workspaceId, c, runDir, baseAlias);
     out.push({ ...r, primary: false });
-    if (r.url) await persistServiceBaseUrl(projectId, workspaceId, c.name, r.url).catch(() => {});
+    if (r.url) await persistServiceBaseUrl(projectId, workspaceId, c.name, r.url, runDir).catch(() => {});
   }
   // Live list for the Preview tab switcher (every service + whether it's enabled/up).
   broadcastToUser(userId, { type: "preview_services", projectId: pub(projectId), services: svcs.map((s) => {
@@ -1287,16 +1325,37 @@ PYEOF`;
 }
 
 /** Compile the manifest into an ordered runbook. */
+async function resolvePreviewWorkers(projectId:string,workspaceId:string,manifest:PreviewManifest,dir:string) {
+  workerHealthCache.delete(projectId);
+  const result=await sh(workspaceId,`cat ${shellQuote(dir+'/package.json')} 2>/dev/null`,15000);
+  let pkg:{}={};if(result.exitCode===0){try{pkg=JSON.parse(result.output);}catch{throw new Error('Cannot read package.json to identify required background processes');}}
+  manifest.backgroundProcesses=discoverBackgroundProcesses(pkg,manifest.backgroundProcesses);
+  // Record literal startup readiness from the actual entrypoint when available.
+  for(const worker of manifest.backgroundProcesses){
+    if(worker.entrypoint && !worker.readyLog){
+      const source=await sh(workspaceId,`cat ${shellQuote(dir+'/'+worker.entrypoint)} 2>/dev/null`,15000);
+      const ready=source.output.match(/console\.log\(["']([^"'\n]*[Rr]eady[^"'\n]*)["']\)/)?.[1];
+      if(ready)worker.readyLog=ready;
+    }
+  }
+  const branch=environmentBranch((await getEnv(projectId))?.previewBranch);
+  const profile=await loadAppProfile(projectId,branch);
+  if(profile){profile.profile.backgroundProcesses=manifest.backgroundProcesses;await saveAppProfile(projectId,profile.profile,branch);}
+  await db.update(projectEnvironments).set({setupManifest:JSON.stringify(manifest)}).where(eq(projectEnvironments.projectId,projectId));
+}
+
 function buildRunbook(manifest: PreviewManifest, engines: EngineHandle[], dir = PROJECT_DIR): RunStep[] {
   const steps = compileRuntimePlan(manifest, {
+    purpose: "preview",
     dir, localize: c => localizeCmd(c, dir), configure: "", start: appStartCommand(manifest, dir),
     sql: (file, step) => {
       if (!step.connectionKey) return sqlApplyCommand(engines, file);
       const target = manifest.databases.find(d => d.connectionEnvVar === step.connectionKey);
       return target ? targetedSqlCommand(file, step.connectionKey, target.engine, target.engine, engines.find(e=>e.engine===target.engine)?.port ?? 0) : "echo 'Unknown SQL connectionKey in schemaSteps'; exit 1";
     },
-    http: path => `code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 ${shellQuote(`http://127.0.0.1:${manifest.port}${path}`)}); case "$code" in 2??|3??) exit 0;; *) echo "HTTP $code"; exit 1;; esac`,
+    http: path => previewAvailabilityCommand(manifest.port, path),
   });
+  steps.push({id:"workers",phase:"run",label:"Start required background workers with selected preview settings",command:previewWorkerCommand('start',dir,manifest.backgroundProcesses,manifest.databases.map(d=>d.connectionEnvVar),{webPort:manifest.port}),status:"pending"});
   steps.push({ id: "assets", phase: "verify", label: "Verify assets and database health", command: "", status: "pending" });
   return steps;
 }
@@ -1341,10 +1400,15 @@ async function executeRunbook(
   const head = await sh(workspaceId, `git -C ${shellQuote(dir)} rev-parse HEAD`, 15_000);
   const revision = head.output.trim();
   const loaded = await loadAppProfile(projectId, branch);
+  const omittedSeeds = orderedSchema(manifest).filter(s => s.kind === "seed" && (!s.requiredBy?.trim() || !s.verify?.trim()));
+  if (omittedSeeds.length) plog(projectId, userId, `Skipped ${omittedSeeds.length} seed step(s): preview initialization requires a repository requirement and a read-only existence check.`);
   // Include plan content so a corrected command/config invalidates a previous blocker.
   const envHash = await sh(workspaceId, `sha256sum ${shellQuote(dir + "/.env")} | cut -d ' ' -f1`, 15_000);
   // Invalidate blockers recorded before consolidated patch recovery was available.
   const identity = "replay-feedback-v1:" + revision + envHash.output.trim() + JSON.stringify([manifest, loaded?.profile.configPatches, loaded?.profile.environmentOverrides]);
+  await resolvePreviewWorkers(projectId,workspaceId,manifest,dir);
+  const stoppedWorkers=await sh(workspaceId,previewWorkerCommand('stop',dir,manifest.backgroundProcesses),30000);
+  if(stoppedWorkers.exitCode!==0)throw new Error('Could not stop previous preview workers');
   let executionDir = dir;
   let steps: RunStep[] = [...prelude, ...buildRunbook(manifest, engines, dir)];
   const persist = () => persistSteps(projectId, userId, steps);
@@ -1355,6 +1419,12 @@ async function executeRunbook(
       validateSchemaTargets(orderedSchema(manifest), manifest.databases);
       const profile = await loadAppProfile(projectId, branch);
       if (profile) {
+        const captured = preparedEnvironment.get(manifest);
+        if (captured && profile.profile.appliedProjectEnvironment) {
+          const edited = new Set(environmentChanges(captured, profile.profile.appliedProjectEnvironment));
+          profile.profile.environmentOverrides = (profile.profile.environmentOverrides || []).filter(v => !edited.has(v.key));
+          await saveAppProfile(projectId, profile.profile, branch);
+        }
         await applyBranchEnvironment(workspaceId, profile.profile, executionDir);
         await applySavedPatches(projectId, userId, workspaceId, profile.profile, executionDir);
       }
@@ -1367,7 +1437,9 @@ async function executeRunbook(
           if (matches.length === 1) engine.dbName = matches[0]!.database;
           else if (matches.length > 1 && orderedSchema(manifest).some(s => s.kind === "sqlScript" && !s.connectionKey)) throw new Error("SQL_TARGET_REQUIRED: Multiple logical databases detected. FIRST updatePlan schemaSteps: retain migration order and give EVERY sqlScript a connectionKey matching databases[].connectionEnvVar. Available keys: " + manifest.databases.map(d=>d.connectionEnvVar).join(", ") + ". Do not repair schemas until this routing is saved.");
         }
-        plog(projectId, userId, "Branch databases isolated; external connections unchanged");
+        const currentProfile=await loadAppProfile(projectId,branch);
+        if(currentProfile){currentProfile.profile.databaseIdentities=databases;await saveAppProfile(projectId,currentProfile.profile,branch);}
+        plog(projectId, userId, 'Selected branch databases: '+databases.map(d=>d.engine+': '+d.database).join(', '));
       }
       return { exitCode: 0, output: "Configuration verified" };
     }
@@ -1379,7 +1451,7 @@ async function executeRunbook(
       const checked = await verifyPreview(projectId, userId, workspaceId, manifest, branch);
       return { exitCode: checked.overall === "ok" ? 0 : 1, output: checked.summary + (checked.broken.length ? "\nBroken assets: " + checked.broken.join(", ") : "") };
     }
-    const r = await runDetachedPolled(projectId, userId, workspaceId, command,
+    const r = await runDetachedPolled(projectId, userId, workspaceId, step.id === "install" ? cachedInstallCommand(executionDir,command) : command,
       step.phase === "run" ? 60_000 : step.phase === "schema" ? 600_000 : 1_800_000,
       { stallMs: step.phase === "schema" ? 0 : 900_000, workDir: executionDir });
     throwIfCancelled(projectId);
@@ -1393,6 +1465,7 @@ async function executeRunbook(
   // Every failure, including qualification, returns through the same recovery gate.
   const budget = new PreviewRecoveryBudget(3);
   let pendingFailure: RunStep | null = null;
+  try {
   for (;;) {
     throwIfCancelled(projectId);
     const failedStep = pendingFailure ?? await executeSteps(steps, { run, persist, cancelled: () => isCancelled(projectId) });
@@ -1406,6 +1479,9 @@ async function executeRunbook(
       }
       return { up: true, steps };
     }
+    // A later availability check can fail after workers start. Do not let those
+    // workers consume jobs while recovery changes the checkout/environment.
+    await sh(workspaceId,previewWorkerCommand('stop',dir,manifest.backgroundProcesses),30000);
     const latest = await loadAppProfile(projectId, branch);
     const recipeIdentity = JSON.stringify([manifest, latest?.profile.configPatches, latest?.profile.environmentOverrides]);
     const normalizedFailure = {...failedStep, command: failedStep.command.replace(/\/data\/preview-check-[a-f0-9-]+/g, dir)};
@@ -1424,7 +1500,7 @@ async function executeRunbook(
     steps.push(recovery); await persist();
     await sh(workspaceId, `fuser -k ${manifest.port}/tcp 2>/dev/null || true`, 20_000);
     const outcome = await driveSandbox(projectId, userId, workspaceId, manifest, engines, model, dir,
-      [...configNotes, `FAILED STEP ${failedStep.id} (${failedStep.phase}): ${failedStep.error}. Failed command: ${failedStep.command}. If this came from clean replay, the working sandbox was insufficient: repair the persisted recipe or source patches that the fresh checkout needs. The failed scratch checkout has been removed; reproduce in this selected checkout and save the fix. Do not merely restart the server or claim ready without persisting the missing work. For SQL_TARGET_REQUIRED, FIRST persist schemaSteps with connectionKey on every raw SQL file, preserving migrations before dependent scripts and their verify assertions. Do not run ad-hoc migrations until the mapping is saved. For stale patches, FIRST inspectSavedPatches and replaceSavedPatches; do not start unrelated database work before reconciling configuration. For SQL failures fix the script order/identity handling and persist executable repairs, not just a note to rerun. Use resetDevelopmentDatabase when clean replay is needed; never drop a database without a verified backup. Repair and PERSIST the recipe. The executor will replay it; merely starting a process is not sufficient.`]);
+      [...configNotes, `FAILED STEP ${failedStep.id} (${failedStep.phase}): ${failedStep.error}. Failed command: ${failedStep.command}. If this came from clean replay, the working sandbox was insufficient: repair the runtime recipe; report required source changes for ticket execution. The failed scratch checkout has been removed; reproduce in this selected checkout and save the fix. Do not merely restart the server or claim ready without persisting the missing work. For SQL_TARGET_REQUIRED, FIRST persist schemaSteps with connectionKey on every raw SQL file, preserving migrations before dependent scripts and their verify assertions. Do not run ad-hoc migrations until the mapping is saved. For stale patches, FIRST inspectSavedPatches and replaceSavedPatches; do not start unrelated database work before reconciling configuration. For SQL failures, correct runtime ordering only when the existing repository scripts support it; script contents or identity-handling defects require a ticket repair. Use resetDevelopmentDatabase when clean replay is needed; never drop a database without a verified backup. Repair and PERSIST the recipe. The executor will replay it; merely starting a process is not sufficient.`]);
     throwIfCancelled(projectId);
     recovery.status = outcome ? "done" : "failed"; recovery.finishedAt = new Date().toISOString();
     await persist();
@@ -1474,7 +1550,7 @@ async function executeRunbook(
         if(reset.exitCode!==0 || !/^DATABASE_RESET$/m.test(reset.output)) throw new Error("Clean database qualification reset failed; verified backup retained");
       }
       executionDir = cleanDir;
-      const cleanSteps = buildRunbook(manifest, engines, cleanDir);
+      const cleanSteps = buildRunbook(manifest, engines, cleanDir).filter(step=>step.id!=="workers");
       const previousSteps = steps;
       steps = [...prelude, recovery, clean, ...cleanSteps];
       const invalid = await executeSteps(cleanSteps, { run, persist, cancelled: () => isCancelled(projectId) });
@@ -1489,20 +1565,34 @@ async function executeRunbook(
       continue;
     } finally {
       executionDir = dir;
+      // Workers have no listening port: stop every process rooted in this
+      // generated verification checkout before deleting it.
+      await sh(workspaceId,previewWorkerCommand('cleanup',cleanDir),30000).catch(()=>{});
       // Stop only the scratch app, then remove only our generated checkout.
       await sh(workspaceId, `fuser -k ${manifest.port}/tcp 2>/dev/null || true; git -C ${shellQuote(dir)} worktree remove --force ${shellQuote(cleanDir)}`, 30_000).catch(() => {});
     }
     plog(projectId, userId, "Clean replay passed — restarting from the saved plan in the selected checkout.");
     steps = [...prelude, recovery, clean, ...buildRunbook(manifest, engines, dir)];
   }
+  } catch (error) {
+    await sh(workspaceId,previewWorkerCommand('stop',dir,manifest.backgroundProcesses),30000).catch(()=>{});
+    throw error;
+  }
 }
 const driverFailures = new Map<string, string>();
 
-async function ensurePreviewEngine(projectId: string, userId: string, engine: DbEngine) {
-  return ensureEngine(projectId, engine, {
-    cancelled: () => isCancelled(projectId),
-    progress: (elapsed) => plog(projectId, userId, `Waiting for ${engine} readiness (${elapsed}s)…`),
+async function ensurePreviewEngine(projectId: string, userId: string, engine: DbEngine, spec?: PlannedDb) {
+  const handle = await ensureManagedDatabaseWithRecovery({
+    projectId, userId, engine, cancelled: () => isCancelled(projectId),
+    progress: message => plog(projectId, userId, message),
   });
+  if (spec) {
+    const value = formatConnection(spec, handle);
+    await db.insert(projectEnvironmentVariables)
+      .values({ projectId, key: spec.connectionEnvVar, encryptedValue: encryptSecret(value), isSecret: true, hasValue: true, description: "Managed development database connection" })
+      .onConflictDoUpdate({ target: [projectEnvironmentVariables.projectId, projectEnvironmentVariables.key], set: { encryptedValue: encryptSecret(value), isSecret: true, hasValue: true, updatedAt: new Date() } });
+  }
+  return handle;
 }
 
 async function applyBranchEnvironment(workspaceId: string, profile: AppProfile, dir: string) {
@@ -1529,6 +1619,7 @@ async function saveConsolidatedPatches(projectId:string,userId:string,workspaceI
   const loaded=await loadAppProfile(projectId,branch);
   if(!loaded) throw new Error("No profile available to save preview repairs");
   const patches=[...(loaded.profile.configPatches??[]),...(extra?[extra]:[])];
+  assertPreviewRuntimePatches(patches);
   if(!patches.length) return;
   const clean=`/data/patch-normalize-${crypto.randomUUID()}`;
   try {
@@ -1550,6 +1641,7 @@ async function saveConsolidatedPatches(projectId:string,userId:string,workspaceI
 }
 
 async function applySavedPatches(projectId: string, userId: string, workspaceId: string, profile: AppProfile, dir: string) {
+  assertPreviewRuntimePatches(profile.configPatches);
   const script = buildConfigPatchScript(profile.configPatches, dir);
   if (!script) return;
   const result = await sh(workspaceId, script, 60_000);
@@ -1627,152 +1719,30 @@ async function ensureGoToolchainOnData(projectId: string, userId: string, worksp
 // a real DB migration error, a 500, or which DB the app actually connects to. This tool
 // gives it a strictly READ-ONLY exec into the project's preview VM to gather real
 // evidence. Anything that mutates (rebuild, restart, migrations, writes, mutating SQL)
-// stays behind @preview.
-const PREVIEW_READONLY_BINS = new Set([
-  "curl", "wget", "cat", "head", "tail", "ls", "grep", "egrep", "fgrep", "rg", "find",
-  "wc", "stat", "file", "ps", "df", "du", "free", "env", "printenv", "echo", "pwd",
-  "whoami", "hostname", "date", "which", "command", "sort", "uniq", "cut", "tr", "jq",
-  "nl", "xxd", "docker", "psql", "mysql", "sqlite3", "sqlcmd", "netstat", "ss",
-  "nslookup", "dig", "uname", "id", "awk", "sed", "true", "test",
-]);
-const PREVIEW_MUTATING_SQL = /\b(DROP|DELETE|UPDATE|INSERT|ALTER|TRUNCATE|GRANT|REVOKE|REPLACE|MERGE|VACUUM|REINDEX|CLUSTER)\b/i;
-// git subcommands that only READ. Without these the agent can't answer "which
-// branch is this worktree on / what changed" — the first question of nearly every
-// branch bug. Subcommands with both read and write modes are narrowed below.
-const GIT_READONLY_SUB = new Set([
-  "status", "log", "diff", "show", "branch", "worktree", "rev-parse", "ls-files",
-  "ls-tree", "ls-remote", "describe", "remote", "config", "blame", "shortlog",
-  "cat-file", "name-rev", "for-each-ref", "show-ref", "symbolic-ref", "count-objects",
-]);
-// Switching what a checkout points at. Permitted ONLY in a ticket worktree — never
-// in /data/project, which is the checkout the running preview is serving.
-const GIT_SWITCH_SUB = new Set(["fetch", "checkout", "switch", "restore"]);
-
+// belongs to ticket execution, apart from the explicit app restart operation.
 /** Which checkout on the sandbox a preview action should operate on: the ticket
  *  worktree for the branch currently being previewed, else the default checkout.
  *  Resolves the branch → ticket by BOTH the feature/ticket-<id> convention and the
  *  ticket's recorded githubBranch (custom branch names are the common case), then
  *  verifies the worktree actually exists on the VM. */
 async function resolvePreviewWorkDir(projectId: string, workspaceId: string): Promise<{ dir: string; note: string }> {
-  const [row] = await db.select({ b: projectEnvironments.previewBranch }).from(projectEnvironments).where(eq(projectEnvironments.projectId, projectId));
-  const branch = row?.b || "";
-  if (!branch || branch === "(default)") return { dir: PROJECT_DIR, note: "the default branch" };
-
-  let ticketId = branch.match(/^feature\/ticket-(.+)$/)?.[1] ?? null;
-  if (!ticketId) {
-    const [tk] = await db.select({ id: projectTickets.id })
-      .from(projectTickets)
-      .where(and(eq(projectTickets.projectId, projectId), eq(projectTickets.githubBranch, branch)));
-    ticketId = tk?.id ?? null;
-  }
-  // Not a ticket branch — an EPIC's integration branch runs in its own worktree too, so
-  // resolve that instead of silently handing back the default checkout (which would have
-  // the agent inspecting a tree that isn't what's running).
-  if (!ticketId) {
-    const [ep] = await db.select({ id: epics.id })
-      .from(epics)
-      .where(and(eq(epics.projectId, projectId), eq(epics.branch, branch)));
-    if (!ep) return { dir: PROJECT_DIR, note: "the default branch" };
-    const ewt = branchWorktreeDir(branch);
-    const echk = await sh(workspaceId, `test -d ${ewt} && test -e ${ewt}/.git && echo OK || echo NO`, 20_000).catch(() => ({ output: "NO" } as { output: string }));
-    return echk.output.includes("OK")
-      ? { dir: ewt, note: `epic branch ${branch} (worktree)` }
-      : { dir: PROJECT_DIR, note: "the default branch" };
-  }
-
-  const wt = ticketWorktreeDir(ticketId);
-  const chk = await sh(workspaceId, `test -d ${wt} && test -e ${wt}/.git && echo OK || echo NO`, 20_000).catch(() => ({ output: "NO" } as { output: string }));
-  return chk.output.includes("OK")
-    ? { dir: wt, note: `ticket branch ${branch} (worktree)` }
-    : { dir: PROJECT_DIR, note: "the default branch" };
+  const row = await getEnv(projectId);
+  const trees = await sh(workspaceId, `git -C ${shellQuote(PROJECT_DIR)} worktree list --porcelain`, 20_000);
+  if (trees.exitCode !== 0) throw new Error("Cannot identify the selected preview checkout.");
+  return {dir: restartWorktree(trees.output, row?.previewBranch ?? null), note: `selected branch ${row?.previewBranch || '(default)'}`};
 }
 
-/** Classify a shell command as read-only-safe for autonomous preview inspection. Errs
- *  toward refusal: every pipeline segment must lead with an allow-listed read-only tool,
- *  and known write escapes (redirection, sed -i, find -delete/-exec, curl write methods,
- *  mutating SQL, write docker subcommands) are rejected. */
-function classifyReadonlyPreviewCmd(cmd: string, opts: { allowBranchSwitch?: boolean } = {}): { ok: boolean; reason?: string } {
-  const c = (cmd || "").trim();
-  if (!c) return { ok: false, reason: "empty command" };
-  // File write redirection (allow only 2>&1 and >/dev/null style discards).
-  const redir = c.replace(/2>&1/g, "").replace(/[0-9]?>\s*\/dev\/null/g, "").replace(/&>\s*\/dev\/null/g, "");
-  if (/>/.test(redir)) return { ok: false, reason: "output redirection to a file is not allowed (read-only)" };
-  if (/`|\$\(/.test(c)) return { ok: false, reason: "command substitution is not allowed" };
-  if (PREVIEW_MUTATING_SQL.test(c)) return { ok: false, reason: "a mutating SQL keyword was detected — inspection is read-only (use @preview to run migrations/writes)" };
-  if (/\bsed\b[^|;&]*\s-\w*i/.test(c)) return { ok: false, reason: "sed -i (in-place edit) is not allowed" };
-  if (/\bfind\b[^|;&]*\s-(delete|exec|execdir|ok)\b/.test(c)) return { ok: false, reason: "find -delete/-exec is not allowed" };
-  if (/\b(curl|wget)\b[^|;&]*(-X\s*(POST|PUT|DELETE|PATCH)|--data|--data-raw|\s-d\s|--upload-file|\s-T\s|\s-F\s|--form)/i.test(c)) return { ok: false, reason: "curl/wget write or upload is not allowed — GET only" };
-  const segments = c.split(/\s*(?:\|\||&&|;|\||\n)\s*/).map((s) => s.trim()).filter(Boolean);
-  for (const seg of segments) {
-    const tokens = seg.split(/\s+/).filter((t) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)); // drop leading FOO=bar
-    const bin = (tokens[0] || "").replace(/^.*\//, ""); // basename
-    if (bin === "git") {
-      const g = gitCheck(seg, !!opts.allowBranchSwitch);
-      if (!g.ok) return g;
-      continue;
-    }
-    if (!PREVIEW_READONLY_BINS.has(bin)) return { ok: false, reason: `'${bin || seg}' is not an allowed read-only command` };
-    if (bin === "docker" && /^docker\s+(?!ps\b|logs\b|images\b|inspect\b|top\b|stats\b|version\b|info\b|exec\b)/.test(seg)) {
-      return { ok: false, reason: "only read-only docker subcommands (ps/logs/images/inspect/top/stats) — or docker exec for a read-only DB query — are allowed" };
-    }
-  }
-  return { ok: true };
-}
-
-/** Narrow a single `git ...` segment. Read-only subcommands always pass; the
- *  branch-moving ones (fetch/checkout/switch/restore) only when the target dir is
- *  a ticket worktree, never the checkout the live preview is serving. */
-function gitCheck(seg: string, allowBranchSwitch: boolean): { ok: boolean; reason?: string } {
-  // Skip global options (`git -C dir`, `git --no-pager`) to find the subcommand.
-  const toks = seg.split(/\s+/).slice(1);
-  let i = 0;
-  while (i < toks.length && toks[i]!.startsWith("-")) i += toks[i] === "-C" || toks[i] === "-c" ? 2 : 1;
-  const sub = toks[i] ?? "";
-  const rest = toks.slice(i + 1).join(" ");
-
-  if (GIT_READONLY_SUB.has(sub)) {
-    // These have write modes too — allow only the reading form.
-    if (sub === "worktree" && !/^\s*list\b/.test(rest)) return { ok: false, reason: "only `git worktree list` is allowed" };
-    if (sub === "remote" && rest && !/^\s*(-v|--verbose|show\b|get-url\b)/.test(rest)) return { ok: false, reason: "only `git remote -v` / `git remote show` are allowed" };
-    if (sub === "config" && !/(^|\s)(--get|--get-all|--list|-l)(\s|$)/.test(rest)) return { ok: false, reason: "only reading git config (--get/--list) is allowed" };
-    if (sub === "branch" && /(^|\s)(-d|-D|-m|-M|--delete|--move|--set-upstream)/.test(rest)) return { ok: false, reason: "`git branch` may only list, not create/delete/rename" };
-    if (sub === "restore") return { ok: false, reason: "`git restore` discards work — not allowed" };
-    return { ok: true };
-  }
-  if (GIT_SWITCH_SUB.has(sub)) {
-    if (!allowBranchSwitch) {
-      return { ok: false, reason: `\`git ${sub}\` changes what the checkout points at, which would disturb the running preview — only allowed inside a ticket worktree (pass workdir: "ticket:<id>")` };
-    }
-    // Even in a worktree, don't let a "switch" throw away uncommitted work.
-    if (/(^|\s)(-f|--force|--hard|--discard-changes)(\s|$)/.test(rest)) return { ok: false, reason: `forced \`git ${sub}\` is not allowed` };
-    if (sub === "restore") return { ok: false, reason: "`git restore` discards work — not allowed" };
-    // `git checkout [ref] -- <path>` reverts files rather than moving the branch.
-    if (/(^|\s)--(\s|$)/.test(rest)) return { ok: false, reason: `\`git ${sub} -- <path>\` reverts files — only whole-branch switching is allowed` };
-    return { ok: true };
-  }
-  return { ok: false, reason: `\`git ${sub || "(none)"}\` is not an allowed subcommand — inspection is read-only apart from fetch/checkout/switch inside a ticket worktree` };
-}
-
-/** Build the `inspectPreview` tool bound to a project. Read-only by default; a project
- *  whose owner turned on Agent shell access gets the unrestricted version instead, which
- *  is why this is async — the flag decides what the DESCRIPTION promises, and a tool that
- *  advertises writes it then refuses is worse than one that never offered.
- *  Returns {} if there's no project context (standalone chat), so it's safe to spread. */
+/** Conversation inspection is always read-only. The legacy shell setting cannot override it. */
 export async function createPreviewInspectTool(params: { projectId?: string }): Promise<Record<string, unknown>> {
   const { projectId } = params;
-  let shellAccess = false;
-  if (projectId) {
-    const [row] = await db.select({ f: projects.agentShellAccess }).from(projects).where(eq(projects.id, projectId)).limit(1)
-      .catch(() => [] as Array<{ f: boolean }>);
-    shellAccess = !!row?.f;
-  }
-  if (shellAccess) return { inspectPreview: previewShellTool(projectId!) };
+  // Conversation inspection never escalates to a writable shell, even when the
+  // project enables shell access for other execution contexts.
   return {
     inspectPreview: tool({
       description:
-        "READ-ONLY window into this project's LIVE preview sandbox — use it to DIAGNOSE runtime issues you cannot see from source alone (a database migration error, a 500, why an asset 404s, which DB the app really connects to). Runs ONE shell command on the preview VM and returns its output. Gather REAL evidence instead of guessing: curl the app (GET only), tail the app log, `docker logs`, inspect the DB schema with read-only SQL (SELECT / \\dt / \\d / information_schema), or use read-only git (`git status`, `git log`, `git diff`, `git worktree list`) to see what a checkout actually contains. By DEFAULT it runs in whatever checkout the preview is currently serving — a ticket's worktree when a ticket branch is live — so what you inspect matches what the user is looking at; pass `workdir` to inspect the main checkout or another ticket's worktree instead. You CANNOT mutate — no writes, rebuilds, restarts, migrations, or mutating SQL; those stay behind `@preview`. One exception: inside a ticket worktree you may `git fetch` / `git checkout` / `git switch` to look at another branch. If a fix needs running, report the finding and tell the user to run `@preview`. Only works when a preview sandbox exists for this project.",
+        "READ-ONLY window into this project's LIVE preview sandbox — use it to DIAGNOSE runtime issues you cannot see from source alone (a database migration error, a 500, why an asset 404s, which DB the app really connects to). Runs ONE shell command on the preview VM and returns its output. Gather REAL evidence instead of guessing: curl the app (GET only), tail the app log, `docker logs`, inspect migration files, or use read-only git (`git status`, `git log`, `git diff`, `git worktree list`) to see what a checkout actually contains. By DEFAULT it runs in whatever checkout the preview is currently serving — a ticket's worktree when a ticket branch is live — so what you inspect matches what the user is looking at; pass `workdir` to inspect the main checkout or another ticket's worktree instead. You CANNOT mutate — no writes, rebuilds, restarts, migrations, or mutating SQL; route application changes through the existing ticket. Branch switching is not allowed. handlePreview supports prepared-app restart and manage_data for authorized account/data operations, including worker pause/resume and atomic multi-table cleanup. Source changes require tickets. Only works when a preview sandbox exists for this project.",
       inputSchema: zodSchema(z.object({
-        command: z.string().describe("One shell command, e.g. `curl -s -i http://localhost:8080/`, `tail -n 100 preview.log`, `docker logs --tail 100 postgres`, `docker exec postgres psql -U app -d app -c '\\dt'`, `git log --oneline -5`, `grep -rn \"func.*Migrate\" internal/database`."),
+        command: z.string().describe("One shell command, e.g. `curl -s -i http://localhost:8080/`, `tail -n 100 preview.log`, `docker logs --tail 100 postgres`, `git log --oneline -5`, `grep -rn \"func.*Migrate\" internal/database`."),
         workdir: z.string().optional().describe("Which checkout to run in: \"preview\" (default) = the one the preview is currently serving; \"main\" = the default-branch checkout (/data/project); \"ticket:<ticketId>\" = that ticket's worktree; or an absolute path under /data."),
         reason: z.string().optional().describe("One line: what you're trying to find out."),
       })),
@@ -1782,9 +1752,7 @@ export async function createPreviewInspectTool(params: { projectId?: string }): 
         try { workspaceId = await envWorkspaceId(projectId); }
         catch { return { error: "No preview sandbox exists for this project yet. Ask the user to start a preview (Run default branch), then inspection will work." }; }
 
-        // Resolve the checkout BEFORE classifying: branch switching is allowed
-        // only once we know we're in a worktree, not the checkout the live
-        // preview is serving.
+        // Resolve the selected checkout for inspection only; never switch its branch.
         let dir: string;
         let note: string;
         const w = (workdir || "preview").trim();
@@ -1797,10 +1765,10 @@ export async function createPreviewInspectTool(params: { projectId?: string }): 
           ({ dir, note } = await resolvePreviewWorkDir(projectId, workspaceId));
         }
 
-        const check = classifyReadonlyPreviewCmd(command, { allowBranchSwitch: dir !== PROJECT_DIR });
-        if (!check.ok) return { error: `Refused (read-only inspection): ${check.reason}. To change/fix/restart the preview, use @preview instead.` };
+        const check = compilePreviewInspection(command);
+        if (!check.ok) return { error: `Refused (read-only inspection): ${check.reason}. Route code changes through the ticket workflow. Use handlePreview manage_data for authorized data changes, worker controls and transactional cleanup; restart_app for a restart.` };
         try {
-          const res = await sh(workspaceId, `${envPrefix(dir)}${command}`, 45_000);
+          const res = await sh(workspaceId, `${envPrefix(dir)}${check.command}`, 45_000);
           const output = (res.output || "").slice(-6000).trim();
           return { workdir: dir, ran_in: note, exitCode: res.exitCode, output: output || "(no output)" };
         } catch (e) {
@@ -1811,47 +1779,6 @@ export async function createPreviewInspectTool(params: { projectId?: string }): 
       },
     }),
   };
-}
-
-/** The same window with the guard-rail removed, for a project that opted in. Everything
- *  else is identical — same workdir resolution, same output cap — so turning the setting
- *  on doesn't change WHERE the agent looks, only what it may do there. */
-function previewShellTool(projectId: string) {
-  return tool({
-    description:
-      "A SHELL on this project's LIVE preview sandbox — this project has granted the agent full shell access, so you can both diagnose AND FIX. Runs ONE command and returns its output. Use it for real evidence (curl the app, tail the log, `docker logs`, query the DB, read-only git) and, when you find the problem, for the repair: free a full disk, install a missing package, restart a crashed process, apply a migration, fix a config file. By DEFAULT it runs in whatever checkout the preview is currently serving — a ticket's worktree when a ticket branch is live — so what you touch matches what the user is looking at; pass `workdir` for the main checkout or another ticket's worktree. This is a real machine and the changes are real: prefer the narrow command over the broad one, SAY what you ran and what it did, and don't delete anything you can't identify. `@preview` still owns the full rebuild/restart flow — reach for it rather than reconstructing a boot sequence by hand. Only works when a preview sandbox exists for this project.",
-    inputSchema: zodSchema(z.object({
-      command: z.string().describe("One shell command, e.g. `df -h`, `docker system prune -f`, `tail -n 100 preview.log`, `npm install`, `curl -s -i http://localhost:8080/`."),
-      workdir: z.string().optional().describe("Which checkout to run in: \"preview\" (default) = the one the preview is currently serving; \"main\" = the default-branch checkout (/data/project); \"ticket:<ticketId>\" = that ticket's worktree; or an absolute path under /data."),
-      reason: z.string().optional().describe("One line: what you're doing and why."),
-    })),
-    execute: async ({ command, workdir }: { command: string; workdir?: string; reason?: string }) => {
-      let workspaceId: string;
-      try { workspaceId = await envWorkspaceId(projectId); }
-      catch { return { error: "No preview sandbox exists for this project yet. Ask the user to start a preview (Run default branch), then the shell will work." }; }
-      const w = (workdir || "preview").trim();
-      let dir: string;
-      let note: string;
-      if (w === "main") { dir = PROJECT_DIR; note = "the default checkout"; }
-      else if (w.startsWith("ticket:")) { const t = w.slice(7).trim(); dir = ticketWorktreeDir(t); note = `the worktree for ticket ${t}`; }
-      else if (w.startsWith("/")) {
-        if (!/^\/data\/[\w./-]*$/.test(w)) return { error: 'workdir must be "preview", "main", "ticket:<id>", or an absolute path under /data.' };
-        dir = w; note = w;
-      } else {
-        ({ dir, note } = await resolvePreviewWorkDir(projectId, workspaceId));
-      }
-      try {
-        // Longer than the read-only ceiling: an install or a prune legitimately takes minutes.
-        const res = await sh(workspaceId, `${envPrefix(dir)}${command}`, 180_000);
-        const output = (res.output || "").slice(-6000).trim();
-        return { workdir: dir, ran_in: note, exitCode: res.exitCode, output: output || "(no output)" };
-      } catch (e) {
-        const msg = (e as Error).message || String(e);
-        if (/no VM associated|not found|unreachable/i.test(msg)) return { error: "The preview sandbox isn't running right now — ask the user to start/restart the preview." };
-        return { error: `Command failed: ${msg.slice(0, 200)}` };
-      }
-    },
-  });
 }
 
 function buildDriverSystemPrompt(manifest: PreviewManifest, engines: EngineHandle[], workDir: string = PROJECT_DIR, configNotes: string[] = [], directives: string[] = []): string {
@@ -1875,11 +1802,15 @@ function buildDriverSystemPrompt(manifest: PreviewManifest, engines: EngineHandl
     `- port: ${port}`,
   ].filter(Boolean).join("\n");
 
-  return `You are an expert DevOps engineer bringing an EXISTING application up so it can be previewed live. You DRIVE a remote Alpine Linux sandbox by calling the \`run\` tool with shell commands — one command per call — and reading the real output before deciding the next. When the app is confirmed serving, call \`finish\`.
+  return `${DEVELOPMENT_DATABASE_RECOVERY_INSTRUCTION}
+
+${DEVELOPMENT_ACCESS_INSTRUCTION}
+
+You are an expert DevOps engineer bringing an EXISTING application up so it can be previewed live. You DRIVE a remote Alpine Linux sandbox by calling the \`run\` tool with shell commands — one command per call — and reading the real output before deciding the next. When the app is confirmed serving, call \`finish\`.
 
 SANDBOX: Alpine Linux (musl, apk, OpenRC/rc-service, busybox) — NOT Debian. Use \`apk add --no-cache <pkg>\` (never apt/yum), \`rc-service <svc> start\` (never systemctl). Docker is installed and running. Every \`run\` command ALREADY has: the .NET toolchain on PATH (if installed to /data/.dotnet), caches pointed at /data (NUGET_PACKAGES, DOTNET_CLI_HOME, TMPDIR — keep everything on /data, the 20GB volume; the root fs is tiny), and the .env in your working dir sourced. You are in ${workDir}.
 ${isBranch ? `\nIMPORTANT — you are running a FEATURE BRANCH from a git worktree at ${workDir}. The MAIN branch already ran successfully on this same VM, so the toolchain (/data/.dotnet) and the package cache (/data/.nuget) are ALREADY installed and warm — do NOT reinstall the toolchain or re-fix things the main run already fixed; reuse them. The DB connection strings + any env fixes are already in this worktree's .env. You likely just need: restore (fast, cache is warm) → build → start the app. Work in ${workDir} (cd there for every command).\n` : ""}
-The repo is already cloned. The databases below are already installed + running (do NOT install/start any DB); their connection strings are already in .env:
+The repo is already cloned. The databases below passed provisioning checks; verify their current state when an error occurs and recover the local development service using the recovery policy above. Reuse their configured credentials, ports, and data directories. Their connection strings are in .env:
 ${dbLines}
 
 ${directives.length ? `MANDATORY DIRECTIVES (project-specific rules — you MUST verify EACH is satisfied and make it so; do NOT skip any, and do NOT call finish until they hold):\n${directives.map((d) => `  ▣ ${d}`).join("\n")}\n\n` : ""}SETUP PLAN (from analyzing the codebase — follow it, but verify against reality and adapt when a command fails):
@@ -1894,7 +1825,7 @@ HOW TO WORK:
 - Apply migrations, then the SQL scripts in order (SQL Server runs in Docker — use \`docker exec\` with sqlcmd inside the mssql container, or a client you install; the connection string is in .env).
 - Start the APP SERVER detached so it keeps running after the command returns: \`setsid sh -c 'cd ${workDir}; <run command>' </dev/null > ${workDir}/preview.log 2>&1 &\` — it must bind 0.0.0.0:${port}. (This is the ONLY case where you background a command yourself.)
 - VERIFY for real: \`curl -sS -i http://127.0.0.1:${port}/\`. A real 2xx/3xx/4xx = up → \`finish\` ready. 000/connection-refused = down → read ${workDir}/preview.log, diagnose, fix, retry.
-- CASE SENSITIVITY: Historical instructions recommending case aliases are obsolete; preserve their goal using canonical references instead. Correct asset REFERENCES to the canonical tracked filename. NEVER add case-bridging copies or symlinks under wwwroot: ASP.NET static asset discovery treats these as conflicting build targets. Remove only aliases proven preview-created (untracked and identical to their tracked target); never delete distinct tracked assets. Persist the repair. Verify the affected URLs AND rebuild again to prove the next run works.
+- CASE SENSITIVITY: Report incorrect asset references and the canonical tracked filenames for a ticket repair. Do not edit source, create aliases, or save source patches in preview.
 - A 500 needs judgement: the app IS serving (running), but errored on the request. Read the error in ${workDir}/preview.log.
   • ENVIRONMENT issue in your remit (missing/wrong connection string, a service that isn't up, a missing env var) → fix it and retry.
   • A SCHEMA error ("Invalid column name", "Invalid object name", "relation does not exist", "Unknown column", a missing table/column — Postgres/MySQL/SQL Server alike) is almost always a schema that FAILED TO BUILD — and building the schema IS your job, so do NOT give up on it. (DB clients: SQL Server → \`docker exec -i mssql …sqlcmd…\`, list with \`SELECT name FROM sys.tables\`; Postgres → \`docker exec -i postgres psql\`, list with \`\\dt\` / information_schema.tables; MySQL → \`docker exec -i mysql mysql\`, \`SHOW TABLES\`.) First look at the Steps: did migration/schema steps FAIL (crossed out)? They usually did, for fixable reasons: (a) a SQL file has a UTF-8 BOM/encoding that breaks the first statement — re-apply stripping the BOM (\`tail -c +4 file | …\` if the first 3 bytes are EF BB BF); (b) the migration ran against a DIFFERENT database than the app (NEVER hardcode a DB name — use the .env connection the app uses; verify the app's DB actually has the tables); (c) wrong order — a script ALTERs a table an earlier failed step should have created, so fix the earlier step first; (d) a bad migration (e.g. drops a column before its table exists) — report the actual schema conflict and repair the migration on the isolated branch; never forge migration history. (e) a script that RESTORES a whole database FROM DISK='…\\x.bak' — that backup lives on the original dev machine and is NOT in the repo/sandbox; SKIP it entirely (do not try to find, download, or recreate the .bak, and do not restore over the app's DB), the schema comes from the migrations + the other scripts. Re-apply the failed schema steps against the SAME DB the app uses, then restart and re-check the page. Call \`noteLearning\` for each fix so the next run has it.
@@ -1905,7 +1836,7 @@ PERSISTING WHAT YOU LEARN (so the next run doesn't repeat your work):
 - Each \`run\` command starts a FRESH shell, so a bare \`export FOO=bar\` does NOT carry to the next command. For an environment fix that must stick (an env var, a cert/CA path, a package source), call the \`setEnv\` tool — it stores the var on the project (encrypted) AND writes it into .env now, so it is re-applied on every future setup and SURVIVES a VM rebuild. (Appending to ./.env only lasts while this VM lives — if the VM is recreated you'd have to rediscover the fix.)
 - When you discover the PLAN itself was wrong and found what works — a different toolchain install, install/build/run command, startup project, or port — call \`updatePlan\` to persist the corrected value. Do this AFTER you've confirmed the new command works. This is how the checklist self-heals: the next preview run skips straight to the working commands. IMPORTANT: in a build/run command you persist, use paths RELATIVE to the working dir (e.g. \`Cohire.Web/wwwroot/CohireFiles\`), NOT absolute \`${PROJECT_DIR}/...\` — the same command is later run in FEATURE-BRANCH worktrees, and a hardcoded ${PROJECT_DIR} path would touch main instead of the worktree.
 - When you learn a FACT that no plan field captures — a schema/ordering rule (migration MUST run before a SQL script), a missing client (\`sqlcmd\` isn't installed → use \`docker exec\`), a config gotcha — call \`noteLearning\` so the next run and every feature branch see it up front. Record it the moment you learn it; this is what stops the "figure the same thing out for 2 hours every run" loop.
-- When you EDIT A SOURCE OR CONFIG FILE for the app to run (e.g. repoint a connection string in appsettings.json from a dead dev/prod host to the provisioned localhost DB, or a Serilog sink connection the app reads from the file), use \`persistConfigPatch\` — NOT a bare sed/echo. A plain edit is a change to a TRACKED file, so a git branch switch / fresh checkout / rebuild RESETS it and the app breaks again; persistConfigPatch re-applies it automatically after every checkout, so branches and rebuilds inherit it. (Env fixes → setEnv; tracked-file config fixes → persistConfigPatch.)
+- Persist supported runtime configuration overrides with \`persistConfigPatch\`; prefer environment settings. Application source repairs belong to tickets. Never persist account mutations or test scripts.
 
 RUNNING COMMANDS — IMPORTANT:
 - The \`run\` tool already runs each command DETACHED and polls it to completion, so restore/build/install take as long as they need — you do NOT need to background them, add \`&\`, nohup, or your own timeout wrapper. Just run the plain command (e.g. \`dotnet build Cohire.sln -c Release\`).
@@ -1918,8 +1849,11 @@ RUNNING COMMANDS — IMPORTANT:
   This avoids the wasteful "run → vague failure → re-run to see the error" cycle.
 
 RULES:
-- SQL schema/seed scripts may be repaired as saved preview patches on the default checkout too; inspect dependencies and identity handling, preserve the original schema using resetDevelopmentDatabase before a destructive reset, and persist executable fixes via persistConfigPatch plus ordered schemaSteps. Inspect scripts before execution and never hide database drops inside scripts to bypass the backup tool. Do not treat noteLearning or a successful second run on a partially seeded DB as a fix. ${PREVIEW_SOURCE_POLICY} Never disable migrations, suppress PendingModelChangesWarning, or mark unapplied migrations as applied; repair and validate the model/migration instead.
+- Inspect repository SQL schema/seed scripts and dependencies before execution. Runtime ordering may be corrected in schemaSteps, but script, model and migration changes require ticket execution. Never save SQL source patches, hide database drops in scripts, disable migrations, suppress PendingModelChangesWarning, or mark unapplied migrations as applied. Do not treat noteLearning or a successful second run on a partially seeded database as a source fix. ${PREVIEW_SOURCE_POLICY}
 - When a command genuinely fails (a real non-zero exit with an error), read the error and fix the ENVIRONMENT, then continue. Keep going until the app responds or it truly cannot run — do not give up after one failed attempt.
+- Required background workers belong in backgroundProcesses, never detached shell commands or replay actions. The runtime starts/stops them with the selected web app and environment. Never launch workers in a preview-check checkout.
+- Preview owns runtime preparation and basic availability only. Do not install browser-test tools or run login/feature/acceptance tests during preview setup or recovery. These belong to ticket validation, even if old learnings/directives or replayActions say otherwise. A failed login test is not proof the server cannot start.
+- Do not bootstrap administrator accounts or reset passwords as a startup habit. Only initialize data explicitly required by the repository, using its existing seed/bootstrap command. Record the source requirement in schemaSteps.requiredBy and a read-only existence assertion in verify; when the data already exists, skip the seed. Never compare passwords as an existence check. Requested test-account creation/reset uses the separate preview data operation, without a ticket build or a recurring startup action.
 - One command per \`run\` call. Never print secrets.`;
 }
 
@@ -1932,8 +1866,9 @@ RULES:
  */
 async function runDetachedPolled(
   projectId: string, userId: string, workspaceId: string, command: string, maxMs: number,
-  opts?: { stallMs?: number; workDir?: string; onActivity?: () => void },
+  opts?: { stallMs?: number; workDir?: string; onActivity?: () => void; abortSignal?: AbortSignal; onProgress?: (detail: string) => void },
 ): Promise<{ exitCode: number; output: string }> {
+  opts?.abortSignal?.throwIfAborted();
   const id = `r${Date.now().toString(36)}${Math.floor(Math.random() * 1e7).toString(36)}`;
   const dir = "/data/.run";
   const logf = `${dir}/${id}.log`, donef = `${dir}/${id}.done`, scriptf = `${dir}/${id}.sh`;
@@ -1955,7 +1890,8 @@ async function runDetachedPolled(
   // so the driver gets fast feedback (~minutes) instead of burning the full
   // maxMs. 0 = disabled (for genuinely-silent steps like SQL restores).
   const stallMs = opts?.stallMs ?? 0;
-  const deadline = Date.now() + maxMs;
+  const startedAt = Date.now();
+  const deadline = startedAt + maxMs;
   let interval = 3000;
   let lastSize = -1;
   let lastGrowthAt = Date.now();
@@ -1964,7 +1900,7 @@ async function runDetachedPolled(
     opts?.onActivity?.(); // keep the caller's idle watchdog alive during a long command
     interval = Math.min(interval + 2000, 15000); // back off: 3s,5s,7s…15s
     // Cancelled → kill the detached command's process tree and bail.
-    if (isCancelled(projectId)) {
+    if (isCancelled(projectId) || opts?.abortSignal?.aborted) {
       await execOnWorkspace(workspaceId, `pkill -9 -f ${id} 2>/dev/null; echo cancelled`, { timeout: 20_000 }).catch(() => {});
       return { exitCode: -3, output: "(cancelled)" };
     }
@@ -1978,8 +1914,9 @@ async function runDetachedPolled(
         .catch(() => ({ output: "", stderr: "", exitCode: 0 }));
       return { exitCode: code, output: (out.output || "").trim() || "(no output)" };
     }
+    opts?.onProgress?.(`Preview command still running (${Math.round((Date.now() - startedAt) / 1000)}s elapsed).`);
     if (stallMs > 0) {
-      const size = parseInt((chkOut.match(/SIZE:(\d+)/) || [])[1] ?? "0", 10);
+      const size = parseInt((chkOut.match(/SIZE:\s*(\d+)/) || [])[1] ?? "0", 10);
       if (size > lastSize) { lastSize = size; lastGrowthAt = Date.now(); }
       else if (Date.now() - lastGrowthAt > stallMs) {
         const tail = await execOnWorkspace(workspaceId, `pkill -9 -f ${id} 2>/dev/null; tail -c 2000 ${logf} 2>/dev/null`, { timeout: 30_000 }).catch(() => ({ output: "" }));
@@ -2012,6 +1949,7 @@ async function driveSandbox(
   const failedCommands = new Set<string>();
   const resets = new Set<string>();
   const reconcilePatches = async (patches: NonNullable<AppProfile["configPatches"]>, reason: string) => {
+    assertPreviewRuntimePatches(patches);
     const check = async (target: string) => {
       const script = buildConfigPatchScript(patches, target, true);
       if (!script) return;
@@ -2059,7 +1997,7 @@ async function driveSandbox(
       execute: async ({patches,reason}) => { try { return await reconcilePatches(patches,reason); } catch(e) { return `Patch replacement rejected: ${(e as Error).message}`; } },
     }),
     resetDevelopmentDatabase: tool({
-      description: "Back up and reset one managed local SQL Server development database when schema repair needs a clean replay. Specify its active .env connection key and exact database. Saves full schema+data backup plus original tracked source, verifies backup, persists location, then resets. External connections and system databases are refused. At most once per database per recovery. Afterward fix and persist SQL scripts/ordered schemaSteps, then replay the entire schema; do not mark success on a partially repaired database.",
+      description: "Back up and reset one managed local SQL Server development database when schema repair needs a clean replay. Specify its active .env connection key and exact database. Saves full schema+data backup plus original tracked source, verifies backup, persists location, then resets. External connections and system databases are refused. At most once per database per recovery. Use only existing repository scripts with corrected runtime ordering; source changes require ticket execution. Do not mark success on a partially repaired database.",
       inputSchema:zodSchema(z.object({database:z.string(),connectionKey:z.string(),reason:z.string().min(1)})),
       execute: async ({database,connectionKey,reason}) => {
         if(resets.has(database)) return "Database reset already attempted in this recovery; stop repeating it and repair the recipe.";
@@ -2092,7 +2030,7 @@ async function driveSandbox(
         timeoutSec: z.number().optional().describe("How long to wait for THIS command before returning control (default 600, max 1800). For a big restore/build use ~1500. A timeout terminates the process before returning; do not launch duplicate work."),
       })),
       execute: async ({ command, timeoutSec }: { command: string; timeoutSec?: number }) => {
-        if (previewPublicationBlocked(command)) return {exitCode:1,output:"Preview repairs must never be checked in or pushed. Save the repair with persistConfigPatch instead."};
+        if (previewPublicationBlocked(command)) return {exitCode:1,output:"Preview repairs must never be checked in or pushed. Application repairs belong to ticket execution."};
         if (/\bDROP\s+DATABASE\b|\bdropdb\b/i.test(command)) return {exitCode:1,output:"Direct database drops are blocked. Use resetDevelopmentDatabase so a verified original backup is saved first."};
         const state = await sh(workspaceId, `cd ${shellQuote(workDir)} && { git diff HEAD; sha256sum .env 2>/dev/null; } | sha256sum`, 15_000);
         const commandKey = command + state.output.trim();
@@ -2163,7 +2101,7 @@ async function driveSandbox(
       },
     }),
     persistConfigPatch: tool({
-      description: "Persist an edit to a CONFIG FILE so it SURVIVES a git branch switch, a fresh checkout, and a rebuild (like setEnv does for env vars, but for a tracked file that a checkout would otherwise reset). This also records minimal SOURCE repairs on default and ticket previews; never commit these repairs. Use this whenever you edit a file for the app to RUN in the sandbox: e.g. repoint a connection string in appsettings.json from a dead dev/prod host to the provisioned localhost DB, or a Serilog sink connection that the app reads from the file. Give the EXACT literal text to find + its replacement. It's applied NOW and auto-re-applied after every future checkout/branch-switch, so branches and rebuilds never rediscover it.",
+      description: "Persist a supported runtime configuration override (appsettings.json or application.yml/properties). Prefer setEnv. Source, login/UI, scripts and dependency changes must go through tickets and cannot be replayed as preview patches.",
       inputSchema: zodSchema(z.object({
         file: z.string().describe("Path relative to the working dir, e.g. 'Cohire.Web/appsettings.json'."),
         find: z.string().describe("EXACT literal substring currently in the file to replace (copy it verbatim)."),
@@ -2172,6 +2110,7 @@ async function driveSandbox(
         create: z.boolean().optional().describe("Create a sandbox-only file; find must be empty."),
       })),
       execute: async ({ file, find, replace, reason, create }: { file: string; find: string; replace: string; reason?: string; create?: boolean }) => {
+        assertPreviewRuntimePatches([{file}]);
         const script = buildConfigPatchScript([{ file, find, replace, create }], workDir);
         if (script) { const r = await sh(workspaceId, script, 30_000); if (r.exitCode !== 0) return `Patch failed: ${failureSummary(r.output)}`; }
         try {
@@ -2246,7 +2185,7 @@ async function driveSandbox(
       tools,
       stopWhen: stepCountIs(40), // generous step budget — schema-heavy apps (30+ scripts) need room to repair AND start
       system: buildDriverSystemPrompt(manifest, engines, workDir, configNotes, directives),
-      prompt: `Profile scope: ${profileBranch}. schemaSteps/replayActions/verificationPaths corrections must be JSON arrays. Persist every repair; do not use unrecorded shell workarounds. Database drops must use resetDevelopmentDatabase so the original schema and data are backed up first. Repair schema script ordering and identity inserts at their source using saved patches; never rely on rerunning a partially failed script until it works. Never commit or push to main from preview recovery. Bring the app up and verify it serves on 0.0.0.0:${port} (working dir: ${workDir}). Begin.`,
+      prompt: `Profile scope: ${profileBranch}. schemaSteps/replayActions/verificationPaths corrections must be JSON arrays. Persist every repair; do not use unrecorded shell workarounds. Database drops must use resetDevelopmentDatabase so the original schema and data are backed up first. Correct runtime script ordering when appropriate. Report SQL source or identity-insert defects for ticket execution; do not save source patches or rely on rerunning a partially failed script until it works. Never commit or push to main from preview recovery. Bring the app up and verify it serves on 0.0.0.0:${port} (working dir: ${workDir}). Begin.`,
       abortSignal: ac.signal,
     });
   } catch (e) {
@@ -2278,280 +2217,63 @@ async function driveSandbox(
   return false;
 }
 
-/** Summarize what the preview agent did from its recent command log — used when it ends
- *  WITHOUT calling `reply`, and (with interrupted=true) when it's PAUSED by a watchdog/Stop
- *  instead of dying silently. On interruption the message explains where it got to and
- *  invites the user to say "continue" (the next @preview inherits this history + prior
- *  actions, so it resumes rather than restarts). */
-async function summarizePreviewRun(model: LanguageModel, instruction: string, projectId: string, interrupted: boolean): Promise<{ reply: string; status: "ok" | "error" | "stuck" }> {
-  const rawTail = (logBuffers.get(projectId) || "").slice(-9000);
-  if (!rawTail.trim()) {
-    return { reply: interrupted
-      ? "I was working on the preview but **paused before finishing** (it was taking a while). Nothing was left broken. Reply **\"continue\"** and I'll pick up from where I left off."
-      : "I investigated but couldn't produce a clean summary — open the Preview tab logs for the details.", status: "stuck" };
-  }
+/** Structured operations on the selected preview database; no shell agent. */
+export async function runPreviewDataOperation(opts: {
+  projectId:string; publicProjectId:string; userId:string; conversationId:string;
+  instruction:string; abortSignal?:AbortSignal; onActivity?:()=>void; onProgress?:(detail:string)=>void;
+}): Promise<{status:'ok'|'error';reply:string}> {
+  // Share the preview lifecycle queue so branch switches/restarts cannot race a
+  // multi-table data transaction. Unlike acquirePreviewRun, do not cancel work.
+  const selected=await getEnv(opts.projectId);
+  if(selected?.previewStatus!=='running')return {status:'error',reply:'The selected preview must be running before changing its account or data. No ticket was started.'};
+  const release=await acquirePreviewAccess(opts.projectId);
   try {
-    const { object } = await generateObject({
-      model,
-      schema: zodSchema(z.object({
-        status: z.enum(["ok", "error", "stuck"]).describe("ok = fixed/verified; error = can't run; stuck = paused/needs the user or a genuine code-data bug"),
-        summary: z.string().describe("2-5 sentences, markdown ok. What was being done, what was found, and the next step (or, if paused, that the user can say \"continue\"). Do NOT paste raw SQL/console output."),
-      })),
-      prompt: `You are the LFG Preview agent. You were ${interrupted ? "PAUSED (it was taking too long) while working on" : "asked to do"} "${instruction}" on the live sandbox${interrupted ? ", so you did NOT finish yet" : " but didn't leave a summary"}. From the commands you ran and THEIR OUTPUTS below, write a concise, coherent chat reply for the user: what you were doing and what you found so far. ${interrupted ? "Then clearly say you PAUSED and that they can reply \"continue\" to resume from here — and mention any caveat (a step still pending, something half-applied). Do NOT claim it's done." : "Give the root cause and the recommended next step. If the schema is fine but the app's own code queries a column/table that doesn't exist, say clearly it's an application/repo bug (name the exact column/table) that needs a code or migration fix — not something the preview can fix."}\n\nRecent commands + outputs:\n${rawTail}`,
-    });
-    return { reply: object.summary, status: object.status };
-  } catch {
-    return { reply: interrupted
-      ? "I **paused mid-task** (it was taking a while) — nothing left broken. Reply **\"continue\"** and I'll resume from where I stopped."
-      : "I investigated but couldn't produce a clean summary — open the Preview tab logs for the details.", status: "stuck" };
-  }
-}
-
-// ── Interactive preview agent (@preview in chat) ──────────────────────────────
-// Full shell control of the project's LIVE sandbox, driven by a chat request
-// ("@preview restart the app", "@preview why is postgres failing?"). Same `run`
-// loop as the setup driver, but the goal is the user's instruction and it replies
-// with a chat summary. Commands stream into the Preview tab log; abort via the
-// chat Stop. Does NOT re-run setup — it acts on the already-provisioned sandbox.
-export async function runPreviewChat(opts: {
-  projectId: string;          // internal id
-  publicProjectId: string;
-  userId: string;
-  conversationId: string | null;
-  instruction: string;
-  abortSignal?: AbortSignal;
-  /** Auto-invoked flows (e.g. asset self-heal) set this so the agent fixes the
-   *  LIVE preview but NEVER git commit/push — auto-committing to the user's branch
-   *  is a surprise they explicitly don't want. */
-  noCommit?: boolean;
-  /** Bumped on every step so the caller's idle watchdog treats a long-but-active
-   *  @preview session (many commands) as alive, not hung. Without it the watchdog
-   *  killed long preview runs with "The assistant stopped responding". */
-  onActivity?: () => void;
-}): Promise<{ reply: string; status: "ok" | "error" | "stuck" }> {
-  const { projectId, publicProjectId, userId, instruction, abortSignal, noCommit } = opts;
-  publicIdCache.set(projectId, publicProjectId); // WS routing for plog
-
-  const driver = await resolveDriverModel(userId, projectId);
-  if (!driver) return { reply: "I can't reach an AI model — add an API key in Settings to use the preview agent.", status: "error" };
-
-  let workspaceId: string;
-  try { ({ workspaceId } = await ensureProjectSandbox(projectId)); }
-  catch { return { reply: "There's no preview sandbox for this project yet. Open the **Preview** tab and run setup first, then ask me again.", status: "error" }; }
-
-  const row = await getEnv(projectId);
-  const profileBranch = row?.previewBranch && row.previewBranch !== "(default)" ? row.previewBranch : "default";
-  const manifest = row?.setupManifest ? (JSON.parse(row.setupManifest) as PreviewManifest) : null;
-  const port = manifest?.port ?? DEFAULT_PORT;
-  const runCmd = row?.runCommand || manifest?.runCmd || "";
-  const savedProfile = await loadAppProfile(projectId, profileBranch);
-  let configNotes = savedProfile ? profileNotes(savedProfile.profile) : [];
-  const directives = savedProfile?.profile.directives ?? [];
-  // What the last setup/preview run already did — captured BEFORE this chat runs
-  // any commands of its own, so a follow-up @preview continues from where the
-  // previous run left off instead of re-investigating from scratch.
-  const priorActions = summarizeAgentActions(logBuffers.get(projectId) || row?.setupLog || "");
-
-  // Operate on whatever branch is CURRENTLY being previewed — a ticket's git
-  // worktree if a branch is live, else main's /data/project. Otherwise @preview
-  // would act on main while you're looking at a ticket branch.
-  // Resolves the branch → worktree by BOTH the feature/ticket-<id> convention and
-  // the ticket's recorded githubBranch, so a custom branch name doesn't silently
-  // send @preview at main.
-  const { dir: workDir, note: branchNote } = await resolvePreviewWorkDir(projectId, workspaceId);
-
-  plog(projectId, userId, `@preview (${branchNote}): ${instruction}`);
-
-  // Load the recent conversation so the agent can resolve references like "do THAT small
-  // change", "fix it", "the case-mismatch above" — @preview previously saw ONLY the
-  // current message and kept replying "the original request isn't in my context".
-  let historyContext = "";
-  if (opts.conversationId) {
-    const recent = await db.select({ role: messages.role, content: messages.content })
-      .from(messages)
-      .where(eq(messages.conversationId, opts.conversationId))
-      .orderBy(desc(messages.createdAt))
-      .limit(16)
-      .catch(() => [] as { role: string; content: string }[]);
-    // Chronological, drop the just-persisted current @preview message (it IS the instruction).
-    const ordered = recent.reverse().filter((m) => (m.content || "").trim());
-    const priorMsgs = ordered.slice(0, -1);
-    if (priorMsgs.length) {
-      const lines = priorMsgs
-        .map((m) => `${m.role === "user" ? "User" : "Assistant"}: ${(m.content || "").replace(/\s+/g, " ").slice(0, 1000)}`)
-        .join("\n");
-      historyContext = `## Recent conversation (context — the user's request below may refer to THIS)\n${lines}\n\n## The user's @preview request (act on this)\n`;
-    }
-  }
-  const agentPrompt = historyContext + instruction;
-
-  let reply = "";
-  let replyStatus: "ok" | "error" | "stuck" = "ok";
-  const tools = {
-    run: tool({
-      description: "Run one shell command in the project's live Alpine sandbox (bash). Runs detached + polled, so long commands are fine. Returns exit code + combined stdout/stderr (last 6KB). exitCode -2 = terminated at the deadline (inspect the failure before retrying); -4 = we killed it after ~4 min of no output (stuck — change approach).",
-      inputSchema: zodSchema(z.object({
-        command: z.string().describe("One shell command (use && or a heredoc for multi-step). Run in the FOREGROUND — do NOT add '&'/nohup/setsid yourself; we detach it. EXCEPTION: the app server must be launched detached (setsid ... &) so it keeps running."),
-        timeoutSec: z.number().optional().describe("Seconds to wait before returning control (default 600, max 1800)."),
-      })),
-      execute: async ({ command, timeoutSec }: { command: string; timeoutSec?: number }) => {
-        if (previewPublicationBlocked(command)) return {exitCode:1,output:"Preview repairs must never be checked in or pushed. Save the repair with persistConfigPatch instead."};
-        opts.onActivity?.(); // proof-of-life for the caller's idle watchdog (each command = alive)
-        const maxMs = Math.min(Math.max(timeoutSec ?? 600, 10), 1800) * 1000;
-        plog(projectId, userId, `$ ${command}`);
-        const r = await runDetachedPolled(projectId, userId, workspaceId, command, maxMs, { stallMs: 240_000, workDir, onActivity: opts.onActivity });
-        plog(projectId, userId, `  → exit ${r.exitCode}`, r.output ? { detail: r.output.slice(-1800), level: r.exitCode === 0 ? "info" : "error" } : undefined);
-        return { exitCode: r.exitCode, output: r.exitCode === 0 ? r.output.slice(-6000) || "(no output)" : failureSummary(r.output, 6000) };
-      },
-    }),
-    setEnv: tool({
-      description: "PERSIST an environment fix so it's applied on EVERY future preview/setup AND inherited by ticket branches — not just this live app. Use this whenever you fix something via an env var (a cert/CA path, ASPNETCORE_FORWARDEDHEADERS_ENABLED, a base URL, a runtime flag) INSTEAD of only echoing to .env. Stored (encrypted) on the project + written to .env now. This is how a fix you make on main automatically reaches feature branches and the next rebuild.",
-      inputSchema: zodSchema(z.object({ key: z.string(), value: z.string(), reason: z.string().optional() })),
-      execute: async ({ key, value, reason }: { key: string; value: string; reason?: string }) => {
-        if (UNSAFE_ENV_KEYS.has(key)) {
-          return `Refused: ${key} is machine-specific and must NOT be persisted — it gets injected into other VMs and clobbers their real ${key}. Reference the tool's absolute path instead.`;
-        }
-        try {
-          await db.insert(projectEnvironmentVariables)
-            .values({ projectId, key, encryptedValue: encryptSecret(value), isSecret: false, hasValue: true, description: reason || "preview fix" })
-            .onConflictDoUpdate({ target: [projectEnvironmentVariables.projectId, projectEnvironmentVariables.key], set: { encryptedValue: encryptSecret(value), hasValue: true, updatedAt: new Date() } });
-          const line = `${key}="${String(value).replace(/(["\\$`])/g, "\\$1")}"`;
-          const b64 = Buffer.from(line).toString("base64");
-          for (const d of [...new Set([workDir, PROJECT_DIR])]) {
-            await sh(workspaceId, `cd ${d} 2>/dev/null && (grep -v '^${key}=' .env 2>/dev/null > .env.tmp; echo ${b64} | base64 -d >> .env.tmp; mv .env.tmp .env) && echo SET_ENV`, 30_000);
-          }
-          plog(projectId, userId, `Persisted env ${key} (applies to future runs + branches)`, { detail: reason });
-          return `persisted ${key} — future setups and branches inherit it.`;
-        } catch (e) { return `failed to persist env: ${(e as Error).message}`; }
-      },
-    }),
-    updatePlan: tool({
-      description: "PERSIST a correction to the saved setup plan (toolchain/install/build/run/port/startupProject) so the next preview build uses the working command, and branches inherit it. Use after you've confirmed the corrected command works.",
-      inputSchema: zodSchema(z.object({
-        field: z.enum(["toolchain", "installCmd", "buildCmd", "runCmd", "port", "startupProject"]),
-        value: z.string().describe("Corrected value. For 'toolchain', full command sequence one per line. For 'port', the number as a string."),
-        reason: z.string().optional(),
-      })),
-      execute: async ({ field, value, reason }: { field: string; value: string; reason?: string }) => {
-        if (!manifest) return "no saved plan to update yet — run a full setup first.";
-        if (field === "toolchain") manifest.toolchain = value.split("\n").map((s) => s.trim()).filter(Boolean);
-        else if (field === "port") { const p = parseInt(value, 10); if (p > 0) manifest.port = p; }
-        else (manifest as any)[field] = value;
-        await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId)).catch(() => {});
-        await applyProfileCorrection(projectId, field, value, reason, profileBranch).catch(() => {});
-        plog(projectId, userId, `Updated plan: ${field}`, { detail: reason });
-        return "plan updated — future builds + branches use this.";
-      },
-    }),
-    noteLearning: tool({
-      description: "Record a non-obvious FACT you learned about running THIS app that a plan field can't capture (a schema/ordering rule, a missing client, a config gotcha, a workaround) so future previews AND feature branches get it up front instead of rediscovering it. Persisted on the profile and shown to future agents as a CONFIG QUIRK.",
-      inputSchema: zodSchema(z.object({ note: z.string().describe("One concrete, actionable sentence.") })),
-      execute: async ({ note }: { note: string }) => {
-        const ok = await recordProfileLearning(projectId, note, profileBranch).catch(() => false);
-        plog(projectId, userId, `Learned: ${note}`);
-        return ok ? "recorded — future runs and branches will see this." : "noted (no profile yet).";
-      },
-    }),
-    addDirective: tool({
-      description: "Add a MANDATORY DIRECTIVE — a must-do rule every future run/preview must verify + satisfy (stronger than noteLearning). Use after solving a blocker that must never regress, phrased as an imperative the next agent can check.",
-      inputSchema: zodSchema(z.object({ directive: z.string() })),
-      execute: async ({ directive }: { directive: string }) => {
-        const ok = await recordDirective(projectId, directive, profileBranch).catch(() => false);
-        plog(projectId, userId, `Added mandatory directive: ${directive}`);
-        return ok ? "recorded — every future run must satisfy this." : "noted (no profile yet).";
-      },
-    }),
-    persistConfigPatch: tool({
-      description: "Persist a CONFIG-FILE edit so it SURVIVES a git branch switch / fresh checkout / rebuild (like setEnv for env vars, but for a tracked file). Use whenever you must edit a config or source file for the app to RUN — e.g. repoint an appsettings.json connection from a dead host to the provisioned localhost DB. Exact literal find + replace. Applied now AND re-applied after every future checkout, so branches inherit it.",
-      inputSchema: zodSchema(z.object({ file: z.string(), find: z.string(), replace: z.string(), reason: z.string().optional(), create: z.boolean().optional() })),
-      execute: async ({ file, find, replace, reason, create }: { file: string; find: string; replace: string; reason?: string; create?: boolean }) => {
-        const script = buildConfigPatchScript([{ file, find, replace, create }], workDir);
-        if (script) { const applied = await sh(workspaceId, script, 30_000); if (applied.exitCode !== 0) return `Patch failed: ${failureSummary(applied.output)}`; }
-        try {
-        await saveConsolidatedPatches(projectId,userId,workspaceId,profileBranch,workDir,undefined,{file,find,replace,note:reason,create});
-        } catch (error) { return `Repair applied locally but NOT saved: ${(error as Error).message}. Reconcile the saved patches before reporting ready.`; }
-        const ok = true;
-        plog(projectId, userId, `Persisted config patch to ${file}`, { detail: reason });
-        return ok ? "applied + persisted — re-applies after every checkout/branch-switch." : "applied now (no profile to persist to yet).";
-      },
-    }),
-    reply: tool({
-      description: "Call ONCE when you've finished. Give a concise chat summary (markdown ok). Set status: 'ok' = you succeeded/verified the fix; 'error' = it failed or can't be done; 'stuck' = partially done / needs the user. If you made a fix, say whether you PERSISTED it (setEnv/updatePlan) and whether you committed code.",
-      inputSchema: zodSchema(z.object({
-        status: z.enum(["ok", "error", "stuck"]).describe("Outcome for the chat banner colour (green/red/yellow)."),
-        summary: z.string(),
-      })),
-      execute: async ({ status, summary }: { status: "ok" | "error" | "stuck"; summary: string }) => { reply = summary; replyStatus = status; return "acknowledged"; },
-    }),
+  opts.abortSignal?.throwIfAborted();
+  const row=await getEnv(opts.projectId);
+  if(row?.previewBranch!==selected.previewBranch||row?.appUrl!==selected.appUrl)return {status:'error',reply:'The selected preview changed while waiting. No data operation was started on the new branch.'};
+  if(row?.previewStatus!=='running'||!row.appUrl||!row.setupManifest)return {status:'error',reply:'The selected preview must be running before changing its account or data. No ticket was started.'};
+  const workspaceId=await envWorkspaceId(opts.projectId);
+  const {dir}=await resolvePreviewWorkDir(opts.projectId,workspaceId);
+  const manifest=manifestSchema.parse(JSON.parse(row.setupManifest));
+  const driver=await resolveDriverModel(opts.userId,opts.projectId);
+  if(!driver)return {status:'error',reply:'No model is available for this preview operation.'};
+  let reply='';let status:'ok'|'error'='error';
+  const checkSelection=async()=>{
+    const current=await getEnv(opts.projectId);
+    if(current?.previewStatus!=='running'||current.previewBranch!==row.previewBranch||current.appUrl!==row.appUrl)throw new Error('The selected preview changed. Operation stopped; no automatic retry on another branch.');
   };
-
-  const startHint = `setsid sh -c 'cd ${workDir}; set -a; . ./.env 2>/dev/null; set +a; ${runCmd || "<run command>"}' </dev/null > ${workDir}/preview.log 2>&1 &`;
-  const canEditCode = workDir !== PROJECT_DIR; // only on a ticket's isolated branch
-
-  // MULTI-APP (monorepo) awareness: WITHOUT this the agent only knows the PRIMARY's
-  // port/runCmd/log, so a companion-targeted request ("fix the admin") gets mis-executed
-  // against the primary — it curls the primary's port (:5000), greps the primary's
-  // appsettings, and never touches the companion's real failure. List EVERY app with its
-  // OWN port, dir, log file, and exact ISOLATED start command (which strips the primary's
-  // Serilog__* env — the very contamination that 500s a second .NET app) so a request
-  // acts on the RIGHT app + verifies on the RIGHT port.
-  const svcs = manifest?.services ?? [];
-  const servicesBlock = svcs.length > 1
-    ? `\nAPPS IN THIS PREVIEW (monorepo — this repo runs ${svcs.length} separate web apps; a request may target ANY ONE of them — act on THAT app's port/dir/log, NOT the primary's):\n` +
-      svcs.map((s) => {
-        const tag = s.primary ? "PRIMARY, always on" : (s.enabled ? "companion, ON" : "companion, OFF");
-        const where = s.dir ? ` in ${s.dir}/` : "";
-        const log = s.primary ? `${workDir}/preview.log` : `${workDir}/preview-${s.name}.log`;
-        const start = s.primary ? startHint : serviceStartCommand(s, workDir);
-        return `  • "${s.name}" (${tag}) — port ${s.port}${where}; log ${log}\n      run: ${s.runCmd}\n      (re)start DETACHED: ${start}\n      verify: curl -sS -i http://127.0.0.1:${s.port}/`;
-      }).join("\n") +
-      `\nWhen a request names an app (e.g. "fix the admin"), operate on THAT service: (re)start it with ITS start command above (each companion's start command strips the primary's Serilog__* env, so a second .NET app isn't crashed by the first app's logging config), read ITS OWN log file, and verify on ITS OWN port. Do NOT curl the primary's port ${port} to check a companion — that just re-confirms the primary is up.\n`
-    : "";
-  const system = `You are the LFG **Preview agent** for this project. You have FULL shell control of the project's LIVE Alpine sandbox (musl, apk, OpenRC/rc-service, busybox — Docker is available) via the \`run\` tool: one command per call, run detached + polled so long commands are fine. You are working in **${branchNote}** at ${workDir}; its .env is sourced before every command; the toolchain + /data caches are already on PATH.
-
-CODE CHANGES: ${PREVIEW_SOURCE_POLICY}
-
-${manifest ? `${svcs.length > 1 ? "PRIMARY app" : "App"}: ${manifest.stack || `${manifest.runtime}/${manifest.framework}`}. Run command: \`${runCmd || "(unknown)"}\`. Port: ${port}. Databases: ${manifest.databases.length ? manifest.databases.map((d) => `${d.engine} (127.0.0.1, connection in .env as ${d.connectionEnvVar})`).join(", ") : "none"}.` : "This preview has not been fully set up yet — the app may not be running."}
-${servicesBlock}
-${directives.length ? `\nMANDATORY DIRECTIVES (project rules you MUST honor and, if the request relates to them, verify/enforce):\n${directives.map((d) => `  ▣ ${d}`).join("\n")}\n` : ""}${configNotes.length ? `\nCONFIG QUIRKS (from the probe — RESPECT these; they prevent the exact mistakes that broke past runs, e.g. corrupting a JSONC appsettings.json):\n${configNotes.map((n) => `  ⚠ ${n}`).join("\n")}\n` : ""}
-${priorActions ? `\nWHAT THE LAST RUN ALREADY DID (the setup/preview agent's most recent COMMANDS + exit codes + decisions — CONTINUE from here; do NOT redo steps that already succeeded, and start from the point it failed/stopped):\n${priorActions}\n` : ""}
-
-The ${svcs.length > 1 ? "PRIMARY " : ""}app server (if running) listens on 127.0.0.1:${port}${svcs.length > 1 ? " (companions listen on their OWN ports — see APPS above)" : ""}. To (re)start ${svcs.length > 1 ? "the primary" : "it"}, launch it DETACHED:
-  ${startHint}
-then VERIFY for real: \`curl -sS -i http://127.0.0.1:${port}/\` (2xx/3xx/4xx = up; 000/refused/5xx = not up → read ${workDir}/preview.log).${svcs.length > 1 ? " For a COMPANION, use its own start command + port + log from the APPS list above." : ""}
-
-SCOPE — do ONLY what the user asked, nothing more:
-- If it's a DIAGNOSTIC question (why/what/check/is-it-working/where): INVESTIGATE with read-only commands (curl, cat, grep, ls, head, docker logs, SQL SELECTs) and REPORT the finding via \`reply\`. Do NOT rebuild, re-restore packages, re-run migrations, re-seed the DB, or restart the app for a diagnostic question — that wastes hours and isn't what was asked. Find the cause, explain it, and suggest the fix.
-- Only take mutating/expensive actions (build, restore, migrate, seed, restart, install) when the user EXPLICITLY asks you to fix/change/restart/set something up. When unsure, investigate and report rather than mutate.
-- The app is usually ALREADY set up and running — assume the toolchain, DB, and build exist; verify before assuming they don't. Do not redo setup.
-- RUN IN "LOG MODE" so an error shows the FIRST time — don't run a command that hides the error and forces a re-run. Keep \`2>&1\` and add the tool's verbose flag (e.g. \`dotnet ef … -v\` — plain ef only says "Build failed. Use dotnet build to see the errors."; use \`--verbosity normal\`/\`npm --loglevel verbose\`). Don't \`grep\`/\`head\` away the real error + its context. Errors are expected — the goal is to see WHAT failed immediately.
-- CASE SENSITIVITY: Historical instructions recommending case aliases are obsolete; preserve their goal using canonical references instead. Correct asset REFERENCES to the canonical tracked filename. NEVER add case-bridging copies or symlinks under wwwroot: ASP.NET static asset discovery treats these as conflicting build targets. Remove only aliases proven preview-created (untracked and identical to their tracked target); never delete distinct tracked assets. Persist the repair. Verify the affected URLs AND rebuild again to prove the next run works.
-
-PERSIST YOUR FIXES (critical — otherwise they're lost and branches don't get them):
-- When you fix something with an ENV var (a cert/CA path, ASPNETCORE_FORWARDEDHEADERS_ENABLED for a reverse-proxy/HTTPS asset issue, a base URL, a runtime flag), call \`setEnv\` — do NOT just \`echo >> .env\`. setEnv records it on the project so EVERY future setup AND every ticket branch inherits it. An echo-only fix works for this one live app and then vanishes.
-- When you find a plan command was wrong and confirm the right one, call \`updatePlan\`.
-- When you learn a FACT no field captures (a schema/ordering rule, a missing client like sqlcmd, a config gotcha), call \`noteLearning\` so the next run + branches see it.
-- When you EDIT A SOURCE OR CONFIG FILE for the app to run (repoint an appsettings.json connection off a dead host, fix a Serilog sink connection), use \`persistConfigPatch\` — a bare edit is reset by a branch switch / checkout; persistConfigPatch re-applies it after every checkout so branches inherit it.
-- General rules are remembered via directives; literal patches stay branch-scoped and must be verified against each checkout.
-
-RULES: source-code edits follow the CODE CHANGES policy above (sandbox-only on default and ticket previews; never checked in). Installing tools/deps, editing ./.env and config is fine when asked. Verify with real commands — never claim success without checking. When finished, ALWAYS call \`reply\` with status (ok/error/stuck) + a short summary of what you found/did (and whether you persisted/committed it). Never print secrets.`;
-
-  try {
-    await generateText({ model: driver.model, tools, stopWhen: stepCountIs(40), system, prompt: agentPrompt, abortSignal, onStepFinish: () => opts.onActivity?.() });
-  } catch (e) {
-    const msg = (e as Error).message || String(e);
-    // Paused (watchdog idle-timeout or user Stop) → don't die silently with "Stopped.".
-    // Summarize what it was doing so far and invite "continue" (it resumes from here).
-    if (abortSignal?.aborted || /abort/i.test(msg)) {
-      return reply ? { reply, status: replyStatus } : await summarizePreviewRun(driver.model, instruction, projectId, true);
-    }
-    plog(projectId, userId, `Preview agent error: ${msg}`, { level: "error" });
-    return { reply: reply || `I ran into an error: ${msg.slice(0, 300)}`, status: "error" };
+  const maintenance=new PreviewWorkerMaintenance(manifest.backgroundProcesses||[],async(action,workers)=>{
+    await checkSelection();
+    opts.onProgress?.(action==='status'?'Checking background workers':action==='stop'?'Pausing background workers':'Resuming background workers');
+    const r=await sh(workspaceId,previewWorkerCommand(action,dir,workers,manifest.databases.map(d=>d.connectionEnvVar),{webPort:row.appPort||manifest.port}),45000);
+    if(r.exitCode!==0)throw Error(`Worker ${action} failed: ${r.output.slice(-1500)}`);
+    workerHealthCache.delete(opts.projectId);
+    return JSON.parse(r.output);
+  });
+  const tools={...previewDataTools({
+    saveAccount:async(account)=>{await checkSelection(); const {storePreviewAccount}=await import('./preview-accounts.ts');await storePreviewAccount(opts.projectId,environmentBranch(row.previewBranch),account);},
+    recallAccounts:async(identity)=>{await checkSelection();const {recallPreviewAccounts}=await import('./preview-accounts.ts');return recallPreviewAccounts(opts.projectId,environmentBranch(row.previewBranch),identity);},
+    previewUrl:row.appUrl,connectionKeys:manifest.databases.map(d=>d.connectionEnvVar),workers:async(action)=>{
+    opts.abortSignal?.throwIfAborted();throwIfCancelled(opts.projectId);
+    return action==='pause'?maintenance.pause():action==='resume'?maintenance.resume():maintenance.status();
+  },run:async(command,activity)=>{
+    opts.abortSignal?.throwIfAborted();throwIfCancelled(opts.projectId);
+    await checkSelection();
+    opts.onActivity?.();opts.onProgress?.(activity||'Checking the app');
+    // No command/output logging: generated test credentials stay within this chat.
+    const result=await execOnWorkspace(workspaceId,previewDataWorkspaceCommand(dir,command),{timeout:45000});
+    opts.onActivity?.();
+    return {exitCode:result.exitCode,output:((result.output||'')+(result.stderr||'')).slice(-12000)};
+  }}),reply:tool({description:'Report the actual result. Success requires evidence; return generated test credentials when requested. Never claim a ticket was needed or started.',inputSchema:zodSchema(z.object({status:z.enum(['ok','error']),summary:z.string()})),execute:async(args:{status:'ok'|'error';summary:string})=>{reply=args.summary;status=args.status;return 'acknowledged';}})};
+  try{await generateText({model:driver.model,tools,system:PREVIEW_DATA_INSTRUCTION+'\n'+PREVIEW_DATA_MAINTENANCE_INSTRUCTION+`\nSelected branch: ${row.previewBranch}. Read code from ${dir}. Registered database keys: ${manifest.databases.map(d=>d.connectionEnvVar).join(', ')}.`,prompt:opts.instruction,stopWhen:stepCountIs(40),abortSignal:opts.abortSignal,onStepFinish:()=>opts.onActivity?.()});}
+  catch(e){status='error';reply=opts.abortSignal?.aborted?'Preview data operation stopped.':`Preview data operation failed: ${(e as Error).message}`;}
+  finally {
+    // Restoration must run even after cancellation. An explicit Stop/changed
+    // preview is checked by the adapter and is never silently restarted here.
+    try{await maintenance.resume();}catch(e){status='error';reply+=` Worker restoration did not complete: ${(e as Error).message}. Data changes already committed, if any, remain committed.`;}
   }
-  if (reply) return { reply, status: replyStatus };
-  // Fallback: the agent ended WITHOUT calling reply → summarize what it actually ran so
-  // the chat gets a coherent answer with the finding + next step (not raw log lines).
-  return await summarizePreviewRun(driver.model, instruction, projectId, false);
+  return {status,reply:reply||'The preview data operation did not produce a verified result. No ticket was started.'};
+  } finally {release();}
 }
 
 /**
@@ -2587,22 +2309,11 @@ done`.trim();
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
-export interface SetupOptions { userId: string; branch?: string; rebuildManifest?: boolean; ticketId?: string; conversationId?: string | null }
+export interface SetupOptions { expectedBranch?: string; cleanBuild?: boolean; userId: string; branch?: string; rebuildManifest?: boolean; ticketId?: string; conversationId?: string | null }
 
 /** The worktree directory for a ticket's branch inside the preview sandbox. Must
  *  match the name the ticket executor creates: `wt-ticket-<ticketId first 12>`. */
 function ticketWorktreeDir(ticketId: string): string { return `/data/wt-ticket-${ticketId.slice(0, 12)}`; }
-
-/** The worktree directory for an arbitrary branch (an EPIC's integration branch, say)
- *  that isn't tied to a ticket. Slashes and anything shell-unfriendly are flattened, and
- *  a short hash of the ORIGINAL name is appended so two branches that flatten to the same
- *  string (epic/a-b vs epic/a/b) can't land in one directory. */
-function branchWorktreeDir(branch: string): string {
-  const slug = branch.replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "branch";
-  let h = 0;
-  for (let i = 0; i < branch.length; i++) h = (Math.imul(h, 31) + branch.charCodeAt(i)) | 0;
-  return `/data/wt-br-${slug}-${(h >>> 0).toString(36)}`;
-}
 
 /** Resolve a token-embedded clone URL for the project's repo (GitHub or GitLab),
  *  with a FRESH token — so a `git fetch` works even if the remote's baked-in token
@@ -2714,7 +2425,8 @@ export async function setupPreview(projectId: string, opts: SetupOptions): Promi
   const [project] = await db.select().from(projects).where(eq(projects.id, projectId));
   if (!project) return { error: "project not found" };
   if (project.projectId) publicIdCache.set(projectId, project.projectId); // for WS routing
-  const branch = opts.branch || ""; // "" → use the repo's default branch
+  const branch = opts.branch && opts.branch !== "(default)" ? opts.branch : "";
+  if(branch)assertPreviewBranch(branch); // "" → use the repo's default branch
 
   // Serialize: cancel + wait out any run already using this project's VM so two
   // clones/builds never overlap (→ OOM/segfault). Clears the cancel flag for us.
@@ -2789,7 +2501,9 @@ export async function setupPreview(projectId: string, opts: SetupOptions): Promi
     // GitLab OAuth clones auth as oauth2:<token>@; GitHub as x-access-token:<token>@.
     const cred = provider === "gitlab" ? `oauth2:${token}` : `x-access-token:${token}`;
     const authUrl = repoUrl.replace(/^https:\/\//, `https://${cred}@`);
-    const coBranch = branch ? `git checkout ${branch} 2>/dev/null || true` : "true";
+    const coBranch = branch
+      ? `git check-ref-format --branch ${shellQuote(branch)} >/dev/null && git checkout ${shellQuote(branch)} && test "$(git branch --show-current)" = ${shellQuote(branch)}`
+      : `git remote set-head origin -a && DEFAULT_BRANCH=$(git symbolic-ref --short refs/remotes/origin/HEAD) && git checkout "\${DEFAULT_BRANCH#origin/}"`;
 
     await prep("clone", "running");
     plog(projectId, userId, `Pulling repo from ${provider === "gitlab" ? "GitLab" : "GitHub"} (${repoUrl.replace(/^https:\/\//, "")})${branch ? ` @ ${branch}` : ""}…`);
@@ -2799,11 +2513,12 @@ export PATH=/root/node/current/bin:/usr/local/bin:/usr/bin:/bin:$PATH
 apk add --no-cache git ca-certificates >/dev/null 2>&1 || true
 mkdir -p /data
 if [ -d ${PROJECT_DIR}/.git ]; then
-  cd ${PROJECT_DIR} && git remote set-url origin "${authUrl}" && git fetch --prune origin 2>&1 && { ${coBranch}; git pull --ff-only >/dev/null 2>&1; echo CLONE_OK; }
+  cd ${PROJECT_DIR} && git remote set-url origin ${shellQuote(authUrl)} && git fetch --prune origin 2>&1 && { ${coBranch} && git pull --ff-only && test "$(git rev-parse HEAD)" = "$(git rev-parse @{upstream})" && echo CLONE_OK; }
 else
-  rm -rf ${PROJECT_DIR}; git clone "${authUrl}" ${PROJECT_DIR} 2>&1 | tail -3; if [ -d ${PROJECT_DIR}/.git ]; then cd ${PROJECT_DIR} && (${coBranch}) && echo CLONE_OK; fi
+  if test -d ${PROJECT_DIR} && test -n "$(ls -A ${PROJECT_DIR})"; then echo 'Existing unregistered checkout preserved; restore its Git metadata before setup'; exit 1; fi
+  git clone ${shellQuote(authUrl)} ${PROJECT_DIR} && cd ${PROJECT_DIR} && (${coBranch}) && test "$(git rev-parse HEAD)" = "$(git rev-parse @{upstream})" && echo CLONE_OK
 fi`, 240_000);
-    if (!clone.output.includes("CLONE_OK")) {
+    if (clone.exitCode !== 0 || !clone.output.includes("CLONE_OK")) {
       // Scrub any credential that leaked into git's error text before showing it.
       const safe = clone.output.replace(/\/\/[^@\s]+@/g, "//***@").slice(-500);
       plog(projectId, userId, "Could not fetch the repo", { level: "error", detail: safe });
@@ -2859,7 +2574,7 @@ fi`, 240_000);
     throwIfCancelled(projectId);
 
     if (profile) {
-      const fingerprint = await sh(workspaceId, `git -C ${PROJECT_DIR} rev-parse HEAD^{tree}`, 15_000);
+      const fingerprint = await sh(workspaceId, runtimeFingerprintCommand(PROJECT_DIR), 15_000);
       profile.inputFingerprint = fingerprint.output.trim();
       await saveAppProfile(projectId, profile);
       manifest = deriveManifestFromProfile(profile);
@@ -2922,7 +2637,7 @@ fi`, 240_000);
       // here just buries the chat (a big repo greps out 150+ vars). Point at the tab and
       // keep the names in the log line's detail for debugging.
       plog(projectId, userId, `${envSync.needsInput.length} external key(s) needed — set them in the Environment tab, then Restart.`, { detail: envSync.needsInput.map((n) => n.key).join(", ") });
-      await publishSummary(
+      await publishConfigurationNotice(
         userId,
         opts.conversationId,
         `🔑 **${envSync.needsInput.length} environment variable(s) need values** — set them in the **Environment** tab, then Restart.`,
@@ -2955,11 +2670,11 @@ fi`, 240_000);
       for (const dbSpec of manifest.databases) {
         const providedVal = providedVals.get(dbSpec.connectionEnvVar) || "";
         if (dbMode === "provided" && !providedVal) {
-          await publishSummary(userId, opts.conversationId, `⚠️ **DB mode is "Use my DB"** but \`${dbSpec.connectionEnvVar}\` isn't set. Add it in the Environment tab and Restart — or switch DB mode to "Always provision".`, pub(projectId)).catch(() => {});
+          await publishConfigurationNotice(userId, opts.conversationId, `⚠️ **DB mode is "Use my DB"** but \`${dbSpec.connectionEnvVar}\` isn't set. Add it in the Environment tab and Restart — or switch DB mode to "Always provision".`, pub(projectId)).catch(() => {});
         }
         if (await shouldUseProvidedDb(workspaceId, projectId, userId, dbSpec, providedVal, dbMode)) continue;
         plog(projectId, userId, `Provisioning ${dbSpec.engine} → ${dbSpec.connectionEnvVar}…`);
-        const h = await ensurePreviewEngine(projectId, userId, dbSpec.engine);
+        const h = await ensurePreviewEngine(projectId, userId, dbSpec.engine, dbSpec);
         engineHandles.push(h);
         provisioned[dbSpec.connectionEnvVar] = formatConnection(dbSpec, h);
         plog(projectId, userId, `${dbSpec.engine} ready at 127.0.0.1:${h.port} (db "${h.dbName}") → ${dbSpec.connectionEnvVar} ✓`);
@@ -3059,14 +2774,16 @@ fi`, 240_000);
     if ((manifest.services || []).some((s) => !s.primary && s.enabled)) {
       await enableHttpAccess(workspaceId, effectivePort).catch(() => {});
     }
-    // Post-run verification (URL + assets + DB) → publish the launch summary to chat.
+    // Keep automatic launch diagnostics in the Preview panel, not the conversation.
     const vManifest = effectivePort === manifest.port ? manifest : { ...manifest, port: effectivePort };
     const v = await verifyPreview(projectId, userId, workspaceId, vManifest, branch || "(default)").catch(() => null);
     auditStep.status = v?.overall === "ok" ? "done" : "failed";
     if (auditStep.status === "failed") auditStep.error = v?.summary || "Verification could not complete";
     await persistSteps(projectId, userId, result.steps);
-    if (v) await publishSummary(userId, opts.conversationId, `${v.summary}\n\n🔗 ${previewUrl}${companionSummary}`, pub(projectId)).catch(() => {});
+    if (v) plog(projectId, userId, "Preview launch summary", { level: v.overall === "ok" ? "info" : "error", detail: `${v.summary}\n\n🔗 ${previewUrl}${companionSummary}` });
     if (auditStep.status === "failed") return failed(projectId, userId, auditStep.error || "Preview verification failed");
+    throwIfCancelled(projectId);
+    await recordAppliedEnvironment(projectId, environmentBranch((await getEnv(projectId))?.previewBranch), preparedEnvironment.get(manifest));
     return { previewUrl };
   } catch (err) {
     const msg = errText(err);
@@ -3109,6 +2826,7 @@ async function failed(projectId: string, userId: string, error: string): Promise
 }
 
 /** Current preview state for the Preview tab. */
+const workerHealthCache=new Map<string,{at:number;error:string|null}>();
 export async function getPreviewState(projectId: string) {
   const row = await getEnv(projectId);
   if (!row) return { previewStatus: "idle" as PreviewStatus, previewUrl: null, manifest: null, error: null, branch: null, log: "", steps: [], setupComplete: false, services: [] };
@@ -3132,12 +2850,27 @@ export async function getPreviewState(projectId: string) {
     dir: s.dir ?? "",
     url: s.primary ? (row.appUrl ?? "") : ((!!s.primary || !!s.enabled) ? companionUrl(s.name) : ""),
   }));
+  let workerError:string|null=null;
+  if(row.previewStatus==='running' && manifest?.backgroundProcesses?.length){
+    let health=workerHealthCache.get(projectId);
+    if(!health || Date.now()-health.at>10000){
+      try{
+        const workspaceId=await envWorkspaceId(projectId);const {dir}=await resolvePreviewWorkDir(projectId,workspaceId);
+        const result=await sh(workspaceId,previewWorkerCommand('status',dir,manifest.backgroundProcesses,manifest.databases.map(d=>d.connectionEnvVar)),15000);
+        const data=JSON.parse(result.output);
+        health={at:Date.now(),error:result.exitCode===0 && data.healthy?null:'A required background worker is stopped or has outdated database settings. Restart the app to restart its workers; see App logs.'};
+      }catch{health={at:Date.now(),error:'Could not verify required background workers. Check the preview runtime and App logs.'};}
+      workerHealthCache.set(projectId,health);
+    }
+    workerError=health.error;
+  }
   return {
-    previewStatus: (row.previewStatus as PreviewStatus) ?? "idle",
+    previewStatus: workerError ? 'error' as PreviewStatus : (row.previewStatus as PreviewStatus) ?? "idle",
     previewUrl: row.appUrl ?? null,
     manifest,
-    error: row.previewError ?? null,
+    error: workerError ?? row.previewError ?? null,
     branch: row.previewBranch ?? null,
+    databaseIdentities: (await loadAppProfile(projectId,environmentBranch(row.previewBranch)))?.profile.databaseIdentities || [],
     log: logBuffers.get(projectId) ?? row.setupLog ?? "",
     steps: row.setupSteps ? (JSON.parse(row.setupSteps) as RunStep[]) : [],
     setupComplete: row.setupComplete === 1,
@@ -3183,7 +2916,7 @@ export async function reprobeProfile(projectId: string, userId: string): Promise
   }
   // Keep hard-won learnings across the re-probe.
   Object.assign(profile, mergeKnowledge(profile, prior?.profile));
-  const fp = await sh(workspaceId, `git -C ${shellQuote(dir)} rev-parse HEAD^{tree}`, 15_000);
+  const fp = await sh(workspaceId, runtimeFingerprintCommand(dir), 15_000);
   profile.inputFingerprint = fp.output.trim();
   await saveAppProfile(projectId, profile, branch);
   // Refresh the derived manifest so the next run uses the new plan.
@@ -3445,26 +3178,31 @@ git diff "$BASE"..."$HEAD" 2>/dev/null | head -c 300000
  *  primary + other companions untouched — so starting/toggling a second app never forces a
  *  full restart (which would take down the primary too, and re-derive only the enabled set).
  *  Returns true if it kicked off; false if the caller should fall back to a full restart
- *  (preview not running, or on a ticket branch). Fire-and-forget for the actual bring-up. */
+ *  (preview not running). Fire-and-forget for the actual bring-up. */
 async function startCompanionInBackground(projectId: string, userId: string, manifest: PreviewManifest, name: string): Promise<boolean> {
   const row = await getEnv(projectId);
-  const onDefault = !row?.previewBranch || row.previewBranch === "(default)";
+
   const added = (manifest.services || []).find((s) => s.name === name);
-  if (!(added && row?.previewStatus === "running" && onDefault && row.stableAlias)) return false;
+  if (!(added && row?.previewStatus === "running" && row.stableAlias)) return false;
   const stableAlias = row.stableAlias, appUrl = row.appUrl ?? "";
   (async () => {
+    let release:(()=>void)|undefined;
     try {
+      release=await acquirePreviewAccess(projectId);
+      const current = await getEnv(projectId);
+      if (current?.previewBranch !== row.previewBranch) throw new Error('Preview selection changed before companion startup; retry on the selected branch.');
       await loadPublicId(projectId); // WS routing for plog/broadcast
       const sandbox = await ensureProjectSandbox(projectId); // respawn a reaped VM if needed
       if (sandbox.created || sandbox.recreated) {
         plog(projectId, userId, `The preview VM was down — restarting the whole preview (primary + "${name}")…`);
-        restartPreview(projectId, { userId }).catch((e) => console.error("[preview] companion respawn restart failed:", e));
+        restartPreview(projectId, { userId, branch: row.previewBranch || "(default)", expectedBranch: row.previewBranch || "(default)" }).catch((e) => console.error("[preview] companion respawn restart failed:", e));
         return;
       }
       const workspaceId = sandbox.workspaceId;
       plog(projectId, userId, `Starting app "${name}" in the background — the main app keeps running…`);
-      const r = await exposeService(projectId, userId, workspaceId, added, PROJECT_DIR, stableAlias);
-      if (r.url) await persistServiceBaseUrl(projectId, workspaceId, name, r.url).catch(() => {});
+      const {dir} = await resolvePreviewWorkDir(projectId, workspaceId);
+      const r = await exposeService(projectId, userId, workspaceId, added, dir, stableAlias);
+      if (r.url) await persistServiceBaseUrl(projectId, workspaceId, name, r.url, dir).catch(() => {});
       // exposeService just pointed the job's primary port at THIS companion. Restore it to
       // the primary app — this toggle path deliberately leaves the primary running and
       // never re-registers its alias, so without this the main URL starts serving the
@@ -3477,20 +3215,24 @@ async function startCompanionInBackground(projectId: string, userId: string, man
         url: s.primary ? appUrl : (s.name === name ? (r.url || "") : (s.enabled ? `https://${stableAlias}-${s.name}.${appDomain}` : "")),
         up: s.name === name ? r.ok : true,
       })) });
-    } catch (e) { plog(projectId, userId, `Background start of "${name}" failed: ${(e as Error).message?.slice(0, 160)}`, { level: "error" }); }
+    } catch (e) { plog(projectId, userId, `Background start of "${name}" failed: ${(e as Error).message?.slice(0, 160)}`, { level: "error" }); } finally { release?.(); }
   })();
   return true;
 }
 
 export async function setServiceEnabled(projectId: string, userId: string, name: string, enabled: boolean): Promise<{ ok: boolean; error?: string; services?: unknown[] }> {
-  const loaded = await loadAppProfile(projectId);
+  const release = await acquirePreviewAccess(projectId);
+  try {
+  const selection = (await getEnv(projectId))?.previewBranch || '(default)';
+  const profileBranch = environmentBranch(selection);
+  const loaded = await loadAppProfile(projectId, profileBranch);
   if (!loaded?.profile.services?.length) return { ok: false, error: "This preview has no multi-app services detected." };
   const profile = loaded.profile;
   const svc = profile.services!.find((s) => s.name === name);
   if (!svc) return { ok: false, error: `Unknown service "${name}".` };
   if (svc.primary) return { ok: false, error: "The primary app is always on — it can't be toggled." };
   svc.enabled = enabled;
-  await saveAppProfile(projectId, profile);
+  await saveAppProfile(projectId, profile, profileBranch);
   const manifest = deriveManifestFromProfile(profile);
   await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
 
@@ -3511,10 +3253,11 @@ export async function setServiceEnabled(projectId: string, userId: string, name:
     return { ok: true, services: svcList() };
   }
   // ON → start JUST this companion in the background (primary stays up). Fall back to a full
-  // restart only when nothing is running / a ticket branch is active.
+  // restart only when the preview is not running.
   const started = await startCompanionInBackground(projectId, userId, manifest, name);
-  if (!started) restartPreview(projectId, { userId }).catch((e) => console.error("[preview] service-toggle restart failed:", e));
+  if (!started) restartPreview(projectId, { userId, branch: selection, expectedBranch: selection }).catch((e) => console.error("[preview] service-toggle restart failed:", e));
   return { ok: true, services: svcList() };
+  } finally { release(); }
 }
 
 const svcSlug = (s: string) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24);
@@ -3530,7 +3273,11 @@ export async function addService(
   projectId: string, userId: string,
   input: { name: string; dir?: string; runCmd: string; buildCmd?: string; port: number },
 ): Promise<{ ok: boolean; error?: string; services?: unknown[] }> {
-  const loaded = await loadAppProfile(projectId);
+  const release = await acquirePreviewAccess(projectId);
+  try {
+  const selection = (await getEnv(projectId))?.previewBranch || '(default)';
+  const profileBranch = environmentBranch(selection);
+  const loaded = await loadAppProfile(projectId, profileBranch);
   if (!loaded) return { ok: false, error: "Set up the preview first, then add an app." };
   const profile = loaded.profile;
 
@@ -3555,23 +3302,28 @@ export async function addService(
   if (profile.services.some((s) => s.port === port)) return { ok: false, error: `Port ${port} is already used by another service.` };
   profile.services.push({ name, dir: dir || undefined, runCmd, buildCmd: buildCmd || undefined, port, primary: false, enabled: true, manual: true });
 
-  await saveAppProfile(projectId, profile);
+  await saveAppProfile(projectId, profile, profileBranch);
   const manifest = deriveManifestFromProfile(profile);
   await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
 
   // Bring the new app up in the BACKGROUND so the main app keeps serving (no full restart);
-  // falls back to a full restart only when nothing is running / a ticket branch is active.
+  // falls back to a full restart only when the preview is not running.
   const started = await startCompanionInBackground(projectId, userId, manifest, name);
-  if (!started) restartPreview(projectId, { userId }).catch((e) => console.error("[preview] add-service restart failed:", e));
+  if (!started) restartPreview(projectId, { userId, branch: selection, expectedBranch: selection }).catch((e) => console.error("[preview] add-service restart failed:", e));
   const services = (manifest.services || []).map((s) => ({ name: s.name, port: s.port, primary: !!s.primary, enabled: !!s.enabled, manual: !!s.manual }));
   return { ok: true, services };
+  } finally { release(); }
 }
 
 /** Remove a MANUALLY-added companion (auto-detected ones can only be toggled off). Stops
  *  its process and drops it from the profile; if only the primary remains the preview
  *  collapses back to single-app. */
 export async function removeService(projectId: string, userId: string, name: string): Promise<{ ok: boolean; error?: string; services?: unknown[] }> {
-  const loaded = await loadAppProfile(projectId);
+  const release = await acquirePreviewAccess(projectId);
+  try {
+  const selection = (await getEnv(projectId))?.previewBranch || '(default)';
+  const profileBranch = environmentBranch(selection);
+  const loaded = await loadAppProfile(projectId, profileBranch);
   if (!loaded?.profile.services?.length) return { ok: false, error: "This preview has no services." };
   const profile = loaded.profile;
   const svc = profile.services!.find((s) => s.name === name);
@@ -3581,11 +3333,12 @@ export async function removeService(projectId: string, userId: string, name: str
   const workspaceId = await envWorkspaceId(projectId).catch(() => null);
   if (workspaceId) await sh(workspaceId, `fuser -k ${svc.port}/tcp 2>/dev/null; pkill -f ':${svc.port}' 2>/dev/null; echo OK`, 15_000).catch(() => {});
   profile.services = profile.services!.filter((s) => s.name !== name);
-  await saveAppProfile(projectId, profile);
+  await saveAppProfile(projectId, profile, profileBranch);
   const manifest = deriveManifestFromProfile(profile);
   await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(manifest), updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
   const services = (manifest.services || []).map((s) => ({ name: s.name, port: s.port, primary: !!s.primary, enabled: !!s.enabled, manual: !!s.manual }));
   return { ok: true, services };
+  } finally { release(); }
 }
 
 /**
@@ -3612,6 +3365,164 @@ export async function rebuildPreviewSandbox(projectId: string, userId: string): 
   return { ok: true };
 }
 
+/** Restart the active checkout in place. Branch refresh and cold setup use restartPreview. */
+export async function restartPreviewApp(projectId: string, opts: Pick<SetupOptions, "userId"> & { rebuildApp?: boolean }): Promise<{ previewUrl: string } | { error: string }> {
+  const { userId } = opts;
+  const releaseRun = await acquirePreviewRun(projectId);
+  const steps: RunStep[] = [];
+  let workspaceId: string | undefined;
+  const startedPorts: number[] = [];
+  let workerDir:string|undefined;
+  let workersStopped=false;
+  try {
+    await loadPublicId(projectId);
+    resetLog(projectId);
+    await setPreview(projectId, userId, { previewStatus: "starting", previewError: null }, "Restarting the current app…");
+    await persistSteps(projectId, userId, steps);
+    // Read after acquiring the lock: a preceding branch switch may have changed this.
+    const row = await getEnv(projectId);
+    if (!row?.setupManifest || !row.runCommand) throw new Error("No prepared app to restart. Run the selected branch first.");
+    const manifest = manifestSchema.parse(JSON.parse(row.setupManifest));
+    const sandbox = await ensureProjectSandbox(projectId);
+    workspaceId = sandbox.workspaceId;
+    throwIfCancelled(projectId);
+    if (sandbox.created || sandbox.recreated) throw new Error("The sandbox had to be recreated. Use Update & rebuild to restore its runtime and start this branch.");
+    const trees = await sh(workspaceId, `git -C ${PROJECT_DIR} worktree list --porcelain`, 15_000);
+    if (trees.exitCode !== 0) throw new Error("The prepared checkout is unavailable. Use Update & rebuild to prepare this branch.");
+    const dir = restartWorktree(trees.output, row.previewBranch);
+    workerDir=dir;
+    await resolvePreviewWorkers(projectId,workspaceId,manifest,dir);
+
+    const branch = environmentBranch(row.previewBranch);
+    const profile = (await loadAppProfile(projectId, branch))?.profile;
+    const savedValues = await readProjectEnvironment(projectId);
+    const snapshot = environmentFingerprint(savedValues);
+    const previous = profile?.appliedProjectEnvironment;
+    const changedKeys = [...new Set([...environmentChanges(snapshot, previous), ...(profile?.pendingProjectEnvironment?.keys || [])])];
+    const databaseKeys = new Set(manifest.databases.map(d => d.connectionEnvVar));
+    // Without a prior baseline, preserve provisioned connections and recorded
+    // runtime repairs. With a baseline, only actual user edits override repairs.
+    const legacyProtected = new Set([...databaseKeys, ...(profile?.environmentOverrides || []).map(e => e.key)]);
+    if (previous && changedKeys.some(key => databaseKeys.has(key))) {
+      throw new Error("Database connection settings changed. Use Update & rebuild to apply them and check the database connection.");
+    }
+    const patches = Object.fromEntries(changedKeys.filter(key => previous || !legacyProtected.has(key)).map(key => [key, savedValues[key] ?? null]));
+    const buildNeeded = opts.rebuildApp === true || !!profile?.pendingProjectEnvironment?.requiresBuild || requiresEnvironmentBuild(changedKeys, profile?.buildEnvironmentKeys);
+    const builds = [
+      ...(manifest.buildCmd ? [{ name: "app", command: manifest.buildCmd, dir: "" }] : []),
+      ...(manifest.services || []).filter(s => !s.primary && s.enabled && s.buildCmd).map(s => ({ name: s.name, command: s.buildCmd!, dir: s.dir || "" })),
+    ];
+    if (buildNeeded && !builds.length && !/\b(dev|vite|watch)\b/.test(row.runCommand)) {
+      throw new Error("These environment changes require a build, but no build command is saved. Use Update & rebuild to prepare the app.");
+    }
+    if (!profile) throw new Error("The saved runtime profile is missing. Use Update & rebuild to prepare this branch.");
+    if (previous) {
+      profile.environmentOverrides = (profile.environmentOverrides || []).filter(v => !changedKeys.includes(v.key));
+    }
+    if (changedKeys.length || buildNeeded) {
+      profile.pendingProjectEnvironment = { keys: changedKeys, requiresBuild: buildNeeded };
+      await saveAppProfile(projectId, profile, branch);
+    }
+    const workerStop=await sh(workspaceId,previewWorkerCommand('stop',dir,manifest.backgroundProcesses),30000);
+    if(workerStop.exitCode!==0)throw new Error('Could not stop previous preview workers');
+    workersStopped=true;
+    if (Object.keys(patches).length) {
+      plog(projectId, userId, `Applying ${Object.keys(patches).length} saved environment change(s) to this preview.`);
+      const applied = await sh(workspaceId, environmentPatchCommand(dir, patches), 30_000);
+      throwIfCancelled(projectId);
+      if (applied.exitCode !== 0) throw new Error("Could not apply saved environment settings. Changes are still pending.");
+    }
+    if (buildNeeded && builds.length) {
+      // Stop only these app processes before modifying their build output.
+      const ports = [row.appPort || manifest.port, ...(manifest.services || []).filter(s => !s.primary && s.enabled).map(s => s.port)];
+      await sh(workspaceId, ports.map(port => `fuser -k ${port}/tcp 2>/dev/null || true`).join("\n"), 15_000);
+      for (const build of builds) {
+        throwIfCancelled(projectId);
+        const step: RunStep = { id: `env-build-${build.name}`, phase: "build", label: `Build ${build.name} with updated settings`, command: build.command, status: "running" };
+        steps.push(step); await persistSteps(projectId, userId, steps);
+        plog(projectId, userId, step.label);
+        const result = await runDetachedPolled(projectId, userId, workspaceId,
+          (build.dir ? `cd ${shellQuote(build.dir)} && ` : "") + localizeCmd(build.command, dir), 600_000,
+          { workDir: dir, stallMs: 180_000, onProgress: detail => plog(projectId, userId, detail) });
+        throwIfCancelled(projectId);
+        if (result.exitCode !== 0) throw new Error("Build with updated environment settings failed. Changes are still pending; check the app build before retrying.");
+        step.status = "done"; await persistSteps(projectId, userId, steps);
+      }
+    }
+    plog(projectId, userId, `Restarting ${row.previewBranch || "default branch"} in place — keeping its checkout and installed dependencies.`);
+    const services = [
+      { name: "app", port: row.appPort || manifest.port, command: row.runCommand, log: "preview.log", subdir: "", primary: true },
+      ...(manifest.services || []).filter(s => !s.primary && s.enabled).map(s => ({
+        name: s.name, port: s.port, command: s.runCmd, log: `preview-${s.name}.log`, subdir: s.dir || "", primary: false,
+      })),
+    ];
+    const alias = row.stableAlias || randomAlias();
+    let previewUrl = row.appUrl || "";
+    for (const service of services) {
+      throwIfCancelled(projectId);
+      const step: RunStep = { id: `restart-${service.name}`, phase: "run", label: `Restart ${service.name}`, command: service.command, status: "running", startedAt: new Date().toISOString() };
+      steps.push(step);
+      await persistSteps(projectId, userId, steps);
+      const subdir = service.subdir ? `cd ${shellQuote(service.subdir)} && ` : "";
+      const command = subdir + localizeCmd(service.command, dir);
+      const environment = envPrefix(dir) + (service.primary ? "" : `unset $(env | grep '^Serilog__' | cut -d= -f1) 2>/dev/null; `);
+      // A previous launcher can finish after its port closes. Its exit marker must
+      // not make this new process appear to have exited.
+      const exitFile = `${dir}/${service.log}.${crypto.randomUUID()}.exit`;
+      startedPorts.push(service.port);
+      const launch = await sh(workspaceId, restartServerCommand(dir, service.port, command, environment, service.log, exitFile), 15_000);
+      throwIfCancelled(projectId);
+      if (launch.exitCode !== 0) throw new Error(failureSummary(launch.output));
+      const activeWorkspace = workspaceId;
+      let lastProgress = -10;
+      await waitForRestart({
+        probe: async () => {
+          const result = await sh(activeWorkspace, `if test -f ${shellQuote(exitFile)}; then echo EXITED; fi; printf 'HTTP='; curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:${service.port}/ 2>/dev/null; echo`, 8_000);
+          return { code: Number(result.output.match(/HTTP=(\d{3})/)?.[1] || 0), exited: result.output.includes("EXITED") };
+        },
+        cancelled: () => isCancelled(projectId), now: Date.now, sleep,
+        progress: seconds => { if (seconds - lastProgress >= 10) { lastProgress = seconds; plog(projectId, userId, `Waiting for ${service.name} to start (${seconds}s)…`); } },
+      });
+      throwIfCancelled(projectId);
+      await enableHttpAccess(workspaceId, service.port);
+      const url = await setStableUrl(service.primary ? alias : `${alias}-${service.name}`, workspaceId, service.port);
+      if (service.primary) previewUrl = url;
+      step.status = "done";
+      step.finishedAt = new Date().toISOString();
+      await persistSteps(projectId, userId, steps);
+    }
+    throwIfCancelled(projectId);
+    const workerStep:RunStep={id:'restart-workers',phase:'run',label:'Restart required background workers',command:'',status:'running'};
+    steps.push(workerStep);await persistSteps(projectId,userId,steps);
+    const workers=await sh(workspaceId,previewWorkerCommand('start',dir,manifest.backgroundProcesses,manifest.databases.map(d=>d.connectionEnvVar),{webPort:row.appPort||manifest.port}),45000);
+    if(workers.exitCode!==0)throw new Error(failureSummary(workers.output));
+    workerStep.status='done';await persistSteps(projectId,userId,steps);
+    if (services.length > 1) await enableHttpAccess(workspaceId, services[0]!.port);
+    await db.update(projectEnvironments).set({ stableAlias: alias, updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
+    throwIfCancelled(projectId);
+    await recordAppliedEnvironment(projectId, branch, snapshot);
+    throwIfCancelled(projectId);
+    await setPreview(projectId, userId, { previewStatus: "running", appUrl: previewUrl, previewError: null }, "App restarted");
+    plog(projectId, userId, `App restarted with saved settings${buildNeeded ? " and refreshed build output" : ""}. No checkout sync, installation, migrations or AI repair were run.`);
+    return { previewUrl };
+  } catch (error) {
+    const message = (error as Error).message || String(error);
+    if(workspaceId && workerDir && workersStopped)await sh(workspaceId,previewWorkerCommand('stop',workerDir),30000).catch(()=>{});
+    if (message === "__CANCELLED__" || isCancelled(projectId)) {
+      if (workspaceId && startedPorts.length) await sh(workspaceId, startedPorts.map(port => `fuser -k ${port}/tcp 2>/dev/null || true`).join("\n"), 15_000).catch(() => {});
+      await setPreview(projectId, userId, { previewStatus: "stopped", appUrl: null, previewError: null }, "Preview stopped");
+      return { error: "cancelled" };
+    }
+    for (const step of steps) if (step.status === "running") { step.status = "failed"; step.error = message; step.finishedAt = new Date().toISOString(); }
+    await persistSteps(projectId, userId, steps);
+    return failed(projectId, userId, message);
+  } finally {
+    cancelledProjects.delete(projectId);
+    releaseRun();
+  }
+}
+
+/** Prepare/refresh a branch, including dependencies, build and schema. */
 export async function restartPreview(projectId: string, opts: SetupOptions): Promise<{ previewUrl: string } | { error: string }> {
   const { userId, ticketId } = opts;
   // An explicit branch to run (an epic's integration branch). Ignored when a ticketId is
@@ -3621,19 +3532,18 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
   const row = await getEnv(projectId);
   if (!row?.setupManifest || !row?.runCommand || row?.setupComplete !== 1) {
     // Nothing to restart yet → run the full setup (default branch only).
-    if (ticketId || explicitBranch) return { error: "Set up the preview first, then you can run a specific branch." };
+    if (ticketId || explicitBranch) return failed(projectId, userId, "Preview setup is incomplete. Complete setup before running this branch.");
     return setupPreview(projectId, opts);
   }
   let manifest = JSON.parse(row.setupManifest) as PreviewManifest; // may gain DBs via reconcile below
   const savedProfile = await loadAppProfile(projectId);
   let configNotes = savedProfile ? profileNotes(savedProfile.profile) : [];
-  resetLog(projectId);
   await loadPublicId(projectId); // for WS routing
 
   // Prelude rows join the shared build/schema/start/verification executor for this run.
-  const branchLabel0 = ticketId ? `feature/ticket-${ticketId}` : "(default)";
+  const branchLabel0 = explicitBranch || (ticketId ? `feature/ticket-${ticketId}` : "(default)");
   const steps: RunStep[] = [
-    { id: "locate", phase: "prepare", label: ticketId ? `Locate the ticket worktree (${branchLabel0})` : "Use the default checkout", command: "", status: "pending" },
+    { id: "locate", phase: "prepare", label: ticketId || explicitBranch ? `Locate the selected checkout (${branchLabel0})` : "Use the default checkout", command: "", status: "pending" },
     { id: "plan", phase: "prepare", label: "Validate the selected branch run profile", command: "", status: "pending" },
     { id: "db", phase: "prepare", label: "Start required database services", command: "", status: "pending" },
     { id: "env", phase: "prepare", label: "Apply environment and verify saved patches", command: "", status: "pending" },
@@ -3653,7 +3563,17 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
   // Set when we hand off to setupPreview, which takes the run lock ITSELF — we must
   // release ours before delegating or it would wait forever on us (see the guard below).
   let lockReleased = false;
+
   try {
+    if (opts.expectedBranch && ((await getEnv(projectId))?.previewBranch || '(default)') !== opts.expectedBranch) {
+      return {error:'Preview selection changed while waiting. No branch was switched.'};
+    }
+
+    resetLog(projectId);
+    // Publish before VM checks: otherwise the first poll sees the old stopped
+    // state and abandons progress while this request is still starting.
+    await setPreview(projectId, userId, { previewStatus: "provisioning", previewError: null }, "Preparing the selected preview…");
+    await persistSteps(projectId, userId, steps);
     const { recreated } = await ensureProjectSandbox(projectId);
     const workspaceId = await envWorkspaceId(projectId);
 
@@ -3705,7 +3625,8 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
           merge: projectTickets.githubMergeStatus,
           key: projectTickets.ticketKey,
           status: projectTickets.status,
-        }).from(projectTickets).where(eq(projectTickets.id, ticketId));
+        }).from(projectTickets).where(and(eq(projectTickets.id, ticketId),eq(projectTickets.projectId,projectId)));
+        if(!tk)throw new Error("Ticket does not belong to this project.");
         remoteBranch = tk?.gb || `feature/ticket-${ticketId}`;
 
         // REFUSE a branch that was never pushed, rather than discovering it as a
@@ -3723,6 +3644,7 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
             `then this preview will have something to run.`);
         }
       }
+      assertPreviewBranch(remoteBranch);
       branchLabel = remoteBranch;
       const auth = await resolveAuthedRepoUrl(projectId, userId);
       if ("error" in auth) { await setStep("locate", "failed"); return failed(projectId, userId, auth.error); }
@@ -3736,141 +3658,28 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
         await setPreview(projectId, userId, { previewStatus: "starting", previewBranch: remoteBranch }, `Switching to ${remoteBranch}…`);
         plog(projectId, userId, `Preview mode "checkout": stashing local changes + switching the main checkout to ${remoteBranch}…`);
         const sw = await sh(workspaceId, `
+set -e
 cd ${PROJECT_DIR} 2>/dev/null || { echo NO_MAIN; exit 0; }
 git remote set-url origin "${auth.authUrl}" 2>/dev/null
-fuser -k ${manifest.port}/tcp 2>/dev/null; pkill -f ':${manifest.port}' 2>/dev/null; sleep 1
+fuser -k ${manifest.port}/tcp 2>/dev/null || true; pkill -f ':${manifest.port}' 2>/dev/null || true; sleep 1
 ${autostash(PROJECT_DIR, "checkout")}
-git fetch --no-tags --force origin "+refs/heads/${remoteBranch}:refs/remotes/origin/${remoteBranch}" 2>&1 | tail -3
-git checkout -B "${remoteBranch}" "origin/${remoteBranch}" 2>&1 | tail -3
+git fetch --no-tags --force origin "+refs/heads/${remoteBranch}:refs/remotes/origin/${remoteBranch}" 2>&1
+git checkout -B "${remoteBranch}" "origin/${remoteBranch}" 2>&1
 # Nuke stale build output so Release recompiles the Razor views (see worktree path).
-rm -rf ${PROJECT_DIR}/bin ${PROJECT_DIR}/obj ${PROJECT_DIR}/*/bin ${PROJECT_DIR}/*/obj ${PROJECT_DIR}/*/*/bin ${PROJECT_DIR}/*/*/obj 2>/dev/null || true
 echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
 `, 240_000);
+        if (sw.exitCode !== 0) throw new Error("Selected checkout could not be prepared: " + failureSummary(sw.output));
         if (sw.output.includes("NO_MAIN")) { await setStep("locate", "failed"); return failed(projectId, userId, `The base checkout isn't set up on this sandbox yet — run the default-branch preview once, then preview this ticket.`); }
         if (!sw.output.includes(`HEAD=${remoteBranch}`)) { await setStep("locate", "failed"); return failed(projectId, userId, `Couldn't switch the checkout to \`${remoteBranch}\` — is the branch pushed?\n\n${sw.output.slice(-500)}`); }
         plog(projectId, userId, `Main checkout is now on ${remoteBranch} ✓ (local changes stashed)`);
       } else {
         // WORKTREE mode (default): a separate dir; the main checkout is untouched.
-        runDir = ticketId ? ticketWorktreeDir(ticketId) : branchWorktreeDir(remoteBranch);
-        // ALWAYS fetch + hard-sync the worktree to the LATEST pushed commit — an
-        // existing worktree can be at a STALE commit (the ticket was rebuilt), which
-        // is why "I don't see the new changes". Also repair the INVERTED layout where
-        // the main checkout (/data/project) is sitting ON the ticket branch (a prior
-        // build ran in the preview VM and switched it) — that blocks `git worktree add`.
-        await setPreview(projectId, userId, { previewStatus: "starting", previewBranch: remoteBranch }, `Syncing ${remoteBranch} to the latest commit…`);
-        plog(projectId, userId, `Preparing worktree for ${remoteBranch} (fetch + sync to the latest pushed commit)…`);
-        const prepScript = `
-cd ${PROJECT_DIR} 2>/dev/null || { echo NO_MAIN; exit 0; }
-git remote set-url origin "${auth.authUrl}" 2>/dev/null
-# Explicit destination refspec so refs/remotes/origin/${remoteBranch} is created even
-# for slashed branch names / narrowed clones — otherwise 'git worktree add origin/<b>'
-# below can't resolve the ref (branch is on GitHub but origin/<b> is empty locally).
-# Reclaim page cache first (safe: frees memory WITHOUT touching any running process /
-# other previews on this sandbox) to relieve pressure before the transfer.
-sync 2>/dev/null; echo 1 > /proc/sys/vm/drop_caches 2>/dev/null || true
-# SHALLOW (--depth=1) + single-threaded + HTTP/1.1: the build only needs the tip
-# commit, and a reproducible git-remote-https SIGSEGV during transfer is usually an
-# HTTP/2 (nghttp2) crash — forcing HTTP/1.1 sidesteps it; the shallow/1-thread flags
-# keep the memory footprint tiny on this small Alpine/musl VM.
-git -c http.version=HTTP/1.1 -c pack.threads=1 fetch --no-tags --force --depth=1 origin "+refs/heads/${remoteBranch}:refs/remotes/origin/${remoteBranch}" 2>&1 | tail -3
-# Free the branch from ANY checkout that still claims it, else 'git worktree add -B'
-# fails "cannot force update the branch ... checked out at <path>". This is the usual
-# reason ONE ticket branch won't prepare while the others do: a stale worktree (or the
-# main checkout) left over from an earlier FAILED run still owns the branch.
-# 1) MAIN checkout is on the branch (inverted layout) → move it to the default branch
-#    (detach as a fallback — the app runs from the worktree, not main).
-CUR=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
-if [ "$CUR" = "${remoteBranch}" ]; then
-  git remote set-head origin -a >/dev/null 2>&1
-  DEF=$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null | sed 's@^origin/@@'); [ -z "$DEF" ] && DEF=main
-  git checkout -f "$DEF" 2>&1 | tail -1 || git checkout -f --detach 2>&1 | tail -1 || true
-fi
-# 2) ANOTHER worktree holds the branch → remove it (prune only drops MISSING dirs; a
-#    stale-but-present worktree keeps the branch locked). Skip the dir we'll reuse.
-git worktree prune 2>/dev/null
-OTHER_WT=$(git worktree list --porcelain 2>/dev/null | awk -v b="refs/heads/${remoteBranch}" '$1=="worktree"{p=$2} $1=="branch" && $2==b {print p}')
-for w in $OTHER_WT; do
-  if [ "$w" != "${runDir}" ]; then git worktree remove --force "$w" 2>&1 | tail -1 || rm -rf "$w"; fi
-done
-git worktree prune 2>/dev/null
-if [ -e "${runDir}/.git" ]; then
-  # Existing worktree → hard-reset to the LATEST pushed commit (picks up new changes).
-  # Park anything uncommitted first: this reset+clean is the one place that used to
-  # discard a worktree's work silently, with no stash net at all.
-${autostash(runDir, remoteBranch).split("\n").map((l) => "  " + l).join("\n")}
-  git -C "${runDir}" -c http.version=HTTP/1.1 -c pack.threads=1 fetch --no-tags --force --depth=1 origin "+refs/heads/${remoteBranch}:refs/remotes/origin/${remoteBranch}" 2>&1 | tail -1
-  git -C "${runDir}" reset --hard "origin/${remoteBranch}" 2>&1 | tail -2
-  git -C "${runDir}" clean -fd 2>&1 | tail -1
-else
-  rm -rf "${runDir}" 2>/dev/null
-  git worktree add -f -B "${remoteBranch}" "${runDir}" "origin/${remoteBranch}" 2>&1 | tail -4
-  if [ ! -e "${runDir}/.git" ]; then
-    # 'invalid reference: origin/<b>' means the fetch above didn't land the ref (it can
-    # segfault under memory pressure). Delete the worktree + local branch and RE-FETCH
-    # shallow before retrying the add — re-adding alone can't help if origin/<b> is
-    # still missing. (This is the "delete the worktree and start again" recovery.)
-    git branch -D "${remoteBranch}" 2>/dev/null || true
-    git worktree prune 2>/dev/null
-    rm -rf "${runDir}" 2>/dev/null
-    echo "retrying: re-fetch (shallow) + worktree add…"
-    git -c http.version=HTTP/1.1 -c pack.threads=1 fetch --no-tags --force --depth=1 origin "+refs/heads/${remoteBranch}:refs/remotes/origin/${remoteBranch}" 2>&1 | tail -3
-    git worktree add -f -B "${remoteBranch}" "${runDir}" "origin/${remoteBranch}" 2>&1 | tail -4
-  fi
-fi
-# CRITICAL: remove stale build output. In Release, ASP.NET compiles .cshtml Razor
-# views INTO <App>.Views.dll at BUILD time — an incremental build can keep serving
-# the OLD compiled views (the page renders old code even though the source is new).
-# bin/obj are gitignored, so 'git clean -fd' does NOT remove them; nuke them so the
-# rebuild recompiles the views. (NuGet cache lives on /data, so restore stays fast.)
-rm -rf ${runDir}/bin ${runDir}/obj ${runDir}/*/bin ${runDir}/*/obj ${runDir}/*/*/bin ${runDir}/*/*/obj 2>/dev/null || true
-echo "cleaned build output (bin/obj) so Razor views recompile"
-test -e "${runDir}/.git" && echo "WT_OK $(git -C "${runDir}" log -1 --oneline 2>/dev/null)" || echo WT_FAIL
-`;
-        let prep = await sh(workspaceId, prepScript, 240_000);
-        // git faults come in two flavours here, both from resource exhaustion on the VM
-        // (never a reboot — the VM keeps running):
-        //   • SIGSEGV (signal 11): out of RAM (musl aborts). HTTP/1.1 + shallow avoid the
-        //     usual triggers; reclaiming page cache relieves the rest.
-        //   • SIGBUS ("Bus error"): git mmap()s objects/index — SIGBUS means the mmap
-        //     can't be backed, i.e. /data is OUT OF DISK.
-        // Policy (per user): ticket worktrees are DISPOSABLE. On a resource fault, wipe
-        // ALL of them (each carries a heavy node_modules/.next) — the biggest reclaim —
-        // then re-create only the branch being asked for on retry. Another branch's live
-        // preview keeps serving from RAM until its next file read; that's an accepted
-        // trade for making the requested branch runnable.
-        const vmFault = (out: string) => /died of signal 11|remote helper 'https' aborted|Segmentation fault|Bus error|SIGBUS/i.test(out) && !out.includes("WT_OK");
-        if (vmFault(prep.output)) {
-          const disk = await sh(workspaceId, "df -h /data 2>/dev/null | tail -1; echo '---'; du -sh /data/wt-ticket-* 2>/dev/null | tail -20", 20_000).catch(() => ({ output: "" }));
-          plog(projectId, userId, `git crashed (out of memory/disk). Clearing ALL ticket worktrees to reclaim space, then re-running ${remoteBranch}.\n${(disk.output || "").trim()}`, { level: "error" });
-          await sh(workspaceId, `
-sync 2>/dev/null; echo 1 > /proc/sys/vm/drop_caches 2>/dev/null || true   # free page cache (safe)
-pkill -9 -f 'git-remote-http' 2>/dev/null || true                        # reap the crashed helper only
-# Wipe EVERY ticket worktree (disposable) — unregister then hard-remove the dirs.
-git -C ${PROJECT_DIR} worktree list --porcelain 2>/dev/null | awk '$1=="worktree"{print $2}' | grep -v "^${PROJECT_DIR}$" | while read w; do git -C ${PROJECT_DIR} worktree remove --force "$w" 2>/dev/null || rm -rf "$w"; done
-rm -rf /data/wt-ticket-* 2>/dev/null || true                             # catch any unregistered leftovers
-git -C ${PROJECT_DIR} worktree prune 2>/dev/null || true
-git -C ${PROJECT_DIR} gc --prune=now --quiet 2>/dev/null || true          # compact the shared clone
-rm -rf /root/.npm/_cacache ~/.npm/_cacache /root/.cache/yarn 2>/dev/null || true  # re-downloadable caches
-sleep 2; df -h /data 2>/dev/null | tail -1`, 120_000).catch(() => {});
-          prep = await sh(workspaceId, prepScript, 240_000);
-        }
-        if (prep.output.includes("NO_MAIN")) {
-          await setStep("locate", "failed");
-          return failed(projectId, userId, `The base checkout isn't set up on this sandbox yet — run the default-branch preview once, then preview this ticket.`);
-        }
-        if (!prep.output.includes("WT_OK")) {
-          await setStep("locate", "failed");
-          // Log the real git output + disk state — the banner clips it, and the actual
-          // reason ("cannot force update … checked out at …", Bus error, auth) lives here.
-          const df = await sh(workspaceId, "df -h /data 2>/dev/null | tail -1", 15_000).catch(() => ({ output: "" }));
-          plog(projectId, userId, `Worktree prep failed for ${remoteBranch}:\n${prep.output.slice(-800)}\n[disk] ${(df.output || "").trim()}`, { level: "error" });
-          const hint = vmFault(prep.output) ? ` git keeps crashing — the sandbox is out of ${/Bus error|SIGBUS/i.test(prep.output) ? "DISK" : "memory"} even after clearing all ticket worktrees. The sandbox likely needs a bigger disk. Sandbox disk: ${(df.output || "").trim() || "unknown"}.` : "";
-          return failed(projectId, userId, `Couldn't prepare the ticket branch \`${remoteBranch}\`.${hint}\n\n${prep.output.slice(-600)}`);
-        }
-        const headLine = prep.output.match(/WT_OK\s+(.+)/)?.[1]?.trim();
-        plog(projectId, userId, `Worktree ready on ${remoteBranch} ✓ (HEAD: ${headLine || "synced to origin"})`);
-        // Share the preview's DB creds/run config: copy the default .env into the worktree.
-        await sh(workspaceId, `cp ${PROJECT_DIR}/.env ${runDir}/.env 2>/dev/null || true; echo env`, 20_000);
+        runDir = previewCheckoutDir(remoteBranch);
+        await setPreview(projectId,userId,{previewStatus:'starting',previewBranch:remoteBranch},`Refreshing ${remoteBranch}…`);
+        const prep=await sh(workspaceId,refreshPreviewCheckout(PROJECT_DIR,runDir,remoteBranch,auth.authUrl),240_000);
+        if(prep.exitCode!==0 || !prep.output.includes('WT_OK'))throw new Error('Selected branch could not be refreshed: '+failureSummary(prep.output));
+        // Existing branch-local connection settings survive refreshes.
+        await sh(workspaceId,`test -f ${shellQuote(runDir+'/.env')} || cp ${shellQuote(PROJECT_DIR+'/.env')} ${shellQuote(runDir+'/.env')}`,20_000);
       }
     } else {
       // Default branch — ALWAYS fetch + hard-sync the main checkout to the LATEST pushed
@@ -3884,19 +3693,20 @@ sleep 2; df -h /data 2>/dev/null | tail -1`, 120_000).catch(() => {});
       await setPreview(projectId, userId, { previewStatus: "starting", previewBranch: "(default)" }, "Pulling the latest default branch…");
       plog(projectId, userId, "Syncing the default branch to the latest pushed commit…");
       const sync = await sh(workspaceId, `
+set -e
 cd ${PROJECT_DIR} 2>/dev/null || { echo NO_MAIN; exit 0; }
 ${authUrl ? `git remote set-url origin "${authUrl}" 2>/dev/null` : ""}
-fuser -k ${manifest.port}/tcp 2>/dev/null; pkill -f ':${manifest.port}' 2>/dev/null; sleep 1
+fuser -k ${manifest.port}/tcp 2>/dev/null || true; pkill -f ':${manifest.port}' 2>/dev/null || true; sleep 1
 ${autostash(PROJECT_DIR, "default")}
-git fetch --no-tags --force origin 2>&1 | tail -2
+git fetch --no-tags --force origin 2>&1
 git remote set-head origin -a >/dev/null 2>&1
 DEF=$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null | sed 's@^origin/@@'); [ -z "$DEF" ] && DEF=main
-git checkout -B "$DEF" "origin/$DEF" 2>&1 | tail -2 || git checkout "$DEF" 2>&1 | tail -2
-git reset --hard "origin/$DEF" 2>&1 | tail -1
-git clean -fd 2>&1 | tail -1
-rm -rf ${PROJECT_DIR}/bin ${PROJECT_DIR}/obj ${PROJECT_DIR}/*/bin ${PROJECT_DIR}/*/obj ${PROJECT_DIR}/*/*/bin ${PROJECT_DIR}/*/*/obj 2>/dev/null || true
+git checkout -B "$DEF" "origin/$DEF" 2>&1
+git reset --hard "origin/$DEF" 2>&1
+git clean -fd 2>&1
 echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) $(git log -1 --oneline 2>/dev/null)"
 `, 240_000);
+      if (sync.exitCode !== 0) throw new Error("Default checkout could not be refreshed: " + failureSummary(sync.output));
       if (sync.output.includes("NO_MAIN")) {
         // Belt-and-braces: the disk-generation guard above already routes a wiped /data
         // to the full setup, so reaching here means the checkout went away mid-run (or
@@ -3915,21 +3725,39 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) $(git log -1 --oneline
         plog(projectId, userId, `Default branch synced to latest ✓${head ? ` (${head})` : ""}`);
       }
     }
+    if(opts.cleanBuild) {
+      const clean=await sh(workspaceId,cleanPreviewBuildCommand(runDir),60_000);
+      if(clean.exitCode!==0)throw new Error('Explicit clean build could not clear generated outputs.');
+    }
     await setStep("locate", "done");
 
     await setStep("plan", "running");
     const profileBranch = branchLabel === "(default)" ? "default" : branchLabel;
     activeProfileBranches.set(projectId, profileBranch);
-    const fingerprint = await sh(workspaceId, `git -C ${shellQuote(runDir)} rev-parse HEAD^{tree}`, 15_000);
+    const fingerprint = await sh(workspaceId, runtimeFingerprintCommand(runDir), 15_000);
     const inputs = fingerprint.output.trim();
     let scoped = await loadAppProfile(projectId, profileBranch);
-    const committedRecipe = await sh(workspaceId, `git -C ${shellQuote(runDir)} show HEAD:.lfg-validation.json`, 15_000);
-    if (committedRecipe.exitCode === 0 && committedRecipe.output.trim()) {
-      const recipe = appProfileSchema.parse(JSON.parse(committedRecipe.output));
-      recipe.inputFingerprint = inputs;
-      await saveAppProfile(projectId, recipe, profileBranch);
-      scoped = await loadAppProfile(projectId, profileBranch);
-      plog(projectId, userId, "Using the runtime recipe committed with this branch.");
+    if (fingerprint.exitCode !== 0 || !/^[a-f0-9]{40,64}$/.test(inputs)) throw new Error("Could not identify the selected checkout's source revision.");
+    // Saved corrections can be newer than the committed recipe. Replacing them on
+    // every refresh repeats the same bootstrap failure and repair. Changed source
+    // still invalidates the profile below.
+    if (scoped?.profile.inputFingerprint === inputs) {
+      plog(projectId, userId, "Reusing the saved runtime recipe and corrections for this unchanged branch.");
+    } else {
+      const committedRecipe = await sh(workspaceId, `git -C ${shellQuote(runDir)} show HEAD:.lfg-validation.json`, 15_000);
+      if (committedRecipe.exitCode === 0 && committedRecipe.output.trim()) {
+        const recipe = appProfileSchema.parse(JSON.parse(committedRecipe.output));
+        recipe.previewAccounts = scoped?.profile.previewAccounts;
+        if(scoped?.profile.services) {
+          const preferences=new Map(scoped.profile.services.map(service=>[service.name,service]));
+          recipe.services=(recipe.services||[]).map(service=>({...service,enabled:preferences.get(service.name)?.enabled ?? service.enabled}));
+          for(const service of scoped.profile.services)if(service.manual && !recipe.services.some(s=>s.name===service.name))recipe.services.push(service);
+        }
+        recipe.inputFingerprint = inputs;
+        await saveAppProfile(projectId, recipe, profileBranch);
+        scoped = await loadAppProfile(projectId, profileBranch);
+        plog(projectId, userId, "Using the runtime recipe committed with this branch.");
+      }
     }
 
     if (!scoped || scoped.profile.inputFingerprint !== inputs) {
@@ -3944,7 +3772,7 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) $(git log -1 --oneline
       if (!probed) throw new Error("Could not validate the selected branch's run profile. No unverified plan was replayed; retry probing.");
       // Branch-specific corrections stay on their branch. Inherit general instructions
       // for a new branch, but never silently transplant literal patches from another branch.
-      const baseline = scoped?.profile ?? (savedProfile ? { ...savedProfile.profile, configPatches: [], replayActions: [], environmentOverrides: [] } : undefined);
+      const baseline = scoped?.profile ?? (savedProfile ? { ...savedProfile.profile, previewAccounts: [], databaseIdentities: [], configPatches: [], replayActions: [], environmentOverrides: [] } : undefined);
       const next = mergeKnowledge(probed, baseline);
       next.inputFingerprint = inputs;
       delete next.blockedFailure; delete next.verifiedRevision;
@@ -4019,14 +3847,16 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) $(git log -1 --oneline
     if ((manifest.services || []).some((s) => !s.primary && s.enabled)) {
       await enableHttpAccess(workspaceId, effectivePort).catch(() => {});
     }
-    // Post-run verification (URL + assets + DB) → publish the launch summary to chat.
+    // Keep automatic launch diagnostics in the Preview panel, not the conversation.
     const vManifest = effectivePort === manifest.port ? manifest : { ...manifest, port: effectivePort };
     const v = await verifyPreview(projectId, userId, workspaceId, vManifest, branchLabel).catch(() => null);
     auditStep.status = v?.overall === "ok" ? "done" : "failed";
     if (auditStep.status === "failed") auditStep.error = v?.summary || "Verification could not complete";
     await persistSteps(projectId, userId, result.steps);
-    if (v) await publishSummary(userId, opts.conversationId, `${v.summary}\n\n🔗 ${previewUrl}${companionSummary}`, pub(projectId)).catch(() => {});
+    if (v) plog(projectId, userId, "Preview launch summary", { level: v.overall === "ok" ? "info" : "error", detail: `${v.summary}\n\n🔗 ${previewUrl}${companionSummary}` });
     if (auditStep.status === "failed") return failed(projectId, userId, auditStep.error || "Preview verification failed");
+    throwIfCancelled(projectId);
+    await recordAppliedEnvironment(projectId, environmentBranch((await getEnv(projectId))?.previewBranch), preparedEnvironment.get(manifest));
     return { previewUrl };
   } catch (err) {
     const msg = (err as Error).message ?? String(err);
@@ -4063,6 +3893,9 @@ export async function stopPreview(projectId: string, userId: string): Promise<vo
   const port = row?.appPort
     ?? (row?.setupManifest ? (JSON.parse(row.setupManifest) as PreviewManifest).port : undefined)
     ?? DEFAULT_PORT;
+  const workerManifest=row?.setupManifest?JSON.parse(row.setupManifest) as PreviewManifest:null;
+  const workerDir=(await resolvePreviewWorkDir(projectId,workspaceId)).dir;
+  await sh(workspaceId,previewWorkerCommand('stop',workerDir,workerManifest?.backgroundProcesses),30000);
   // Kill the app port + any lingering build/install processes started for this run.
   // Include git (clone/fetch + the git-remote-https helper): a cancelled run's clone
   // keeps churning otherwise and, overlapped with the next run's clone, OOMs the VM

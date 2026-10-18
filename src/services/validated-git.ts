@@ -1,5 +1,5 @@
 import { validationShell } from "./validation-sandbox.ts";
-import { ValidationFailure, assertHeadsUnchanged, type ValidationContext, type ValidationEvidence } from "./validation-contract.ts";
+import { ValidationFailure, assertHeadsUnchanged, hashContract, type ValidationContext, type ValidationEvidence } from "./validation-contract.ts";
 import { shellQuote as q } from "./preview-plan.ts";
 
 export interface PublicationOptions {
@@ -59,29 +59,72 @@ export async function publishValidatedTicket(o:PublicationOptions) {
 export async function publishValidatedMerge(o:PublicationOptions & {targetBranch:string;baseBranch?:string;kind?:'integration'|'promotion'}) {
   checkedRef(o.featureBranch);checkedRef(o.targetBranch);checkedRef(o.baseBranch??'main');
   return serialized(`${o.repoUrl}:${o.targetBranch}`,async()=>{
-    const {sh,auth}=client(o);const candidate=`/data/validation-merge-${crypto.randomUUID()}`;
+    const startedAt=Date.now();
+    const {sh,auth}=client(o);
     const heads=async()=>({source:await sh(`git ls-remote --heads origin ${q('refs/heads/'+o.featureBranch)} | cut -f1`),target:await sh(`git ls-remote --heads origin ${q('refs/heads/'+o.targetBranch)} | cut -f1`)});
     await sh(`git remote set-url origin ${q(auth)}\nif test "$(git rev-parse --is-shallow-repository)" = true; then git fetch --unshallow origin; fi`);
     const expected=await heads();if(!expected.source)throw new ValidationFailure('Source branch is not published');
     await sh(`git fetch --no-tags origin ${q(o.featureBranch)} ${q(expected.target?o.targetBranch:(o.baseBranch??'main'))}`);
     const baseline=expected.target||await sh(`git rev-parse ${q('origin/'+(o.baseBranch??'main'))}`);
+    // The same source/target revisions resume the saved merge, including partial
+    // repairs. Changed revisions get a different candidate and fresh validation.
+    const candidate=`/data/validation-merge-${hashContract({root:o.projectDir,source:expected.source,baseline,target:o.targetBranch}).slice(0,32)}`;
+    let published=false;
     try {
-      await sh(`git worktree add --detach ${q(candidate)} ${q(baseline)}`);
-      const merged=await validationShell(o.workspaceId,`cd ${q(candidate)}; git -c user.name='LFG Agent' -c user.email='agent@lfg.dev' merge --no-commit --no-ff ${q(expected.source)} -m ${q('Integrate '+o.featureBranch)}`,120_000);
-      if(merged.exitCode!==0) {
+      const exists=await sh(`if test -e ${q(candidate+'/.git')}; then echo yes; fi`);
+      if(exists==='yes') {
+        await sh(`git -C ${q(candidate)} merge-base --is-ancestor ${q(baseline)} HEAD`);
+        o.validation.onLog?.('Resuming the saved merge repair; ticket implementation will not run again.');
+      } else {
+        await sh(`git worktree add --detach ${q(candidate)} ${q(baseline)}`);
+        const merged=await validationShell(o.workspaceId,`cd ${q(candidate)}; git -c user.name='LFG Agent' -c user.email='agent@lfg.dev' merge --no-commit --no-ff ${q(expected.source)} -m ${q('Integrate '+o.featureBranch)}`,120_000);
+        if(merged.exitCode!==0 && !(await sh(`git -C ${q(candidate)} diff --name-only --diff-filter=U`)))throw new ValidationFailure('Merge candidate failed: '+merged.output);
+      }
+      const deadline=Date.now()+20*60_000;
+      for(let attempt=0;attempt<2;attempt++) {
         const conflicts=await sh(`git -C ${q(candidate)} diff --name-only --diff-filter=U`);
-        if(!conflicts)throw new ValidationFailure('Merge candidate failed: '+merged.output);
+        if(!conflicts)break;
+        if(o.validation.cancelled?.())throw new ValidationFailure('Merge repair cancelled; candidate preserved.');
+        o.validation.onLog?.(`Resolving ${conflicts.split('\n').length} merge conflict(s), attempt ${attempt+1}/2.`);
         const {runValidationRepair}=await import('./merge-resolver.ts');
         await runValidationRepair({projectId:o.validation.projectId,userId:o.validation.userId,workspaceId:o.workspaceId,projectDir:candidate,onLog:o.validation.onLog,cancelled:o.validation.cancelled,
-          prompt:`Resolve the pending merge conflicts in ${candidate}, preserving both branches' intent. Do not commit, abort, reset, checkout, or push. Conflicted paths:\n${conflicts}\nThe server will commit and independently validate the merged application.`});
-        await sh(`test "$(git -C ${q(candidate)} rev-parse HEAD)" = ${q(baseline)}\ngit -C ${q(candidate)} add -A`);
+          timeoutMs:Math.max(1,deadline-Date.now()),
+          prompt:`Resolve only the pending merge conflicts in ${candidate}, preserving both branches' intent. Continue from existing partial resolutions. Inspect the conflict stages and make the smallest coherent resolution; do not rebuild the ticket, refactor unrelated code, or provision an app runtime. Do not commit, abort, reset, checkout, or push. Stage each resolved path with git add. Conflicted paths:\n${conflicts}\nBefore finishing, verify git diff --name-only --diff-filter=U is empty and git diff --cached --check passes. The server will commit and run configured validation after conflict resolution.`});
+        await sh(`test "$(git -C ${q(candidate)} rev-parse HEAD)" = ${q(baseline)}`);
+        if(Date.now()>=deadline)break;
       }
-      const sha=await validateWithRepair(o,candidate,o.targetBranch,baseline,o.kind??'integration');
+      const remaining=await sh(`git -C ${q(candidate)} diff --name-only --diff-filter=U`);
+      if(remaining)throw new ValidationFailure('Merge repair left unresolved paths: '+remaining.split('\n').join(', '));
+      await sh(`git -C ${q(candidate)} diff --check\ngit -C ${q(candidate)} diff --cached --check`);
+      const candidateTree=await sh(`git -C ${q(candidate)} write-tree`);
+      const sourceTree=await sh(`git rev-parse ${q(expected.source+'^{tree}')}`);
+      let reused:any=null;
+      if(candidateTree===sourceTree && !o.validation.requiredChecks?.length) {
+        const local=await sh('if test -f .env; then git hash-object .env; else echo missing; fi');
+        const {readReusableMergeEvidence}=await import('./validation-policy.ts');
+        reused=await readReusableMergeEvidence(o,{revision:expected.source,tree:candidateTree,baseline},local);
+      }
+      let sha:string;
+      if(reused) {
+        if(o.validation.cancelled?.())throw new ValidationFailure('Merge cancelled');
+        o.validation.onLog?.('Reusing ticket validation '+reused.id+': identical source tree, unchanged target baseline and environment in the same sandbox.');
+        await sh(`git -C ${q(candidate)} -c user.name='LFG Agent' -c user.email='agent@lfg.dev' commit -m 'merge: integrate verified ticket'`);
+        sha=await sh(`git -C ${q(candidate)} rev-parse HEAD`);
+        if(await sh(`git rev-parse ${q(sha+'^{tree}')}`)!==candidateTree)throw new ValidationFailure('Merge tree changed after evidence reuse');
+      } else {
+        o.validation.onLog?.('Merge requires fresh checks: no matching ticket evidence for this tree, baseline and environment.');
+        sha=await validateWithRepair(o,candidate,o.targetBranch,baseline,o.kind??'integration');
+      }
       await sh(`git merge-base --is-ancestor ${q(expected.source)} ${q(sha)}\ngit merge-base --is-ancestor ${q(baseline)} ${q(sha)}`);
       assertHeadsUnchanged(expected,await heads());
       const files=(await sh(`git diff --name-only ${q(baseline)} ${q(sha)}`)).split('\n').filter(Boolean);
       await sh(`git push origin ${q(sha+':refs/heads/'+o.targetBranch)} ${q('--force-with-lease=refs/heads/'+o.targetBranch+':'+expected.target)}\ntest "$(git ls-remote --heads origin ${q('refs/heads/'+o.targetBranch)} | cut -f1)" = ${q(sha)}`);
+      published=true;
       return {sha,files};
-    } finally { await validationShell(o.workspaceId,`git -C ${q(o.projectDir)} worktree remove --force ${q(candidate)}`).catch(()=>{}); }
+    } finally {
+      o.validation.onLog?.(`Merge elapsed: ${Math.round((Date.now()-startedAt)/1000)} seconds.`);
+      if(published)await validationShell(o.workspaceId,`git -C ${q(o.projectDir)} worktree remove --force ${q(candidate)}`).catch(()=>{});
+      else o.validation.onLog?.(`Merge did not publish. Partial resolutions are preserved in ${candidate}; retry merging the saved ticket branch to continue.`);
+    }
   });
 }

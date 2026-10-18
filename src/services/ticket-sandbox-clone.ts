@@ -3,11 +3,12 @@ import { sandboxes } from '../db/schema/sandbox.ts';
 import { projectEnvironments } from '../db/schema/project-environments.ts';
 import { and, eq, desc, inArray } from 'drizzle-orm';
 import { submitClone, waitForClone } from './sandbox/clone-v2.ts';
-import { setNoSleep } from './mags.ts';
+import { setNoSleep, execOnWorkspace } from './mags.ts';
 
 /** Saved separately from ready ticket registrations so a pending clone is never exec-probed. */
 export async function createTicketSandbox(options: {
   projectId: string; ticketId: string; userId: string;
+  allowPreparedPreviewWithAppError?: boolean;
   fresh: () => Promise<{jobId:string;workspaceId:string}>;
   log: (message:string) => Promise<unknown>;
 }): Promise<{jobId:string;workspaceId:string;cloneIntentId?:string}> {
@@ -25,8 +26,25 @@ export async function createTicketSandbox(options: {
   if (intent && !intent.magsJobId) return recoverUnconfirmed();
   if (!intent) {
     const [source] = await db.select().from(projectEnvironments).where(eq(projectEnvironments.projectId, options.projectId));
-    if (!source?.workspaceId || !source.setupComplete || source.previewStatus === 'error') {
-      throw new Error('A working prepared preview is required to clone this ticket sandbox.');
+    if (!source?.workspaceId || !source.setupComplete) {
+      await options.log('Preparing the project Preview environment automatically…');
+      const {ensureProjectSandbox} = await import('./project-sandbox.ts');
+      // Uses the normal project lifecycle lock and persists the environment assignment.
+      // An unfinished app cannot pass a running-preview check before its first build.
+      await ensureProjectSandbox(options.projectId);
+      await options.log('Project environment assigned. Creating an independent build workspace; the builder will prepare the app and its dependencies.');
+      return options.fresh();
+    }
+    if (source.previewStatus === 'error' && !options.allowPreparedPreviewWithAppError) {
+      throw new Error('The existing prepared preview has an error. Repair it before cloning the build environment.');
+    }
+    if (source.previewStatus === 'error') {
+      // A failed preview of another ticket does not invalidate the prepared base.
+      // Recovery can clone it only when the actual source checkout still responds.
+      const probe = await execOnWorkspace(source.workspaceId, 'git -C /data/project rev-parse --show-toplevel', {timeout:20_000}).catch(()=>null);
+      if (probe?.exitCode !== 0 || probe.output.trim() !== '/data/project') {
+        throw new Error('The prepared project checkout is unavailable. Restore the project Preview, then retry Coding.');
+      }
     }
     await options.log('Cloning the prepared preview disks into an independent ticket sandbox…');
     [intent] = await db.insert(sandboxes).values({projectId:options.projectId,ticketId:options.ticketId,userId:options.userId,
@@ -38,7 +56,11 @@ export async function createTicketSandbox(options: {
       // Explicit rejection has allocated nothing. Unknown POST outcomes must not be retried.
       if ([404,409].includes((error as any).statusCode)) {
         await db.update(sandboxes).set({status:'rejected'}).where(eq(sandboxes.id,intent.id));
-        throw new Error('Preview clone was rejected; no empty replacement sandbox was created.');
+        // submitClone already redacts credentials from provider diagnostics. Preserve
+        // the reason instead of collapsing missing-source and busy-source failures.
+        const detail = error instanceof Error ? error.message : `HTTP ${(error as any).statusCode}`;
+        console.warn('[ticket-sandbox-clone] rejected', {ticketId:options.ticketId,sourceWorkspaceId:source.workspaceId,detail});
+        throw new Error(`Preview clone was rejected: ${detail} No replacement sandbox was created.`);
       }
       await options.log(`Clone submission could not be confirmed: ${(error as Error).message}`);
       return recoverUnconfirmed();

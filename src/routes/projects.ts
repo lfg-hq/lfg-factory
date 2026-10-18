@@ -1,3 +1,4 @@
+import { isChatTurnActive } from "../services/ticket-chat-turn.ts";
 import { resolveBuilderModelKey } from "../services/build-llm-access.ts";
 import { availableChatModels } from "../services/available-models.ts";
 import { resolveLlmGrants } from "../services/llm-access.ts";
@@ -149,6 +150,24 @@ async function syncOutcomeTicketStages(projectId: string) {
 
 const projectsRouter = new Hono<AuthEnv>();
 projectsRouter.use("*", requireAuth);
+
+// Lightweight sidebar list: same owner/active-member access as the project list.
+projectsRouter.get("/api/project-switcher", async (c) => {
+  const userId = c.get("user").id;
+  const [owned, shared] = await Promise.all([
+    db.select({id:projects.id,projectId:projects.projectId,name:projects.name}).from(projects).where(eq(projects.ownerId,userId)),
+    db.select({id:projects.id,projectId:projects.projectId,name:projects.name}).from(projectMembers)
+      .innerJoin(projects,eq(projectMembers.projectId,projects.id))
+      .where(and(eq(projectMembers.userId,userId),eq(projectMembers.status,"active"))),
+  ]);
+  const available = [...new Map([...owned,...shared].map(p=>[p.id,p])).values()];
+  const counts = available.length ? await db.select({projectId:notifications.projectId,unread:sql<number>`count(*)`})
+    .from(notifications).where(and(eq(notifications.userId,userId),isNull(notifications.readAt),inArray(notifications.projectId,available.map(p=>p.projectId))))
+    .groupBy(notifications.projectId) : [];
+  const unread = new Map(counts.map(n=>[n.projectId,Number(n.unread)]));
+  c.header('Cache-Control','private, no-store');
+  return c.json({projects:available.map(p=>({id:p.projectId,name:p.name,unread:unread.get(p.projectId)||0})).sort((a,b)=>a.name.localeCompare(b.name))});
+});
 
 // ── GET /projects — project list ────────────────────────────────────
 projectsRouter.get("/projects", async (c) => {
@@ -886,6 +905,7 @@ projectsRouter.get("/projects/:projectId/api/checklist", async (c) => {
     stage: stageMap[t.stageId ?? ""] ?? "Backlog",
     stage_id: t.stageId,
     queue_status: t.queueStatus,
+    agentBusy: isChatTurnActive(t.id),
     created_at: t.createdAt,
     updated_at: t.updatedAt,
     // When the build finished and the ticket moved to In Review (ticket-executor sets

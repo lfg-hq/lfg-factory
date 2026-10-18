@@ -1,3 +1,4 @@
+import { createConnectionChecker } from '../../services/chatgpt-connection-check.ts';
 import { userLlmAccess } from "../../services/llm-access.ts";
 /** OpenAI Codex (ChatGPT subscription) connector API for Pi sandbox builds. */
 
@@ -5,6 +6,7 @@ import { Hono } from "hono";
 import { requireAuth } from "../../auth/middleware.ts";
 import type { auth } from "../../auth/index.ts";
 import {
+  getOpenAICodexAccessToken,
   disconnectOpenAICodex,
   pollOpenAICodexAuth,
   startOpenAICodexAuth,
@@ -43,6 +45,15 @@ openAICodexAuthApi.post("/disconnect", async (c) => {
     console.error("[openai-codex-auth/disconnect]", error);
     return c.json({ ok: false, error: String(error) }, 500);
   }
+});
+
+const checkConnection = createConnectionChecker(getOpenAICodexAccessToken);
+openAICodexAuthApi.post('/check', async c => {
+  c.header('Cache-Control','no-store');
+  if (!(await userLlmAccess(c.get('user').id)).canUseSubscription) {
+    return c.json({status:'unavailable',message:'ChatGPT subscriptions are disabled by your admin.'},403);
+  }
+  return c.json(await checkConnection(c.get('user').id));
 });
 
 export default openAICodexAuthApi;

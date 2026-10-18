@@ -7,7 +7,7 @@ import { db } from "../config/db.ts";
 import { modelSelections } from "../db/schema/chat.ts";
 import { profiles, applicationState } from "../db/schema/users.ts";
 import { getProviderName, getProviderModel, DEFAULT_MODEL_KEY } from "../ai/provider.ts";
-import { startPiCli, streamPiToCompletion, isPiSupportedProvider, extractPiProgress } from "./pi-cli.ts";
+import { startPiCli, streamPiToCompletion, stopPiAttempt, isPiSupportedProvider, extractPiProgress } from "./pi-cli.ts";
 import {
   startClaudeCli, pollOutput, parseJsonlEvents, isStreamComplete, extractExitCode,
 } from "./claude-cli.ts";
@@ -116,6 +116,7 @@ export async function runValidationRepair(o: {
 
   if (cli.usePi && cli.provider) {
     log(`Repairing with Pi (${cli.provider}/${cli.piModelId})…`);
+    let repairPid: string | undefined;
     try {
       const pi = await startPiCli({
         workspaceId: o.workspaceId, prompt, projectDir: dirName,
@@ -124,6 +125,7 @@ export async function runValidationRepair(o: {
         apiKey: cli.apiKey, oauthAccessToken: cli.oauthAccessToken,
         envVars: o.envVars ?? {},
       });
+      repairPid = pi.backgroundPid;
       let lastLog = 0;
       const res = await streamPiToCompletion({
         workspaceId: o.workspaceId, outputFile: pi.outputFile, backgroundPid: pi.backgroundPid,
@@ -133,6 +135,8 @@ export async function runValidationRepair(o: {
       account = (extractPiProgress(res.tail || "", 1200) || "").replace(/^Agent:\s*/, "").trim();
       if (res.fatalError) throw new Error(res.fatalError);
     } catch (e) {
+      // A retry must not race the prior repair's surviving tool processes.
+      if(repairPid)await stopPiAttempt(o.workspaceId,repairPid);
       throw new Error(`Pi repair failed: ${(e as Error).message}`);
     }
   } else if (cli.claudeUsable) {

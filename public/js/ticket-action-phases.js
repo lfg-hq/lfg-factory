@@ -74,10 +74,11 @@
     const liveCards=new Map(Array.from(area.querySelectorAll('.feature-live[data-live-url]'),card=>[card.dataset.liveUrl,card]));
     const previous = area.querySelector('.ticket-phase-body:not([hidden])');
     const scroll = previous ? { top:previous.scrollTop, left:previous.scrollLeft, bottom:previous.scrollHeight-previous.scrollTop-previous.clientHeight<40 } : null;
-    const phases = group(rows, ticket);
+    const phases = group(rows, ticket).filter(phase => phase.id === 'build' || (phase.id === 'validation' ? ticket?.validationEnabled !== false : ticket?.featureTestingEnabled !== false));
     area.dataset.phaseView = key;
     const history = histories.get(historyUrl);
-    let selected = choices.get(key) || (phases[2].rows.length ? 'feature-testing' : phases[1].rows.length ? 'validation' : 'build');
+    let selected = choices.get(key) || phases.slice().reverse().find(phase => phase.rows.length)?.id || 'build';
+    if (!phases.some(phase => phase.id === selected)) selected = 'build';
     const fragment = document.createDocumentFragment();
     const headers = document.createElement('div'); headers.className = 'phase-headers'; headers.setAttribute('role', 'tablist'); headers.setAttribute('aria-label', 'Ticket actions');
     const dock = document.createElement('div'); dock.className = 'feature-browser-dock'; dock.setAttribute('aria-label', 'Feature test browser');

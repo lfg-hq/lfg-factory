@@ -76,7 +76,7 @@ export const messages = pgTable(
     activityTrail: jsonb("activity_trail").$type<Array<{ text: string; tool?: string }> | null>(),
     // Page previews produced during this turn, so the card comes back on refresh
     // rather than living only in the socket message that announced it.
-    pagePreviews: jsonb("page_previews").$type<Array<{ id: string; name: string }> | null>(),
+    pagePreviews: jsonb("page_previews").$type<Array<import("../../../types/chat-artifact.ts").ChatArtifact> | null>(),
     // HOW this assistant turn ended. Recorded on every turn, surfaced in the UI only
     // when it is not "complete" — a reply that was cut off used to be saved as though
     // it had finished, so an interrupted thought was indistinguishable from an answer.
@@ -129,4 +129,12 @@ export const modelSelections = pgTable("model_selection", {
   selectedModel: text("selected_model").notNull().default("gpt-5.6-luna"),
   createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),
   updatedAt: timestamp("updated_at", { mode: "date" }).notNull().default(sql`now()`),
+});
+
+/** Private per-conversation handoff; never a shared project memory or chat message. */
+export const conversationContexts = pgTable("conversation_context", {
+  conversationId: text("conversation_id").primaryKey().references(() => conversations.id, { onDelete: "cascade" }),
+  summary: text("summary").notNull(),
+  throughId: text("through_id").notNull(),
+  throughAt: timestamp("through_at", { mode: "date" }).notNull(),
 });

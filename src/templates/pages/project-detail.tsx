@@ -117,13 +117,15 @@ export function ProjectDetailPage({
   <link rel="icon" type="image/x-icon" href="/public/images/favicon.ico" />
   <title>${project.name} — LFG</title>
   <script>(function(){if(localStorage.getItem('sidebarMinimized')==='true'){document.documentElement.classList.add('sidebar-minimized-preload');}})()</script>
+  <link rel="stylesheet" href="/public/css/document-graph.css?v=1" />
+  <script src="/public/js/document-graph.js?v=1" defer></script>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
   <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
   <link rel="stylesheet" href="/public/css/projects.css" />
   <link rel="stylesheet" href="/public/css/project_detail.css" />
-  <link rel="stylesheet" href="/public/css/project-home.css?v=20260923-epic-dashboard" />
-  <link rel="stylesheet" href="/public/css/artifacts.css?v=20260923-compact-docs" />
+  <link rel="stylesheet" href="/public/css/project-home.css?v=20261015-calm-dashboard" />
+  <link rel="stylesheet" href="/public/css/artifacts.css?v=20261004-dark-folders" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
@@ -466,13 +468,13 @@ export function ProjectDetailPage({
         ${(activeTab === "home" || activeTab === "inbox") ? html`
 
           ${activeTab === "home" ? html`
-          <script src="/public/js/project-home.js?v=20260923-epic-dashboard"></script>
+          <script src="/public/js/project-home.js?v=20261015-calm-dashboard"></script>
           <div class="home-dashboard" data-project="${project.projectId}">
             ${role !== "viewer" && role !== "guest" ? html`
-            <form id="home-start-form" data-project="${project.projectId}" class="home-new-requirement">
-              <div class="home-compose"><i class="fas fa-wand-magic-sparkles" aria-hidden="true"></i><textarea id="home-start-input" rows="1" maxlength="10000" required aria-label="New requirement" placeholder="What would you like to build or improve?"></textarea><button type="submit" class="btn btn-primary" aria-label="Start a new chat"><i class="fas fa-arrow-right" aria-hidden="true"></i></button></div>
-              <span id="home-start-error" role="status" class="home-muted"></span>
-            </form>` : ""}
+            <section class="home-start-card" aria-labelledby="home-start-title">
+              <div class="home-start-copy"><h2 id="home-start-title">What would you like to work on?</h2><p>Plan a feature, ask a question, or share a document.</p></div>
+              <a class="home-start-link" href="/chat/project/${project.projectId}?new=1"><i class="fas fa-plus" aria-hidden="true"></i> New chat</a>
+            </section>` : ""}
             <section aria-labelledby="home-epics-title">
               <div class="home-section-heading"><div><h2 id="home-epics-title">Latest epics</h2><p class="home-muted">Newest first · Progress counts tickets ready for review or completed</p></div><a href="/projects/${project.projectId}/epics" class="home-quiet-link">View all →</a></div>
               <div id="home-epics" class="home-epics" aria-live="polite"><p class="home-muted home-epics-empty">Loading epics…</p></div>
@@ -484,7 +486,7 @@ export function ProjectDetailPage({
                 ${conversations.length ? conversations.slice(0,3).map(cv => html`
                   <a href="/chat/project/${project.projectId}/conversation/${cv.id}" class="home-conversation">
                     <span><span class="home-conversation-title">${(cv.title || "Untitled conversation").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")}</span><small>${new Date(cv.updatedAt).toLocaleDateString(undefined,{month:"short",day:"numeric"})}</small></span><span class="home-quiet-link">Continue →</span>
-                  </a>`) : html`<p class="home-muted">Your project conversations will appear here.</p>`}
+                  </a>`) : html`<div class="home-conversations-empty"><i class="far fa-comment" aria-hidden="true"></i><p class="home-muted">Your conversations will appear here.</p></div>`}
               </section>
               <aside class="home-dashboard-side" aria-label="Project resources and team">
                 <section class="home-resources">
@@ -1027,7 +1029,7 @@ export function ProjectDetailPage({
           <script src="/public/js/markdown-config.js"></script>
   <!-- PDF libraries load on demand when exporting a document. -->
           <script src="/public/js/design-preview.js"></script>
-  <script src="/public/js/artifacts-loader.js?v=20260923-compact-docs"></script>
+  <script src="/public/js/artifacts-loader.js?v=20261004-ticket-activity"></script>
           <script src="/public/js/document-comments.js"></script>
           <script>
             // Reuse the SAME docs module as the chat Docs panel (window.ArtifactsLoader),
@@ -1326,11 +1328,12 @@ export function ProjectDetailPage({
         ${activeTab === "config" && modelConfig ? html`
         <div style="max-width:820px;">
           <div class="agent-card">
-            <div class="agent-card-head"><div><h3>Build workflow</h3><p>Build a whole feature from its approved requirements. Chat shows epics and previews; implementation tickets remain available in Tickets.</p></div></div>
-            <label style="display:flex;gap:10px;align-items:center;"><input id="cfg-epic-builds" type="checkbox" disabled /> Build features as epics</label>
-            <p id="cfg-epic-builds-status" role="status" style="font-size:12px;color:var(--text-secondary)">Loading setting…</p>
+            <div class="agent-card-head"><div><h3>Build checks</h3><p>Choose which checks run after a build. Disabled stages are skipped and their ticket tabs are hidden. Changes apply to the next check run.</p></div></div>
+            <label style="display:flex;gap:10px;align-items:center;margin-bottom:12px"><input id="cfg-validation-enabled" type="checkbox" disabled /> Validation — check app startup and ticket requirements</label>
+            <label style="display:flex;gap:10px;align-items:center"><input id="cfg-feature-testing-enabled" type="checkbox" disabled /> Feature testing — exercise the feature through browser or API tests</label>
+            <p id="cfg-build-stages-status" role="status" style="font-size:12px;color:var(--text-secondary)">Loading settings…</p>
           </div>
-          <script src="/public/js/epic-build-settings.js"></script>
+          <script src="/public/js/build-stage-settings.js"></script>
           <div class="agent-card">
             <div class="agent-card-head">
               <div>
@@ -1508,23 +1511,10 @@ export function ProjectDetailPage({
           <div class="agent-card">
             <div class="agent-card-head">
               <div>
-                <h3>Sandbox access</h3>
-                <p>What the chat agent may do on this project's preview machine when it looks into a problem. Reading always works; running things is the part you decide.</p>
+                <h3>Preview inspection</h3>
+                <p>Chat can inspect logs and the running app. Application changes are handled through tickets, with their build history and checks. Saved environment settings and app restarts remain available.</p>
               </div>
             </div>
-            <div id="shell-access-opts" class="access-opts">
-              <label class="access-opt" for="shell-off">
-                <input type="radio" name="shell-access" id="shell-off" value="off" onchange="saveShellAccess(false)" />
-                <span class="access-opt-title"><i class="fas fa-eye"></i> Read only</span>
-                <p>It can curl the app, tail logs, read the database and inspect git — then tell you what's wrong. Anything that writes is refused.</p>
-              </label>
-              <label class="access-opt" for="shell-on">
-                <input type="radio" name="shell-access" id="shell-on" value="on" onchange="saveShellAccess(true)" />
-                <span class="access-opt-title"><i class="fas fa-terminal"></i> Full shell</span>
-                <p>It can also fix what it finds — free a full disk, restart a dead process, install a missing package — without you opening a terminal.</p>
-              </label>
-            </div>
-            <div class="agent-row"><span id="shell-access-status" class="agent-status"></span></div>
           </div>
         </div>
         ` : ""}
@@ -1739,7 +1729,7 @@ export function ProjectDetailPage({
     </div>
   </div>
 
-  <script src="/public/js/sidebar.js?v=20260923-tooltip-theme"></script>
+  <script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
 <script src="/public/js/sidebar-chats.js?v=20260908-initials"></script>
   <script src="/public/js/board-sync.js"></script>
   <script></script>
@@ -2004,43 +1994,12 @@ export function ProjectDetailPage({
         .then(function(d){
           if (!d) return;
           if (typeof d.customInstructions === "string") ta.value = d.customInstructions;
-          paintShellAccess(!!d.agentShellAccess, !!d.canGrantShell);
+
         })
         .catch(function(){});
     }
     // The picker is the state — no separate save button, since there's nothing to
     // compose. Owners only: it decides what someone else's chat can do to the VM.
-    function paintShellAccess(on, canGrant) {
-      var opts = document.getElementById("shell-access-opts");
-      if (!opts) return;
-      var el = document.getElementById(on ? "shell-on" : "shell-off");
-      if (el) el.checked = true;
-      var labels = opts.querySelectorAll(".access-opt");
-      for (var i = 0; i < labels.length; i++) {
-        var input = labels[i].querySelector("input");
-        labels[i].classList.toggle("selected", !!(input && input.checked));
-        if (input) input.disabled = !canGrant;
-      }
-      opts.classList.toggle("locked", !canGrant);
-      var st = document.getElementById("shell-access-status");
-      if (st) st.textContent = canGrant
-        ? (on ? "The agent runs commands on the preview machine. Changes it makes are real." : "The agent reports problems it finds; you fix them.")
-        : "Only the project owner can change this.";
-    }
-    function saveShellAccess(on) {
-      var st = document.getElementById("shell-access-status");
-      if (st) st.textContent = "Saving…";
-      fetch("/api/projects/" + projectId + "/preview/build-settings", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agentShellAccess: on })
-      })
-        .then(function(r){ return r.json(); })
-        .then(function(d){
-          if (d && d.error) { if (st) st.textContent = d.error; return; }
-          paintShellAccess(on, true);
-        })
-        .catch(function(){ if (st) st.textContent = "Could not save."; });
-    }
     function saveCustomInstructions() {
       var ta = document.getElementById("custom-instructions");
       var st = document.getElementById("custom-instructions-status");

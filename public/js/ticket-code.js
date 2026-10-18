@@ -14,8 +14,11 @@
     const q = new URLSearchParams({ base, ...extra });
     const r = await fetch(api + action + '?' + q, { credentials: 'same-origin', ...(body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}) });
     const data = await r.json();
-    if (r.status === 202 && data.preparing) { status(data.message || 'Restoring ticket workspace…'); $('connection').textContent = '◌ Restoring'; await new Promise(resolve => setTimeout(resolve, 2000)); return request(action, body, extra); }
-    if (!r.ok || data.error) throw new Error(data.error || 'Request failed');
+    if (r.status === 202 && data?.preparing) { status(data.message || 'Restoring ticket workspace…'); $('connection').textContent = '◌ Restoring'; await new Promise(resolve => setTimeout(resolve, 2000)); return request(action, body, extra); }
+    if (!r.ok || data?.error) throw new Error(data?.error || 'Request failed');
+    if (action === 'tree' && (!data || !Array.isArray(data.files) || typeof data.branch !== 'string' || data.files.some(f => !f || typeof f.path !== 'string' || typeof f.changed !== 'boolean'))) {
+      throw new Error('The workspace returned an incomplete file list. Refresh to retry.');
+    }
     return data;
   }
   function updateUrl(path) { const url = new URL(location.href); url.searchParams.set('base', base); if (path) url.searchParams.set('file', path); window.history.replaceState(null, '', url); }

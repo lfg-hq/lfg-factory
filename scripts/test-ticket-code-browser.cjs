@@ -5,11 +5,12 @@ execFileSync('bun',['-e',`import {TicketCodePage} from './src/templates/pages/ti
 (async()=>{
  const browser=await chromium.launch({executablePath:process.env.CHROME_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',headless:true});
  const page=await browser.newPage({viewport:{width:1440,height:1000}});const errors=[];page.on('pageerror',e=>errors.push(e.message));
- let saved='export const count = 2;\n',commits=0, canEdit=true, failSave=false, preparing=1, treeError=false;
+ let saved='export const count = 2;\n',commits=0, canEdit=true, failSave=false, preparing=1, treeError=false, malformedTree=false;
  await page.route('**/*',async route=>{
   const u=new URL(route.request().url()); let local;
   if(u.pathname.includes('/code/')) {
    const action=u.pathname.split('/').pop(),body=route.request().postDataJSON();
+   if(action==='tree' && malformedTree)return route.fulfill({contentType:'application/json',body:JSON.stringify({branch:'feature/ticket'})});
    if(action==='tree' && treeError)return route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({error:'Workspace recovery failed. Retry shortly.'})});
    if(action==='tree' && preparing-->0)return route.fulfill({status:202,contentType:'application/json',body:JSON.stringify({preparing:true,message:'Restoring ticket code…'})});
    if(action==='save' && failSave)return route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({error:'File changed in the sandbox. Reopen it and reconcile your edits before saving.'})});
@@ -40,5 +41,7 @@ execFileSync('bun',['-e',`import {TicketCodePage} from './src/templates/pages/ti
  canEdit=false;page.on('dialog',d=>d.accept());await page.reload();await page.waitForFunction(()=>document.querySelector('#status').textContent==='Read-only');
  assert.equal(await page.locator('#save').isDisabled(),true);assert.equal(await page.locator('#command').isDisabled(),true);
  treeError=true;await page.reload();await page.waitForFunction(()=>document.querySelector('#status').textContent==='Checkout unavailable');assert.equal(await page.locator('#change-count').textContent(),'—');assert.match(await page.locator('#file-list').textContent(),/Could not load/);
+ treeError=false;malformedTree=true;await page.reload();await page.waitForFunction(()=>document.querySelector('#status').textContent==='Checkout unavailable');assert.match(await page.locator('#message').textContent(),/incomplete file list/);assert.equal(await page.locator('#change-count').textContent(),'—');assert.equal(await page.locator('#command').isDisabled(),true);
+ assert.match(await page.locator('script[src*="ticket-code.js"]').getAttribute('src'),/\?v=[a-f0-9]{16}$/);
  assert.deepEqual(errors,[]);console.log('Screenshots: '+temp);console.log('PASS: Monaco load, diff, edit, save, defer/confirm commit, terminal, search, mobile layout; no browser errors');await browser.close();
 })().catch(e=>{console.error(e);process.exit(1)});

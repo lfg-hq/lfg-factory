@@ -1,3 +1,4 @@
+import { startAuthWorkspaceWithRecovery } from "./auth-workspace-recovery.ts";
 /**
  * Per-user ChatGPT/OpenAI Codex authentication for Pi sandbox builds.
  *
@@ -135,13 +136,13 @@ async function createAuthWorkspace(userId: string): Promise<string> {
     await db.delete(sandboxes).where(eq(sandboxes.id, existing.id));
   }
 
-  const workspaceName = `openai-auth-${crypto.randomUUID().slice(0, 12)}`;
-  const { jobId, workspaceId } = await newWorkspace(workspaceName, {
-    rootfsType: "pi",
-    noSync: true,
-    idleMinutes: 60,
-    diskGb: 3,
-    memGb: 2,
+  const { jobId, workspaceId } = await startAuthWorkspaceWithRecovery({
+    name: () => `openai-auth-${crypto.randomUUID().slice(0, 12)}`,
+    create: workspaceName => newWorkspace(workspaceName, {
+      rootfsType: "pi", noSync: true, idleMinutes: 60, diskGb: 3, memGb: 2,
+    }),
+    cleanup: workspaceName => stopWorkspace(workspaceName),
+    onRetry: () => console.info('[openai-codex-auth] Auth VM failed to start; retrying once with a fresh VM'),
   });
   await db.insert(sandboxes).values({
     userId,

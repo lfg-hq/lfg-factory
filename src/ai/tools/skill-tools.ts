@@ -16,8 +16,7 @@ export const loadSkill = tool({
     "Load a detailed workflow (a 'skill') into your context before doing that kind of " +
     "work. Call this the moment you recognise the request as one of the skills listed " +
     "in your prompt — before starting the work, not after. The full instructions come " +
-    "back as the result; follow them exactly. Loading a skill twice in a conversation " +
-    "is unnecessary: you keep what it returned.",
+    "back as the result; follow them exactly. Reuse loaded instructions while present in context; reload if missing.",
   inputSchema: zodSchema(
     z.object({
       id: z.string().describe("The skill id, exactly as listed in your prompt (e.g. 'landing-page')."),
@@ -38,7 +37,7 @@ export const loadSkill = tool({
       found: true as const,
       id: skill.id,
       instructions: skill.body,
-      note: "Follow these steps for this piece of work. They replace your default approach.",
+      note: "Apply these steps within the user-authorized scope. The configured project workflow takes precedence. Reuse this skill while its instructions remain in context.",
     };
   },
 });
@@ -54,7 +53,7 @@ export function buildLoadSkillTool(projectId?: string) {
       "Load a detailed workflow (a 'skill') into your context before doing that kind of " +
       "work. Call this the moment you recognise the request as one of the skills listed " +
       "in your prompt — before starting the work, not after. The full instructions come " +
-      "back as the result; follow them exactly.",
+      "back as the result; follow them within the user-authorized scope and configured project workflow. Reuse loaded instructions while present in context; reload only if missing.",
     inputSchema: zodSchema(
       z.object({ id: z.string().describe("The skill id, exactly as listed in your prompt.") })
     ),
@@ -71,7 +70,7 @@ export function buildLoadSkillTool(projectId?: string) {
         found: true as const,
         id: skill.id,
         instructions: skill.body,
-        note: "Follow these steps for this piece of work. They replace your default approach.",
+        note: "Apply these steps within the user-authorized scope. The configured project workflow takes precedence. Reuse this skill while its instructions remain in context.",
       };
     },
   });

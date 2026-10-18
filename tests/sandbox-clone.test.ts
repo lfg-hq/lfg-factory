@@ -37,3 +37,16 @@ test('clone errors preserve HTTP diagnostics for HTML, empty and JSON responses'
   expect(await submitClone('source')).toBe('accepted');
  }finally{globalThis.fetch=original;if(token===undefined)delete process.env.MAGS_API_TOKEN;else process.env.MAGS_API_TOKEN=token;}
 });
+
+test('clone uses the documented encoded URL and Bearer header with no request body',async()=>{
+ const original=globalThis.fetch,token=process.env.MAGS_API_TOKEN,base=process.env.MAGS_API_URL;
+ process.env.MAGS_API_TOKEN='local-contract-token';process.env.MAGS_API_URL='https://api.magpiecloud.com/';
+ let calls=0;
+ globalThis.fetch=(async(url:any,options:any)=>{
+  calls++;expect(url).toBe('https://api.magpiecloud.com/api/v2/mags-jobs/pv-test-source/clone');
+  expect(options.method).toBe('POST');expect(options.headers.Authorization).toBe('Bearer local-contract-token');expect(options.body).toBeUndefined();
+  return new Response(JSON.stringify({request_id:'clone-contract-test',status:'accepted'}),{status:202});
+ }) as any;
+ try{expect(await submitClone('pv-test-source')).toBe('clone-contract-test');expect(calls).toBe(1);}
+ finally{globalThis.fetch=original;if(token===undefined)delete process.env.MAGS_API_TOKEN;else process.env.MAGS_API_TOKEN=token;if(base===undefined)delete process.env.MAGS_API_URL;else process.env.MAGS_API_URL=base;}
+});
