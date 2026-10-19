@@ -17,13 +17,21 @@
 .ca-excerpt .ca-markdown>:first-child{margin-top:0}.ca-excerpt .ca-markdown p{margin:8px 0 14px}.ca-excerpt .ca-markdown h2,.ca-excerpt .ca-markdown h3{margin:14px 0 6px}
 .chat-artifact-card[data-artifact-kind="document"] .ca-foot{margin:0;padding:9px 16px}
 .chat-artifact-card button:disabled{opacity:.45;cursor:default}.chat-artifact-card button:focus-visible,.ca-dialog button:focus-visible{outline:2px solid var(--primary-color,#7c3aed);outline-offset:2px}
-/* Accent the saved-artifact cards so they read as separate from the conversation. */
-.chat-artifact-card{--ca-accent:var(--primary-color,#7c3aed);border-left:3px solid var(--ca-accent)}
-.chat-artifact-card[data-artifact-kind="document"] .ca-head{background:color-mix(in srgb,var(--ca-accent) 7%,transparent);border-bottom-color:color-mix(in srgb,var(--ca-accent) 18%,var(--ca-border))}
-.chat-artifact-card[data-artifact-kind="document"] .ca-document-icon{color:var(--ca-accent)}
-.chat-artifact-card[data-artifact-kind="document"] .ca-foot{background:color-mix(in srgb,var(--ca-accent) 3%,transparent)}
-.chat-artifact-card .ca-head button,.chat-artifact-card .ca-foot button{color:var(--ca-accent);font-weight:500}
+/* A quiet accent so saved artifacts read as separate from the conversation. */
+.chat-artifact-card{--ca-accent:var(--primary-color,#7c3aed);border-left:2px solid color-mix(in srgb,var(--ca-accent) 70%,transparent)}
+.chat-artifact-card[data-artifact-kind="document"] .ca-head{background:color-mix(in srgb,var(--ca-accent) 3%,transparent);border-bottom-color:var(--ca-border)}
+.chat-artifact-card[data-artifact-kind="document"] .ca-heading strong{font-weight:500}
+.chat-artifact-card[data-artifact-kind="document"] .ca-document-icon{color:color-mix(in srgb,var(--ca-accent) 75%,transparent);font-size:18px}
+.chat-artifact-card .ca-head button,.chat-artifact-card .ca-foot button{color:var(--ca-accent);font-weight:400}
 .ca-dialog-head .ca-dialog-close{font-size:22px;line-height:1;width:36px;height:36px;padding:0;display:inline-flex;align-items:center;justify-content:center}
+/* Lighter document typography: headings guide, they should not shout. */
+.ca-excerpt .ca-markdown{font-size:13.5px;color:color-mix(in srgb,var(--ca-ink) 88%,transparent)}
+.ca-excerpt .ca-markdown h1,.ca-excerpt .ca-markdown h2,.ca-excerpt .ca-markdown h3{font-size:13.5px;font-weight:600;color:var(--ca-ink)}
+.ca-excerpt .ca-markdown strong{font-weight:600}
+.ca-markdown h1,.ca-markdown h2,.ca-markdown h3{font-weight:600;letter-spacing:-.005em}
+.ca-markdown h1{font-size:22px}.ca-markdown h2{font-size:18px}.ca-markdown h3{font-size:15.5px}
+.ca-dialog-body{font-size:15px}
+.ca-criteria{margin:8px 0 20px;padding-left:20px;line-height:1.6}.ca-criteria li{margin:6px 0}
 /* Updated documents and the change review. */
 .chat-artifact-card.is-updated{--ca-accent:#d97706}
 .ca-foot-actions{display:flex;gap:4px;flex-wrap:wrap}

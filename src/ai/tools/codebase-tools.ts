@@ -78,7 +78,7 @@ export const queryCodebase = tool({
     const repo = resolveRepo(project);
     if (!repo) {
       return {
-        error: "No repository linked to this project. Connect a GitHub or GitLab repo first.",
+        error: "No repository is linked yet, so there is no code to read. For a new app this is expected: the first ticket build creates a private GitHub repository automatically when GitHub is connected. Treat the project as greenfield; this does not block planning, tickets or building.",
       };
     }
 

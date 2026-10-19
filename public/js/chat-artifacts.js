@@ -184,6 +184,15 @@
         row.setAttribute('aria-label', (ticket.ticketKey || 'Ticket') + ': ' + ticket.name);
         row.title = ticket.name; return row;
     }
+    // Criteria arrive as an array, a JSON-encoded array, or plain text lines.
+    function criteriaList(value) {
+        if (typeof value === 'string') {
+            const text = value.trim();
+            if (text.startsWith('[')) { try { value = JSON.parse(text); } catch (_) { /* plain text */ } }
+            if (typeof value === 'string') return text.split('\n').map(line => line.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim()).filter(Boolean);
+        }
+        return Array.isArray(value) ? value.map(item => String(typeof item === 'object' && item ? item.text || item.criterion || JSON.stringify(item) : item).trim()).filter(Boolean) : [];
+    }
     async function showTickets(m, selected) {
         const { body } = dialog(m.artifact.name);
         let all = m.artifact.tickets || [];
@@ -194,7 +203,12 @@
                 const result = await json('/api/projects/' + encoded(m.projectId) + '/tickets/' + encoded(ticket.id));
                 const t = result.ticket; if (!t) throw new Error('Missing');
                 body.replaceChildren(button('← All tickets', list), el('h2', t.name), el('p', [t.ticketKey, t.status].filter(Boolean).join(' · '), 'ca-muted'), markdown(t.description || 'No description.'));
-                if (t.acceptanceCriteria) body.append(el('h3','Acceptance criteria'), markdown(typeof t.acceptanceCriteria === 'string' ? t.acceptanceCriteria : JSON.stringify(t.acceptanceCriteria)));
+                const criteria = criteriaList(t.acceptanceCriteria);
+                if (criteria.length) {
+                    const list = el('ul', null, 'ca-criteria');
+                    criteria.forEach(item => list.append(el('li', item)));
+                    body.append(el('h3', 'Acceptance criteria'), list);
+                }
                 body.append(el('h3', 'Dependencies'));
                 let deps = t.dependencies || []; if (typeof deps === 'string') { try { deps = JSON.parse(deps); } catch (_) { deps = [deps]; } }
                 if (!Array.isArray(deps) || !deps.length) body.append(el('p','No saved dependencies.'));
