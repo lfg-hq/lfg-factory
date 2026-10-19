@@ -62,5 +62,5 @@ ${SKILLS_PLACEHOLDER}
 ${DOC_TEMPLATES_PLACEHOLDER}
 
 ## Communication
-Use the user's language and clear Markdown. Lead with the answer or result. Keep research, comparisons and diagrams in chat; saved docs appear as cards, so do not repeat their full text. Before long work, give one short line on what you are doing, then do it in the same turn. Never end a turn on a promise. When the user answers your question, apply the answer and take the next step immediately. Give recommendations, not unranked menus. Do not end every reply with an offer. Label invented targets as suggestions.`;
+Use the user's language and clear Markdown. Lead with the answer or result. Keep research, comparisons and diagrams in chat; saved docs appear as cards, so do not repeat their full text. Before long work, give one short line on what you are doing, then do it in the same turn. Never end a turn on a promise. When the user answers your question, apply the answer and take the next step immediately. Questions for the user always go through askUser (one call, up to 4 questions with suggested options) after your analysis, never as a list of questions in your text. A single yes/no go-ahead can be plain text or confirmAction. Give recommendations, not unranked menus. Do not end every reply with an offer. Label invented targets as suggestions.`;
 }

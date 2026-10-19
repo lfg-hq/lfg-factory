@@ -36,6 +36,21 @@ export function shouldContinuePromise(text: string, state: { aborted: boolean; w
   return !state.aborted && !state.waitingForUser && !state.closedByCard && endsOnUnkeptPromise(text);
 }
 
+/**
+ * Did the turn end by asking the user several questions in its text instead of through
+ * askUser? Two or more question lines in the closing blocks mean the user is being asked
+ * to decide things the question card exists for. One closing question ("Want me to
+ * build it?") is a normal ending and is left alone.
+ */
+export function endsOnProseQuestions(text: string): boolean {
+  const tail = (text ?? '').trim().split(/\n\s*\n/).slice(-2).join('\n');
+  return tail.split('\n').filter((line) => /\?[*_)\s]*$/.test(line.trim())).length >= 2;
+}
+
+export function shouldAskWithCard(text: string, state: { aborted: boolean; waitingForUser: boolean; closedByCard: boolean }): boolean {
+  return !state.aborted && !state.waitingForUser && !state.closedByCard && endsOnProseQuestions(text);
+}
+
 /** Keep tool results when continuing so completed writes are not repeated. */
 export function continuationMessages(history: any[], response: any[], instruction: string): any[] {
   return [...history, ...response, { role: 'user', content: instruction }];

@@ -7,7 +7,7 @@ import { compactContext, contextBudget, estimateContextTokens, HANDOFF_INSTRUCTI
 import { loadConversationHandoff } from './conversation-handoff.ts';
 import { BUILD_EVENT_ROLE } from '../services/build-summary-turn.ts';
 import {compactToolSteps} from './history-budget.ts';
-import { emptyTurnContent, shouldContinuePromise, continuationMessages } from './turn-completion.ts';
+import { emptyTurnContent, shouldContinuePromise, shouldAskWithCard, continuationMessages } from './turn-completion.ts';
 export { endsOnUnkeptPromise } from './turn-completion.ts';
 import {linkTicketDocumentsTool} from "./tools/ticket-document-tools.ts";
 import { previewActionTool } from './tools/preview-action-tools.ts';
@@ -89,6 +89,11 @@ const CITATION_PATTERNS = [
   /\bcite(?:turn\d+search\d+)+\b/g,              // bare citeturn0search0...
   /\(https?:\/\/[^)]*\?utm_source=openai\)/g,    // (url?utm_source=openai)
 ];
+/** Sent ONLY inside the retry pass when the reply ended with questions written as text. */
+const ASK_WITH_CARD_NUDGE =
+  "Your reply ended with questions for the user written as text. Call askUser now with those same " +
+  "questions (up to 4), each with 2-4 short suggested options. Write no other text.";
+
 /** Sent as a user turn ONLY inside the retry pass — never stored in the transcript. */
 const CONTINUE_NUDGE =
   "You ended your turn describing what you were about to do, but you didn't do it — " +
@@ -1443,17 +1448,20 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     const responseMessages = (await abortable(result.response, abortController.signal)).messages;
     completedPassMessages.push(...responseMessages);
     savedPassMessages = completedPassMessages;
-    stalledMidPromise = shouldContinuePromise(producedThisPass, {
+    const turnState = {
       aborted: abortController.signal.aborted,
       waitingForUser: askUserCardSent || confirmCardSent,
       closedByCard: turnClosedByCard,
-    });
-    if (!stalledMidPromise || pass === 1) break;
+    };
+    stalledMidPromise = shouldContinuePromise(producedThisPass, turnState);
+    // Questions belong in the askUser card, where the user can pick answers.
+    const unaskedQuestions = !stalledMidPromise && shouldAskWithCard(producedThisPass, turnState);
+    if ((!stalledMidPromise && !unaskedQuestions) || pass === 1) break;
 
     // Nudge: replay what it just said and tell it to act. Kept OUT of the stored
     // transcript — this is scaffolding for the model, not part of the conversation.
     nudgeUsed = true;
-    passMessages = continuationMessages(passMessages, responseMessages, CONTINUE_NUDGE);
+    passMessages = continuationMessages(passMessages, responseMessages, unaskedQuestions ? ASK_WITH_CARD_NUDGE : CONTINUE_NUDGE);
    }
   } catch (err: any) {
     if (err?.name !== "AbortError") {

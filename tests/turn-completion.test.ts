@@ -1,5 +1,5 @@
 import {test,expect} from 'bun:test';
-import {shouldContinuePromise,continuationMessages,emptyTurnContent} from '../src/ai/turn-completion.ts';
+import {shouldContinuePromise,shouldAskWithCard,continuationMessages,emptyTurnContent} from '../src/ai/turn-completion.ts';
 const active={aborted:false,waitingForUser:false,closedByCard:false};
 test('a promised next action continues even after inspection or an earlier write',()=>{
  expect(shouldContinuePromise('I checked the settings. I will register the missing key now.',active)).toBe(true);
@@ -27,4 +27,11 @@ test('question-only turns do not claim generation stopped',()=>{
  expect(emptyTurnContent(true,true)).toBe('*Generation stopped*');
  expect(emptyTurnContent(false,true)).toBe('*Generation stopped*');
  expect(emptyTurnContent(false,false)).toContain('No response');
+});
+test('several questions written as text are redirected to the askUser card',()=>{
+ const reply='Exotel is a reasonable first provider.\n\n**Three things will shape the MVP:**\n\n1. Is this for **recruitment agencies or in-house HR teams**?\n2. Are candidates **actively applying**, or uploading an existing database?\n3. Should calls only **check interest**, or conduct a **job-specific interview**?';
+ expect(shouldAskWithCard(reply,active)).toBe(true);
+ expect(shouldAskWithCard('Here is the plan.\n\nWant me to build it?',active)).toBe(false);
+ expect(shouldAskWithCard('Why does this matter? Latency drives cost.\n\nThe recommendation is Exotel.',active)).toBe(false);
+ expect(shouldAskWithCard(reply,{...active,waitingForUser:true})).toBe(false);
 });
