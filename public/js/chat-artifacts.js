@@ -7,7 +7,8 @@
     const encoded = encodeURIComponent;
     async function json(url) { const r = await fetch(url); if (!r.ok) throw new Error('Unavailable'); return r.json(); }
     // Allow document formatting without executable HTML, remote media, or unsafe links.
-    function markdown(content) {
+    // `diagrams` keeps Mermaid fences recognizable so the shared renderer draws them.
+    function markdown(content, {diagrams = false} = {}) {
         const out = el('div', null, 'ca-markdown');
         if (!window.marked) { out.textContent = content; return out; }
         const parsed = new DOMParser().parseFromString(window.marked.parse(String(content)), 'text/html');
@@ -19,6 +20,7 @@
                 if (['SCRIPT','STYLE','IFRAME','OBJECT','SVG','FORM'].includes(n.tagName)) continue;
                 if (!tags.has(n.tagName)) { clean(n, target); continue; }
                 const copy = document.createElement(n.tagName.toLowerCase());
+                if (diagrams && n.tagName === 'CODE' && n.classList.contains('language-mermaid')) copy.className = 'language-mermaid';
                 if (n.tagName === 'A') {
                     const href = n.getAttribute('href') || '';
                     if (/^(https?:\/\/|mailto:|\/(?!\/)|#)/i.test(href)) { copy.setAttribute('href', href); copy.setAttribute('rel', 'noopener noreferrer'); copy.setAttribute('target', '_blank'); }
@@ -33,7 +35,9 @@
         const modal = el('dialog', null, 'ca-dialog');
         modal.setAttribute('aria-label', title);
         const head = el('header', null, 'ca-dialog-head'); head.append(el('strong', title));
-        head.append(button('Back to chat', () => modal.close()));
+        const close = button('×', () => modal.close());
+        close.className = 'ca-dialog-close'; close.title = 'Close'; close.setAttribute('aria-label', 'Close');
+        head.append(close);
         const body = el('div', null, 'ca-dialog-body'); modal.append(head, body); document.body.append(modal);
         modal.addEventListener('close', () => { modal.remove(); if (opener?.isConnected) opener.focus(); });
         modal.showModal(); return { modal, body };
@@ -43,7 +47,7 @@
         try {
             const result = await json('/projects/' + encoded(m.projectId) + '/api/files/' + encoded(m.artifact.id) + '/content');
             m.content = String(result.content || '');
-            target.replaceChildren(markdown(m.content || 'This document is empty.'));
+            target.replaceChildren(markdown(m.content || 'This document is empty.', {diagrams: true}));
         } catch (_) {
             target.replaceChildren(el('p', 'This document could not be loaded. It may have been removed, or access has changed.'));
             target.append(button('Retry', () => readDocument(m, target)));
@@ -92,7 +96,8 @@
         m.sidebar.disabled = !m.saved;
         m.sidebar.title = m.saved ? 'Open this document in the sidebar' : 'Available once the document is saved';
         // Title already appears in the toolbar; show the document body beneath it.
-        const text = m.content.replace(/^# [^\n]+\n*/, '');
+        // Diagrams need the full view; a cut-off Mermaid fence would show as raw source.
+        const text = m.content.replace(/^# [^\n]+\n*/, '').replace(/```mermaid[\s\S]*?(```|$)/g, '*Diagram · expand to view*');
         m.excerpt.replaceChildren(markdown(text ? text.slice(0,600) + (text.length > 600 ? '\n\n…' : '') : (m.saved ? 'Open to read the saved document.' : 'Writing document…')));
     }
     function ticketRow(ticket, m, open) {

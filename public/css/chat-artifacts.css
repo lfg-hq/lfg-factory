@@ -17,3 +17,10 @@
 .ca-excerpt .ca-markdown>:first-child{margin-top:0}.ca-excerpt .ca-markdown p{margin:8px 0 14px}.ca-excerpt .ca-markdown h2,.ca-excerpt .ca-markdown h3{margin:14px 0 6px}
 .chat-artifact-card[data-artifact-kind="document"] .ca-foot{margin:0;padding:9px 16px}
 .chat-artifact-card button:disabled{opacity:.45;cursor:default}.chat-artifact-card button:focus-visible,.ca-dialog button:focus-visible{outline:2px solid var(--primary-color,#7c3aed);outline-offset:2px}
+/* Accent the saved-artifact cards so they read as separate from the conversation. */
+.chat-artifact-card{--ca-accent:var(--primary-color,#7c3aed);border-left:3px solid var(--ca-accent)}
+.chat-artifact-card[data-artifact-kind="document"] .ca-head{background:color-mix(in srgb,var(--ca-accent) 7%,transparent);border-bottom-color:color-mix(in srgb,var(--ca-accent) 18%,var(--ca-border))}
+.chat-artifact-card[data-artifact-kind="document"] .ca-document-icon{color:var(--ca-accent)}
+.chat-artifact-card[data-artifact-kind="document"] .ca-foot{background:color-mix(in srgb,var(--ca-accent) 3%,transparent)}
+.chat-artifact-card .ca-head button,.chat-artifact-card .ca-foot button{color:var(--ca-accent);font-weight:500}
+.ca-dialog-head .ca-dialog-close{font-size:22px;line-height:1;width:36px;height:36px;padding:0;display:inline-flex;align-items:center;justify-content:center}

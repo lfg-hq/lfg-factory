@@ -17,13 +17,32 @@
         });
         return library;
     }
+    // Mermaid ends a statement at ';', so a semicolon inside a sequence message or note
+    // ("Save outcome; suppress outreach") breaks the whole diagram. Escape those.
+    function repairSource(source) {
+        if (!/^\s*sequenceDiagram\b/m.test(source)) return source;
+        return source.split('\n').map(line => {
+            const colon = line.indexOf(':');
+            if (colon < 0 || !/(->>|-->>|->|-->|-x|--x|-\)|--\)|^\s*note\b)/i.test(line.slice(0, colon))) return line;
+            return line.slice(0, colon + 1) + line.slice(colon + 1).replace(/;/g, '#59;');
+        }).join('\n');
+    }
+    async function renderSource(api, source) {
+        try {
+            return await api.render('lfg-diagram-' + (++sequence), source);
+        } catch (error) {
+            const repaired = repairSource(source);
+            if (repaired === source) throw error;
+            return api.render('lfg-diagram-' + (++sequence), repaired);
+        }
+    }
     function expandDiagram(drawing, trigger, source) {
         const svg = drawing.querySelector('svg');
         if (!svg) return;
         const dialog = document.createElement('dialog');
         dialog.className = 'lfg-diagram-viewer';
         dialog.setAttribute('aria-label', 'Expanded diagram');
-        dialog.innerHTML = '<header><strong>Diagram</strong><div class="lfg-diagram-controls"><button type="button" data-action="out" aria-label="Zoom out">&minus;</button><output aria-live="polite"></output><button type="button" data-action="in" aria-label="Zoom in">+</button><button type="button" data-action="fit">Fit all</button><button type="button" data-action="width">Fit width</button><button type="button" data-action="layout" aria-pressed="false">Horizontal</button><button type="button" data-action="close" aria-label="Close expanded diagram">Close</button></div></header><div class="lfg-diagram-viewport" tabindex="0" aria-label="Diagram; scroll to explore when zoomed"><div class="lfg-diagram-canvas"></div></div>';
+        dialog.innerHTML = '<header><strong>Diagram</strong><div class="lfg-diagram-controls"><button type="button" data-action="out" aria-label="Zoom out">&minus;</button><output aria-live="polite"></output><button type="button" data-action="in" aria-label="Zoom in">+</button><button type="button" data-action="fit">Fit all</button><button type="button" data-action="width">Fit width</button><button type="button" data-action="layout" aria-pressed="false">Horizontal</button><button type="button" data-action="close" class="lfg-diagram-close" aria-label="Close expanded diagram" title="Close">&times;</button></div></header><div class="lfg-diagram-viewport" tabindex="0" aria-label="Diagram; scroll to explore when zoomed"><div class="lfg-diagram-canvas"></div></div>';
         const viewport = dialog.querySelector('.lfg-diagram-viewport');
         const canvas = dialog.querySelector('.lfg-diagram-canvas');
         const originalStyle = svg.getAttribute('style');
@@ -49,10 +68,41 @@
             dialog.querySelector('[data-action="out"]').disabled = scale <= 0.1;
             dialog.querySelector('[data-action="in"]').disabled = scale >= maxScale;
         };
+        // Automatic fits stop at 150%: past that a small diagram only gets blurry, not clearer.
+        const fitScale = (w, h, mode) => Math.min(1.5, mode === 'width' ? (viewport.clientWidth - 48) / w
+            : Math.min((viewport.clientWidth - 48) / w, (viewport.clientHeight - 48) / h));
         const fit = () => {
             if (sizing === 'manual') return;
-            zoom(sizing === 'width' ? (viewport.clientWidth - 48) / width
-                : Math.min((viewport.clientWidth - 48) / width, (viewport.clientHeight - 48) / height));
+            zoom(fitScale(width, height, sizing));
+        };
+        const renderHorizontal = async () => {
+            const api = await load();
+            const result = await renderSource(api, source.replace(declaration, '$1LR'));
+            const holder = document.createElement('div');
+            holder.innerHTML = result.svg;
+            const next = holder.querySelector('svg');
+            if (!next) throw new Error('No diagram');
+            next.setAttribute('aria-label', 'Mermaid diagram, horizontal layout');
+            return next;
+        };
+        // Open in whichever orientation shows the text largest when fitted to the width;
+        // scrolling down a tall diagram reads better than squinting at a long strip.
+        const chooseLayout = async () => {
+            try {
+                const candidate = await renderHorizontal();
+                if (restored) return;
+                const box = candidate.viewBox.baseVal;
+                const current = fitScale(width, height, 'width');
+                const other = fitScale(box.width, box.height, 'width');
+                const tie = Math.abs(other - current) < 0.05;
+                if (other > current + 0.05 || (tie && box.height * other < height * current)) {
+                    canvas.replaceChildren(candidate);
+                    activeSvg = candidate; width = box.width; height = box.height; horizontal = true;
+                    layoutButton.setAttribute('aria-pressed', 'true');
+                    layoutButton.textContent = 'Original layout';
+                    fit();
+                }
+            } catch (_) { /* The original layout is already showing. */ }
         };
         const changeLayout = async () => {
             const version = ++layoutVersion;
@@ -61,16 +111,7 @@
             try {
                 const nextHorizontal = !horizontal;
                 let nextSvg = svg;
-                if (nextHorizontal) {
-                    const api = await load();
-                    const result = await api.render('lfg-diagram-' + (++sequence), source.replace(declaration, '$1LR'));
-                    if (restored || version !== layoutVersion) return;
-                    const holder = document.createElement('div');
-                    holder.innerHTML = result.svg;
-                    nextSvg = holder.querySelector('svg');
-                    if (!nextSvg) throw new Error('No diagram');
-                    nextSvg.setAttribute('aria-label', 'Mermaid diagram, horizontal layout');
-                }
+                if (nextHorizontal) nextSvg = await renderHorizontal();
                 if (restored || version !== layoutVersion) return;
                 canvas.replaceChildren(nextSvg);
                 activeSvg = nextSvg;
@@ -125,7 +166,7 @@
         window.addEventListener('beforeprint', close);
         dialog.showModal();
         fit();
-        if (!layoutButton.hidden) void changeLayout();
+        if (!layoutButton.hidden) void chooseLayout();
         dialog.querySelector('[data-action="close"]').focus();
     }
     async function render(root = document) {
@@ -137,7 +178,7 @@
                 const pre = code.parentElement;
                 try {
                     const api = await load();
-                    const { svg } = await api.render('lfg-diagram-' + (++sequence), code.textContent);
+                    const { svg } = await renderSource(api, code.textContent);
                     if (!pre.isConnected) return;
                     const figure = document.createElement('figure');
                     figure.className = 'lfg-diagram';
@@ -218,6 +259,7 @@
 .lfg-diagram-status:empty{display:none}
 .lfg-diagram-status{flex-basis:100%;font-size:12px;color:#64748b}
 .lfg-diagram-viewer button[aria-pressed="true"]{background:#ede9fe;color:#6d28d9}
+.lfg-diagram-viewer .lfg-diagram-close{font-size:20px;line-height:1;width:34px;height:34px;padding:0}
 .lfg-diagram-controls output{min-width:44px;text-align:center;font-variant-numeric:tabular-nums}
 .lfg-diagram-viewport{flex:1;min-height:0;overflow:auto;background:#f8fafc}
 .lfg-diagram-canvas{box-sizing:border-box;display:flex;align-items:center;justify-content:center;min-width:100%;min-height:100%;width:max-content;padding:24px}

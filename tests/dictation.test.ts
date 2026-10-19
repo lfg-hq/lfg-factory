@@ -9,7 +9,7 @@ test('transcription uses current models with context, automatic language and no 
  await connectDictation('v=0','secret',new AbortController().signal,{keywords:['LFG']},(async(_url:any,init:any)=>{
   const s=JSON.parse(init.body.get('session'));
   expect(s.type).toBe('transcription');expect(s.audio.input.transcription.model).toBe('gpt-live-transcribe');
-  expect(s.audio.input.transcription.keywords).toEqual(['LFG']);expect(s.audio.input.turn_detection).toBeNull();
+  expect(s.audio.input.transcription.keywords).toEqual(['LFG']);expect(s.audio.input.turn_detection).toMatchObject({type:'server_vad'});
   expect(s.audio.output).toBeUndefined();expect(s.audio.input.transcription.language).toBeUndefined();
   return new Response('answer');
  }) as typeof fetch);

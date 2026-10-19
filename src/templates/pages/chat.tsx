@@ -37,8 +37,8 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
   <link rel="stylesheet" href="/public/css/artifacts.css?v=20261004-dark-folders" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
-  <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261018-document-actions" />
-  <link rel="stylesheet" href="/public/css/chat.css?v=20261018-connection-check" />
+  <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261019-accents" />
+  <link rel="stylesheet" href="/public/css/chat.css?v=20261019-live-dictation" />
   <link rel="stylesheet" href="/public/css/artifacts-fix.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
@@ -464,7 +464,7 @@ export function ChatPage({
     window.__WS_PATH__ = '/ws/chat';
   </script>
   <script src="/public/js/marked.min.js"></script>
-  <script src="/public/js/markdown-config.js?v=20261015-horizontal-default"></script>
+  <script src="/public/js/markdown-config.js?v=20261019-readable-layout"></script>
   <!-- PDF libraries load on demand when exporting a document. -->
   <script src="/public/js/design-preview.js"></script>
   <script src="/public/js/artifacts-loader.js?v=20261015-map-groups"></script>
@@ -479,8 +479,8 @@ export function ChatPage({
   <script src="/public/js/tab-overflow.js"></script>
   <script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
   <script src="/public/js/custom-dropdown.js"></script>
-  <script src="/public/js/dictation.js?v=20261018-dictation-composer"></script>
-  <script src="/public/js/chat-artifacts.js?v=20261018-document-actions"></script>
+  <script src="/public/js/dictation.js?v=20261019-live-dictation"></script>
+  <script src="/public/js/chat-artifacts.js?v=20261019-accents"></script>
   <script src="/public/js/chatgpt-connection.js?v=20261018"></script>
   <script src="/public/js/chat.js?v=20261018-connection-check"></script>
   <script src="/public/js/voice-mode.js?v=20261016-voice-hidden" data-disabled="true"></script>

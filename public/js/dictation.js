@@ -11,8 +11,25 @@ window.createDictation = ({button, input, wrapper, getScope, getContext, onSend}
         s.peer?.close(); s.audioContext?.close().catch(() => {});
         cancelAnimationFrame(s.frame);
     }
+    // Live words fill the composer as they arrive; the full-recording transcript replaces them.
+    function showLive(s) {
+        const text = preview(s);
+        if (!text) return;
+        const before = s.draft.slice(0, s.start), after = s.draft.slice(s.end);
+        input.value = before + (before && !/\s$/.test(before) ? ' ' : '') + text + (after && !/^\s/.test(after) ? ' ' : '') + after;
+        s.live = true; input.readOnly = true; input.classList.add('dictation-live');
+        input.dispatchEvent(new Event('input', {bubbles: true}));
+        input.scrollTop = input.scrollHeight;
+    }
+    function clearLive(s) {
+        if (!s.live) return;
+        s.live = false; input.readOnly = false; input.classList.remove('dictation-live');
+        input.value = s.draft;
+        input.dispatchEvent(new Event('input', {bubbles: true}));
+    }
     function close(s) {
         if (session !== s) return;
+        clearLive(s);
         session = null; s.abort.abort(); stopCapture(s);
         s.panel.remove(); button.classList.remove('recording');
         button.setAttribute('aria-pressed','false'); button.title = 'Dictate a message';
@@ -20,6 +37,7 @@ window.createDictation = ({button, input, wrapper, getScope, getContext, onSend}
     }
     function insert(s, text) {
         if (!active(s)) { close(s); return; }
+        clearLive(s);
         text = text.trim();
         if (text) {
             // Insert at the original caret if the draft is unchanged; never overwrite concurrent edits.
@@ -88,7 +106,7 @@ window.createDictation = ({button, input, wrapper, getScope, getContext, onSend}
     }
     function build(s) {
         const panel = document.createElement('div'); panel.className = 'audio-recording-indicator';
-        panel.innerHTML = '<button type="button" class="recording-cancel-btn" aria-label="Cancel dictation" title="Cancel dictation">×</button><canvas class="dictation-waveform" aria-hidden="true"></canvas><span class="dictation-status" role="status" aria-live="polite">Connecting…</span><button type="button" class="dictation-retry" hidden aria-label="Retry transcription" title="Retry transcription">↻</button><button type="button" class="dictation-done" aria-label="Stop dictation and keep text" title="Stop dictation and keep text"><span class="dictation-stop-icon" aria-hidden="true"></span></button><button type="button" class="dictation-send" aria-label="Transcribe and send message" title="Transcribe and send message" disabled>↑</button>';
+        panel.innerHTML = '<button type="button" class="recording-cancel-btn" aria-label="Cancel dictation" title="Cancel dictation">×</button><canvas class="dictation-waveform" aria-hidden="true"></canvas><span class="dictation-status" role="status" aria-live="polite">Connecting…</span><button type="button" class="dictation-retry" hidden aria-label="Retry transcription" title="Retry transcription">↻</button><button type="button" class="dictation-done" aria-label="Stop dictation and keep text" title="Stop dictation and keep text"><span class="dictation-stop-icon" aria-hidden="true"></span></button><button type="button" class="dictation-send" aria-label="Transcribe and send message" title="Transcribe and send message" disabled><i class="fas fa-paper-plane" aria-hidden="true"></i></button>';
         s.panel=panel; s.status=panel.querySelector('.dictation-status');
         s.done=panel.querySelector('.dictation-done'); s.retry=panel.querySelector('.dictation-retry');
         panel.dataset.phase = s.phase;
@@ -146,7 +164,7 @@ window.createDictation = ({button, input, wrapper, getScope, getContext, onSend}
                 } else if(data.type==='conversation.item.input_audio_transcription.completed') {
                     s.items.set(data.item_id,{text:data.transcript || '',final:true});
                 } else return;
-                // Preview is retained for recovery; the editor stays in place while recording.
+                showLive(s);
             };
             const opened=new Promise((resolve,reject)=>{
                 const timer=setTimeout(()=>reject(new Error('Dictation connection timed out. Please retry.')),25000);

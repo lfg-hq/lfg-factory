@@ -3348,8 +3348,10 @@ input:checked + .turbo-slider + .turbo-label,
 /* Keep an editable composer above the quiet recording controls. */
 #chat-form .input-wrapper:has(> .audio-recording-indicator) #chat-input-box { display:block !important; visibility:visible !important; pointer-events:auto; }
 #chat-form .input-wrapper:has(> .audio-recording-indicator) #chat-input { visibility:visible !important; opacity:1 !important; pointer-events:auto; }
-#chat-form .audio-recording-indicator .dictation-send { background:var(--text-color,#1d2024); color:var(--card-bg,#fff); font-size:26px; }
-[data-theme="light"] #chat-form .audio-recording-indicator .dictation-send { background:#1d2024; color:#fff; }
-[data-theme="dark"] #chat-form .audio-recording-indicator .dictation-send { background:#f1f2f3; color:#1d2024; }
+/* Same send button as the composer, so recording does not look like a different control. */
+#chat-form .audio-recording-indicator .dictation-send { background:rgba(187,134,252,.2); color:var(--primary-color,#7c3aed); font-size:15px; }
+[data-theme="light"] #chat-form .audio-recording-indicator .dictation-send { background:linear-gradient(135deg,#7c3aed 0%,#6366f1 100%); color:#fff; }
+[data-theme="light"] #chat-form .audio-recording-indicator .dictation-send:hover { background:linear-gradient(135deg,#6d28d9 0%,#4f46e5 100%); }
+#chat-input.dictation-live { caret-color:transparent; }
 .chatgpt-connection{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 8px;padding:10px 14px;border:1px solid var(--border-color);border-radius:12px;background:var(--card-bg);color:var(--text-color);font-size:13px}
 .chatgpt-connection [role="status"]{flex:1;min-width:180px}.chatgpt-connection button,.chatgpt-connection a{font:inherit;color:inherit;background:transparent;border:0;cursor:pointer;padding:5px}.chatgpt-connection button:disabled{opacity:.5;cursor:wait}
