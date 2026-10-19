@@ -987,7 +987,12 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
       stopWhen: stepCountIs(80),
       maxOutputTokens: Math.min(12000, Math.floor(contextBudget() * .2)),
       prepareStep: async ({messages: stepMessages}) => {
-        const bounded = await compactContext(stepMessages, fixedTokens, summarize);
+        const bounded = await compactContext(stepMessages, fixedTokens, summarize, undefined, () => {
+          // Summarizing takes a model call; say so instead of looking frozen.
+          const detail = "Condensing earlier context";
+          noteActivity(detail, "compactContext");
+          ws.send(JSON.stringify({type:"ai_chunk",chunk:"",is_final:false,is_notification:true,notification_type:"tool_detail",function_name:"compactContext",detail}));
+        });
         chatDiagnostic('context_budget', {estimatedTokens:fixedTokens + estimateContextTokens(bounded),
           budgetTokens:contextBudget(), compacted:bounded !== stepMessages});
         return {messages:bounded};
@@ -1357,6 +1362,8 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
           const artifact = savedChatArtifact(event.toolName, toolOutput(event), event.toolCallId);
           if (artifact) {
             const at = pagePreviews.findIndex(p => p.kind === artifact.kind && p.id === artifact.id);
+            // Several edits in one turn review as one change: keep the earliest baseline.
+            if (at >= 0 && pagePreviews[at]!.previousVersion) artifact.previousVersion = Math.min(pagePreviews[at]!.previousVersion!, artifact.previousVersion ?? Infinity);
             if (at >= 0) pagePreviews[at] = artifact; else pagePreviews.push(artifact);
             if (checkpointPromise) await checkpointPromise.catch(() => {});
             await persistAssistant(stripCitations(fullResponse));

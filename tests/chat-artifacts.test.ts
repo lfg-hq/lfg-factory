@@ -16,3 +16,7 @@ test('ticket groups contain only saved references, never arbitrary tool fields',
  expect(savedChatArtifact('createTickets',{tickets:[{}]},'batch')).toBeNull();
  expect(savedChatArtifact('getFileContent',{id:'d'},'batch')).toBeNull();
 });
+test('document revisions carry the version they replaced so the card can show changes',()=>{
+ expect(savedChatArtifact('patchFileContent',{success:true,id:'d',name:'Requirements',fileType:'prd',previousVersion:4},'c')).toEqual({kind:'document',id:'d',name:'Requirements',fileType:'prd',previousVersion:4});
+ expect(savedChatArtifact('streamDocumentContent',{saved:true,id:'d',name:'Requirements',fileType:'prd',previousVersion:0},'c')).not.toHaveProperty('previousVersion');
+});

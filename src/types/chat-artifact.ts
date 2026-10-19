@@ -4,5 +4,7 @@ export interface ChatArtifact {
   name: string;
   kind?: 'document' | 'tickets';
   fileType?: string;
+  /** Saved version holding the content before this turn's edit; enables Review changes. */
+  previousVersion?: number;
   tickets?: Array<{ id: string; name: string; ticketKey?: string | null }>;
 }

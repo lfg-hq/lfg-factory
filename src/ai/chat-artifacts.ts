@@ -5,7 +5,8 @@ export function savedChatArtifact(tool: string, output: Record<string, unknown> 
   if (!output || output.error) return null;
   if (['streamDocumentContent', 'updateFileContent', 'patchFileContent'].includes(tool)) {
     if (!(output.saved === true || output.success === true) || typeof output.id !== 'string' || !output.id) return null;
-    return {kind:'document', id:output.id, name:typeof output.name === 'string' ? output.name : 'Document', fileType:typeof output.fileType === 'string' ? output.fileType : 'document'};
+    return {kind:'document', id:output.id, name:typeof output.name === 'string' ? output.name : 'Document', fileType:typeof output.fileType === 'string' ? output.fileType : 'document',
+      ...(typeof output.previousVersion === 'number' && output.previousVersion > 0 ? {previousVersion:output.previousVersion} : {})};
   }
   if (tool === 'createTickets' && Array.isArray(output.tickets)) {
     const tickets = output.tickets.filter(t => t && typeof t.id === 'string' && t.id).map(t => ({id:t.id, name:typeof t.name === 'string' ? t.name : 'Ticket', ticketKey:typeof t.ticketKey === 'string' ? t.ticketKey : null}));

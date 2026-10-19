@@ -61,6 +61,78 @@
         if (m.saved) readDocument(m, body);
         else { m.reader = body; body.append(el('p', 'Draft · not saved', 'ca-muted'), markdown(m.content || 'Writing document…')); }
     }
+    // Line diff (LCS). Documents are a few hundred lines, so the table stays small.
+    function diffLines(before, after) {
+        const a = before.split('\n'), b = after.split('\n');
+        const n = a.length, w = b.length + 1, dp = new Uint32Array((n + 1) * w);
+        for (let i = n - 1; i >= 0; i--) for (let j = b.length - 1; j >= 0; j--)
+            dp[i * w + j] = a[i] === b[j] ? dp[(i + 1) * w + j + 1] + 1 : Math.max(dp[(i + 1) * w + j], dp[i * w + j + 1]);
+        const ops = []; let i = 0, j = 0;
+        while (i < n && j < b.length) {
+            if (a[i] === b[j]) { ops.push({t:'=', text:a[i]}); i++; j++; }
+            else if (dp[(i + 1) * w + j] >= dp[i * w + j + 1]) ops.push({t:'-', text:a[i++]});
+            else ops.push({t:'+', text:b[j++]});
+        }
+        while (i < n) ops.push({t:'-', text:a[i++]});
+        while (j < b.length) ops.push({t:'+', text:b[j++]});
+        let hunk = -1, inChange = false;
+        for (const op of ops) { if (op.t === '=') inChange = false; else { if (!inChange) hunk++; inChange = true; op.hunk = hunk; } }
+        return {ops, hunks: hunk + 1};
+    }
+    // Rebuild the current document with one change (or all, when hunk is null) undone.
+    function revert(ops, hunk) {
+        return ops.filter(op => op.t === '=' || (hunk === null || op.hunk === hunk ? op.t === '-' : op.t === '+')).map(op => op.text).join('\n');
+    }
+    async function saveContent(m, content) {
+        const query = '?type=' + encoded(m.artifact.fileType || 'document') + '&name=' + encoded(m.artifact.name);
+        const r = await fetch('/projects/' + encoded(m.projectId) + '/api/files' + query, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({content})});
+        if (!r.ok) throw new Error('Save failed');
+    }
+    async function showChanges(m) {
+        const { body } = dialog('Changes · ' + m.artifact.name);
+        body.classList.add('ca-diff-body');
+        let before;
+        const draw = async () => {
+            body.replaceChildren(el('p', 'Loading changes…', 'ca-muted'));
+            try {
+                if (before == null) {
+                    const old = await json('/projects/' + encoded(m.projectId) + '/api/files/' + encoded(m.artifact.id) + '/versions/' + encoded(m.artifact.previousVersion));
+                    before = String(old.version?.content || '');
+                }
+                const current = await json('/projects/' + encoded(m.projectId) + '/api/files/' + encoded(m.artifact.id) + '/content');
+                m.content = String(current.content || '');
+                const {ops, hunks} = diffLines(before, m.content);
+                const added = ops.filter(o => o.t === '+').length, removed = ops.filter(o => o.t === '-').length;
+                const summary = el('div', null, 'ca-diff-summary');
+                summary.append(el('span', hunks ? hunks + (hunks === 1 ? ' change' : ' changes') + ' since version ' + m.artifact.previousVersion : 'No differences from version ' + m.artifact.previousVersion),
+                    el('span', '+' + added, 'ca-diff-added-count'), el('span', '−' + removed, 'ca-diff-removed-count'));
+                if (hunks > 1) summary.append(button('Undo all changes', () => apply(revert(ops, null))));
+                body.replaceChildren(summary);
+                for (let h = 0; h < hunks; h++) {
+                    const first = ops.findIndex(o => o.hunk === h), last = ops.findLastIndex(o => o.hunk === h);
+                    const block = el('section', null, 'ca-diff-hunk');
+                    const head = el('header', null, 'ca-diff-hunk-head');
+                    head.append(el('strong', 'Change ' + (h + 1)), button('Undo this change', () => apply(revert(ops, h))));
+                    block.append(head);
+                    for (let k = Math.max(0, first - 2); k <= Math.min(ops.length - 1, last + 2); k++) {
+                        const op = ops[k];
+                        const line = el('div', op.text || ' ', 'ca-diff-line ' + (op.t === '+' ? 'is-added' : op.t === '-' ? 'is-removed' : 'is-context'));
+                        line.dataset.sign = op.t === '=' ? ' ' : op.t === '+' ? '+' : '−';
+                        block.append(line);
+                    }
+                    body.append(block);
+                }
+            } catch (_) {
+                body.replaceChildren(el('p', 'Could not load the changes. The earlier version may have been removed.'), button('Retry', draw));
+            }
+        };
+        const apply = async content => {
+            body.querySelectorAll('button').forEach(b => { b.disabled = true; });
+            try { await saveContent(m, content); m.content = content; paint(m); await draw(); }
+            catch (_) { body.prepend(el('p', 'Could not save the document. Try again.', 'ca-diff-error')); body.querySelectorAll('button').forEach(b => { b.disabled = false; }); }
+        };
+        await draw();
+    }
     function openSidebar(m) {
         if (!m.saved) return;
         m.dialog?.close();
@@ -86,12 +158,18 @@
             const foot = el('footer', null, 'ca-foot');
             m.status = el('small', '', 'ca-muted');
             m.sidebar = button('View in sidebar', () => openSidebar(m));
-            foot.append(m.status, m.sidebar);
+            m.review = button('Review changes', () => showChanges(m));
+            m.review.className = 'ca-review-changes';
+            const actions = el('div', null, 'ca-foot-actions'); actions.append(m.review, m.sidebar);
+            foot.append(m.status, actions);
             m.card.replaceChildren(head, m.excerpt, foot);
             m.documentUI = true;
         }
         m.title.textContent = m.artifact.name;
-        m.subtitle.textContent = m.saved ? 'Document' : 'Document · draft';
+        const updated = m.saved && m.artifact.previousVersion;
+        m.subtitle.textContent = updated ? 'Document · updated' : m.saved ? 'Document' : 'Document · draft';
+        m.card.classList.toggle('is-updated', !!updated);
+        m.review.hidden = !updated;
         m.status.textContent = m.saved ? 'Saved to Docs' : m.interrupted ? 'Interrupted · draft not saved' : 'Writing…';
         m.sidebar.disabled = !m.saved;
         m.sidebar.title = m.saved ? 'Open this document in the sidebar' : 'Available once the document is saved';

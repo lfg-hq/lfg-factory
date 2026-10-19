@@ -18,17 +18,18 @@ export function setWsBroadcast(fn: (userId: string, data: object) => void) {
 }
 
 // Keep agent revisions in the same version history as manual document edits.
-async function preserveDocumentVersion(file: {id: string; s3Key: string | null; content: string | null}, nextContent: string, userId: string) {
+/** Returns the version number holding the previous content, or null when nothing changed. */
+async function preserveDocumentVersion(file: {id: string; s3Key: string | null; content: string | null}, nextContent: string, userId: string): Promise<number | null> {
   const previous = await getContent(file.s3Key, file.content);
-  if (previous === nextContent) return;
+  if (previous === nextContent) return null;
   // Retry the unique version slot if a simultaneous editor saved first.
   for (let attempt = 0; attempt < 4; attempt++) {
     const [latest] = await db.select({version: projectFileVersions.versionNumber}).from(projectFileVersions)
       .where(eq(projectFileVersions.fileId, file.id)).orderBy(desc(projectFileVersions.versionNumber)).limit(1);
     const saved = await db.insert(projectFileVersions).values({fileId: file.id, versionNumber: (latest?.version ?? 0) + 1,
       content: previous, createdById: userId, changeDescription: "Agent revision"})
-      .onConflictDoNothing().returning({id: projectFileVersions.id});
-    if (saved.length) return;
+      .onConflictDoNothing().returning({version: projectFileVersions.versionNumber});
+    if (saved.length) return saved[0]!.version;
   }
   throw new Error("Could not preserve the previous document version. Please retry.");
 }
@@ -66,7 +67,7 @@ export const streamDocumentContent = tool({
   execute: async ({ projectId, userId, name, fileType, content, epicId }, options) => {
     if (fileType === "design_baseline") throw new Error("Use captureDesignLayout to create a verified layout capture.");
     const [previous] = await db.select().from(projectFiles).where(and(eq(projectFiles.projectId, projectId), eq(projectFiles.epicId, ""), eq(projectFiles.name, name), eq(projectFiles.fileType, fileType)));
-    if (previous) await preserveDocumentVersion(previous, content, userId);
+    const previousVersion = previous ? await preserveDocumentVersion(previous, content, userId) : null;
     const { s3Key, dbContent } = await saveContent(projectId, fileType, name, content);
 
     // Docs always live at PROJECT scope so they stay visible and editable. An epic
@@ -98,7 +99,7 @@ export const streamDocumentContent = tool({
         is_complete: true,
       });
     }
-    return { saved: true, id: file!.id, name, fileType };
+    return { saved: true, id: file!.id, name, fileType, ...(previousVersion ? { previousVersion } : {}) };
   },
 });
 
@@ -248,7 +249,7 @@ export const updateFileContent = tool({
     if (existing.fileType === "design_baseline") return { success: false, error: "Layout captures are immutable. Capture a new version." };
     await associateUsageDocument(existing.id, options.toolCallId);
 
-    await preserveDocumentVersion(existing, content, userId);
+    const previousVersion = await preserveDocumentVersion(existing, content, userId);
     const { s3Key, dbContent } = await saveContent(existing.projectId, existing.fileType, existing.name, content);
     const [file] = await db
       .update(projectFiles)
@@ -271,7 +272,7 @@ export const updateFileContent = tool({
         is_complete: true,
       });
     }
-    return { success: true, id: file.id, name: file.name, fileType: file.fileType };
+    return { success: true, id: file.id, name: file.name, fileType: file.fileType, ...(previousVersion ? { previousVersion } : {}) };
   },
 });
 
@@ -326,7 +327,7 @@ export const patchFileContent = tool({
     }
 
     // Save updated content
-    await preserveDocumentVersion(existing, content, userId);
+    const previousVersion = await preserveDocumentVersion(existing, content, userId);
     const { s3Key, dbContent } = await saveContent(existing.projectId, existing.fileType, existing.name, content);
     const [file] = await db
       .update(projectFiles)
@@ -352,6 +353,6 @@ export const patchFileContent = tool({
 
     const applied = results.filter((r) => r.applied).length;
     const failed = results.filter((r) => !r.applied).length;
-    return { success: true, id: file.id, name: file.name, fileType: file.fileType, editsApplied: applied, editsFailed: failed, details: results };
+    return { success: true, id: file.id, name: file.name, fileType: file.fileType, ...(previousVersion ? { previousVersion } : {}), editsApplied: applied, editsFailed: failed, details: results };
   },
 });

@@ -43,3 +43,18 @@ test('common credentials are removed before summarization and from its output', 
  });
  expect(result).not.toContain(secret);
 });
+test('bulky old tool output is shortened before any summarization request',async()=>{
+ const page='page text '.repeat(3000);
+ const rows:any[]=[{role:'user',content:'Research providers'},
+  {role:'assistant',content:[{type:'tool-call',toolName:'readUrl',toolCallId:'r',input:{}}]},
+  {role:'tool',content:[{type:'tool-result',toolName:'readUrl',toolCallId:'r',output:{type:'text',value:page}}]},
+  {role:'assistant',content:'Found three options.'},{role:'user',content:'Write the doc'},
+  {role:'assistant',content:[{type:'tool-call',toolName:'getFileContent',toolCallId:'f',input:{}}]},
+  {role:'tool',content:[{type:'tool-result',toolName:'getFileContent',toolCallId:'f',output:{type:'text',value:'current doc'}}]}];
+ let summarized=false;
+ const result=await compactContext(rows,100,async()=>{summarized=true;return 'summary';},12000,()=>{summarized=true;});
+ expect(summarized).toBe(false);
+ expect(JSON.stringify(result[2])).toContain('Earlier tool output shortened');
+ expect(result.at(-1)).toEqual(rows.at(-1));
+ expect(JSON.stringify(rows[2])).toContain(page.slice(0,100));
+});
