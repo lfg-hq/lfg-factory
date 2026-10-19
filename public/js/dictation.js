@@ -155,7 +155,7 @@ window.createDictation = ({button, input, wrapper, getScope, getContext, onSend}
                 if(!active(s) || s.phase!=='recording')return;
                 let data;try{data=JSON.parse(event.data);}catch{return;}
                 if(data.type==='error' || data.type==='conversation.item.input_audio_transcription.failed') {
-                    label(s,'Live preview unavailable. Your recording will be transcribed when you stop.');return;
+                    s.panel.dataset.live='off';label(s,'Live text unavailable · transcript appears when you stop');return;
                 }
                 if(!data.item_id)return;
                 if(data.type==='conversation.item.input_audio_transcription.delta') {
@@ -183,8 +183,9 @@ window.createDictation = ({button, input, wrapper, getScope, getContext, onSend}
             await s.peer.setRemoteDescription({type:'answer',sdp:answer});await opened;if(!active(s) || s.phase!=='recording')return;
 
         } catch {
-            // Full-recording transcription remains available when live setup fails.
+            // Full-recording transcription remains available when live setup fails; say so.
             s.peer?.close();
+            if (active(s) && s.phase === 'recording') { s.panel.dataset.live = 'off'; label(s, 'Live text unavailable · transcript appears when you stop'); }
         }
     }
     async function start() {

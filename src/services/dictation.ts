@@ -3,10 +3,10 @@ export type DictationContext = { prompt?: string; keywords?: string[] };
 export function dictationSession(context: DictationContext = {}) {
   return { type: 'transcription', audio: { input: {
     noise_reduction: { type: 'near_field' },
-    transcription: { model: 'gpt-live-transcribe', delay: 'medium', ...context },
-    // Server VAD transcribes each phrase as the user pauses, so live text appears while
-    // they speak. The full recording is still transcribed separately as the final text.
-    turn_detection: { type: 'server_vad', threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: 500 },
+    // gpt-live-transcribe streams deltas as speech arrives; a low delay shows words sooner.
+    transcription: { model: 'gpt-live-transcribe', delay: 'low', ...context },
+    // This model rejects turn detection: it must be omitted or null.
+    turn_detection: null,
   } } };
 }
 export async function connectDictation(sdp: string, key: string, signal: AbortSignal, context: DictationContext = {}, request: typeof fetch = fetch) {

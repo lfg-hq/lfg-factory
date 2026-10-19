@@ -6,7 +6,17 @@ import { stream as codexStream } from "@earendil-works/pi-ai/api/openai-codex-re
 import type { AssistantMessage, Context, TextContent, ImageContent, Usage, TSchema } from "@earendil-works/pi-ai";
 
 // This provider object contains a static catalog, never a user's credentials.
-const catalog = openaiCodexProvider().getModels();
+const installed = openaiCodexProvider().getModels();
+// Codex models newer than the pinned pi-ai catalog, copied from pi-ai 1.3.0. Same API and
+// endpoint as their siblings, so each is its sibling with a new id. Drop after upgrading.
+const ADDED_MODELS = [
+  { from: "gpt-6-astra", id: "gpt-6.1-sol", name: "GPT-6.1 Sol", contextWindow: 500000,
+    cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5, tiers: [{ inputTokensAbove: 272000, input: 4, output: 15, cacheRead: 0.2, cacheWrite: 5 }] } },
+];
+const catalog = [...installed, ...ADDED_MODELS.flatMap(({ from, ...added }) => {
+  const sibling = installed.find(m => m.id === from);
+  return sibling && !installed.some(m => m.id === added.id) ? [{ ...sibling, ...added } as typeof sibling] : [];
+})];
 export const SUBSCRIPTION_PREFIX = "chatgpt/";
 export const isSubscriptionModel = (key: string) => key.startsWith(SUBSCRIPTION_PREFIX);
 export const subscriptionCatalog = () => catalog;

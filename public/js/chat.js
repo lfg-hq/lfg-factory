@@ -4883,15 +4883,102 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
     
-    // Function to load a specific conversation
-    async function loadConversation(conversationId) {
+    // Render saved messages in order; returns how many produced visible content.
+    function renderHistoryMessages(list) {
+        let count = 0;
+        list.forEach(message => {
+                // Restore an attached image (if any) so it persists across reloads.
+                let fileData = null;
+                const cif = message.content_if_file;
+                if (Array.isArray(cif) && cif.length && (cif[0].type || '').startsWith('image/') && cif[0].url) {
+                    fileData = { name: cif[0].name, type: cif[0].type, url: cif[0].url };
+                }
+                // The trail the user watched during this turn, replayed COLLAPSED above
+                // the answer it produced — the live one only ever lived in the DOM, so a
+                // refresh used to erase the record of what the agent did.
+                // A dictated message keeps its mic on reload. addMessageToChat's 4th
+                // argument is userRole, not options — so the marker is added after.
+                if (message.role === 'user' && message.is_voice) {
+                    const el = addMessageToChat('user', message.content || '', fileData);
+                    markMessageAsVoice(el);
+                    count++;
+                    return;
+                }
+                const renderedTimeline = message.role === 'assistant' && renderAssistantTimeline(message);
+                if (renderedTimeline) count++;
+                if (!renderedTimeline && message.role === 'assistant' && Array.isArray(message.activity_trail) && message.activity_trail.length) {
+                    renderSavedTrail(message.activity_trail, message.end_reason);
+                }
+                if (!renderedTimeline && message.role === 'assistant') renderSavedInlineArtifacts(message);
+                if (!renderedTimeline && ((message.content && message.content.trim() !== '') || fileData)) {
+                    const el = addMessageToChat(message.role, message.content || '', fileData);
+                    if (message.role === 'assistant' && message.end_reason) markMessageEndReason(el, message.end_reason);
+                    count++;
+                }
+                // Any page preview this turn produced, rebuilt from the saved document.
+                if (message.role === 'assistant' && Array.isArray(message.page_previews)) {
+                    message.page_previews.forEach((p) => p && p.id && !p.kind && renderChatArtifact(p, { replay: true }));
+                }
+        });
+        return count;
+    }
+
+    // ── Lazy history: open on the newest page, fetch older pages on scroll-up ──
+    const HISTORY_PAGE = 20;
+    let historyObserver = null;
+    function installHistoryLoader(conversationId, oldestId, loadVersion) {
+        historyObserver?.disconnect(); historyObserver = null;
+        messageContainer.querySelector('.history-loader')?.remove();
+        if (!oldestId) return;
+        const loader = document.createElement('div');
+        loader.className = 'history-loader';
+        const status = document.createElement('span');
+        status.textContent = 'Scroll up for earlier messages';
+        const jump = document.createElement('button');
+        jump.type = 'button'; jump.className = 'history-jump'; jump.textContent = 'Jump to first message';
+        jump.addEventListener('click', () => loadConversation(conversationId, {all: true}));
+        loader.append(status, jump);
+        messageContainer.prepend(loader);
+        let oldest = oldestId, loading = false;
+        const loadOlder = async () => {
+            if (loading || !oldest) return;
+            loading = true; status.textContent = 'Loading earlier messages…';
+            try {
+                const response = await fetch(`/api/conversations/${conversationId}?limit=${HISTORY_PAGE}&before=${encodeURIComponent(oldest)}`);
+                if (!response.ok) throw new Error('Could not load earlier messages');
+                const data = await response.json();
+                if (loadVersion !== conversationLoadVersion || !loader.isConnected) return;
+                // Render at the end, then move the new nodes above the current history,
+                // keeping the reader's place on screen.
+                const before = chatMessages.scrollHeight, top = chatMessages.scrollTop;
+                const tail = messageContainer.lastChild;
+                renderHistoryMessages(data.messages || []);
+                const added = [];
+                for (let node = tail ? tail.nextSibling : messageContainer.firstChild; node; node = node.nextSibling) added.push(node);
+                loader.after(...added);
+                chatMessages.scrollTop = top + (chatMessages.scrollHeight - before);
+                oldest = data.has_more ? data.messages?.[0]?.id : null;
+                if (!oldest) { historyObserver?.disconnect(); loader.remove(); return; }
+                status.textContent = 'Scroll up for earlier messages';
+            } catch (error) {
+                status.textContent = error.message + ' · scroll up to retry';
+            } finally { loading = false; }
+        };
+        historyObserver = new IntersectionObserver(entries => { if (entries.some(e => e.isIntersecting)) loadOlder(); }, {root: chatMessages, rootMargin: '200px 0px 0px 0px'});
+        // Start observing after the initial scroll-to-bottom so opening a chat does not fetch.
+        requestAnimationFrame(() => requestAnimationFrame(() => { if (loader.isConnected) historyObserver?.observe(loader); }));
+    }
+
+    // Function to load a specific conversation. `all` loads the full history and opens
+    // at the first message; otherwise only the newest page loads.
+    async function loadConversation(conversationId, {all = false} = {}) {
         window.dispatchEvent(new Event('chat-voice-stop'));
         const loadVersion = ++conversationLoadVersion;
         dictation?.cancel();
         if (socket) { socket.onclose = null; socket.close(); socket = null; isSocketConnected = false; }
         try {
-            console.log('[loadConversation] fetching:', `/api/conversations/${conversationId}`);
-            const response = await fetch(`/api/conversations/${conversationId}`);
+            const historyUrl = `/api/conversations/${conversationId}` + (all ? '' : `?limit=${HISTORY_PAGE}`);
+            const response = await fetch(historyUrl);
             console.log('[loadConversation] response status:', response.status);
             if (!response.ok) {
                 console.error('[loadConversation] Failed:', response.status, await response.text());
@@ -4921,42 +5008,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 currentProjectId = data.project.id;
             }
 
-            // Add each message to the chat
-            let rendered = 0;
-            data.messages.forEach(message => {
-                // Restore an attached image (if any) so it persists across reloads.
-                let fileData = null;
-                const cif = message.content_if_file;
-                if (Array.isArray(cif) && cif.length && (cif[0].type || '').startsWith('image/') && cif[0].url) {
-                    fileData = { name: cif[0].name, type: cif[0].type, url: cif[0].url };
-                }
-                // The trail the user watched during this turn, replayed COLLAPSED above
-                // the answer it produced — the live one only ever lived in the DOM, so a
-                // refresh used to erase the record of what the agent did.
-                // A dictated message keeps its mic on reload. addMessageToChat's 4th
-                // argument is userRole, not options — so the marker is added after.
-                if (message.role === 'user' && message.is_voice) {
-                    const el = addMessageToChat('user', message.content || '', fileData);
-                    markMessageAsVoice(el);
-                    rendered++;
-                    return;
-                }
-                const renderedTimeline = message.role === 'assistant' && renderAssistantTimeline(message);
-                if (renderedTimeline) rendered++;
-                if (!renderedTimeline && message.role === 'assistant' && Array.isArray(message.activity_trail) && message.activity_trail.length) {
-                    renderSavedTrail(message.activity_trail, message.end_reason);
-                }
-                if (!renderedTimeline && message.role === 'assistant') renderSavedInlineArtifacts(message);
-                if (!renderedTimeline && ((message.content && message.content.trim() !== '') || fileData)) {
-                    const el = addMessageToChat(message.role, message.content || '', fileData);
-                    if (message.role === 'assistant' && message.end_reason) markMessageEndReason(el, message.end_reason);
-                    rendered++;
-                }
-                // Any page preview this turn produced, rebuilt from the saved document.
-                if (message.role === 'assistant' && Array.isArray(message.page_previews)) {
-                    message.page_previews.forEach((p) => p && p.id && !p.kind && renderChatArtifact(p, { replay: true }));
-                }
-            });
+            // Newest page only; older messages load as the user scrolls up.
+            const rendered = renderHistoryMessages(data.messages);
+            installHistoryLoader(conversationId, data.has_more ? data.messages[0]?.id : null, loadVersion);
             console.log('[loadConversation] rendered', rendered, 'messages');
             connectWebSocket();
             
@@ -4989,8 +5043,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 window.history.pushState({}, '', url);
             }
 
-            // Force scroll to bottom when loading conversation
-            scrollToBottom(true);
+            // Open at the latest message, or at the very first when jumping to the start.
+            if (all) { userScrolledUp = true; chatMessages.scrollTop = 0; } else scrollToBottom(true);
         } catch (error) {
             console.error('Error loading conversation:', error);
         } finally {

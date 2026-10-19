@@ -4,7 +4,7 @@ import { db } from "../../config/db.ts";
 import { conversations, messages } from "../../db/schema/chat.ts";
 import { projects } from "../../db/schema/projects.ts";
 import { users } from "../../db/schema/users.ts";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, or, lt, desc, asc, sql } from "drizzle-orm";
 import { getChatAccess } from "../../services/chat-access.ts";
 import type { auth } from "../../auth/index.ts";
 
@@ -63,12 +63,26 @@ conversationsApi.get("/:id", async (c) => {
     return c.json({ error: "Not found" }, 404);
   }
 
-  // Load messages
-  const msgs = await db
-    .select()
-    .from(messages)
-    .where(eq(messages.conversationId, id))
-    .orderBy(messages.createdAt);
+  // Load messages. With ?limit, return only the newest page (older than ?before) so a
+  // long chat opens fast; without it, the whole history, for jumping to the start.
+  // Build events wake the agent but are not something the user said.
+  const visible = and(eq(messages.conversationId, id), sql`coalesce(${messages.userRole}, '') <> 'build_event'`);
+  const limit = Math.min(200, Math.max(1, Number(c.req.query("limit")) || 0)) || null;
+  let hasMore = false;
+  let msgs;
+  if (limit) {
+    const beforeId = c.req.query("before");
+    const [anchor] = beforeId ? await db.select({ createdAt: messages.createdAt, id: messages.id }).from(messages)
+      .where(and(eq(messages.id, beforeId), eq(messages.conversationId, id))).limit(1) : [];
+    const page = await db.select().from(messages)
+      .where(anchor ? and(visible, or(lt(messages.createdAt, anchor.createdAt), and(eq(messages.createdAt, anchor.createdAt), lt(messages.id, anchor.id)))) : visible)
+      .orderBy(desc(messages.createdAt), desc(messages.id))
+      .limit(limit + 1);
+    hasMore = page.length > limit;
+    msgs = page.slice(0, limit).reverse();
+  } else {
+    msgs = await db.select().from(messages).where(visible).orderBy(asc(messages.createdAt), asc(messages.id));
+  }
 
   // Names for any guest turns (an owner/admin who continued this chat).
   const guestIds = [...new Set(msgs.map((m) => m.authorId).filter(Boolean))] as string[];
@@ -96,8 +110,8 @@ conversationsApi.get("/:id", async (c) => {
     // owner/admin — the UI hides the composer when read_only.
     is_mine: access.isAuthor,
     read_only: !access.canWrite,
-    // Build events wake the agent but are not something the user said.
-    messages: msgs.filter((m) => m.userRole !== "build_event").map((m) => ({
+    has_more: hasMore,
+    messages: msgs.map((m) => ({
       id: m.id,
       role: m.role,
       content: m.content,

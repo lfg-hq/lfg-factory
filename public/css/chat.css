@@ -3353,5 +3353,11 @@ input:checked + .turbo-slider + .turbo-label,
 [data-theme="light"] #chat-form .audio-recording-indicator .dictation-send { background:linear-gradient(135deg,#7c3aed 0%,#6366f1 100%); color:#fff; }
 [data-theme="light"] #chat-form .audio-recording-indicator .dictation-send:hover { background:linear-gradient(135deg,#6d28d9 0%,#4f46e5 100%); }
 #chat-input.dictation-live { caret-color:transparent; }
+.audio-recording-indicator[data-phase="recording"][data-live="off"] .dictation-status { position:static;width:auto;height:auto;clip-path:none;flex:0 1 auto;max-width:45%;font-size:12px; }
 .chatgpt-connection{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 8px;padding:10px 14px;border:1px solid var(--border-color);border-radius:12px;background:var(--card-bg);color:var(--text-color);font-size:13px}
 .chatgpt-connection [role="status"]{flex:1;min-width:180px}.chatgpt-connection button,.chatgpt-connection a{font:inherit;color:inherit;background:transparent;border:0;cursor:pointer;padding:5px}.chatgpt-connection button:disabled{opacity:.5;cursor:wait}
+
+/* Lazy history: a quiet bar above the oldest loaded message. */
+.history-loader { display:flex;align-items:center;justify-content:center;gap:14px;margin:8px auto 18px;font-size:12px;color:var(--text-muted,#64748b); }
+.history-loader .history-jump { font:inherit;font-size:12px;color:var(--primary-color,#7c3aed);background:transparent;border:1px solid var(--border-color,#e2e7ef);border-radius:999px;padding:4px 12px;cursor:pointer; }
+.history-loader .history-jump:hover { background:color-mix(in srgb,var(--primary-color,#7c3aed) 8%,transparent); }
