@@ -1333,7 +1333,7 @@ export function ProjectDetailPage({
             <label style="display:flex;gap:10px;align-items:center"><input id="cfg-feature-testing-enabled" type="checkbox" disabled /> Feature testing — exercise the feature through browser or API tests</label>
             <p id="cfg-build-stages-status" role="status" style="font-size:12px;color:var(--text-secondary)">Loading settings…</p>
           </div>
-          <script src="/public/js/build-stage-settings.js"></script>
+          <script src="/public/js/build-stage-settings.js?v=20261020-off-default"></script>
           <div class="agent-card">
             <div class="agent-card-head">
               <div>

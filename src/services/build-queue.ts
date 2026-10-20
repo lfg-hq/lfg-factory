@@ -163,9 +163,9 @@ export async function onTicketFinished(ticketId: string, status: "complete" | "f
     await logRunEvent(item.agentRunId, item.id, "run_blocked", { ticketId }, true);
     const remaining = await pendingItems(item.agentRunId);
     await announce(item.agentRunId,
-      `⛔ **Build chain paused** — ${item.title || "a ticket"} failed.\n\n` +
-      `${remaining.length} ticket${remaining.length === 1 ? "" : "s"} still queued behind it. ` +
-      `Open the ticket's Actions tab for the failure, then retry it — the chain picks up from there.`);
+      `⏸️ **Build paused** — ${item.title || "a ticket"} didn't finish.\n\n` +
+      (remaining.length ? `The ${remaining.length} ticket${remaining.length === 1 ? "" : "s"} after it ${remaining.length === 1 ? "is" : "are"} waiting, because ${remaining.length === 1 ? "it builds" : "they build"} on this one. ` : "") +
+      `I'm looking into what went wrong and will explain it here with a suggested fix. Nothing is lost; once it's fixed, the build continues from this ticket.`);
     const [run] = await db.select().from(agentRuns).where(eq(agentRuns.id, item.agentRunId)).limit(1);
     if (run) summarizeRun(run, buildEventMessage({ kind: "paused", tickets: [item.title || ticketId],
       detail: `${remaining.length} ticket${remaining.length === 1 ? "" : "s"} still queued behind it.` }));

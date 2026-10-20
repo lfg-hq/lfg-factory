@@ -70,6 +70,8 @@
     return history.rows;
   }
   const choices = new Map();
+  // Remember whether the reader opened or closed diagnostics; refreshes must not undo it.
+  const diagnosticsOpen = new Map();
   function render(area, rows, ticket, key, renderRow, historyUrl, refresh) {
     const liveCards=new Map(Array.from(area.querySelectorAll('.feature-live[data-live-url]'),card=>[card.dataset.liveUrl,card]));
     const previous = area.querySelector('.ticket-phase-body:not([hidden])');
@@ -91,6 +93,8 @@
       buttons.forEach((button, i) => { button.setAttribute('aria-selected', String(phases[i].id === selected)); button.tabIndex = phases[i].id === selected ? 0 : -1; });
       bodies.forEach((body, i) => { body.hidden = phases[i].id !== selected; });
       dock.hidden = selected !== 'feature-testing' || !dock.childElementCount;
+      // Paging applies to the build log only.
+      const note = headers.querySelector('.phase-history-note'); if (note) note.hidden = selected !== 'build';
       area.scrollTop = 0;
     }
     let index = 0;
@@ -150,7 +154,10 @@
       let logHost=body;
       let showLogs=null;
       if(phase.id==='validation'&&displayRows.length){
-        const details=document.createElement('details');const summary=document.createElement('summary');summary.textContent='Technical activity and diagnostics';details.append(summary);const logs=document.createElement('div');details.append(logs);body.append(details);logHost=logs;
+        const details=document.createElement('details');const summary=document.createElement('summary');summary.textContent='Technical activity and diagnostics';details.append(summary);
+        // A failed validation opens by default: the reason lives in these rows.
+        details.open=diagnosticsOpen.has(key)?diagnosticsOpen.get(key):phase.status==='error';
+        details.addEventListener('toggle',()=>diagnosticsOpen.set(key,details.open));const logs=document.createElement('div');details.append(logs);body.append(details);logHost=logs;
       }
       if(phase.id==='feature-testing' && displayRows.length){
         body.classList.add('feature-log-toolbar');
@@ -255,7 +262,7 @@
     dock.hidden = selected !== 'feature-testing' || !dock.childElementCount;
     fragment.append(headers, dock);
     if (history?.more) {
-      const note = document.createElement('div'); note.className = 'phase-history-note'; note.setAttribute('role', 'status');
+      const note = document.createElement('div'); note.className = 'phase-history-note'; note.setAttribute('role', 'status'); note.hidden = selected !== 'build';
       const more = document.createElement('button'); more.type = 'button';
       more.textContent = history.loading ? 'Loading…' : history.error ? 'Retry loading earlier logs' : 'Load 20 earlier logs';
       more.disabled = !!history.loading;

@@ -1,0 +1,4 @@
+-- SQLite cannot change a column default in place; new rows get the default from the
+-- application schema (drizzle push). Existing projects keep their current setting.
+-- OPTIONAL, not applied automatically: also switch existing projects off.
+-- UPDATE project SET validation_enabled = 0, feature_testing_enabled = 0;

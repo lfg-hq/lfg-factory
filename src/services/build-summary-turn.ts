@@ -26,8 +26,8 @@ export function buildEventMessage(event: { kind: "complete" | "paused"; tickets:
   if (event.previewUrl) lines.push(`Preview: ${event.previewUrl}${event.branch ? ` (branch ${event.branch})` : ""}`);
   if (event.detail) lines.push(event.detail);
   lines.push(event.kind === "complete"
-    ? "Read the built tickets' results (getTicketDetails, getRecentActivities). Then tell the user what was built, give step-by-step instructions for testing it in the preview, and list anything unverified or still open. Do not start builds or change tickets."
-    : "Read the failed ticket's details and logs (getTicketDetails). Explain in plain language what failed and why, and recommend the fix. Ask before retrying or changing anything.");
+    ? "Read the built tickets' results (getTicketDetails, getRecentActivities). Then tell the user what was built, name each ticket's branch and latest commit, give step-by-step instructions for testing it in the preview, and list anything unverified or still open. Do not start builds or change tickets."
+    : "Read the failed ticket's details and logs (getTicketDetails). Explain in plain language what failed and why, say where the work so far is saved (branch), and recommend the fix. Ask before retrying or changing anything.");
   return lines.join("\n");
 }
 

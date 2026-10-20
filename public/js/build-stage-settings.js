@@ -18,6 +18,6 @@
         finally { input.disabled = !data.canChangeBuildStages; }
       });
     }
-    status.textContent = data.canChangeBuildStages ? 'Both checks are enabled by default.' : 'Only the project owner can change these settings.';
+    status.textContent = data.canChangeBuildStages ? 'Both checks are off by default. Turn one on when you want it to run after each build.' : 'Only the project owner can change these settings.';
   }).catch(error => { status.textContent = error.message; });
 })();

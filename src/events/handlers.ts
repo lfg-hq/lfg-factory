@@ -183,7 +183,7 @@ export function registerEventHandlers(): void {
 
     await reportBuildStatus(ticketId, exitCode === 130 ? "stopped" : status,
       exitCode === 130 ? "Build stopped." : status === "complete"
-        ? "Build finished, ready for review." : "Build failed. Open the ticket’s Actions log for details and retry.");
+        ? "Build finished, ready for review." : "Build didn’t finish. Ask me here what went wrong, or open the ticket’s Actions tab for the full log.");
 
     if (status === "complete") {
       const durationStr = durationMs ? ` in ${Math.round(durationMs / 1000)}s` : "";

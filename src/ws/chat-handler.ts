@@ -11,7 +11,7 @@ import {
 import { handleStream } from "../ai/stream-handler.ts";
 import { db } from "../config/db.ts";
 import { messages, conversations } from "../db/schema/chat.ts";
-import { eq, asc, desc } from "drizzle-orm";
+import { eq, asc, desc, and, sql } from "drizzle-orm";
 import { restartPreview, getPreviewState } from "../services/dev-preview.ts";
 import { getProjectAccess } from "../auth/project-access.ts";
 
@@ -253,12 +253,13 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
 
 async function sendHistory(ws: ServerWebSocket<WsData>, conversationId: string): Promise<void> {
   console.log("[ws] sendHistory called for conversation:", conversationId);
-  const rows = await db
+  // The newest page, oldest first; build events wake the agent but are not user messages.
+  const rows = (await db
     .select()
     .from(messages)
-    .where(eq(messages.conversationId, conversationId))
-    .orderBy(asc(messages.createdAt))
-    .limit(100);
+    .where(and(eq(messages.conversationId, conversationId), sql`coalesce(${messages.userRole}, '') <> 'build_event'`))
+    .orderBy(desc(messages.createdAt), desc(messages.id))
+    .limit(40)).reverse();
 
   console.log("[ws] sendHistory found", rows.length, "messages");
   send(ws, {

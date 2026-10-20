@@ -63,8 +63,8 @@ export const projects = sqliteTable(
     qaMode: text("qa_mode").notNull().default("off"),
     // Unused: epic build mode was removed. Kept so schema push does not drop the column.
     epicBuildsEnabled: integer("epic_builds_enabled", { mode: "boolean" }).notNull().default(false),
-    validationEnabled: integer("validation_enabled", { mode: "boolean" }).notNull().default(true),
-    featureTestingEnabled: integer("feature_testing_enabled", { mode: "boolean" }).notNull().default(true),
+    validationEnabled: integer("validation_enabled", { mode: "boolean" }).notNull().default(false),
+    featureTestingEnabled: integer("feature_testing_enabled", { mode: "boolean" }).notNull().default(false),
     // How this repo runs its tests, detected once (or set up once) rather than
     // rediscovered per ticket. Null until the first QA run resolves it.
     testCommand: text("test_command"),
