@@ -14,6 +14,8 @@ export interface ValidationContext {
   onLog?: (message: string) => void;
   onCheckpoint?: (message: string) => Promise<void> | void;
   cancelled?: () => boolean;
+  /** The user chose to skip checks: keep the committed build and continue. */
+  skipped?: () => boolean;
 }
 export interface ValidationEvidence {
   id: string; projectId: string; branch: string; revision: string; tree: string;

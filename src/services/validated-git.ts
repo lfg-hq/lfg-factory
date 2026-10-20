@@ -74,7 +74,15 @@ export async function publishValidatedTicket(o:PublicationOptions) {
     await o.validation.onCheckpoint?.(`**Build saved:** commit \`${saved.slice(0,7)}\` is pushed to \`${o.featureBranch}\` before checks run.`);
     // One Checks stage: start the app, then walk the feature in a browser, with a single
     // repair loop. Its repairs are committed and pushed below.
-    const sha=await validateWithRepair(o,o.projectDir,o.featureBranch,baseline,'ticket');
+    let sha:string;
+    if(o.validation.skipped?.()) sha=saved;
+    else try {
+      sha=await validateWithRepair(o,o.projectDir,o.featureBranch,baseline,'ticket');
+    } catch(error) {
+      if(!o.validation.skipped?.())throw error;
+      sha=saved;
+    }
+    if(sha===saved && o.validation.skipped?.())await o.validation.onCheckpoint?.(`**Checks skipped:** the build saved in \`${saved.slice(0,7)}\` continues without checks. Repairs in progress were not saved.`);
     await push(sha);
     return {sha,branch:o.featureBranch};
   });
@@ -135,8 +143,23 @@ export async function publishValidatedMerge(o:PublicationOptions & {targetBranch
         sha=await sh(`git -C ${q(candidate)} rev-parse HEAD`);
         if(await sh(`git rev-parse ${q(sha+'^{tree}')}`)!==candidateTree)throw new ValidationFailure('Merge tree changed after evidence reuse');
       } else {
-        o.validation.onLog?.('Merge requires fresh checks: no matching ticket evidence for this tree, baseline and environment.');
-        sha=await validateWithRepair(o,candidate,o.targetBranch,baseline,o.kind??'integration');
+        const commitMerge=async()=>{
+          await sh(`git -C ${q(candidate)} -c user.name='LFG Agent' -c user.email='agent@lfg.dev' commit --no-verify -m 'merge: integrate ticket (checks skipped)'`);
+          return sh(`git -C ${q(candidate)} rev-parse HEAD`);
+        };
+        if(o.validation.skipped?.()) {
+          o.validation.onLog?.('Checks were skipped for this ticket; merging without re-checking.');
+          sha=await commitMerge();
+        } else {
+          o.validation.onLog?.('Merge requires fresh checks: no matching ticket evidence for this tree, baseline and environment.');
+          try { sha=await validateWithRepair(o,candidate,o.targetBranch,baseline,o.kind??'integration'); }
+          catch(error) {
+            if(!o.validation.skipped?.())throw error;
+            o.validation.onLog?.('Checks skipped during the merge check; merging without them.');
+            await sh(`git -C ${q(candidate)} reset -q --hard\ngit -C ${q(candidate)} merge --no-commit --no-ff ${q(expected.source)} || true`).catch(()=>'');
+            sha=await commitMerge();
+          }
+        }
       }
       await sh(`git merge-base --is-ancestor ${q(expected.source)} ${q(sha)}\ngit merge-base --is-ancestor ${q(baseline)} ${q(sha)}`);
       assertHeadsUnchanged(expected,await heads());

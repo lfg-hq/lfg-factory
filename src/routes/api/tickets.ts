@@ -279,6 +279,23 @@ ticketsApi.delete("/:projectId/tickets/:ticketId", async (c) => {
 });
 
 // ── GET /api/projects/:projectId/stages ──────────────────────────────
+// ── POST /:projectId/tickets/:ticketId/skip-checks — keep the saved build, continue ──
+ticketsApi.post("/:projectId/tickets/:ticketId/skip-checks", async (c) => {
+  const user = c.get("user");
+  const { projectId, ticketId } = c.req.param();
+  const access = await getProjectAccess(projectId!, user.id);
+  if (!access) return c.json({ error: "Not found" }, 404);
+  if (!access.permissions.canManageTickets) return c.json({ error: "Ticket management permission is required." }, 403);
+  const [ticket] = await db.select({ id: projectTickets.id, queueStatus: projectTickets.queueStatus }).from(projectTickets)
+    .where(and(eq(projectTickets.id, ticketId!), eq(projectTickets.projectId, access.project.id))).limit(1);
+  if (!ticket) return c.json({ error: "Ticket not found" }, 404);
+  if (ticket.queueStatus !== "executing") return c.json({ error: "No checks are running for this ticket." }, 409);
+  const { requestSkipChecks } = await import("../../services/check-skip.ts");
+  await requestSkipChecks(ticketId!);
+  await addTicketLog(ticketId!, "Checks skip requested. The saved build continues without checks.", "agent_progress", user.id).catch(() => {});
+  return c.json({ ok: true }, 202);
+});
+
 // ── GET /:projectId/build-progress?tickets=a,b — live rows for the chat build card ──
 ticketsApi.get("/:projectId/build-progress", async (c) => {
   const user = c.get("user");

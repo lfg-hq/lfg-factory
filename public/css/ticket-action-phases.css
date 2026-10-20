@@ -179,3 +179,7 @@
 }
 /* Checks tab: app startup is a compact header above the browser walkthrough. */
 [data-phase-view] .ticket-phase-body.checks-startup { flex:0 0 auto; max-height:45%; border-bottom:1px solid var(--border-color,#dce2ed); }
+.checks-skip-bar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:10px 16px; padding:8px 12px; border:1px solid var(--border-color,#dce2ed); border-radius:8px; font-size:12.5px; color:var(--text-secondary,#64748b); }
+.checks-skip-bar .checks-skip { flex:none; font:inherit; font-size:12.5px; padding:5px 12px; border-radius:6px; border:1px solid var(--border-color,#dce2ed); background:transparent; color:var(--text-primary,#263246); cursor:pointer; }
+.checks-skip-bar .checks-skip:hover:not(:disabled) { border-color:#d97706; color:#b45309; }
+.checks-skip-bar .checks-skip:disabled { opacity:.6; cursor:wait; }

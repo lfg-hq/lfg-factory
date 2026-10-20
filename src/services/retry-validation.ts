@@ -14,5 +14,12 @@ export async function retrySavedValidation(o:PublicationOptions,baseline:string,
  if(phase==='feature-testing')await o.validation.onCheckpoint?.(`**Resuming saved app:** Connected to ticket sandbox \`${o.workspaceId}\`, checkout \`${o.projectDir}\`, commit \`${sha!.slice(0,12)}\`. Checking whether its existing server is still responding before opening the browser. No replacement app sandbox was created.`);
  const {runTicketRuntime}=await import('./ticket-runtime.ts');
  // 'checks' is the combined stage: app startup, then the browser walkthrough.
- return runTicketRuntime(o,undefined,{kind:'ticket',baseline,phase:phase==='checks'?undefined:phase});
+ try {
+  return await runTicketRuntime(o,undefined,{kind:'ticket',baseline,phase:phase==='checks'?undefined:phase});
+ } catch(error) {
+  // Skipping keeps the saved commit; unsaved repairs from this attempt are dropped.
+  if(!o.validation.skipped?.())throw error;
+  await o.validation.onCheckpoint?.(`**Checks skipped:** keeping saved commit \`${sha!.slice(0,7)}\`.`);
+  return sha!;
+ }
 }

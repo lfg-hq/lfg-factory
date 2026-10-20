@@ -56,6 +56,20 @@ test('checks run once on the saved build and their repairs are pushed after',()=
  expect(git(repo,'show --name-only --format= '+result.sha)).toContain('migration-fix.txt');
  expect(git(repo,'ls-remote --heads origin refs/heads/feature/ticket')).toContain(result.sha);
 }));
+test('skipping checks keeps the saved build and publishes it',()=>fixture(async(o,repo)=>{
+ writeFileSync(join(repo,'pending.txt'),'pending');let skip=false;
+ o.validation.skipped=()=>skip;
+ validation=async()=>{skip=true;writeFileSync(join(repo,'half-repair.txt'),'unsaved');throw new Error('Ticket run cancelled');};
+ const result=await publishValidatedTicket(o);
+ expect(git(repo,'show --name-only --format= '+result.sha)).toContain('pending.txt');
+ expect(git(repo,'show --name-only --format= '+result.sha)).not.toContain('half-repair.txt');
+ expect(git(repo,'ls-remote --heads origin refs/heads/feature/ticket')).toContain(result.sha);
+}));
+test('a skipped ticket merges into the epic branch without re-running checks',()=>fixture(async(o,repo)=>{
+ git(repo,'push -q origin feature/ticket');let checks=0;validation=async()=>{checks++;};
+ const result=await publishValidatedMerge({...o,targetBranch:'main',validation:{...o.validation,skipped:()=>true}});
+ expect(checks).toBe(0);expect(git(repo,'ls-remote --heads origin main')).toContain(result.sha);
+}));
 test('integration validates the merged working tree before creating the merge commit',()=>fixture(async(o,repo)=>{
  git(repo,'push -q origin feature/ticket');const baseline=git(repo,'rev-parse origin/main');
  validation=async(v)=>{const dir=translate(v.projectDir);expect(git(dir,'rev-parse HEAD')).toBe(baseline);expect(git(dir,'status --porcelain')).toContain('feature.txt');};

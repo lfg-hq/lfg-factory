@@ -158,6 +158,18 @@
       }
       // Inside Checks, startup sits above the browser walkthrough and takes only its own height.
       if(phase.id==='validation')body.classList.add('checks-startup');
+      // Slow or stuck checks can be skipped: the build is already committed.
+      if(phase===checkPhases[0] && running && combined(checkPhases)==='working' && historyUrl){
+        const bar=document.createElement('div');bar.className='checks-skip-bar';
+        const note=document.createElement('span');note.textContent='The build is already committed. Skipping stops the checks and moves on to the next ticket.';
+        const skip=document.createElement('button');skip.type='button';skip.className='checks-skip';skip.textContent='Skip checks';
+        skip.onclick=async()=>{
+          skip.disabled=true;skip.textContent='Skipping…';
+          try{const r=await fetch(historyUrl.replace(/\/logs$/,'/skip-checks'),{method:'POST',credentials:'same-origin'});if(!r.ok)throw new Error((await r.json().catch(()=>({}))).error||'Could not skip checks');note.textContent='Skipping: the current check stops in a few seconds.';}
+          catch(error){skip.disabled=false;skip.textContent='Skip checks';note.textContent=error.message;}
+        };
+        bar.append(note,skip);body.append(bar);
+      }
       if(phase.id==='validation'){
         const intro=document.createElement('p');intro.className='phase-empty';intro.textContent='App startup: required tools, database and migrations, and the server starting. The browser walkthrough follows below. Connection problems pause checks; they do not mean the feature failed.';body.append(intro);
       }

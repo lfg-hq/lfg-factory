@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { ticketStage, latestUpdate } from '../src/services/build-progress.ts';
+import { ticketStage, latestUpdate, checkLogType, shortSummary } from '../src/services/build-progress.ts';
 const logs = (...lines: string[]) => lines.map(text => ({ text, type: 'command' }));
 
 test('stage follows the build from queue to review', () => {
@@ -26,4 +26,14 @@ test('update skips tool chatter and keeps one readable sentence', () => {
     'Working with the Stream and Voicebot Applet | Exotel Developer Docs'))).toBeNull();
   expect(latestUpdate([{text:'Reading /data/applet.txt',type:'command'},{text:'Setting up the database schema and the call worker for the screening flow.',type:'agent_progress'}]))
     .toBe('Setting up the database schema and the call worker for the screening flow.');
+});
+
+test('agent narration renders as a message; commands stay rows',()=>{
+ expect(checkLogType("[Validation] I'll first inspect the saved requirements, running services, and existing changes.")).toBe('ai_response');
+ expect(checkLogType('[Validation] Reading application files')).toBe('command');
+ expect(checkLogType('Running ps aux | grep -i next | wc -l')).toBe('command');
+});
+test('completion summary keeps two or three sentences',()=>{
+ expect(shortSummary('Agent: Built the restricted portal. Added Exotel call wiring. Wrote nine tests. Recorded the gaps in docs.')).toBe('Built the restricted portal. Added Exotel call wiring. Wrote nine tests.');
+ expect(shortSummary('')).toBe('');
 });

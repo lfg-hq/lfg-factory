@@ -35,13 +35,18 @@ function runningStage(logs: LogLine[]): BuildStage {
 }
 
 // Agent narration reads as prose; command output (grep hits, paths, URLs, JSON) does not.
-function isProse(text: string): boolean {
+export function isProse(text: string): boolean {
   if (text.length < 25 || CHATTER.test(text) || /^[{\[/]/.test(text) || text.startsWith("Validation check:")) return false;
   if (/[\w.-]+\.\w+:\d+|https?:\/\/|\|/.test(text) || (text.match(/\//g) ?? []).length > 2) return false;
   const words = text.split(" ").filter((word) => /[a-z]{2,}/i.test(word));
   return words.length >= 5 && (text.match(/[a-z ]/gi) ?? []).length / text.length > 0.75;
 }
 const NARRATION = new Set(["agent_progress", "ai_response"]);
+
+/** Agent prose renders as an agent card in the ticket's Actions view; commands stay rows. */
+export function checkLogType(line: string): "ai_response" | "command" {
+  return isProse(clean(line)) ? "ai_response" : "command";
+}
 
 /** One readable sentence about what is happening now, or null. Agent notes win over command output. */
 export function latestUpdate(logs: LogLine[]): string | null {
@@ -85,3 +90,27 @@ export async function buildProgress(projectId: string, ticketIds: string[]) {
   }));
   return { active: tickets.some((t) => t.active), tickets };
 }
+
+/** Two or three plain sentences: what a build did, for the "Ticket complete" card. */
+export function shortSummary(text: string | null | undefined): string {
+  const flat = clean(text ?? "").replace(/^Agent:\s*/, "");
+  if (!flat) return "";
+  const sentences = flat.match(/[^.!?]+[.!?]+(\s|$)/g) ?? [flat];
+  const picked = sentences.slice(0, 3).map((sentence) => sentence.trim()).join(" ");
+  return picked.length > 420 ? picked.slice(0, 417) + "…" : picked;
+}
+
+/** Fallback when the agent left no closing summary: its latest build-phase note. */
+export async function recentWorkSummary(ticketId: string): Promise<string> {
+  const logs = await db.select({ text: ticketLogs.command, type: ticketLogs.logType }).from(ticketLogs)
+    .where(eq(ticketLogs.ticketId, ticketId)).orderBy(desc(ticketLogs.createdAt), desc(ticketLogs.id)).limit(120);
+  for (const log of logs) {
+    const raw = log.text ?? "";
+    if (/^\[(Validation|Feature testing)\]/.test(raw)) continue;
+    const text = clean(raw);
+    if (/^(Ticket complete|Build saved|Checks skipped|Validation scope|Running the saved ticket|Merg)/i.test(text)) continue;
+    if (NARRATION.has(log.type ?? "") && isProse(text)) return shortSummary(text);
+  }
+  return "";
+}
+
