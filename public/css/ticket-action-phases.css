@@ -177,3 +177,5 @@
   .phase-headers .phase-history-note { margin-left:auto; }
   .feature-browser-content { grid-template-columns:minmax(0,1fr); }
 }
+/* Checks tab: app startup is a compact header above the browser walkthrough. */
+[data-phase-view] .ticket-phase-body.checks-startup { flex:0 0 auto; max-height:45%; border-bottom:1px solid var(--border-color,#dce2ed); }

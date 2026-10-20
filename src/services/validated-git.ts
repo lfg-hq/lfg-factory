@@ -72,19 +72,9 @@ export async function publishValidatedTicket(o:PublicationOptions) {
     await push(saved);
     await recordSavedCommit(o,saved);
     await o.validation.onCheckpoint?.(`**Build saved:** commit \`${saved.slice(0,7)}\` is pushed to \`${o.featureBranch}\` before checks run.`);
-    const {loadBuildStageSettings}=await import('./build-stage-settings.ts');
-    const settings=await loadBuildStageSettings(o.validation.projectId);
-    let sha:string;
-    if(settings.validationEnabled!==false && settings.featureTestingEnabled!==false && o.validation.ticketId){
-      // Validation first; save its repairs, then test the saved app in the browser.
-      const {runTicketRuntime}=await import('./ticket-runtime.ts');
-      const validated=await runTicketRuntime(o,undefined,{kind:'ticket',baseline,phase:'validation'});
-      await push(validated);
-      await recordSavedCommit(o,validated);
-      sha=await runTicketRuntime(o,undefined,{kind:'ticket',baseline,phase:'feature-testing'});
-    } else {
-      sha=await validateWithRepair(o,o.projectDir,o.featureBranch,baseline,'ticket');
-    }
+    // One Checks stage: start the app, then walk the feature in a browser, with a single
+    // repair loop. Its repairs are committed and pushed below.
+    const sha=await validateWithRepair(o,o.projectDir,o.featureBranch,baseline,'ticket');
     await push(sha);
     return {sha,branch:o.featureBranch};
   });

@@ -1,23 +1,22 @@
 (() => {
-  const fields = {validationEnabled: document.getElementById('cfg-validation-enabled'), featureTestingEnabled: document.getElementById('cfg-feature-testing-enabled')};
+  // One "Checks" stage: app startup plus the browser walkthrough, saved as both flags.
+  const input = document.getElementById('cfg-checks-enabled');
   const status = document.getElementById('cfg-build-stages-status');
-  if (!status) return;
+  if (!input || !status) return;
   const project = location.pathname.split('/projects/')[1]?.split('/')[0];
   const url = '/api/projects/' + encodeURIComponent(project) + '/preview/build-settings';
   fetch(url).then(r => { if (!r.ok) throw Error('Could not load build checks'); return r.json(); }).then(data => {
-    for (const [field,input] of Object.entries(fields)) {
-      input.checked = data[field] !== false;
-      input.disabled = !data.canChangeBuildStages;
-      input.addEventListener('change', async () => {
-        const value = input.checked; input.disabled = true;
-        try {
-          const response = await fetch(url, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({[field]:value})});
-          if (!response.ok) throw Error('Could not save build checks');
-          status.textContent = 'Saved. Applies to the next check run. Reload open tickets to update their tabs.';
-        } catch(error) { input.checked = !value; status.textContent = error.message; }
-        finally { input.disabled = !data.canChangeBuildStages; }
-      });
-    }
-    status.textContent = data.canChangeBuildStages ? 'Both checks are off by default. Turn one on when you want it to run after each build.' : 'Only the project owner can change these settings.';
+    input.checked = data.validationEnabled !== false || data.featureTestingEnabled !== false;
+    input.disabled = !data.canChangeBuildStages;
+    input.addEventListener('change', async () => {
+      const value = input.checked; input.disabled = true;
+      try {
+        const response = await fetch(url, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({validationEnabled:value,featureTestingEnabled:value})});
+        if (!response.ok) throw Error('Could not save build checks');
+        status.textContent = value ? 'Saved. Checks run after the next build.' : 'Saved. Builds are committed without checks.';
+      } catch(error) { input.checked = !value; status.textContent = error.message; }
+      finally { input.disabled = !data.canChangeBuildStages; }
+    });
+    status.textContent = data.canChangeBuildStages ? 'Off by default for new projects.' : 'Only the project owner can change this setting.';
   }).catch(error => { status.textContent = error.message; });
 })();

@@ -470,8 +470,8 @@ export function ChatPage({
   <script src="/public/js/artifacts-loader.js?v=20261015-map-groups"></script>
   <script src="/public/js/document-comments.js"></script>
   <script src="/public/js/artifacts.js"></script>
-  <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261004-log-layout" />
-<script src="/public/js/ticket-action-phases.js?v=20261020-diagnostics"></script>
+  <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261020-checks-tab" />
+<script src="/public/js/ticket-action-phases.js?v=20261020-checks-tab"></script>
 <script src="/public/js/preview-tab.js?v=20261005-start-state"></script>
     <script src="/public/js/ticket-agent.js?v=20261005-followup-tasks"></script>
   <script src="/public/js/ticket-activity.js?v=20261004-ticket-activity"></script>

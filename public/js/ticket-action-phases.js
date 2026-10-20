@@ -79,8 +79,25 @@
     const phases = group(rows, ticket).filter(phase => phase.id === 'build' || (phase.id === 'validation' ? ticket?.validationEnabled !== false : ticket?.featureTestingEnabled !== false));
     area.dataset.phaseView = key;
     const history = histories.get(historyUrl);
-    let selected = choices.get(key) || phases.slice().reverse().find(phase => phase.rows.length)?.id || 'build';
-    if (!phases.some(phase => phase.id === selected)) selected = 'build';
+    // Validation and feature testing read as one Checks stage: app startup, then the
+    // browser walkthrough. Their rows stay separate underneath; only the tabs merge.
+    const checkIds = ['validation', 'feature-testing'];
+    const tabOf = id => checkIds.includes(id) ? 'checks' : id;
+    const checkPhases = phases.filter(phase => checkIds.includes(phase.id));
+    const running = ticket && /^(executing|queued|stopping)$/.test(ticket.queueStatus || '');
+    const combined = list => {
+      const statuses = list.map(phase => phase.status);
+      if (statuses.includes('error')) return 'error';
+      if (statuses.includes('stopped')) return 'stopped';
+      if (statuses.includes('working')) return 'working';
+      if (statuses.every(status => ['done', 'not-applicable', 'saved'].includes(status))) return 'done';
+      if (statuses.some(status => status === 'done')) return running ? 'working' : 'pending';
+      return statuses.every(status => status === 'pending') ? 'pending' : 'unknown';
+    };
+    const tabs = [{ id: 'build', label: 'Build', status: phases[0].status, members: ['build'] }];
+    if (checkPhases.length) tabs.push({ id: 'checks', label: 'Checks', status: combined(checkPhases), members: checkPhases.map(phase => phase.id) });
+    let selected = tabOf(choices.get(key) || phases.slice().reverse().find(phase => phase.rows.length)?.id || 'build');
+    if (!tabs.some(tab => tab.id === selected)) selected = 'build';
     const fragment = document.createDocumentFragment();
     const headers = document.createElement('div'); headers.className = 'phase-headers'; headers.setAttribute('role', 'tablist'); headers.setAttribute('aria-label', 'Ticket actions');
     const dock = document.createElement('div'); dock.className = 'feature-browser-dock'; dock.setAttribute('aria-label', 'Feature test browser');
@@ -90,23 +107,20 @@
       area.classList.remove('feature-logs-open');
       selected = id;
       choices.set(key, selected);
-      buttons.forEach((button, i) => { button.setAttribute('aria-selected', String(phases[i].id === selected)); button.tabIndex = phases[i].id === selected ? 0 : -1; });
-      bodies.forEach((body, i) => { body.hidden = phases[i].id !== selected; });
-      dock.hidden = selected !== 'feature-testing' || !dock.childElementCount;
+      buttons.forEach((button, i) => { button.setAttribute('aria-selected', String(tabs[i].id === selected)); button.tabIndex = tabs[i].id === selected ? 0 : -1; });
+      bodies.forEach((body, i) => { body.hidden = tabOf(phases[i].id) !== selected; });
+      dock.hidden = selected !== 'checks' || !dock.childElementCount;
       // Paging applies to the build log only.
       const note = headers.querySelector('.phase-history-note'); if (note) note.hidden = selected !== 'build';
       area.scrollTop = 0;
     }
-    let index = 0;
-    for (const phase of phases) {
+    for (const tab of tabs) {
       const button = document.createElement('button'); button.type = 'button'; button.className = 'phase-header';
-      button.setAttribute('role', 'tab'); button.setAttribute('aria-selected', String(selected === phase.id)); button.tabIndex = selected === phase.id ? 0 : -1;
-      const body = document.createElement('div'); body.className = 'ticket-phase-body';
-      body.id = 'phase-body-' + key.replace(/[^a-zA-Z0-9_-]/g, '-') + '-' + phase.id;
-      button.id = body.id + '-tab'; button.setAttribute('aria-controls', body.id); body.setAttribute('role', 'tabpanel'); body.setAttribute('aria-labelledby', button.id); body.tabIndex = 0;
-      const label = document.createElement('strong'); label.textContent = phase.label;
-      const badge = document.createElement('span'); badge.className = 'phase-status phase-' + phase.status;
-      const statusLabel = phase.status === 'not-applicable' ? 'Not applicable' : phase.status === 'saved' ? 'Saved code' : phase.status[0].toUpperCase() + phase.status.slice(1);
+      button.setAttribute('role', 'tab'); button.setAttribute('aria-selected', String(selected === tab.id)); button.tabIndex = selected === tab.id ? 0 : -1;
+      button.id = 'phase-tab-' + key.replace(/[^a-zA-Z0-9_-]/g, '-') + '-' + tab.id;
+      const label = document.createElement('strong'); label.textContent = tab.label;
+      const badge = document.createElement('span'); badge.className = 'phase-status phase-' + tab.status;
+      const statusLabel = tab.status === 'not-applicable' ? 'Not applicable' : tab.status === 'saved' ? 'Saved code' : tab.status[0].toUpperCase() + tab.status.slice(1);
       badge.title = statusLabel; badge.setAttribute('aria-label', statusLabel); badge.setAttribute('role', 'img');
       const paths = {
         done: '<path d="m5 12 4 4L19 6"/>', saved: '<path d="m5 12 4 4L19 6"/>',
@@ -116,14 +130,20 @@
         unknown: '<circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 0 1 6 0c0 2-3 2-3 4m0 4h.01"/>',
         'not-applicable': '<path d="M5 12h14"/>'
       };
-      badge.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (paths[phase.status] || paths.unknown) + '</svg>';
-      button.append(label, badge); button.onclick = () => select(phase.id);
+      badge.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (paths[tab.status] || paths.unknown) + '</svg>';
+      button.append(label, badge); button.onclick = () => select(tab.id);
       button.onkeydown = event => {
         const current = buttons.indexOf(button);
-        const target = event.key === 'ArrowRight' ? (current + 1) % phases.length : event.key === 'ArrowLeft' ? (current + phases.length - 1) % phases.length : event.key === 'Home' ? 0 : event.key === 'End' ? phases.length - 1 : -1;
-        if (target >= 0) { event.preventDefault(); select(phases[target].id); buttons[target].focus(); }
+        const target = event.key === 'ArrowRight' ? (current + 1) % tabs.length : event.key === 'ArrowLeft' ? (current + tabs.length - 1) % tabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : -1;
+        if (target >= 0) { event.preventDefault(); select(tabs[target].id); buttons[target].focus(); }
       };
       headers.append(button); buttons.push(button);
+    }
+    let index = 0;
+    for (const phase of phases) {
+      const body = document.createElement('div'); body.className = 'ticket-phase-body';
+      body.id = 'phase-body-' + key.replace(/[^a-zA-Z0-9_-]/g, '-') + '-' + phase.id;
+      body.setAttribute('role', 'tabpanel'); body.setAttribute('aria-labelledby', 'phase-tab-' + key.replace(/[^a-zA-Z0-9_-]/g, '-') + '-' + tabOf(phase.id)); body.tabIndex = 0;
       if (phase.id === 'feature-testing' && phase.rows.length && !phase.rows.some(r=>/\[(?:Live browser|Watch recording)\]\(/.test(String(r.message||'')))) {
         const summary=document.createElement('p');summary.className='feature-stage-summary';summary.setAttribute('role','status');
         const last=phase.rows.slice().reverse().find(r=>/Feature testing|Execution failed:|❌/.test(String(r.message||'')));
@@ -136,8 +156,10 @@
         if(!String(row.message||'').startsWith('Validation check: '))continue;
         try{const c=JSON.parse(row.message.slice(18));if(typeof c.id==='string'&&typeof c.label==='string'&&['pending','running','passed','failed','blocked'].includes(c.status))checks.set(c.id,c);}catch{}
       }
+      // Inside Checks, startup sits above the browser walkthrough and takes only its own height.
+      if(phase.id==='validation')body.classList.add('checks-startup');
       if(phase.id==='validation'){
-        const intro=document.createElement('p');intro.className='phase-empty';intro.textContent='Checks the saved implementation: required tools, app startup, and the ticket’s specific requirements. Connection problems pause verification; they do not mean the feature failed.';body.append(intro);
+        const intro=document.createElement('p');intro.className='phase-empty';intro.textContent='App startup: required tools, database and migrations, and the server starting. The browser walkthrough follows below. Connection problems pause checks; they do not mean the feature failed.';body.append(intro);
       }
       if(checks.size){
         const list=document.createElement('ul');list.className='validation-checklist';list.setAttribute('aria-label','Validation checks');
@@ -257,9 +279,9 @@
         empty.textContent = phase.status === 'saved' ? 'This ticket already has saved code. This retry reused it.' : 'No logs available for this phase.';
         body.append(empty);
       }
-      body.hidden = selected !== phase.id; bodies.push(body);
+      body.hidden = tabOf(phase.id) !== selected; bodies.push(body);
     }
-    dock.hidden = selected !== 'feature-testing' || !dock.childElementCount;
+    dock.hidden = selected !== 'checks' || !dock.childElementCount;
     fragment.append(headers, dock);
     if (history?.more) {
       const note = document.createElement('div'); note.className = 'phase-history-note'; note.setAttribute('role', 'status'); note.hidden = selected !== 'build';
@@ -283,7 +305,7 @@
     const restoreLogs=area.classList.contains('feature-logs-open');
     area.classList.remove('feature-logs-open');
     area.replaceChildren(fragment);
-    if(restoreLogs&&selected==='feature-testing')area.querySelector('.feature-show-logs')?.click();
+    if(restoreLogs&&selected==='checks')area.querySelector('.feature-show-logs')?.click();
     const visible = bodies.find(body => !body.hidden);
     if (visible && scroll) { visible.scrollTop = scroll.bottom ? visible.scrollHeight : scroll.top; visible.scrollLeft = scroll.left; }
 

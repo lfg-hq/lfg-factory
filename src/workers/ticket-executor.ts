@@ -3963,7 +3963,7 @@ export async function startTicketMergeRetry(ticketId: string, actorId?: string, 
 }
 
 /** Start a validation-only run on an existing dedicated ticket checkout. */
-export async function startTicketValidationRetry(ticketId:string,actorId:string,phase:'validation'|'feature-testing'='validation'):Promise<void> {
+export async function startTicketValidationRetry(ticketId:string,actorId:string,phase:'validation'|'feature-testing'|'checks'='checks'):Promise<void> {
   if(executingTickets.has(ticketId) || isChatTurnActive(ticketId))throw new Error("This ticket already has an active operation.");
   executingTickets.add(ticketId);
   let launched=false;
@@ -3973,7 +3973,7 @@ export async function startTicketValidationRetry(ticketId:string,actorId:string,
     if(/^(queued|executing|stopping)$/.test(ticket.queueStatus))throw new Error(`Ticket operation is ${ticket.queueStatus}. Wait for it to finish or stop it before retrying validation.`);
     const [project]=await db.select().from(projects).where(eq(projects.id,ticket.projectId)).limit(1);
     if(!project)throw new Error("Project not found.");
-    if ((phase === "validation" && project.validationEnabled === false) || (phase === "feature-testing" && project.featureTestingEnabled === false)) throw new Error("This stage is disabled in Project Settings.");
+    if ((phase === "validation" && project.validationEnabled === false) || (phase === "feature-testing" && project.featureTestingEnabled === false) || (phase === "checks" && project.validationEnabled === false && project.featureTestingEnabled === false)) throw new Error("Checks are turned off in Project Settings.");
     const sb=await findExistingSandbox(ticketId);
     if(!sb?.magsWorkspaceId || !["ticket","ticket-chat"].includes(sb.workspaceType) || sb.magsWorkspaceId.startsWith("pv-"))throw new Error("Retry validation requires the saved dedicated build sandbox. No new sandbox or development run was started.");
     const branch=ticket.githubBranch || sb.currentBranch;
@@ -3990,7 +3990,7 @@ export async function startTicketValidationRetry(ticketId:string,actorId:string,
     const claimed=await db.update(projectTickets).set({status:ticket.status,queueStatus:"executing",updatedAt:new Date()}).where(and(eq(projectTickets.id,ticketId),eq(projectTickets.queueStatus,ticket.queueStatus))).returning({id:projectTickets.id});
     if(!claimed.length)throw new Error("Another operation claimed this ticket. Retry after it finishes.");
     await setBuildOrigin(ticketId, null, actorId);
-    await reportBuildStatus(ticketId, "started", `${phase === "feature-testing" ? "Feature testing" : "Validation"} started.`);
+    await reportBuildStatus(ticketId, "started", `${phase === "feature-testing" ? "Feature testing" : phase === "checks" ? "Checks" : "Validation"} started.`);
     broadcastToUser(project.ownerId,{type:"ticket_status",ticketId,status:ticket.status,queueStatus:"executing"});
     const workspaceId=sb.magsWorkspaceId;
     const job=runChatTurn(ticketId,async()=>{
@@ -4036,7 +4036,7 @@ export async function startTicketValidationRetry(ticketId:string,actorId:string,
         await addLog(ticketId,`✅ **Validation passed** for saved commit \`${sha.slice(0,12)}\`. Moved to **In Review**. Development was skipped. Any repairs were committed locally; this action did not push or merge.`,"ai_response",project.ownerId);
       } catch(error) {
         clearInterval(cancelPoll);
-        if(!await stoppedByUser(ticketId,project.ownerId)) await markTicketFailed(ticketId,(phase==='feature-testing'?'Feature testing failed: ':'Validation failed: ')+(failureSummary((error as Error).message).split("\nFailed command:")[0] || "No diagnostic returned"),project.ownerId,{emitEvent:false,failureKind:error instanceof ValidationFailure?error.failureKind:undefined});
+        if(!await stoppedByUser(ticketId,project.ownerId)) await markTicketFailed(ticketId,(phase==='feature-testing'?'Feature testing failed: ':phase==='checks'?'Checks failed: ':'Validation failed: ')+(failureSummary((error as Error).message).split("\nFailed command:")[0] || "No diagnostic returned"),project.ownerId,{emitEvent:false,failureKind:error instanceof ValidationFailure?error.failureKind:undefined});
       } finally {
         clearInterval(cancelPoll);
         await sleepTicketVm(workspaceId);

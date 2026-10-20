@@ -11,9 +11,9 @@ try {
    const rows=['Starting Pi build','Running the saved ticket:','Feature testing passed'].map(message=>({message}));
    window.TicketActionPhases.render(document.getElementById('actions'),rows,settings,'test',row=>{const el=document.createElement('p');el.textContent=row.message;return el;});
   },{validationEnabled,featureTestingEnabled});
-  const expected=['Build',...(validationEnabled?['Validation']:[]),...(featureTestingEnabled?['Feature testing']:[])];
+  // Validation and feature testing share one Checks tab when either is on.
+  const expected=['Build',...(validationEnabled||featureTestingEnabled?['Checks']:[])];
   assert.deepEqual(await page.locator('[role=tab] strong').allTextContents(),expected);
-  assert.equal(await page.locator('[role=tabpanel]:visible').count(),1);
   await page.locator('[role=tab]').last().click(); // Remember a choice, then disable it on the next render.
  }
  const saves=[];
@@ -21,13 +21,12 @@ try {
   if(route.request().method()==='POST') saves.push(route.request().postDataJSON());
   await route.fulfill({json:{validationEnabled:true,featureTestingEnabled:true,canChangeBuildStages:true}});
  });
- await page.route('http://settings.test/projects/demo/config',route=>route.fulfill({contentType:'text/html',body:'<input type="checkbox" id="cfg-validation-enabled" disabled><input type="checkbox" id="cfg-feature-testing-enabled" disabled><p id="cfg-build-stages-status"></p>'}));
+ await page.route('http://settings.test/projects/demo/config',route=>route.fulfill({contentType:'text/html',body:'<input type="checkbox" id="cfg-checks-enabled" disabled><p id="cfg-build-stages-status"></p>'}));
  await page.goto('http://settings.test/projects/demo/config');
  await page.addScriptTag({content:readFileSync('public/js/build-stage-settings.js','utf8')});
- await page.waitForFunction(()=>!document.getElementById('cfg-validation-enabled').disabled);
- await page.locator('#cfg-validation-enabled').uncheck();
+ await page.waitForFunction(()=>!document.getElementById('cfg-checks-enabled').disabled);
+ await page.locator('#cfg-checks-enabled').uncheck();
  await page.waitForFunction(()=>document.getElementById('cfg-build-stages-status').textContent.startsWith('Saved.'));
- assert.deepEqual(saves,[{validationEnabled:false}]);
- assert.equal(await page.locator('#cfg-feature-testing-enabled').isChecked(),true);
- console.log('PASS: four stage combinations, selected tab fallback, independent settings save');
+ assert.deepEqual(saves,[{validationEnabled:false,featureTestingEnabled:false}]);
+ console.log('PASS: one Checks tab for every stage combination; one toggle saves both checks');
 } finally {await browser.close();}

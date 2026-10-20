@@ -786,9 +786,9 @@ ticketsApi.post("/:projectId/tickets/:ticketId/retry-validation",async(c)=>{
   try {
     const {startTicketValidationRetry}=await import("../../workers/ticket-executor.ts");
     const body=await c.req.json().catch(()=>({}));
-    const phase=body.phase ?? 'validation';
-    if(!['validation','feature-testing'].includes(phase))return c.json({error:'Invalid run phase'},400);
-    if ((phase === 'validation' && access.project.validationEnabled === false) || (phase === 'feature-testing' && access.project.featureTestingEnabled === false)) return c.json({error:'This stage is disabled in Project Settings.'},409);
+    const phase=body.phase ?? 'checks';
+    if(!['validation','feature-testing','checks'].includes(phase))return c.json({error:'Invalid run phase'},400);
+    if ((phase === 'validation' && access.project.validationEnabled === false) || (phase === 'feature-testing' && access.project.featureTestingEnabled === false) || (phase === 'checks' && access.project.validationEnabled === false && access.project.featureTestingEnabled === false)) return c.json({error:'Checks are turned off in Project Settings.'},409);
     await startTicketValidationRetry(ticketId,user.id,phase);
     return c.json({ok:true},202);
   }catch(error){

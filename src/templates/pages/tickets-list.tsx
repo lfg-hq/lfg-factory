@@ -721,8 +721,7 @@ export function TicketsListPage({ user, project, stages, tickets, epics = [], ex
         <a class="ticket-code-link ticket-code-link--toolbar" title="Open code workspace in a new window" id="drawer-code-link" target="_blank" rel="noopener"><svg class="ticket-code-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 7-5 5 5 5m8-10 5 5-5 5m-3-13-2 16" /></svg><span>Code</span><svg class="ticket-code-external" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6m0-6L10 14M10 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5" /></svg></a>
         <select id="drawer-run-phase" class="drawer-run-phase" aria-label="Choose ticket action">
           <option value="build">Build &amp; run enabled checks</option>
-          <option value="validation">Validation only</option>
-          <option value="feature-testing">Feature testing only</option>
+          <option value="checks">Checks only (saved code)</option>
         </select>
         <button class="drawer-execute-btn" id="drawer-build-btn" onclick="runSelectedTicketPhase()">
           <i class="fas fa-play"></i> Run
@@ -924,8 +923,8 @@ export function TicketsListPage({ user, project, stages, tickets, epics = [], ex
 <script src="/public/js/sidebar-chats.js?v=20260908-initials"></script>
 <script src="/public/js/sharing.js"></script>
 <!-- Shared preview component — the SAME one the main chat Preview panel uses. -->
-<link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261004-log-layout" />
-<script src="/public/js/ticket-action-phases.js?v=20261020-diagnostics"></script>
+<link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261020-checks-tab" />
+<script src="/public/js/ticket-action-phases.js?v=20261020-checks-tab"></script>
 <script src="/public/js/preview-tab.js?v=20261005-start-state"></script>
 <script>
   const PROJECT_ID = document.body.dataset.projectId;
@@ -1160,7 +1159,7 @@ export function TicketsListPage({ user, project, stages, tickets, epics = [], ex
         renderDrawerDetails(ticketMap[ticketId]);
         var phaseSelect = document.getElementById('drawer-run-phase');
         for (var option of phaseSelect.options) {
-          option.hidden = option.disabled = (option.value === 'validation' && live.validationEnabled === false) || (option.value === 'feature-testing' && live.featureTestingEnabled === false);
+          option.hidden = option.disabled = option.value === 'checks' && live.validationEnabled === false && live.featureTestingEnabled === false;
         }
         if (phaseSelect.selectedOptions[0]?.disabled) phaseSelect.value = 'build';
 
@@ -1343,7 +1342,7 @@ export function TicketsListPage({ user, project, stages, tickets, epics = [], ex
     if (phase === 'build') return buildCurrentTicket();
     return retryCurrentValidation(phase);
   }
-  async function retryCurrentValidation(phase = 'validation') {
+  async function retryCurrentValidation(phase = 'checks') {
     if (!_currentTicketId) return;
     const ticketId = _currentTicketId;
     const btn = document.getElementById('drawer-validation-btn');

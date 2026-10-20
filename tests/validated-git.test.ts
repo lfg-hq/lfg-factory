@@ -47,17 +47,14 @@ test('the build is saved and pushed before checks run',()=>fixture(async(o,repo)
  const result=await publishValidatedTicket(o);expect(calls).toBe(1);expect(result.sha).not.toBe(before);
  expect(git(repo,'ls-remote --heads origin refs/heads/feature/ticket')).toContain(result.sha);
 }));
-test('validation repairs are saved and pushed before feature testing starts',()=>fixture(async(o,repo)=>{
- settings={validationEnabled:true,featureTestingEnabled:true};o.validation.ticketId='t';
- writeFileSync(join(repo,'pending.txt'),'pending');let validatedSha='';
- validation=async()=>{
-  if(phases.at(-1)==='validation'){writeFileSync(join(repo,'migration-fix.txt'),'repair');return;}
-  validatedSha=git(repo,'rev-parse HEAD');
-  expect(git(repo,'ls-remote --heads origin refs/heads/feature/ticket')).toContain(validatedSha);
-  expect(git(repo,'show --name-only --format= HEAD')).toContain('migration-fix.txt');
- };
+test('checks run once on the saved build and their repairs are pushed after',()=>fixture(async(o,repo)=>{
+ settings={validationEnabled:true,featureTestingEnabled:true};
+ writeFileSync(join(repo,'pending.txt'),'pending');let saved='';
+ validation=async()=>{saved=git(repo,'rev-parse HEAD');writeFileSync(join(repo,'migration-fix.txt'),'repair');};
  const result=await publishValidatedTicket(o);
- expect(phases).toEqual(['validation','feature-testing']);expect(result.sha).toBe(validatedSha);
+ expect(phases).toEqual([undefined]);expect(result.sha).not.toBe(saved);
+ expect(git(repo,'show --name-only --format= '+result.sha)).toContain('migration-fix.txt');
+ expect(git(repo,'ls-remote --heads origin refs/heads/feature/ticket')).toContain(result.sha);
 }));
 test('integration validates the merged working tree before creating the merge commit',()=>fixture(async(o,repo)=>{
  git(repo,'push -q origin feature/ticket');const baseline=git(repo,'rev-parse origin/main');

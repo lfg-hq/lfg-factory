@@ -1328,12 +1328,11 @@ export function ProjectDetailPage({
         ${activeTab === "config" && modelConfig ? html`
         <div style="max-width:820px;">
           <div class="agent-card">
-            <div class="agent-card-head"><div><h3>Build checks</h3><p>Choose which checks run after a build. Disabled stages are skipped and their ticket tabs are hidden. Changes apply to the next check run.</p></div></div>
-            <label style="display:flex;gap:10px;align-items:center;margin-bottom:12px"><input id="cfg-validation-enabled" type="checkbox" disabled /> Validation — check app startup and ticket requirements</label>
-            <label style="display:flex;gap:10px;align-items:center"><input id="cfg-feature-testing-enabled" type="checkbox" disabled /> Feature testing — exercise the feature through browser or API tests</label>
+            <div class="agent-card-head"><div><h3>Build checks</h3><p>Every build is committed and pushed first. Checks then start the app (dependencies, database and migrations) and walk through the ticket's feature in a browser, repairing what fails. Changes apply to the next build.</p></div></div>
+            <label style="display:flex;gap:10px;align-items:center"><input id="cfg-checks-enabled" type="checkbox" disabled /> Run checks after each build</label>
             <p id="cfg-build-stages-status" role="status" style="font-size:12px;color:var(--text-secondary)">Loading settings…</p>
           </div>
-          <script src="/public/js/build-stage-settings.js?v=20261020-off-default"></script>
+          <script src="/public/js/build-stage-settings.js?v=20261020-single-checks"></script>
           <div class="agent-card">
             <div class="agent-card-head">
               <div>
