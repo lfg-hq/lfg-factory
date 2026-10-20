@@ -245,7 +245,7 @@
         const active = tickets.some(t => !TERMINAL.has(t.stage));
         const head = el('header', null, 'ca-head');
         const heading = el('div', null, 'ca-heading');
-        heading.append(el('strong', active ? 'Building ' + tickets.length + (tickets.length === 1 ? ' ticket' : ' tickets') : failed ? 'Build paused' : ready === tickets.length ? 'Build complete' : 'Build'),
+        heading.append(el('strong', active && tickets.every(t => t.stage === 'changing' || TERMINAL.has(t.stage)) ? 'Updating ' + (tickets.length === 1 ? (tickets[0].key || 'ticket') : tickets.length + ' tickets') : active ? 'Building ' + tickets.length + (tickets.length === 1 ? ' ticket' : ' tickets') : failed ? 'Build paused' : ready === tickets.length ? 'Build complete' : 'Build'),
             el('small', ready + ' of ' + tickets.length + ' ready', 'ca-muted'));
         head.append(heading);
         const bar = el('div', null, 'ca-build-bar'); bar.setAttribute('role', 'progressbar');

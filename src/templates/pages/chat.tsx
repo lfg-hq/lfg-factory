@@ -37,8 +37,8 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
   <link rel="stylesheet" href="/public/css/artifacts.css?v=20261004-dark-folders" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
-  <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261020-build-card" />
-  <link rel="stylesheet" href="/public/css/chat.css?v=20261020-lazy-history" />
+  <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261020-one-card" />
+  <link rel="stylesheet" href="/public/css/chat.css?v=20261020-one-card" />
   <link rel="stylesheet" href="/public/css/artifacts-fix.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
@@ -250,7 +250,6 @@ export function ChatPage({
             <p>Start a conversation with the AI assistant below.</p>
           </div>` : html`<div class="loading-messages" style="text-align:center;padding:2rem;opacity:0.5;">Loading conversation...</div>`}
         </div>
-        <section id="chat-ticket-activity" aria-label="Project ticket activity" hidden></section>
       </div>
 
       <!-- Input Area -->
@@ -474,15 +473,14 @@ export function ChatPage({
 <script src="/public/js/ticket-action-phases.js?v=20261020-checks-tab"></script>
 <script src="/public/js/preview-tab.js?v=20261005-start-state"></script>
     <script src="/public/js/ticket-agent.js?v=20261005-followup-tasks"></script>
-  <script src="/public/js/ticket-activity.js?v=20261004-ticket-activity"></script>
   <script src="/public/js/env-tab.js?v=20261004-env-apply"></script>
   <script src="/public/js/tab-overflow.js"></script>
   <script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
   <script src="/public/js/custom-dropdown.js"></script>
   <script src="/public/js/dictation.js?v=20261020-live-text"></script>
-  <script src="/public/js/chat-artifacts.js?v=20261020-build-card"></script>
+  <script src="/public/js/chat-artifacts.js?v=20261020-one-card"></script>
   <script src="/public/js/chatgpt-connection.js?v=20261018"></script>
-  <script src="/public/js/chat.js?v=20261020-lazy-history"></script>
+  <script src="/public/js/chat.js?v=20261020-one-card"></script>
   <script src="/public/js/voice-mode.js?v=20261016-voice-hidden" data-disabled="true"></script>
   <script src="/public/js/mobile-menu.js"></script>
 

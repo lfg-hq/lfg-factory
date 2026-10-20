@@ -380,7 +380,7 @@ export const sendTicketMessage = tool({
       const {bus}=await import('../../events/bus.ts');
       bus.emit({type:'ticket.chat_message',payload:{ticketId,message,sender:'orchestrator',actorId:userId,operationId:operation.id}});
     }
-    return {success:true,operationId:operation.id,status:operation.status,detail:operation.detail};
+    return {success:true,ticketId,operationId:operation.id,status:operation.status,detail:operation.detail};
   },
 });
 

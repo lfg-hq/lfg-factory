@@ -20,5 +20,10 @@ test('update skips tool chatter and keeps one readable sentence', () => {
     '[Validation] The first browser sign-in was rejected because `.env` names localhost as the trusted origin. I will fix it.'))).toBe(
     'The first browser sign-in was rejected because .env names localhost as the trusted origin.');
   expect(latestUpdate(logs('Running npm audit --omit=dev', 'Successfully replaced 4 block(s) in src/a.ts.'))).toBeNull();
-  expect(latestUpdate(logs('x'.repeat(400)))!.length).toBeLessThanOrEqual(158);
+  expect(latestUpdate(logs('this is a long readable sentence about the work '.repeat(10)))!.length).toBeLessThanOrEqual(158);
+  // Command output never becomes the headline, even when it is the newest line.
+  expect(latestUpdate(logs('/data/programmable.txt:338:API Status /data/details.txt:79:StatusCallback /data/details.txt:277:curl_close',
+    'Working with the Stream and Voicebot Applet | Exotel Developer Docs'))).toBeNull();
+  expect(latestUpdate([{text:'Reading /data/applet.txt',type:'command'},{text:'Setting up the database schema and the call worker for the screening flow.',type:'agent_progress'}]))
+    .toBe('Setting up the database schema and the call worker for the screening flow.');
 });

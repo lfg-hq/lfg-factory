@@ -69,25 +69,6 @@ try {
  }
  console.log('PASS: document group hover and count contrast meet 4.5:1 in both themes; keyboard focus visible');
 
- await page.setContent('<body data-project-id="test"><section id="chat-ticket-activity" hidden></section></body>');
- await page.evaluate(()=>{
-   window.fixtureTickets=[{id:'five',ticketKey:'INV-5',name:'Repair processing',status:'in_review',queueStatus:'done',agentBusy:true}];
-   window.fetch=async()=>({ok:true,json:async()=>({tickets:window.fixtureTickets})});
-   window.TicketAgentChat={open:(...args)=>{window.openedTicket=args[0];}};
- });
- await page.addStyleTag({content:readFileSync('public/css/chat.css','utf8')});
- await page.addScriptTag({content:readFileSync('public/js/ticket-activity.js','utf8')});
- await page.locator('.ticket-activity-spinner').waitFor();
- assert.match(await page.locator('.chat-ticket-activity-state').textContent(),/Agent working/);
- await page.getByRole('button',{name:'Open ticket'}).click();
- assert.equal(await page.evaluate(()=>window.openedTicket),'five');
- await page.evaluate(()=>{
-   window.fixtureTickets[0].agentBusy=false;
-   window.dispatchEvent(new CustomEvent('ticket-activity',{detail:{type:'ticket_chat_state',ticketId:'five',busy:false}}));
- });
- assert.equal(await page.locator('.ticket-activity-spinner').count(),0);
- assert.match(await page.locator('.chat-ticket-activity-state').textContent(),/Work finished/);
- console.log('PASS: an In Review ticket repair shows live activity, opens its ticket, and stops spinning on completion');
  const ticketSource=readFileSync('public/js/ticket-agent.js','utf8');
  const buttonCode=ticketSource.slice(ticketSource.indexOf('  let chatBusy = false;'),ticketSource.indexOf('  // Stop whatever the agent'));
  await page.setContent('<button id="ta-stop"></button><button id="ta-send"></button><input id="ta-input"><button id="ta-build"></button>');

@@ -71,7 +71,7 @@ try {
         document.querySelectorAll('.tab-button').forEach(el => el.classList.toggle('active',el.dataset.tab === tab));
       }
     },{theme,tab});
-    for (const script of ['artifacts','ticket-action-phases','ticket-agent','ticket-activity']) {
+    for (const script of ['artifacts','ticket-action-phases','ticket-agent']) {
       await page.addScriptTag({path:`public/js/${script}.js`});
     }
     await page.evaluate(() => document.dispatchEvent(new Event('DOMContentLoaded')));
@@ -94,7 +94,8 @@ try {
       if (tab) assert.equal(await page.locator(`#${tab}`).evaluate(el => el.classList.contains('active')),true);
       assert.match(await page.locator('#ta-title').textContent(),/INV-3/);
     };
-    await page.getByRole('button',{name:'Open ticket',exact:true}).click();
+    // Build-card rows open tickets this way.
+    await page.evaluate(() => window.TicketAgentChat.open('ticket-3','INV-3','Repair processing',{status:'in_review'}));
     await checkPanel();
     await page.locator('[data-ta-tab="tasks"]').click();
     await page.getByText('Original implementation',{exact:true}).waitFor();
@@ -112,7 +113,8 @@ try {
     await page.getByRole('button',{name:'Close ticket and return to chat'}).click();
     assert.equal(await page.locator('#ticket-agent-panel').isVisible(),false);
     if (tab) assert.equal(await page.locator('#artifacts-panel').evaluate(el => el.style.width),'650px','restore previous sidebar width');
-    await page.getByRole('button',{name:'Open ticket',exact:true}).click();
+    // Build-card rows open tickets this way.
+    await page.evaluate(() => window.TicketAgentChat.open('ticket-3','INV-3','Repair processing',{status:'in_review'}));
     await checkPanel();
     await page.setViewportSize({width:1440,height:900});
   }
@@ -122,6 +124,6 @@ try {
   assert.equal(await page.locator('#artifacts-panel').evaluate(el=>el.classList.contains('expanded')),true,'same-chat completion keeps relevant panel open');
   await page.evaluate(()=>{window.currentConversationId=null;window.dispatchEvent(new Event('chat-conversation-changed'));});
   assert.equal(await page.locator('#artifacts-panel').evaluate(el=>el.classList.contains('expanded')),false,'new chat closes panel');
-  console.log('PASS: Open ticket stays visible with Docs/Preview open or the sidebar closed, after resizing and reopening, in both themes');
+  console.log('PASS: An opened ticket stays visible with Docs/Preview open or the sidebar closed, after resizing and reopening, in both themes');
   console.log('PASS: Tasks tab refreshes live when follow-up tasks arrive, preserving completed history');
 } finally { await browser.close(); }

@@ -13,7 +13,7 @@ export function savedChatArtifact(tool: string, output: Record<string, unknown> 
     const ticketIds = output.ticketIds.filter((id): id is string => typeof id === 'string' && !!id);
     return ticketIds.length ? {kind:'build_run', id:output.runId, name:'Build', ticketIds} : null;
   }
-  if (tool === 'queueTicketExecution' && output.success === true && typeof output.ticketId === 'string') {
+  if (['queueTicketExecution','sendTicketMessage'].includes(tool) && output.success === true && typeof output.ticketId === 'string') {
     return {kind:'build_run', id:'ticket-'+output.ticketId+'-'+callId, name:'Build', ticketIds:[output.ticketId]};
   }
   if (tool === 'createTickets' && Array.isArray(output.tickets)) {
