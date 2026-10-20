@@ -39,7 +39,7 @@ export type RuntimeDependencies={
  progress:(message:string)=>Promise<void>;
 };
 
-/** One persistent checkout, no commit until actual checks pass, no baseline reconstruction. */
+/** One persistent checkout; the build is already committed, and repairs commit once checks pass. */
 export async function runTicketRuntime(o:PublicationOptions, deps?:RuntimeDependencies, mode:{kind:"ticket"|"integration"|"promotion";baseline:string;allowDetached?:boolean;phase?:'validation'|'feature-testing'}={kind:"ticket",baseline:""}):Promise<string> {
  const settings = deps ? deps.settings ?? {} : await loadBuildStageSettings(o.validation.projectId);
  const validationEnabled = settings.validationEnabled !== false;
@@ -118,7 +118,7 @@ export async function runTicketRuntime(o:PublicationOptions, deps?:RuntimeDepend
   const currentPolicy=runtimePolicySchema.parse(JSON.parse(await sh('if test -f .lfg-checks.json; then cat .lfg-checks.json; else echo "{}"; fi')));
   required=featureOnly?[]:[...new Set([...required,...currentPolicy.requiredCategories])];
   scope=validationScope((await sh(`git diff --name-only ${diffBase}`)).split('\n').filter(Boolean),currentPolicy);
-  await d.progress(featureOnly ? '**Feature testing:** '+(attempt ? 'Repairing test setup: '+failure.slice(0,1000) : 'Preparing tests for the existing app.') : attempt ? `**Repairing runtime checks:** ${failure.slice(0,1000)}\n\nThe same agent session will repair this and rerun the affected checks.` : '**Running the saved ticket:** checking its database, restoring dependencies and starting the app in the existing sandbox. Changes will be committed together after it works.');
+  await d.progress(featureOnly ? '**Feature testing:** '+(attempt ? 'Repairing test setup: '+failure.slice(0,1000) : 'Preparing tests for the existing app.') : attempt ? `**Repairing runtime checks:** ${failure.slice(0,1000)}\n\nThe same agent session will repair this and rerun the affected checks.` : '**Running the saved ticket:** checking its database, restoring dependencies and starting the app in the existing sandbox. The build is already saved; any repairs are committed once checks pass.');
   const resources=await d.recover?.() ?? "Resource inventory unavailable; inspect it before starting heavy commands.";
   await sh(`rm -f ${q(report)}`);
   let agentFailure="";
@@ -222,6 +222,6 @@ After reclaiming space, create ${root} and write ${report} as JSON: {"runId":"${
    return sha;
   } catch(error) {if(saved || error instanceof PiSessionInfrastructureError || ['RecordingStorageError','RuntimeEnvironmentBlocked'].includes((error as Error).name))throw error;cancelled();failure=redact((error as Error).message); if(!failure.includes('Repair agent failed:'))lastDiagnosis=failure;}
  }
- throw new Error(`Runtime validation paused after ${budgetMs/60_000} minutes; uncommitted work is retained in the ticket sandbox. Resume validation from this work. Last blocker: ${failure || lastDiagnosis || 'Validation did not finish before the deadline'}`);
+ throw new Error(`Runtime validation paused after ${budgetMs/60_000} minutes; the build is saved on the ticket branch and any unfinished repairs remain in the sandbox. Resume validation from this work. Last blocker: ${failure || lastDiagnosis || 'Validation did not finish before the deadline'}`);
  } finally { await d.progress(`Validation elapsed: ${Math.round((now()-runtimeStarted)/1000)} seconds.`); try{await browser?.close();}finally{await d.close?.();} }
 }

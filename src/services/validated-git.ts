@@ -42,6 +42,12 @@ export async function validateWithRepair(o:PublicationOptions,dir:string,branch:
   const {runTicketRuntime}=await import('./ticket-runtime.ts');
   return runTicketRuntime({...o,projectDir:dir,featureBranch:branch},undefined,{kind,baseline,allowDetached:kind!=="ticket"});
 }
+/** Point the ticket at its latest saved commit so a later failure still shows where the work is. */
+async function recordSavedCommit(o:PublicationOptions,sha:string) {
+  if(!o.validation.ticketId)return;
+  const [{db},{projectTickets},{eq}]=await Promise.all([import('../config/db.ts'),import('../db/schema/tickets.ts'),import('drizzle-orm')]);
+  await db.update(projectTickets).set({githubBranch:o.featureBranch,githubCommitSha:sha,updatedAt:new Date()}).where(eq(projectTickets.id,o.validation.ticketId)).catch(()=>{});
+}
 export async function publishValidatedTicket(o:PublicationOptions) {
   checkedRef(o.featureBranch);
   return serialized(`${o.repoUrl}:${o.featureBranch}`,async()=>{
@@ -51,8 +57,35 @@ export async function publishValidatedTicket(o:PublicationOptions) {
     const baselineBranch=checkedRef(o.validation.baselineBranch??'main');
     await sh(`git fetch --no-tags origin ${q(baselineBranch)}`);
     const baseline=await sh('git rev-parse FETCH_HEAD');
-    const sha=await validateWithRepair(o,o.projectDir,o.featureBranch,baseline,'ticket');
-    await sh(`git push origin ${q(sha+':refs/heads/'+o.featureBranch)} ${q('--force-with-lease=refs/heads/'+o.featureBranch+':'+old)}\ntest "$(git ls-remote --heads origin ${q('refs/heads/'+o.featureBranch)} | cut -f1)" = ${q(sha)}`);
+    let remote=old;
+    const push=async(sha:string)=>{
+      if(sha===remote)return;
+      await sh(`git push origin ${q(sha+':refs/heads/'+o.featureBranch)} ${q('--force-with-lease=refs/heads/'+o.featureBranch+':'+remote)}\ntest "$(git ls-remote --heads origin ${q('refs/heads/'+o.featureBranch)} | cut -f1)" = ${q(sha)}`);
+      remote=sha;
+    };
+    // The build is saved before any check runs: a crashed sandbox or a failed check
+    // must never be able to lose finished work. Checks and their repairs build on it.
+    const branch=await sh('git branch --show-current');
+    if(branch!==o.featureBranch)throw new ValidationFailure('Ticket checkout is on a different branch; refusing to save it.');
+    await sh(`git add -A\nif ! git diff --cached --quiet; then git -c user.name='LFG Agent' -c user.email='agent@lfg.dev' commit -q -m 'feat: save ticket implementation (before checks)'; fi`);
+    const saved=await sh('git rev-parse HEAD');
+    await push(saved);
+    await recordSavedCommit(o,saved);
+    await o.validation.onCheckpoint?.(`**Build saved:** commit \`${saved.slice(0,7)}\` is pushed to \`${o.featureBranch}\` before checks run.`);
+    const {loadBuildStageSettings}=await import('./build-stage-settings.ts');
+    const settings=await loadBuildStageSettings(o.validation.projectId);
+    let sha:string;
+    if(settings.validationEnabled!==false && settings.featureTestingEnabled!==false && o.validation.ticketId){
+      // Validation first; save its repairs, then test the saved app in the browser.
+      const {runTicketRuntime}=await import('./ticket-runtime.ts');
+      const validated=await runTicketRuntime(o,undefined,{kind:'ticket',baseline,phase:'validation'});
+      await push(validated);
+      await recordSavedCommit(o,validated);
+      sha=await runTicketRuntime(o,undefined,{kind:'ticket',baseline,phase:'feature-testing'});
+    } else {
+      sha=await validateWithRepair(o,o.projectDir,o.featureBranch,baseline,'ticket');
+    }
+    await push(sha);
     return {sha,branch:o.featureBranch};
   });
 }
