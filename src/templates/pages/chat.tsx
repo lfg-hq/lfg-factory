@@ -37,7 +37,7 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
   <link rel="stylesheet" href="/public/css/artifacts.css?v=20261004-dark-folders" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
-  <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261019-sleek" />
+  <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261020-build-card" />
   <link rel="stylesheet" href="/public/css/chat.css?v=20261020-lazy-history" />
   <link rel="stylesheet" href="/public/css/artifacts-fix.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
@@ -480,7 +480,7 @@ export function ChatPage({
   <script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
   <script src="/public/js/custom-dropdown.js"></script>
   <script src="/public/js/dictation.js?v=20261020-live-text"></script>
-  <script src="/public/js/chat-artifacts.js?v=20261019-sleek"></script>
+  <script src="/public/js/chat-artifacts.js?v=20261020-build-card"></script>
   <script src="/public/js/chatgpt-connection.js?v=20261018"></script>
   <script src="/public/js/chat.js?v=20261020-lazy-history"></script>
   <script src="/public/js/voice-mode.js?v=20261016-voice-hidden" data-disabled="true"></script>

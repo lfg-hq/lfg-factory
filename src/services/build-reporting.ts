@@ -9,10 +9,11 @@ import { eq } from 'drizzle-orm';
 import { notify } from './notify.ts';
 import { broadcastToUser } from '../ws/connection-manager.ts';
 
-export interface BuildOrigin { conversationId: string | null; userId: string | null }
+export interface BuildOrigin { conversationId: string | null; userId: string | null; inRun?: boolean }
 const originId = (ticketId: string) => `build-origin:${ticketId}`;
-export async function setBuildOrigin(ticketId: string, conversationId: string | null, userId: string | null = null) {
-  const output = JSON.stringify({ conversationId, userId });
+/** `inRun`: the ticket is part of a build run, whose card and announcements report it. */
+export async function setBuildOrigin(ticketId: string, conversationId: string | null, userId: string | null = null, inRun = false) {
+  const output = JSON.stringify({ conversationId, userId, ...(inRun ? { inRun: true } : {}) });
   await db.insert(ticketLogs).values({ id: originId(ticketId), ticketId, logType: 'execution_origin',
     command: conversationId ? 'Build requested from chat' : 'Build requested outside chat', output,
   }).onConflictDoUpdate({ target: ticketLogs.id, set: { output, command: conversationId ? "Build requested from chat" : "Build requested outside chat", createdAt: new Date() } });
@@ -22,6 +23,7 @@ export async function getBuildOrigin(ticketId: string): Promise<BuildOrigin> {
   try { const value = JSON.parse(row?.output || '{}'); return {
     conversationId: typeof value.conversationId === 'string' && value.conversationId ? value.conversationId : null,
     userId: typeof value.userId === 'string' ? value.userId : null,
+    ...(value.inRun ? { inRun: true } : {}),
   }; } catch { return { conversationId: null, userId: null }; }
 }
 
@@ -36,7 +38,8 @@ async function deliverBuildStatus(ticketId: string, status: string, detail: stri
   await notify({ userId, projectId: project.projectId, type: `build_${status}`, targetType: 'ticket', targetId: ticketId,
     message: content, link: `/projects/${project.projectId}/tickets?ticket=${encodeURIComponent(ticketId)}`,
   }).catch(error => console.error('[build-reporting] Notification failed:', error));
-  if (!origin.conversationId) return;
+  // The chat's live build card shows queued/started; run tickets are reported by the run.
+  if (!origin.conversationId || origin.inRun || status === 'queued' || status === 'started') return;
   await db.insert(messages).values({ conversationId: origin.conversationId, role: 'assistant', userRole:'operation_status', content });
   broadcastToUser(userId, { type: 'message', sender: 'assistant', message: content,
     conversation_id: origin.conversationId, project_id: project.projectId, build_status: true });

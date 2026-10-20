@@ -279,6 +279,16 @@ ticketsApi.delete("/:projectId/tickets/:ticketId", async (c) => {
 });
 
 // ── GET /api/projects/:projectId/stages ──────────────────────────────
+// ── GET /:projectId/build-progress?tickets=a,b — live rows for the chat build card ──
+ticketsApi.get("/:projectId/build-progress", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId")!, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  const ids = (c.req.query("tickets") ?? "").split(",").map((id) => id.trim()).filter(Boolean);
+  const { buildProgress } = await import("../../services/build-progress.ts");
+  return c.json(await buildProgress(access.project.id, ids));
+});
+
 ticketsApi.get("/:projectId/stages", async (c) => {
   const user = c.get("user");
   const { projectId } = c.req.param();

@@ -28,11 +28,12 @@ test('legacy ticket creation conversation is never treated as build origin', asy
   await reportBuildStatus('ticket','failed','Build failed.');
   expect(notices).toHaveLength(1); expect(chats).toHaveLength(0); expect(sockets).toHaveLength(0);
 });
-test('chat build persists replies and sends every status to inbox and exact initiating thread', async () => {
+test('chat build sends every status to the inbox and outcomes to the initiating thread', async () => {
   await setBuildOrigin('ticket','request-chat','requester');
   expect(await getBuildOrigin('ticket')).toEqual({conversationId:'request-chat',userId:'requester'});
   for (const status of ['queued','started','attention','failed','stopped','complete']) await reportBuildStatus('ticket',status,status);
-  expect(chats).toHaveLength(6);
+  // Queued/started appear on the live build card, not as chat messages.
+  expect(chats).toHaveLength(4);
   expect(chats.every(p => p.conversationId === 'request-chat')).toBe(true);
   expect(sockets.every(p => p.conversation_id === 'request-chat' && p.userId === 'requester' && p.build_status)).toBe(true);
   expect(notices.slice(1).map(p => p.type)).toEqual(['build_queued','build_started','build_attention','build_failed','build_stopped','build_complete']);
@@ -40,8 +41,15 @@ test('chat build persists replies and sends every status to inbox and exact init
 test('ticket-view retry clears the prior chat destination but keeps notifications', async () => {
   await setBuildOrigin('ticket',null,'requester');
   await reportBuildStatus('ticket','complete','Passed');
-  expect(chats).toHaveLength(6); expect(sockets).toHaveLength(6);
+  expect(chats).toHaveLength(4); expect(sockets).toHaveLength(4);
   expect(notices.at(-1)).toMatchObject({type:'build_complete',userId:'requester',targetId:'ticket'});
+});
+test('tickets in a build run leave chat reporting to the run', async () => {
+  await setBuildOrigin('ticket','run-chat','requester',true);
+  expect(await getBuildOrigin('ticket')).toMatchObject({conversationId:'run-chat',inRun:true});
+  const before=chats.length;
+  await reportBuildStatus('ticket','failed','Failed');
+  expect(chats.length).toBe(before); expect(notices.at(-1).type).toBe('build_failed');
 });
 test('unavailable chat cannot fail the build and the notification is already saved', async () => {
   await setBuildOrigin('ticket','request-chat','requester'); rejectChat = true;

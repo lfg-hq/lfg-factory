@@ -418,6 +418,7 @@ export const startBuildRun = tool({
     return {
       success: true,
       runId: res.runId,
+      ticketIds,
       queued: res.queued,
       building: res.firstTicketId,
       afterBuild: afterBuild ?? "preview",
@@ -466,7 +467,7 @@ export const queueTicketExecution = tool({
     await db.insert(ticketLogs).values({ ticketId, logType: "user_message", command: notes ? `Queued: ${notes}` : "Queued for execution" });
     await reportBuildStatus(ticketId, "queued", "Build queued.");
     emitTicketQueued({ ticketId, projectId: row?.projectId ?? "", notes });
-    return { success: true };
+    return { success: true, ticketId };
   },
 });
 

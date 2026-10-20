@@ -222,12 +222,59 @@
         }
         if (selected) detail(selected); else list();
     }
+    // ── Live build card: every ticket in the build, its stage and latest update ──
+    const TERMINAL = new Set(['ready','failed','stopped','waiting']);
+    function pollBuild(m) {
+        if (m.polling) return;
+        m.polling = true;
+        const tick = async () => {
+            m.poll = null;
+            if (!m.card.isConnected) { m.polling = false; return; }
+            try {
+                m.progress = await json('/api/projects/' + encoded(m.projectId) + '/build-progress?tickets=' + m.artifact.ticketIds.map(encoded).join(','));
+                paint(m);
+                if (m.progress.active) m.poll = setTimeout(tick, document.hidden ? 15000 : 4000); else m.polling = false;
+            } catch (_) { m.poll = setTimeout(tick, 15000); }
+        };
+        tick();
+    }
+    function paintBuild(m) {
+        const tickets = m.progress?.tickets || (m.artifact.ticketIds || []).map(id => ({id, key:'', name:'Loading…', stage:'queued', label:'Queued'}));
+        const ready = tickets.filter(t => t.stage === 'ready').length;
+        const failed = tickets.find(t => t.stage === 'failed');
+        const active = tickets.some(t => !TERMINAL.has(t.stage));
+        const head = el('header', null, 'ca-head');
+        const heading = el('div', null, 'ca-heading');
+        heading.append(el('strong', active ? 'Building ' + tickets.length + (tickets.length === 1 ? ' ticket' : ' tickets') : failed ? 'Build paused' : ready === tickets.length ? 'Build complete' : 'Build'),
+            el('small', ready + ' of ' + tickets.length + ' ready', 'ca-muted'));
+        head.append(heading);
+        const bar = el('div', null, 'ca-build-bar'); bar.setAttribute('role', 'progressbar');
+        bar.setAttribute('aria-valuemin', '0'); bar.setAttribute('aria-valuemax', String(tickets.length)); bar.setAttribute('aria-valuenow', String(ready));
+        const fill = el('span'); fill.style.width = (tickets.length ? Math.round(100 * ready / tickets.length) : 0) + '%'; bar.append(fill);
+        const list = el('div', null, 'ca-build-list');
+        for (const t of tickets) {
+            const row = button('', () => window.TicketAgentChat?.open(String(t.id), t.key || '', t.name || '', {status: t.stage}));
+            row.className = 'ca-build-row'; row.dataset.stage = t.stage;
+            row.setAttribute('aria-label', (t.key || 'Ticket') + ' ' + t.name + ': ' + t.label + (t.update ? '. ' + t.update : ''));
+            const dot = el('span', null, 'ca-build-dot'); dot.setAttribute('aria-hidden', 'true');
+            const text = el('span', null, 'ca-build-text');
+            const title = el('span', null, 'ca-build-title'); title.append(el('small', t.key || '', 'ca-ticket-key'), el('span', t.name));
+            text.append(title);
+            if (t.update) text.append(el('span', t.update, 'ca-build-update'));
+            const stage = el('span', t.label + (t.sha && t.stage !== 'waiting' ? ' · ' + t.sha : ''), 'ca-build-stage');
+            row.append(dot, text, stage); list.append(row);
+        }
+        const foot = el('footer', null, 'ca-foot');
+        foot.append(el('small', active ? 'Updates live while the build runs' : failed ? (failed.key || 'A ticket') + ' needs attention; the rest wait for it' : 'Each ticket\'s code is committed to its branch', 'ca-muted'));
+        m.card.replaceChildren(head, bar, list, foot);
+    }
     function paint(m) {
         const card = m.card; const a = m.artifact;
         if (m.reader?.isConnected) m.reader.replaceChildren(el('p', m.saved ? 'Saved to Docs' : 'Draft · not saved', 'ca-muted'), markdown(m.content || 'Writing document…'));
         const head = el('header', null, 'ca-head');
         const title = el('div', null, 'ca-heading'); title.append(el('strong', a.name));
         head.append(title);
+        if (a.kind === 'build_run') { paintBuild(m); return; }
         if (a.kind === 'tickets') {
             const tickets = a.tickets || [];
             title.append(el('small', tickets.length + ' tickets', 'ca-muted'));
@@ -254,6 +301,7 @@
         const m = card ? models.get(card) : create(container, artifact, projectId, opts.callId);
         m.artifact = artifact; m.saved = true; m.interrupted = false; m.card.dataset.artifactId = artifact.id;
         paint(m);
+        if (artifact.kind === 'build_run') pollBuild(m);
         if (artifact.kind === 'document') {
             json('/projects/' + encoded(projectId) + '/api/files/' + encoded(artifact.id) + '/content').then(result => { m.content = String(result.content || ''); paint(m); }).catch(() => {});
         }

@@ -8,6 +8,14 @@ export function savedChatArtifact(tool: string, output: Record<string, unknown> 
     return {kind:'document', id:output.id, name:typeof output.name === 'string' ? output.name : 'Document', fileType:typeof output.fileType === 'string' ? output.fileType : 'document',
       ...(typeof output.previousVersion === 'number' && output.previousVersion > 0 ? {previousVersion:output.previousVersion} : {})};
   }
+  // A build shows one live card following every ticket it builds.
+  if (tool === 'startBuildRun' && typeof output.runId === 'string' && output.runId && Array.isArray(output.ticketIds)) {
+    const ticketIds = output.ticketIds.filter((id): id is string => typeof id === 'string' && !!id);
+    return ticketIds.length ? {kind:'build_run', id:output.runId, name:'Build', ticketIds} : null;
+  }
+  if (tool === 'queueTicketExecution' && output.success === true && typeof output.ticketId === 'string') {
+    return {kind:'build_run', id:'ticket-'+output.ticketId+'-'+callId, name:'Build', ticketIds:[output.ticketId]};
+  }
   if (tool === 'createTickets' && Array.isArray(output.tickets)) {
     const tickets = output.tickets.filter(t => t && typeof t.id === 'string' && t.id).map(t => ({id:t.id, name:typeof t.name === 'string' ? t.name : 'Ticket', ticketKey:typeof t.ticketKey === 'string' ? t.ticketKey : null}));
     if (!tickets.length) return null;
