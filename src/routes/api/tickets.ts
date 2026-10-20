@@ -453,7 +453,7 @@ ticketsApi.get("/:projectId/tickets/:ticketId/logs", async (c) => {
   }
   const logs = await db.select().from(ticketLogs)
     .where(and(eq(ticketLogs.ticketId, ticketId), ne(ticketLogs.logType, "execution_origin"), boundary))
-    .orderBy(desc(ticketLogs.createdAt), desc(ticketLogs.id)).limit(20);
+    .orderBy(desc(ticketLogs.createdAt), desc(ticketLogs.id)).limit(Math.min(500, Math.max(1, Number(c.req.query("limit")) || 20)));
 
   return c.json(logs.reverse().map((l) => {
     // A question row carries its clickable options (and whether it blocks) as JSON in

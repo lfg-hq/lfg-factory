@@ -11,7 +11,7 @@
       const text = String(row.message || '').replace(/\*\*/g, '').trim();
       if (/^(Running a sandbox command|The same repair session is still active\.)$/.test(text)) continue;
       const retry = /^Retrying validation of saved commit/i.test(text);
-      const validation = tag?.[1]==='Validation' || /^Validation check:|^Validation connection interrupted:|^Checking prerequisite:/i.test(text) || retry || /^(Running the saved ticket:|Repairing runtime checks:|Checking:|Preparing validation:|Now verifying this commit|Fresh \/ candidate:|Runtime checks passed|✅\s*Validation passed)/i.test(text);
+      const validation = tag?.[1]==='Validation' || /^Validation check:|^Validation connection interrupted:|^Checking prerequisite:|^(App|Preview) readiness|^Preview ready|^Checks skip/i.test(text) || retry || /^(Running the saved ticket:|Repairing runtime checks:|Checking:|Preparing validation:|Now verifying this commit|Fresh \/ candidate:|Runtime checks passed|✅\s*Validation passed)/i.test(text);
       const build = /^(Starting Pi build|Isolated build:|Starting (?:ticket )?build|Building ticket)/i.test(text);
       if (build) { buildStarted = true; active = 0; phases[0].status = 'working'; phases[1].status = 'pending'; phases[2].status = 'pending'; }
       if (validation) {
@@ -55,14 +55,16 @@
     return false;
   }
   const histories = new Map();
+  const PAGE = 250;
   async function load(url, older = false) {
     const history = histories.get(url) || { rows: [], more: false };
     const cursor = older && history.rows[0]?.id;
-    const response = await fetch(url + (cursor ? '?before=' + encodeURIComponent(cursor) : ''), { credentials: 'same-origin' });
+    // Large pages keep a whole build and its checks in one window, so phases group correctly.
+    const response = await fetch(url + '?limit=' + PAGE + (cursor ? '&before=' + encodeURIComponent(cursor) : ''), { credentials: 'same-origin' });
     if (!response.ok) throw new Error('Could not load action history');
     const rows = await response.json();
     if (!Array.isArray(rows)) throw new Error('Invalid action history');
-    if (older || !histories.has(url)) history.more = rows.length === 20;
+    if (older || !histories.has(url)) history.more = rows.length === PAGE;
     const merged = new Map(history.rows.map(row => [row.id, row]));
     for (const row of rows) merged.set(row.id, row);
     history.rows = Array.from(merged.values()).sort((a,b) => String(a.createdAt).localeCompare(String(b.createdAt)) || String(a.id).localeCompare(String(b.id)));
@@ -298,7 +300,7 @@
     if (history?.more) {
       const note = document.createElement('div'); note.className = 'phase-history-note'; note.setAttribute('role', 'status'); note.hidden = selected !== 'build';
       const more = document.createElement('button'); more.type = 'button';
-      more.textContent = history.loading ? 'Loading…' : history.error ? 'Retry loading earlier logs' : 'Load 20 earlier logs';
+      more.textContent = history.loading ? 'Loading…' : history.error ? 'Retry loading earlier logs' : 'Load earlier logs';
       more.disabled = !!history.loading;
       more.onclick = async () => {
         if (history.loading) return;

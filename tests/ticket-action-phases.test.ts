@@ -34,7 +34,7 @@ test('loading earlier history preserves it across refreshes and deduplicates row
  await api.load('/test-history');
  const older=await api.load('/test-history',true);
  expect(older.map((r:any)=>r.id)).toEqual(['a','b']);
- expect(calls[1]).toBe('/test-history?before=b');
+ expect(calls[1]).toBe('/test-history?limit=250&before=b');
  expect((await api.load('/test-history')).length).toBe(2);
  }finally{globalThis.fetch=original;}
 });
