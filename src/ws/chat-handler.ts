@@ -93,11 +93,18 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
     const turn = findBackgroundTurn(conn.userId, conn.conversationId);
     if (conn.conversationId && !syncedSockets.has(ws) && (!turn || !turn.subscribers.has(ws))) {
       syncedSockets.add(ws);
-      let rows = await db.select().from(messages).where(eq(messages.conversationId, conn.conversationId!)).orderBy(asc(messages.createdAt));
+      // Newest page only, without build events, matching the REST history; older pages
+      // load on scroll-up.
+      const resumePage = async () => (await db.select().from(messages)
+        .where(and(eq(messages.conversationId, conn.conversationId!), sql`coalesce(${messages.userRole}, '') <> 'build_event'`))
+        .orderBy(desc(messages.createdAt), desc(messages.id)).limit(RESUME_PAGE + 1)).reverse();
+      let rows = await resumePage();
       const active = findBackgroundTurn(conn.userId, conn.conversationId);
-      if (!active) rows = await db.select().from(messages).where(eq(messages.conversationId, conn.conversationId!)).orderBy(asc(messages.createdAt));
+      if (!active) rows = await resumePage();
+      const hasMore = rows.length > RESUME_PAGE;
+      if (hasMore) rows = rows.slice(1);
       if (active?.subscribers.has(ws) || !getConnection(ws)) return;
-      send(ws, { type: "background_resume", messages: rows.filter(m => !active || m.id !== active.assistantMessageId).map(m => ({ ...m, page_previews: m.pagePreviews ?? null, activity_trail: m.activityTrail, end_reason: m.endReason, is_partial: m.isPartial })), events: active?.events.map(e => JSON.parse(e)) ?? [] });
+      send(ws, { type: "background_resume", has_more: hasMore, messages: rows.filter(m => !active || m.id !== active.assistantMessageId).map(m => ({ ...m, page_previews: m.pagePreviews ?? null, activity_trail: m.activityTrail, end_reason: m.endReason, is_partial: m.isPartial })), events: active?.events.map(e => JSON.parse(e)) ?? [] });
       active?.subscribers.add(ws);
     }
     send(ws, { type: "chat_queue", items: turn?.followups.snapshot() ?? [] });
@@ -250,6 +257,8 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
     }
   }
 }
+
+const RESUME_PAGE = 20;
 
 async function sendHistory(ws: ServerWebSocket<WsData>, conversationId: string): Promise<void> {
   console.log("[ws] sendHistory called for conversation:", conversationId);

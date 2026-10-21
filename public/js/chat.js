@@ -822,6 +822,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 conversationLoadedViaRest = false;
                 socket.onmessage({data: JSON.stringify({type:'chat_history', messages:data.messages})});
                 conversationLoadedViaRest = loaded;
+                // Older history stays one scroll away, as after a normal load.
+                if (data.has_more && data.messages?.[0]?.id) installHistoryLoader(currentConversationId, data.messages[0].id, conversationLoadVersion);
                 data.events.forEach(item => socket.onmessage({data: JSON.stringify(item)}));
                 return;
             }

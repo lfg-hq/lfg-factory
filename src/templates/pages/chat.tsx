@@ -480,7 +480,7 @@ export function ChatPage({
   <script src="/public/js/dictation.js?v=20261020-live-text"></script>
   <script src="/public/js/chat-artifacts.js?v=20261020-one-card"></script>
   <script src="/public/js/chatgpt-connection.js?v=20261018"></script>
-  <script src="/public/js/chat.js?v=20261020-one-card"></script>
+  <script src="/public/js/chat.js?v=20261021-resume-page"></script>
   <script src="/public/js/voice-mode.js?v=20261016-voice-hidden" data-disabled="true"></script>
   <script src="/public/js/mobile-menu.js"></script>
 

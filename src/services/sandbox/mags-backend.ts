@@ -103,7 +103,7 @@ export async function newWorkspace(name: string, opts?: {
       return { jobId: requestId, workspaceId: name };
     }
     if (st.status === "completed" || st.status === "error") {
-      throw new Error(`VM '${name}' ended unexpectedly with status: ${st.status}`);
+      throw new Error(vmEndedMessage(name, st));
     }
     await sleep(pollInterval);
   }
@@ -158,7 +158,7 @@ export async function newWorkspaceV2(
       return { jobId: requestId, workspaceId: name };
     }
     if (st?.status === "completed" || st?.status === "error") {
-      throw new Error(`VM '${name}' ended unexpectedly with status: ${st.status}`);
+      throw new Error(vmEndedMessage(name, st));
     }
     await sleep(1000);
   }
@@ -248,6 +248,15 @@ export async function findJob(nameOrId: string): Promise<{
 export function normalizeMagsAppUrl(url: string | null | undefined): string {
   const appDomain = process.env.MAGS_APP_DOMAIN || "app.lfg.run";
   return (url ?? "").replace(/\.apps\.magpiecloud\.com/i, `.${appDomain}`);
+}
+
+/** Keep Mags's own reason (e.g. no free capacity) so the build and chat can explain it. */
+export function vmEndedMessage(name: string, st: { status?: string; error_message?: unknown }): string {
+  const reason = typeof st.error_message === "string" && st.error_message.trim() ? st.error_message.trim() : "";
+  const capacity = /enough free (cpu|memory|disk)|capacity/i.test(reason)
+    ? " The sandbox provider has no free capacity right now: stop or delete idle sandboxes (or wait), then retry. The ticket's code was not changed."
+    : "";
+  return `VM '${name}' ended unexpectedly with status: ${st.status}${reason ? ` — ${reason}.` : ""}${capacity}`;
 }
 
 async function magsApi(method: string, path: string, body?: unknown): Promise<any> {
