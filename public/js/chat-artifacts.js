@@ -260,7 +260,9 @@
             const text = el('span', null, 'ca-build-text');
             const title = el('span', null, 'ca-build-title'); title.append(el('small', t.key || '', 'ca-ticket-key'), el('span', t.name));
             text.append(title);
-            if (t.update) text.append(el('span', t.update, 'ca-build-update'));
+            // The stage pill already says Ready; the note is only news while work runs or after a failure.
+            const note = String(t.update || '').replace(/^[\u2600-\u27BF\u{1F300}-\u{1FAFF}\uFE0F\s]+/u, '');
+            if (note && t.stage !== 'ready' && t.stage !== 'waiting') text.append(el('span', note, 'ca-build-update'));
             const stage = el('span', t.label + (t.sha && t.stage !== 'waiting' ? ' · ' + t.sha : ''), 'ca-build-stage');
             row.append(dot, text, stage); list.append(row);
         }

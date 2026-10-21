@@ -24,6 +24,7 @@
 .phase-history-note button:focus-visible { outline:2px solid var(--primary-color,#8b5cf6); outline-offset:2px; }
 .phase-history-note button:disabled { opacity:.6; cursor:wait; }
 .ticket-phase-body { min-width:0; }
+.phase-older { margin:4px 0 8px; text-align:center; font-size:11.5px; color:var(--text-secondary,#64748b); }
 .ticket-phase-body[hidden] { display:none !important; }
 [data-theme="light"] .phase-headers { background:#fff; }
 [data-theme="light"] .phase-header[aria-selected="true"] { color:#273247; }

@@ -37,7 +37,7 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
   <link rel="stylesheet" href="/public/css/artifacts.css?v=20261004-dark-folders" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
-  <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261020-one-card" />
+  <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261022-build-rows" />
   <link rel="stylesheet" href="/public/css/chat.css?v=20261021-inline-strip" />
   <link rel="stylesheet" href="/public/css/artifacts-fix.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
@@ -72,6 +72,33 @@ export function ChatPage({
     #ta-log .ta-act.is-failed .ta-result { background:rgba(220,38,38,.1); }
     #ta-log .ta-chev { font-size:9px; opacity:.5; transition:transform .12s; flex:none; }
     #ta-log .ta-outline { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; color:var(--text-secondary,#94a3b8); padding:2px 8px 2px 32px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    #ta-pane-git { font-size:13px; }
+    #ta-pane-git .ta-git-empty { padding:28px 20px; text-align:center; color:var(--text-secondary,#64748b); line-height:1.5; }
+    #ta-pane-git .ta-git-head { padding:16px 20px 14px; border-bottom:1px solid var(--border-color,#e5e7eb); display:flex; flex-direction:column; gap:9px; }
+    #ta-pane-git .ta-git-route { display:flex; align-items:center; gap:8px; flex-wrap:wrap; min-width:0; color:var(--text-secondary,#64748b); }
+    #ta-pane-git .ta-git-route code { font-size:12px; padding:3px 8px; border-radius:6px; background:rgba(124,58,237,.08); color:#7c3aed; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    #ta-pane-git .ta-git-arrow { font-size:10px; opacity:.6; }
+    #ta-pane-git .ta-git-badge { font-size:11px; font-weight:600; padding:2px 8px; border-radius:999px; background:rgba(100,116,139,.12); color:var(--text-secondary,#64748b); }
+    #ta-pane-git .ta-git-badge.is-merged { background:rgba(22,163,74,.12); color:#15803d; }
+    #ta-pane-git .ta-git-stats { display:flex; align-items:center; gap:14px; flex-wrap:wrap; font-size:12px; color:var(--text-secondary,#64748b); }
+    #ta-pane-git .ta-git-stats a { margin-left:auto; color:#7c3aed; text-decoration:none; font-weight:500; }
+    #ta-pane-git .ta-git-add { color:#16a34a; }
+    #ta-pane-git .ta-git-del { color:#dc2626; }
+    #ta-pane-git .ta-git-hunk { color:#7c3aed; }
+    #ta-pane-git .ta-git-section { padding:14px 20px 4px; }
+    #ta-pane-git .ta-git-label { font-size:11px; font-weight:600; letter-spacing:.4px; text-transform:uppercase; color:var(--text-secondary,#64748b); margin-bottom:8px; }
+    #ta-pane-git .ta-git-commit { display:flex; align-items:baseline; gap:10px; padding:6px 0; border-bottom:1px solid var(--border-color,#f1f5f9); min-width:0; }
+    #ta-pane-git .ta-git-commit code { flex:none; font-size:11.5px; color:#7c3aed; }
+    #ta-pane-git .ta-git-commit span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    #ta-pane-git .ta-git-commit small { flex:none; color:var(--text-secondary,#94a3b8); }
+    #ta-pane-git .ta-git-file { border:1px solid var(--border-color,#e5e7eb); border-radius:8px; margin-bottom:6px; overflow:hidden; }
+    #ta-pane-git .ta-git-file summary { list-style:none; display:flex; align-items:center; gap:10px; padding:8px 12px; cursor:pointer; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; }
+    #ta-pane-git .ta-git-file summary::-webkit-details-marker { display:none; }
+    #ta-pane-git .ta-git-file summary:hover { background:rgba(128,128,128,.06); }
+    #ta-pane-git .ta-git-file .ta-chev { font-size:9px; opacity:.5; transition:transform .15s; }
+    #ta-pane-git .ta-git-file[open] .ta-chev { transform:rotate(90deg); }
+    #ta-pane-git .ta-git-path { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    #ta-pane-git .ta-git-file pre { margin:0; padding:10px 12px; font-size:11.5px; line-height:1.5; overflow:auto; max-height:420px; white-space:pre; border-top:1px solid var(--border-color,#e5e7eb); background:rgba(128,128,128,.04); }
     #ta-log .ta-cmd-body { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; color:var(--text-color,#cbd5e1); background:var(--background-surface,#141414); border:1px solid var(--border-color,#2a2a2a); border-radius:6px; padding:8px 10px; margin:4px 0 0 20px; white-space:pre-wrap; word-break:break-word; max-height:260px; overflow:auto; }
   </style>
   <script src="/public/js/theme-switcher.js"></script>
@@ -476,16 +503,16 @@ export function ChatPage({
   <script src="/public/js/artifacts-loader.js?v=20261015-map-groups"></script>
   <script src="/public/js/document-comments.js"></script>
   <script src="/public/js/artifacts.js"></script>
-  <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261021-skip-checks" />
-<script src="/public/js/ticket-action-phases.js?v=20261021-log-pages"></script>
+  <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261022-log-window" />
+<script src="/public/js/ticket-action-phases.js?v=20261022-log-window"></script>
 <script src="/public/js/preview-tab.js?v=20261005-start-state"></script>
-    <script src="/public/js/ticket-agent.js?v=20261021-header-buttons"></script>
+    <script src="/public/js/ticket-agent.js?v=20261022-git-tab"></script>
   <script src="/public/js/env-tab.js?v=20261004-env-apply"></script>
   <script src="/public/js/tab-overflow.js"></script>
   <script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
   <script src="/public/js/custom-dropdown.js"></script>
   <script src="/public/js/dictation.js?v=20261021-inline-strip"></script>
-  <script src="/public/js/chat-artifacts.js?v=20261021-card-below"></script>
+  <script src="/public/js/chat-artifacts.js?v=20261022-build-rows"></script>
   <script src="/public/js/chatgpt-connection.js?v=20261018"></script>
   <script src="/public/js/chat.js?v=20261021-card-below"></script>
   <script src="/public/js/voice-mode.js?v=20261016-voice-hidden" data-disabled="true"></script>

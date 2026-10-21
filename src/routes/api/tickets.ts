@@ -1012,7 +1012,7 @@ ticketsApi.get("/:projectId/tickets/:ticketId/git/diff", async (c) => {
   const { projectId, ticketId } = c.req.param();
   const access = await getProjectAccess(projectId, user.id);
   if (!access) return c.json({ error: "Project not found" }, 404);
-  const base = c.req.query("base") || "main";
+  const base = c.req.query("base") || ""; // empty: the branch the ticket merges into
   const { getTicketDiff } = await import("../../services/dev-preview.ts");
   return c.json(await getTicketDiff(access.project.id, ticketId, base));
 });

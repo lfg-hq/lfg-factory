@@ -72,6 +72,10 @@
     return history.rows;
   }
   const choices = new Map();
+  // The build log shows its latest rows; scrolling up reveals older ones a page at a time.
+  const SHOW = 20;
+  const shown = new Map();
+  const anchors = new Map();
   // Remember whether the reader opened or closed diagnostics; refreshes must not undo it.
   const diagnosticsOpen = new Map();
   function render(area, rows, ticket, key, renderRow, historyUrl, refresh) {
@@ -115,6 +119,7 @@
       // Paging applies to the build log only.
       const note = headers.querySelector('.phase-history-note'); if (note) note.hidden = selected !== 'build';
       area.scrollTop = 0;
+      const body = bodies.find(b => !b.hidden); if (body && id === 'build') body.scrollTop = body.scrollHeight;
     }
     for (const tab of tabs) {
       const button = document.createElement('button'); button.type = 'button'; button.className = 'phase-header';
@@ -204,7 +209,30 @@
         const logs=document.createElement('div');logs.className='feature-run-log';dialog.append(heading,logs);show.onclick=()=>{dialog.hidden=false;area.classList.add('feature-logs-open');show.hidden=true;};
         body.append(show,dialog);logHost=logs;
       }
-      for (const row of displayRows) {
+      let visibleRows = displayRows;
+      if (phase.id === 'build') {
+        const limit = shown.get(key) || SHOW;
+        visibleRows = displayRows.slice(Math.max(0, displayRows.length - limit));
+        if (visibleRows.length < displayRows.length || history?.more) {
+          const older = document.createElement('p'); older.className = 'phase-older';
+          older.textContent = history?.loading ? 'Loading earlier logs…' : 'Scroll up for earlier logs';
+          body.append(older);
+          body.addEventListener('scroll', () => {
+            if (body.scrollTop > 40 || body.dataset.revealing) return;
+            body.dataset.revealing = '1';
+            anchors.set(key, body.scrollHeight - body.scrollTop);
+            // Rows arrive already shaped by the caller; after fetching older ones, let it reshape them.
+            const reveal = (fetched) => { if (!area.isConnected || area.dataset.phaseView !== key) return; if (fetched && refresh) refresh(); else render(area, rows, ticket, key, renderRow, historyUrl, refresh); };
+            if (visibleRows.length < displayRows.length) { shown.set(key, limit + SHOW); reveal(); }
+            else if (history?.more && !history.loading) {
+              history.loading = true; older.textContent = 'Loading earlier logs…';
+              shown.set(key, limit + SHOW);
+              load(historyUrl, true).catch(() => { history.error = true; }).finally(() => { history.loading = false; reveal(true); });
+            }
+          }, { passive: true });
+        }
+      }
+      for (const row of visibleRows) {
         logHost.append(renderRow(row, index++));
         const live = String(row.message || '').match(/\[(?:Live browser|Watch recording)\]\((\/uploads\/ticket-tests\/[a-zA-Z0-9-]+\/[a-zA-Z0-9-]+)\/(?:status\.json|recording\.mp4)\)/);
         if (live && phase.id==='feature-testing' && row===latestLive) {
@@ -309,7 +337,7 @@
         catch (_) { history.error = true; }
         finally {
           history.loading = false;
-          if (area.isConnected && area.dataset.phaseView === key) render(area, history.rows, ticket, key, renderRow, historyUrl, refresh);
+          if (area.isConnected && area.dataset.phaseView === key) { if (refresh) refresh(); else render(area, history.rows, ticket, key, renderRow, historyUrl, refresh); }
         }
       };
       note.append(more);
@@ -321,7 +349,11 @@
     area.replaceChildren(fragment);
     if(restoreLogs&&selected==='checks')area.querySelector('.feature-show-logs')?.click();
     const visible = bodies.find(body => !body.hidden);
-    if (visible && scroll) { visible.scrollTop = scroll.bottom ? visible.scrollHeight : scroll.top; visible.scrollLeft = scroll.left; }
+    const anchor = anchors.get(key); anchors.delete(key);
+    // Opening a ticket lands on its latest activity; revealing older rows keeps the reader's place.
+    if (visible && anchor != null) visible.scrollTop = visible.scrollHeight - anchor;
+    else if (visible && scroll) { visible.scrollTop = scroll.bottom ? visible.scrollHeight : scroll.top; visible.scrollLeft = scroll.left; }
+    else if (visible) visible.scrollTop = visible.scrollHeight;
 
   }
   root.TicketActionPhases = { group, render, load, latestFeatureRunCompleted };

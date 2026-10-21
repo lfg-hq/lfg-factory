@@ -417,29 +417,53 @@
   function renderDiff(diff) {
     return String(diff).slice(0, 60000).split("\n").map((ln) => {
       const e = esc(ln);
-      if (ln.startsWith("+") && !ln.startsWith("+++")) return `<span style="color:#4ade80;">${e}</span>`;
-      if (ln.startsWith("-") && !ln.startsWith("---")) return `<span style="color:#f87171;">${e}</span>`;
-      if (ln.startsWith("@@")) return `<span style="color:#a78bfa;">${e}</span>`;
+      if (ln.startsWith("+") && !ln.startsWith("+++")) return `<span class="ta-git-add">${e}</span>`;
+      if (ln.startsWith("-") && !ln.startsWith("---")) return `<span class="ta-git-del">${e}</span>`;
+      if (ln.startsWith("@@")) return `<span class="ta-git-hunk">${e}</span>`;
       return e;
     }).join("\n");
+  }
+  // Split a unified diff into per-file patches, keyed by the new path.
+  function patchesByFile(diff) {
+    const map = {};
+    for (const part of String(diff || "").split(/\n(?=diff --git )/)) {
+      const m = part.match(/^diff --git a\/.+? b\/(.+)\n/); if (!m) continue;
+      map[m[1]] = part.split("\n").filter((l) => !/^(diff --git|--- |\+\+\+ |index )/.test(l)).join("\n");
+    }
+    return map;
+  }
+  function relTime(sec) {
+    if (!sec) return "";
+    const d = Math.max(0, Date.now() / 1000 - sec);
+    return d < 3600 ? Math.max(1, Math.round(d / 60)) + "m ago" : d < 86400 ? Math.round(d / 3600) + "h ago" : Math.round(d / 86400) + "d ago";
   }
   async function loadGit() {
     const el = $("ta-pane-git");
     if (!el || !ticketId) return;
-    el.innerHTML = '<div style="opacity:.5;padding:20px;text-align:center;">Loading diff…</div>';
+    const id = ticketId;
+    el.innerHTML = '<div class="ta-git-empty"><i class="fas fa-spinner fa-spin"></i> Reading the branch from GitHub…</div>';
     try {
-      const r = await fetch(`/api/projects/${PID()}/tickets/${ticketId}/git/diff?base=main`, { credentials: "same-origin" });
+      const r = await fetch(`/api/projects/${PID()}/tickets/${id}/git/diff`, { credentials: "same-origin" });
       const d = await r.json();
-      if (d.error) { el.innerHTML = `<div style="opacity:.6;padding:24px;text-align:center;line-height:1.5;">${esc(d.error)}</div>`; return; }
+      if (ticketId !== id) return;
+      if (d.error) { el.innerHTML = `<div class="ta-git-empty">${esc(d.error)}</div>`; return; }
       const files = Array.isArray(d.files) ? d.files : [];
       const commits = Array.isArray(d.commits) ? d.commits : [];
-      let html = `<div style="padding:12px 16px;border-bottom:1px solid var(--border-color,#2a2a2a);font-size:12px;color:var(--text-secondary,#9ca3af);"><code style="color:#a78bfa;">${esc(d.head || "")}</code> vs <code>${esc(d.base || "main")}</code> · ${files.length} file${files.length !== 1 ? "s" : ""} changed</div>`;
-      if (commits.length) html += `<div style="padding:10px 16px;border-bottom:1px solid var(--border-color,#2a2a2a);">${commits.map((c) => `<div style="font-size:12px;color:var(--text-secondary,#9ca3af);padding:2px 0;"><code style="color:#a78bfa;">${esc((c.sha || "").slice(0, 7))}</code> ${esc(c.subject || "")}</div>`).join("")}</div>`;
-      if (files.length) html += `<div style="padding:8px 16px;">${files.map((f) => `<div style="display:flex;justify-content:space-between;font-size:12px;padding:3px 0;font-family:ui-monospace,monospace;"><span style="color:var(--text-color,#cbd5e1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(f.path)}</span><span style="flex:none;margin-left:10px;"><span style="color:#22c55e;">+${f.added}</span> <span style="color:#ef4444;">-${f.removed}</span></span></div>`).join("")}</div>`;
-      if (d.diff) html += `<pre style="margin:0;padding:12px 16px;font-size:11.5px;line-height:1.5;overflow:auto;white-space:pre;color:var(--text-color,#cbd5e1);border-top:1px solid var(--border-color,#2a2a2a);">${renderDiff(d.diff)}</pre>`;
+      const added = files.reduce((n, f) => n + (f.added || 0), 0), removed = files.reduce((n, f) => n + (f.removed || 0), 0);
+      const patches = patchesByFile(d.diff);
+      let html = `<div class="ta-git-head">
+        <div class="ta-git-route"><i class="fas fa-code-branch"></i><code>${esc(d.head || "")}</code><i class="fas fa-arrow-right ta-git-arrow"></i><code>${esc(d.base || "main")}</code>${d.merged ? '<span class="ta-git-badge is-merged">Merged</span>' : '<span class="ta-git-badge">Not merged</span>'}</div>
+        <div class="ta-git-stats"><span>${files.length} file${files.length !== 1 ? "s" : ""}</span><span class="ta-git-add">+${added}</span><span class="ta-git-del">−${removed}</span><span>${commits.length} commit${commits.length !== 1 ? "s" : ""}</span>${d.compareUrl ? `<a href="${esc(d.compareUrl)}" target="_blank" rel="noopener">View on GitHub <i class="fas fa-arrow-up-right-from-square"></i></a>` : ""}</div>
+      </div>`;
+      if (commits.length) html += `<div class="ta-git-section"><div class="ta-git-label">Commits</div>${commits.map((c) => `<div class="ta-git-commit"><code>${esc(c.sha || "")}</code><span>${esc(c.subject || "")}</span><small>${esc(relTime(c.when))}</small></div>`).join("")}</div>`;
+      if (files.length) html += `<div class="ta-git-section"><div class="ta-git-label">Files changed</div>${files.map((f) => {
+        const patch = patches[f.path];
+        return `<details class="ta-git-file"><summary><i class="fas fa-chevron-right ta-chev"></i><span class="ta-git-path">${esc(f.path)}</span><span class="ta-git-add">+${f.added}</span><span class="ta-git-del">−${f.removed}</span></summary>${patch ? `<pre>${renderDiff(patch)}</pre>` : '<p class="ta-git-empty">No text diff for this file.</p>'}</details>`;
+      }).join("")}</div>`;
+      else html += '<div class="ta-git-empty">No file changes on this branch yet.</div>';
       el.innerHTML = html;
       setTabCount("git", files.length);
-    } catch (e) { el.innerHTML = '<div style="opacity:.55;padding:24px;text-align:center;">Couldn\'t load the diff.</div>'; }
+    } catch (e) { if (ticketId === id) el.innerHTML = '<div class="ta-git-empty">Couldn\'t load the changes. Try the tab again.</div>'; }
   }
 
   function open(id, key, name, meta, opts) {

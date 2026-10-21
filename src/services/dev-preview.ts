@@ -32,6 +32,7 @@ import { validateSchemaTargets, assetCaseCheck, schemaStepSchema, replayActionSc
  *
  * The DB provisioning uses the validated recipes in ./project-sandbox.ts.
  */
+import { githubTicketDiff, parseAuthedGithubUrl } from "./ticket-diff-github.ts";
 import { z } from "zod";
 import { generateObject, generateText, stepCountIs, tool, zodSchema, type LanguageModel } from "ai";
 import { and, desc, eq, isNotNull, or } from "drizzle-orm";
@@ -3074,12 +3075,18 @@ export async function getPreviewBranches(projectId: string): Promise<Array<{ id:
 export async function getTicketDiff(projectId: string, ticketId: string, base: string): Promise<{
   branches: string[]; base: string; head: string;
   files: Array<{ path: string; added: number; removed: number }>; diff: string;
-  commits: Array<{ sha: string; when: number; subject: string }>; error?: string;
+  commits: Array<{ sha: string; when: number; subject: string }>; error?: string; merged?: boolean; compareUrl?: string;
 }> {
   // Prefer the ticket's actually-pushed branch; fall back to the convention.
-  const [tk] = await db.select({ gb: projectTickets.githubBranch }).from(projectTickets).where(eq(projectTickets.id, ticketId));
+  const [tk] = await db.select({ gb: projectTickets.githubBranch, epicId: projectTickets.epicId }).from(projectTickets).where(eq(projectTickets.id, ticketId));
   const head = tk?.gb || `feature/ticket-${ticketId}`;
-  const b = (base || "main").replace(/[^\w./-]/g, "") || "main";
+  // No base asked for: compare with the branch the ticket merges into (its epic's).
+  const anchor = base ? null : await (await import("./epics.ts")).resolveTicketAnchor({ epicId: tk?.epicId });
+  const b = (base || (anchor?.epic ? anchor.anchorBranch : "main")).replace(/[^\w./-]/g, "") || "main";
+  // GitHub answers directly; no sandbox clone needed.
+  const authed = await resolveAuthedRepoUrl(projectId);
+  const gh = "error" in authed ? null : parseAuthedGithubUrl(authed.authUrl);
+  if (gh) return githubTicketDiff(gh, b, head);
   let workspaceId: string;
   try { ({ workspaceId } = await ensureProjectSandbox(projectId)); }
   catch { return { branches: [], base: b, head, files: [], diff: "", commits: [], error: "No preview sandbox yet — open the Preview tab and set it up first." }; }
