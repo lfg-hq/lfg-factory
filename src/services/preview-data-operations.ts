@@ -17,7 +17,9 @@ const transactionSchema=z.object({connectionKey:z.string(),statements:z.array(sq
 
 export function validateDataSql(sql:string) {
  const statement=sql.trim().replace(/;\s*$/,'');
- if (!/^(select|insert|update|delete)\b/i.test(statement) || /;|--|\/\*|\b(copy|alter|drop|truncate|create|grant|revoke|pg_read_file|pg_write_file|pg_read_binary_file|pg_ls_dir|lo_import|lo_export|dblink|pg_terminate_backend|pg_cancel_backend|set_config|openrowset|opendatasource|openquery|xp_cmdshell|exec|execute|into|bulk)\b/i.test(statement)) throw new Error('Use one parameterized SELECT/INSERT/UPDATE/DELETE statement; schema and server operations are unavailable.');
+ // INSERT needs INTO; any other INTO (SELECT … INTO) creates a table and stays blocked.
+ const screened=statement.replace(/^insert\s+into\b/i,'insert');
+ if (!/^(select|insert|update|delete)\b/i.test(statement) || /;|--|\/\*|\b(copy|alter|drop|truncate|create|grant|revoke|pg_read_file|pg_write_file|pg_read_binary_file|pg_ls_dir|lo_import|lo_export|dblink|pg_terminate_backend|pg_cancel_backend|set_config|openrowset|opendatasource|openquery|xp_cmdshell|exec|execute|into|bulk)\b/i.test(screened)) throw new Error('Use one parameterized SELECT/INSERT/UPDATE/DELETE statement; schema and server operations are unavailable.');
  if (/^(update|delete)\b/i.test(statement) && !/\bwhere\b/i.test(statement)) throw new Error('Account/data updates require a WHERE clause.');
  return statement;
 }

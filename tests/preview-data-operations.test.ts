@@ -53,3 +53,9 @@ test('structured inspection reads source and reports database metadata without e
   const invalid=spawnSync('sh',['-c',previewDataWorkspaceCommand(join(root,'missing'),"printf SHOULD_NOT_RUN")],{encoding:'utf8'});expect(invalid.status).not.toBe(0);expect(invalid.stdout).not.toContain('SHOULD_NOT_RUN');
  }finally{rmSync(root,{recursive:true,force:true});}
 });
+
+test('INSERT INTO is allowed; SELECT INTO stays blocked', () => {
+  expect(validateDataSql('INSERT INTO "user" (id, email) VALUES ($1, $2)')).toContain('INSERT INTO');
+  expect(() => validateDataSql('SELECT * INTO copy_of_users FROM "user"')).toThrow();
+  expect(() => validateDataSql('INSERT INTO a SELECT * INTO b FROM c')).toThrow();
+});
