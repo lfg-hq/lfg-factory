@@ -13,3 +13,17 @@ export function providerErrorMessage(error: unknown, provider: string | null): s
   }
   return `${label} could not complete the response. Please retry or choose another model. If it persists, check the server diagnostics.`;
 }
+
+/** Error name, status and machine codes only (e.g. "AI_APICallError 503 server_is_overloaded"); never message text. */
+export function safeErrorReason(error: unknown): string {
+  const parts = new Set<string>();
+  let value: any = error;
+  for (let depth = 0; value && depth < 3; depth++, value = value.cause) {
+    if (typeof value.name === 'string' && value.name !== 'Error') parts.add(value.name);
+    if (typeof value.statusCode === 'number') parts.add(String(value.statusCode));
+    if (typeof value.code === 'string') parts.add(value.code);
+    const message = typeof value.message === 'string' ? value.message : '';
+    for (const code of message.replace(/https?:\/\/\S+/g, '').match(/\b(?:[a-z]+_){1,4}[a-z]+\b|\bE[A-Z]{3,}\b|\b(?:timed? ?out|terminated|aborted|overloaded)\b/g)?.slice(0, 3) ?? []) parts.add(code);
+  }
+  return [...parts].join(' ').slice(0, 160);
+}

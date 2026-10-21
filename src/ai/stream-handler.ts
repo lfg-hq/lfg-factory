@@ -1,5 +1,5 @@
 import { savedChatArtifact } from "./chat-artifacts.ts";
-import { providerErrorMessage } from './provider-error.ts';
+import { providerErrorMessage, safeErrorReason } from './provider-error.ts';
 import { wrapGraphConnectorTools } from "../services/document-graph-connectors.ts";
 import { withChatDiagnostics, chatStage, chatDiagnostic, chatConversation } from './chat-diagnostics.ts';
 import { abortable, cancellableStream, trackTurnTools } from './stream-cancellation.ts';
@@ -1013,7 +1013,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
       },
       onError: ({ error }) => {
         // The SDK's default logger dumps the full provider request. Keep safe metadata only.
-        chatDiagnostic('stream_error', {outcome:'error', model:modelKey, status: typeof (error as any)?.statusCode === 'number' ? (error as any).statusCode : undefined});
+        chatDiagnostic('stream_error', {outcome:'error', model:modelKey, status: typeof (error as any)?.statusCode === 'number' ? (error as any).statusCode : undefined, reason: safeErrorReason(error)});
       },
       onStepFinish: ({ toolCalls, usage }) => {
         chatDiagnostic('context_usage', {inputTokens:usage.inputTokens, outputTokens:usage.outputTokens});
@@ -1472,7 +1472,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
    }
   } catch (err: any) {
     if (err?.name !== "AbortError") {
-      chatDiagnostic('stream_error', {outcome:'error'});
+      chatDiagnostic('stream_error', {outcome:'error', reason: safeErrorReason(err)});
       streamError = new Error(providerErrorMessage(err, getProviderName(modelKey)));
     }
   } finally {

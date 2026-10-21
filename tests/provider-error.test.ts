@@ -27,3 +27,11 @@ describe('provider failures', () => {
     await expect(result.response).rejects.toThrow('No output generated');
   });
 });
+
+test('diagnostic reasons keep error codes and drop message text', async () => {
+  const { safeErrorReason } = await import('../src/ai/provider-error.ts');
+  const error = Object.assign(new Error('Service unavailable: server_is_overloaded for https://api.example.test?key=sk-secret123456'), { name: 'AI_APICallError', statusCode: 503 });
+  const reason = safeErrorReason(error);
+  expect(reason).toBe('AI_APICallError 503 server_is_overloaded');
+  expect(reason).not.toContain('sk-');
+});

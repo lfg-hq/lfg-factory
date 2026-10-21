@@ -3538,9 +3538,14 @@ export async function restartPreview(projectId: string, opts: SetupOptions): Pro
   const explicitBranch = !ticketId && opts.branch && opts.branch !== "(default)" ? opts.branch.trim() : "";
   const row = await getEnv(projectId);
   if (!row?.setupManifest || !row?.runCommand || row?.setupComplete !== 1) {
-    // Nothing to restart yet → run the full setup (default branch only).
-    if (ticketId || explicitBranch) return failed(projectId, userId, "Preview setup is incomplete. Complete setup before running this branch.");
-    return setupPreview(projectId, opts);
+    // Nothing to restart yet → run the full setup, directly on the branch asked for
+    // (an epic's branch, or a ticket's pushed branch) so a fresh project still previews.
+    if (ticketId) {
+      const [tk] = await db.select({ gb: projectTickets.githubBranch }).from(projectTickets).where(eq(projectTickets.id, ticketId));
+      if (!tk?.gb) return failed(projectId, userId, "This ticket has no pushed branch yet. Build it first, then preview.");
+      return setupPreview(projectId, { ...opts, ticketId: undefined, branch: tk.gb });
+    }
+    return setupPreview(projectId, explicitBranch ? { ...opts, branch: explicitBranch } : opts);
   }
   let manifest = JSON.parse(row.setupManifest) as PreviewManifest; // may gain DBs via reconcile below
   const savedProfile = await loadAppProfile(projectId);

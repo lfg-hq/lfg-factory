@@ -4,16 +4,17 @@ type Trace = { id: string; conversationId?: string; projectId?: string; started:
 const traces = new AsyncLocalStorage<Trace>();
 // Only explicit metadata is accepted. Never pass prompts, tool arguments/results,
 // HTTP bodies, URLs, tokens or raw error messages to this logger.
-type Metadata = { model?: string; tool?: string; status?: number; outcome?: 'complete' | 'error' | 'cancelled'; durationMs?: number; inputTokens?:number; outputTokens?:number; estimatedTokens?:number; budgetTokens?:number; compacted?:boolean };
+type Metadata = { model?: string; tool?: string; status?: number; outcome?: 'complete' | 'error' | 'cancelled'; durationMs?: number; inputTokens?:number; outputTokens?:number; estimatedTokens?:number; budgetTokens?:number; compacted?:boolean; reason?: string };
+// `reason` carries only error names, statuses and machine codes (see safeErrorReason).
 export function chatDiagnostic(event: string, metadata: Metadata = {}) {
   const trace = traces.getStore();
   if (!trace) return;
   if (event === 'stream_error') trace.failed = true;
-  const { model, tool, status, outcome, durationMs, inputTokens, outputTokens, estimatedTokens, budgetTokens, compacted } = metadata;
+  const { model, tool, status, outcome, durationMs, inputTokens, outputTokens, estimatedTokens, budgetTokens, compacted, reason } = metadata;
   console.info(JSON.stringify({ component: 'chat', event, requestId: trace.id,
     conversationId: trace.conversationId, projectId: trace.projectId,
     elapsedMs: Date.now() - trace.started, stage: trace.stage,
-    stageElapsedMs: Date.now() - trace.stageStarted, model, tool, status, outcome, durationMs, inputTokens, outputTokens, estimatedTokens, budgetTokens, compacted }));
+    stageElapsedMs: Date.now() - trace.stageStarted, model, tool, status, outcome, durationMs, inputTokens, outputTokens, estimatedTokens, budgetTokens, compacted, reason }));
 }
 export function chatStage(stage: string) {
   const trace = traces.getStore();
