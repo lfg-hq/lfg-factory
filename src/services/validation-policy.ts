@@ -7,7 +7,7 @@ export const runtimePolicySchema=z.object({
 export type RuntimePolicy=z.infer<typeof runtimePolicySchema>;
 export function validationScope(paths:string[],policy:RuntimePolicy) {
  const styleOnly=paths.length>0 && paths.every(p=>/\.(css|scss|sass|less)$/i.test(p));
- return {kind:styleOnly&&policy.styleChecks.length?'focused':'full',commands:styleOnly?policy.styleChecks:[],reason:styleOnly&&policy.styleChecks.length?'Only styles changed; run the repository’s configured style checks and app availability.':'Run affected feature checks; changes may affect application behavior.'};
+ return {kind:styleOnly&&policy.styleChecks.length?'focused':'full',commands:styleOnly?policy.styleChecks:[],reason:styleOnly&&policy.styleChecks.length?'Only styles changed, so checks run the style checks and confirm the app still starts.':'Checks start the app and test this ticket\'s feature.'};
 }
 export function requirementsEvidence(requirements:string) {return createHash("sha256").update(requirements).digest("hex");}
 export function environmentEvidence(vars:Record<string,string>,settings:unknown,local:string) {
@@ -21,7 +21,7 @@ export async function readReusableMergeEvidence(o:import('./validated-git.ts').P
  if(!o.validation.ticketId)return null;
  const [{db},{runtimeValidations},{eq,and,desc},{loadRuntimeEnvironment},{loadBuildStageSettings}]=await Promise.all([
   import('../config/db.ts'),import('../db/schema/runtime-validation.ts'),import('drizzle-orm'),import('./ticket-runtime-environment.ts'),import('./build-stage-settings.ts')]);
- const settings=await loadBuildStageSettings(o.validation.projectId);
+ const settings=await loadBuildStageSettings(o.validation.projectId,o.validation.ticketId);
  if(settings.validationEnabled===false)return null;
  const vars=await loadRuntimeEnvironment(o.validation.projectId);
  const {projectTickets}=await import('../db/schema/tickets.ts');

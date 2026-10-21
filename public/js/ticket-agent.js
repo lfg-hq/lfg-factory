@@ -196,9 +196,51 @@
     if (input) {
       input.placeholder = isBusy() ? "Agent is working — press ■ to stop and send…" : "Send a message to the agent…";
     }
+    renderChecksButton();
     const b = $("ta-build"); if (!b) return;
     if (isBusy()) { b.disabled = true; b.style.opacity = ".9"; b.innerHTML = '<i class="fas fa-spinner fa-spin" style="font-size:10px;"></i>' + (isBuilding() ? "Building…" : "Working…"); }
     else { b.disabled = chatBusy || buildPending; b.style.opacity = b.disabled ? ".55" : "1"; b.innerHTML = '<i class="fas fa-play" style="font-size:10px;"></i>' + (hasPreviousBuild(curMeta) ? "Re-build" : "Build"); b.title = hasPreviousBuild(curMeta) ? "Re-build this ticket" : "Build this ticket"; }
+  }
+  // Checks for this ticket: its own on/off choice, or the project default.
+  function checksOn(m) { return !!m && (m.validationEnabled !== false || m.featureTestingEnabled !== false); }
+  function renderChecksButton() {
+    const b = $("ta-checks"); if (!b) return;
+    if (!curMeta || curMeta.checksMode === undefined) { b.style.display = "none"; return; }
+    const on = checksOn(curMeta);
+    b.style.display = "inline-flex";
+    b.setAttribute("aria-pressed", String(on));
+    b.querySelector(".ta-checks-label").textContent = on ? "Checks on" : "Checks off";
+    b.querySelector(".ta-checks-dot").style.background = on ? "#16a34a" : "#94a3b8";
+    b.title = (on ? "Checks run after this ticket builds" : "This ticket builds without checks") +
+      (curMeta.checksMode === "project" ? " (project default). Click to change for this ticket only." : " (set for this ticket). Click to switch.");
+    b.disabled = isBusy();
+  }
+  async function loadChecksSetting() {
+    if (!ticketId) return;
+    const id = ticketId;
+    try {
+      const r = await fetch(`/api/projects/${PID()}/tickets/${id}`, { credentials: "same-origin" });
+      if (!r.ok || id !== ticketId) return;
+      const t = (await r.json()).ticket || {};
+      curMeta = Object.assign({}, curMeta, { checksMode: t.checksMode, validationEnabled: t.validationEnabled, featureTestingEnabled: t.featureTestingEnabled, projectChecksEnabled: t.projectChecksEnabled });
+      renderChecksButton();
+    } catch (_) {}
+  }
+  async function toggleChecks() {
+    if (!ticketId || !curMeta || isBusy()) return;
+    const want = !checksOn(curMeta);
+    // Back to the project default when that already matches; otherwise pin this ticket.
+    const mode = want === !!curMeta.projectChecksEnabled ? "project" : (want ? "on" : "off");
+    const b = $("ta-checks"); if (b) b.disabled = true;
+    try {
+      const r = await fetch(`/api/projects/${PID()}/tickets/${ticketId}/checks`, { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: JSON.stringify({ mode }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || "failed");
+      curMeta = Object.assign({}, curMeta, { checksMode: j.checksMode, validationEnabled: j.validationEnabled, featureTestingEnabled: j.featureTestingEnabled });
+      toast(want ? "Checks will run after this ticket builds." : "This ticket will build without checks.");
+      if (currentLogRows.length) renderAll(currentLogRows);
+    } catch (e) { toast("Couldn't change checks: " + (e.message || e)); }
+    renderChecksButton();
   }
   // Stop whatever the agent is doing right now (build OR the in-flight chat turn).
   // Same endpoint the Task List drawer uses; it kills the in-VM agent and unblocks
@@ -410,6 +452,7 @@
     tasksLoaded = false; gitLoaded = false;
     chatBusy = meta?.agentBusy === true;
     setBuildUI();
+    void loadChecksSetting();
     // A turn started before this page loaded is still running server-side — ask, so the
     // button opens as Stop instead of inviting a second message that would be rejected.
     fetch(`/api/projects/${PID()}/tickets/${id}/chat/status`, { credentials: "same-origin" })
@@ -514,8 +557,49 @@
       job.output = match[2];
       job.jobStatus = match[2].startsWith("finished") ? (match[2].includes("exit 0,") ? "Completed" : "Failed") : "Running · waiting for completion";
     }
-    return result;
+    return mergeActionResults(result);
   }
+
+  // One row per action: a tool logs "Editing x", then its result, often "Editing x" again.
+  // Fold the result into the action and drop the repeat, so each step reads once.
+  const TAG_RE = /^\[(Validation|Feature testing)\]\s*/;
+  function isActionText(text) { return text.charAt(0) === "$" || ACTION_RE.test(text); }
+  function mergeActionResults(rows) {
+    const out = []; let last = null;
+    for (const row of rows) {
+      const type = row.type || "command";
+      const msg = String(row.message || "").trim();
+      const text = msg.replace(TAG_RE, "");
+      if (type !== "command" || row.job) { out.push(row); last = null; continue; }
+      if (isActionText(text)) {
+        const tag = (msg.match(TAG_RE) || [""])[0];
+        if (last && last.text === text && last.tag === tag) { if (row.output && !last.row.output) last.row.output = row.output; continue; }
+        const copy = Object.assign({}, row, { action: true });
+        out.push(copy); last = { row: copy, text, tag }; continue;
+      }
+      if (last && !last.row.resultText && !/^(The |I['’]|I )/.test(text) && text.split(" ").length < 40) {
+        last.row.resultText = text;
+        last.row.output = last.row.output ? last.row.output + "\n" + text : text;
+        continue;
+      }
+      out.push(row); last = null;
+    }
+    return out;
+  }
+  function resultSummary(row) {
+    const r = String(row.resultText || "");
+    if (row.jobStatus) return row.jobStatus;
+    if (row.exitCode != null) return row.exitCode === 0 ? "done" : "failed";
+    let m;
+    if ((m = r.match(/^Successfully wrote (\d+) bytes/))) return (+m[1] >= 1024 ? (+m[1] / 1024).toFixed(1) + " KB" : m[1] + " B") + " written";
+    if ((m = r.match(/^Successfully replaced (\d+) block/))) return m[1] + (m[1] === "1" ? " change" : " changes");
+    if (/^Command failed|error|failed/i.test(r)) return "failed";
+    if (r === "(no output)") return "done";
+    return r ? "output" : "";
+  }
+  const VERB_ICONS = [[/^Editing/, "fa-pen"], [/^(Creating|Writing)/, "fa-file-circle-plus"], [/^(Reading|Listing|Searching|Inspecting|Checking)/, "fa-eye"], [/^Browser:/, "fa-globe"],
+    [/^(Committing|Committed)/, "fa-code-commit"], [/^(Merging|Merged)/, "fa-code-merge"], [/^(Pushing|Pushed)/, "fa-cloud-arrow-up"],
+    [/^(Installing|Building|Build|Starting|Started|Spinning|Setting up|Restarting)/, "fa-gear"]];
 
   function renderAll(rows) {
     const area = $("ta-log");
@@ -532,7 +616,7 @@
   }
 
   let rowSeq = 0;
-  const ACTION_RE = /^(Running|Reading|Editing|Writing|Creating|Searching|Listing|Merging|Merged|Committing|Committed|Pushed|Pushing|Building|Build|Installing|Started|Starting|Cloning|Fetching|Restarting|Verifying|Continuing|Spinning|Setting up)/;
+  const ACTION_RE = /^(Running|Reading|Editing|Writing|Creating|Searching|Listing|Merging|Merged|Committing|Committed|Pushed|Pushing|Building|Build |Installing|Started|Starting|Cloning|Fetching|Restarting|Verifying|Continuing|Spinning|Setting up|Inspecting|Checking|Browser:)/;
   function renderRow(row) {
     const type = row.type || "command";
     const msg = (row.message || "").trim();
@@ -550,17 +634,22 @@
         : "";
       return `<div class="ta-question"><div class="ta-question-label"><i class="fas fa-circle-question"></i> Needs your answer</div><div class="markdown-content">${md(msg)}</div>${btns}</div>`;
     }
-    // command / tool row → ONE collapsible: the command as the header, its output as the body.
+    // A tool action: verb icon, what it did, a short result; expandable only with output.
     const out = String(row.output || "");
-    const hasOut = out.length > 0;
-    const bodyText = hasOut ? out : msg;
-    const isAction = hasOut || msg.charAt(0) === "$" || msg.charCodeAt(0) > 255 || ACTION_RE.test(msg);
+    const text = msg.replace(TAG_RE, "");
     const id = "tarow-" + String(row.id || (++rowSeq)).replace(/[^a-zA-Z0-9_-]/g, "_");
-    const status = row.jobStatus || (row.exitCode != null ? (row.exitCode === 0 ? "Completed" : "Failed") : hasOut ? "Result received" : "Activity");
-    const label = esc(msg.split("\n")[0]) || "(no output)";
-    return `<div class="ta-cmdrow${isAction ? "" : " ta-outrow"}">
-      <div class="ta-cmd-header" data-ta-toggle="${id}"><i class="fas fa-chevron-right ta-chev"></i><i class="fas ${isAction ? "fa-terminal" : "fa-angle-right"}" style="opacity:.55;font-size:11px;"></i><span class="ta-cmd-text">${label}</span><small style="margin-left:auto;white-space:nowrap;opacity:.7">${esc(status)}</small></div>
-      <div id="${id}" class="ta-cmd-body" style="display:none;">${hasOut ? "<strong>Command</strong>\n" + esc(msg) + "\n\n<strong>Result / latest output</strong>\n" : ""}${esc(bodyText)}</div>
+    if (!row.action && !row.job && !isActionText(text)) {
+      // Stray output with no action to belong to: a quiet line, full text on hover.
+      return `<div class="ta-outline" title="${esc(text)}">${esc(text.split("\n")[0]) || "(no output)"}</div>`;
+    }
+    const icon = (VERB_ICONS.find(([re]) => re.test(text)) || [null, "fa-terminal"])[1];
+    const summary = resultSummary(row);
+    const failed = summary === "failed" || row.jobStatus === "Failed";
+    const expandable = out.length > 0 && out.trim() !== text;
+    const label = esc(text.split("\n")[0]) || "(no output)";
+    return `<div class="ta-cmdrow ta-act${failed ? " is-failed" : ""}">
+      <div class="ta-cmd-header"${expandable ? ` data-ta-toggle="${id}"` : ""}><i class="fas ${icon} ta-verb" aria-hidden="true"></i><span class="ta-cmd-text">${label}</span>${summary ? `<small class="ta-result">${esc(summary)}</small>` : ""}${expandable ? '<i class="fas fa-chevron-right ta-chev" aria-hidden="true"></i>' : ""}</div>
+      ${expandable ? `<div id="${id}" class="ta-cmd-body" style="display:none;">${esc(out)}</div>` : ""}
     </div>`;
   }
 
@@ -753,6 +842,7 @@
     $("ta-stop")?.addEventListener("click", stopTicket);
     $("ta-edit")?.addEventListener("click", toggleEdit);
     $("ta-preview")?.addEventListener("click", previewTicket);
+    $("ta-checks")?.addEventListener("click", toggleChecks);
     $("ta-delete")?.addEventListener("click", deleteTicket);
     // A deliberate tab choice outranks the pending auto-switch — never yank the panel
     // out from under someone who just clicked Details while the logs were still loading.

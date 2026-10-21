@@ -11,7 +11,7 @@
       const text = String(row.message || '').replace(/\*\*/g, '').trim();
       if (/^(Running a sandbox command|The same repair session is still active\.)$/.test(text)) continue;
       const retry = /^Retrying validation of saved commit/i.test(text);
-      const validation = tag?.[1]==='Validation' || /^Validation check:|^Validation connection interrupted:|^Checking prerequisite:|^(App|Preview) readiness|^Preview ready|^Checks skip/i.test(text) || retry || /^(Running the saved ticket:|Repairing runtime checks:|Checking:|Preparing validation:|Now verifying this commit|Fresh \/ candidate:|Runtime checks passed|✅\s*Validation passed)/i.test(text);
+      const validation = tag?.[1]==='Validation' || /^Validation check:|^Validation connection interrupted:|^Checking prerequisite:|^(App|Preview) readiness|^Preview ready|^Checks skip|^Checks:|^Checks could not run/i.test(text) || retry || /^(Running the saved ticket:|Repairing runtime checks:|Checking:|Preparing validation:|Now verifying this commit|Fresh \/ candidate:|Runtime checks passed|✅\s*Validation passed)/i.test(text);
       const build = /^(Starting Pi build|Isolated build:|Starting (?:ticket )?build|Building ticket)/i.test(text);
       if (build) { buildStarted = true; active = 0; phases[0].status = 'working'; phases[1].status = 'pending'; phases[2].status = 'pending'; }
       if (validation) {

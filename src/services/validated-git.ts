@@ -42,6 +42,19 @@ export async function validateWithRepair(o:PublicationOptions,dir:string,branch:
   const {runTicketRuntime}=await import('./ticket-runtime.ts');
   return runTicketRuntime({...o,projectDir:dir,featureBranch:branch},undefined,{kind,baseline,allowDetached:kind!=="ticket"});
 }
+/** Outages say nothing about the feature: provider overload, lost agent or sandbox connections. */
+export function isCheckInfrastructureFailure(error:unknown):boolean {
+  const e=error as {name?:string;message?:string};
+  return e?.name==='PiSessionInfrastructureError' || /overloaded|service_unavailable|server_is_overloaded|\b50[234]\b|busy or uncertain|connection interrupted|controller connection|WebSocket closed 1006/i.test(String(e?.message ?? error));
+}
+
+/** The card shown the moment a build is committed, before any check. */
+async function buildCompleteCard(o:PublicationOptions,sha:string):Promise<string> {
+  let summary='';
+  if(o.validation.ticketId){try{summary=await (await import('./build-progress.ts')).recentWorkSummary(o.validation.ticketId);}catch{/* summary is optional */}}
+  return `✅ **Build complete** — code committed and pushed.\n\n${summary?`**What got done:** ${summary}\n\n`:''}- Branch: \`${o.featureBranch}\`\n- Commit: \`${sha.slice(0,7)}\`\n- Pushed to the repository ✓`;
+}
+
 /** Point the ticket at its latest saved commit so a later failure still shows where the work is. */
 async function recordSavedCommit(o:PublicationOptions,sha:string) {
   if(!o.validation.ticketId)return;
@@ -71,7 +84,7 @@ export async function publishValidatedTicket(o:PublicationOptions) {
     const saved=await sh('git rev-parse HEAD');
     await push(saved);
     await recordSavedCommit(o,saved);
-    await o.validation.onCheckpoint?.(`**Build saved:** commit \`${saved.slice(0,7)}\` is pushed to \`${o.featureBranch}\` before checks run.`);
+    await o.validation.onCheckpoint?.(await buildCompleteCard(o,saved));
     // One Checks stage: start the app, then walk the feature in a browser, with a single
     // repair loop. Its repairs are committed and pushed below.
     let sha:string;
@@ -79,8 +92,12 @@ export async function publishValidatedTicket(o:PublicationOptions) {
     else try {
       sha=await validateWithRepair(o,o.projectDir,o.featureBranch,baseline,'ticket');
     } catch(error) {
-      if(!o.validation.skipped?.())throw error;
-      sha=saved;
+      if(o.validation.skipped?.()) sha=saved;
+      else if(isCheckInfrastructureFailure(error)) {
+        // An outage is not a failed feature: keep the saved build moving.
+        sha=saved;
+        await o.validation.onCheckpoint?.(`**Checks could not run:** ${String((error as Error)?.message ?? error).slice(0,240)}\n\nThis is an infrastructure problem, not a problem with the feature. The saved build continues; run checks again later from the ticket.`);
+      } else throw error;
     }
     if(sha===saved && o.validation.skipped?.())await o.validation.onCheckpoint?.(`**Checks skipped:** the build saved in \`${saved.slice(0,7)}\` continues without checks. Repairs in progress were not saved.`);
     await push(sha);
@@ -154,8 +171,8 @@ export async function publishValidatedMerge(o:PublicationOptions & {targetBranch
           o.validation.onLog?.('Merge requires fresh checks: no matching ticket evidence for this tree, baseline and environment.');
           try { sha=await validateWithRepair(o,candidate,o.targetBranch,baseline,o.kind??'integration'); }
           catch(error) {
-            if(!o.validation.skipped?.())throw error;
-            o.validation.onLog?.('Checks skipped during the merge check; merging without them.');
+            if(!o.validation.skipped?.() && !isCheckInfrastructureFailure(error))throw error;
+            o.validation.onLog?.(o.validation.skipped?.() ? 'Checks skipped during the merge check; merging without them.' : 'Checks could not run during the merge (infrastructure problem); merging without them.');
             await sh(`git -C ${q(candidate)} reset -q --hard\ngit -C ${q(candidate)} merge --no-commit --no-ff ${q(expected.source)} || true`).catch(()=>'');
             sha=await commitMerge();
           }

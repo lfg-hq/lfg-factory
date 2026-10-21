@@ -27,8 +27,8 @@ function runningStage(logs: LogLine[]): BuildStage {
     const text = clean(raw);
     if (/^Repairing (runtime checks|test setup)|^Feature testing: Repairing/i.test(text)) return "repairing";
     if (/^Feature testing|^\[Feature testing\]/i.test(raw) || /^Browser: |Live browser/i.test(text)) return "testing";
-    if (/^\[Validation\]/.test(raw) || /^(Running the saved ticket|Validation scope|App readiness|Preview readiness)/i.test(text)) return "checking";
-    if (/^Build saved:/i.test(text)) return "committed";
+    if (/^\[Validation\]/.test(raw) || /^(Running the saved ticket|Validation scope|Checks:|App readiness|Preview readiness)/i.test(text)) return "checking";
+    if (/^(Build saved:|Build complete)/i.test(text)) return "committed";
     if (/^(Isolated build|Starting Pi build|Starting (ticket )?build|Building ticket)/i.test(text)) return "building";
   }
   return "building";
@@ -108,7 +108,7 @@ export async function recentWorkSummary(ticketId: string): Promise<string> {
     const raw = log.text ?? "";
     if (/^\[(Validation|Feature testing)\]/.test(raw)) continue;
     const text = clean(raw);
-    if (/^(Ticket complete|Build saved|Checks skipped|Validation scope|Running the saved ticket|Merg)/i.test(text)) continue;
+    if (/^(Ticket complete|Build saved|Build complete|Checks skipped|Checks:|Checks could not run|Validation scope|Running the saved ticket|Merg)/i.test(text)) continue;
     if (NARRATION.has(log.type ?? "") && isProse(text)) return shortSummary(text);
   }
   return "";

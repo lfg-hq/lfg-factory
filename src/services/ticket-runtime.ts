@@ -41,7 +41,7 @@ export type RuntimeDependencies={
 
 /** One persistent checkout; the build is already committed, and repairs commit once checks pass. */
 export async function runTicketRuntime(o:PublicationOptions, deps?:RuntimeDependencies, mode:{kind:"ticket"|"integration"|"promotion";baseline:string;allowDetached?:boolean;phase?:'validation'|'feature-testing'}={kind:"ticket",baseline:""}):Promise<string> {
- const settings = deps ? deps.settings ?? {} : await loadBuildStageSettings(o.validation.projectId);
+ const settings = deps ? deps.settings ?? {} : await loadBuildStageSettings(o.validation.projectId, o.validation.ticketId);
  const validationEnabled = settings.validationEnabled !== false;
  const featureEnabled = settings.featureTestingEnabled !== false && mode.phase !== 'validation' && mode.kind === 'ticket' && !!o.validation.ticketId;
  if ((mode.phase === 'validation' && !validationEnabled) || (mode.phase === 'feature-testing' && !featureEnabled)) throw new Error('This stage is disabled in Project Settings.');
@@ -83,7 +83,7 @@ export async function runTicketRuntime(o:PublicationOptions, deps?:RuntimeDepend
  const diffBase=mode.baseline && /^[a-f0-9]{40,64}$/.test(mode.baseline) ? mode.baseline : 'HEAD';
  const changed=(await sh(`git diff --name-only ${diffBase}`)).split('\n').filter(Boolean);
  let scope=validationScope(changed,policy);
- await d.progress('Validation scope: '+scope.kind+'. '+scope.reason);
+ await d.progress('**Checks:** '+scope.reason);
  const runtimeStarted=now();
  if(initialBranch!==o.featureBranch && !(mode.allowDetached && initialBranch===''))throw new Error('Ticket checkout is on a different branch; refusing to overwrite it.');
 

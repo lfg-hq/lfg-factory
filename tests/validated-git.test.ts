@@ -70,6 +70,19 @@ test('a skipped ticket merges into the epic branch without re-running checks',()
  const result=await publishValidatedMerge({...o,targetBranch:'main',validation:{...o.validation,skipped:()=>true}});
  expect(checks).toBe(0);expect(git(repo,'ls-remote --heads origin main')).toContain(result.sha);
 }));
+test('an outage during checks keeps the saved build moving',()=>fixture(async(o,repo)=>{
+ writeFileSync(join(repo,'pending.txt'),'pending');const notes:string[]=[];
+ o.validation.onCheckpoint=async(m:string)=>{notes.push(m);};
+ validation=async()=>{throw new Error('Repair agent failed: Codex error: server_is_overloaded (503)');};
+ const result=await publishValidatedTicket(o);
+ expect(git(repo,'ls-remote --heads origin refs/heads/feature/ticket')).toContain(result.sha);
+ expect(notes[0]).toContain('**Build complete**');expect(notes[0]).toContain('Pushed to the repository');
+ expect(notes.some(n=>n.startsWith('**Checks could not run:**'))).toBe(true);
+}));
+test('a real check failure still stops publication after the build is saved',()=>fixture(async(o)=>{
+ validation=async()=>{throw new Error('Assertion failed: the saved Site does not appear in the list');};
+ await expect(publishValidatedTicket(o)).rejects.toThrow('Assertion failed');
+}));
 test('integration validates the merged working tree before creating the merge commit',()=>fixture(async(o,repo)=>{
  git(repo,'push -q origin feature/ticket');const baseline=git(repo,'rev-parse origin/main');
  validation=async(v)=>{const dir=translate(v.projectDir);expect(git(dir,'rev-parse HEAD')).toBe(baseline);expect(git(dir,'status --porcelain')).toContain('feature.txt');};

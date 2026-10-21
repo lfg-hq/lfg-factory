@@ -61,11 +61,17 @@ export function ChatPage({
     #ta-log .ta-qopt:hover { background:rgba(245,158,11,.22); }
     #ta-log .ta-qopt:disabled { opacity:.45; cursor:default; }
     #ta-log .ta-cmdrow { align-self:stretch; }
-    #ta-log .ta-cmd-header { display:flex; align-items:center; gap:8px; cursor:pointer; font-size:12.5px; color:var(--text-color,#cbd5e1); padding:3px 4px; border-radius:6px; }
-    #ta-log .ta-cmd-header:hover { background:var(--border-color,#1f1f1f); }
-    #ta-log .ta-outrow .ta-cmd-header { color:var(--text-secondary,#9ca3af); }
-    #ta-log .ta-cmd-text { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0; }
-    #ta-log .ta-chev { font-size:9px; opacity:.55; transition:transform .12s; flex:none; }
+    /* One row per action: verb icon, what happened, a short result, optional details. */
+    #ta-log .ta-cmd-header { display:flex; align-items:center; gap:10px; font-size:12.5px; color:var(--text-color,#cbd5e1); padding:5px 8px; border-radius:7px; min-height:28px; }
+    #ta-log .ta-cmd-header[data-ta-toggle] { cursor:pointer; }
+    #ta-log .ta-cmd-header[data-ta-toggle]:hover { background:var(--border-color,#1f1f1f); }
+    #ta-log .ta-verb { width:14px; text-align:center; font-size:11px; color:var(--text-secondary,#94a3b8); flex:none; }
+    #ta-log .ta-cmd-text { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0; }
+    #ta-log .ta-result { flex:none; font-size:11px; color:var(--text-secondary,#94a3b8); padding:1px 8px; border-radius:999px; background:rgba(128,128,128,.1); white-space:nowrap; }
+    #ta-log .ta-act.is-failed .ta-verb, #ta-log .ta-act.is-failed .ta-result { color:#dc2626; }
+    #ta-log .ta-act.is-failed .ta-result { background:rgba(220,38,38,.1); }
+    #ta-log .ta-chev { font-size:9px; opacity:.5; transition:transform .12s; flex:none; }
+    #ta-log .ta-outline { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; color:var(--text-secondary,#94a3b8); padding:2px 8px 2px 32px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     #ta-log .ta-cmd-body { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; color:var(--text-color,#cbd5e1); background:var(--background-surface,#141414); border:1px solid var(--border-color,#2a2a2a); border-radius:6px; padding:8px 10px; margin:4px 0 0 20px; white-space:pre-wrap; word-break:break-word; max-height:260px; overflow:auto; }
   </style>
   <script src="/public/js/theme-switcher.js"></script>
@@ -201,22 +207,23 @@ export function ChatPage({
            chat (not a replacement). Distinct card (shadow + rounded) with a close button;
            the main chat stays visible at the edges. Right panel keeps the live preview. -->
       <div id="ticket-agent-panel" style="display:none;position:absolute;top:12px;left:12px;bottom:12px;right:12px;z-index:80;background:var(--card-bg,#141414);border:1px solid var(--border-color,#2a2a2a);border-radius:14px;box-shadow:0 18px 50px rgba(0,0,0,.55);flex-direction:column;overflow:hidden;">
-        <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--border-color,#2a2a2a);flex:none;background:var(--background-surface,#191919);">
+        <div style="display:flex;align-items:center;gap:10px;padding:14px 16px 6px;border-bottom:0;flex:none;background:var(--card-bg,#141414);">
           <i class="fas fa-comments" style="color:#a78bfa;"></i>
-          <span id="ta-title" style="font-weight:600;color:var(--text-color,#e2e8f0);font-size:14px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Ticket</span>
+          <span id="ta-title" style="font-weight:600;color:var(--text-color,#e2e8f0);font-size:15px;letter-spacing:-.005em;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Ticket</span>
           <button id="ta-exit" type="button" title="Close ticket and return to chat" aria-label="Close ticket and return to chat" style="flex:none;height:32px;padding:0 10px;gap:6px;border-radius:8px;cursor:pointer;background:transparent;color:var(--text-color,#e2e8f0);border:1px solid var(--border-color,#333);display:inline-flex;align-items:center;justify-content:center;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg><span>Close</span></button>
         </div>
         <div id="ta-resize" title="Drag to resize the split" style="position:absolute;top:0;right:-4px;width:10px;height:100%;cursor:ew-resize;z-index:7;"></div>
-        <div id="ta-actionbar" style="display:flex;align-items:center;gap:8px;padding:9px 14px;flex:none;border-bottom:1px solid var(--border-color,#2a2a2a);background:var(--background-surface,#191919);">
+        <div id="ta-actionbar" style="display:flex;align-items:center;gap:8px;padding:8px 16px 10px;flex:none;border-bottom:0;background:var(--card-bg,#141414);">
           <button id="ta-build" title="Queue this ticket for the coding agent to build" style="height:32px;padding:0 14px;border-radius:8px;cursor:pointer;background:#7c3aed;color:#fff;border:none;font-size:12.5px;font-weight:600;display:inline-flex;align-items:center;gap:7px;"><i class="fas fa-play" style="font-size:10px;"></i>Build</button>
           <button id="ta-stop" title="Stop the agent that is running right now" style="height:32px;padding:0 14px;border-radius:8px;cursor:pointer;background:transparent;color:#f87171;border:1px solid #5a2a30;font-size:12.5px;font-weight:600;display:none;align-items:center;gap:7px;"><i class="fas fa-stop" style="font-size:10px;"></i>Stop</button>
           <button id="ta-edit" title="Edit this ticket" style="height:32px;padding:0 12px;border-radius:8px;cursor:pointer;background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);font-size:12.5px;display:inline-flex;align-items:center;gap:7px;"><i class="fas fa-pen" style="font-size:11px;"></i>Edit</button>
           <button id="ta-preview" title="Open this ticket's branch in the Preview panel (starts it if it isn't running)" style="height:32px;padding:0 12px;border-radius:8px;cursor:pointer;background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);font-size:12.5px;display:inline-flex;align-items:center;gap:7px;"><i class="fas fa-display" style="font-size:11px;"></i>Preview</button>
+          <button id="ta-checks" type="button" aria-pressed="false" title="Checks for this ticket" style="height:32px;padding:0 12px;border-radius:999px;cursor:pointer;background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);font-size:12px;display:none;align-items:center;gap:7px;"><span class="ta-checks-dot" style="width:7px;height:7px;border-radius:50%;background:#94a3b8;"></span><span class="ta-checks-label">Checks off</span></button>
           <span style="flex:1;"></span>
           <button id="ta-delete" title="Delete this ticket" style="height:32px;width:34px;border-radius:8px;cursor:pointer;background:transparent;color:#f87171;border:1px solid var(--border-color,#333);font-size:12px;display:inline-flex;align-items:center;justify-content:center;"><i class="fas fa-trash"></i></button>
         </div>
         <style>
-          #ta-tabs { display:flex; gap:2px; padding:0 12px; flex:none; border-bottom:1px solid var(--border-color,#2a2a2a); background:var(--background-surface,#191919); }
+          #ta-tabs { display:flex; gap:2px; padding:0 12px; flex:none; border-bottom:1px solid var(--border-color,#2a2a2a); background:var(--card-bg,#141414); }
           .ta-tab { padding:9px 13px; border:none; background:transparent; color:var(--text-secondary,#9ca3af); font-size:12.5px; font-weight:500; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; display:inline-flex; align-items:center; gap:6px; }
           .ta-tab:hover { color:var(--text-color,#e2e8f0); }
           .ta-tab.active { color:#a78bfa; border-bottom-color:#a78bfa; }
@@ -472,7 +479,7 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261021-skip-checks" />
 <script src="/public/js/ticket-action-phases.js?v=20261021-log-pages"></script>
 <script src="/public/js/preview-tab.js?v=20261005-start-state"></script>
-    <script src="/public/js/ticket-agent.js?v=20261005-followup-tasks"></script>
+    <script src="/public/js/ticket-agent.js?v=20261021-action-rows"></script>
   <script src="/public/js/env-tab.js?v=20261004-env-apply"></script>
   <script src="/public/js/tab-overflow.js"></script>
   <script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>

@@ -14,6 +14,7 @@ import { instantApps } from "../../db/schema/instant.ts";
 import { eq, ne, and, asc, desc, max, notExists, lt, inArray } from "drizzle-orm";
 import { getProjectAccess, requirePermission } from "../../auth/project-access.ts";
 import { nextTicketKey } from "../../utils/ticket-keys.ts";
+import { applyTicketChecks, ticketChecksMode } from "../../services/build-stage-settings.ts";
 import { notify } from "../../services/notify.ts";
 import { addLog as addTicketLog } from "../../services/ticket-logs.ts";
 import { isChatTurnActive, decodeQuestionMeta } from "../../services/ticket-chat-turn.ts";
@@ -159,8 +160,7 @@ ticketsApi.get("/:projectId/tickets/:ticketId", async (c) => {
     ticket: {
       ...ticket,
       agentBusy: isChatTurnActive(ticket.id),
-      validationEnabled: project.validationEnabled !== false,
-      featureTestingEnabled: project.featureTestingEnabled !== false,
+      ...ticketCheckSettings(project, ticket.details),
       anchorBranch: anchor.anchorBranch,
       epicBranch: anchor.epic?.branch ?? null,
       epicKey: anchor.epic?.epicKey ?? null,
@@ -170,6 +170,14 @@ ticketsApi.get("/:projectId/tickets/:ticketId", async (c) => {
     repo,
   });
 });
+
+/** The checks that will run for this ticket, and whether that is the ticket's own choice. */
+function ticketCheckSettings(project: { validationEnabled?: boolean | null; featureTestingEnabled?: boolean | null }, details: unknown) {
+  const mode = ticketChecksMode(details);
+  const effective = applyTicketChecks({ validationEnabled: project.validationEnabled !== false, featureTestingEnabled: project.featureTestingEnabled !== false }, mode);
+  return { validationEnabled: effective.validationEnabled !== false, featureTestingEnabled: effective.featureTestingEnabled !== false, checksMode: mode,
+    projectChecksEnabled: project.validationEnabled !== false || project.featureTestingEnabled !== false };
+}
 
 /** Build the clone URL / host / web-IDE link the "Open in editor" menu needs. */
 function buildRepoLinks(
@@ -279,6 +287,24 @@ ticketsApi.delete("/:projectId/tickets/:ticketId", async (c) => {
 });
 
 // ── GET /api/projects/:projectId/stages ──────────────────────────────
+// ── POST /:projectId/tickets/:ticketId/checks — this ticket's own checks setting ──
+ticketsApi.post("/:projectId/tickets/:ticketId/checks", async (c) => {
+  const user = c.get("user");
+  const { projectId, ticketId } = c.req.param();
+  const access = await getProjectAccess(projectId!, user.id);
+  if (!access) return c.json({ error: "Not found" }, 404);
+  if (!access.permissions.canManageTickets) return c.json({ error: "Ticket management permission is required." }, 403);
+  const body = await c.req.json().catch(() => ({})) as { mode?: unknown };
+  if (body.mode !== "on" && body.mode !== "off" && body.mode !== "project") return c.json({ error: "mode must be on, off or project" }, 400);
+  const [ticket] = await db.select({ details: projectTickets.details }).from(projectTickets)
+    .where(and(eq(projectTickets.id, ticketId!), eq(projectTickets.projectId, access.project.id))).limit(1);
+  if (!ticket) return c.json({ error: "Ticket not found" }, 404);
+  const details = { ...((ticket.details && typeof ticket.details === "object") ? ticket.details as Record<string, unknown> : {}) };
+  if (body.mode === "project") delete details.checks; else details.checks = body.mode;
+  await db.update(projectTickets).set({ details, updatedAt: new Date() }).where(eq(projectTickets.id, ticketId!));
+  return c.json({ ok: true, ...ticketCheckSettings(access.project, details) });
+});
+
 // ── POST /:projectId/tickets/:ticketId/skip-checks — keep the saved build, continue ──
 ticketsApi.post("/:projectId/tickets/:ticketId/skip-checks", async (c) => {
   const user = c.get("user");
