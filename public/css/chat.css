@@ -3312,19 +3312,17 @@ input:checked + .turbo-slider + .turbo-label,
 .message.assistant:has(.lfg-diagram) { width:100%; max-width:100%; box-sizing:border-box; min-width:0; }
 .message.assistant:has(.lfg-diagram) > .message-content { min-width:0; width:100%; box-sizing:border-box; }
 
-/* Dictation replaces only the toolbar row, preserving the existing editor and draft. */
-#chat-form .input-wrapper:has(> .audio-recording-indicator) > .left-actions,
-#chat-form .input-wrapper:has(> .audio-recording-indicator) > .input-actions { visibility:hidden; pointer-events:none; }
-#chat-form .input-wrapper > .audio-recording-indicator {
-    position:absolute;bottom:8px;left:12px;right:12px;width:auto;max-width:none;
-    height:40px;min-height:0;margin:0;padding:0;display:flex;flex-direction:row;
-    align-items:center;gap:12px;border:0;border-radius:0;box-shadow:none;background:transparent;z-index:11;
+/* Dictation: a compact strip in the toolbar, before the mic. Nothing else moves. */
+#chat-form .input-actions > .audio-recording-indicator {
+    position:static;display:flex;flex-direction:row;align-items:center;gap:6px;
+    width:clamp(120px,26vw,300px);height:28px;min-height:0;margin:0 2px 0 0;padding:0 4px;
+    border:0;border-radius:999px;box-shadow:none;background:var(--hover-bg,rgba(128,128,128,.08));
 }
-.dictation-waveform { flex:1;min-width:0;width:0;height:32px;color:var(--text-muted,#64748b); }
+.dictation-waveform { flex:1;min-width:0;width:0;height:20px;color:var(--primary-color,#7c3aed); }
 #chat-form .audio-recording-indicator button {
-    flex:0 0 36px;width:36px;height:36px;padding:0;display:grid;place-items:center;
-    border:0;border-radius:50%;background:var(--hover-bg,rgba(128,128,128,.12));
-    color:var(--text-color,#334155);font-size:24px;cursor:pointer;
+    flex:0 0 22px;width:22px;height:22px;padding:0;display:grid;place-items:center;
+    border:0;border-radius:50%;background:transparent;
+    color:var(--text-secondary,#64748b);font-size:14px;line-height:1;cursor:pointer;
 }
 #chat-form .audio-recording-indicator button:hover { background:var(--border-color,rgba(128,128,128,.24)); }
 #chat-form .audio-recording-indicator button:focus-visible { outline:2px solid var(--primary-color,#7c3aed);outline-offset:2px; }
@@ -3338,12 +3336,7 @@ input:checked + .turbo-slider + .turbo-label,
 #chat-input { mask-image:none;-webkit-mask-image:none; }
 
 /* Keep an editable composer above the quiet recording controls. */
-#chat-form .input-wrapper:has(> .audio-recording-indicator) #chat-input-box { display:block !important; visibility:visible !important; pointer-events:auto; }
-#chat-form .input-wrapper:has(> .audio-recording-indicator) #chat-input { visibility:visible !important; opacity:1 !important; pointer-events:auto; }
 /* Same send button as the composer, so recording does not look like a different control. */
-#chat-form .audio-recording-indicator .dictation-send { background:rgba(187,134,252,.2); color:var(--primary-color,#7c3aed); font-size:15px; }
-[data-theme="light"] #chat-form .audio-recording-indicator .dictation-send { background:linear-gradient(135deg,#7c3aed 0%,#6366f1 100%); color:#fff; }
-[data-theme="light"] #chat-form .audio-recording-indicator .dictation-send:hover { background:linear-gradient(135deg,#6d28d9 0%,#4f46e5 100%); }
 #chat-input.dictation-live { caret-color:transparent; }
 .audio-recording-indicator[data-phase="recording"][data-live="off"] .dictation-status { position:static;width:auto;height:auto;clip-path:none;flex:0 1 auto;max-width:45%;font-size:12px; }
 .chatgpt-connection{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 8px;padding:10px 14px;border:1px solid var(--border-color);border-radius:12px;background:var(--card-bg);color:var(--text-color);font-size:13px}
@@ -3353,3 +3346,9 @@ input:checked + .turbo-slider + .turbo-label,
 .history-loader { display:flex;align-items:center;justify-content:center;gap:14px;margin:8px auto 18px;font-size:12px;color:var(--text-muted,#64748b); }
 .history-loader .history-jump { font:inherit;font-size:12px;color:var(--primary-color,#7c3aed);background:transparent;border:1px solid var(--border-color,#e2e7ef);border-radius:999px;padding:4px 12px;cursor:pointer; }
 .history-loader .history-jump:hover { background:color-mix(in srgb,var(--primary-color,#7c3aed) 8%,transparent); }
+
+#chat-form .audio-recording-indicator .dictation-send { display:none; }
+#chat-form .audio-recording-indicator:not([data-phase="failed"]) .dictation-done { display:none; }
+#chat-form .audio-recording-indicator .dictation-stop-icon { width:9px;height:9px; }
+#chat-form .audio-recording-indicator .dictation-status { font-size:11.5px; }
+#record-audio-btn.recording { color:#dc2626; }

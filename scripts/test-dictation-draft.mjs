@@ -9,7 +9,7 @@ try {
   if(url.includes('/dictation/transcribe')){calls++;if(transcriptionGate)await transcriptionGate;return r.fulfill({status:fail?502:200,json:fail?{error:'Try again.'}:{text:'Hello, LFG. Please check the API.'}});}
   if(url.includes('/dictation/session')){if(sessionGate)await sessionGate;return r.fulfill({body:'v=0\r\nanswer'});}
   if(url.includes('/api/voice'))return r.fulfill({json:{natural:true}});
-  return r.fulfill({contentType:'text/html',body:'<html data-theme="light"><body><form id="chat-form"><div class="input-wrapper"><div class="left-actions">Attachments</div><div id="chat-input-box"><textarea id="chat-input"></textarea></div><div class="input-actions"><button type="button" id="record-audio-btn">Record</button></div></div></form></body></html>'});
+  return r.fulfill({contentType:'text/html',body:'<html data-theme="light"><body><form id="chat-form"><div class="input-wrapper"><div class="left-actions">Attachments</div><div id="chat-input-box"><textarea id="chat-input"></textarea></div><div class="input-actions"><button type="button" id="record-audio-btn">Record</button><button type="submit" id="send-btn">Send</button></div></div></form></body></html>'});
  });
  await page.goto('https://dictation.test/');await page.addStyleTag({path:'public/css/styles.css'});await page.addStyleTag({path:'public/css/theme-variables.css'});await page.addStyleTag({path:'public/css/chat.css'});await page.addStyleTag({path:'public/css/light/light-mode.css'});
  await page.evaluate(()=>{
@@ -32,10 +32,14 @@ try {
  const start=async()=>{await page.click('#record-audio-btn');await page.waitForFunction(()=>document.querySelector('.dictation-status')?.textContent==='Listening…');};
  const speak=async()=>page.evaluate(()=>emit({type:'conversation.item.input_audio_transcription.delta',item_id:'a',delta:'hello <b>lfg</b>'}));
  await page.fill('#chat-input','Existing draft.');await start();await speak();
- assert.equal(await page.locator('.live-transcription').count(),0);assert.equal(await page.locator('.left-actions').isVisible(),false);
+ // The composer stays as it is; a compact strip sits in the toolbar before the mic.
+ assert.equal(await page.locator('.left-actions').isVisible(),true);
+ assert.equal(await page.locator('#send-btn').isVisible(),true);
  assert.equal(await page.locator('#chat-input-box').isVisible(),true);
- assert.equal(await page.inputValue('#chat-input'),'Existing draft.');
- assert.equal(await page.locator('.audio-recording-indicator').evaluate(el=>el.getBoundingClientRect().height),40);
+ assert.equal(await page.locator('.input-actions > .audio-recording-indicator + #record-audio-btn').count(),1);
+ assert.equal(await page.locator('.audio-recording-indicator').evaluate(el=>el.getBoundingClientRect().height),28);
+ // Live words show in the draft as plain text while recording.
+ await page.waitForFunction(()=>document.querySelector('#chat-input').value==='Existing draft. hello <b>lfg</b>');
  await page.screenshot({animations:'disabled',path:'/tmp/lfg-openai-dictation-light.png'});
  await page.evaluate(()=>{document.documentElement.dataset.theme='dark';document.body.style.background='#16191f';});
  await page.setViewportSize({width:390,height:740});
@@ -43,12 +47,12 @@ try {
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  await page.screenshot({animations:'disabled',path:'/tmp/lfg-openai-dictation-dark-mobile.png'});
  await page.setViewportSize({width:1000,height:700});
- await page.getByRole('button',{name:'Stop dictation and keep text',exact:true}).click();
+ await page.click('#record-audio-btn');
  await page.waitForFunction(()=>!controller.active);
  assert.equal(await page.inputValue('#chat-input'),'Existing draft. Hello, LFG. Please check the API.');assert.equal(calls,1);
  assert.equal(await page.locator('#chat-input').evaluate(el=>getComputedStyle(el).maskImage),'none');
  // Transcription failure retains recording for retry, not a new microphone session.
- fail=true;await start();await speak();await page.getByRole('button',{name:'Stop dictation and keep text',exact:true}).click();
+ fail=true;await start();await speak();await page.click('#record-audio-btn');
  await page.getByRole('button',{name:'Retry transcription'}).waitFor({state:'visible'});
  assert.equal(await page.evaluate(()=>micCalls),2);
  fail=false;await page.getByRole('button',{name:'Retry transcription'}).click();await page.waitForFunction(()=>!controller.active);
@@ -83,7 +87,7 @@ try {
  assert.equal(await page.evaluate(()=>sends),1);
  // Enter also works with focus on the recording controls; holding it cannot send the result.
  await start();
- await page.focus('.dictation-done');
+ await page.focus('#record-audio-btn');
  await page.keyboard.down('Enter');
  await page.waitForFunction(()=>!controller.active);
  await page.keyboard.down('Enter');
@@ -103,7 +107,7 @@ try {
  let releaseSession;sessionGate=new Promise(resolve=>releaseSession=resolve);
  await page.fill('#chat-input','Initial draft.');await start();
  await page.fill('#chat-input','Edited while recording.');
- await page.getByRole('button',{name:'Transcribe and send message',exact:true}).click();
+ await page.click('#send-btn');
  await page.waitForFunction(()=>window.explicitSends===1);
  assert.equal(await page.evaluate(()=>sentDraft),'Edited while recording. Hello, LFG. Please check the API.');
  assert.equal(await page.evaluate(()=>controller.active),false);

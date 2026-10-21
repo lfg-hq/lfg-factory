@@ -114,7 +114,10 @@ window.createDictation = ({button, input, wrapper, getScope, getContext, onSend}
         s.send.onclick=()=>{if(s.phase==='recording'){s.sendAfter=true;void stop(s);}};
         s.done.onclick=()=>stop(s);
         panel.querySelector('.recording-cancel-btn').onclick=()=>{close(s);input.focus();};
-        s.retry.onclick=()=>finalize(s); wrapper.append(panel);
+        s.retry.onclick=()=>finalize(s);
+        // A compact strip in the toolbar, before the mic; the rest of the composer stays.
+        const actions=wrapper.querySelector('.input-actions');
+        if(actions)actions.insertBefore(panel,button.parentElement===actions?button:actions.firstChild);else wrapper.append(panel);
     }
     function waveform(s) {
         const canvas=s.panel.querySelector('canvas'), ctx=canvas.getContext('2d');
@@ -133,15 +136,15 @@ window.createDictation = ({button, input, wrapper, getScope, getContext, onSend}
             if(!active(s) || s.phase!=='recording')return;
             if(now-lastFrame<120){s.frame=requestAnimationFrame(draw);return;}
             lastFrame=now;
-            const width=canvas.clientWidth, height=32, ratio=window.devicePixelRatio || 1;
+            const width=canvas.clientWidth, height=canvas.clientHeight || 20, ratio=window.devicePixelRatio || 1;
             canvas.width=width*ratio;canvas.height=height*ratio;ctx.setTransform(ratio,0,0,ratio,0,0);
             let level=0;
             if(s.analyser){s.analyser.getByteTimeDomainData(s.samples);for(const sample of s.samples)level+=((sample-128)/128)**2;level=Math.sqrt(level/s.samples.length);}
             smoothed=smoothed*.75+level*.25;
-            s.levels.push(reduced ? 3 : Math.max(3,Math.min(22,smoothed*120)));if(s.levels.length>200)s.levels.shift();
-            ctx.strokeStyle=getComputedStyle(canvas).color;ctx.lineWidth=3;ctx.lineCap='round';
-            const count=Math.floor(width/7);
-            for(let i=0;i<count;i++){const h=s.levels[s.levels.length-count+i] || 3;ctx.beginPath();ctx.moveTo(i*7+2,(height-h)/2);ctx.lineTo(i*7+2,(height+h)/2);ctx.stroke();}
+            s.levels.push(reduced ? 2 : Math.max(2,Math.min(height-2,smoothed*90)));if(s.levels.length>200)s.levels.shift();
+            ctx.strokeStyle=getComputedStyle(canvas).color;ctx.lineWidth=2;ctx.lineCap='round';
+            const count=Math.floor(width/5);
+            for(let i=0;i<count;i++){const h=s.levels[s.levels.length-count+i] || 2;ctx.beginPath();ctx.moveTo(i*5+2,(height-h)/2);ctx.lineTo(i*5+2,(height+h)/2);ctx.stroke();}
             s.frame=requestAnimationFrame(draw);
         };
         draw();
@@ -221,6 +224,13 @@ window.createDictation = ({button, input, wrapper, getScope, getContext, onSend}
         } catch(error) { if(active(s)) {s.abort.abort();failed(s,error.name==='NotAllowedError'?'Microphone permission was denied. Allow access and try again.':error.message);} }
     }
     button.title='Dictate a message';button.setAttribute('aria-label','Dictate a message');button.onclick=start;
+    // The composer's own Send button finishes the recording and sends its transcript.
+    wrapper.querySelector('#send-btn')?.addEventListener('click', event => {
+        if (!session || !['connecting','recording','stopping','finalizing'].includes(session.phase)) return;
+        event.preventDefault(); event.stopImmediatePropagation();
+        if (session.phase === 'recording') { session.sendAfter = true; void stop(session); }
+        else if (session.phase === 'connecting') close(session);
+    }, true);
     let finishingWithEnter = false;
     // Capture before the chat input's Enter-to-send handler and native button clicks.
     wrapper.addEventListener('keydown', event => {
