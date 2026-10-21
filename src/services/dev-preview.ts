@@ -252,7 +252,7 @@ export async function recoverInterruptedPreviews(quietMs = 2 * 60_000): Promise<
   for (const row of rows) {
     if (previewRunQueue.isActive(row.projectId) || Date.now() - new Date(row.updatedAt ?? 0).getTime() < quietMs) continue;
     await db.update(projectEnvironments)
-      .set({ previewStatus: "error", previewError: "Preview setup was interrupted by a server restart. Press Retry to start it again.", updatedAt: new Date() })
+      .set({ previewStatus: "error", previewError: "Preview setup was interrupted by a server restart. Press Update & rebuild to start it again.", updatedAt: new Date() })
       .where(and(eq(projectEnvironments.projectId, row.projectId), inArray(projectEnvironments.previewStatus, BUSY_PREVIEW)));
     recovered++;
   }
