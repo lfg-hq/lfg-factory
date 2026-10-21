@@ -35,7 +35,7 @@ import { validateSchemaTargets, assetCaseCheck, schemaStepSchema, replayActionSc
 import { githubTicketDiff, parseAuthedGithubUrl } from "./ticket-diff-github.ts";
 import { z } from "zod";
 import { generateObject, generateText, stepCountIs, tool, zodSchema, type LanguageModel } from "ai";
-import { and, desc, eq, isNotNull, or } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, or } from "drizzle-orm";
 import { db } from "../config/db.ts";
 import { projects, projectEnvironmentVariables } from "../db/schema/projects.ts";
 import { projectEnvironments } from "../db/schema/project-environments.ts";
@@ -238,6 +238,26 @@ function throwIfCancelled(projectId: string) { if (cancelledProjects.has(project
 // take over. The cancel flag is cleared for the new run ONLY after the old one has
 // released — otherwise the new run's clear revives the run it just cancelled.
 const previewRunQueue = new PreviewRunQueue();
+
+/**
+ * A preview mid-setup lives in the process running it. A deploy or crash ends that
+ * process, but the row keeps saying "provisioning" and the panel spins forever.
+ * Rows still busy after a quiet spell, with no run in this process, were interrupted.
+ */
+const BUSY_PREVIEW: PreviewStatus[] = ["detecting", "provisioning", "installing", "seeding", "starting"];
+export async function recoverInterruptedPreviews(quietMs = 2 * 60_000): Promise<number> {
+  const rows = await db.select({ projectId: projectEnvironments.projectId, status: projectEnvironments.previewStatus, updatedAt: projectEnvironments.updatedAt })
+    .from(projectEnvironments).where(inArray(projectEnvironments.previewStatus, BUSY_PREVIEW));
+  let recovered = 0;
+  for (const row of rows) {
+    if (previewRunQueue.isActive(row.projectId) || Date.now() - new Date(row.updatedAt ?? 0).getTime() < quietMs) continue;
+    await db.update(projectEnvironments)
+      .set({ previewStatus: "error", previewError: "Preview setup was interrupted by a server restart. Press Retry to start it again.", updatedAt: new Date() })
+      .where(and(eq(projectEnvironments.projectId, row.projectId), inArray(projectEnvironments.previewStatus, BUSY_PREVIEW)));
+    recovered++;
+  }
+  return recovered;
+}
 async function acquirePreviewAccess(projectId:string):Promise<()=>void> {
   const release=await previewRunQueue.acquire(projectId);
   try {

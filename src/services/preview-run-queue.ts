@@ -2,6 +2,9 @@
 export class PreviewRunQueue {
   private tails = new Map<string, Promise<void>>();
 
+  /** True while this process holds or waits for a run of the project. */
+  isActive(projectId: string): boolean { return this.tails.has(projectId); }
+
   async acquire(projectId: string): Promise<() => void> {
     const previous = this.tails.get(projectId);
     let resolve!: () => void;

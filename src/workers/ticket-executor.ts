@@ -1076,6 +1076,13 @@ export async function startTicketWorker() {
       .catch((e) => console.warn("[ticket-executor] build-run resume failed:", (e as Error).message));
   }, 8_000);
 
+  // Previews a restart cut off mid-setup: mark them interrupted so Retry appears.
+  const sweepPreviews = () => void import("../services/dev-preview.ts")
+    .then((m) => m.recoverInterruptedPreviews())
+    .catch((e) => console.warn("[ticket-executor] preview recovery failed:", (e as Error).message));
+  setTimeout(sweepPreviews, 60_000);
+  setInterval(sweepPreviews, 2 * 60_000).unref?.();
+
   bus.on("ticket.queued", async (event) => {
     const { ticketId } = event.payload;
 
