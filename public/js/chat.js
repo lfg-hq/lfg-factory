@@ -949,6 +949,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         }
                         if (msg.role === 'assistant') {
                             if (!msg.content?.trim() && !assistantTimelineParts(msg)) renderSavedInlineArtifacts(msg);
+                            if (!assistantTimelineParts(msg)) renderSavedInlineArtifacts(msg, true);
                             (msg.page_previews || msg.pagePreviews || []).forEach(p => p?.id && !p.kind && renderChatArtifact(p, {replay:true}));
                         }
                     });
@@ -3952,9 +3953,10 @@ document.addEventListener('DOMContentLoaded', () => {
         return parts;
     }
 
-    function renderSavedInlineArtifacts(message) {
+    // Build cards follow the reply that started the build; other cards precede it.
+    function renderSavedInlineArtifacts(message, trailing = false) {
         (message.page_previews || message.pagePreviews || []).forEach(artifact => {
-            if (artifact?.id && artifact.kind) renderChatArtifact(artifact, {replay:true});
+            if (artifact?.id && artifact.kind && (artifact.kind === 'build_run') === trailing) renderChatArtifact(artifact, {replay:true});
         });
     }
 
@@ -3968,6 +3970,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (part.kind === 'message') lastMessage = addMessageToChat('assistant', part.text);
             else renderSavedTrail(part.steps, message.end_reason, index < parts.length - 1);
         });
+        renderSavedInlineArtifacts(message, true);
         if (finalTextIndex < 0) renderSavedInlineArtifacts(message);
         if (lastMessage && message.end_reason) markMessageEndReason(lastMessage, message.end_reason);
         return true;
@@ -4916,6 +4919,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (message.role === 'assistant' && message.end_reason) markMessageEndReason(el, message.end_reason);
                     count++;
                 }
+                if (!renderedTimeline && message.role === 'assistant') renderSavedInlineArtifacts(message, true);
                 // Any page preview this turn produced, rebuilt from the saved document.
                 if (message.role === 'assistant' && Array.isArray(message.page_previews)) {
                     message.page_previews.forEach((p) => p && p.id && !p.kind && renderChatArtifact(p, { replay: true }));

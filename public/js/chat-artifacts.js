@@ -299,6 +299,8 @@
         // Replay can be delivered more than once during reconnect. Deduplicate references.
         if (!card) card = [...container.querySelectorAll('.chat-artifact-card')].find(c => c.dataset.artifactId === artifact.id && c.dataset.artifactKind === artifact.kind);
         const m = card ? models.get(card) : create(container, artifact, projectId, opts.callId);
+        // The build card belongs under the reply that started the build, not above it.
+        if (!card && artifact.kind === 'build_run' && !opts.replay) m.trailing = true;
         m.artifact = artifact; m.saved = true; m.interrupted = false; m.card.dataset.artifactId = artifact.id;
         paint(m);
         if (artifact.kind === 'build_run') pollBuild(m);
@@ -313,7 +315,11 @@
         m.saved = false; if (data.file_name) m.artifact.name = data.file_name; m.content += data.content_chunk || ''; paint(m);
     }
     function finish(container) {
-        container.querySelectorAll('.chat-artifact-card').forEach(card => { const m = models.get(card); if (m && !m.saved) {m.interrupted = true; paint(m);} });
+        container.querySelectorAll('.chat-artifact-card').forEach(card => {
+            const m = models.get(card); if (!m) return;
+            if (!m.saved) { m.interrupted = true; paint(m); }
+            if (m.trailing) { m.trailing = false; container.append(card); }
+        });
     }
     window.ChatArtifacts = {render, stream, finish};
 })();
