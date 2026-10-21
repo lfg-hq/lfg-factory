@@ -11,7 +11,9 @@ test('data operations cannot expose arbitrary source-editing or build tools',asy
  expect('inspect' in tools).toBe(false);
  expect((await (tools.database.execute as any)({connectionKey:'OTHER_DB',sql:'SELECT 1',params:[],maxAffectedRows:1},{})).error).toBeTruthy();
  expect(calls).toBe(0);
- for(const sql of ['DROP TABLE account','UPDATE account SET password=$1','DELETE FROM account','SELECT 1; DROP TABLE account','COPY account TO PROGRAM x'])expect(()=>validateDataSql(sql)).toThrow();
+ // Full SQL on the local development database; only machine-level escapes stay blocked.
+ for(const sql of ['DROP TABLE account','UPDATE account SET password=$1','DELETE FROM account','CREATE TABLE t (id int)','SELECT * INTO copy FROM account'])expect(validateDataSql(sql)).toBe(sql);
+ for(const sql of ['COPY account TO PROGRAM x',"SELECT pg_read_file('/etc/passwd')","SELECT dblink_connect('x')"])expect(()=>validateDataSql(sql)).toThrow();
  expect(validateDataSql('UPDATE account SET password=$1 WHERE id=$2;')).toBe('UPDATE account SET password=$1 WHERE id=$2');
 });
 
@@ -20,7 +22,7 @@ test('transactions validate every statement before pausing or running and do not
  const tools=previewDataTools({previewUrl:'https://preview.example',connectionKeys:['DATABASE_URL'],workers:async action=>{calls.push(action);},run:async()=>{calls.push('sql');return {exitCode:0,output:'committed'};}});
  const invoke=(args:any)=>(tools.databaseTransaction.execute as any)(args,{});
  expect((await invoke({connectionKey:'OTHER',statements:[{sql:'SELECT 1'}]})).error).toBeTruthy();
- expect((await invoke({connectionKey:'DATABASE_URL',statements:[{sql:'DELETE FROM jobs WHERE id=$1',params:['one']},{sql:'DROP TABLE users'}]})).error).toBeTruthy();
+ expect((await invoke({connectionKey:'DATABASE_URL',statements:[{sql:'DELETE FROM jobs WHERE id=$1',params:['one']},{sql:'COPY users TO PROGRAM \'x\''}]})).error).toBeTruthy();
  expect(calls).toEqual([]);
  expect((await invoke({connectionKey:'DATABASE_URL',statements:[{sql:'DELETE FROM jobs WHERE tenant=$1',params:['fixture'],maxAffectedRows:500,expectedRows:46}]})).exitCode).toBe(0);
  expect(calls).toEqual(['pause','sql']);
@@ -54,8 +56,6 @@ test('structured inspection reads source and reports database metadata without e
  }finally{rmSync(root,{recursive:true,force:true});}
 });
 
-test('INSERT INTO is allowed; SELECT INTO stays blocked', () => {
+test('INSERT INTO a Better Auth "user" table is accepted', () => {
   expect(validateDataSql('INSERT INTO "user" (id, email) VALUES ($1, $2)')).toContain('INSERT INTO');
-  expect(() => validateDataSql('SELECT * INTO copy_of_users FROM "user"')).toThrow();
-  expect(() => validateDataSql('INSERT INTO a SELECT * INTO b FROM c')).toThrow();
 });
