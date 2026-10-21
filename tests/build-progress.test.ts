@@ -19,6 +19,7 @@ test('update skips tool chatter and keeps one readable sentence', () => {
   expect(latestUpdate(logs('[Validation] Reading application files', '[Validation] Editing a file',
     '[Validation] The first browser sign-in was rejected because `.env` names localhost as the trusted origin. I will fix it.'))).toBe(
     'The first browser sign-in was rejected because .env names localhost as the trusted origin.');
+  expect(latestUpdate(logs("import { betterAuth } from 'better-auth'; import { db } from '../server/db'; export const auth = betterAuth({ database: db, logger: { disabled: true } })"))).toBeNull();
   expect(latestUpdate(logs('Running npm audit --omit=dev', 'Successfully replaced 4 block(s) in src/a.ts.'))).toBeNull();
   expect(latestUpdate(logs('this is a long readable sentence about the work '.repeat(10)))!.length).toBeLessThanOrEqual(158);
   // Command output never becomes the headline, even when it is the newest line.

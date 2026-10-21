@@ -38,6 +38,8 @@ function runningStage(logs: LogLine[]): BuildStage {
 export function isProse(text: string): boolean {
   if (text.length < 25 || CHATTER.test(text) || /^[{\[/]/.test(text) || text.startsWith("Validation check:")) return false;
   if (/[\w.-]+\.\w+:\d+|https?:\/\/|\|/.test(text) || (text.match(/\//g) ?? []).length > 2) return false;
+  // Source code (imports, objects, statements) is not a progress note.
+  if (/^(import|export|const|let|function|return)\b|[{}]|=>|\w\(|;\s*$/.test(text)) return false;
   const words = text.split(" ").filter((word) => /[a-z]{2,}/i.test(word));
   return words.length >= 5 && (text.match(/[a-z ]/gi) ?? []).length / text.length > 0.75;
 }

@@ -210,7 +210,8 @@
     b.style.display = "inline-flex";
     b.setAttribute("aria-pressed", String(on));
     b.querySelector(".ta-checks-label").textContent = on ? "Checks on" : "Checks off";
-    b.querySelector(".ta-checks-dot").style.background = on ? "#16a34a" : "#94a3b8";
+    const icon = b.querySelector(".ta-checks-icon");
+    icon.className = "fas ta-checks-icon " + (on ? "fa-toggle-on" : "fa-toggle-off"); icon.style.color = on ? "#16a34a" : "#94a3b8";
     b.title = (on ? "Checks run after this ticket builds" : "This ticket builds without checks") +
       (curMeta.checksMode === "project" ? " (project default). Click to change for this ticket only." : " (set for this ticket). Click to switch.");
     b.disabled = isBusy();

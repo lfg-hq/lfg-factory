@@ -46,7 +46,7 @@ export function ChatPage({
   <style>
     /* "Chat with ticket" log entries */
     #ta-log .ta-user { align-self:flex-end; max-width:85%; background:#7c3aed; color:#fff; padding:8px 13px; border-radius:12px 12px 3px 12px; font-size:13.5px; line-height:1.5; white-space:pre-wrap; word-break:break-word; }
-    #ta-log .ta-agent { align-self:flex-start; max-width:92%; background:var(--card-bg,#161616); border:1px solid var(--border-color,#2a2a2a); border-left:3px solid #34d399; padding:10px 13px; border-radius:10px; font-size:13.5px; line-height:1.55; }
+    #ta-log .ta-agent { align-self:flex-start; margin:10px 0; max-width:92%; background:var(--card-bg,#161616); border:1px solid var(--border-color,#2a2a2a); border-left:3px solid #34d399; padding:10px 13px; border-radius:10px; font-size:13.5px; line-height:1.55; }
     #ta-log .ta-agent-label { font-size:10.5px; text-transform:uppercase; letter-spacing:.5px; color:#34d399; font-weight:700; margin-bottom:4px; }
     #ta-log .ta-cmd { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; color:var(--text-secondary,#9ca3af); padding:2px 0; }
     #ta-log .ta-out { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; color:var(--text-color,#cbd5e1); background:var(--background-surface,#141414); border:1px solid var(--border-color,#2a2a2a); border-radius:6px; padding:8px 10px; white-space:pre-wrap; word-break:break-word; max-height:220px; overflow:auto; }
@@ -217,8 +217,8 @@ export function ChatPage({
           <button id="ta-build" title="Queue this ticket for the coding agent to build" style="height:32px;padding:0 14px;border-radius:8px;cursor:pointer;background:#7c3aed;color:#fff;border:none;font-size:12.5px;font-weight:600;display:inline-flex;align-items:center;gap:7px;"><i class="fas fa-play" style="font-size:10px;"></i>Build</button>
           <button id="ta-stop" title="Stop the agent that is running right now" style="height:32px;padding:0 14px;border-radius:8px;cursor:pointer;background:transparent;color:#f87171;border:1px solid #5a2a30;font-size:12.5px;font-weight:600;display:none;align-items:center;gap:7px;"><i class="fas fa-stop" style="font-size:10px;"></i>Stop</button>
           <button id="ta-edit" title="Edit this ticket" style="height:32px;padding:0 12px;border-radius:8px;cursor:pointer;background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);font-size:12.5px;display:inline-flex;align-items:center;gap:7px;"><i class="fas fa-pen" style="font-size:11px;"></i>Edit</button>
-          <button id="ta-preview" title="Open this ticket's branch in the Preview panel (starts it if it isn't running)" style="height:32px;padding:0 12px;border-radius:8px;cursor:pointer;background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);font-size:12.5px;display:inline-flex;align-items:center;gap:7px;"><i class="fas fa-display" style="font-size:11px;"></i>Preview</button>
-          <button id="ta-checks" type="button" aria-pressed="false" title="Checks for this ticket" style="height:32px;padding:0 12px;border-radius:999px;cursor:pointer;background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);font-size:12px;display:none;align-items:center;gap:7px;"><span class="ta-checks-dot" style="width:7px;height:7px;border-radius:50%;background:#94a3b8;"></span><span class="ta-checks-label">Checks off</span></button>
+          <button id="ta-preview" title="Open this ticket's branch in the Preview panel (starts it if it isn't running)" style="height:32px;padding:0 12px;border-radius:8px;cursor:pointer;background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);font-size:12.5px;display:inline-flex;align-items:center;gap:7px;"><i class="fas fa-desktop" style="font-size:11px;"></i>Preview</button>
+          <button id="ta-checks" type="button" aria-pressed="false" title="Checks for this ticket" style="height:32px;padding:0 12px;border-radius:8px;cursor:pointer;background:transparent;color:var(--text-color,#cbd5e1);border:1px solid var(--border-color,#333);font-size:12.5px;display:none;align-items:center;gap:7px;"><i class="fas fa-toggle-off ta-checks-icon" style="font-size:13px;color:#94a3b8;"></i><span class="ta-checks-label">Checks off</span></button>
           <span style="flex:1;"></span>
           <button id="ta-delete" title="Delete this ticket" style="height:32px;width:34px;border-radius:8px;cursor:pointer;background:transparent;color:#f87171;border:1px solid var(--border-color,#333);font-size:12px;display:inline-flex;align-items:center;justify-content:center;"><i class="fas fa-trash"></i></button>
         </div>
@@ -479,7 +479,7 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261021-skip-checks" />
 <script src="/public/js/ticket-action-phases.js?v=20261021-log-pages"></script>
 <script src="/public/js/preview-tab.js?v=20261005-start-state"></script>
-    <script src="/public/js/ticket-agent.js?v=20261021-action-rows"></script>
+    <script src="/public/js/ticket-agent.js?v=20261021-header-buttons"></script>
   <script src="/public/js/env-tab.js?v=20261004-env-apply"></script>
   <script src="/public/js/tab-overflow.js"></script>
   <script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
