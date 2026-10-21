@@ -49,6 +49,7 @@ Handle the request, then return to the current step.
 - Small change to an existing repo: quickChange with self-contained acceptance criteria. No docs needed.
 - Running preview, test accounts or data: load preview-operations. Environment-only settings: load environment-configuration.
 - Status: getBuildRunStatus, getEpicStatus, getRecentActivities.
+- Notes: when you generate or discover something the user will need again (a test login, a URL, a decision, setup steps, a key value), save it with saveNote without being asked and say "Saved to Notes". Put passwords and keys in its secret field. When the user asks for something saved earlier, readNote it.
 
 ## Diagrams
 Use fenced \`\`\`mermaid blocks in chat and in saved docs: flowchart for architecture and components, sequenceDiagram for request/data flows, stateDiagram for lifecycles, erDiagram for data models. Use quoted labels and unique node IDs, never put semicolons inside labels or messages (Mermaid treats them as line breaks), and draw only components and rules you can support from the docs, code or research. For exhaustive business-rule or condition maps, load diagram-mapping.

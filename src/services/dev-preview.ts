@@ -2272,7 +2272,10 @@ export async function runPreviewDataOperation(opts: {
     return JSON.parse(r.output);
   });
   const tools={...previewDataTools({
-    saveAccount:async(account)=>{await checkSelection(); const {storePreviewAccount}=await import('./preview-accounts.ts');await storePreviewAccount(opts.projectId,environmentBranch(row.previewBranch),account);},
+    saveAccount:async(account)=>{await checkSelection(); const {storePreviewAccount}=await import('./preview-accounts.ts');await storePreviewAccount(opts.projectId,environmentBranch(row.previewBranch),account);
+      // Also keep it in the project's Notes so the user can find it later.
+      const {saveNote}=await import('./project-notes.ts');
+      await saveNote({projectId:opts.projectId,kind:'login',title:`Preview login: ${account.username}`,body:`Verified test login for the preview of \`${row.previewBranch||'the default branch'}\`.\n\n- Username: \`${account.username}\`\n- Sign in at: ${row.appUrl}`,secret:account.password,source:'agent'}).catch(e=>console.warn('[dev-preview] login note not saved:',(e as Error).message));},
     recallAccounts:async(identity)=>{await checkSelection();const {recallPreviewAccounts}=await import('./preview-accounts.ts');return recallPreviewAccounts(opts.projectId,environmentBranch(row.previewBranch),identity);},
     previewUrl:row.appUrl,connectionKeys:manifest.databases.map(d=>d.connectionEnvVar),workers:async(action)=>{
     opts.abortSignal?.throwIfAborted();throwIfCancelled(opts.projectId);

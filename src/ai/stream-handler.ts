@@ -708,6 +708,11 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   // Skipped when @ticket already pinned the context.
   const branchCtx = await branchCtxPromise;
   if (branchCtx) contextMessages.push({ role: "system", content: branchCtx });
+  // Saved notes travel with every product chat so earlier logins and decisions are remembered.
+  if (productChat && internalProjectId) {
+    const notes = await import("../services/project-notes.ts").then(m => m.notesContext(internalProjectId!)).catch(() => "");
+    if (notes) contextMessages.push({ role: "system", content: notes });
+  }
 
   let tools: Record<string, any> = instantMode
     ? createInstantTools({
@@ -756,6 +761,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
       const { previewDiagnosticsTool } = await import('./tools/preview-diagnostics.ts');
       tools.getPreviewDiagnostics = previewDiagnosticsTool({projectId:internalProjectId,publicProjectId:projectId,userId});
     }
+    if (projectId) Object.assign(tools, (await import('./tools/note-tools.ts')).noteTools({projectId:internalProjectId,userId}));
     if (projectId) tools.linkTicketDocuments = linkTicketDocumentsTool({projectId:internalProjectId,publicProjectId:projectId,userId});
     if (projectId) tools.handlePreview = previewActionTool({projectId:internalProjectId,publicProjectId:projectId,userId,conversationId:convId!,abortSignal:abortController.signal,onActivity:req.onActivity,
       onProgress: (detail) => {

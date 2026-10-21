@@ -35,7 +35,7 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
   <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
-  <link rel="stylesheet" href="/public/css/artifacts.css?v=20261004-dark-folders" />
+  <link rel="stylesheet" href="/public/css/artifacts.css?v=20261022-notes" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
   <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261022-build-rows" />
   <link rel="stylesheet" href="/public/css/chat.css?v=20261021-inline-strip" />
@@ -313,6 +313,7 @@ export function ChatPage({
         <button class="tab-button" data-tab="checklist">Tickets</button>
         <button class="tab-button" data-tab="preview">Preview</button>
         <button class="tab-button" data-tab="env">Env</button>
+        <button class="tab-button" data-tab="notes">Notes</button>
       </div>
       <div class="tab-overflow" id="tab-overflow">
         <button class="tab-overflow-btn" id="tab-overflow-btn" title="More tabs" aria-haspopup="true" aria-expanded="false">
@@ -393,6 +394,27 @@ export function ChatPage({
               <div class="env-msg" id="env-msg" hidden></div>
             </div>
             <div class="env-list" id="env-list"></div>
+          </div>
+        </div>
+
+        <!-- Notes Tab — the project's notebook: logins, links, decisions the agent or user saved.
+             Secrets stay encrypted; the list only says one exists until revealed. -->
+        <div class="tab-pane" id="notes">
+          <div class="env-panel notes-panel" id="notes-root" data-project-id="${projectId}">
+            <div class="env-panel-head">
+              <div class="env-head-row">
+                <div style="min-width:0;">
+                  <h3 class="env-title">Notes</h3>
+                  <div class="env-sub" id="notes-count">Loading…</div>
+                </div>
+                <div class="env-head-actions">
+                  <button id="notes-add" class="env-mini env-mini-primary" hidden><i class="fas fa-plus"></i> New note</button>
+                  <button id="notes-refresh" class="env-mini env-icon" title="Refresh notes" aria-label="Refresh notes"><i class="fas fa-sync-alt"></i></button>
+                </div>
+              </div>
+              <div class="env-msg" id="notes-msg" hidden></div>
+            </div>
+            <div class="notes-list" id="notes-list"></div>
           </div>
         </div>
 
@@ -508,6 +530,7 @@ export function ChatPage({
 <script src="/public/js/preview-tab.js?v=20261005-start-state"></script>
     <script src="/public/js/ticket-agent.js?v=20261022-git-tab"></script>
   <script src="/public/js/env-tab.js?v=20261004-env-apply"></script>
+  <script src="/public/js/notes-tab.js?v=20261022-notes"></script>
   <script src="/public/js/tab-overflow.js"></script>
   <script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
   <script src="/public/js/custom-dropdown.js"></script>
