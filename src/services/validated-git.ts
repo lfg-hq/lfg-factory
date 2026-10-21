@@ -164,8 +164,11 @@ export async function publishValidatedMerge(o:PublicationOptions & {targetBranch
           await sh(`git -C ${q(candidate)} -c user.name='LFG Agent' -c user.email='agent@lfg.dev' commit --no-verify -m 'merge: integrate ticket (checks skipped)'`);
           return sh(`git -C ${q(candidate)} rev-parse HEAD`);
         };
-        if(o.validation.skipped?.()) {
-          o.validation.onLog?.('Checks were skipped for this ticket; merging without re-checking.');
+        const {loadBuildStageSettings}=await import('./build-stage-settings.ts');
+        const settings=o.validation.projectId ? await loadBuildStageSettings(o.validation.projectId,o.validation.ticketId).catch(()=>({})) : {};
+        const checksOff=(settings as {validationEnabled?:boolean}).validationEnabled===false && (settings as {featureTestingEnabled?:boolean}).featureTestingEnabled===false;
+        if(checksOff || o.validation.skipped?.()) {
+          o.validation.onLog?.(checksOff ? 'Checks are off for this ticket; merging without them.' : 'Checks were skipped for this ticket; merging without re-checking.');
           sha=await commitMerge();
         } else {
           o.validation.onLog?.('Merge requires fresh checks: no matching ticket evidence for this tree, baseline and environment.');

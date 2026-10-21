@@ -80,7 +80,7 @@
   const diagnosticsOpen = new Map();
   function render(area, rows, ticket, key, renderRow, historyUrl, refresh) {
     const liveCards=new Map(Array.from(area.querySelectorAll('.feature-live[data-live-url]'),card=>[card.dataset.liveUrl,card]));
-    const previous = area.querySelector('.ticket-phase-body:not([hidden])');
+    const previous = area.querySelector('.checks-view:not([hidden])') || area.querySelector('.ticket-phase-body:not([hidden])');
     const scroll = previous ? { top:previous.scrollTop, left:previous.scrollLeft, bottom:previous.scrollHeight-previous.scrollTop-previous.clientHeight<40 } : null;
     const phases = group(rows, ticket).filter(phase => phase.id === 'build' || (phase.id === 'validation' ? ticket?.validationEnabled !== false : ticket?.featureTestingEnabled !== false));
     area.dataset.phaseView = key;
@@ -115,7 +115,8 @@
       choices.set(key, selected);
       buttons.forEach((button, i) => { button.setAttribute('aria-selected', String(tabs[i].id === selected)); button.tabIndex = tabs[i].id === selected ? 0 : -1; });
       bodies.forEach((body, i) => { body.hidden = tabOf(phases[i].id) !== selected; });
-      dock.hidden = selected !== 'checks' || !dock.childElementCount;
+      dock.hidden = !dock.childElementCount;
+      if (checksView) checksView.hidden = selected !== 'checks';
       // Paging applies to the build log only.
       const note = headers.querySelector('.phase-history-note'); if (note) note.hidden = selected !== 'build';
       area.scrollTop = 0;
@@ -177,9 +178,6 @@
         };
         bar.append(note,skip);body.append(bar);
       }
-      if(phase.id==='validation'){
-        const intro=document.createElement('p');intro.className='phase-empty';intro.textContent='App startup: required tools, database and migrations, and the server starting. The browser walkthrough follows below. Connection problems pause checks; they do not mean the feature failed.';body.append(intro);
-      }
       if(checks.size){
         const list=document.createElement('ul');list.className='validation-checklist';list.setAttribute('aria-label','Validation checks');
         for(const check of checks.values()){
@@ -195,19 +193,15 @@
       let logHost=body;
       let showLogs=null;
       if(phase.id==='validation'&&displayRows.length){
-        const details=document.createElement('details');const summary=document.createElement('summary');summary.textContent='Technical activity and diagnostics';details.append(summary);
+        const details=document.createElement('details');const summary=document.createElement('summary');summary.textContent='Startup logs';details.append(summary);
         // A failed validation opens by default: the reason lives in these rows.
         details.open=diagnosticsOpen.has(key)?diagnosticsOpen.get(key):phase.status==='error';
         details.addEventListener('toggle',()=>diagnosticsOpen.set(key,details.open));const logs=document.createElement('div');details.append(logs);body.append(details);logHost=logs;
       }
       if(phase.id==='feature-testing' && displayRows.length){
-        body.classList.add('feature-log-toolbar');
-        const show=document.createElement('button');show.type='button';show.className='feature-show-logs';show.textContent='Show logs';showLogs=show;
-        const dialog=document.createElement('section');dialog.className='feature-log-dialog';dialog.hidden=true;dialog.setAttribute('role','region');dialog.setAttribute('aria-label','Feature test logs');
-        const heading=document.createElement('header');const title=document.createElement('strong');title.textContent='Feature test logs';
-        const close=document.createElement('button');close.type='button';close.textContent='Back to browser';close.onclick=()=>{dialog.hidden=true;area.classList.remove('feature-logs-open');show.hidden=false;};heading.append(title,close);
-        const logs=document.createElement('div');logs.className='feature-run-log';dialog.append(heading,logs);show.onclick=()=>{dialog.hidden=false;area.classList.add('feature-logs-open');show.hidden=true;};
-        body.append(show,dialog);logHost=logs;
+        const details=document.createElement('details');details.className='checks-logs';const summary=document.createElement('summary');summary.textContent='Browser test logs';details.append(summary);
+        const open=diagnosticsOpen.get(key+':feature');details.open=!!open;details.addEventListener('toggle',()=>diagnosticsOpen.set(key+':feature',details.open));
+        const logs=document.createElement('div');logs.className='feature-run-log';details.append(logs);body.append(details);logHost=logs;
       }
       let visibleRows = displayRows;
       if (phase.id === 'build') {
@@ -249,7 +243,7 @@
           const details=document.createElement('div');details.className='feature-browser-details';details.append(checklist);
           const stage=document.createElement('div');stage.className='feature-review-stage';
           stage.append(status,viewport);content.append(details,stage);
-          const enlarge=document.createElement('button');enlarge.type='button';enlarge.className='feature-enlarge';enlarge.textContent='Focus browser';enlarge.onclick=()=>{const expanded=card.classList.toggle('browser-expanded');enlarge.textContent=expanded?'Show assertions':'Focus browser';enlarge.setAttribute('aria-expanded',String(expanded));};card.append(enlarge,content);
+          const enlarge=document.createElement('button');enlarge.type='button';enlarge.className='feature-enlarge';enlarge.textContent='Focus browser';enlarge.onclick=()=>{const expanded=card.classList.toggle('browser-expanded');enlarge.textContent=expanded?'Show assertions':'Focus browser';enlarge.setAttribute('aria-expanded',String(expanded));};card.append(content);
           const expandedChecks=new Set();
 
           owner.append(card);
@@ -288,7 +282,7 @@
 
               status.hidden=false;
               const stale=Date.now()-state.updatedAt>45000;
-              status.textContent=(state.status==='working'?(stale?'Waiting for browser update — ':'Live — '):state.status==='passed'?'Passed — ':'Attempt '+(state.attempt||'')+' failed — ')+state.step;
+              status.textContent=(state.status==='working'?(stale?'Waiting for browser update — ':'Live — '):state.status==='passed'?'Passed — ':(state.attempt>1?'Attempt '+state.attempt+' failed — ':'Failed — '))+state.step;
               frame.onload=()=>{frame.hidden=false;placeholder.hidden=true;};frame.onerror=()=>{if(frame.hidden)placeholder.textContent='Waiting for browser frames; reconnecting…';};frame.src=live[1]+'/live.jpg?t='+Date.now();
               if(state.status!=='working'){
                 frame.hidden=true;frame.onload=null;
@@ -323,8 +317,41 @@
       }
       body.hidden = tabOf(phase.id) !== selected; bodies.push(body);
     }
-    dock.hidden = selected !== 'checks' || !dock.childElementCount;
-    fragment.append(headers, dock);
+    // Checks read top to bottom in one scroll: outcome, app startup, the browser walkthrough, then logs.
+    let checksView = null;
+    if (checkPhases.length) {
+      checksView = document.createElement('div'); checksView.className = 'checks-view'; checksView.hidden = selected !== 'checks';
+      checksView.setAttribute('role', 'tabpanel');
+      const all = checkPhases.flatMap(phase => phase.rows);
+      const text = row => String(row.message || '').replace(/^\[(Validation|Feature testing)\]\s*/, '').replace(/\*\*/g, '').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/\s+/g, ' ').trim();
+      const skipped = all.some(row => /^(\*\*)?Checks skip/i.test(String(row.message || '')));
+      const overall = combined(checkPhases);
+      const failure = all.slice().reverse().find(row => /^(\*\*)?(Feature testing failed|Validation failed|Checks failed|Checks could not run|Runtime checks failed)/i.test(String(row.message || '')));
+      const verdict = skipped ? ['skipped', 'Checks were skipped', 'The saved build continued without them.']
+        : overall === 'done' ? ['done', 'Checks passed', 'The app started and the feature behaved as its acceptance criteria describe.']
+        : overall === 'error' ? ['error', 'Checks failed', failure ? text(failure).replace(/^(Feature testing failed|Validation failed|Checks failed)\.?\s*/i, '').slice(0, 240) : 'See the step that failed below.']
+        : overall === 'working' ? ['working', 'Checks are running', 'The app is starting and the feature is being exercised in a browser.']
+        : ['pending', 'Checks have not run', 'They run after the build is saved.'];
+      const banner = document.createElement('div'); banner.className = 'checks-banner'; banner.dataset.state = verdict[0]; banner.setAttribute('role', 'status');
+      const title = document.createElement('strong'); title.textContent = verdict[1];
+      const detail = document.createElement('span'); detail.textContent = verdict[2];
+      banner.append(title, detail); checksView.append(banner);
+      const stepState = phase => skipped && phase.status !== 'done' ? ['skipped', 'Skipped'] : ({ done:['done','Passed'], error:['error','Failed'], working:['working','Running'], 'not-applicable':['done','Not needed'], saved:['skipped','Skipped'] })[phase.status] || ['pending','Not run'];
+      let number = 0;
+      for (const phase of checkPhases) {
+        const step = document.createElement('section'); step.className = 'checks-step';
+        const head = document.createElement('header');
+        const [state, label] = stepState(phase); step.dataset.state = state;
+        const name = document.createElement('strong'); name.textContent = (++number) + '. ' + (phase.id === 'validation' ? 'App starts' : 'Feature walkthrough');
+        const pill = document.createElement('span'); pill.className = 'checks-pill'; pill.textContent = label;
+        head.append(name, pill); step.append(head);
+        if (phase.id === 'feature-testing') step.append(dock);
+        step.append(bodies[phases.indexOf(phase)]);
+        checksView.append(step);
+      }
+    }
+    dock.hidden = !dock.childElementCount;
+    fragment.append(headers);
     if (history?.more) {
       const note = document.createElement('div'); note.className = 'phase-history-note'; note.setAttribute('role', 'status'); note.hidden = selected !== 'build';
       const more = document.createElement('button'); more.type = 'button';
@@ -343,17 +370,18 @@
       note.append(more);
       headers.append(note);
     }
-    for (const body of bodies) fragment.append(body);
+    for (const [i, body] of bodies.entries()) if (!checkIds.includes(phases[i].id)) fragment.append(body);
+    if (checksView) fragment.append(checksView);
     const restoreLogs=area.classList.contains('feature-logs-open');
     area.classList.remove('feature-logs-open');
     area.replaceChildren(fragment);
     if(restoreLogs&&selected==='checks')area.querySelector('.feature-show-logs')?.click();
-    const visible = bodies.find(body => !body.hidden);
+    const visible = checksView && !checksView.hidden ? checksView : bodies.find(body => !body.hidden);
     const anchor = anchors.get(key); anchors.delete(key);
     // Opening a ticket lands on its latest activity; revealing older rows keeps the reader's place.
     if (visible && anchor != null) visible.scrollTop = visible.scrollHeight - anchor;
     else if (visible && scroll) { visible.scrollTop = scroll.bottom ? visible.scrollHeight : scroll.top; visible.scrollLeft = scroll.left; }
-    else if (visible) visible.scrollTop = visible.scrollHeight;
+    else if (visible && visible !== checksView) visible.scrollTop = visible.scrollHeight;
 
   }
   root.TicketActionPhases = { group, render, load, latestFeatureRunCompleted };

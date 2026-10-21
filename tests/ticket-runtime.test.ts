@@ -220,7 +220,7 @@ test('both disabled saves implementation without starting a repair agent or chec
  writeFileSync(join(x.dir,'app.txt'),'implemented');
  const sha=await runTicketRuntime(x.o,x.deps);
  expect(sha).not.toBe(x.original);expect(x.agents()).toBe(0);expect(x.checks()).toBe(0);
- expect(x.messages.join('\n')).toContain('has not been verified');
+ expect(x.messages.join('\n')).toContain('so the saved code was not tested'); expect(x.messages.join('\n')).not.toContain('Checks start the app');
 }));
 test('disabled validation still protects cancellation and branch identity',()=>fixture(async x=>{
  x.deps.settings={validationEnabled:false,featureTestingEnabled:false};

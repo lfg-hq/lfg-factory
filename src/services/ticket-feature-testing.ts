@@ -33,6 +33,8 @@ PY`;
 export async function runTicketFeatureTesting(o:FeatureTestContext){
  try { return await executeFeatureTesting(o); }
  catch(error){
+  // A skip or stop ends the run on purpose; the caller reports that, not a test failure.
+  if(o.cancelled?.())throw error;
   await o.progress(`**Feature testing failed.** ${o.redact((error as Error).message).slice(0,2500)}\n\nBrowser recordings are attached to their attempts above when frames were captured. Setup and API failures have diagnostic output rather than a screen recording.`);
   throw error;
  }

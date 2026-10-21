@@ -15,7 +15,7 @@ try{
  assert.equal(await page.locator('[data-status="passed"]').textContent(),'✓Configuration defaults and overridespassed');
  assert(await page.getByText('Connection problem',{exact:true}).isVisible());
  assert(!(await page.getByText('Inspecting saved code',{exact:true}).isVisible()));
- await page.getByText('Technical activity and diagnostics',{exact:true}).click();
+ await page.getByText('Startup logs',{exact:true}).click();
  assert(await page.getByText('Inspecting saved code',{exact:true}).isVisible());
  console.log('Validation progress UI passed');
 }finally{await browser.close();}
