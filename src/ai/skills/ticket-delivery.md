@@ -13,8 +13,8 @@ Every feature lives in one **epic**: its requirements doc, technical analysis an
 ## Proposing and creating tickets
 
 1. Read the PRD, technical analysis and design language (`getFileContent`). Tickets must match them.
-2. Propose the set in chat as a short table: name, what it delivers, complexity, priority, order. This is the user's review.
-3. Create the tickets once the user confirms, or right away if they explicitly asked for tickets. Run `setProjectStack()` if it isn't set, then `createTickets()` with the `epicId` and the primary source document, then `scheduleTickets()` in dependency order. Use `linkTicketDocuments` for any additional relevant docs.
+2. Propose the set in chat as a short table: name, what it delivers, depends on, complexity, priority. This is the user's review. Dependencies are real prerequisites only (ticket B uses code or data that ticket A creates); tickets that don't need each other have none and could be built in parallel, so say which ones those are.
+3. Create the tickets once the user confirms, or right away if they explicitly asked for tickets. Run `setProjectStack()` if it isn't set, then `createTickets()` with the `epicId`, the primary source document and each ticket's `dependsOn` (names from this batch or existing keys), then `scheduleTickets()` in dependency order. Saved dependencies drive the Ticket map; fix a missing one later with `updateTicketDetails` `dependsOn`. Use `linkTicketDocuments` for any additional relevant docs.
 4. Report "Created N tickets under *<epic>*", listing them by key, then ask whether to start the build (skip the question if building was already authorized).
 
 ### Ticket quality

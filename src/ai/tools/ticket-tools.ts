@@ -68,6 +68,11 @@ export const createTickets = tool({
       sourceDocumentId: z.string().optional(),
       approvedDesignDocumentIds: z.array(z.string().uuid()).max(20).optional().describe("Preview IDs explicitly accepted by the user. Include all relevant screens; never drafts. Independent copies are referenced in the ticket."),
       notes: z.string().optional(),
+      dependsOn: z.array(z.string()).optional().describe(
+        "Tickets that must be built before this one: exact names of tickets in this same batch, or keys of " +
+        "existing tickets (e.g. 'REC-2'). Leave empty when it can be built in parallel with the others. " +
+        "Saved so the ticket map shows what depends on what."
+      ),
       attachmentImageIds: z.array(z.string()).optional().describe(
         "Image/file ids of attachments the user provided THIS turn to attach to this ticket. " +
         "Use ONLY ids surfaced in the message as (imageId: <id>). Include when the ticket is about a " +
@@ -184,6 +189,14 @@ export const createTickets = tool({
       created.push({ id: row!.id, ticketKey: row!.ticketKey, name: row!.name });
     }
 
+    // Dependencies name tickets in this batch (by name) or existing ones (by key/id).
+    const batchByName = new Map(created.map((c) => [c.name.trim().toLowerCase(), c.id]));
+    for (const [index, t] of tickets.entries()) {
+      if (!t.dependsOn?.length || !created[index]) continue;
+      const ids = await resolveTicketRefs(projectId, t.dependsOn, batchByName);
+      if (ids.length) await db.update(projectTickets).set({ dependencies: ids.filter((id) => id !== created[index]!.id), updatedAt: new Date() }).where(eq(projectTickets.id, created[index]!.id));
+    }
+
     return { created: created.length, tickets: created, epicId: resolvedEpicId, name: resolvedEpicId ? (await getEpic(resolvedEpicId))?.name || "Created tickets" : "Created tickets" };
   },
 });
@@ -254,6 +267,16 @@ export const updateTicket = tool({
   },
 });
 
+/** Ticket ids for references given as batch names, ticket keys (REC-2) or ids, within one project. */
+async function resolveTicketRefs(projectId: string, refs: string[], batchByName: Map<string, string>): Promise<string[]> {
+  const rows = await db.select({ id: projectTickets.id, key: projectTickets.ticketKey, name: projectTickets.name }).from(projectTickets).where(eq(projectTickets.projectId, projectId));
+  const ids = refs.map((ref) => {
+    const r = ref.trim(), lower = r.toLowerCase();
+    return batchByName.get(lower) ?? rows.find((t) => t.id === r || t.key?.toLowerCase() === lower || t.name.trim().toLowerCase() === lower)?.id;
+  }).filter((id): id is string => !!id);
+  return [...new Set(ids)];
+}
+
 export const updateTicketDetails = tool({
   description: "Update the description, acceptance criteria, or other details of a ticket.",
   inputSchema: zodSchema(z.object({
@@ -263,9 +286,14 @@ export const updateTicketDetails = tool({
     acceptanceCriteria: z.array(z.string()).optional(),
     complexity: z.enum(["simple", "medium", "complex"]).optional(),
     notes: z.string().optional(),
+    dependsOn: z.array(z.string()).optional().describe("Replace this ticket's prerequisites: ticket keys (e.g. 'REC-2') or ids. Pass [] to clear."),
   })),
-  execute: async ({ ticketId, name, description, acceptanceCriteria, complexity, notes }, options) => {
+  execute: async ({ ticketId, name, description, acceptanceCriteria, complexity, notes, dependsOn }, options) => {
     const u: Record<string, unknown> = { updatedAt: new Date() };
+    if (dependsOn) {
+      const [own] = await db.select({ projectId: projectTickets.projectId }).from(projectTickets).where(eq(projectTickets.id, ticketId)).limit(1);
+      if (own) u.dependencies = (await resolveTicketRefs(own.projectId, dependsOn, new Map())).filter((id) => id !== ticketId);
+    }
     if (name) u.name = name;
     if (description) u.description = description;
     if (acceptanceCriteria) u.acceptanceCriteria = acceptanceCriteria;
