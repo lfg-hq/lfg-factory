@@ -4,14 +4,13 @@ import { getBuildOrigin, setBuildOrigin, reportBuildStatus } from "../services/b
  *
  * Subscribes to ticket lifecycle events and reacts:
  * - Logs activities to the project timeline
- * - Auto-queues the next ticket after completion
+ * - Advances build runs when a ticket in one finishes (single tickets build alone)
  */
 
-import { bus, emit } from "./bus.ts";
+import { bus } from "./bus.ts";
 import { db } from "../config/db.ts";
 import { projectTickets } from "../db/schema/tickets.ts";
-import { projects } from "../db/schema/projects.ts";
-import { eq, and, asc, inArray } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { logActivity } from "../services/activity-log.ts";
 import { ACTIVITY_TYPES } from "../db/schema/activities.ts";
 
@@ -39,95 +38,6 @@ async function getTicketName(ticketId: string): Promise<string> {
  *  advance the build queue twice. */
 const recentFinishes = new Map<string, number>();
 
-// ── Auto-queue next ticket ──────────────────────────────────────────
-
-async function autoQueueNextTicket(projectId: string, completedTicketId: string): Promise<void> {
-  // Find the next open ticket that isn't already queued or executing
-  const [nextTicket] = await db
-    .select({ id: projectTickets.id, name: projectTickets.name })
-    .from(projectTickets)
-    .where(
-      and(
-        eq(projectTickets.projectId, projectId),
-        eq(projectTickets.status, "open"),
-        eq(projectTickets.queueStatus, "none")
-      )
-    )
-    .orderBy(asc(projectTickets.executionOrder), asc(projectTickets.createdAt))
-    .limit(1);
-
-  if (!nextTicket) {
-    // No more open tickets — check if any failed
-    const [project] = await db
-      .select({ ownerId: projects.ownerId, name: projects.name, publicProjectId: projects.projectId })
-      .from(projects)
-      .where(eq(projects.id, projectId))
-      .limit(1);
-
-    if (!project) return;
-
-    // Count failed tickets for this project
-    const failedTickets = await db
-      .select({ id: projectTickets.id, name: projectTickets.name })
-      .from(projectTickets)
-      .where(
-        and(
-          eq(projectTickets.projectId, projectId),
-          eq(projectTickets.status, "failed")
-        )
-      );
-
-    const failedCount = failedTickets.length;
-
-    if (failedCount > 0) {
-      const failedNames = failedTickets.map((t) => t.name).join(", ");
-      await logActivity({
-        projectId,
-        actorType: "system",
-        activityType: ACTIVITY_TYPES.BATCH_COMPLETE,
-        title: "Build chain finished with errors",
-        description: `${failedCount} ticket(s) failed: ${failedNames}`,
-        metadata: { failedCount, failedTicketIds: failedTickets.map((t) => t.id) },
-      });
-
-      await reportBuildStatus(completedTicketId, "attention", `Build chain finished with ${failedCount} failed ticket(s).`);
-    } else {
-      await logActivity({
-        projectId,
-        actorType: "system",
-        activityType: ACTIVITY_TYPES.BATCH_COMPLETE,
-        title: "All tickets built successfully",
-        description: `All queued tickets for ${project.name} have been built.`,
-      });
-
-      await reportBuildStatus(completedTicketId, "complete", "Build chain finished.");
-    }
-    return;
-  }
-
-  // Mark as queued
-  await db
-    .update(projectTickets)
-    .set({ queueStatus: "queued", updatedAt: new Date() })
-    .where(eq(projectTickets.id, nextTicket.id));
-
-  // Log the auto-queue activity
-  await logActivity({
-    projectId,
-    ticketId: nextTicket.id,
-    actorType: "system",
-    activityType: ACTIVITY_TYPES.ORCHESTRATOR_QUEUED_NEXT,
-    title: `Auto-queued: ${nextTicket.name}`,
-    description: `Automatically queued after completion of previous ticket.`,
-    metadata: { previousTicketId: completedTicketId },
-  });
-
-  const origin = await getBuildOrigin(completedTicketId);
-  await setBuildOrigin(nextTicket.id, origin.conversationId, origin.userId);
-  await reportBuildStatus(nextTicket.id, "queued", "Build queued.");
-  // Emit ticket.queued to trigger the executor
-  emit({ type: "ticket.queued", ticketId: nextTicket.id, projectId });
-}
 
 // ── Register all handlers ───────────────────────────────────────────
 
@@ -210,12 +120,11 @@ export function registerEventHandlers(): void {
 
     // A ticket that belongs to a BUILD RUN is advanced by that run — it knows the
     // dependency order, stays inside the epic, survives a restart, and finishes with
-    // the preview. Only when a ticket isn't part of a run do we fall back to the old
-    // project-wide "next open ticket" reflex.
+    // the preview. A ticket queued on its own builds only itself: the old project-wide
+    // "next open ticket" reflex rebuilt unrelated tickets nobody asked for.
     const { onTicketFinished } = await import("../services/build-queue.ts");
-    const handledByRun = await onTicketFinished(ticketId, status === "complete" ? "complete" : "failed")
+    await onTicketFinished(ticketId, status === "complete" ? "complete" : "failed")
       .catch((e) => { console.warn("[handlers] build-run advance failed:", (e as Error).message); return true; });
-    if (!handledByRun) await autoQueueNextTicket(projectId, ticketId);
   });
 
   // ticket.needs_attention → log activity
