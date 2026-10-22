@@ -942,10 +942,10 @@ document.addEventListener('DOMContentLoaded', () => {
                             addMessageToChat(msg.role, '', { audioIndicator: audioIndicator });
                         } else if (msg.role === 'assistant' && renderAssistantTimeline(msg)) {
                             // Ordered text/action phases restored from the saved offsets.
-                        } else if (msg.content && msg.content.trim() !== '') {
+                        } else if ((msg.content && msg.content.trim() !== '') || savedAttachments(msg)) {
                             // Restore inline documents before their final summary, as in the live turn.
                             if (msg.role === 'assistant') renderSavedInlineArtifacts(msg);
-                            addMessageToChat(msg.role, msg.content, null, null, msg.is_partial);
+                            addMessageToChat(msg.role, msg.content, savedAttachments(msg), null, msg.is_partial);
                         }
                         if (msg.role === 'assistant') {
                             if (!msg.content?.trim() && !assistantTimelineParts(msg)) renderSavedInlineArtifacts(msg);
@@ -4937,16 +4937,20 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
     
+    // Attachments saved on a message, in the shape addMessageToChat renders; null if none.
+    function savedAttachments(message) {
+        const list = message.content_if_file || message.contentIfFile;
+        if (!Array.isArray(list)) return null;
+        const files = list.filter((f) => f && f.name).map((f) => ({ name: f.name, type: f.type || '', url: f.url || '' }));
+        return files.length ? files : null;
+    }
+
     // Render saved messages in order; returns how many produced visible content.
     function renderHistoryMessages(list) {
         let count = 0;
         list.forEach(message => {
-                // Restore an attached image (if any) so it persists across reloads.
-                let fileData = null;
-                const cif = message.content_if_file;
-                if (Array.isArray(cif) && cif.length && (cif[0].type || '').startsWith('image/') && cif[0].url) {
-                    fileData = { name: cif[0].name, type: cif[0].type, url: cif[0].url };
-                }
+                // Restore every attachment (images as thumbnails, other files as chips).
+                const fileData = savedAttachments(message);
                 // The trail the user watched during this turn, replayed COLLAPSED above
                 // the answer it produced — the live one only ever lived in the DOM, so a
                 // refresh used to erase the record of what the agent did.

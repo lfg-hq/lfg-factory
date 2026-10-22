@@ -104,7 +104,7 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
       const hasMore = rows.length > RESUME_PAGE;
       if (hasMore) rows = rows.slice(1);
       if (active?.subscribers.has(ws) || !getConnection(ws)) return;
-      send(ws, { type: "background_resume", has_more: hasMore, messages: rows.filter(m => !active || m.id !== active.assistantMessageId).map(m => ({ ...m, page_previews: m.pagePreviews ?? null, activity_trail: m.activityTrail, end_reason: m.endReason, is_partial: m.isPartial })), events: active?.events.map(e => JSON.parse(e)) ?? [] });
+      send(ws, { type: "background_resume", has_more: hasMore, messages: rows.filter(m => !active || m.id !== active.assistantMessageId).map(m => ({ ...m, page_previews: m.pagePreviews ?? null, activity_trail: m.activityTrail, end_reason: m.endReason, is_partial: m.isPartial, content_if_file: m.contentIfFile ?? null, is_voice: m.isVoice ?? false })), events: active?.events.map(e => JSON.parse(e)) ?? [] });
       active?.subscribers.add(ws);
     }
     send(ws, { type: "chat_queue", items: turn?.followups.snapshot() ?? [] });
@@ -282,6 +282,9 @@ async function sendHistory(ws: ServerWebSocket<WsData>, conversationId: string):
       page_previews: m.pagePreviews ?? null,
       end_reason: m.endReason ?? null,
       is_partial: m.isPartial ?? false,
+      // Attachments travel with every history path so a refresh keeps them.
+      content_if_file: m.contentIfFile ?? null,
+      is_voice: m.isVoice ?? false,
     })),
   });
 }
