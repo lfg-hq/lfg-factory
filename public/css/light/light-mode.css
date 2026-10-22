@@ -271,10 +271,9 @@ body[data-theme="light"] {
     background-color: transparent !important;
 }
 
-/* User messages - keep purple */
+/* User messages - soft purple tint (tokens in chat.css) */
 [data-theme="light"] .message.user {
-    background-color: #7c3aed !important;
-    color: #ffffff !important;
+    color: var(--user-bubble-text) !important;
 }
 
 /* Assistant messages - white card on light gray */
@@ -1001,7 +1000,7 @@ body[data-theme="light"] {
 }
 
 [data-theme="light"] .instant-chat-panel .message.user .message-content {
-    color: #ffffff !important;
+    color: var(--user-bubble-text) !important;
 }
 
 /* Instant switcher */
