@@ -1014,7 +1014,24 @@ ticketsApi.get("/:projectId/tickets/:ticketId/git/diff", async (c) => {
   if (!access) return c.json({ error: "Project not found" }, 404);
   const base = c.req.query("base") || ""; // empty: the branch the ticket merges into
   const { getTicketDiff } = await import("../../services/dev-preview.ts");
-  return c.json(await getTicketDiff(access.project.id, ticketId, base));
+  return c.json(await getTicketDiff(access.project.id, ticketId, base, c.req.query("round") || undefined));
+});
+
+// ── POST /:projectId/tickets/:ticketId/git/revert { mergeSha } ───────
+// Undo one of this ticket's merges into its epic (only while it is the epic's newest commit).
+ticketsApi.post("/:projectId/tickets/:ticketId/git/revert", async (c) => {
+  const user = c.get("user");
+  const { projectId, ticketId } = c.req.param();
+  const access = await getProjectAccess(projectId, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  if (access.role !== "owner" && !access.permissions.canManageTickets) return c.json({ error: "You can't change tickets in this project." }, 403);
+  const { mergeSha } = await c.req.json<{ mergeSha?: string }>().catch(() => ({} as { mergeSha?: string }));
+  if (!mergeSha || !/^[0-9a-f]{40}$/.test(mergeSha)) return c.json({ error: "Choose a merge to undo." }, 400);
+  const { revertTicketEpicMerge } = await import("../../services/dev-preview.ts");
+  const result = await revertTicketEpicMerge(access.project.id, ticketId!, mergeSha);
+  if (!result.ok) return c.json({ error: result.error }, 409);
+  await addTicketLog(ticketId!, `Undid merge ${mergeSha.slice(0, 7)} on ${result.base} (revert commit ${result.sha.slice(0, 7)}). The ticket's branch is unchanged.`, "command", user.id).catch(() => {});
+  return c.json({ ok: true, sha: result.sha, base: result.base });
 });
 
 /** Resolve the ticket's dedicated sandbox VM (most recent), or null. */

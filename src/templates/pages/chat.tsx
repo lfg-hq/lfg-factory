@@ -91,12 +91,24 @@ export function ChatPage({
     #ta-pane-git .ta-git-commit code { flex:none; font-size:11.5px; color:#7c3aed; }
     #ta-pane-git .ta-git-commit span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     #ta-pane-git .ta-git-commit small { flex:none; color:var(--text-secondary,#94a3b8); }
-    #ta-pane-git .ta-git-file { border:1px solid var(--border-color,#e5e7eb); border-radius:8px; margin-bottom:6px; overflow:hidden; }
-    #ta-pane-git .ta-git-file summary { list-style:none; display:flex; align-items:center; gap:10px; padding:8px 12px; cursor:pointer; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; }
+    #ta-pane-git .ta-git-files { border:1px solid var(--border-color,#e5e7eb); border-radius:8px; overflow:hidden; }
+    #ta-pane-git .ta-git-file { border-top:1px solid var(--border-color,#eef1f6); }
+    #ta-pane-git .ta-git-file:first-child { border-top:0; }
+    #ta-pane-git .ta-git-file summary { list-style:none; display:flex; align-items:center; gap:10px; padding:5px 12px; cursor:pointer; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; line-height:1.5; }
+    #ta-pane-git .ta-git-dir { opacity:.55; }
+    #ta-pane-git .ta-git-gh { margin-left:auto; font-size:12px; color:#7c3aed; text-decoration:none; font-weight:500; }
+    #ta-pane-git .ta-git-rounds { display:flex; flex-direction:column; gap:6px; }
+    #ta-pane-git .ta-git-round { display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; text-align:left; padding:8px 12px; border:1px solid var(--border-color,#e5e7eb); border-radius:8px; background:transparent; color:inherit; font:inherit; font-size:12.5px; cursor:pointer; }
+    #ta-pane-git .ta-git-round small { color:var(--text-secondary,#64748b); font-size:12px; white-space:nowrap; }
+    #ta-pane-git .ta-git-round:hover { background:rgba(124,58,237,.05); }
+    #ta-pane-git .ta-git-round.is-current { border-color:#7c3aed; background:rgba(124,58,237,.07); font-weight:600; }
+    #ta-pane-git .ta-git-round.is-pending span { color:#b45309; }
+    #ta-pane-git .ta-git-undo { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:12px 20px 0; padding:9px 12px; border-radius:8px; background:rgba(148,163,184,.1); font-size:12.5px; color:var(--text-secondary,#64748b); }
+    #ta-pane-git .ta-git-undo.is-done { background:rgba(22,163,74,.1); color:#15803d; }
+    #ta-pane-git .ta-git-undo-btn { flex:none; padding:5px 11px; border-radius:7px; border:1px solid rgba(220,38,38,.35); background:transparent; color:#b91c1c; font:inherit; font-size:12.5px; cursor:pointer; }
+    #ta-pane-git .ta-git-undo-btn:hover:not(:disabled) { background:rgba(220,38,38,.07); }
     #ta-pane-git .ta-git-file summary::-webkit-details-marker { display:none; }
     #ta-pane-git .ta-git-file summary:hover { background:rgba(128,128,128,.06); }
-    #ta-pane-git .ta-git-file .ta-chev { font-size:9px; opacity:.5; transition:transform .15s; }
-    #ta-pane-git .ta-git-file[open] .ta-chev { transform:rotate(90deg); }
     #ta-pane-git .ta-git-path { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     #ta-pane-git .ta-git-file pre { margin:0; padding:10px 12px; font-size:11.5px; line-height:1.5; overflow:auto; max-height:420px; white-space:pre; border-top:1px solid var(--border-color,#e5e7eb); background:rgba(128,128,128,.04); }
     #ta-log .ta-cmd-body { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; color:var(--text-color,#cbd5e1); background:var(--background-surface,#141414); border:1px solid var(--border-color,#2a2a2a); border-radius:6px; padding:8px 10px; margin:4px 0 0 20px; white-space:pre-wrap; word-break:break-word; max-height:260px; overflow:auto; }
@@ -528,7 +540,7 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261022-checks-view" />
 <script src="/public/js/ticket-action-phases.js?v=20261022-followup-logs2"></script>
 <script src="/public/js/preview-tab.js?v=20261005-start-state"></script>
-    <script src="/public/js/ticket-agent.js?v=20261022-git-tab"></script>
+    <script src="/public/js/ticket-agent.js?v=20261022-git-rounds"></script>
   <script src="/public/js/env-tab.js?v=20261004-env-apply"></script>
   <script src="/public/js/notes-tab.js?v=20261022-notes-quiet"></script>
   <script src="/public/js/tab-overflow.js"></script>

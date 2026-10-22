@@ -32,10 +32,10 @@ import { validateSchemaTargets, assetCaseCheck, schemaStepSchema, replayActionSc
  *
  * The DB provisioning uses the validated recipes in ./project-sandbox.ts.
  */
-import { githubTicketDiff, parseAuthedGithubUrl } from "./ticket-diff-github.ts";
+import { githubTicketDiff, parseAuthedGithubUrl, revertTicketMerge } from "./ticket-diff-github.ts";
 import { z } from "zod";
 import { generateObject, generateText, stepCountIs, tool, zodSchema, type LanguageModel } from "ai";
-import { and, desc, eq, inArray, isNotNull, or } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, like, or } from "drizzle-orm";
 import { db } from "../config/db.ts";
 import { projects, projectEnvironmentVariables } from "../db/schema/projects.ts";
 import { projectEnvironments } from "../db/schema/project-environments.ts";
@@ -3146,10 +3146,11 @@ export async function getPreviewBranches(projectId: string): Promise<Array<{ id:
  * Returns the branch list (for the base selector), per-file +/- counts, and the
  * unified diff text. `base...head` = what this ticket changed since it diverged.
  */
-export async function getTicketDiff(projectId: string, ticketId: string, base: string): Promise<{
+export async function getTicketDiff(projectId: string, ticketId: string, base: string, round?: string): Promise<{
   branches: string[]; base: string; head: string;
   files: Array<{ path: string; added: number; removed: number }>; diff: string;
   commits: Array<{ sha: string; when: number; subject: string }>; error?: string; merged?: boolean; compareUrl?: string;
+  rounds?: import('./ticket-diff-github.ts').TicketRound[]; round?: string; canRevert?: boolean;
 }> {
   // Prefer the ticket's actually-pushed branch; fall back to the convention.
   const [tk] = await db.select({ gb: projectTickets.githubBranch, epicId: projectTickets.epicId }).from(projectTickets).where(eq(projectTickets.id, ticketId));
@@ -3160,7 +3161,13 @@ export async function getTicketDiff(projectId: string, ticketId: string, base: s
   // GitHub answers directly; no sandbox clone needed.
   const authed = await resolveAuthedRepoUrl(projectId);
   const gh = "error" in authed ? null : parseAuthedGithubUrl(authed.authUrl);
-  if (gh) return githubTicketDiff(gh, b, head);
+  if (gh) {
+    // Every merge this ticket made into its epic, as logged by the platform ("Merged to <branch> (<sha>)").
+    const { ticketLogs } = await import("../db/schema/tickets.ts");
+    const mergeLines = await db.select({ c: ticketLogs.command }).from(ticketLogs).where(and(eq(ticketLogs.ticketId, ticketId), like(ticketLogs.command, "Merged to %"))).catch(() => []);
+    const knownMerges = mergeLines.map((l) => /^Merged to \S+ \(([0-9a-f]{7,40})\)/.exec(l.c ?? "")?.[1]).filter((x): x is string => !!x);
+    return githubTicketDiff(gh, b, head, fetch, round, knownMerges);
+  }
   let workspaceId: string;
   try { ({ workspaceId } = await ensureProjectSandbox(projectId)); }
   catch { return { branches: [], base: b, head, files: [], diff: "", commits: [], error: "No preview sandbox yet — open the Preview tab and set it up first." }; }
@@ -3990,3 +3997,18 @@ export async function stopPreview(projectId: string, userId: string): Promise<vo
   await sh(workspaceId, `fuser -k ${port}/tcp 2>/dev/null; pkill -f ':${port}' 2>/dev/null; pkill -f 'dotnet' 2>/dev/null; pkill -f 'npm ' 2>/dev/null; pkill -f 'git-remote-http' 2>/dev/null; pkill -f 'git clone' 2>/dev/null; pkill -f 'git fetch' 2>/dev/null; echo stopped`, 30_000).catch(() => {});
   await setPreview(projectId, userId, { previewStatus: "stopped", appUrl: null }, "Preview stopped");
 }
+
+/** Undo one of a ticket's merges into its epic (GitHub only), and note it on the ticket. */
+export async function revertTicketEpicMerge(projectId: string, ticketId: string, mergeSha: string): Promise<{ ok: true; sha: string; base: string } | { ok: false; error: string }> {
+  const [tk] = await db.select({ key: projectTickets.ticketKey, gb: projectTickets.githubBranch, epicId: projectTickets.epicId }).from(projectTickets).where(and(eq(projectTickets.id, ticketId), eq(projectTickets.projectId, projectId)));
+  if (!tk?.gb) return { ok: false, error: "This ticket has no pushed branch." };
+  const anchor = await (await import("./epics.ts")).resolveTicketAnchor({ epicId: tk.epicId });
+  const authed = await resolveAuthedRepoUrl(projectId);
+  const gh = "error" in authed ? null : parseAuthedGithubUrl(authed.authUrl);
+  if (!gh) return { ok: false, error: "Undo is available for GitHub repositories only." };
+  const result = await revertTicketMerge(gh, anchor.anchorBranch, mergeSha, `Revert ${tk.key ?? "ticket"} merge ${mergeSha.slice(0, 7)}\n\nUndoes the changes merged from ${tk.gb} into ${anchor.anchorBranch}. Requested from the ticket's Git tab.`);
+  if (!result.ok) return result;
+  await db.update(projectTickets).set({ githubMergeStatus: "reverted", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId));
+  return { ok: true, sha: result.sha, base: anchor.anchorBranch };
+}
+

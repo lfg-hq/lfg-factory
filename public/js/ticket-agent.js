@@ -437,33 +437,72 @@
     const d = Math.max(0, Date.now() / 1000 - sec);
     return d < 3600 ? Math.max(1, Math.round(d / 60)) + "m ago" : d < 86400 ? Math.round(d / 3600) + "h ago" : Math.round(d / 86400) + "d ago";
   }
-  async function loadGit() {
+  // "Oct 22, 4:51 PM" — the moment matters when reviewing what landed when.
+  function stamp(sec) {
+    if (!sec) return "";
+    const d = new Date(sec * 1000);
+    return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  }
+  function splitPath(path) {
+    const i = String(path).lastIndexOf("/");
+    return i < 0 ? ["", path] : [path.slice(0, i + 1), path.slice(i + 1)];
+  }
+  let gitRound = null; // the merge being viewed; null = latest
+  async function loadGit(round) {
     const el = $("ta-pane-git");
     if (!el || !ticketId) return;
     const id = ticketId;
+    if (round !== undefined) gitRound = round;
     el.innerHTML = '<div class="ta-git-empty"><i class="fas fa-spinner fa-spin"></i> Reading the branch from GitHub…</div>';
     try {
-      const r = await fetch(`/api/projects/${PID()}/tickets/${id}/git/diff`, { credentials: "same-origin" });
+      const q = gitRound ? `?round=${encodeURIComponent(gitRound)}` : "";
+      const r = await fetch(`/api/projects/${PID()}/tickets/${id}/git/diff${q}`, { credentials: "same-origin" });
       const d = await r.json();
       if (ticketId !== id) return;
       if (d.error) { el.innerHTML = `<div class="ta-git-empty">${esc(d.error)}</div>`; return; }
       const files = Array.isArray(d.files) ? d.files : [];
       const commits = Array.isArray(d.commits) ? d.commits : [];
-      const added = files.reduce((n, f) => n + (f.added || 0), 0), removed = files.reduce((n, f) => n + (f.removed || 0), 0);
+      const rounds = Array.isArray(d.rounds) ? d.rounds : [];
+      const current = rounds.find((x) => x.id === d.round) || rounds[0] || null;
       const patches = patchesByFile(d.diff);
       let html = `<div class="ta-git-head">
-        <div class="ta-git-route"><i class="fas fa-code-branch"></i><code>${esc(d.head || "")}</code><i class="fas fa-arrow-right ta-git-arrow"></i><code>${esc(d.base || "main")}</code>${d.merged ? '<span class="ta-git-badge is-merged">Merged</span>' : '<span class="ta-git-badge">Not merged</span>'}</div>
-        <div class="ta-git-stats"><span>${files.length} file${files.length !== 1 ? "s" : ""}</span><span class="ta-git-add">+${added}</span><span class="ta-git-del">−${removed}</span><span>${commits.length} commit${commits.length !== 1 ? "s" : ""}</span>${d.compareUrl ? `<a href="${esc(d.compareUrl)}" target="_blank" rel="noopener">View on GitHub <i class="fas fa-arrow-up-right-from-square"></i></a>` : ""}</div>
+        <div class="ta-git-route"><i class="fas fa-code-branch"></i><code>${esc(d.head || "")}</code><i class="fas fa-arrow-right ta-git-arrow"></i><code>${esc(d.base || "main")}</code>${d.merged ? '<span class="ta-git-badge is-merged">Merged</span>' : '<span class="ta-git-badge">Not merged</span>'}${d.compareUrl ? `<a class="ta-git-gh" href="${esc(d.compareUrl)}" target="_blank" rel="noopener">GitHub <i class="fas fa-arrow-up-right-from-square"></i></a>` : ""}</div>
       </div>`;
-      if (commits.length) html += `<div class="ta-git-section"><div class="ta-git-label">Commits</div>${commits.map((c) => `<div class="ta-git-commit"><code>${esc(c.sha || "")}</code><span>${esc(c.subject || "")}</span><small>${esc(relTime(c.when))}</small></div>`).join("")}</div>`;
-      if (files.length) html += `<div class="ta-git-section"><div class="ta-git-label">Files changed</div>${files.map((f) => {
+      if (rounds.length) {
+        html += `<div class="ta-git-section"><div class="ta-git-label">${rounds.some((x) => !x.pending) ? "Merges into the epic" : "Pushed work"}</div><div class="ta-git-rounds">${rounds.map((x) => {
+          const when = x.pending ? "Not merged yet" : "Merged " + stamp(x.mergedAt);
+          const size = `${x.commits.length} commit${x.commits.length !== 1 ? "s" : ""} · ${x.files} file${x.files !== 1 ? "s" : ""} <span class="ta-git-add">+${x.added}</span> <span class="ta-git-del">−${x.removed}</span>`;
+          return `<button type="button" class="ta-git-round${current && x.id === current.id ? " is-current" : ""}${x.pending ? " is-pending" : ""}" data-git-round="${esc(x.id)}"><span>${esc(when)}</span><small>${size}</small></button>`;
+        }).join("")}</div></div>`;
+      }
+      if (current && current.mergeSha) {
+        html += `<div class="ta-git-undo">${d.canRevert
+          ? `<span>This merge is the newest change on <code>${esc(d.base)}</code>.</span><button type="button" class="ta-git-undo-btn" data-git-revert="${esc(current.mergeSha)}"><i class="fas fa-rotate-left"></i> Undo this merge</button>`
+          : `<span>Newer work has landed on the epic since this merge. To undo it, ask the agent to revert it.</span>`}</div>`;
+      }
+      if (commits.length) html += `<div class="ta-git-section"><div class="ta-git-label">Commits</div>${commits.map((c) => `<div class="ta-git-commit"><code>${esc(c.sha || "")}</code><span>${esc(c.subject || "")}</span><small title="${esc(relTime(c.when))}">${esc(stamp(c.when))}</small></div>`).join("")}</div>`;
+      if (files.length) html += `<div class="ta-git-section"><div class="ta-git-label">Files changed · ${files.length}</div><div class="ta-git-files">${files.map((f) => {
         const patch = patches[f.path];
-        return `<details class="ta-git-file"><summary><i class="fas fa-chevron-right ta-chev"></i><span class="ta-git-path">${esc(f.path)}</span><span class="ta-git-add">+${f.added}</span><span class="ta-git-del">−${f.removed}</span></summary>${patch ? `<pre>${renderDiff(patch)}</pre>` : '<p class="ta-git-empty">No text diff for this file.</p>'}</details>`;
-      }).join("")}</div>`;
-      else html += '<div class="ta-git-empty">No file changes on this branch yet.</div>';
+        const [dir, base] = splitPath(f.path);
+        return `<details class="ta-git-file"><summary title="${esc(f.path)}"><span class="ta-git-path"><span class="ta-git-dir">${esc(dir)}</span>${esc(base)}</span><span class="ta-git-add">+${f.added}</span><span class="ta-git-del">−${f.removed}</span></summary>${patch ? `<pre>${renderDiff(patch)}</pre>` : '<p class="ta-git-empty">No text diff for this file.</p>'}</details>`;
+      }).join("")}</div></div>`;
+      else html += '<div class="ta-git-empty">No file changes here.</div>';
       el.innerHTML = html;
       setTabCount("git", files.length);
     } catch (e) { if (ticketId === id) el.innerHTML = '<div class="ta-git-empty">Couldn\'t load the changes. Try the tab again.</div>'; }
+  }
+  async function revertMerge(mergeSha, button) {
+    if (!window.confirm("Undo this merge?\n\nA new commit on the epic branch restores it to how it was before this merge. The ticket's own branch is kept, so nothing is lost; to bring the work back later, ask the agent to revert the undo.")) return;
+    button.disabled = true; button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Undoing…';
+    try {
+      const r = await fetch(`/api/projects/${PID()}/tickets/${ticketId}/git/revert`, { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mergeSha }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || "Couldn't undo the merge.");
+      gitRound = null; await loadGit();
+      const note = document.createElement("div"); note.className = "ta-git-undo is-done";
+      note.textContent = `Undone: the epic is back to how it was before that merge (commit ${String(d.sha).slice(0, 7)}).`;
+      $("ta-pane-git")?.prepend(note);
+    } catch (e) { button.disabled = false; button.innerHTML = '<i class="fas fa-rotate-left"></i> Undo this merge'; window.alert(e.message); }
   }
 
   function open(id, key, name, meta, opts) {
@@ -474,7 +513,7 @@
     curKey = key || "";
     editing = false;
     const eb0 = $("ta-edit"); if (eb0) eb0.innerHTML = '<i class="fas fa-pen" style="font-size:11px;"></i>Edit';
-    tasksLoaded = false; gitLoaded = false;
+    tasksLoaded = false; gitLoaded = false; gitRound = null;
     chatBusy = meta?.agentBusy === true;
     setBuildUI();
     void loadChecksSetting();
@@ -868,6 +907,12 @@
     $("ta-edit")?.addEventListener("click", toggleEdit);
     $("ta-preview")?.addEventListener("click", previewTicket);
     $("ta-checks")?.addEventListener("click", toggleChecks);
+    $("ta-pane-git")?.addEventListener("click", (e) => {
+      const round = e.target.closest("[data-git-round]");
+      if (round) { loadGit(round.getAttribute("data-git-round")); return; }
+      const undo = e.target.closest("[data-git-revert]");
+      if (undo) revertMerge(undo.getAttribute("data-git-revert"), undo);
+    });
     $("ta-delete")?.addEventListener("click", deleteTicket);
     // A deliberate tab choice outranks the pending auto-switch — never yank the panel
     // out from under someone who just clicked Details while the logs were still loading.
