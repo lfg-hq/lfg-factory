@@ -1540,8 +1540,15 @@ elif git rev-parse --verify ${featureBranch} 2>/dev/null; then
     git checkout ${featureBranch}
 else
     echo "CREATING_FEATURE_BRANCH"
-    git checkout origin/${anchorBranch} 2>/dev/null || git checkout ${anchorBranch} 2>/dev/null || true
-    git checkout -b ${featureBranch}
+    # A cloned preview disk carries the preview's local edits (config patches, build
+    # output), so a plain checkout of the anchor fails and used to fall through silently,
+    # cutting the ticket from whatever the disk had checked out (often main). Force the
+    # new branch onto the anchor; untracked/ignored files (.env, node_modules) are kept.
+    ANCHOR_REF=origin/${anchorBranch}
+    git rev-parse --verify "$ANCHOR_REF" >/dev/null 2>&1 || ANCHOR_REF=${anchorBranch}
+    git checkout -f -B ${featureBranch} "$ANCHOR_REF" 2>&1 || { echo "FEATURE_BASE_FAILED"; exit 1; }
+    # A new ticket must start from its epic's code, or the agent builds on the wrong app.
+    [ "$(git rev-parse HEAD)" = "$(git rev-parse "$ANCHOR_REF")" ] || { echo "FEATURE_BASE_FAILED: ${featureBranch} is not on ${anchorBranch}"; exit 1; }
 fi
 
 git config user.email "ai@lfg.dev"
@@ -1568,6 +1575,9 @@ git branch --show-current
             .set({ githubBranch: featureBranch, githubMergeStatus: "pending", updatedAt: new Date() })
             .where(eq(projectTickets.id, ticketId));
         }
+      } else if (gitResult.output.includes("FEATURE_BASE_FAILED")) {
+        // Never let an agent build on a checkout that lacks the epic's code.
+        throw new Error(`Couldn't place ${featureBranch} on ${anchorBranch}; the ticket would not contain its epic's code. Nothing was built.`);
       } else if (gitResult.output.includes("GIT_CLONE_FAILED") || gitResult.output.includes("GIT_SETUP_FAILED_NO_GIT")) {
         // The clone genuinely failed — no code in the VM. Running the agent
         // against an empty dir is the "round and round" flailing; fail cleanly.
@@ -3269,8 +3279,15 @@ elif git rev-parse --verify ${featureBranch} 2>/dev/null; then
     git checkout ${featureBranch}
 else
     echo "CREATING_FEATURE_BRANCH"
-    git checkout origin/${anchorBranch} 2>/dev/null || git checkout ${anchorBranch} 2>/dev/null || true
-    git checkout -b ${featureBranch}
+    # A cloned preview disk carries the preview's local edits (config patches, build
+    # output), so a plain checkout of the anchor fails and used to fall through silently,
+    # cutting the ticket from whatever the disk had checked out (often main). Force the
+    # new branch onto the anchor; untracked/ignored files (.env, node_modules) are kept.
+    ANCHOR_REF=origin/${anchorBranch}
+    git rev-parse --verify "$ANCHOR_REF" >/dev/null 2>&1 || ANCHOR_REF=${anchorBranch}
+    git checkout -f -B ${featureBranch} "$ANCHOR_REF" 2>&1 || { echo "FEATURE_BASE_FAILED"; exit 1; }
+    # A new ticket must start from its epic's code, or the agent builds on the wrong app.
+    [ "$(git rev-parse HEAD)" = "$(git rev-parse "$ANCHOR_REF")" ] || { echo "FEATURE_BASE_FAILED: ${featureBranch} is not on ${anchorBranch}"; exit 1; }
 fi
 
 git config user.email "ai@lfg.dev"
