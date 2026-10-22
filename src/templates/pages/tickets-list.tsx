@@ -924,7 +924,7 @@ export function TicketsListPage({ user, project, stages, tickets, epics = [], ex
 <script src="/public/js/sharing.js"></script>
 <!-- Shared preview component — the SAME one the main chat Preview panel uses. -->
 <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261022-checks-view" />
-<script src="/public/js/ticket-action-phases.js?v=20261022-followup-logs"></script>
+<script src="/public/js/ticket-action-phases.js?v=20261022-followup-logs2"></script>
 <script src="/public/js/preview-tab.js?v=20261005-start-state"></script>
 <script>
   const PROJECT_ID = document.body.dataset.projectId;

@@ -84,14 +84,14 @@
     const previous = area.querySelector('.checks-view:not([hidden])') || area.querySelector('.ticket-phase-body:not([hidden])');
     const scroll = previous ? { top:previous.scrollTop, left:previous.scrollLeft, bottom:previous.scrollHeight-previous.scrollTop-previous.clientHeight<40 } : null;
     const grouped = group(rows, ticket);
-    const shown = phase => phase.id === 'build' || (phase.id === 'validation' ? ticket?.validationEnabled !== false : ticket?.featureTestingEnabled !== false);
+    const stageShown = phase => phase.id === 'build' || (phase.id === 'validation' ? ticket?.validationEnabled !== false : ticket?.featureTestingEnabled !== false);
     // A hidden check stage never hides its rows: they read under Build, in order.
-    const hiddenRows = grouped.filter(phase => !shown(phase)).flatMap(phase => phase.rows);
+    const hiddenRows = grouped.filter(phase => !stageShown(phase)).flatMap(phase => phase.rows);
     if (hiddenRows.length) {
       const order = new Map(rows.map((row, i) => [row.id, i]));
       grouped[0].rows = grouped[0].rows.concat(hiddenRows).sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
     }
-    const phases = grouped.filter(shown);
+    const phases = grouped.filter(stageShown);
     area.dataset.phaseView = key;
     const history = histories.get(historyUrl);
     // Validation and feature testing read as one Checks stage: app startup, then the
