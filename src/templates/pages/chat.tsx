@@ -103,6 +103,7 @@ export function ChatPage({
     #ta-pane-git .ta-git-round:hover { background:rgba(124,58,237,.05); }
     #ta-pane-git .ta-git-round.is-current { border-color:#7c3aed; background:rgba(124,58,237,.07); font-weight:600; }
     #ta-pane-git .ta-git-round.is-pending span { color:#b45309; }
+    #ta-pane-git .ta-git-sha { font-size:11.5px; color:#7c3aed; margin-right:8px; font-weight:500; }
     #ta-pane-git .ta-git-undo { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:12px 20px 0; padding:9px 12px; border-radius:8px; background:rgba(148,163,184,.1); font-size:12.5px; color:var(--text-secondary,#64748b); }
     #ta-pane-git .ta-git-undo.is-done { background:rgba(22,163,74,.1); color:#15803d; }
     #ta-pane-git .ta-git-undo-btn { flex:none; padding:5px 11px; border-radius:7px; border:1px solid rgba(220,38,38,.35); background:transparent; color:#b91c1c; font:inherit; font-size:12.5px; cursor:pointer; }
@@ -540,7 +541,7 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261022-checks-view" />
 <script src="/public/js/ticket-action-phases.js?v=20261022-followup-logs2"></script>
 <script src="/public/js/preview-tab.js?v=20261005-start-state"></script>
-    <script src="/public/js/ticket-agent.js?v=20261022-git-rounds"></script>
+    <script src="/public/js/ticket-agent.js?v=20261022-git-sha"></script>
   <script src="/public/js/env-tab.js?v=20261004-env-apply"></script>
   <script src="/public/js/notes-tab.js?v=20261022-notes-quiet"></script>
   <script src="/public/js/tab-overflow.js"></script>

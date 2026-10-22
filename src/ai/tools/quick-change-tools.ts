@@ -6,13 +6,22 @@ import {projects} from '../../db/schema/projects.ts';
 import {projectTickets} from '../../db/schema/tickets.ts';
 import {eq} from 'drizzle-orm';
 import {getProjectAccess} from '../../auth/project-access.ts';
-import {createEpic} from '../../services/epics.ts';
+import {createEpic,getEpic,listUnapprovedEpics} from '../../services/epics.ts';
 import {createBuildRun,getActiveRun} from '../../services/build-queue.ts';
 import {nextTicketKey} from '../../utils/ticket-keys.ts';
 const pending=new Map<string,Promise<unknown>>();
+type EpicLike={id:string;projectId:string;conversationId:string|null;updatedAt:Date|null};
+export async function resolveQuickChangeEpic<E extends EpicLike>(projectId:string,context:{userId:string;conversationId:string},epicId:string|undefined,name:string,
+ deps:{get:(id:string)=>Promise<E|undefined>;open:(projectId:string)=>Promise<E[]>;create:(input:{projectId:string;name:string;createdById:string;conversationId:string})=>Promise<E>}={get:getEpic as never,open:listUnapprovedEpics as never,create:createEpic as never}):Promise<E>{
+ if(epicId){const chosen=await deps.get(epicId);if(chosen&&chosen.projectId===projectId)return chosen;}
+ const open=await deps.open(projectId);
+ const fromThisChat=open.filter(e=>e.conversationId===context.conversationId);
+ const pick=(fromThisChat.length?fromThisChat:open.length===1?open:[]).sort((a,b)=>+new Date(b.updatedAt??0)-+new Date(a.updatedAt??0))[0];
+ return pick ?? deps.create({projectId,name,createdById:context.userId,conversationId:context.conversationId});
+}
 export function quickChangeTool(context:{projectId:string;userId:string;conversationId:string;turnId:string}) {
  return tool({description:'Build one explicitly requested small new change to an existing repository without requiring PRD/technical documents. Provide self-contained scope and testable acceptance criteria. Reuse sendTicketMessage for repairs to an existing ticket; use the feature workflow (requirements, technical analysis, tickets) for a new substantial feature.',
- inputSchema:zodSchema(z.object({approvedByUser:z.literal(true),name:z.string().min(1).max(150),description:z.string().min(20).max(12000),acceptanceCriteria:z.array(z.string().min(1)).min(2).max(8)})),
+ inputSchema:zodSchema(z.object({approvedByUser:z.literal(true),name:z.string().min(1).max(150),description:z.string().min(20).max(12000),acceptanceCriteria:z.array(z.string().min(1)).min(2).max(8),epicId:z.string().optional().describe('The epic this change belongs to: the feature whose code it changes (getEpicStatus lists epics). Omit only for a change unrelated to any open epic; it then defaults to this conversation\'s open epic.')})),
  execute:async(args)=>{
   if(!args.approvedByUser)return {error:'An explicit request to implement this change is required.'};
   const key=context.projectId+':'+context.conversationId+':'+context.turnId;
@@ -30,7 +39,10 @@ export function quickChangeTool(context:{projectId:string;userId:string;conversa
    if(active?.items.some(item=>item.ticketId===id))return {status:active.status,runId:active.runId,ticketId:id,note:'This change is already tracked by the existing build.'};
    if(active)return {status:'not_started',runId:active.runId,detail:'A project build is already active. Check that build before starting another.'};
    if(!ticket){
-    const epic=await createEpic({projectId:project.id,name:args.name,createdById:context.userId,conversationId:context.conversationId});
+    // A quick change to a feature still in progress belongs to that feature's epic, so it
+    // builds on the feature's code and ships (and previews) with it. A new epic is cut from
+    // main and would not contain that code at all.
+    const epic=await resolveQuickChangeEpic(project.id,context,args.epicId,args.name);
     [ticket]=await db.insert(projectTickets).values({id,projectId:project.id,epicId:epic.id,conversationId:context.conversationId,ticketKey:await nextTicketKey(project.id,project.name),name:args.name,description:args.description,acceptanceCriteria:args.acceptanceCriteria,complexity:'simple',details:{workflow:'quick-change'}}).onConflictDoNothing().returning();
     if(!ticket)[ticket]=await db.select().from(projectTickets).where(eq(projectTickets.id,id));
    }

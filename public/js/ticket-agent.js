@@ -472,12 +472,13 @@
         html += `<div class="ta-git-section"><div class="ta-git-label">${rounds.some((x) => !x.pending) ? "Merges into the epic" : "Pushed work"}</div><div class="ta-git-rounds">${rounds.map((x) => {
           const when = x.pending ? "Not merged yet" : "Merged " + stamp(x.mergedAt);
           const size = `${x.commits.length} commit${x.commits.length !== 1 ? "s" : ""} · ${x.files} file${x.files !== 1 ? "s" : ""} <span class="ta-git-add">+${x.added}</span> <span class="ta-git-del">−${x.removed}</span>`;
-          return `<button type="button" class="ta-git-round${current && x.id === current.id ? " is-current" : ""}${x.pending ? " is-pending" : ""}" data-git-round="${esc(x.id)}"><span>${esc(when)}</span><small>${size}</small></button>`;
+          const sha = x.mergeSha ? `<code class="ta-git-sha" title="Merge commit ${esc(x.mergeSha)}">${esc(x.mergeSha.slice(0, 7))}</code>` : "";
+          return `<button type="button" class="ta-git-round${current && x.id === current.id ? " is-current" : ""}${x.pending ? " is-pending" : ""}" data-git-round="${esc(x.id)}"><span>${sha}${esc(when)}</span><small>${size}</small></button>`;
         }).join("")}</div></div>`;
       }
       if (current && current.mergeSha) {
         html += `<div class="ta-git-undo">${d.canRevert
-          ? `<span>This merge is the newest change on <code>${esc(d.base)}</code>.</span><button type="button" class="ta-git-undo-btn" data-git-revert="${esc(current.mergeSha)}"><i class="fas fa-rotate-left"></i> Undo this merge</button>`
+          ? `<span>Merge <code>${esc(current.mergeSha.slice(0, 7))}</code> is the newest change on <code>${esc(d.base)}</code>. Undoing it removes these changes from the epic branch.</span><button type="button" class="ta-git-undo-btn" data-git-revert="${esc(current.mergeSha)}"><i class="fas fa-rotate-left"></i> Undo this merge</button>`
           : `<span>Newer work has landed on the epic since this merge. To undo it, ask the agent to revert it.</span>`}</div>`;
       }
       if (commits.length) html += `<div class="ta-git-section"><div class="ta-git-label">Commits</div>${commits.map((c) => `<div class="ta-git-commit"><code>${esc(c.sha || "")}</code><span>${esc(c.subject || "")}</span><small title="${esc(relTime(c.when))}">${esc(stamp(c.when))}</small></div>`).join("")}</div>`;
