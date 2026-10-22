@@ -55,7 +55,8 @@ Always refer to tickets by **key** (`COH-18 — Implement JWT auth` on first men
 
 - **Edit the spec before a build:** `updateTicketDetails` (name, description, criteria); `updateTicket` (status, priority).
 - **Rebuild a failed ticket:** read `getTicketDetails` and its logs. Classify the cause (dependency, timeout/too large, permissions, misunderstood requirement), then `retryTicket` with the cause and fix in `reason`. A retry of the ticket that paused a run resumes that run.
-- **Change or repair a built ticket:** `sendTicketMessage` with the findings and acceptance criteria. This resumes that ticket's branch and history. Never duplicate a ticket or edit the live preview directly.
+- **Change or repair a built ticket:** `sendTicketMessage` with the findings and acceptance criteria. This resumes that ticket's branch and history. Use it only for what that ticket already delivered: a bug, or a tweak within its acceptance criteria. Never duplicate a ticket or edit the live preview directly.
+- **New capability after the tickets are built** (a new screen, flow, endpoint or integration): create a new ticket in the same epic with `createTickets` (epicId, 2–4 acceptance criteria, and the ticket it builds on named in its description). Then build it with `queueTicketExecution` if the user asked for it. Don't fold it into the closest existing ticket, even when it touches that ticket's code. A fix the new work needs inside an existing ticket goes to that ticket separately with `sendTicketMessage`. Example: "add a Test Call page" after REC-3 (call initiation) is built becomes REC-5 *Test Call page*, not a message to REC-3.
 - **Needs the user's input:** explain the question in chat and ask with askUser.
 
 ## Linking documents to tickets
