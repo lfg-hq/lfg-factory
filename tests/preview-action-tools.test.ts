@@ -64,3 +64,12 @@ test('data operations enforce the same permission and cancellation boundary',asy
  await (previewActionTool({...context,abortSignal:ac.signal},{...d,access}).execute as any)({action:'manage_data',instruction:'Reset password'},{});
  expect(calls).toBe(0);
 });
+test('expose_port opens a running port publicly for this project only',async()=>{
+ let call:any;
+ const tool=previewActionTool(context,{access,restart:async()=>({previewUrl:'x'}),expose:async(projectId,userId,input)=>{call={projectId,userId,...input};return {ok:true,url:'https://p-abc-media.app.lfg.run',wsUrl:'wss://p-abc-media.app.lfg.run',name:'media',port:8081};}});
+ const result:any=await (tool.execute as any)({action:'expose_port',name:'media',port:8081},{});
+ expect(result.status).toBe('ok');expect(result.wsUrl).toBe('wss://p-abc-media.app.lfg.run');
+ expect(call).toEqual({projectId:'internal',userId:'actor',name:'media',port:8081});
+ const refused:any=await (previewActionTool(context,{access,restart:async()=>({previewUrl:'x'}),expose:async()=>({ok:false,error:'Nothing is listening on port 9999 in the preview.'})}).execute as any)({action:'expose_port',name:'x',port:9999},{});
+ expect(refused).toEqual({status:'error',reply:'Nothing is listening on port 9999 in the preview.'});
+});

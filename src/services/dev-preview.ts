@@ -1230,6 +1230,56 @@ async function exposeService(
   return { name: service.name, url, port: service.port, ok };
 }
 
+/**
+ * Open an extra port of the running preview (a WebSocket audio worker, an API, a webhook
+ * receiver) on its own public subdomain, pinned to that port. The process must already be
+ * listening; this only exposes it. Remembered in the profile and reopened on every start.
+ */
+export async function exposePreviewPort(projectId: string, userId: string, input: { name: string; port: number }): Promise<{ ok: true; url: string; wsUrl: string; name: string; port: number } | { ok: false; error: string }> {
+  const row = await getEnv(projectId);
+  if (row?.previewStatus !== "running" || !row.appUrl) return { ok: false, error: "Start the preview first; ports are opened on the running preview." };
+  const port = Number(input.port);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return { ok: false, error: "Give a valid port (1–65535)." };
+  const name = String(input.name || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || `port-${port}`;
+  if (port === row.appPort) return { ok: true, url: row.appUrl, wsUrl: row.appUrl.replace(/^http/, "ws"), name, port };
+  const workspaceId = await envWorkspaceId(projectId).catch(() => null);
+  if (!workspaceId) return { ok: false, error: "The preview sandbox is not reachable." };
+  const probe = await sh(workspaceId, `(ss -ltn 2>/dev/null || netstat -ltn 2>/dev/null) | grep -Eq '[:.]${port}[[:space:]]' && echo LISTENING || echo CLOSED`, 20_000).catch(() => ({ output: "", exitCode: 1 }));
+  if (!probe.output.includes("LISTENING")) return { ok: false, error: `Nothing is listening on port ${port} in the preview. Start that process (check the worker logs), then open the port.` };
+  const url = await openExtraPort(workspaceId, row.stableAlias || "", name, port, row.appPort);
+  if (!url) return { ok: false, error: `Port ${port} could not be exposed publicly. Try again.` };
+  const branch = environmentBranch(row.previewBranch);
+  const loaded = await loadAppProfile(projectId, branch);
+  if (loaded) {
+    loaded.profile.exposedPorts = [...(loaded.profile.exposedPorts || []).filter((p) => p.port !== port && p.name !== name), { name, port }];
+    await saveAppProfile(projectId, loaded.profile, branch);
+  }
+  plog(projectId, userId, `Opened port ${port} (${name}) publicly at ${url}`);
+  return { ok: true, url, wsUrl: url.replace(/^http/, "ws"), name, port };
+}
+
+/** Expose one extra port on <alias>-<name>, then point the job's bare URL back at the app. */
+async function openExtraPort(workspaceId: string, alias: string, name: string, port: number, primaryPort?: number | null): Promise<string> {
+  let url = "";
+  for (let attempt = 1; attempt <= 3 && !url; attempt++) {
+    try {
+      const direct = await enableHttpAccess(workspaceId, port);
+      url = alias ? await setStableUrl(`${alias}-${name}`, workspaceId, port).catch(() => direct) : direct;
+    } catch { await sleep(3000); }
+  }
+  if (primaryPort) await enableHttpAccess(workspaceId, primaryPort).catch(() => {});
+  return url;
+}
+
+/** Reopen the ports exposed on request, after the preview (re)starts. */
+async function reopenExposedPorts(projectId: string, userId: string, workspaceId: string, alias: string, primaryPort: number): Promise<void> {
+  const loaded = await loadAppProfile(projectId, environmentBranch((await getEnv(projectId))?.previewBranch)).catch(() => null);
+  for (const p of loaded?.profile.exposedPorts || []) {
+    const url = await openExtraPort(workspaceId, alias, p.name, p.port, primaryPort);
+    plog(projectId, userId, url ? `Reopened port ${p.port} (${p.name}) at ${url}` : `Could not reopen port ${p.port} (${p.name})`, url ? undefined : { level: "error" });
+  }
+}
+
 /** Write/replace a single var in the live sandbox .env (so a sibling app picks it up on
  *  its next start). Value is quote-escaped for `set -a; . ./.env` sourcing. */
 async function writeLiveEnvVar(workspaceId: string, key: string, value: string, runDir = PROJECT_DIR): Promise<void> {
@@ -2792,6 +2842,7 @@ fi`, 240_000);
     const auditStep: RunStep = { id: "audit", phase: "verify", label: "Verify homepage, assets and database health", command: "", status: "running" };
     result.steps.push(auditStep); await persistSteps(projectId, userId, result.steps);
     const companionSummary = await runEnabledCompanions(projectId, userId, workspaceId, manifest, PROJECT_DIR, alias, previewUrl);
+    await reopenExposedPorts(projectId, userId, workspaceId, alias, effectivePort).catch(() => {});
     // Each companion's exposeService() calls enableHttpAccess for ITS port, which leaves
     // the job's primary port pointing at whichever companion started last. Restore it to
     // the primary app so the job's bare URL (and any unpinned alias) means the main app.
@@ -3874,6 +3925,7 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) $(git log -1 --oneline
     result.steps.push(companionStep, auditStep);
     await persistSteps(projectId, userId, result.steps);
     const companionSummary = await runEnabledCompanions(projectId, userId, workspaceId, manifest, runDir, alias, previewUrl);
+    await reopenExposedPorts(projectId, userId, workspaceId, alias, effectivePort).catch(() => {});
     companionStep.status = /❌|failed|did not/i.test(companionSummary) ? "failed" : "done";
     auditStep.status = "running";
     await persistSteps(projectId, userId, result.steps);

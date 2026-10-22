@@ -159,6 +159,7 @@ export const appProfileSchema = z.object({
   // every checkout — e.g. repointing an appsettings.json connection from a dead
   // dev/prod host to the provisioned localhost DB. Auto-filled via persistConfigPatch.
   recoveryBackups: z.array(z.object({id:z.string(),workspaceId:z.string(),database:z.string(),connectionKey:z.string().optional(),path:z.string(),createdAt:z.string(),reason:z.string()})).optional(),
+  exposedPorts: z.array(z.object({ name: z.string(), port: z.number().int() })).optional().describe("Leave EMPTY — extra running ports opened publicly on request (e.g. a WebSocket worker)."),
   configPatches: z.array(z.object({
     file: z.string().describe("Path relative to the checkout, e.g. 'Cohire.Web/appsettings.json'."),
     find: z.string().describe("Exact literal text to replace."),
