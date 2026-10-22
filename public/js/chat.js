@@ -1433,7 +1433,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Condensing a long conversation is visible, never a silent pause.
         if (data.notification_type === 'context_compaction') {
-            showContextCondense(data.phase === 'done' ? 'done' : 'working');
+            showContextCondense(data.phase === 'done' ? 'done' : 'working', data.phase === 'progress' ? { done: data.done, total: data.total } : null);
             return;
         }
 
@@ -3909,7 +3909,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // A banner in the transcript while the agent summarizes older turns, then a quiet
     // marker of where it happened. The trail keeps its own "Condensing" step too.
-    function contextCondenseBanner(state) {
+    function contextCondenseBanner(state, progress) {
         const banner = document.createElement('div');
         banner.className = 'context-condense';
         banner.setAttribute('role', 'status');
@@ -3919,7 +3919,9 @@ document.addEventListener('DOMContentLoaded', () => {
         icon.setAttribute('aria-hidden', 'true');
         const text = document.createElement('div');
         const title = document.createElement('strong');
-        title.textContent = state === 'working' ? 'Condensing earlier conversation…' : 'Earlier conversation condensed';
+        title.textContent = state === 'working'
+            ? 'Condensing earlier conversation…' + (progress && progress.total ? ' ' + progress.done + ' of ' + progress.total : '')
+            : 'Earlier conversation condensed';
         const note = document.createElement('span');
         note.textContent = state === 'working'
             ? 'This chat is long, so the agent is summarizing older turns to keep working. Nothing is deleted.'
@@ -3928,10 +3930,10 @@ document.addEventListener('DOMContentLoaded', () => {
         banner.append(icon, text);
         return banner;
     }
-    function showContextCondense(state) {
+    function showContextCondense(state, progress) {
         const trail = activeTrail && activeTrail.isConnected ? activeTrail : null;
         let banner = messageContainer.querySelector('.context-condense[data-state="working"]');
-        const next = contextCondenseBanner(state);
+        const next = contextCondenseBanner(state, progress);
         if (banner) banner.replaceWith(next);
         else if (trail) trail.after(next);
         else messageContainer.appendChild(next);

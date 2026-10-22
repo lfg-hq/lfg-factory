@@ -949,7 +949,11 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   const summarize = (evidence: string): Promise<string> => {
     const key = createHash('sha256').update(evidence).digest('hex');
     if (!summaryCache.has(key)) summaryCache.set(key, (async () => {
-      const result = await generateText({model, system:HANDOFF_INSTRUCTION, prompt:evidence,
+      // Summaries use the fast helper model on a subscription (the main reasoning model
+      // took ~1 minute per batch), falling back to the chat model otherwise.
+      const sub = currentSubscription();
+      const summaryModel = sub ? (await import("./pi-subscription-model.ts")).createPiSubscriptionModel('gpt-5.6-luna', sub.getAccessToken) : model;
+      const result = await generateText({model:summaryModel, system:HANDOFF_INSTRUCTION, prompt:evidence,
         maxOutputTokens:2200, abortSignal:abortController.signal, maxRetries:1});
       return result.text;
     })());
@@ -997,8 +1001,13 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
         const bounded = await compactContext(stepMessages, fixedTokens, summarize, undefined, () => {
           // Summarizing takes a model call; the chat shows a visible banner, not a hidden step.
           condensing = true;
+          req.onActivity?.();
           noteActivity("Condensing earlier context", "compactContext");
           ws.send(JSON.stringify({type:"ai_chunk",chunk:"",is_final:false,is_notification:true,notification_type:"context_compaction",phase:"start"}));
+        }, (done, total) => {
+          // Progress doubles as a heartbeat so a long condense is never mistaken for a stall.
+          req.onActivity?.();
+          ws.send(JSON.stringify({type:"ai_chunk",chunk:"",is_final:false,is_notification:true,notification_type:"context_compaction",phase:"progress",done,total}));
         });
         if (condensing) ws.send(JSON.stringify({type:"ai_chunk",chunk:"",is_final:false,is_notification:true,notification_type:"context_compaction",phase:"done"}));
         chatDiagnostic('context_budget', {estimatedTokens:fixedTokens + estimateContextTokens(bounded),

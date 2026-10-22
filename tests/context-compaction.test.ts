@@ -58,3 +58,17 @@ test('bulky old tool output is shortened before any summarization request',async
  expect(result.at(-1)).toEqual(rows.at(-1));
  expect(JSON.stringify(rows[2])).toContain(page.slice(0,100));
 });
+test('long history is summarized in parallel batches, merged once, with progress',async()=>{
+ const rows:any[]=[];
+ for(let i=0;i<40;i++){rows.push({role:'user',content:'question '+i+' '+'x'.repeat(9000)});rows.push({role:'assistant',content:'answer '+i+' '+'y'.repeat(9000)});}
+ rows.push({role:'user',content:'latest request'},{role:'assistant',content:'working on it'});
+ let active=0,peak=0;const prompts:string[]=[];const progress:string[]=[];
+ const summarize=async(text:string)=>{active++;peak=Math.max(peak,active);prompts.push(text);await new Promise(r=>setTimeout(r,5));active--;return 'summary '+prompts.length;};
+ const out=await compactContext(rows,0,summarize,60000,undefined,(d,t)=>progress.push(d+'/'+t));
+ const batches=prompts.filter(p=>p.startsWith('Historical messages, part'));
+ expect(batches.length).toBeGreaterThan(1);
+ expect(peak).toBeGreaterThan(1);
+ expect(prompts.filter(p=>p.startsWith('Merge these')).length).toBe(1);
+ expect(progress.at(-1)).toBe(`${batches.length+1}/${batches.length+1}`);
+ expect(JSON.stringify(out)).toContain('latest request');
+});

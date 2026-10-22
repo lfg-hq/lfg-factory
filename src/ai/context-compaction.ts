@@ -62,7 +62,16 @@ export function pruneToolResults(messages: ModelMessage[], end: number): ModelMe
 }
 
 /** Compact only at a completed message boundary; keep latest call/result group intact. */
-export async function compactContext(messages: ModelMessage[], fixedTokens: number, summarize: Summarizer, budget = contextBudget(), onSummarize?: () => void): Promise<ModelMessage[]> {
+async function mapLimit<T, R>(items: T[], limit: number, run: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) { const i = next++; out[i] = await run(items[i]!, i); }
+  }));
+  return out;
+}
+
+export async function compactContext(messages: ModelMessage[], fixedTokens: number, summarize: Summarizer, budget = contextBudget(), onSummarize?: () => void, onProgress?: (done: number, total: number) => void): Promise<ModelMessage[]> {
   const target = Math.floor(budget * .75);
   if (fixedTokens + estimateContextTokens(messages) <= target) return messages;
   let cut = messages.length - 1;
@@ -82,19 +91,30 @@ export async function compactContext(messages: ModelMessage[], fixedTokens: numb
   const pinned = prefix.filter((m, i) => m.role === 'system' || i === lastUser);
   const evidence = prefix.filter((m, i) => m.role !== 'system' && i !== lastUser);
   if (!evidence.length) throw new Error('This request exceeds the chat context budget. Please narrow the attached content.');
-  // Bounded sequential summaries avoid overflowing the summarization call itself.
-  let summary = '';
+  // Bounded batches summarized in parallel, then merged once. A sequential chain of
+  // slow model calls took minutes on long chats and the turn was cancelled as dead.
+  const batches: string[] = [];
   let batch = '';
   for (const message of evidence) {
     const raw = JSON.stringify(message);
     const bounded = raw.length > 24000 ? raw.slice(0, 16000) + '\n[Large historical item shortened; retrieve source for details]\n' + raw.slice(-8000) : raw;
-    if (batch && batch.length + bounded.length > 30000) {
-      summary = await summarizeEvidence('Previous handoff:\n' + summary + '\nHistorical messages:\n' + batch, summarize);
-      batch = '';
-    }
+    if (batch && batch.length + bounded.length > 60000) { batches.push(batch); batch = ''; }
     batch += bounded + '\n';
   }
-  if (batch) summary = await summarizeEvidence('Previous handoff:\n' + summary + '\nHistorical messages:\n' + batch, summarize);
+  if (batch) batches.push(batch);
+  let done = 0;
+  const total = batches.length + (batches.length > 1 ? 1 : 0);
+  onProgress?.(done, total);
+  const parts = await mapLimit(batches, 4, async (text, i) => {
+    const part = await summarizeEvidence(`Historical messages, part ${i + 1} of ${batches.length} (oldest first):\n` + text, summarize);
+    onProgress?.(++done, total);
+    return part;
+  });
+  let summary = parts[0] ?? '';
+  if (parts.length > 1) {
+    summary = await summarizeEvidence('Merge these consecutive handoff summaries (oldest first) into one handoff. Keep every decision, open item, identifier and the latest state:\n\n' + parts.map((p, i) => `### Part ${i + 1}\n${p}`).join('\n\n'), summarize);
+    onProgress?.(++done, total);
+  }
   const compacted = [handoffMessage(summary), ...pinned, ...messages.slice(cut)];
   if (fixedTokens + estimateContextTokens(compacted) > target) throw new Error('Recent context is too large to compact safely. Please narrow the attached content.');
   return compacted;
