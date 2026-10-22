@@ -78,3 +78,8 @@ test('persisted phase labels classify a partial page without earlier markers',()
  expect(p[0].rows).toHaveLength(0);expect(p[1].rows).toHaveLength(2);
  expect(p[1].rows[0].message).toBe('Inspecting the saved checkout');
 });
+test('a follow-up sent to a built ticket is build work, not part of the earlier checks',()=>{
+ const p=group(rows('Starting Pi build','Editing src/a.ts','**Checks:** Checks start the app and test this ticket\'s feature.','Build saved.','Chat follow-up','Refreshing ticket from epic/e1…','Editing src/test-call.ts'),{status:'review',queueStatus:'none'});
+ expect(p[0].rows.map((r:any)=>r.message)).toEqual(['Starting Pi build','Editing src/a.ts','Chat follow-up','Refreshing ticket from epic/e1…','Editing src/test-call.ts']);
+ expect(p[1].rows.length).toBe(2);
+});

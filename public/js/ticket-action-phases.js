@@ -12,7 +12,8 @@
       if (/^(Running a sandbox command|The same repair session is still active\.)$/.test(text)) continue;
       const retry = /^Retrying validation of saved commit/i.test(text);
       const validation = tag?.[1]==='Validation' || /^Validation check:|^Validation connection interrupted:|^Checking prerequisite:|^(App|Preview) readiness|^Preview ready|^Checks skip|^Checks:|^Checks could not run/i.test(text) || retry || /^(Running the saved ticket:|Repairing runtime checks:|Checking:|Preparing validation:|Now verifying this commit|Fresh \/ candidate:|Runtime checks passed|✅\s*Validation passed)/i.test(text);
-      const build = /^(Starting Pi build|Isolated build:|Starting (?:ticket )?build|Building ticket)/i.test(text);
+      // A ticket follow-up (a change or repair sent to a built ticket) is new build work.
+      const build = /^(Starting Pi build|Isolated build:|Starting (?:ticket )?build|Building ticket|Chat follow-up$|Refreshing ticket from )/i.test(text);
       if (build) { buildStarted = true; active = 0; phases[0].status = 'working'; phases[1].status = 'pending'; phases[2].status = 'pending'; }
       if (validation) {
         active = 1;
@@ -82,7 +83,15 @@
     const liveCards=new Map(Array.from(area.querySelectorAll('.feature-live[data-live-url]'),card=>[card.dataset.liveUrl,card]));
     const previous = area.querySelector('.checks-view:not([hidden])') || area.querySelector('.ticket-phase-body:not([hidden])');
     const scroll = previous ? { top:previous.scrollTop, left:previous.scrollLeft, bottom:previous.scrollHeight-previous.scrollTop-previous.clientHeight<40 } : null;
-    const phases = group(rows, ticket).filter(phase => phase.id === 'build' || (phase.id === 'validation' ? ticket?.validationEnabled !== false : ticket?.featureTestingEnabled !== false));
+    const grouped = group(rows, ticket);
+    const shown = phase => phase.id === 'build' || (phase.id === 'validation' ? ticket?.validationEnabled !== false : ticket?.featureTestingEnabled !== false);
+    // A hidden check stage never hides its rows: they read under Build, in order.
+    const hiddenRows = grouped.filter(phase => !shown(phase)).flatMap(phase => phase.rows);
+    if (hiddenRows.length) {
+      const order = new Map(rows.map((row, i) => [row.id, i]));
+      grouped[0].rows = grouped[0].rows.concat(hiddenRows).sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+    }
+    const phases = grouped.filter(shown);
     area.dataset.phaseView = key;
     const history = histories.get(historyUrl);
     // Validation and feature testing read as one Checks stage: app startup, then the
