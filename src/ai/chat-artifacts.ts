@@ -16,6 +16,13 @@ export function savedChatArtifact(tool: string, output: Record<string, unknown> 
   if (['queueTicketExecution','sendTicketMessage'].includes(tool) && output.success === true && typeof output.ticketId === 'string') {
     return {kind:'build_run', id:'ticket-'+output.ticketId+'-'+callId, name:'Build', ticketIds:[output.ticketId]};
   }
+  // A quick change creates one ticket and builds it; a retry rebuilds one. Both get the live card.
+  if (tool === 'quickChange' && typeof output.ticketId === 'string' && output.ticketId && ['queued', 'running', 'executing'].includes(String(output.status))) {
+    return {kind:'build_run', id:typeof output.runId === 'string' && output.runId ? output.runId : 'ticket-'+output.ticketId+'-'+callId, name:'Build', ticketIds:[output.ticketId]};
+  }
+  if (tool === 'retryTicket' && typeof output.ticketId === 'string' && output.ticketId && (output.success === true || output.queued === true || output.status === 'queued')) {
+    return {kind:'build_run', id:'ticket-'+output.ticketId+'-'+callId, name:'Build', ticketIds:[output.ticketId]};
+  }
   if (tool === 'createTickets' && Array.isArray(output.tickets)) {
     const tickets = output.tickets.filter(t => t && typeof t.id === 'string' && t.id).map(t => ({id:t.id, name:typeof t.name === 'string' ? t.name : 'Ticket', ticketKey:typeof t.ticketKey === 'string' ? t.ticketKey : null}));
     if (!tickets.length) return null;

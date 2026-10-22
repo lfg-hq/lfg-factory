@@ -20,3 +20,10 @@ test('document revisions carry the version they replaced so the card can show ch
  expect(savedChatArtifact('patchFileContent',{success:true,id:'d',name:'Requirements',fileType:'prd',previousVersion:4},'c')).toEqual({kind:'document',id:'d',name:'Requirements',fileType:'prd',previousVersion:4});
  expect(savedChatArtifact('streamDocumentContent',{saved:true,id:'d',name:'Requirements',fileType:'prd',previousVersion:0},'c')).not.toHaveProperty('previousVersion');
 });
+
+test('every way of starting a build gets the live build card', async () => {
+  const { savedChatArtifact } = await import('../src/ai/chat-artifacts.ts');
+  expect(savedChatArtifact('quickChange', { runId: 'run-1', ticketId: 't6', ticketKey: 'REC-6', status: 'queued' }, 'c1')).toEqual({ kind: 'build_run', id: 'run-1', name: 'Build', ticketIds: ['t6'] });
+  expect(savedChatArtifact('quickChange', { ticketId: 't6', status: 'review', note: 'already completed' }, 'c1')).toBeNull();
+  expect(savedChatArtifact('retryTicket', { success: true, ticketId: 't3', note: 'Ticket queued for execution' }, 'c2')).toMatchObject({ kind: 'build_run', ticketIds: ['t3'] });
+});

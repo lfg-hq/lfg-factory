@@ -374,7 +374,7 @@ export const retryTicket = tool({
     if (ticketRetryMode(row, mode) === 'merge') {
       const { startTicketMergeRetry } = await import('../../workers/ticket-executor.ts');
       await startTicketMergeRetry(ticketId, userId, conversationId);
-      return { success: true, note: 'Merge retry started from the published ticket branch. Implementation is not being repeated.' };
+      return { success: true, ticketId, note: 'Merge retry started from the published ticket branch. Implementation is not being repeated.' };
     }
     const claimed = await db.update(projectTickets).set({ status: "open", queueStatus: "queued", queuedAt: new Date(), updatedAt: new Date() }).where(and(eq(projectTickets.id, ticketId), eq(projectTickets.queueStatus, row.queueStatus))).returning({id:projectTickets.id});
     if (!claimed.length) throw new Error("Another operation claimed this ticket.");
@@ -386,7 +386,7 @@ export const retryTicket = tool({
     // Emit queued event to trigger execution
     const { emit } = await import("../../events/bus.ts");
     emit({ type: "ticket.queued", ticketId, projectId: row?.projectId ?? "" });
-    return { success: true, note: "Ticket queued for execution" };
+    return { success: true, ticketId, note: "Ticket queued for execution" };
   },
 });
 
