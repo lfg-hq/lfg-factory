@@ -1431,6 +1431,12 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        // Condensing a long conversation is visible, never a silent pause.
+        if (data.notification_type === 'context_compaction') {
+            showContextCondense(data.phase === 'done' ? 'done' : 'working');
+            return;
+        }
+
         // Specific action of the current tool (args now known) → update the live indicator.
         if (data.notification_type === 'tool_detail') {
             showStopButton();
@@ -3901,6 +3907,42 @@ document.addEventListener('DOMContentLoaded', () => {
         return collapsed;
     }
 
+    // A banner in the transcript while the agent summarizes older turns, then a quiet
+    // marker of where it happened. The trail keeps its own "Condensing" step too.
+    function contextCondenseBanner(state) {
+        const banner = document.createElement('div');
+        banner.className = 'context-condense';
+        banner.setAttribute('role', 'status');
+        banner.dataset.state = state;
+        const icon = document.createElement('i');
+        icon.className = state === 'working' ? 'fas fa-spinner fa-spin' : 'fas fa-compress-alt';
+        icon.setAttribute('aria-hidden', 'true');
+        const text = document.createElement('div');
+        const title = document.createElement('strong');
+        title.textContent = state === 'working' ? 'Condensing earlier conversation…' : 'Earlier conversation condensed';
+        const note = document.createElement('span');
+        note.textContent = state === 'working'
+            ? 'This chat is long, so the agent is summarizing older turns to keep working. Nothing is deleted.'
+            : 'The agent now works from a summary of older turns. The full history stays in this chat.';
+        text.append(title, note);
+        banner.append(icon, text);
+        return banner;
+    }
+    function showContextCondense(state) {
+        const trail = activeTrail && activeTrail.isConnected ? activeTrail : null;
+        let banner = messageContainer.querySelector('.context-condense[data-state="working"]');
+        const next = contextCondenseBanner(state);
+        if (banner) banner.replaceWith(next);
+        else if (trail) trail.after(next);
+        else messageContainer.appendChild(next);
+        if (trail) {
+            if (state === 'working') trail.dataset.condensing = '1'; else delete trail.dataset.condensing;
+            trail.dataset.lastActivity = String(Date.now());
+            updateTrailMeta(trail);
+        }
+        scrollToBottom();
+    }
+
     function updateTrailMeta(trail) {
         if (!trail) return;
         const count = trail.querySelectorAll('.agent-trail-step').length;
@@ -3910,7 +3952,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (trail.classList.contains('is-running')) {
             const silent = Math.floor((Date.now() - Number(trail.dataset.lastActivity || trail.dataset.started)) / 1000);
             const title = trail.querySelector('.agent-trail-title');
-            if (title) title.textContent = silent >= 30
+            if (title && trail.dataset.condensing) title.textContent = 'Condensing earlier context…';
+            else if (title) title.textContent = silent >= 30
                 ? 'Waiting for a response — no update for ' + silent + 's'
                 : (trail.dataset.action || 'Thinking…');
         }
@@ -3920,9 +3963,12 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderSavedTrail(steps, endReason, phase = false) {
         activeTrail = null;                       // never continue a historical trail
         steps.forEach((st) => trailStep({ detail: st.text, tool: st.tool, warning: st.warning }));
-        if (phase) { finishWorkPhase(); return; }
-        finalizeTrail(endReason === 'error' ? 'Failed' : endReason === 'stopped' ? 'Stopped'
+        // History keeps the marker of where the conversation was condensed.
+        const condensedTrail = steps.some((st) => st.tool === 'compactContext') ? activeTrail : null;
+        if (phase) finishWorkPhase();
+        else finalizeTrail(endReason === 'error' ? 'Failed' : endReason === 'stopped' ? 'Stopped'
             : endReason && endReason !== 'complete' ? 'Interrupted — ' + endReason : undefined);
+        if (condensedTrail && condensedTrail.isConnected) condensedTrail.after(contextCondenseBanner('done'));
     }
 
     // Offsets refer to the persisted, citation-cleaned content. Old records have no
@@ -3978,6 +4024,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     /** The turn is over: stamp the trail, collapse it, and leave it in the transcript. */
     function finalizeTrail(outcome) {
+        // A turn that ended mid-condense leaves no spinner behind.
+        messageContainer.querySelectorAll('.context-condense[data-state="working"]').forEach((el) => el.remove());
         clearInterval(trailTimer);
         trailTimer = null;
         if (!activeTrail || !activeTrail.isConnected) { activeTrail = null; return; }

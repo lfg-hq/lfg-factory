@@ -993,12 +993,14 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
       stopWhen: stepCountIs(80),
       maxOutputTokens: Math.min(12000, Math.floor(contextBudget() * .2)),
       prepareStep: async ({messages: stepMessages}) => {
+        let condensing = false;
         const bounded = await compactContext(stepMessages, fixedTokens, summarize, undefined, () => {
-          // Summarizing takes a model call; say so instead of looking frozen.
-          const detail = "Condensing earlier context";
-          noteActivity(detail, "compactContext");
-          ws.send(JSON.stringify({type:"ai_chunk",chunk:"",is_final:false,is_notification:true,notification_type:"tool_detail",function_name:"compactContext",detail}));
+          // Summarizing takes a model call; the chat shows a visible banner, not a hidden step.
+          condensing = true;
+          noteActivity("Condensing earlier context", "compactContext");
+          ws.send(JSON.stringify({type:"ai_chunk",chunk:"",is_final:false,is_notification:true,notification_type:"context_compaction",phase:"start"}));
         });
+        if (condensing) ws.send(JSON.stringify({type:"ai_chunk",chunk:"",is_final:false,is_notification:true,notification_type:"context_compaction",phase:"done"}));
         chatDiagnostic('context_budget', {estimatedTokens:fixedTokens + estimateContextTokens(bounded),
           budgetTokens:contextBudget(), compacted:bounded !== stepMessages});
         return {messages:bounded};

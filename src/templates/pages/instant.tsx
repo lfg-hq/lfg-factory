@@ -115,7 +115,7 @@ export function InstantPage({
   <link rel="stylesheet" href="/public/css/common.css" />
   <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
   <link rel="stylesheet" href="/public/css/styles.css" />
-  <link rel="stylesheet" href="/public/css/chat.css?v=20260908-hover-copy" />
+  <link rel="stylesheet" href="/public/css/chat.css?v=20261022-condense" />
   <link rel="stylesheet" href="/public/css/instant.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
