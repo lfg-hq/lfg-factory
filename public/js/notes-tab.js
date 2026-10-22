@@ -110,12 +110,19 @@
       const d = await api("");
       const next = JSON.stringify(d.notes || []);
       canEdit = !!d.canEdit;
+      // A blip in an earlier poll ("Failed to fetch") is stale once one succeeds.
+      if ($("notes-msg")?.dataset.loadError) { msg(""); delete $("notes-msg").dataset.loadError; }
       // Polling must not wipe a form the user is typing in.
       if (next === signature && notes.length) return;
       signature = next; notes = d.notes || [];
       if (!editingId) render();
       else if (!notes.some((n) => n.id === editingId) && editingId !== "new") { editingId = null; render(); }
-    } catch (e) { msg(e.message || "Could not load notes."); }
+    } catch (e) {
+      // Background refreshes stay quiet; only a load with nothing shown reports the failure.
+      if (notes.length) return;
+      msg("Couldn't load notes. Check your connection; it retries automatically.");
+      const el = $("notes-msg"); if (el) el.dataset.loadError = "1";
+    }
   }
 
   async function secretOf(id) {

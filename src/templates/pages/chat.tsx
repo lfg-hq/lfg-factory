@@ -530,7 +530,7 @@ export function ChatPage({
 <script src="/public/js/preview-tab.js?v=20261005-start-state"></script>
     <script src="/public/js/ticket-agent.js?v=20261022-git-tab"></script>
   <script src="/public/js/env-tab.js?v=20261004-env-apply"></script>
-  <script src="/public/js/notes-tab.js?v=20261022-notes"></script>
+  <script src="/public/js/notes-tab.js?v=20261022-notes-quiet"></script>
   <script src="/public/js/tab-overflow.js"></script>
   <script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
   <script src="/public/js/custom-dropdown.js"></script>
