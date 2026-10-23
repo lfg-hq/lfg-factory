@@ -7,6 +7,7 @@ import {
   projectTickets,
   ticketStages,
   ticketLogs,
+  ticketAddenda,
   projectTodoLists,
   projectTicketAttachments,
 } from "../../db/schema/tickets.ts";
@@ -391,18 +392,21 @@ export const retryTicket = tool({
 });
 
 export const sendTicketMessage = tool({
-  description: "Send a message to the coding agent currently working on a ticket. If a Claude session is active, it resumes that session with the message. Otherwise it starts a new session with context.",
+  description: "Send a change request or question to a ticket's coding agent. A change request is saved on the ticket (pending until a build or follow-up publishes it), so it survives failures and rebuilds. If a Claude session is active, it resumes that session with the message. Otherwise it starts a new session with context.",
   inputSchema: zodSchema(z.object({
     ticketId: z.string(),
     conversationId: z.string().optional().describe("Current conversation ID supplied in your context; associates activity with this chat."),
     message: z.string().describe("The instruction or question to send to the ticket agent"),
+    kind: z.enum(["change","question"]).optional().describe("'change' (default): a code change. It is saved on the ticket as a pending change request and carried into every build and follow-up until one publishes it. 'question': only asks the ticket agent something."),
   })),
-  execute: async (args: {ticketId:string;message:string;conversationId?:string;projectId?:string;userId?:string;turnId?:string}) => {
+  execute: async (args: {ticketId:string;message:string;kind?:'change'|'question';conversationId?:string;projectId?:string;userId?:string;turnId?:string}) => {
     const {ticketId,message,conversationId,projectId,userId,turnId}=args;
     if(!conversationId || !projectId || !userId || !turnId)return {error:'Server-owned conversation, project, actor and turn context are required.'};
     const {createTicketOperation}=await import('../../services/ticket-operations.ts');
     const {operation,created}=await createTicketOperation({ticketId,message,conversationId,projectId,userId,turnId});
     if(created){
+      // Durable record: a failed or interrupted turn must not lose the request.
+      if((args.kind ?? 'change')==='change') await db.insert(ticketAddenda).values({ticketId,createdById:userId,description:message,status:'pending'});
       await db.insert(ticketLogs).values({ticketId,logType:'agent_action',command:message});
       emitTicketCommented({ticketId,projectId,message,logType:'agent_action'});
       const {bus}=await import('../../events/bus.ts');

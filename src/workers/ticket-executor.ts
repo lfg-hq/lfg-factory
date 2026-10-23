@@ -665,6 +665,9 @@ async function ticketAddendaContext(ticketId: string): Promise<{ block: string; 
   return { block, pendingIds: pending.map((p) => p.id) };
 }
 
+/** Pending addenda a follow-up turn was given, so it resolves exactly those once it publishes. */
+const chatTurnAddenda = new Map<string, string[]>();
+
 /** Mark a ticket's pending addenda resolved after a successful (re)build. */
 async function resolveTicketAddenda(ticketId: string, pendingIds: string[]): Promise<void> {
   if (!pendingIds.length) return;
@@ -2547,6 +2550,7 @@ async function executeTicketChatInternal(
   // Shared context for BOTH agent paths (Pi and Claude Code): the requirements, what
   // was already built, and the conversation so far — so a follow-up isn't blind and a
   // question can be answered from what the ticket actually is.
+  chatTurnAddenda.set(ticketId, (await ticketAddendaContext(ticketId)).pendingIds);
   const chatContext = (baselineProblem ? `## Current checkout limitation\n${baselineProblem}\nThis turn is read-only: inspect and answer the request, state the concrete synchronization problem if implementation is requested, and preserve all existing edits. Do not implement or publish code on this stale baseline.\n\n` : '') + await buildChatContext(ticket, project!.id, message) + ticketDocumentInstructions(await materializeTicketDocs({
     projectId:project!.id,workspaceId,projectDir:projectPath,epicId:ticket.epicId,sourceDocumentId:ticket.sourceDocumentId,sourceDocumentIds:ticketDocumentIds(ticket.details),
     text:[ticket.name,ticket.description,ticket.notes,message].join('\n'),
@@ -2837,6 +2841,7 @@ ${ENGINEERING_CONTRACT}
   // Chat turn done — save the journal and retire the VM; a later follow-up starts fresh.
   await sleepTicketVm(workspaceId, ticketId, "Follow-up");
   } finally {
+    chatTurnAddenda.delete(ticketId);
     chatLane?.release();
   }
 }
@@ -2916,6 +2921,8 @@ async function finalizeTicketChat(
       `- Branch: \`${featureBranch}\`\n- Commit: \`${sha.slice(0, 7)}\`\n${mergedOk ? `- Merged to \`${anchorBranch}\` ✓\n` : ""}\nRe-run the **Preview** to see the change, or open the **Git** tab for the diff.`;
     await addLog(ticketId, done, "ai_response", ownerId);
     await publishTicketOperation(featureBranch, anchorBranch, sha, done);
+    // The change requests this turn was given are now published: stop carrying them.
+    await resolveTicketAddenda(ticketId, chatTurnAddenda.get(ticketId) ?? []);
     // A published follow-up does not prove every historical or verification task
     // succeeded. Preserve the individual task outcomes reported by the agent.
     await maybeSubmitEpicForReview(ticket.epicId);

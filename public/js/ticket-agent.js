@@ -110,8 +110,38 @@
         (criteria.length ? `<ol style="margin:0;padding-left:22px;">${criteria.map(c => `<li style="margin-bottom:6px;">${esc(c)}</li>`).join("")}</ol>` :
           `<p style="margin:0;color:var(--text-secondary,#9ca3af);">No acceptance criteria have been saved for this ticket.</p>`) +
       `</section>` +
+      `<div id="ta-addenda"></div>` +
       `<div id="ta-refs" style="margin-top:14px;"></div>`;
     renderDocRefs(meta);
+    renderAddenda(meta);
+  }
+
+  // Change requests sent to this ticket after it was written (by you or the agent).
+  // They are not in the description; every build and follow-up carries the pending
+  // ones until a run publishes them.
+  function renderAddenda(meta) {
+    const host = $("ta-addenda");
+    const id = (meta && meta.id) || ticketId;
+    if (!host || !id) return;
+    fetch(`/api/projects/${PID()}/tickets/${id}/addenda`, { credentials: "same-origin" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        const list = (j && Array.isArray(j.addenda)) ? j.addenda : [];
+        if (!list.length || $("ta-addenda") !== host) return;
+        const when = (d) => (d ? new Date(d).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "");
+        const row = (a) => {
+          const pending = a.status === "pending";
+          return `<li style="margin-bottom:8px;">` +
+            `<span style="font-size:11px;font-weight:600;padding:1px 7px;border-radius:6px;margin-right:6px;background:${pending ? "rgba(245,158,11,.16)" : "rgba(34,197,94,.14)"};color:${pending ? "#d97706" : "#16a34a"};">${pending ? "Pending" : "Done"}</span>` +
+            `<span style="font-size:11px;color:var(--text-secondary,#9ca3af);">${esc(when(pending ? a.createdAt : a.resolvedAt))}</span>` +
+            `<div class="markdown-content" style="margin-top:3px;">${md(String(a.description || ""))}</div></li>`;
+        };
+        host.innerHTML = `<section aria-label="Change requests" style="margin-top:18px;font-size:13px;line-height:1.6;">` +
+          `<h3 style="font-size:13px;margin:0 0 4px;">Change requests</h3>` +
+          `<p style="margin:0 0 8px;color:var(--text-secondary,#9ca3af);font-size:12px;">Added after the description. Pending ones are included in every build and follow-up until one publishes them.</p>` +
+          `<ul style="margin:0;padding-left:18px;">${list.map(row).join("")}</ul></section>`;
+      })
+      .catch(() => {});
   }
 
   /**
