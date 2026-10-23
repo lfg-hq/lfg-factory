@@ -29,9 +29,29 @@ export function redactHandoffSecrets(text: string): string {
     .replace(/((?:api[_ -]?key|password|secret|access[_ -]?token)\s*[=:]\s*)[^\s,;"}]+/gi, '$1[REDACTED]')
     .replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/g, '[REDACTED PRIVATE KEY]');
 }
+/** Our own failure while condensing context (not the model provider's), with a machine code for diagnostics. */
+export class ContextCompactionError extends Error {
+  override name = 'ContextCompactionError';
+  constructor(message: string, readonly code: string) { super(message); }
+}
+const SUMMARY_MAX_CHARS = 9000;
+/**
+ * A summary that comes back too long is shortened, never fatal: the subscription models
+ * ignore output limits, and a merged summary of several parts often overshoots.
+ */
 export async function summarizeEvidence(evidence: string, summarize: Summarizer): Promise<string> {
-  const result = redactHandoffSecrets(await summarize(redactHandoffSecrets(evidence))).trim();
-  if (!result || result.length > 9000) throw new Error('Context summary was empty or oversized. Please retry.');
+  const run = async (text: string) => redactHandoffSecrets(await summarize(redactHandoffSecrets(text))).trim();
+  let result = await run(evidence);
+  if (!result) result = await run(evidence);
+  if (!result) throw new ContextCompactionError('Condensing earlier context returned an empty summary. Please retry.', 'summary_empty');
+  if (result.length > SUMMARY_MAX_CHARS) {
+    const shorter = await run('Shorten this handoff to under 6000 characters. Keep every decision, open item, identifier and the latest state:\n\n' + result).catch(() => '');
+    if (shorter && shorter.length < result.length) result = shorter;
+  }
+  if (result.length > SUMMARY_MAX_CHARS) {
+    const cut = result.lastIndexOf('\n', SUMMARY_MAX_CHARS - 80);
+    result = result.slice(0, cut > SUMMARY_MAX_CHARS / 2 ? cut : SUMMARY_MAX_CHARS - 80) + '\n[Summary shortened; recheck sources for details]';
+  }
   return result;
 }
 export function handoffMessage(summary: string): ModelMessage {
@@ -81,7 +101,7 @@ export async function compactContext(messages: ModelMessage[], fixedTokens: numb
     cut--;
     while (cut > 0 && messages[cut]?.role !== 'assistant') cut--;
   }
-  if (cut <= 0) throw new Error('This request exceeds the chat context budget. Please narrow the attached content.');
+  if (cut <= 0) throw new ContextCompactionError('This request exceeds the chat context budget. Please narrow the attached content.', 'context_over_budget');
   const pruned = pruneToolResults(messages, cut);
   if (fixedTokens + estimateContextTokens(pruned) <= target) return pruned;
   messages = pruned;
@@ -90,7 +110,7 @@ export async function compactContext(messages: ModelMessage[], fixedTokens: numb
   const lastUser = messages.findLastIndex(m => m.role === 'user');
   const pinned = prefix.filter((m, i) => m.role === 'system' || i === lastUser);
   const evidence = prefix.filter((m, i) => m.role !== 'system' && i !== lastUser);
-  if (!evidence.length) throw new Error('This request exceeds the chat context budget. Please narrow the attached content.');
+  if (!evidence.length) throw new ContextCompactionError('This request exceeds the chat context budget. Please narrow the attached content.', 'context_over_budget');
   // Bounded batches summarized in parallel, then merged once. A sequential chain of
   // slow model calls took minutes on long chats and the turn was cancelled as dead.
   const batches: string[] = [];
@@ -116,6 +136,6 @@ export async function compactContext(messages: ModelMessage[], fixedTokens: numb
     onProgress?.(++done, total);
   }
   const compacted = [handoffMessage(summary), ...pinned, ...messages.slice(cut)];
-  if (fixedTokens + estimateContextTokens(compacted) > target) throw new Error('Recent context is too large to compact safely. Please narrow the attached content.');
+  if (fixedTokens + estimateContextTokens(compacted) > target) throw new ContextCompactionError('Recent context is too large to compact safely. Please narrow the attached content.', 'recent_context_too_large');
   return compacted;
 }

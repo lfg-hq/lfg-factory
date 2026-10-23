@@ -72,3 +72,26 @@ test('long history is summarized in parallel batches, merged once, with progress
  expect(progress.at(-1)).toBe(`${batches.length+1}/${batches.length+1}`);
  expect(JSON.stringify(out)).toContain('latest request');
 });
+
+test('an oversized summary is shortened, not fatal', async () => {
+  const { summarizeEvidence } = await import('../src/ai/context-compaction.ts');
+  const calls: string[] = [];
+  const out = await summarizeEvidence('history', async (e) => { calls.push(e); return calls.length === 1 ? 'x'.repeat(12000) : 'short handoff'; });
+  expect(out).toBe('short handoff');
+  expect(calls[1]).toContain('Shorten this handoff');
+});
+test('a summary that stays oversized is truncated with a note', async () => {
+  const { summarizeEvidence } = await import('../src/ai/context-compaction.ts');
+  const out = await summarizeEvidence('history', async () => 'line\n'.repeat(4000));
+  expect(out.length).toBeLessThanOrEqual(9000);
+  expect(out).toContain('[Summary shortened');
+});
+test('an empty summary is retried, then fails with our own named error', async () => {
+  const { summarizeEvidence } = await import('../src/ai/context-compaction.ts');
+  const { providerErrorMessage, safeErrorReason } = await import('../src/ai/provider-error.ts');
+  let n = 0;
+  const error = await summarizeEvidence('history', async () => { n++; return ''; }).catch(e => e);
+  expect(n).toBe(2);
+  expect(safeErrorReason(error)).toContain('ContextCompactionError summary_empty');
+  expect(providerErrorMessage(error, 'openai')).not.toContain('Openai');
+});

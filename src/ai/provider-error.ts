@@ -9,6 +9,8 @@ export function providerErrorMessage(error: unknown, provider: string | null): s
       return `${label} has insufficient API credit. Add credit to that provider account or choose another model in the chat model selector, then retry.`;
     }
     if (status === 401 || status === 403) return `${label} rejected the API credentials or access permissions. Check the provider key in Settings or choose another model, then retry.`;
+    // Condensing failures are ours, with our own wording: never blame the provider for them.
+    if (value.name === 'ContextCompactionError' && message) return message;
     // The ChatGPT usage-limit notice is built by the provider library and is safe to show as is.
     if (value.name === 'ChatGPTUsageLimit' && message) return message;
     if (status === 429) return `${label} is limiting requests. Wait briefly and retry, or choose another model.`;
