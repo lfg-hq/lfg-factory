@@ -2,7 +2,7 @@ import { and, eq, inArray, lt } from 'drizzle-orm';
 import { db } from '../config/db.ts';
 import { sandboxes } from '../db/schema/sandbox.ts';
 import { projectTickets } from '../db/schema/tickets.ts';
-import { deleteWorkspace, execOnWorkspace, setNoSleep } from './mags.ts';
+import { deleteWorkspace, execOnWorkspace, findJob, setNoSleep, stopWorkspace } from './mags.ts';
 import { shellQuote } from './ticket-code.ts';
 import { checkpointTicketWorkspace, discardTicketCheckpoint } from './ticket-workspace-checkpoint.ts';
 import { isChatTurnActive } from './ticket-chat-turn.ts';
@@ -108,6 +108,21 @@ export async function retireTicketSandbox(ticketId: string, workspaceId: string 
   await setNoSleep(workspaceId, false).catch(() => {});
 }
 
+const gone = (error: unknown) => /404|not found/i.test((error as Error)?.message ?? '');
+/** Mags refuses to delete a workspace while its VM job is active: stop the job, wait for it to end, then delete. */
+export async function destroyTicketVm(workspaceId: string, jobId?: string | null): Promise<void> {
+  const job = await findJob(jobId || workspaceId).catch(error => { if (gone(error)) return null; throw error; });
+  if (job && !['completed', 'stopped', 'error', 'failed', 'deleted'].includes(job.status)) {
+    await stopWorkspace(job.jobId).catch(error => { if (!gone(error)) throw error; });
+    for (let i = 0; i < 15; i++) {
+      const current = await findJob(job.jobId).catch(() => null);
+      if (!current || ['completed', 'stopped', 'error', 'failed', 'deleted'].includes(current.status)) break;
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+  }
+  await deleteWorkspace(workspaceId).catch(error => { if (!gone(error)) throw error; });
+}
+
 /** A turn is starting on this VM: keep the sweeper away from it. */
 export async function markTicketSandboxBusy(workspaceId: string): Promise<void> {
   await db.update(sandboxes).set({ status: 'busy', updatedAt: new Date() }).where(and(eq(sandboxes.magsWorkspaceId, workspaceId), inArray(sandboxes.workspaceType, DISPOSABLE))).catch(() => {});
@@ -135,7 +150,7 @@ export async function sweepIdleTicketSandboxes(): Promise<number> {
           await db.update(sandboxes).set({ status: 'held', updatedAt: new Date() }).where(eq(sandboxes.id, row.id));
           return;
         }
-        await deleteWorkspace(workspaceId).catch(error => { if (!/404|not found/i.test((error as Error).message)) throw error; });
+        await destroyTicketVm(workspaceId, current.magsJobId);
         await db.delete(sandboxes).where(eq(sandboxes.id, row.id));
         deleted++;
         console.log(`[ticket-sandbox] deleted idle ticket sandbox ${workspaceId} (ticket ${ticketId})`);

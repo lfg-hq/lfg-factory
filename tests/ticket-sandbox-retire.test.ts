@@ -5,6 +5,7 @@ import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 // Real git in a temp directory stands in for the sandbox, so the "is this work on
 // GitHub?" script is exercised for real. The database is a small in-memory fake.
+let jobActive=false;
 let rows:any[], ticket:any, calls:string[], deleted:string[], journalFile:string|null;
 const db={
  select:(fields?:any)=>({from:(table:any)=>({where:()=>Promise.resolve(table.name==='tickets'?[ticket]:rows)})}),
@@ -22,7 +23,7 @@ mock.module('../src/services/mags.ts',()=>({
    if(command.includes('.lfg-journal-')) return {exitCode:0,output:journalFile ?? ''};
    const r=spawnSync('bash',['-c',command.replaceAll('/data/project',repo)],{encoding:'utf8'});return {exitCode:r.status ?? 1,output:(r.stdout||'')+(r.stderr||'')};
  },
- setNoSleep:async(_w:string,pin:boolean)=>{calls.push('pin:'+pin);},deleteWorkspace:async(w:string)=>{deleted.push(w);},findJob:async()=>null,newWorkspaceV2:async()=>{throw new Error('unexpected');},
+ setNoSleep:async(_w:string,pin:boolean)=>{calls.push('pin:'+pin);},deleteWorkspace:async(w:string)=>{if(jobActive)throw new Error(`workspace '${w}' has 1 active job(s); stop them first`);deleted.push(w);},findJob:async()=>({jobId:'j1',workspaceId:'clone-1',status:jobActive?'running':'completed'}),stopWorkspace:async()=>{calls.push('stop');jobActive=false;},newWorkspaceV2:async()=>{throw new Error('unexpected');},
 }));
 mock.module('../src/services/ticket-chat-turn.ts',()=>({isChatTurnActive:()=>false}));
 mock.module('../src/services/ticket-workspace-checkpoint.ts',()=>({checkpointTicketWorkspace:async()=>{calls.push('checkpoint');},discardTicketCheckpoint:async()=>{calls.push('discard');},readTicketCheckpoint:async()=>null,restoreTicketCheckpoint:async()=>false}));
@@ -39,7 +40,7 @@ beforeEach(()=>{
   git('config','user.email','t@t');git('config','user.name','t');
   writeFileSync(join(repo,'a.txt'),'1');git('add','.');git('commit','-qm','one');git('remote','add','origin',origin);git('push','-q','origin','feature/x');
   rows=[{id:'s1',ticketId:'t1',magsWorkspaceId:'clone-1',workspaceType:'ticket',status:'busy',currentBranch:'feature/x',updatedAt:new Date(0)}];
-  ticket={id:'t1',branch:'feature/x',sha:null,q:'none',details:{}};calls=[];deleted=[];journalFile=null;
+  ticket={id:'t1',branch:'feature/x',sha:null,q:'none',details:{}};calls=[];deleted=[];journalFile=null;jobActive=false;
 });
 test('pushed work: no checkpoint, row idle, VM allowed to sleep, then swept',async()=>{
   await m.retireTicketSandbox('t1','clone-1','Build');
@@ -78,4 +79,9 @@ test('the journal the agent wrote is saved to the ticket and injected next turn'
   const block=m.workJournalBlock(ticket.details);
   expect(block).toContain('Follow-up');expect(block).toContain('login form');
   expect(m.ticketJournalInstruction('t1')).toContain(m.ticketJournalPath('t1'));
+});
+
+test('a running VM is stopped before its workspace is deleted',async()=>{
+  await m.retireTicketSandbox('t1','clone-1');jobActive=true;rows[0].updatedAt=new Date(0);
+  expect(await m.sweepIdleTicketSandboxes()).toBe(1);expect(calls).toContain('stop');expect(deleted).toEqual(['clone-1']);
 });
