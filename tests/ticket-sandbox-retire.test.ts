@@ -63,6 +63,10 @@ test('a VM whose state cannot be read is held, never deleted',async()=>{
   expect(rows[0].status).toBe('held');rows[0].updatedAt=new Date(0);
   expect(await m.sweepIdleTicketSandboxes()).toBe(0);expect(deleted).toEqual([]);
 });
+test('sandboxes parked before this change are not swept unless enabled',async()=>{
+  rows[0].status='sleeping';rows[0].updatedAt=new Date('2026-09-01');
+  expect(await m.sweepIdleTicketSandboxes()).toBe(0);expect(deleted).toEqual([]);
+});
 test('a recent busy sandbox is left alone by the sweeper',async()=>{
   rows[0].updatedAt=new Date(Date.now()-60_000);
   expect(await m.sweepIdleTicketSandboxes()).toBe(0);

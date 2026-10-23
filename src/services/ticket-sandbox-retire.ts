@@ -22,6 +22,10 @@ const JOURNAL_MAX_ENTRIES = 8;
 // A 'busy' row this old belongs to a turn that died with the server (no retire ran).
 const ABANDONED_BUSY_MS = 3 * 60 * 60_000;
 const SWEEPABLE = ['idle', 'sleeping', 'ready', 'busy'];
+// Sandboxes parked before disposable sandboxes shipped are only swept when explicitly
+// enabled: clearing them is a one-off bulk deletion across every project.
+const LEGACY_BEFORE = new Date(process.env.TICKET_SANDBOX_LEGACY_BEFORE || '2026-10-23T15:00:00Z');
+const isLegacy = (row: { status: string; updatedAt: Date }) => row.status !== 'idle' && row.updatedAt < LEGACY_BEFORE && process.env.TICKET_SANDBOX_SWEEP_LEGACY !== '1';
 const JOURNAL_ENTRY_CHARS = 4000;
 
 /** Outside the repository, so it is never committed; one file per ticket for shared VMs. */
@@ -118,7 +122,7 @@ export async function sweepIdleTicketSandboxes(): Promise<number> {
     if (!row.ticketId || !row.magsWorkspaceId || row.magsWorkspaceId.startsWith('pv-')) continue;
     const ticketId = row.ticketId, workspaceId = row.magsWorkspaceId;
     // Cheap checks first, so the workspace lock is only taken for real candidates.
-    if ((row.status === 'busy' && Date.now() - row.updatedAt.getTime() < ABANDONED_BUSY_MS) || isChatTurnActive(ticketId)) continue;
+    if ((row.status === 'busy' && Date.now() - row.updatedAt.getTime() < ABANDONED_BUSY_MS) || isLegacy(row) || isChatTurnActive(ticketId)) continue;
     try {
       await withTicketWorkspaceLock(ticketId, async () => {
         const [current] = await db.select().from(sandboxes).where(eq(sandboxes.id, row.id));
