@@ -989,6 +989,9 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     chatStage('model_response');
     let firstEvent = true;
     let firstText = true;
+    // Once condensed, later steps build on the condensed history; each step used to
+    // start from the full history and condense again (several banners, extra calls).
+    let carried: { sourceLength: number; messages: any[] } | null = null;
     const result = streamText({
       model,
       system: cached.system,
@@ -998,7 +1001,9 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
       maxOutputTokens: Math.min(12000, Math.floor(contextBudget() * .2)),
       prepareStep: async ({messages: stepMessages}) => {
         let condensing = false;
-        const bounded = await compactContext(stepMessages, fixedTokens, summarize, undefined, () => {
+        const input = carried && stepMessages.length >= carried.sourceLength
+          ? [...carried.messages, ...stepMessages.slice(carried.sourceLength)] : stepMessages;
+        const bounded = await compactContext(input, fixedTokens, summarize, undefined, () => {
           // Summarizing takes a model call; the chat shows a visible banner, not a hidden step.
           condensing = true;
           req.onActivity?.();
@@ -1010,6 +1015,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
           ws.send(JSON.stringify({type:"ai_chunk",chunk:"",is_final:false,is_notification:true,notification_type:"context_compaction",phase:"progress",done,total}));
         });
         if (condensing) ws.send(JSON.stringify({type:"ai_chunk",chunk:"",is_final:false,is_notification:true,notification_type:"context_compaction",phase:"done"}));
+        if (carried || bounded !== stepMessages) carried = { sourceLength: stepMessages.length, messages: bounded };
         chatDiagnostic('context_budget', {estimatedTokens:fixedTokens + estimateContextTokens(bounded),
           budgetTokens:contextBudget(), compacted:bounded !== stepMessages});
         return {messages:bounded};
