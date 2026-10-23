@@ -56,10 +56,16 @@ export async function openTicketWorkspace(options:{project:typeof projects.$infe
           if (result?.exitCode === 0 && result.output.trim() === branch) { if (existing.workspaceType !== 'ticket-worktree') await setNoSleep(job.jobId,false); return {workspaceId,root,branch}; }
           await new Promise(resolve=>setTimeout(resolve,2000));
         }
-        throw new Error('The existing sandbox could not open the ticket checkout. It has been preserved; retry after it finishes waking.');
+        // A sandbox that never answers (long-awake VMs stop responding to commands) used to
+        // fail every follow-up. Set it aside, untouched, and continue from the saved
+        // checkpoint or the pushed branch in a fresh sandbox below.
+        if (!options.canRestore || existing.workspaceType === 'ticket-worktree') throw new Error('The existing sandbox could not open the ticket checkout. It has been preserved; retry after it finishes waking.');
+        progress('The previous sandbox is not responding. Continuing in a fresh sandbox from the saved work; the old one is kept as it was.');
+        await db.update(sandboxes).set({workspaceType:'ticket-unresponsive',status:'unresponsive',updatedAt:new Date()}).where(eq(sandboxes.id,existing.id));
+      } else {
+        if (!job && !/HTTP 404.*(?:job not found|not found)/i.test(probeError instanceof Error ? probeError.message : '')) throw new Error('Sandbox availability is uncertain. Retry shortly; no replacement was created.');
+        if (job && !['completed','stopped','error','failed','deleted'].includes(job.status)) throw new Error('Sandbox availability is uncertain. Retry shortly; no replacement was created.');
       }
-      if (!job && !/HTTP 404.*(?:job not found|not found)/i.test(probeError instanceof Error ? probeError.message : '')) throw new Error('Sandbox availability is uncertain. Retry shortly; no replacement was created.');
-      if (job && !['completed','stopped','error','failed','deleted'].includes(job.status)) throw new Error('Sandbox availability is uncertain. Retry shortly; no replacement was created.');
     }
     if (!options.canRestore) throw new Error('The ticket workspace has expired. A project editor must open Coding to restore it.');
     const {gitUserId} = resolveGitActor(project,actorId);

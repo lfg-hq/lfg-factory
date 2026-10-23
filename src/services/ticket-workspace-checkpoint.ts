@@ -25,10 +25,40 @@ async function run(workspace: string, args: object) {
   if (r.exitCode !== 0 || data.error) throw new Error(data.error || 'Workspace checkpoint failed');
   return data;
 }
-export async function readTicketCheckpoint(ticketId: string): Promise<{branch:string;head:string;sha256:string;archive:string} | null> {
-  let raw: string;
-  try { raw = await readFile(location(ticketId), 'utf8'); }
+// Checkpoints go to object storage when it is configured: the app directory in production
+// is not writable by the app user, so every local save failed and each build sandbox was
+// kept awake indefinitely. The local directory remains for development.
+const storageKey = (ticketId: string) => { location(ticketId); return `ticket-checkpoints/${ticketId}.json`; };
+async function writeCheckpoint(ticketId: string, json: string) {
+  const s3 = await import('./s3.ts');
+  if (s3.isS3Enabled) { await s3.uploadBinary(storageKey(ticketId), Buffer.from(json), 'application/json'); return; }
+  await mkdir(directory, {recursive:true, mode:0o700});
+  const path = location(ticketId), temp = path + '.' + crypto.randomUUID();
+  try {
+    const file = await open(temp,'wx',0o600);
+    try { await file.writeFile(json); await file.sync(); }
+    finally { await file.close(); }
+    await rename(temp, path);
+  } finally { await rm(temp, {force:true}); }
+}
+async function readCheckpointRaw(ticketId: string): Promise<string | null> {
+  const s3 = await import('./s3.ts');
+  if (s3.isS3Enabled) {
+    try {
+      const { body } = await s3.downloadBinary(storageKey(ticketId));
+      if (body.length) return body.toString('utf8');
+    } catch (e) {
+      const err = e as { name?: string; $metadata?: { httpStatusCode?: number } };
+      if (err.name !== 'NoSuchKey' && err.$metadata?.httpStatusCode !== 404) throw e;
+    }
+  }
+  // Older checkpoints (and development) live on local disk.
+  try { return await readFile(location(ticketId), 'utf8'); }
   catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null; throw e; }
+}
+export async function readTicketCheckpoint(ticketId: string): Promise<{branch:string;head:string;sha256:string;archive:string} | null> {
+  const raw = await readCheckpointRaw(ticketId);
+  if (raw === null) return null;
   const checkpoint = JSON.parse(raw);
   const data = Buffer.from(checkpoint.archive, 'base64');
   if (data.length > limit || createHash('sha256').update(data).digest('hex') !== checkpoint.sha256) throw new Error('The saved workspace checkpoint failed verification. Recovery stopped.');
@@ -47,14 +77,7 @@ export async function checkpointTicketWorkspace(ticketId:string, workspace:strin
     }
     const data = Buffer.concat(chunks);
     if (data.length !== meta.size || createHash('sha256').update(data).digest('hex') !== meta.sha256) throw new Error('Workspace checkpoint transfer failed verification');
-    await mkdir(directory, {recursive:true, mode:0o700});
-    const path = location(ticketId), temp = path + '.' + crypto.randomUUID();
-    try {
-      const file = await open(temp,'wx',0o600);
-      try { await file.writeFile(JSON.stringify({...meta, archive:data.toString('base64')})); await file.sync(); }
-      finally { await file.close(); }
-      await rename(temp, path);
-    } finally { await rm(temp, {force:true}); }
+    await writeCheckpoint(ticketId, JSON.stringify({...meta, archive:data.toString('base64')}));
   } finally { await execOnWorkspace(workspace, `rm -f ${shellQuote(remote)}`, {timeout:10_000}).catch(()=>{}); }
 }
 export async function restoreTicketCheckpoint(ticketId:string, workspace:string, root:string, branch:string) {
