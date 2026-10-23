@@ -91,6 +91,21 @@ export function toPiContext(options: LanguageModelV3CallOptions, modelId: string
   return context;
 }
 
+/** A safe, explainable error for a failed subscription request (see doStream). */
+export function subscriptionFailure(detail: string): Error & { code?: string; statusCode?: number } {
+  const usageLimit = detail.match(/You have hit your ChatGPT usage limit[^\n]*/)?.[0];
+  const status = Number(detail.match(/\b(4\d\d|5\d\d)\b/)?.[1]) || undefined;
+  const codes = [...new Set(detail.match(/\b(?:[a-z]+_){1,4}[a-z]+\b/g) ?? [])].slice(0, 4);
+  const error: Error & { code?: string; statusCode?: number } = new Error(usageLimit
+    ? `${usageLimit} No API fallback was used.`
+    : "ChatGPT subscription request failed. Check account connection, model access, and usage limits. No API fallback was used.");
+  if (codes.length) error.code = codes.join(" ");
+  if (status) error.statusCode = status;
+  if (usageLimit) error.name = "ChatGPTUsageLimit";
+  console.warn("[chatgpt-subscription] request failed", { status, codes, usageLimit: !!usageLimit });
+  return error;
+}
+
 export function createPiSubscriptionModel(
   modelId: string,
   getAccessToken: () => Promise<string>,
@@ -149,8 +164,11 @@ export function createPiSubscriptionModel(
               if (firstProviderEvent) { chatDiagnostic('first_provider_event', {model:modelId}); firstProviderEvent=false; }
               signal.throwIfAborted();
               if (event.type === "error") {
-                // Upstream error payloads can echo request data. Do not forward them.
-                throw new Error(event.reason === "aborted" ? "ChatGPT subscription request cancelled." : "ChatGPT subscription request failed. Check account connection, model access, and usage limits. No API fallback was used.");
+                // Upstream error payloads can echo request data. Do not forward them, but keep
+                // what is safe: the usage-limit notice (built by the library, no request data),
+                // the HTTP status and the machine codes, so a failure says why it happened.
+                if (event.reason === "aborted") throw new Error("ChatGPT subscription request cancelled.");
+                throw subscriptionFailure(String((event.error as { errorMessage?: unknown } | undefined)?.errorMessage ?? ""));
               }
               if (event.type === "done") {
                 if (structured && ids.size !== 1) throw new Error("ChatGPT did not return the requested structured result.");

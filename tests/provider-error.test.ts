@@ -35,3 +35,15 @@ test('diagnostic reasons keep error codes and drop message text', async () => {
   expect(reason).toBe('AI_APICallError 503 server_is_overloaded');
   expect(reason).not.toContain('sk-');
 });
+
+test('a ChatGPT usage limit is shown as is; other subscription failures keep only status and codes', async () => {
+  const { subscriptionFailure } = await import('../src/ai/pi-subscription-model.ts');
+  const limit = subscriptionFailure('You have hit your ChatGPT usage limit (plus plan). Try again in ~42 min.');
+  expect(providerErrorMessage(limit, 'openai')).toBe('You have hit your ChatGPT usage limit (plus plan). Try again in ~42 min. No API fallback was used.');
+  const other = subscriptionFailure('Request failed (400): {"error":{"type":"invalid_request_error","code":"context_length_exceeded","message":"secret prompt text"}}');
+  expect(other.statusCode).toBe(400);
+  expect(other.code).toContain('context_length_exceeded');
+  expect(other.message).not.toContain('secret prompt text');
+  const { safeErrorReason } = await import('../src/ai/provider-error.ts');
+  expect(safeErrorReason(other)).toContain('400');
+});
