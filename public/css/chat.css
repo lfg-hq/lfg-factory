@@ -1,14 +1,14 @@
 :root {
     /* User bubble: a soft tint of the brand purple, so your own messages
        stay recognisable without outshouting the replies. */
-    --user-bubble-bg: rgba(139, 92, 246, 0.16);
-    --user-bubble-border: rgba(139, 92, 246, 0.30);
+    --user-bubble-bg: var(--tint-bg, rgba(139, 120, 240, 0.12));
+    --user-bubble-border: var(--tint-border, rgba(139, 120, 240, 0.28));
     --user-bubble-text: #ece8ff;
     --user-bubble-chip: rgba(139, 92, 246, 0.18);
 }
 [data-theme="light"] {
-    --user-bubble-bg: #f1edff;
-    --user-bubble-border: #e2d9ff;
+    --user-bubble-bg: var(--tint-bg, #f3f0ff);
+    --user-bubble-border: var(--tint-border, #e2d9ff);
     --user-bubble-text: #2e1065;
     --user-bubble-chip: #ffffff;
 }

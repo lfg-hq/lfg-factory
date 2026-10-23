@@ -356,6 +356,7 @@ export function SettingsPage({ workspaceContext, teamAccess, teamContent, user, 
   </style>
   <link rel="stylesheet" href="/public/css/team-settings.css" />
 <link rel="stylesheet" href="/public/css/workspace-picker.css" />
+  <link rel="stylesheet" href="/public/css/calm.css?v=1" />
 </head>
 <body data-user-id="${user.id}" data-user-name="${user.name}">
 <div class="app-container">
