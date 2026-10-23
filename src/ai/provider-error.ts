@@ -19,7 +19,11 @@ export function safeErrorReason(error: unknown): string {
   const parts = new Set<string>();
   let value: any = error;
   for (let depth = 0; value && depth < 3; depth++, value = value.cause) {
-    if (typeof value.name === 'string' && value.name !== 'Error') parts.add(value.name);
+    if (typeof value.name === 'string') parts.add(value.name);
+    // AI SDK errors carry machine fields that explain a failure without its text.
+    if (typeof value.reason === 'string' && value.reason.length <= 40) parts.add('reason:' + value.reason);
+    if (typeof value.isRetryable === 'boolean') parts.add(value.isRetryable ? 'retryable' : 'not-retryable');
+    if (Array.isArray(value.errors) && value.errors.length) parts.add('attempts:' + value.errors.length);
     if (typeof value.statusCode === 'number') parts.add(String(value.statusCode));
     if (typeof value.code === 'string') parts.add(value.code);
     const message = typeof value.message === 'string' ? value.message : '';

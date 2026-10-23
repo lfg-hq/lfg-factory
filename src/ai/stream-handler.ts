@@ -1518,7 +1518,13 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   let savedSteps: any[] | null = null;
   try {
     if (streamTextResult) {
-      const resp = await abortable(streamTextResult.response, abortController.signal);
+      // After a stream error the SDK's final response may never settle; waiting on it
+      // held the turn in "persisting" until the 4-minute watchdog cancelled it. Use what
+      // was captured per pass, and never wait more than a moment for the rest.
+      const resp = streamError ? null : await Promise.race([
+        abortable(streamTextResult.response, abortController.signal),
+        new Promise((resolve) => setTimeout(() => resolve(null), 15_000)),
+      ]);
       const rawMessages: any[] = savedPassMessages ?? (resp as any)?.messages ?? [];
       // Hard cap to avoid storing megabytes of tool output. Per-result
       // tool-result content is already capped at 8KB upstream; cap whole
