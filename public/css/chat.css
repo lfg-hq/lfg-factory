@@ -3313,9 +3313,12 @@ input:checked + .turbo-slider + .turbo-label,
 .message.assistant:has(.lfg-diagram) > .message-content { min-width:0; width:100%; box-sizing:border-box; }
 
 /* Dictation: a compact strip in the toolbar, before the mic. Nothing else moves. */
+/* The strip is sized to the composer, not the window, so it never reaches the left tools
+   (attach, connectors, settings). 250px reserves those plus the mic/send/stop buttons. */
+#chat-form .input-wrapper { container-type:inline-size; }
 #chat-form .input-actions > .audio-recording-indicator {
     position:static;display:flex;flex-direction:row;align-items:center;gap:6px;
-    width:clamp(120px,26vw,300px);height:28px;min-height:0;margin:0 2px 0 0;padding:0 4px;
+    width:clamp(80px,calc(100cqw - 250px),300px);height:28px;min-height:0;margin:0 2px 0 0;padding:0 4px;
     border:0;border-radius:999px;box-shadow:none;background:var(--hover-bg,rgba(128,128,128,.08));
 }
 .dictation-waveform { flex:1;min-width:0;width:0;height:20px;color:var(--primary-color,#7c3aed); }
@@ -3360,3 +3363,6 @@ input:checked + .turbo-slider + .turbo-label,
 .context-condense span { color: var(--text-secondary, #64748b); }
 .context-condense[data-state="done"] { border-color: var(--border-color, #e2e7ef); background: transparent; padding: 8px 14px; }
 .context-condense[data-state="done"] > i { color: var(--text-secondary, #94a3b8); }
+
+/* While dictating, the role/model label steps aside for the strip (its menu stays under Settings). */
+#chat-form:has(.audio-recording-indicator) .status-indicators { visibility:hidden; }
