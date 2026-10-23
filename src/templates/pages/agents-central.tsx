@@ -51,7 +51,7 @@ export function AgentsCentralPage({ user, agents, messages }: AgentsCentralPageP
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
   <script src="/public/js/theme-switcher.js"></script>
 <link rel="stylesheet" href="/public/css/build-notifications.css?v=4" />
-  <link rel="stylesheet" href="/public/css/calm.css?v=1" />
+  <link rel="stylesheet" href="/public/css/calm.css?v=2" />
 </head>
 <body data-user-id="${user.id}">
   <div class="app-container">

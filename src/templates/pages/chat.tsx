@@ -116,7 +116,7 @@ export function ChatPage({
   </style>
   <script src="/public/js/theme-switcher.js"></script>
 <link rel="stylesheet" href="/public/css/build-notifications.css?v=4" />
-  <link rel="stylesheet" href="/public/css/calm.css?v=1" />
+  <link rel="stylesheet" href="/public/css/calm.css?v=2" />
 </head>
 <body data-user-id="${user.id}"
   data-user-name="${user.name}"

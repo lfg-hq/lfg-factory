@@ -221,3 +221,10 @@ html[data-theme] .llm-btn-save {
 html[data-theme] .llm-btn-save:hover {
     background: var(--tint-bg-hover) !important;
 }
+
+/* Unread count next to Notifications: tinted pill, not a solid dot. */
+html[data-theme] #build-inbox-button .build-unread {
+    background: var(--tint-bg) !important;
+    color: var(--tint-text) !important;
+    box-shadow: inset 0 0 0 1px var(--tint-border) !important;
+}
