@@ -56,6 +56,12 @@ async function readCheckpointRaw(ticketId: string): Promise<string | null> {
   try { return await readFile(location(ticketId), 'utf8'); }
   catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null; throw e; }
 }
+/** Drop a ticket's checkpoint once its work is on GitHub, so recovery restores the branch. */
+export async function discardTicketCheckpoint(ticketId: string): Promise<void> {
+  const s3 = await import('./s3.ts');
+  if (s3.isS3Enabled) await s3.deleteFile(storageKey(ticketId));
+  await rm(location(ticketId), {force:true});
+}
 export async function readTicketCheckpoint(ticketId: string): Promise<{branch:string;head:string;sha256:string;archive:string} | null> {
   const raw = await readCheckpointRaw(ticketId);
   if (raw === null) return null;

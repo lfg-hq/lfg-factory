@@ -88,6 +88,8 @@ api.all('/:projectId/tickets/:ticketId/code/:action', async c => {
         // Even a failed terminal command can have changed files. Never release the VM without a verified checkpoint.
         await checkpointTicketWorkspace(ticketId,workspaceId,root,branch);
         if (dedicated) await setNoSleep(workspaceId,false);
+        // Editing counts as use: the idle-sandbox sweeper waits a full grace period after the last edit.
+        await db.update(sandboxes).set({updatedAt:new Date()}).where(and(eq(sandboxes.ticketId,ticketId),eq(sandboxes.magsWorkspaceId,workspaceId))).catch(()=>{});
       }
       return response;
     });

@@ -85,7 +85,9 @@ export async function openTicketWorkspace(options:{project:typeof projects.$infe
       const ref = 'refs/remotes/origin/' + branch;
       const sha = ticket.githubCommitSha;
       if (sha && !/^[a-f0-9]{40,64}$/i.test(sha)) throw new Error('Invalid saved ticket commit');
-      await checkedExec(created.workspaceId,`set -eu\ngit clone --no-checkout -- ${shellQuote(auth.authUrl)} ${shellQuote(temp)}\ngit -C ${shellQuote(temp)} check-ref-format --branch ${shellQuote(branch)} >/dev/null\ngit -C ${shellQuote(temp)} checkout -B ${shellQuote(branch)} ${shellQuote(sha || ref)}\n`);
+      // GitHub is the source of truth: start from the branch head; the recorded commit is
+      // only a fallback for a branch that is no longer on the remote.
+      await checkedExec(created.workspaceId,`set -eu\ngit clone --no-checkout -- ${shellQuote(auth.authUrl)} ${shellQuote(temp)}\ngit -C ${shellQuote(temp)} check-ref-format --branch ${shellQuote(branch)} >/dev/null\nif git -C ${shellQuote(temp)} rev-parse --verify --quiet ${shellQuote(ref)} >/dev/null; then git -C ${shellQuote(temp)} checkout -B ${shellQuote(branch)} ${shellQuote(ref)}; else git -C ${shellQuote(temp)} checkout -B ${shellQuote(branch)} ${shellQuote(sha || ref)}; fi\n`);
     }
     // Keep ignored runtime configuration and dependencies inherited from the prepared clone.
     // Swap only after recovery has succeeded, retaining inherited files in a sibling directory.
@@ -106,8 +108,6 @@ if (source/'.git').exists():
   dst.parent.mkdir(parents=True,exist_ok=True); shutil.copy2(src,dst)
 `;
     await checkedExec(created.workspaceId, `python3 -c ${shellQuote(copyIgnored)}`);
-    // Preserve the checkpoint before publishing the replacement registration.
-    await checkpointTicketWorkspace(ticket.id,created.workspaceId,'/data/project',branch);
     const registration = {projectId:project.id,ticketId:ticket.id,userId:actorId,magsWorkspaceId:created.workspaceId,magsJobId:created.jobId,workspaceType:'ticket',status:'ready',currentBranch:branch,updatedAt:new Date()};
     if (created.cloneIntentId) await db.update(sandboxes).set(registration).where(eq(sandboxes.id,created.cloneIntentId));
     else await db.insert(sandboxes).values(registration);
