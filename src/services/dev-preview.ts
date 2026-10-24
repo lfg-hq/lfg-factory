@@ -1852,6 +1852,88 @@ export async function createPreviewInspectTool(params: { projectId?: string }): 
   };
 }
 
+/** The shell a runInPreview call executes: settings, scratch setup, the command under a timeout, and a report of checkout changes. */
+export function previewRunScript(o: { prefix: string; dir: string; cwd: string; prepare: string; run: string; timeout: number; tmp?: string }): string {
+  // Snapshot the served checkout so any change the command makes is reported, not hidden.
+  const status = `git -C ${shellQuote(o.dir)} status --porcelain 2>/dev/null | sort`;
+  const before = `${o.tmp ?? "/data/tmp"}/lfg-before.$$`;
+  return `${o.prefix}${o.prepare}BEFORE=$(${status}); cd ${shellQuote(o.cwd)}; ` +
+    `timeout ${o.timeout} sh -c ${shellQuote(o.run)} 2>&1; CODE=$?; ` +
+    `AFTER=$(${status}); echo; echo "__LFG_EXIT=$CODE"; [ "$BEFORE" = "$AFTER" ] || { echo "__LFG_CHANGED"; ` +
+    `printf '%s\\n' "$BEFORE" > ${before}; printf '%s\\n' "$AFTER" | grep -vxF -f ${before} | head -20; rm -f ${before}; }`;
+}
+
+/**
+ * The chat agent's working shell in the preview sandbox: run commands and short scripts
+ * against the running app to verify an API, check a webhook, confirm data or reproduce a
+ * bug, and report the evidence. It runs with the app's settings loaded. Scripts live in a
+ * scratch folder outside the repository. Source changes still belong to tickets: the tool
+ * reports any change to the served checkout instead of hiding it.
+ */
+export function createPreviewRunTool(ctx: { projectId: string; publicProjectId: string; userId: string; conversationId: string; abortSignal?: AbortSignal; onProgress?: (detail: string) => void }) {
+  const input = z.object({
+    purpose: z.string().min(1).max(300).describe("One line shown to the user: what this run verifies, e.g. \"Check POST /api/test-calls returns 201\"."),
+    command: z.string().max(8000).optional().describe("Shell command(s) to run. With a script, this runs after it is written (default: run the script)."),
+    script: z.object({
+      filename: z.string().regex(/^[\w.-]{1,80}$/).describe("e.g. check_api.js, probe.py, smoke.sh"),
+      content: z.string().min(1).max(60000),
+    }).optional().describe("A file written to the scratch folder (outside the repo) before the command runs. Interpreter is picked from the extension when no command is given."),
+    workdir: z.enum(["app", "scratch"]).optional().describe("\"app\" (default) = the checkout the preview is serving, for curl/CLI/DB checks; \"scratch\" = this chat's scratch folder."),
+    timeoutSeconds: z.number().int().min(5).max(600).optional().describe("Default 120. The command is stopped after this."),
+  }).refine(v => v.command || v.script, { message: "Provide a command or a script." });
+  return tool({
+    description: "Run commands or a short script in this project's LIVE preview sandbox, with the app's settings (.env) loaded, to VERIFY something: call an API (curl or a script), check a webhook or worker, query the dev database, reproduce a bug, measure a response. Use it whenever you need evidence rather than a guess, then report what you ran and the result. Write scripts to the scratch folder (script.filename/content); never edit the app's source here: code changes go to tickets or quickChange. Do not stop or restart the app (use handlePreview restart_app), and do not place real paid calls or charges unless the user asked for them. Output is capped and known secret values are masked.",
+    inputSchema: zodSchema(input),
+    execute: async (args: z.infer<typeof input>) => {
+      const { getProjectAccess } = await import("../auth/project-access.ts");
+      const access = await getProjectAccess(ctx.publicProjectId, ctx.userId);
+      if (!access || access.project.id !== ctx.projectId || !access.permissions.canChat || !access.permissions.canEditFiles) return { error: "Project chat and edit permissions are required to run commands in the preview." };
+      let workspaceId: string;
+      try { workspaceId = await envWorkspaceId(ctx.projectId); }
+      catch { return { error: "No preview sandbox exists for this project yet. Start the preview first (handlePreview restart_app or the Run button)." }; }
+      const { dir } = await resolvePreviewWorkDir(ctx.projectId, workspaceId);
+      const scratch = `/data/lfg-agent/${ctx.conversationId.replace(/[^\w-]/g, "").slice(0, 36) || "chat"}`;
+      const timeout = args.timeoutSeconds ?? 120;
+      const interpreter = (name: string) => name.endsWith(".py") ? "python3" : /\.(m?js|cjs)$/.test(name) ? "node" : name.endsWith(".ts") ? "npx -y tsx" : "sh";
+      let run = args.command?.trim() || "";
+      let prepare = `mkdir -p ${shellQuote(scratch)}; `;
+      if (args.script) {
+        const file = `${scratch}/${args.script.filename}`;
+        prepare += `printf %s ${shellQuote(Buffer.from(args.script.content).toString("base64"))} | base64 -d > ${shellQuote(file)}; chmod +x ${shellQuote(file)}; `;
+        if (!run) run = `${interpreter(args.script.filename)} ${shellQuote(file)}`;
+      }
+      const cwd = args.workdir === "scratch" ? scratch : dir;
+      const script = previewRunScript({ prefix: envPrefix(dir), dir, cwd, prepare, run, timeout });
+      ctx.onProgress?.(args.purpose);
+      try {
+        ctx.abortSignal?.throwIfAborted();
+        const res = await sh(workspaceId, script, (timeout + 30) * 1000);
+        let output = res.output || "";
+        const exit = Number(output.match(/__LFG_EXIT=(\d+)/)?.[1] ?? res.exitCode);
+        const changedAt = output.indexOf("__LFG_CHANGED");
+        const changed = changedAt >= 0 ? output.slice(changedAt + 13).trim().split("\n").map(l => l.trim()).filter(Boolean) : [];
+        output = output.replace(/\n?__LFG_EXIT=\d+[\s\S]*$/, "").trim();
+        // Mask saved project secrets that a command may have printed.
+        for (const [key, value] of Object.entries(await readProjectEnvironment(ctx.projectId).catch(() => ({} as Record<string, string>)))) {
+          if (value && value.length >= 8) output = output.split(value).join(`[${key}]`);
+        }
+        const truncated = output.length > 12000;
+        return {
+          purpose: args.purpose, ranIn: cwd, exitCode: exit, timedOut: exit === 124 || exit === 143,
+          output: (truncated ? "…" + output.slice(-12000) : output) || "(no output)",
+          ...(changed.length ? { changedAppFiles: changed, warning: "The command changed files in the served checkout. Revert them unless the user asked for this; code changes belong in tickets." } : {}),
+          scratchFolder: scratch,
+        };
+      } catch (e) {
+        if (ctx.abortSignal?.aborted) return { error: "Cancelled." };
+        const msg = (e as Error).message || String(e);
+        if (/no VM associated|not found|unreachable/i.test(msg)) return { error: "The preview sandbox is not running. Start or restart the preview, then retry." };
+        return { error: `Run failed: ${msg.slice(0, 200)}` };
+      }
+    },
+  });
+}
+
 function buildDriverSystemPrompt(manifest: PreviewManifest, engines: EngineHandle[], workDir: string = PROJECT_DIR, configNotes: string[] = [], directives: string[] = []): string {
   const port = manifest.port;
   const isBranch = workDir !== PROJECT_DIR;

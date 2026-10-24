@@ -46,7 +46,7 @@ import { createAgentTools, createWebResearchTools } from "./tools/agent-tools.ts
 import { broadcastToUser, getConnection } from "../ws/connection-manager.ts";
 import { getComposioTools, listConnectors } from "../services/composio-manager.ts";
 import { downloadBinary } from "../services/s3.ts";
-import { createPreviewInspectTool } from "../services/dev-preview.ts";
+import { createPreviewInspectTool, createPreviewRunTool } from "../services/dev-preview.ts";
 import type { ServerWebSocket } from "bun";
 import type { WsData } from "../ws/types.ts";
 import { withUserSubscription } from "../services/subscription-execution.ts";
@@ -766,6 +766,9 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     }
     if (projectId) Object.assign(tools, (await import('./tools/note-tools.ts')).noteTools({projectId:internalProjectId,userId}));
     if (projectId) tools.linkTicketDocuments = linkTicketDocumentsTool({projectId:internalProjectId,publicProjectId:projectId,userId});
+    // A working shell in the preview for verification: run checks and scripts, report the evidence.
+    if (projectId && productChat) tools.runInPreview = createPreviewRunTool({projectId:internalProjectId,publicProjectId:projectId,userId,conversationId:convId!,abortSignal:abortController.signal,
+      onProgress: (detail) => { if (abortController.signal.aborted) return; req.onActivity?.(); noteActivity(detail, "runInPreview"); }});
     if (projectId) tools.handlePreview = previewActionTool({projectId:internalProjectId,publicProjectId:projectId,userId,conversationId:convId!,abortSignal:abortController.signal,onActivity:req.onActivity,
       onProgress: (detail) => {
         if (abortController.signal.aborted) return;
