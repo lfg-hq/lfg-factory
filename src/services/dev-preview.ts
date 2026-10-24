@@ -1858,7 +1858,8 @@ export function previewRunScript(o: { prefix: string; dir: string; cwd: string; 
   const status = `git -C ${shellQuote(o.dir)} status --porcelain 2>/dev/null | sort`;
   const before = `${o.tmp ?? "/data/tmp"}/lfg-before.$$`;
   return `${o.prefix}${o.prepare}BEFORE=$(${status}); cd ${shellQuote(o.cwd)}; ` +
-    `timeout ${o.timeout} sh -c ${shellQuote(o.run)} 2>&1; CODE=$?; ` +
+    // Preview VMs ship bash; agents write bash syntax. Plain sh only where bash is missing.
+    `SHELL_BIN=$(command -v bash || echo sh); timeout ${o.timeout} "$SHELL_BIN" -c ${shellQuote(o.run)} 2>&1; CODE=$?; ` +
     `AFTER=$(${status}); echo; echo "__LFG_EXIT=$CODE"; [ "$BEFORE" = "$AFTER" ] || { echo "__LFG_CHANGED"; ` +
     `printf '%s\\n' "$BEFORE" > ${before}; printf '%s\\n' "$AFTER" | grep -vxF -f ${before} | head -20; rm -f ${before}; }`;
 }
@@ -1894,7 +1895,7 @@ export function createPreviewRunTool(ctx: { projectId: string; publicProjectId: 
       const { dir } = await resolvePreviewWorkDir(ctx.projectId, workspaceId);
       const scratch = `/data/lfg-agent/${ctx.conversationId.replace(/[^\w-]/g, "").slice(0, 36) || "chat"}`;
       const timeout = args.timeoutSeconds ?? 120;
-      const interpreter = (name: string) => name.endsWith(".py") ? "python3" : /\.(m?js|cjs)$/.test(name) ? "node" : name.endsWith(".ts") ? "npx -y tsx" : "sh";
+      const interpreter = (name: string) => name.endsWith(".py") ? "python3" : /\.(m?js|cjs)$/.test(name) ? "node" : name.endsWith(".ts") ? "npx -y tsx" : "bash";
       let run = args.command?.trim() || "";
       let prepare = `mkdir -p ${shellQuote(scratch)}; `;
       if (args.script) {

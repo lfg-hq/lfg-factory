@@ -38,3 +38,9 @@ test('a command past its timeout is stopped', () => {
   const out = sh(build('sleep 5', repo, 1));
   expect(out).toContain('__LFG_EXIT=124');
 });
+
+test('commands run under bash, so bash syntax works', () => {
+  const out = sh(build('arr=(a b c); echo "count=${#arr[@]}"; [[ -n "$GREETING" ]] && echo ok'));
+  expect(out).toContain('count=3');
+  expect(out).toContain('ok');
+});
