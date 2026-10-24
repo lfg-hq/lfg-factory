@@ -54,7 +54,7 @@ export function workJournalBlock(details: unknown): string {
 /** Move the journal the agent wrote into the ticket record. Missing or unreadable files are ignored. */
 export async function collectTicketJournal(ticketId: string, workspaceId: string, kind: string): Promise<void> {
   const path = ticketJournalPath(ticketId);
-  const r = await execOnWorkspace(workspaceId, `if [ -f ${shellQuote(path)} ]; then head -c ${JOURNAL_ENTRY_CHARS} ${shellQuote(path)}; rm -f ${shellQuote(path)}; fi`, { timeout: 20_000 }).catch(() => null);
+  const r = await execOnWorkspace(workspaceId, `if [ -f ${shellQuote(path)} ]; then head -c ${JOURNAL_ENTRY_CHARS} ${shellQuote(path)}; rm -f ${shellQuote(path)}; fi`, { timeout: 20_000, attempts: 1, socketGraceMs: 5_000 }).catch(() => null);
   const text = r?.exitCode === 0 ? r.output.trim() : '';
   if (!text) return;
   const [ticket] = await db.select({ details: projectTickets.details }).from(projectTickets).where(eq(projectTickets.id, ticketId));
@@ -75,7 +75,7 @@ cd ${shellQuote(root)} 2>/dev/null || { echo STATE_UNKNOWN; exit 0; }
 HEAD_SHA=$(git rev-parse HEAD)
 if [ -n ${shellQuote(sha)} ] && [ "$HEAD_SHA" = ${shellQuote(sha)} ]; then echo STATE_PUBLISHED; exit 0; fi
 git merge-base --is-ancestor HEAD ${shellQuote('refs/remotes/origin/' + branch)} 2>/dev/null && echo STATE_PUBLISHED || echo STATE_LOCAL`;
-  const r = await execOnWorkspace(workspaceId, script, { timeout: 30_000 }).catch(() => null);
+  const r = await execOnWorkspace(workspaceId, script, { timeout: 30_000, attempts: 1, socketGraceMs: 5_000 }).catch(() => null);
   const out = r?.output ?? '';
   return out.includes('STATE_PUBLISHED') ? 'published' : out.includes('STATE_LOCAL') ? 'local' : 'unknown';
 }

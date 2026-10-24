@@ -68,7 +68,7 @@ export interface SandboxBackend {
   execOnWorkspace(
     nameOrId: string,
     command: string,
-    opts?: { timeout?: number }
+    opts?: { timeout?: number; attempts?: number; socketGraceMs?: number }
   ): Promise<SandboxExecResult>;
   findJob(nameOrId: string): Promise<JobInfo | null>;
   enableHttpAccess(nameOrId: string, port?: number): Promise<string>;

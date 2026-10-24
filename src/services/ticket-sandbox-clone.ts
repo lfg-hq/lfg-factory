@@ -6,12 +6,24 @@ import { submitClone, waitForClone } from './sandbox/clone-v2.ts';
 import { setNoSleep, execOnWorkspace } from './mags.ts';
 
 /** Saved separately from ready ticket registrations so a pending clone is never exec-probed. */
+const BUSY_SOURCE = /another disk checkpoint or clone is in progress/i;
+export const BUSY_RETRY_MS = Number(process.env.TICKET_CLONE_BUSY_RETRY_MS ?? 30_000);
 export async function createTicketSandbox(options: {
   projectId: string; ticketId: string; userId: string;
   allowPreparedPreviewWithAppError?: boolean;
   fresh: () => Promise<{jobId:string;workspaceId:string}>;
   log: (message:string) => Promise<unknown>;
+  busyRetries?: number;
 }): Promise<{jobId:string;workspaceId:string;cloneIntentId?:string}> {
+  // Mags copies a disk one operation at a time. A clone refused for that reason allocated
+  // nothing, so it is marked rejected (never resumed) and submitted again after a pause.
+  const retryWhenBusy = async (intentId: string, detail: string) => {
+    if (!BUSY_SOURCE.test(detail) || (options.busyRetries ?? 0) >= 6) return null;
+    await db.update(sandboxes).set({status:'rejected',updatedAt:new Date()}).where(eq(sandboxes.id,intentId));
+    await options.log('The preview disk is busy with another copy. Trying again in 30 seconds…');
+    await new Promise(resolve => setTimeout(resolve, BUSY_RETRY_MS));
+    return createTicketSandbox({...options, busyRetries:(options.busyRetries ?? 0) + 1});
+  };
   if (process.env.SANDBOX_BACKEND === 'docker') return options.fresh();
   const [pending] = await db.select().from(sandboxes).where(and(
     eq(sandboxes.ticketId, options.ticketId), eq(sandboxes.workspaceType, 'ticket-clone'),
@@ -59,6 +71,8 @@ export async function createTicketSandbox(options: {
         // submitClone already redacts credentials from provider diagnostics. Preserve
         // the reason instead of collapsing missing-source and busy-source failures.
         const detail = error instanceof Error ? error.message : `HTTP ${(error as any).statusCode}`;
+        const retried = await retryWhenBusy(intent.id, detail);
+        if (retried) return retried;
         console.warn('[ticket-sandbox-clone] rejected', {ticketId:options.ticketId,sourceWorkspaceId:source.workspaceId,detail});
         throw new Error(`Preview clone was rejected: ${detail} No replacement sandbox was created.`);
       }
@@ -70,7 +84,13 @@ export async function createTicketSandbox(options: {
   }
   if (!intent?.magsJobId) throw new Error('Clone submission outcome is unknown; inspect Magpie before retrying. Automatic resubmission is blocked.');
   await options.log(`Waiting for clone ${intent.magsJobId}; checking every 10 seconds…`);
-  const clone = await waitForClone(intent.magsJobId);
+  let clone: {jobId:string;workspaceId:string};
+  try { clone = await waitForClone(intent.magsJobId); }
+  catch (error) {
+    const retried = await retryWhenBusy(intent.id, (error as Error).message ?? '');
+    if (retried) return retried;
+    throw error;
+  }
   if (clone.workspaceId === intent.magsBaseWorkspaceId) throw new Error('Clone returned the source identity; refusing to modify it');
   await setNoSleep(clone.jobId, true);
   // Preserve the cloned working configuration and caches. Git setup selects the

@@ -237,7 +237,8 @@ export async function newWorkspaceV2(name: string, opts: NewWorkspaceV2Opts = {}
 export async function execOnWorkspace(
   nameOrId: string,
   command: string,
-  opts: { timeout?: number } = {}
+  // attempts/socketGraceMs tune the hosted backend's network retries; local exec has none.
+  opts: { timeout?: number; attempts?: number; socketGraceMs?: number } = {}
 ): Promise<SandboxExecResult> {
   const cname = containerName(nameOrId);
   const timeout = opts.timeout ?? 300_000;

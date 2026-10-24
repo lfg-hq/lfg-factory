@@ -42,7 +42,8 @@ export async function openTicketWorkspace(options:{project:typeof projects.$infe
       const workspaceId = existing.magsWorkspaceId, root = ticketWorkspaceRoot(existing);
       progress('Checking ticket workspace…');
       // Probe first: provider job listings may omit older live workspaces.
-      const probe = async()=>execOnWorkspace(workspaceId,`git -C ${shellQuote(root)} symbolic-ref --short HEAD`,{timeout:20_000});
+      // One quick attempt per probe (~20s at most), so a dead VM costs about a minute, not ~11.
+      const probe = async()=>execOnWorkspace(workspaceId,`git -C ${shellQuote(root)} symbolic-ref --short HEAD`,{timeout:15_000,attempts:1,socketGraceMs:5_000});
       let probeError: unknown;
       let result = await probe().catch(error=>{probeError=error;return null;});
       if (result?.exitCode === 0 && result.output.trim() !== branch) throw new Error('The existing checkout is on another branch. It has been preserved; switch it back before opening Coding.');

@@ -1,23 +1,25 @@
 import {test,expect,mock,afterAll} from 'bun:test';
 const priorBackend=process.env.SANDBOX_BACKEND;
 process.env.SANDBOX_BACKEND='mags';
+process.env.TICKET_CLONE_BUSY_RETRY_MS='0';
+let waitErrors:string[]=[];
 afterAll(()=>{if(priorBackend===undefined)delete process.env.SANDBOX_BACKEND;else process.env.SANDBOX_BACKEND=priorBackend;});
 let pending:any;let source:any={workspaceId:'preview',setupComplete:1,previewStatus:'running'};
 let submitCount=0;let requestError:any;let freshCount=0;let cleaned:string[]=[];let resolved='clone-new';
 let reads=0; let probeResult:any={exitCode:0,output:'/data/project'};
 const db={
- select:()=>({from:()=>({where:()=>{const rows=reads++===0?(pending?[pending]:[]):(source?[source]:[]);return {then:(resolve:any)=>Promise.resolve(rows).then(resolve),orderBy:()=>({limit:async()=>rows})};}})}),
+ select:()=>({from:()=>({where:()=>{const rows=reads++===0?(pending&&pending.status!=='rejected'?[pending]:[]):(source?[source]:[]);return {then:(resolve:any)=>Promise.resolve(rows).then(resolve),orderBy:()=>({limit:async()=>rows})};}})}),
  insert:()=>({values:(v:any)=>({returning:async()=>{pending={id:'intent',...v};return [pending];}})}),
- update:()=>({set:(v:any)=>({where:async()=>{pending={...pending,...v};}})}),
+ update:()=>({set:(v:any)=>({where:async()=>{pending={...pending,...v};if(v.status==='rejected')reads=0;}})}),
 };
 mock.module('../src/config/db.ts',()=>({db}));
-mock.module('../src/services/sandbox/clone-v2.ts',()=>({submitClone:async()=>{submitCount++;if(requestError)throw requestError;return 'request';},waitForClone:async(id:string)=>({jobId:id,workspaceId:resolved})}));
+mock.module('../src/services/sandbox/clone-v2.ts',()=>({submitClone:async()=>{submitCount++;if(requestError)throw requestError;return 'request';},waitForClone:async(id:string)=>{if(waitErrors.length)throw new Error(waitErrors.shift());return {jobId:id,workspaceId:resolved};}}));
 mock.module('../src/services/mags.ts',()=>({setNoSleep:async()=>{},execOnWorkspace:async()=>probeResult}));
 let preparedCount=0;let prepareError:any;
 mock.module('../src/services/project-sandbox.ts',()=>({ensureProjectSandbox:async()=>{preparedCount++;if(prepareError)throw prepareError;return {workspaceId:'new-preview'};}}));
 const {createTicketSandbox}=await import('../src/services/ticket-sandbox-clone.ts');
 const options={projectId:'p',ticketId:'t',userId:'u',log:async()=>{},fresh:async()=>{freshCount++;return {jobId:'fresh',workspaceId:'fresh'};}};
-function reset(){preparedCount=0;prepareError=null;reads=0;pending=undefined;submitCount=0;freshCount=0;requestError=null;cleaned=[];resolved='clone-new';source={workspaceId:'preview',setupComplete:1,previewStatus:'running'};}
+function reset(){waitErrors=[];preparedCount=0;prepareError=null;reads=0;pending=undefined;submitCount=0;freshCount=0;requestError=null;cleaned=[];resolved='clone-new';source={workspaceId:'preview',setupComplete:1,previewStatus:'running'};}
 test('registers accepted clone and preserves its prepared application files',async()=>{reset();const r=await createTicketSandbox(options);expect(r.cloneIntentId).toBe('intent');expect(pending.magsJobId).toBe('request');expect(cleaned).toEqual([]);});
 test('pending request resumes without clone POST',async()=>{reset();pending={id:'intent',status:'cloning',magsJobId:'existing',magsBaseWorkspaceId:'preview'};await createTicketSandbox(options);expect(submitCount).toBe(0);expect(cleaned).toEqual([]);});
 test('unknown clone submission is retained without provisioning an empty replacement',async()=>{reset();pending={id:'intent',status:'submitting'};await expect(createTicketSandbox(options)).rejects.toThrow('unconfirmed');expect(submitCount).toBe(0);expect(freshCount).toBe(0);expect(pending.status).toBe('unconfirmed');});
@@ -33,3 +35,8 @@ test('Coding recovery does not clone an unhealthy prepared checkout',async()=>{r
 test('ordinary builds retain their working-preview requirement',async()=>{reset();source.previewStatus='error';await expect(createTicketSandbox(options)).rejects.toThrow('existing prepared preview');expect(submitCount).toBe(0);});
 
 test('explicit clone rejection retains provider diagnostics',async()=>{reset();requestError=Object.assign(new Error('Clone API HTTP 404: source V2 sandbox not found'),{statusCode:404});await expect(createTicketSandbox(options)).rejects.toThrow('source V2 sandbox not found');expect(pending.status).toBe('rejected');expect(submitCount).toBe(1);expect(freshCount).toBe(0);});
+
+const busy='Clone request failed: clone failed: another disk checkpoint or clone is in progress. Inspect clone logs.';
+test('a clone refused because the preview disk is busy is retried, not left pending',async()=>{reset();waitErrors=[busy,busy];const r=await createTicketSandbox(options);expect(r.workspaceId).toBe('clone-new');expect(submitCount).toBe(3);});
+test('a saved clone that failed as busy is marked rejected and resubmitted',async()=>{reset();pending={id:'intent',status:'cloning',magsJobId:'old',magsBaseWorkspaceId:'preview'};waitErrors=[busy];const r=await createTicketSandbox(options);expect(r.workspaceId).toBe('clone-new');expect(submitCount).toBe(1);});
+test('a disk that stays busy eventually gives up with the reason',async()=>{reset();waitErrors=Array(10).fill(busy);await expect(createTicketSandbox(options)).rejects.toThrow('another disk checkpoint');expect(submitCount).toBe(7);});

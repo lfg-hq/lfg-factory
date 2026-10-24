@@ -2474,6 +2474,8 @@ async function executeTicketChatInternal(
     id: project!.id, ownerId, ticketBuildIsolation: (project as { ticketBuildIsolation?: string }).ticketBuildIsolation,
   });
   let chatLane: { release: () => void } | null = null;
+  // Retired in `finally`: every exit (the Pi path, stops, errors) must release the VM.
+  let retireWorkspace: string | null = null;
   if (chatPlacement.shared) {
     // Interactive: wait briefly for a slot rather than refusing the user's message,
     // then go ahead anyway — a slower answer beats no answer.
@@ -2498,6 +2500,7 @@ async function executeTicketChatInternal(
     return;
   }
   const workspaceId = chatSb.workspaceId;
+  retireWorkspace = workspaceId;
 
   // Resume the CLI session this ticket's chat has been using. This row is written by
   // the /api/v1/cli/output webhook on every turn; the chat used to hardcode null here,
@@ -2838,9 +2841,9 @@ ${ENGINEERING_CONTRACT}
     });
   }
 
-  // Chat turn done — save the journal and retire the VM; a later follow-up starts fresh.
-  await sleepTicketVm(workspaceId, ticketId, "Follow-up");
   } finally {
+    // Chat turn done — save the journal and retire the VM; a later follow-up starts fresh.
+    if (retireWorkspace) await sleepTicketVm(retireWorkspace, ticketId, "Follow-up").catch(() => {});
     chatTurnAddenda.delete(ticketId);
     chatLane?.release();
   }

@@ -180,20 +180,24 @@ export async function newWorkspaceV2(
 export async function execOnWorkspace(
   nameOrId: string,
   command: string,
-  opts: { timeout?: number } = {}
+  opts: { timeout?: number; attempts?: number; socketGraceMs?: number } = {}
 ): Promise<MagsExecResult> {
   const timeout = opts.timeout ?? 300_000; // 5 min default
+  // Probes pass attempts: 1 and a short grace: a "20s" probe used to take ~160s
+  // (3 attempts × (20s + 30s socket grace) + pauses), so waking a dead VM took minutes.
+  const attempts = Math.max(1, opts.attempts ?? 3);
+  const grace = opts.socketGraceMs ?? 30_000;
   const token = process.env.MAGS_API_TOKEN;
   if (!token) throw new Error("MAGS_API_TOKEN not set");
   const base = (process.env.MAGS_API_URL || "https://api.magpiecloud.com").replace(/\/+$/, "");
   const url = `${base}/api/v2/mags-jobs/${encodeURIComponent(nameOrId)}/exec`;
 
   let lastError: Error | null = null;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
     if (attempt > 0) await sleep(5000);
 
     const ctrl = new AbortController();
-    const abortTimer = setTimeout(() => ctrl.abort(), timeout + 30_000); // socket timeout > command timeout
+    const abortTimer = setTimeout(() => ctrl.abort(), timeout + grace); // socket timeout > command timeout
     try {
       const resp = await fetch(url, {
         method: "POST",
