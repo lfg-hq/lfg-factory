@@ -152,6 +152,8 @@ export function createPiSubscriptionModel(
         // The Codex backend does not accept max_output_tokens. Report this below.
         temperature: options.temperature,
         reasoningEffort: options.providerOptions?.openai?.reasoningEffort as NonNullable<Parameters<typeof codexStream>[2]>['reasoningEffort'],
+        // Sent as prompt_cache_key: requests in one conversation reuse the cached prompt prefix.
+        sessionId: typeof options.providerOptions?.openai?.promptCacheKey === "string" ? options.providerOptions.openai.promptCacheKey : undefined,
       });
       const warnings = ["maxOutputTokens", "topP", "topK", "presencePenalty", "frequencyPenalty", "seed", "stopSequences"].filter(k => options[k as keyof typeof options] !== undefined).map(feature => ({ type: "unsupported" as const, feature }));
       const ids = new Map<number, string>();

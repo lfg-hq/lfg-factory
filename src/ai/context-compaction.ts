@@ -91,28 +91,100 @@ async function mapLimit<T, R>(items: T[], limit: number, run: (item: T, index: n
   return out;
 }
 
-export async function compactContext(messages: ModelMessage[], fixedTokens: number, summarize: Summarizer, budget = contextBudget(), onSummarize?: () => void, onProgress?: (done: number, total: number) => void): Promise<ModelMessage[]> {
-  const target = Math.floor(budget * .75);
-  if (fixedTokens + estimateContextTokens(messages) <= target) return messages;
+export type CompactionStage = 'pruned' | 'images' | 'summarized' | 'fallback';
+export type CompactionOptions = {
+  /** Real/estimated ratio from the provider's reported input size (1 = raw estimate). */
+  scale?: number;
+  /** Never send more than this (defaults to the budget). Below it, an over-target result is sent rather than failing. */
+  hardLimit?: number;
+  signal?: AbortSignal;
+  onStage?: (stage: CompactionStage) => void;
+};
+
+/** Start of the latest completed group (a final assistant reply keeps the group before it). */
+function latestBoundary(messages: ModelMessage[]): number {
   let cut = messages.length - 1;
   while (cut > 0 && messages[cut]?.role !== 'assistant') cut--;
-  // A final assistant reply without tools can be retained along with the preceding group.
   if (cut > 0 && messages[cut - 1]?.role === 'tool') {
     cut--;
     while (cut > 0 && messages[cut]?.role !== 'assistant') cut--;
   }
-  if (cut <= 0) throw new ContextCompactionError('This request exceeds the chat context budget. Please narrow the attached content.', 'context_over_budget');
-  const pruned = pruneToolResults(messages, cut);
-  if (fixedTokens + estimateContextTokens(pruned) <= target) return pruned;
-  messages = pruned;
-  onSummarize?.();
-  const prefix = messages.slice(0, cut);
+  return cut;
+}
+const toolIndexes = (messages: ModelMessage[]) => messages.flatMap((m, i) => m.role === 'tool' ? [i] : []);
+/** Replace images and files (except in the kept messages) with a short note. */
+export function dropOldMedia(messages: ModelMessage[], keep: Set<number>): ModelMessage[] {
+  let changed = false;
+  const next = messages.map((message, index) => {
+    if (keep.has(index) || !Array.isArray(message.content)) return message;
+    const content = (message.content as any[]).map(part => {
+      if (part?.type !== 'image' && part?.type !== 'file') return part;
+      changed = true;
+      return { type: 'text', text: '[Earlier image or file omitted to save context. Ask the user to re-share it if needed.]' };
+    });
+    return { ...message, content } as ModelMessage;
+  });
+  return changed ? next : messages;
+}
+
+/**
+ * Fit the conversation into the model's budget, cheapest relief first, stopping as soon
+ * as it fits: (1) shorten older tool output, keeping the two latest results whole;
+ * (2) drop older images; (3) summarize older history. If summarizing fails, older history
+ * is dropped with a note instead. The turn fails only when the current request and its
+ * latest results alone exceed the hard limit.
+ */
+export async function compactContext(messages: ModelMessage[], fixedTokens: number, summarize: Summarizer, budget = contextBudget(), onSummarize?: () => void, onProgress?: (done: number, total: number) => void, opts: CompactionOptions = {}): Promise<ModelMessage[]> {
+  const scale = opts.scale && opts.scale > 0 ? Math.min(1, opts.scale) : 1;
+  const size = (list: ModelMessage[]) => Math.ceil((fixedTokens + estimateContextTokens(list)) * scale);
+  const target = Math.floor(budget * .75);
+  const hardLimit = opts.hardLimit ?? budget;
+  if (size(messages) <= target) return messages;
   const lastUser = messages.findLastIndex(m => m.role === 'user');
+
+  // 1. Older tool output (free): everything before the latest group, and within a long
+  // turn everything but the two latest results.
+  const tools = toolIndexes(messages);
+  let current = pruneToolResults(messages, Math.max(latestBoundary(messages), tools.length >= 2 ? tools.at(-2)! : 0));
+  if (current !== messages) opts.onStage?.('pruned');
+  if (size(current) <= target) return current;
+
+  // 2. Older images (free). The current request's attachments stay.
+  const media = dropOldMedia(current, new Set([lastUser, ...tools.slice(-2)]));
+  if (media !== current) { current = media; opts.onStage?.('images'); }
+  if (size(current) <= target) return current;
+
+  // 3. Summarize history before the latest completed message boundary.
+  const cut = latestBoundary(current);
+  const prefix = cut > 0 ? current.slice(0, cut) : [];
   const pinned = prefix.filter((m, i) => m.role === 'system' || i === lastUser);
   const evidence = prefix.filter((m, i) => m.role !== 'system' && i !== lastUser);
-  if (!evidence.length) throw new ContextCompactionError('This request exceeds the chat context budget. Please narrow the attached content.', 'context_over_budget');
-  // Bounded batches summarized in parallel, then merged once. A sequential chain of
-  // slow model calls took minutes on long chats and the turn was cancelled as dead.
+  let compacted = current;
+  if (evidence.length) {
+    onSummarize?.();
+    let summary: string | null = null;
+    try { summary = await summarizeBatches(evidence, summarize, onProgress); }
+    catch (error) {
+      if (opts.signal?.aborted || (error as Error)?.name === 'AbortError') throw error;
+      console.warn('[context] summary failed; dropping older history instead:', (error as Error)?.name, (error as any)?.code ?? '');
+    }
+    if (summary) opts.onStage?.('summarized'); else opts.onStage?.('fallback');
+    const head: ModelMessage = summary ? handoffMessage(summary)
+      : { role: 'assistant', content: 'Earlier conversation was omitted to fit the context limit (no summary available). Recheck sources, saved docs and Notes as needed.' };
+    compacted = [head, ...pinned, ...current.slice(cut)];
+  }
+  if (size(compacted) <= hardLimit) return compacted;
+
+  // 4. Last resort inside the current turn: shorten every result but the latest, drop all older media.
+  const tailTools = toolIndexes(compacted);
+  compacted = dropOldMedia(pruneToolResults(compacted, tailTools.at(-1) ?? compacted.length), new Set([compacted.findLastIndex(m => m.role === 'user')]));
+  if (size(compacted) <= hardLimit) return compacted;
+  throw new ContextCompactionError('This request is too large for the model even after condensing. Please narrow the attached content.', 'recent_context_too_large');
+}
+
+/** Bounded batches summarized in parallel, then merged once. */
+async function summarizeBatches(evidence: ModelMessage[], summarize: Summarizer, onProgress?: (done: number, total: number) => void): Promise<string> {
+  // A sequential chain of slow model calls took minutes on long chats and the turn was cancelled as dead.
   const batches: string[] = [];
   let batch = '';
   for (const message of evidence) {
@@ -135,7 +207,5 @@ export async function compactContext(messages: ModelMessage[], fixedTokens: numb
     summary = await summarizeEvidence('Merge these consecutive handoff summaries (oldest first) into one handoff. Keep every decision, open item, identifier and the latest state:\n\n' + parts.map((p, i) => `### Part ${i + 1}\n${p}`).join('\n\n'), summarize);
     onProgress?.(++done, total);
   }
-  const compacted = [handoffMessage(summary), ...pinned, ...messages.slice(cut)];
-  if (fixedTokens + estimateContextTokens(compacted) > target) throw new ContextCompactionError('Recent context is too large to compact safely. Please narrow the attached content.', 'recent_context_too_large');
-  return compacted;
+  return summary;
 }

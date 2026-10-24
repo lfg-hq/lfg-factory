@@ -3,7 +3,8 @@ import { providerErrorMessage, safeErrorReason } from './provider-error.ts';
 import { wrapGraphConnectorTools } from "../services/document-graph-connectors.ts";
 import { withChatDiagnostics, chatStage, chatDiagnostic, chatConversation } from './chat-diagnostics.ts';
 import { abortable, cancellableStream, trackTurnTools } from './stream-cancellation.ts';
-import { compactContext, contextBudget, estimateContextTokens, HANDOFF_INSTRUCTION } from './context-compaction.ts';
+import { compactContext, estimateContextTokens, HANDOFF_INSTRUCTION, type CompactionStage } from './context-compaction.ts';
+import { contextProfile, recordTokenScale, tokenScale } from './context-profile.ts';
 import { loadConversationHandoff } from './conversation-handoff.ts';
 import { BUILD_EVENT_ROLE } from '../services/build-summary-turn.ts';
 import {compactToolSteps} from './history-budget.ts';
@@ -580,6 +581,8 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   }
 
   chatDiagnostic('model_selected', {model:modelKey});
+  // How much this model may take: its own window, capped per connection type (see context-profile).
+  const profile = contextProfile(modelKey);
   chatStage('attachments');
   // ── 4b. Attach an uploaded IMAGE to the model turn ──────────────────────────
   // Vision-native models (Claude/GPT/Gemini) get the image directly. Text-only
@@ -960,7 +963,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     return summaryCache.get(key)!;
   };
   // Read the saved checkpoint only; summarizing older history waits until after the turn.
-  const handoff = await loadConversationHandoff(convId!, summarize, undefined, { compact: false });
+  const handoff = await loadConversationHandoff(convId!, summarize, undefined, { compact: false, budget: profile.budget });
   if (handoff) {
     const covered = historyRanges.filter(r => r.createdAt < handoff.throughAt ||
       (+r.createdAt === +handoff.throughAt && r.id <= handoff.throughId));
@@ -992,18 +995,27 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     // Once condensed, later steps build on the condensed history; each step used to
     // start from the full history and condense again (several banners, extra calls).
     let carried: { sourceLength: number; messages: any[] } | null = null;
+    // Raw estimate of what the last step sent; its real size calibrates later estimates.
+    let lastSentEstimate = 0;
     const result = streamText({
       model,
       system: cached.system,
       messages: passMessages,
       tools,
       stopWhen: stepCountIs(80),
-      maxOutputTokens: Math.min(12000, Math.floor(contextBudget() * .2)),
+      maxOutputTokens: Math.min(12000, Math.floor(profile.budget * .2)),
+      // One cache key per conversation, so the provider reuses the unchanged prompt prefix
+      // (system, tools, earlier history). The ChatGPT subscription adapter passes it on too.
+      // Only OpenAI itself: DeepSeek, Kimi and GLM go through the same SDK and may reject the field
+      // (they cache a stable prefix automatically).
+      providerOptions: convId && (profile.route === "subscription" || getProviderName(modelKey) === "openai") ? { openai: { promptCacheKey: convId } } : undefined,
       prepareStep: async ({messages: stepMessages}) => {
         let condensing = false;
         const input = carried && stepMessages.length >= carried.sourceLength
           ? [...carried.messages, ...stepMessages.slice(carried.sourceLength)] : stepMessages;
-        const bounded = await compactContext(input, fixedTokens, summarize, undefined, () => {
+        const stages: CompactionStage[] = [];
+        const scale = tokenScale(convId);
+        const bounded = await compactContext(input, fixedTokens, summarize, profile.budget, () => {
           // Summarizing takes a model call; the chat shows a visible banner, not a hidden step.
           condensing = true;
           req.onActivity?.();
@@ -1013,11 +1025,12 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
           // Progress doubles as a heartbeat so a long condense is never mistaken for a stall.
           req.onActivity?.();
           ws.send(JSON.stringify({type:"ai_chunk",chunk:"",is_final:false,is_notification:true,notification_type:"context_compaction",phase:"progress",done,total}));
-        });
+        }, {scale, hardLimit:profile.budget, signal:abortController.signal, onStage:stage=>stages.push(stage)});
         if (condensing) ws.send(JSON.stringify({type:"ai_chunk",chunk:"",is_final:false,is_notification:true,notification_type:"context_compaction",phase:"done"}));
         if (carried || bounded !== stepMessages) carried = { sourceLength: stepMessages.length, messages: bounded };
-        chatDiagnostic('context_budget', {estimatedTokens:fixedTokens + estimateContextTokens(bounded),
-          budgetTokens:contextBudget(), compacted:bounded !== stepMessages});
+        lastSentEstimate = fixedTokens + estimateContextTokens(bounded);
+        chatDiagnostic('context_budget', {estimatedTokens:Math.ceil(lastSentEstimate * scale), rawEstimate:lastSentEstimate, scale:Number(scale.toFixed(2)),
+          budgetTokens:profile.budget, windowTokens:profile.window, route:profile.route, compacted:bounded !== stepMessages, stages:stages.join(',') || undefined});
         return {messages:bounded};
       },
       abortSignal: abortController.signal,
@@ -1039,7 +1052,10 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
         chatDiagnostic('stream_error', {outcome:'error', model:modelKey, status: typeof (error as any)?.statusCode === 'number' ? (error as any).statusCode : undefined, reason: safeErrorReason(error)});
       },
       onStepFinish: ({ toolCalls, usage }) => {
-        chatDiagnostic('context_usage', {inputTokens:usage.inputTokens, outputTokens:usage.outputTokens});
+        // The provider's real input size (cached tokens included) calibrates our estimate.
+        const calibrated = recordTokenScale(convId, usage.inputTokens, lastSentEstimate);
+        chatDiagnostic('context_usage', {inputTokens:usage.inputTokens, outputTokens:usage.outputTokens,
+          cachedInputTokens:usage.inputTokenDetails?.cacheReadTokens ?? usage.cachedInputTokens, scale:calibrated === null ? undefined : Number(calibrated.toFixed(2))});
         if (abortController.signal.aborted) return;
         if (!toolCalls?.length) return;
         flush();
@@ -1506,7 +1522,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
 
   // Refresh the history checkpoint off the critical path, for the next turn.
   void loadConversationHandoff(convId!, (evidence) => generateText({model, system:HANDOFF_INSTRUCTION, prompt:evidence,
-    maxOutputTokens:2200, maxRetries:1}).then(r => r.text))
+    maxOutputTokens:2200, maxRetries:1}).then(r => r.text), undefined, { budget: profile.budget })
     .catch(error => console.warn('[stream-handler] handoff refresh failed:', (error as Error).message));
 
   chatStage('persisting_response');

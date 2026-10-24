@@ -4,17 +4,17 @@ type Trace = { id: string; conversationId?: string; projectId?: string; started:
 const traces = new AsyncLocalStorage<Trace>();
 // Only explicit metadata is accepted. Never pass prompts, tool arguments/results,
 // HTTP bodies, URLs, tokens or raw error messages to this logger.
-type Metadata = { model?: string; tool?: string; status?: number; outcome?: 'complete' | 'error' | 'cancelled'; durationMs?: number; inputTokens?:number; outputTokens?:number; estimatedTokens?:number; budgetTokens?:number; compacted?:boolean; reason?: string };
+type Metadata = { model?: string; tool?: string; status?: number; outcome?: 'complete' | 'error' | 'cancelled'; durationMs?: number; inputTokens?:number; outputTokens?:number; estimatedTokens?:number; budgetTokens?:number; compacted?:boolean; reason?: string; rawEstimate?: number; scale?: number; windowTokens?: number; route?: string; stages?: string; cachedInputTokens?: number };
 // `reason` carries only error names, statuses and machine codes (see safeErrorReason).
 export function chatDiagnostic(event: string, metadata: Metadata = {}) {
   const trace = traces.getStore();
   if (!trace) return;
   if (event === 'stream_error') trace.failed = true;
-  const { model, tool, status, outcome, durationMs, inputTokens, outputTokens, estimatedTokens, budgetTokens, compacted, reason } = metadata;
+  const { model, tool, status, outcome, durationMs, inputTokens, outputTokens, estimatedTokens, budgetTokens, compacted, reason, rawEstimate, scale, windowTokens, route, stages, cachedInputTokens } = metadata;
   console.info(JSON.stringify({ component: 'chat', event, requestId: trace.id,
     conversationId: trace.conversationId, projectId: trace.projectId,
     elapsedMs: Date.now() - trace.started, stage: trace.stage,
-    stageElapsedMs: Date.now() - trace.stageStarted, model, tool, status, outcome, durationMs, inputTokens, outputTokens, estimatedTokens, budgetTokens, compacted, reason }));
+    stageElapsedMs: Date.now() - trace.stageStarted, model, tool, status, outcome, durationMs, inputTokens, outputTokens, estimatedTokens, budgetTokens, compacted, reason, rawEstimate, scale, windowTokens, route, stages, cachedInputTokens }));
 }
 export function chatStage(stage: string) {
   const trace = traces.getStore();

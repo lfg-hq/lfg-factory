@@ -8,7 +8,7 @@ import { contextBudget, estimateContextTokens, handoffMessage, summarizeEvidence
  * `compact: false` only reads the saved checkpoint, so a turn can start without waiting
  * on summarization; the caller refreshes it in the background after the turn.
  */
-export async function loadConversationHandoff(conversationId: string, summarize: Summarizer, store = db, opts: { compact?: boolean } = {}) {
+export async function loadConversationHandoff(conversationId: string, summarize: Summarizer, store = db, opts: { compact?: boolean; budget?: number } = {}) {
   const [saved] = await store.select().from(conversationContexts).where(eq(conversationContexts.conversationId, conversationId));
   // Read textual evidence only; recent tool output is loaded separately by the caller.
   const rows = await store.select({ id: messages.id, role: messages.role, content: messages.content,
@@ -21,7 +21,8 @@ export async function loadConversationHandoff(conversationId: string, summarize:
   // budget, counting the tool steps each turn replays (capped as the replay caps them).
   // Counting rows alone let a few large turns start every request near the condensing
   // threshold, so most turns condensed mid-way.
-  const exactBudget = Math.floor(contextBudget() * .25);
+  const budget = opts.budget ?? contextBudget();
+  const exactBudget = Math.floor(budget * .25);
   const size = (row: typeof rows[number]) => estimateContextTokens(String(row.content ?? '')) +
     (Array.isArray(row.steps) ? Math.min(estimateContextTokens(JSON.stringify(row.steps)), 4000) : 0);
   let keepFrom = rows.length, kept = 0;
@@ -31,7 +32,7 @@ export async function loadConversationHandoff(conversationId: string, summarize:
     kept = next; keepFrom = i;
   }
   const total = rows.reduce((n, row) => n + size(row), 0);
-  const oversized = keepFrom > 0 && total > contextBudget() * .35;
+  const oversized = keepFrom > 0 && total > budget * .35;
   const old = opts.compact !== false && (rows.length > 40 || oversized) ? rows.slice(0, keepFrom) : [];
   if (old.length) {
     let batch = '';
