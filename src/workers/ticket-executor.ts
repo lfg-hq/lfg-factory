@@ -2920,7 +2920,7 @@ async function finalizeTicketChat(
       (documentation ? documentation.message + "\n\n" : "") +
       `- Branch: \`${featureBranch}\`\n- Commit: \`${sha.slice(0, 7)}\`\n${mergedOk ? `- Merged to \`${anchorBranch}\` ✓\n` : ""}\nRe-run the **Preview** to see the change, or open the **Git** tab for the diff.`;
     await addLog(ticketId, done, "ai_response", ownerId);
-    await publishTicketOperation(featureBranch, anchorBranch, sha, done);
+    await publishTicketOperation(featureBranch, anchorBranch, sha, done, workSummary);
     // The change requests this turn was given are now published: stop carrying them.
     await resolveTicketAddenda(ticketId, chatTurnAddenda.get(ticketId) ?? []);
     // A published follow-up does not prove every historical or verification task

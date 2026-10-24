@@ -12,7 +12,7 @@ import { broadcastToUser } from '../ws/connection-manager.ts';
 export type OperationStatus = 'queued' | 'running' | 'needs_input' | 'failed' | 'completed';
 export interface TicketOperation {
  id:string;ticketId:string;projectId:string;publicProjectId:string;conversationId:string;userId:string;
- status:OperationStatus;requestHash?:string;detail:string;updatedAt:string;waitingForInput?:boolean;lastAnswerTurnId?:string;selectedBranch?:string|null;publication?:{branch:string;anchor:string;sha:string};
+ status:OperationStatus;requestHash?:string;detail:string;updatedAt:string;waitingForInput?:boolean;lastAnswerTurnId?:string;selectedBranch?:string|null;publication?:{branch:string;anchor:string;sha:string;summary?:string};
 }
 const context = new AsyncLocalStorage<string>();
 export function operationId(ticketId:string,conversationId:string,turnId:string,message:string) {
@@ -85,22 +85,53 @@ export async function withTicketOperation(id:string|undefined,run:()=>Promise<vo
   const claimed={...op,status:'running' as const,detail:'Ticket agent is working.',updatedAt:new Date().toISOString()};
   const rows=await db.update(ticketLogs).set({output:JSON.stringify(claimed)}).where(and(eq(ticketLogs.id,id),eq(ticketLogs.output,JSON.stringify(op)))).returning({id:ticketLogs.id});
   if(!rows.length)return;
+  const startedAt=new Date();
   try {
    await run();
    const finished=await readTicketOperation(id);
-   if(finished?.publication) await finishPublishedOperation(finished);
-   if((await readTicketOperation(id))?.status==='running' || (await readTicketOperation(id))?.waitingForInput)await updateTicketOperation('failed','The ticket turn ended without a verified outcome. Saved work is retained; inspect the ticket before retrying.');
+   if(finished?.publication) await finishPublishedOperation(finished,startedAt);
+   if((await readTicketOperation(id))?.status==='running' || (await readTicketOperation(id))?.waitingForInput)await updateTicketOperation('failed',(await workRecap(op.ticketId,startedAt,'Done before it stopped'))+'The ticket turn ended without a verified outcome. Saved work is retained; inspect the ticket before retrying.');
   } catch(e) {await updateTicketOperation('failed',`Ticket follow-up failed: ${(e as Error).message}`);throw e;}
  });
 }
 
-export async function publishTicketOperation(branch:string,anchor:string,sha:string,detail:string) {
+export async function publishTicketOperation(branch:string,anchor:string,sha:string,detail:string,summary?:string) {
  const id=context.getStore();if(!id)return;
  const op=await readTicketOperation(id);if(!op)return;
- op.publication={branch,anchor,sha};op.detail=detail;op.updatedAt=new Date().toISOString();
+ op.publication={branch,anchor,sha,summary:summary?.trim().slice(0,1200) || undefined};op.detail=detail;op.updatedAt=new Date().toISOString();
  await db.update(ticketLogs).set({output:JSON.stringify(op)}).where(eq(ticketLogs.id,id));
 }
-async function finishPublishedOperation(op:TicketOperation) {
+type Recap = {changed:string[];verified:string[];open:string[]};
+/** Split the agent's work journal (Changed / Verified / Open / Setup notes) into bullet lists. */
+export function parseWorkJournal(text:string):Recap {
+ const out:Recap={changed:[],verified:[],open:[]};
+ let section:keyof Recap|null=null;
+ const add=(line:string)=>{const t=line.replace(/^[-*•]\s+|^\d+[.)]\s+/,'').replace(/\s+/g,' ').trim();if(section&&t&&!/^(none|n\/a|nothing)\.?$/i.test(t)&&out[section].length<6)out[section].push(t.length>220?t.slice(0,217)+'…':t);};
+ for(const raw of text.split('\n')){
+  const heading=raw.match(/^\s*(?:#+\s*|[-*]\s*)?\**\s*(changed|verified|open|setup notes?)\s*\**\s*:?\s*\**\s*(.*)$/i);
+  if(heading){const name=heading[1]!.toLowerCase();section=name.startsWith('changed')?'changed':name==='verified'?'verified':name==='open'?'open':null;if(heading[2])add(heading[2]);continue;}
+  if(raw.trim())add(raw.trim());
+ }
+ return out;
+}
+/** "What shipped" bullets for this turn: the journal the agent wrote, else its closing summary. */
+async function workRecap(ticketId:string,since:Date,title:string,fallback?:string):Promise<string> {
+ const [ticket]=await db.select({details:projectTickets.details}).from(projectTickets).where(eq(projectTickets.id,ticketId)).catch(()=>[]);
+ const entries=((ticket?.details as {workJournal?:{at:string;text:string}[]}|null)?.workJournal ?? []);
+ const cutoff=Math.floor(since.getTime()/60000)*60000;
+ const latest=entries.filter(e=>Date.parse(e.at.replace(' UTC','Z').replace(' ','T'))>=cutoff).at(-1);
+ const recap=latest?parseWorkJournal(latest.text):{changed:[],verified:[],open:[]};
+ if(!recap.changed.length&&fallback){
+  recap.changed=(fallback.replace(/\s+/g,' ').match(/[^.!?]+[.!?]+(\s|$)/g) ?? [fallback]).map(x=>x.trim()).filter(Boolean).slice(0,4);
+ }
+ const list=(items:string[])=>items.map(i=>'- '+i).join('\n');
+ let text='';
+ if(recap.changed.length)text+=`**${title}**\n${list(recap.changed)}\n\n`;
+ if(recap.verified.length)text+=`**Verified**\n${list(recap.verified)}\n\n`;
+ if(recap.open.length)text+=`**Still open**\n${list(recap.open)}\n\n`;
+ return text;
+}
+async function finishPublishedOperation(op:TicketOperation,since=new Date(Date.parse(op.updatedAt))) {
  const {getPreviewState,restartPreview}=await import('./dev-preview.ts');
  const state=await getPreviewState(op.projectId).catch(()=>null);
  const selected=state?.branch || '(default)';
@@ -110,6 +141,10 @@ async function finishPublishedOperation(op:TicketOperation) {
   const result=await restartPreview(op.projectId,{userId:op.userId,branch:selected,expectedBranch:selected,conversationId:op.conversationId}).catch(e=>({error:(e as Error).message}));
   detail+='error' in result ? ` Preview refresh did not complete: ${result.error}` : ` Preview updated: ${result.previewUrl}. Availability passed; the refreshed preview's full user workflow has not been independently verified.`;
  } else detail+=' The selected Preview was left unchanged. Select the published branch when you want to preview this change.';
+ // Lead with what was built, as bullets; the publication facts follow.
+ const [ticket]=await db.select({key:projectTickets.ticketKey,name:projectTickets.name}).from(projectTickets).where(eq(projectTickets.id,op.ticketId)).catch(()=>[]);
+ const recap=await workRecap(op.ticketId,since,'What shipped',publication.summary);
+ if(recap)detail=(ticket?`**${[ticket.key,ticket.name].filter(Boolean).join(' · ')}**\n\n`:'')+recap+detail;
  await updateTicketOperation('completed',detail,op.id);
 }
 export async function recoverTicketOperations(before=Date.now()) {
