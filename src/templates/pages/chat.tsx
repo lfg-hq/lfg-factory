@@ -31,6 +31,8 @@ export function ChatPage({
   <script>(function(){if(localStorage.getItem('sidebarMinimized')==='true'){document.documentElement.classList.add('sidebar-minimized-preload');}})()</script>
   <link rel="stylesheet" href="/public/css/document-graph.css?v=20261015-map-groups" />
   <script src="/public/js/document-graph.js?v=20261015-map-groups" defer></script>
+  <link rel="stylesheet" href="/public/css/document-sync.css?v=20261024b" />
+  <script src="/public/js/document-sync.js?v=20261024" defer></script>
   <script src="/public/js/ticket-map.js?v=20261015-map-groups" defer></script>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
@@ -535,7 +537,7 @@ export function ChatPage({
   <script src="/public/js/markdown-config.js?v=20261019-readable-layout"></script>
   <!-- PDF libraries load on demand when exporting a document. -->
   <script src="/public/js/design-preview.js"></script>
-  <script src="/public/js/artifacts-loader.js?v=20261015-map-groups"></script>
+  <script src="/public/js/artifacts-loader.js?v=20261024-doc-sync"></script>
   <script src="/public/js/document-comments.js"></script>
   <script src="/public/js/artifacts.js"></script>
   <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261022-checks-view" />

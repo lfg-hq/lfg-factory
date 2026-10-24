@@ -1,0 +1,80 @@
+/* Documentation sync — Settings card, Documents panel button and sync dialog. */
+:root,[data-theme="dark"]{--ds-bg:#16181d;--ds-surface:#1d2026;--ds-soft:#24272f;--ds-border:#3a3f4b;--ds-text:#e5e7eb;--ds-muted:#a3a9b6;--ds-accent:#9875ec;--ds-ok:#34d399;--ds-error:#f87171}
+[data-theme="light"]{--ds-bg:#fff;--ds-surface:#fff;--ds-soft:#f6f7f9;--ds-border:#e2e6ee;--ds-text:#1f2430;--ds-muted:#667085;--ds-accent:#7950d6;--ds-ok:#059669;--ds-error:#dc2626}
+
+.doc-sync-icon{width:36px;height:36px;flex:none;border-radius:9px;display:grid;place-items:center;font-size:16px}
+.doc-sync-identity{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.doc-sync-identity strong{font-size:13px;font-weight:600;color:var(--tm-ink,var(--ds-text));display:flex;align-items:center;gap:8px}
+.doc-sync-identity>span,.doc-sync-identity>a{font-size:12px;line-height:1.5;color:var(--tm-muted,var(--ds-muted))}
+.doc-sync-identity>a{color:var(--tm-accent,var(--ds-accent))}
+.doc-sync-btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:34px;padding:0 13px;border:1px solid var(--tm-border,var(--ds-border));border-radius:7px;background:var(--tm-surface,var(--ds-surface));color:var(--tm-ink,var(--ds-text));font:inherit;font-size:12px;font-weight:500;white-space:nowrap;cursor:pointer;text-decoration:none}
+.doc-sync-btn:hover{background:var(--tm-soft,var(--ds-soft))}
+.doc-sync-btn:disabled{opacity:.55;cursor:wait}
+.doc-sync-primary,.doc-sync-primary:hover{background:var(--tm-accent,var(--ds-accent));border-color:var(--tm-accent,var(--ds-accent));color:#fff!important}
+.doc-sync-primary:hover{filter:brightness(1.07)}
+.doc-sync-loading{padding:22px 24px;font-size:12px;color:var(--tm-muted,var(--ds-muted))}
+.is-error{color:var(--ds-error)!important}
+
+/* Settings card */
+.doc-sync-card .doc-sync-heading{justify-content:space-between;align-items:flex-start}
+.doc-sync-card .doc-sync-heading p{max-width:620px}
+.doc-sync-row{padding:18px 24px;border-top:1px solid var(--tm-border,var(--ds-border));display:flex;flex-direction:column;gap:14px}
+.doc-sync-row-head{display:flex;align-items:center;gap:14px}
+.doc-sync-pill{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;padding:4px 9px;border:1px solid var(--tm-border,var(--ds-border));border-radius:6px;font-size:10px;color:var(--tm-muted,var(--ds-muted))}
+.doc-sync-pill.is-on{color:var(--ds-ok);border-color:color-mix(in srgb,var(--ds-ok) 35%,transparent);background:color-mix(in srgb,var(--ds-ok) 8%,transparent)}
+.doc-sync-controls{display:flex;flex-wrap:wrap;align-items:flex-end;gap:14px 28px;padding-left:50px}
+.doc-sync-dest{flex:1 1 320px;min-width:0;max-width:520px;margin:0}
+.doc-sync-dest label{display:block;font-size:10px;font-weight:500;color:var(--tm-muted,var(--ds-muted));margin-bottom:5px}
+.doc-sync-dest-field{display:flex;gap:8px}
+.doc-sync-dest input{flex:1;min-width:0;height:34px;padding:0 10px;border:1px solid var(--tm-border,var(--ds-border));border-radius:7px;background:var(--tm-surface,var(--ds-surface));color:var(--tm-ink,var(--ds-text));font:inherit;font-size:12px;outline:none}
+.doc-sync-dest input:focus-visible{border-color:var(--tm-accent,var(--ds-accent));box-shadow:0 0 0 3px color-mix(in srgb,var(--tm-accent,var(--ds-accent)) 14%,transparent)}
+.doc-sync-auto{display:flex;align-items:center;gap:12px;min-height:34px}
+.doc-sync-auto .toggle-switch{width:40px;height:22px}
+.doc-sync-auto .toggle-slider:before{width:16px;height:16px;left:2px;bottom:2px}
+.doc-sync-auto .toggle-switch input:checked+.toggle-slider:before{transform:translateX(18px)}
+.doc-sync-auto .toggle-switch input:disabled+.toggle-slider{opacity:.45;cursor:not-allowed}
+.doc-sync-auto .toggle-switch input:focus-visible+.toggle-slider{outline:3px solid color-mix(in srgb,var(--tm-accent,var(--ds-accent)) 30%,transparent);outline-offset:2px}
+.doc-sync-auto-label{display:flex;flex-direction:column;gap:2px;cursor:pointer;max-width:300px}
+.doc-sync-auto-label strong{font-size:12px;font-weight:550;color:var(--tm-ink,var(--ds-text))}
+.doc-sync-auto-label span{font-size:11px;line-height:1.5;color:var(--tm-muted,var(--ds-muted))}
+.doc-sync-meta{padding-left:50px;font-size:11px;color:var(--tm-muted,var(--ds-muted));overflow-wrap:anywhere}
+@media(max-width:560px){.doc-sync-controls,.doc-sync-meta{padding-left:0}.doc-sync-row{padding:16px}.doc-sync-row-head{flex-wrap:wrap}.doc-sync-row-head .doc-sync-identity{flex-basis:calc(100% - 50px)}.doc-sync-row-head .doc-sync-pill{margin-left:50px}}
+
+/* Documents panel button */
+.document-sync-open{display:inline-flex;align-items:center;gap:6px;position:relative;background:var(--map-control,var(--ds-soft));border:1px solid var(--map-border,var(--ds-border));border-radius:7px;color:var(--map-text,var(--ds-text));padding:7px 10px;font:inherit;font-size:12px;line-height:20px;white-space:nowrap;cursor:pointer}
+.document-sync-open:hover{background:var(--map-hover,var(--ds-soft))}
+.document-sync-open.has-pending::after{content:'';position:absolute;top:-3px;right:-3px;width:8px;height:8px;border-radius:50%;background:var(--ds-accent);box-shadow:0 0 0 2px var(--ds-bg)}
+@container (max-width:360px){.document-sync-open span{display:none}}
+
+/* Sync dialog */
+.doc-sync-dialog{position:fixed;inset:0;margin:auto;height:fit-content;box-sizing:border-box;width:min(560px,calc(100vw - 32px));max-height:min(720px,90vh);padding:0;border:1px solid var(--ds-border);border-radius:14px;background:var(--ds-bg);color:var(--ds-text);box-shadow:0 24px 80px #0008;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.doc-sync-dialog[open]{display:flex;flex-direction:column}
+.doc-sync-dialog::backdrop{background:#0009}
+.doc-sync-dialog header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:20px 22px 14px}
+.doc-sync-dialog h2{margin:0 0 4px;font-size:18px;font-weight:650}
+.doc-sync-dialog header p{margin:0;font-size:12px;line-height:1.6;color:var(--ds-muted)}
+.doc-sync-close{background:transparent;border:0;color:var(--ds-muted);font-size:16px;width:32px;height:32px;border-radius:7px;cursor:pointer;flex:none}
+.doc-sync-close:hover{background:var(--ds-soft);color:var(--ds-text)}
+.doc-sync-dialog :focus-visible{outline:2px solid var(--ds-accent);outline-offset:2px}
+.doc-sync-panel-body{overflow-y:auto;border-top:1px solid var(--ds-border)}
+.doc-sync-targets{display:flex;flex-direction:column}
+.doc-sync-target{display:flex;align-items:flex-start;gap:12px;padding:14px 22px;border-bottom:1px solid var(--ds-border);cursor:pointer}
+.doc-sync-target:hover{background:var(--ds-soft)}
+.doc-sync-target.is-disabled{cursor:default}
+.doc-sync-target input{margin:11px 0 0;accent-color:var(--ds-accent);width:16px;height:16px;flex:none}
+.doc-sync-target .doc-sync-identity strong{color:var(--ds-text)}
+.doc-sync-target .doc-sync-identity>span{color:var(--ds-muted)}
+.doc-sync-tag{font-size:10px;font-weight:500;padding:1px 6px;border-radius:5px;color:var(--ds-accent);background:color-mix(in srgb,var(--ds-accent) 12%,transparent)}
+.doc-sync-errors{margin:4px 0 0;padding-left:16px;font-size:11px;line-height:1.5;color:var(--ds-error);overflow-wrap:anywhere}
+.doc-sync-panel-body footer{display:flex;align-items:center;flex-wrap:wrap;gap:12px;padding:16px 22px 4px}
+.doc-sync-force{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--ds-muted);cursor:pointer;margin-right:auto}
+.doc-sync-force input{accent-color:var(--ds-accent)}
+.doc-sync-settings-link{font-size:12px;color:var(--ds-accent);text-decoration:none}
+.doc-sync-settings-link:hover{text-decoration:underline}
+.doc-sync-panel-body .doc-sync-btn{background:var(--ds-surface);border-color:var(--ds-border);color:var(--ds-text)}
+.doc-sync-panel-body .doc-sync-primary{background:var(--ds-accent);border-color:var(--ds-accent);color:#fff}
+.doc-sync-note{margin:0;padding:8px 22px 18px;min-height:18px;font-size:12px;color:var(--ds-ok)}
+.doc-sync-empty{padding:28px 22px;display:flex;flex-direction:column;align-items:flex-start;gap:8px}
+.doc-sync-empty strong{font-size:14px}
+.doc-sync-empty p{margin:0 0 6px;font-size:12px;line-height:1.6;color:var(--ds-muted)}
+@media(max-width:480px){.doc-sync-panel-body footer{flex-direction:column;align-items:stretch}.doc-sync-force{margin-right:0}}

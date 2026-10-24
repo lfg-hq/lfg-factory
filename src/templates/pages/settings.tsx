@@ -1126,6 +1126,22 @@ export function SettingsPage({ workspaceContext, teamAccess, teamContent, user, 
           }
         </script>
 
+        <!-- Documentation sync: publish project documents to connected knowledge bases -->
+        <section class="llm-keys-table doc-sync-card" id="doc-sync-card" data-configured="${composio?.configured ? "1" : "0"}" style="margin-top:1.5rem;">
+          <div class="llm-keys-row doc-sync-heading">
+            <div>
+              <h3 style="margin:0;display:flex;align-items:center;gap:.5rem;"><i class="fas fa-book-open" style="color:#8b5cf6;" aria-hidden="true"></i> Documentation sync</h3>
+              <p class="byok-desc" style="margin:5px 0 0;">Publish your project documents to the knowledge bases your team already uses. Connect a source, choose where documents go, then sync manually or automatically.</p>
+            </div>
+            <span class="integration-status" id="doc-sync-summary">${composio?.configured ? "Loading…" : "Setup required"}</span>
+          </div>
+          ${composio?.configured ? html`
+            <div id="doc-sync-list" class="doc-sync-list" aria-live="polite"><div class="doc-sync-loading">Checking your connections…</div></div>
+          ` : html`<div class="composio-empty"><strong>Documentation sync uses Composio connections</strong><p class="byok-desc">Notion, Google Docs, Google Drive, Confluence, SharePoint, OneDrive and Coda connect through Composio.</p>${teamAccess?.isAdmin !== false ? html`<details class="integration-details"><summary>Setup instructions</summary><p>Add <code>COMPOSIO_API_KEY</code> to your server environment. Get a key from the <a href="https://platform.composio.dev" target="_blank" rel="noopener">Composio dashboard ↗</a>.</p></details>` : html`<p class="byok-desc">Ask an admin to enable this integration.</p>`}</div>`}
+        </section>
+        <link rel="stylesheet" href="/public/css/document-sync.css?v=20261024b" />
+        <script src="/public/js/document-sync.js?v=20261024" defer></script>
+
         <!-- Composio Connectors Card -->
         <section class="llm-keys-table composio-card" style="margin:24px 0;">
           <div class="llm-keys-row" style="justify-content:space-between;">

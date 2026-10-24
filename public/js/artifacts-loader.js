@@ -6985,6 +6985,7 @@ document.addEventListener('DOMContentLoaded', function() {
             // Store project ID for use in file operations
             window.currentFileBrowserProjectId = projectId;
             window.DocumentGraph?.mount(projectId);
+            window.DocumentSync?.mount(projectId);
             
             const fileBrowserContainer = document.getElementById('filebrowser');
             const fileBrowserMain = document.getElementById('filebrowser-main');

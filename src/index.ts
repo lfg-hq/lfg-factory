@@ -1,5 +1,7 @@
 import voiceApi from './routes/api/voice.ts';
 import documentGraphApi from "./routes/api/document-graph.ts";
+import { documentSyncSettingsApi, documentSyncProjectApi } from "./routes/api/document-sync.ts";
+import { registerDocumentSyncWorker } from "./services/document-sync.ts";
 import { registerDocumentGraphWorker } from "./services/document-graph.ts";
 import tokenUsageApi from "./routes/api/token-usage.ts";
 import { Hono } from "hono";
@@ -212,6 +214,8 @@ app.route("/api/projects", ticketCodeApi);
 app.route("/api/projects", ticketsApi);
 app.route("/api/projects", notesApi);
 app.route("/api/projects", documentGraphApi);
+app.route("/api/projects", documentSyncProjectApi);
+app.route("/api/document-sync", documentSyncSettingsApi);
 app.route("/api/conversations", conversationsApi);
 app.route("/api/instant", instantApi);
 app.route("/api/v1/cli", cliRouter);
@@ -347,6 +351,7 @@ async function handleFetch(req: Request, server: import("bun").Server<WsData>): 
 // ── Start background workers ─────────────────────────────────────────
 registerEventHandlers();
 registerDocumentGraphWorker();
+registerDocumentSyncWorker();
 registerAgentNotifier();
 registerAgentReflector();
 startTicketWorker();

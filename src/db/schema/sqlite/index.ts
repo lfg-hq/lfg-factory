@@ -41,3 +41,4 @@ export * from "./document-templates.ts";
 export * from "./runtime-validation.ts";
 
 export * from "./document-graph.ts";
+export * from "./document-sync.ts";

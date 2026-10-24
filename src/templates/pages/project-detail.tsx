@@ -119,6 +119,8 @@ export function ProjectDetailPage({
   <script>(function(){if(localStorage.getItem('sidebarMinimized')==='true'){document.documentElement.classList.add('sidebar-minimized-preload');}})()</script>
   <link rel="stylesheet" href="/public/css/document-graph.css?v=1" />
   <script src="/public/js/document-graph.js?v=1" defer></script>
+  <link rel="stylesheet" href="/public/css/document-sync.css?v=20261024b" />
+  <script src="/public/js/document-sync.js?v=20261024" defer></script>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
   <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
@@ -1029,7 +1031,7 @@ export function ProjectDetailPage({
           <script src="/public/js/markdown-config.js"></script>
   <!-- PDF libraries load on demand when exporting a document. -->
           <script src="/public/js/design-preview.js"></script>
-  <script src="/public/js/artifacts-loader.js?v=20261004-ticket-activity"></script>
+  <script src="/public/js/artifacts-loader.js?v=20261024-doc-sync"></script>
           <script src="/public/js/document-comments.js"></script>
           <script>
             // Reuse the SAME docs module as the chat Docs panel (window.ArtifactsLoader),
