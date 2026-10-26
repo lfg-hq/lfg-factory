@@ -6,7 +6,9 @@ import { submitClone, waitForClone } from './sandbox/clone-v2.ts';
 import { setNoSleep, execOnWorkspace } from './mags.ts';
 
 /** Saved separately from ready ticket registrations so a pending clone is never exec-probed. */
-const BUSY_SOURCE = /another disk checkpoint or clone is in progress/i;
+// Clone refusals that allocate nothing and usually pass on a later try: the source disk
+// busy with another copy, or the provider timing out while exporting it.
+const BUSY_SOURCE = /another disk checkpoint or clone is in progress|DeadlineExceeded|context deadline exceeded|code = Unavailable|source export: rpc error/i;
 export const BUSY_RETRY_MS = Number(process.env.TICKET_CLONE_BUSY_RETRY_MS ?? 30_000);
 export async function createTicketSandbox(options: {
   projectId: string; ticketId: string; userId: string;
@@ -20,7 +22,8 @@ export async function createTicketSandbox(options: {
   const retryWhenBusy = async (intentId: string, detail: string) => {
     if (!BUSY_SOURCE.test(detail) || (options.busyRetries ?? 0) >= 6) return null;
     await db.update(sandboxes).set({status:'rejected',updatedAt:new Date()}).where(eq(sandboxes.id,intentId));
-    await options.log('The preview disk is busy with another copy. Trying again in 30 seconds…');
+    await options.log(/in progress/i.test(detail) ? 'The preview disk is busy with another copy. Trying again in 30 seconds…'
+      : `Copying the preview disk timed out on the sandbox provider. Trying again in 30 seconds (attempt ${(options.busyRetries ?? 0) + 2} of 7)…`);
     await new Promise(resolve => setTimeout(resolve, BUSY_RETRY_MS));
     return createTicketSandbox({...options, busyRetries:(options.busyRetries ?? 0) + 1});
   };
