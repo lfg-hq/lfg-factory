@@ -53,7 +53,10 @@ export const createTickets = tool({
       name: z.string().describe("Ticket title"),
       description: z.string().describe(
         "Formatted Markdown (NOT a plain paragraph). Use headings and bullet lists: " +
-        "## Overview, ## Implementation Notes (stack, data model, API routes, edge cases), " +
+        "## Problem (what is wrong or missing today, in plain words: what someone does, what happens, what should happen; " +
+        "for a feature, who needs it and what they can't do yet; one line of key evidence at most), " +
+        "## Goal (what will be true when done, 1-2 sentences), " +
+        "## Implementation Notes (stack, data model, API routes, edge cases), " +
         "## UI / UX (screens, states, design references), ## Out of Scope. " +
         "Use `inline code` for identifiers, endpoints, and hex values. " +
         "CRITICAL: this ticket is handed to a SEPARATE coding agent that receives this ticket and linked saved documents " +

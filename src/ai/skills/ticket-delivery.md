@@ -23,11 +23,16 @@ Every feature lives in one **epic**: its requirements doc, technical analysis an
 - **name**: a clear, actionable title.
 - **acceptanceCriteria**: 2–4 specific, testable statements, including one representative successful user workflow. Never leave this empty.
 - **complexity**: simple | medium | complex. **priority**: High | Medium | Low.
-- **description**: Markdown with these sections. The build agent reads only this, so pack in the concrete detail (fields, endpoints, hex colors, component specs):
+- **description**: Markdown with these sections. Two readers: the user scanning the ticket list, who must understand the problem in ten seconds, and the build agent, who reads only this, so pack the concrete detail (fields, endpoints, hex colors, component specs) into Implementation Notes:
 
 ```markdown
-## Overview
-What this ticket delivers and why, in 1-2 sentences.
+## Problem
+What is wrong or missing today, in plain words a non-engineer understands: what someone does,
+what happens, what should happen. For a new feature: who needs it and what they can't do yet.
+One line of key evidence if there is any (the exact error, the wrong value), not a log dump.
+
+## Goal
+What will be true when this ticket is done, in 1-2 sentences.
 
 ## Implementation Notes
 - Approach, libraries and patterns from the technical analysis
@@ -40,6 +45,8 @@ What this ticket delivers and why, in 1-2 sentences.
 ## Out of Scope
 - What this ticket does not cover
 ```
+
+Write it for someone reading the ticket cold, weeks later. Never narrate the conversation ("The user explicitly requested…", "As discussed…"): state the problem itself. Keep investigation detail (IDs, timestamps, attempt numbers) out of Problem; put only what the build needs in Implementation Notes.
 
 Always refer to tickets by **key** (`COH-18 — Implement JWT auth` on first mention, then `COH-18`). The keys come back from `createTickets`, `getPendingTickets` and `getTicketDetails`. Never use your own numbering.
 
