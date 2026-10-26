@@ -11,3 +11,11 @@ test('a defect found while verifying is the agent\'s to fix in the same turn', (
 test('testing no longer excludes a repair', () => {
   expect(prompt).not.toContain('add, build, expose, test or set up');
 });
+test('provider failures are isolated by testing the provider directly', () => {
+  expect(prompt).toContain('find which side is wrong before anything else, by testing the provider directly with runInPreview');
+  expect(prompt).toContain('Never ask the user to check a dashboard for something the provider\'s API can tell you.');
+});
+test('no repeated display-only fixes; re-test after a fix publishes', () => {
+  expect(prompt).toContain('Do not queue another fix that only changes how an error is displayed while its cause is still unknown.');
+  expect(prompt).toContain('re-run the check that found the problem before calling it fixed');
+});

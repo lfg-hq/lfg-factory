@@ -204,6 +204,12 @@ export const INVESTIGATION_TOOLS = new Set([
 /** A short, human line describing WHAT a tool call is actually doing, from its args —
  *  so the status pill can say "Reading src/foo.ts on feature/cal-7" instead of a bare
  *  "Inspect preview". Returns "" when there's nothing specific to add. */
+/** What a long tool input is, for the "Writing …" progress line. */
+const TOOL_INPUT_LABELS: Record<string, string> = {
+  createTickets: "the ticket", updateTicketDetails: "the ticket update", quickChange: "the change request",
+  sendTicketMessage: "the change for the ticket", runInPreview: "the check", saveNote: "the note",
+};
+
 /**
  * A readable name for any tool, used when toolActionDetail has nothing specific to say.
  *
@@ -890,6 +896,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   // Previews rendered this turn, saved with the message so a refresh brings the card
   // back — it used to exist only in the socket message that announced it.
   const pagePreviews: import("../types/chat-artifact.ts").ChatArtifact[] = [];
+  const inputProgress = new Map<string, { tool: string; chars: number; head: string; lastSent: number }>();
   const noteActivity = (text: string, tool?: string, warning = false) => {
     if (!text) return;
     const last = activityTrail[activityTrail.length - 1];
@@ -1161,6 +1168,11 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
           if (event.toolName === "askUser") {
             askUserArgs.set(event.id, "");
           }
+          // Long tool inputs (a ticket's full description) can take a minute to write;
+          // show that writing is in progress instead of a frozen "Creating tickets".
+          if (!DOCUMENT_STREAM_TOOLS.has(event.toolName) && event.toolName !== "askUser" && event.toolName !== "confirmAction") {
+            inputProgress.set(event.id, { tool: event.toolName, chars: 0, head: "", lastSent: Date.now() });
+          }
           // Track confirmAction args accumulation — it owns the turn like a card
           if (event.toolName === "confirmAction") {
             confirmArgs.set(event.id, "");
@@ -1184,6 +1196,20 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
         }
 
         case "tool-input-delta": {
+          const progress = inputProgress.get(event.id);
+          if (progress) {
+            progress.chars += event.delta.length;
+            if (progress.head.length < 3000) progress.head += event.delta;
+            if (Date.now() - progress.lastSent >= 3000 && progress.chars >= 300) {
+              progress.lastSent = Date.now();
+              const title = progress.head.match(/"(?:name|title)"\s*:\s*"((?:[^"\\]|\\.){1,80})/)?.[1];
+              const what = TOOL_INPUT_LABELS[progress.tool] ?? "the request";
+              req.onActivity?.();
+              ws.send(JSON.stringify({ type: "ai_chunk", chunk: "", is_final: false, is_notification: true,
+                notification_type: "tool_detail", function_name: progress.tool,
+                detail: `Writing ${what}${title ? ` “${title}”` : ""}… ${progress.chars.toLocaleString("en-US")} characters so far` }));
+            }
+          }
           // Accumulate askUser args
           if (askUserArgs.has(event.id)) {
             askUserArgs.set(event.id, askUserArgs.get(event.id)! + event.delta);
