@@ -45,3 +45,5 @@ const timedOut='Clone dc0029b8 failed: clone failed: source export: rpc error: c
 test('a provider timeout while exporting the disk is retried too',async()=>{reset();waitErrors=[timedOut];const r=await createTicketSandbox(options);expect(r.workspaceId).toBe('clone-new');expect(submitCount).toBe(2);});
 test('a saved clone that timed out is not resumed forever',async()=>{reset();pending={id:'intent',status:'cloning',magsJobId:'old',magsBaseWorkspaceId:'preview'};waitErrors=[timedOut];const r=await createTicketSandbox(options);expect(r.workspaceId).toBe('clone-new');expect(submitCount).toBe(1);});
 test('a genuine clone failure is not retried',async()=>{reset();waitErrors=['Clone x failed: clone failed: source disk not found.'];await expect(createTicketSandbox(options)).rejects.toThrow('not found');expect(submitCount).toBe(1);});
+
+test('a preview busy running commands is retried',async()=>{reset();waitErrors=['Clone a88 failed: clone failed: source export: source sandbox has active requests; retry when idle. Inspect clone logs.'];const r=await createTicketSandbox(options);expect(r.workspaceId).toBe('clone-new');expect(submitCount).toBe(2);});

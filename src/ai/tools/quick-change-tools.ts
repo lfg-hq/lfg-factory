@@ -47,6 +47,8 @@ export function quickChangeTool(context:{projectId:string;userId:string;conversa
     if(!ticket)[ticket]=await db.select().from(projectTickets).where(eq(projectTickets.id,id));
    }
    if(!ticket)throw Error('Quick-change ticket could not be created');
+   // The screenshots the user sent with this request go to the ticket agent too.
+   await (await import('../../services/ticket-images.ts')).attachTurnImages(ticket.id,context.turnId);
    if(['review','done'].includes(ticket.status))return {ticketId:id,status:ticket.status,note:'This change already completed; use sendTicketMessage for a follow-up.'};
    const run=await createBuildRun({projectId:project.id,userId:context.userId,conversationId:context.conversationId,epicId:ticket.epicId,ticketIds:[id],afterBuild:'preview',triggerMessage:args.description});
    return {...run,ticketId:id,ticketKey:ticket.ticketKey,status:'queued'};

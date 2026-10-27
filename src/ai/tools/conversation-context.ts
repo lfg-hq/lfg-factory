@@ -19,6 +19,7 @@ export function withConversationContext(tools: Record<string, any>, conversation
         ? await context!.conversationEpic(args.projectId, conversationId) : undefined);
       const result = await tool.execute({ ...args, conversationId,
         ...(['sendTicketMessage','getTicketOperationStatus'].includes(name) ? {projectId,userId,turnId} : {}),
+        ...(name === 'createTickets' ? {turnId} : {}),
         ...(builds.has(name) || isDoc || name === 'startEpic' || name === 'readDesignSource' || name === 'captureDesignLayout' || name === 'queryCodebase' ? {userId} : {}),
         ...(isDoc && epicId ? {epicId} : {}),
       }, { ...(opts as object), designSourceRead: designSourcesRead.has(args.projectId) });

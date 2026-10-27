@@ -2,6 +2,7 @@ import { withTicketOperation, updateTicketOperation, publishTicketOperation } fr
 import { selectTicketContextDocuments, ticketDocumentInstructions } from "../services/ticket-context-documents.ts";
 import {emptyRepoBootstrap} from '../services/empty-repo-bootstrap.ts';
 import { openTicketWorkspace, latestTicketWorkspace } from '../services/ticket-workspace.ts';
+import { ticketImagesBlock } from '../services/ticket-images.ts';
 import { markTicketSandboxBusy, retireTicketSandbox, sweepIdleTicketSandboxes, ticketJournalInstruction, workJournalBlock } from '../services/ticket-sandbox-retire.ts';
 import { setBuildOrigin, reportBuildStatus } from "../services/build-reporting.ts";
 import { ticketStopVerificationScript, confirmTicketStopped } from "../services/ticket-stop-verification.ts";
@@ -35,7 +36,7 @@ import { currentUsage } from "../ai/usage-context.ts";
  */
 
 import { db } from "../config/db.ts";
-import { projectTickets, projectTodoLists, ticketStages, ticketLogs, ticketAddenda, projectTicketAttachments } from "../db/schema/tickets.ts";
+import { projectTickets, projectTodoLists, ticketStages, ticketLogs, ticketAddenda } from "../db/schema/tickets.ts";
 import { projects, projectEnvironmentVariables } from "../db/schema/projects.ts";
 import { projectEnvironments } from "../db/schema/project-environments.ts";
 import { profiles, githubTokens, applicationState, llmApiKeys } from "../db/schema/users.ts";
@@ -1844,7 +1845,7 @@ Before implementing, fix the git issue:
   try {
     cliResult = await startClaudeCli({
       workspaceId,
-      prompt: prompt + workJournalBlock(ticket.details) + ticketJournalInstruction(ticketId),
+      prompt: prompt + workJournalBlock(ticket.details) + await ticketImagesBlock(ticketId, workspaceId) + ticketJournalInstruction(ticketId),
       projectDir: projectDirName,
       sessionId: existingSessionId,
       userId: ownerId,
@@ -2558,6 +2559,7 @@ async function executeTicketChatInternal(
     projectId:project!.id,workspaceId,projectDir:projectPath,epicId:ticket.epicId,sourceDocumentId:ticket.sourceDocumentId,sourceDocumentIds:ticketDocumentIds(ticket.details),
     text:[ticket.name,ticket.description,ticket.notes,message].join('\n'),
   }));
+  const chatImages = await ticketImagesBlock(ticketId, workspaceId);
 
   // ── Route to Pi for non-Claude models (mirror the BUILD path) ───────────
   // The chat used to be hardcoded to Claude Code — a DeepSeek/OpenAI/GLM user
@@ -2627,7 +2629,7 @@ ${ticket.name}
 
 ## Description
 ${ticket.description ?? ""}
-${chatContext}
+${chatContext}${chatImages}
 ## New message from the user
 ${message}
 
@@ -2729,7 +2731,7 @@ ${ENGINEERING_CONTRACT}
       cliApiKey,
     },
     message,
-    chatContext, // requirements + build state + the conversation so far
+    chatContext + chatImages, // requirements + build state + the conversation so far + screenshots
   ) + ticketJournalInstruction(ticketId);
 
   const envVars: Record<string, string> = {
@@ -3532,11 +3534,6 @@ git branch --show-current
       sharedToolchainPaths.push("/data/.dotnet", "/data/.dotnet/tools");
     }
     // Screenshots the user attached to this ticket → absolute URLs the agent can fetch.
-    const ticketAttRows = await db.select().from(projectTicketAttachments)
-      .where(eq(projectTicketAttachments.ticketId, ticketId)).catch(() => []);
-    const ticketAttachments = ticketAttRows
-      .filter((a) => !a.fileType || /^image\//.test(a.fileType))
-      .map((a) => ({ url: /^https?:\/\//.test(a.filePath) ? a.filePath : `${CALLBACK_BASE_URL}${a.filePath}`, name: a.originalFilename ?? "image" }));
     const piPrompt = buildPiTicketPrompt({
       ticket: {
         name: ticket.name,
@@ -3550,7 +3547,7 @@ git branch --show-current
       runInfo: await loadRunInfo(project.id),
       directives: await directivesBlock(project.id, featureBranch),
       addenda: addendaCtx.block,
-      attachments: ticketAttachments,
+      attachments: [], // screenshots are copied into the sandbox (ticketImagesBlock); links need a login
       // Saved project/epic requirements and explicit design references are readable files.
       designRefs: await materializeTicketDocs({
         projectId: project.id,
@@ -3559,7 +3556,7 @@ git branch --show-current
         epicId: ticket.epicId, sourceDocumentId: ticket.sourceDocumentId, sourceDocumentIds:ticketDocumentIds(ticket.details),
         text: [ticket.name, ticket.description ?? "", ticket.notes ?? ""].join("\n"),
       }),
-    }) + workJournalBlock(ticket.details) + ticketJournalInstruction(ticketId);
+    }) + workJournalBlock(ticket.details) + await ticketImagesBlock(ticketId, workspaceId) + ticketJournalInstruction(ticketId);
     try {
       // Resolve (or mint) the CLI API key that authenticates the VM→server webhook.
       let cliApiKey = (await db.select({ k: profiles.cliApiKey }).from(profiles).where(eq(profiles.userId, ownerId)).limit(1))[0]?.k ?? "";

@@ -84,7 +84,8 @@ export const createTickets = tool({
       ),
     })),
   })),
-  execute: async ({ projectId, userId, epicId, epicName, conversationId, tickets }, options) => {
+  execute: async ({ projectId, userId, epicId, epicName, conversationId, tickets, ...rest }, options) => {
+    const turnId = (rest as { turnId?: string }).turnId;
     const approvedDesigns = await readApprovedDesigns(projectId, tickets.flatMap((t) => t.approvedDesignDocumentIds ?? []));
     // Fetch all stages for this project so we can validate stageId
     const allStages = await db.select().from(ticketStages)
@@ -157,7 +158,9 @@ export const createTickets = tool({
 
       // Attach any images the user shared this turn (referenced by id) to the ticket, so
       // the coding agent — and the ticket view — get the actual screenshot, not just prose.
-      const attachIds = [...new Set((t.attachmentImageIds || []).filter(Boolean))];
+      // Ids the model chose win; a single new ticket with none gets this turn's screenshots.
+      const turnImages = !t.attachmentImageIds?.length && tickets.length === 1 ? await (await import('../../services/ticket-images.ts')).turnImageIds(turnId) : [];
+      const attachIds = [...new Set([...(t.attachmentImageIds || []), ...turnImages].filter(Boolean))];
       if (attachIds.length) {
         const files = await db.select().from(chatFiles).where(inArray(chatFiles.id, attachIds)).catch(() => []);
         if (files.length) {
@@ -411,6 +414,8 @@ export const sendTicketMessage = tool({
       // Durable record: a failed or interrupted turn must not lose the request.
       if((args.kind ?? 'change')==='change') await db.insert(ticketAddenda).values({ticketId,createdById:userId,description:message,status:'pending'});
       await db.insert(ticketLogs).values({ticketId,logType:'agent_action',command:message});
+      // The screenshots the user sent with this request go to the ticket agent too.
+      await (await import('../../services/ticket-images.ts')).attachTurnImages(ticketId,turnId);
       emitTicketCommented({ticketId,projectId,message,logType:'agent_action'});
       const {bus}=await import('../../events/bus.ts');
       bus.emit({type:'ticket.chat_message',payload:{ticketId,message,sender:'orchestrator',actorId:userId,operationId:operation.id}});
