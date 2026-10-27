@@ -41,7 +41,7 @@ test('explicit clone rejection retains provider diagnostics',async()=>{reset();r
 const busy='Clone request failed: clone failed: another disk checkpoint or clone is in progress. Inspect clone logs.';
 test('a clone refused because the preview disk is busy is retried, not left pending',async()=>{reset();waitErrors=[busy,busy];const r=await createTicketSandbox(options);expect(r.workspaceId).toBe('clone-new');expect(submitCount).toBe(3);});
 test('a saved clone that failed as busy is marked rejected and resubmitted',async()=>{reset();pending={id:'intent',status:'cloning',magsJobId:'old',magsBaseWorkspaceId:'preview'};waitErrors=[busy];const r=await createTicketSandbox(options);expect(r.workspaceId).toBe('clone-new');expect(submitCount).toBe(1);});
-test('a disk that stays busy eventually gives up with the reason',async()=>{reset();waitErrors=Array(10).fill(busy);await expect(createTicketSandbox(options)).rejects.toThrow('another disk checkpoint');expect(submitCount).toBe(7);});
+test('a disk that stays busy continues in a fresh sandbox after 6 retries, never failing the work',async()=>{reset();waitErrors=Array(10).fill(busy);const r=await createTicketSandbox(options);expect(submitCount).toBe(7);expect(freshCount).toBe(1);expect(r.freshEnvironment).toBe(true);});
 
 const timedOut='Clone dc0029b8 failed: clone failed: source export: rpc error: code = DeadlineExceeded desc = context deadline exceeded. Inspect clone logs; source rollback failures require operator attention.';
 test('a provider timeout while exporting the disk is retried too',async()=>{reset();waitErrors=[timedOut];const r=await createTicketSandbox(options);expect(r.workspaceId).toBe('clone-new');expect(submitCount).toBe(2);});
@@ -50,8 +50,9 @@ test('a genuine clone failure is not retried',async()=>{reset();waitErrors=['Clo
 
 test('a preview busy running commands is retried',async()=>{reset();waitErrors=['Clone a88 failed: clone failed: source export: source sandbox has active requests; retry when idle. Inspect clone logs.'];const r=await createTicketSandbox(options);expect(r.workspaceId).toBe('clone-new');expect(submitCount).toBe(2);});
 
-test('a clone stuck pending is cancelled before it is resubmitted',async()=>{reset();waitErrors=['Clone request stuck pending at the provider for 4 minutes'];const r=await createTicketSandbox(options);expect(stopped).toEqual(['request']);expect(r.workspaceId).toBe('clone-new');expect(submitCount).toBe(2);});
+test('a clone stuck pending is cancelled and the run continues fresh, not into the lock it leaves behind',async()=>{reset();waitErrors=['Clone request stuck pending at the provider for 4 minutes'];const r=await createTicketSandbox({...options,projectId:'p-stuck'});expect(stopped).toEqual(['request']);expect(submitCount).toBe(1);expect(freshCount).toBe(1);expect(r.freshEnvironment).toBe(true);});
 
 // Keep these last: a stalled provider flags the project for the rest of the file.
 test('a provider that stalls twice is not retried for an hour: the run continues in a fresh sandbox',async()=>{reset();const logs:string[]=[];waitErrors=[timedOut,timedOut,timedOut];const r=await createTicketSandbox({...options,log:async(m:string)=>{logs.push(m);}});expect(submitCount).toBe(2);expect(freshCount).toBe(1);expect(r.freshEnvironment).toBe(true);expect(logs.some(l=>l.includes('fresh sandbox'))).toBe(true);});
 test('the next ticket in that project skips the copy while the provider is stalled',async()=>{reset();const r=await createTicketSandbox(options);expect(submitCount).toBe(0);expect(freshCount).toBe(1);expect(r.freshEnvironment).toBe(true);});
+test('busy refusals right after a stall go fresh instead of six more retries',async()=>{reset();waitErrors=[timedOut,busy,busy];const r=await createTicketSandbox({...options,projectId:'p-after-stall'});expect(submitCount).toBe(2);expect(freshCount).toBe(1);expect(r.freshEnvironment).toBe(true);});

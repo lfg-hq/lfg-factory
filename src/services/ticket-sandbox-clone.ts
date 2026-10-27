@@ -74,11 +74,16 @@ export async function createTicketSandbox(options: {
     if (!busy && !stalled) return null;
     await db.update(sandboxes).set({status:'rejected',updatedAt:new Date()}).where(eq(sandboxes.id,intentId));
     const attempt = options.busyRetries ?? 0;
-    if (stalled && (options.stallRetries ?? 0) >= 1) {
-      copyUnavailableUntil.set(options.projectId, Date.now() + STALL_SKIP_MS);
-      return freshInstead("The sandbox provider timed out copying this project's preview twice, so this run continues in a fresh sandbox from the ticket branch. The agent installs dependencies first, so setup takes longer.");
+    // A copy problem never fails the work: the run continues in a fresh sandbox instead.
+    // A cancelled stuck copy keeps the disk locked on the provider for minutes, so after one
+    // there is no point retrying; the same for a second stall or exhausted busy retries.
+    const cancelledStuck = /stuck pending/i.test(detail);
+    if (cancelledStuck || (stalled && (options.stallRetries ?? 0) >= 1) || (busy && (attempt >= 6 || (options.stallRetries ?? 0) >= 1))) {
+      if (stalled || cancelledStuck || options.stallRetries) copyUnavailableUntil.set(options.projectId, Date.now() + STALL_SKIP_MS);
+      return freshInstead(busy && !stalled && !options.stallRetries
+        ? "The preview stayed busy for 3 minutes, so this run continues in a fresh sandbox from the ticket branch. The agent installs dependencies first, so setup takes longer."
+        : "The sandbox provider couldn't copy this project's preview in time, so this run continues in a fresh sandbox from the ticket branch. The agent installs dependencies first, so setup takes longer.");
     }
-    if (busy && attempt >= 6) return null;
     await options.log(busy ? 'The preview is busy (another copy or running commands). Trying again in 30 seconds…'
       : 'Copying the preview disk timed out on the sandbox provider. Trying once more in 30 seconds…');
     await new Promise(resolve => setTimeout(resolve, BUSY_RETRY_MS));
