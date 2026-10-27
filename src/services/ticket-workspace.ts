@@ -10,7 +10,7 @@ import { resolveGitActor } from './git-access.ts';
 import { shellQuote } from './ticket-code.ts';
 import { checkpointTicketWorkspace, readTicketCheckpoint, restoreTicketCheckpoint } from './ticket-workspace-checkpoint.ts';
 import { isChatTurnActive } from './ticket-chat-turn.ts';
-export type TicketWorkspace = {workspaceId:string;root:string;branch:string};
+export type TicketWorkspace = {workspaceId:string;root:string;branch:string;freshEnvironment?:boolean};
 export const ticketWorkspaceRoot = (sb:{workspaceType:string;ticketId:string|null}) => sb.workspaceType === 'ticket-worktree' ? `/data/wt-ticket-${sb.ticketId!.slice(0,12)}` : '/data/project';
 export async function latestTicketWorkspace(projectId:string, ticketId:string) {
   return (await db.select().from(sandboxes).where(and(eq(sandboxes.projectId,projectId),eq(sandboxes.ticketId,ticketId),inArray(sandboxes.workspaceType,['ticket','ticket-chat','ticket-worktree']))).orderBy(desc(sandboxes.updatedAt)).limit(1))[0];
@@ -114,7 +114,7 @@ if (source/'.git').exists():
     else await db.insert(sandboxes).values(registration);
     await setNoSleep(created.jobId,false);
     progress('Ticket workspace ready');
-    return {workspaceId:created.workspaceId,root:'/data/project',branch};
+    return {workspaceId:created.workspaceId,root:'/data/project',branch,freshEnvironment:created.freshEnvironment};
   });
 }
 /** Called before build/chat VMs are allowed to idle-sleep. Failure keeps them pinned. */

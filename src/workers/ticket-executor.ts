@@ -1029,6 +1029,12 @@ async function stoppedByUser(ticketId: string, ownerId: string): Promise<boolean
   return true;
 }
 
+/** Prompt note for a sandbox started fresh because the prepared preview couldn't be copied. */
+const FRESH_SANDBOX_NOTE = `
+
+## Fresh sandbox
+This sandbox was started fresh (the prepared preview could not be copied), so dependencies, build output and local settings are not installed. Install dependencies with the project's own install command (see package.json, README or lockfile) before building, running or testing. Do not commit generated files.`;
+
 // Concurrency guard: only one ticket per project at a time
 const executingProjects = new Set<string>();
 // Per-ticket in-flight guard. Prevents the same ticket from executing twice
@@ -1407,6 +1413,7 @@ async function executeTicketInternal(ticketId: string, actorId?: string): Promis
   let sandboxRow = await findExistingSandbox(ticketId);
   let isReuse = !!sandboxRow;
   let workspaceId = sandboxRow?.magsWorkspaceId ?? null;
+  let freshSandbox = false; // the preview couldn't be copied; the agent installs dependencies
 
   if (isReuse && workspaceId) {
     // Probe existing workspace
@@ -1442,7 +1449,7 @@ async function executeTicketInternal(ticketId: string, actorId?: string): Promis
 
     // Ticket build VM: persistent (v2 always) + noSync (no S3 mirror) + keepAlive
     // (no_sleep=true) so Mags can't idle-sleep a live build. Toggled off at build end.
-    const { jobId, workspaceId: wsId, cloneIntentId } = await createTicketSandbox({ projectId: project.id, ticketId, userId: ownerId,
+    const { jobId, workspaceId: wsId, cloneIntentId, freshEnvironment } = await createTicketSandbox({ projectId: project.id, ticketId, userId: ownerId,
       log: message => addLog(ticketId, message, "command", ownerId),
       fresh: () => newWorkspaceV2(workspaceName, {
       vcpus: 4,
@@ -1454,6 +1461,7 @@ async function executeTicketInternal(ticketId: string, actorId?: string): Promis
       }),
     });
     workspaceId = wsId;
+    freshSandbox = !!freshEnvironment;
 
     // Wait for VM to boot
     if (!cloneIntentId) await sleep(8_000);
@@ -1845,7 +1853,7 @@ Before implementing, fix the git issue:
   try {
     cliResult = await startClaudeCli({
       workspaceId,
-      prompt: prompt + workJournalBlock(ticket.details) + await ticketImagesBlock(ticketId, workspaceId) + ticketJournalInstruction(ticketId),
+      prompt: prompt + workJournalBlock(ticket.details) + await ticketImagesBlock(ticketId, workspaceId) + (freshSandbox ? FRESH_SANDBOX_NOTE : "") + ticketJournalInstruction(ticketId),
       projectDir: projectDirName,
       sessionId: existingSessionId,
       userId: ownerId,
@@ -2210,7 +2218,7 @@ async function ensureIsolatedChatSandbox(
   // VM instead of a dedicated clone — same box the build used, so an "answer" turn can
   // look at the branch (and the running app + its databases) with no VM boot at all.
   sharedWorkspaceId: string | null = null,
-): Promise<{ workspaceId: string; projectDir: string } | { error: string }> {
+): Promise<{ workspaceId: string; projectDir: string; freshEnvironment?: boolean } | { error: string }> {
   if (sharedWorkspaceId) {
     const wt = await ensureSharedChatWorktree(ticket, project, ownerId, gitUserId, usingOwnGit, sharedWorkspaceId);
     if ("error" in wt) return wt;
@@ -2225,7 +2233,7 @@ async function ensureIsolatedChatSandbox(
     const workspace = await openTicketWorkspace({ticket:savedTicket,project:savedProject,actorId:gitUserId,canRestore:true,continuation:true,
       progress:message=>{void addLog(ticket.id,message,'command',ownerId);}});
     await wakeTicketVm(workspace.workspaceId);
-    return {workspaceId:workspace.workspaceId,projectDir:workspace.root.replace(/^\/data\//,'')};
+    return {workspaceId:workspace.workspaceId,projectDir:workspace.root.replace(/^\/data\//,''),freshEnvironment:workspace.freshEnvironment};
   } catch (error) { return {error: error instanceof Error ? error.message : 'Could not open ticket workspace'}; }
 
 }
@@ -2559,7 +2567,7 @@ async function executeTicketChatInternal(
     projectId:project!.id,workspaceId,projectDir:projectPath,epicId:ticket.epicId,sourceDocumentId:ticket.sourceDocumentId,sourceDocumentIds:ticketDocumentIds(ticket.details),
     text:[ticket.name,ticket.description,ticket.notes,message].join('\n'),
   }));
-  const chatImages = await ticketImagesBlock(ticketId, workspaceId);
+  const chatImages = await ticketImagesBlock(ticketId, workspaceId) + (chatSb.freshEnvironment ? FRESH_SANDBOX_NOTE : "");
 
   // ── Route to Pi for non-Claude models (mirror the BUILD path) ───────────
   // The chat used to be hardcoded to Claude Code — a DeepSeek/OpenAI/GLM user
@@ -3098,6 +3106,7 @@ async function executeTicketApiInternal(
     }
   }
   let workspaceId = sandboxRow?.magsWorkspaceId ?? null;
+  let freshSandbox = false; // the preview couldn't be copied; the agent installs dependencies
 
   // Worktree path: use the shared preview sandbox directly (don't create a VM).
   if (useWorktree) {
@@ -3146,7 +3155,7 @@ async function executeTicketApiInternal(
     // preinstalled). The older newWorkspace routes rootfs via the __MAGS_ROOTFS_TYPE
     // env passthrough, which was silently landing on the DEFAULT rootfs (mags-vm,
     // node 20.15.1) → Pi exit 127.
-    const { jobId, workspaceId: wsId, cloneIntentId } = await createTicketSandbox({ projectId: project.id, ticketId, userId: ownerId,
+    const { jobId, workspaceId: wsId, cloneIntentId, freshEnvironment } = await createTicketSandbox({ projectId: project.id, ticketId, userId: ownerId,
       log: message => addLog(ticketId, message, "command", ownerId),
       fresh: () => newWorkspaceV2(workspaceName, {
       vcpus: 4,
@@ -3160,6 +3169,7 @@ async function executeTicketApiInternal(
       }),
     });
     workspaceId = wsId;
+    freshSandbox = !!freshEnvironment;
     if (!cloneIntentId) await sleep(8_000);
 
     const created = await db.insert(sandboxes).values({
@@ -3556,7 +3566,7 @@ git branch --show-current
         epicId: ticket.epicId, sourceDocumentId: ticket.sourceDocumentId, sourceDocumentIds:ticketDocumentIds(ticket.details),
         text: [ticket.name, ticket.description ?? "", ticket.notes ?? ""].join("\n"),
       }),
-    }) + workJournalBlock(ticket.details) + await ticketImagesBlock(ticketId, workspaceId) + ticketJournalInstruction(ticketId);
+    }) + workJournalBlock(ticket.details) + await ticketImagesBlock(ticketId, workspaceId) + (freshSandbox ? FRESH_SANDBOX_NOTE : "") + ticketJournalInstruction(ticketId);
     try {
       // Resolve (or mint) the CLI API key that authenticates the VM→server webhook.
       let cliApiKey = (await db.select({ k: profiles.cliApiKey }).from(profiles).where(eq(profiles.userId, ownerId)).limit(1))[0]?.k ?? "";

@@ -51,3 +51,7 @@ test('a genuine clone failure is not retried',async()=>{reset();waitErrors=['Clo
 test('a preview busy running commands is retried',async()=>{reset();waitErrors=['Clone a88 failed: clone failed: source export: source sandbox has active requests; retry when idle. Inspect clone logs.'];const r=await createTicketSandbox(options);expect(r.workspaceId).toBe('clone-new');expect(submitCount).toBe(2);});
 
 test('a clone stuck pending is cancelled before it is resubmitted',async()=>{reset();waitErrors=['Clone request stuck pending at the provider for 4 minutes'];const r=await createTicketSandbox(options);expect(stopped).toEqual(['request']);expect(r.workspaceId).toBe('clone-new');expect(submitCount).toBe(2);});
+
+// Keep these last: a stalled provider flags the project for the rest of the file.
+test('a provider that stalls twice is not retried for an hour: the run continues in a fresh sandbox',async()=>{reset();const logs:string[]=[];waitErrors=[timedOut,timedOut,timedOut];const r=await createTicketSandbox({...options,log:async(m:string)=>{logs.push(m);}});expect(submitCount).toBe(2);expect(freshCount).toBe(1);expect(r.freshEnvironment).toBe(true);expect(logs.some(l=>l.includes('fresh sandbox'))).toBe(true);});
+test('the next ticket in that project skips the copy while the provider is stalled',async()=>{reset();const r=await createTicketSandbox(options);expect(submitCount).toBe(0);expect(freshCount).toBe(1);expect(r.freshEnvironment).toBe(true);});

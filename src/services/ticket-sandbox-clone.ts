@@ -10,7 +10,13 @@ import { setNoSleep, execOnWorkspace, stopWorkspace } from './mags.ts';
 // busy with another copy, or the provider timing out while exporting it.
 // Includes 'source sandbox has active requests; retry when idle': the preview VM was running
 // commands (often the chat agent checking it) at the moment the copy started.
-const BUSY_SOURCE = /another disk checkpoint or clone is in progress|DeadlineExceeded|context deadline exceeded|code = Unavailable|source export:|active requests|retry when idle|retry later|stuck pending/i;
+// The source disk is busy (another copy, or commands running on the preview): retrying works.
+const BUSY_SOURCE = /another disk checkpoint or clone is in progress|active requests|retry when idle|retry later/i;
+// The provider stalls exporting the disk. It persisted for hours on one preview, so it gets one
+// retry; then the ticket continues in a fresh sandbox and the project skips copying for a while.
+const PROVIDER_STALL = /DeadlineExceeded|context deadline exceeded|RST_STREAM|code = Unavailable|stuck pending|source export: rpc error/i;
+const STALL_SKIP_MS = 30 * 60_000;
+const copyUnavailableUntil = new Map<string, number>();
 export const BUSY_RETRY_MS = Number(process.env.TICKET_CLONE_BUSY_RETRY_MS ?? 30_000);
 const LOCK_STALE_MS = 3 * 60_000;  // a holder refreshes every minute; silence this long means it died
 const LOCK_WAIT_MS = Number(process.env.TICKET_CLONE_LOCK_WAIT_MS ?? 30 * 60_000);
@@ -47,21 +53,36 @@ export async function createTicketSandbox(options: {
   fresh: () => Promise<{jobId:string;workspaceId:string}>;
   log: (message:string) => Promise<unknown>;
   busyRetries?: number;
+  stallRetries?: number;
   lockHeld?: boolean;
-}): Promise<{jobId:string;workspaceId:string;cloneIntentId?:string}> {
+}): Promise<{jobId:string;workspaceId:string;cloneIntentId?:string;freshEnvironment?:boolean}> {
   if (process.env.SANDBOX_BACKEND === 'docker') return options.fresh();
+  const freshInstead = async (reason: string) => {
+    await options.log(reason);
+    return {...await options.fresh(), freshEnvironment:true};
+  };
+  if ((copyUnavailableUntil.get(options.projectId) ?? 0) > Date.now()) {
+    return freshInstead("The sandbox provider couldn't copy this project's preview a few minutes ago, so this run starts in a fresh sandbox. The agent installs dependencies first, so setup takes longer.");
+  }
   // One copy of a project's preview disk at a time: the provider refuses a second, and two
   // tickets retrying against each other kept the disk busy for both (REC-3 and REC-9).
   if (!options.lockHeld) return cloneLock.run(options.projectId, options.log, () => createTicketSandbox({...options, lockHeld:true}));
   // Mags copies a disk one operation at a time. A clone refused for that reason allocated
   // nothing, so it is marked rejected (never resumed) and submitted again after a pause.
   const retryWhenBusy = async (intentId: string, detail: string) => {
-    if (!BUSY_SOURCE.test(detail) || (options.busyRetries ?? 0) >= 6) return null;
+    const busy = BUSY_SOURCE.test(detail), stalled = PROVIDER_STALL.test(detail);
+    if (!busy && !stalled) return null;
     await db.update(sandboxes).set({status:'rejected',updatedAt:new Date()}).where(eq(sandboxes.id,intentId));
-    await options.log(/in progress|active requests|when idle/i.test(detail) ? 'The preview is busy (another copy or running commands). Trying again in 30 seconds…'
-      : `Copying the preview disk timed out on the sandbox provider. Trying again in 30 seconds (attempt ${(options.busyRetries ?? 0) + 2} of 7)…`);
+    const attempt = options.busyRetries ?? 0;
+    if (stalled && (options.stallRetries ?? 0) >= 1) {
+      copyUnavailableUntil.set(options.projectId, Date.now() + STALL_SKIP_MS);
+      return freshInstead("The sandbox provider timed out copying this project's preview twice, so this run continues in a fresh sandbox from the ticket branch. The agent installs dependencies first, so setup takes longer.");
+    }
+    if (busy && attempt >= 6) return null;
+    await options.log(busy ? 'The preview is busy (another copy or running commands). Trying again in 30 seconds…'
+      : 'Copying the preview disk timed out on the sandbox provider. Trying once more in 30 seconds…');
     await new Promise(resolve => setTimeout(resolve, BUSY_RETRY_MS));
-    return createTicketSandbox({...options, busyRetries:(options.busyRetries ?? 0) + 1});
+    return createTicketSandbox({...options, busyRetries:attempt + (busy ? 1 : 0), stallRetries:(options.stallRetries ?? 0) + (stalled ? 1 : 0)});
   };
   const [pending] = await db.select().from(sandboxes).where(and(
     eq(sandboxes.ticketId, options.ticketId), eq(sandboxes.workspaceType, 'ticket-clone'),
