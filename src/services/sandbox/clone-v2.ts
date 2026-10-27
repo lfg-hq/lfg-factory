@@ -29,12 +29,20 @@ async function request(method: string, path: string): Promise<any> {
 }
 
 export async function waitForClone(requestId: string, options: {
-  status?: () => Promise<any>; wait?: (ms: number) => Promise<void>; now?: () => number;
+  status?: () => Promise<any>; wait?: (ms: number) => Promise<void>; now?: () => number; maxPendingMs?: number;
 } = {}): Promise<{ jobId: string; workspaceId: string }> {
   const now = options.now || Date.now;
   const deadline = now() + 660_000; // server allows ten minutes; leave boot/reporting headroom
+  // A clone normally leaves 'pending' within a minute. One that sits there holds the source
+  // disk and blocks every other copy, so the caller cancels and resubmits it.
+  const maxPending = options.maxPendingMs ?? 240_000;
+  let pendingSince: number | null = null;
   while (now() < deadline) {
     const status = await (options.status ? options.status() : request('GET', `${encodeURIComponent(requestId)}/status`));
+    if (status.status === 'pending') {
+      pendingSince ??= now();
+      if (now() - pendingSince > maxPending) throw new Error(`Clone ${requestId} stuck pending at the provider for ${Math.round((now() - pendingSince) / 60_000)} minutes`);
+    } else pendingSince = null;
     if (status.status === 'running' && typeof status.name === 'string' && status.name) {
       return { jobId: requestId, workspaceId: status.name };
     }

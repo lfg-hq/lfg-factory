@@ -50,3 +50,5 @@ test('clone uses the documented encoded URL and Bearer header with no request bo
  try{expect(await submitClone('pv-test-source')).toBe('clone-contract-test');expect(calls).toBe(1);}
  finally{globalThis.fetch=original;if(token===undefined)delete process.env.MAGS_API_TOKEN;else process.env.MAGS_API_TOKEN=token;if(base===undefined)delete process.env.MAGS_API_URL;else process.env.MAGS_API_URL=base;}
 });
+
+test('a clone that never leaves pending is reported as stuck',async()=>{let time=0;await expect(waitForClone('id',{now:()=>time,wait:async ms=>{time+=ms;},maxPendingMs:60_000,status:async()=>({status:'pending'})})).rejects.toThrow('stuck pending');expect(time).toBeLessThan(120_000);});

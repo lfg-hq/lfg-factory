@@ -3,22 +3,56 @@ import { sandboxes } from '../db/schema/sandbox.ts';
 import { projectEnvironments } from '../db/schema/project-environments.ts';
 import { and, eq, desc, inArray } from 'drizzle-orm';
 import { submitClone, waitForClone } from './sandbox/clone-v2.ts';
-import { setNoSleep, execOnWorkspace } from './mags.ts';
+import { setNoSleep, execOnWorkspace, stopWorkspace } from './mags.ts';
 
 /** Saved separately from ready ticket registrations so a pending clone is never exec-probed. */
 // Clone refusals that allocate nothing and usually pass on a later try: the source disk
 // busy with another copy, or the provider timing out while exporting it.
 // Includes 'source sandbox has active requests; retry when idle': the preview VM was running
 // commands (often the chat agent checking it) at the moment the copy started.
-const BUSY_SOURCE = /another disk checkpoint or clone is in progress|DeadlineExceeded|context deadline exceeded|code = Unavailable|source export:|active requests|retry when idle|retry later/i;
+const BUSY_SOURCE = /another disk checkpoint or clone is in progress|DeadlineExceeded|context deadline exceeded|code = Unavailable|source export:|active requests|retry when idle|retry later|stuck pending/i;
 export const BUSY_RETRY_MS = Number(process.env.TICKET_CLONE_BUSY_RETRY_MS ?? 30_000);
+const LOCK_STALE_MS = 3 * 60_000;  // a holder refreshes every minute; silence this long means it died
+const LOCK_WAIT_MS = Number(process.env.TICKET_CLONE_LOCK_WAIT_MS ?? 30 * 60_000);
+const LOCK_POLL_MS = Number(process.env.TICKET_CLONE_LOCK_POLL_MS ?? 10_000);
+/** Serializes preview copies per project across server processes (a uniquely keyed row). */
+export async function withProjectCloneLock<T>(projectId: string, log: (message:string) => Promise<unknown>, run: () => Promise<T>): Promise<T> {
+  const id = `clone-lock-${projectId}`;
+  const started = Date.now();
+  let told = false;
+  for (;;) {
+    const [got] = await db.insert(sandboxes).values({id, projectId, workspaceType:'clone-lock', status:'busy', updatedAt:new Date()}).onConflictDoNothing().returning();
+    if (got) break;
+    const [held] = await db.select().from(sandboxes).where(eq(sandboxes.id, id));
+    if (held && Date.now() - held.updatedAt.getTime() > LOCK_STALE_MS) {
+      await db.delete(sandboxes).where(and(eq(sandboxes.id, id), eq(sandboxes.updatedAt, held.updatedAt)));
+      continue;
+    }
+    if (Date.now() - started > LOCK_WAIT_MS) throw new Error("Another ticket has been copying this project's preview for too long. Retry shortly.");
+    if (!told) { told = true; await quietLog(log, "Another ticket is copying this project's preview right now. Waiting for it to finish…"); }
+    await new Promise(resolve => setTimeout(resolve, LOCK_POLL_MS));
+  }
+  const beat = setInterval(() => { void db.update(sandboxes).set({updatedAt:new Date()}).where(eq(sandboxes.id, id)).catch(() => {}); }, 60_000);
+  beat.unref?.();
+  try { return await run(); }
+  finally { clearInterval(beat); await db.delete(sandboxes).where(eq(sandboxes.id, id)).catch(() => {}); }
+}
+const quietLog = (log: (message:string) => Promise<unknown>, message: string) => log(message).catch(() => {});
+/** Replaceable in tests. */
+export const cloneLock = { run: withProjectCloneLock };
+
 export async function createTicketSandbox(options: {
   projectId: string; ticketId: string; userId: string;
   allowPreparedPreviewWithAppError?: boolean;
   fresh: () => Promise<{jobId:string;workspaceId:string}>;
   log: (message:string) => Promise<unknown>;
   busyRetries?: number;
+  lockHeld?: boolean;
 }): Promise<{jobId:string;workspaceId:string;cloneIntentId?:string}> {
+  if (process.env.SANDBOX_BACKEND === 'docker') return options.fresh();
+  // One copy of a project's preview disk at a time: the provider refuses a second, and two
+  // tickets retrying against each other kept the disk busy for both (REC-3 and REC-9).
+  if (!options.lockHeld) return cloneLock.run(options.projectId, options.log, () => createTicketSandbox({...options, lockHeld:true}));
   // Mags copies a disk one operation at a time. A clone refused for that reason allocated
   // nothing, so it is marked rejected (never resumed) and submitted again after a pause.
   const retryWhenBusy = async (intentId: string, detail: string) => {
@@ -29,7 +63,6 @@ export async function createTicketSandbox(options: {
     await new Promise(resolve => setTimeout(resolve, BUSY_RETRY_MS));
     return createTicketSandbox({...options, busyRetries:(options.busyRetries ?? 0) + 1});
   };
-  if (process.env.SANDBOX_BACKEND === 'docker') return options.fresh();
   const [pending] = await db.select().from(sandboxes).where(and(
     eq(sandboxes.ticketId, options.ticketId), eq(sandboxes.workspaceType, 'ticket-clone'),
     inArray(sandboxes.status, ['cloning','submitting','unconfirmed']),
@@ -92,6 +125,8 @@ export async function createTicketSandbox(options: {
   let clone: {jobId:string;workspaceId:string};
   try { clone = await waitForClone(intent.magsJobId); }
   catch (error) {
+    // A clone stuck pending still holds the source disk: cancel it before resubmitting.
+    if (/stuck pending/i.test((error as Error).message ?? '')) await stopWorkspace(intent.magsJobId).catch(() => {});
     const retried = await retryWhenBusy(intent.id, (error as Error).message ?? '');
     if (retried) return retried;
     throw error;
