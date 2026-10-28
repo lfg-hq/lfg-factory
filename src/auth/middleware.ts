@@ -36,7 +36,7 @@ export const requireAuth = createMiddleware<{
   if (!session) {
     // For API routes, return 401 JSON
     if (c.req.path.startsWith("/api/")) {
-      console.log("[auth] 401 for", c.req.method, c.req.path, "cookie:", c.req.header("cookie")?.substring(0, 60) ?? "NONE");
+      console.log("[auth] 401 for", c.req.method, c.req.path);
       return c.json({ error: "Unauthorized" }, 401);
     }
     // For page routes, redirect to login

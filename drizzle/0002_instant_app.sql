@@ -19,9 +19,15 @@ CREATE TABLE `instant_app` (
 	FOREIGN KEY (`sandbox_id`) REFERENCES `sandbox`(`id`) ON UPDATE no action ON DELETE set null,
 	FOREIGN KEY (`conversation_id`) REFERENCES `conversation`(`id`) ON UPDATE no action ON DELETE set null
 );
+--> statement-breakpoint
 CREATE UNIQUE INDEX `instant_app_id_unique` ON `instant_app` (`app_id`);
+--> statement-breakpoint
 CREATE INDEX `instant_user_idx` ON `instant_app` (`user_id`);
+--> statement-breakpoint
 CREATE INDEX `instant_project_idx` ON `instant_app` (`project_id`);
+--> statement-breakpoint
 CREATE INDEX `instant_status_idx` ON `instant_app` (`status`);
+--> statement-breakpoint
 CREATE UNIQUE INDEX `instant_sandbox_unique` ON `instant_app` (`sandbox_id`);
+--> statement-breakpoint
 CREATE UNIQUE INDEX `instant_conversation_unique` ON `instant_app` (`conversation_id`);

@@ -104,6 +104,10 @@ export const auth = betterAuth({
       : {}),
   },
 
+  // Google access must come from a completed provider flow. Existing password
+  // and other provider logins stay enabled; same-email sign-in cannot link them.
+  account: { accountLinking: { enabled: true, disableImplicitLinking: true } },
+
   session: {
     expiresIn: 60 * 60 * 24 * 7, // 7 days
     updateAge: 60 * 60 * 24, // refresh every day

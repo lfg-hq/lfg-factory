@@ -1,0 +1,86 @@
+// TEST FIXTURES ONLY. Real browser, HTTP server and Better Auth cookies; no
+// intercepted API responses or fake authenticated browser state.
+import { chromium } from "playwright-core";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import assert from "node:assert/strict";
+const temp = await mkdtemp(join(tmpdir(), "venture-browser-"));
+const port = 8091;
+Object.assign(process.env, { DATABASE_DRIVER: "sqlite", DATABASE_URL: join(temp, "test.db"), BETTER_AUTH_URL: `http://localhost:${port}`, PORT: String(port), NODE_ENV: "test", GOOGLE_CLIENT_ID: "", GOOGLE_CLIENT_SECRET: "", TURNSTILE_SECRET_KEY: "" });
+const push = Bun.spawn(["bun", "run", "db:push"], { env: process.env, stdout: "pipe", stderr: "pipe" });
+if (await push.exited !== 0) throw new Error("Browser fixture schema setup failed");
+const { db } = await import("../src/config/db.ts");
+const { users, accounts } = await import("../src/db/schema/users.ts");
+const { hashPassword } = await import("better-auth/crypto");
+const id = crypto.randomUUID(), password = crypto.randomUUID(), email = `fixture-${id}@workspace.example.org`;
+await db.insert(users).values({ id, email, emailVerified: true, name: "TEST FIXTURE" });
+await db.insert(accounts).values([{ id: crypto.randomUUID(), userId: id, accountId: id, providerId: "credential", password: await hashPassword(password) }, { id: crypto.randomUUID(), userId: id, accountId: `TEST-FIXTURE-${id}`, providerId: "google" }]);
+const server = Bun.spawn(["bun", "run", "src/index.ts"], { env: process.env, stdout: "inherit", stderr: "inherit" });
+let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+try {
+  const base = `http://localhost:${port}`;
+  let ready = false;
+  for (let i = 0; i < 60; i++) { try { if ((await fetch(`${base}/health`)).ok) { ready = true; break; } } catch {} await Bun.sleep(100); }
+  assert(ready, "Temporary web server failed to start");
+  browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || "/usr/bin/chromium", headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' });
+  const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
+  await page.goto(`${base}/venture-analyst`, { waitUntil: "domcontentloaded" });
+  assert.equal(await page.locator('.va-label').textContent(), 'EXAMPLE CONVERSATION');
+  assert.equal(await page.getByText('INTERACTIVE MOCKUP').count(), 0);
+  await page.screenshot({ path: "/data/venture-desktop.png" });
+  const cta = page.getByRole('button', { name: 'Chat with analyst agent', exact: true });
+  await cta.focus(); await page.keyboard.press('Enter');
+  await page.getByRole('button', { name: 'Continue with Google', exact: true }).waitFor();
+  assert.equal(await page.getByText('Signing in with Google…', { exact: true }).count(), 0);
+  assert.equal(await page.locator('.va-message').count(), 0, 'Example history must clear');
+  assert.equal(await page.locator('.va-error').count(), 0, 'Expected anonymous readiness is not an auth failure');
+  const clickedLabel = await page.getByRole('button', { name: 'Continue with Google', exact: true }).evaluate(el => { (el as HTMLButtonElement).click(); return document.querySelector('.va-google')?.textContent; });
+  assert.equal(clickedLabel, 'Signing in with Google…', 'Signing-in state appears only after the click');
+  await page.getByText(/GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET/).waitFor();
+  assert.match(await page.locator('.va-error').textContent() || '', /Correlation ID:/);
+  assert.equal(await page.getByRole('button', { name: 'Continue with Google', exact: true }).isEnabled(), true);
+  const cancelledLabel = await page.evaluate(() => {
+    (document.querySelector('.va-google') as HTMLButtonElement).click();
+    const cancel = [...document.querySelectorAll('#va-stage button')].find(el => el.textContent === 'Cancel') as HTMLButtonElement;
+    cancel.click(); return document.querySelector('.va-google')?.textContent;
+  });
+  assert.equal(cancelledLabel, 'Continue with Google', 'Cancelling restores a retryable sign-in state');
+  await page.keyboard.press('Escape');
+  assert.equal(await cta.getAttribute('aria-expanded'), 'false');
+  assert(await cta.evaluate(el => el === document.activeElement));
+  await page.setViewportSize({ width: 390, height: 844 });
+  await cta.click(); await page.getByRole('button', { name: 'Continue with Google', exact: true }).waitFor();
+  const box = await page.locator('#va-panel').boundingBox();
+  assert(box && box.x === 0 && box.y === 0 && box.width === 390 && box.height === 844, JSON.stringify(box));
+  assert.equal(await page.locator('#va-panel').getAttribute('aria-modal'), 'true');
+  await page.getByRole('button', { name: 'Continue with Google', exact: true }).focus();
+  await page.keyboard.press('Tab'); assert(await page.getByRole('button', { name: 'Collapse chat' }).evaluate(el => el === document.activeElement));
+  await page.screenshot({ path: '/data/venture-mobile.png' });
+  await page.keyboard.press('Escape'); assert(await cta.evaluate(el => el === document.activeElement));
+  await page.evaluate(() => localStorage.setItem('lfg-theme', 'dark'));
+  await page.reload({ waitUntil: 'domcontentloaded' }); await cta.click();
+  await page.getByRole('button', { name: 'Continue with Google', exact: true }).waitFor();
+  assert.equal(await page.locator('#va-panel').evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(22, 27, 34)');
+  await page.screenshot({ path: '/data/venture-dark-mobile.png' });
+  const loginStatus = await page.evaluate(async ({ email, password }) => {
+    const response = await fetch('/api/auth/sign-in/email', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
+    return response.status;
+  }, { email, password });
+  assert.equal(loginStatus, 200, 'Real Better Auth fixture login');
+  await page.goto(`${base}/venture-analyst`, { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'New conversation', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'New conversation', exact: true }).click();
+  await page.getByText('Your private conversation is saved.', { exact: false }).waitFor();
+  const selected = await page.getByLabel('Saved conversations').inputValue(); assert(selected);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByText('Your private conversation is saved.', { exact: false }).waitFor();
+  assert.equal(await page.getByLabel('Saved conversations').inputValue(), selected);
+  assert.equal(await page.locator('.va-message').count(), 0, 'No fabricated authenticated chat');
+  assert.deepEqual(errors, []);
+  console.info('Browser checks passed: approved labelled sample, desktop/mobile panel, keyboard/focus, dark mode, honest configuration failure, real session resume/create/reload. Google identities here are TEST FIXTURES, not live OAuth proof.');
+} finally {
+  await browser?.close(); server.kill(); await server.exited;
+  await rm(temp, { recursive: true, force: true });
+}

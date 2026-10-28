@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "drizzle-kit push && bun run --hot src/index.ts",
     "start": "drizzle-kit push && bun run src/index.ts",
+    "test:venture": "bun run tests/run-venture.ts",
+    "test:venture-browser": "bun run tests/venture-browser.ts",
     "test:instant": "node scripts/test-instant-mode.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",

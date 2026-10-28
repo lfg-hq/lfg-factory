@@ -10,7 +10,8 @@ import { trimTrailingSlash } from "hono/trailing-slash";
 import { serveStatic } from "hono/bun";
 import { env } from "./config/env.ts";
 import landing from "./routes/landing.ts";
-import authRoutes from "./routes/auth.ts";
+import ventureApi from "./routes/api/venture.ts";
+import authRoutes, { handleGoogleCallback } from "./routes/auth.ts";
 import chatRoutes from "./routes/chat.ts";
 import instantRoutes from "./routes/instant.ts";
 import projectsRoutes from "./routes/projects.ts";
@@ -199,6 +200,7 @@ app.get("/health", (c) => c.json({ status: "ok" }));
 // ── Routes ──────────────────────────────────────────────────────────
 app.route("/", authRoutes);
 app.route("/", landing);
+app.route("/api/venture", ventureApi);
 app.route("/", chatRoutes);
 app.route("/", instantRoutes);
 app.route("/", projectsRoutes);
@@ -304,6 +306,9 @@ async function handleFetch(req: Request, server: import("bun").Server<WsData>): 
       }
     }
 
+    if (url.pathname === "/api/auth/callback/google") {
+      return handleGoogleCallback(req);
+    }
     return auth.handler(req);
   }
 
@@ -371,6 +376,7 @@ console.log(`Starting LFG on port ${env.PORT} (${env.NODE_ENV})`);
 
 export default {
   port: env.PORT,
+  hostname: "0.0.0.0",
 
   // Long-running endpoints (Mags VM provisioning, Claude CLI install) can take
   // 60-300s. Disable Bun's default 10s idle timeout.
