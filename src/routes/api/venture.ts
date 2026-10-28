@@ -2,17 +2,17 @@ import { Hono } from "hono";
 import { asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../../config/db.ts";
-import { ventureConversations, ventureMessages, ventureSources } from "../../db/schema/venture.ts";
+import { ventureConversations, ventureMessages, ventureSources, ventureAssessments } from "../../db/schema/venture.ts";
 import { getVentureAccess, googleConfigured, isVentureSameOrigin, ownedVentureConversation } from "../../services/venture-access.ts";
 import { loggedRequest, ventureError } from "../../utils/request-log.ts";
 
-import { analystReadiness, reserveTurn, runTurn, stopTurn, recoverInterrupted, VentureFailure } from '../../services/venture-analyst.ts';
+import { analystReadiness, reserveTurn, runAssessment, runTurn, stopTurn, recoverInterrupted, VentureFailure } from '../../services/venture-analyst.ts';
 
 type Variables = { userId: string; requestId: string };
 const venture = new Hono<{ Variables: Variables }>();
 venture.onError((_error, c) => ventureError(c.get("requestId"), 500, "STORAGE_UNAVAILABLE", "Private storage is temporarily unavailable. Retry; if it continues, contact support with this correlation ID."));
 venture.use("*", async (c, next) => loggedRequest(c.req.raw,
-  c.req.path.endsWith('/stream') ? 'venture.stream.accept' : c.req.path.endsWith('/stop') ? 'venture.stream.stop' : c.req.path.endsWith("/session") ? "venture.session" : c.req.path.endsWith("/conversations") ? `venture.conversations.${c.req.method === "POST" ? "create" : "list"}` : "venture.conversation.load",
+  c.req.path.endsWith('/assessment') ? `venture.assessment.${c.req.method === 'POST' ? 'generate' : 'load'}` : c.req.path.endsWith('/stream') ? 'venture.stream.accept' : c.req.path.endsWith('/stop') ? 'venture.stream.stop' : c.req.path.endsWith("/session") ? "venture.session" : c.req.path.endsWith("/conversations") ? `venture.conversations.${c.req.method === "POST" ? "create" : "list"}` : "venture.conversation.load",
   async requestId => {
   c.set("requestId", requestId);
   c.header("Cache-Control", "private, no-store");
@@ -114,6 +114,30 @@ venture.post('/conversations/:id/stop', async c => {
     if (!payload.success) return ventureError(c.get('requestId'), 400, 'INVALID_REQUEST', 'Supply the active turn request ID.');
     const cancellationRequested = stopTurn(conversation.id, payload.data.requestId);
     return c.json({ cancellationRequested, requestId: c.get('requestId') });
+  } catch (error) { if (error instanceof VentureFailure) return ventureError(c.get('requestId'), error.status, error.code, error.message); throw error; }
+});
+venture.get('/conversations/:id/assessment', async c => {
+  const conversation = await ownedVentureConversation(c.req.param('id'), c.get('userId'));
+  if (!conversation) return ventureError(c.get('requestId'), 404, 'CONVERSATION_NOT_FOUND', 'Select an owned conversation.');
+  const [assessment] = await db.select().from(ventureAssessments).where(eq(ventureAssessments.conversationId, conversation.id)).orderBy(desc(ventureAssessments.version)).limit(1);
+  const sources = await db.select().from(ventureSources).where(eq(ventureSources.conversationId, conversation.id));
+  return c.json({ assessment: assessment || null, sources, requestId: c.get('requestId') });
+});
+venture.post('/conversations/:id/assessment', async c => {
+  const conversation = await ownedVentureConversation(c.req.param('id'), c.get('userId'));
+  if (!conversation) return ventureError(c.get('requestId'), 404, 'CONVERSATION_NOT_FOUND', 'Select an owned conversation.');
+  if (!c.req.header('content-type')?.startsWith('application/json')) return ventureError(c.get('requestId'), 415, 'JSON_REQUIRED', 'Send a JSON request ID.');
+  try {
+    const payload = z.object({ requestId: z.string().uuid() }).strict().safeParse(await boundedJson(c.req.raw, 512));
+    if (!payload.success) return ventureError(c.get('requestId'), 400, 'INVALID_REQUEST', 'Supply a unique UUID requestId.');
+    const abort = await reserveTurn(conversation.id, c.get('userId'), payload.data.requestId, 'Generate a saved assessment from the latest conversation and retrieved evidence.');
+    const onAbort = () => abort.abort(new Error('CANCELLED'));
+    c.req.raw.signal.addEventListener('abort', onAbort, { once: true });
+    if (c.req.raw.signal.aborted) onAbort();
+    try {
+      const assessment = await runAssessment(conversation.id, payload.data.requestId, abort, c.get('requestId'));
+      return c.json({ assessment, requestId: c.get('requestId') }, 201);
+    } finally { c.req.raw.signal.removeEventListener('abort', onAbort); }
   } catch (error) { if (error instanceof VentureFailure) return ventureError(c.get('requestId'), error.status, error.code, error.message); throw error; }
 });
 venture.all("*", c => ventureError(c.get("requestId"), 404, "ENDPOINT_NOT_FOUND", "This venture endpoint is unavailable. Return to your conversation list."));

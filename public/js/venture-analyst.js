@@ -5,6 +5,7 @@
   const cta = $('va-cta'), close = $('va-close'), status = $('va-status');
   const narrow = matchMedia('(max-width:1023px)');
   let expanded = false, controller, streamController, activeTurn, epoch = 0, loadEpoch = 0, returnFocus = cta, selectedId = null;
+  const drafts = new Map();
   function stop() {
     if (activeTurn) fetch(`/api/venture/conversations/${encodeURIComponent(activeTurn.id)}/stop`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requestId: activeTurn.requestId }), keepalive: true }).catch(() => {});
     streamController?.abort(); streamController = null;
@@ -83,7 +84,12 @@
     const data = await api(`/api/venture/conversations/${encodeURIComponent(id)}`);
     if (version !== epoch || loadVersion !== loadEpoch || !expanded) return;
     selectedId = data.conversation.id;
+    stage.querySelector('.va-views')?.remove();
+    const views = element('div', '', 'va-views');
+    views.append(button('Chat', () => loadConversation(id, content).catch(failure)), button('Assessment', () => assessmentView(id, content)));
+    content.before(views);
     content.replaceChildren(element('div', 'PRIVATE CONVERSATION', 'va-label'));
+    content.setAttribute('role', 'log'); content.removeAttribute('aria-label');
     if (!data.messages.length) content.append(element('p', 'Welcome. Tell me what you’re thinking of building and who it would help. A rough idea is enough to begin.', 'va-message'));
     for (const msg of data.messages) {
       const bubble = element('div', msg.content, `va-message ${msg.role === 'user' ? 'user' : ''}`);
@@ -103,6 +109,54 @@
     composer(data.conversation.id, content);
     content.scrollTop = content.scrollHeight;
   }
+  async function assessmentView(id, content) {
+    if (activeTurn) return;
+    const loadVersion = ++loadEpoch;
+    const form = stage.querySelector('.va-composer');
+    // Keep the composer and unsent correction intact while browsing the report.
+    if (form) form.hidden = true;
+    content.replaceChildren(element('p', 'Loading latest saved assessment…', 'va-muted'));
+    try {
+      const data = await api(`/api/venture/conversations/${encodeURIComponent(id)}/assessment`);
+      if (selectedId !== id || !expanded || loadVersion !== loadEpoch) return;
+      renderAssessment(data.assessment, data.sources || [], id, content);
+    } catch (error) { if (loadVersion === loadEpoch && expanded) content.replaceChildren(element('p', message(error), 'va-error'), button('Retry loading assessment', () => assessmentView(id, content))); }
+  }
+  function renderAssessment(saved, sources, id, content) {
+    content.replaceChildren(); content.setAttribute('role', 'region'); content.setAttribute('aria-label', 'Saved venture assessment');
+    content.append(element('h2', 'Assessment'), element('p', 'Financial figures and timelines are scenarios, not promises. Founder fit concerns relevant experience, access and capacity—not personal worth.', 'va-muted'));
+    if (saved) {
+      content.append(element('p', `${saved.status.toUpperCase()} · Version ${saved.version} · Last saved ${new Date(saved.createdAt).toLocaleString()}`, 'va-label'));
+      const labels = { missingInputs: 'Missing inputs / focused follow-up', assumptions: 'Assumptions', founderFit: 'Founder fit and recommended changes', opportunity: 'Opportunity and customer pain', units: 'Shared currency, period and geography', market: 'Bottom-up TAM / SAM / SOM', revenue: 'Conservative / base / upside revenue', financing: 'Financing and profit-sharing tradeoffs', gtm: 'GTM experiments and budgets', milestones: 'Validation, MVP, first user and first revenue', uncertainties: 'Uncertainties' };
+      const human = key => key.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase());
+      function render(value, parent) {
+        if (value === null) { parent.append(element('span', 'Unknown — input needed')); return; }
+        if (Array.isArray(value)) { const list = element('ul'); for (const item of value) { const li = element('li'); render(item, li); list.append(li); } parent.append(list); return; }
+        if (typeof value === 'object') {
+          if (value.kind && value.text) {
+            parent.append(element('p', `[${value.kind}] ${value.text}`));
+            value.sourceIds.forEach(sourceId => { const source = sources.find(s => s.id === sourceId); if (source) addSource(parent, source); }); return;
+          }
+          for (const [key, child] of Object.entries(value)) { const row = element('div', '', 'va-assessment-row'); row.append(element('strong', `${human(key)}: `)); render(child, row); parent.append(row); } return;
+        }
+        parent.append(document.createTextNode(String(value)));
+      }
+      for (const [key, title] of Object.entries(labels)) { const section = element('section', '', 'va-assessment-section'); section.append(element('h3', title)); render(saved.contentJson[key], section); content.append(section); }
+    } else content.append(element('p', 'No saved assessment yet. Generate a provisional assessment, or return to chat to supply missing inputs.'));
+    const feedback = element('p', '', 'va-muted'); feedback.setAttribute('role', 'status');
+    const generate = button(saved ? 'Regenerate explicitly' : 'Generate assessment', async () => {
+      if (activeTurn) return;
+      const requestId = crypto.randomUUID(); activeTurn = { id, requestId };
+      generate.disabled = true; feedback.textContent = `Generating and validating… Correlation ID: ${requestId}`;
+      stage.querySelectorAll('.va-history button,.va-history select,.va-views button').forEach(el => { el.disabled = true; });
+      try {
+        const data = await api(`/api/venture/conversations/${encodeURIComponent(id)}/assessment`, { method: 'POST', body: JSON.stringify({ requestId }) });
+        if (expanded && selectedId === id) renderAssessment(data.assessment, sources, id, content);
+      } catch (error) { if (expanded) feedback.textContent = message(error); }
+      finally { activeTurn = null; generate.disabled = false; stage.querySelectorAll('.va-history button,.va-history select,.va-views button').forEach(el => { el.disabled = false; }); }
+    }, 'va-send');
+    content.append(generate, feedback);
+  }
   function addSource(content, source) {
     // No raw Markdown/HTML rendering. Only validated ledger URLs become links.
     let url; try { url = new URL(source.url); } catch { return; }
@@ -115,6 +169,7 @@
     stage.querySelector('.va-composer')?.remove();
     const form = element('form', '', 'va-composer'), row = element('div', '', 'va-inputrow');
     const input = element('textarea'); input.maxLength = 4000; input.rows = 2; input.required = true; input.setAttribute('aria-label', 'Your message'); input.placeholder = 'Tell me about your idea…';
+    input.value = drafts.get(id) || ''; input.oninput = () => drafts.set(id, input.value);
     const send = element('button', 'Send', 'va-send'); send.type = 'submit';
     const stopButton = button('Stop', stop); stopButton.hidden = true;
     const feedback = element('div', '', 'va-muted'); feedback.setAttribute('role', 'status');
@@ -123,8 +178,8 @@
       event.preventDefault(); if (activeTurn || !input.value.trim()) return;
       const text = input.value.trim(), requestId = crypto.randomUUID(), version = epoch;
       activeTurn = { id, requestId }; streamController = new AbortController();
-      input.value = ''; input.disabled = true; send.disabled = true; stopButton.hidden = false;
-      stage.querySelectorAll('.va-history button,.va-history select').forEach(el => { el.disabled = true; });
+      drafts.delete(id); input.value = ''; input.disabled = true; send.disabled = true; stopButton.hidden = false;
+      stage.querySelectorAll('.va-history button,.va-history select,.va-views button').forEach(el => { el.disabled = true; });
       const user = element('div', text, 'va-message user'), answer = element('div', '', 'va-message'); content.append(user, answer);
       feedback.textContent = `Analysis starting… Correlation ID: ${requestId}`;
       let finished = false;
@@ -156,7 +211,7 @@
         activeTurn = null; streamController = null;
         if (version === epoch) {
           input.disabled = false; send.disabled = false; stopButton.hidden = true;
-          stage.querySelectorAll('.va-history button,.va-history select').forEach(el => { el.disabled = false; });
+          stage.querySelectorAll('.va-history button,.va-history select,.va-views button').forEach(el => { el.disabled = false; });
           feedback.append(button('Retry explicitly', () => { input.value = text; input.focus(); }), button('Reload saved history', () => loadConversation(id, content).catch(failure)));
         }
       }
