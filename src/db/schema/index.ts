@@ -1,4 +1,5 @@
 export * from "./users.ts";
+export * from "./venture.ts";
 export * from "./organizations.ts";
 export * from "./chat.ts";
 export * from "./projects.ts";

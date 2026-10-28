@@ -1,0 +1,66 @@
+{
+  "ticket": "LFG-1",
+  "status": "implemented_live_google_unverified",
+  "baselineRevision": "b8dcf9efc1367bd00327d9685df77fccd09396db",
+  "pushedCommit": null,
+  "mergedRevision": null,
+  "runningRevision": null,
+  "runtimeVerification": "bun run start bound 0.0.0.0:8080; landing 200, private anonymous session 401 and missing-Google configuration 503 had structured correlation-ID logs. Temporary web processes stopped after verification; local PostgreSQL retained for checks.",
+  "verifiedRevision": "baseline plus uncommitted ticket working tree",
+  "prerequisites": [
+    {
+      "name": "Bun and application dependencies",
+      "reason": "Run the existing Hono/Better Auth web application",
+      "verificationCommand": "bun -e 'import {Hono} from \"hono\"; import {auth} from \"./src/auth/index.ts\"; const a=new Hono().get(\"/probe\",c=>c.text(\"ok\")); if((await a.request(\"http://localhost/probe\")).status!==200)process.exit(1); if(await auth.api.getSession({headers:new Headers()}))process.exit(1); process.exit(0);'",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Node and SQLite native binding",
+      "reason": "Execute the repository's Drizzle SQLite runner",
+      "verificationCommand": "node -e 'const D=require(\"better-sqlite3\");const d=new D(\":memory:\");try{if(d.prepare(\"select 1 as ok\").get().ok!==1)process.exitCode=1}finally{d.close()}'",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Drizzle migration tooling",
+      "reason": "Apply actual journalled migrations rather than substitute SQL execution",
+      "verificationCommand": "d=$(mktemp -d /data/tmp/venture-prereq.XXXXXX) && DATABASE_DRIVER=sqlite DATABASE_URL=\"$d/probe.db\" bun run db:migrate >/dev/null; s=$?; test -z \"$d\" || rm -rf \"$d\"; exit \"$s\"",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Local PostgreSQL service and venture schema",
+      "reason": "Verify supported PostgreSQL persistence, authenticated connectivity and disposable test-database capability",
+      "verificationCommand": "bun -e 'import {Pool} from \"pg\";import {env} from \"./src/config/env.ts\";const p=new Pool({connectionString:env.POSTGRES_URL,connectionTimeoutMillis:5000});try{await p.query(\"SELECT count(*) FROM venture_conversation\");const n=\"venture_prereq_\"+crypto.randomUUID().replaceAll(\"-\",\"\");await p.query(\"CREATE DATABASE \"+n);await p.query(\"DROP DATABASE \"+n)}finally{await p.end()}'",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "TypeScript compiler",
+      "reason": "Compile the existing TypeScript stack without dependency upgrades",
+      "verificationCommand": "node -e 'const ts=require(\"typescript\");const r=ts.transpileModule(\"const value:number=1\",{reportDiagnostics:true});if(!r.outputText||r.diagnostics.length)process.exit(1)'",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Chromium and Playwright",
+      "reason": "Verify real responsive rendering, keyboard interaction and session resume",
+      "verificationCommand": "bun -e 'import {chromium} from \"playwright-core\";const b=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||\"/usr/bin/chromium\",headless:true,args:[\"--no-sandbox\",\"--disable-dev-shm-usage\"]});try{const p=await b.newPage();await p.setContent(\"<main>probe</main>\");if(await p.locator(\"main\").textContent()!==\"probe\")throw Error(\"browser unavailable\")}finally{await b.close()}'",
+      "timeoutSeconds": 30
+    }
+  ],
+  "processes": [
+    {
+      "name": "web",
+      "workingDirectory": "/data/project",
+      "command": "bun run start",
+      "bind": "0.0.0.0:8080",
+      "logs": "stdout/stderr; platform collection and rotation",
+      "worker": "No additional venture worker; existing in-process project workers unchanged"
+    }
+  ],
+  "checks": [
+    {"command": "bun run test:venture", "status": "passed", "evidence": "6 access/privacy/logging tests on each DB, paired actual migrations repeated with existing-data preservation, fresh-process persistence, 2 fixture-only installed Better Auth OAuth state/cancellation tests plus stable generated-secret/defaults test"},
+    {"command": "bun run test:venture-browser", "status": "passed", "evidence": "Real Chromium and isolated HTTP server: desktop/mobile, sample clearing, honest config failure/retry, keyboard/focus, dark mode, real session create/resume/reload; fixture-linked Google account only"},
+    {"command": "bun run typecheck", "status": "passed"},
+    {"command": "bun run check:schema", "status": "passed"},
+    {"command": "bun build src/index.ts --target=bun --outdir=/data/venture-build", "status": "passed", "evidence": "2610 modules bundled"},
+    {"workflow": "Live Google OAuth success and cancellation, including Workspace identity", "status": "unverified", "gap": "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET absent; public-origin callback must be authorized in the Google registration. No fixture counts as provider workflow evidence."}
+  ]
+}
