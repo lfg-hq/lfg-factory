@@ -15,6 +15,13 @@
       "when": 1793145600000,
       "tag": "0001_venture",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793232000000,
+      "tag": "0002_venture_stream_lock",
+      "breakpoints": true
     }
   ]
 }

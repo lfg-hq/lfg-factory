@@ -26,6 +26,11 @@ export async function loggedRequest(request: Request, event: string, run: (reque
   return response;
 }
 
+export function ventureLog(event: string, requestId: string, started: number, outcome: string, details: Record<string, unknown> = {}) {
+  console.info(JSON.stringify({ timestamp: new Date().toISOString(), level: outcome === 'failed' ? 'error' : 'info', service: 'venture', event, requestId,
+    outcome, durationMs: Math.round(performance.now() - started), retryCount: 0, ...details }));
+}
+
 export function ventureError(requestId: string, status: number, code: string, error: string) {
   return Response.json({ error, code, requestId }, { status, headers: { "X-Error-Code": code } });
 }
