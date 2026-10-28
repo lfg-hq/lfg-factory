@@ -121,3 +121,15 @@ test('staging unresolved markers cannot bypass the merge gate when runtime check
  await expect(publishValidatedMerge({...o,targetBranch:'main'})).rejects.toThrow();
  expect(checks).toBe(0);expect(git(repo,'ls-remote --heads origin main')).toContain(baseline);
 }));
+test('checks off still resolves merge conflicts and publishes (REC-13)',()=>fixture(async(o,repo)=>{
+ conflictingBranches(repo);settings={validationEnabled:false,featureTestingEnabled:false};let attempts=0;
+ repair=async(r)=>{attempts++;const dir=translate(r.projectDir);writeFileSync(join(dir,'base.txt'),'ticket and epic resolved\n');git(dir,'add base.txt');};
+ // Checks being off reports as cancelled/skipped, but nobody pressed Stop.
+ const result=await publishValidatedMerge({...o,targetBranch:'main',validation:{...o.validation,cancelled:()=>true,skipped:()=>true,stopped:()=>false}});
+ expect(attempts).toBe(1);expect(git(repo,'ls-remote --heads origin main')).toContain(result.sha);
+}));
+test('a real Stop still cancels conflict resolution',()=>fixture(async(o,repo)=>{
+ const baseline=conflictingBranches(repo);let attempts=0;repair=async()=>{attempts++;};
+ await expect(publishValidatedMerge({...o,targetBranch:'main',validation:{...o.validation,cancelled:()=>true,stopped:()=>true}})).rejects.toThrow('Merge repair cancelled');
+ expect(attempts).toBe(0);expect(git(repo,'ls-remote --heads origin main')).toContain(baseline);
+}));

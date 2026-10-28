@@ -1954,7 +1954,7 @@ Before implementing, fix the git issue:
       // hardcode github.com regardless of where the repo actually lives.
       const gitAuth = await resolveRepoAuth(project, gitUserId).catch(() => null);
       const { sha, documentation } = await commitAndPush({
-      validation: { gitCredentialUserId: gitUserId, projectId: project.id, userId: buildLlm.actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, cancelled: () => cancelledTickets.has(ticketId) || checksSkipped(ticketId), skipped: () => checksSkipped(ticketId), onLog: line => { addLog(ticketId, line, checkLogType(line), ownerId).catch(() => {}); }, onCheckpoint: async message => { await addLog(ticketId, message, "agent_progress", ownerId); } },
+      validation: { gitCredentialUserId: gitUserId, projectId: project.id, userId: buildLlm.actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, stopped: () => cancelledTickets.has(ticketId), cancelled: () => cancelledTickets.has(ticketId) || checksSkipped(ticketId), skipped: () => checksSkipped(ticketId), onLog: line => { addLog(ticketId, line, checkLogType(line), ownerId).catch(() => {}); }, onCheckpoint: async message => { await addLog(ticketId, message, "agent_progress", ownerId); } },
         workspaceId,
         projectDir: `${WORKING_DIR}/${projectDirName}`,
         commitMessage: `feat: ${ticket.ticketKey ? ticket.ticketKey + " " : ""}${ticket.name}`,
@@ -1995,7 +1995,7 @@ Before implementing, fix the git issue:
         // exist. resolveRepoAuth gives the right host, token and credential username.
         const mergeAuth = gitAuth;
         const { sha: mergeSha, files: mergedFiles } = await mergeToAnchor({
-      validation: { gitCredentialUserId: gitUserId, projectId: project.id, userId: buildLlm.actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, cancelled: () => cancelledTickets.has(ticketId) || checksSkipped(ticketId), skipped: () => checksSkipped(ticketId), onLog: line => { addLog(ticketId, line, checkLogType(line), ownerId).catch(() => {}); }, onCheckpoint: async message => { await addLog(ticketId, message, "agent_progress", ownerId); } },
+      validation: { gitCredentialUserId: gitUserId, projectId: project.id, userId: buildLlm.actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, stopped: () => cancelledTickets.has(ticketId), cancelled: () => cancelledTickets.has(ticketId) || checksSkipped(ticketId), skipped: () => checksSkipped(ticketId), onLog: line => { addLog(ticketId, line, checkLogType(line), ownerId).catch(() => {}); }, onCheckpoint: async message => { await addLog(ticketId, message, "agent_progress", ownerId); } },
           workspaceId,
           projectDir: `${WORKING_DIR}/${projectDirName}`,
           featureBranch,
@@ -2894,7 +2894,7 @@ async function finalizeTicketChat(
   try {
     await addLog(ticketId, "Committing chat changes…", "command", ownerId);
     const { sha, documentation } = await commitAndPush({
-      validation: { gitCredentialUserId: gitUserId, projectId: project.id, userId: actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, cancelled: () => cancelledTickets.has(ticketId) || checksSkipped(ticketId), skipped: () => checksSkipped(ticketId), onLog: line => { addLog(ticketId, line, checkLogType(line), ownerId).catch(() => {}); }, onCheckpoint: async message => { await addLog(ticketId, message, "agent_progress", ownerId); } },
+      validation: { gitCredentialUserId: gitUserId, projectId: project.id, userId: actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, stopped: () => cancelledTickets.has(ticketId), cancelled: () => cancelledTickets.has(ticketId) || checksSkipped(ticketId), skipped: () => checksSkipped(ticketId), onLog: line => { addLog(ticketId, line, checkLogType(line), ownerId).catch(() => {}); }, onCheckpoint: async message => { await addLog(ticketId, message, "agent_progress", ownerId); } },
       workspaceId, projectDir,
       commitMessage: `chore: ${summary}`,
       featureBranch,
@@ -2908,7 +2908,7 @@ async function finalizeTicketChat(
     try {
       await addLog(ticketId, `Merging to ${anchorBranch}…`, "command", ownerId);
       const { sha: mergeSha } = await mergeToAnchor({
-      validation: { gitCredentialUserId: gitUserId, projectId: project.id, userId: actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, cancelled: () => cancelledTickets.has(ticketId) || checksSkipped(ticketId), skipped: () => checksSkipped(ticketId), onLog: line => { addLog(ticketId, line, checkLogType(line), ownerId).catch(() => {}); }, onCheckpoint: async message => { await addLog(ticketId, message, "agent_progress", ownerId); } },
+      validation: { gitCredentialUserId: gitUserId, projectId: project.id, userId: actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, stopped: () => cancelledTickets.has(ticketId), cancelled: () => cancelledTickets.has(ticketId) || checksSkipped(ticketId), skipped: () => checksSkipped(ticketId), onLog: line => { addLog(ticketId, line, checkLogType(line), ownerId).catch(() => {}); }, onCheckpoint: async message => { await addLog(ticketId, message, "agent_progress", ownerId); } },
         workspaceId, projectDir, featureBranch,
         repoUrl: auth.repoUrl, githubToken: auth.token, tokenUser: auth.tokenUser,
         targetBranch: anchorBranch, baseBranch: anchorBase,
@@ -3790,7 +3790,7 @@ git branch --show-current
     try {
       await addLog(ticketId, "Committing changes...", "command", ownerId);
       const { sha, documentation } = await commitAndPush({
-      validation: { gitCredentialUserId: gitUserId, projectId: project.id, userId: buildLlm.actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, cancelled: () => cancelledTickets.has(ticketId) || checksSkipped(ticketId), skipped: () => checksSkipped(ticketId), onLog: line => { addLog(ticketId, line, checkLogType(line), ownerId).catch(() => {}); }, onCheckpoint: async message => { await addLog(ticketId, message, "agent_progress", ownerId); } },
+      validation: { gitCredentialUserId: gitUserId, projectId: project.id, userId: buildLlm.actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, stopped: () => cancelledTickets.has(ticketId), cancelled: () => cancelledTickets.has(ticketId) || checksSkipped(ticketId), skipped: () => checksSkipped(ticketId), onLog: line => { addLog(ticketId, line, checkLogType(line), ownerId).catch(() => {}); }, onCheckpoint: async message => { await addLog(ticketId, message, "agent_progress", ownerId); } },
         workspaceId,
         projectDir,
         commitMessage: `feat: ${ticket.ticketKey ? ticket.ticketKey + " " : ""}${ticket.name}`,
@@ -3818,7 +3818,7 @@ git branch --show-current
       try {
         await addLog(ticketId, `Merging to ${anchorBranch}...`, "command", ownerId);
         const { sha: mergeSha, files: mergedFiles } = await mergeToAnchor({
-      validation: { gitCredentialUserId: gitUserId, projectId: project.id, userId: buildLlm.actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, cancelled: () => cancelledTickets.has(ticketId) || checksSkipped(ticketId), skipped: () => checksSkipped(ticketId), onLog: line => { addLog(ticketId, line, checkLogType(line), ownerId).catch(() => {}); }, onCheckpoint: async message => { await addLog(ticketId, message, "agent_progress", ownerId); } },
+      validation: { gitCredentialUserId: gitUserId, projectId: project.id, userId: buildLlm.actorId, ticketId: ticketId, epicId: ticket.epicId ?? undefined, baselineBranch: anchorBase, stopped: () => cancelledTickets.has(ticketId), cancelled: () => cancelledTickets.has(ticketId) || checksSkipped(ticketId), skipped: () => checksSkipped(ticketId), onLog: line => { addLog(ticketId, line, checkLogType(line), ownerId).catch(() => {}); }, onCheckpoint: async message => { await addLog(ticketId, message, "agent_progress", ownerId); } },
           workspaceId,
           projectDir,
           featureBranch,
@@ -4080,7 +4080,7 @@ export async function startTicketValidationRetry(ticketId:string,actorId:string,
         await wakeTicketVm(workspaceId);
         const {retrySavedValidation}=await import("../services/retry-validation.ts");
         const sha=await retrySavedValidation({workspaceId,projectDir,featureBranch:branch,repoUrl:auth.repoUrl,githubToken:auth.token,tokenUser:auth.tokenUser,
-          validation:{projectId:project.id,userId:buildLlm.actorId,ticketId,gitCredentialUserId:gitUserId,cancelled:()=>cancelledTickets.has(ticketId)||checksSkipped(ticketId),skipped:()=>checksSkipped(ticketId),onLog:line=>{void addLog(ticketId,line,checkLogType(line),project.ownerId).catch(()=>{});},onCheckpoint:async message=>{await addLog(ticketId,message,"agent_progress",project.ownerId);}}},previous?.baseline ?? "",phase);
+          validation:{projectId:project.id,userId:buildLlm.actorId,ticketId,gitCredentialUserId:gitUserId,stopped:()=>cancelledTickets.has(ticketId),cancelled:()=>cancelledTickets.has(ticketId)||checksSkipped(ticketId),skipped:()=>checksSkipped(ticketId),onLog:line=>{void addLog(ticketId,line,checkLogType(line),project.ownerId).catch(()=>{});},onCheckpoint:async message=>{await addLog(ticketId,message,"agent_progress",project.ownerId);}}},previous?.baseline ?? "",phase);
         await refreshCancellation();
         if(cancelledTickets.has(ticketId))throw new Error("Validation cancelled");
         if(phase==='feature-testing') {

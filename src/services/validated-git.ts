@@ -132,10 +132,11 @@ export async function publishValidatedMerge(o:PublicationOptions & {targetBranch
       for(let attempt=0;attempt<2;attempt++) {
         const conflicts=await sh(`git -C ${q(candidate)} diff --name-only --diff-filter=U`);
         if(!conflicts)break;
-        if(o.validation.cancelled?.())throw new ValidationFailure('Merge repair cancelled; candidate preserved.');
+        // Checks being off must not abort conflict resolution: a merge cannot publish without it.
+        if((o.validation.stopped ?? o.validation.cancelled)?.())throw new ValidationFailure('Merge repair cancelled; candidate preserved.');
         o.validation.onLog?.(`Resolving ${conflicts.split('\n').length} merge conflict(s), attempt ${attempt+1}/2.`);
         const {runValidationRepair}=await import('./merge-resolver.ts');
-        await runValidationRepair({projectId:o.validation.projectId,userId:o.validation.userId,workspaceId:o.workspaceId,projectDir:candidate,onLog:o.validation.onLog,cancelled:o.validation.cancelled,
+        await runValidationRepair({projectId:o.validation.projectId,userId:o.validation.userId,workspaceId:o.workspaceId,projectDir:candidate,onLog:o.validation.onLog,cancelled:o.validation.stopped ?? o.validation.cancelled,
           timeoutMs:Math.max(1,deadline-Date.now()),
           prompt:`Resolve only the pending merge conflicts in ${candidate}, preserving both branches' intent. Continue from existing partial resolutions. Inspect the conflict stages and make the smallest coherent resolution; do not rebuild the ticket, refactor unrelated code, or provision an app runtime. Do not commit, abort, reset, checkout, or push. Stage each resolved path with git add. Conflicted paths:\n${conflicts}\nBefore finishing, verify git diff --name-only --diff-filter=U is empty and git diff --cached --check passes. The server will commit and run configured validation after conflict resolution.`});
         await sh(`test "$(git -C ${q(candidate)} rev-parse HEAD)" = ${q(baseline)}`);
@@ -154,7 +155,7 @@ export async function publishValidatedMerge(o:PublicationOptions & {targetBranch
       }
       let sha:string;
       if(reused) {
-        if(o.validation.cancelled?.())throw new ValidationFailure('Merge cancelled');
+        if((o.validation.stopped ?? o.validation.cancelled)?.())throw new ValidationFailure('Merge cancelled');
         o.validation.onLog?.('Reusing ticket validation '+reused.id+': identical source tree, unchanged target baseline and environment in the same sandbox.');
         await sh(`git -C ${q(candidate)} -c user.name='LFG Agent' -c user.email='agent@lfg.dev' commit -m 'merge: integrate verified ticket'`);
         sha=await sh(`git -C ${q(candidate)} rev-parse HEAD`);

@@ -14,6 +14,9 @@ export interface ValidationContext {
   onLog?: (message: string) => void;
   onCheckpoint?: (message: string) => Promise<void> | void;
   cancelled?: () => boolean;
+  /** Only a real stop (the user pressed Stop). Checks being off is not a stop: merge conflicts
+   *  still have to be resolved for the change to publish. Falls back to `cancelled`. */
+  stopped?: () => boolean;
   /** The user chose to skip checks: keep the committed build and continue. */
   skipped?: () => boolean;
 }
