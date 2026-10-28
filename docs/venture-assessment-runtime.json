@@ -1,0 +1,101 @@
+{
+  "status": "implemented_live_workflow_unverified",
+  "prerequisites": [
+    {
+      "name": "Bun and native SQLite",
+      "reason": "Existing web runtime and persistence",
+      "verificationCommand": "cd /data/project && bun -e \"import {Database} from 'bun:sqlite'; const d=new Database(':memory:'); if(d.query('select 1 as n').get().n!==1)process.exit(1);d.close();\"",
+      "timeoutSeconds": 30,
+      "result": "passed"
+    },
+    {
+      "name": "Node and project dependencies",
+      "reason": "Existing Drizzle CLI, AI SDK 6, Hono and TypeScript",
+      "verificationCommand": "cd /data/project && node -e \"if(Number(process.versions.node.split('.')[0])<22)process.exit(1);for(const p of ['ai','hono','drizzle-orm','drizzle-kit','typescript','playwright-core','zod'])require.resolve(p);\"",
+      "timeoutSeconds": 30,
+      "result": "passed"
+    },
+    {
+      "name": "Application database schema",
+      "reason": "Owner-scoped conversation, source and assessment persistence",
+      "verificationCommand": "cd /data/project && bun -e \"import {db} from './src/config/db.ts';import {ventureMessages,ventureSources,ventureConversations,ventureAssessments} from './src/db/schema/venture.ts';for(const t of [ventureMessages,ventureSources,ventureConversations,ventureAssessments])await db.select().from(t).limit(1);\"",
+      "timeoutSeconds": 30,
+      "result": "passed"
+    },
+    {
+      "name": "Chromium headless browser",
+      "reason": "Responsive report navigation, reload, failure preservation",
+      "verificationCommand": "cd /data/project && bun -e \"import {chromium} from 'playwright-core';const b=await chromium.launch({executablePath:'/usr/bin/chromium',headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});try{const p=await b.newPage();await p.goto('data:text/html,<title>capability</title>');if(await p.title()!=='capability')process.exitCode=1;}finally{await b.close();}\"",
+      "timeoutSeconds": 30,
+      "result": "passed"
+    },
+    {
+      "name": "Real configured model and Exa",
+      "reason": "Mandatory actual model generation and retrieved evidence; fixture tests do not satisfy live workflow",
+      "verificationCommand": "cd /data/project && bun run scripts/verify-venture-provider.ts",
+      "timeoutSeconds": 30,
+      "result": "failed_missing_third_party_credentials"
+    },
+    {
+      "name": "Google OAuth client",
+      "reason": "Private founder sign-in; presence check only, live OAuth still requires actual browser completion",
+      "verificationCommand": "cd /data/project && bun -e \"import {env} from './src/config/env.ts';if(!env.GOOGLE_CLIENT_ID||!env.GOOGLE_CLIENT_SECRET)process.exit(1);\"",
+      "timeoutSeconds": 30,
+      "result": "failed_missing_third_party_credentials"
+    }
+  ],
+  "checks": [
+    {
+      "command": "bun run typecheck",
+      "result": "passed"
+    },
+    {
+      "command": "bun build src/index.ts --target=bun --outdir=/data/venture-build",
+      "result": "passed"
+    },
+    {
+      "command": "bun run test:venture-analyst",
+      "result": "passed"
+    },
+    {
+      "command": "bun run test:venture-browser",
+      "result": "passed"
+    },
+    {
+      "command": "bun test tests/chat-background-lifecycle.test.ts tests/build-chat-routing.test.ts",
+      "result": "passed"
+    },
+    {
+      "command": "node scripts/check-schema-parity.mjs",
+      "result": "passed"
+    },
+    {
+      "command": "git diff --check",
+      "result": "passed"
+    }
+  ],
+  "processes": [
+    {
+      "name": "web",
+      "workingDirectory": "/data/project",
+      "command": "bun start",
+      "bind": "0.0.0.0:8080",
+      "environment": ".env or inherited resolved environment; default SQLite ./data/lfg.db",
+      "logs": "stdout/stderr; platform collection/rotation"
+    }
+  ],
+  "additionalWorkers": [],
+  "database": "No prior database records present; initialized empty local SQLite from checked-in schema using db:push. Integrity ok; users 0. Not data restoration. No account/session/password changes.",
+  "remainingGaps": [
+    "Real Google/provider/research idea-to-assessment/correction/reload journey not verified; missing OPENAI_API_KEY, EXA_API_KEY, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET.",
+    "PostgreSQL not selected or runtime-tested; existing paired schema unchanged.",
+    "No claim that fixture assumptions or live model semantic adherence have been independently verified."
+  ],
+  "git": {
+    "baseRevision": "95e5577cad69bfe813c9dd23fe076be391425811",
+    "implementation": "uncommitted working tree",
+    "pushedCommit": null,
+    "mergedRevision": null,
+    "runningRevision": "base plus ticket working tree during verification; temporary processes stopped"
+  }
+}

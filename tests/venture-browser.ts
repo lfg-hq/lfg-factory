@@ -1,5 +1,6 @@
 // TEST FIXTURES ONLY. Real browser, HTTP server and Better Auth cookies; no
 // intercepted API responses or fake authenticated browser state.
+import { assessmentFixture } from './venture-assessment.fixture.ts';
 import { chromium } from "playwright-core";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -88,6 +89,27 @@ try {
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.getByText(/failed; correlation ID/).waitFor();
   assert.equal(await page.locator('.va-message.user').count(), 1, 'Reload does not replay billable turns');
+  const { ventureAssessments } = await import('../src/db/schema/venture.ts');
+  await db.insert(ventureAssessments).values({ conversationId: selected, version: 1, status: 'provisional', contentJson: assessmentFixture() });
+  await page.getByRole('button', { name: 'Assessment', exact: true }).click();
+  await page.getByText(/PROVISIONAL · Version 1/).waitFor();
+  for (const title of ['Founder fit and recommended changes', 'Bottom-up TAM / SAM / SOM', 'Conservative / base / upside revenue', 'Financing and profit-sharing tradeoffs', 'GTM experiments and budgets', 'Validation, MVP, first user and first revenue']) assert.equal(await page.getByRole('heading', { name: title, exact: true }).count(), 1);
+  await page.getByRole('button', { name: 'Regenerate explicitly' }).click();
+  await page.getByText(/Configure .*retry explicitly/).waitFor();
+  assert.equal(await page.getByText(/PROVISIONAL · Version 1/).count(), 1);
+  await page.getByRole('button', { name: 'Chat', exact: true }).click();
+  await page.getByLabel('Your message', { exact: true }).fill('TEST FIXTURE unsent correction');
+  await page.getByRole('button', { name: 'Assessment', exact: true }).click();
+  await page.getByText(/PROVISIONAL · Version 1/).waitFor();
+  await page.getByRole('button', { name: 'Chat', exact: true }).click();
+  assert.equal(await page.getByLabel('Your message', { exact: true }).inputValue(), 'TEST FIXTURE unsent correction');
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Assessment', exact: true }).click();
+  await page.getByText(/PROVISIONAL · Version 1/).waitFor();
+  assert.equal(await page.locator('#va-panel').evaluate(el => el.scrollWidth <= el.clientWidth), true);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.waitForFunction(() => !document.querySelector('#va-panel')?.hasAttribute('aria-modal'));
+  assert.equal(await page.locator('#va-panel').getAttribute('aria-modal'), null);
   assert.deepEqual(errors, []);
   console.info('Browser checks passed: approved labelled sample, desktop/mobile panel, keyboard/focus, dark mode, honest configuration failure, real session resume/create/reload. Google identities here are TEST FIXTURES, not live OAuth proof.');
 } finally {

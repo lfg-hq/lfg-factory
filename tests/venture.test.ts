@@ -78,7 +78,7 @@ test("owner-only create/list/load and durable messages; no project chat context"
   expect(await child.exited).toBe(0);
 });
 test('stream and stop endpoints retain all access guards and enforce payload limits', async () => {
-  for (const suffix of ['stream', 'stop']) {
+  for (const suffix of ['stream', 'stop', 'assessment']) {
     const path = `/api/venture/conversations/${conversationId}/${suffix}`;
     expect((await request(path, undefined, 'POST', {})).status).toBe(401);
     expect((await request(path, 2, 'POST', {})).status).toBe(403);
@@ -88,6 +88,16 @@ test('stream and stop endpoints retain all access guards and enforce payload lim
   const path = `/api/venture/conversations/${conversationId}/stream`;
   for (const payload of [{ requestId: crypto.randomUUID(), content: 'x'.repeat(4001) }, { requestId: crypto.randomUUID(), content: 'TEST FIXTURE', projectId: 'foreign' }, { requestId: 'bad', content: 'x' }]) expect((await request(path, 0, 'POST', payload)).status).toBe(400);
   expect((await request(path, 0, 'POST', { content: 'x'.repeat(18001) })).status).toBe(413);
+});
+test('assessment read isolation and failed real-adapter generation preserve saved version', async () => {
+  const path = `/api/venture/conversations/${conversationId}/assessment`;
+  for (const [user, status] of [[undefined, 401], [2, 403], [1, 404]] as const) expect((await request(path, user)).status).toBe(status);
+  const before = await (await request(path, 0)).json(); expect(before.assessment.version).toBe(1);
+  const requestId = crypto.randomUUID();
+  const failed = await request(path, 0, 'POST', { requestId }); expect(failed.status).toBe(503);
+  expect((await failed.json()).code).toBe('PROVIDER_NOT_CONFIGURED');
+  expect((await request(path, 0, 'POST', { requestId })).status).toBe(409);
+  expect((await (await request(path, 0)).json()).assessment).toEqual(before.assessment);
 });
 test('real adapter with missing credentials streams truthful error and persists without replay', async () => {
   if (env.OPENAI_API_KEY || env.ANTHROPIC_API_KEY || env.GOOGLE_AI_API_KEY) return; // This is a missing-key test, not live-provider evidence.

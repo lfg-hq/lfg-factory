@@ -1,8 +1,10 @@
-import { streamText, stepCountIs, type ToolSet } from 'ai';
+import { generateText, NoObjectGeneratedError, NoOutputGeneratedError, Output, streamText, stepCountIs, type ToolSet } from 'ai';
+import { assessmentSchema, validateAssessment } from './venture-assessment.ts';
+import { ventureAssessmentPrompt } from '../ai/prompts/venture-assessment.ts';
 import { and, eq, gte, lt, desc, inArray } from 'drizzle-orm';
 import { db } from '../config/db.ts';
 import { env } from '../config/env.ts';
-import { ventureConversations, ventureMessages, ventureSources } from '../db/schema/venture.ts';
+import { ventureConversations, ventureMessages, ventureSources, ventureAssessments } from '../db/schema/venture.ts';
 import { DEFAULT_MODEL_KEY, getModel, getProviderName, getProviderModel } from '../ai/provider.ts';
 import { createWebResearchTools } from '../ai/tools/agent-tools.ts';
 import { ventureAnalystPrompt } from '../ai/prompts/venture-analyst.ts';
@@ -165,4 +167,44 @@ export async function runTurn(conversationId: string, requestId: string, abort: 
     } catch { log('venture.turn.failed', 'failed', { errorCode: 'STORAGE_UNAVAILABLE' }); send({ type: 'error', code: 'STORAGE_UNAVAILABLE', message: 'Saving failed. Reload history before retrying; contact support with this correlation ID.' }); }
     finally { active.delete(conversationId); }
   }
+}
+
+// Uses the same durable reservation, hourly budget and per-conversation lock as chat.
+export async function runAssessment(conversationId: string, requestId: string, abort: AbortController, httpRequestId: string) {
+  const started = performance.now();
+  const log = (event: string, outcome: string, details = {}) => ventureLog(event, requestId, started, outcome, { httpRequestId, turnId: requestId, ...modelDetails, ...details });
+  const where = and(eq(ventureMessages.conversationId, conversationId), eq(ventureMessages.requestId, requestId), eq(ventureMessages.role, 'assistant'));
+  const timer = setTimeout(() => abort.abort(new Error('TURN_TIMEOUT')), VENTURE_LIMITS.timeoutMs);
+  log('venture.assessment.started', 'pending');
+  try {
+    let model;
+    try { model = getModel(DEFAULT_MODEL_KEY, undefined, { allowEnvFallback: true }); }
+    catch { throw new VentureFailure('PROVIDER_NOT_CONFIGURED', 503, `Configure ${providerSecret}, then retry explicitly. The last saved assessment is safe.`); }
+    const history = await db.select().from(ventureMessages).where(eq(ventureMessages.conversationId, conversationId)).orderBy(desc(ventureMessages.createdAt), desc(ventureMessages.id)).limit(60);
+    const sources = await db.select().from(ventureSources).where(eq(ventureSources.conversationId, conversationId)).orderBy(desc(ventureSources.retrievedAt)).limit(480);
+    const result = await generateText({ model, system: ventureAssessmentPrompt, prompt: JSON.stringify({
+      conversation: history.reverse().filter(m => m.content && (m.role === 'user' || m.status === 'completed')).map(m => ({ role: m.role, content: m.content.slice(0, 16000) })),
+      sources: sources.map(s => ({ id: s.id, url: s.url, retrievedAt: s.retrievedAt, excerpt: s.excerpt?.slice(0, 8000) })),
+    }), output: Output.object({ schema: assessmentSchema }), maxOutputTokens: 12000, maxRetries: 0, abortSignal: abort.signal });
+    log('venture.assessment.provider_response', 'success', { providerRequestId: safeId(result.response.id) });
+    let content;
+    try { content = validateAssessment(result.output, new Set(sources.map(s => s.id))); }
+    catch { throw new VentureFailure('ASSESSMENT_INVALID', 422, 'Generated assessment failed evidence, schema or arithmetic checks. Correct missing inputs in chat and retry explicitly. The previous version is unchanged.'); }
+    abort.signal.throwIfAborted();
+    const [last] = await db.select({ version: ventureAssessments.version }).from(ventureAssessments).where(eq(ventureAssessments.conversationId, conversationId)).orderBy(desc(ventureAssessments.version)).limit(1);
+    // One insert is atomic; the durable assistant reservation serializes writers.
+    const [assessment] = await db.insert(ventureAssessments).values({ conversationId, version: (last?.version || 0) + 1, status: content.status, contentJson: content }).returning();
+    await db.update(ventureMessages).set({ status: 'completed', content: `Saved assessment version ${assessment!.version}. Open Assessment to read it.` }).where(where);
+    log('venture.assessment.completed', 'success', { validationOutcome: 'valid', version: assessment!.version });
+    return assessment!;
+  } catch (error) {
+    const cancelled = abort.signal.aborted;
+    const invalid = NoObjectGeneratedError.isInstance(error) || NoOutputGeneratedError.isInstance(error);
+    const failure = error instanceof VentureFailure ? error : invalid ? new VentureFailure('ASSESSMENT_INVALID', 422, 'The model returned an incomplete or invalid assessment. Add missing inputs in chat and retry explicitly. Your previous assessment is unchanged.') : new VentureFailure(cancelled ? 'ASSESSMENT_CANCELLED' : 'ASSESSMENT_FAILED', cancelled ? 408 : 502, 'Assessment could not be saved. The previous valid version is safe. Retry explicitly, or contact support with this correlation ID.');
+    await db.update(ventureMessages).set({ status: cancelled ? 'cancelled' : 'failed' }).where(where);
+    const providerError = error as { statusCode?: number; responseHeaders?: Record<string, string> } | null;
+    const failureCategory = providerError?.statusCode === 401 || providerError?.statusCode === 403 ? 'PROVIDER_AUTH' : providerError?.statusCode === 429 ? 'PROVIDER_RATE_LIMIT' : providerError?.statusCode && providerError.statusCode >= 500 ? 'PROVIDER_UNAVAILABLE' : failure.code;
+    log(`venture.assessment.${cancelled ? 'cancelled' : 'failed'}`, cancelled ? 'cancelled' : 'failed', { errorCode: failure.code, failureCategory, providerRequestId: safeId(providerError?.responseHeaders?.['x-request-id']), validationOutcome: failure.code === 'ASSESSMENT_INVALID' ? 'invalid' : 'not_saved' });
+    throw failure;
+  } finally { clearTimeout(timer); active.delete(conversationId); }
 }
