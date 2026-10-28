@@ -77,6 +77,32 @@ test("owner-only create/list/load and durable messages; no project chat context"
   const child = Bun.spawn(["bun", "-e", `import {db} from './src/config/db.ts'; import {ventureMessages} from './src/db/schema/venture.ts'; import {eq} from 'drizzle-orm'; const r=await db.select().from(ventureMessages).where(eq(ventureMessages.conversationId, ${JSON.stringify(conversationId)})); if(r.length!==1)process.exit(1);process.exit(0);`], { cwd: process.cwd(), env: process.env, stdout: "pipe", stderr: "pipe" });
   expect(await child.exited).toBe(0);
 });
+test('stream and stop endpoints retain all access guards and enforce payload limits', async () => {
+  for (const suffix of ['stream', 'stop']) {
+    const path = `/api/venture/conversations/${conversationId}/${suffix}`;
+    expect((await request(path, undefined, 'POST', {})).status).toBe(401);
+    expect((await request(path, 2, 'POST', {})).status).toBe(403);
+    expect((await request(path, 1, 'POST', {})).status).toBe(404);
+    expect((await request(path, 0, 'POST', {}, 'https://evil.example')).status).toBe(403);
+  }
+  const path = `/api/venture/conversations/${conversationId}/stream`;
+  for (const payload of [{ requestId: crypto.randomUUID(), content: 'x'.repeat(4001) }, { requestId: crypto.randomUUID(), content: 'TEST FIXTURE', projectId: 'foreign' }, { requestId: 'bad', content: 'x' }]) expect((await request(path, 0, 'POST', payload)).status).toBe(400);
+  expect((await request(path, 0, 'POST', { content: 'x'.repeat(18001) })).status).toBe(413);
+});
+test('real adapter with missing credentials streams truthful error and persists without replay', async () => {
+  if (env.OPENAI_API_KEY || env.ANTHROPIC_API_KEY || env.GOOGLE_AI_API_KEY) return; // This is a missing-key test, not live-provider evidence.
+  const requestId = crypto.randomUUID(), path = `/api/venture/conversations/${conversationId}/stream`;
+  const response = await request(path, 0, 'POST', { requestId, content: 'TEST FIXTURE missing provider request' });
+  expect(response.headers.get('content-type')).toBe('application/x-ndjson');
+  const events = (await response.text()).trim().split('\n').map(line => JSON.parse(line));
+  expect(events.some(e => e.code === 'PROVIDER_NOT_CONFIGURED' && e.requestId === requestId)).toBe(true);
+  expect(events.at(-1).status).toBe('failed');
+  expect((await request(path, 0, 'POST', { requestId, content: 'TEST FIXTURE duplicate' })).status).toBe(409);
+  const loaded = await (await request(`/api/venture/conversations/${conversationId}`, 0)).json();
+  expect(loaded.messages.some((m: any) => m.requestId === requestId && m.status === 'failed')).toBe(true);
+  expect(loaded.messages.some((m: any) => m.content === 'TEST FIXTURE private content')).toBe(true);
+  expect(loaded.sources.length).toBe(1);
+});
 test("request logs include success and denial, correlation and duration without secrets/content", async () => {
   const records: any[] = []; const original = console.info;
   console.info = (...values) => { records.push(JSON.parse(String(values[0]))); };

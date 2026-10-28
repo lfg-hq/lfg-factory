@@ -4,7 +4,11 @@
   const grid = $('va-grid'), panel = $('va-panel'), stage = $('va-stage');
   const cta = $('va-cta'), close = $('va-close'), status = $('va-status');
   const narrow = matchMedia('(max-width:1023px)');
-  let expanded = false, controller, epoch = 0, loadEpoch = 0, returnFocus = cta, selectedId = null;
+  let expanded = false, controller, streamController, activeTurn, epoch = 0, loadEpoch = 0, returnFocus = cta, selectedId = null;
+  function stop() {
+    if (activeTurn) fetch(`/api/venture/conversations/${encodeURIComponent(activeTurn.id)}/stop`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requestId: activeTurn.requestId }), keepalive: true }).catch(() => {});
+    streamController?.abort(); streamController = null;
+  }
   const element = (tag, text, className) => {
     const el = document.createElement(tag);
     if (text) el.textContent = text;
@@ -23,7 +27,7 @@
     const foot = element('div', 'Your idea deserves its own conversation.', 'va-sample');
     foot.append(button('Start yours →', () => open())); stage.append(content, foot);
   }
-  function cancel() { epoch++; controller?.abort(); controller = null; }
+  function cancel() { epoch++; stop(); controller?.abort(); controller = null; }
   function modal() {
     const active = expanded && narrow.matches;
     panel.setAttribute('role', active ? 'dialog' : 'region');
@@ -80,15 +84,83 @@
     if (version !== epoch || loadVersion !== loadEpoch || !expanded) return;
     selectedId = data.conversation.id;
     content.replaceChildren(element('div', 'PRIVATE CONVERSATION', 'va-label'));
-    if (!data.messages.length) content.append(element('p', 'Your private conversation is saved. Analyst messaging and research are coming in the next release.', 'va-muted'));
+    if (!data.messages.length) content.append(element('p', 'Welcome. Tell me what you’re thinking of building and who it would help. A rough idea is enough to begin.', 'va-message'));
     for (const msg of data.messages) {
       const bubble = element('div', msg.content, `va-message ${msg.role === 'user' ? 'user' : ''}`);
-      if (msg.status === 'failed' || msg.status === 'cancelled') bubble.append(element('small', ` (${msg.status})`));
+      if (msg.status !== 'completed') {
+        bubble.append(element('small', ` (${msg.status === 'started' ? 'in progress or interrupted — reload after two minutes' : msg.status}; correlation ID: ${msg.requestId}). Saved history is safe.`));
+        if (msg.status === 'started') bubble.append(button('Stop saved turn', async () => {
+          try { await api(`/api/venture/conversations/${encodeURIComponent(id)}/stop`, { method: 'POST', body: JSON.stringify({ requestId: msg.requestId }) }); await loadConversation(id, content); } catch (error) { failure(error); }
+        }));
+        if (msg.role === 'assistant') bubble.append(button('Retry explicitly', () => {
+          const prior = data.messages.find(m => m.requestId === msg.requestId && m.role === 'user');
+          const input = stage.querySelector('textarea'); if (input && prior) { input.value = prior.content; input.focus(); }
+        }));
+      }
       content.append(bubble);
     }
-    // Integration seam: the next ticket can attach its bounded streaming composer
-    // to this event. No fake assistant response or client-side authentication.
-    panel.dispatchEvent(new CustomEvent('venture:conversation', { detail: { conversation: data.conversation, messages: data.messages } }));
+    for (const source of data.sources || []) addSource(content, source);
+    composer(data.conversation.id, content);
+    content.scrollTop = content.scrollHeight;
+  }
+  function addSource(content, source) {
+    // No raw Markdown/HTML rendering. Only validated ledger URLs become links.
+    let url; try { url = new URL(source.url); } catch { return; }
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return;
+    const link = element('a', `${source.title || url.hostname} · ${new Date(source.retrievedAt).toLocaleDateString()} · [[source:${source.id}]]`, 'va-source');
+    link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer';
+    const row = element('div', '', 'va-muted'); row.append(link, element('p', (source.excerpt || '').slice(0, 240))); content.append(row);
+  }
+  function composer(id, content) {
+    stage.querySelector('.va-composer')?.remove();
+    const form = element('form', '', 'va-composer'), row = element('div', '', 'va-inputrow');
+    const input = element('textarea'); input.maxLength = 4000; input.rows = 2; input.required = true; input.setAttribute('aria-label', 'Your message'); input.placeholder = 'Tell me about your idea…';
+    const send = element('button', 'Send', 'va-send'); send.type = 'submit';
+    const stopButton = button('Stop', stop); stopButton.hidden = true;
+    const feedback = element('div', '', 'va-muted'); feedback.setAttribute('role', 'status');
+    row.append(input, send, stopButton); form.append(row, feedback); stage.append(form);
+    form.onsubmit = async event => {
+      event.preventDefault(); if (activeTurn || !input.value.trim()) return;
+      const text = input.value.trim(), requestId = crypto.randomUUID(), version = epoch;
+      activeTurn = { id, requestId }; streamController = new AbortController();
+      input.value = ''; input.disabled = true; send.disabled = true; stopButton.hidden = false;
+      stage.querySelectorAll('.va-history button,.va-history select').forEach(el => { el.disabled = true; });
+      const user = element('div', text, 'va-message user'), answer = element('div', '', 'va-message'); content.append(user, answer);
+      feedback.textContent = `Analysis starting… Correlation ID: ${requestId}`;
+      let finished = false;
+      try {
+        const response = await fetch(`/api/venture/conversations/${encodeURIComponent(id)}/stream`, { method: 'POST', credentials: 'same-origin', signal: streamController.signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requestId, content: text }) });
+        if (!response.ok) {
+          const error = await response.json(); throw Object.assign(new Error(error.error), { requestId: error.requestId });
+        }
+        const reader = response.body.getReader(), decoder = new TextDecoder(); let pending = '';
+        while (true) {
+          const chunk = await reader.read(); if (chunk.done) break;
+          pending += decoder.decode(chunk.value, { stream: true });
+          const lines = pending.split('\n'); pending = lines.pop();
+          for (const line of lines) {
+            if (!line || version !== epoch) continue;
+            const event = JSON.parse(line);
+            if (event.type === 'text') answer.append(document.createTextNode(event.text));
+            if (event.type === 'progress') feedback.textContent = `${event.message} Correlation ID: ${requestId}`;
+            if (event.type === 'source') addSource(content, event.source);
+            if (event.type === 'error') feedback.textContent = `${event.message} (${event.code}) Correlation ID: ${requestId}`;
+            if (event.type === 'done') { finished = true; if (event.status === 'completed') feedback.textContent = `Saved. Correlation ID: ${requestId}`; }
+          }
+          content.scrollTop = content.scrollHeight;
+        }
+        if (!finished) throw Object.assign(new Error('Stream interrupted. Reload saved history before retrying.'), { requestId });
+      } catch (error) {
+        if (version === epoch) feedback.textContent = error.name === 'AbortError' ? `Stopped. Partial history is saved. Correlation ID: ${requestId}` : message(error);
+      } finally {
+        activeTurn = null; streamController = null;
+        if (version === epoch) {
+          input.disabled = false; send.disabled = false; stopButton.hidden = true;
+          stage.querySelectorAll('.va-history button,.va-history select').forEach(el => { el.disabled = false; });
+          feedback.append(button('Retry explicitly', () => { input.value = text; input.focus(); }), button('Reload saved history', () => loadConversation(id, content).catch(failure)));
+        }
+      }
+    };
   }
   function failure(error) {
     if (error.name === 'AbortError') return;
@@ -115,12 +187,18 @@
     stage.append(toolbar, content);
     const id = data.conversations.some(item => item.id === selectedId) ? selectedId : data.conversations[0]?.id;
     if (id) { select.value = id; await loadConversation(id, content); }
-    else content.append(element('p', 'Create a private conversation to begin. Analyst messaging and research are coming in the next release.', 'va-muted'));
+    else content.append(element('p', 'Create a private conversation to begin an adaptive interview and public-source research.', 'va-muted'));
   }
   async function ready() {
     cancel(); controller = new AbortController(); const version = epoch;
     stage.replaceChildren(element('p', 'Checking private session…', 'va-content'));
-    try { await api('/api/venture/session'); if (version === epoch && expanded) await conversations(); }
+    try {
+      const readiness = await api('/api/venture/session');
+      if (version === epoch && expanded) {
+        await conversations();
+        if (!readiness.streamingAvailable) stage.querySelector('.va-content')?.prepend(element('p', `AI is unavailable: the operator must configure ${readiness.requiredProviderKey || 'platform provider credentials'}. Saved history remains readable.`, 'va-muted'));
+      }
+    }
     catch (error) { if (version === epoch && expanded) {
       if (error.status === 401 || error.code === 'GOOGLE_LINK_REQUIRED') authView(); else failure(error);
     } }

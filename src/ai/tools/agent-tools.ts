@@ -44,7 +44,11 @@ function cleanText(s: string): string {
  * available" — which is exactly what happened in the product/analyst chat on Kimi. These
  * only need EXA_API_KEY; no agentId/userId, so they work anywhere.
  */
-export function createWebResearchTools() {
+export function createWebResearchTools(options: {
+  signal?: AbortSignal;
+  onResponse?: (requestId: string | null) => void;
+  readPublicUrl?: (url: string, limit: number, signal?: AbortSignal) => Promise<{ url: string; title: string; text: string }>;
+} = {}) {
   const EXA_BASE = "https://api.exa.ai";
 
   const webSearch = tool({
@@ -67,6 +71,7 @@ export function createWebResearchTools() {
       if (!env.EXA_API_KEY) return { error: "Web search is not configured (EXA_API_KEY missing in env)." };
       try {
         const res = await fetch(`${EXA_BASE}/search`, {
+          signal: options.signal,
           method: "POST",
           headers: { "x-api-key": env.EXA_API_KEY, "content-type": "application/json" },
           body: JSON.stringify({
@@ -77,6 +82,7 @@ export function createWebResearchTools() {
             contents: { text: { maxCharacters: 1200 }, highlights: { numSentences: 3, highlightsPerUrl: 2 } },
           }),
         });
+        options.onResponse?.(res.headers.get('x-request-id'));
         if (!res.ok) return { error: `Exa search failed (${res.status}): ${(await res.text()).slice(0, 300)}` };
         const data = (await res.json()) as { results?: any[] };
         const results = (data.results ?? []).map((r: any) => ({
@@ -106,6 +112,7 @@ export function createWebResearchTools() {
     execute: async ({ url, max_chars }) => {
       if (!env.EXA_API_KEY) return { error: "Web reading is not configured (EXA_API_KEY missing in env)." };
       const limit = Math.min(max_chars ?? 8000, 30000);
+      if (options.readPublicUrl) return options.readPublicUrl(url, Math.max(1, limit), options.signal);
       try {
         const res = await fetch(`${EXA_BASE}/contents`, {
           method: "POST",

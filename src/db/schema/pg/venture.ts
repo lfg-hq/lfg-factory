@@ -18,7 +18,7 @@ export const ventureMessages = pgTable("venture_message", {
   requestId: text("request_id").notNull(),
   status: text("status", { enum: ["started", "completed", "failed", "cancelled"] }).notNull().default("started"),
   createdAt: timestamp("created_at", { mode: "date" }).notNull().defaultNow(),
-}, t => [index("venture_msg_conv_idx").on(t.conversationId, t.createdAt), uniqueIndex("venture_msg_request_idx").on(t.conversationId, t.requestId, t.role)]);
+}, t => [index("venture_msg_conv_idx").on(t.conversationId, t.createdAt), uniqueIndex("venture_msg_request_idx").on(t.conversationId, t.requestId, t.role), uniqueIndex("venture_msg_active_idx").on(t.conversationId).where(sql`${t.role} = 'assistant' AND ${t.status} = 'started'`)]);
 
 export const ventureSources = pgTable("venture_source", {
   id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
