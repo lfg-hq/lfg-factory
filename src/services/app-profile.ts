@@ -129,7 +129,7 @@ export const appProfileSchema = z.object({
   databaseIdentities:z.array(z.object({engine:z.string(),database:z.string()})).optional(),
   previewAccounts: z.array(z.object({identity:z.string(),connectionKey:z.string(),username:z.string(),passwordEncrypted:z.string(),verifiedAt:z.string()})).optional(),
   verifiedRevision: z.string().optional(),
-  blockedFailure: z.object({ revision: z.string(), key: z.string(), detail: z.string() }).optional(),
+  blockedFailure: z.object({ revision: z.string(), key: z.string(), detail: z.string(), sourceRepair: z.object({ summary: z.string(), files: z.array(z.string()), acceptanceCriteria: z.array(z.string()) }).optional() }).optional(),
   // ── Env / secrets ──
   autoEnvVars: z.array(z.object({
     key: z.string(),

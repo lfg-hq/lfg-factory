@@ -1466,7 +1466,7 @@ async function executeRunbook(
   projectId: string, userId: string, workspaceId: string,
   manifest: PreviewManifest, engines: EngineHandle[], model: any,
   _resumeSteps: RunStep[] | null, prelude: RunStep[] = [], configNotes: string[] = [], dir = PROJECT_DIR,
-): Promise<{ up: boolean; steps: RunStep[]; error?: string }> {
+): Promise<{ up: boolean; steps: RunStep[]; error?: string; sourceRepair?: SourceRepair }> {
   const branch = activeProfileBranches.get(projectId) ?? "default";
   const head = await sh(workspaceId, `git -C ${shellQuote(dir)} rev-parse HEAD`, 15_000);
   const revision = head.output.trim();
@@ -1560,12 +1560,14 @@ async function executeRunbook(
     const stopReason = budget.next(key);
     if (stopReason || !model || loaded?.profile.blockedFailure?.key === key) {
       const detail = `${failedStep.error || failedStep.label}\n${stopReason || (!model ? "No recovery model is available." : "This unchanged failure was already investigated.")}`;
+      // An unchanged failure keeps the source repair its investigation asked for.
+      const sourceRepair = loaded?.profile.blockedFailure?.key === key ? loaded.profile.blockedFailure.sourceRepair : undefined;
       const current = await loadAppProfile(projectId, branch);
       if (current) {
-        current.profile.blockedFailure = { revision, key, detail };
+        current.profile.blockedFailure = { revision, key, detail, ...(sourceRepair ? { sourceRepair } : {}) };
         await saveAppProfile(projectId, current.profile, branch);
       }
-      return { up: false, steps, error: detail };
+      return { up: false, steps, error: detail, sourceRepair };
     }
     const recovery: RunStep = { id: "recovery", phase: "recovery", label: `Repair ${failedStep.label}`, command: "", status: "running", startedAt: new Date().toISOString() };
     steps.push(recovery); await persist();
@@ -1578,8 +1580,9 @@ async function executeRunbook(
     if (!outcome) {
       const current = await loadAppProfile(projectId, branch);
       const detail = driverFailures.get(projectId) || failedStep.error || "Recovery failed";
-      if (current) { current.profile.blockedFailure = { revision, key, detail }; await saveAppProfile(projectId, current.profile, branch); }
-      return { up: false, steps, error: detail };
+      const sourceRepair = driverRepairs.get(projectId);
+      if (current) { current.profile.blockedFailure = { revision, key, detail, ...(sourceRepair ? { sourceRepair } : {}) }; await saveAppProfile(projectId, current.profile, branch); }
+      return { up: false, steps, error: detail, sourceRepair };
     }
     try {
       await saveConsolidatedPatches(projectId,userId,workspaceId,branch,dir,engines);
@@ -1651,6 +1654,9 @@ async function executeRunbook(
   }
 }
 const driverFailures = new Map<string, string>();
+/** The application change a failed driver says the preview needs; a ticket implements it. */
+export type SourceRepair = { summary: string; files: string[]; acceptanceCriteria: string[] };
+const driverRepairs = new Map<string, SourceRepair>();
 
 async function ensurePreviewEngine(projectId: string, userId: string, engine: DbEngine, spec?: PlannedDb) {
   const handle = await ensureManagedDatabaseWithRecovery({
@@ -2096,6 +2102,7 @@ async function driveSandbox(
   const port = manifest.port;
   const profileBranch = activeProfileBranches.get(projectId) ?? "default";
   driverFailures.delete(projectId);
+  driverRepairs.delete(projectId);
   let finished: { status: "ready" | "failed"; detail: string } | undefined;
   // Load the project's MANDATORY DIRECTIVES (user-authored + agent-appended must-dos).
   const directives = (await loadAppProfile(projectId, profileBranch).catch(() => null))?.profile.directives ?? [];
@@ -2315,13 +2322,19 @@ async function driveSandbox(
       },
     }),
     finish: tool({
-      description: "Call ONCE when the app is confirmed serving on the port (status 'ready'), or when it genuinely cannot run without a source-code change (status 'failed').",
+      description: "Call ONCE when the app is confirmed serving on the port (status 'ready'), or when it genuinely cannot run without a source-code change (status 'failed'). When the blocker is an application defect (migrations, schema code, scripts, models, config code), fill sourceRepair: a repair ticket is built from it automatically and the preview reruns once it merges.",
       inputSchema: zodSchema(z.object({
         status: z.enum(["ready", "failed"]),
         detail: z.string().describe("For 'ready': the URL/port. For 'failed': the concrete blocking reason incl. the real error."),
+        sourceRepair: z.object({
+          summary: z.string().min(20).describe("The source change needed, for a coding agent that has not seen this run: the defect, its evidence, and the fix. Never propose forging migration history, disabling migrations or dropping data."),
+          files: z.array(z.string()).describe("Repository files that need the change."),
+          acceptanceCriteria: z.array(z.string()).min(1).max(6).describe("Checkable outcomes, e.g. 'npm run db:migrate succeeds on a database that already has these columns'."),
+        }).optional().describe("Only with status 'failed', when an application source change is the fix."),
       })),
-      execute: async ({ status, detail }: { status: "ready" | "failed"; detail: string }) => {
+      execute: async ({ status, detail, sourceRepair }: { status: "ready" | "failed"; detail: string; sourceRepair?: SourceRepair }) => {
         finished = { status, detail };
+        if (status === "failed" && sourceRepair) driverRepairs.set(projectId, sourceRepair);
         plog(projectId, userId, `Driver finished: ${status}`, { detail, level: status === "ready" ? "info" : "error" });
         return "acknowledged";
       },
@@ -2339,7 +2352,7 @@ async function driveSandbox(
       tools,
       stopWhen: stepCountIs(40), // generous step budget — schema-heavy apps (30+ scripts) need room to repair AND start
       system: buildDriverSystemPrompt(manifest, engines, workDir, configNotes, directives),
-      prompt: `Profile scope: ${profileBranch}. schemaSteps/replayActions/verificationPaths corrections must be JSON arrays. Persist every repair; do not use unrecorded shell workarounds. Database drops must use resetDevelopmentDatabase so the original schema and data are backed up first. Correct runtime script ordering when appropriate. Report SQL source or identity-insert defects for ticket execution; do not save source patches or rely on rerunning a partially failed script until it works. Never commit or push to main from preview recovery. Bring the app up and verify it serves on 0.0.0.0:${port} (working dir: ${workDir}). Begin.`,
+      prompt: `Profile scope: ${profileBranch}. schemaSteps/replayActions/verificationPaths corrections must be JSON arrays. Persist every repair; do not use unrecorded shell workarounds. Database drops must use resetDevelopmentDatabase so the original schema and data are backed up first. Correct runtime script ordering when appropriate. Report SQL source or identity-insert defects for ticket execution by calling finish with status 'failed' and sourceRepair (a repair ticket is then built and the preview reruns); do not save source patches or rely on rerunning a partially failed script until it works. Never commit or push to main from preview recovery. Bring the app up and verify it serves on 0.0.0.0:${port} (working dir: ${workDir}). Begin.`,
       abortSignal: ac.signal,
     });
   } catch (e) {
@@ -2865,7 +2878,11 @@ fi`, 240_000);
     const result = await executeRunbook(projectId, userId, workspaceId, manifest, engineHandles, driver?.model, null, prelude, configNotes);
     up = result.up;
     await db.update(projectEnvironments).set({ setupComplete: up ? 1 : 0, runCommand: manifest.runCmd, updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
-    if (!up) return failed(projectId, userId, result.error || "Preview plan failed — see the failing step.");
+    if (!up) {
+      const out = await failed(projectId, userId, result.error || "Preview plan failed — see the failing step.");
+      requestSourceRepair(projectId, opts, branch, out.error, result.sourceRepair);
+      return out;
+    }
 
     // 6. Confirm the app is actually serving on its port (reality check).
     plog(projectId, userId, `Verifying the app responds on 127.0.0.1:${manifest.port}…`);
@@ -2975,6 +2992,14 @@ function errText(err: unknown): string {
     e = e.cause;
   }
   return parts.join(" — ") || String(err);
+}
+
+/** A preview blocked on an application defect hands it to a repair ticket, which reruns the preview when built. */
+function requestSourceRepair(projectId: string, opts: SetupOptions, branch: string, error: string, sourceRepair?: SourceRepair): void {
+  if (!sourceRepair) return;
+  void import("./preview-repair.ts")
+    .then(m => m.requestPreviewRepair({ projectId, userId: opts.userId, conversationId: opts.conversationId ?? null, branch, error, sourceRepair }))
+    .catch(e => console.warn("[dev-preview] repair ticket not requested:", (e as Error).message));
 }
 
 async function failed(projectId: string, userId: string, error: string): Promise<{ error: string }> {
@@ -3991,7 +4016,11 @@ echo "HEAD=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) $(git log -1 --oneline
     await setStep("env", "done");
     const driver = await resolveDriverModel(userId, projectId);
     const result = await executeRunbook(projectId, userId, workspaceId, manifest, engines, driver?.model, null, steps, configNotes, runDir);
-    if (!result.up) return failed(projectId, userId, result.error || "Preview plan failed — see the failing step.");
+    if (!result.up) {
+      const out = await failed(projectId, userId, result.error || "Preview plan failed — see the failing step.");
+      requestSourceRepair(projectId, opts, branchLabel === "(default)" ? "" : branchLabel, out.error, result.sourceRepair);
+      return out;
+    }
     const effectivePort = manifest.port;
     await db.update(projectEnvironments).set({ setupManifest: JSON.stringify(manifest), runCommand: manifest.runCmd, updatedAt: new Date() }).where(eq(projectEnvironments.projectId, projectId));
     plog(projectId, userId, `App and saved plan verified ✓ (${branchLabel})`);
