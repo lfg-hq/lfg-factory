@@ -48,6 +48,7 @@ export { createInstantTools } from "./instant-tools.ts";
 export { createBuilderTools } from "./builder-tools.ts";
 
 export { queryCodebase } from "./codebase-tools.ts";
+export { compareBranches } from "./branch-tools.ts";
 
 export { getRecentActivities } from "./activity-tools.ts";
 
@@ -64,6 +65,7 @@ import { startEpic, checkEpicOverlap, getEpicStatus, addToEpic, listTicketsForEp
 import { getProjectEnvVars, registerRequiredEnvVars, setEnvVar } from "./env-tools.ts";
 import { broadcastToUser, askUser, confirmAction, lookupTechnologySpecs } from "./misc-tools.ts";
 import { queryCodebase } from "./codebase-tools.ts";
+import { compareBranches } from "./branch-tools.ts";
 import { getRecentActivities } from "./activity-tools.ts";
 import { loadSkill } from "./skill-tools.ts";
 import { loadDocumentTemplate } from "./doc-template-tools.ts";
@@ -109,6 +111,7 @@ export const toolsProduct = {
   askUser,
   confirmAction,
   queryCodebase,
+  compareBranches,
   getRecentActivities,
   loadSkill,
   loadDocumentTemplate,

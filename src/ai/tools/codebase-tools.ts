@@ -24,7 +24,7 @@ import { DEFAULT_MODEL_KEY, type UserApiKeys } from "../provider.ts";
 import { eq } from "drizzle-orm";
 
 /** Derive owner/repo from stored fields, falling back to parsing repoUrl (GitHub or GitLab). */
-function resolveRepo(project: {
+export function resolveRepo(project: {
   repoOwner: string | null;
   repoName: string | null;
   repoUrl: string | null;
