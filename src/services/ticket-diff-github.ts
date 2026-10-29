@@ -129,3 +129,50 @@ export async function revertTicketMerge(gh: Gh, base: string, mergeSha: string, 
   if (!moved.body) return { ok: false, error: moved.status === 422 ? "The epic changed while undoing; nothing was changed. Try again." : `GitHub refused to update ${base} (HTTP ${moved.status}).` };
   return { ok: true, sha: created.body.sha };
 }
+
+export type BranchStatus = { name: string; aheadBy: number | null; behindBy: number | null; status: string; lastCommitDate: string | null };
+export type BranchComparison = { base: string; defaultBranch?: string; branches: BranchStatus[]; total: number; truncated: boolean; error?: string };
+
+/**
+ * How far each branch is ahead of / behind `base` (default: the repo's default branch),
+ * read from GitHub so the counts are exact (the preview's clone is shallow).
+ * `only` keeps branches whose name equals or contains one of the given strings.
+ */
+export async function compareGithubBranches(gh: Gh, opts: { base?: string; only?: string[]; limit?: number } = {}, fetcher: typeof fetch = fetch): Promise<BranchComparison> {
+  const api = client(gh, fetcher);
+  const limit = opts.limit ?? 50;
+  const fail = (error: string, base = opts.base ?? ""): BranchComparison => ({ base, branches: [], total: 0, truncated: false, error });
+  const refused = "GitHub refused access to this repository with the connected token. Reconnect GitHub in Settings (or check the token can read this repo).";
+  const info = await api.get("");
+  if (info.status === 401 || info.status === 403) return fail(refused);
+  if (info.status === 404) return fail(`GitHub repository ${gh.owner}/${gh.repo} was not found (or the connected GitHub account can't see it).`);
+  if (!info.body) return fail(`GitHub didn't answer for ${gh.owner}/${gh.repo} (HTTP ${info.status}).`);
+  const defaultBranch = String(info.body.default_branch ?? "main");
+  const base = opts.base || defaultBranch;
+
+  const names: string[] = [];
+  for (let page = 1; page <= 10; page++) {
+    const list = await api.get(`/branches?per_page=100&page=${page}`);
+    if (list.status === 401 || list.status === 403) return fail(refused, base);
+    const rows = Array.isArray(list.body) ? list.body as Array<{ name: string }> : [];
+    names.push(...rows.map((b) => b.name));
+    if (rows.length < 100) break;
+  }
+  if (!names.includes(base)) return { ...fail(`Branch ${base} was not found on GitHub. The default branch is ${defaultBranch}.`, base), defaultBranch };
+  const only = (opts.only ?? []).filter(Boolean);
+  const matching = names.filter((n) => n !== base && (!only.length || only.some((o) => n === o || n.includes(o)))).sort();
+
+  const picked = matching.slice(0, limit);
+  const branches: BranchStatus[] = [];
+  for (let i = 0; i < picked.length; i += 10) {
+    branches.push(...await Promise.all(picked.slice(i, i + 10).map(async (name): Promise<BranchStatus> => {
+      const c = await api.get(`/compare/${ref(base)}...${ref(name)}`);
+      if (!c.body) return { name, aheadBy: null, behindBy: null, status: c.status === 404 ? "not found" : `error (HTTP ${c.status})`, lastCommitDate: null };
+      const commits: Json[] = c.body.commits ?? [];
+      // Not ahead means the branch tip is the merge base; otherwise it is the newest compared commit (when the list isn't capped).
+      const tip = c.body.ahead_by === 0 ? c.body.merge_base_commit : commits.length === c.body.ahead_by ? commits[commits.length - 1] : null;
+      return { name, aheadBy: c.body.ahead_by, behindBy: c.body.behind_by, status: c.body.status, lastCommitDate: tip?.commit?.committer?.date ?? tip?.commit?.author?.date ?? null };
+    })));
+  }
+  return { base, defaultBranch, branches, total: matching.length, truncated: matching.length > picked.length };
+}
