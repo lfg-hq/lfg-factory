@@ -15,7 +15,7 @@ import { projectFiles } from "../../db/schema/documents.ts";
 import { readApprovedDesigns, approvedDesignReferences } from "../../services/approved-designs.ts";
 import { projects } from "../../db/schema/projects.ts";
 import { chatFiles } from "../../db/schema/chat.ts";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, desc } from "drizzle-orm";
 import { nextTicketKey } from "../../utils/ticket-keys.ts";
 import { createEpic, getEpic } from "../../services/epics.ts";
 import {
@@ -228,22 +228,46 @@ export const getPendingTickets = tool({
   },
 });
 
+// A long-lived ticket has thousands of build-log lines; returning them all put ~100k tokens
+// into the chat for one call and forced context condensing. Return what a decision needs.
+const MEANINGFUL_LOGS = ["ai_response", "user_message", "question", "agent_action", "cli_error", "agent_progress", "chat_operation"];
+const clip = (text: string | null | undefined, max: number) => !text ? text ?? null : text.length > max ? text.slice(0, max) + `… [${text.length - max} more characters]` : text;
+
 export const getTicketDetails = tool({
-  description: "Get full details of a specific ticket including description, acceptance criteria, and logs.",
-  inputSchema: zodSchema(z.object({ ticketId: z.string() })),
-  execute: async ({ ticketId }, options) => {
+  description: "Get a ticket's details: description, acceptance criteria, status, branch and commits, pending change requests, its latest work journal, tasks, and its most recent meaningful log entries (agent replies, errors, change requests, the last few commands). Older entries are summarized by count; raise logLimit or set includeCommands to see more.",
+  inputSchema: zodSchema(z.object({
+    ticketId: z.string(),
+    logLimit: z.number().int().min(1).max(200).optional().describe("Most recent meaningful log entries to return (default 40)."),
+    includeCommands: z.boolean().optional().describe("Also return recent build/command log lines with their output (default: only the last 8)."),
+  })),
+  execute: async ({ ticketId, logLimit, includeCommands }, options) => {
     const [ticket] = await db.select().from(projectTickets).where(eq(projectTickets.id, ticketId));
     if (!ticket) return { found: false as const };
     await associateUsageTicket(ticket.id, options.toolCallId);
-    const [logs, todos] = await Promise.all([
-      db.select().from(ticketLogs).where(eq(ticketLogs.ticketId, ticketId)).orderBy(ticketLogs.createdAt),
+    const limit = logLimit ?? 40;
+    const [meaningful, commands, counts, todos, addenda] = await Promise.all([
+      db.select().from(ticketLogs).where(and(eq(ticketLogs.ticketId, ticketId), inArray(ticketLogs.logType, MEANINGFUL_LOGS))).orderBy(desc(ticketLogs.createdAt)).limit(limit),
+      db.select().from(ticketLogs).where(and(eq(ticketLogs.ticketId, ticketId), eq(ticketLogs.logType, "command"))).orderBy(desc(ticketLogs.createdAt)).limit(includeCommands ? limit : 8),
+      db.select({ logType: ticketLogs.logType }).from(ticketLogs).where(eq(ticketLogs.ticketId, ticketId)),
       db.select().from(projectTodoLists).where(eq(projectTodoLists.ticketId, ticketId)).orderBy(projectTodoLists.order),
+      db.select().from(ticketAddenda).where(eq(ticketAddenda.ticketId, ticketId)).orderBy(desc(ticketAddenda.createdAt)).limit(10),
     ]);
+    const entry = (l: typeof meaningful[number], outputMax: number) => ({
+      logType: l.logType, createdAt: l.createdAt, exitCode: l.exitCode,
+      command: clip(l.command, 1500), output: clip(l.output, outputMax),
+    });
+    const logs = [...meaningful.map(l => entry(l, 1500)), ...commands.map(l => entry(l, includeCommands ? 1500 : 300))]
+      .sort((a, b) => +new Date(a.createdAt) - +new Date(b.createdAt));
+    const details = (ticket.details ?? {}) as { workJournal?: { at: string; kind: string; text: string }[]; checks?: unknown; sourceDocumentIds?: unknown };
+    const { details: _raw, ...fields } = ticket;
     return {
       found: true as const,
-      ticket,
-      logs: logs.map((l) => ({ logType: l.logType, command: l.command, output: l.output, exitCode: l.exitCode, createdAt: l.createdAt })),
+      ticket: { ...fields, checks: details.checks ?? null, sourceDocumentIds: details.sourceDocumentIds ?? null },
+      latestWorkJournal: details.workJournal?.at(-1) ?? null,
+      changeRequests: addenda.map(a => ({ status: a.status, createdAt: a.createdAt, description: clip(a.description, 1500) })),
       todos: todos.map((t) => ({ id: t.id, description: t.description, status: t.status })),
+      logs,
+      logsOmitted: Math.max(0, counts.length - logs.length),
     };
   },
 });

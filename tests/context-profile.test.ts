@@ -89,3 +89,14 @@ test('the subscription sends the conversation as its prompt cache key', async ()
   const reader = stream.getReader(); while (!(await reader.read()).done) { /* drain */ }
   expect(seen.sessionId).toBe('conv-1');
 });
+
+test('one oversized tool result is trimmed instead of summarizing the chat', async () => {
+  const huge = [{ role: 'user', content: 'check REC-3' } as any,
+    { role: 'assistant', content: [{ type: 'tool-call', toolName: 'getTicketDetails', toolCallId: 'g', input: {} }] },
+    { role: 'tool', content: [{ type: 'tool-result', toolName: 'getTicketDetails', toolCallId: 'g', output: { type: 'text', value: 'log line\n'.repeat(40000) } }] }];
+  const stages: string[] = [];
+  const out = await compactContext(huge, 0, async () => { throw new Error('should not summarize'); }, 60000, undefined, undefined, { onStage: s => stages.push(s) });
+  expect(stages).toEqual(['pruned']);
+  expect(JSON.stringify(out[2]).length).toBeLessThan(50000);
+  expect(JSON.stringify(out[2])).toContain('omitted to fit the context');
+});

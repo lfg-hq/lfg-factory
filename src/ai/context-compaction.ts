@@ -60,6 +60,27 @@ export function handoffMessage(summary: string): ModelMessage {
 
 const PRUNE_ABOVE_CHARS = 4000;
 const PRUNED_KEEP_CHARS = 1500;
+// One tool result this large (~15k tokens) is trimmed even when it is the latest: a single
+// oversized result (a ticket's full log history) otherwise forced summarizing the whole chat.
+const OVERSIZED_RESULT_CHARS = 45_000;
+
+/** Trim any single tool result above OVERSIZED_RESULT_CHARS, keeping its start and end. */
+export function capOversizedResults(messages: ModelMessage[]): ModelMessage[] {
+  let changed = false;
+  const next = messages.map(message => {
+    if (message.role !== 'tool' || !Array.isArray(message.content)) return message;
+    const content = message.content.map((part: any) => {
+      if (part?.type !== 'tool-result') return part;
+      const raw = typeof part.output?.value === 'string' ? part.output.value : JSON.stringify(part.output?.value ?? part.output);
+      if (!raw || raw.length <= OVERSIZED_RESULT_CHARS) return part;
+      changed = true;
+      return { ...part, output: { type: 'text', value: raw.slice(0, 30_000) +
+        `\n[… ${raw.length - 40_000} characters of this tool result omitted to fit the context. Call the tool again with narrower arguments if you need them.]\n` + raw.slice(-10_000) } };
+    });
+    return { ...message, content } as ModelMessage;
+  });
+  return changed ? next : messages;
+}
 /**
  * Shorten bulky tool results (web pages, search hits, file reads) before `end`. Free and
  * instant, unlike summarization, and usually enough: old tool output is most of the bulk.
@@ -143,9 +164,9 @@ export async function compactContext(messages: ModelMessage[], fixedTokens: numb
   const lastUser = messages.findLastIndex(m => m.role === 'user');
 
   // 1. Older tool output (free): everything before the latest group, and within a long
-  // turn everything but the two latest results.
+  // turn everything but the two latest results. Any single oversized result is trimmed too.
   const tools = toolIndexes(messages);
-  let current = pruneToolResults(messages, Math.max(latestBoundary(messages), tools.length >= 2 ? tools.at(-2)! : 0));
+  let current = capOversizedResults(pruneToolResults(messages, Math.max(latestBoundary(messages), tools.length >= 2 ? tools.at(-2)! : 0)));
   if (current !== messages) opts.onStage?.('pruned');
   if (size(current) <= target) return current;
 
