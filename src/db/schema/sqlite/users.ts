@@ -93,6 +93,8 @@ export const profiles = sqliteTable("profile", {
   openaiCodexCredentials: text("openai_codex_credentials"),
   openaiCodexCredentialsUpdatedAt: integer("openai_codex_credentials_updated_at", { mode: "timestamp" }),
   cliApiKey: text("cli_api_key").unique(),
+  // Opt-in: show "Build on my computer" on tickets and accept those builds (LFG Desktop).
+  desktopBuildsEnabled: integer("desktop_builds_enabled", { mode: "boolean" }).notNull().default(false),
 
   // Organization context
   currentOrganizationId: text("current_organization_id"),

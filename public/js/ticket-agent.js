@@ -227,8 +227,6 @@
       input.placeholder = isBusy() ? "Agent is working — press ■ to stop and send…" : "Send a message to the agent…";
     }
     renderChecksButton();
-    const local = $("ta-run-local");
-    if (local) { local.disabled = isBusy() || buildPending; local.style.opacity = local.disabled ? ".55" : "1"; }
     const b = $("ta-build"); if (!b) return;
     if (isBusy()) { b.disabled = true; b.style.opacity = ".9"; b.innerHTML = '<i class="fas fa-spinner fa-spin" style="font-size:10px;"></i>' + (isBuilding() ? "Building…" : "Working…"); }
     else { b.disabled = chatBusy || buildPending; b.style.opacity = b.disabled ? ".55" : "1"; b.innerHTML = '<i class="fas fa-play" style="font-size:10px;"></i>' + (hasPreviousBuild(curMeta) ? "Re-build" : "Build"); b.title = hasPreviousBuild(curMeta) ? "Re-build this ticket" : "Build this ticket"; }
@@ -311,24 +309,6 @@
       switchTicketTab("actions");
       try { if (window.ArtifactsLoader && window.ArtifactsLoader._checklistProjectId) window.ArtifactsLoader.loadChecklist(window.ArtifactsLoader._checklistProjectId); } catch (_) {}
     } catch (e) { toast("Couldn't queue: " + (e.message || e)); }
-    finally { buildPending = false; setBuildUI(); }
-  }
-  // Build on the person's own computer (LFG Desktop runs their Claude Code); logs still stream here.
-  async function runOnMyComputer() {
-    if (!ticketId || isBusy() || buildPending) return;
-    const runningId = ticketId;
-    buildPending = true;
-    setBuildUI();
-    try {
-      const r = await fetch(`/api/projects/${PID()}/tickets/${ticketId}/run-local`, { method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin", body: "{}" });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.error || "failed");
-      if (ticketId !== runningId) return;
-      curMeta = Object.assign({}, curMeta, { queueStatus: "executing", status: "in_progress" }); // optimistic
-      renderMeta(curMeta);
-      toast(j.runnerConnected ? "Sent to your computer. Approve it in LFG Desktop." : "Waiting for your computer. Open LFG Desktop (Settings → Integrations → Computers to pair one).");
-      switchTicketTab("actions");
-    } catch (e) { toast("Couldn't start: " + (e.message || e)); }
     finally { buildPending = false; setBuildUI(); }
   }
   async function deleteTicket() {
@@ -954,7 +934,6 @@
   function wire() {
     $("ta-exit")?.addEventListener("click", close);
     $("ta-build")?.addEventListener("click", buildTicket);
-    $("ta-run-local")?.addEventListener("click", runOnMyComputer);
     $("ta-stop")?.addEventListener("click", stopTicket);
     $("ta-edit")?.addEventListener("click", toggleEdit);
     $("ta-preview")?.addEventListener("click", previewTicket);

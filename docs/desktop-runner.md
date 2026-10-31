@@ -21,6 +21,10 @@ Company LFG server (Postgres)                     Jane's computer: LFG Desktop
 
 ## Rules the code enforces
 
+- **Opt-in, per person.** "Build on my computer" is off until the person turns it on in
+  Settings → Integrations → Computers (`profiles.desktop_builds_enabled`). Off: the
+  Tickets Run menu doesn't offer it and `/run-local` answers 403. It isn't offered in
+  the chat ticket panel at all.
 - **A job runs only on the requester's devices.** `runner_job.userId` is the person who
   clicked "Run on my computer"; the hub never offers it to anyone else's device, and a
   device can only report on jobs offered to it.
@@ -52,8 +56,8 @@ Company LFG server (Postgres)                     Jane's computer: LFG Desktop
 | Start on a ticket | `POST /api/projects/:projectId/tickets/:ticketId/run-local` |
 | Stop | the existing ticket Stop also cancels runner jobs |
 | WebSocket | `/ws/runner` in `src/index.ts` (Bearer device token, no session) |
-| Settings UI | Settings → Integrations → Computers (`public/js/runner-computers.js`) |
-| Ticket UI | "Run on my computer" in the chat ticket panel (`public/js/ticket-agent.js`) and "Build on my computer" in the Tickets drawer Run menu (`tickets-list.tsx`) |
+| Settings UI | Settings → Integrations → Computers: the opt-in switch, computers, headless tokens (`public/js/runner-computers.js`, `src/services/runner/opt-in.ts`) |
+| Ticket UI | "Build on my computer" in the Tickets drawer Run menu, only when turned on (`tickets-list.tsx`) |
 | Desktop app | `desktop/` (Electron shell, runner core, headless CLI) |
 
 ## Job lifecycle
@@ -88,6 +92,7 @@ Also `rejected` (declined on the computer) and `cancelled` (Stop).
 bun test tests/runner-hub.test.ts   # routing, ownership, reconnects, cancel, decline
 bun test tests/runner-e2e.test.ts   # real WebSocket + runner + git, stand-in `claude`
 bun test tests/desktop-auth.test.ts # browser sign-in: PKCE, one-time codes, app session
+bun test tests/desktop-opt-in.test.ts # off by default; Run menu and /run-local follow the setting
 cd desktop && npm install && npm run typecheck
 ```
 

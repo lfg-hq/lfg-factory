@@ -837,6 +837,8 @@ ticketsApi.post("/:projectId/tickets/:ticketId/run-local", async (c) => {
   if (!access) return c.json({ error: "Not found" }, 404);
   if (!access.permissions.canManageTickets || !access.permissions.canEditFiles) return c.json({ error: "Ticket management and code-edit permissions are required." }, 403);
   if (isChatTurnActive(ticketId)) return c.json({ error: "This ticket already has an active operation." }, 409);
+  const { desktopBuildsEnabled } = await import("../../services/runner/opt-in.ts");
+  if (!(await desktopBuildsEnabled(user.id))) return c.json({ error: "Build on my computer is off. Turn it on in Settings → Integrations → Computers." }, 403);
   const body = await c.req.json<{ notes?: string }>().catch(() => ({} as { notes?: string }));
   const { startTicketOnRunner, RunnerJobError } = await import("../../services/runner/ticket-job.ts");
   const { userHasConnectedRunner } = await import("../../services/runner/hub.ts");

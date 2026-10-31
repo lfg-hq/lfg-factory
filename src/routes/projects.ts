@@ -709,6 +709,7 @@ projectsRouter.get("/projects/:projectId/tickets", async (c) => {
     db.select({
       openAICodexConnected: profiles.openaiCodexAuthenticated,
       claudeCodeConnected: profiles.claudeCodeAuthenticated,
+      desktopBuildsEnabled: profiles.desktopBuildsEnabled,
     }).from(profiles)
       .where(eq(profiles.userId, user.id))
       .limit(1),
@@ -749,6 +750,7 @@ projectsRouter.get("/projects/:projectId/tickets", async (c) => {
       // Drawer-only render for the chat's ticket sidebar (?embed=<ticketId>): skips the
       // nav + kanban so the grid never flashes before the ticket details.
       embed: c.req.query("embed") ?? undefined,
+      desktopBuilds: profile?.desktopBuildsEnabled ?? false,
       executionMode: {
         claudeCodeEnabled: appState?.claudeCodeEnabled ?? true,
         builderModelKey: appState?.builderModelKey ?? "claude_4.5_sonnet",

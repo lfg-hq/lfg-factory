@@ -436,26 +436,32 @@ export function SettingsPage({ workspaceContext, teamAccess, teamContent, user, 
 
       ${activeSection === "team" ? html`<div class="team-settings">${teamContent}</div>` : activeSection === "integrations" ? html`
 
-        <!-- LFG Desktop: this person's own computers that run builds with their Claude Code -->
+        <!-- LFG Desktop: opt-in, per person. On: tickets offer "Build on my computer". -->
         <div class="llm-keys-table" id="runner-computers" style="margin-bottom:1.5rem;">
-          <div class="llm-keys-row" style="border-bottom:1px solid var(--border-color, rgba(255,255,255,0.07));padding:1rem 1.375rem;justify-content:space-between;gap:1rem;flex-wrap:wrap;">
+          <div class="llm-keys-row" style="padding:1rem 1.375rem;justify-content:space-between;gap:1rem;">
             <div>
               <h3 style="margin:0;font-size:0.9375rem;font-weight:700;color:var(--text-color,#f0f0f0);display:flex;align-items:center;gap:.5rem;">
                 <i class="fas fa-laptop-code" style="color:#8b5cf6;"></i>
-                Computers
+                Build on my computer
               </h3>
-              <div class="byok-desc" style="margin-top:.25rem;">Run ticket builds on your own computer with LFG Desktop and the Claude Code login already there. Signing in to LFG Desktop connects that computer. Tickets, logs and branches still show up here for everyone.</div>
+              <div class="byok-desc" style="margin-top:.25rem;">Run ticket builds on your own computer with LFG Desktop and the Claude Code login already there. When it's on, tickets you open offer “Build on my computer” in the Run menu. Only you are affected.</div>
             </div>
-            <button id="runner-connect-btn" type="button" class="llm-btn-save" style="border-radius:7px;padding:.45rem .875rem;flex-shrink:0;">
-              <i class="fas fa-plus"></i>&nbsp; Headless runner token
-            </button>
+            <label class="toggle-switch" style="flex-shrink:0;"><input id="runner-enabled" type="checkbox" role="switch" aria-label="Build on my computer" disabled><span class="toggle-slider"></span></label>
           </div>
-          <div id="runner-pairing" class="llm-keys-row" style="display:none;flex-direction:column;align-items:stretch;gap:.625rem;border-bottom:1px solid var(--border-color, rgba(255,255,255,0.07));"></div>
-          <div id="runner-device-list" class="llm-keys-row" style="flex-direction:column;align-items:stretch;gap:.5rem;">
-            <div class="byok-desc">Loading…</div>
+          <div id="runner-body" hidden>
+            <div class="llm-keys-row" style="border-top:1px solid var(--border-color, rgba(255,255,255,0.07));justify-content:space-between;gap:1rem;flex-wrap:wrap;">
+              <div class="byok-desc">Your computers. Signing in to LFG Desktop connects that computer.</div>
+              <button id="runner-connect-btn" type="button" class="llm-btn-save" style="border-radius:7px;padding:.45rem .875rem;flex-shrink:0;">
+                <i class="fas fa-plus"></i>&nbsp; Headless runner token
+              </button>
+            </div>
+            <div id="runner-pairing" class="llm-keys-row" style="display:none;flex-direction:column;align-items:stretch;gap:.625rem;border-top:1px solid var(--border-color, rgba(255,255,255,0.07));"></div>
+            <div id="runner-device-list" class="llm-keys-row" style="flex-direction:column;align-items:stretch;gap:.5rem;border-top:1px solid var(--border-color, rgba(255,255,255,0.07));">
+              <div class="byok-desc">Loading…</div>
+            </div>
           </div>
         </div>
-        <script src="/public/js/runner-computers.js?v=20261031" defer></script>
+        <script src="/public/js/runner-computers.js?v=20261101-opt-in" defer></script>
 
         <!-- Coding agent account connections -->
         <div class="llm-keys-table" style="margin-bottom:1.5rem;">

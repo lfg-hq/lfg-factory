@@ -5,6 +5,8 @@
  * POST   /api/runner/devices       — pair a computer; returns its token ONCE
  * DELETE /api/runner/devices/:id   — revoke a computer (disconnects it)
  * GET    /api/runner/jobs          — this person's recent runner jobs
+ * GET    /api/runner/settings      — is "Build on my computer" on for this person?
+ * PUT    /api/runner/settings      — turn it on or off ({ enabled })
  */
 
 import { Hono } from "hono";
@@ -14,6 +16,7 @@ import { db } from "../../config/db.ts";
 import { env } from "../../config/env.ts";
 import { runnerDevices, runnerJobs } from "../../db/schema/runners.ts";
 import { createRunnerDevice, isDeviceConnected, revokeRunnerDevice } from "../../services/runner/hub.ts";
+import { desktopBuildsEnabled, setDesktopBuildsEnabled } from "../../services/runner/opt-in.ts";
 import type { auth } from "../../auth/index.ts";
 
 type Env = { Variables: { user: typeof auth.$Infer.Session.user } };
@@ -51,6 +54,15 @@ runnerApi.get("/jobs", async (c) => {
     createdAt: runnerJobs.createdAt, finishedAt: runnerJobs.finishedAt,
   }).from(runnerJobs).where(eq(runnerJobs.userId, c.get("user").id)).orderBy(desc(runnerJobs.createdAt)).limit(50);
   return c.json({ jobs: rows });
+});
+
+runnerApi.get("/settings", async (c) => c.json({ enabled: await desktopBuildsEnabled(c.get("user").id) }));
+
+runnerApi.put("/settings", async (c) => {
+  const body = await c.req.json<{ enabled?: unknown }>().catch(() => ({} as { enabled?: unknown }));
+  if (typeof body.enabled !== "boolean") return c.json({ error: "enabled must be true or false" }, 400);
+  await setDesktopBuildsEnabled(c.get("user").id, body.enabled);
+  return c.json({ enabled: body.enabled });
 });
 
 export default runnerApi;

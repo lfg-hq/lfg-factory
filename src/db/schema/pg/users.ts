@@ -82,6 +82,8 @@ export const profiles = pgTable("profile", {
   openaiCodexCredentials: text("openai_codex_credentials"),
   openaiCodexCredentialsUpdatedAt: timestamp("openai_codex_credentials_updated_at", { mode: "date" }),
   cliApiKey: text("cli_api_key").unique(),
+  // Opt-in: show "Build on my computer" on tickets and accept those builds (LFG Desktop).
+  desktopBuildsEnabled: boolean("desktop_builds_enabled").notNull().default(false),
   currentOrganizationId: text("current_organization_id"),
   allowProjectInvitations: boolean("allow_project_invitations").notNull().default(true),
   createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),

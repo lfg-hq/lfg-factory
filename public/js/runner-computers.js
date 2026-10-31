@@ -3,7 +3,10 @@
   const list = document.getElementById("runner-device-list");
   const pairing = document.getElementById("runner-pairing");
   const connectBtn = document.getElementById("runner-connect-btn");
-  if (!list || !pairing || !connectBtn) return;
+  const toggle = document.getElementById("runner-enabled");
+  const body = document.getElementById("runner-body");
+  if (!list || !pairing || !connectBtn || !toggle || !body) return;
+  let enabled = false;
 
   function el(tag, style, text) {
     const node = document.createElement(tag);
@@ -49,7 +52,7 @@
 
   function render(devices) {
     if (!devices.length) {
-      const empty = el("div", "", "No computers yet. Install LFG Desktop and sign in: it connects that computer automatically.");
+      const empty = el("div", "", "No computers yet. Install LFG Desktop and sign in: that connects the computer.");
       empty.className = "byok-desc";
       list.replaceChildren(empty);
       return;
@@ -110,7 +113,33 @@
     }
   });
 
-  load();
+  function show(on) {
+    enabled = on;
+    toggle.checked = on;
+    body.hidden = !on;
+    if (on) load();
+  }
+
+  // The opt-in switch: off hides "Build on my computer" on tickets and refuses local builds.
+  toggle.addEventListener("change", async () => {
+    const want = toggle.checked;
+    toggle.disabled = true;
+    try {
+      const r = await fetch("/api/runner/settings", { method: "PUT", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: want }) });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      show((await r.json()).enabled);
+    } catch (e) {
+      toggle.checked = !want;
+      window.alert("Couldn't change this setting: " + (e.message || e));
+    } finally {
+      toggle.disabled = false;
+    }
+  });
+
+  fetch("/api/runner/settings", { credentials: "same-origin" })
+    .then((r) => (r.ok ? r.json() : { enabled: false }))
+    .then((j) => { show(!!j.enabled); toggle.disabled = false; })
+    .catch(() => { toggle.disabled = false; });
   // Pick up a computer coming online without a reload.
-  setInterval(() => { if (!document.hidden) load(); }, 15000);
+  setInterval(() => { if (enabled && !document.hidden) load(); }, 15000);
 })();

@@ -48,6 +48,8 @@ interface TicketsListPageProps {
    *  the body carries `embed-drawer` from the SERVER so the nav + kanban are hidden before
    *  first paint (no grid flash). */
   embed?: string;
+  /** This person turned on "Build on my computer" (Settings → Integrations → Computers). */
+  desktopBuilds?: boolean;
 }
 
 const PRIORITY_COLOR: Record<string, string> = {
@@ -66,7 +68,7 @@ const STAGE_STATUS: Record<string, string> = {
   "Archive": "archived",
 };
 
-export function TicketsListPage({ user, project, stages, tickets, epics = [], executionMode, embed }: TicketsListPageProps) {
+export function TicketsListPage({ user, project, stages, tickets, epics = [], executionMode, embed, desktopBuilds = false }: TicketsListPageProps) {
   const avatarLetter = (user.name?.[0] ?? user.email?.[0] ?? "?").toUpperCase();
   const subscriptionProviders = new Set<string>();
   if (executionMode?.openAICodexConnected) subscriptionProviders.add("openai");
@@ -722,7 +724,7 @@ export function TicketsListPage({ user, project, stages, tickets, epics = [], ex
         <select id="drawer-run-phase" class="drawer-run-phase" aria-label="Choose ticket action">
           <option value="build">Build &amp; run enabled checks</option>
           <option value="checks">Checks only (saved code)</option>
-          <option value="local">Build on my computer (LFG Desktop)</option>
+          ${desktopBuilds ? html`<option value="local">Build on my computer (LFG Desktop)</option>` : ""}
         </select>
         <button class="drawer-execute-btn" id="drawer-build-btn" onclick="runSelectedTicketPhase()">
           <i class="fas fa-play"></i> Run
