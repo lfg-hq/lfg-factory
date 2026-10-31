@@ -1,3 +1,4 @@
+import { ticketBranchName } from "../utils/ticket-branch.ts";
 import { withTicketOperation, updateTicketOperation, publishTicketOperation } from '../services/ticket-operations.ts';
 import { selectTicketContextDocuments, ticketDocumentInstructions } from "../services/ticket-context-documents.ts";
 import {emptyRepoBootstrap} from '../services/empty-repo-bootstrap.ts';
@@ -1291,12 +1292,6 @@ export async function startTicketWorker() {
  *  `feature/ticket-<uuid>`. Falls back to the uuid form when the ticket has no key. Only
  *  used as the FALLBACK when `githubBranch` is unset, and persisted on first build — so
  *  already-built tickets keep their existing branch (backward-compatible). */
-function ticketBranchName(ticket: { ticketKey?: string | null; name?: string | null; id: string }): string {
-  const slug = (s: string) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-  const key = slug(ticket.ticketKey || "");
-  const title = slug(ticket.name || "").slice(0, 40).replace(/-+$/g, "");
-  return key ? `feature/${key}${title ? `-${title}` : ""}` : `feature/ticket-${ticket.id}`;
-}
 
 async function executeTicketInternal(ticketId: string, actorId?: string): Promise<void> {
   const startTime = Date.now();

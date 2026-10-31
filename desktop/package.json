@@ -1,0 +1,35 @@
+{
+  "name": "lfg-desktop",
+  "productName": "LFG",
+  "version": "0.1.0",
+  "description": "LFG Desktop: your company's LFG, with coding jobs run on this computer by Claude Code.",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.js",
+  "bin": { "lfg-runner": "dist/cli.js" },
+  "scripts": {
+    "build": "tsc -p . && cp src/preload.cjs src/setup.html dist/",
+    "start": "npm run build && electron .",
+    "runner": "npm run build && node dist/cli.js",
+    "typecheck": "tsc -p . --noEmit",
+    "dist": "npm run build && electron-builder"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.7.2"
+  },
+  "build": {
+    "appId": "ai.lfg.desktop",
+    "productName": "LFG",
+    "files": ["dist/**", "package.json"],
+    "mac": { "category": "public.app-category.developer-tools", "target": ["dmg", "zip"] },
+    "win": { "target": ["nsis"] },
+    "linux": { "target": ["AppImage"] }
+  }
+}

@@ -25,6 +25,8 @@ import instantApi from "./routes/api/instant.ts";
 import { cliRouter } from "./routes/api/cli.ts";
 import claudeAuthApi from "./routes/api/claude-auth.ts";
 import openAICodexAuthApi from "./routes/api/openai-codex-auth.ts";
+import runnerApi from "./routes/api/runner.ts";
+import { authenticateRunnerToken, runnerOpened, runnerClosed, runnerMessage, type RunnerConn } from "./services/runner/hub.ts";
 import composioApi from "./routes/api/composio.ts";
 import invitationsApi from "./routes/api/invitations.ts";
 import sharingApi from "./routes/api/sharing.ts";
@@ -224,6 +226,7 @@ app.route("/api/agents", agentsApi);
 app.route("/api/agents", agentWebhookRouter);
 app.route("/api/v1/claude-auth", claudeAuthApi);
 app.route("/api/v1/openai-codex-auth", openAICodexAuthApi);
+app.route("/api/runner", runnerApi);
 app.route("/api/composio", composioApi);
 app.route("/api/projects", invitationsApi);
 app.route("/api/projects", sharingApi);
@@ -307,6 +310,18 @@ async function handleFetch(req: Request, server: import("bun").Server<WsData>): 
     return auth.handler(req);
   }
 
+  // LFG Desktop runners: device-token auth (no browser session), outbound from the laptop.
+  if (url.pathname === "/ws/runner") {
+    const token = req.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
+    const device = await authenticateRunnerToken(token);
+    if (!device) return new Response("Unauthorized", { status: 401 });
+    const upgraded = server.upgrade(req, {
+      data: { sessionId: `runner:${device.id}`, userId: device.userId, runner: { deviceId: device.id, deviceName: device.name } },
+    });
+    if (upgraded) return undefined as unknown as Response;
+    return new Response("WebSocket upgrade failed", { status: 500 });
+  }
+
   if (url.pathname === "/ws/chat" || url.pathname === "/ws/chat/") {
     const session = await auth.api.getSession({ headers: req.headers });
     if (!session?.user) {
@@ -348,6 +363,20 @@ async function handleFetch(req: Request, server: import("bun").Server<WsData>): 
   return app.fetch(req);
 }
 
+// One RunnerConn per socket, so the hub can tell a replaced connection from the live one.
+const runnerConns = new WeakMap<object, RunnerConn>();
+function runnerConn(ws: import("bun").ServerWebSocket<WsData>): RunnerConn {
+  let conn = runnerConns.get(ws);
+  if (!conn) {
+    conn = {
+      deviceId: ws.data.runner!.deviceId, deviceName: ws.data.runner!.deviceName, userId: ws.data.userId,
+      send: (m) => { ws.send(JSON.stringify(m)); }, close: (code, reason) => ws.close(code, reason),
+    };
+    runnerConns.set(ws, conn);
+  }
+  return conn;
+}
+
 // ── Start background workers ─────────────────────────────────────────
 registerEventHandlers();
 registerDocumentGraphWorker();
@@ -379,8 +408,9 @@ export default {
   fetch: handleFetch,
 
   websocket: {
-    open: onOpen,
-    close: onClose,
-    message: onMessage,
+    open: (ws: import("bun").ServerWebSocket<WsData>) => ws.data.runner ? void runnerOpened(runnerConn(ws)).catch(console.error) : onOpen(ws),
+    close: (ws: import("bun").ServerWebSocket<WsData>) => ws.data.runner ? runnerClosed(runnerConn(ws)) : onClose(ws),
+    message: (ws: import("bun").ServerWebSocket<WsData>, data: string | Buffer) =>
+      ws.data.runner ? runnerMessage(runnerConn(ws), data).catch(e => console.error("[runner] message failed:", e)) : onMessage(ws, data),
   },
 };
