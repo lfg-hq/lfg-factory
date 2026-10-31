@@ -14,6 +14,7 @@
  * persists on the workspace disk. VM replacement must not attach that disk while
  * another VM owns it; a job's terminal status does not prove disk release.
  */
+import { PREVIEW_VM_DISK_GB } from './vm-disk.ts';
 import { db } from "../config/db.ts";
 import { projectEnvironments } from "../db/schema/project-environments.ts";
 import { projectDatabases } from "../db/schema/project-databases.ts";
@@ -169,7 +170,7 @@ async function ensureProjectSandboxOnce(projectId: string): Promise<{ workspaceI
   // Persist the creation intent BEFORE the provider call. A crash/timeout must not
   // let a later request submit another creation for the same persistent disk.
   const [claimed] = await db.insert(projectEnvironments)
-    .values({ projectId, workspaceId: candidateWorkspaceId, memGb: 8, diskGb: 20, status: "provisioning", lastAwakeAt: new Date() })
+    .values({ projectId, workspaceId: candidateWorkspaceId, memGb: 8, diskGb: PREVIEW_VM_DISK_GB, status: "provisioning", lastAwakeAt: new Date() })
     .onConflictDoNothing({ target: projectEnvironments.projectId }).returning();
   const existing = claimed ?? (await db.select().from(projectEnvironments).where(eq(projectEnvironments.projectId, projectId)))[0];
   if (!existing) throw new Error("Could not resolve the project's sandbox record");
@@ -189,7 +190,7 @@ async function ensureProjectSandboxOnce(projectId: string): Promise<{ workspaceI
       }
     },
     create: () => newWorkspaceV2(workspaceId, {
-      vcpus: 4, memoryMb: 8192, diskGb: 20, keepAlive: true,
+      vcpus: 4, memoryMb: 8192, diskGb: PREVIEW_VM_DISK_GB, keepAlive: true,
       rootfsType: process.env.PREVIEW_ROOTFS || "pi",
     }),
   });
@@ -213,7 +214,7 @@ export async function restartProjectSandbox(projectId: string): Promise<{ worksp
   // Local Docker containers do not use Magpie's shared-disk replacement path.
   const workspaceId = await envWorkspaceId(projectId);
   await stopWorkspace(workspaceId);
-  await newWorkspaceV2(workspaceId, { vcpus: 4, memoryMb: 8192, diskGb: 20 });
+  await newWorkspaceV2(workspaceId, { vcpus: 4, memoryMb: 8192, diskGb: PREVIEW_VM_DISK_GB });
   return { workspaceId };
 }
 
@@ -319,7 +320,7 @@ export async function ensureEngine(projectId: string, engine: DbEngine, opts?: {
   if (!row) {
     await db.insert(projectDatabases).values({ projectId, engine, workspaceId,
       host: "127.0.0.1", port: spec.port, dbName: spec.defaultDb, username: spec.username,
-      passwordEncrypted: encryptSecret(generatePassword()), status: "provisioning", memGb: 8, diskGb: 20,
+      passwordEncrypted: encryptSecret(generatePassword()), status: "provisioning", memGb: 8, diskGb: PREVIEW_VM_DISK_GB,
     }).onConflictDoNothing();
     [row] = await db.select().from(projectDatabases).where(and(eq(projectDatabases.projectId, projectId), eq(projectDatabases.engine, engine)));
   }
@@ -355,7 +356,7 @@ export async function ensureEngine(projectId: string, engine: DbEngine, opts?: {
   }
 
   const values = {
-    projectId, engine, workspaceId, memGb: 8, diskGb: 20,
+    projectId, engine, workspaceId, memGb: 8, diskGb: PREVIEW_VM_DISK_GB,
     host: "127.0.0.1", port: spec.port, endpoint: `127.0.0.1:${spec.port}`,
     dbName: spec.defaultDb, username: spec.username,
     passwordEncrypted: encryptSecret(password), status: "ready", updatedAt: new Date(),

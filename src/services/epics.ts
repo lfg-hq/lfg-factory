@@ -480,7 +480,7 @@ export async function promoteEpicToMain(
   const { shellQuote } = await import("./preview-plan.ts");
   const { publishValidatedMerge } = await import("./validated-git.ts");
   const { workspaceId } = await newWorkspaceV2(`epic-validation-${crypto.randomUUID().slice(0,8)}`, {
-    vcpus: 4, memoryMb: 8192, diskGb: 20, keepAlive: true, noSync: true, rootfsType: "claude",
+    vcpus: 4, memoryMb: 8192, diskGb: (await import("./vm-disk.ts")).TICKET_VM_DISK_GB, keepAlive: true, noSync: true, rootfsType: "claude",
   });
   let mergeCommitSha: string;
   try {

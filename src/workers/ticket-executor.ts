@@ -1104,6 +1104,9 @@ export async function startTicketWorker() {
   setTimeout(sweepSandboxes, 90_000);
   setInterval(sweepSandboxes, 2 * 60_000).unref?.();
 
+  // Mags keeps a stopped VM's disk until it is deleted; delete what LFG no longer needs.
+  void import("../services/mags-reaper.ts").then((m) => m.startMagsReaper());
+
   bus.on("ticket.queued", async (event) => {
     const { ticketId } = event.payload;
 

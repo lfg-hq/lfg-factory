@@ -10,6 +10,7 @@ import { resolveGitActor } from './git-access.ts';
 import { shellQuote } from './ticket-code.ts';
 import { checkpointTicketWorkspace, readTicketCheckpoint, restoreTicketCheckpoint } from './ticket-workspace-checkpoint.ts';
 import { isChatTurnActive } from './ticket-chat-turn.ts';
+import { TICKET_VM_DISK_GB } from './vm-disk.ts';
 export type TicketWorkspace = {workspaceId:string;root:string;branch:string;freshEnvironment?:boolean};
 export const ticketWorkspaceRoot = (sb:{workspaceType:string;ticketId:string|null}) => sb.workspaceType === 'ticket-worktree' ? `/data/wt-ticket-${sb.ticketId!.slice(0,12)}` : '/data/project';
 export async function latestTicketWorkspace(projectId:string, ticketId:string) {
@@ -75,7 +76,7 @@ export async function openTicketWorkspace(options:{project:typeof projects.$infe
     const checkpoint = await readTicketCheckpoint(ticket.id);
     if (checkpoint && checkpoint.branch !== branch) throw new Error('Saved checkpoint branch does not match this ticket. Recovery stopped.');
     progress('Starting workspace from the prepared project environment…');
-    const created = await createTicketSandbox({projectId:project.id,ticketId:ticket.id,userId:actorId,allowPreparedPreviewWithAppError:true,log:async message=>progress(message),fresh:()=>newWorkspaceV2(`code-${ticket.id.slice(0,8)}-${crypto.randomUUID().slice(0,8)}`,{vcpus:4,memoryMb:4096,diskGb:20,keepAlive:true,rootfsType:process.env.PREVIEW_ROOTFS || 'pi'})});
+    const created = await createTicketSandbox({projectId:project.id,ticketId:ticket.id,userId:actorId,allowPreparedPreviewWithAppError:true,log:async message=>progress(message),fresh:()=>newWorkspaceV2(`code-${ticket.id.slice(0,8)}-${crypto.randomUUID().slice(0,8)}`,{vcpus:4,memoryMb:4096,diskGb:TICKET_VM_DISK_GB,keepAlive:true,rootfsType:process.env.PREVIEW_ROOTFS || 'pi'})});
     progress('Restoring ticket code and saved edits…');
     // The clone is a new VM. Do not modify the source preview or an old ticket VM.
     const temp = '/data/lfg-code-' + crypto.randomUUID();
