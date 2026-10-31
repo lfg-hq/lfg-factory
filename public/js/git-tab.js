@@ -13,10 +13,11 @@
       try { const url = new URL(pr.url); if (url.protocol === 'https:' && !url.username && !url.password) { a.href = url.href; a.target = '_blank'; a.rel = 'noopener noreferrer'; } } catch { /* invalid provider URL remains text */ }
       return a;
     }
+    function focusWorkspace() { const heading = root.querySelector('h2'); if (heading) { heading.tabIndex = -1; heading.focus(); } }
     const apiBase = `/api/projects/${encodeURIComponent(root.dataset.projectId)}/git`;
     let pollTimer;
-    async function api(path, payload) {
-      const response = await fetch(apiBase + path, { credentials: 'same-origin', method: payload ? 'POST' : 'GET', headers: payload ? { 'Content-Type': 'application/json' } : {}, body: payload ? JSON.stringify(payload) : undefined });
+    async function api(path, payload, method) {
+      const response = await fetch(apiBase + path, { credentials: 'same-origin', method: method || (payload ? 'POST' : 'GET'), headers: payload ? { 'Content-Type': 'application/json' } : {}, body: payload ? JSON.stringify(payload) : undefined });
       const body = await response.json();
       if (!response.ok) throw new Error(`${body.error || 'Operation failed. Retry after checking access.'} (${body.code || response.status}) · Correlation ID: ${body.correlationId || response.headers.get('X-Correlation-ID')}`);
       return body;
@@ -104,10 +105,50 @@
           const result = await api('/pull-requests', { reviewId: r.id, acknowledged: true, title: title.value, body: body.value });
           if (!d.open) return;
           content.replaceChildren(el('h3', result.existing ? 'Open existing pull request' : 'Pull request created'), link(result.pullRequest));
-          if (!data.pullRequests.some(p => p.id === result.pullRequest.id)) data.pullRequests.push(result.pullRequest);
+          api('/branches').then(fresh => {
+            data = fresh; refreshedAt = new Date().toLocaleTimeString();
+            if (d.open) d.addEventListener('close', () => { render(); focusWorkspace(); }, { once: true }); else { render(); focusWorkspace(); }
+          }).catch(e => { if (d.open) content.append(el('p', `PR confirmed, but refresh failed: ${e.message}`, 'git-notice')); });
         } catch (e) { if (d.open) { error.textContent = e.message; create.disabled = false; } }
       });
       content.append(titleLabel, bodyLabel, el('p', 'Creation does not approve or merge this branch. The saved review and limitations are retained in the PR body.'), error, button('Back to review', () => showReview(d, content, r.id)), create); title.focus();
+    }
+    async function mergePR(p) {
+      const { d, content } = dialog('Review & merge');
+      content.append(el('p', 'Refreshing provider checks, reviews, conflicts and repository policy…'));
+      try {
+        const state = await api(`/pull-requests/${p.id}/merge-state`); if (!d.open) return;
+        const pr = state.pullRequest;
+        content.replaceChildren(el('h3', `Merge ${pr.source} into ${pr.destination}`), el('code', `${pr.sourceRepo || 'Fork'}: ${pr.source} → ${pr.destination}`), el('p', `Exact source revision: ${pr.headSha}`, 'git-revisions'), link(pr));
+        content.append(el('p', `Draft: ${pr.draft ? 'yes' : 'no'} · Provider policy: ${state.policy || 'unknown'}`));
+        for (const key of ['conflicts', 'checks', 'reviews', 'protection']) content.append(el('p', `${key}: ${state.states?.[key] || 'unknown — refresh or inspect provider'}`));
+        content.append(el('p', 'Merging into an epic is not delivery to main. This action does not approve an epic or delete its branch.'));
+        const error = el('p', state.blockers.length ? `Blocked: ${(state.blockerMessages || state.blockers).join(' ')} · Correlation ID: ${state.correlationId}` : 'Provider reports eligible. State is rechecked on confirmation.', 'git-notice'); error.setAttribute('role', 'alert');
+        const confirm = button(`Confirm merge into ${pr.destination}`, async () => {
+          confirm.disabled = true; error.textContent = 'Confirming current revision and provider result…';
+          try {
+            await api(`/pull-requests/${pr.id}/merge`, { confirmation: pr.source, destination: pr.destination, expectedSha: pr.headSha });
+            d.close(); await load(true, true);
+          } catch (e) { if (d.open) { error.textContent = e.message; confirm.disabled = false; } }
+        });
+        confirm.disabled = !!state.blockers.length;
+        content.append(error, confirm, button('Refresh confirmation', () => { d.close(); mergePR(pr); }));
+      } catch (e) { if (d.open) content.replaceChildren(el('p', e.message, 'git-notice'), link(p)); }
+    }
+    function deleteBranch(r) {
+      const { d, content } = dialog('Delete branch?');
+      content.append(el('code', r.branch), el('p', `Expected revision: ${r.headSha}`, 'git-revisions'), el('p', 'No cascading deletion. Default/protected, active preview/build, open-PR and dependent branches are blocked by the server.'));
+      const warning = el('label'), unmerged = el('input'); unmerged.type = 'checkbox';
+      warning.append(unmerged, document.createTextNode(' I understand this may contain work not in the default branch, and explicitly confirm deleting that unmerged work.'));
+      const label = el('label', 'Type the exact branch name'), typed = el('input'); typed.type = 'text'; typed.autocomplete = 'off'; label.append(typed);
+      const error = el('p', '', 'git-notice'); error.setAttribute('role', 'alert');
+      const confirm = button('Delete branch', async () => {
+        confirm.disabled = true; error.textContent = 'Rechecking fresh remote ref and active use…';
+        try { await api('/branches', { branch: r.branch, expectedSha: r.headSha, confirmation: typed.value, confirmUnmerged: unmerged.checked }, 'DELETE'); d.close(); await load(true, true); }
+        catch (e) { if (d.open) { error.textContent = e.message; confirm.disabled = typed.value !== r.branch; } }
+      });
+      confirm.disabled = true; typed.addEventListener('input', () => { confirm.disabled = typed.value !== r.branch; });
+      content.append(warning, label, error, confirm); typed.focus();
     }
     function matches(r) {
       return (filter === 'all' || r.integration.status === filter) && `${r.name} ${r.branch || ''} ${r.destination || ''}`.toLowerCase().includes(query.toLowerCase());
@@ -124,6 +165,7 @@
       if (r.activeUse.queued) n.append(el('span', 'Queued · not executing', 'git-badge'));
       for (const pr of r.pullRequests) n.append(link(pr));
       if (data.canManageCode && !r.missingRef && r.branch && r.destination && !r.pullRequests.length) n.append(button('Create PR · review first', () => startReview(r.branch, r.destination)));
+      if (data.canManageCode && !r.missingRef && r.branch) n.append(button('Delete branch…', () => deleteBranch(r)));
       return n;
     }
     function map(r, children) {
@@ -145,6 +187,9 @@
         for (const p of prs) {
           const n = el('article', undefined, 'git-card git-pr');
           n.append(link(p), el('code', `${p.sourceRepo || 'Fork / external repository'}: ${p.source} → ${p.destination}`));
+          const epic = data.epics.find(e => (p.sourceRepo?.toLowerCase() === data.repository.toLowerCase() && e.branch === p.source) || (p.sourceRepo?.toLowerCase() === data.repository.toLowerCase() && e.tickets.some(t => t.branch === p.source)));
+          n.append(el('span', epic ? `${epic.name} · ${epic.branch === p.source ? 'Epic → Base' : 'Ticket → Epic'}` : 'No epic', 'git-badge'));
+          if (data.canManageCode) n.append(button(p.draft ? 'Draft · inspect blockers' : 'Review & merge', () => mergePR(p)));
           content.append(n);
         }
         if (!prs.length) content.append(el('p', 'No matching open pull requests.'));
@@ -200,7 +245,7 @@
       select.addEventListener('change', () => { filter = select.value; renderContent(content); });
       controls.append(branches, prs, search, select); root.append(controls, content); renderContent(content);
     }
-    async function load(force) {
+    async function load(force, focusAfter) {
       if (loading || (data && !force)) return;
       loading = true; root.setAttribute('aria-busy', 'true'); root.replaceChildren(el('p', 'Loading repository branches and pull requests…', 'git-notice'));
       try {
@@ -208,6 +253,7 @@
         const body = await response.json();
         if (!response.ok) throw new Error(`${body.error || 'Unable to load repository. Reconnect Git in Settings and refresh.'} · Correlation ID: ${body.correlationId || response.headers.get('X-Correlation-ID') || 'unavailable'}`);
         data = body; refreshedAt = new Date().toLocaleTimeString(); render();
+        if (focusAfter) focusWorkspace();
       } catch (e) { root.replaceChildren(el('p', e.message || 'Network unavailable. Check your connection and retry.', 'git-notice')); root.append(button('Retry', () => load(true)), button('Saved reviews', savedReviews)); }
       finally { loading = false; root.setAttribute('aria-busy', 'false'); }
     }

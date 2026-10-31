@@ -312,7 +312,7 @@ export async function recordEpicFilesTouched(
 // ── Approval + promotion to main ─────────────────────────────────────
 
 export interface MergeBlocker {
-  code: "not_approved" | "no_branch" | "parent_unmerged" | "no_repo";
+  code: "not_approved" | "no_branch" | "parent_unmerged" | "no_repo" | "confirmation_required";
   message: string;
 }
 
@@ -341,12 +341,12 @@ export async function getMergeBlockers(epic: Epic): Promise<MergeBlocker[]> {
 
   if (epic.parentEpicId) {
     const parent = await getEpic(epic.parentEpicId);
-    if (parent && parent.status !== "merged") {
+    if (!parent || parent.projectId !== epic.projectId || parent.status !== "merged") {
       blockers.push({
         code: "parent_unmerged",
         message:
-          `${epic.epicKey} was built on top of ${parent.epicKey} (${parent.name}), which hasn't ` +
-          `gone live yet. Merging now would take that unapproved work with it — land ${parent.epicKey} first.`,
+          `${epic.epicKey} was built on top of ${parent?.epicKey || 'an unavailable epic'} (${parent?.name || 'unknown'}), which hasn't ` +
+          `gone live yet. Merging now would take that unapproved work with it — resolve the parent dependency first.`,
       });
     }
   }
@@ -416,16 +416,9 @@ export async function listDependentEpics(epicId: string): Promise<Epic[]> {
   return db.select().from(epics).where(eq(epics.parentEpicId, epicId));
 }
 
-/**
- * Promote an APPROVED epic to main: open a PR from the epic branch and merge it,
- * then fold the epic's docs into the project's master docs.
- *
- * Docs merge when code merges — that's the point. An epic's scope/tech docs
- * describe unapproved work while it's in flight, so they live at epic scope; on
- * promotion they're copied to project scope where the client reads them. (The
- * copy is verbatim; genuinely rewriting the master PRD around a delta is a model
- * job, not a database one, so that stays a deliberate follow-up.)
- */
+/** Compatibility entry point for the epic panel. Approval remains separate;
+ * promotion now requires the Git tab's exact-revision provider PR confirmation.
+ * No second PR, validation VM or raw-ref publication is performed here. */
 export async function promoteEpicToMain(
   epicId: string,
   actingUserId: string
@@ -447,68 +440,14 @@ export async function promoteEpicToMain(
     };
   }
 
-  const { createPullRequest, mergePullRequest } = await import("./git.ts");
-  const targetBranch = epic.baseBranch || "main";
-
-  const { prNumber, prUrl } = await createPullRequest({
-    repoOwner: auth.owner,
-    repoName: auth.repo,
-    featureBranch: epic.branch!,
-    targetBranch,
-    title: `${epic.epicKey}: ${epic.name}`,
-    body:
-      `${epic.goal || ""}\n\n` +
-      `Approved epic — every ticket in it was built on \`${epic.branch}\`, cut from ` +
-      `\`${targetBranch}\`${epic.baseSha ? `@${epic.baseSha.slice(0, 7)}` : ""}.`,
-    githubToken: auth.token,
-  });
-
-  await db
-    .update(epics)
-    .set({ prNumber, prUrl, updatedAt: new Date() })
-    .where(eq(epics.id, epicId));
-
-  // GitLab MRs aren't merged through this path — hand back the MR to merge there.
-  if (auth.provider !== "github") {
-    return { merged: false, prNumber, prUrl };
-  }
-
-  // A fresh disposable build VM tests the current base + epic, then publishes that
-  // exact merge commit with a lease. Provider branch protection remains authoritative.
-  const { newWorkspaceV2, deleteWorkspace } = await import("./mags.ts");
-  const { validationShell } = await import("./validation-sandbox.ts");
-  const { shellQuote } = await import("./preview-plan.ts");
-  const { publishValidatedMerge } = await import("./validated-git.ts");
-  const { workspaceId } = await newWorkspaceV2(`epic-validation-${crypto.randomUUID().slice(0,8)}`, {
-    vcpus: 4, memoryMb: 8192, diskGb: 20, keepAlive: true, noSync: true, rootfsType: "claude",
-  });
-  let mergeCommitSha: string;
-  try {
-    let ready = false;
-    for(let i=0;i<30;i++) {
-      const r=await validationShell(workspaceId,"echo READY",10_000).catch(()=>null);
-      if(r?.output.trim()==="READY") {ready=true;break;}
-      await new Promise(r=>setTimeout(r,2000));
-    }
-    if(!ready) throw new Error("Epic validation sandbox did not become ready");
-    const clone=await validationShell(workspaceId,`git clone ${shellQuote(auth.authUrl)} /data/project`,120_000);
-    if(clone.exitCode!==0)throw new Error("Could not clone the epic validation repository");
-    const result=await publishValidatedMerge({workspaceId,projectDir:"/data/project",repoUrl:auth.repoUrl,
-      githubToken:auth.token,tokenUser:auth.tokenUser,featureBranch:epic.branch!,targetBranch,baseBranch:targetBranch,kind:"promotion",
-      validation:{projectId:project.id,userId:actingUserId,epicId,baselineBranch:targetBranch}});
-    mergeCommitSha=result.sha;
-  } finally { await deleteWorkspace(workspaceId); }
-
-  await db
-    .update(epics)
-    .set({ status: "merged", mergeCommitSha, mergedAt: new Date(), updatedAt: new Date() })
-    .where(eq(epics.id, epicId));
-
-  // Docs are LINKED, not owned, so there is nothing to move on approval — they
-  // were always readable in the project's Docs tab.
-
-  console.log(`[epics] ${epic.epicKey} merged to ${targetBranch} (${mergeCommitSha.slice(0, 7)})`);
-  return { merged: true, prNumber, prUrl };
+  // Promotion now uses the same provider-native guarded PR workflow as the Git tab.
+  // The old disposable raw-ref publish path could bypass repository PR policy.
+  return {
+    merged: false,
+    prNumber: epic.prNumber ?? undefined,
+    prUrl: epic.prUrl ?? undefined,
+    blockers: [{ code: "confirmation_required", message: "Open Git → All open PRs → Review & merge to confirm the exact destination and revision. If no PR exists, use Create PR · review first. Approval is preserved; nothing has been merged." }],
+  };
 }
 
 /**

@@ -20,7 +20,15 @@ try {
   const reviews = await fetch('http://127.0.0.1:8080/api/projects/runtime-check/git/reviews');
   const reviewBody = await reviews.json();
   if (reviews.status !== 401 || reviewBody.code !== 'AUTH_REQUIRED' || !reviewBody.correlationId) throw new Error('Private review authentication check failed.');
-  console.log('Web smoke check passed: health, Git and saved-review correlated authentication failures. No live-provider workflow claimed.');
+  for (const [method, path] of [['POST', 'pull-requests/1/merge'], ['DELETE', 'branches']] as const) {
+    const response = await fetch(`http://127.0.0.1:8080/api/projects/runtime-check/git/${path}`, { method, headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const error = await response.json();
+    if (response.status !== 401 || error.code !== 'AUTH_REQUIRED' || !error.correlationId) throw new Error('Private mutation authentication check failed.');
+  }
+  // Invalid login probes the actual database-backed auth handler; creates no account/session.
+  const login = await fetch('http://127.0.0.1:8080/api/auth/sign-in/email', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'http://localhost:8080' }, body: JSON.stringify({ email: 'runtime-capability-check@invalid.example', password: crypto.randomUUID() }) });
+  if (login.status !== 401) throw new Error(`Database-backed authentication probe returned ${login.status}; inspect runtime configuration.`);
+  console.log('Web smoke check passed: health, database-backed authentication and correlated Git/review/mutation denial. No live-provider workflow claimed.');
 } finally {
   child.kill('SIGTERM');
   await child.exited;
