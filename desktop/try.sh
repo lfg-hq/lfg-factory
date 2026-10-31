@@ -10,9 +10,12 @@
 #   desktop/try.sh --fake-claude    a stand-in for Claude Code (no usage, ~2 seconds)
 #   desktop/try.sh --headless       the runner in this terminal instead of the app
 #   desktop/try.sh --reset          start over with a fresh database and demo repo
+#   desktop/try.sh --google         offer Google sign-in (needs this port's callback,
+#                                   http://localhost:<port>/api/auth/callback/google,
+#                                   in your Google OAuth client's redirect URIs)
 #
-# Port: 8100, or set LFG_DESKTOP_TEST_PORT. Google sign-in is offered only on port 8000,
-# the callback your Google OAuth client allows; elsewhere use the printed test account.
+# Port: 8100, or set LFG_DESKTOP_TEST_PORT. Google sign-in is offered on port 8000 or with
+# --google; otherwise sign in with the printed test account.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -20,13 +23,14 @@ cd "$ROOT"
 PORT="${LFG_DESKTOP_TEST_PORT:-8100}"
 DIR="$ROOT/.desktop-test"
 URL="http://localhost:$PORT"
-MODE=app FAKE=0 RESET=0
+MODE=app FAKE=0 RESET=0 GOOGLE=0
 for arg in "$@"; do
   case "$arg" in
     --headless) MODE=headless ;;
     --fake-claude) FAKE=1 ;;
     --reset) RESET=1 ;;
-    -h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --google) GOOGLE=1 ;;
+    -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown option: $arg (try --help)" >&2; exit 2 ;;
   esac
 done
@@ -59,8 +63,9 @@ mkdir -p "$DIR/work" "$DIR/uploads"
 # Your .env minus anything that would touch shared state: database, URLs, captcha,
 # outgoing email, the Telegram bot and file storage are replaced below.
 # Google only accepts the callback URLs registered for your OAuth client (normally
-# port 8000). On any other port its button would just fail, so it's left out.
-GOOGLE_KEYS=""; if [ "$PORT" != 8000 ]; then GOOGLE_KEYS="|GOOGLE_CLIENT_ID|GOOGLE_CLIENT_SECRET"; fi
+# port 8000). On any other port its button would just fail, so it's left out
+# unless --google says you've registered this port's callback too.
+GOOGLE_KEYS=""; if [ "$PORT" != 8000 ] && [ "$GOOGLE" = 0 ]; then GOOGLE_KEYS="|GOOGLE_CLIENT_ID|GOOGLE_CLIENT_SECRET"; fi
 grep -vE '^(DATABASE_DRIVER|DATABASE_URL|POSTGRES_(HOST|PORT|DB|USER|PASSWORD)|PORT|APP_URL|BETTER_AUTH_URL|TURNSTILE_SITE_KEY|TURNSTILE_SECRET_KEY|TELEGRAM_PUBLIC_BOT_TOKEN|TELEGRAM_PUBLIC_BOT_OWNER_ID|SENDGRID_API_KEY|FILE_STORAGE_TYPE|LOCAL_STORAGE_DIR'"$GOOGLE_KEYS"')=' .env > "$DIR/test.env"
 cat >> "$DIR/test.env" <<EOF
 
