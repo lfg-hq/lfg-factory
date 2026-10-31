@@ -28,3 +28,20 @@ test('free text outside known sections is ignored, long lines are capped', () =>
   expect(r.changed[0]!.length).toBeLessThanOrEqual(218);
   expect(r.verified).toEqual([]);
 });
+
+test('only the plain-language part of a journal is shown to the user', () => {
+  const r = parseWorkJournal(`### For the user
+- **Built**: The screening call no longer drops when OpenAI rejects an audio setting.
+- **Checked**: The fix was tested with recorded call audio; no real call was placed.
+- **Still open**: The echo on speakerphone is not fixed yet.
+
+### For the next agent
+- **Changed**: \`src/worker/audio-bridge.ts\` isolates PCM remainder per item (HEAD bbf75b5c).
+- **Verified**: npm ci --include=dev passed; 54 network-free tests passed.
+- **Open**: ai-realtime.ts ledger unverified live.`);
+  expect(r.changed).toEqual(['The screening call no longer drops when OpenAI rejects an audio setting.']);
+  expect(r.verified).toEqual(['The fix was tested with recorded call audio; no real call was placed.']);
+  expect(r.open).toEqual(['The echo on speakerphone is not fixed yet.']);
+  expect(JSON.stringify(r)).not.toContain('npm ci');
+  expect(JSON.stringify(r)).not.toContain('bbf75b5c');
+});

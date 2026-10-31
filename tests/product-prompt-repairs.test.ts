@@ -24,3 +24,6 @@ test('quick changes are off: every change is a tracked ticket and documented beh
   expect(prompt).toContain('Every change is a tracked ticket, however small');
   expect(prompt).toContain('first update the epic\'s requirements and technical docs');
 });
+test('queued work is described in plain words', () => {
+  expect(prompt).toContain('say in one plain sentence what it will change for the user');
+});

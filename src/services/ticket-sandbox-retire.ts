@@ -35,12 +35,22 @@ export function ticketJournalInstruction(ticketId: string): string {
   return `
 
 ## Work journal (required before you finish)
-This sandbox is deleted after your turn. The next turn starts in a fresh sandbox with only the code on the ticket branch and this journal, so write what the next agent needs. Before your final reply, overwrite ${ticketJournalPath(ticketId)} (outside the repository; never commit it) with short Markdown under these headings:
-- **Changed**: what you changed this turn and why (files or areas).
-- **Verified**: what you actually ran or checked, and the result.
+This sandbox is deleted after your turn. Before your final reply, overwrite ${ticketJournalPath(ticketId)} (outside the repository; never commit it) with short Markdown in two parts.
+
+### For the user
+Shown to the person who asked, so write for them in plain, non-technical words: what changed in the product as they will notice it. No commit hashes, branch names, commands, package installs, test counts or tool names. Put any file name in backticks.
+- **Built**: 1-4 bullets, what now works differently.
+- **Checked**: 1-3 bullets, what you confirmed and how; say plainly what could not be checked (for example, no real call was placed).
+- **Still open**: only what affects them (blocked, unverified, needs their action). Leave it out if there is nothing.
+
+### For the next agent
+The next turn starts in a fresh sandbox with only the ticket branch and this journal.
+- **Changed**: what you changed and why (files or areas).
+- **Verified**: what you ran and the result.
 - **Open**: anything unfinished, failing or unverified.
-- **Setup notes**: commands, ports, env settings or quirks needed to build, run or test this project.
-Keep it under 40 lines. No secrets or key values.`;
+- **Setup notes**: commands, ports, env settings or quirks needed to build, run or test.
+
+Keep it under 50 lines. No secrets or key values.`;
 }
 
 type JournalEntry = { at: string; kind: string; text: string };

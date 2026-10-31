@@ -104,18 +104,24 @@ export async function publishTicketOperation(branch:string,anchor:string,sha:str
 type Recap = {changed:string[];verified:string[];open:string[]};
 /** Split the agent's work journal (Changed / Verified / Open / Setup notes) into bullet lists. */
 export function parseWorkJournal(text:string):Recap {
+ // Journals have a plain-language part for the user; only that part is shown in chat.
+ const forUser=text.match(/#+\s*For the user\b([\s\S]*?)(?=\n#+\s*For the next agent\b|$)/i)?.[1];
+ if(forUser!==undefined)return parseSections(forUser,{built:'changed',checked:'verified','still open':'open'});
+ return parseSections(text,{changed:'changed',verified:'verified',open:'open'});
+}
+function parseSections(text:string,names:Record<string,keyof Recap>):Recap {
  const out:Recap={changed:[],verified:[],open:[]};
  let section:keyof Recap|null=null;
  const add=(line:string)=>{const t=line.replace(/^[-*•]\s+|^\d+[.)]\s+/,'').replace(/\s+/g,' ').trim();if(section&&t&&!/^(none|n\/a|nothing)\.?$/i.test(t)&&out[section].length<6)out[section].push(t.length>220?t.slice(0,217)+'…':t);};
  for(const raw of text.split('\n')){
-  const heading=raw.match(/^\s*(?:#+\s*|[-*]\s*)?\**\s*(changed|verified|open|setup notes?)\s*\**\s*:?\s*\**\s*(.*)$/i);
-  if(heading){const name=heading[1]!.toLowerCase();section=name.startsWith('changed')?'changed':name==='verified'?'verified':name==='open'?'open':null;if(heading[2])add(heading[2]);continue;}
+  const heading=raw.match(/^\s*(?:#+\s*|[-*]\s*)?\**\s*(changed|verified|open|setup notes?|built|checked|still open)\s*\**\s*:?\s*\**\s*(.*)$/i);
+  if(heading){section=names[heading[1]!.toLowerCase()] ?? null;if(heading[2])add(heading[2]);continue;}
   if(raw.trim())add(raw.trim());
  }
  return out;
 }
 /** "What shipped" bullets for this turn: the journal the agent wrote, else its closing summary. */
-async function workRecap(ticketId:string,since:Date,title:string,fallback?:string):Promise<string> {
+async function workRecap(ticketId:string,since:Date,title:string,fallback?:string,checkedTitle='What was checked'):Promise<string> {
  const [ticket]=await db.select({details:projectTickets.details}).from(projectTickets).where(eq(projectTickets.id,ticketId)).catch(()=>[]);
  const entries=((ticket?.details as {workJournal?:{at:string;text:string}[]}|null)?.workJournal ?? []);
  const cutoff=Math.floor(since.getTime()/60000)*60000;
@@ -127,7 +133,7 @@ async function workRecap(ticketId:string,since:Date,title:string,fallback?:strin
  const list=(items:string[])=>items.map(i=>'- '+i).join('\n');
  let text='';
  if(recap.changed.length)text+=`**${title}**\n${list(recap.changed)}\n\n`;
- if(recap.verified.length)text+=`**Verified**\n${list(recap.verified)}\n\n`;
+ if(recap.verified.length)text+=`**${checkedTitle}**\n${list(recap.verified)}\n\n`;
  if(recap.open.length)text+=`**Still open**\n${list(recap.open)}\n\n`;
  return text;
 }
@@ -136,14 +142,15 @@ async function finishPublishedOperation(op:TicketOperation,since=new Date(Date.p
  const state=await getPreviewState(op.projectId).catch(()=>null);
  const selected=state?.branch || '(default)';
  const publication=op.publication!;
- let detail=`Ticket changes published: ${publication.branch} (${publication.sha.slice(0,12)}), merged into ${publication.anchor}.`;
+ // Plain wording for the user; branch and commit stay in the ticket's own log and Git tab.
+ let detail=`Merged into \`${publication.anchor}\`.`;
  if(state?.previewStatus==='running' && selected===op.selectedBranch && [publication.branch,publication.anchor].includes(selected)) {
   const result=await restartPreview(op.projectId,{userId:op.userId,branch:selected,expectedBranch:selected,conversationId:op.conversationId}).catch(e=>({error:(e as Error).message}));
-  detail+='error' in result ? ` Preview refresh did not complete: ${result.error}` : ` Preview updated: ${result.previewUrl}. Availability passed; the refreshed preview's full user workflow has not been independently verified.`;
- } else detail+=' The selected Preview was left unchanged. Select the published branch when you want to preview this change.';
+  detail+='error' in result ? ` The preview couldn't be refreshed: ${result.error}` : ` The preview is updated and running: ${result.previewUrl}. It hasn't been tested end to end.`;
+ } else detail+=` The preview is showing another branch, so it wasn't refreshed. Switch it to \`${publication.anchor}\` to see this change.`;
  // Lead with what was built, as bullets; the publication facts follow.
  const [ticket]=await db.select({key:projectTickets.ticketKey,name:projectTickets.name}).from(projectTickets).where(eq(projectTickets.id,op.ticketId)).catch(()=>[]);
- const recap=await workRecap(op.ticketId,since,'What shipped',publication.summary);
+ const recap=await workRecap(op.ticketId,since,'What was built',publication.summary);
  if(recap)detail=(ticket?`**${[ticket.key,ticket.name].filter(Boolean).join(' · ')}**\n\n`:'')+recap+detail;
  await updateTicketOperation('completed',detail,op.id);
 }
