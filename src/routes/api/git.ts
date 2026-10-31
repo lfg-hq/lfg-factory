@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { requireAuth } from '../../auth/middleware.ts';
 import type { auth } from '../../auth/index.ts';
-import { getProjectAccess, requirePermission } from '../../auth/project-access.ts';
+import { getProjectAccess, requirePermission, PermissionError } from '../../auth/project-access.ts';
 import { resolveGitActor, NO_SHARED_GIT_MESSAGE } from '../../services/git-access.ts';
 import { createGitProvider, GitProviderError } from '../../services/git-provider.ts';
 import { buildGitWorkspace } from '../../services/git-workspace.ts';
@@ -14,6 +14,9 @@ import { githubTokens } from '../../db/schema/users.ts';
 import { getValidGitlabToken } from '../../services/gitlab-token.ts';
 import { ticketExecutions } from '../../db/schema/orchestrator.ts';
 import { eq, and } from 'drizzle-orm';
+import { gitReviews } from '../../db/schema/git-reviews.ts';
+import { gitContext } from '../../services/git-context.ts';
+import { queueReview, retryReview, priorReviews, createReviewedPR, reviewBody, reviewRepository, ReviewError } from '../../services/git-review.ts';
 
 type AuthEnv = { Variables: { user: typeof auth.$Infer.Session.user; session: typeof auth.$Infer.Session.session; gitErrorCode: string; gitPartial: boolean } };
 // Existing application diagnostics use console stdout/stderr; no file logger is installed.
@@ -95,4 +98,61 @@ for (const view of ['branches', 'pull-requests'] as const) gitApi.get(`/projects
     return fail('Unable to read the repository. Check Git access in Settings → Integrations and refresh.', error.code, error.status === 401 || error.status === 403 ? 403 : 502);
   }
 });
+// All review endpoints recheck project access and resolve the acting Git account.
+// Findings contain private repository information, so even polling requires Git access.
+for (const route of [
+  ['POST', 'reviews'], ['GET', 'reviews'], ['GET', 'reviews/:id'],
+  ['POST', 'reviews/:id/retry'], ['POST', 'pull-requests'],
+] as const) {
+  gitApi.on(route[0], `/projects/:projectId/git/${route[1]}`, async c => {
+    const correlationId = c.res.headers.get('X-Correlation-ID')!;
+    try {
+      if (route[0] === 'POST') {
+        const origin = c.req.header('Origin');
+        if (origin && origin !== new URL(c.req.url).origin) throw new ReviewError('ORIGIN_DENIED', 403);
+        if (!c.req.header('Content-Type')?.startsWith('application/json')) throw new ReviewError('JSON_REQUIRED', 400);
+        if (Number(c.req.header('Content-Length') || 0) > 60_000) throw new ReviewError('REQUEST_TOO_LARGE', 400);
+      }
+      const access = await getProjectAccess(c.req.param('projectId')!, c.get('user').id);
+      if (!access) throw new ReviewError('PROJECT_ACCESS_DENIED', 404);
+      if (route[0] === 'POST' && !requirePermission(access, 'canEditFiles')) throw new ReviewError('CODE_PERMISSION_REQUIRED', 403);
+      const provider = await gitContext(access.project, c.get('user').id);
+      if (route[1] === 'reviews' && route[0] === 'GET') return c.json({ reviews: await priorReviews(access.project.id), correlationId });
+      const raw = route[0] === 'POST' ? await c.req.text() : '{}';
+      if (raw.length > 60_000) throw new ReviewError('REQUEST_TOO_LARGE', 400);
+      let input: any;
+      try { input = JSON.parse(raw); } catch { throw new ReviewError('INVALID_JSON', 400); }
+      if (!input || typeof input !== 'object' || Array.isArray(input)) throw new ReviewError('INVALID_JSON', 400);
+      if (route[1] === 'reviews' && route[0] === 'POST') {
+        const review = await queueReview(access.project, c.get('user').id, provider, input.headRef, input.baseRef, correlationId);
+        return c.json({ review, correlationId }, 202);
+      }
+      const id = route[1] === 'pull-requests' ? input.reviewId : c.req.param('id');
+      const [row] = await db.select().from(gitReviews).where(and(eq(gitReviews.id, id || ''), eq(gitReviews.projectId, access.project.id))).limit(1);
+      if (!row || row.repo !== reviewRepository(provider) || row.provider !== provider.provider) throw new ReviewError('REVIEW_NOT_FOUND', 404);
+      if (route[1].endsWith('/retry')) return c.json({ review: await retryReview(row), correlationId }, 202);
+      if (route[1] === 'pull-requests') return c.json({ ...await createReviewedPR(access.project, c.get('user').id, provider, row, input, correlationId), correlationId });
+      let stale = true, freshness = 'unavailable';
+      let freshnessError: string | undefined;
+      try {
+        const [head, base] = await Promise.all([provider.ref(row.headRef), provider.ref(row.baseRef)]);
+        stale = head !== row.headSha || base !== row.baseSha; freshness = stale ? 'stale' : 'current';
+      } catch (e) { freshnessError = e instanceof GitProviderError ? e.code : 'REF_CHECK_UNAVAILABLE'; c.set('gitPartial', true); c.set('gitErrorCode', freshnessError); }
+      return c.json({ review: row, stale, freshness, freshnessError, suggestedBody: row.status === 'completed' ? reviewBody(row) : '', correlationId });
+    } catch (e) {
+      const code = e instanceof PermissionError ? 'CODE_PERMISSION_REQUIRED' : e instanceof GitProviderError ? e.code : 'GIT_REVIEW_UNAVAILABLE';
+      c.set('gitErrorCode', code);
+      const messages: Record<string, string> = {
+        REVIEW_STALE: 'Source or destination changed. Run a new review before creating a PR.',
+        REVIEW_NOT_COMPLETED: 'Wait for a completed review. If blocked or incomplete, resolve the reported issue and retry.',
+        PR_CREATION_BUSY: 'Another creation for this source and destination is in progress or awaiting provider reconciliation. Check open PRs before retrying.',
+        PR_CREATION_UNCERTAIN: 'Creation may have reached the provider. Check open PRs, then retry confirmation to reconcile; no second creation will be sent.',
+        ACKNOWLEDGMENT_REQUIRED: 'Read and acknowledge the findings before confirming creation.',
+        GIT_DISCONNECTED: 'Connect your Git account in Settings → Integrations and retry.',
+      };
+      const status = e instanceof PermissionError ? 403 : e instanceof GitProviderError && [400, 403, 404, 409, 422].includes(e.status) ? e.status : 502;
+      return c.json({ error: messages[code] || 'Unable to complete this Git operation. Check project permissions and connected Git/model accounts, then retry.', code, correlationId }, status as 400 | 403 | 404 | 409 | 422 | 502);
+    }
+  });
+}
 export default gitApi;

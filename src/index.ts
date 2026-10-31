@@ -47,6 +47,7 @@ import shareRoutes from "./routes/share.ts";
 import { auth } from "./auth/index.ts";
 import { startTicketWorker } from "./workers/ticket-executor.ts";
 import { startAgentScheduler } from "./services/agent-scheduler.ts";
+import { startGitReviewRunner, stopGitReviewRunner } from "./services/git-review.ts";
 import { startAgentTimeoutSweeper } from "./services/agent-timeout-sweeper.ts";
 import { registerAgentNotifier } from "./services/agent-notifier.ts";
 import { registerAgentReflector } from "./services/agent-reflector.ts";
@@ -359,6 +360,10 @@ registerAgentNotifier();
 registerAgentReflector();
 startTicketWorker();
 startAgentScheduler();
+startGitReviewRunner();
+for (const signal of ['SIGTERM', 'SIGINT'] as const) process.once(signal, () => {
+  void stopGitReviewRunner().finally(() => process.exit(0));
+});
 startAgentTimeoutSweeper();
 
 // ── Public Telegram bot (instant app builder) ────────────────────────
