@@ -828,6 +828,27 @@ ticketsApi.post("/:projectId/tickets/:ticketId/queue", async (c) => {
   return c.json({ ok: true });
 });
 
+// ── POST /:projectId/tickets/:ticketId/run-local ────────────────────
+// Build this ticket on the requester's own computer (LFG Desktop + their Claude Code).
+ticketsApi.post("/:projectId/tickets/:ticketId/run-local", async (c) => {
+  const user = c.get("user");
+  const { projectId, ticketId } = c.req.param();
+  const access = await getProjectAccess(projectId, user.id);
+  if (!access) return c.json({ error: "Not found" }, 404);
+  if (!access.permissions.canManageTickets || !access.permissions.canEditFiles) return c.json({ error: "Ticket management and code-edit permissions are required." }, 403);
+  if (isChatTurnActive(ticketId)) return c.json({ error: "This ticket already has an active operation." }, 409);
+  const body = await c.req.json<{ notes?: string }>().catch(() => ({} as { notes?: string }));
+  const { startTicketOnRunner, RunnerJobError } = await import("../../services/runner/ticket-job.ts");
+  const { userHasConnectedRunner } = await import("../../services/runner/hub.ts");
+  try {
+    const job = await startTicketOnRunner({ projectId: access.project.id, ticketId, actorId: user.id, notes: body.notes });
+    return c.json({ ok: true, jobId: job.id, status: job.status, runnerConnected: userHasConnectedRunner(user.id) }, 202);
+  } catch (error) {
+    if (error instanceof RunnerJobError) return c.json({ error: error.message }, error.status);
+    throw error;
+  }
+});
+
 // Revalidate the saved candidate without dispatching the development agent.
 ticketsApi.post("/:projectId/tickets/:ticketId/retry-validation",async(c)=>{
   const user=c.get("user");const {projectId,ticketId}=c.req.param();
@@ -945,6 +966,13 @@ ticketsApi.post("/:projectId/tickets/:ticketId/stop", async (c) => {
   if(!access.permissions.canManageTickets)return c.json({error:"Ticket management permission is required."},403);
   const [ticket]=await db.select().from(projectTickets).where(and(eq(projectTickets.id,ticketId!),eq(projectTickets.projectId,access.project.id))).limit(1);
   if(!ticket)return c.json({error:"Ticket not found"},404);
+  // A build running on someone's own computer: cancel it there; the cloud worker isn't involved.
+  const { cancelTicketJobs } = await import("../../services/runner/hub.ts");
+  if (await cancelTicketJobs(ticketId!)) {
+    await db.update(projectTickets).set({ status: "stopped", queueStatus: "none", updatedAt: new Date() }).where(eq(projectTickets.id, ticketId!));
+    await addTicketLog(ticketId!, "Stopped. The job on your computer was cancelled.", "agent_progress", access.project.ownerId);
+    return c.json({ ok: true, ticket: { ticketId, status: "stopped", queueStatus: "none" } });
+  }
   const { requestTicketStop } = await import("../../workers/ticket-executor.ts");
   try {await requestTicketStop(ticketId!, access.project.id);}
   catch(error){return c.json({error:(error as Error).message},409);}

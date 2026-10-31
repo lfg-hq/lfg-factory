@@ -61,4 +61,6 @@ export interface WsData {
   userId: string;
   conversationId?: string;
   projectId?: string;
+  /** Set for LFG Desktop runner sockets (/ws/runner), which bypass the chat handlers. */
+  runner?: { deviceId: string; deviceName: string };
 }
