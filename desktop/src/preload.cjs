@@ -5,7 +5,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 if (location.protocol === "file:") {
   contextBridge.exposeInMainWorld("lfg", {
     getSetup: () => ipcRenderer.invoke("lfg:get-setup"),
-    signIn: (serverUrl) => ipcRenderer.invoke("lfg:sign-in", { serverUrl }),
+    signIn: () => ipcRenderer.invoke("lfg:sign-in"),
     cancelSignIn: () => ipcRenderer.invoke("lfg:cancel-sign-in"),
   });
 }

@@ -1,43 +1,43 @@
 #!/usr/bin/env bash
-# One-click LFG Desktop test.
+# One-click LFG Desktop.
 #
-# Starts a throwaway LFG server on its own SQLite database (your Postgres, builds and
-# bots are untouched), seeds a demo project + ticket backed by a local Git repo,
-# pairs this computer, and launches LFG Desktop already connected. Everything lives
-# in .desktop-test/. Quit the app (menu bar "LFG" → Quit) to stop the server too.
+#   desktop/try.sh                  build and open LFG Desktop, signed in to lfg.run
 #
-#   desktop/try.sh                  the desktop app, with your real Claude Code
-#   desktop/try.sh --fake-claude    a stand-in for Claude Code (no usage, ~2 seconds)
-#   desktop/try.sh --headless       the runner in this terminal instead of the app
-#   desktop/try.sh --reset          start over with a fresh database and demo repo
-#   desktop/try.sh --google         offer Google sign-in (needs this port's callback,
-#                                   http://localhost:<port>/api/auth/callback/google,
-#                                   in your Google OAuth client's redirect URIs)
+# Local test environment (no lfg.run account or deploy needed): a throwaway LFG server
+# on its own SQLite database (your Postgres, builds and bots are untouched), a demo
+# project + ticket backed by a local Git repo, everything in .desktop-test/:
 #
-# The app signs in the real way: "Sign in with your browser" opens your browser, you
-# sign in there and choose Connect. The server address is filled in for you.
+#   desktop/try.sh --local                 the app, against the local test server
+#   desktop/try.sh --local --fake-claude   a stand-in for Claude Code (no usage, ~2 seconds)
+#   desktop/try.sh --local --headless      the runner in this terminal instead of the app
+#   desktop/try.sh --local --reset         start over with a fresh database and demo repo
+#   desktop/try.sh --local --google        offer Google sign-in (needs
+#                                          http://localhost:<port>/api/auth/callback/google
+#                                          in your Google OAuth client's redirect URIs)
 #
-# Port: 8100, or set LFG_DESKTOP_TEST_PORT. The server is http://127.0.0.1:<port>, so
-# signing in to it in your browser doesn't replace your localhost:8000 session. With
-# --google (or on port 8000) it's http://localhost:<port>, because that's what Google
-# accepts; a sign-in there replaces your browser's localhost session cookie.
+# Port: 8100, or set LFG_DESKTOP_TEST_PORT. The local server is http://127.0.0.1:<port>
+# (http://localhost:<port> with --google or on port 8000, which is what Google accepts).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 PORT="${LFG_DESKTOP_TEST_PORT:-8100}"
 DIR="$ROOT/.desktop-test"
-MODE=app FAKE=0 RESET=0 GOOGLE=0
+MODE=app FAKE=0 RESET=0 GOOGLE=0 LOCAL=0
 for arg in "$@"; do
   case "$arg" in
     --headless) MODE=headless ;;
     --fake-claude) FAKE=1 ;;
     --reset) RESET=1 ;;
     --google) GOOGLE=1 ;;
-    -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --local) LOCAL=1 ;;
+    -h|--help) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown option: $arg (try --help)" >&2; exit 2 ;;
   esac
 done
+if [ "$LOCAL" = 0 ] && { [ "$MODE" = headless ] || [ "$FAKE" = 1 ] || [ "$RESET" = 1 ] || [ "$GOOGLE" = 1 ]; }; then
+  echo "--headless, --fake-claude, --reset and --google are for the local test server: add --local." >&2; exit 2
+fi
 HOST=127.0.0.1; if [ "$GOOGLE" = 1 ] || [ "$PORT" = 8000 ]; then HOST=localhost; fi
 URL="http://$HOST:$PORT"
 
@@ -48,13 +48,13 @@ die()  { printf '\033[1;31m✗\033[0m %s\n' "$*" >&2; exit 1; }
 # ── 1. Prerequisites ─────────────────────────────────────────────────
 say "Checking prerequisites"
 for tool in bun git npm node curl; do command -v "$tool" >/dev/null || die "$tool is not installed."; done
-[ -f .env ] || die "No .env in $ROOT. Copy the one from your main checkout."
+if [ "$LOCAL" = 1 ]; then [ -f .env ] || die "No .env in $ROOT. Copy the one from your main checkout."; fi
 if [ "$FAKE" = 0 ]; then
   command -v claude >/dev/null || die "Claude Code isn't installed. Install it and run 'claude' once to sign in, or use --fake-claude."
   echo "  Claude Code $(claude --version 2>/dev/null | head -1)"
 fi
-if lsof -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
-  die "Port $PORT is busy. Stop whatever uses it, or run: LFG_DESKTOP_TEST_PORT=8200 $0"
+if [ "$LOCAL" = 1 ] && lsof -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+  die "Port $PORT is busy. Stop whatever uses it, or run: LFG_DESKTOP_TEST_PORT=8200 $0 --local"
 fi
 
 # ── 2. Dependencies ──────────────────────────────────────────────────
@@ -62,6 +62,11 @@ fi
 [ -d desktop/node_modules ] || { say "Installing desktop dependencies"; (cd desktop && npm install --no-audit --no-fund); }
 say "Building LFG Desktop"
 (cd desktop && npm run build --silent)
+
+if [ "$LOCAL" = 0 ]; then
+  say "Opening LFG Desktop. Click \"Sign in with your browser\" and sign in as usual."
+  exec desktop/node_modules/.bin/electron desktop
+fi
 
 # ── 3. Isolated environment ──────────────────────────────────────────
 [ "$RESET" = 1 ] && { say "Resetting .desktop-test"; rm -rf "$DIR"; }

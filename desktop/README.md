@@ -17,15 +17,9 @@ Work happens in `~/LFG/repos` (clones) and `~/LFG/worktrees` (one per ticket bra
 
 ## Which server
 
-The app signs in to LFG Cloud (`https://lfg.run`). For a company's own deployment, ship
-the app with a `server.json` next to `package.json`:
-
-```json
-{ "serverUrl": "https://lfg.yourcompany.com" }
-```
-
-People can still pick another server from "Use a different server" on the sign-in
-screen, but don't need to. `try.sh` points the app at its local test server.
+The app signs in to LFG Cloud (`https://lfg.run`); it never shows or asks for a server
+address. `desktop/try.sh --local` points it at a local test server instead
+(`LFG_SERVER_URL`, a developer-only override).
 
 ## How sign-in works
 
@@ -46,18 +40,18 @@ useless without the verifier that never leaves the app.
 From the repository root, or by double-clicking `desktop/Try LFG Desktop.command` in Finder:
 
 ```sh
-desktop/try.sh                 # the app, with your real Claude Code
-desktop/try.sh --fake-claude   # a stand-in for Claude Code: no usage, done in seconds
-desktop/try.sh --headless      # the runner in the terminal instead of the app
-desktop/try.sh --reset         # start over
+desktop/try.sh                         # build and open the app, signed in to lfg.run
+desktop/try.sh --local                 # a throwaway local server with a demo project instead
+desktop/try.sh --local --fake-claude   # …with a stand-in for Claude Code: no usage
+desktop/try.sh --local --headless      # …with the runner in the terminal instead of the app
+desktop/try.sh --local --reset         # …starting over
 ```
 
-It starts a separate LFG server on http://localhost:8100 with its own SQLite database
-in `.desktop-test/`, so your Postgres, running builds, Telegram bot and email are not
-touched. It seeds a test account, a "Desktop runner demo" project backed by a local Git
-repo, and one ticket; pairs this computer; and opens LFG Desktop already connected. The
-terminal prints the test sign-in. On the ticket, pick **Build on my computer** in the
-Run menu and click **Run**. Quitting the app stops the server.
+`--local` runs its own LFG server on its own SQLite database in `.desktop-test/`, so
+your Postgres, running builds, Telegram bot and email are not touched. It seeds a test
+account, a "Desktop runner demo" project backed by a local Git repo, and one ticket.
+The terminal prints the test sign-in. On the ticket, pick **Build on my computer** in
+the Run menu and click **Run**. Quitting the app stops the server.
 
 ## Develop
 

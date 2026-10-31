@@ -16,16 +16,10 @@
   h1 { font-size: 22px; margin: 0 0 6px; }
   p { color: var(--muted); margin: 0 0 18px; }
   .notice { background: var(--notice-bg); color: var(--fg); border-radius: 10px; padding: 10px 12px; margin-bottom: 18px; font-size: 14px; }
-  label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
-  input { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--field); color: var(--fg); font: inherit; -webkit-user-select: text; user-select: text; }
   button { width: 100%; margin-top: 18px; padding: 11px 18px; border: 0; border-radius: 10px; background: var(--accent); color: var(--accent-fg); font: inherit; font-weight: 600; cursor: pointer; }
   button.secondary { background: transparent; color: var(--fg); border: 1px solid var(--border); margin-top: 10px; }
   button:disabled { opacity: .6; cursor: default; }
   .hint { font-size: 13px; color: var(--muted); margin: 16px 0 0; }
-  .server-line { text-align: center; font-size: 13px; margin: 14px 0 0; }
-  .server-line a { color: var(--muted); }
-  #server-field { margin-bottom: 4px; }
-  #server-field:not([hidden]) ~ .server-line { display: none; }
   #error { color: var(--error); font-size: 14px; margin-top: 12px; min-height: 1.4em; }
   #waiting { display: none; }
   .waiting #form { display: none; }
@@ -44,12 +38,7 @@
     <h1>Sign in to LFG</h1>
     <p>You'll sign in with your browser, the same way you sign in to LFG on the web, including Google or your company's single sign-on.</p>
     <form id="signin">
-      <div id="server-field" hidden>
-        <label for="server">LFG server</label>
-        <input id="server" type="url" placeholder="https://lfg.yourcompany.com" required autocomplete="url">
-      </div>
       <button id="go" type="submit">Sign in with your browser</button>
-      <p class="server-line"><span id="server-name"></span> · <a href="#" id="change-server">Use a different server</a></p>
     </form>
     <p class="hint">Builds you start with “Build on my computer” run here with your Claude Code login. Install it and run <code>claude</code> once in a terminal.</p>
   </section>
@@ -68,26 +57,19 @@
 
   window.lfg.getSetup().then((s) => {
     if (!s) return;
-    $("server").value = s.serverUrl || "";
-    try { $("server-name").textContent = new URL(s.serverUrl).host; } catch (_) { $("server-field").hidden = false; }
+
     if (s.notice) { $("notice").textContent = s.notice; $("notice").hidden = false; }
-    ($("server-field").hidden ? $("go") : $("server")).focus();
+    $("go").focus();
   });
 
   $("signin").addEventListener("submit", async (event) => {
     event.preventDefault();
     $("error").textContent = "";
     setWaiting(true);
-    const result = await window.lfg.signIn($("server").value);
+    const result = await window.lfg.signIn();
     if (result.ok) return; // the window now loads your workspace
     setWaiting(false);
     if (!result.cancelled) $("error").textContent = result.error;
-  });
-
-  $("change-server").addEventListener("click", (event) => {
-    event.preventDefault();
-    $("server-field").hidden = false;
-    $("server").select();
   });
 
   $("cancel").addEventListener("click", () => { window.lfg.cancelSignIn(); });

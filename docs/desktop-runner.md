@@ -96,7 +96,7 @@ Run DB-backed test files one at a time: they share one cached DB connection per 
 Try the whole flow in one step (isolated server, seeded demo, app already paired):
 
 ```sh
-desktop/try.sh --fake-claude   # or without the flag to use your real Claude Code
+desktop/try.sh --local --fake-claude   # local test server; drop --fake-claude for real Claude Code
 ```
 
 Or by hand: pair a computer in Settings → Integrations → Computers, then
