@@ -49,7 +49,7 @@
 
   function render(devices) {
     if (!devices.length) {
-      const empty = el("div", "", "No computers connected yet. Connect one, then use “Run on my computer” on a ticket.");
+      const empty = el("div", "", "No computers yet. Install LFG Desktop and sign in: it connects that computer automatically.");
       empty.className = "byok-desc";
       list.replaceChildren(empty);
       return;
@@ -84,7 +84,7 @@
   }
 
   connectBtn.addEventListener("click", async () => {
-    const name = window.prompt("Name this computer", "My laptop");
+    const name = window.prompt("Name the machine this headless runner is on", "Build box");
     if (name === null) return;
     connectBtn.disabled = true;
     try {
@@ -92,7 +92,7 @@
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
       const server = j.serverUrl || window.location.origin;
-      const intro = el("div", "", "Open LFG Desktop on that computer and paste these. The token is shown only once.");
+      const intro = el("div", "", "For the headless runner (lfg-runner) on a machine without the desktop app. LFG Desktop doesn't need this: signing in connects it. The token is shown only once.");
       intro.className = "byok-desc";
       const headless = el("div", "font-size:.75rem;", "No desktop app (for example on a Linux box)? Run: lfg-runner --server " + server + " --token <token> --auto-approve");
       headless.className = "byok-desc";

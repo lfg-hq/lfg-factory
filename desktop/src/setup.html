@@ -2,48 +2,81 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
-<title>Connect LFG Desktop</title>
+<title>Sign in to LFG</title>
 <style>
-  :root { color-scheme: light dark; --bg: #fafafa; --fg: #111827; --muted: #6b7280; --border: #d1d5db; --field: #fff; --accent: #7c3aed; --error: #dc2626; }
-  @media (prefers-color-scheme: dark) { :root { --bg: #141414; --fg: #e5e7eb; --muted: #9ca3af; --border: #374151; --field: #1f1f1f; --error: #f87171; } }
-  body { margin: 0; padding: 28px 32px; background: var(--bg); color: var(--fg); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-  h1 { font-size: 20px; margin: 0 0 6px; }
+  :root { color-scheme: light dark; --bg: #f8fafc; --card: #fff; --fg: #0f172a; --muted: #64748b; --border: #e2e8f0; --field: #fff; --accent: #4f46e5; --accent-fg: #fff; --error: #dc2626; --notice-bg: #eef2ff; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0b0f19; --card: #141a2a; --fg: #e2e8f0; --muted: #94a3b8; --border: #263049; --field: #0f1524; --accent: #6366f1; --error: #f87171; --notice-bg: #1e2340; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; background: var(--bg); color: var(--fg); font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; -webkit-user-select: none; user-select: none; }
+  main { width: 100%; max-width: 420px; background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 32px; }
+  .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; margin-bottom: 22px; }
+  .logo span { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 9px; background: var(--accent); color: var(--accent-fg); font-size: 14px; }
+  h1 { font-size: 22px; margin: 0 0 6px; }
   p { color: var(--muted); margin: 0 0 18px; }
-  ol { color: var(--muted); padding-left: 18px; margin: 0 0 20px; }
-  label { display: block; font-weight: 600; margin: 14px 0 6px; }
-  input { box-sizing: border-box; width: 100%; padding: 9px 11px; border-radius: 8px; border: 1px solid var(--border); background: var(--field); color: var(--fg); font: inherit; }
-  button { margin-top: 22px; padding: 9px 18px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+  .notice { background: var(--notice-bg); color: var(--fg); border-radius: 10px; padding: 10px 12px; margin-bottom: 18px; font-size: 14px; }
+  label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+  input { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--field); color: var(--fg); font: inherit; -webkit-user-select: text; user-select: text; }
+  button { width: 100%; margin-top: 18px; padding: 11px 18px; border: 0; border-radius: 10px; background: var(--accent); color: var(--accent-fg); font: inherit; font-weight: 600; cursor: pointer; }
+  button.secondary { background: transparent; color: var(--fg); border: 1px solid var(--border); margin-top: 10px; }
   button:disabled { opacity: .6; cursor: default; }
-  #error { color: var(--error); margin-top: 12px; min-height: 1.5em; }
+  .hint { font-size: 13px; color: var(--muted); margin: 16px 0 0; }
+  #error { color: var(--error); font-size: 14px; margin-top: 12px; min-height: 1.4em; }
+  #waiting { display: none; }
+  .waiting #form { display: none; }
+  .waiting #waiting { display: block; }
+  .spinner { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--border); border-top-color: var(--accent); display: inline-block; vertical-align: -4px; margin-right: 8px; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
 </style>
 </head>
 <body>
-  <h1>Connect this computer</h1>
-  <p>LFG Desktop shows your company's LFG, and runs the coding for tickets you start on this computer, using the Claude Code login already here.</p>
-  <ol>
-    <li>In LFG, open Settings → Computers and choose “Connect a computer”.</li>
-    <li>Paste the address and token it shows below.</li>
-    <li>Make sure Claude Code is installed and signed in: run <code>claude</code> once in a terminal.</li>
-  </ol>
-  <form id="form">
-    <label for="server">LFG address</label>
-    <input id="server" type="url" placeholder="https://lfg.yourcompany.com" required>
-    <label for="token">Computer token</label>
-    <input id="token" type="password" placeholder="lfgr_…" autocomplete="off" required>
-    <button id="save" type="submit">Connect</button>
-    <div id="error" role="alert"></div>
-  </form>
+<main>
+  <div class="logo"><span>▲</span>LFG</div>
+  <div id="notice" class="notice" hidden></div>
+
+  <section id="form">
+    <h1>Sign in to LFG</h1>
+    <p>You'll sign in with your browser, the same way you sign in to LFG on the web, including Google or your company's single sign-on.</p>
+    <form id="signin">
+      <label for="server">Your company's LFG address</label>
+      <input id="server" type="url" placeholder="https://lfg.yourcompany.com" required autocomplete="url">
+      <button id="go" type="submit">Sign in with your browser</button>
+    </form>
+    <p class="hint">Builds you start with “Build on my computer” run here with your Claude Code login. Install it and run <code>claude</code> once in a terminal.</p>
+  </section>
+
+  <section id="waiting">
+    <h1><span class="spinner" aria-hidden="true"></span>Finish in your browser</h1>
+    <p>We opened LFG in your browser. Sign in there and choose <strong>Connect</strong>, then come back here.</p>
+    <button id="cancel" class="secondary" type="button">Cancel</button>
+  </section>
+
+  <div id="error" role="alert"></div>
+</main>
 <script>
   const $ = (id) => document.getElementById(id);
-  window.lfg.getSetup().then((s) => { $("server").value = s.serverUrl || ""; });
-  $("form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    $("save").disabled = true;
-    $("error").textContent = "";
-    const result = await window.lfg.saveSetup($("server").value, $("token").value);
-    if (!result.ok) { $("error").textContent = result.error; $("save").disabled = false; }
+  const setWaiting = (on) => document.body.classList.toggle("waiting", on);
+
+  window.lfg.getSetup().then((s) => {
+    if (!s) return;
+    $("server").value = s.serverUrl || "";
+    if (s.notice) { $("notice").textContent = s.notice; $("notice").hidden = false; }
+    if (s.serverUrl) $("go").focus(); else $("server").focus();
   });
+
+  $("signin").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    $("error").textContent = "";
+    setWaiting(true);
+    const result = await window.lfg.signIn($("server").value);
+    if (result.ok) return; // the window now loads your workspace
+    setWaiting(false);
+    if (!result.cancelled) $("error").textContent = result.error;
+  });
+
+  $("cancel").addEventListener("click", () => { window.lfg.cancelSignIn(); });
 </script>
 </body>
 </html>

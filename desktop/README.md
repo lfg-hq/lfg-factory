@@ -7,11 +7,27 @@ the Claude Code login already here. See `../docs/desktop-runner.md` for how it f
 
 1. Install and sign in to Claude Code: run `claude` once in a terminal.
 2. Make sure `git` can push to the project's repository from this computer.
-3. In LFG: Settings → Integrations → Computers → **Connect a computer**.
-4. Start the app and paste the address and token.
-5. On a ticket, choose **Run on my computer**. Approve it when LFG Desktop asks.
+3. Open LFG Desktop, enter your company's LFG address and click **Sign in with your
+   browser**. Sign in there as usual (Google, SSO or password) and choose **Connect**.
+   That signs the app in and connects this computer; there is no token to copy.
+4. On a ticket, pick **Build on my computer** in the Run menu. Approve it when LFG Desktop asks.
 
 Work happens in `~/LFG/repos` (clones) and `~/LFG/worktrees` (one per ticket branch).
+**Sign out on this computer** (menu bar) disconnects it again.
+
+## How sign-in works
+
+The standard flow for desktop apps (OAuth for native apps, RFC 8252), the same one
+Slack, Linear or VS Code use. Nothing is signed in to inside the app window.
+
+1. The app listens on a random `127.0.0.1` port and opens `/desktop/authorize` in your browser.
+2. Signed in there, you confirm "Connect LFG Desktop on <computer>?".
+3. The browser goes to the app's `127.0.0.1` callback with a one-time code (valid 5 minutes).
+4. The app sends the code with its PKCE verifier to `/api/desktop/token` and gets this
+   computer's runner token and a one-time token that opens a session of its own.
+
+The server accepts only `127.0.0.1` callbacks and same-site confirmations, and a code is
+useless without the verifier that never leaves the app.
 
 ## Try it in one step
 

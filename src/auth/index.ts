@@ -1,6 +1,6 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { emailOTP } from "better-auth/plugins";
+import { emailOTP, oneTimeToken } from "better-auth/plugins";
 import { db } from "../config/db.ts";
 import { env } from "../config/env.ts";
 import {
@@ -112,6 +112,9 @@ export const auth = betterAuth({
   // Passwordless 6-digit email login (used by the /apps instant-app flow).
   // sign-in with an OTP auto-creates the account if it doesn't exist.
   plugins: [
+    // LFG Desktop sign-in hand-off (src/services/runner/desktop-auth.ts). Tokens are only
+    // minted server-side for a fresh app session; browsers can't generate them.
+    oneTimeToken({ disableClientRequest: true, storeToken: "hashed", expiresIn: 3 }),
     emailOTP({
       otpLength: 6,
       expiresIn: 60 * 10, // 10 minutes

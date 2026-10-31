@@ -26,6 +26,7 @@ import { cliRouter } from "./routes/api/cli.ts";
 import claudeAuthApi from "./routes/api/claude-auth.ts";
 import openAICodexAuthApi from "./routes/api/openai-codex-auth.ts";
 import runnerApi from "./routes/api/runner.ts";
+import desktopRoutes from "./routes/desktop.ts";
 import { authenticateRunnerToken, runnerOpened, runnerClosed, runnerMessage, type RunnerConn } from "./services/runner/hub.ts";
 import composioApi from "./routes/api/composio.ts";
 import invitationsApi from "./routes/api/invitations.ts";
@@ -214,6 +215,7 @@ app.use("*", async (c, next) => {
   return c.redirect(session ? "/projects" : "/auth/login");
 });
 app.route("/", authRoutes);
+app.route("/", desktopRoutes);
 app.route("/", landing);
 app.route("/", chatRoutes);
 app.route("/", instantRoutes);

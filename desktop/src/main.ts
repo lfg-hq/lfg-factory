@@ -2,46 +2,50 @@
  * LFG Desktop: a window onto the company's LFG server, plus a runner that does the
  * coding on this computer with the Claude Code login already here.
  *
- * Nothing is stored locally except the server URL, this computer's runner token
- * (encrypted with the OS keychain via safeStorage) and the "don't ask again" list.
+ * Signing in happens in the person's own browser (see browser-signin.ts), which hands
+ * back this computer's runner token and a session of the app's own. The app never
+ * shows the website's login page and never signs in to Google inside its window.
+ *
+ * Stored locally: the server URL, the runner token (encrypted with the OS keychain via
+ * safeStorage), this computer's device id, and the "don't ask again" project list.
  */
 
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, safeStorage, session, shell, Tray, nativeImage } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, safeStorage, session, shell, Tray, nativeImage, type IpcMainInvokeEvent } from "electron";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Runner, defaultWorkRoot, type RunnerState } from "./runner.ts";
 import { nodeSocketFactory } from "./socket.ts";
+import { signInWithBrowser, SignInCancelled } from "./browser-signin.ts";
 import type { RunnerJobOffer } from "./protocol.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
 interface Config {
   serverUrl?: string;
-  /** base64 of safeStorage.encryptString(token) */
+  /** base64 of safeStorage.encryptString(runner token) */
   token?: string;
+  deviceId?: string;
+  email?: string;
   /** Projects whose jobs run without asking. */
   trustedProjects?: string[];
   workRoot?: string;
 }
 
-// Development overrides, set by desktop/try.sh: a throwaway profile, already paired,
-// pointed at a local test server. Never persisted.
-const devServerUrl = process.env.LFG_SERVER_URL;
-const devToken = process.env.LFG_RUNNER_TOKEN;
+// Development overrides, set by desktop/try.sh: a throwaway profile pointed at a local test server.
 if (process.env.LFG_DESKTOP_PROFILE) app.setPath("userData", `${app.getPath("userData")}-${process.env.LFG_DESKTOP_PROFILE}`);
 
 const configPath = () => join(app.getPath("userData"), "config.json");
 function loadConfig(): Config {
   try { return JSON.parse(readFileSync(configPath(), "utf8")); } catch { return {}; }
 }
-function saveConfig(config: Config) {
+function saveConfig() {
   mkdirSync(dirname(configPath()), { recursive: true });
   writeFileSync(configPath(), JSON.stringify(config, null, 2), { mode: 0o600 });
 }
-function readToken(config: Config): string | null {
-  if (devToken) return devToken;
+function readToken(): string | null {
   if (!config.token) return null;
   try { return safeStorage.decryptString(Buffer.from(config.token, "base64")); } catch { return null; }
 }
@@ -62,59 +66,131 @@ function loginShellEnv(): NodeJS.ProcessEnv {
 
 let config: Config = {};
 let mainWindow: BrowserWindow | null = null;
-let setupWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let runner: Runner | null = null;
 let runnerStatus: { state: RunnerState; detail?: string } = { state: "disconnected" };
 let shellEnv: NodeJS.ProcessEnv = process.env;
+let signIn: AbortController | null = null;
+let signInNotice = "";
 
-// Sign-in providers whose pages must stay inside the app, so the session cookie lands here.
-const SIGN_IN_PAGES: Array<[RegExp, RegExp]> = [
-  [/^accounts\.google\.[a-z.]+$/, /^\//],
-  [/^accounts\.youtube\.com$/, /^\//],
-  [/^github\.com$/, /^\/(login|session|sessions)(\/|$)/],
-  [/^gitlab\.com$/, /^\/(oauth|users\/sign_in)(\/|$)/],
-];
-const isSignInPage = (url: URL) => url.protocol === "https:" && SIGN_IN_PAGES.some(([host, path]) => host.test(url.hostname) && path.test(url.pathname));
+const origin = () => (config.serverUrl ? new URL(config.serverUrl).origin : "");
+const deviceName = () => (process.platform === "darwin" ? spawnSync("scutil", ["--get", "ComputerName"], { encoding: "utf8" }).stdout.trim() : "") || hostname().replace(/\.local$/, "");
 
-function openMain() {
-  if (!config.serverUrl) return openSetup();
-  if (mainWindow) { mainWindow.show(); mainWindow.focus(); return; }
-  mainWindow = new BrowserWindow({ width: 1400, height: 900, title: "LFG", webPreferences: { contextIsolation: true, sandbox: true } });
-  const origin = new URL(config.serverUrl).origin;
-  const inApp = (raw: string) => { const url = new URL(raw); return url.origin === origin || isSignInPage(url); };
-  // Other sites open in the person's browser, not inside the app.
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (inApp(url)) return { action: "allow" };
+// ── Window ───────────────────────────────────────────────────────────
+
+function ensureWindow(): BrowserWindow {
+  if (mainWindow) return mainWindow;
+  const win = new BrowserWindow({
+    width: 1400, height: 900, minWidth: 480, minHeight: 560, title: "LFG",
+    webPreferences: { preload: join(here, "preload.cjs"), contextIsolation: true, sandbox: true },
+  });
+  // The website's sign-in pages mean "not signed in here": show the app's own sign-in.
+  const isSignInPage = (url: URL) => url.origin === origin() && /^\/auth\/(login|register)\/?$/.test(url.pathname);
+  const guard = (event: Electron.Event, raw: string) => {
+    let url: URL;
+    try { url = new URL(raw); } catch { return; }
+    if (url.protocol === "file:") return;
+    if (isSignInPage(url)) { event.preventDefault(); showSignIn(); return; }
+    // Other sites open in the person's browser, not inside the app.
+    if (url.origin !== origin()) { event.preventDefault(); void shell.openExternal(raw); }
+  };
+  win.webContents.on("will-navigate", guard);
+  win.webContents.on("will-redirect", guard);
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (new URL(url).origin === origin()) return { action: "allow" };
     void shell.openExternal(url);
     return { action: "deny" };
   });
-  mainWindow.webContents.on("will-navigate", (event, url) => {
-    if (!inApp(url)) { event.preventDefault(); void shell.openExternal(url); }
-  });
-  // The app, not the website: start at the person's projects (sign-in if needed).
-  void mainWindow.loadURL(`${origin}/projects`);
-  mainWindow.on("closed", () => { mainWindow = null; });
+  win.on("closed", () => { mainWindow = null; });
+  mainWindow = win;
+  return win;
+}
+
+function showSignIn(notice = "") {
+  signInNotice = notice;
+  const win = ensureWindow();
+  void win.loadFile(join(here, "setup.html"));
+  win.show();
+}
+
+function showWorkspace(path = "/projects") {
+  if (!config.serverUrl || !readToken()) return showSignIn();
+  const win = ensureWindow();
+  void win.loadURL(`${origin()}${path}`);
+  win.show();
+  win.focus();
 }
 
 /** Mark requests to the LFG server as coming from the app, so it skips the marketing site. */
 function tagServerRequests() {
   session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
     const headers = details.requestHeaders;
-    if (config.serverUrl && details.url.startsWith(new URL(config.serverUrl).origin + "/")) headers["X-LFG-Desktop"] = app.getVersion();
+    if (config.serverUrl && details.url.startsWith(origin() + "/")) headers["X-LFG-Desktop"] = app.getVersion();
     callback({ requestHeaders: headers });
   });
 }
 
-function openSetup() {
-  if (setupWindow) { setupWindow.focus(); return; }
-  setupWindow = new BrowserWindow({
-    width: 560, height: 560, title: "Connect LFG Desktop", resizable: false,
-    webPreferences: { preload: join(here, "preload.cjs"), contextIsolation: true, sandbox: true },
-  });
-  void setupWindow.loadFile(join(here, "setup.html"));
-  setupWindow.on("closed", () => { setupWindow = null; });
+// ── Sign-in (from the local setup page only) ─────────────────────────
+
+const fromSetupPage = (event: IpcMainInvokeEvent) => event.senderFrame?.url.startsWith("file://") ?? false;
+
+ipcMain.handle("lfg:get-setup", (event) => {
+  if (!fromSetupPage(event)) return null;
+  return { serverUrl: config.serverUrl ?? process.env.LFG_SERVER_URL ?? "", email: config.email ?? "", notice: signInNotice, deviceName: deviceName() };
+});
+
+ipcMain.handle("lfg:sign-in", async (event, input: { serverUrl: string }) => {
+  if (!fromSetupPage(event)) return { ok: false, error: "Not allowed" };
+  let url: URL;
+  try { url = new URL(String(input.serverUrl).trim()); } catch { return { ok: false, error: "Enter the full address, like https://lfg.yourcompany.com" }; }
+  if (url.protocol !== "https:" && !["localhost", "127.0.0.1"].includes(url.hostname)) return { ok: false, error: "Use an https:// address." };
+  if (!safeStorage.isEncryptionAvailable()) return { ok: false, error: "This system has no secure storage for the sign-in." };
+  signIn?.abort();
+  signIn = new AbortController();
+  try {
+    const result = await signInWithBrowser({
+      serverUrl: url.origin,
+      deviceName: deviceName(),
+      replaceDeviceId: url.origin === origin() ? config.deviceId : undefined,
+      openBrowser: (link) => shell.openExternal(link),
+      signal: signIn.signal,
+    });
+    config = { ...config, serverUrl: url.origin, token: safeStorage.encryptString(result.runnerToken).toString("base64"), deviceId: result.deviceId, email: result.user.email };
+    saveConfig();
+    startRunner();
+    ensureWindow();
+    void mainWindow!.loadURL(`${url.origin}/desktop/session?token=${encodeURIComponent(result.sessionToken)}`);
+    app.focus({ steal: true });
+    mainWindow!.show();
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof SignInCancelled) return { ok: false, cancelled: true, error: error.message };
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  } finally {
+    signIn = null;
+  }
+});
+
+ipcMain.handle("lfg:cancel-sign-in", (event) => { if (fromSetupPage(event)) signIn?.abort(); });
+
+async function signOut() {
+  const server = origin();
+  if (server && config.deviceId) {
+    // Unpair this computer while the session still exists, then end the session.
+    await session.defaultSession.fetch(`${server}/api/runner/devices/${config.deviceId}`, { method: "DELETE", credentials: "include" }).catch(() => {});
+    await session.defaultSession.fetch(`${server}/auth/logout`, { method: "POST", credentials: "include" }).catch(() => {});
+  }
+  await session.defaultSession.clearStorageData({ storages: ["cookies"] });
+  runner?.stop();
+  runner = null;
+  runnerStatus = { state: "disconnected" };
+  config = { ...config, token: undefined, deviceId: undefined, email: undefined };
+  saveConfig();
+  refreshTray();
+  showSignIn("You're signed out on this computer.");
 }
+
+// ── Runner ───────────────────────────────────────────────────────────
 
 async function approve(job: RunnerJobOffer) {
   const p = job.payload;
@@ -134,7 +210,7 @@ async function approve(job: RunnerJobOffer) {
   if (response !== 0) return { approved: false as const, reason: "Declined on this computer" };
   if (checkboxChecked) {
     config.trustedProjects = [...new Set([...(config.trustedProjects ?? []), p.projectName])];
-    saveConfig(config);
+    saveConfig();
   }
   return { approved: true as const };
 }
@@ -142,7 +218,7 @@ async function approve(job: RunnerJobOffer) {
 function startRunner() {
   runner?.stop();
   runner = null;
-  const token = readToken(config);
+  const token = readToken();
   if (!config.serverUrl || !token) return;
   runner = new Runner({
     serverUrl: config.serverUrl,
@@ -154,7 +230,11 @@ function startRunner() {
     env: shellEnv,
     appVersion: app.getVersion(),
     approve,
-    onState: (state, detail) => { runnerStatus = { state, detail }; refreshTray(); },
+    onState: (state, detail) => {
+      runnerStatus = { state, detail };
+      refreshTray();
+      if (state === "unauthorized") showSignIn("This computer was disconnected from LFG. Sign in again to reconnect it.");
+    },
     onJob: (e) => {
       const body = e.phase === "started" ? "Started on this computer"
         : e.phase === "finished" ? (e.detail ?? "Done")
@@ -168,69 +248,59 @@ function startRunner() {
   runner.start();
 }
 
+// ── Menu bar ─────────────────────────────────────────────────────────
+
 function statusLabel(): string {
+  if (!readToken()) return "Not signed in";
   switch (runnerStatus.state) {
-    case "connected": return `Connected${runnerStatus.detail ? ` as ${runnerStatus.detail}` : ""}`;
+    case "connected": return `Connected${config.email ? ` as ${config.email}` : ""}`;
     case "connecting": return "Connecting…";
-    case "unauthorized": return "Not paired: pair this computer again";
+    case "unauthorized": return "Disconnected: sign in again";
     case "stopped": return "Runner stopped";
-    default: return `Disconnected${runnerStatus.detail ? `: ${runnerStatus.detail}` : ""}, retrying`;
+    default: return `Offline${runnerStatus.detail ? `: ${runnerStatus.detail}` : ""}, retrying`;
   }
 }
 
 function refreshTray() {
   if (!tray) return;
   const busy = runner?.active.size ?? 0;
+  const signedIn = !!readToken();
   tray.setToolTip(`LFG: ${statusLabel()}`);
   if (process.platform === "darwin") tray.setTitle(busy ? `LFG ●${busy}` : runnerStatus.state === "connected" ? "LFG" : "LFG ○");
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: statusLabel(), enabled: false },
     ...(busy ? [{ label: `${busy} job running`, enabled: false }] : []),
     { type: "separator" },
-    { label: "Open LFG", click: openMain },
+    { label: "Open LFG", click: () => showWorkspace() },
+    ...(signedIn ? [{ label: "Open LFG in your browser", click: () => { void shell.openExternal(`${origin()}/projects`); } }] : []),
     { label: "Open work folder", click: () => { const dir = config.workRoot ?? defaultWorkRoot(); mkdirSync(dir, { recursive: true }); void shell.openPath(dir); } },
-    { label: "Pair this computer again…", click: openSetup },
     { type: "separator" },
+    signedIn ? { label: "Sign out on this computer", click: () => { void signOut(); } } : { label: "Sign in…", click: () => showSignIn() },
     { label: "Quit LFG", role: "quit" },
   ]));
 }
 
-ipcMain.handle("lfg:get-setup", () => ({ serverUrl: config.serverUrl ?? "", paired: !!readToken(config), encryption: safeStorage.isEncryptionAvailable() }));
-ipcMain.handle("lfg:save-setup", async (_e, input: { serverUrl: string; token: string }) => {
-  let url: URL;
-  try { url = new URL(input.serverUrl.trim()); } catch { return { ok: false, error: "Enter the full address, like https://lfg.yourcompany.com" }; }
-  if (url.protocol !== "https:" && !["localhost", "127.0.0.1"].includes(url.hostname)) return { ok: false, error: "Use an https:// address." };
-  const token = input.token.trim();
-  if (!token.startsWith("lfgr_")) return { ok: false, error: "That doesn't look like a computer token. Copy it from Settings → Computers." };
-  if (!safeStorage.isEncryptionAvailable()) return { ok: false, error: "This system has no secure storage for the token." };
-  config = { ...config, serverUrl: url.origin, token: safeStorage.encryptString(token).toString("base64") };
-  saveConfig(config);
-  startRunner();
-  setupWindow?.close();
-  openMain();
-  return { ok: true };
-});
+// ── App ──────────────────────────────────────────────────────────────
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on("second-instance", openMain);
+  app.on("second-instance", () => showWorkspace());
   app.whenReady().then(() => {
     shellEnv = loginShellEnv();
     config = loadConfig();
-    if (devServerUrl) config.serverUrl = devServerUrl;
+    if (process.env.LFG_SERVER_URL && origin() !== new URL(process.env.LFG_SERVER_URL).origin) {
+      config = { trustedProjects: config.trustedProjects, serverUrl: new URL(process.env.LFG_SERVER_URL).origin };
+    }
     if (process.env.LFG_WORK_ROOT) config.workRoot = process.env.LFG_WORK_ROOT;
-    // A plain Chrome user agent: Google refuses sign-in from agents that announce Electron.
-    app.userAgentFallback = app.userAgentFallback.replace(/ Electron\/\S+/, "").replace(/ (LFG|lfg-desktop)\/\S+/, "");
     tagServerRequests();
     tray = new Tray(nativeImage.createEmpty());
     refreshTray();
     startRunner();
-    openMain();
-    app.on("activate", openMain);
+    showWorkspace();
+    app.on("activate", () => showWorkspace());
   });
-  // Keep running in the tray so jobs can still arrive with no window open.
+  // Keep running in the menu bar so jobs can still arrive with no window open.
   app.on("window-all-closed", () => { /* stay alive */ });
-  app.on("before-quit", () => runner?.stop());
+  app.on("before-quit", () => { signIn?.abort(); runner?.stop(); });
 }
-

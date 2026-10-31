@@ -32,6 +32,9 @@ Company LFG server (Postgres)                     Jane's computer: LFG Desktop
   started with `--auto-approve`.
 - **No silent fallback.** If the computer is offline the ticket waits ("Waiting for
   your computer"). It never moves to a cloud sandbox or another key on its own.
+- **Sign-in happens in the person's browser**, never inside the app window (RFC 8252,
+  as Slack, Linear and VS Code do). Signing in to the app pairs the computer; there is
+  no token to copy. Tokens from Settings are only for the headless `lfg-runner`.
 - **Device tokens** are random, shown once at pairing, stored on the server only as a
   SHA-256 hash, and revocable (revoking disconnects the device immediately). On the
   computer the token is encrypted with the OS keychain (Electron `safeStorage`).
@@ -45,6 +48,7 @@ Company LFG server (Postgres)                     Jane's computer: LFG Desktop
 | Connections, routing, job state, ticket logs | `src/services/runner/hub.ts` |
 | Ticket → job (prompt, branch, base branches) | `src/services/runner/ticket-job.ts` |
 | Pair / list / revoke computers | `src/routes/api/runner.ts` (`/api/runner/*`) |
+| Desktop sign-in (browser, PKCE, 127.0.0.1 callback) | `src/routes/desktop.ts`, `src/services/runner/desktop-auth.ts`, `desktop/src/browser-signin.ts` |
 | Start on a ticket | `POST /api/projects/:projectId/tickets/:ticketId/run-local` |
 | Stop | the existing ticket Stop also cancels runner jobs |
 | WebSocket | `/ws/runner` in `src/index.ts` (Bearer device token, no session) |
@@ -83,6 +87,7 @@ Also `rejected` (declined on the computer) and `cancelled` (Stop).
 ```sh
 bun test tests/runner-hub.test.ts   # routing, ownership, reconnects, cancel, decline
 bun test tests/runner-e2e.test.ts   # real WebSocket + runner + git, stand-in `claude`
+bun test tests/desktop-auth.test.ts # browser sign-in: PKCE, one-time codes, app session
 cd desktop && npm install && npm run typecheck
 ```
 

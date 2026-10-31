@@ -444,10 +444,10 @@ export function SettingsPage({ workspaceContext, teamAccess, teamContent, user, 
                 <i class="fas fa-laptop-code" style="color:#8b5cf6;"></i>
                 Computers
               </h3>
-              <div class="byok-desc" style="margin-top:.25rem;">Run ticket builds on your own computer with LFG Desktop and the Claude Code login already there. Tickets, logs and branches still show up here for everyone.</div>
+              <div class="byok-desc" style="margin-top:.25rem;">Run ticket builds on your own computer with LFG Desktop and the Claude Code login already there. Signing in to LFG Desktop connects that computer. Tickets, logs and branches still show up here for everyone.</div>
             </div>
             <button id="runner-connect-btn" type="button" class="llm-btn-save" style="border-radius:7px;padding:.45rem .875rem;flex-shrink:0;">
-              <i class="fas fa-plus"></i>&nbsp; Connect a computer
+              <i class="fas fa-plus"></i>&nbsp; Headless runner token
             </button>
           </div>
           <div id="runner-pairing" class="llm-keys-row" style="display:none;flex-direction:column;align-items:stretch;gap:.625rem;border-bottom:1px solid var(--border-color, rgba(255,255,255,0.07));"></div>

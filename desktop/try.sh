@@ -14,15 +14,19 @@
 #                                   http://localhost:<port>/api/auth/callback/google,
 #                                   in your Google OAuth client's redirect URIs)
 #
-# Port: 8100, or set LFG_DESKTOP_TEST_PORT. Google sign-in is offered on port 8000 or with
-# --google; otherwise sign in with the printed test account.
+# The app signs in the real way: "Sign in with your browser" opens your browser, you
+# sign in there and choose Connect. The server address is filled in for you.
+#
+# Port: 8100, or set LFG_DESKTOP_TEST_PORT. The server is http://127.0.0.1:<port>, so
+# signing in to it in your browser doesn't replace your localhost:8000 session. With
+# --google (or on port 8000) it's http://localhost:<port>, because that's what Google
+# accepts; a sign-in there replaces your browser's localhost session cookie.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 PORT="${LFG_DESKTOP_TEST_PORT:-8100}"
 DIR="$ROOT/.desktop-test"
-URL="http://localhost:$PORT"
 MODE=app FAKE=0 RESET=0 GOOGLE=0
 for arg in "$@"; do
   case "$arg" in
@@ -30,10 +34,12 @@ for arg in "$@"; do
     --fake-claude) FAKE=1 ;;
     --reset) RESET=1 ;;
     --google) GOOGLE=1 ;;
-    -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Unknown option: $arg (try --help)" >&2; exit 2 ;;
   esac
 done
+HOST=127.0.0.1; if [ "$GOOGLE" = 1 ] || [ "$PORT" = 8000 ]; then HOST=localhost; fi
+URL="http://$HOST:$PORT"
 
 say()  { printf '\033[1;35m▸\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!\033[0m %s\n' "$*"; }
@@ -135,7 +141,7 @@ cat <<EOF
 
   ┌─ LFG Desktop test ─────────────────────────────────────────────
   │ Server     $URL   (isolated: .desktop-test/lfg.db)
-  │ Sign in    $EMAIL
+  │ Sign in    $EMAIL   (in your browser, when the app sends you there)
   │ Password   $PASSWORD
   │ Project    $PROJECT_URL
   │ Ticket     $TICKET  →  open it, Run menu: "Build on my computer", then Run
@@ -145,11 +151,12 @@ cat <<EOF
 
 EOF
 
-export LFG_SERVER_URL="$URL" LFG_RUNNER_TOKEN="$TOKEN" LFG_RUNNER_ALLOW_LOCAL_REPOS=1 LFG_WORK_ROOT="$DIR/work"
+export LFG_SERVER_URL="$URL" LFG_RUNNER_ALLOW_LOCAL_REPOS=1 LFG_WORK_ROOT="$DIR/work"
 if [ "$MODE" = headless ]; then
   say "Runner running here (Ctrl+C to stop). Open $PROJECT_URL in your browser and sign in with the details above."
   node desktop/dist/cli.js --server "$URL" --token "$TOKEN" --auto-approve --work-root "$DIR/work"
 else
-  say "Opening LFG Desktop. Sign in inside the app window. Quit it from the menu bar (LFG → Quit LFG) to stop everything."
+  say "Opening LFG Desktop. Click \"Sign in with your browser\", sign in there with the details above, choose Connect."
+  say "Quit from the menu bar (LFG → Quit LFG) to stop everything."
   LFG_DESKTOP_PROFILE=test desktop/node_modules/.bin/electron desktop
 fi
