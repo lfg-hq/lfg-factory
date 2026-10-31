@@ -5,8 +5,12 @@ import { readFileSync } from 'node:fs';
 // Browser fixtures only. Real template, artifact switch/overflow handlers and Git UI.
 test('artifact Git navigation, safe provider text, filters, collapse and mobile overflow', async () => {
   const integration = {status:'not_integrated',ahead:2,behind:0,evidence:'fixture comparison'};
-  const row = {id:'fixture-ticket',name:'<img src=x onerror=alert(1)>',branch:'ticket/work',destination:'epic/work',missingRef:false,integration,activeUse:{},pullRequests:[]};
-  const fixture = {repository:'fixture/repo',correlationId:'fixture-correlation',defaultBranch:{branch:'main'},epics:[{...row,id:'fixture-epic',name:'Fixture epic',branch:'epic/work',destination:'main',tickets:[row]}],other:[],pullRequests:[{id:42,title:'External draft fixture',url:'https://github.com/fixture/repo/pull/42',source:'fork/work',sourceRepo:null,destination:'epic/work',draft:true}],totals:{epics:{total:1,integrated:0,notIntegrated:1,unknown:0},tickets:{total:1,integrated:0,notIntegrated:1,unknown:0},other:{total:0,integrated:0,notIntegrated:0,unknown:0}},completeness:{complete:false,pullRequests:true,errors:[{code:'FIXTURE_PARTIAL'}]}};
+  const row = {id:'fixture-ticket',name:'<img src=x onerror=alert(1)>',branch:'ticket/work',headSha:'ticket-head',baseSha:'epic-head',refState:'present',destination:'epic/work',missingRef:false,integration,activeUse:{},pullRequests:[]};
+  const branchless = {...row,id:'no-branch',name:'Named branchless association',branch:null,headSha:null,refState:'no_branch',integration:{...integration,status:'unknown'}};
+  const absent = {...row,id:'absent-branch',name:'Absent remote association',branch:'ticket/absent',headSha:null,missingRef:true,refState:'absent',integration:{...integration,status:'unknown'}};
+  const unknown = {...absent,id:'unavailable-branch',name:'Unavailable remote association',branch:'ticket/unavailable',missingRef:false,refState:'unavailable'};
+  const counts = {total:3,associations:4,withoutBranch:1,integrated:0,notIntegrated:1,unknown:2};
+  const fixture = {canManageCode:true,repository:'fixture/repo',correlationId:'fixture-correlation',defaultBranch:{branch:'main'},epics:[{...row,id:'fixture-epic',name:'Fixture epic',branch:'epic/work',destination:'main',headSha:'epic-head',baseSha:'main-head',tickets:[row,branchless,absent,unknown],ticketCounts:counts}],other:[],pullRequests:[{id:42,title:'External draft fixture',url:'https://github.com/fixture/repo/pull/42',source:'fork/work',sourceRepo:null,destination:'epic/work',draft:true}],totals:{epics:{total:1,integrated:0,notIntegrated:1,unknown:0},tickets:counts,other:{total:0,integrated:0,notIntegrated:0,unknown:0}},completeness:{complete:false,pullRequests:true,errors:[{code:'FIXTURE_PARTIAL'}]}};
   const html = String(await ChatPage({user:{id:'fixture',name:'Fixture',email:'fixture@example.invalid'},projectId:'fixture-project',projectName:'Fixture'})).replace(/<script\b[^>]*>[\s\S]*?<\/script>/g,'').replace('</body>','<script src="/public/js/artifacts.js"></script><script src="/public/js/tab-overflow.js"></script><script src="/public/js/git-tab.js"></script></body>');
   let unavailable = false;
   const server = Bun.serve({hostname:'127.0.0.1',port:0,fetch(req){
@@ -25,7 +29,17 @@ test('artifact Git navigation, safe provider text, filters, collapse and mobile 
     await page.waitForSelector('#git-root .git-stats');
     expect(await page.locator('#git-root').innerText()).toContain('FIXTURE_PARTIAL');
     expect(await page.locator('#git-root img').count()).toBe(0);
-    expect(await page.locator('#git-root .git-ticket').innerText()).toContain('<img src=x');
+    expect(await page.locator('#git-root .git-ticket').first().innerText()).toContain('<img src=x');
+    const noBranchRow = page.locator('#git-root .git-ticket').filter({hasText:'Named branchless association'});
+    expect(await noBranchRow.innerText()).toContain('No branch recorded → epic/work');
+    expect(await noBranchRow.innerText()).not.toMatch(/deleted|not started|unavailable|missing ref/i);
+    expect(await page.locator('#git-root .git-ticket').filter({hasText:'Absent remote association'}).innerText()).toContain('Branch not found in complete remote listing');
+    expect(await page.locator('#git-root .git-ticket').filter({hasText:'Unavailable remote association'}).innerText()).toContain('provider listing incomplete');
+    expect(await page.locator('#git-root .git-ticket button').count()).toBe(2); // Only present ref gets write entry points.
+    expect(await page.locator('#git-root .git-edge').count()).toBe(2); // Present ticket and epic only.
+    expect(await page.locator('#git-root .git-map').innerText()).not.toMatch(/missing branch|ticket\/absent|ticket\/unavailable/);
+    expect(await page.locator('#git-root summary').first().innerText()).toContain('4 tickets · 3 ticket branches · 1 with no branch recorded · 0 integrated into epic · 1 not integrated · 2 unknown');
+    expect(await page.locator('#git-root .git-stats > div').nth(1).innerText()).toContain('3\nTicket branches');
     await page.locator('#git-root summary').first().click();
     expect(await page.locator('#git-root details').first().getAttribute('open')).toBeNull();
     await page.getByRole('button',{name:'All open PRs',exact:true}).click();

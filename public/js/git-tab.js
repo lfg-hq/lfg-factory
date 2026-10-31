@@ -155,26 +155,26 @@
     }
     function row(r, kind) {
       const n = el('div', undefined, `git-branch git-${kind}`);
-      n.append(el('b', r.name), el('code', `${r.branch || 'No stored branch'} → ${r.destination || 'Unknown destination'}`));
+      n.append(el('b', r.name), el('code', `${r.branch || 'No branch recorded'} → ${r.destination || 'Unknown destination'}`));
       const state = r.integration.status;
       n.append(el('span', `${state === 'integrated' ? 'Integrated into' : state === 'not_integrated' ? 'Not integrated into' : 'Unknown integration into'} ${r.destination || 'unknown'}`, `git-badge git-${state}`));
-      n.append(el('small', r.missingRef ? 'Missing/deleted or unavailable ref' : `${r.integration.ahead ?? '?'} ahead · ${r.integration.behind ?? '?'} behind ${r.destination || 'unknown'}`));
-      n.append(el('small', r.integration.evidence));
+      n.append(el('small', !r.branch ? 'No branch recorded' : r.refState === 'absent' ? 'Branch not found in complete remote listing' : r.refState === 'unavailable' ? 'Remote ref unavailable · provider listing incomplete; refresh to verify' : `${r.integration.ahead ?? '?'} ahead · ${r.integration.behind ?? '?'} behind ${r.destination || 'unknown'}`));
+      if (r.branch) n.append(el('small', r.integration.evidence));
       if (r.activeUse.preview) n.append(el('span', 'Selected for preview', 'git-badge'));
       if (r.activeUse.execution) n.append(el('span', 'Execution active', 'git-badge'));
       if (r.activeUse.queued) n.append(el('span', 'Queued · not executing', 'git-badge'));
       for (const pr of r.pullRequests) n.append(link(pr));
-      if (data.canManageCode && !r.missingRef && r.branch && r.destination && !r.pullRequests.length) n.append(button('Create PR · review first', () => startReview(r.branch, r.destination)));
-      if (data.canManageCode && !r.missingRef && r.branch) n.append(button('Delete branch…', () => deleteBranch(r)));
+      if (data.canManageCode && r.headSha && r.branch && r.destination && !r.pullRequests.length) n.append(button('Create PR · review first', () => startReview(r.branch, r.destination)));
+      if (data.canManageCode && r.headSha && r.branch) n.append(button('Delete branch…', () => deleteBranch(r)));
       return n;
     }
     function map(r, children) {
       const n = el('div', undefined, 'git-map');
       n.append(el('small', 'Intended merge destinations · not commit ancestry. Solid = integrated; dashed = pending; dotted = unknown.'));
-      for (const t of [...children, r]) {
+      for (const t of [...children, r].filter(t => t.branch && t.headSha && t.destination && t.baseSha)) {
         const edge = el('div', undefined, `git-edge git-${t.integration.status}`);
-        edge.append(el('code', t.branch || '(missing branch)'), el('span', ' → ', 'git-arrow'), el('code', t.destination || '(unknown destination)'));
-        edge.setAttribute('aria-label', `${t.branch || 'missing branch'} to ${t.destination || 'unknown'}: ${t.integration.status}`);
+        edge.append(el('code', t.branch), el('span', ' → ', 'git-arrow'), el('code', t.destination));
+        edge.setAttribute('aria-label', `${t.branch} to ${t.destination}: ${t.integration.status}`);
         n.append(edge);
       }
       return n;
@@ -197,7 +197,7 @@
         return;
       }
       const d = data.defaultBranch;
-      content.append(el('div', `${d.branch} · Default branch${d.protected ? ' · Protected' : ''}${d.missingRef ? ' · Ref unavailable' : ''}`, 'git-notice'));
+      content.append(el('div', `${d.branch} · Default branch${d.protected ? ' · Protected' : ''}${d.refState === 'absent' ? ' · Not found in complete remote listing' : d.refState === 'unavailable' ? ' · Remote ref unavailable; listing incomplete' : ''}`, 'git-notice'));
       let visible = 0;
       for (const epic of data.epics) {
         const children = epic.tickets.filter(matches);
@@ -206,8 +206,8 @@
         const card = el('details', undefined, 'git-card'); card.open = !collapsed.has(epic.id);
         card.addEventListener('toggle', () => card.open ? collapsed.delete(epic.id) : collapsed.add(epic.id));
         const summary = el('summary', `${epic.epicKey || 'Epic'} · ${epic.name}`);
-        const integrated = epic.tickets.filter(t => t.integration.status === 'integrated').length;
-        summary.append(el('small', `${epic.tickets.length} ticket branches · ${integrated} integrated into epic · ${epic.tickets.filter(t => t.integration.status === 'unknown').length} unknown`));
+        const counts = epic.ticketCounts;
+        summary.append(el('small', `${counts.associations} tickets · ${counts.total} ticket branches · ${counts.withoutBranch} with no branch recorded · ${counts.integrated} integrated into epic · ${counts.notIntegrated} not integrated · ${counts.unknown} unknown`));
         card.append(summary, map(epic, children), row(epic, 'epic'));
         const nested = el('div', undefined, 'git-children');
         children.forEach(t => nested.append(row(t, 'ticket'))); card.append(nested); content.append(card);
@@ -215,7 +215,7 @@
       const other = data.other.filter(matches);
       const otherCard = el('details', undefined, 'git-card'); otherCard.open = !collapsed.has('other');
       otherCard.addEventListener('toggle', () => otherCard.open ? collapsed.delete('other') : collapsed.add('other'));
-      otherCard.append(el('summary', `Other branches · No epic (${other.length} matching / ${data.other.length} loaded)`));
+      otherCard.append(el('summary', `Other branches · No epic (${other.filter(r => r.branch).length} matching / ${data.totals.other.total} recorded branches · ${data.other.filter(r => !r.branch).length} associations with no branch recorded)`));
       other.forEach(r => otherCard.append(row(r, 'other'))); content.append(otherCard);
       if (!visible && !other.length) content.append(el('p', 'No matching branches. Stored associations with missing refs remain visible when filters are cleared.'));
       content.append(el('small', `${visible} matching epic groups · ${other.length} matching other rows. Stats above are unfiltered loaded totals.`));
@@ -230,7 +230,7 @@
       const stats = el('div', undefined, 'git-stats');
       for (const [key, title] of [['epics', 'Epics'], ['tickets', 'Ticket branches'], ['other', 'Other branches · No epic']]) {
         const total = data.totals[key], n = el('div');
-        n.append(el('strong', String(total.total)), el('span', title), el('small', `${total.integrated} integrated · ${total.notIntegrated} not integrated · ${total.unknown} unknown`)); stats.append(n);
+        n.append(el('strong', String(total.total)), el('span', title), el('small', `${total.integrated} integrated · ${total.notIntegrated} not integrated · ${total.unknown} unknown${total.associations !== undefined ? ` · ${total.associations} associations · ${total.withoutBranch} with no branch recorded` : ''}`)); stats.append(n);
       }
       const prStat = el('div'); prStat.append(el('strong', String(data.pullRequests.length)), el('span', 'Open pull requests'), el('small', `${data.pullRequests.filter(p => p.draft).length} drafts${data.completeness.pullRequests ? '' : ' · partial'}`)); stats.append(prStat); root.append(stats);
       const controls = el('div', undefined, 'git-controls');

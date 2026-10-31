@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 
 test('saved progress, findings, keyboard acknowledgment, editable final confirmation and stale state', async () => {
   const integration = { status: 'not_integrated', ahead: 1, behind: 0, evidence: 'TEST FIXTURE' };
-  const row = { id: 'fixture-branch', name: 'Feature', branch: 'feature', destination: 'main', missingRef: false, integration, activeUse: {}, pullRequests: [] };
+  const row = { id: 'fixture-branch', name: 'Feature', branch: 'feature', headSha: 'a'.repeat(40), baseSha: 'b'.repeat(40), refState: 'present', destination: 'main', missingRef: false, integration, activeUse: {}, pullRequests: [] };
   const total = { total: 1, integrated: 0, notIntegrated: 1, unknown: 0 };
   const workspace = { repository: 'fixture/repo', canManageCode: true, defaultBranch: { branch: 'main' }, epics: [], other: [row], pullRequests: [], totals: { epics: { ...total, total: 0 }, tickets: { ...total, total: 0 }, other: total }, completeness: { complete: true, pullRequests: true, errors: [] } };
   let review: any, creates = 0, polls = 0, stale = false;

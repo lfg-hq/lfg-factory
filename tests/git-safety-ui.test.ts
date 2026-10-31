@@ -5,10 +5,10 @@ import { readFileSync } from 'node:fs';
 test('hierarchy → AI review findings → confirmed PR → open PR merge → typed deletion, failures retain input', async () => {
   const sha = 'a'.repeat(40), base = 'b'.repeat(40);
   const integration = { status: 'integrated', ahead: 0, behind: 0, evidence: 'TEST FIXTURE' };
-  const row = { id: 'ticket', name: 'TEST FIXTURE ticket', branch: 'ticket/feature', headSha: sha, destination: 'epic/delivery', missingRef: false, integration, activeUse: {}, pullRequests: [] };
+  const row = { id: 'ticket', name: 'TEST FIXTURE ticket', branch: 'ticket/feature', headSha: sha, baseSha: base, refState: 'present', destination: 'epic/delivery', missingRef: false, integration, activeUse: {}, pullRequests: [] };
   const total = { total: 1, integrated: 1, notIntegrated: 0, unknown: 0 };
   const pr = { id: 7, title: '<img src=x onerror=alert(1)>', url: 'https://github.com/fixture/repo/pull/7', source: row.branch, sourceRepo: 'fixture/repo', destination: row.destination, headSha: sha, draft: false };
-  const data: any = { repository: 'fixture/repo', canManageCode: true, defaultBranch: { branch: 'main', protected: true }, epics: [{ ...row, id: 'epic', name: 'TEST FIXTURE epic', branch: 'epic/delivery', destination: 'main', tickets: [row] }], other: [], pullRequests: [], totals: { epics: total, tickets: total, other: { ...total, total: 0 } }, completeness: { complete: true, pullRequests: true, errors: [] } };
+  const data: any = { repository: 'fixture/repo', canManageCode: true, defaultBranch: { branch: 'main', protected: true }, epics: [{ ...row, id: 'epic', name: 'TEST FIXTURE epic', branch: 'epic/delivery', destination: 'main', tickets: [row], ticketCounts: { ...total, associations: 1, withoutBranch: 0 } }], other: [], pullRequests: [], totals: { epics: total, tickets: total, other: { ...total, total: 0 } }, completeness: { complete: true, pullRequests: true, errors: [] } };
   const review = { id: 'review', headRef: row.branch, baseRef: row.destination, headSha: sha, baseSha: base, status: 'completed', attempt: 1, findings: '[]', summary: 'TEST FIXTURE AI findings. Real model not called.', limitations: '["Static review only."]' };
   let creates = 0, merges = 0, deletes = 0, denyMerge = true, denyDelete = true;
   const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(req) {
