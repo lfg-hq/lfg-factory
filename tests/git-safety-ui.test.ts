@@ -37,9 +37,10 @@ test('hierarchy → AI review findings → confirmed PR → open PR merge → ty
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } }); page.setDefaultTimeout(5000);
     const errors: string[] = []; page.on('pageerror', e => errors.push(e.message));
     await page.goto(`http://127.0.0.1:${server.port}`);
-    await page.waitForSelector('.git-stats');
+    await page.waitForSelector('.git-controls');
     expect(errors).toEqual([]);
-    await page.locator('.git-ticket').getByRole('button', { name: 'Create PR · review first' }).click();
+    await page.getByRole('button', { name: 'Inspect ticket/feature · history unavailable', exact: true }).click();
+    await page.getByRole('button', { name: 'Create PR · review first' }).click();
     await page.getByRole('checkbox').check(); await page.getByRole('button', { name: 'Continue to PR details →' }).click();
     await page.getByRole('button', { name: 'Create pull request', exact: true }).click(); await page.waitForSelector('dialog a'); expect(creates).toBe(1);
     await page.keyboard.press('Escape'); await page.waitForSelector('dialog', { state: 'detached' });
@@ -53,8 +54,9 @@ test('hierarchy → AI review findings → confirmed PR → open PR merge → ty
     expect(await page.locator('dialog').isVisible()).toBe(true); denyMerge = false;
     await page.getByRole('button', { name: 'Confirm merge into epic/delivery' }).click(); await page.waitForSelector('dialog', { state: 'detached' });
     await page.waitForFunction(() => document.querySelector('#git-root')?.textContent?.includes('No matching open pull requests.'));
-    await page.getByRole('button', { name: 'Branches by epic' }).click();
-    await page.locator('.git-ticket').getByRole('button', { name: 'Delete branch…' }).click();
+    await page.getByRole('button', { name: 'Branch trees' }).click();
+    await page.getByRole('button', { name: 'Inspect ticket/feature · history unavailable', exact: true }).click();
+    await page.getByRole('button', { name: 'Delete branch…' }).click();
     const typed = page.getByLabel('Type the exact branch name'); await typed.fill('wrong'); expect(await page.getByRole('button', { name: 'Delete branch', exact: true }).isDisabled()).toBe(true);
     await typed.fill(row.branch); await page.getByRole('checkbox').check(); await page.getByRole('button', { name: 'Delete branch', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('dialog')?.textContent?.includes('fixture-delete-failure'));

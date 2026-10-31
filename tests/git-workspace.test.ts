@@ -1,4 +1,6 @@
 import { test, expect } from 'bun:test';
+import { createHash } from 'node:crypto';
+const fixtureSha = (name: string) => createHash('sha1').update(name).digest('hex');
 import { createGitProvider, type GitPR } from '../src/services/git-provider.ts';
 import { integrationFor, buildGitWorkspace } from '../src/services/git-workspace.ts';
 // Labelled deterministic provider fixtures — not live provider evidence.
@@ -63,9 +65,10 @@ for (const complete of [true, false]) test(`branchless associations are not bran
     if (u.pathname.endsWith('/repo')) return Response.json({ default_branch: 'main' });
     if (u.pathname.endsWith('/branches')) {
       if (u.searchParams.get('page') === '2') return new Response('', { status: 403 });
-      return Response.json(['main', 'epic/one', 'present', 'free'].map(name => ({ name, commit: { sha: name } })), { headers: complete ? {} : { link: '<https://api.github.com/fixture>; rel="next"' } });
+      return Response.json(['main', 'epic/one', 'present', 'free'].map(name => ({ name, commit: { sha: fixtureSha(name) } })), { headers: complete ? {} : { link: '<https://api.github.com/fixture>; rel="next"' } });
     }
     if (u.pathname.endsWith('/pulls')) return Response.json([]);
+    if (u.pathname.endsWith('/commits')) return Response.json([{sha:u.searchParams.get('sha'),parents:[]}]);
     return Response.json({ ahead_by: 0, behind_by: 0 });
   }) as typeof fetch);
   const tickets = [
@@ -88,8 +91,9 @@ test('branchless tickets alone do not make successful branch comparisons incompl
   const provider = createGitProvider(config, (async (url: string) => {
     const u = new URL(url);
     if (u.pathname.endsWith('/repo')) return Response.json({ default_branch: 'main' });
-    if (u.pathname.endsWith('/branches')) return Response.json(['main', 'epic'].map(name => ({ name, commit: { sha: name } })));
+    if (u.pathname.endsWith('/branches')) return Response.json(['main', 'epic'].map(name => ({ name, commit: { sha: fixtureSha(name) } })));
     if (u.pathname.endsWith('/pulls')) return Response.json([]);
+    if (u.pathname.endsWith('/commits')) return Response.json([{sha:u.searchParams.get('sha'),parents:[]}]);
     return Response.json({ ahead_by: 0, behind_by: 0 });
   }) as typeof fetch);
   const w = await buildGitWorkspace(provider, [{ id: 'e', name: 'Epic', epicKey: null, branch: 'epic', baseBranch: 'main', baseSha: null }], [{ id: 't', title: 'No recorded branch', epicId: 'e', githubBranch: null, destination: 'epic', status: 'done' }], null);
@@ -101,8 +105,9 @@ test('stored IDs, missing branches, stacked epic destinations, default and Other
   const provider = createGitProvider(config, (async (url: string) => {
     const u = new URL(url);
     if (u.pathname.endsWith('/repo')) return Response.json({ default_branch: 'main' });
-    if (u.pathname.endsWith('/branches')) return Response.json(['main','epic/one','epic/two','free','legacy'].map(name => ({name,commit:{sha:name}})));
+    if (u.pathname.endsWith('/branches')) return Response.json(['main','epic/one','epic/two','free','legacy'].map(name => ({name,commit:{sha:fixtureSha(name)}})));
     if (u.pathname.endsWith('/pulls')) return Response.json([]);
+    if (u.pathname.endsWith('/commits')) return Response.json([{sha:u.searchParams.get('sha'),parents:[]}]);
     return Response.json({ ahead_by: 0, behind_by: 0 });
   }) as typeof fetch);
   const workspace = await buildGitWorkspace(provider, [{id:'e1',name:'First',epicKey:'E1',branch:'epic/one',baseBranch:'main',baseSha:'m0'},{id:'e2',name:'Stacked',epicKey:'E2',branch:'epic/two',baseBranch:'epic/one',baseSha:'e0'}], [{id:'t1',title:'Missing',epicId:'e1',githubBranch:'deleted',status:'done',destination:'epic/one'}], 't1');
@@ -111,4 +116,27 @@ test('stored IDs, missing branches, stacked epic destinations, default and Other
   expect(workspace.other.map(b => b.branch)).toEqual(['free','legacy']);
   expect(workspace.defaultBranch.branch).toBe('main'); expect(workspace.totals.tickets.unknown).toBe(1);
   expect(workspace.completeness.complete).toBe(false);
+});
+
+// TEST-ONLY actual parent DAG: a squash result is status evidence, never a synthetic join.
+test('workspace scopes include observed deleted ticket history without inventing ancestry from squash or stacked epic links', async () => {
+  const s = (n: number) => fixtureSha(`commit-${n}`);
+  const provider = createGitProvider(config);
+  provider.info = async () => ({defaultBranch:'main'});
+  provider.branches = async () => ({items:[branch('main',s(6)),branch('epic/one',s(4)),branch('epic/two',s(7)),branch('ticket',s(3))],complete:true,errors:[]});
+  provider.pullRequests = async (closed=false) => ({items:closed?[{...merged,source:'deleted',headSha:s(5),destination:'epic/one',mergeSha:s(4)}]:[],complete:true,errors:[]});
+  provider.compare = async () => ({ahead:0,behind:0,complete:true});
+  const commits = [{sha:s(1),parents:[]},{sha:s(2),parents:[s(1)]},{sha:s(3),parents:[s(2)]},{sha:s(4),parents:[s(2),s(3)]},{sha:s(5),parents:[s(1)]},{sha:s(6),parents:[s(4)]},{sha:s(7),parents:[]}];
+  provider.history = async root => ({items:commits.filter(c=>c.sha===root || c.sha===s(1)),complete:true,nextPage:null,errors:[]});
+  const w = await buildGitWorkspace(provider,[{id:'e1',name:'One',epicKey:'E1',branch:'epic/one',baseBranch:'main',baseSha:null},{id:'e2',name:'Two',epicKey:'E2',branch:'epic/two',baseBranch:'epic/one',baseSha:null}],[{id:'t1',title:'Ticket',epicId:'e1',githubBranch:'ticket',status:'done',destination:'epic/one'},{id:'t2',title:'Deleted after squash',epicId:'e1',githubBranch:'deleted',status:'done',destination:'epic/one'},{id:'none',title:'Branchless',epicId:'e1',githubBranch:null,status:'done',destination:'epic/one'}],null);
+  expect(w.graph.nodes.filter(n=>n.sha===s(1))).toHaveLength(1);
+  expect(w.graph.edges).toContainEqual({parentSha:s(2),childSha:s(4)});
+  expect(w.graph.edges).toContainEqual({parentSha:s(3),childSha:s(4)});
+  expect(w.graph.edges).not.toContainEqual({parentSha:s(5),childSha:s(4)});
+  expect(w.graph.edges).not.toContainEqual({parentSha:s(4),childSha:s(7)});
+  expect(w.graph.heads).toContainEqual(expect.objectContaining({rowId:'t2',sha:s(5),historical:true}));
+  expect(w.graph.heads).toContainEqual(expect.objectContaining({rowId:'t2',sha:null,refState:'absent'}));
+  expect(w.graph.heads.some(h=>h.rowId==='none')).toBe(false);
+  expect(w.graph.scopes.find(scope=>scope.id==='e1')?.rowIds).toEqual(['e1','t1','t2']);
+  expect(w.graph.scopes.find(scope=>scope.id==='pending')?.rowIds).toEqual(['t2','default']);
 });

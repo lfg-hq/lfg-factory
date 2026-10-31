@@ -3,6 +3,8 @@ export type GitBranch = { branch: string; headSha: string; protected: boolean };
 export type GitPR = { id: number; title: string; url: string; source: string; destination: string; headSha: string; sourceRepo: string | null; draft: boolean; merged: boolean; mergeSha: string | null };
 export type GitIssue = { code: string; providerRequestId?: string };
 export type GitPage<T> = { items: T[]; complete: boolean; errors: GitIssue[] };
+export type GitCommit = { sha: string; parents: string[] };
+export type GitHistory = GitPage<GitCommit> & { nextPage: number | null };
 export type GitComparison = { ahead: number | null; behind: number | null; complete: boolean };
 export class GitProviderError extends Error {
   constructor(public code: string, public status = 502, public providerRequestId?: string) { super(code); }
@@ -92,6 +94,24 @@ export function createGitProvider(config: GitProviderConfig, fetcher: typeof fet
     branches: () => pages<GitBranch>(gl ? '/repository/branches' : '/branches', b => ({ branch: b.name, headSha: gl ? b.commit.id : b.commit.sha, protected: !!b.protected })),
     pullRequests: (merged = false) => pages<GitPR>(gl ? `/merge_requests?state=${merged ? 'merged' : 'opened'}&scope=all` : `/pulls?state=${merged ? 'closed' : 'open'}&sort=updated&direction=desc`, pr),
     compare,
+    // Immutable roots only. Each call is one bounded page, never a moving branch ref.
+    history: async (sha: string, page = 1, perPage = 30): Promise<GitHistory> => {
+      if (!/^[a-f0-9]{40,64}$/.test(sha) || !Number.isSafeInteger(page) || page < 1 || page > 10000 || !Number.isSafeInteger(perPage) || perPage < 1 || perPage > 100) throw new GitProviderError('INVALID_HISTORY_BOUNDS', 400);
+      try {
+        const { body, headers } = await get(gl ? `/repository/commits?ref_name=${sha}&per_page=${perPage}&page=${page}` : `/commits?sha=${sha}&per_page=${perPage}&page=${page}`);
+        if (!Array.isArray(body) || body.length > perPage) throw new GitProviderError('PROVIDER_INVALID_HISTORY');
+        const items = body.map((c: any): GitCommit => {
+          const id = gl ? c.id : c.sha, parents = gl ? c.parent_ids : c.parents?.map((p: any) => p.sha);
+          if (!/^[a-f0-9]{40,64}$/.test(id) || !Array.isArray(parents) || parents.some(p => !/^[a-f0-9]{40,64}$/.test(p))) throw new GitProviderError('PROVIDER_INVALID_HISTORY');
+          return { sha: id, parents: [...new Set<string>(parents)] };
+        });
+        const more = gl ? headers.has('x-next-page') ? !!headers.get('x-next-page') : body.length === perPage : headers.has('link') ? /rel="next"/.test(headers.get('link') || '') : body.length === perPage;
+        return { items, complete: !more, nextPage: more ? page + 1 : null, errors: [] };
+      } catch (e) {
+        const err = e instanceof GitProviderError ? e : new GitProviderError('PROVIDER_INVALID_HISTORY');
+        return { items: [], complete: false, nextPage: page, errors: [{ code: err.code, providerRequestId: err.providerRequestId }] };
+      }
+    },
     ref: async (ref: string) => {
       const { body } = await get(gl ? `/repository/branches/${encodeURIComponent(ref)}` : `/branches/${encodeURIComponent(ref)}`);
       const sha = gl ? body.commit?.id : body.commit?.sha;

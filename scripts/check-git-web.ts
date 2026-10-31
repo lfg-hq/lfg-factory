@@ -1,5 +1,5 @@
 // Bounded local runtime smoke check. No accounts, settings or data are changed.
-const child = Bun.spawn(['bun', 'run', 'src/index.ts'], { cwd: process.cwd(), env: process.env, stdout: 'inherit', stderr: 'inherit' });
+const child = Bun.spawn(['bash', '-c', 'exec env BETTER_AUTH_SECRET="${BETTER_AUTH_SECRET:-$(cat data/.auth-secret)}" bun run src/index.ts'], { cwd: process.cwd(), env: process.env, stdout: 'inherit', stderr: 'inherit' });
 try {
   let ready = false;
   for (let attempt = 0; attempt < 40; attempt++) {
@@ -17,6 +17,9 @@ try {
   const denied = await fetch('http://127.0.0.1:8080/api/projects/runtime-check/git/branches');
   const body = await denied.json();
   if (denied.status !== 401 || body.code !== 'AUTH_REQUIRED' || !body.correlationId || denied.headers.get('X-Correlation-ID') !== body.correlationId) throw new Error('Git authentication/correlation smoke check failed.');
+  const history = await fetch('http://127.0.0.1:8080/api/projects/runtime-check/git/history?sha=' + 'a'.repeat(40));
+  const historyBody = await history.json();
+  if (history.status !== 401 || historyBody.code !== 'AUTH_REQUIRED' || !historyBody.correlationId) throw new Error('Private history authentication check failed.');
   const reviews = await fetch('http://127.0.0.1:8080/api/projects/runtime-check/git/reviews');
   const reviewBody = await reviews.json();
   if (reviews.status !== 401 || reviewBody.code !== 'AUTH_REQUIRED' || !reviewBody.correlationId) throw new Error('Private review authentication check failed.');

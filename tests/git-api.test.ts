@@ -61,6 +61,28 @@ test('shared read-only viewer gets paginated provider results; denied provider l
     expect(logs.join(' ')).not.toMatch(/fixture-owner-token|private body|Authorization/);
   } finally { console.log=log; globalThis.fetch=originalFetch; }
 });
+test('authorized immutable history bounds, incremental pages and correlated success/failure logs', async () => {
+  await db.update(projects).set({shareGitAccess:true}).where(eq(projects.id,'internal'));
+  const sha='a'.repeat(40), logs:string[]=[]; const log=console.log; console.log=(...v)=>logs.push(v.join(' '));
+  globalThis.fetch=(async (url:string) => {
+    const u=new URL(url);
+    expect(u.searchParams.get('sha')).toBe(sha);
+    return u.searchParams.get('page')==='2' ? new Response('fixture private source',{status:403,headers:{'x-github-request-id':'fixture-history-id'}}) : Response.json([{sha,parents:[{sha:'b'.repeat(40)},{sha:'c'.repeat(40)}]}],{headers:{link:'<https://ignored.invalid>; rel="next"'}});
+  }) as typeof fetch;
+  try {
+    expect((await request(`/projects/public/git/history?sha=${sha}`,'outsider')).status).toBe(404);
+    expect((await request('/projects/public/git/history?sha=main')).status).toBe(400);
+    expect((await request(`/projects/public/git/history?sha=${sha}&page=0`)).status).toBe(400);
+    const first=await request(`/projects/public/git/history?sha=${sha}`);expect(first.status).toBe(200);
+    expect(await first.json()).toMatchObject({complete:false,nextPage:2,items:[{sha,parents:['b'.repeat(40),'c'.repeat(40)]}]});
+    const failure=await request(`/projects/public/git/history?sha=${sha}&page=2`);
+    expect(await failure.json()).toMatchObject({complete:false,nextPage:2,errors:[{code:'PROVIDER_ACCESS_DENIED'}]});
+    const records=logs.map(l=>JSON.parse(l));
+    expect(records.some(l=>l.event==='git.history.completed' && l.correlationId && l.timestamp && l.durationMs>=0 && l.provider==='github')).toBe(true);
+    expect(records.some(l=>l.event==='git.history.failed' && l.errorCode==='PROVIDER_ACCESS_DENIED' && l.providerRequestIds.includes('fixture-history-id'))).toBe(true);
+    expect(logs.join(' ')).not.toMatch(/fixture-owner-token|private source|Authorization/);
+  } finally {console.log=log;globalThis.fetch=originalFetch;}
+});
 test('conflicting stored repository identity cannot send a token to another repository', async () => {
   await db.update(projects).set({repoUrl:'https://github.com/other/repo'}).where(eq(projects.id,'internal'));
   const response=await request('/projects/public/git/branches','owner'); expect(response.status).toBe(400);
