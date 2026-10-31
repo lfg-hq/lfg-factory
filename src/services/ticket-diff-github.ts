@@ -22,7 +22,7 @@ export type TicketDiff = {
   rounds?: TicketRound[]; round?: string; canRevert?: boolean;
   merged?: boolean; compareUrl?: string; error?: string;
 };
-type Gh = { owner: string; repo: string; token: string };
+export type Gh = { owner: string; repo: string; token: string };
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- GitHub REST payloads
 type Json = any;
 
@@ -32,16 +32,21 @@ export function parseAuthedGithubUrl(authUrl: string): Gh | null {
   return m ? { token: decodeURIComponent(m[1]!), owner: m[2]!, repo: m[3]! } : null;
 }
 
-const ref = (name: string) => name.split("/").map(encodeURIComponent).join("/");
+export const ref = (name: string) => name.split("/").map(encodeURIComponent).join("/");
 
-function client(gh: Gh, fetcher: typeof fetch) {
+export function client(gh: Gh, fetcher: typeof fetch = fetch) {
   const headers = { Authorization: `Bearer ${gh.token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "LFG" };
   const repo = `${API}/repos/${gh.owner}/${gh.repo}`;
   const call = async (method: string, path: string, body?: unknown) => {
     const r = await fetcher(repo + path, { method, headers: body ? { ...headers, "Content-Type": "application/json" } : headers, body: body ? JSON.stringify(body) : undefined });
-    return { status: r.status, body: (r.ok ? await r.json() : null) as Json };
+    if (r.ok) return { status: r.status, body: (r.status === 204 ? null : await r.json().catch(() => null)) as Json, message: "" };
+    const err = await r.json().catch(() => null) as Json;
+    return { status: r.status, body: null as Json, message: String(err?.errors?.[0]?.message ?? err?.message ?? "") };
   };
-  return { get: (path: string) => call("GET", path), post: (path: string, body: unknown) => call("POST", path, body), patch: (path: string, body: unknown) => call("PATCH", path, body) };
+  return {
+    get: (path: string) => call("GET", path), post: (path: string, body: unknown) => call("POST", path, body), patch: (path: string, body: unknown) => call("PATCH", path, body),
+    put: (path: string, body: unknown) => call("PUT", path, body), del: (path: string) => call("DELETE", path),
+  };
 }
 
 const seconds = (iso?: string) => Math.floor(Date.parse(iso ?? "") / 1000) || 0;

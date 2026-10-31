@@ -4994,3 +4994,127 @@ body.ticket-modal-open {
 .note-form textarea { resize: vertical; font: inherit; font-size: 13px; }
 .note-form-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .note-clear { font-size: 12px; color: var(--text-secondary, #94a3b8); display: inline-flex; gap: 6px; align-items: center; }
+
+/* ── Git tab: branches vs the default branch, PRs, merge, delete (git-tab.js) ──
+   Scoped to .git-panel: tickets.css has its own .git-badge for the ticket page. */
+.git-panel { --git-open: #a78bfa; --git-merged: #10b981; --git-pr: #38bdf8; --git-stale: #94a3b8; --git-behind: #f59e0b; }
+[data-theme="light"] .git-panel { --git-open: #7c3aed; --git-merged: #059669; --git-pr: #0284c7; --git-stale: #64748b; --git-behind: #d97706; }
+.git-panel .env-sub a { color: inherit; text-decoration: none; border-bottom: 1px dotted currentColor; }
+.git-panel code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.95em; }
+
+.git-panel .git-stats { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; align-items: stretch; }
+.git-panel .git-stat {
+    flex: 1 1 90px; display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+    padding: 9px 12px; border: 1px solid var(--border-color, #333); border-radius: 9px;
+    background: transparent; color: var(--text-secondary, #94a3b8); cursor: pointer; text-align: left;
+    transition: border-color 0.12s ease, background 0.12s ease;
+}
+.git-panel .git-stat b { font-size: 19px; font-weight: 650; color: var(--text-primary, #e2e8f0); font-variant-numeric: tabular-nums; }
+.git-panel .git-stat span { font-size: 11.5px; }
+.git-panel .git-stat.is-open b { color: var(--git-open); }
+.git-panel .git-stat.is-merged b { color: var(--git-merged); }
+.git-panel .git-stat.is-pr b { color: var(--git-pr); }
+.git-panel .git-stat:hover { border-color: var(--text-secondary, #94a3b8); }
+.git-panel .git-stat.on { border-color: var(--primary-color, #7c3aed); background: rgba(124, 58, 237, 0.08); }
+.git-panel .git-ratio { flex: 1 0 100%; height: 4px; border-radius: 4px; background: color-mix(in srgb, var(--git-open) 35%, transparent); overflow: hidden; }
+.git-panel .git-ratio i { display: block; height: 100%; background: var(--git-merged); }
+
+.git-panel .git-toolbar { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
+.git-panel .git-toolbar .env-input { flex: 1 1 auto; }
+.git-panel .git-view { display: inline-flex; border: 1px solid var(--border-color, #333); border-radius: 7px; overflow: hidden; flex: none; }
+.git-panel .git-view button { padding: 6px 11px; font-size: 12px; background: transparent; border: 0; color: var(--text-secondary, #94a3b8); cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+.git-panel .git-view button + button { border-left: 1px solid var(--border-color, #333); }
+.git-panel .git-view button.on { color: var(--text-primary, #e2e8f0); background: var(--card-bg-alt, rgba(124, 58, 237, 0.12)); }
+
+.git-panel .git-cleanup-confirm { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; padding: 10px 12px; border-radius: 8px; font-size: 12.5px; color: var(--text-primary, #e2e8f0); background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.3); }
+.git-panel .git-cleanup-confirm span { flex: 1 1 220px; }
+.git-panel [hidden] { display: none !important; } /* .env-mini and the confirm bar set display, which beats the attribute */
+.git-panel .env-mini-danger-solid { color: #fff; background: #dc2626; border-color: #dc2626; }
+.git-panel .env-mini-danger-solid:hover { color: #fff; border-color: #b91c1c; }
+.git-panel a.env-mini { text-decoration: none; }
+.git-panel .env-icon { padding: 7px 9px; }
+
+.git-panel .git-row {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px 16px; align-items: center;
+    padding: 11px 20px; border-bottom: 1px solid var(--border-color, #2a2a2a);
+}
+.git-panel .git-row:hover { background: var(--card-bg-alt, rgba(30, 30, 30, 0.6)); }
+.git-panel .git-row.is-default { background: rgba(124, 58, 237, 0.05); }
+.git-panel .git-row-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.git-panel .git-icon { font-size: 12px; color: var(--git-open); }
+.git-panel .git-row.is-merged .git-icon { color: var(--git-merged); }
+.git-panel .git-name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; color: var(--text-primary, #e2e8f0); word-break: break-all; margin-right: 2px; }
+.git-panel .git-row.is-merged .git-name { color: var(--text-secondary, #94a3b8); }
+.git-panel .git-commit { margin-top: 4px; font-size: 12px; color: var(--text-secondary, #94a3b8); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.git-panel .git-commit code { color: var(--text-primary, #e2e8f0); opacity: 0.8; }
+
+.git-panel .git-badge {
+    display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: 999px;
+    font-size: 10.5px; font-weight: 500; line-height: 17px; white-space: nowrap; text-decoration: none;
+    color: var(--text-secondary, #94a3b8); border: 1px solid var(--border-color, #333); background: transparent;
+}
+.git-panel .git-badge.is-default { color: var(--primary-color, #7c3aed); border-color: currentColor; }
+.git-panel .git-badge.is-open { color: var(--git-open); border-color: color-mix(in srgb, var(--git-open) 45%, transparent); }
+.git-panel .git-badge.is-merged { color: var(--git-merged); border-color: color-mix(in srgb, var(--git-merged) 45%, transparent); }
+.git-panel .git-badge.is-pr { color: var(--git-pr); border-color: color-mix(in srgb, var(--git-pr) 45%, transparent); }
+.git-panel .git-badge.is-draft { color: var(--git-stale); border-style: dashed; }
+.git-panel .git-badge.is-stale { color: var(--git-behind); border-color: color-mix(in srgb, var(--git-behind) 45%, transparent); }
+
+.git-panel .git-ab { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-variant-numeric: tabular-nums; color: var(--text-secondary, #94a3b8); }
+.git-panel .git-ab-behind { min-width: 34px; text-align: right; color: var(--git-behind); }
+.git-panel .git-ab-ahead { min-width: 34px; color: var(--git-open); }
+.git-panel .git-ab-bar { position: relative; display: flex; width: 90px; height: 6px; }
+.git-panel .git-ab-bar::after { content: ""; position: absolute; left: 50%; top: -3px; bottom: -3px; width: 1px; background: var(--border-color, #444); }
+.git-panel .git-ab-bar i { position: absolute; top: 0; bottom: 0; }
+.git-panel .git-ab-bar i.l { right: 50%; background: var(--git-behind); border-radius: 3px 0 0 3px; opacity: 0.75; }
+.git-panel .git-ab-bar i.r { left: 50%; background: var(--git-open); border-radius: 0 3px 3px 0; }
+.git-panel .git-row.is-merged .git-ab-bar i.r { background: var(--git-merged); }
+
+.git-panel .git-actions { display: flex; gap: 5px; justify-content: flex-end; }
+.git-panel .git-actions .env-mini { padding: 4px 9px; font-size: 11.5px; }
+.git-panel .git-actions .git-merge { color: var(--git-merged); border-color: color-mix(in srgb, var(--git-merged) 45%, transparent); }
+
+.git-panel .git-form { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 8px; margin-top: 4px; padding: 12px; border-radius: 9px; border: 1px solid var(--border-color, #333); background: var(--card-bg, rgba(0, 0, 0, 0.15)); }
+.git-panel .git-form-danger { border-color: rgba(239, 68, 68, 0.35); background: rgba(239, 68, 68, 0.06); }
+.git-panel .git-form-text { font-size: 12.5px; color: var(--text-primary, #e2e8f0); line-height: 1.5; }
+.git-panel .git-form-text a { color: var(--git-pr); }
+.git-panel .git-form > .env-input, .git-panel .git-form textarea { flex: none; }
+.git-panel .git-form textarea { resize: vertical; font-family: inherit; }
+.git-panel .git-form-actions { display: flex; gap: 6px; align-items: center; justify-content: flex-end; flex-wrap: wrap; }
+.git-panel .git-form-actions > :first-child { margin-right: auto; }
+.git-panel .git-inline { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary, #94a3b8); }
+.git-panel .git-inline select { flex: none; max-width: 240px; }
+.git-panel .git-method { flex: 0 1 180px; }
+
+/* Narrow panel: actions drop under the branch, ahead/behind stays beside it. */
+.git-panel.is-narrow .git-row { grid-template-columns: minmax(0, 1fr) auto; }
+.git-panel.is-narrow .git-actions { grid-column: 1 / -1; justify-content: flex-start; }
+.git-panel.is-narrow .git-ab-bar { width: 56px; }
+
+.git-panel .git-map-wrap { padding: 12px 16px 20px; }
+.git-panel .git-map { width: 100%; height: auto; display: block; }
+.git-panel .git-map-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 11.5px; color: var(--text-secondary, #94a3b8); margin-bottom: 8px; }
+.git-panel .git-map-legend span::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; background: var(--c); }
+.git-panel .git-map-legend .is-open { --c: var(--git-open); }
+.git-panel .git-map-legend .is-pr { --c: var(--git-pr); }
+.git-panel .git-map-legend .is-merged { --c: var(--git-merged); }
+.git-panel .git-map-legend .is-stale { --c: var(--git-stale); }
+.git-panel .git-map-legend .git-map-hint { flex-basis: 100%; opacity: 0.8; }
+.git-panel .git-map-legend .git-map-hint::before { display: none; }
+.git-panel .git-map-trunk { stroke: var(--primary-color, #7c3aed); stroke-width: 3; stroke-linecap: round; }
+.git-panel .git-map-trunk-tip { fill: var(--primary-color, #7c3aed); }
+.git-panel .git-map-guide { stroke: var(--border-color, #2a2a2a); stroke-width: 1; stroke-dasharray: 2 4; }
+.git-panel .git-map-label { font: 11.5px ui-monospace, SFMono-Regular, Menlo, monospace; fill: var(--text-secondary, #94a3b8); }
+.git-panel .git-map-label.is-trunk { fill: var(--primary-color, #7c3aed); font-weight: 600; }
+.git-panel .git-map-lane { --c: var(--git-open); }
+.git-panel .git-map-lane.is-pr { --c: var(--git-pr); }
+.git-panel .git-map-lane.is-merged { --c: var(--git-merged); }
+.git-panel .git-map-lane.is-stale { --c: var(--git-stale); }
+.git-panel .git-map-lane .git-map-label { fill: var(--text-primary, #e2e8f0); }
+.git-panel .git-map-lane.is-merged .git-map-label { fill: var(--text-secondary, #94a3b8); }
+.git-panel .git-map-edge { fill: none; stroke: var(--c); stroke-width: 2; }
+.git-panel .git-map-tag { font-size: 10.5px; font-weight: 500; fill: var(--c); }
+.git-panel .git-map-fork { fill: var(--c); }
+.git-panel .git-map-dot { fill: var(--card-bg, #121212); stroke: var(--c); stroke-width: 2; }
+.git-panel .git-map-more { font-size: 10.5px; fill: var(--c); }
+.git-panel .git-map-lane:hover .git-map-guide { stroke: var(--c); stroke-dasharray: none; opacity: 0.35; }

@@ -37,7 +37,7 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
   <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
-  <link rel="stylesheet" href="/public/css/artifacts.css?v=20261022-notes" />
+  <link rel="stylesheet" href="/public/css/artifacts.css?v=20261031-git" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
   <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261022-build-rows" />
   <link rel="stylesheet" href="/public/css/chat.css?v=20261023-dictation-fit" />
@@ -327,6 +327,7 @@ export function ChatPage({
         <button class="tab-button active" data-tab="filebrowser">Docs</button>
         <button class="tab-button" data-tab="checklist">Tickets</button>
         <button class="tab-button" data-tab="preview">Preview</button>
+        <button class="tab-button" data-tab="gitflow">Git</button>
         <button class="tab-button" data-tab="env">Env</button>
         <button class="tab-button" data-tab="notes">Notes</button>
       </div>
@@ -378,6 +379,35 @@ export function ChatPage({
             <div id="preview-body" style="flex:1;min-height:0;position:relative;overflow:hidden;">
               <!-- states rendered by preview-tab.js -->
             </div>
+          </div>
+        </div>
+
+        <!-- Git Tab — the project's branches on GitHub: merged vs not, PRs, merge, delete (git-tab.js). -->
+        <div class="tab-pane" id="gitflow">
+          <div class="env-panel git-panel" id="git-root" data-project-id="${projectId}">
+            <div class="env-panel-head">
+              <div class="env-head-row">
+                <div style="min-width:0;">
+                  <h3 class="env-title">Branches</h3>
+                  <div class="env-sub" id="git-count">Loading…</div>
+                </div>
+                <div class="env-head-actions">
+                  <button id="git-cleanup" class="env-mini" hidden></button>
+                  <button id="git-refresh" class="env-mini env-icon" title="Refresh from GitHub" aria-label="Refresh branches"><i class="fas fa-rotate-right"></i></button>
+                </div>
+              </div>
+              <div class="git-cleanup-confirm" id="git-cleanup-confirm" hidden></div>
+              <div class="git-stats" id="git-stats"></div>
+              <div class="git-toolbar">
+                <input id="git-search" class="env-input" type="search" placeholder="Filter branches…" spellcheck="false" aria-label="Filter branches" />
+                <div class="git-view" role="group" aria-label="View">
+                  <button class="on" data-view="list"><i class="fas fa-list"></i> List</button>
+                  <button data-view="map"><i class="fas fa-diagram-project"></i> Map</button>
+                </div>
+              </div>
+              <div class="env-msg" id="git-msg" hidden></div>
+            </div>
+            <div class="env-list" id="git-list"></div>
           </div>
         </div>
 
@@ -544,6 +574,7 @@ export function ChatPage({
 <script src="/public/js/ticket-action-phases.js?v=20261022-followup-logs2"></script>
 <script src="/public/js/preview-tab.js?v=20261005-start-state"></script>
     <script src="/public/js/ticket-agent.js?v=20261022-git-sha"></script>
+  <script src="/public/js/git-tab.js?v=20261031-git"></script>
   <script src="/public/js/env-tab.js?v=20261004-env-apply"></script>
   <script src="/public/js/notes-tab.js?v=20261022-notes-quiet"></script>
   <script src="/public/js/tab-overflow.js"></script>
