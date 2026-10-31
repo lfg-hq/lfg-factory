@@ -133,7 +133,7 @@ cat <<EOF
   │ Sign in    $EMAIL
   │ Password   $PASSWORD
   │ Project    $PROJECT_URL
-  │ Ticket     $TICKET  →  open it, click "Run on my computer"
+  │ Ticket     $TICKET  →  open it, Run menu: "Build on my computer", then Run
   │ Claude     $([ "$FAKE" = 1 ] && echo "stand-in (--fake-claude)" || echo "your Claude Code login (uses your plan)")
   │ See result git --git-dir "$ORIGIN" log --all --oneline --stat
   └────────────────────────────────────────────────────────────────
