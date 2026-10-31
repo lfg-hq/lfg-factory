@@ -4,6 +4,8 @@ import type { auth } from '../../auth/index.ts';
 import { getProjectAccess, requirePermission, PermissionError } from '../../auth/project-access.ts';
 import { resolveGitActor, NO_SHARED_GIT_MESSAGE } from '../../services/git-access.ts';
 import { createGitProvider, GitProviderError } from '../../services/git-provider.ts';
+import { reconcileExternalPRs } from '../../services/git-reconciliation.ts';
+import { inspectMerge, mutateGit, gitSafetyMessage } from '../../services/git-safety.ts';
 import { buildGitWorkspace } from '../../services/git-workspace.ts';
 import { resolveTicketAnchor } from '../../services/epics.ts';
 import { db } from '../../config/db.ts';
@@ -19,11 +21,8 @@ import { gitContext } from '../../services/git-context.ts';
 import { queueReview, retryReview, priorReviews, createReviewedPR, reviewBody, reviewRepository, ReviewError } from '../../services/git-review.ts';
 
 type AuthEnv = { Variables: { user: typeof auth.$Infer.Session.user; session: typeof auth.$Infer.Session.session; gitErrorCode: string; gitPartial: boolean } };
-// Existing application diagnostics use console stdout/stderr; no file logger is installed.
-// One bounded structured terminal event per request, collected/rotated by the host.
-export function logGitRequest(fields: Record<string, unknown>) {
-  console.log(JSON.stringify({ timestamp: new Date().toISOString(), level: fields.outcome === 'failed' ? 'error' : 'info', service: 'git-workspace', event: 'git.request.completed', retryCount: 0, ...fields }));
-}
+import { logGitRequest } from '../../services/git-logging.ts';
+export { logGitRequest } from '../../services/git-logging.ts';
 const gitApi = new Hono<AuthEnv>();
 gitApi.use('/projects/:projectId/git/*', async (c, next) => {
   const started = performance.now();
@@ -49,7 +48,7 @@ for (const view of ['branches', 'pull-requests'] as const) gitApi.get(`/projects
     const access = await getProjectAccess(c.req.param('projectId')!, c.get('user').id);
     if (!access) return fail('Project not found or access denied. Check your project membership.', 'PROJECT_ACCESS_DENIED', 404);
     const project = access.project;
-    // Viewing does not require code-management permission. No write endpoint is exposed.
+    // Viewing does not require code-management permission; each mutation checks it anew.
     let canManageCode = false;
     try { canManageCode = requirePermission(access, 'canEditFiles'); } catch { /* read-only member */ }
     const actor = resolveGitActor(project, c.get('user').id);
@@ -84,14 +83,14 @@ for (const view of ['branches', 'pull-requests'] as const) gitApi.get(`/projects
         const anchor = await resolveTicketAnchor({ epicId: validEpic?.id ?? null });
         tickets.push({ ...t, title: t.name, executionActive: activeExecutions.some(e => e.ticketId === t.id), destination: t.epicId ? validEpic?.branch ?? '' : anchor.anchorBranch });
       }
-      data = await buildGitWorkspace(provider, storedEpics, tickets, project.previewTicketId);
+      data = await buildGitWorkspace(provider, storedEpics, tickets, project.previewTicketId, canManageCode ? prs => reconcileExternalPRs(project.id, c.get('user').id, provider!, prs, correlationId) : undefined);
     }
     if (!data.completeness.complete) {
       c.set('gitPartial', true);
       c.set('gitErrorCode', data.completeness.errors[0]?.code || 'COMPARISON_UNKNOWN');
     }
     logGitRequest({ event: 'git.provider.completed', correlationId, provider: kind, outcome: data.completeness.complete ? 'completed' : 'partial', durationMs: Math.round(performance.now() - started), ...provider.diagnostics(), failureCategories: provider.errors.slice(0, 10).map(e => e.code) });
-    return c.json({ ...data, canManageCode, correlationId });
+    return c.json({ ...data, readOnly: !canManageCode, canManageCode, correlationId });
   } catch (e) {
     const error = e instanceof GitProviderError ? e : new GitProviderError('GIT_UNAVAILABLE');
     logGitRequest({ event: 'git.provider.failed', correlationId, outcome: 'failed', provider: provider?.provider, durationMs: Math.round(performance.now() - started), errorCode: error.code, providerRequestId: error.providerRequestId, ...provider?.diagnostics() });
@@ -152,6 +151,39 @@ for (const route of [
       };
       const status = e instanceof PermissionError ? 403 : e instanceof GitProviderError && [400, 403, 404, 409, 422].includes(e.status) ? e.status : 502;
       return c.json({ error: messages[code] || 'Unable to complete this Git operation. Check project permissions and connected Git/model accounts, then retry.', code, correlationId }, status as 400 | 403 | 404 | 409 | 422 | 502);
+    }
+  });
+}
+for (const [method, path] of [['GET', 'pull-requests/:number/merge-state'], ['POST', 'pull-requests/:number/merge'], ['DELETE', 'branches']] as const) {
+  gitApi.on(method, `/projects/:projectId/git/${path}`, async c => {
+    const correlationId = c.res.headers.get('X-Correlation-ID')!;
+    try {
+      if (method !== 'GET') {
+        const origin = c.req.header('Origin');
+        if (origin && origin !== new URL(c.req.url).origin) throw new GitProviderError('ORIGIN_DENIED', 403);
+        if (!c.req.header('Content-Type')?.startsWith('application/json')) throw new GitProviderError('JSON_REQUIRED', 400);
+      }
+      const access = await getProjectAccess(c.req.param('projectId')!, c.get('user').id);
+      if (!access) throw new GitProviderError('PROJECT_ACCESS_DENIED', 404);
+      if (!requirePermission(access, 'canEditFiles')) throw new GitProviderError('CODE_PERMISSION_REQUIRED', 403);
+      const provider = await gitContext(access.project, c.get('user').id);
+      if (method === 'GET') {
+        const number = Number(c.req.param('number'));
+        if (!Number.isSafeInteger(number) || number < 1) throw new GitProviderError('INVALID_PR_NUMBER', 400);
+        const state = await inspectMerge(access.project.id, provider, number);
+        return c.json({ ...state, blockerMessages: state.blockers.map(gitSafetyMessage), correlationId });
+      }
+      const raw = await c.req.text();
+      if (raw.length > 4096) throw new GitProviderError('REQUEST_TOO_LARGE', 400);
+      let input: any; try { input = JSON.parse(raw); } catch { throw new GitProviderError('INVALID_JSON', 400); }
+      if (!input || typeof input !== 'object' || Array.isArray(input)) throw new GitProviderError('INVALID_JSON', 400);
+      const result = await mutateGit(access.project.id, c.get('user').id, provider, method === 'DELETE' ? 'delete' : 'merge', { ...input, number: c.req.param('number') }, correlationId);
+      return c.json({ result, correlationId });
+    } catch (e) {
+      const code = e instanceof PermissionError ? 'CODE_PERMISSION_REQUIRED' : e instanceof GitProviderError ? e.code : 'GIT_MUTATION_UNAVAILABLE';
+      c.set('gitErrorCode', code);
+      const status = e instanceof PermissionError ? 403 : e instanceof GitProviderError && [400, 403, 404, 409, 422].includes(e.status) ? e.status : 502;
+      return c.json({ error: gitSafetyMessage(code), code, correlationId }, status as 400 | 403 | 404 | 409 | 422 | 502);
     }
   });
 }

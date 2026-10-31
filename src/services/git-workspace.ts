@@ -15,9 +15,10 @@ export async function integrationFor(head: GitBranch | undefined, destination: G
   }
   return c.complete && prs.complete ? { status: 'not_integrated', evidence: 'Current revision not contained; no matching merged PR evidence', ahead: c.ahead, behind: c.behind } : { ...unknown, ahead: c.ahead, behind: c.behind };
 }
-export async function buildGitWorkspace(provider: GitProvider, epics: WorkspaceEpic[], tickets: WorkspaceTicket[], previewTicketId: string | null) {
+export async function buildGitWorkspace(provider: GitProvider, epics: WorkspaceEpic[], tickets: WorkspaceTicket[], previewTicketId: string | null, reconcileMerged?: (prs: GitPR[]) => Promise<void>) {
   const info = await provider.info();
   const [branches, openPRs, mergedPRs] = await Promise.all([provider.branches(), provider.pullRequests(), provider.pullRequests(true)]);
+  if (mergedPRs.complete && reconcileMerged) await reconcileMerged(mergedPRs.items);
   const refs = new Map(branches.items.map(b => [b.branch, b]));
   const comparisons = new Map<string, Promise<GitComparison>>();
   const compare: GitProvider['compare'] = (base, head) => {
