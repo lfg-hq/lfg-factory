@@ -38,3 +38,18 @@ screenshots
 *.log
 
 backups/
+# Local checkouts, scratch output and the desktop app never belong in the server image.
+# Git worktrees and test environments carry their own copies of .env.
+.worktrees
+.desktop-test
+desktop
+output
+.deck-build
+Untitled
+**/node_modules
+
+# Env files at ANY depth (the rules above only cover the top level)
+**/.env
+**/.env.*
+**/credentials.json
+!example.env
