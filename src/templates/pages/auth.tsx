@@ -5,7 +5,7 @@ import { html } from "hono/html";
  * Uses Better Auth client-side API for form submission (no Django CSRF needed).
  * Auth endpoints: POST /api/auth/sign-up/email, POST /api/auth/sign-in/email
  */
-export const AuthPage = ({ turnstileSiteKey = "" }: { turnstileSiteKey?: string }) => html`
+export const AuthPage = ({ turnstileSiteKey = "", googleEnabled = true }: { turnstileSiteKey?: string; googleEnabled?: boolean }) => html`
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -156,6 +156,7 @@ export const AuthPage = ({ turnstileSiteKey = "" }: { turnstileSiteKey?: string 
 
                     <!-- Login Form -->
                     <div class="auth-form login-form">
+                        ${googleEnabled ? html`
                         <button type="button" onclick="signInWithGoogle()" class="w-full flex items-center justify-center gap-3 bg-white border border-slate-200 p-3 rounded-lg text-slate-700 font-medium hover:bg-slate-50 transition-colors mb-6">
                             <img src="https://www.google.com/favicon.ico" alt="Google" class="w-5 h-5" />
                             Sign in with Google
@@ -165,6 +166,7 @@ export const AuthPage = ({ turnstileSiteKey = "" }: { turnstileSiteKey?: string 
                             <div class="absolute inset-0 flex items-center"><div class="w-full border-t border-slate-200"></div></div>
                             <div class="relative flex justify-center text-xs uppercase"><span class="bg-white px-2 text-slate-400">Or continue with email</span></div>
                         </div>
+                        ` : ""}
 
                         <form id="login-form" class="space-y-4">
                             <div>
@@ -196,6 +198,7 @@ export const AuthPage = ({ turnstileSiteKey = "" }: { turnstileSiteKey?: string 
 
                     <!-- Register Form -->
                     <div class="auth-form register-form hidden">
+                        ${googleEnabled ? html`
                         <button type="button" onclick="signInWithGoogle()" class="w-full flex items-center justify-center gap-3 bg-white border border-slate-200 p-3 rounded-lg text-slate-700 font-medium hover:bg-slate-50 transition-colors mb-6">
                             <img src="https://www.google.com/favicon.ico" alt="Google" class="w-5 h-5" />
                             Sign up with Google
@@ -205,6 +208,7 @@ export const AuthPage = ({ turnstileSiteKey = "" }: { turnstileSiteKey?: string 
                             <div class="absolute inset-0 flex items-center"><div class="w-full border-t border-slate-200"></div></div>
                             <div class="relative flex justify-center text-xs uppercase"><span class="bg-white px-2 text-slate-400">Or continue with email</span></div>
                         </div>
+                        ` : ""}
 
                         <form id="register-form" class="space-y-4">
                             <div>

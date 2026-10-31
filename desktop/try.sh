@@ -11,7 +11,8 @@
 #   desktop/try.sh --headless       the runner in this terminal instead of the app
 #   desktop/try.sh --reset          start over with a fresh database and demo repo
 #
-# Port: 8100, or set LFG_DESKTOP_TEST_PORT.
+# Port: 8100, or set LFG_DESKTOP_TEST_PORT. Google sign-in is offered only on port 8000,
+# the callback your Google OAuth client allows; elsewhere use the printed test account.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -57,7 +58,10 @@ say "Building LFG Desktop"
 mkdir -p "$DIR/work" "$DIR/uploads"
 # Your .env minus anything that would touch shared state: database, URLs, captcha,
 # outgoing email, the Telegram bot and file storage are replaced below.
-grep -vE '^(DATABASE_DRIVER|DATABASE_URL|POSTGRES_(HOST|PORT|DB|USER|PASSWORD)|PORT|APP_URL|BETTER_AUTH_URL|TURNSTILE_SITE_KEY|TURNSTILE_SECRET_KEY|TELEGRAM_PUBLIC_BOT_TOKEN|TELEGRAM_PUBLIC_BOT_OWNER_ID|SENDGRID_API_KEY|FILE_STORAGE_TYPE|LOCAL_STORAGE_DIR)=' .env > "$DIR/test.env"
+# Google only accepts the callback URLs registered for your OAuth client (normally
+# port 8000). On any other port its button would just fail, so it's left out.
+GOOGLE_KEYS=""; if [ "$PORT" != 8000 ]; then GOOGLE_KEYS="|GOOGLE_CLIENT_ID|GOOGLE_CLIENT_SECRET"; fi
+grep -vE '^(DATABASE_DRIVER|DATABASE_URL|POSTGRES_(HOST|PORT|DB|USER|PASSWORD)|PORT|APP_URL|BETTER_AUTH_URL|TURNSTILE_SITE_KEY|TURNSTILE_SECRET_KEY|TELEGRAM_PUBLIC_BOT_TOKEN|TELEGRAM_PUBLIC_BOT_OWNER_ID|SENDGRID_API_KEY|FILE_STORAGE_TYPE|LOCAL_STORAGE_DIR'"$GOOGLE_KEYS"')=' .env > "$DIR/test.env"
 cat >> "$DIR/test.env" <<EOF
 
 # ── desktop/try.sh overrides ──

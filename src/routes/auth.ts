@@ -6,8 +6,10 @@ import { auth } from "../auth/index.ts";
 const authRoutes = new Hono();
 
 // ── Login / Register page ──────────────────────────────────────────
-authRoutes.get("/auth/login", (c) => c.html(AuthPage({ turnstileSiteKey: env.TURNSTILE_SITE_KEY })));
-authRoutes.get("/auth/register", (c) => c.html(AuthPage({ turnstileSiteKey: env.TURNSTILE_SITE_KEY })));
+// Google sign-in only shows when it's configured (a self-host or test server may not have it).
+const authPage = () => AuthPage({ turnstileSiteKey: env.TURNSTILE_SITE_KEY, googleEnabled: !!(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) });
+authRoutes.get("/auth/login", (c) => c.html(authPage()));
+authRoutes.get("/auth/register", (c) => c.html(authPage()));
 
 // ── Logout ─────────────────────────────────────────────────────────
 // Accepts both GET (direct link) and POST (form submit), signs out, then redirects.

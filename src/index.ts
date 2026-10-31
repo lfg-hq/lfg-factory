@@ -203,6 +203,16 @@ app.get("/health", (c) => c.json({ status: "ok" }));
 // ── Routes ──────────────────────────────────────────────────────────
 // Scope Git diagnostics/auth before broad middleware on legacy API routers.
 app.route("/api", gitApi);
+// LFG Desktop (it sends X-LFG-Desktop on requests to this server) is the product, not
+// the website: marketing pages send it to the person's projects, or to sign in.
+const marketingRoots = new Set(landing.routes.map(r => "/" + r.path.split("/")[1]).filter(p => p !== "/api"));
+app.use("*", async (c, next) => {
+  if (c.req.method !== "GET" || !c.req.header("x-lfg-desktop")) return next();
+  const path = c.req.path;
+  if (path !== "/" && !marketingRoots.has("/" + path.split("/")[1])) return next();
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  return c.redirect(session ? "/projects" : "/auth/login");
+});
 app.route("/", authRoutes);
 app.route("/", landing);
 app.route("/", chatRoutes);

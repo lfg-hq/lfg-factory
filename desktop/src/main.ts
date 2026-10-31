@@ -6,7 +6,7 @@
  * (encrypted with the OS keychain via safeStorage) and the "don't ask again" list.
  */
 
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, safeStorage, shell, Tray, nativeImage } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, safeStorage, session, shell, Tray, nativeImage } from "electron";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -68,22 +68,42 @@ let runner: Runner | null = null;
 let runnerStatus: { state: RunnerState; detail?: string } = { state: "disconnected" };
 let shellEnv: NodeJS.ProcessEnv = process.env;
 
+// Sign-in providers whose pages must stay inside the app, so the session cookie lands here.
+const SIGN_IN_PAGES: Array<[RegExp, RegExp]> = [
+  [/^accounts\.google\.[a-z.]+$/, /^\//],
+  [/^accounts\.youtube\.com$/, /^\//],
+  [/^github\.com$/, /^\/(login|session|sessions)(\/|$)/],
+  [/^gitlab\.com$/, /^\/(oauth|users\/sign_in)(\/|$)/],
+];
+const isSignInPage = (url: URL) => url.protocol === "https:" && SIGN_IN_PAGES.some(([host, path]) => host.test(url.hostname) && path.test(url.pathname));
+
 function openMain() {
   if (!config.serverUrl) return openSetup();
   if (mainWindow) { mainWindow.show(); mainWindow.focus(); return; }
   mainWindow = new BrowserWindow({ width: 1400, height: 900, title: "LFG", webPreferences: { contextIsolation: true, sandbox: true } });
   const origin = new URL(config.serverUrl).origin;
-  // Links to other sites open in the person's browser, not inside the app.
+  const inApp = (raw: string) => { const url = new URL(raw); return url.origin === origin || isSignInPage(url); };
+  // Other sites open in the person's browser, not inside the app.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (new URL(url).origin === origin) return { action: "allow" };
+    if (inApp(url)) return { action: "allow" };
     void shell.openExternal(url);
     return { action: "deny" };
   });
   mainWindow.webContents.on("will-navigate", (event, url) => {
-    if (new URL(url).origin !== origin) { event.preventDefault(); void shell.openExternal(url); }
+    if (!inApp(url)) { event.preventDefault(); void shell.openExternal(url); }
   });
-  void mainWindow.loadURL(config.serverUrl);
+  // The app, not the website: start at the person's projects (sign-in if needed).
+  void mainWindow.loadURL(`${origin}/projects`);
   mainWindow.on("closed", () => { mainWindow = null; });
+}
+
+/** Mark requests to the LFG server as coming from the app, so it skips the marketing site. */
+function tagServerRequests() {
+  session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
+    const headers = details.requestHeaders;
+    if (config.serverUrl && details.url.startsWith(new URL(config.serverUrl).origin + "/")) headers["X-LFG-Desktop"] = app.getVersion();
+    callback({ requestHeaders: headers });
+  });
 }
 
 function openSetup() {
@@ -200,6 +220,9 @@ if (!app.requestSingleInstanceLock()) {
     config = loadConfig();
     if (devServerUrl) config.serverUrl = devServerUrl;
     if (process.env.LFG_WORK_ROOT) config.workRoot = process.env.LFG_WORK_ROOT;
+    // A plain Chrome user agent: Google refuses sign-in from agents that announce Electron.
+    app.userAgentFallback = app.userAgentFallback.replace(/ Electron\/\S+/, "").replace(/ (LFG|lfg-desktop)\/\S+/, "");
+    tagServerRequests();
     tray = new Tray(nativeImage.createEmpty());
     refreshTray();
     startRunner();
