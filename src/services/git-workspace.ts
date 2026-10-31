@@ -30,7 +30,8 @@ export async function buildGitWorkspace(provider: GitProvider, epics: WorkspaceE
   const row = async (id: string, name: string, branch: string | null, destination: string | null, baseSha: string | null, ticket?: WorkspaceTicket) => {
     if (branch) used.add(branch);
     const ref = branch ? refs.get(branch) : undefined;
-    return { id, name, branch, headSha: ref?.headSha ?? null, missingRef: !ref, protected: ref?.protected ?? false, destination, baseSha: destination ? refs.get(destination)?.headSha ?? null : null, storedBaseSha: baseSha,
+    const refState = !branch ? 'no_branch' : ref ? 'present' : branches.complete ? 'absent' : 'unavailable';
+    return { id, name, branch, headSha: ref?.headSha ?? null, refState, missingRef: refState === 'absent', protected: ref?.protected ?? false, destination, baseSha: destination ? refs.get(destination)?.headSha ?? null : null, storedBaseSha: baseSha,
       integration: await integrationFor(ref, destination ? refs.get(destination) : undefined, mergedPRs, provider.identity, compare),
       activeUse: { preview: !!ticket && ticket.id === previewTicketId, execution: !!ticket?.executionActive || ticket?.queueStatus === 'executing', queued: ticket?.queueStatus === 'queued' },
       pullRequests: openPRs.items.filter(p => p.sourceRepo?.toLowerCase() === provider.identity.toLowerCase() && p.source === branch && p.destination === destination),
@@ -51,10 +52,12 @@ export async function buildGitWorkspace(provider: GitProvider, epics: WorkspaceE
   for (const b of branches.items.filter(b => !used.has(b.branch))) other.push(await row(`branch:${b.branch}`, b.branch, b.branch, info.defaultBranch, null));
   const ticketRows = [...groups.flatMap(e => e.tickets), ...other.filter(r => tickets.some(t => t.id === r.id))];
   const count = (rows: typeof other) => ({ total: rows.length, integrated: rows.filter(r => r.integration.status === 'integrated').length, notIntegrated: rows.filter(r => r.integration.status === 'not_integrated').length, unknown: rows.filter(r => r.integration.status === 'unknown').length });
+  // Ticket associations remain visible, but only stored branch names contribute to branch counts.
+  const branchCounts = (rows: typeof other) => ({ ...count(rows.filter(r => r.branch)), associations: rows.length, withoutBranch: rows.filter(r => !r.branch).length });
   const errors = [...branches.errors, ...openPRs.errors, ...mergedPRs.errors, ...provider.errors];
-  const comparisonsComplete = refs.has(info.defaultBranch) && [...groups, ...ticketRows, ...other].every(r => r.integration.status !== 'unknown');
-  return { repository: provider.identity, provider: provider.provider, readOnly: true, defaultBranch: { branch: info.defaultBranch, ...refs.get(info.defaultBranch), missingRef: !refs.has(info.defaultBranch) }, epics: groups, other, pullRequests: openPRs.items,
-    totals: { epics: count(groups), tickets: count(ticketRows), other: count(other), openPRs: openPRs.items.length },
+  const comparisonsComplete = refs.has(info.defaultBranch) && [...groups, ...ticketRows, ...other].filter(r => r.branch).every(r => r.integration.status !== 'unknown');
+  return { repository: provider.identity, provider: provider.provider, readOnly: true, defaultBranch: { branch: info.defaultBranch, ...refs.get(info.defaultBranch), missingRef: branches.complete && !refs.has(info.defaultBranch), refState: refs.has(info.defaultBranch) ? 'present' : branches.complete ? 'absent' : 'unavailable' }, epics: groups.map(g => ({ ...g, ticketCounts: branchCounts(g.tickets) })), other, pullRequests: openPRs.items,
+    totals: { epics: count(groups), tickets: branchCounts(ticketRows), other: branchCounts(other), openPRs: openPRs.items.length },
     completeness: { complete: branches.complete && openPRs.complete && mergedPRs.complete && comparisonsComplete, branches: branches.complete, pullRequests: openPRs.complete, mergeEvidence: mergedPRs.complete, comparisons: comparisonsComplete, errors: errors.slice(0, 30) },
   };
 }
