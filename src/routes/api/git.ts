@@ -39,6 +39,29 @@ gitApi.use('/projects/:projectId/git/*', async (c, next) => {
   }
 });
 gitApi.use('/projects/:projectId/git/*', requireAuth);
+// Incremental immutable history pages share the same authorization and actor resolution.
+gitApi.get('/projects/:projectId/git/history', async c => {
+  const correlationId = c.res.headers.get('X-Correlation-ID')!;
+  const started = performance.now();
+  let provider: ReturnType<typeof createGitProvider> | undefined;
+  try {
+    const access = await getProjectAccess(c.req.param('projectId')!, c.get('user').id);
+    if (!access) throw new GitProviderError('PROJECT_ACCESS_DENIED', 404);
+    const sha = c.req.query('sha') || '', page = Number(c.req.query('page') || '1');
+    if (!/^[a-f0-9]{40,64}$/.test(sha) || !Number.isSafeInteger(page) || page < 1 || page > 10000) throw new GitProviderError('INVALID_HISTORY_BOUNDS', 400);
+    provider = await gitContext(access.project, c.get('user').id);
+    const history = await provider.history(sha, page);
+    if (!history.complete) c.set('gitPartial', true);
+    if (history.errors.length) c.set('gitErrorCode', history.errors[0]!.code);
+    logGitRequest({ event: history.errors.length ? 'git.history.failed' : 'git.history.completed', correlationId, outcome: history.errors.length ? 'failed' : history.complete ? 'completed' : 'partial', provider: provider.provider, durationMs: Math.round(performance.now() - started), errorCode: history.errors[0]?.code, failureCategories: history.errors.map(e => e.code), ...provider.diagnostics() });
+    return c.json({ ...history, correlationId });
+  } catch (e) {
+    const error = e instanceof GitProviderError ? e : new GitProviderError('GIT_UNAVAILABLE');
+    c.set('gitErrorCode', error.code);
+    logGitRequest({ event: 'git.history.failed', correlationId, outcome: 'failed', durationMs: Math.round(performance.now() - started), errorCode: error.code, provider: provider?.provider, ...provider?.diagnostics() });
+    return c.json({ error: 'Unable to load history. Check Git access and retry this page.', code: error.code, correlationId }, [400, 403, 404].includes(error.status) ? error.status as 400 | 403 | 404 : 502);
+  }
+});
 for (const view of ['branches', 'pull-requests'] as const) gitApi.get(`/projects/:projectId/git/${view}`, async c => {
   const correlationId = c.res.headers.get('X-Correlation-ID')!;
   const fail = (error: string, code: string, status: 400 | 403 | 404 | 502) => { c.set('gitErrorCode', code); return c.json({ error, code, correlationId }, status); };
@@ -84,6 +107,8 @@ for (const view of ['branches', 'pull-requests'] as const) gitApi.get(`/projects
         tickets.push({ ...t, title: t.name, executionActive: activeExecutions.some(e => e.ticketId === t.id), destination: t.epicId ? validEpic?.branch ?? '' : anchor.anchorBranch });
       }
       data = await buildGitWorkspace(provider, storedEpics, tickets, project.previewTicketId, canManageCode ? prs => reconcileExternalPRs(project.id, c.get('user').id, provider!, prs, correlationId) : undefined);
+      const historyErrors = data.graph.heads.flatMap(h => h.history?.errors || []);
+      logGitRequest({ event: historyErrors.length ? 'git.history.workspace.failed' : 'git.history.workspace.completed', correlationId, provider: kind, outcome: historyErrors.length ? 'failed' : data.graph.complete ? 'completed' : 'partial', durationMs: Math.round(performance.now() - started), errorCode: historyErrors[0]?.code, failureCategories: historyErrors.slice(0, 10).map(e => e.code), nodes: data.graph.nodes.length, heads: data.graph.heads.length, ...provider.diagnostics() });
     }
     if (!data.completeness.complete) {
       c.set('gitPartial', true);

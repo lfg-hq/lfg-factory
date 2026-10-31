@@ -1,4 +1,5 @@
 import type { GitBranch, GitComparison, GitPage, GitPR, GitProvider } from './git-provider.ts';
+import { buildHistory } from './git-history.ts';
 export type WorkspaceEpic = { id: string; name: string; epicKey: string | null; branch: string | null; baseBranch: string | null; baseSha: string | null };
 export type WorkspaceTicket = { id: string; title: string; epicId: string | null; githubBranch: string | null; status: string; queueStatus?: string | null; executionActive?: boolean; destination: string };
 export type Integration = { status: 'integrated' | 'not_integrated' | 'unknown'; evidence: string; ahead: number | null; behind: number | null };
@@ -54,10 +55,17 @@ export async function buildGitWorkspace(provider: GitProvider, epics: WorkspaceE
   const count = (rows: typeof other) => ({ total: rows.length, integrated: rows.filter(r => r.integration.status === 'integrated').length, notIntegrated: rows.filter(r => r.integration.status === 'not_integrated').length, unknown: rows.filter(r => r.integration.status === 'unknown').length });
   // Ticket associations remain visible, but only stored branch names contribute to branch counts.
   const branchCounts = (rows: typeof other) => ({ ...count(rows.filter(r => r.branch)), associations: rows.length, withoutBranch: rows.filter(r => !r.branch).length });
-  const errors = [...branches.errors, ...openPRs.errors, ...mergedPRs.errors, ...provider.errors];
+  const allRows = [...groups.flatMap(g => [g, ...g.tickets]), ...other];
+  const defaultRef = refs.get(info.defaultBranch);
+  const graph = await buildHistory(provider, [...allRows, { id: 'default', branch: info.defaultBranch, headSha: defaultRef?.headSha ?? null, refState: defaultRef ? 'present' : branches.complete ? 'absent' : 'unavailable', integration: { status: 'integrated' } }], [
+    { id: 'pending', rowIds: allRows.filter(r => r.branch && r.integration.status !== 'integrated').map(r => r.id).concat('default') },
+    ...groups.map(g => ({ id: g.id, rowIds: [g.id, ...g.tickets.filter(t => t.branch).map(t => t.id)] })),
+    { id: 'other', rowIds: other.filter(r => r.branch).map(r => r.id) },
+  ], allRows.flatMap(r => mergedPRs.items.filter(p => p.merged && p.sourceRepo?.toLowerCase() === provider.identity.toLowerCase() && p.source === r.branch && p.destination === r.destination && p.headSha && p.headSha !== r.headSha).map(p => ({ rowId: r.id, branch: r.branch!, sha: p.headSha }))));
+  const errors = [...branches.errors, ...openPRs.errors, ...mergedPRs.errors, ...provider.errors, ...graph.heads.flatMap(h => h.history?.errors || [])];
   const comparisonsComplete = refs.has(info.defaultBranch) && [...groups, ...ticketRows, ...other].filter(r => r.branch).every(r => r.integration.status !== 'unknown');
-  return { repository: provider.identity, provider: provider.provider, readOnly: true, defaultBranch: { branch: info.defaultBranch, ...refs.get(info.defaultBranch), missingRef: branches.complete && !refs.has(info.defaultBranch), refState: refs.has(info.defaultBranch) ? 'present' : branches.complete ? 'absent' : 'unavailable' }, epics: groups.map(g => ({ ...g, ticketCounts: branchCounts(g.tickets) })), other, pullRequests: openPRs.items,
+  return { graph, repository: provider.identity, provider: provider.provider, readOnly: true, defaultBranch: { branch: info.defaultBranch, ...refs.get(info.defaultBranch), missingRef: branches.complete && !refs.has(info.defaultBranch), refState: refs.has(info.defaultBranch) ? 'present' : branches.complete ? 'absent' : 'unavailable' }, epics: groups.map(g => ({ ...g, ticketCounts: branchCounts(g.tickets) })), other, pullRequests: openPRs.items,
     totals: { epics: count(groups), tickets: branchCounts(ticketRows), other: branchCounts(other), openPRs: openPRs.items.length },
-    completeness: { complete: branches.complete && openPRs.complete && mergedPRs.complete && comparisonsComplete, branches: branches.complete, pullRequests: openPRs.complete, mergeEvidence: mergedPRs.complete, comparisons: comparisonsComplete, errors: errors.slice(0, 30) },
+    completeness: { complete: branches.complete && openPRs.complete && mergedPRs.complete && comparisonsComplete && graph.complete, history: graph.complete, branches: branches.complete, pullRequests: openPRs.complete, mergeEvidence: mergedPRs.complete, comparisons: comparisonsComplete, errors: errors.slice(0, 30) },
   };
 }
