@@ -1,0 +1,152 @@
+{
+  "status": "implemented_with_documented_live_provider_gap",
+  "implementationRevision": "5597728cc806bffe06844b0ae01c32ab7f9af67b plus uncommitted LFG-7 changes",
+  "pushedCommit": null,
+  "mergedRevision": null,
+  "runningRevision": null,
+  "runtime": {
+    "command": "BETTER_AUTH_SECRET=\"${BETTER_AUTH_SECRET:-$(cat data/.auth-secret)}\" bun run src/index.ts",
+    "workingDirectory": "/data/project",
+    "bind": "0.0.0.0:8080",
+    "environment": "Existing .env / inherited resolved process environment; no variants",
+    "processes": [
+      "Bun web process with existing in-process bounded DB-backed Git review runner; no new worker"
+    ],
+    "logs": "stdout/stderr; platform collection/rotation, no application log files",
+    "smokeResult": "Passed health 200, database-backed invalid-login 401 and correlated anonymous history/branches/reviews/merge/delete 401. Temporary process stopped.",
+    "jobStatus": "No Git review, operation or mutation records in local database; no live job execution claimed",
+    "databaseRepair": "Existing PostgreSQL reachable. Applied checked-in additive 0001_git_reviews.sql and 0002_git_mutations.sql after backup /data/recovery/lfg7/before-git-tables.dump. No replacement or account/session/data reset."
+  },
+  "prerequisites": [
+    {
+      "name": "Bun and built-in SQLite",
+      "reason": "Build/server and isolated SQLite persistence/migration tests",
+      "verificationCommand": "cd /data/project && bun -e 'import {Database} from \"bun:sqlite\"; const d=new Database(\":memory:\"); try { if(d.query(\"select 1 as n\").get().n!==1) throw new Error(\"SQLite unavailable\"); console.log(Bun.version); } finally {d.close();}'",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Node.js",
+      "reason": "Schema parity and TypeScript tooling",
+      "verificationCommand": "cd /data/project && node --input-type=module -e 'import assert from \"node:assert/strict\"; assert(Number(process.versions.node.split(\".\")[0])>=22); assert.equal(await Promise.resolve(1),1)'",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Existing application dependencies",
+      "reason": "Real AI SDK, Hono, Drizzle, PostgreSQL client and TypeScript compiler",
+      "verificationCommand": "cd /data/project && bun -e 'import {generateText} from \"ai\"; import {Hono} from \"hono\"; import {sql} from \"drizzle-orm\"; import pg from \"pg\"; if(![generateText,Hono,pg.Pool].every(x=>typeof x===\"function\")||!sql)process.exit(1)' && bun node_modules/typescript/bin/tsc --version",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Configured PostgreSQL database",
+      "reason": "Authenticated connectivity and required existing/new durable schema using the web environment",
+      "verificationCommand": "cd /data/project && bun run scripts/check-git-database.ts",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Chromium",
+      "reason": "Real desktop/mobile review-dialog and navigation verification",
+      "verificationCommand": "cd /data/project && bun -e 'import {chromium} from \"playwright-core\"; const b=await chromium.launch({executablePath:\"/usr/bin/chromium\",headless:true,args:[\"--no-sandbox\",\"--disable-dev-shm-usage\"]});try{const p=await b.newPage();await p.setContent(\"<title>capability-check</title>\");if(await p.title()!==\"capability-check\")throw new Error(\"Browser unavailable\")}finally{await b.close()}'",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Git checkout",
+      "reason": "Assigned branch/revision and preservation of existing changes",
+      "verificationCommand": "cd /data/project && git rev-parse --is-inside-work-tree && git rev-parse HEAD",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "drizzle-kit",
+      "reason": "Isolated API/review/safety fixture schema generation",
+      "verificationCommand": "cd /data/project && bun node_modules/drizzle-kit/bin.cjs --version",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Bash",
+      "reason": "Exact requested web command environment resolution and runtime smoke launcher",
+      "verificationCommand": "bash -c 'test \"${BASH_VERSINFO[0]}\" -ge 4 && test \"${LFG_CAPABILITY_UNSET:-working}\" = working'",
+      "timeoutSeconds": 30
+    }
+  ],
+  "checks": [
+    {
+      "command": "bun install --frozen-lockfile --ignore-scripts && npm install --prefix node_modules/.preview-drizzle --no-package-lock drizzle-kit@0.31.4 && ln -sf ../.preview-drizzle/node_modules/drizzle-kit/bin.cjs node_modules/.bin/drizzle-kit",
+      "status": "passed"
+    },
+    {
+      "command": "bun build src/index.ts --target=bun --packages=external --outdir=/tmp/lfg-import-check",
+      "status": "passed",
+      "result": "428 modules; /tmp resolves under /data/tmp"
+    },
+    {
+      "command": "bun run typecheck",
+      "status": "passed"
+    },
+    {
+      "command": "bun test tests/git-history.test.ts tests/git-workspace.test.ts tests/git-navigation.test.ts",
+      "status": "passed",
+      "result": "14 tests / 110 assertions; includes real Chromium desktop/narrow/light rendering with labelled fixture history"
+    },
+    {
+      "command": "bun test tests/git-api.test.ts",
+      "status": "passed",
+      "result": "4 tests / 30 assertions; authorization, page bounds, safe correlated success/failure logs"
+    },
+    {
+      "command": "bun test tests/git-review-ui.test.ts tests/git-safety-ui.test.ts",
+      "status": "passed",
+      "result": "2 Chromium workflows / 33 assertions; no live mutations"
+    },
+    {
+      "command": "bun test tests/git-review.test.ts",
+      "status": "passed",
+      "result": "10 tests / 80 assertions"
+    },
+    {
+      "command": "bun test tests/git-safety.test.ts",
+      "status": "passed",
+      "result": "12 tests / 78 assertions"
+    },
+    {
+      "command": "bun test tests/git-review-provider.test.ts tests/git-safety-provider.test.ts",
+      "status": "passed",
+      "result": "5 provider-fixture tests; executed alongside the two UI regressions (7 tests / 64 assertions total)"
+    },
+    {
+      "command": "node scripts/check-schema-parity.mjs",
+      "status": "passed",
+      "result": "36 mirrored schema files"
+    },
+    {
+      "command": "bun scripts/check-git-web.ts",
+      "status": "passed",
+      "result": "Runs exact requested web command with resolved environment; checks database-backed auth and stops temporary server"
+    },
+    {
+      "command": "git diff --check",
+      "status": "passed"
+    }
+  ],
+  "acceptanceEvidence": {
+    "AC1": "Real ChatPage screenshots and navigation assertions; one overview / per-epic horizontal SVGs, no dashboard/maps, original tabs unchanged",
+    "AC2": "Provider/workspace/browser fixtures assert actual parent edges, deduplication, splits/multi-parent joins and honest squash/missing/bounded states",
+    "AC3": "Branch keyboard details and existing review/safety/All open PRs regressions; no real mutations",
+    "AC4": "Actor-authorized immutable history pages, initial concurrency/root bounds with visible deferred heads, partial/error boundaries, keyboard/scroll and correlated sanitized logs"
+  },
+  "workflowVerification": {
+    "fixtureHistories": "passed; labelled tests only",
+    "browserReviewAndSafety": "passed; test-only API responses, not live-provider proof",
+    "liveGitProvider": "unverified: zero connected Git accounts/projects in sandbox",
+    "liveAIReviewToPR": "unverified; unchanged provider path, no model/account credentials; no real Git mutations performed"
+  },
+  "screenshots": [
+    "/data/git-evidence/desktop.png",
+    "/data/git-evidence/narrow.png",
+    "/data/git-evidence/narrow-epics.png",
+    "/data/git-evidence/narrow-light.png"
+  ],
+  "remainingGaps": [
+    "Connect authorized real Git credentials/project through existing Integrations to verify authenticated provider history.",
+    "Existing real AI review-to-PR workflow additionally needs configured model/account credentials; not executed by this presentation/history ticket."
+  ],
+  "persistedTasks": "docs/git-horizontal-trees-ticket.md"
+}

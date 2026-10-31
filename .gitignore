@@ -66,3 +66,36 @@ package-lock.json
 
 # Local browser planning test reports (project content)
 /test-results/chat-planning/
+node_modules/
+.next/
+out/
+dist/
+build/
+.turbo/
+.svelte-kit/
+.vite/
+.venv/
+venv/
+env/
+.Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.cache/
+.parcel-cache/
+coverage/
+.nyc_output/
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+.lfg/
+dev.log
+build.log
+npm-debug.log*
+yarn-error.log
+!.env.example

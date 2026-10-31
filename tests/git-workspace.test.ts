@@ -1,0 +1,142 @@
+import { test, expect } from 'bun:test';
+import { createHash } from 'node:crypto';
+const fixtureSha = (name: string) => createHash('sha1').update(name).digest('hex');
+import { createGitProvider, type GitPR } from '../src/services/git-provider.ts';
+import { integrationFor, buildGitWorkspace } from '../src/services/git-workspace.ts';
+// Labelled deterministic provider fixtures — not live provider evidence.
+const config = { provider: 'github' as const, owner: 'fixture', repo: 'repo', token: 'fixture-token' };
+const branch = (branch: string, headSha = branch) => ({ branch, headSha, protected: false });
+const merged: GitPR = { id: 7, title: 'fixture squash', url: 'https://github.com/fixture/repo/pull/7', source: 'ticket', destination: 'epic', headSha: 't1', sourceRepo: 'fixture/repo', draft: false, merged: true, mergeSha: 'squash' };
+const cmp = async (base: string, head: string) => ({ ahead: head === 'squash' ? 0 : 2, behind: 1, complete: true });
+test('exact-head squash/rebase evidence is destination aware and ignores later branch commits/forks', async () => {
+  const history = { items: [merged], complete: true, errors: [] };
+  expect((await integrationFor(branch('ticket','t1'), branch('epic'), history, 'fixture/repo', cmp)).status).toBe('integrated');
+  expect((await integrationFor(branch('ticket','t2'), branch('epic'), history, 'fixture/repo', cmp)).status).toBe('not_integrated');
+  expect((await integrationFor(branch('ticket','t1'), branch('main'), history, 'fixture/repo', cmp)).status).toBe('not_integrated');
+  expect((await integrationFor(branch('ticket','t1'), branch('epic'), history, 'other/repo', cmp)).status).toBe('not_integrated');
+  expect((await integrationFor(branch('ticket','t1'), branch('epic'), history, 'fixture/repo', async () => ({ ahead: 1, behind: 0, complete: true }))).status).toBe('not_integrated');
+});
+test('missing refs, unknown comparison and partial merge evidence never count merged; identical refs do', async () => {
+  const history = { items: [], complete: false, errors: [] };
+  expect((await integrationFor(undefined, branch('epic'), history, 'fixture/repo', cmp)).status).toBe('unknown');
+  expect((await integrationFor(branch('t'), branch('epic'), history, 'fixture/repo', cmp)).status).toBe('unknown');
+  expect((await integrationFor(branch('t'), branch('epic'), { ...history, complete: true }, 'fixture/repo', async () => ({ ahead: null, behind: null, complete: false }))).status).toBe('unknown');
+  const provider = createGitProvider(config);
+  expect((await integrationFor(branch('t','same'), branch('e','same'), history, 'fixture/repo', provider.compare)).evidence).toContain('Identical');
+});
+test('GitHub paginates all branches and PRs without filtering drafts or forks', async () => {
+  const seen: string[] = [];
+  const provider = createGitProvider(config, (async (url: string) => {
+    const u = new URL(url); seen.push(u.pathname + u.search);
+    const page = Number(u.searchParams.get('page'));
+    const body = u.pathname.endsWith('/branches') ? [branch('fixture')].map(b => ({name:b.branch,commit:{sha:'h'}})) : [{ number: page, title: 'fixture external', head: { ref: 'fork', sha: 'h', repo: { full_name: 'external/fork' } }, base: { ref: 'main' }, draft: true }];
+    return Response.json(body, { headers: page === 1 ? { link: '<https://api.github.com/ignored>; rel="next"' } : {} });
+  }) as typeof fetch);
+  const branches = await provider.branches(), prs = await provider.pullRequests();
+  expect(branches.items.length).toBe(2); expect(branches.complete).toBe(true);
+  expect(prs.items.length).toBe(2); expect(prs.items[0]).toMatchObject({ draft: true, sourceRepo: 'external/fork' });
+  expect(seen.filter(s => s.includes('page=2')).length).toBe(2);
+});
+test('GitLab pagination retains external MRs and denied later pages return explicit partial errors', async () => {
+  const provider = createGitProvider({ ...config, provider: 'gitlab', owner: 'group/subgroup' }, (async (url: string) => {
+    const u = new URL(url);
+    expect(u.pathname).toContain('group%2Fsubgroup%2Frepo');
+    if (u.searchParams.get('page') === '2') return new Response('private secret body must not escape', {status:403, headers:{'x-request-id':'safe-id'}});
+    return Response.json([{iid:2,title:'fixture external',source_branch:'fork',target_branch:'epic',source_project_id:4,target_project_id:5,draft:true}],{headers:{'x-next-page':'2'}});
+  }) as typeof fetch);
+  const prs = await provider.pullRequests();
+  expect(prs.complete).toBe(false); expect(prs.items[0]?.draft).toBe(true); expect(prs.items[0]?.sourceRepo).toBeNull();
+  expect(prs.errors).toEqual([{code:'PROVIDER_ACCESS_DENIED',providerRequestId:'safe-id'}]);
+  expect(JSON.stringify(prs)).not.toContain('secret body');
+});
+test('page bounds and GitLab comparison timeouts remain explicitly incomplete', async () => {
+  let calls = 0;
+  const bounded = createGitProvider(config, (async () => { calls++; return Response.json([], { headers: { link: '<https://api.github.com/fixture>; rel="next"' } }); }) as typeof fetch);
+  const list = await bounded.branches();
+  expect(calls).toBe(100); expect(list.complete).toBe(false); expect(list.errors[0]?.code).toBe('PROVIDER_PAGE_LIMIT');
+  const gitlab = createGitProvider({ ...config, provider: 'gitlab' }, (async () => Response.json({ compare_timeout: true, commits: [] })) as typeof fetch);
+  expect(await gitlab.compare('base','head')).toEqual({ahead:null,behind:null,complete:false});
+  expect(gitlab.errors[0]?.code).toBe('PROVIDER_COMPARISON_INCOMPLETE');
+});
+// No live repository state is used or changed by these regression fixtures.
+for (const complete of [true, false]) test(`branchless associations are not branches; absent refs require complete listing (${complete})`, async () => {
+  const provider = createGitProvider(config, (async (url: string) => {
+    const u = new URL(url);
+    if (u.pathname.endsWith('/repo')) return Response.json({ default_branch: 'main' });
+    if (u.pathname.endsWith('/branches')) {
+      if (u.searchParams.get('page') === '2') return new Response('', { status: 403 });
+      return Response.json(['main', 'epic/one', 'present', 'free'].map(name => ({ name, commit: { sha: fixtureSha(name) } })), { headers: complete ? {} : { link: '<https://api.github.com/fixture>; rel="next"' } });
+    }
+    if (u.pathname.endsWith('/pulls')) return Response.json([]);
+    if (u.pathname.endsWith('/commits')) return Response.json([{sha:u.searchParams.get('sha'),parents:[]}]);
+    return Response.json({ ahead_by: 0, behind_by: 0 });
+  }) as typeof fetch);
+  const tickets = [
+    { id: 'none', title: 'Named branchless ticket', epicId: 'e1', githubBranch: null },
+    { id: 'absent', title: 'Named recorded ticket', epicId: 'e1', githubBranch: 'absent' },
+    { id: 'present', title: 'Present ticket', epicId: 'e1', githubBranch: 'present' },
+    { id: 'unassigned', title: 'Unassigned branchless ticket', epicId: null, githubBranch: null },
+  ].map(t => ({ ...t, status: 'done', destination: 'epic/one' }));
+  const w = await buildGitWorkspace(provider, [{ id: 'e1', name: 'Epic', epicKey: 'E1', branch: 'epic/one', baseBranch: 'main', baseSha: null }], tickets, null);
+  expect(w.epics[0]?.tickets[0]).toMatchObject({ id: 'none', name: 'Named branchless ticket', branch: null, refState: 'no_branch', missingRef: false, integration: { status: 'unknown' }, destination: 'epic/one' });
+  expect(w.epics[0]?.tickets[1]).toMatchObject({ branch: 'absent', headSha: null, refState: complete ? 'absent' : 'unavailable', missingRef: complete, integration: { status: 'unknown' } });
+  expect(w.epics[0]?.tickets[2]).toMatchObject({ refState: 'present', missingRef: false, integration: { status: 'integrated' } });
+  expect(w.epics[0]?.ticketCounts).toEqual({ total: 2, associations: 3, withoutBranch: 1, integrated: 1, notIntegrated: 0, unknown: 1 });
+  expect(w.totals.tickets).toEqual({ total: 2, associations: 4, withoutBranch: 2, integrated: 1, notIntegrated: 0, unknown: 1 });
+  expect(w.totals.other).toEqual({ total: 1, associations: 2, withoutBranch: 1, integrated: 1, notIntegrated: 0, unknown: 0 });
+  expect(w.completeness.branches).toBe(complete);
+  expect(w.completeness.complete).toBe(false);
+});
+test('branchless tickets alone do not make successful branch comparisons incomplete', async () => {
+  const provider = createGitProvider(config, (async (url: string) => {
+    const u = new URL(url);
+    if (u.pathname.endsWith('/repo')) return Response.json({ default_branch: 'main' });
+    if (u.pathname.endsWith('/branches')) return Response.json(['main', 'epic'].map(name => ({ name, commit: { sha: fixtureSha(name) } })));
+    if (u.pathname.endsWith('/pulls')) return Response.json([]);
+    if (u.pathname.endsWith('/commits')) return Response.json([{sha:u.searchParams.get('sha'),parents:[]}]);
+    return Response.json({ ahead_by: 0, behind_by: 0 });
+  }) as typeof fetch);
+  const w = await buildGitWorkspace(provider, [{ id: 'e', name: 'Epic', epicKey: null, branch: 'epic', baseBranch: 'main', baseSha: null }], [{ id: 't', title: 'No recorded branch', epicId: 'e', githubBranch: null, destination: 'epic', status: 'done' }], null);
+  expect(w.totals.tickets).toMatchObject({ total: 0, associations: 1, withoutBranch: 1, unknown: 0 });
+  expect(w.epics[0]?.ticketCounts).toEqual(w.totals.tickets);
+  expect(w.completeness.complete).toBe(true);
+});
+test('stored IDs, missing branches, stacked epic destinations, default and Other remain distinct', async () => {
+  const provider = createGitProvider(config, (async (url: string) => {
+    const u = new URL(url);
+    if (u.pathname.endsWith('/repo')) return Response.json({ default_branch: 'main' });
+    if (u.pathname.endsWith('/branches')) return Response.json(['main','epic/one','epic/two','free','legacy'].map(name => ({name,commit:{sha:fixtureSha(name)}})));
+    if (u.pathname.endsWith('/pulls')) return Response.json([]);
+    if (u.pathname.endsWith('/commits')) return Response.json([{sha:u.searchParams.get('sha'),parents:[]}]);
+    return Response.json({ ahead_by: 0, behind_by: 0 });
+  }) as typeof fetch);
+  const workspace = await buildGitWorkspace(provider, [{id:'e1',name:'First',epicKey:'E1',branch:'epic/one',baseBranch:'main',baseSha:'m0'},{id:'e2',name:'Stacked',epicKey:'E2',branch:'epic/two',baseBranch:'epic/one',baseSha:'e0'}], [{id:'t1',title:'Missing',epicId:'e1',githubBranch:'deleted',status:'done',destination:'epic/one'}], 't1');
+  expect(workspace.epics[1]?.destination).toBe('epic/one');
+  expect(workspace.epics[0]?.tickets[0]).toMatchObject({ id:'t1', missingRef:true, integration:{status:'unknown'}, activeUse:{preview:true} });
+  expect(workspace.other.map(b => b.branch)).toEqual(['free','legacy']);
+  expect(workspace.defaultBranch.branch).toBe('main'); expect(workspace.totals.tickets.unknown).toBe(1);
+  expect(workspace.completeness.complete).toBe(false);
+});
+
+// TEST-ONLY actual parent DAG: a squash result is status evidence, never a synthetic join.
+test('workspace scopes include observed deleted ticket history without inventing ancestry from squash or stacked epic links', async () => {
+  const s = (n: number) => fixtureSha(`commit-${n}`);
+  const provider = createGitProvider(config);
+  provider.info = async () => ({defaultBranch:'main'});
+  provider.branches = async () => ({items:[branch('main',s(6)),branch('epic/one',s(4)),branch('epic/two',s(7)),branch('ticket',s(3))],complete:true,errors:[]});
+  provider.pullRequests = async (closed=false) => ({items:closed?[{...merged,source:'deleted',headSha:s(5),destination:'epic/one',mergeSha:s(4)}]:[],complete:true,errors:[]});
+  provider.compare = async () => ({ahead:0,behind:0,complete:true});
+  const commits = [{sha:s(1),parents:[]},{sha:s(2),parents:[s(1)]},{sha:s(3),parents:[s(2)]},{sha:s(4),parents:[s(2),s(3)]},{sha:s(5),parents:[s(1)]},{sha:s(6),parents:[s(4)]},{sha:s(7),parents:[]}];
+  provider.history = async root => ({items:commits.filter(c=>c.sha===root || c.sha===s(1)),complete:true,nextPage:null,errors:[]});
+  const w = await buildGitWorkspace(provider,[{id:'e1',name:'One',epicKey:'E1',branch:'epic/one',baseBranch:'main',baseSha:null},{id:'e2',name:'Two',epicKey:'E2',branch:'epic/two',baseBranch:'epic/one',baseSha:null}],[{id:'t1',title:'Ticket',epicId:'e1',githubBranch:'ticket',status:'done',destination:'epic/one'},{id:'t2',title:'Deleted after squash',epicId:'e1',githubBranch:'deleted',status:'done',destination:'epic/one'},{id:'none',title:'Branchless',epicId:'e1',githubBranch:null,status:'done',destination:'epic/one'}],null);
+  expect(w.graph.nodes.filter(n=>n.sha===s(1))).toHaveLength(1);
+  expect(w.graph.edges).toContainEqual({parentSha:s(2),childSha:s(4)});
+  expect(w.graph.edges).toContainEqual({parentSha:s(3),childSha:s(4)});
+  expect(w.graph.edges).not.toContainEqual({parentSha:s(5),childSha:s(4)});
+  expect(w.graph.edges).not.toContainEqual({parentSha:s(4),childSha:s(7)});
+  expect(w.graph.heads).toContainEqual(expect.objectContaining({rowId:'t2',sha:s(5),historical:true}));
+  expect(w.graph.heads).toContainEqual(expect.objectContaining({rowId:'t2',sha:null,refState:'absent'}));
+  expect(w.graph.heads.some(h=>h.rowId==='none')).toBe(false);
+  expect(w.graph.scopes.find(scope=>scope.id==='e1')?.rowIds).toEqual(['e1','t1','t2']);
+  expect(w.graph.scopes.find(scope=>scope.id==='pending')?.rowIds).toEqual(['t2','default']);
+});
