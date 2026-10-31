@@ -35,6 +35,7 @@ import homeApi from "./routes/api/project-home.ts";
 import projectTransferApi from "./routes/api/project-transfer.ts";
 import previewApi from "./routes/api/preview.ts";
 import epicsApi from "./routes/api/epics.ts";
+import gitApi from "./routes/api/git.ts";
 import boardsApi from "./routes/api/boards.ts";
 import previewProxy from "./routes/preview-proxy.ts";
 import agentsRoutes from "./routes/agents.ts";
@@ -46,6 +47,7 @@ import shareRoutes from "./routes/share.ts";
 import { auth } from "./auth/index.ts";
 import { startTicketWorker } from "./workers/ticket-executor.ts";
 import { startAgentScheduler } from "./services/agent-scheduler.ts";
+import { startGitReviewRunner, stopGitReviewRunner } from "./services/git-review.ts";
 import { startAgentTimeoutSweeper } from "./services/agent-timeout-sweeper.ts";
 import { registerAgentNotifier } from "./services/agent-notifier.ts";
 import { registerAgentReflector } from "./services/agent-reflector.ts";
@@ -197,6 +199,8 @@ app.use("*", logger());
 app.get("/health", (c) => c.json({ status: "ok" }));
 
 // ── Routes ──────────────────────────────────────────────────────────
+// Scope Git diagnostics/auth before broad middleware on legacy API routers.
+app.route("/api", gitApi);
 app.route("/", authRoutes);
 app.route("/", landing);
 app.route("/", chatRoutes);
@@ -356,6 +360,10 @@ registerAgentNotifier();
 registerAgentReflector();
 startTicketWorker();
 startAgentScheduler();
+startGitReviewRunner();
+for (const signal of ['SIGTERM', 'SIGINT'] as const) process.once(signal, () => {
+  void stopGitReviewRunner().finally(() => process.exit(0));
+});
 startAgentTimeoutSweeper();
 
 // ── Public Telegram bot (instant app builder) ────────────────────────
@@ -371,6 +379,7 @@ console.log(`Starting LFG on port ${env.PORT} (${env.NODE_ENV})`);
 
 export default {
   port: env.PORT,
+  hostname: "0.0.0.0",
 
   // Long-running endpoints (Mags VM provisioning, Claude CLI install) can take
   // 60-300s. Disable Bun's default 10s idle timeout.
