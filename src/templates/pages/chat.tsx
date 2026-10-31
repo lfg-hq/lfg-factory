@@ -37,7 +37,7 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="/public/css/common.css" />
   <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
-  <link rel="stylesheet" href="/public/css/artifacts.css?v=20261031-git" />
+  <link rel="stylesheet" href="/public/css/artifacts.css?v=20261031-git-groups" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
   <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261022-build-rows" />
   <link rel="stylesheet" href="/public/css/chat.css?v=20261023-dictation-fit" />
@@ -397,13 +397,13 @@ export function ChatPage({
                 </div>
               </div>
               <div class="git-cleanup-confirm" id="git-cleanup-confirm" hidden></div>
+              <div class="git-view" role="tablist" aria-label="View">
+                <button class="on" data-view="list" role="tab"><i class="fas fa-layer-group"></i> Grouped list</button>
+                <button data-view="map" role="tab"><i class="fas fa-diagram-project"></i> Branch map</button>
+              </div>
               <div class="git-stats" id="git-stats"></div>
               <div class="git-toolbar">
-                <input id="git-search" class="env-input" type="search" placeholder="Filter branches…" spellcheck="false" aria-label="Filter branches" />
-                <div class="git-view" role="group" aria-label="View">
-                  <button class="on" data-view="list"><i class="fas fa-list"></i> List</button>
-                  <button data-view="map"><i class="fas fa-diagram-project"></i> Map</button>
-                </div>
+                <input id="git-search" class="env-input" type="search" placeholder="Filter by branch, ticket key or name…" spellcheck="false" aria-label="Filter branches" />
               </div>
               <div class="env-msg" id="git-msg" hidden></div>
             </div>
@@ -574,7 +574,7 @@ export function ChatPage({
 <script src="/public/js/ticket-action-phases.js?v=20261022-followup-logs2"></script>
 <script src="/public/js/preview-tab.js?v=20261005-start-state"></script>
     <script src="/public/js/ticket-agent.js?v=20261022-git-sha"></script>
-  <script src="/public/js/git-tab.js?v=20261031-git"></script>
+  <script src="/public/js/git-tab.js?v=20261031-git-groups"></script>
   <script src="/public/js/env-tab.js?v=20261004-env-apply"></script>
   <script src="/public/js/notes-tab.js?v=20261022-notes-quiet"></script>
   <script src="/public/js/tab-overflow.js"></script>

@@ -14,6 +14,9 @@ type Json = any;
 export type BranchPull = { number: number; title: string; url: string; state: "open" | "merged" | "closed"; draft: boolean; base: string; mergeable?: boolean | null };
 export type BranchRow = {
   name: string; isDefault: boolean; protected: boolean;
+  /** What ahead/behind and "merged" are measured against: the default branch, or the
+   *  branch this one merges into (a ticket's epic branch). */
+  base: string;
   aheadBy: number | null; behindBy: number | null; status: string;
   merged: boolean; pull: BranchPull | null;
   lastCommit: { sha: string; message: string; author: string; date: string } | null;
@@ -36,7 +39,8 @@ const pullView = (p: Json): BranchPull => ({
   state: p.state === "open" ? "open" : p.merged_at ? "merged" : "closed",
 });
 
-export async function githubBranchOverview(gh: Gh, fetcher: typeof fetch = fetch, limit = 100): Promise<BranchOverview> {
+/** `bases` maps a branch to the branch it merges into; unlisted (or missing on GitHub) → the default branch. */
+export async function githubBranchOverview(gh: Gh, fetcher: typeof fetch = fetch, limit = 100, bases: Record<string, string> = {}): Promise<BranchOverview> {
   const api = client(gh, fetcher);
   const repoUrl = `https://github.com/${gh.owner}/${gh.repo}`;
   const empty = (error: string, defaultBranch = ""): BranchOverview => ({
@@ -70,18 +74,20 @@ export async function githubBranchOverview(gh: Gh, fetcher: typeof fetch = fetch
   const def = listed.find((b) => b.name === defaultBranch);
   const defTip = def ? (await api.get(`/commits/${ref(defaultBranch)}`)).body : null;
   const rows: BranchRow[] = [{
-    name: defaultBranch, isDefault: true, protected: !!def?.protected, aheadBy: 0, behindBy: 0, status: "default",
+    name: defaultBranch, isDefault: true, protected: !!def?.protected, base: defaultBranch, aheadBy: 0, behindBy: 0, status: "default",
     merged: false, pull: null, lastCommit: tipOf(defTip), url: `${repoUrl}/tree/${ref(defaultBranch)}`,
   }];
   for (let i = 0; i < picked.length; i += 10) {
     rows.push(...await Promise.all(picked.slice(i, i + 10).map(async (b): Promise<BranchRow> => {
-      const c = await api.get(`/compare/${ref(defaultBranch)}...${ref(b.name)}`);
+      const wanted = bases[b.name];
+      const base = wanted && wanted !== b.name && listed.some((x) => x.name === wanted) ? wanted : defaultBranch;
+      const c = await api.get(`/compare/${ref(base)}...${ref(b.name)}`);
       const pull = pullByHead.get(b.name) ?? null;
       const commits: Json[] = c.body?.commits ?? [];
       const tip = !c.body ? null : c.body.ahead_by === 0 ? c.body.merge_base_commit : commits.length === c.body.ahead_by ? commits[commits.length - 1] : null;
       const aheadBy = c.body ? Number(c.body.ahead_by) : null;
       return {
-        name: b.name, isDefault: false, protected: !!b.protected,
+        name: b.name, isDefault: false, protected: !!b.protected, base,
         aheadBy, behindBy: c.body ? Number(c.body.behind_by) : null, status: c.body ? String(c.body.status) : `error (HTTP ${c.status})`,
         merged: aheadBy === 0 || (pull?.state === "merged"), pull, lastCommit: tipOf(tip), url: `${repoUrl}/tree/${ref(b.name)}`,
       };
@@ -136,4 +142,34 @@ export async function deleteBranch(gh: Gh, name: string, fetcher: typeof fetch =
   if (r.status === 204) return { ok: true };
   if (r.status === 422 || r.status === 404) return { ok: false, error: `Branch ${name} is already gone or is protected.` };
   return { ok: false, error: refusal(`delete ${name}`, r.status, r.message) };
+}
+
+export type ChangeSet = {
+  base: string; head: string; aheadBy: number; behindBy: number;
+  commits: Array<{ sha: string; message: string }>;
+  files: Array<{ path: string; status: string; added: number; removed: number; patch: string }>;
+  compareUrl: string; error?: string;
+};
+
+/** What a pull request from `head` into `base` would contain, for the pre-PR review. */
+export async function githubChangeSet(gh: Gh, base: string, head: string, fetcher: typeof fetch = fetch): Promise<ChangeSet> {
+  const compareUrl = `https://github.com/${gh.owner}/${gh.repo}/compare/${ref(base)}...${ref(head)}`;
+  const c = await client(gh, fetcher).get(`/compare/${ref(base)}...${ref(head)}`);
+  const empty = { base, head, aheadBy: 0, behindBy: 0, commits: [], files: [], compareUrl };
+  if (!c.body) return { ...empty, error: c.status === 404 ? `Couldn't compare ${head} with ${base}: one of them isn't on GitHub.` : refusal(`compare ${head} with ${base}`, c.status, c.message) };
+  return {
+    base, head, aheadBy: Number(c.body.ahead_by), behindBy: Number(c.body.behind_by), compareUrl,
+    commits: ((c.body.commits ?? []) as Json[]).map((x) => ({ sha: String(x.sha).slice(0, 7), message: String(x.commit?.message ?? "").split("\n")[0]! })),
+    files: ((c.body.files ?? []) as Json[]).map((f) => ({
+      path: String(f.filename), status: String(f.status), added: Number(f.additions ?? 0), removed: Number(f.deletions ?? 0),
+      patch: String(f.patch ?? (f.status === "removed" ? "" : "(binary or too large to show)")),
+    })),
+  };
+}
+
+/** A file's full text at a branch, for reviewing a change in context. */
+export async function githubFileAt(gh: Gh, path: string, branch: string, fetcher: typeof fetch = fetch): Promise<string | null> {
+  const r = await client(gh, fetcher).get(`/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(branch)}`);
+  if (!r.body || Array.isArray(r.body) || typeof r.body.content !== "string") return null;
+  return Buffer.from(r.body.content, "base64").toString("utf8");
 }
