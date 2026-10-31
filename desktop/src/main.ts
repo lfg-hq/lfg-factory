@@ -37,6 +37,20 @@ interface Config {
 // Development overrides, set by desktop/try.sh: a throwaway profile pointed at a local test server.
 if (process.env.LFG_DESKTOP_PROFILE) app.setPath("userData", `${app.getPath("userData")}-${process.env.LFG_DESKTOP_PROFILE}`);
 
+/**
+ * The server this build signs in to: LFG Cloud, or a company's own deployment named in
+ * server.json next to the app ({"serverUrl": "https://lfg.example.com"}). try.sh points
+ * it at a local test server with LFG_SERVER_URL. People only change it by choice.
+ */
+function defaultServerUrl(): string {
+  if (process.env.LFG_SERVER_URL) return new URL(process.env.LFG_SERVER_URL).origin;
+  try {
+    const bundled = JSON.parse(readFileSync(join(here, "..", "server.json"), "utf8")) as { serverUrl?: string };
+    if (bundled.serverUrl) return new URL(bundled.serverUrl).origin;
+  } catch { /* none bundled */ }
+  return "https://lfg.run";
+}
+
 const configPath = () => join(app.getPath("userData"), "config.json");
 function loadConfig(): Config {
   try { return JSON.parse(readFileSync(configPath(), "utf8")); } catch { return {}; }
@@ -136,7 +150,7 @@ const fromSetupPage = (event: IpcMainInvokeEvent) => event.senderFrame?.url.star
 
 ipcMain.handle("lfg:get-setup", (event) => {
   if (!fromSetupPage(event)) return null;
-  return { serverUrl: config.serverUrl ?? process.env.LFG_SERVER_URL ?? "", email: config.email ?? "", notice: signInNotice, deviceName: deviceName() };
+  return { serverUrl: config.serverUrl ?? defaultServerUrl(), email: config.email ?? "", notice: signInNotice, deviceName: deviceName() };
 });
 
 ipcMain.handle("lfg:sign-in", async (event, input: { serverUrl: string }) => {
@@ -289,8 +303,8 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(() => {
     shellEnv = loginShellEnv();
     config = loadConfig();
-    if (process.env.LFG_SERVER_URL && origin() !== new URL(process.env.LFG_SERVER_URL).origin) {
-      config = { trustedProjects: config.trustedProjects, serverUrl: new URL(process.env.LFG_SERVER_URL).origin };
+    if (process.env.LFG_SERVER_URL && origin() !== defaultServerUrl()) {
+      config = { trustedProjects: config.trustedProjects, serverUrl: defaultServerUrl() };
     }
     if (process.env.LFG_WORK_ROOT) config.workRoot = process.env.LFG_WORK_ROOT;
     tagServerRequests();

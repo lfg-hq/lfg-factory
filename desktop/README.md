@@ -7,13 +7,25 @@ the Claude Code login already here. See `../docs/desktop-runner.md` for how it f
 
 1. Install and sign in to Claude Code: run `claude` once in a terminal.
 2. Make sure `git` can push to the project's repository from this computer.
-3. Open LFG Desktop, enter your company's LFG address and click **Sign in with your
-   browser**. Sign in there as usual (Google, SSO or password) and choose **Connect**.
-   That signs the app in and connects this computer; there is no token to copy.
+3. Open LFG Desktop and click **Sign in with your browser**. Sign in there as usual
+   (Google, SSO or password) and choose **Connect**. That signs the app in and connects
+   this computer; there is no token to copy.
 4. On a ticket, pick **Build on my computer** in the Run menu. Approve it when LFG Desktop asks.
 
 Work happens in `~/LFG/repos` (clones) and `~/LFG/worktrees` (one per ticket branch).
 **Sign out on this computer** (menu bar) disconnects it again.
+
+## Which server
+
+The app signs in to LFG Cloud (`https://lfg.run`). For a company's own deployment, ship
+the app with a `server.json` next to `package.json`:
+
+```json
+{ "serverUrl": "https://lfg.yourcompany.com" }
+```
+
+People can still pick another server from "Use a different server" on the sign-in
+screen, but don't need to. `try.sh` points the app at its local test server.
 
 ## How sign-in works
 
