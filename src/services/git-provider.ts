@@ -1,4 +1,4 @@
-/** Read-only provider adapter. Never uses preview clones or follows provider-supplied URLs. */
+/** Provider adapter. Never uses preview clones or follows provider-supplied URLs. */
 export type GitBranch = { branch: string; headSha: string; protected: boolean };
 export type GitPR = { id: number; title: string; url: string; source: string; destination: string; headSha: string; sourceRepo: string | null; draft: boolean; merged: boolean; mergeSha: string | null };
 export type GitIssue = { code: string; providerRequestId?: string };
@@ -17,15 +17,26 @@ export function createGitProvider(config: GitProviderConfig, fetcher: typeof fet
   const requestIds = new Set<string>();
   let requests = 0;
   const deadline = Date.now() + 45_000;
-  const get = async (path: string): Promise<{ body: any; headers: Headers }> => {
+  const get = async (path: string, payload?: Record<string, unknown>): Promise<{ body: any; headers: Headers }> => {
     try {
       if (++requests > 600 || Date.now() > deadline) throw new GitProviderError('PROVIDER_BUDGET');
-      const response = await fetcher(base + path, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'LFG', 'X-GitHub-Api-Version': '2022-11-28' }, signal: AbortSignal.timeout(10_000) });
+      const response = await fetcher(base + path, { method: payload ? 'POST' : 'GET', body: payload ? JSON.stringify(payload) : undefined, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'LFG', 'X-GitHub-Api-Version': '2022-11-28' }, signal: AbortSignal.timeout(10_000) });
       const rawId = response.headers.get(gl ? 'x-request-id' : 'x-github-request-id');
       const id = rawId?.replace(/[^a-zA-Z0-9:_-]/g, '').slice(0, 100);
       if (id && requestIds.size < 20) requestIds.add(id);
       if (!response.ok) throw new GitProviderError(response.status === 429 || (response.status === 403 && response.headers.get('x-ratelimit-remaining') === '0') ? 'PROVIDER_RATE_LIMIT' : response.status === 401 || response.status === 403 ? 'PROVIDER_ACCESS_DENIED' : response.status === 404 ? 'PROVIDER_NOT_FOUND' : 'PROVIDER_HTTP_ERROR', response.status, id);
-      return { body: await response.json(), headers: response.headers };
+      const reader = response.body?.getReader();
+      if (!reader) throw new GitProviderError('PROVIDER_INVALID_RESPONSE');
+      const chunks: Uint8Array[] = []; let bytes = 0;
+      try {
+        while (true) {
+          const { value, done } = await reader.read(); if (done) break;
+          bytes += value.byteLength;
+          if (bytes > 2_000_000) { await reader.cancel(); throw new GitProviderError('PROVIDER_RESPONSE_TOO_LARGE', 422); }
+          chunks.push(value);
+        }
+        return { body: JSON.parse(Buffer.concat(chunks).toString('utf8')), headers: response.headers };
+      } finally { reader.releaseLock(); }
     } catch (e) {
       const error = e instanceof GitProviderError ? e : new GitProviderError('PROVIDER_UNAVAILABLE');
       errors.push({ code: error.code, providerRequestId: error.providerRequestId });
@@ -74,11 +85,52 @@ export function createGitProvider(config: GitProviderConfig, fetcher: typeof fet
     } catch { return { ahead: null, behind: null, complete: false }; }
   }
   return {
-    identity, provider, errors, requestIds,
+    identity, provider, errors, requestIds, repositoryKey: base,
     info: async () => { const { body } = await get(''); if (!body.default_branch) throw new GitProviderError('PROVIDER_NO_DEFAULT_BRANCH'); return { defaultBranch: String(body.default_branch) }; },
     branches: () => pages<GitBranch>(gl ? '/repository/branches' : '/branches', b => ({ branch: b.name, headSha: gl ? b.commit.id : b.commit.sha, protected: !!b.protected })),
     pullRequests: (merged = false) => pages<GitPR>(gl ? `/merge_requests?state=${merged ? 'merged' : 'opened'}&scope=all` : `/pulls?state=${merged ? 'closed' : 'open'}&sort=updated&direction=desc`, pr),
     compare,
+    ref: async (ref: string) => {
+      const { body } = await get(gl ? `/repository/branches/${encodeURIComponent(ref)}` : `/branches/${encodeURIComponent(ref)}`);
+      const sha = gl ? body.commit?.id : body.commit?.sha;
+      if (!/^[a-f0-9]{40,64}$/.test(sha || '')) throw new GitProviderError('PROVIDER_INVALID_REVISION');
+      return sha as string;
+    },
+    reviewChanges: async (baseSha: string, headSha: string) => {
+      const { body } = await get(gl ? `/repository/compare?from=${baseSha}&to=${headSha}&straight=false` : `/compare/${baseSha}...${headSha}`);
+      const files = gl ? body.diffs : body.files;
+      if (!Array.isArray(files) || files.length >= (gl ? 100 : 300) || body.compare_timeout || body.compare_same_ref || body.overflow) throw new GitProviderError('DIFF_INCOMPLETE', 422);
+      if (files.length > 40) throw new GitProviderError('DIFF_TOO_LARGE', 422);
+      const included: { file: string; patch: string; context?: string; contextOmittedReason?: string }[] = [];
+      const excluded: { file: string; reason: string }[] = [];
+      let size = 0;
+      for (const f of files) {
+        const file = String(gl ? f.new_path : f.filename);
+        if (!file || file.length > 500 || file.startsWith('/') || file.split('/').some(p => p === '..' || p === '.') || /[\x00-\x1f]/.test(file)) throw new GitProviderError('PROVIDER_INVALID_PATH', 422);
+        const patch = gl ? f.diff : f.patch;
+        // Never send obvious credential files or secret-bearing content to a model.
+        const secret = /(^|\/)(\.env(?:\..*)?|[^/]*\.(?:pem|key|p12|pfx)|credentials(?:\..*)?|\.npmrc|\.netrc|\.pypirc|id_rsa|id_ed25519)$/i.test(file);
+        const containsSecret = (s: string) => /-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:gh[pousr]_|sk-proj-|AKIA)[A-Za-z0-9]{16,}|(?:api[_-]?key|password|secret|token)\s*[:=]\s*["'][^"'\s]{12,}["']/i.test(s);
+        const patchIncomplete = !gl && typeof patch === 'string' && Number.isInteger(f.additions) && Number.isInteger(f.deletions) && patch.split('\n').filter((line: string) => /^[+-]/.test(line)).length !== f.additions + f.deletions;
+        if (secret || !patch || patchIncomplete || f.collapsed || f.too_large || containsSecret(patch)) { excluded.push({ file, reason: secret ? 'secret file' : !patch ? 'binary or unavailable patch' : 'secret-bearing or incomplete patch' }); continue; }
+        if ((size += patch.length) > 120_000) throw new GitProviderError('DIFF_TOO_LARGE', 422);
+        const item: { file: string; patch: string; context?: string; contextOmittedReason?: string } = { file, patch, contextOmittedReason: 'Context file-count bound or deleted file; patch only.' };
+        if (included.length < 6 && !(gl ? f.deleted_file : f.status === 'removed')) {
+          const { body: content } = await get(gl ? `/repository/files/${encodeURIComponent(file)}?ref=${headSha}` : `/contents/${file.split('/').map(encodeURIComponent).join('/')}?ref=${headSha}`);
+          const decoded = content.encoding === 'base64' && content.size <= 20_000 ? Buffer.from(content.content || '', 'base64').toString('utf8') : '';
+          if (decoded && !decoded.includes('\u0000') && !containsSecret(decoded)) { item.context = decoded; delete item.contextOmittedReason; }
+          else item.contextOmittedReason = decoded ? 'Secret-bearing or binary context excluded; patch only.' : 'Context unavailable or over 20 KB; patch only.';
+        }
+        included.push(item);
+      }
+      return { files: included, excluded, limitations: ['Static review only; runtime tests were not executed.', 'Context is bounded to six source files of at most 20 KB; unchanged dependencies and runtime behavior are not exhaustively verified.'] };
+    },
+    createPullRequest: async (source: string, destination: string, title: string, body: string) => {
+      const response = await get(gl ? '/merge_requests' : '/pulls', gl ? { source_branch: source, target_branch: destination, title, description: body } : { head: source, base: destination, title, body });
+      const result = pr(response.body);
+      if (!Number.isInteger(result.id) || !result.url?.startsWith('https://')) throw new GitProviderError('PROVIDER_INVALID_RESPONSE');
+      return result;
+    },
     diagnostics: () => ({ requests, providerRequestIds: [...requestIds], retryCount: 0 }),
   };
 }

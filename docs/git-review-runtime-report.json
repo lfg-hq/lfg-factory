@@ -1,0 +1,79 @@
+{
+  "status": "implemented_with_live_provider_verification_gap",
+  "implementationRevision": "85d3cc7ce5921f9c7c9a534843f4fdfddf29a768 plus uncommitted ticket changes",
+  "pushedCommit": null,
+  "mergedRevision": null,
+  "runningRevision": null,
+  "runtime": {
+    "command": "bun run src/index.ts",
+    "workingDirectory": "/data/project",
+    "bind": "0.0.0.0:8080",
+    "environment": "existing .env / inherited resolved process environment",
+    "processes": ["Bun web process, including bounded DB-backed Git review runner"],
+    "logs": "stdout/stderr, platform collected and rotated; no application log files",
+    "smokeResult": "started successfully, health 200, private Git/review routes 401 with correlation IDs; temporary process stopped",
+    "jobStatus": "local development database has 0 reviews / 0 operations; no real-provider job execution claimed"
+  },
+  "prerequisites": [
+    {
+      "name": "Bun and built-in SQLite",
+      "reason": "Build/server and isolated SQLite persistence/migration tests",
+      "verificationCommand": "cd /data/project && bun -e 'import {Database} from \"bun:sqlite\"; const d=new Database(\":memory:\"); try { if(d.query(\"select 1 as n\").get().n!==1) throw new Error(\"SQLite unavailable\"); console.log(Bun.version); } finally {d.close();}'",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Node.js",
+      "reason": "Schema parity and TypeScript tooling",
+      "verificationCommand": "cd /data/project && node --input-type=module -e 'import assert from \"node:assert/strict\"; assert(Number(process.versions.node.split(\".\")[0])>=22); assert.equal(await Promise.resolve(1),1)'",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Existing application dependencies",
+      "reason": "Real AI SDK, Hono, Drizzle, PostgreSQL client and TypeScript compiler",
+      "verificationCommand": "cd /data/project && bun -e 'import {generateText} from \"ai\"; import {Hono} from \"hono\"; import {sql} from \"drizzle-orm\"; import pg from \"pg\"; if(![generateText,Hono,pg.Pool].every(x=>typeof x===\"function\")||!sql)process.exit(1)' && bun node_modules/typescript/bin/tsc --version",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Configured PostgreSQL database",
+      "reason": "Authenticated connectivity and required existing/new durable schema using the web environment",
+      "verificationCommand": "cd /data/project && bun run scripts/check-git-database.ts",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Chromium",
+      "reason": "Real desktop/mobile review-dialog and navigation verification",
+      "verificationCommand": "cd /data/project && bun -e 'import {chromium} from \"playwright-core\"; const b=await chromium.launch({executablePath:\"/usr/bin/chromium\",headless:true,args:[\"--no-sandbox\",\"--disable-dev-shm-usage\"]});try{const p=await b.newPage();await p.setContent(\"<title>capability-check</title>\");if(await p.title()!==\"capability-check\")throw new Error(\"Browser unavailable\")}finally{await b.close()}'",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Git checkout",
+      "reason": "Assigned branch/revision and preservation of existing changes",
+      "verificationCommand": "cd /data/project && git rev-parse --is-inside-work-tree && git rev-parse HEAD",
+      "timeoutSeconds": 30
+    }
+  ],
+  "checks": [
+    {"command": "bun install --frozen-lockfile --ignore-scripts", "status": "passed"},
+    {"command": "bun build src/index.ts --target=bun --packages=external --outdir=/tmp/lfg-import-check", "status": "passed", "note": "Exact output path symlinked into /data to respect sandbox disk policy"},
+    {"command": "bun run typecheck", "status": "passed"},
+    {"command": "node scripts/check-schema-parity.mjs", "status": "passed", "result": "35 mirrored files"},
+    {"command": "bun test tests/git-review.test.ts", "status": "passed", "result": "10 tests, 80 assertions; labelled isolated fixtures"},
+    {"command": "bun test tests/git-review-provider.test.ts", "status": "passed", "result": "4 tests; both provider APIs and exclusion/size bounds"},
+    {"command": "bun test tests/git-review-ui.test.ts", "status": "passed", "result": "1 Chromium workflow, keyboard/mobile/saved/stale/confirmation"},
+    {"command": "bun run test:git-review:pg", "status": "passed", "result": "1 real PostgreSQL schema/claim/idempotency/active-lock test; fixture schema removed"},
+    {"command": "bun test tests/git-workspace.test.ts tests/git-navigation.test.ts", "status": "passed", "result": "7 tests"},
+    {"command": "bun test tests/git-api.test.ts", "status": "passed", "result": "3 tests"},
+    {"command": "bun test tests/team-rbac.test.ts", "status": "passed", "result": "16 tests"},
+    {"command": "bun run scripts/check-git-web.ts", "status": "passed", "result": "Runs exact requested server command and stops it after bounded smoke checks"},
+    {"command": "git diff --check", "status": "passed"}
+  ],
+  "workflowVerification": {
+    "fixtureReviewToPR": "passed; actual AI SDK generateText with labelled test model, durable records and test-only HTTP PR responses",
+    "successAndFailureLogs": "asserted timestamp, IDs, outcomes, duration, safe identifiers and error categories; credentials/private bodies excluded",
+    "liveAI": "unverified: no configured account credentials",
+    "liveGitProvider": "unverified: no connected project/account credentials; no real PR mutations performed"
+  },
+  "remainingGaps": ["Connect an authorized Git account and the configured model key/personal subscription through existing Settings to verify a real saved AI review and authenticated workflow."],
+  "limitations": ["Static bounded review is not runtime testing or approval.", "Provider PR APIs offer no atomic two-ref compare-and-create; concurrent remote pushes can race the final freshness check despite durable local serialization."],
+  "persistedTasks": "docs/git-review-ticket.md"
+}
