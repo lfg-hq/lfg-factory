@@ -1,0 +1,40 @@
+# Durable Git review — persisted ticket tasks and evidence
+
+Scope: LFG-5 order 2; requirements 4886d65e and analysis d3b0931f; accepted preview 2bf4ed98 read in full. Both Venture documents were read as shared constraints, not additional feature scope.
+
+## Prerequisite inventory / session notes
+- Bun 1.2.23 (install/build/server, built-in SQLite) and Node 22.22.2 (schema/TypeScript tooling) work. Git 2.47.3 checkout inspection works.
+- Existing lockfile/dependencies reused: AI SDK 6, Drizzle, Hono, pg, TypeScript, playwright-core. No scaffold or provider migration.
+- Configured local PostgreSQL was already healthy; authenticated application `select 1` succeeded. Existing container `postgres` reused. No database recovery or account resets.
+- Chromium was missing: repaired with `apk add --no-cache chromium`; Chromium 136 launch and browser workflows now pass.
+- Required external credentials: existing connected GitHub/GitLab account and the selected model provider's key in existing Settings → LLM Keys, or an authorized personal ChatGPT subscription in Integrations. Supported key fields: anthropic/openai/google/kimi/deepseek/glm. No invented keys, environment fallback, new manual flags, or new environment settings.
+- Local database has zero users/projects/model/GitHub accounts. No first-run or demo account was added. Real AI/Git workflows cannot be verified with these credentials absent.
+
+## Tasks / acceptance map
+- [x] AC1 implementation: `src/services/git-review.ts` calls real `getModel`/`generateText` using `userLlmAccess`, subscription execution, current selection/project lock, existing usage tracking, and no model substitution or env-key fallback. Provider adapter fetches SHA-bound diffs and bounded source context. Structured findings, coverage, included/excluded/unknown epic scope and limitations persist. Known secret/binary/incomplete patches are excluded and block completion; oversized/unavailable changes fail closed. No tools or mutations are available to the model.
+  - Evidence: `tests/git-review.test.ts` (10 passing): saved structured review, missing model blocked/retry, stored-association scope, restart/lease recovery, retry exhaustion. `tests/git-review-provider.test.ts` (4 passing): both native providers, immutable context, secret/binary/truncation/size guards. These are labelled test-only fixtures, not live AI evidence.
+- [x] AC2 implementation: project authorization, Git actor and code-management permission on writes; completed review + acknowledgment; host/repository/ref/SHA binding; fresh two-ref check and complete duplicate lookup, repeated immediately before mutation. Durable unique operation keys plus active repository/ref-pair locks; acknowledgment timestamp, result association and audit. Uncertain POSTs are only reconciled, never blindly replayed. Only failures known to precede POST can retry it.
+  - Evidence: service/API fixtures prove acknowledgment, changed source AND base, cross-project denial, incomplete review, concurrent confirmation, duplicate retry, uncertain reconciliation across revisions. PR body is editable and retains the authoritative saved summary/findings/limitations. No real PR mutations were tested.
+- [x] AC3 implementation: atomic claims, concurrency 2, 120-second execution deadline, 180-second fenced leases, 3 bounded transient attempts and backoff. Same web process starts/stops the runner; no detached worker. Saved list/results remain readable if ref checks are unavailable, with creation blocked. UI polls real persisted progress, shows retry/stale/failure, excluded scope, two-step confirmation and existing PR links.
+  - Evidence: persisted recovery/concurrency tests plus `tests/git-review-ui.test.ts` (1 passing Chromium workflow): queued/running/results, saved reopen, no unsafe HTML, keyboard acknowledgment, editable details, explicit final POST and mobile stale state. Existing navigation/browser regression passes.
+- [x] AC4: SQLite migration/schema-column validation and PostgreSQL additive migration, atomic claims, operation-key AND active-pair uniqueness tested (1 passing PostgreSQL test in a temporary schema, cleaned up). Both dialects parity (35 files) and `bun run typecheck` pass.
+- [x] Observability: existing console stdout/stderr pattern, bounded transition/request events with timestamps/level/service/correlation/job IDs/outcomes/durations/codes, attempts, safe model/provider/request IDs; mutation activity audit. Success and failure log assertions pass and reject credential/private-body leakage. No app log files; collection/rotation remains platform-owned.
+- [x] Required install/build/run commands verified. `scripts/check-git-web.ts` executes exact `bun run src/index.ts`, confirms 0.0.0.0:8080 startup, health and correlated private-route 401s, then stops the child.
+- [ ] Live configured AI review with saved output: unverified, credentials absent.
+- [ ] Real-provider read-path and full authenticated review-to-PR workflow: unverified, connected account credentials absent. Production PR mutations are out of scope as tests.
+
+## Runtime and migration evidence
+One required process: `bun run src/index.ts`, cwd `/data/project`, `.env` inherited, web on 0.0.0.0:8080 and in-process bounded review runner; stdout/stderr collected by host. All temporary web/browser processes were stopped. A healthy web response is NOT job-execution evidence; actual review completion/failure evidence is the persisted fixture runner tests. Local production-shaped DB has no review jobs (0 reviews / 0 operations).
+
+Additive `drizzle/pg/0001_git_reviews.sql` applied to existing local PostgreSQL; project count remained 0 before/after. Subsequent empty-table column/constraint adjustments synchronized the final schema. No old data was deleted; no restored-data claim. Mirrored SQLite migration is `drizzle/0014_git_reviews.sql`; both journals include the new migration. Normal repository migration/push commands inherit `.env`; no env variants introduced.
+
+Commands: `bun install --frozen-lockfile --ignore-scripts`; `bun run test:git-review`; `bun run test:git-review:pg`; `bun test tests/git-workspace.test.ts tests/git-navigation.test.ts` (7 pass); `bun test tests/git-api.test.ts` (3 pass); `bun test tests/team-rbac.test.ts` (16 pass); `node scripts/check-schema-parity.mjs`; `bun run typecheck`; exact requested build; `bun run scripts/check-git-database.ts`; `bun run scripts/check-git-web.ts`.
+
+Run DB-mocking test files in separate Bun processes, as the package commands do. PostgreSQL test requires the selected real local PostgreSQL service and removes its uniquely named fixture schema. Browser tests require `/usr/bin/chromium`. Build output `/tmp/lfg-import-check` is symlinked to `/data/lfg-import-check` to honor both the exact requested command and sandbox disk policy; prior generated output was preserved under `/data/lfg-import-check-prior-20261031`.
+
+## Explicit limitations and remaining gaps
+Static AI review is advisory, not runtime testing, human approval or merge approval. Context is capped at six 20-KB files, diffs at 40 files / 120K characters and provider responses at 2 MB; all limitations/exclusions are shown. Epic scope uses current ticket ancestry; missing refs and squash/rebase can remain unknown, never requirement-completion proof. Known credential-file/content filtering is conservative, not a universal secret detector.
+
+Provider PR APIs accept branch names and offer no atomic compare-and-create across BOTH refs. Rechecks and durable local serialization minimize, but cannot eliminate, a remote push between final check and provider acceptance. This residual provider race is not represented as an atomic guarantee.
+
+No commits, pushes or merges performed. Inspected branch `feature/lfg-5-implement-durable-detailed-ai-review-bef`, base HEAD `85d3cc7ce5921f9c7c9a534843f4fdfddf29a768`; runtime smoke uses that revision plus these uncommitted changes, then stops. Full machine-readable prerequisites/checks are in `docs/git-review-runtime-report.json`.

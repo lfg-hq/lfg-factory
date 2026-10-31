@@ -1,4 +1,6 @@
 import { Hono } from "hono";
+import { logGitRequest } from '../../services/git-logging.ts';
+import { logActivity } from '../../services/activity-log.ts';
 import { requireAuth } from "../../auth/middleware.ts";
 import { db } from "../../config/db.ts";
 import { epics } from "../../db/schema/epics.ts";
@@ -34,6 +36,14 @@ type AuthEnv = {
 };
 
 const epicsApi = new Hono<AuthEnv>();
+epicsApi.use('/epics/:epicId/merge', async (c, next) => {
+  const correlationId = crypto.randomUUID(), started = performance.now();
+  c.header('X-Correlation-ID', correlationId);
+  logGitRequest({ service: 'git-safety', event: 'epic.promotion.started', correlationId, outcome: 'started', durationMs: 0 });
+  try { await next(); } finally {
+    logGitRequest({ service: 'git-safety', event: 'epic.promotion.completed', correlationId, outcome: c.res.status >= 400 ? 'failed' : 'completed', status: c.res.status, durationMs: Math.round(performance.now() - started), errorCode: ({ 401: 'AUTH_REQUIRED', 403: 'CODE_PERMISSION_REQUIRED', 404: 'EPIC_NOT_FOUND', 409: 'EPIC_PR_CONFIRMATION_REQUIRED', 500: 'EPIC_PROMOTION_UNAVAILABLE' } as Record<number, string>)[c.res.status] });
+  }
+});
 epicsApi.use("*", requireAuth);
 
 /**
@@ -327,17 +337,22 @@ epicsApi.post("/epics/:epicId/merge", async (c) => {
   const user = c.get("user");
   const { epicId } = c.req.param();
 
+  const correlationId = c.res.headers.get('X-Correlation-ID');
+  const origin = c.req.header('Origin');
+  if (origin && origin !== new URL(c.req.url).origin) return c.json({ error: 'Use the same-origin Git confirmation screen.', code: 'ORIGIN_DENIED', correlationId }, 403);
   const loaded = await loadEpic(epicId!, user.id);
-  if (!loaded) return c.json({ error: "Epic not found" }, 404);
+  if (!loaded) return c.json({ error: 'Epic not found. Check project membership.', code: 'EPIC_NOT_FOUND', correlationId }, 404);
+  if (!loaded.access.permissions.canEditFiles) return c.json({ error: 'Code-management permission is required.', code: 'CODE_PERMISSION_REQUIRED', correlationId }, 403);
 
   try {
     const result = await promoteEpicToMain(epicId!, user.id);
     if (!result.merged && result.blockers?.length) {
-      return c.json({ error: result.blockers[0]!.message, blockers: result.blockers }, 409);
+      await logActivity({ projectId: loaded.epic.projectId, actorType: 'user', activityType: 'git_promotion_blocked', title: 'Epic promotion requires guarded PR confirmation', metadata: { correlationId, errorCode: result.blockers[0]!.code } });
+      return c.json({ error: result.blockers[0]!.message, blockers: result.blockers, code: 'EPIC_PR_CONFIRMATION_REQUIRED', correlationId }, 409);
     }
     return c.json(result);
   } catch (err) {
-    return c.json({ error: `Merge failed: ${(err as Error).message}` }, 500);
+    return c.json({ error: 'Open Git → All open PRs to inspect provider state and retry guarded confirmation.', code: 'EPIC_PROMOTION_UNAVAILABLE', correlationId }, 500);
   }
 });
 

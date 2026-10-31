@@ -1,0 +1,112 @@
+{
+  "status": "implemented_with_verification_gaps",
+  "implementationRevision": "2240e5904acb0cea2cb1651e26c5b00f7eb2016a plus uncommitted whitespace/evidence repair",
+  "pushedCommit": null,
+  "mergedRevision": null,
+  "runningRevision": null,
+  "runtime": {
+    "command": "bun run src/index.ts",
+    "workingDirectory": "/data/project",
+    "bind": "0.0.0.0:8080",
+    "environment": "existing .env and inherited resolved environment; no new settings",
+    "processes": ["Bun web process including existing bounded Git review runner and existing scheduler/executor; no separate new worker"],
+    "logs": "stdout/stderr collected and rotated by platform; no application log files added",
+    "result": "Exact command started successfully. Health 200; database-backed invalid authentication 401; anonymous Git/review/merge/delete 401 with correlation IDs. Temporary web/browser processes stopped.",
+    "jobStatus": "0 projects, Git reviews, PR operations and mutations in local application DB; no real provider job execution claimed",
+    "databaseRepair": "Authenticated PostgreSQL 16.15 connection was healthy. Missing prior git_reviews/git_operations caused RUNNER_DB_ERROR. Applied checked-in additive 0001_git_reviews and new 0002_git_mutations migrations after read-only existence checks. Required schema check and runtime rerun passed; no prior rows deleted, no fresh-database fallback or credential/account change."
+  },
+  "prerequisites": [
+    {
+      "name": "Bun and built-in SQLite",
+      "reason": "TypeScript build/server and isolated SQLite persistence tests; Bun 1.2.23 exercised",
+      "verificationCommand": "cd /data/project && bun -e 'import {Database} from \"bun:sqlite\"; const d=new Database(\":memory:\"); try { if(d.query(\"select 1 as n\").get().n!==1) throw new Error(\"SQLite unavailable\"); console.log(Bun.version); } finally {d.close();}'",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Node.js",
+      "reason": "Schema tooling; Node 22.22.2 exercised",
+      "verificationCommand": "cd /data/project && node --input-type=module -e 'import assert from \"node:assert/strict\"; assert(Number(process.versions.node.split(\".\")[0])>=22); assert.equal(await Promise.resolve(1),1)'",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Existing application dependencies and TypeScript",
+      "reason": "Hono, Drizzle, real AI SDK, PostgreSQL client, browser harness and TypeScript 5.9.3",
+      "verificationCommand": "cd /data/project && bun -e 'import {generateText} from \"ai\"; import {Hono} from \"hono\"; import {sql} from \"drizzle-orm\"; import pg from \"pg\"; import {chromium} from \"playwright-core\"; if(![generateText,Hono,pg.Pool,chromium.launch].every(x=>typeof x===\"function\")||!sql)process.exit(1)' && bun node_modules/typescript/bin/tsc --version",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Configured PostgreSQL database",
+      "reason": "Authenticated connectivity and all required web/runner/safety tables in the selected environment",
+      "verificationCommand": "cd /data/project && bun run scripts/check-git-database.ts",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Chromium",
+      "reason": "Real keyboard/mobile and integrated confirmation browser workflows; installed with apk, Chromium 136 exercised",
+      "verificationCommand": "cd /data/project && bun -e 'import {chromium} from \"playwright-core\"; const b=await chromium.launch({executablePath:\"/usr/bin/chromium\",headless:true,args:[\"--no-sandbox\",\"--disable-dev-shm-usage\"]});try{const p=await b.newPage();await p.setContent(\"<title>capability-check</title>\");if(await p.title()!==\"capability-check\")throw new Error(\"Browser unavailable\")}finally{await b.close()}'",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Git checkout",
+      "reason": "Assigned branch/revision and preservation of existing work; Git 2.47.3 exercised",
+      "verificationCommand": "cd /data/project && git rev-parse --is-inside-work-tree && git rev-parse HEAD",
+      "timeoutSeconds": 30
+    }
+  ],
+  "checks": [
+    {"command": "bun install --frozen-lockfile --ignore-scripts", "status": "passed"},
+    {"command": "bun build src/index.ts --target=bun --packages=external --outdir=/tmp/lfg-import-check", "status": "passed", "note": "Existing /tmp symlink resolves into /data"},
+    {"command": "bun run typecheck", "status": "passed"},
+    {"command": "bun run check:schema", "status": "passed", "result": "36 mirrored files"},
+    {"command": "bun test tests/git-safety.test.ts", "status": "passed", "result": "12 tests, 78 assertions; isolated SQLite/provider fixtures"},
+    {"command": "bun test tests/git-safety-provider.test.ts tests/git-safety-postgres.test.ts", "status": "passed", "result": "2 tests, 13 assertions; GitLab HTTP fixtures and actual PostgreSQL temporary-schema migration/idempotency test, cleaned up"},
+    {"command": "bun test tests/git-safety-ui.test.ts", "status": "passed", "result": "1 integrated mobile Chromium workflow, 19 assertions; labelled HTTP fixtures, no live AI/Git calls"},
+    {"command": "bun test tests/git-review-ui.test.ts", "status": "passed", "result": "1 desktop/keyboard/mobile saved/stale review flow, 14 assertions"},
+    {"command": "bun test tests/git-review.test.ts", "status": "passed", "result": "10 tests, 80 assertions; durable review and confirmed creation fixtures"},
+    {"command": "bun test tests/git-review-provider.test.ts", "status": "passed", "result": "4 tests, 23 assertions"},
+    {"command": "bun test tests/git-workspace.test.ts tests/git-navigation.test.ts tests/team-rbac.test.ts tests/ticket-diff-github.test.ts tests/runtime-validation.test.ts tests/preview-runtime-boundary.test.ts", "status": "passed", "result": "41 tests, 179 assertions"},
+    {"command": "bun test tests/git-api.test.ts", "status": "passed", "result": "3 tests, 19 assertions"},
+    {"command": "bun test tests/quick-change-epic.test.ts tests/document-epic-context.test.ts tests/preview-source-policy.test.ts", "status": "passed", "result": "10 tests, 35 assertions"},
+    {"command": "bun run test:epics", "status": "passed"},
+    {"command": "bun run test:nav", "status": "failed", "result": "4 assertions against untouched project-detail/epics/tickets-list shared history scripts and Home/Activity/Settings tab row. Focused Git navigation tests pass."},
+    {"command": "bun run scripts/check-git-database.ts", "status": "passed"},
+    {"command": "bun run scripts/check-git-web.ts", "status": "passed", "result": "Exact web command plus DB-backed auth and correlated mutation denial; process stopped"},
+    {"command": "git diff --check", "status": "passed"}
+  ],
+  "workflowVerification": {
+    "fixtureIntegration": "Hierarchy, AI findings, PR details/acknowledgment, All open PRs, fresh merge confirmation, failure/success, typed deletion failure/success passed in Chromium. Not live AI/provider evidence.",
+    "mutationPersistence": "Eligible merges/deletes and uncertain-outcome retries verified using isolated HTTP fixtures; ticket history, epic promotion, audit and operation idempotency asserted. No actual repository mutated.",
+    "logs": "Success and relevant failure assert timestamp/level/service/event/correlation ID/outcome/duration/error code, safe provider request IDs and retry count. Persisted logActivity verified. No token, provider body, diff or model content logged by mutation services.",
+    "liveGitProvider": "unverified: no connected project/Git account; real mutations outside authorized scope",
+    "liveAI": "unverified: no configured account model credentials/subscription"
+  },
+  "remainingGaps": [
+    "Authorized real Git/model account workflow not exercised; use existing Settings credentials/subscription, never invented keys.",
+    "Four broad navigation assertions in untouched files fail; not marked passed or silently changed outside scope."
+  ],
+  "limitations": [
+    "Delete APIs have no atomic SHA precondition: final ref read/local repo serialization cannot eliminate an external push race.",
+    "Uncertain operations reconcile confirmed merged/absent provider state; otherwise block resend and direct to provider inspection.",
+    "External reconciliation only trusts current exact linked source revisions, intended destinations and existing epic approval. Changed/deleted refs remain unknown rather than overwriting linkage.",
+    "Provider protections remain authoritative; unsupported queues use provider links, never raw refs, force merge, automatic approval or cascading deletion."
+  ],
+  "repairVerification": {
+    "date": "2026-10-31",
+    "scope": "Preserved saved implementation; removed trailing whitespace from actorId lines in both mutation schemas that blocked publication validation.",
+    "checkout": "Assigned ticket branch at 2240e5904acb0cea2cb1651e26c5b00f7eb2016a was initially clean. Saved merge-repair directory absent. No commit, push or merge performed; platform publication state not independently verified.",
+    "prerequisites": "All six prerequisite commands above rerun and passed. Chromium installed with apk. Existing PostgreSQL container logs/mounts, port ownership, disk and resolved app configuration inspected; authenticated connection worked but Git tables were absent. Applied checked-in 0001_git_reviews and 0002_git_mutations after read-only absence checks in one transaction. Existing data preserved, no fresh database, credentials or env-file changes.",
+    "passed": [
+      "Exact install/build, typecheck, 36-file schema parity",
+      "Safety 12 tests/78 assertions; provider/PostgreSQL 2/13",
+      "Integrated safety mobile Chromium 1/19; prior review browser 1/14",
+      "Git workspace/navigation/RBAC/diff/runtime/preview group 41/179",
+      "Epic/document/source-policy 10/35; epics page script",
+      "Database prerequisite; exact web command, health and database-backed auth probe, correlated private Git denial; process stopped",
+      "git diff --check and full implementation range git diff HEAD^ --check"
+    ],
+    "failed": ["Broad test:nav still has the same four assertions in untouched files; not passed."],
+    "liveWorkflow": "Unverified. Local database has zero projects, Git accounts, model API keys, reviews and operations. No real Git mutations or paid AI calls performed.",
+    "earlierChecks": "Checks listed above but not included in this repair's passed list are retained prior-turn evidence, not claimed rerun in this turn."
+  },
+  "persistedTasks": "docs/git-safety-ticket.md"
+}
