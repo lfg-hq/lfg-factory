@@ -37,7 +37,10 @@ export function quickChangeTool(context:{projectId:string;userId:string;conversa
    let [ticket]=await db.select().from(projectTickets).where(eq(projectTickets.id,id));
    const active=await getActiveRun(project.id);
    if(active?.items.some(item=>item.ticketId===id))return {status:active.status,runId:active.runId,ticketId:id,note:'This change is already tracked by the existing build.'};
-   if(active)return {status:'not_started',runId:active.runId,detail:'A project build is already active. Check that build before starting another.'};
+   // Only a build that is actually running blocks this. A run paused on a failed ticket has
+   // nothing building; it keeps waiting for that retry while this change builds separately.
+   if(active && active.status!=='blocked')return {status:'not_started',runId:active.runId,detail:'A project build is running now. It must finish before this change can start.'};
+   const pausedRun=active?.status==='blocked'?{runId:active.runId,failed:active.items.filter(i=>i.status==='failed').map(i=>i.title)}:undefined;
    if(!ticket){
     // A quick change to a feature still in progress belongs to that feature's epic, so it
     // builds on the feature's code and ships (and previews) with it. A new epic is cut from
@@ -51,7 +54,7 @@ export function quickChangeTool(context:{projectId:string;userId:string;conversa
    await (await import('../../services/ticket-images.ts')).attachTurnImages(ticket.id,context.turnId);
    if(['review','done'].includes(ticket.status))return {ticketId:id,status:ticket.status,note:'This change already completed; use sendTicketMessage for a follow-up.'};
    const run=await createBuildRun({projectId:project.id,userId:context.userId,conversationId:context.conversationId,epicId:ticket.epicId,ticketIds:[id],afterBuild:'preview',triggerMessage:args.description});
-   return {...run,ticketId:id,ticketKey:ticket.ticketKey,status:'queued'};
+   return {...run,ticketId:id,ticketKey:ticket.ticketKey,status:'queued',...(pausedRun?{pausedRun,note:'An earlier build run is paused on a failed ticket; it does not block this change and stays paused until that ticket is retried.'}:{})};
   };
   const promise=work();pending.set(key,promise);try{return await promise;}finally{pending.delete(key);}
  }});

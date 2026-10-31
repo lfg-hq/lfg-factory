@@ -361,9 +361,12 @@ export async function getActiveRun(projectId: string): Promise<{
   runId: string; status: string; epicId: string | null; afterBuild: AfterBuild;
   items: { ticketId: string | null; title: string; status: string; sequence: number }[];
 } | null> {
-  const [run] = await db.select().from(agentRuns)
-    .where(and(eq(agentRuns.projectId, projectId), eq(agentRuns.runType, RUN_TYPE), inArray(agentRuns.status, ["running", "planning", "blocked"])))
+  // A run that is building wins over one paused on a failed ticket: a paused run may sit
+  // while unrelated work (a quick change) builds in its own run.
+  const [building] = await db.select().from(agentRuns)
+    .where(and(eq(agentRuns.projectId, projectId), eq(agentRuns.runType, RUN_TYPE), inArray(agentRuns.status, ["running", "planning"])))
     .orderBy(desc(agentRuns.createdAt)).limit(1);
+  const run = building ?? (await blockedRun(projectId));
   if (!run) return null;
   const items = await db.select().from(ticketExecutions)
     .where(eq(ticketExecutions.agentRunId, run.id))
@@ -377,7 +380,8 @@ export async function getActiveRun(projectId: string): Promise<{
 
 /** Release an explicitly superseded blocked run, preserving its work and history. */
 export async function cancelBlockedRun(projectId: string, runId: string): Promise<boolean> {
-  const active = await getActiveRun(projectId);
+  const paused = await blockedRun(projectId);
+  const active = paused && paused.id === runId ? await getRunItems(paused) : null;
   if (!active || active.runId !== runId || active.status !== "blocked") return false;
   if (active.items.some(item => ["running", "queued"].includes(item.status))) return false;
   const changed = await db.update(agentRuns).set({status:"cancelled", updatedAt:new Date()})
@@ -389,9 +393,22 @@ export async function cancelBlockedRun(projectId: string, runId: string): Promis
   return true;
 }
 
+async function getRunItems(run: typeof agentRuns.$inferSelect) {
+  const items = await db.select().from(ticketExecutions).where(eq(ticketExecutions.agentRunId, run.id));
+  return { runId: run.id, status: run.status, items: items.map(i => ({ status: i.status })) };
+}
+async function blockedRun(projectId: string) {
+  const [run] = await db.select().from(agentRuns)
+    .where(and(eq(agentRuns.projectId, projectId), eq(agentRuns.runType, RUN_TYPE), eq(agentRuns.status, "blocked")))
+    .orderBy(desc(agentRuns.createdAt)).limit(1);
+  return run;
+}
+
 /** Un-block a run after the user retries the failed ticket. */
 export async function resumeBlockedRun(projectId: string): Promise<boolean> {
-  const active = await getActiveRun(projectId);
+  // The paused run itself, even while another run (a quick change) is building.
+  const paused = await blockedRun(projectId);
+  const active = paused ? { runId: paused.id, status: paused.status } : null;
   if (!active || active.status !== "blocked") return false;
   const changed = await db.update(agentRuns).set({ status: "running", updatedAt: new Date() }).where(and(eq(agentRuns.id, active.runId),eq(agentRuns.status,"blocked"))).returning({id:agentRuns.id});
   if (!changed.length) return false;
