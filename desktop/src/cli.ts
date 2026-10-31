@@ -25,6 +25,8 @@ const runner = new Runner({
   workRoot: flag("work-root") ?? defaultWorkRoot(),
   createSocket: nodeSocketFactory,
   appVersion: "cli",
+  claudeBin: process.env.LFG_CLAUDE_BIN,
+  allowLocalRepos: process.env.LFG_RUNNER_ALLOW_LOCAL_REPOS === "1",
   approve: async () => autoApprove ? { approved: true } : { approved: false, reason: "Headless runner without --auto-approve" },
   onState: (state, detail) => {
     console.log(`[lfg-runner] ${state}${detail ? `: ${detail}` : ""}`);

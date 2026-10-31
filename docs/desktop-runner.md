@@ -49,7 +49,7 @@ Company LFG server (Postgres)                     Jane's computer: LFG Desktop
 | Stop | the existing ticket Stop also cancels runner jobs |
 | WebSocket | `/ws/runner` in `src/index.ts` (Bearer device token, no session) |
 | Settings UI | Settings → Integrations → Computers (`public/js/runner-computers.js`) |
-| Ticket UI | "Run on my computer" next to Build (`public/js/ticket-agent.js`) |
+| Ticket UI | "Run on my computer" in the chat ticket panel (`public/js/ticket-agent.js`) and "Build on my computer" in the Tickets drawer Run menu (`tickets-list.tsx`) |
 | Desktop app | `desktop/` (Electron shell, runner core, headless CLI) |
 
 ## Job lifecycle
@@ -88,7 +88,13 @@ cd desktop && npm install && npm run typecheck
 
 Run DB-backed test files one at a time: they share one cached DB connection per process.
 
-Try it locally: pair a computer in Settings → Integrations → Computers, then
+Try the whole flow in one step (isolated server, seeded demo, app already paired):
+
+```sh
+desktop/try.sh --fake-claude   # or without the flag to use your real Claude Code
+```
+
+Or by hand: pair a computer in Settings → Integrations → Computers, then
 
 ```sh
 cd desktop && npm start                                    # the app

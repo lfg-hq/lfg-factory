@@ -13,6 +13,24 @@ the Claude Code login already here. See `../docs/desktop-runner.md` for how it f
 
 Work happens in `~/LFG/repos` (clones) and `~/LFG/worktrees` (one per ticket branch).
 
+## Try it in one step
+
+From the repository root, or by double-clicking `desktop/Try LFG Desktop.command` in Finder:
+
+```sh
+desktop/try.sh                 # the app, with your real Claude Code
+desktop/try.sh --fake-claude   # a stand-in for Claude Code: no usage, done in seconds
+desktop/try.sh --headless      # the runner in the terminal instead of the app
+desktop/try.sh --reset         # start over
+```
+
+It starts a separate LFG server on http://localhost:8100 with its own SQLite database
+in `.desktop-test/`, so your Postgres, running builds, Telegram bot and email are not
+touched. It seeds a test account, a "Desktop runner demo" project backed by a local Git
+repo, and one ticket; pairs this computer; and opens LFG Desktop already connected. The
+terminal prints the test sign-in. On the ticket, pick **Build on my computer** in the
+Run menu and click **Run**. Quitting the app stops the server.
+
 ## Develop
 
 ```sh

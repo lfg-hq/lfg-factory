@@ -26,6 +26,12 @@ interface Config {
   workRoot?: string;
 }
 
+// Development overrides, set by desktop/try.sh: a throwaway profile, already paired,
+// pointed at a local test server. Never persisted.
+const devServerUrl = process.env.LFG_SERVER_URL;
+const devToken = process.env.LFG_RUNNER_TOKEN;
+if (process.env.LFG_DESKTOP_PROFILE) app.setPath("userData", `${app.getPath("userData")}-${process.env.LFG_DESKTOP_PROFILE}`);
+
 const configPath = () => join(app.getPath("userData"), "config.json");
 function loadConfig(): Config {
   try { return JSON.parse(readFileSync(configPath(), "utf8")); } catch { return {}; }
@@ -35,6 +41,7 @@ function saveConfig(config: Config) {
   writeFileSync(configPath(), JSON.stringify(config, null, 2), { mode: 0o600 });
 }
 function readToken(config: Config): string | null {
+  if (devToken) return devToken;
   if (!config.token) return null;
   try { return safeStorage.decryptString(Buffer.from(config.token, "base64")); } catch { return null; }
 }
@@ -120,6 +127,8 @@ function startRunner() {
   runner = new Runner({
     serverUrl: config.serverUrl,
     token,
+    claudeBin: process.env.LFG_CLAUDE_BIN,
+    allowLocalRepos: process.env.LFG_RUNNER_ALLOW_LOCAL_REPOS === "1",
     workRoot: config.workRoot ?? defaultWorkRoot(),
     createSocket: nodeSocketFactory,
     env: shellEnv,
@@ -189,6 +198,8 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(() => {
     shellEnv = loginShellEnv();
     config = loadConfig();
+    if (devServerUrl) config.serverUrl = devServerUrl;
+    if (process.env.LFG_WORK_ROOT) config.workRoot = process.env.LFG_WORK_ROOT;
     tray = new Tray(nativeImage.createEmpty());
     refreshTray();
     startRunner();

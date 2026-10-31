@@ -104,7 +104,16 @@ export function runnerClosed(conn: RunnerConn): void {
   })().catch(e => console.error("[runner] close handling failed:", e));
 }
 
-export async function runnerMessage(conn: RunnerConn, raw: string | Buffer): Promise<void> {
+// One computer's messages are handled strictly in order, so its log reads in order.
+const inbox = new WeakMap<RunnerConn, Promise<void>>();
+
+export function runnerMessage(conn: RunnerConn, raw: string | Buffer): Promise<void> {
+  const next = (inbox.get(conn) ?? Promise.resolve()).then(() => handleRunnerMessage(conn, raw));
+  inbox.set(conn, next.catch(() => {}));
+  return next;
+}
+
+async function handleRunnerMessage(conn: RunnerConn, raw: string | Buffer): Promise<void> {
   let msg: RunnerToServer;
   try { msg = JSON.parse(typeof raw === "string" ? raw : raw.toString("utf8")); }
   catch { conn.send({ type: "error", message: "Invalid JSON" }); return; }

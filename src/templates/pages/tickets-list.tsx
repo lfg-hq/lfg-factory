@@ -722,6 +722,7 @@ export function TicketsListPage({ user, project, stages, tickets, epics = [], ex
         <select id="drawer-run-phase" class="drawer-run-phase" aria-label="Choose ticket action">
           <option value="build">Build &amp; run enabled checks</option>
           <option value="checks">Checks only (saved code)</option>
+          <option value="local">Build on my computer (LFG Desktop)</option>
         </select>
         <button class="drawer-execute-btn" id="drawer-build-btn" onclick="runSelectedTicketPhase()">
           <i class="fas fa-play"></i> Run
@@ -1340,7 +1341,25 @@ export function TicketsListPage({ user, project, stages, tickets, epics = [], ex
   function runSelectedTicketPhase() {
     const phase = document.getElementById('drawer-run-phase').value;
     if (phase === 'build') return buildCurrentTicket();
+    if (phase === 'local') return runCurrentTicketOnMyComputer();
     return retryCurrentValidation(phase);
+  }
+  // Build on the requester's own computer: LFG Desktop runs their Claude Code, logs stream here.
+  async function runCurrentTicketOnMyComputer() {
+    if (!_currentTicketId) return;
+    const ticketId = _currentTicketId;
+    const btn = document.getElementById('drawer-build-btn');
+    if (btn.disabled) return;
+    btn.disabled = true;
+    try {
+      const res = await fetch('/api/projects/' + PROJECT_ID + '/tickets/' + ticketId + '/run-local', {method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+      const data = await res.json().catch(function () { return {}; });
+      if (!res.ok) throw new Error(data.error || 'Could not start the build on your computer');
+      handleTicketStatus({ticketId:ticketId,status:'in_progress',queueStatus:'executing'});
+      if (_currentTicketId === ticketId) switchDrawerTab('actions', document.querySelector('.drawer-tab[data-tab="actions"]'));
+      if (!data.runnerConnected) alert('Waiting for your computer. Open LFG Desktop, or pair one in Settings, Integrations, Computers.');
+    } catch (error) { alert(error.message); }
+    finally { btn.disabled = false; }
   }
   async function retryCurrentValidation(phase = 'checks') {
     if (!_currentTicketId) return;
