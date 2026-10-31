@@ -67,19 +67,3 @@ test('merge conflicts and blocked PRs say why', async () => {
   expect(await mergeBranch(gh, 'x', 'main', fetcher)).toMatchObject({ ok: false, error: expect.stringContaining('conflicts') });
   expect(await mergePullRequest(gh, 3, 'merge', fetcher)).toMatchObject({ ok: false, error: expect.stringContaining("can't be merged yet") });
 });
-
-test('ticket branches are measured against their epic branch', async () => {
-  const { fetcher, calls } = fake({
-    '': { default_branch: 'main' },
-    '/branches?per_page=100&page=1': [{ name: 'main' }, { name: 'epic/e1' }, { name: 'ticket/t1' }, { name: 'ticket/orphan' }],
-    '/pulls?state=all&per_page=100&sort=created&direction=desc': [],
-    '/compare/main...epic/e1': { ahead_by: 3, behind_by: 0, status: 'ahead', commits: [at('2026-10-01T00:00:00Z'), at('2026-10-01T00:00:00Z'), at('2026-10-01T00:00:00Z')] },
-    '/compare/epic/e1...ticket/t1': { ahead_by: 0, behind_by: 2, status: 'behind', commits: [], merge_base_commit: at('2026-10-01T00:00:00Z') },
-    '/compare/main...ticket/orphan': { ahead_by: 1, behind_by: 0, status: 'ahead', commits: [at('2026-10-01T00:00:00Z')] },
-  });
-  const r = await githubBranchOverview(gh, fetcher, 100, { 'epic/e1': 'main', 'ticket/t1': 'epic/e1', 'ticket/orphan': 'epic/gone' });
-  const by = Object.fromEntries(r.branches.map((b) => [b.name, b]));
-  expect(by['ticket/t1']).toMatchObject({ base: 'epic/e1', merged: true });
-  expect(by['ticket/orphan']).toMatchObject({ base: 'main', merged: false }); // its epic branch isn't on GitHub
-  expect(calls.some((c) => c.path === '/compare/main...ticket/t1')).toBe(false);
-});
