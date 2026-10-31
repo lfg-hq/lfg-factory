@@ -56,6 +56,47 @@ test('page bounds and GitLab comparison timeouts remain explicitly incomplete', 
   expect(await gitlab.compare('base','head')).toEqual({ahead:null,behind:null,complete:false});
   expect(gitlab.errors[0]?.code).toBe('PROVIDER_COMPARISON_INCOMPLETE');
 });
+// No live repository state is used or changed by these regression fixtures.
+for (const complete of [true, false]) test(`branchless associations are not branches; absent refs require complete listing (${complete})`, async () => {
+  const provider = createGitProvider(config, (async (url: string) => {
+    const u = new URL(url);
+    if (u.pathname.endsWith('/repo')) return Response.json({ default_branch: 'main' });
+    if (u.pathname.endsWith('/branches')) {
+      if (u.searchParams.get('page') === '2') return new Response('', { status: 403 });
+      return Response.json(['main', 'epic/one', 'present', 'free'].map(name => ({ name, commit: { sha: name } })), { headers: complete ? {} : { link: '<https://api.github.com/fixture>; rel="next"' } });
+    }
+    if (u.pathname.endsWith('/pulls')) return Response.json([]);
+    return Response.json({ ahead_by: 0, behind_by: 0 });
+  }) as typeof fetch);
+  const tickets = [
+    { id: 'none', title: 'Named branchless ticket', epicId: 'e1', githubBranch: null },
+    { id: 'absent', title: 'Named recorded ticket', epicId: 'e1', githubBranch: 'absent' },
+    { id: 'present', title: 'Present ticket', epicId: 'e1', githubBranch: 'present' },
+    { id: 'unassigned', title: 'Unassigned branchless ticket', epicId: null, githubBranch: null },
+  ].map(t => ({ ...t, status: 'done', destination: 'epic/one' }));
+  const w = await buildGitWorkspace(provider, [{ id: 'e1', name: 'Epic', epicKey: 'E1', branch: 'epic/one', baseBranch: 'main', baseSha: null }], tickets, null);
+  expect(w.epics[0]?.tickets[0]).toMatchObject({ id: 'none', name: 'Named branchless ticket', branch: null, refState: 'no_branch', missingRef: false, integration: { status: 'unknown' }, destination: 'epic/one' });
+  expect(w.epics[0]?.tickets[1]).toMatchObject({ branch: 'absent', headSha: null, refState: complete ? 'absent' : 'unavailable', missingRef: complete, integration: { status: 'unknown' } });
+  expect(w.epics[0]?.tickets[2]).toMatchObject({ refState: 'present', missingRef: false, integration: { status: 'integrated' } });
+  expect(w.epics[0]?.ticketCounts).toEqual({ total: 2, associations: 3, withoutBranch: 1, integrated: 1, notIntegrated: 0, unknown: 1 });
+  expect(w.totals.tickets).toEqual({ total: 2, associations: 4, withoutBranch: 2, integrated: 1, notIntegrated: 0, unknown: 1 });
+  expect(w.totals.other).toEqual({ total: 1, associations: 2, withoutBranch: 1, integrated: 1, notIntegrated: 0, unknown: 0 });
+  expect(w.completeness.branches).toBe(complete);
+  expect(w.completeness.complete).toBe(false);
+});
+test('branchless tickets alone do not make successful branch comparisons incomplete', async () => {
+  const provider = createGitProvider(config, (async (url: string) => {
+    const u = new URL(url);
+    if (u.pathname.endsWith('/repo')) return Response.json({ default_branch: 'main' });
+    if (u.pathname.endsWith('/branches')) return Response.json(['main', 'epic'].map(name => ({ name, commit: { sha: name } })));
+    if (u.pathname.endsWith('/pulls')) return Response.json([]);
+    return Response.json({ ahead_by: 0, behind_by: 0 });
+  }) as typeof fetch);
+  const w = await buildGitWorkspace(provider, [{ id: 'e', name: 'Epic', epicKey: null, branch: 'epic', baseBranch: 'main', baseSha: null }], [{ id: 't', title: 'No recorded branch', epicId: 'e', githubBranch: null, destination: 'epic', status: 'done' }], null);
+  expect(w.totals.tickets).toMatchObject({ total: 0, associations: 1, withoutBranch: 1, unknown: 0 });
+  expect(w.epics[0]?.ticketCounts).toEqual(w.totals.tickets);
+  expect(w.completeness.complete).toBe(true);
+});
 test('stored IDs, missing branches, stacked epic destinations, default and Other remain distinct', async () => {
   const provider = createGitProvider(config, (async (url: string) => {
     const u = new URL(url);
