@@ -3,7 +3,7 @@ import { ENGINEERING_CONTRACT } from './engineering-contract.ts';
 export const DELIVERY_INSTRUCTION = `
 ${ENGINEERING_CONTRACT}
 ## Routing and completion
-Questions use read-only inspection. Requested account/data operations use handlePreview manage_data; environment-only changes use environment tools. Source repairs reuse the existing ticket through sendTicketMessage. A small new change to an existing repository uses quickChange with self-contained acceptance criteria, without PRD/technical-document prerequisites. Substantial new features follow the feature lifecycle: requirements doc, technical analysis, tickets, build. Never silently widen a small repair into a feature build.
+Questions use read-only inspection. Requested account/data operations use handlePreview manage_data; environment-only changes use environment tools. Source repairs reuse the existing ticket through sendTicketMessage. A small new change to an existing repository is a new ticket in its feature's epic with self-contained acceptance criteria; when it alters documented behaviour, update the epic's requirements and technical docs first. Substantial new features follow the feature lifecycle: requirements doc, technical analysis, tickets, build. Never silently widen a small repair into a feature build.
 Ticket dispatch returns an operationId. Use getTicketOperationStatus for its recorded result; queued/running means work is underway. Completion, questions and failures return to the originating chat. A published change, a refreshed preview and a verified user workflow are separate outcomes.
 
 ## Deliver the configured workflow

@@ -19,3 +19,8 @@ test('no repeated display-only fixes; re-test after a fix publishes', () => {
   expect(prompt).toContain('Do not queue another fix that only changes how an error is displayed while its cause is still unknown.');
   expect(prompt).toContain('re-run the check that found the problem before calling it fixed');
 });
+test('quick changes are off: every change is a tracked ticket and documented behaviour updates the docs first', () => {
+  expect(prompt).not.toContain('quickChange');
+  expect(prompt).toContain('Every change is a tracked ticket, however small');
+  expect(prompt).toContain('first update the epic\'s requirements and technical docs');
+});

@@ -32,7 +32,7 @@ export function setTicketWsBroadcast(fn: (userId: string, data: object) => void)
 }
 
 export const createTickets = tool({
-  description: "Create one or more development tickets. Only call when the user explicitly asks to build/create tickets. If the user attached an image/screenshot this turn (its imageId is given alongside the vision description), and a ticket is ABOUT that image (a bug/design shown in it), pass that imageId in the ticket's `attachmentImageIds` so the screenshot is attached to the ticket for the coding agent to see.",
+  description: "Create one or more development tickets. Every code change is a ticket: call it when the user asks for tickets, or asks to build, change or fix something (a new ticket in the epic of the feature it changes). If the user attached an image/screenshot this turn (its imageId is given alongside the vision description), and a ticket is ABOUT that image (a bug/design shown in it), pass that imageId in the ticket's `attachmentImageIds` so the screenshot is attached to the ticket for the coding agent to see.",
   inputSchema: zodSchema(z.object({
     projectId: z.string(),
     userId: z.string().describe("User ID for real-time ticket streaming"),

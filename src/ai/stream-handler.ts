@@ -951,8 +951,12 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   tools = withConversationContext(readingTools(tools, userMessage), convId, userId, internalProjectId, userMsgRow?.id);
 
   if(internalProjectId && userMsgRow?.id) {
-    const {quickChangeTool}=await import('./tools/quick-change-tools.ts');
-    tools.quickChange=quickChangeTool({projectId:internalProjectId,userId,conversationId:convId,turnId:userMsgRow.id});
+    // Quick changes are off: every change is a ticket in its epic, with the epic's docs kept
+    // current, so the project's history shows what changed. QUICK_CHANGES_ENABLED=1 restores it.
+    if (process.env.QUICK_CHANGES_ENABLED === '1') {
+      const {quickChangeTool}=await import('./tools/quick-change-tools.ts');
+      tools.quickChange=quickChangeTool({projectId:internalProjectId,userId,conversationId:convId,turnId:userMsgRow.id});
+    }
   }
   const turnTools = trackTurnTools(tools, abortController.signal);
   tools = turnTools.tools;
