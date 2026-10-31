@@ -1,6 +1,6 @@
 {
   "status": "implemented_with_verification_gaps",
-  "implementationRevision": "1ac16596f59855c4949fa6bad89e926ca20740bd plus uncommitted ticket changes",
+  "implementationRevision": "2240e5904acb0cea2cb1651e26c5b00f7eb2016a plus uncommitted whitespace/evidence repair",
   "pushedCommit": null,
   "mergedRevision": null,
   "runningRevision": null,
@@ -90,5 +90,23 @@
     "External reconciliation only trusts current exact linked source revisions, intended destinations and existing epic approval. Changed/deleted refs remain unknown rather than overwriting linkage.",
     "Provider protections remain authoritative; unsupported queues use provider links, never raw refs, force merge, automatic approval or cascading deletion."
   ],
+  "repairVerification": {
+    "date": "2026-10-31",
+    "scope": "Preserved saved implementation; removed trailing whitespace from actorId lines in both mutation schemas that blocked publication validation.",
+    "checkout": "Assigned ticket branch at 2240e5904acb0cea2cb1651e26c5b00f7eb2016a was initially clean. Saved merge-repair directory absent. No commit, push or merge performed; platform publication state not independently verified.",
+    "prerequisites": "All six prerequisite commands above rerun and passed. Chromium installed with apk. Existing PostgreSQL container logs/mounts, port ownership, disk and resolved app configuration inspected; authenticated connection worked but Git tables were absent. Applied checked-in 0001_git_reviews and 0002_git_mutations after read-only absence checks in one transaction. Existing data preserved, no fresh database, credentials or env-file changes.",
+    "passed": [
+      "Exact install/build, typecheck, 36-file schema parity",
+      "Safety 12 tests/78 assertions; provider/PostgreSQL 2/13",
+      "Integrated safety mobile Chromium 1/19; prior review browser 1/14",
+      "Git workspace/navigation/RBAC/diff/runtime/preview group 41/179",
+      "Epic/document/source-policy 10/35; epics page script",
+      "Database prerequisite; exact web command, health and database-backed auth probe, correlated private Git denial; process stopped",
+      "git diff --check and full implementation range git diff HEAD^ --check"
+    ],
+    "failed": ["Broad test:nav still has the same four assertions in untouched files; not passed."],
+    "liveWorkflow": "Unverified. Local database has zero projects, Git accounts, model API keys, reviews and operations. No real Git mutations or paid AI calls performed.",
+    "earlierChecks": "Checks listed above but not included in this repair's passed list are retained prior-turn evidence, not claimed rerun in this turn."
+  },
   "persistedTasks": "docs/git-safety-ticket.md"
 }

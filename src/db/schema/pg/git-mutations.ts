@@ -5,7 +5,7 @@ import { users } from './users.ts';
 export const gitMutations = pgTable('git_mutations', {
   id: text('id').primaryKey(), operationKey: text('operation_key').notNull(), activeKey: text('active_key'),
   projectId: text('project_id').notNull().references(() => projects.id, { onDelete: 'cascade' }),
-  actorId: text('actor_id').notNull(), 
+  actorId: text('actor_id').notNull(),
   repo: text('repo').notNull(), provider: text('provider').notNull(), type: text('type').notNull(),
   headRef: text('head_ref').notNull(), baseRef: text('base_ref').notNull(), headSha: text('head_sha').notNull(), baseSha: text('base_sha').notNull(),
   acknowledgedAt: timestamp('acknowledged_at', { mode: 'date' }).notNull(),
