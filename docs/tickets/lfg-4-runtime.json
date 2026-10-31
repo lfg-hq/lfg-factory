@@ -1,0 +1,57 @@
+{
+  "status": "implemented_with_verification_gaps",
+  "prerequisites": [
+    {
+      "name": "Bun and project dependencies",
+      "reason": "Build and run existing Bun/TypeScript/Hono/Drizzle application and tests",
+      "verificationCommand": "cd /data/project && bun --version && bun -e 'await import(\"hono\"); await import(\"drizzle-orm\"); await import(\"typescript\"); await import(\"pg\"); console.log(\"runtime dependencies available\")'",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Node.js",
+      "reason": "Existing schema-parity and navigation regression scripts",
+      "verificationCommand": "cd /data/project && node -e 'if(Number(process.versions.node.split(\".\")[0]) < 22) process.exit(1); console.log(process.version)'",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Selected application database and schema",
+      "reason": "Read stored project, epic, ticket, execution and Git credential associations through selected dialect",
+      "verificationCommand": "cd /data/project && bun scripts/check-git-database.ts",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Chromium and Playwright Core",
+      "reason": "Real browser verification of artifact navigation and responsive Git UI",
+      "verificationCommand": "cd /data/project && bun -e 'import {chromium} from \"playwright-core\"; const b=await chromium.launch({executablePath:\"/usr/bin/chromium\",headless:true,args:[\"--no-sandbox\",\"--disable-dev-shm-usage\"]}); try {const p=await b.newPage(); await p.setContent(\"<title>capability</title>\"); if(await p.title()!==\"capability\") throw Error(\"browser unavailable\");} finally {await b.close();}'",
+      "timeoutSeconds": 30
+    }
+  ],
+  "checks": [
+    {"command":"bun install --frozen-lockfile --ignore-scripts", "result":"passed"},
+    {"command":"bun build src/index.ts --target=bun --packages=external --outdir=/tmp/lfg-import-check", "result":"passed"},
+    {"command":"bun run typecheck", "result":"passed"},
+    {"command":"bun run check:schema", "result":"passed"},
+    {"command":"bun test tests/git-workspace.test.ts", "result":"6 passed"},
+    {"command":"bun test tests/git-api.test.ts", "result":"3 passed; sanitized success/failure logging asserted"},
+    {"command":"bun test tests/git-navigation.test.ts", "result":"1 passed; actual Chromium/artifact navigation; 12 assertions"},
+    {"command":"bun test tests/ticket-diff-github.test.ts", "result":"5 passed"},
+    {"command":"bun test tests/team-rbac.test.ts", "result":"16 passed"},
+    {"command":"bun run test:nav", "result":"failed: four unrelated existing assertions in unchanged project-detail/epics/tickets-list templates; see checklist"},
+    {"command":"bun scripts/check-git-web.ts", "result":"passed; invokes exact bun run src/index.ts, health 200 and correlated Git 401, stops temporary web process"}
+  ],
+  "processes": [
+    {"command":"bun run src/index.ts", "workingDirectory":"/data/project", "environment":"resolved .env / inherited process environment", "listen":"0.0.0.0:8080", "logs":"stdout/stderr, existing platform collection/rotation", "state":"verification process stopped; no new worker required"}
+  ],
+  "remainingGaps": [
+    "Live GitHub/GitLab workflow unverified: existing sandbox database has zero project records and zero connected provider credentials. Connect via existing Settings. No new required secret settings.",
+    "Four unrelated legacy navigation regression assertions remain failing; targeted Git browser navigation passes."
+  ],
+  "revisionFacts": {
+    "baseRevision":"1207647ad63b4bcb66a6493dfe784f9441fb06b8",
+    "implementation":"uncommitted modified ticket checkout",
+    "pushedCommit":null,
+    "mergedRevision":null,
+    "runningRevision":"modified ticket checkout during verification, stopped afterward",
+    "liveProviderWorkflowVerified":false
+  }
+}

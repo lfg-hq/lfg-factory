@@ -19,7 +19,7 @@ const envSchema = z.object({
   POSTGRES_PASSWORD: z.string().optional().default(""),
 
   BETTER_AUTH_SECRET: z.string().min(1),
-  BETTER_AUTH_URL: z.string().url(),
+  BETTER_AUTH_URL: z.string().url().default("http://localhost:8080"),
 
   GOOGLE_CLIENT_ID: z.string().optional().default(""),
   GOOGLE_CLIENT_SECRET: z.string().optional().default(""),
@@ -112,7 +112,7 @@ const envSchema = z.object({
   PORT: z
     .string()
     .optional()
-    .default("3000")
+    .default("8080")
     .transform((v) => parseInt(v, 10)),
   NODE_ENV: z
     .enum(["development", "production", "test"])

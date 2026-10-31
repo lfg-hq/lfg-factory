@@ -1,0 +1,92 @@
+[sandbox] backend = mags
+[event-handlers] Orchestrator event handlers registered
+[agent-notifier] Registered agent event handlers
+[agent-reflector] Listening for agent.command_completed
+[agent-scheduler] Starting agent scheduler (check interval: 60s)
+[agent-sweeper] Starting timeout sweeper (interval: 60s)
+Starting LFG on port 8080 (development)
+Started development server: http://0.0.0.0:8080
+[public-telegram] TELEGRAM_PUBLIC_BOT_TOKEN or TELEGRAM_PUBLIC_BOT_OWNER_ID not set — skipping
+[ticket-executor] Worker started
+<-- GET /
+--> GET / [32m200[0m 114ms
+<-- GET /
+--> GET / [32m200[0m 95ms
+<-- GET /
+--> GET / [32m200[0m 91ms
+<-- GET /
+--> GET / [32m200[0m 91ms
+<-- GET /
+--> GET / [32m200[0m 89ms
+<-- GET /
+--> GET / [32m200[0m 106ms
+<-- GET /
+--> GET / [32m200[0m 105ms
+<-- GET /
+--> GET / [32m200[0m 94ms
+<-- GET /
+--> GET / [32m200[0m 104ms
+<-- GET /
+--> GET / [32m200[0m 104ms
+<-- GET /
+--> GET / [32m200[0m 93ms
+<-- GET /
+--> GET / [32m200[0m 104ms
+<-- GET /venture-analyst
+{"timestamp":"2026-10-31T04:37:17.551Z","level":"info","service":"venture","event":"venture.landing","requestId":"615219ac-3011-46b6-b68f-71577c73be50","transition":"started","outcome":"pending","durationMs":0,"method":"GET"}
+{"timestamp":"2026-10-31T04:37:17.551Z","level":"info","service":"venture","event":"venture.landing","requestId":"615219ac-3011-46b6-b68f-71577c73be50","transition":"completed","outcome":"success","durationMs":1,"method":"GET","status":200}
+--> GET /venture-analyst [32m200[0m 1ms
+<-- GET /api/venture/session
+{"timestamp":"2026-10-31T04:37:19.654Z","level":"info","service":"venture","event":"venture.session","requestId":"c04dba97-f103-4c80-b718-44910e7938f6","transition":"started","outcome":"pending","durationMs":0,"method":"GET"}
+{"timestamp":"2026-10-31T04:37:19.672Z","level":"warn","service":"venture","event":"venture.session","requestId":"c04dba97-f103-4c80-b718-44910e7938f6","transition":"failed","outcome":"denied","durationMs":19,"method":"GET","status":401,"errorCode":"SIGN_IN_REQUIRED"}
+--> GET /api/venture/session [33m401[0m 20ms
+<-- GET /api/venture/session
+{"timestamp":"2026-10-31T04:37:22.080Z","level":"info","service":"venture","event":"venture.session","requestId":"83ef8d23-28fb-4bd3-84b5-8f654b308374","transition":"started","outcome":"pending","durationMs":0,"method":"GET"}
+{"timestamp":"2026-10-31T04:37:22.080Z","level":"warn","service":"venture","event":"venture.session","requestId":"83ef8d23-28fb-4bd3-84b5-8f654b308374","transition":"failed","outcome":"denied","durationMs":0,"method":"GET","status":401,"errorCode":"SIGN_IN_REQUIRED"}
+--> GET /api/venture/session [33m401[0m 0ms
+<-- POST /auth/venture/google
+{"timestamp":"2026-10-31T04:37:24.115Z","level":"info","service":"venture","event":"venture.google.initiate","requestId":"37d4da1e-7ff1-43eb-be12-a77393a806a6","transition":"started","outcome":"pending","durationMs":0,"method":"POST","provider":"google","retryCount":0}
+{"timestamp":"2026-10-31T04:37:24.116Z","level":"warn","service":"venture","event":"venture.google.initiate","requestId":"37d4da1e-7ff1-43eb-be12-a77393a806a6","transition":"failed","outcome":"denied","durationMs":0,"method":"POST","provider":"google","retryCount":0,"status":403,"errorCode":"ORIGIN_REJECTED"}
+--> POST /auth/venture/google [33m403[0m 1ms
+<-- GET /venture-analyst?chat=open
+{"timestamp":"2026-10-31T04:37:31.564Z","level":"info","service":"venture","event":"venture.landing","requestId":"5632ab32-856c-4adc-815f-d8c8991056db","transition":"started","outcome":"pending","durationMs":0,"method":"GET"}
+{"timestamp":"2026-10-31T04:37:31.564Z","level":"info","service":"venture","event":"venture.landing","requestId":"5632ab32-856c-4adc-815f-d8c8991056db","transition":"completed","outcome":"success","durationMs":0,"method":"GET","status":200}
+--> GET /venture-analyst?chat=open [32m200[0m 0ms
+<-- GET /api/venture/session
+{"timestamp":"2026-10-31T04:37:32.936Z","level":"info","service":"venture","event":"venture.session","requestId":"0490c19d-0f57-43c6-9170-323c71929723","transition":"started","outcome":"pending","durationMs":0,"method":"GET"}
+{"timestamp":"2026-10-31T04:37:32.936Z","level":"warn","service":"venture","event":"venture.session","requestId":"0490c19d-0f57-43c6-9170-323c71929723","transition":"failed","outcome":"denied","durationMs":0,"method":"GET","status":401,"errorCode":"SIGN_IN_REQUIRED"}
+--> GET /api/venture/session [33m401[0m 1ms
+<-- GET /
+--> GET / [32m200[0m 107ms
+<-- GET /venture-analyst
+{"timestamp":"2026-10-31T05:03:04.273Z","level":"info","service":"venture","event":"venture.landing","requestId":"4c698fc8-6720-42d2-9377-efd7c49b07da","transition":"started","outcome":"pending","durationMs":0,"method":"GET"}
+{"timestamp":"2026-10-31T05:03:04.274Z","level":"info","service":"venture","event":"venture.landing","requestId":"4c698fc8-6720-42d2-9377-efd7c49b07da","transition":"completed","outcome":"success","durationMs":1,"method":"GET","status":200}
+--> GET /venture-analyst [32m200[0m 1ms
+<-- GET /api/venture/session
+{"timestamp":"2026-10-31T05:03:04.942Z","level":"info","service":"venture","event":"venture.session","requestId":"6cb1bca9-d9a9-4e19-b69e-df433983e8fa","transition":"started","outcome":"pending","durationMs":0,"method":"GET"}
+{"timestamp":"2026-10-31T05:03:04.944Z","level":"warn","service":"venture","event":"venture.session","requestId":"6cb1bca9-d9a9-4e19-b69e-df433983e8fa","transition":"failed","outcome":"denied","durationMs":1,"method":"GET","status":401,"errorCode":"SIGN_IN_REQUIRED"}
+--> GET /api/venture/session [33m401[0m 2ms
+<-- GET /api/venture/session
+{"timestamp":"2026-10-31T05:03:07.758Z","level":"info","service":"venture","event":"venture.session","requestId":"2d94a6e2-36e0-4b03-a8b3-abcd115e32b1","transition":"started","outcome":"pending","durationMs":0,"method":"GET"}
+{"timestamp":"2026-10-31T05:03:07.758Z","level":"warn","service":"venture","event":"venture.session","requestId":"2d94a6e2-36e0-4b03-a8b3-abcd115e32b1","transition":"failed","outcome":"denied","durationMs":0,"method":"GET","status":401,"errorCode":"SIGN_IN_REQUIRED"}
+--> GET /api/venture/session [33m401[0m 0ms
+<-- GET /api/venture/session
+{"timestamp":"2026-10-31T05:03:09.362Z","level":"info","service":"venture","event":"venture.session","requestId":"cf22d8d3-7abf-421d-9e9c-14aef06dd254","transition":"started","outcome":"pending","durationMs":0,"method":"GET"}
+{"timestamp":"2026-10-31T05:03:09.364Z","level":"warn","service":"venture","event":"venture.session","requestId":"cf22d8d3-7abf-421d-9e9c-14aef06dd254","transition":"failed","outcome":"denied","durationMs":1,"method":"GET","status":401,"errorCode":"SIGN_IN_REQUIRED"}
+--> GET /api/venture/session [33m401[0m 2ms
+<-- GET /venture-analyst
+{"timestamp":"2026-10-31T05:04:16.768Z","level":"info","service":"venture","event":"venture.landing","requestId":"f5d283f4-fc3d-41a2-9e17-d30d166331fd","transition":"started","outcome":"pending","durationMs":0,"method":"GET"}
+{"timestamp":"2026-10-31T05:04:16.769Z","level":"info","service":"venture","event":"venture.landing","requestId":"f5d283f4-fc3d-41a2-9e17-d30d166331fd","transition":"completed","outcome":"success","durationMs":1,"method":"GET","status":200}
+--> GET /venture-analyst [32m200[0m 1ms
+<-- GET /api/venture/session
+{"timestamp":"2026-10-31T05:04:17.611Z","level":"info","service":"venture","event":"venture.session","requestId":"491d1281-a4b8-40e2-9cbf-c6ff5834f133","transition":"started","outcome":"pending","durationMs":0,"method":"GET"}
+{"timestamp":"2026-10-31T05:04:17.613Z","level":"warn","service":"venture","event":"venture.session","requestId":"491d1281-a4b8-40e2-9cbf-c6ff5834f133","transition":"failed","outcome":"denied","durationMs":2,"method":"GET","status":401,"errorCode":"SIGN_IN_REQUIRED"}
+--> GET /api/venture/session [33m401[0m 2ms
+<-- GET /api/venture/session
+{"timestamp":"2026-10-31T05:04:23.874Z","level":"info","service":"venture","event":"venture.session","requestId":"624cec5b-68cd-404e-98d4-cc5eebee4691","transition":"started","outcome":"pending","durationMs":0,"method":"GET"}
+{"timestamp":"2026-10-31T05:04:23.876Z","level":"warn","service":"venture","event":"venture.session","requestId":"624cec5b-68cd-404e-98d4-cc5eebee4691","transition":"failed","outcome":"denied","durationMs":2,"method":"GET","status":401,"errorCode":"SIGN_IN_REQUIRED"}
+--> GET /api/venture/session [33m401[0m 2ms
+<-- GET /api/venture/session
+{"timestamp":"2026-10-31T05:04:25.448Z","level":"info","service":"venture","event":"venture.session","requestId":"421a3e2f-7a7b-4360-a0ff-0a9d7fa317ee","transition":"started","outcome":"pending","durationMs":0,"method":"GET"}
+{"timestamp":"2026-10-31T05:04:25.451Z","level":"warn","service":"venture","event":"venture.session","requestId":"421a3e2f-7a7b-4360-a0ff-0a9d7fa317ee","transition":"failed","outcome":"denied","durationMs":3,"method":"GET","status":401,"errorCode":"SIGN_IN_REQUIRED"}
+--> GET /api/venture/session [33m401[0m 3ms
