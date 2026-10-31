@@ -144,7 +144,10 @@ export async function publishValidatedMerge(o:PublicationOptions & {targetBranch
       }
       const remaining=await sh(`git -C ${q(candidate)} diff --name-only --diff-filter=U`);
       if(remaining)throw new ValidationFailure('Merge repair left unresolved paths: '+remaining.split('\n').join(', '));
-      await sh(`git -C ${q(candidate)} diff --check\ngit -C ${q(candidate)} diff --cached --check`);
+      // Leftover conflict markers block publication; whitespace findings from the same check
+      // (a trailing space) do not. LFG-6 was refused over one trailing space in a schema file.
+      const markers=await sh(`{ git -C ${q(candidate)} diff --check; git -C ${q(candidate)} diff --cached --check; } 2>&1 | grep -i 'conflict marker' || true`);
+      if(markers)throw new ValidationFailure('Merge left conflict markers: '+markers.split('\n').slice(0,5).join('; '));
       const candidateTree=await sh(`git -C ${q(candidate)} write-tree`);
       const sourceTree=await sh(`git rev-parse ${q(expected.source+'^{tree}')}`);
       let reused:any=null;

@@ -133,3 +133,8 @@ test('a real Stop still cancels conflict resolution',()=>fixture(async(o,repo)=>
  await expect(publishValidatedMerge({...o,targetBranch:'main',validation:{...o.validation,cancelled:()=>true,stopped:()=>true}})).rejects.toThrow('Merge repair cancelled');
  expect(attempts).toBe(0);expect(git(repo,'ls-remote --heads origin main')).toContain(baseline);
 }));
+test('a trailing space does not block a merge (LFG-6)',()=>fixture(async(o,repo)=>{
+ writeFileSync(join(repo,'schema.ts'),'export const x = 1; \n');git(repo,'add .');git(repo,'commit -qm whitespace');git(repo,'push -q origin feature/ticket');
+ const result=await publishValidatedMerge({...o,targetBranch:'main',validation:{...o.validation,skipped:()=>true}});
+ expect(git(repo,'ls-remote --heads origin main')).toContain(result.sha);
+}));
