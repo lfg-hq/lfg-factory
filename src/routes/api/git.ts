@@ -107,6 +107,9 @@ for (const view of ['branches', 'pull-requests'] as const) gitApi.get(`/projects
         tickets.push({ ...t, title: t.name, executionActive: activeExecutions.some(e => e.ticketId === t.id), destination: t.epicId ? validEpic?.branch ?? '' : anchor.anchorBranch });
       }
       data = await buildGitWorkspace(provider, storedEpics, tickets, project.previewTicketId, canManageCode ? prs => reconcileExternalPRs(project.id, c.get('user').id, provider!, prs, correlationId) : undefined);
+      const overviewRows = [...data.epics, ...data.other].filter(r => r.branch);
+      const unknownDefaults = overviewRows.filter(r => r.defaultComparison?.integration.status === 'unknown').length;
+      logGitRequest({ event: unknownDefaults ? 'git.default-comparison.failed' : 'git.default-comparison.completed', correlationId, provider: kind, outcome: unknownDefaults ? 'failed' : 'completed', durationMs: Math.round(performance.now() - started), rows: overviewRows.length, unknown: unknownDefaults, errorCode: unknownDefaults ? provider.errors[0]?.code || 'DEFAULT_COMPARISON_UNKNOWN' : undefined, ...provider.diagnostics() });
       const historyErrors = data.graph.heads.flatMap(h => h.history?.errors || []);
       logGitRequest({ event: historyErrors.length ? 'git.history.workspace.failed' : 'git.history.workspace.completed', correlationId, provider: kind, outcome: historyErrors.length ? 'failed' : data.graph.complete ? 'completed' : 'partial', durationMs: Math.round(performance.now() - started), errorCode: historyErrors[0]?.code, failureCategories: historyErrors.slice(0, 10).map(e => e.code), nodes: data.graph.nodes.length, heads: data.graph.heads.length, ...provider.diagnostics() });
     }

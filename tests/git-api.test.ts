@@ -83,6 +83,33 @@ test('authorized immutable history bounds, incremental pages and correlated succ
     expect(logs.join(' ')).not.toMatch(/fixture-owner-token|private source|Authorization/);
   } finally {console.log=log;globalThis.fetch=originalFetch;}
 });
+test('non-main default comparisons keep stacked destinations and record correlated success/failure', async () => {
+  const { epics }=await import('../src/db/schema/epics.ts');
+  await db.insert(epics).values([{id:'parent',projectId:'internal',name:'TEST FIXTURE parent',branch:'parent',baseBranch:'release'},{id:'stacked',projectId:'internal',name:'TEST FIXTURE stacked',branch:'stacked',baseBranch:'parent',parentEpicId:'parent'}]);
+  const s=(n:number)=>String(n).repeat(40);
+  const logs:string[]=[];const log=console.log;console.log=(...v)=>logs.push(v.join(' '));let denied=false;
+  globalThis.fetch=(async (url:string)=>{
+    const u=new URL(url);
+    if(u.pathname.endsWith('/repo'))return Response.json({default_branch:'release'});
+    if(u.pathname.endsWith('/branches'))return Response.json(['release','parent','stacked'].map((name,i)=>({name,commit:{sha:s(i+1)}})));
+    if(u.pathname.endsWith('/pulls'))return Response.json([]);
+    if(u.pathname.endsWith('/commits'))return Response.json([{sha:u.searchParams.get('sha'),parents:[]}]);
+    if(u.pathname.includes(`/compare/${s(1)}...${s(3)}`))return denied?new Response('TEST FIXTURE private body',{status:403,headers:{'x-github-request-id':'fixture-default-comparison'}}):Response.json({ahead_by:2,behind_by:1});
+    return Response.json({ahead_by:0,behind_by:1});
+  }) as typeof fetch;
+  try {
+    const response=await request('/projects/public/git/branches');expect(response.status).toBe(200);
+    const body=await response.json();expect(body.defaultBranch.branch).toBe('release');
+    expect(body.epics.find((e:any)=>e.id==='stacked')).toMatchObject({destination:'parent',integration:{status:'integrated'},defaultComparison:{branch:'release',integration:{status:'not_integrated'}}});
+    denied=true;const partial=await (await request('/projects/public/git/branches')).json();
+    expect(partial.epics.find((e:any)=>e.id==='stacked')).toMatchObject({destination:'parent',integration:{status:'integrated'},defaultComparison:{integration:{status:'unknown'}}});
+    expect(partial.completeness.comparisons).toBe(false);
+    const records=logs.map(l=>JSON.parse(l));
+    for(const event of ['git.default-comparison.completed','git.default-comparison.failed'])expect(records.some(l=>l.event===event&&l.correlationId&&l.timestamp&&l.service==='git-workspace'&&l.level&&l.durationMs>=0&&l.provider==='github'&&l.retryCount===0)).toBe(true);
+    expect(records.some(l=>l.event==='git.default-comparison.failed'&&l.errorCode==='PROVIDER_ACCESS_DENIED'&&l.providerRequestIds.includes('fixture-default-comparison'))).toBe(true);
+    expect(logs.join(' ')).not.toMatch(/fixture-owner-token|private body|Authorization/);
+  } finally {console.log=log;globalThis.fetch=originalFetch;}
+});
 test('conflicting stored repository identity cannot send a token to another repository', async () => {
   await db.update(projects).set({repoUrl:'https://github.com/other/repo'}).where(eq(projects.id,'internal'));
   const response=await request('/projects/public/git/branches','owner'); expect(response.status).toBe(400);

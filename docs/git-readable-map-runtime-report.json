@@ -1,0 +1,110 @@
+{
+  "status": "implemented_with_documented_live_provider_gap",
+  "implementationRevision": "86430ac169e426a1f63dca4381477c6b1cea4517 plus uncommitted LFG-9 changes",
+  "pushedCommit": null,
+  "mergedRevision": null,
+  "runningRevision": null,
+  "persistedTasks": "docs/git-readable-map-ticket.md",
+  "runtime": {
+    "command": "bun run src/index.ts",
+    "workingDirectory": "/data/project",
+    "bind": "0.0.0.0:8080",
+    "environment": "Existing .env and inherited resolved process environment; no env-file variants",
+    "processes": ["Bun web with existing in-process bounded DB-backed review runner; no new worker"],
+    "logs": "stdout/stderr; platform collection and rotation; no new application log files",
+    "smokeResult": "Passed home/health 200, actual database-backed invalid-login 401, correlated private Git/history/review/mutation 401. Temporary process stopped.",
+    "jobStatus": "Empty real review queue: recovery and claim query succeeded, runNextReview returned false. No job queued/executed; no live provider workflow claimed.",
+    "databaseRepair": "Existing PostgreSQL base schema connected, but Git tables absent (42P01 git_reviews). Inspected existing local service logs/mount/disk. Backed up to /data/recovery/lfg9-20261101/before-git-migrations.dump and applied checked-in additive PG 0001/0002 transactionally. Users/projects remained zero. No reset, new DB or data restoration. Schema/queue probes and startup rechecked."
+  },
+  "prerequisites": [
+    {
+      "name": "Bun and built-in SQLite",
+      "reason": "Build/server and isolated SQLite API/review/safety tests",
+      "verificationCommand": "cd /data/project && bun -e 'import {Database} from \"bun:sqlite\"; const d=new Database(\":memory:\"); try { if(d.query(\"select 1 as n\").get().n!==1) throw new Error(\"SQLite unavailable\"); console.log(Bun.version); } finally {d.close();}'",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Node.js",
+      "reason": "Schema parity tooling",
+      "verificationCommand": "cd /data/project && node --input-type=module -e 'import assert from \"node:assert/strict\"; assert(Number(process.versions.node.split(\".\")[0])>=22); assert.equal(await Promise.resolve(1),1)'",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Existing application dependencies",
+      "reason": "Hono/Drizzle/provider SDK/PostgreSQL/TypeScript and browser tests",
+      "verificationCommand": "cd /data/project && bun -e 'import {generateText} from \"ai\"; import {Hono} from \"hono\"; import {sql} from \"drizzle-orm\"; import pg from \"pg\"; if(![generateText,Hono,pg.Pool].every(x=>typeof x===\"function\")||!sql)process.exit(1)' && bun node_modules/typescript/bin/tsc --version",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Configured PostgreSQL database",
+      "reason": "Authenticated same-environment web database and required durable Git schema",
+      "verificationCommand": "cd /data/project && bun run scripts/check-git-database.ts",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Chromium and playwright-core",
+      "reason": "Actual rendered desktop/narrow map, focus and right drawer verification",
+      "verificationCommand": "cd /data/project && bun -e 'import {chromium} from \"playwright-core\"; const b=await chromium.launch({executablePath:\"/usr/bin/chromium\",headless:true,args:[\"--no-sandbox\",\"--disable-dev-shm-usage\"]});try{const p=await b.newPage();await p.setContent(\"<title>capability-check</title>\");if(await p.title()!==\"capability-check\")throw new Error(\"Browser unavailable\")}finally{await b.close()}'",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Git checkout",
+      "reason": "Assigned revision and preserving existing checkout changes",
+      "verificationCommand": "cd /data/project && git rev-parse --is-inside-work-tree && git rev-parse HEAD",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "drizzle-kit",
+      "reason": "Isolated fixture database schema generation",
+      "verificationCommand": "cd /data/project && bun node_modules/drizzle-kit/bin.cjs --version",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Bash",
+      "reason": "Existing bounded web smoke launcher and runtime commands",
+      "verificationCommand": "bash -c 'test \"${BASH_VERSINFO[0]}\" -ge 4 && test \"${LFG_CAPABILITY_UNSET:-working}\" = working'",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Docker local PostgreSQL service",
+      "reason": "Existing sandbox-local database hosting; no external services modified",
+      "verificationCommand": "docker inspect postgres --format '{{.State.Running}}' | grep -qx true",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "PostgreSQL client utilities",
+      "reason": "Sandbox backup before additive schema repair",
+      "verificationCommand": "pg_dump --version && psql --version",
+      "timeoutSeconds": 30
+    }
+  ],
+  "checks": [
+    {"command": "bun install --frozen-lockfile --ignore-scripts", "status": "passed"},
+    {"command": "bun build src/index.ts --target=bun --packages=external --outdir=/tmp/lfg-import-check", "status": "passed"},
+    {"command": "bun run typecheck", "status": "passed"},
+    {"command": "node scripts/check-schema-parity.mjs", "status": "passed"},
+    {"command": "bun test tests/git-workspace.test.ts tests/git-history.test.ts", "status": "passed"},
+    {"command": "bun test tests/git-api.test.ts", "status": "passed"},
+    {"command": "bun test tests/git-navigation.test.ts", "status": "passed"},
+    {"command": "bun test tests/git-review-ui.test.ts && bun test tests/git-safety-ui.test.ts", "status": "passed"},
+    {"command": "bun test tests/git-review.test.ts && bun test tests/git-review-provider.test.ts && bun test tests/git-safety.test.ts && bun test tests/git-safety-provider.test.ts", "status": "passed"},
+    {"command": "bun run scripts/check-git-database.ts", "status": "passed"},
+    {"command": "bun run scripts/check-git-web.ts", "status": "passed"},
+    {"command": "git diff --check", "status": "passed"}
+  ],
+  "acceptanceEvidence": {
+    "AC1": "Workspace/API fixtures: release default, stacked epic included in parent but not default (or unknown when denied), ticket included in epic and previewed independently; mutation destinations/SHAs unchanged; exact-head squash/rebase/later-commit tests retained.",
+    "AC2": "Real ChatPage browser: fixed compact rows, explicit labels/key/ref, green included/amber not included/neutral unknown legend, independent existence/PR state, no primary DAG/dashboard/history buttons. Initial activity order/ties/unknown last and refresh order tested. Partial PR data is unknown, not zero.",
+    "AC3": "Browser geometry: unchanged map row bounds on selection, right drawer <=420px/95vw, viewport height bound, full ref/SHAs/destination/evidence/commit info; desktop/narrow Escape, close, focus return, Shift+Tab and overflow pass.",
+    "AC4": "All-open-PR/draft/fork display and unchanged review-first acknowledgment/freshness/guarded merge/delete flows pass test-only browser/service regressions; missing/unknown refs, exact-current-head evidence and non-main defaults tested. No live mutations."
+  },
+  "observabilityEvidence": "API fixtures assert default-comparison completed and failed records include timestamp, level, service, event, correlation, duration, provider, retry count, error code and provider request ID. Token/private body leakage assertions pass; real anonymous Git denial also emitted correlated request logs.",
+  "visualComparison": "Inspected rendered desktop/drawer, light theme, 390px narrow/drawer screenshots alongside accepted 856179bd desktop/narrow reference. Retained compact map columns and per-epic hierarchy, semantic status curves explicitly non-chronological, horizontal narrow map scrolling and fixed right overlay. Default-overview heading follows ticket clarification. Test data deliberately differs from design snapshot.",
+  "screenshots": ["/data/git-evidence/desktop.png", "/data/git-evidence/desktop-light.png", "/data/git-evidence/desktop-drawer.png", "/data/git-evidence/narrow.png", "/data/git-evidence/narrow-drawer.png", "/data/git-evidence/approved-desktop.png", "/data/git-evidence/approved-narrow.png"],
+  "workflowVerification": {
+    "fixtureProviderAndBrowser": "passed; fixtures visibly labelled and confined to tests",
+    "liveGitProvider": "unverified: sandbox has zero users/projects and no connected Git account",
+    "liveAIReviewToPR": "unverified; unchanged provider path; no live AI generation or repository mutation attempted"
+  },
+  "remainingGaps": ["Authenticated live Git/AI workflow requires existing Integrations Git credentials/project and selected model access; not established by fixture rendering or startup checks."]
+}
