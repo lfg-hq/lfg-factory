@@ -39,7 +39,7 @@ test('saved progress, findings, keyboard acknowledgment, editable final confirma
     await page.goto(`http://127.0.0.1:${server.port}`);
     await page.waitForSelector('#git-root .git-controls', { timeout: 5000 });
     expect(errors).toEqual([]);
-    await page.getByRole('button', { name: 'Inspect feature · history unavailable', exact: true }).last().click();
+    await page.getByRole('button', { name: 'TICKET · Feature', exact: true }).last().click();
     await page.getByRole('button', { name: 'Create PR · review first' }).click({ timeout: 5000 });
     await page.waitForFunction(() => document.querySelector('dialog')?.textContent?.includes('Analyzing immutable'));
     expect(creates).toBe(0);

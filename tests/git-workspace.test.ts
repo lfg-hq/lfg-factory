@@ -138,5 +138,28 @@ test('workspace scopes include observed deleted ticket history without inventing
   expect(w.graph.heads).toContainEqual(expect.objectContaining({rowId:'t2',sha:null,refState:'absent'}));
   expect(w.graph.heads.some(h=>h.rowId==='none')).toBe(false);
   expect(w.graph.scopes.find(scope=>scope.id==='e1')?.rowIds).toEqual(['e1','t1','t2']);
-  expect(w.graph.scopes.find(scope=>scope.id==='pending')?.rowIds).toEqual(['t2','default']);
+  expect(w.graph.scopes.find(scope=>scope.id==='pending')?.rowIds).toEqual(['default']);
+});
+// TEST-ONLY provider truth: release is default, ticket is preview, stacked epic merges to parent.
+for (const unavailable of [false, true]) test(`default inclusion is separate from stacked parent and preview (${unavailable})`, async () => {
+  const provider = createGitProvider(config);
+  const refs = ['release','parent','stacked','ticket','free'].map(name=>branch(name,fixtureSha(name)));
+  const calls:string[]=[];
+  provider.info = async () => ({defaultBranch:'release'});
+  provider.branches = async () => ({items:refs,complete:true,errors:[]});
+  provider.pullRequests = async () => ({items:[],complete:true,errors:[]});
+  provider.history = async sha => ({items:[{sha,parents:[],summary:null,committedAt:null}],complete:true,nextPage:null,errors:[]});
+  provider.compare = async (base,head) => {
+    calls.push(`${base}:${head}`);
+    if (base===fixtureSha('release') && head===fixtureSha('stacked')) return unavailable ? {ahead:null,behind:null,complete:false} : {ahead:2,behind:1,complete:true};
+    return {ahead:0,behind:1,complete:true};
+  };
+  const w=await buildGitWorkspace(provider,[{id:'p',name:'Parent',epicKey:'P',branch:'parent',baseBranch:'release',baseSha:null},{id:'s',name:'Stacked',epicKey:'S',parentEpicId:'p',branch:'stacked',baseBranch:'parent',baseSha:'stored-parent'}],[{id:'t',title:'Preview ticket',epicId:'s',githubBranch:'ticket',status:'done',destination:'stacked'}],'t');
+  expect(w.defaultBranch.branch).toBe('release');
+  expect(w.epics[1]).toMatchObject({destination:'parent',parentEpicId:'p',baseSha:fixtureSha('parent'),storedBaseSha:'stored-parent',integration:{status:'integrated'},defaultComparison:{branch:'release',baseSha:fixtureSha('release'),integration:{status:unavailable?'unknown':'not_integrated'}},activeUse:{preview:false}});
+  expect(w.epics[1]!.tickets[0]).toMatchObject({destination:'stacked',baseSha:fixtureSha('stacked'),integration:{status:'integrated'},defaultComparison:null,activeUse:{preview:true}});
+  expect(w.graph.scopes.find(s=>s.id==='pending')?.rowIds).toEqual(['s','default']);
+  expect(calls.filter(c=>c===`${fixtureSha('release')}:${fixtureSha('parent')}`)).toHaveLength(1);
+  expect(calls).not.toContain(`${fixtureSha('release')}:${fixtureSha('ticket')}`);
+  expect(w.completeness.comparisons).toBe(!unavailable);
 });

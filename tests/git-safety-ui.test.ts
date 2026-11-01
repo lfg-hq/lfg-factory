@@ -39,7 +39,7 @@ test('hierarchy → AI review findings → confirmed PR → open PR merge → ty
     await page.goto(`http://127.0.0.1:${server.port}`);
     await page.waitForSelector('.git-controls');
     expect(errors).toEqual([]);
-    await page.getByRole('button', { name: 'Inspect ticket/feature · history unavailable', exact: true }).click();
+    await page.getByRole('button', { name: 'TICKET · TEST FIXTURE ticket', exact: true }).click();
     await page.getByRole('button', { name: 'Create PR · review first' }).click();
     await page.getByRole('checkbox').check(); await page.getByRole('button', { name: 'Continue to PR details →' }).click();
     await page.getByRole('button', { name: 'Create pull request', exact: true }).click(); await page.waitForSelector('dialog a'); expect(creates).toBe(1);
@@ -54,8 +54,8 @@ test('hierarchy → AI review findings → confirmed PR → open PR merge → ty
     expect(await page.locator('dialog').isVisible()).toBe(true); denyMerge = false;
     await page.getByRole('button', { name: 'Confirm merge into epic/delivery' }).click(); await page.waitForSelector('dialog', { state: 'detached' });
     await page.waitForFunction(() => document.querySelector('#git-root')?.textContent?.includes('No matching open pull requests.'));
-    await page.getByRole('button', { name: 'Branch trees' }).click();
-    await page.getByRole('button', { name: 'Inspect ticket/feature · history unavailable', exact: true }).click();
+    await page.getByRole('button', { name: 'Branch map' }).click();
+    await page.getByRole('button', { name: 'TICKET · TEST FIXTURE ticket', exact: true }).click();
     await page.getByRole('button', { name: 'Delete branch…' }).click();
     const typed = page.getByLabel('Type the exact branch name'); await typed.fill('wrong'); expect(await page.getByRole('button', { name: 'Delete branch', exact: true }).isDisabled()).toBe(true);
     await typed.fill(row.branch); await page.getByRole('checkbox').check(); await page.getByRole('button', { name: 'Delete branch', exact: true }).click();
