@@ -4456,14 +4456,24 @@ async function recoverUnpushedTickets() {
   }
 }
 
+/**
+ * A Stop belongs to the attempt it was pressed on. An attempt that ended another way first
+ * (e.g. failing while its sandbox was still provisioning) used to leave the flag behind, and
+ * the next build killed itself as soon as its agent started ("Stopped by you", LFG-8).
+ */
+async function oneAttempt<T>(ticketId: string, run: () => Promise<T>): Promise<T> {
+  try { return await run(); }
+  finally { cancelledTickets.delete(ticketId); }
+}
+
 async function executeTicket(ticketId: string, actorId?: string): Promise<void> {
-  return withTicketUsage(ticketId, actorId, "ticket_build", () => executeTicketInternal(ticketId, actorId));
+  return oneAttempt(ticketId, () => withTicketUsage(ticketId, actorId, "ticket_build", () => executeTicketInternal(ticketId, actorId)));
 }
 
 async function executeTicketApi(ticketId: string, useCodingAgent: boolean, actorId?: string, placement?: BuildPlacement): Promise<void> {
-  return withTicketUsage(ticketId, actorId, "ticket_build", () => executeTicketApiInternal(ticketId, useCodingAgent, actorId, placement));
+  return oneAttempt(ticketId, () => withTicketUsage(ticketId, actorId, "ticket_build", () => executeTicketApiInternal(ticketId, useCodingAgent, actorId, placement)));
 }
 
 async function executeTicketChat(ticketId: string, message: string, sender: string, actorId?: string): Promise<void> {
-  return withTicketUsage(ticketId, actorId, "ticket_chat", () => executeTicketChatInternal(ticketId, message, sender, actorId));
+  return oneAttempt(ticketId, () => withTicketUsage(ticketId, actorId, "ticket_chat", () => executeTicketChatInternal(ticketId, message, sender, actorId)));
 }
