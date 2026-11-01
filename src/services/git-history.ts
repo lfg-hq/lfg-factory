@@ -19,6 +19,7 @@ export async function buildHistory(provider: GitProvider, rows: HistoryRow[], sc
   const nodes = new Map<string, GitCommit>();
   for (const head of heads) {
     head.history = head.sha ? histories.get(head.sha) ?? null : null;
+    // Keep provider metadata verbatim, including null summary/date; never infer activity from load time.
     for (const c of head.history?.items || []) nodes.set(c.sha, c);
   }
   const edges = [...nodes.values()].flatMap(c => c.parents.map(parentSha => ({ parentSha, childSha: c.sha })));
