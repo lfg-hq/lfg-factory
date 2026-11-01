@@ -102,3 +102,6 @@ yarn-error.log
 
 # LFG Desktop local test environment (desktop/try.sh)
 .desktop-test/
+
+# Marketing video planning (local only)
+Videos/
