@@ -1,4 +1,16 @@
 import { z } from "zod";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+
+function developmentAuthSecret() {
+  if (process.env.BETTER_AUTH_SECRET || process.env.NODE_ENV === "production") return process.env.BETTER_AUTH_SECRET;
+  // Stable across restarts/rebuilds when data/ is persisted; never replace a key.
+  mkdirSync("./data", { recursive: true });
+  const path = "./data/.auth-secret";
+  try { writeFileSync(path, randomBytes(32).toString("hex"), { flag: "wx", mode: 0o600 }); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
+  return readFileSync(path, "utf8").trim();
+}
 
 const envSchema = z.object({
   // Database driver: "sqlite" for local dev/testing, "postgresql" for production
@@ -126,7 +138,7 @@ type RawEnv = z.infer<typeof envSchema>;
 export type Env = RawEnv & { POSTGRES_URL: string };
 
 function loadEnv(): Env {
-  const result = envSchema.safeParse(process.env);
+  const result = envSchema.safeParse({ ...process.env, BETTER_AUTH_SECRET: developmentAuthSecret() });
   if (!result.success) {
     console.error("Invalid environment variables:", result.error.format());
     process.exit(1);

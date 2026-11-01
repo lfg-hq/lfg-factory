@@ -50,6 +50,20 @@
       "when": 1793442108338,
       "tag": "0015_git_mutations",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793558428091,
+      "tag": "0016_venture",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793558428092,
+      "tag": "0017_venture_stream_lock",
+      "breakpoints": true
     }
   ]
 }

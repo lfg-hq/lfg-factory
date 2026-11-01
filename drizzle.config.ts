@@ -2,7 +2,7 @@ import { defineConfig } from "drizzle-kit";
 
 const isPg = process.env.DATABASE_DRIVER === "postgresql";
 
-const pgUrl = `postgresql://${process.env.POSTGRES_USER ?? "postgres"}:${encodeURIComponent(process.env.POSTGRES_PASSWORD ?? "")}@${process.env.POSTGRES_HOST ?? "localhost"}:${process.env.POSTGRES_PORT ?? "5432"}/${process.env.POSTGRES_DB ?? "lfg_node"}`;
+const pgUrl = process.env.DATABASE_URL?.startsWith("postgres") ? process.env.DATABASE_URL : `postgresql://${process.env.POSTGRES_USER ?? "postgres"}:${encodeURIComponent(process.env.POSTGRES_PASSWORD ?? "")}@${process.env.POSTGRES_HOST ?? "localhost"}:${process.env.POSTGRES_PORT ?? "5432"}/${process.env.POSTGRES_DB ?? "lfg_node"}`;
 
 export default defineConfig({
   schema: isPg

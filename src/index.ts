@@ -10,7 +10,8 @@ import { trimTrailingSlash } from "hono/trailing-slash";
 import { serveStatic } from "hono/bun";
 import { env } from "./config/env.ts";
 import landing from "./routes/landing.ts";
-import authRoutes from "./routes/auth.ts";
+import ventureApi from "./routes/api/venture.ts";
+import authRoutes, { handleGoogleCallback } from "./routes/auth.ts";
 import chatRoutes from "./routes/chat.ts";
 import instantRoutes from "./routes/instant.ts";
 import projectsRoutes from "./routes/projects.ts";
@@ -217,6 +218,7 @@ app.use("*", async (c, next) => {
 app.route("/", authRoutes);
 app.route("/", desktopRoutes);
 app.route("/", landing);
+app.route("/api/venture", ventureApi);
 app.route("/", chatRoutes);
 app.route("/", instantRoutes);
 app.route("/", projectsRoutes);
@@ -323,6 +325,9 @@ async function handleFetch(req: Request, server: import("bun").Server<WsData>): 
       }
     }
 
+    if (url.pathname === "/api/auth/callback/google") {
+      return handleGoogleCallback(req);
+    }
     return auth.handler(req);
   }
 

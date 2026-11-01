@@ -1,0 +1,126 @@
+{
+  "status": "implemented_with_live_workflow_unverified",
+  "prerequisites": [
+    {
+      "name": "Bun 1.4.x",
+      "reason": "Existing Bun web runtime and native SQLite adapter",
+      "verificationCommand": "cd /data/project && PATH=/data/tooling/bin:$PATH bun -e \"import {Database} from 'bun:sqlite'; const d=new Database(':memory:'); if(d.query('select 1 as n').get().n!==1)process.exit(1); d.close();\"",
+      "timeoutSeconds": 30,
+      "observedExitCode": 0,
+      "result": "passed"
+    },
+    {
+      "name": "Node and installed project dependencies",
+      "reason": "Drizzle CLI, TypeScript and installed AI SDK 6/Hono stack",
+      "verificationCommand": "cd /data/project && node -e \"if(Number(process.versions.node.split('.')[0])<22)process.exit(1); for(const p of ['ai','hono','drizzle-orm','drizzle-kit','typescript','playwright-core'])require.resolve(p);\"",
+      "timeoutSeconds": 30,
+      "observedExitCode": 0,
+      "result": "passed"
+    },
+    {
+      "name": "Application SQLite database/schema",
+      "reason": "Durable owner-scoped venture messages and sources",
+      "verificationCommand": "cd /data/project && PATH=/data/tooling/bin:$PATH bun -e \"import {db} from './src/config/db.ts'; import {ventureMessages,ventureSources,ventureConversations} from './src/db/schema/venture.ts'; for(const table of [ventureMessages,ventureSources,ventureConversations])await db.select().from(table).limit(1);\"",
+      "timeoutSeconds": 30,
+      "observedExitCode": 0,
+      "result": "passed"
+    },
+    {
+      "name": "Chromium headless browser",
+      "reason": "Approved responsive panel, streaming error and reload verification",
+      "verificationCommand": "cd /data/project && PATH=/data/tooling/bin:$PATH bun -e \"import {chromium} from 'playwright-core'; const b=await chromium.launch({executablePath:'/usr/bin/chromium',headless:true,args:['--no-sandbox','--disable-dev-shm-usage']}); try { const p=await b.newPage(); await p.goto('data:text/html,<title>capability</title>'); if(await p.title()!=='capability')process.exitCode=1; } finally { await b.close(); }\"",
+      "timeoutSeconds": 30,
+      "observedExitCode": 0,
+      "result": "passed"
+    },
+    {
+      "name": "Real platform model and Exa research",
+      "reason": "Mandatory real-provider adaptive analysis and public-source verification; currently missing credentials",
+      "verificationCommand": "cd /data/project && PATH=/data/tooling/bin:$PATH bun run scripts/verify-venture-provider.ts",
+      "timeoutSeconds": 30,
+      "observedExitCode": 1,
+      "result": "unavailable_missing_third_party_credentials"
+    },
+    {
+      "name": "Google OAuth client configuration",
+      "reason": "Existing Google-linked founder login; presence check only, not a live OAuth journey",
+      "verificationCommand": "cd /data/project && PATH=/data/tooling/bin:$PATH bun -e \"import {env} from './src/config/env.ts'; if(!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET)process.exit(1);\"",
+      "timeoutSeconds": 30,
+      "observedExitCode": 1,
+      "result": "unavailable_missing_third_party_credentials"
+    }
+  ],
+  "checks": [
+    {
+      "command": "cd /data/project && PATH=/data/tooling/bin:$PATH bun run typecheck",
+      "result": "passed"
+    },
+    {
+      "command": "cd /data/project && PATH=/data/tooling/bin:$PATH bun build src/index.ts --target=bun --outdir=/data/tmp/venture-build",
+      "result": "passed"
+    },
+    {
+      "command": "cd /data/project && PATH=/data/tooling/bin:$PATH bun run test:venture-analyst",
+      "result": "passed",
+      "evidence": "21 targeted fixture/integration/policy/OAuth/default tests"
+    },
+    {
+      "command": "cd /data/project && PATH=/data/tooling/bin:$PATH bun run test:venture-browser",
+      "result": "passed",
+      "evidence": "Real Chromium and HTTP/session/database; identities are labelled test fixtures; provider deliberately absent"
+    },
+    {
+      "command": "cd /data/project && node scripts/check-schema-parity.mjs",
+      "result": "passed"
+    },
+    {
+      "command": "cd /data/project && PATH=/data/tooling/bin:$PATH bun run scripts/verify-venture-provider.ts",
+      "result": "failed_missing_credentials",
+      "evidence": "No real-provider output or live sources verified; no fabricated fallback"
+    },
+    {
+      "command": "Google OAuth presence prerequisite",
+      "result": "failed_missing_credentials",
+      "evidence": "Google credential values absent; live OAuth unverified"
+    }
+  ],
+  "processes": [
+    {
+      "name": "web",
+      "workingDirectory": "/data/project",
+      "command": "bun start",
+      "environment": ".env or inherited resolved environment; default SQLite identity ./data/lfg.db",
+      "bind": "0.0.0.0:8080",
+      "logs": "stdout/stderr; platform collection/rotation",
+      "verification": "Normal start clean after local schema repair; health/landing 200 and private API 401; temporary process stopped"
+    }
+  ],
+  "workers": {
+    "additionalWorkers": [],
+    "note": "No venture worker. Existing application in-process jobs preserved."
+  },
+  "missingThirdPartySettings": [
+    "OPENAI_API_KEY",
+    "EXA_API_KEY",
+    "GOOGLE_CLIENT_ID",
+    "GOOGLE_CLIENT_SECRET"
+  ],
+  "liveEvidenceGaps": [
+    "Real authenticated Google-linked founder interview/research/reload journey",
+    "Live model adherence to profile-confirmation and untrusted-page instructions",
+    "Actual provider/search request IDs and real sources; fixture IDs do not count"
+  ],
+  "otherVerificationNotes": [
+    "PostgreSQL runtime not selected or exercised; paired schema and migration supplied and parity checked",
+    "Timeout branch uses test-triggered abort reason, not a 120-second wall-clock wait",
+    "Single web process is the selected architecture; per-user hourly admission is not a distributed multi-process limiter"
+  ],
+  "git": {
+    "baseRevision": "2c036f945a467626fc356cb2b8a799815d9e7d82",
+    "implementation": "uncommitted ticket changes",
+    "pushedCommit": null,
+    "mergedRevision": null,
+    "runningRevision": "base revision plus ticket work during stopped runtime checks"
+  },
+  "databaseRepair": "No prior DB existed. Migration-created empty DB preserved at data/recovery-20261028/migrated-empty-lfg.db; current empty DB initialized using checked-in schema via db:push. Not a data restoration."
+}
