@@ -4,7 +4,8 @@
     const root = document.getElementById('git-root'), pane = document.getElementById('git');
     if (!root || !pane) return;
     let data, refreshedAt, loading = false, view = 'branches', query = '', filter = 'all';
-    const sectionOpen = new Map();
+    const sectionOpen = new Map(), rowOrders = new Map();
+    let closeDrawer = () => {};
     function rememberSection(section, id, initiallyOpen = false) {
       section.open = sectionOpen.get(id) ?? initiallyOpen;
       section.addEventListener('toggle', () => { if (section.isConnected) sectionOpen.set(id, section.open); });
@@ -159,26 +160,48 @@
     }
     function row(r, kind) {
       const n = el('div', undefined, `git-branch git-${kind}`);
-      n.append(el('b', r.name), el('code', `${r.branch || 'No branch recorded'} → ${r.destination || 'Unknown destination'}`));
+      n.append(el('b', r.name), el('code', `Branch · ${r.branch || 'No branch recorded'}`), el('p', `Intended destination · ${r.destination || 'Unknown destination'}`));
+      n.append(el('code', `Current SHA · ${r.headSha || 'Unavailable'}\nDestination SHA · ${r.baseSha || 'Unavailable'}`));
+      if (r.parentEpicId) { const parent = data.epics.find(e => e.id === r.parentEpicId); n.append(el('p', `Parent epic · ${parent ? (parent.epicKey || '') + ' · ' + parent.name : r.parentEpicId}`)); }
+      if (r.defaultComparison) n.append(el('p', `${statusText(r.defaultComparison.integration, r.defaultComparison.branch)} · ${r.defaultComparison.integration.evidence}`), el('code', `Default base SHA · ${r.defaultComparison.baseSha || 'Unavailable'}`));
       const state = r.integration.status;
-      n.append(el('span', `${state === 'integrated' ? 'Integrated into' : state === 'not_integrated' ? 'Not integrated into' : 'Unknown integration into'} ${r.destination || 'unknown'}`, `git-badge git-${state}`));
+      n.append(el('span', statusText(r.integration, r.destination), `git-badge git-${state}`));
       n.append(el('small', !r.branch ? 'No branch recorded' : r.refState === 'absent' ? 'Branch not found in complete remote listing' : r.refState === 'unavailable' ? 'Remote ref unavailable · provider listing incomplete; refresh to verify' : `${r.integration.ahead ?? '?'} ahead · ${r.integration.behind ?? '?'} behind ${r.destination || 'unknown'}`));
       if (r.branch) n.append(el('small', r.integration.evidence));
       const commit = data.graph?.nodes.find(c => c.sha === r.headSha);
       n.append(el('p', commit?.summary || 'Commit summary unknown'), el('small', activityText(commit?.committedAt)));
       n.append(el('small', 'Checks / review status unknown · inspect PR for current provider state'));
-      if (r.activeUse.preview) n.append(el('span', 'Selected for preview', 'git-badge'));
+      if (r.activeUse.preview) n.append(el('span', 'Currently in Preview', 'git-badge'));
       if (r.activeUse.execution) n.append(el('span', 'Execution active', 'git-badge'));
       if (r.activeUse.queued) n.append(el('span', 'Queued · not executing', 'git-badge'));
-      for (const pr of r.pullRequests) n.append(link(pr));
-      if (data.canManageCode && r.headSha && r.branch && r.destination && !r.pullRequests.length) n.append(button('Create PR · review first', () => { root.querySelector('dialog')?.close(); startReview(r.branch, r.destination); }));
-      if (data.canManageCode && r.headSha && r.branch) n.append(button('Delete branch…', () => { root.querySelector('dialog')?.close(); deleteBranch(r); }));
+      n.append(el('h3', 'Pull requests · intended destination'));
+      for (const pr of r.pullRequests) n.append(link(pr), el('small', pr.draft ? 'PR state · Draft' : 'PR state · Open'));
+      if (!r.pullRequests.length) n.append(el('p', data.completeness.pullRequests ? 'No open PR for this destination.' : 'Open PRs unknown · listing incomplete. Open All open PRs to inspect loaded results.'));
+      if (data.canManageCode && r.headSha && r.branch && r.destination && !r.pullRequests.length) n.append(button('Create PR · review first', () => { closeDrawer(); startReview(r.branch, r.destination); }));
+      if (data.canManageCode && r.headSha && r.branch) n.append(button('Delete branch…', () => { closeDrawer(); deleteBranch(r); }));
       return n;
     }
     function inspect(r, historyHead) {
-      const { content } = dialog(r.branch || r.name);
-      if (historyHead?.historical) content.append(el('p', 'Selected historical PR head · not the current branch revision or proof of current integration.'), el('code', historyHead.sha));
-      content.append(row(r, 'details'));
+      const previous = document.activeElement;
+      closeDrawer();
+      const drawer = el('aside', undefined, 'git-details-drawer');
+      drawer.setAttribute('role', 'dialog'); drawer.setAttribute('aria-label', 'Branch details'); drawer.tabIndex = -1;
+      closeDrawer = () => { drawer.remove(); if (previous?.isConnected) previous.focus(); closeDrawer = () => {}; };
+      const close = button('Close ×', () => closeDrawer());
+      drawer.append(close, el('small', 'BRANCH DETAILS'), el('h2', r.name));
+      if (historyHead?.historical) drawer.append(el('p', 'Selected historical PR head · not the current branch revision or proof of current integration.'), el('code', historyHead.sha));
+      drawer.append(row(r, 'details'));
+      drawer.append(el('p', 'Included means current changes are in the named base, not proof of a merged PR or epic approval.'));
+      drawer.addEventListener('keydown', e => {
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeDrawer(); }
+        if (e.key === 'Tab') {
+          const focusable = [...drawer.querySelectorAll('button:not(:disabled),a[href],summary,[tabindex="0"]')];
+          const first = focusable[0], last = focusable[focusable.length - 1];
+          if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); }
+          else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
+        }
+      });
+      root.append(drawer); close.focus();
     }
     const svgEl = (tag, attrs, text) => {
       const n = document.createElementNS('http://www.w3.org/2000/svg', tag);
@@ -214,7 +237,7 @@
       return `Updated ${relative} · ${new Date(date).toLocaleString()}`;
     }
     const clip = (text, limit) => text.length > limit ? text.slice(0, limit - 1) + '…' : text;
-    function tree(scopeId, rows) {
+    function historyTree(scopeId, rows) {
       const wrap = el('div', undefined, 'git-tree');
       const graph = data.graph;
       if (!graph) {
@@ -310,6 +333,51 @@
       for (const r of rows.filter(r => !r.branch)) wrap.append(button(`${r.name} · No branch recorded`, () => inspect(r)));
       return wrap;
     }
+    function statusText(integration, base) {
+      return `${integration?.status === 'integrated' ? '✓ Included in' : integration?.status === 'not_integrated' ? '○ Not included in' : '? Unknown in'} ${base || 'unknown destination'}`;
+    }
+    function ordered(scope, rows, compareRows) {
+      const prior = rowOrders.get(scope) || [];
+      const fresh = rows.filter(r => !prior.includes(r.id)).sort(compareRows);
+      const order = [...prior, ...fresh.map(r => r.id)]; rowOrders.set(scope, order);
+      return [...rows].sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+    }
+    function statusMap(scope, rows, base, overview = false) {
+      const scroll = el('div', undefined, 'git-map-scroll');
+      const map = el('div', undefined, overview ? 'git-status-map git-overview-map' : 'git-status-map');
+      for (const title of [overview ? 'Epic / other branch' : 'Ticket / actual branch', 'Branch map · status summary', `Changes in ${base || 'destination'}?`, 'PR']) map.append(el('div', title, 'git-map-colhead'));
+      const time = r => Math.max(activity(r.headSha), ...(r.tickets || []).map(t => activity(t.headSha)));
+      const sorted = ordered(scope, rows, (a, b) => {
+        const at = time(a), bt = time(b);
+        return (at === bt ? 0 : at > bt ? -1 : 1) || stable(a.branch || '', b.branch || '') || stable(a.id, b.id);
+      });
+      for (const r of sorted) {
+        const comparison = overview ? r.defaultComparison?.integration : r.integration;
+        const destination = overview ? data.defaultBranch.branch : base || r.destination;
+        const state = comparison?.status || 'unknown';
+        const name = el('div', undefined, 'git-map-cell git-map-name'); name.dataset.rowId = r.id;
+        const kind = r.tickets ? 'EPIC' : r.id.startsWith('branch:') ? 'OTHER BRANCH' : 'TICKET';
+        const select = button(`${kind}${r.ticketKey || r.epicKey ? ' · ' + (r.ticketKey || r.epicKey) : ''} · ${r.name}`, () => inspect(r));
+        select.title = r.name; select.className = 'git-map-select'; select.dataset.selectId = r.id;
+        name.append(select, el('code', `BRANCH · ${r.branch || 'No branch recorded'}`));
+        const existence = r.refState === 'absent' ? 'Branch absent' : r.refState === 'unavailable' ? 'Branch existence unknown' : !r.branch ? 'No branch recorded' : 'Branch exists';
+        name.append(el('small', `${existence}${r.activeUse?.preview === true ? ' · Currently in Preview' : ''}`));
+        const lane = el('div', undefined, `git-map-cell git-status-lane git-${state}`);
+        const svg = svgEl('svg', { viewBox: '0 0 280 60', role: 'img', 'aria-label': `Status summary: ${statusText(comparison, destination)}; not commit ancestry` });
+        svg.append(svgEl('path', { d: 'M0 14H280', class: 'git-shared-line' }), svgEl('path', { d: state === 'integrated' ? 'M16 14Q32 14 44 40H202Q220 40 236 14' : 'M16 14Q32 14 44 40H244', class: 'git-status-line' }), svgEl('circle', { cx: state === 'integrated' ? 236 : 244, cy: state === 'integrated' ? 14 : 40, r: 4 }));
+        if (r.branch) lane.append(svg);
+        else lane.append(el('small', 'No branch · association only'));
+        const status = el('div', undefined, `git-map-cell git-${state}`);
+        status.append(el('span', statusText(comparison, destination)));
+        status.append(el('small', comparison?.ahead == null ? 'Comparison unavailable' : `${comparison.ahead} ahead · ${comparison.behind ?? '?'} behind`));
+        if (overview && r.destination !== destination) status.append(el('small', `Parent destination · ${r.destination || 'Unknown'}`));
+        const prs = el('div', undefined, 'git-map-cell git-map-pr');
+        for (const pr of r.pullRequests) prs.append(link(pr), el('small', pr.draft ? 'Draft PR' : 'Open PR'));
+        if (!r.pullRequests.length) prs.append(el('small', data.completeness.pullRequests ? 'No open PR' : 'Open PRs unknown'));
+        map.append(name, lane, status, prs);
+      }
+      scroll.append(map); return scroll;
+    }
     function renderContent(content) {
       content.replaceChildren();
       if (view === 'prs') {
@@ -323,15 +391,19 @@
           if (data.canManageCode) n.append(button(p.draft ? 'Draft · inspect blockers' : 'Review & merge', () => mergePR(p)));
           content.append(n);
         }
-        if (!prs.length) content.append(el('p', 'No matching open pull requests.'));
+        if (!prs.length) content.append(el('p', data.completeness.pullRequests ? 'No matching open pull requests.' : 'No matching open PRs loaded · repository listing incomplete; total unknown.'));
         content.append(el('small', `${prs.length} matching · ${data.pullRequests.length} loaded repository PRs${data.completeness.pullRequests ? '' : ' · incomplete'}`));
         return;
       }
-      const pending = allRows().filter(r => matches(r) && r.branch && r.integration.status !== 'integrated');
-      content.append(el('h3', 'Pending branches'), el('small', 'Earlier commits → Latest · Select a branch to inspect'), tree('pending', pending));
-      content.append(el('p', '● Commit · Curves show observed splits / joins only · Scroll horizontally for history', 'git-legend'));
+      const defaultBranch = data.defaultBranch.branch;
+      const legend = el('p', undefined, 'git-legend');
+      legend.append(el('span', '✓ Green: Included', 'git-integrated'), el('span', '○ Amber: Not included', 'git-not_integrated'), el('span', '? Neutral: Unknown / shared context', 'git-unknown')); content.append(legend);
+      content.append(el('h3', `Repository overview · ${defaultBranch}`), el('p', 'Branch-status summary, not exact commit chronology. Included means changes in the named base—not PR merge or epic approval.', 'git-map-note'));
+      const pending = [...data.epics, ...data.other].filter(r => r.branch && (r.defaultComparison?.integration.status || 'unknown') !== 'integrated' && (filter === 'all' || (r.defaultComparison?.integration.status || 'unknown') === filter)).filter(r => `${r.name} ${r.branch}`.toLowerCase().includes(query.toLowerCase()));
+      content.append(statusMap('overview', pending, defaultBranch, true));
+      if (!pending.length) content.append(el('p', data.completeness.branches && data.completeness.comparisons ? 'No matching pending epic or other branches in the loaded comparisons.' : 'No pending branches loaded · repository data incomplete.'));
       const epicActivity = e => Math.max(activity(e.headSha), ...e.tickets.map(t => activity(t.headSha)));
-      const epics = [...data.epics].sort((a, b) => {
+      const epics = ordered('epics', data.epics, (a, b) => {
         const at = epicActivity(a), bt = epicActivity(b);
         return (at === bt ? 0 : at > bt ? -1 : 1) || stable(a.name, b.name) || stable(a.headSha || '', b.headSha || '') || stable(a.id, b.id);
       });
@@ -339,22 +411,30 @@
         const rows = [epic, ...epic.tickets].filter(matches);
         if (!rows.length) continue;
         const section = el('details', undefined, 'git-epic-tree'), header = el('summary', undefined, 'git-heading');
-        rememberSection(section, epic.id, epics.indexOf(epic) === 0);
-        const title = el('div'); title.append(el('h3', `${epic.epicKey || 'Epic'} · ${epic.name}`), el('small', `${Number.isFinite(epicActivity(epic)) ? activityText(new Date(epicActivity(epic)).toISOString()) : 'Update time unknown'} · ${epic.ticketCounts.integrated} integrated · ${epic.ticketCounts.notIntegrated} pending · ${epic.ticketCounts.unknown} unknown`));
+        rememberSection(section, epic.id, true);
+        const title = el('div'); title.append(el('h3', `${epic.epicKey || 'Epic'} · ${epic.name}`), el('small', `${Number.isFinite(epicActivity(epic)) ? activityText(new Date(epicActivity(epic)).toISOString()) : 'Update time unknown'} · ${epic.ticketCounts.integrated} included in this epic · ${epic.ticketCounts.notIntegrated} not included · ${epic.ticketCounts.unknown} unknown`));
         header.append(title);
-        if (epic.branch) {
-          if (epic.pullRequests.length) header.append(button('View open PR', () => inspect(epic)));
-          else if (data.canManageCode && epic.headSha && epic.destination) header.append(button('Review & create PR', () => startReview(epic.branch, epic.destination)));
-          else header.append(button('Branch details', () => inspect(epic)));
-        }
-        section.append(header, tree(epic.id, rows)); content.append(section);
+        header.append(button('Epic branch details', e => { e.preventDefault(); inspect(epic); }));
+        const base = el('p', `BRANCH · ${epic.branch || 'No branch recorded'} · Intended parent destination · ${epic.destination || 'Unknown'}`, 'git-map-note');
+        section.append(header, base, statusMap(epic.id, rows.filter(r => r.id !== epic.id), epic.branch)); content.append(section);
       }
       const other = data.other.filter(matches), section = el('details', undefined, 'git-epic-tree');
       rememberSection(section, 'other');
-      section.append(el('summary', 'Other branches · No epic'), tree('other', other)); content.append(section);
+      section.append(el('summary', 'Other branches · No epic'), statusMap('other', other)); content.append(section);
+      const advanced = el('details', undefined, 'git-advanced');
+      rememberSection(advanced, 'advanced');
+      advanced.append(el('summary', 'Older commits (advanced)'));
+      const history = el('div'); advanced.append(history);
+      const fillHistory = () => {
+        if (!advanced.open || history.childNodes.length) return;
+        history.append(el('p', 'Actual provider ancestry · partial history boundaries are explicit.'), el('h3', 'Repository history context'), historyTree('pending', allRows()));
+        for (const epic of data.epics) history.append(el('h3', `${epic.epicKey || 'Epic'} · ${epic.name}`), historyTree(epic.id, [epic, ...epic.tickets]));
+        if (data.other.length) history.append(el('h3', 'Other branches · No epic'), historyTree('other', data.other));
+      };
+      advanced.addEventListener('toggle', fillHistory); fillHistory(); content.append(advanced);
     }
     function render() {
-      root.replaceChildren();
+      closeDrawer(); root.replaceChildren();
       const header = el('div', undefined, 'git-heading'), actions = el('div', undefined, 'git-header-actions');
       actions.append(button('Saved reviews', savedReviews), button('Refresh', () => load(true)));
       header.append(el('h2', 'Git'), actions); root.append(header);
@@ -362,11 +442,11 @@
       root.append(el('small', `${data.repository} · ${data.canManageCode ? 'Review-first actions' : 'Read-only access'} · Refreshed ${refreshedAt}`));
       if (!data.completeness.complete) notice(`Partial / unknown data — check access and refresh. ${data.completeness.errors.map(e => e.code).join(', ')} · Correlation ID: ${data.correlationId}`);
       const controls = el('div', undefined, 'git-controls');
-      const branches = button('Branch trees', () => { view = 'branches'; render(); }); branches.setAttribute('aria-pressed', String(view === 'branches'));
+      const branches = button('Branch map', () => { view = 'branches'; render(); }); branches.setAttribute('aria-pressed', String(view === 'branches'));
       const prs = button('All open PRs', () => { view = 'prs'; render(); }); prs.setAttribute('aria-pressed', String(view === 'prs'));
       const search = el('input'); search.type = 'search'; search.placeholder = 'Search branches or pull requests'; search.setAttribute('aria-label', search.placeholder); search.value = query;
       const select = el('select'); select.setAttribute('aria-label', 'Integration status filter');
-      for (const [value, title] of [['all', 'All statuses'], ['integrated', 'Integrated'], ['not_integrated', 'Not integrated'], ['unknown', 'Unknown']]) { const o = el('option', title); o.value = value; select.append(o); }
+      for (const [value, title] of [['all', 'All statuses'], ['integrated', 'Included'], ['not_integrated', 'Not included'], ['unknown', 'Unknown']]) { const o = el('option', title); o.value = value; select.append(o); }
       select.value = filter; select.hidden = view === 'prs';
       const content = el('section');
       search.addEventListener('input', () => { query = search.value; renderContent(content); });
