@@ -14,7 +14,10 @@ test('horizontal shared ancestry, branch details, history loading, workspace tab
   const epic = {...row,id:'epic',name:'Git branches and pull requests',epicKey:'E2',branch:'epic/work',headSha:sha(6),destination:'main',tickets:[row,branchless,absent,unavailable],ticketCounts:counts};
   const second = {...epic,id:'second',epicKey:'E1',name:'Venture Analyst',branch:'epic/analyst',headSha:sha(7),tickets:[]};
   const nodes = [{sha:sha(1),parents:[sha(0)]},{sha:sha(2),parents:[sha(1)]},{sha:sha(3),parents:[sha(2)]},{sha:sha(4),parents:[sha(2)]},{sha:sha(5),parents:[sha(4)]},{sha:sha(6),parents:[sha(3),sha(4)]},{sha:sha(7),parents:[sha(2)]}];
-  const rows = [epic,row,absent,unavailable,second];
+  nodes.forEach(n => Object.assign(n, {summary:n.sha === sha(5) ? 'TEST FIXTURE latest summary <script>' : 'TEST FIXTURE older summary', committedAt:n.sha === sha(5) ? '2026-11-01T15:59:00.000Z' : n.sha === sha(6) ? '2026-10-31T10:00:00.000Z' : null}));
+  const twin = {...row,id:'twin',branch:'ticket/z-twin',name:'TEST FIXTURE shared head',pullRequests:[{id:43,title:'TEST FIXTURE draft',draft:true,merged:false,url:'https://github.com/fixture/repo/pull/43'}]};
+  epic.tickets.push(twin);
+  const rows = [second,epic,twin,row,absent,unavailable]; // Deliberately not activity-sorted.
   const fixture = {canManageCode:true,repository:'TEST FIXTURE / repository',correlationId:'fixture-correlation',defaultBranch:{branch:'main'},epics:[epic,second],other:[],graph:{nodes,heads:rows.map(r=>({rowId:r.id,branch:r.branch,sha:r.headSha,refState:r.refState,history:r.headSha?{complete:r.id!=='ticket',nextPage:r.id==='ticket'?2:null,errors:[]}:null})),scopes:[{id:'pending',rowIds:rows.map(r=>r.id)},{id:'epic',rowIds:[epic.id,...epic.tickets.map(t=>t.id)]},{id:'second',rowIds:['second']},{id:'other',rowIds:[]}]},pullRequests:[{id:42,title:'External draft fixture',url:'https://github.com/fixture/repo/pull/42',source:'fork/work',sourceRepo:null,destination:'epic/work',draft:true}],totals:{epics:counts,tickets:counts,other:counts},completeness:{complete:false,pullRequests:true,errors:[{code:'FIXTURE_PARTIAL'}]}};
   const html = String(await ChatPage({user:{id:'fixture',name:'Fixture',email:'fixture@example.invalid'},projectId:'fixture-project',projectName:'TEST FIXTURE'})).replace(/<script\b[^>]*>[\s\S]*?<\/script>/g,'').replace('</body>','<script src="/public/js/artifacts.js"></script><script src="/public/js/tab-overflow.js"></script><script src="/public/js/git-tab.js"></script></body>');
   let denied=false, historyCalls=0;
@@ -41,12 +44,36 @@ test('horizontal shared ancestry, branch details, history loading, workspace tab
     expect(await page.locator('#git-root img').count()).toBe(0);
     const viewport=page.locator('.git-graph-viewport').first();
     expect(await viewport.locator('.git-commit').count()).toBe(7);
+    const labels = viewport.locator('.git-graph-label');
+    expect(await labels.evaluateAll(ns=>ns.map(n=>n.getAttribute('aria-label')))).toEqual(['Inspect ticket/work','Inspect ticket/z-twin','Inspect epic/work','Inspect epic/analyst']);
+    const textPositions = await labels.evaluateAll(ns=>ns.map(n=>({x:Number(n.querySelector('text')!.getAttribute('x')),y:Number(n.querySelector('text')!.getAttribute('y'))})));
+    expect(textPositions.every(p=>p.x===48)).toBe(true); // Lane-adjacent, independent of latest commit rank.
+    expect(new Set(textPositions.map(p=>p.y)).size).toBe(4); // Shared head label collision avoided.
+    expect(textPositions.map(p=>p.y)).toEqual([...textPositions.map(p=>p.y)].sort((a,b)=>a-b));
+    expect(await viewport.innerText()).toContain('TEST FIXTURE latest summary <script>');
+    expect(await viewport.innerText()).toContain('Update time unknown');
+    expect(await viewport.innerText()).toContain('2 ahead · 0 behind → epic/work');
+    expect(await viewport.innerText()).not.toMatch(/checks passed|approved/);
+    expect(await viewport.innerText()).toContain('PR #43 · Draft');
+    expect(await viewport.innerText()).toContain('Shared head');
+    expect(await page.locator('.git-epic-tree summary').first().innerText()).toContain('E2');
+    expect(await page.locator('.git-epic-tree').first().evaluate(n=>(n as HTMLDetailsElement).open)).toBe(true);
+    expect(await page.locator('.git-epic-tree').nth(1).evaluate(n=>(n as HTMLDetailsElement).open)).toBe(false);
+    expect(await page.locator('#git-root').evaluate(n=>getComputedStyle(n).fontSize)).toBe('13px');
     const mergeEdges=viewport.locator(`path[data-child-sha="${sha(6)}"]`);
     expect(await mergeEdges.count()).toBe(2);
     const positions=await viewport.locator('[data-parent-sha]').evaluateAll(paths=>paths.map(p=>p.getAttribute('d')));
     expect(positions.every(d=>{const ns=d!.match(/[\d.]+/g)!.map(Number);return ns[0]!<ns[6]!;})).toBe(true);
     mkdirSync('/data/git-evidence',{recursive:true});
     await page.locator('#artifacts-panel').screenshot({path:'/data/git-evidence/desktop.png'});
+    await page.locator('html').evaluate(n=>n.setAttribute('data-theme','light'));
+    await page.locator('#artifacts-panel').screenshot({path:'/data/git-evidence/desktop-light.png'});
+    const reference = await browser.newPage({viewport:{width:1100,height:1600}});
+    await reference.setContent(readFileSync('.lfg/context/b31a0073-38d9-44b9-b497-00a29d721fe9.html','utf8'));
+    await reference.screenshot({path:'/data/git-evidence/approved-desktop.png'});
+    await reference.setViewportSize({width:390,height:844});
+    await reference.screenshot({path:'/data/git-evidence/approved-narrow.png'});
+    await reference.close();
     const label=page.getByRole('button',{name:'Inspect ticket/work',exact:true}).first();await label.focus();await page.keyboard.press('Enter');
     expect(await page.locator('dialog').innerText()).toContain('ticket/work → epic/work');
     expect(await page.locator('dialog').innerText()).toContain('<img src=x');
@@ -62,6 +89,11 @@ test('horizontal shared ancestry, branch details, history loading, workspace tab
     expect(historyCalls).toBe(1);
     await page.getByRole('button',{name:'All open PRs',exact:true}).click();expect(await page.locator('#git-root').innerText()).toContain('External draft fixture · Draft');
     await page.getByRole('button',{name:'Branch trees',exact:true}).click();
+    const epicSummary = page.locator('.git-epic-tree summary').first();
+    await epicSummary.focus(); await page.keyboard.press('Enter');
+    expect(await page.locator('.git-epic-tree').first().evaluate(n=>(n as HTMLDetailsElement).open)).toBe(false);
+    await page.keyboard.press('Enter');
+    expect(await page.locator('.git-epic-tree').first().evaluate(n=>(n as HTMLDetailsElement).open)).toBe(true);
     await page.setViewportSize({width:390,height:844});
     await page.locator('#artifacts-panel').evaluate(n=>{(n as HTMLElement).style.width='390px';(n as HTMLElement).style.minWidth='0';});
     await page.locator('#artifacts-tabs-list').evaluate(n=>{(n as HTMLElement).style.flex='0 0 160px';(n as HTMLElement).style.width='160px';window.dispatchEvent(new Event('resize'));});
