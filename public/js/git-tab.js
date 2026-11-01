@@ -4,6 +4,11 @@
     const root = document.getElementById('git-root'), pane = document.getElementById('git');
     if (!root || !pane) return;
     let data, refreshedAt, loading = false, view = 'branches', query = '', filter = 'all';
+    const sectionOpen = new Map();
+    function rememberSection(section, id, initiallyOpen = false) {
+      section.open = sectionOpen.get(id) ?? initiallyOpen;
+      section.addEventListener('toggle', () => { if (section.isConnected) sectionOpen.set(id, section.open); });
+    }
     const el = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
     const button = (text, action) => { const b = el('button', text); b.type = 'button'; b.addEventListener('click', action); return b; };
     const notice = (text) => root.append(el('p', text, 'git-notice'));
@@ -159,6 +164,9 @@
       n.append(el('span', `${state === 'integrated' ? 'Integrated into' : state === 'not_integrated' ? 'Not integrated into' : 'Unknown integration into'} ${r.destination || 'unknown'}`, `git-badge git-${state}`));
       n.append(el('small', !r.branch ? 'No branch recorded' : r.refState === 'absent' ? 'Branch not found in complete remote listing' : r.refState === 'unavailable' ? 'Remote ref unavailable · provider listing incomplete; refresh to verify' : `${r.integration.ahead ?? '?'} ahead · ${r.integration.behind ?? '?'} behind ${r.destination || 'unknown'}`));
       if (r.branch) n.append(el('small', r.integration.evidence));
+      const commit = data.graph?.nodes.find(c => c.sha === r.headSha);
+      n.append(el('p', commit?.summary || 'Commit summary unknown'), el('small', activityText(commit?.committedAt)));
+      n.append(el('small', 'Checks / review status unknown · inspect PR for current provider state'));
       if (r.activeUse.preview) n.append(el('span', 'Selected for preview', 'git-badge'));
       if (r.activeUse.execution) n.append(el('span', 'Execution active', 'git-badge'));
       if (r.activeUse.queued) n.append(el('span', 'Queued · not executing', 'git-badge'));
@@ -190,6 +198,22 @@
         render();
       } catch (e) { trigger.after(el('p', e.message, 'git-notice')); trigger.disabled = false; }
     }
+    function activity(sha) {
+      const date = data.graph?.nodes.find(c => c.sha === sha)?.committedAt;
+      return date && Number.isFinite(Date.parse(date)) ? Date.parse(date) : -Infinity;
+    }
+    const stable = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+    function headOrder(a, b) {
+      const at = activity(a.sha), bt = activity(b.sha);
+      return (at === bt ? 0 : at > bt ? -1 : 1) || stable(a.branch, b.branch) || stable(a.sha || '', b.sha || '') || stable(a.rowId, b.rowId);
+    }
+    function activityText(date) {
+      if (!date || !Number.isFinite(Date.parse(date))) return 'Update time unknown';
+      const minutes = Math.max(0, Math.floor((Date.now() - Date.parse(date)) / 60000));
+      const relative = minutes < 1 ? 'just now' : minutes < 60 ? `${minutes} min ago` : minutes < 1440 ? `${Math.floor(minutes / 60)} hr ago` : `${Math.floor(minutes / 1440)} ${Math.floor(minutes / 1440) === 1 ? 'day' : 'days'} ago`;
+      return `Updated ${relative} · ${new Date(date).toLocaleString()}`;
+    }
+    const clip = (text, limit) => text.length > limit ? text.slice(0, limit - 1) + '…' : text;
     function tree(scopeId, rows) {
       const wrap = el('div', undefined, 'git-tree');
       const graph = data.graph;
@@ -199,22 +223,24 @@
       }
       else {
         const scope = graph.scopes.find(s => s.id === scopeId);
-        const heads = graph.heads.filter(h => scope?.rowIds.includes(h.rowId) && (h.rowId === 'default' && rows.length > 0 || rows.some(r => r.id === h.rowId))).sort((a, b) => Number(b.rowId === 'default') - Number(a.rowId === 'default') || a.branch.localeCompare(b.branch) || (a.sha || '').localeCompare(b.sha || ''));
+        const heads = graph.heads.filter(h => scope?.rowIds.includes(h.rowId) && (h.rowId === 'default' && rows.length > 0 || rows.some(r => r.id === h.rowId))).sort(headOrder);
         const known = new Map(graph.nodes.map(n => [n.sha, n]));
-        const selected = new Map(), lanes = new Map(), laneColors = new Map(); let nextLane = 0;
+        const visibleHeads = heads.filter(h => h.sha && known.has(h.sha));
+        const headLanes = new Map();
+        visibleHeads.forEach((h, lane) => { if (!headLanes.has(h.sha)) headLanes.set(h.sha, lane); });
+        const selected = new Map(), lanes = new Map(), laneColors = new Map(); let nextLane = visibleHeads.length;
+        // Reserve sorted head lanes before traversal; shared SHA nodes still occur only once.
         // A head owns its first-parent lane until reaching an already shared node.
         function walk(sha, lane) {
           if (selected.has(sha) || !known.has(sha)) return;
+          lane = headLanes.get(sha) ?? lane;
           const c = known.get(sha); selected.set(sha, c); lanes.set(sha, lane);
-          c.parents.forEach((p, i) => walk(p, i === 0 ? lane : nextLane++));
+          c.parents.forEach((p, i) => { if (!selected.has(p) && known.has(p)) walk(p, i === 0 ? lane : nextLane++); });
         }
-        heads.forEach(h => {
-          if (h.sha && !selected.has(h.sha)) {
-            const start = nextLane;
-            walk(h.sha, nextLane++);
-            const hash = [...h.branch].reduce((n, c) => (n * 31 + c.charCodeAt(0)) >>> 0, 0);
-            for (let lane = start; lane < nextLane; lane++) laneColors.set(lane, h.rowId === 'default' ? 4 : (hash + lane - start) % 4);
-          }
+        visibleHeads.forEach((h, lane) => {
+          const hash = [...h.branch].reduce((n, c) => (n * 31 + c.charCodeAt(0)) >>> 0, 0);
+          laneColors.set(lane, h.rowId === 'default' ? 4 : hash % 4);
+          walk(h.sha, lane);
         });
         const ranks = new Map(), visiting = new Set();
         function rank(sha) {
@@ -226,20 +252,14 @@
           visiting.delete(sha); ranks.set(sha, value); return value;
         }
         [...selected.keys()].forEach(rank);
-        const maxRank = Math.max(0, ...ranks.values()), step = Math.max(70, 660 / Math.max(1, maxRank)), labelX = 90 + maxRank * step;
-        const labelSlots = new Set();
-        const labels = heads.filter(h => h.sha && selected.has(h.sha)).map(h => {
-          let lane = lanes.get(h.sha);
-          while (labelSlots.has(lane)) lane++;
-          labelSlots.add(lane);
-          return { h, lane };
-        });
-        const height = Math.max(130, (Math.max(nextLane, ...[...labelSlots].map(l => l + 1)) + 1) * 58);
-        const width = Math.max(1000, labelX + Math.max(320, ...heads.map(h => h.branch.length * 8 + 80)));
+        const maxRank = Math.max(0, ...ranks.values()), step = Math.max(24, 900 / Math.max(1, maxRank));
+        const labels = visibleHeads.map((h, lane) => ({ h, lane }));
+        const height = Math.max(84, nextLane * 64 + 20);
+        const width = Math.max(1000, 80 + maxRank * step);
         const viewport = el('div', undefined, 'git-graph-viewport'); viewport.tabIndex = 0;
         viewport.setAttribute('aria-label', 'Commit history. Scroll horizontally for later commits.');
         const svg = svgEl('svg', { width, height, role: 'group', 'aria-label': 'Horizontal commit ancestry: earlier to latest' });
-        const x = sha => 40 + ranks.get(sha) * step, y = sha => 35 + lanes.get(sha) * 58;
+        const x = sha => 30 + ranks.get(sha) * step, y = sha => 38 + lanes.get(sha) * 64;
         const color = lane => `var(--git-lane-${laneColors.get(lane) ?? 0})`;
         for (const c of selected.values()) for (const p of c.parents) {
           if (!selected.has(p)) continue; // Unobserved parents are boundaries, never fabricated nodes.
@@ -247,18 +267,26 @@
           svg.append(svgEl('path', { d: `M${x(p)} ${y(p)} C${mid} ${y(p)} ${mid} ${y(c.sha)} ${x(c.sha)} ${y(c.sha)}`, fill: 'none', stroke: color(lanes.get(c.sha)), 'stroke-width': 3, 'data-parent-sha': p, 'data-child-sha': c.sha }));
         }
         for (const c of selected.values()) {
-          const pick = svgEl('g', { tabindex: 0, role: 'button', 'aria-label': `Commit ${c.sha}`, class: 'git-commit' });
-          pick.append(svgEl('circle', { cx: x(c.sha), cy: y(c.sha), r: 5, stroke: color(lanes.get(c.sha)), 'stroke-width': 3 }), svgEl('title', {}, c.sha));
-          const action = () => { const r = rows.find(r => r.headSha === c.sha); if (r) inspect(r); else { const { content } = dialog('Commit'); content.append(el('code', c.sha), el('p', `Observed parents: ${c.parents.join(', ') || 'Root commit'}`)); } };
+          const pick = svgEl('g', { tabindex: 0, role: 'button', 'aria-label': `Commit ${c.sha} · ${c.summary || 'Summary unknown'}`, class: 'git-commit' });
+          pick.append(svgEl('circle', { cx: x(c.sha), cy: y(c.sha), r: 5, stroke: color(lanes.get(c.sha)), 'stroke-width': 3 }), svgEl('title', {}, `${c.sha}\n${c.summary || 'Summary unknown'}\n${activityText(c.committedAt)}`));
+          const action = () => { const r = rows.find(r => r.headSha === c.sha); if (r) inspect(r); else { const { content } = dialog('Commit'); content.append(el('code', c.sha), el('p', c.summary || 'Commit summary unknown'), el('p', activityText(c.committedAt)), el('p', `Observed parents: ${c.parents.join(', ') || 'Root commit'}`)); } };
           pick.addEventListener('click', action); pick.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); action(); } });
           svg.append(pick);
         }
         for (const { h, lane } of labels) {
-          const r = rows.find(r => r.id === h.rowId), labelY = 35 + lane * 58;
+          const r = rows.find(r => r.id === h.rowId), labelY = 38 + lane * 64, commit = known.get(h.sha);
+          const labelX = 48;
+          const name = r ? `${r.ticketKey || r.epicKey || ''}${r.ticketKey || r.epicKey ? ' · ' : ''}${r.name}` : h.branch;
           const label = svgEl('g', { tabindex: 0, role: 'button', 'aria-label': `Inspect ${h.branch}${h.historical ? ' historical PR head' : ''}`, class: 'git-graph-label' });
-          // Muted leaders attach labels, not commit ancestry.
-          label.append(svgEl('path', { d: `M${x(h.sha) + 8} ${y(h.sha)} L${labelX - 10} ${labelY}`, class: 'git-label-leader' }));
-          label.append(svgEl('text', { x: labelX, y: labelY }, h.branch), svgEl('text', { x: labelX, y: labelY + 17, class: 'git-graph-hint' }, `${h.sha.slice(0, 10)} · ${h.historical ? 'Historical PR head' : r?.integration.status || 'Shared history · context only'}`));
+          // Fixed non-overlapping text columns beside each lane, never remote end callouts.
+          label.append(svgEl('rect', { x: labelX - 8, y: labelY - 30, width: 264, height: 23, rx: 4, class: 'git-label-pill' }));
+          label.append(svgEl('text', { x: labelX, y: labelY - 14 }, clip(name, 37)), svgEl('title', {}, `${h.branch}\n${commit?.summary || 'Commit summary unknown'}\n${activityText(commit?.committedAt)}`));
+          label.append(svgEl('text', { x: 330, y: labelY - 14, class: 'git-graph-summary' }, clip(commit?.summary || 'Commit summary unknown', 62)));
+          const prs = r?.pullRequests || [];
+          label.append(svgEl('text', { x: 790, y: labelY - 14, class: 'git-graph-hint' }, clip(prs.length ? prs.map(p => `PR #${p.id} · ${p.draft ? 'Draft' : p.merged ? 'Merged' : 'Open'}`).join(' · ') : data.completeness.pullRequests ? 'No open PR' : 'Open PRs unknown', 30)));
+          const comparison = r ? `${r.integration.ahead ?? '?'} ahead · ${r.integration.behind ?? '?'} behind → ${r.destination || 'Unknown destination'}` : 'Shared history · context only';
+          label.append(svgEl('text', { x: labelX, y: labelY + 18, class: 'git-graph-hint' }, clip(`${h.historical ? 'Historical PR head · ' : ''}${lanes.get(h.sha) !== lane ? `Shared head ${h.sha.slice(0, 10)} · ` : ''}${comparison}`, 95)));
+          label.append(svgEl('text', { x: 620, y: labelY + 18, class: 'git-graph-hint' }, clip(activityText(commit?.committedAt), 57)));
           const action = () => { if (r) inspect(r, h); else { const { content } = dialog(h.branch); content.append(el('code', h.sha), el('p', 'Default branch · shared historical context')); } };
           label.addEventListener('click', action); label.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); action(); } });
           svg.append(label);
@@ -302,11 +330,17 @@
       const pending = allRows().filter(r => matches(r) && r.branch && r.integration.status !== 'integrated');
       content.append(el('h3', 'Pending branches'), el('small', 'Earlier commits → Latest · Select a branch to inspect'), tree('pending', pending));
       content.append(el('p', '● Commit · Curves show observed splits / joins only · Scroll horizontally for history', 'git-legend'));
-      for (const epic of data.epics) {
+      const epicActivity = e => Math.max(activity(e.headSha), ...e.tickets.map(t => activity(t.headSha)));
+      const epics = [...data.epics].sort((a, b) => {
+        const at = epicActivity(a), bt = epicActivity(b);
+        return (at === bt ? 0 : at > bt ? -1 : 1) || stable(a.name, b.name) || stable(a.headSha || '', b.headSha || '') || stable(a.id, b.id);
+      });
+      for (const epic of epics) {
         const rows = [epic, ...epic.tickets].filter(matches);
         if (!rows.length) continue;
-        const section = el('section', undefined, 'git-epic-tree'), header = el('div', undefined, 'git-heading');
-        const title = el('div'); title.append(el('h3', `${epic.epicKey || 'Epic'} · ${epic.name}`), el('small', `${epic.ticketCounts.integrated} ticket branches integrated · ${epic.ticketCounts.notIntegrated} pending · ${epic.ticketCounts.unknown} unknown`));
+        const section = el('details', undefined, 'git-epic-tree'), header = el('summary', undefined, 'git-heading');
+        rememberSection(section, epic.id, epics.indexOf(epic) === 0);
+        const title = el('div'); title.append(el('h3', `${epic.epicKey || 'Epic'} · ${epic.name}`), el('small', `${Number.isFinite(epicActivity(epic)) ? activityText(new Date(epicActivity(epic)).toISOString()) : 'Update time unknown'} · ${epic.ticketCounts.integrated} integrated · ${epic.ticketCounts.notIntegrated} pending · ${epic.ticketCounts.unknown} unknown`));
         header.append(title);
         if (epic.branch) {
           if (epic.pullRequests.length) header.append(button('View open PR', () => inspect(epic)));
@@ -315,8 +349,9 @@
         }
         section.append(header, tree(epic.id, rows)); content.append(section);
       }
-      const other = data.other.filter(matches), section = el('section', undefined, 'git-epic-tree');
-      section.append(el('h3', 'Other branches · No epic'), tree('other', other)); content.append(section);
+      const other = data.other.filter(matches), section = el('details', undefined, 'git-epic-tree');
+      rememberSection(section, 'other');
+      section.append(el('summary', 'Other branches · No epic'), tree('other', other)); content.append(section);
     }
     function render() {
       root.replaceChildren();
@@ -336,7 +371,7 @@
       const content = el('section');
       search.addEventListener('input', () => { query = search.value; renderContent(content); });
       select.addEventListener('change', () => { filter = select.value; renderContent(content); });
-      controls.append(branches, prs, search, select); root.append(controls, content); renderContent(content);
+      controls.append(branches, prs, search, select, el('small', 'Latest activity first ↓')); root.append(controls, content); renderContent(content);
     }
     async function load(force, focusAfter) {
       if (loading || (data && !force)) return;

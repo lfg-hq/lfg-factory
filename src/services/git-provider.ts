@@ -3,7 +3,7 @@ export type GitBranch = { branch: string; headSha: string; protected: boolean };
 export type GitPR = { id: number; title: string; url: string; source: string; destination: string; headSha: string; sourceRepo: string | null; draft: boolean; merged: boolean; mergeSha: string | null };
 export type GitIssue = { code: string; providerRequestId?: string };
 export type GitPage<T> = { items: T[]; complete: boolean; errors: GitIssue[] };
-export type GitCommit = { sha: string; parents: string[] };
+export type GitCommit = { sha: string; parents: string[]; summary: string | null; committedAt: string | null };
 export type GitHistory = GitPage<GitCommit> & { nextPage: number | null };
 export type GitComparison = { ahead: number | null; behind: number | null; complete: boolean };
 export class GitProviderError extends Error {
@@ -103,7 +103,11 @@ export function createGitProvider(config: GitProviderConfig, fetcher: typeof fet
         const items = body.map((c: any): GitCommit => {
           const id = gl ? c.id : c.sha, parents = gl ? c.parent_ids : c.parents?.map((p: any) => p.sha);
           if (!/^[a-f0-9]{40,64}$/.test(id) || !Array.isArray(parents) || parents.some(p => !/^[a-f0-9]{40,64}$/.test(p))) throw new GitProviderError('PROVIDER_INVALID_HISTORY');
-          return { sha: id, parents: [...new Set<string>(parents)] };
+          const message = gl ? c.title : c.commit?.message;
+          const date = gl ? c.committed_date : c.commit?.committer?.date;
+          return { sha: id, parents: [...new Set<string>(parents)],
+            summary: typeof message === 'string' ? message.split(/\r?\n/)[0]!.trim() || null : null,
+            committedAt: typeof date === 'string' && Number.isFinite(Date.parse(date)) ? new Date(date).toISOString() : null };
         });
         const more = gl ? headers.has('x-next-page') ? !!headers.get('x-next-page') : body.length === perPage : headers.has('link') ? /rel="next"/.test(headers.get('link') || '') : body.length === perPage;
         return { items, complete: !more, nextPage: more ? page + 1 : null, errors: [] };

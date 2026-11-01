@@ -1,0 +1,143 @@
+{
+  "status": "implemented_with_documented_live_provider_gap",
+  "implementationRevision": "ab174e00bc93c05d09c57970c4b5c8d8ac6077be plus uncommitted LFG-8 changes",
+  "pushedCommit": null,
+  "mergedRevision": null,
+  "runningRevision": null,
+  "runtime": {
+    "command": "BETTER_AUTH_SECRET=\"${BETTER_AUTH_SECRET:-$(cat data/.auth-secret)}\" bun run src/index.ts",
+    "workingDirectory": "/data/project",
+    "bind": "0.0.0.0:8080",
+    "environment": "Existing .env / inherited resolved process environment; no variants",
+    "processes": [
+      "Bun web process with existing in-process bounded DB-backed Git review runner; no new worker"
+    ],
+    "logs": "stdout/stderr; platform collection/rotation, no application log files",
+    "smokeResult": "Passed health 200, database-backed invalid-login 401 and correlated anonymous history/branches/reviews/merge/delete 401. Temporary process stopped.",
+    "jobStatus": "No review job or mutation enqueued by this ticket; no job execution claimed.",
+    "databaseRepair": "Existing PostgreSQL authenticated successfully, but Git tables were absent. Backup /data/recovery/lfg8-before-git-migrations.dump; applied existing additive 0001/0002 Git migrations transactionally. Users/projects/sessions each remained zero. Required schema probe passed; no data reset or fresh database."
+  },
+  "prerequisites": [
+    {
+      "name": "Bun and built-in SQLite",
+      "reason": "Build/server and isolated SQLite persistence/migration tests",
+      "verificationCommand": "cd /data/project && bun -e 'import {Database} from \"bun:sqlite\"; const d=new Database(\":memory:\"); try { if(d.query(\"select 1 as n\").get().n!==1) throw new Error(\"SQLite unavailable\"); console.log(Bun.version); } finally {d.close();}'",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Node.js",
+      "reason": "Schema parity and TypeScript tooling",
+      "verificationCommand": "cd /data/project && node --input-type=module -e 'import assert from \"node:assert/strict\"; assert(Number(process.versions.node.split(\".\")[0])>=22); assert.equal(await Promise.resolve(1),1)'",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Existing application dependencies",
+      "reason": "Real AI SDK, Hono, Drizzle, PostgreSQL client and TypeScript compiler",
+      "verificationCommand": "cd /data/project && bun -e 'import {generateText} from \"ai\"; import {Hono} from \"hono\"; import {sql} from \"drizzle-orm\"; import pg from \"pg\"; if(![generateText,Hono,pg.Pool].every(x=>typeof x===\"function\")||!sql)process.exit(1)' && bun node_modules/typescript/bin/tsc --version",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Configured PostgreSQL database",
+      "reason": "Authenticated connectivity and required existing/new durable schema using the web environment",
+      "verificationCommand": "cd /data/project && bun run scripts/check-git-database.ts",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Chromium",
+      "reason": "Real desktop/mobile review-dialog and navigation verification",
+      "verificationCommand": "cd /data/project && bun -e 'import {chromium} from \"playwright-core\"; const b=await chromium.launch({executablePath:\"/usr/bin/chromium\",headless:true,args:[\"--no-sandbox\",\"--disable-dev-shm-usage\"]});try{const p=await b.newPage();await p.setContent(\"<title>capability-check</title>\");if(await p.title()!==\"capability-check\")throw new Error(\"Browser unavailable\")}finally{await b.close()}'",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Git checkout",
+      "reason": "Assigned branch/revision and preservation of existing changes",
+      "verificationCommand": "cd /data/project && git rev-parse --is-inside-work-tree && git rev-parse HEAD",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "drizzle-kit",
+      "reason": "Isolated API/review/safety fixture schema generation",
+      "verificationCommand": "cd /data/project && bun node_modules/drizzle-kit/bin.cjs --version",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Bash",
+      "reason": "Exact requested web command environment resolution and runtime smoke launcher",
+      "verificationCommand": "bash -c 'test \"${BASH_VERSINFO[0]}\" -ge 4 && test \"${LFG_CAPABILITY_UNSET:-working}\" = working'",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "Docker local PostgreSQL service",
+      "reason": "Existing sandbox database hosting; no host sockets or external services attached",
+      "verificationCommand": "docker inspect postgres --format '{{.State.Running}}' | grep -qx true",
+      "timeoutSeconds": 30
+    },
+    {
+      "name": "PostgreSQL client utilities",
+      "reason": "Local backup and safe migration recovery",
+      "verificationCommand": "pg_dump --version && psql --version",
+      "timeoutSeconds": 30
+    }
+  ],
+  "checks": [
+    {
+      "command": "bun install --frozen-lockfile --ignore-scripts",
+      "status": "passed"
+    },
+    {
+      "command": "bun build src/index.ts --target=bun --packages=external --outdir=/tmp/lfg-import-check",
+      "status": "passed"
+    },
+    {
+      "command": "bun run typecheck",
+      "status": "passed"
+    },
+    {
+      "command": "bun test tests/git-history.test.ts tests/git-navigation.test.ts tests/git-api.test.ts tests/git-workspace.test.ts tests/git-review-ui.test.ts tests/git-safety-ui.test.ts",
+      "status": "passed"
+    },
+    {
+      "command": "bun test tests/git-navigation.test.ts",
+      "status": "passed"
+    },
+    {
+      "command": "bun run scripts/check-git-database.ts",
+      "status": "passed"
+    },
+    {
+      "command": "bun run scripts/check-git-web.ts",
+      "status": "passed"
+    },
+    {
+      "command": "git diff --check",
+      "status": "passed"
+    }
+  ],
+  "acceptanceEvidence": {
+    "AC1": "Compact scoped styles and lane-adjacent labels, collapsible epic/Other trees; actual ChatPage desktop/light/narrow screenshots visually compared to accepted HTML screenshots. No dashboard cards or pair maps.",
+    "AC2": "Provider/history nullable metadata fixtures and scrambled browser heads verify summary/date normalization, date order with stable ties/unknown last, epic maximum linked activity, destination counts and available Draft PR state. No invented checks/reviews.",
+    "AC3": "Bounded roots/partial history, shared SHA label collisions, deduplicated nodes, multi-parent edges and topological parent-before-child browser assertions.",
+    "AC4": "Keyboard selection exposes exact branch/destination and unchanged review-first/delete guards; All open PRs, narrow tab overflow, collapsible sections and review/safety UI regressions pass."
+  },
+  "workflowVerification": {
+    "fixtureHistories": "passed; labelled tests only",
+    "browserReviewAndSafety": "passed; test-only API responses, not live-provider proof",
+    "liveGitProvider": "unverified: zero connected Git accounts/projects in sandbox",
+    "liveAIReviewToPR": "unverified; unchanged provider path, no model/account credentials; no real Git mutations performed"
+  },
+  "screenshots": [
+    "/data/git-evidence/desktop.png",
+    "/data/git-evidence/narrow.png",
+    "/data/git-evidence/narrow-epics.png",
+    "/data/git-evidence/narrow-light.png",
+    "/data/git-evidence/desktop-light.png",
+    "/data/git-evidence/approved-desktop.png",
+    "/data/git-evidence/approved-narrow.png"
+  ],
+  "remainingGaps": [
+    "Connect authorized real Git credentials/project through existing Integrations to verify authenticated provider history.",
+    "Existing real AI review-to-PR workflow additionally needs configured model/account credentials; not executed by this presentation/history ticket."
+  ],
+  "persistedTasks": "docs/git-compact-trees-ticket.md",
+  "visualComparison": "Reviewed actual desktop/light/narrow screenshots alongside accepted reference screenshots. Adjusted extra parent padding and text/curve collisions after initial comparison. Real fixture DAG and partial diagnostics differ intentionally from sample geometry; density, inline columns, overflow and collapsible section hierarchy retained."
+}
