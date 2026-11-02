@@ -202,9 +202,11 @@
     // No raw Markdown/HTML rendering. Only validated ledger URLs become links.
     let url; try { url = new URL(source.url); } catch { return; }
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return;
-    const link = element('a', `${source.title || url.hostname} · ${new Date(source.retrievedAt).toLocaleDateString()} · [[source:${source.id}]]`, 'va-source');
+    const link = element('a', source.title || url.hostname, 'va-source');
     link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer';
-    const row = element('div', '', 'va-muted'); row.append(link, element('p', (source.excerpt || '').slice(0, 240))); content.append(row);
+    const row = element('div', '', 'va-source-row');
+    row.append(link, element('span', ` · ${url.hostname.replace(/^www\./, '')} · read ${new Date(source.retrievedAt).toLocaleDateString()}`, 'va-muted'), element('p', (source.excerpt || '').replace(/^\[[^\]]*\]\s*/, '').slice(0, 200), 'va-muted'));
+    content.append(row);
   }
   function composer(id, content, onCreated) {
     stage.querySelector('.va-composer')?.remove();
@@ -339,7 +341,7 @@
       grid.classList.add('expanded'); close.hidden = false; cta.setAttribute('aria-expanded', 'true');
       history.replaceState(null, '', `${location.pathname}?chat=open`);
     }
-    stage.replaceChildren(); modal(); panel.focus();
+    stage.replaceChildren(); modal(); if (!pageMode) panel.focus();
     if (error) authView(error); else ready();
   }
   if (pageMode) { open(); return; }

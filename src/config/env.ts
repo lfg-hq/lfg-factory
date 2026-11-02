@@ -60,6 +60,8 @@ const envSchema = z.object({
   EXA_API_KEY: z.string().optional().default(""),
   // Comma-separated emails of LFG staff who review venture assessments and decide funding.
   VENTURE_ADMIN_EMAILS: z.string().optional().default(""),
+  // Blended model cost LFG uses to show token spend in dollars.
+  VENTURE_USD_PER_MILLION_TOKENS: z.preprocess(v => v === "" ? undefined : v, z.coerce.number().positive().default(5)),
 
   // Public base URL used to build links in emails (falls back to BETTER_AUTH_URL)
   APP_URL: z.string().optional().default(""),

@@ -1,15 +1,16 @@
 // Venture dashboard. Two views rendered into #vd:
 //  - list (default): every venture at a glance, with filters;
-//  - detail (?v=id): one venture's verdict, tranche, market, to-dos and steps.
-// Founders see their own ventures; LFG reviewers can switch to all founders and
-// record the binding decision. Server content is rendered with textContent,
-// except sanitized Markdown in the transcript.
+//  - detail (?v=id): where the venture stands now (what LFG built, what it
+//    cost, results, a week-by-week timeline), then the analyst's assessment.
+// Founders see their own ventures; LFG reviewers can switch to all founders,
+// record the binding decision and report progress. Server content is rendered
+// with textContent, except sanitized Markdown in the transcript.
 (() => {
   'use strict';
   const root = document.getElementById('vd');
   const params = new URLSearchParams(location.search);
   let scope = params.get('scope') === 'all' ? 'all' : 'mine';
-  let selected = params.get('v'), filter = 'all', isAdmin = false, ventures = [];
+  let selected = params.get('v'), filter = 'all', isAdmin = false, ventures = [], rate = 5;
 
   // ---- tiny DOM helpers ---------------------------------------------------
   const el = (tag, text, className) => {
@@ -21,27 +22,29 @@
   const h = (tag, className, ...children) => { const node = el(tag, '', className); node.append(...children.flat().filter(c => c !== null && c !== undefined && c !== false)); return node; };
   const btn = (text, action, className = 'vd-btn') => { const b = el('button', text, className); b.type = 'button'; b.onclick = action; return b; };
   const link = (text, href, className = 'vd-btn') => { const a = el('a', text, className); a.href = href; return a; };
-  const barOf = pct => { const bar = el('span'); bar.style.width = `${pct}%`; return bar; };
+  const barOf = pct => { const bar = el('span'); bar.style.width = `${Math.min(100, Math.max(0, pct))}%`; return bar; };
 
   // ---- formatting ---------------------------------------------------------
   const VERDICT = { fund: ['Fund', 'good'], needs_more_info: ['Needs more info', 'warn'], decline: ['Decline', 'bad'], prohibited: ['Prohibited', 'bad'] };
   const DECISION = { approved: ['Approved', 'good'], needs_more_info: ['Needs more info', 'warn'], declined: ['Declined', 'bad'], prohibited: ['Prohibited', 'bad'] };
+  const STATUS = { planned: ['Planned', 'neutral'], in_progress: ['In progress', 'info'], shipped: ['Shipped', 'good'], blocked: ['Blocked', 'bad'] };
   const TIER = { micro: 'Micro business', small_business: 'Small business', venture_scale: 'Venture scale' };
+  const WORK = { landing_page: 'Landing page', content_strategy: 'Content strategy', mvp: 'MVP', product_feature: 'Product feature', integration: 'Integration', support_tooling: 'Support tooling', security: 'Security', maintenance: 'Maintenance', marketing: 'Marketing', sales: 'Sales', analytics: 'Analytics', operations: 'Operations' };
   const dot = ([label, tone]) => el('span', label, `vd-dot ${tone}`);
   const pill = ([label, tone]) => el('span', label, `vd-pill ${tone}`);
   const compact = n => new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(n);
   const tokens = n => n === null || n === undefined ? '—' : `${compact(n)} tokens`;
-  const money = (n, units) => {
-    if (n === null || n === undefined) return 'Unknown';
-    try { return new Intl.NumberFormat('en', { style: 'currency', currency: units?.currency || 'USD', notation: 'compact', maximumFractionDigits: 1 }).format(n); }
-    catch { return String(n); }
-  };
+  const usd = (n, digits = 0) => n === null || n === undefined ? '—' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: digits, minimumFractionDigits: digits }).format(n);
+  const usdShort = n => n === null || n === undefined ? 'Unknown' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact', maximumFractionDigits: 1 }).format(n);
+  const cost = t => usd(t / 1e6 * rate, t / 1e6 * rate < 100 ? 2 : 0);
   const date = d => d ? new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+  const shortDate = d => d ? new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
   function ago(d) {
     const days = Math.floor((Date.now() - new Date(d).getTime()) / 86_400_000);
     return days <= 0 ? 'Today' : days === 1 ? 'Yesterday' : days < 30 ? `${days} days ago` : date(d);
   }
   const lfgStatus = v => v.decision ? DECISION[v.decision.decision] : v.assessment?.verdict ? ['Awaiting review', 'neutral'] : ['Not assessed', 'muted'];
+  const metricValue = (name, v) => name === 'revenue_usd' ? usd(v) : name === 'conversion_rate' ? `${v}%` : compact(v);
 
   // ---- data and routing ---------------------------------------------------
   async function api(path, options = {}) {
@@ -75,13 +78,14 @@
     };
   }
 
+  async function refreshList() {
+    const data = await api(`/api/venture/dashboard${scope === 'all' ? '?scope=all' : ''}`);
+    isAdmin = data.isAdmin; ventures = data.ventures; rate = data.usdPerMillionTokens || rate; showViewer(data.viewer);
+  }
   async function load() {
     root.replaceChildren(el('p', 'Loading…', 'vd-loading'));
-    try {
-      const data = await api(`/api/venture/dashboard${scope === 'all' ? '?scope=all' : ''}`);
-      isAdmin = data.isAdmin; ventures = data.ventures; showViewer(data.viewer);
-      render();
-    } catch (error) {
+    try { await refreshList(); render(); }
+    catch (error) {
       // Signed-out visitors sign in on the analyst page, then come straight back here.
       if (error.status === 401 || error.code === 'GOOGLE_LINK_REQUIRED') { location.replace('/venture-analyst?chat=open&next=dashboard'); return; }
       if (error.code === 'ADMIN_REQUIRED') { scope = 'mine'; history.replaceState(null, '', url()); load(); return; }
@@ -122,41 +126,41 @@
 
   const FILTERS = [
     ['all', 'All', () => true],
+    ['building', 'Building', v => v.progress.total > 0],
     ['review', 'Awaiting review', v => !v.decision && Boolean(v.assessment?.verdict)],
-    ['approved', 'Approved', v => v.decision?.decision === 'approved'],
     ['info', 'Needs info', v => (v.decision?.decision || v.assessment?.verdict) === 'needs_more_info'],
     ['closed', 'Declined', v => ['declined', 'prohibited', 'decline'].includes(v.decision?.decision || v.assessment?.verdict)],
     ['draft', 'Not assessed', v => !v.assessment],
   ];
 
   function stats() {
-    const approved = ventures.filter(v => v.decision?.decision === 'approved');
-    const committed = approved.reduce((sum, v) => sum + v.decision.tokensApproved, 0);
-    const openTodos = ventures.reduce((sum, v) => sum + v.tasks.total - v.tasks.done, 0);
+    const spent = ventures.reduce((sum, v) => sum + v.progress.tokensSpent, 0);
+    const approved = ventures.reduce((sum, v) => sum + v.tokensApproved, 0);
+    const shipped = ventures.reduce((sum, v) => sum + v.progress.shipped, 0), items = ventures.reduce((sum, v) => sum + v.progress.total, 0);
+    const revenue = ventures.reduce((sum, v) => sum + (v.revenueUsd || 0), 0);
     const stat = (label, value, hint) => h('div', 'vd-stat', el('span', label, 'vd-stat-label'), el('strong', value), el('span', hint, 'vd-sub'));
     return h('div', 'vd-stats',
-      stat('Ventures', String(ventures.length), `${ventures.filter(v => v.assessment).length} assessed`),
-      stat('Awaiting review', String(ventures.filter(FILTERS[1][2]).length), scope === 'all' ? 'Need an LFG decision' : 'With LFG’s team'),
-      stat('Approved', String(approved.length), `${tokens(committed)} committed`),
-      stat(scope === 'all' ? 'Open founder to-dos' : 'Your open to-dos', String(openTodos), 'Across all ventures'));
+      stat('Ventures building', String(ventures.filter(v => v.progress.total).length), `${ventures.length} total · ${ventures.filter(FILTERS[2][2]).length} awaiting review`),
+      stat('Spent so far', cost(spent), `${tokens(spent)} of ${compact(approved)} approved`),
+      stat('Shipped', `${shipped}`, `of ${items} work items`),
+      stat('Monthly revenue', usd(revenue), 'Latest reading, all ventures'));
   }
 
   function row(v) {
-    const r = v.assessment, verdict = r?.verdict ? VERDICT[r.verdict] : null;
+    const r = v.assessment, p = v.progress;
     const item = el('a', '', 'vd-row');
     item.href = url(v.id);
     item.onclick = e => { if (e.metaKey || e.ctrlKey || e.shiftKey || e.button) return; e.preventDefault(); go(v.id); };
-    const progress = v.tasks.total ? h('div', 'vd-progress', h('div', 'vd-track', barOf(Math.round(100 * v.tasks.done / v.tasks.total))), el('span', `${v.tasks.done}/${v.tasks.total}`, 'vd-sub')) : el('span', '—', 'vd-faint');
-    const approved = v.decision?.decision === 'approved';
-    const tokenCell = approved ? h('div', 'vd-stack', el('strong', tokens(v.decision.tokensApproved)), el('span', 'approved', 'vd-sub'))
-      : r?.recommendedTokens ? h('div', 'vd-stack', el('span', tokens(r.recommendedTokens)), el('span', 'recommended', 'vd-sub')) : el('span', '—', 'vd-faint');
     const subtitle = [v.owner ? (v.owner.name || v.owner.email) : null, r?.summary || (r ? 'Assessed before verdicts existed' : 'In conversation with the analyst')].filter(Boolean).join(' · ');
+    const spendCell = v.tokensApproved ? h('div', 'vd-stack', el('strong', cost(p.tokensSpent)), h('div', 'vd-track', barOf(100 * p.tokensSpent / v.tokensApproved)), el('span', `${compact(p.tokensSpent)} of ${compact(v.tokensApproved)} tokens`, 'vd-sub'))
+      : r?.recommendedTokens ? h('div', 'vd-stack', el('span', '—', 'vd-faint'), el('span', `${compact(r.recommendedTokens)} recommended`, 'vd-sub')) : el('span', '—', 'vd-faint');
+    const progressCell = p.total ? h('div', 'vd-stack', el('strong', `Week ${p.week}`), el('span', `${p.shipped} of ${p.total} shipped`, 'vd-sub')) : el('span', '—', 'vd-faint');
     item.append(
       h('div', 'vd-cell vd-cell-main', el('strong', v.title, 'vd-row-title'), el('span', subtitle, 'vd-sub vd-clamp')),
-      h('div', 'vd-cell vd-stack', verdict ? dot(verdict) : el('span', '—', 'vd-faint'), r?.tier ? el('span', TIER[r.tier], 'vd-sub') : null),
-      h('div', 'vd-cell', tokenCell),
-      h('div', 'vd-cell', pill(lfgStatus(v))),
-      h('div', 'vd-cell', progress),
+      h('div', 'vd-cell vd-stack', pill(lfgStatus(v)), r?.verdict ? el('span', `Analyst: ${VERDICT[r.verdict][0]}`, 'vd-sub') : null),
+      h('div', 'vd-cell', spendCell),
+      h('div', 'vd-cell', progressCell),
+      h('div', 'vd-cell', v.revenueUsd !== null ? h('div', 'vd-stack', el('strong', usd(v.revenueUsd)), el('span', 'per month', 'vd-sub')) : el('span', '—', 'vd-faint')),
       h('div', 'vd-cell vd-cell-end', el('span', ago(v.updatedAt), 'vd-sub')));
     return item;
   }
@@ -164,7 +168,7 @@
   function renderList() {
     document.title = 'Ventures | LFG';
     const head = h('div', 'vd-pagehead',
-      h('div', '', el('h1', scope === 'all' ? 'Venture review' : 'Your ventures'), el('p', scope === 'all' ? 'Every founder’s venture, with the analyst’s verdict and LFG’s decision.' : 'The analyst’s verdict, LFG’s decision and your next steps for each idea.', 'vd-muted')),
+      h('div', '', el('h1', scope === 'all' ? 'Venture review' : 'Your ventures'), el('p', scope === 'all' ? 'Every founder’s venture: what LFG is building, what it has cost, and the results.' : 'What LFG is building for each idea, what it has cost, and the results.', 'vd-muted')),
       h('div', 'vd-actions',
         isAdmin ? h('div', 'vd-seg', ...[['mine', 'My ventures'], ['all', 'All founders']].map(([key, label]) => {
           const b = btn(label, () => { if (scope !== key) { scope = key; filter = 'all'; history.pushState(null, '', url()); load(); } }, `vd-seg-btn${scope === key ? ' active' : ''}`);
@@ -187,13 +191,14 @@
     }));
     const shown = ventures.filter(FILTERS.find(f => f[0] === filter)[2]);
     const table = h('div', 'vd-list',
-      h('div', 'vd-row vd-row-head', ...['Venture', 'Analyst verdict', 'Tokens', 'LFG decision', 'To-dos', 'Updated'].map((t, i) => el('span', t, `vd-cell${i === 5 ? ' vd-cell-end' : ''}`))),
+      h('div', 'vd-row vd-row-head', ...['Venture', 'Status', 'Spent', 'Progress', 'Revenue', 'Updated'].map((t, i) => el('span', t, `vd-cell${i === 5 ? ' vd-cell-end' : ''}`))),
       ...shown.map(row));
     root.replaceChildren(head, stats(), chips, table);
   }
 
-  // ---- detail view --------------------------------------------------------
+  // ---- detail: shared bits ------------------------------------------------
   const card = (title, ...children) => h('section', 'vd-card', title ? el('h2', title) : null, ...children);
+  const cardHead = (title, sub, ...right) => h('div', 'vd-card-head', h('div', '', el('h2', title), sub ? el('p', sub, 'vd-sub') : null), ...right);
   function claims(list, sources) {
     if (!list?.length) return el('p', 'None recorded.', 'vd-muted');
     return h('ul', 'vd-claims', ...list.map(c => {
@@ -206,15 +211,126 @@
       return li;
     }));
   }
+  function sparkline(values) {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 100 32'); svg.setAttribute('preserveAspectRatio', 'none'); svg.setAttribute('class', 'vd-spark'); svg.setAttribute('aria-hidden', 'true');
+    if (values.length < 2) return svg;
+    const max = Math.max(...values), min = Math.min(...values), span = max - min || 1;
+    const pts = values.map((v, i) => `${(i / (values.length - 1)) * 100},${30 - ((v - min) / span) * 26}`);
+    const area = document.createElementNS(svg.namespaceURI, 'polygon'); area.setAttribute('points', `0,32 ${pts.join(' ')} 100,32`); area.setAttribute('class', 'vd-spark-area');
+    const line = document.createElementNS(svg.namespaceURI, 'polyline'); line.setAttribute('points', pts.join(' ')); line.setAttribute('class', 'vd-spark-line');
+    svg.append(area, line); return svg;
+  }
 
-  function metrics(data, r) {
-    const d = data.decision;
-    const m = (label, value, sub) => h('div', 'vd-metric', el('span', label, 'vd-stat-label'), value, sub ? el('span', sub, 'vd-sub') : null);
+  // ---- detail: current state ----------------------------------------------
+  function stateStrip(data, r) {
+    const p = data.progress, revenue = data.metrics.filter(m => m.name === 'revenue_usd');
+    const m = (label, value, sub, extra) => h('div', 'vd-metric', el('span', label, 'vd-stat-label'), value, extra || null, sub ? el('span', sub, 'vd-sub') : null);
+    const latest = revenue.at(-1), prev = revenue.at(-2);
+    const change = latest && prev && prev.value ? Math.round(100 * (latest.value - prev.value) / prev.value) : null;
+    if (!p.total) {
+      return h('div', 'vd-metrics',
+        m('Stage', el('strong', data.decision ? DECISION[data.decision.decision][0] : r ? 'Awaiting review' : 'Talking to analyst'), r ? `Analyst says ${VERDICT[r.verdict][0].toLowerCase()}` : null),
+        m('Recommended tranche', el('strong', r?.verdict === 'fund' ? tokens(r.tokenTranche.totalTokens) : '—'), r?.verdict === 'fund' ? `≈ ${cost(r.tokenTranche.totalTokens)} of agent work` : null),
+        m('Work planned', el('strong', r?.verdict === 'fund' ? `${r.tokenTranche.lineItems.length} items` : '—'), r?.verdict === 'fund' ? 'Starts when LFG approves' : null),
+        m('Next check-in', el('strong', r?.checkInWeeks ? `${r.checkInWeeks} weeks after funding` : '—'), null));
+    }
     return h('div', 'vd-metrics',
-      m('Analyst verdict', r ? dot(VERDICT[r.verdict]) : el('strong', '—'), r?.tier ? TIER[r.tier] : null),
-      m('Recommended tranche', el('strong', r?.verdict === 'fund' ? tokens(r.tokenTranche.totalTokens) : '—'), r?.verdict === 'fund' ? `${r.tokenTranche.lineItems.length} line items` : null),
-      m('LFG decision', d ? pill(DECISION[d.decision]) : pill(r ? ['Awaiting review', 'neutral'] : ['Not assessed', 'muted']), d ? (d.decision === 'approved' ? `${tokens(d.tokensApproved)} · ${date(d.createdAt)}` : date(d.createdAt)) : null),
-      m('Next check-in', el('strong', r?.checkInWeeks ? `In ${r.checkInWeeks} week${r.checkInWeeks === 1 ? '' : 's'}` : '—'), data.assessment ? `from ${date(data.assessment.createdAt)}` : null));
+      m('Timeline', el('strong', `Week ${p.week}`), `Funded ${date(p.fundedAt)}`),
+      m('Spent so far', el('strong', cost(p.tokensSpent)), `${tokens(p.tokensSpent)} of ${compact(p.tokensApproved)} approved`, h('div', 'vd-track wide', barOf(100 * p.tokensSpent / (p.tokensApproved || 1)))),
+      m('Shipped', el('strong', `${p.shipped} of ${p.total}`), `${data.workItems.filter(w => w.status === 'in_progress').length} in progress`),
+      m('Monthly revenue', el('strong', latest ? usd(latest.value) : '—'), latest ? (change !== null ? `${change >= 0 ? '+' : ''}${change}% since ${shortDate(prev.recordedAt)}` : `as of ${shortDate(latest.recordedAt)}`) : 'No revenue yet'));
+  }
+
+  function workAdmin(item, onDone) {
+    const status = el('select'); status.setAttribute('aria-label', `Status of ${item.title}`);
+    Object.entries(STATUS).forEach(([key, [label]]) => status.append(new Option(label, key)));
+    status.value = item.status;
+    const add = el('input'); add.type = 'number'; add.min = '0'; add.step = '1000'; add.placeholder = '+ tokens spent'; add.setAttribute('aria-label', `Tokens spent on ${item.title}`);
+    const save = btn('Update', async () => {
+      const body = {};
+      if (status.value !== item.status) body.status = status.value;
+      if (Number(add.value) > 0) body.addTokens = Math.round(Number(add.value));
+      if (!Object.keys(body).length) return;
+      save.disabled = true;
+      try { await api(`/api/venture/admin/work-items/${encodeURIComponent(item.id)}`, { method: 'PATCH', body: JSON.stringify(body) }); await onDone(); }
+      catch (error) { save.disabled = false; alert(errorText(error)); }
+    }, 'vd-btn small');
+    return h('div', 'vd-work-admin', status, add, save);
+  }
+
+  function building(data, r, reload) {
+    const items = data.workItems;
+    if (!items.length) {
+      if (r?.verdict !== 'fund') return null;
+      return card('What LFG will build', el('p', 'Planned from the analyst’s recommendation. Work starts when LFG approves the tranche.', 'vd-muted vd-tight'),
+        h('div', 'vd-work', ...r.tokenTranche.lineItems.map(line => h('div', 'vd-work-item',
+          h('div', 'vd-work-top', h('div', 'vd-work-title', line.workType ? el('span', WORK[line.workType] || line.workType, 'vd-type') : null, el('strong', line.item)), pill(STATUS.planned)),
+          line.deliverable ? el('p', line.deliverable, 'vd-deliverable') : null,
+          el('span', `${tokens(line.tokens)} · ≈ ${cost(line.tokens)}`, 'vd-sub')))));
+    }
+    const p = data.progress;
+    return h('section', 'vd-card',
+      cardHead('What LFG is building', `${tokens(p.tokensSpent)} spent (${cost(p.tokensSpent)}) of ${compact(p.tokensApproved)} approved`),
+      h('div', 'vd-work', ...items.map(w => {
+        const pct = w.tokensBudgeted ? 100 * w.tokensSpent / w.tokensBudgeted : 0;
+        const when = w.status === 'shipped' ? `Shipped ${shortDate(w.shippedAt)}` : w.startedAt ? `Started ${shortDate(w.startedAt)}` : 'Not started';
+        return h('div', `vd-work-item ${w.status}`,
+          h('div', 'vd-work-top', h('div', 'vd-work-title', el('span', WORK[w.workType] || w.workType, 'vd-type'), el('strong', w.title)), pill(STATUS[w.status] || [w.status, 'neutral'])),
+          w.deliverable ? el('p', w.deliverable, 'vd-deliverable') : null,
+          h('div', 'vd-work-meter', h('div', `vd-track wide${pct > 100 ? ' over' : ''}`, barOf(pct)), el('span', `${compact(w.tokensSpent)} / ${compact(w.tokensBudgeted)} · ${cost(w.tokensSpent)}`, 'vd-sub')),
+          el('span', when, 'vd-sub'),
+          isAdmin ? workAdmin(w, reload) : null);
+      })));
+  }
+
+  function results(data, reload) {
+    const by = {};
+    for (const m of data.metrics) (by[m.name] ??= []).push(m);
+    const names = Object.keys(data.metricLabels).filter(n => by[n]);
+    const section = h('section', 'vd-card', cardHead('Results', names.length ? 'Readings from LFG analytics and billing' : null));
+    if (!names.length) section.append(el('p', data.progress.total ? 'No results recorded yet.' : 'Results appear here once LFG starts building.', 'vd-muted'));
+    else section.append(h('div', 'vd-results', ...names.map(name => {
+      const series = by[name], latest = series.at(-1), prev = series.at(-2);
+      const delta = prev ? latest.value - prev.value : null;
+      return h('div', 'vd-result',
+        el('span', data.metricLabels[name], 'vd-stat-label'),
+        h('div', 'vd-result-row', el('strong', metricValue(name, latest.value)), delta !== null && delta !== 0 ? el('span', `${delta > 0 ? '▲' : '▼'} ${metricValue(name, Math.abs(Math.round(delta * 10) / 10))}`, `vd-delta ${delta > 0 ? 'up' : 'down'}`) : null),
+        sparkline(series.map(m => m.value)),
+        el('span', `${series.length} readings · latest ${shortDate(latest.recordedAt)}`, 'vd-sub'));
+    })));
+    if (isAdmin) {
+      const name = el('select'); name.setAttribute('aria-label', 'Metric');
+      Object.entries(data.metricLabels).forEach(([key, label]) => name.append(new Option(label, key)));
+      const value = el('input'); value.type = 'number'; value.min = '0'; value.step = 'any'; value.placeholder = 'Value'; value.setAttribute('aria-label', 'Metric value');
+      const save = btn('Record', async () => {
+        if (value.value === '') return;
+        save.disabled = true;
+        try { await api(`/api/venture/admin/conversations/${encodeURIComponent(data.conversation.id)}/metrics`, { method: 'POST', body: JSON.stringify({ name: name.value, value: Number(value.value) }) }); await reload(); }
+        catch (error) { save.disabled = false; alert(errorText(error)); }
+      }, 'vd-btn small');
+      section.append(h('div', 'vd-work-admin vd-metric-admin', name, value, save));
+    }
+    return section;
+  }
+
+  function timeline(data) {
+    if (!data.events.length) return null;
+    const groups = [];
+    for (const e of data.events) {
+      const key = e.week ? `Week ${e.week}` : 'Before funding';
+      if (groups.at(-1)?.key !== key) groups.push({ key, week: e.week, events: [] });
+      groups.at(-1).events.push(e);
+    }
+    const start = data.progress.fundedAt ? new Date(data.progress.fundedAt).getTime() : null;
+    const range = w => start ? `${shortDate(start + (w - 1) * 7 * 86_400_000)} – ${shortDate(start + (w * 7 - 1) * 86_400_000)}` : '';
+    return h('section', 'vd-card',
+      cardHead('Timeline', data.progress.week ? `Week ${data.progress.week} since LFG funded it` : 'History so far'),
+      h('div', 'vd-timeline', ...groups.map(g => h('div', 'vd-week',
+        h('div', 'vd-week-head', el('strong', g.key), g.week ? el('span', range(g.week), 'vd-sub') : null),
+        h('ol', 'vd-events', ...g.events.map(e => h('li', `vd-event ${e.kind}`,
+          h('div', 'vd-event-body', el('strong', e.title), e.detail ? el('p', e.detail, 'vd-sub') : null),
+          h('div', 'vd-event-meta', el('span', shortDate(e.occurredAt), 'vd-sub'), e.tokens && ['shipped', 'spend'].includes(e.kind) ? el('span', `${compact(e.tokens)} · ${cost(e.tokens)}`, 'vd-sub') : null))))))));
   }
 
   function decisionNote(data, r) {
@@ -222,21 +338,23 @@
     const note = (tone, title, text, extra) => h('div', `vd-callout ${tone}`, el('strong', title), text ? el('p', text) : null, extra || null);
     if (d) {
       const [label, tone] = DECISION[d.decision];
-      return note(tone, d.decision === 'approved' ? `LFG approved ${tokens(d.tokensApproved)}` : `LFG decision: ${label}`, d.founderNote ? `“${d.founderNote}”` : null, isAdmin && d.internalNote ? el('p', `Internal: ${d.internalNote}`, 'vd-sub') : null);
+      return note(tone, d.decision === 'approved' ? `LFG approved ${tokens(d.tokensApproved)} (≈ ${cost(d.tokensApproved)}) on ${date(d.createdAt)}` : `LFG decision: ${label}`, d.founderNote ? `“${d.founderNote}”` : null, isAdmin && d.internalNote ? el('p', `Internal: ${d.internalNote}`, 'vd-sub') : null);
     }
     if (!data.assessment) return note('neutral', 'Not assessed yet', data.isOwner ? 'Keep talking with the analyst, then generate an assessment from the Assessment tab in chat.' : 'The founder hasn’t generated an assessment yet.');
     if (!r) return note('neutral', 'This assessment predates verdicts', 'Regenerate it from the chat to get a verdict and token tranche.');
     return note('neutral', 'Awaiting LFG review', 'The analyst’s verdict is a recommendation. LFG’s venture team makes the funding decision.');
   }
 
+  // ---- detail: assessment -------------------------------------------------
   function tranche(r, sources) {
-    if (r.verdict !== 'fund' || !r.tokenTranche.lineItems.length) return card('Token tranche', el('p', 'No tranche is recommended at this stage.', 'vd-muted'), el('h3', 'Reasoning'), claims([r.tokenTranche.expectedReturn], sources));
+    if (r.verdict !== 'fund' || !r.tokenTranche.lineItems.length) return card('Recommended tranche', el('p', 'No tranche is recommended at this stage.', 'vd-muted'), el('h3', 'Reasoning'), claims([r.tokenTranche.expectedReturn], sources));
     const total = r.tokenTranche.totalTokens;
-    return card('Token tranche',
-      h('div', 'vd-total', el('span', 'First tranche', 'vd-stat-label'), el('strong', tokens(total))),
+    return card('Recommended tranche',
+      h('div', 'vd-total', el('span', 'First tranche', 'vd-stat-label'), h('div', 'vd-stack vd-right', el('strong', tokens(total)), el('span', `≈ ${cost(total)}`, 'vd-sub'))),
       h('div', 'vd-lines', ...r.tokenTranche.lineItems.map(item => h('div', 'vd-line',
-        h('div', 'vd-line-top', el('strong', item.item), el('span', tokens(item.tokens), 'vd-line-amount')),
+        h('div', 'vd-line-top', h('div', 'vd-work-title', item.workType ? el('span', WORK[item.workType] || item.workType, 'vd-type') : null, el('strong', item.item)), el('span', tokens(item.tokens), 'vd-line-amount')),
         h('div', 'vd-track wide', barOf(Math.max(3, Math.round(100 * item.tokens / total)))),
+        item.deliverable ? el('p', item.deliverable, 'vd-deliverable') : null,
         el('p', item.rationale, 'vd-sub')))),
       el('h3', 'Expected return'), claims([r.tokenTranche.expectedReturn], sources));
   }
@@ -247,10 +365,10 @@
     const funnel = h('div', 'vd-funnel', ...[['TAM', 'Total market', m.tam], ['SAM', 'Serviceable', m.sam], ['SOM', 'Obtainable', m.som]].map(([label, name, c]) => h('div', 'vd-funnel-row',
       h('div', 'vd-stack', el('strong', label), el('span', name, 'vd-sub')),
       h('div', 'vd-track wide tall', barOf(c.amount ? Math.max(4, Math.round(100 * Math.sqrt(c.amount / max))) : 0)),
-      h('div', 'vd-stack vd-right', el('strong', money(c.amount, units)), el('span', c.customers !== null && c.pricePerCustomer !== null ? `${compact(c.customers)} × ${money(c.pricePerCustomer, units)}` : 'Input needed', 'vd-sub')))));
-    const scenario = (label, c) => h('div', 'vd-scenario', el('span', label, 'vd-stat-label'), el('strong', money(c.amount, units)), el('span', c.customers !== null ? `${compact(c.customers)} customers / ${units.period}` : 'Input needed', 'vd-sub'));
+      h('div', 'vd-stack vd-right', el('strong', usdShort(c.amount)), el('span', c.customers !== null && c.pricePerCustomer !== null ? `${compact(c.customers)} × ${usdShort(c.pricePerCustomer)}` : 'Input needed', 'vd-sub')))));
+    const scenario = (label, c) => h('div', 'vd-scenario', el('span', label, 'vd-stat-label'), el('strong', usdShort(c.amount)), el('span', c.customers !== null ? `${compact(c.customers)} customers / ${units.period}` : 'Input needed', 'vd-sub'));
     return card('Market opportunity',
-      el('p', `${units.geography} · ${units.currency} per ${units.period}`, 'vd-muted vd-tight'),
+      el('p', `${units.geography} · US dollars per ${units.period}`, 'vd-muted vd-tight'),
       funnel,
       el('h3', 'Revenue scenarios'),
       h('div', 'vd-scenarios', scenario('Conservative', rev.conservative), scenario('Base', rev.base), scenario('Upside', rev.upside)),
@@ -270,9 +388,10 @@
     return card('Go-to-market',
       h('div', 'vd-two', h('div', '', el('h3', 'Target segment'), claims(a.gtm.targetSegment, sources)), h('div', '', el('h3', 'Channels'), claims(a.gtm.channels, sources))),
       el('h3', 'Experiments'),
-      h('ul', 'vd-experiments', ...a.gtm.experiments.map(x => h('li', '', el('span', x.experiment.text), x.suggestedBudget !== null ? el('span', money(x.suggestedBudget, { currency: a.units.currency }), 'vd-pill neutral') : null))));
+      h('ul', 'vd-experiments', ...a.gtm.experiments.map(x => h('li', '', el('span', x.experiment.text), x.suggestedBudget !== null ? el('span', usd(x.suggestedBudget), 'vd-pill neutral') : null))));
   }
 
+  // ---- detail: side column ------------------------------------------------
   function todos(data) {
     const section = card(data.isOwner ? 'Your to-dos' : 'Founder to-dos');
     if (!data.tasks.length) { section.append(el('p', 'The analyst sets commitments with the next assessment.', 'vd-muted')); return section; }
@@ -296,7 +415,7 @@
     return section;
   }
 
-  function decisionForm(data, r) {
+  function decisionForm(data, r, reload) {
     const form = el('form', '', 'vd-card vd-decide');
     const choice = el('select'); choice.setAttribute('aria-label', 'Decision');
     [['approved', 'Approve tranche'], ['needs_more_info', 'Needs more info'], ['declined', 'Decline'], ['prohibited', 'Prohibited (illegal / harmful)']].forEach(([v, l]) => choice.append(new Option(l, v)));
@@ -304,21 +423,22 @@
     const suggested = { fund: 'approved', needs_more_info: 'needs_more_info', decline: 'declined', prohibited: 'prohibited' };
     choice.value = suggested[r?.verdict] || 'needs_more_info';
     amount.value = String(r?.verdict === 'fund' ? r.tokenTranche.totalTokens : 0);
-    const sync = () => { amount.disabled = choice.value !== 'approved'; if (amount.disabled) amount.value = '0'; };
-    choice.onchange = sync; sync();
+    const dollars = el('span', '', 'vd-sub');
+    const sync = () => { amount.disabled = choice.value !== 'approved'; if (amount.disabled) amount.value = '0'; dollars.textContent = Number(amount.value) ? `≈ ${cost(Number(amount.value))}` : ''; };
+    choice.onchange = sync; amount.oninput = sync; sync();
     const note = el('textarea'); note.rows = 2; note.maxLength = 2000; note.placeholder = 'Note to the founder (they’ll see this)';
     const internal = el('textarea'); internal.rows = 2; internal.maxLength = 4000; internal.placeholder = 'Internal note (LFG only)';
     const submit = el('button', data.decision ? 'Update decision' : 'Record decision', 'vd-btn primary'); submit.type = 'submit';
     const feedback = el('p', '', 'vd-muted'); feedback.setAttribute('role', 'status');
-    const field = (label, input) => h('label', 'vd-field', el('span', label), input);
+    const field = (label, input, extra) => h('label', 'vd-field', el('span', label), input, extra || null);
     form.append(el('h2', 'Record LFG decision'), el('p', [data.owner?.name, data.owner?.email].filter(Boolean).join(' · '), 'vd-sub'),
-      field('Decision', choice), field('Tokens approved', amount), note, internal, submit, feedback);
+      field('Decision', choice), field('Tokens approved', amount, dollars), note, internal,
+      el('p', 'Approving releases the tranche: each recommended line item becomes work for LFG’s agents.', 'vd-sub'), submit, feedback);
     form.onsubmit = async e => {
       e.preventDefault(); submit.disabled = true; feedback.textContent = 'Saving…';
       try {
         await api(`/api/venture/admin/conversations/${encodeURIComponent(data.conversation.id)}/decision`, { method: 'POST', body: JSON.stringify({ decision: choice.value, tokensApproved: Number(amount.value) || 0, founderNote: note.value.trim() || undefined, internalNote: internal.value.trim() || undefined }) });
-        ventures = (await api(`/api/venture/dashboard${scope === 'all' ? '?scope=all' : ''}`)).ventures;
-        renderDetail(data.conversation.id);
+        await reload();
       } catch (error) { feedback.textContent = errorText(error); submit.disabled = false; }
     };
     if (data.decisions.length > 1) {
@@ -349,36 +469,46 @@
     return box;
   }
 
+  // ---- detail view --------------------------------------------------------
   async function renderDetail(id) {
     const back = link('← All ventures', url(null), 'vd-back');
     back.onclick = e => { e.preventDefault(); go(null); };
-    root.replaceChildren(back, el('p', 'Loading venture…', 'vd-loading'));
+    if (!root.querySelector('.vd-detail-head')) root.replaceChildren(back, el('p', 'Loading venture…', 'vd-loading'));
+    const reload = async () => { await refreshList(); await renderDetail(id); };
     try {
       const data = await api(`/api/venture/conversations/${encodeURIComponent(id)}/overview`);
       if (id !== selected) return;
+      rate = data.usdPerMillionTokens || rate;
       document.title = `${data.conversation.title} | LFG`;
       const sources = new Map(data.sources.map(s => [s.id, s]));
       const a = data.assessment?.contentJson, r = a?.recommendation;
-      const meta = [data.owner ? (data.owner.name || data.owner.email) : null, data.assessment ? `Assessment v${data.assessment.version}, ${data.assessment.status}, ${date(data.assessment.createdAt)}` : 'Not assessed yet'].filter(Boolean).join(' · ');
+      const tags = h('div', 'vd-head-tags',
+        data.decision ? pill(DECISION[data.decision.decision]) : pill(r ? ['Awaiting review', 'neutral'] : ['Not assessed', 'muted']),
+        r ? dot(VERDICT[r.verdict]) : null, r ? el('span', `Analyst${r.tier ? ` · ${TIER[r.tier]}` : ''}`, 'vd-sub') : null,
+        el('span', [data.owner ? (data.owner.name || data.owner.email) : null, data.assessment ? `Assessment v${data.assessment.version}, ${date(data.assessment.createdAt)}` : null].filter(Boolean).join(' · '), 'vd-sub'));
       const head = h('div', 'vd-detail-head',
-        h('div', '', el('h1', data.conversation.title), el('p', meta, 'vd-muted')),
+        h('div', '', el('h1', data.conversation.title), tags),
         data.isOwner ? link('Open chat', `/venture-analyst/chat?c=${encodeURIComponent(id)}`, 'vd-btn primary') : null);
 
       const main = h('div', 'vd-main'), side = h('aside', 'vd-side');
-      if (r) {
-        main.append(card('Why this verdict', el('p', r.summary, 'vd-lead'), claims(r.rationale, sources)));
-        if (r.complianceFlags?.length) main.append(h('section', 'vd-card vd-flags', el('h2', 'Compliance flags'), claims(r.complianceFlags, sources)));
-        main.append(tranche(r, sources));
+      main.append(...[building(data, r, reload), (data.progress.total || data.metrics.length) ? results(data, reload) : null, timeline(data)].filter(Boolean));
+      if (a) {
+        main.append(h('div', 'vd-divider', el('span', 'Assessment'), el('span', `by the analyst · v${data.assessment.version}`, 'vd-sub')));
+        if (r) {
+          main.append(card('Why this verdict', el('p', r.summary, 'vd-lead'), claims(r.rationale, sources)));
+          if (r.complianceFlags?.length) main.append(h('section', 'vd-card vd-flags', el('h2', 'Compliance flags'), claims(r.complianceFlags, sources)));
+          main.append(tranche(r, sources));
+        }
+        main.append(market(a, sources), founderFit(a, sources), gtm(a, sources), card('Risks and uncertainties', claims(a.uncertainties, sources)));
       }
-      if (a) main.append(market(a, sources), founderFit(a, sources), gtm(a, sources), card('Risks and uncertainties', claims(a.uncertainties, sources)));
-      if (isAdmin && (scope === 'all' || !data.isOwner)) side.append(decisionForm(data, r));
+      if (isAdmin && (scope === 'all' || !data.isOwner)) side.append(decisionForm(data, r, reload));
       if (r) side.append(todos(data), card('Next steps', h('ol', 'vd-steps', ...r.nextSteps.map(s => el('li', s)))));
       if (a?.missingInputs.length) side.append(card('Missing inputs', h('ul', 'vd-plain', ...a.missingInputs.map(m => el('li', m)))));
       if (isAdmin) side.append(transcript(data, sources));
 
-      root.replaceChildren(back, head, decisionNote(data, r), metrics(data, r),
+      root.replaceChildren(back, head, decisionNote(data, r), stateStrip(data, r),
         main.childElementCount ? h('div', 'vd-detail-grid', main, side) : side,
-        el('p', 'Financial figures, token sizes and timelines are scenarios, not promises. LFG’s decision is the binding one.', 'vd-footnote'));
+        el('p', `Dollar figures convert tokens at ${usd(rate, 2)} per million. Market figures, token sizes and timelines in the assessment are scenarios, not promises.`, 'vd-footnote'));
     } catch (error) {
       if (id !== selected) return;
       root.replaceChildren(back, h('div', 'vd-state', el('p', errorText(error), 'vd-error'), btn('Retry', () => renderDetail(id))));

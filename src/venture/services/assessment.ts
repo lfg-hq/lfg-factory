@@ -21,6 +21,10 @@ export const TOKEN_POLICY = {
     'Complex platform (e.g. observability, data infrastructure): 50M–500M tokens, staged',
   ],
 } as const;
+// What LFG's agents can spend tokens on. Shared by the assessment, the work
+// items created on approval, and the dashboard labels.
+export const WORK_TYPES = ['landing_page', 'content_strategy', 'mvp', 'product_feature', 'integration', 'support_tooling', 'security', 'maintenance', 'marketing', 'sales', 'analytics', 'operations'] as const;
+export type WorkType = typeof WORK_TYPES[number];
 const tokens = z.number().int().nonnegative().max(TOKEN_POLICY.maxFirstTranche);
 const recommendation = z.object({
   verdict: z.enum(['fund', 'needs_more_info', 'decline', 'prohibited']),
@@ -30,7 +34,7 @@ const recommendation = z.object({
   complianceFlags: z.array(claim).max(8),
   tokenTranche: z.object({
     totalTokens: tokens,
-    lineItems: z.array(z.object({ item: text, tokens: tokens, rationale: text }).strict()).max(12),
+    lineItems: z.array(z.object({ workType: z.enum(WORK_TYPES), item: text, deliverable: text, tokens: tokens, rationale: text }).strict()).max(12),
     expectedReturn: claim,
   }).strict(),
   founderCommitments: z.array(z.object({ action: text, successSignal: text, dueWeek: z.number().int().nonnegative().nullable() }).strict()).max(10),

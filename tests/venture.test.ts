@@ -10,7 +10,8 @@ import venture from "../src/venture/routes/api.ts";
 import { db } from "../src/config/db.ts";
 import { env } from "../src/config/env.ts";
 import { users, accounts } from "../src/db/schema/users.ts";
-import { ventureConversations, ventureMessages, ventureAssessments, ventureSources, ventureTasks } from "../src/venture/db/schema.ts";
+import { ventureConversations, ventureMessages, ventureAssessments, ventureSources, ventureTasks, ventureWorkItems } from "../src/venture/db/schema.ts";
+import { fundRecommendation } from "./venture-assessment.fixture.ts";
 
 if (!process.env.VENTURE_TEST_ISOLATED) throw new Error("Use bun run test:venture for isolated databases.");
 const app = new Hono().route("/", authRoutes).route("/api/venture", venture);
@@ -168,5 +169,42 @@ test("LFG admins review every venture and record decisions; founders keep tasks 
     const ticked = await request(`/api/venture/tasks/${task!.id}`, 0, "PATCH", { done: true });
     expect(ticked.status).toBe(200); expect((await ticked.json()).task.done).toBe(true);
     expect((await (await request("/api/venture/dashboard", 0)).json()).ventures.find((v: any) => v.id === conversationId)?.tasks).toEqual({ total: 1, done: 1 });
+  } finally { env.VENTURE_ADMIN_EMAILS = previous; }
+});
+
+test("approval releases the tranche as work items; reviewers report progress and results; founders see the timeline", async () => {
+  await db.insert(ventureAssessments).values({ conversationId, version: 2, status: "provisional", contentJson: fundRecommendation() });
+  const previous = env.VENTURE_ADMIN_EMAILS;
+  env.VENTURE_ADMIN_EMAILS = emails[1]!;
+  try {
+    // 2.0M approved against a 2.5M recommendation: proportions kept, exact total.
+    expect((await request(`/api/venture/admin/conversations/${conversationId}/decision`, 1, "POST", { decision: "approved", tokensApproved: 2_000_000 })).status).toBe(201);
+    const items = await db.select().from(ventureWorkItems).where(eq(ventureWorkItems.conversationId, conversationId));
+    expect(items.map(i => i.workType).sort()).toEqual(["landing_page", "mvp"]);
+    expect(items.reduce((sum, i) => sum + i.tokensBudgeted, 0)).toBe(2_000_000);
+    expect(items.find(i => i.workType === "landing_page")!.tokensBudgeted).toBe(400_000);
+    const landing = items.find(i => i.workType === "landing_page")!;
+    const path = `/api/venture/admin/work-items/${landing.id}`;
+    expect((await request(path, 0, "PATCH", { status: "shipped" })).status).toBe(403);
+    expect((await request(path, 1, "PATCH", {})).status).toBe(400);
+    expect((await request(path, 1, "PATCH", { addTokens: -5 })).status).toBe(400);
+    const shipped = await request(path, 1, "PATCH", { status: "shipped", addTokens: 350_000, note: "TEST FIXTURE live" });
+    expect(shipped.status).toBe(200);
+    const item = (await shipped.json()).item;
+    expect(item.tokensSpent).toBe(350_000); expect(item.shippedAt).toBeTruthy(); expect(item.startedAt).toBeTruthy();
+    const metrics = `/api/venture/admin/conversations/${conversationId}/metrics`;
+    expect((await request(metrics, 0, "POST", { name: "revenue_usd", value: 120 })).status).toBe(403);
+    expect((await request(metrics, 1, "POST", { name: "made_up", value: 1 })).status).toBe(400);
+    expect((await request(metrics, 1, "POST", { name: "revenue_usd", value: 120 })).status).toBe(201);
+    const view = await (await request(`/api/venture/conversations/${conversationId}/overview`, 0)).json();
+    expect(view.progress.tokensSpent).toBe(350_000); expect(view.progress.shipped).toBe(1); expect(view.progress.week).toBe(1);
+    expect(view.metrics.at(-1).value).toBe(120);
+    const titles = view.events.map((e: any) => e.title);
+    expect(titles).toContain("Shipped: TEST FIXTURE landing page");
+    expect(titles.some((t: string) => t.startsWith("LFG approved 2M tokens"))).toBe(true);
+    expect(view.events.every((e: any) => e.week === null || e.week >= 1)).toBe(true);
+    const list = await (await request("/api/venture/dashboard", 0)).json();
+    const row = list.ventures.find((v: any) => v.id === conversationId);
+    expect(row.progress.tokensSpent).toBe(350_000); expect(row.revenueUsd).toBe(120); expect(list.usdPerMillionTokens).toBeGreaterThan(0);
   } finally { env.VENTURE_ADMIN_EMAILS = previous; }
 });

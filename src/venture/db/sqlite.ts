@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, index, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, real, index, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
 import { users } from "../../db/schema/sqlite/users.ts";
 
@@ -66,3 +66,40 @@ export const ventureTasks = sqliteTable("venture_task", {
   doneAt: integer("done_at", { mode: "timestamp" }),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
 }, t => [index("venture_task_assessment_idx").on(t.assessmentId, t.position)]);
+
+// What LFG's agents build with an approved tranche, and what each has cost so far.
+export const ventureWorkItems = sqliteTable("venture_work_item", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  conversationId: text("conversation_id").notNull().references(() => ventureConversations.id, { onDelete: "cascade" }),
+  decisionId: text("decision_id").references(() => ventureDecisions.id, { onDelete: "set null" }),
+  workType: text("work_type").notNull(),
+  title: text("title").notNull(),
+  deliverable: text("deliverable"),
+  tokensBudgeted: integer("tokens_budgeted").notNull().default(0),
+  tokensSpent: integer("tokens_spent").notNull().default(0),
+  status: text("status", { enum: ["planned", "in_progress", "shipped", "blocked"] }).notNull().default("planned"),
+  startedAt: integer("started_at", { mode: "timestamp" }),
+  shippedAt: integer("shipped_at", { mode: "timestamp" }),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
+}, t => [index("venture_work_conv_idx").on(t.conversationId)]);
+
+// Venture history: what happened, when, and what it cost.
+export const ventureEvents = sqliteTable("venture_event", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  conversationId: text("conversation_id").notNull().references(() => ventureConversations.id, { onDelete: "cascade" }),
+  kind: text("kind").notNull(),
+  title: text("title").notNull(),
+  detail: text("detail"),
+  tokens: integer("tokens"),
+  occurredAt: integer("occurred_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
+}, t => [index("venture_event_conv_idx").on(t.conversationId, t.occurredAt)]);
+
+// Results: revenue, customers, usage. One row per reading.
+export const ventureMetrics = sqliteTable("venture_metric", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  conversationId: text("conversation_id").notNull().references(() => ventureConversations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  value: real("value").notNull(),
+  note: text("note"),
+  recordedAt: integer("recorded_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
+}, t => [index("venture_metric_conv_idx").on(t.conversationId, t.name, t.recordedAt)]);

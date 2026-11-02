@@ -10,9 +10,9 @@
 import { eq, like } from 'drizzle-orm';
 import { db } from '../src/config/db.ts';
 import { users } from '../src/db/schema/users.ts';
-import { ventureConversations, ventureMessages, ventureSources, ventureAssessments, ventureDecisions, ventureTasks } from '../src/venture/db/schema.ts';
+import { ventureConversations, ventureMessages, ventureSources, ventureAssessments, ventureDecisions, ventureTasks, ventureWorkItems, ventureEvents, ventureMetrics } from '../src/venture/db/schema.ts';
 import { validateAssessment } from '../src/venture/services/assessment.ts';
-import { saveTasks } from '../src/venture/services/dashboard.ts';
+import { saveTasks, METRICS, type MetricName } from '../src/venture/services/dashboard.ts';
 
 if (process.env.NODE_ENV === 'production') throw new Error('Sample data is for local development only.');
 const [ownerEmail, flag] = process.argv.slice(2);
@@ -42,6 +42,13 @@ interface Sample {
   assessment?: (src: string[]) => unknown;
   done?: number[];
   decision?: { decision: 'approved' | 'needs_more_info' | 'declined' | 'prohibited'; tokensApproved: number; founderNote?: string; internalNote?: string };
+  assessedDaysAgo?: number; decidedDaysAgo?: number;
+  // After approval: one entry per tranche line item, weekly results, and other history.
+  progress?: {
+    work: { status: 'planned' | 'in_progress' | 'shipped' | 'blocked'; spent: number; started?: number; shipped?: number }[];
+    metrics: Partial<Record<MetricName, [daysAgo: number, value: number][]>>;
+    events?: [daysAgo: number, kind: string, title: string, detail?: string][];
+  };
 }
 
 const samples: Sample[] = [
@@ -109,9 +116,9 @@ const samples: Sample[] = [
         tokenTranche: {
           totalTokens: 3_200_000,
           lineItems: [
-            { item: 'WhatsApp booking assistant + scheduling MVP', tokens: 2_200_000, rationale: 'Core product on LFG’s shared auth, payments and messaging.' },
-            { item: 'Landing page and onboarding flow', tokens: 500_000, rationale: 'Pilot sign-ups and payment collection.' },
-            { item: 'Support playbook and FAQ bot', tokens: 500_000, rationale: 'Keep the founder on site, not on support.' },
+            { workType: 'mvp', item: 'WhatsApp booking assistant + scheduling MVP', deliverable: 'Customers book a slot on WhatsApp; the plumber gets a day calendar and automatic reminders.', tokens: 2_200_000, rationale: 'Core product on LFG’s shared auth, payments and messaging.' },
+            { workType: 'landing_page', item: 'Landing page and pilot onboarding', deliverable: 'Hindi/English landing page with a 2-minute sign-up and Stripe deposit for the pilot.', tokens: 500_000, rationale: 'Pilot sign-ups and payment collection.' },
+            { workType: 'support_tooling', item: 'Support playbook and FAQ bot', deliverable: 'WhatsApp FAQ bot answering setup and billing questions, with hand-off to LFG support.', tokens: 500_000, rationale: 'Keep the founder on site, not on support.' },
           ],
           expectedReturn: c('~3.2M tokens against ~$58K/yr base-case revenue; break-even at roughly 40 subscribers.'),
         },
@@ -125,7 +132,27 @@ const samples: Sample[] = [
         checkInWeeks: 2,
       },
     }),
-    done: [0, 1],
+    done: [0, 1], assessedDaysAgo: 27, decidedDaysAgo: 25,
+    progress: {
+      work: [
+        { status: 'shipped', spent: 1_940_000, started: 24, shipped: 11 },
+        { status: 'shipped', spent: 410_000, started: 25, shipped: 20 },
+        { status: 'in_progress', spent: 130_000, started: 6 },
+      ],
+      metrics: {
+        signups: [[21, 14], [14, 38], [7, 61], [1, 87]],
+        active_users: [[21, 6], [14, 19], [7, 33], [1, 48]],
+        paying_customers: [[21, 0], [14, 3], [7, 9], [1, 16]],
+        revenue_usd: [[21, 0], [14, 36], [7, 108], [1, 192]],
+        conversion_rate: [[14, 7.9], [7, 14.8], [1, 18.4]],
+      },
+      events: [
+        [23, 'founder', 'Founder completed: Interview 10 plumbers from your WhatsApp groups', '8 of 10 lose jobs to missed calls weekly'],
+        [16, 'founder', 'Founder completed: Get 3 plumbers to commit to a paid pilot', '3 deposits received'],
+        [13, 'checkin', 'Week 2 check-in: pilot live with 3 plumbers', 'Bookings via WhatsApp working; reminders cut no-shows. Continue.'],
+        [6, 'checkin', 'Week 3 check-in: 9 paying plumbers, referrals starting', 'Support questions rising; start the FAQ bot now rather than later.'],
+      ],
+    },
     decision: { decision: 'approved', tokensApproved: 3_000_000, founderNote: 'Approved. We trimmed the support bot; start with the booking flow and pilot.', internalNote: 'Strong founder-market fit. Revisit tranche 2 after pilot retention.' },
   },
   {
@@ -184,9 +211,9 @@ const samples: Sample[] = [
         tokenTranche: {
           totalTokens: 180_000_000,
           lineItems: [
-            { item: 'OpenTelemetry ingest and storage on LFG’s shared infrastructure', tokens: 70_000_000, rationale: 'Minimum viable pipeline for partner data.' },
-            { item: 'AI incident-triage agent', tokens: 80_000_000, rationale: 'The differentiating wedge.' },
-            { item: 'Open-source launch site, docs and community', tokens: 30_000_000, rationale: 'Top-of-funnel for design partners.' },
+            { workType: 'product_feature', item: 'OpenTelemetry ingest and storage', deliverable: 'OTLP endpoint and 14-day hot storage on LFG’s shared infrastructure, sized for 5 partners.', tokens: 70_000_000, rationale: 'Minimum viable pipeline for partner data.' },
+            { workType: 'mvp', item: 'AI incident-triage agent', deliverable: 'Agent that groups alerts into incidents and posts a ranked root-cause summary to Slack.', tokens: 80_000_000, rationale: 'The differentiating wedge.' },
+            { workType: 'content_strategy', item: 'Open-source launch: site, docs, community', deliverable: 'Docs site, GitHub launch, and a 6-week technical content plan for X and LinkedIn.', tokens: 30_000_000, rationale: 'Top-of-funnel for design partners.' },
           ],
           expectedReturn: c('180M tokens is justified only if 5 partners convert near $60K ACV; staged release reduces risk.'),
         },
@@ -316,9 +343,9 @@ const samples: Sample[] = [
         tokenTranche: {
           totalTokens: 12_000_000,
           lineItems: [
-            { item: 'Payout ingestion for Shopify, Amazon, Flipkart', tokens: 6_000_000, rationale: 'Core data plumbing.' },
-            { item: 'Reconciliation copilot and review UI', tokens: 5_000_000, rationale: 'Saves the 60 hours.' },
-            { item: 'Partner-CA onboarding site', tokens: 1_000_000, rationale: 'Second channel.' },
+            { workType: 'integration', item: 'Payout ingestion for Shopify, Amazon, Flipkart', deliverable: 'Daily import of orders, fees and settlements from all three channels into one ledger.', tokens: 6_000_000, rationale: 'Core data plumbing.' },
+            { workType: 'mvp', item: 'Reconciliation copilot and review screen', deliverable: 'Auto-matches payouts to orders and flags mismatches for a one-click accountant review.', tokens: 5_000_000, rationale: 'Saves the 60 hours.' },
+            { workType: 'landing_page', item: 'Partner-CA onboarding site', deliverable: 'Landing page and referral sign-up for accounting firms reselling the copilot.', tokens: 1_000_000, rationale: 'Second channel.' },
           ],
           expectedReturn: c('12M tokens vs ~$108K/yr base case; payback within the first client cohort.'),
         },
@@ -330,7 +357,20 @@ const samples: Sample[] = [
         checkInWeeks: 4,
       },
     }),
-    done: [0],
+    done: [0], assessedDaysAgo: 12, decidedDaysAgo: 10,
+    progress: {
+      work: [
+        { status: 'shipped', spent: 4_600_000, started: 10, shipped: 3 },
+        { status: 'in_progress', spent: 1_350_000, started: 4 },
+        { status: 'planned', spent: 0 },
+      ],
+      metrics: {
+        active_users: [[7, 3], [1, 5]],
+        paying_customers: [[7, 0], [1, 2]],
+        revenue_usd: [[7, 0], [1, 120]],
+      },
+      events: [[5, 'founder', 'Founder completed: Sign 5 clients to a paid pilot', '5 pilot agreements signed']],
+    },
     decision: { decision: 'approved', tokensApproved: 10_000_000, founderNote: 'Approved at 10M; partner-CA site comes with tranche 2.' },
   },
   {
@@ -465,7 +505,7 @@ for (const [i, s] of samples.entries()) {
     userId = `sample-user-${i}`;
     await db.insert(users).values({ id: userId, name: s.founder.name, email: s.founder.email, emailVerified: true });
   }
-  const at = day(s.daysAgo);
+  const at = day(s.daysAgo), assessedAt = day(s.assessedDaysAgo ?? s.daysAgo), decidedAt = day(s.decidedDaysAgo ?? s.daysAgo);
   await db.insert(ventureConversations).values({ id: s.id, userId, title: s.title, createdAt: day(s.daysAgo + 2), updatedAt: at });
   for (const [n, [role, content]] of s.messages.entries()) {
     const when = new Date(day(s.daysAgo + 1).getTime() + n * 60_000);
@@ -479,14 +519,40 @@ for (const [i, s] of samples.entries()) {
   if (s.assessment) {
     // Same validation as live assessments: sample data can't drift from the schema.
     const content = validateAssessment(s.assessment(sourceIds), new Set(sourceIds));
-    const [assessment] = await db.insert(ventureAssessments).values({ id: `${s.id}-a1`, conversationId: s.id, version: 1, status: content.status, contentJson: content, createdAt: at }).returning();
+    const [assessment] = await db.insert(ventureAssessments).values({ id: `${s.id}-a1`, conversationId: s.id, version: 1, status: content.status, contentJson: content, createdAt: assessedAt }).returning();
+    const r = content.recommendation;
+    await db.insert(ventureEvents).values({ conversationId: s.id, kind: 'assessment', title: `Assessment v1: ${{ fund: 'Fund', needs_more_info: 'Needs more info', decline: 'Decline', prohibited: 'Prohibited' }[r.verdict]}`, detail: r.summary, tokens: r.verdict === 'fund' ? r.tokenTranche.totalTokens : null, occurredAt: assessedAt });
     await saveTasks(s.id, assessment!);
     for (const position of s.done ?? []) {
       const tasks = await db.select().from(ventureTasks).where(eq(ventureTasks.assessmentId, assessment!.id));
       const task = tasks.find(t => t.position === position);
       if (task) await db.update(ventureTasks).set({ done: true, doneAt: at }).where(eq(ventureTasks.id, task.id));
     }
-    if (s.decision) await db.insert(ventureDecisions).values({ id: `${s.id}-d1`, conversationId: s.id, assessmentId: assessment!.id, assessmentVersion: 1, adminUserId: owner.id, createdAt: at, ...s.decision });
+    if (s.decision) {
+      await db.insert(ventureDecisions).values({ id: `${s.id}-d1`, conversationId: s.id, assessmentId: assessment!.id, assessmentVersion: 1, adminUserId: owner.id, createdAt: decidedAt, ...s.decision });
+      const label = { approved: `LFG approved ${s.decision.tokensApproved / 1e6}M tokens`, needs_more_info: 'LFG decision: Needs more info', declined: 'LFG decision: Declined', prohibited: 'LFG decision: Prohibited' }[s.decision.decision];
+      await db.insert(ventureEvents).values({ conversationId: s.id, kind: 'decision', title: label, detail: s.decision.founderNote ?? null, tokens: s.decision.tokensApproved || null, occurredAt: decidedAt });
+    }
+    if (s.progress && s.decision?.decision === 'approved') {
+      // Same split the app uses on approval: recommended proportions, exact total.
+      const lines = r.tokenTranche.lineItems, total = r.tokenTranche.totalTokens;
+      const budgets = lines.map(l => Math.floor(l.tokens * s.decision!.tokensApproved / total));
+      budgets[budgets.length - 1]! += s.decision.tokensApproved - budgets.reduce((a, b) => a + b, 0);
+      for (const [n, line] of lines.entries()) {
+        const w = s.progress.work[n]!;
+        await db.insert(ventureWorkItems).values({ id: `${s.id}-w${n}`, conversationId: s.id, decisionId: `${s.id}-d1`, workType: line.workType, title: line.item, deliverable: line.deliverable,
+          tokensBudgeted: budgets[n]!, tokensSpent: w.spent, status: w.status, startedAt: w.started !== undefined ? day(w.started) : null, shippedAt: w.shipped !== undefined ? day(w.shipped) : null, createdAt: decidedAt });
+        if (w.started !== undefined) await db.insert(ventureEvents).values({ conversationId: s.id, kind: 'work', title: `Started: ${line.item}`, detail: line.deliverable, occurredAt: day(w.started) });
+        if (w.shipped !== undefined) await db.insert(ventureEvents).values({ conversationId: s.id, kind: 'shipped', title: `Shipped: ${line.item}`, detail: line.deliverable, tokens: w.spent, occurredAt: day(w.shipped) });
+      }
+      for (const [name, readings] of Object.entries(s.progress.metrics) as [MetricName, [number, number][]][]) {
+        for (const [ago, value] of readings) {
+          await db.insert(ventureMetrics).values({ conversationId: s.id, name, value, recordedAt: day(ago) });
+          if (name === 'revenue_usd' && value) await db.insert(ventureEvents).values({ conversationId: s.id, kind: 'metric', title: `${METRICS[name]}: $${value}`, occurredAt: day(ago) });
+        }
+      }
+      for (const [ago, kind, title, detail] of s.progress.events ?? []) await db.insert(ventureEvents).values({ conversationId: s.id, kind, title, detail: detail ?? null, occurredAt: day(ago) });
+    }
   }
   count++;
 }

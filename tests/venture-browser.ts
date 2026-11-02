@@ -159,8 +159,9 @@ try {
   await page.locator('a.vd-row').first().click();
   await page.getByRole('heading', { name: 'Your to-dos', exact: true }).waitFor();
   assert.match(page.url(), new RegExp(`v=${selected}`));
-  for (const heading of ['Why this verdict', 'Token tranche', 'Market opportunity', 'Next steps', 'Founder fit']) assert.equal(await page.getByRole('heading', { name: heading, exact: true }).count(), 1, heading);
-  assert.equal(await page.locator('.vd-metric .vd-dot', { hasText: 'Fund' }).count(), 1);
+  for (const heading of ['What LFG will build', 'Why this verdict', 'Recommended tranche', 'Market opportunity', 'Next steps', 'Founder fit']) assert.equal(await page.getByRole('heading', { name: heading, exact: true }).count(), 1, heading);
+  assert.equal(await page.locator('.vd-head-tags .vd-dot', { hasText: 'Fund' }).count(), 1);
+  assert.equal(await page.locator('.vd-type', { hasText: 'MVP' }).count() >= 1, true, 'Line items say what kind of work LFG does');
   assert.equal(await page.locator('.vd-metric strong', { hasText: '2.5M tokens' }).count(), 1);
   await page.getByText('Awaiting LFG review', { exact: true }).waitFor();
   await page.locator('.vd-todos input').first().check(); await page.waitForTimeout(300);
@@ -177,6 +178,17 @@ try {
   await page.locator('.vd-decide textarea').first().fill('TEST FIXTURE welcome aboard');
   await page.getByRole('button', { name: 'Record decision', exact: true }).click();
   await page.locator('.vd-callout', { hasText: 'LFG approved 2.5M tokens' }).waitFor();
+  // Approval releases the tranche as work items, with history in the timeline.
+  await page.getByRole('heading', { name: 'What LFG is building', exact: true }).waitFor();
+  assert.equal(await page.locator('.vd-work-item').count(), 2);
+  await page.getByLabel('Status of TEST FIXTURE landing page').selectOption('shipped');
+  await page.getByLabel('Tokens spent on TEST FIXTURE landing page').fill('400000');
+  await page.locator('.vd-work-item', { hasText: 'TEST FIXTURE landing page' }).getByRole('button', { name: 'Update' }).click();
+  await page.locator('.vd-event', { hasText: 'Shipped: TEST FIXTURE landing page' }).waitFor();
+  await page.getByLabel('Metric value').fill('120');
+  await page.getByRole('button', { name: 'Record', exact: true }).click();
+  await page.locator('.vd-result', { hasText: '$120' }).waitFor();
+  assert.equal(await page.locator('.vd-week-head', { hasText: 'Week 1' }).count(), 1);
   await page.screenshot({ path: `${shots}/venture-admin.png`, fullPage: true });
   await page.getByRole('link', { name: '← All ventures' }).click();
   await page.locator('.vd-pill', { hasText: 'Approved' }).waitFor();

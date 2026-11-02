@@ -10,7 +10,7 @@ import { createWebResearchTools } from '../../ai/tools/agent-tools.ts';
 import { ventureAnalystPrompt } from '../prompts/analyst.ts';
 import { publicUrl, readPublicUrl } from './public-url.ts';
 import { ventureLog } from '../request-log.ts';
-import { saveTasks, ventureContext } from './dashboard.ts';
+import { onAssessmentSaved, ventureContext } from './dashboard.ts';
 
 export const VENTURE_LIMITS = { turnsPerHour: 30, researchCalls: 8, timeoutMs: 120_000, inputChars: 4000, outputTokens: 2400 } as const;
 const ownersStarting = new Set<string>(); // Single existing Bun web process; no worker.
@@ -199,7 +199,7 @@ export async function runAssessment(conversationId: string, requestId: string, a
     const [last] = await db.select({ id: ventureAssessments.id, version: ventureAssessments.version }).from(ventureAssessments).where(eq(ventureAssessments.conversationId, conversationId)).orderBy(desc(ventureAssessments.version)).limit(1);
     // One insert is atomic; the durable assistant reservation serializes writers.
     const [assessment] = await db.insert(ventureAssessments).values({ conversationId, version: (last?.version || 0) + 1, status: content.status, contentJson: content }).returning();
-    try { await saveTasks(conversationId, assessment!, last?.id); }
+    try { await onAssessmentSaved(conversationId, assessment!, last?.id); }
     catch { log('venture.assessment.tasks_failed', 'failed', { version: assessment!.version }); }
     await db.update(ventureMessages).set({ status: 'completed', content: `Saved assessment version ${assessment!.version}. Open the [venture dashboard](/venture-analyst/dashboard?v=${conversationId}) to see the verdict, market and your next steps.` }).where(where);
     log('venture.assessment.completed', 'success', { validationOutcome: 'valid', version: assessment!.version });

@@ -20,6 +20,6 @@ export function assessmentFixture(sourceId?: string) {
 
 export function fundRecommendation(base = assessmentFixture()) {
   base.recommendation = { ...base.recommendation, verdict: 'fund', tier: 'micro',
-    tokenTranche: { totalTokens: 2_500_000, lineItems: [{ item: 'TEST FIXTURE landing page', tokens: 500_000, rationale: 'Collect pilot sign-ups' }, { item: 'TEST FIXTURE scheduling MVP', tokens: 2_000_000, rationale: 'Pilot with 10 plumbers' }], expectedReturn: base.recommendation.rationale[0] } } as any;
+    tokenTranche: { totalTokens: 2_500_000, lineItems: [{ workType: 'landing_page', item: 'TEST FIXTURE landing page', deliverable: 'TEST FIXTURE page collecting pilot sign-ups', tokens: 500_000, rationale: 'Collect pilot sign-ups' }, { workType: 'mvp', item: 'TEST FIXTURE scheduling MVP', deliverable: 'TEST FIXTURE booking flow plumbers can use', tokens: 2_000_000, rationale: 'Pilot with 10 plumbers' }], expectedReturn: base.recommendation.rationale[0] } } as any;
   return base;
 }

@@ -1,4 +1,4 @@
-import { pgTable, text, integer, bigint, boolean, timestamp, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, integer, bigint, boolean, doublePrecision, timestamp, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { users } from "../../db/schema/pg/users.ts";
 
@@ -66,3 +66,40 @@ export const ventureTasks = pgTable("venture_task", {
   doneAt: timestamp("done_at", { mode: "date" }),
   createdAt: timestamp("created_at", { mode: "date" }).notNull().defaultNow(),
 }, t => [index("venture_task_assessment_idx").on(t.assessmentId, t.position)]);
+
+// What LFG's agents build with an approved tranche, and what each has cost so far.
+export const ventureWorkItems = pgTable("venture_work_item", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  conversationId: text("conversation_id").notNull().references(() => ventureConversations.id, { onDelete: "cascade" }),
+  decisionId: text("decision_id").references(() => ventureDecisions.id, { onDelete: "set null" }),
+  workType: text("work_type").notNull(),
+  title: text("title").notNull(),
+  deliverable: text("deliverable"),
+  tokensBudgeted: bigint("tokens_budgeted", { mode: "number" }).notNull().default(0),
+  tokensSpent: bigint("tokens_spent", { mode: "number" }).notNull().default(0),
+  status: text("status", { enum: ["planned", "in_progress", "shipped", "blocked"] }).notNull().default("planned"),
+  startedAt: timestamp("started_at", { mode: "date" }),
+  shippedAt: timestamp("shipped_at", { mode: "date" }),
+  createdAt: timestamp("created_at", { mode: "date" }).notNull().defaultNow(),
+}, t => [index("venture_work_conv_idx").on(t.conversationId)]);
+
+// Venture history: what happened, when, and what it cost.
+export const ventureEvents = pgTable("venture_event", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  conversationId: text("conversation_id").notNull().references(() => ventureConversations.id, { onDelete: "cascade" }),
+  kind: text("kind").notNull(),
+  title: text("title").notNull(),
+  detail: text("detail"),
+  tokens: bigint("tokens", { mode: "number" }),
+  occurredAt: timestamp("occurred_at", { mode: "date" }).notNull().defaultNow(),
+}, t => [index("venture_event_conv_idx").on(t.conversationId, t.occurredAt)]);
+
+// Results: revenue, customers, usage. One row per reading.
+export const ventureMetrics = pgTable("venture_metric", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  conversationId: text("conversation_id").notNull().references(() => ventureConversations.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  value: doublePrecision("value").notNull(),
+  note: text("note"),
+  recordedAt: timestamp("recorded_at", { mode: "date" }).notNull().defaultNow(),
+}, t => [index("venture_metric_conv_idx").on(t.conversationId, t.name, t.recordedAt)]);
