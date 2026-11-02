@@ -51,18 +51,32 @@
     const card = el('div', '', 'vd-card vd-empty');
     card.append(el('h2', 'Sign in to see your ventures'), el('p', 'Your dashboard shows the analyst’s verdict, your market opportunity, token tranche and next steps.', 'va-muted'));
     if (error && error.status !== 401) card.append(el('p', errorText(error), 'va-error'));
-    card.append(link('Continue with Google', '/venture-analyst?chat=open', 'va-pill'));
+    card.append(link('Sign in', '/venture-analyst?chat=open&next=dashboard', 'vd-btn primary'));
     detail.replaceChildren(card);
   }
 
+  function showViewer(viewer) {
+    const user = $('vd-user'), out = $('vd-signout');
+    if (!viewer) return;
+    user.textContent = viewer.name || viewer.email; user.title = viewer.email; user.hidden = false; out.hidden = false;
+    out.onclick = async () => {
+      out.disabled = true;
+      try { await fetch('/api/auth/sign-out', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' }); } catch { /* still leave */ }
+      location.assign('/venture-analyst');
+    };
+  }
+
   // ---- List ---------------------------------------------------------------
-  function startForm() {
-    const form = el('form', '', 'vd-card vd-start');
+  function startForm(open) {
+    const toggle = btn('+ New venture', () => { toggle.hidden = true; form.hidden = false; input.focus(); }, 'vd-btn block');
+    const form = el('form', '', 'vd-card vd-start'); form.hidden = !open; toggle.hidden = open;
     const input = el('textarea'); input.rows = 3; input.maxLength = 4000; input.required = true;
     input.placeholder = 'Describe your idea, who it helps, and what you bring to it…'; input.setAttribute('aria-label', 'Describe a new venture');
-    const go = el('button', 'Start with the analyst', 'va-send'); go.type = 'submit';
-    const feedback = el('p', '', 'va-muted'); feedback.setAttribute('role', 'status');
-    form.append(el('h2', 'Start a new venture'), input, go, feedback);
+    const go = el('button', 'Start with the analyst', 'vd-btn primary'); go.type = 'submit';
+    const feedback = el('p', '', 'vd-muted'); feedback.setAttribute('role', 'status');
+    const actions = el('div', '', 'vd-start-actions'); actions.append(go);
+    if (!open) actions.append(btn('Cancel', () => { form.hidden = true; toggle.hidden = false; }, 'vd-btn'));
+    form.append(input, actions, feedback);
     input.onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.requestSubmit(); } };
     form.onsubmit = async e => {
       e.preventDefault(); const text = input.value.trim(); if (!text) return;
@@ -74,13 +88,13 @@
         location.assign(`/venture-analyst?chat=open&c=${encodeURIComponent(conversation.id)}`);
       } catch (error) { go.disabled = false; feedback.textContent = errorText(error); }
     };
-    return form;
+    const wrap = el('div'); wrap.append(toggle, form); return wrap;
   }
 
   function renderList() {
     list.replaceChildren();
-    if (scope === 'mine') list.append(startForm());
-    if (!ventures.length) { list.append(el('p', scope === 'all' ? 'No founder has started a venture yet.' : 'No ventures yet. Describe your idea above to begin.', 'va-muted vd-pad')); return; }
+    if (scope === 'mine') list.append(startForm(!ventures.length));
+    if (!ventures.length) { list.append(el('p', scope === 'all' ? 'No founder has started a venture yet.' : 'No ventures yet. Describe your idea above to begin.', 'vd-muted vd-pad')); return; }
     const items = el('ul', '', 'vd-items');
     for (const v of ventures) {
       const li = el('li'), b = el('button', '', `vd-item${v.id === selected ? ' active' : ''}`); b.type = 'button';
@@ -97,10 +111,10 @@
   }
 
   async function loadList() {
-    list.replaceChildren(el('p', 'Loading ventures…', 'va-muted vd-pad'));
+    list.replaceChildren(el('p', 'Loading ventures…', 'vd-muted vd-pad'));
     try {
       const data = await api(`/api/venture/dashboard${scope === 'all' ? '?scope=all' : ''}`);
-      isAdmin = data.isAdmin; ventures = data.ventures;
+      isAdmin = data.isAdmin; ventures = data.ventures; showViewer(data.viewer);
       scopeTabs.hidden = !isAdmin;
       if (isAdmin) {
         scopeTabs.replaceChildren(...[['mine', 'My ventures'], ['all', 'All founders']].map(([key, label]) => {
@@ -113,7 +127,7 @@
       syncUrl(); renderList(); loadDetail();
     } catch (error) {
       if (error.status === 401 || error.status === 403 && error.code !== 'ADMIN_REQUIRED') return signIn(error);
-      list.replaceChildren(el('p', errorText(error), 'va-error vd-pad'), btn('Retry', loadList));
+      list.replaceChildren(el('p', errorText(error), 'vd-error vd-pad'), btn('Retry', loadList));
     }
   }
 
@@ -142,13 +156,13 @@
   function verdictCards(data, r) {
     const row = el('div', '', 'vd-verdicts');
     const analyst = el('div', '', 'vd-card vd-verdict');
-    analyst.append(el('small', 'ANALYST RECOMMENDATION', 'va-label'));
+    analyst.append(el('small', 'Analyst recommendation', 'vd-label'));
     if (r) {
       const head = el('div', '', 'vd-verdict-head'); head.append(badge(r.verdict), el('span', r.tier ? TIERS[r.tier] : '', 'va-muted'));
       analyst.append(head, el('div', r.verdict === 'fund' ? tokens(r.tokenTranche.totalTokens) : 'No tokens recommended', 'vd-big'), el('p', r.summary));
     } else analyst.append(el('p', data.assessment ? 'This assessment predates verdicts. Regenerate it from the chat to get a verdict and token tranche.' : 'No assessment yet. Keep talking with the analyst, then generate one from the Assessment tab.', 'va-muted'));
 
-    const lfg = el('div', '', 'vd-card vd-verdict'); lfg.append(el('small', 'LFG DECISION', 'va-label'));
+    const lfg = el('div', '', 'vd-card vd-verdict'); lfg.append(el('small', 'LFG decision', 'vd-label'));
     const d = data.decision;
     if (d) {
       const head = el('div', '', 'vd-verdict-head'); head.append(badge(d.decision), el('span', `${when(d.createdAt)}${d.assessmentVersion ? ` · on assessment v${d.assessmentVersion}` : ''}`, 'va-muted'));
@@ -214,7 +228,7 @@
     choice.onchange = sync; sync();
     const note = el('textarea'); note.rows = 2; note.maxLength = 2000; note.placeholder = 'Note to the founder (they will see this)';
     const internal = el('textarea'); internal.rows = 2; internal.maxLength = 4000; internal.placeholder = 'Internal note (LFG reviewers only)';
-    const submit = el('button', 'Record decision', 'va-send'); submit.type = 'submit';
+    const submit = el('button', 'Record decision', 'vd-btn primary'); submit.type = 'submit';
     const feedback = el('p', '', 'va-muted'); feedback.setAttribute('role', 'status');
     const row = el('div', '', 'vd-row'); const amountLabel = el('label', 'Tokens approved'); amountLabel.append(amount); const choiceLabel = el('label', 'Decision'); choiceLabel.append(choice); row.append(choiceLabel, amountLabel);
     form.append(el('h2', 'Record LFG decision'), el('p', `Owner: ${data.owner?.name || ''} · ${data.owner?.email || ''}`, 'va-muted'), row, note, internal, submit, feedback);
@@ -265,7 +279,7 @@
       const head = el('div', '', 'vd-head');
       const h = el('div'); h.append(el('h2', data.conversation.title), el('p', `${data.owner ? `${data.owner.name || data.owner.email} · ` : ''}${data.assessment ? `${data.assessment.status} assessment v${data.assessment.version} · ${when(data.assessment.createdAt)}` : 'Not assessed yet'}`, 'va-muted'));
       const actions = el('div', '', 'vd-actions');
-      if (data.isOwner) actions.append(link(data.assessment ? 'Continue with the analyst' : 'Continue the conversation', `/venture-analyst?chat=open&c=${encodeURIComponent(id)}`, 'va-pill'));
+      if (data.isOwner) actions.append(link('Open chat', `/venture-analyst?chat=open&c=${encodeURIComponent(id)}`, 'vd-btn'));
       head.append(h, actions);
       const parts = [head, verdictCards(data, r)];
       if (isAdmin && scope === 'all' || isAdmin && !data.isOwner) parts.push(decisionForm(data, r));
@@ -285,7 +299,7 @@
         parts.push(section('Uncertainties', claimList(a.uncertainties, sources)));
       }
       if (isAdmin) parts.push(transcript(data, sources));
-      parts.push(el('p', 'Financial figures, token sizes and timelines are scenarios, not promises. The LFG decision is the binding one.', 'va-muted'));
+      parts.push(el('p', 'Financial figures, token sizes and timelines are scenarios, not promises. The LFG decision is the binding one.', 'vd-footnote'));
       detail.replaceChildren(...parts);
     } catch (error) {
       if (id !== selected) return;

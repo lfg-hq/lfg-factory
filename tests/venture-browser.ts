@@ -143,9 +143,14 @@ try {
   await saveTasks(selected, v2!);
   await page.goto(`${base}/venture-analyst/dashboard?v=${selected}`, { waitUntil: 'domcontentloaded' });
   await page.getByRole('heading', { name: 'Your to-dos', exact: true }).waitFor();
-  for (const heading of ['Token tranche', 'Market opportunity', 'Next steps', 'Founder fit', 'Start a new venture']) assert.equal(await page.getByRole('heading', { name: heading, exact: true }).count(), 1, heading);
+  for (const heading of ['Token tranche', 'Market opportunity', 'Next steps', 'Founder fit']) assert.equal(await page.getByRole('heading', { name: heading, exact: true }).count(), 1, heading);
   assert.equal(await page.locator('.vd-verdict .vd-badge', { hasText: 'Fund' }).count(), 1);
   assert.match(await page.locator('.vd-verdict .vd-big').first().textContent() || '', /2\.5M tokens/);
+  // A working page: no marketing nav or footer, and the new-venture form stays tucked away.
+  assert.equal(await page.locator('#navbar, footer').count(), 0);
+  await page.getByRole('button', { name: '+ New venture', exact: true }).waitFor();
+  assert.equal(await page.getByLabel('Describe a new venture').isHidden(), true);
+  assert.equal(await page.locator('#vd-user').textContent(), 'TEST FIXTURE');
   await page.getByText('Pending review by LFG', { exact: false }).waitFor();
   const todo = page.locator('.vd-todos input').first();
   await todo.check(); await page.waitForTimeout(300);

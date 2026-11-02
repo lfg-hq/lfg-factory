@@ -9,7 +9,7 @@ import { loggedRequest, ventureError } from "../../utils/request-log.ts";
 
 import { analystReadiness, reserveTurn, runAssessment, runTurn, stopTurn, recoverInterrupted, VentureFailure } from '../../services/venture-analyst.ts';
 
-type Variables = { userId: string; requestId: string; isAdmin: boolean };
+type Variables = { userId: string; requestId: string; isAdmin: boolean; viewer: { name: string; email: string } };
 const venture = new Hono<{ Variables: Variables }>();
 venture.onError((_error, c) => ventureError(c.get("requestId"), 500, "STORAGE_UNAVAILABLE", "Private storage is temporarily unavailable. Retry; if it continues, contact support with this correlation ID."));
 venture.use("*", async (c, next) => loggedRequest(c.req.raw,
@@ -23,6 +23,7 @@ venture.use("*", async (c, next) => loggedRequest(c.req.raw,
   if (!access.eligible) return ventureError(requestId, 403, "GOOGLE_LINK_REQUIRED", "Connect Google using Continue with Google, then retry.");
   c.set("userId", access.session.user.id);
   c.set("isAdmin", access.isAdmin);
+  c.set("viewer", { name: access.session.user.name, email: access.session.user.email });
   if (!["GET", "HEAD"].includes(c.req.method) && !isVentureSameOrigin(c.req.raw)) {
     return ventureError(requestId, 403, "ORIGIN_REJECTED", "Open the venture page on this site and retry.");
   }
@@ -146,7 +147,7 @@ venture.post('/conversations/:id/assessment', async c => {
 venture.get('/dashboard', async c => {
   const all = c.req.query('scope') === 'all';
   if (all && !c.get('isAdmin')) return ventureError(c.get('requestId'), 403, 'ADMIN_REQUIRED', 'Only LFG venture reviewers can see every founder.');
-  return c.json({ ventures: await dashboardList(c.get('userId'), all), isAdmin: c.get('isAdmin'), requestId: c.get('requestId') });
+  return c.json({ ventures: await dashboardList(c.get('userId'), all), isAdmin: c.get('isAdmin'), viewer: c.get('viewer'), requestId: c.get('requestId') });
 });
 venture.get('/conversations/:id/overview', async c => {
   const conversation = await viewableVentureConversation(c.req.param('id'), c.get('userId'), c.get('isAdmin'));
