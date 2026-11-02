@@ -32,6 +32,7 @@ try {
   const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
   await page.goto(`${base}/venture-analyst`, { waitUntil: "domcontentloaded" });
   assert.equal(await page.locator('.va-label').textContent(), 'EXAMPLE CONVERSATION');
+  assert.equal(await page.locator('#va-fullchat').getAttribute('href'), '/venture-analyst/chat', 'Landing panel links to the full chat');
   assert.equal(await page.getByText('INTERACTIVE MOCKUP').count(), 0);
   await page.screenshot({ path: `${shots}/venture-desktop.png` });
   const cta = page.getByRole('button', { name: 'Chat with analyst agent', exact: true });
@@ -60,7 +61,7 @@ try {
   assert(box && box.x === 0 && box.y === 0 && box.width === 390 && box.height === 844, JSON.stringify(box));
   assert.equal(await page.locator('#va-panel').getAttribute('aria-modal'), 'true');
   await page.getByRole('button', { name: 'Continue with Google', exact: true }).focus();
-  await page.keyboard.press('Tab'); assert(await page.getByRole('button', { name: 'Collapse chat' }).evaluate(el => el === document.activeElement));
+  await page.keyboard.press('Tab'); assert(await page.locator('#va-fullchat').evaluate(el => el === document.activeElement), 'Focus wraps to the first control in the dialog');
   await page.screenshot({ path: `${shots}/venture-mobile.png` });
   await page.keyboard.press('Escape'); assert(await cta.evaluate(el => el === document.activeElement));
   await page.evaluate(() => localStorage.setItem('lfg-theme', 'dark'));
@@ -177,7 +178,20 @@ try {
   assert.equal(await page.getByLabel('Decision').inputValue(), 'approved', 'Form defaults to the analyst verdict');
   await page.locator('.vd-decide textarea').first().fill('TEST FIXTURE welcome aboard');
   await page.getByRole('button', { name: 'Record decision', exact: true }).click();
+  // Approval generates the agreement; nothing is built until both sides sign it.
+  await page.locator('.vd-callout', { hasText: 'Revenue share agreement ready to sign' }).waitFor();
+  assert.equal(await page.getByRole('heading', { name: 'What LFG is building', exact: true }).count(), 0, 'No work before signatures');
+  assert.equal(await page.getByRole('heading', { name: 'What LFG will build', exact: true }).count(), 1);
+  await page.locator('.vd-agreement', { hasText: '8% of the Venture' }).waitFor();
+  for (const side of ['Founder', 'LFG']) {
+    await page.getByLabel(`${side} signature`).fill('TEST FIXTURE Signer');
+    const block = page.locator('.vd-signature', { has: page.getByLabel(`${side} signature`) });
+    await block.locator('input[type=checkbox]').check();
+    await block.getByRole('button', { name: 'Sign agreement' }).click();
+    await page.locator('.vd-signature.signed', { hasText: side }).waitFor();
+  }
   await page.locator('.vd-callout', { hasText: 'LFG approved 2.5M tokens' }).waitFor();
+  await page.screenshot({ path: `${shots}/venture-deal.png`, fullPage: true });
   // Approval releases the tranche as work items, with history in the timeline.
   await page.getByRole('heading', { name: 'What LFG is building', exact: true }).waitFor();
   assert.equal(await page.locator('.vd-work-item').count(), 2);
@@ -191,7 +205,7 @@ try {
   assert.equal(await page.locator('.vd-week-head', { hasText: 'Week 1' }).count(), 1);
   await page.screenshot({ path: `${shots}/venture-admin.png`, fullPage: true });
   await page.getByRole('link', { name: '← All ventures' }).click();
-  await page.locator('.vd-pill', { hasText: 'Approved' }).waitFor();
+  await page.locator('.vd-pill', { hasText: 'Active' }).waitFor();
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'Dashboard has no horizontal scroll on phones');
   assert.deepEqual(errors, []);

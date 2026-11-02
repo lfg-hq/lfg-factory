@@ -10,7 +10,7 @@
   const root = document.getElementById('vd');
   const params = new URLSearchParams(location.search);
   let scope = params.get('scope') === 'all' ? 'all' : 'mine';
-  let selected = params.get('v'), filter = 'all', isAdmin = false, ventures = [], rate = 5;
+  let selected = params.get('v'), filter = 'all', isAdmin = false, ventures = [], rate = 5, openDeal = false;
 
   // ---- tiny DOM helpers ---------------------------------------------------
   const el = (tag, text, className) => {
@@ -43,7 +43,9 @@
     const days = Math.floor((Date.now() - new Date(d).getTime()) / 86_400_000);
     return days <= 0 ? 'Today' : days === 1 ? 'Yesterday' : days < 30 ? `${days} days ago` : date(d);
   }
-  const lfgStatus = v => v.decision ? DECISION[v.decision.decision] : v.assessment?.verdict ? ['Awaiting review', 'neutral'] : ['Not assessed', 'muted'];
+  const DEAL = { equity: 'Equity', revenue_share: 'Revenue share', profit_share: 'Profit share' };
+  const AGREEMENT = { awaiting_signatures: ['Awaiting signatures', 'warn'], changes_requested: ['Renegotiating', 'warn'], active: ['Active', 'good'] };
+  const lfgStatus = v => v.deal && AGREEMENT[v.deal.status] ? AGREEMENT[v.deal.status] : v.decision ? DECISION[v.decision.decision] : v.assessment?.verdict ? ['Awaiting review', 'neutral'] : ['Not assessed', 'muted'];
   const metricValue = (name, v) => name === 'revenue_usd' ? usd(v) : name === 'conversion_rate' ? `${v}%` : compact(v);
 
   // ---- data and routing ---------------------------------------------------
@@ -60,7 +62,7 @@
     if (id) q.set('v', id);
     return `${location.pathname}${q.size ? `?${q}` : ''}`;
   }
-  function go(id) { selected = id; history.pushState(null, '', url()); render(); window.scrollTo(0, 0); }
+  function go(id) { selected = id; openDeal = false; history.pushState(null, '', url()); render(); window.scrollTo(0, 0); }
   addEventListener('popstate', () => {
     const q = new URLSearchParams(location.search), nextScope = q.get('scope') === 'all' ? 'all' : 'mine';
     selected = q.get('v');
@@ -128,6 +130,7 @@
     ['all', 'All', () => true],
     ['building', 'Building', v => v.progress.total > 0],
     ['review', 'Awaiting review', v => !v.decision && Boolean(v.assessment?.verdict)],
+    ['signing', 'Awaiting signatures', v => ['awaiting_signatures', 'changes_requested'].includes(v.deal?.status)],
     ['info', 'Needs info', v => (v.decision?.decision || v.assessment?.verdict) === 'needs_more_info'],
     ['closed', 'Declined', v => ['declined', 'prohibited', 'decline'].includes(v.decision?.decision || v.assessment?.verdict)],
     ['draft', 'Not assessed', v => !v.assessment],
@@ -157,7 +160,7 @@
     const progressCell = p.total ? h('div', 'vd-stack', el('strong', `Week ${p.week}`), el('span', `${p.shipped} of ${p.total} shipped`, 'vd-sub')) : el('span', '—', 'vd-faint');
     item.append(
       h('div', 'vd-cell vd-cell-main', el('strong', v.title, 'vd-row-title'), el('span', subtitle, 'vd-sub vd-clamp')),
-      h('div', 'vd-cell vd-stack', pill(lfgStatus(v)), r?.verdict ? el('span', `Analyst: ${VERDICT[r.verdict][0]}`, 'vd-sub') : null),
+      h('div', 'vd-cell vd-stack', pill(lfgStatus(v)), v.deal ? el('span', DEAL[v.deal.structure], 'vd-sub') : r?.verdict ? el('span', `Analyst: ${VERDICT[r.verdict][0]}`, 'vd-sub') : null),
       h('div', 'vd-cell', spendCell),
       h('div', 'vd-cell', progressCell),
       h('div', 'vd-cell', v.revenueUsd !== null ? h('div', 'vd-stack', el('strong', usd(v.revenueUsd)), el('span', 'per month', 'vd-sub')) : el('span', '—', 'vd-faint')),
@@ -230,9 +233,9 @@
     const change = latest && prev && prev.value ? Math.round(100 * (latest.value - prev.value) / prev.value) : null;
     if (!p.total) {
       return h('div', 'vd-metrics',
-        m('Stage', el('strong', data.decision ? DECISION[data.decision.decision][0] : r ? 'Awaiting review' : 'Talking to analyst'), r ? `Analyst says ${VERDICT[r.verdict][0].toLowerCase()}` : null),
+        m('Stage', el('strong', data.agreements.current ? AGREEMENT[data.agreements.current.status]?.[0] || 'Agreement' : data.decision ? DECISION[data.decision.decision][0] : r ? 'Awaiting review' : 'Talking to analyst'), r ? `Analyst says ${VERDICT[r.verdict][0].toLowerCase()}` : null),
         m('Recommended tranche', el('strong', r?.verdict === 'fund' ? tokens(r.tokenTranche.totalTokens) : '—'), r?.verdict === 'fund' ? `≈ ${cost(r.tokenTranche.totalTokens)} of agent work` : null),
-        m('Work planned', el('strong', r?.verdict === 'fund' ? `${r.tokenTranche.lineItems.length} items` : '—'), r?.verdict === 'fund' ? 'Starts when LFG approves' : null),
+        m('Work planned', el('strong', r?.verdict === 'fund' ? `${r.tokenTranche.lineItems.length} items` : '—'), r?.verdict === 'fund' ? 'Starts when both sides sign' : null),
         m('Next check-in', el('strong', r?.checkInWeeks ? `${r.checkInWeeks} weeks after funding` : '—'), null));
     }
     return h('div', 'vd-metrics',
@@ -263,7 +266,7 @@
     const items = data.workItems;
     if (!items.length) {
       if (r?.verdict !== 'fund') return null;
-      return card('What LFG will build', el('p', 'Planned from the analyst’s recommendation. Work starts when LFG approves the tranche.', 'vd-muted vd-tight'),
+      return card('What LFG will build', el('p', 'Planned from the analyst’s recommendation. Work starts once LFG approves and both sides sign the agreement.', 'vd-muted vd-tight'),
         h('div', 'vd-work', ...r.tokenTranche.lineItems.map(line => h('div', 'vd-work-item',
           h('div', 'vd-work-top', h('div', 'vd-work-title', line.workType ? el('span', WORK[line.workType] || line.workType, 'vd-type') : null, el('strong', line.item)), pill(STATUS.planned)),
           line.deliverable ? el('p', line.deliverable, 'vd-deliverable') : null,
@@ -333,9 +336,129 @@
           h('div', 'vd-event-meta', el('span', shortDate(e.occurredAt), 'vd-sub'), e.tokens && ['shipped', 'spend'].includes(e.kind) ? el('span', `${compact(e.tokens)} · ${cost(e.tokens)}`, 'vd-sub') : null))))))));
   }
 
+  // Deal terms editor shared by the decision form, revisions and change requests.
+  function termFields(initial = {}, optional = false) {
+    const structure = el('select'); structure.setAttribute('aria-label', 'Deal structure');
+    if (optional) structure.append(new Option('No change', ''));
+    Object.entries(DEAL).forEach(([k, v]) => structure.append(new Option(v, k)));
+    structure.value = initial.structure ?? (optional ? '' : 'revenue_share');
+    const num = (label, value, step) => { const i = el('input'); i.type = 'number'; i.step = step; i.min = '0'; i.setAttribute('aria-label', label); if (value !== null && value !== undefined) i.value = String(value); return i; };
+    const equity = num('Equity %', initial.equityPercent, '0.1'), share = num('Share %', initial.revenueSharePercent, '0.5'), cap = num('Cap multiple', initial.capMultiple, '0.5'), term = num('Term in months', initial.termMonths, '1');
+    const f = (label, input) => h('label', 'vd-field', el('span', label), input);
+    const eqField = f('Equity %', equity), shareField = f('Share %', share), capField = f('Cap (× tranche value)', cap), termField = f('Term (months)', term);
+    const sync = () => { const v = structure.value; eqField.hidden = v !== 'equity'; [shareField, capField, termField].forEach(x => { x.hidden = !v || v === 'equity'; }); };
+    structure.onchange = sync; sync();
+    const n = i => i.value === '' ? null : Number(i.value);
+    return {
+      node: h('div', 'vd-terms-form', f('Deal', structure), eqField, shareField, capField, termField),
+      read: () => {
+        const v = structure.value; if (!v) return null;
+        return v === 'equity' ? { structure: v, equityPercent: n(equity), revenueSharePercent: null, capMultiple: null, termMonths: null }
+          : { structure: v, equityPercent: null, revenueSharePercent: n(share), capMultiple: n(cap), termMonths: n(term) };
+      },
+    };
+  }
+
+  function dealCard(data, r, reload) {
+    const ag = data.agreements.current, versions = data.agreements.versions, messages = data.agreements.messages;
+    if (!ag && !r?.deal) return null;
+    const box = h('details', 'vd-card vd-deal');
+    const needsMe = ag && ag.status === 'awaiting_signatures' && ((data.isOwner && !ag.founderSignedAt) || (isAdmin && !ag.lfgSignedAt));
+    const needsLfg = ag && ag.status === 'changes_requested' && isAdmin;
+    const structure = ag?.structure ?? r.deal.structure;
+    box.append(h('summary', 'vd-deal-summary',
+      h('div', 'vd-deal-title', el('h2', 'Deal'), el('span', DEAL[structure], 'vd-type'), el('span', ag ? ag.summary : `Analyst recommends: ${dealLine(r.deal, r.tokenTranche.totalTokens)}`, 'vd-sub')),
+      h('div', 'vd-deal-state', needsMe || needsLfg ? el('span', 'Action needed', 'vd-pill bad') : null, ag ? pill(AGREEMENT[ag.status] || [ag.status, 'neutral']) : pill(['Not proposed yet', 'muted']))));
+    const body = h('div', 'vd-deal-body');
+    if (!ag) {
+      body.append(el('p', `The analyst recommends ${DEAL[r.deal.structure].toLowerCase()}: ${dealLine(r.deal, r.tokenTranche.totalTokens)}. ${r.deal.rationale}`, 'vd-muted'),
+        el('p', 'LFG proposes the final terms when it approves. Both sides then sign the agreement before any work starts.', 'vd-sub'));
+      box.append(body); return box;
+    }
+    const term = (label, value) => h('div', 'vd-term', el('span', label, 'vd-stat-label'), el('strong', value));
+    body.append(h('div', 'vd-terms',
+      term('Structure', DEAL[ag.structure]),
+      ag.structure === 'equity' ? term('LFG stake', `${ag.equityPercent}%`) : term(ag.structure === 'revenue_share' ? 'Share of revenue' : 'Share of profit', `${ag.revenueSharePercent}%`),
+      ag.structure === 'equity' ? null : term('Repayment cap', `${ag.capMultiple}× · ${usd(ag.valueUsd * ag.capMultiple)}`),
+      ag.structure === 'equity' ? null : term('Term', `${ag.termMonths} months`),
+      term('Tokens committed', `${compact(ag.tokensCommitted)} · ≈ ${usd(ag.valueUsd, ag.valueUsd < 100 ? 2 : 0)}`),
+      term('Version', `v${ag.version}${ag.activatedAt ? ` · active ${date(ag.activatedAt)}` : ''}`)));
+    const doc = el('div', '', 'vd-agreement');
+    window.ventureMarkdown ? window.ventureMarkdown.into(doc, ag.body, new Map()) : (doc.textContent = ag.body);
+    body.append(doc);
+
+    const signature = (side, label, signedName, signedAt, canSign) => {
+      const block = h('div', `vd-signature${signedAt ? ' signed' : ''}`, el('span', label, 'vd-stat-label'));
+      if (signedAt) { block.append(el('strong', signedName, 'vd-signed-name'), el('span', `Signed ${date(signedAt)}`, 'vd-sub')); return block; }
+      if (!canSign) { block.append(el('span', ag.status === 'changes_requested' ? 'Waiting for LFG to respond' : 'Not signed yet', 'vd-sub')); return block; }
+      const name = el('input'); name.placeholder = 'Type your full name'; name.setAttribute('aria-label', `${label} signature`);
+      const consent = el('input'); consent.type = 'checkbox';
+      const go = btn('Sign agreement', async () => {
+        if (name.value.trim().length < 2 || !consent.checked) { alert('Type your full name and tick the box to sign.'); return; }
+        go.disabled = true;
+        try { await api(`/api/venture/agreements/${encodeURIComponent(ag.id)}/sign`, { method: 'POST', body: JSON.stringify({ side, name: name.value.trim(), consent: true }) }); await reload(true); }
+        catch (error) { go.disabled = false; alert(errorText(error)); }
+      }, 'vd-btn primary small');
+      block.append(name, h('label', 'vd-consent', consent, el('span', `I have read this agreement and agree to it on behalf of ${side === 'founder' ? 'myself as the founder' : 'LFG'}.`)), go);
+      return block;
+    };
+    body.append(h('div', 'vd-signatures',
+      signature('founder', 'Founder', ag.founderSignedName, ag.founderSignedAt, data.isOwner && ag.status === 'awaiting_signatures'),
+      signature('lfg', 'LFG', ag.lfgSignedName, ag.lfgSignedAt, isAdmin && ag.status === 'awaiting_signatures')));
+
+    if (messages.length || ag.status !== 'active') {
+      const thread = h('div', 'vd-thread', el('h3', 'Negotiation'));
+      if (!messages.length) thread.append(el('p', 'No change requests. The founder can ask to renegotiate before signing; LFG reviews every request manually.', 'vd-sub'));
+      const KIND = { change_request: 'asked for changes', reply: 'replied', revision: 'revised the terms' };
+      for (const m of messages) {
+        const proposed = m.proposedTerms && m.proposedTerms.structure ? dealLine(m.proposedTerms, m.proposedTerms.tokens ?? ag.tokensCommitted) : null;
+        thread.append(h('div', `vd-msg ${m.side}`, h('div', 'vd-msg-head', el('strong', m.side === 'lfg' ? 'LFG' : (m.authorName || 'Founder')), el('span', `${KIND[m.kind]} · ${date(m.createdAt)}`, 'vd-sub')), el('p', m.message), proposed ? el('p', `Proposed: ${proposed}`, 'vd-sub') : null));
+      }
+      if (data.isOwner && ag.status === 'awaiting_signatures' && !ag.founderSignedAt) {
+        const text = el('textarea'); text.rows = 3; text.placeholder = 'What would you like to change, and why?'; text.setAttribute('aria-label', 'Change request');
+        const fields = termFields({}, true);
+        const send = btn('Request changes', async () => {
+          if (text.value.trim().length < 5) { alert('Explain what you would like to change.'); return; }
+          send.disabled = true;
+          try { const proposed = fields.read(); await api(`/api/venture/agreements/${encodeURIComponent(ag.id)}/changes`, { method: 'POST', body: JSON.stringify({ message: text.value.trim(), ...(proposed ? { proposed } : {}) }) }); await reload(true); }
+          catch (error) { send.disabled = false; alert(errorText(error)); }
+        }, 'vd-btn small');
+        thread.append(h('details', 'vd-renegotiate', el('summary', 'Want different terms? Ask to renegotiate'), el('p', 'LFG reviews requests manually and replies here, either with revised terms (a new version to sign) or keeping these.', 'vd-sub'), text, el('span', 'Proposed terms (optional)', 'vd-stat-label'), fields.node, send));
+      }
+      if (isAdmin && ag.status === 'changes_requested') {
+        const text = el('textarea'); text.rows = 3; text.placeholder = 'Reply to the founder'; text.setAttribute('aria-label', 'Reply to change request');
+        const fields = termFields(ag);
+        const tokensInput = el('input'); tokensInput.type = 'number'; tokensInput.value = String(ag.tokensCommitted); tokensInput.setAttribute('aria-label', 'Tokens committed');
+        const respond = async revise => {
+          if (text.value.trim().length < 2) { alert('Write a reply to the founder.'); return; }
+          try {
+            const revised = revise ? { ...fields.read(), tokens: Number(tokensInput.value) || ag.tokensCommitted } : undefined;
+            await api(`/api/venture/admin/agreements/${encodeURIComponent(ag.id)}/respond`, { method: 'POST', body: JSON.stringify({ message: text.value.trim(), ...(revised ? { revised } : {}) }) }); await reload(true);
+          } catch (error) { alert(errorText(error)); }
+        };
+        thread.append(h('div', 'vd-respond', el('h3', 'Respond to the change request'), text, fields.node, h('label', 'vd-field', el('span', 'Tokens committed'), tokensInput),
+          h('div', 'vd-new-actions', btn('Keep current terms', () => respond(false), 'vd-btn small'), btn('Send revised terms', () => respond(true), 'vd-btn primary small'))));
+      }
+      body.append(thread);
+    }
+    if (versions.length > 1) body.append(h('details', 'vd-history', el('summary', `Versions (${versions.length})`), ...versions.map(v => el('p', `v${v.version} · ${v.status.replace('_', ' ')} · ${v.summary} · ${date(v.createdAt)}`, 'vd-sub'))));
+    box.append(body);
+    if (needsMe || needsLfg || openDeal) box.open = true;
+    box.addEventListener('toggle', () => { openDeal = box.open; });
+    return box;
+  }
+  const dealLine = (d, t) => d.structure === 'equity' ? `${d.equityPercent}% equity` : `${d.revenueSharePercent}% of ${d.structure === 'revenue_share' ? 'revenue' : 'profit'} until ${d.capMultiple}× (${usd(t / 1e6 * rate * d.capMultiple)}) or ${d.termMonths} months`;
+
   function decisionNote(data, r) {
     const d = data.decision;
     const note = (tone, title, text, extra) => h('div', `vd-callout ${tone}`, el('strong', title), text ? el('p', text) : null, extra || null);
+    const ag = data.agreements.current;
+    if (ag && ag.status !== 'active') {
+      const mine = (data.isOwner && !ag.founderSignedAt) || (isAdmin && !ag.lfgSignedAt);
+      return ag.status === 'changes_requested'
+        ? note('warn', 'The founder asked to change the terms', isAdmin ? 'Review the request in the Deal section and revise the terms or reply.' : 'LFG is reviewing your request. You’ll see revised terms or a reply in the Deal section.')
+        : note('warn', `Approved: ${DEAL[ag.structure]} agreement ready to sign`, `${ag.summary}. Work starts once both sides sign.${mine ? ' Open the Deal section to read and sign it.' : ''}`);
+    }
     if (d) {
       const [label, tone] = DECISION[d.decision];
       return note(tone, d.decision === 'approved' ? `LFG approved ${tokens(d.tokensApproved)} (≈ ${cost(d.tokensApproved)}) on ${date(d.createdAt)}` : `LFG decision: ${label}`, d.founderNote ? `“${d.founderNote}”` : null, isAdmin && d.internalNote ? el('p', `Internal: ${d.internalNote}`, 'vd-sub') : null);
@@ -422,9 +545,13 @@
     const amount = el('input'); amount.type = 'number'; amount.min = '0'; amount.step = '1000'; amount.setAttribute('aria-label', 'Tokens approved');
     const suggested = { fund: 'approved', needs_more_info: 'needs_more_info', decline: 'declined', prohibited: 'prohibited' };
     choice.value = suggested[r?.verdict] || 'needs_more_info';
-    amount.value = String(r?.verdict === 'fund' ? r.tokenTranche.totalTokens : 0);
+    // Start from what LFG already decided, else from the analyst's recommendation.
+    if (data.decision) choice.value = data.decision.decision;
+    amount.value = String(data.decision?.decision === 'approved' ? data.decision.tokensApproved : r?.verdict === 'fund' ? r.tokenTranche.totalTokens : 0);
     const dollars = el('span', '', 'vd-sub');
-    const sync = () => { amount.disabled = choice.value !== 'approved'; if (amount.disabled) amount.value = '0'; dollars.textContent = Number(amount.value) ? `≈ ${cost(Number(amount.value))}` : ''; };
+    const deal = termFields(data.agreements.current ?? r?.deal ?? {});
+    const dealBox = h('div', 'vd-deal-terms', el('span', 'Deal terms (the agreement both sides sign)', 'vd-stat-label'), deal.node);
+    const sync = () => { amount.disabled = choice.value !== 'approved'; dealBox.hidden = amount.disabled; if (amount.disabled) amount.value = '0'; dollars.textContent = Number(amount.value) ? `≈ ${cost(Number(amount.value))}` : ''; };
     choice.onchange = sync; amount.oninput = sync; sync();
     const note = el('textarea'); note.rows = 2; note.maxLength = 2000; note.placeholder = 'Note to the founder (they’ll see this)';
     const internal = el('textarea'); internal.rows = 2; internal.maxLength = 4000; internal.placeholder = 'Internal note (LFG only)';
@@ -432,13 +559,13 @@
     const feedback = el('p', '', 'vd-muted'); feedback.setAttribute('role', 'status');
     const field = (label, input, extra) => h('label', 'vd-field', el('span', label), input, extra || null);
     form.append(el('h2', 'Record LFG decision'), el('p', [data.owner?.name, data.owner?.email].filter(Boolean).join(' · '), 'vd-sub'),
-      field('Decision', choice), field('Tokens approved', amount, dollars), note, internal,
-      el('p', 'Approving releases the tranche: each recommended line item becomes work for LFG’s agents.', 'vd-sub'), submit, feedback);
+      field('Decision', choice), field('Tokens approved', amount, dollars), dealBox, note, internal,
+      el('p', 'Approving generates the agreement. Work starts only after the founder and LFG both sign it.', 'vd-sub'), submit, feedback);
     form.onsubmit = async e => {
       e.preventDefault(); submit.disabled = true; feedback.textContent = 'Saving…';
       try {
-        await api(`/api/venture/admin/conversations/${encodeURIComponent(data.conversation.id)}/decision`, { method: 'POST', body: JSON.stringify({ decision: choice.value, tokensApproved: Number(amount.value) || 0, founderNote: note.value.trim() || undefined, internalNote: internal.value.trim() || undefined }) });
-        await reload();
+        await api(`/api/venture/admin/conversations/${encodeURIComponent(data.conversation.id)}/decision`, { method: 'POST', body: JSON.stringify({ decision: choice.value, tokensApproved: Number(amount.value) || 0, founderNote: note.value.trim() || undefined, internalNote: internal.value.trim() || undefined, ...(choice.value === 'approved' ? { deal: deal.read() } : {}) }) });
+        await reload(true);
       } catch (error) { feedback.textContent = errorText(error); submit.disabled = false; }
     };
     if (data.decisions.length > 1) {
@@ -474,7 +601,7 @@
     const back = link('← All ventures', url(null), 'vd-back');
     back.onclick = e => { e.preventDefault(); go(null); };
     if (!root.querySelector('.vd-detail-head')) root.replaceChildren(back, el('p', 'Loading venture…', 'vd-loading'));
-    const reload = async () => { await refreshList(); await renderDetail(id); };
+    const reload = async keepDealOpen => { if (keepDealOpen) openDeal = true; await refreshList(); await renderDetail(id); };
     try {
       const data = await api(`/api/venture/conversations/${encodeURIComponent(id)}/overview`);
       if (id !== selected) return;
@@ -506,7 +633,7 @@
       if (a?.missingInputs.length) side.append(card('Missing inputs', h('ul', 'vd-plain', ...a.missingInputs.map(m => el('li', m)))));
       if (isAdmin) side.append(transcript(data, sources));
 
-      root.replaceChildren(back, head, decisionNote(data, r), stateStrip(data, r),
+      root.replaceChildren(back, head, decisionNote(data, r), stateStrip(data, r), dealCard(data, r, reload) || '',
         main.childElementCount ? h('div', 'vd-detail-grid', main, side) : side,
         el('p', `Dollar figures convert tokens at ${usd(rate, 2)} per million. Market figures, token sizes and timelines in the assessment are scenarios, not promises.`, 'vd-footnote'));
     } catch (error) {

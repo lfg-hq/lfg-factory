@@ -252,6 +252,46 @@ a.vd-row:hover .vd-row .vd-track{width:100%;max-width:140px;height:5px;margin:3p
 .vd-divider{display:flex;align-items:baseline;gap:10px;margin:12px 2px -2px;padding-top:12px;border-top:1px solid var(--line)}
 .vd-divider>span:first-child{font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)}
 
+/* ---- deal and agreement ---- */
+.vd-deal{margin-bottom:20px;padding:0}
+.vd-deal-summary{list-style:none;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:16px;padding:16px 22px}
+.vd-deal-summary::-webkit-details-marker{display:none}
+.vd-deal-summary::before{content:"▸";color:var(--muted);font-size:12px;transition:transform .15s;margin-right:-6px}
+.vd-deal[open] .vd-deal-summary::before{transform:rotate(90deg)}
+.vd-deal-title{display:flex;align-items:center;gap:10px;flex-wrap:wrap;flex:1;min-width:0}
+.vd-deal-title h2{margin:0}
+.vd-deal-state{display:flex;gap:6px;align-items:center;flex-shrink:0}
+.vd-deal-body{padding:0 22px 22px;border-top:1px solid var(--line-soft);display:flex;flex-direction:column;gap:16px;padding-top:16px}
+.vd-terms{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px}
+.vd-term{display:flex;flex-direction:column;gap:2px;padding:10px 12px;border-radius:10px;background:var(--sunk);border:1px solid var(--line-soft)}
+.vd-term strong{font-size:15px;font-weight:800}
+.vd-agreement{max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:20px 24px;background:var(--panel);font-size:13px;line-height:1.65;color:var(--ink-2)}
+.vd-agreement h1{font-size:18px;margin:0 0 4px;color:var(--ink)}.vd-agreement h2{font-size:14px;margin:16px 0 6px;color:var(--ink)}
+.vd-agreement p{margin:0 0 8px}.vd-agreement ul{margin:0 0 8px;padding-left:20px}.vd-agreement hr{border:0;border-top:1px solid var(--line);margin:14px 0}
+.vd-signatures{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.vd-signature{display:flex;flex-direction:column;gap:8px;padding:14px 16px;border:1px dashed var(--line);border-radius:10px}
+.vd-signature.signed{border-style:solid;border-color:var(--good-line);background:var(--good-bg)}
+.vd-signed-name{font-family:"Brush Script MT","Segoe Script","Snell Roundhand",cursive;font-size:24px;font-weight:400;color:var(--ink)}
+.vd-signature input[type=text],.vd-signature input:not([type]){height:34px;border:1px solid var(--line);border-radius:8px;padding:0 10px;background:var(--panel)}
+.vd-consent{display:flex;gap:8px;align-items:flex-start;font-size:12px;color:var(--ink-2)}
+.vd-consent input{margin-top:2px;accent-color:#4f46e5}
+.vd-signature .vd-btn{align-self:flex-start}
+.vd-thread{display:flex;flex-direction:column;gap:8px}
+.vd-thread h3,.vd-respond h3{margin:0;font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+.vd-msg{padding:10px 14px;border-radius:10px;border:1px solid var(--line-soft);max-width:85%}
+.vd-msg.founder{background:var(--sunk)}
+.vd-msg.lfg{background:var(--accent-soft);border-color:var(--accent-track);margin-left:auto}
+.vd-msg-head{display:flex;gap:8px;align-items:baseline}
+.vd-msg p{margin:4px 0 0}
+.vd-renegotiate summary{cursor:pointer;font-weight:700;font-size:13px;color:var(--accent-ink)}
+.vd-renegotiate[open]{display:flex;flex-direction:column;gap:8px}
+.vd-renegotiate .vd-btn{align-self:flex-start}
+.vd-respond{display:flex;flex-direction:column;gap:8px;padding:14px;border-radius:10px;border:1px solid var(--accent-track);background:var(--panel)}
+.vd-renegotiate textarea,.vd-respond textarea,.vd-respond input,.vd-terms-form select,.vd-terms-form input{width:100%;border:1px solid var(--line);border-radius:8px;padding:7px 9px;background:var(--panel);font-size:13px;color:var(--ink)}
+.vd-terms-form{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px}
+.vd-deal-terms{display:flex;flex-direction:column;gap:6px;padding:10px;border-radius:8px;background:var(--sunk)}
+@media(max-width:720px){.vd-signatures{grid-template-columns:1fr}.vd-deal-summary{flex-direction:column;align-items:flex-start}.vd-msg{max-width:100%}}
+
 /* ---- responsive ---- */
 @media(max-width:1080px){
   .vd-row{grid-template-columns:minmax(0,2fr) minmax(0,1fr) minmax(0,1fr) minmax(0,1fr)}

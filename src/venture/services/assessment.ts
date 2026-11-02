@@ -25,6 +25,16 @@ export const TOKEN_POLICY = {
 // items created on approval, and the dashboard labels.
 export const WORK_TYPES = ['landing_page', 'content_strategy', 'mvp', 'product_feature', 'integration', 'support_tooling', 'security', 'maintenance', 'marketing', 'sales', 'analytics', 'operations'] as const;
 export type WorkType = typeof WORK_TYPES[number];
+// How LFG is paid back for a tranche: a stake in the company, or a share of
+// revenue or profit until a capped multiple of the tokens' value is returned.
+export const DEAL_STRUCTURES = ['equity', 'revenue_share', 'profit_share'] as const;
+export type DealStructure = typeof DEAL_STRUCTURES[number];
+export interface DealTerms { structure: DealStructure; equityPercent: number | null; revenueSharePercent: number | null; capMultiple: number | null; termMonths: number | null }
+// Terms are either a stake, or a share with a cap and a term, never both.
+export function dealTermsProblem(d: DealTerms) {
+  if (d.structure === 'equity') return d.equityPercent === null ? 'Equity deals need a stake.' : d.revenueSharePercent !== null || d.capMultiple !== null ? 'Equity deals carry no revenue share or cap.' : null;
+  return d.revenueSharePercent === null || d.capMultiple === null || d.termMonths === null ? 'Share deals need a percentage, a cap multiple and a term.' : d.equityPercent !== null ? 'Share deals carry no equity.' : null;
+}
 const tokens = z.number().int().nonnegative().max(TOKEN_POLICY.maxFirstTranche);
 const recommendation = z.object({
   verdict: z.enum(['fund', 'needs_more_info', 'decline', 'prohibited']),
@@ -40,6 +50,15 @@ const recommendation = z.object({
   founderCommitments: z.array(z.object({ action: text, successSignal: text, dueWeek: z.number().int().nonnegative().nullable() }).strict()).max(10),
   nextSteps: z.array(text).min(1).max(8),
   checkInWeeks: z.number().int().min(1).max(12).nullable(),
+  // How LFG is paid back. Required for "fund"; null otherwise.
+  deal: z.object({
+    structure: z.enum(DEAL_STRUCTURES),
+    equityPercent: z.number().min(0.1).max(49).nullable(),
+    revenueSharePercent: z.number().min(0.5).max(50).nullable(),
+    capMultiple: z.number().min(1).max(10).nullable(),
+    termMonths: z.number().int().min(6).max(120).nullable(),
+    rationale: text,
+  }).strict().nullable(),
 }).strict();
 export const assessmentSchema = z.object({
   status: z.enum(['provisional', 'ready']),
@@ -94,6 +113,9 @@ export function validateAssessment(input: unknown, sourceIds: Set<string>): Vent
   if (r.verdict === 'fund' && (tranche.totalTokens <= 0 || !r.tier || !r.founderCommitments.length)) throw new Error('INVALID_FUND_RECOMMENDATION');
   if (r.verdict !== 'fund' && tranche.totalTokens !== 0) throw new Error('TOKENS_WITHOUT_FUNDING');
   if (r.verdict === 'prohibited' && !r.complianceFlags.length) throw new Error('MISSING_COMPLIANCE_FLAGS');
+  if (r.verdict === 'fund' && !r.deal) throw new Error('MISSING_DEAL_TERMS');
+  if (r.verdict !== 'fund' && r.deal) throw new Error('DEAL_WITHOUT_FUNDING');
+  if (r.deal && dealTermsProblem(r.deal)) throw new Error('INVALID_DEAL_TERMS');
   if (r.verdict === 'needs_more_info' && !value.missingInputs.length) throw new Error('MISSING_INPUTS_REQUIRED');
   if (unknown && !value.missingInputs.length) throw new Error('MISSING_INPUTS_REQUIRED');
   if ((unknown || value.missingInputs.length) && value.status !== 'provisional') throw new Error('PROVISIONAL_REQUIRED');

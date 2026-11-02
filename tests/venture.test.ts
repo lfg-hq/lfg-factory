@@ -158,7 +158,8 @@ test("LFG admins review every venture and record decisions; founders keep tasks 
     expect((await request(decisionPath, 1, "POST", { decision: "approved", tokensApproved: 1000 }, "https://evil.example")).status).toBe(403);
     expect((await request(decisionPath, 1, "POST", { decision: "approved", tokensApproved: 0 })).status).toBe(400);
     expect((await request(decisionPath, 1, "POST", { decision: "declined", tokensApproved: 5 })).status).toBe(400);
-    const decided = await request(decisionPath, 1, "POST", { decision: "approved", tokensApproved: 2_500_000, founderNote: "TEST FIXTURE go", internalNote: "TEST FIXTURE internal only" });
+    expect((await request(decisionPath, 1, "POST", { decision: "approved", tokensApproved: 1000 })).status).toBe(400); // approvals need deal terms
+    const decided = await request(decisionPath, 1, "POST", { decision: "approved", tokensApproved: 2_500_000, founderNote: "TEST FIXTURE go", internalNote: "TEST FIXTURE internal only", deal: { structure: "revenue_share", equityPercent: null, revenueSharePercent: 8, capMultiple: 3, termMonths: 36 } });
     expect(decided.status).toBe(201); expect((await decided.json()).decision.assessmentVersion).toBe(1);
     const founderView = await (await request(`/api/venture/conversations/${conversationId}/overview`, 0)).json();
     expect(founderView.decision.tokensApproved).toBe(2_500_000); expect(founderView.decision.founderNote).toBe("TEST FIXTURE go");
@@ -178,7 +179,20 @@ test("approval releases the tranche as work items; reviewers report progress and
   env.VENTURE_ADMIN_EMAILS = emails[1]!;
   try {
     // 2.0M approved against a 2.5M recommendation: proportions kept, exact total.
-    expect((await request(`/api/venture/admin/conversations/${conversationId}/decision`, 1, "POST", { decision: "approved", tokensApproved: 2_000_000 })).status).toBe(201);
+    expect((await request(`/api/venture/admin/conversations/${conversationId}/decision`, 1, "POST", { decision: "approved", tokensApproved: 2_000_000, deal: { structure: "revenue_share", equityPercent: null, revenueSharePercent: 8, capMultiple: 3, termMonths: 36 } })).status).toBe(201);
+    // Nothing is released until both sides sign.
+    expect((await db.select().from(ventureWorkItems).where(eq(ventureWorkItems.conversationId, conversationId))).length).toBe(0);
+    const agreementId = (await (await request(`/api/venture/conversations/${conversationId}/overview`, 0)).json()).agreements.current.id;
+    const sign = (user: number, side: string) => request(`/api/venture/agreements/${agreementId}/sign`, user, "POST", { side, name: "TEST FIXTURE Signer", consent: true });
+    expect((await sign(0, "lfg")).status).toBe(403);
+    expect((await sign(1, "founder")).status).toBe(403);
+    expect((await request(`/api/venture/agreements/${agreementId}/sign`, 0, "POST", { side: "founder", name: "TEST FIXTURE" })).status).toBe(400);
+    expect((await sign(0, "founder")).status).toBe(200);
+    expect((await sign(0, "founder")).status).toBe(409);
+    expect((await db.select().from(ventureWorkItems).where(eq(ventureWorkItems.conversationId, conversationId))).length).toBe(0);
+    const active = await (await sign(1, "lfg")).json();
+    expect(active.agreement.status).toBe("active"); expect(active.agreement.activatedAt).toBeTruthy();
+    expect(active.agreement.body).toContain("8% of the Venture's gross revenue");
     const items = await db.select().from(ventureWorkItems).where(eq(ventureWorkItems.conversationId, conversationId));
     expect(items.map(i => i.workType).sort()).toEqual(["landing_page", "mvp"]);
     expect(items.reduce((sum, i) => sum + i.tokensBudgeted, 0)).toBe(2_000_000);
@@ -206,5 +220,37 @@ test("approval releases the tranche as work items; reviewers report progress and
     const list = await (await request("/api/venture/dashboard", 0)).json();
     const row = list.ventures.find((v: any) => v.id === conversationId);
     expect(row.progress.tokensSpent).toBe(350_000); expect(row.revenueUsd).toBe(120); expect(list.usdPerMillionTokens).toBeGreaterThan(0);
+  } finally { env.VENTURE_ADMIN_EMAILS = previous; }
+});
+
+test("founders can ask to renegotiate before signing; LFG revises (new version) or keeps the terms", async () => {
+  const [other] = await db.insert(ventureConversations).values({ userId: fixtureIds[0]!, title: "TEST FIXTURE negotiation" }).returning();
+  await db.insert(ventureAssessments).values({ conversationId: other!.id, version: 1, status: "provisional", contentJson: fundRecommendation() });
+  const previous = env.VENTURE_ADMIN_EMAILS;
+  env.VENTURE_ADMIN_EMAILS = emails[1]!;
+  try {
+    expect((await request(`/api/venture/admin/conversations/${other!.id}/decision`, 1, "POST", { decision: "approved", tokensApproved: 2_500_000, deal: { structure: "equity", equityPercent: 6, revenueSharePercent: null, capMultiple: null, termMonths: null } })).status).toBe(201);
+    const current = async () => (await (await request(`/api/venture/conversations/${other!.id}/overview`, 0)).json()).agreements;
+    const v1 = (await current()).current;
+    expect(v1.structure).toBe("equity"); expect(v1.body).toContain("6% of the fully diluted equity");
+    const changes = `/api/venture/agreements/${v1.id}/changes`;
+    expect((await request(changes, 1, "POST", { message: "TEST FIXTURE not mine" })).status).toBe(403);
+    expect((await request(changes, 0, "POST", { message: "TEST FIXTURE could we do 4% given I bring partners?", proposed: { structure: "equity", equityPercent: 4 } })).status).toBe(200);
+    expect((await current()).current.status).toBe("changes_requested");
+    expect((await request(`/api/venture/agreements/${v1.id}/sign`, 0, "POST", { side: "founder", name: "TEST FIXTURE", consent: true })).status).toBe(409);
+    const respond = `/api/venture/admin/agreements/${v1.id}/respond`;
+    expect((await request(respond, 0, "POST", { message: "TEST FIXTURE" })).status).toBe(403);
+    expect((await request(respond, 1, "POST", { message: "TEST FIXTURE", revised: { structure: "equity", equityPercent: 5, revenueSharePercent: 8, capMultiple: null, termMonths: null } })).status).toBe(400);
+    expect((await request(respond, 1, "POST", { message: "TEST FIXTURE meet in the middle at 5%", revised: { structure: "equity", equityPercent: 5, revenueSharePercent: null, capMultiple: null, termMonths: null } })).status).toBe(200);
+    const after = await current();
+    expect(after.current.version).toBe(2); expect(after.current.equityPercent).toBe(5); expect(after.current.status).toBe("awaiting_signatures");
+    expect(after.versions.find((v: any) => v.version === 1).status).toBe("superseded");
+    expect(after.messages.map((m: any) => m.kind)).toEqual(["change_request", "revision"]);
+    expect((await request(`/api/venture/agreements/${v1.id}/sign`, 0, "POST", { side: "founder", name: "TEST FIXTURE", consent: true })).status).toBe(409);
+    // A second request, answered by keeping the terms, reopens the same version.
+    const v2 = after.current.id;
+    await request(`/api/venture/agreements/${v2}/changes`, 0, "POST", { message: "TEST FIXTURE one more ask" });
+    expect((await request(`/api/venture/admin/agreements/${v2}/respond`, 1, "POST", { message: "TEST FIXTURE 5% is our final offer" })).status).toBe(200);
+    expect((await current()).current.status).toBe("awaiting_signatures");
   } finally { env.VENTURE_ADMIN_EMAILS = previous; }
 });

@@ -7,6 +7,9 @@ import { getVentureAccess, googleConfigured, isVentureSameOrigin, ownedVentureCo
 import { dashboardList, METRICS, recordDecision, recordMetric, setTaskDone, updateWorkItem, ventureOverview, type MetricName } from "../services/dashboard.ts";
 import { loggedRequest, ventureError } from "../request-log.ts";
 import { env } from "../../config/env.ts";
+import { AgreementFailure, requestChanges, respondToChanges, signAgreement } from "../services/agreements.ts";
+import { DEAL_STRUCTURES, dealTermsProblem } from "../services/assessment.ts";
+import { ventureAgreements } from "../db/schema.ts";
 
 import { analystReadiness, reserveTurn, runAssessment, runTurn, stopTurn, recoverInterrupted, VentureFailure } from '../services/analyst.ts';
 
@@ -14,7 +17,7 @@ type Variables = { userId: string; requestId: string; isAdmin: boolean; viewer: 
 const venture = new Hono<{ Variables: Variables }>();
 venture.onError((_error, c) => ventureError(c.get("requestId"), 500, "STORAGE_UNAVAILABLE", "Private storage is temporarily unavailable. Retry; if it continues, contact support with this correlation ID."));
 venture.use("*", async (c, next) => loggedRequest(c.req.raw,
-  c.req.path.includes('/admin/work-items/') ? 'venture.admin.work' : c.req.path.endsWith('/metrics') ? 'venture.admin.metric' : c.req.path.includes('/admin/') ? 'venture.admin.decision' : c.req.path.endsWith('/dashboard') ? 'venture.dashboard.list' : c.req.path.endsWith('/overview') ? 'venture.dashboard.overview' : c.req.path.includes('/tasks/') ? 'venture.task.update' :
+  c.req.path.includes('/agreements/') ? `venture.agreement.${c.req.path.split('/').pop()}` : c.req.path.includes('/admin/work-items/') ? 'venture.admin.work' : c.req.path.endsWith('/metrics') ? 'venture.admin.metric' : c.req.path.includes('/admin/') ? 'venture.admin.decision' : c.req.path.endsWith('/dashboard') ? 'venture.dashboard.list' : c.req.path.endsWith('/overview') ? 'venture.dashboard.overview' : c.req.path.includes('/tasks/') ? 'venture.task.update' :
   c.req.path.endsWith('/assessment') ? `venture.assessment.${c.req.method === 'POST' ? 'generate' : 'load'}` : c.req.path.endsWith('/stream') ? 'venture.stream.accept' : c.req.path.endsWith('/stop') ? 'venture.stream.stop' : c.req.path.endsWith("/session") ? "venture.session" : c.req.path.endsWith("/conversations") ? `venture.conversations.${c.req.method === "POST" ? "create" : "list"}` : "venture.conversation.load",
   async requestId => {
   c.set("requestId", requestId);
@@ -165,19 +168,30 @@ venture.patch('/tasks/:id', async c => {
     return c.json({ task, requestId: c.get('requestId') });
   } catch (error) { if (error instanceof VentureFailure) return ventureError(c.get('requestId'), error.status, error.code, error.message); throw error; }
 });
+const dealShape = z.object({
+  structure: z.enum(DEAL_STRUCTURES),
+  equityPercent: z.number().min(0.1).max(49).nullable(),
+  revenueSharePercent: z.number().min(0.5).max(50).nullable(),
+  capMultiple: z.number().min(1).max(10).nullable(),
+  termMonths: z.number().int().min(6).max(120).nullable(),
+}).strict();
+const dealPayload = dealShape.refine(d => !dealTermsProblem(d), { message: 'Inconsistent deal terms.' });
 const decisionPayload = z.object({
   decision: z.enum(['approved', 'needs_more_info', 'declined', 'prohibited']),
   tokensApproved: z.number().int().nonnegative().max(1_000_000_000),
   founderNote: z.string().trim().max(2000).optional(),
   internalNote: z.string().trim().max(4000).optional(),
-}).strict().refine(d => d.decision === 'approved' ? d.tokensApproved > 0 : d.tokensApproved === 0, { message: 'Approved decisions need tokens; others must be 0.' });
+  deal: dealPayload.optional(),
+}).strict()
+  .refine(d => d.decision === 'approved' ? d.tokensApproved > 0 : d.tokensApproved === 0, { message: 'Approved decisions need tokens; others must be 0.' })
+  .refine(d => d.decision === 'approved' ? Boolean(d.deal) : !d.deal, { message: 'Approvals need deal terms; other decisions carry none.' });
 venture.post('/admin/conversations/:id/decision', async c => {
   if (!c.get('isAdmin')) return ventureError(c.get('requestId'), 403, 'ADMIN_REQUIRED', 'Only LFG venture reviewers can record funding decisions.');
   const conversation = await viewableVentureConversation(c.req.param('id'), c.get('userId'), true);
   if (!conversation) return ventureError(c.get('requestId'), 404, 'CONVERSATION_NOT_FOUND', 'This venture is unavailable.');
   try {
     const payload = decisionPayload.safeParse(await boundedJson(c.req.raw, 8000));
-    if (!payload.success) return ventureError(c.get('requestId'), 400, 'INVALID_DECISION', 'Choose a decision; approved needs a positive token amount, other decisions use 0.');
+    if (!payload.success) return ventureError(c.get('requestId'), 400, 'INVALID_DECISION', 'Choose a decision. Approving needs a positive token amount and consistent deal terms; other decisions use 0 tokens and no deal.');
     const decision = await recordDecision(conversation.id, c.get('userId'), payload.data);
     return c.json({ decision, requestId: c.get('requestId') }, 201);
   } catch (error) { if (error instanceof VentureFailure) return ventureError(c.get('requestId'), error.status, error.code, error.message); throw error; }
@@ -207,6 +221,55 @@ venture.post('/admin/conversations/:id/metrics', async c => {
     const metric = await recordMetric(conversation.id, payload.data.name, payload.data.value, payload.data.note);
     return c.json({ metric, requestId: c.get('requestId') }, 201);
   } catch (error) { if (error instanceof VentureFailure) return ventureError(c.get('requestId'), error.status, error.code, error.message); throw error; }
+});
+// Agreements: both sides sign; the founder may ask for changes first, and LFG
+// answers manually with revised terms or a reply.
+async function agreementAccess(c: any) {
+  const [agreement] = await db.select().from(ventureAgreements).where(eq(ventureAgreements.id, c.req.param('id'))).limit(1);
+  if (!agreement) return null;
+  const conversation = await viewableVentureConversation(agreement.conversationId, c.get('userId'), c.get('isAdmin'));
+  return conversation ? { agreement, isOwner: conversation.userId === c.get('userId') } : null;
+}
+const agreementError = (c: any, error: unknown) => {
+  if (error instanceof AgreementFailure || error instanceof VentureFailure) return ventureError(c.get('requestId'), error.status, error.code, error.message);
+  throw error;
+};
+const signPayload = z.object({ side: z.enum(['founder', 'lfg']), name: z.string().trim().min(2).max(120), consent: z.literal(true) }).strict();
+venture.post('/agreements/:id/sign', async c => {
+  try {
+    const access = await agreementAccess(c);
+    if (!access) return ventureError(c.get('requestId'), 404, 'AGREEMENT_NOT_FOUND', 'This agreement is unavailable.');
+    const payload = signPayload.safeParse(await boundedJson(c.req.raw, 1024));
+    if (!payload.success) return ventureError(c.get('requestId'), 400, 'INVALID_SIGNATURE', 'Type your full name and confirm you agree.');
+    if (payload.data.side === 'founder' && !access.isOwner) return ventureError(c.get('requestId'), 403, 'FOUNDER_ONLY', 'Only the founder signs for the founder.');
+    if (payload.data.side === 'lfg' && !c.get('isAdmin')) return ventureError(c.get('requestId'), 403, 'ADMIN_REQUIRED', 'Only LFG venture reviewers sign for LFG.');
+    const agreement = await signAgreement(access.agreement.id, payload.data.side, c.get('userId'), payload.data.name);
+    return c.json({ agreement, requestId: c.get('requestId') });
+  } catch (error) { return agreementError(c, error); }
+});
+const changesPayload = z.object({ message: z.string().trim().min(5).max(4000), proposed: dealShape.partial().optional() }).strict();
+venture.post('/agreements/:id/changes', async c => {
+  try {
+    const access = await agreementAccess(c);
+    if (!access) return ventureError(c.get('requestId'), 404, 'AGREEMENT_NOT_FOUND', 'This agreement is unavailable.');
+    if (!access.isOwner) return ventureError(c.get('requestId'), 403, 'FOUNDER_ONLY', 'Only the founder can ask to change the terms.');
+    const payload = changesPayload.safeParse(await boundedJson(c.req.raw, 8000));
+    if (!payload.success) return ventureError(c.get('requestId'), 400, 'INVALID_REQUEST', 'Explain what you would like to change.');
+    const agreement = await requestChanges(access.agreement.id, c.get('userId'), payload.data.message, payload.data.proposed);
+    return c.json({ agreement, requestId: c.get('requestId') });
+  } catch (error) { return agreementError(c, error); }
+});
+const respondPayload = z.object({ message: z.string().trim().min(2).max(4000), revised: dealShape.extend({ tokens: z.number().int().positive().max(1_000_000_000).optional() }).strict().refine(d => !dealTermsProblem(d)).optional() }).strict();
+venture.post('/admin/agreements/:id/respond', async c => {
+  if (!c.get('isAdmin')) return ventureError(c.get('requestId'), 403, 'ADMIN_REQUIRED', 'Only LFG venture reviewers can respond.');
+  try {
+    const access = await agreementAccess(c);
+    if (!access) return ventureError(c.get('requestId'), 404, 'AGREEMENT_NOT_FOUND', 'This agreement is unavailable.');
+    const payload = respondPayload.safeParse(await boundedJson(c.req.raw, 8000));
+    if (!payload.success) return ventureError(c.get('requestId'), 400, 'INVALID_RESPONSE', 'Write a reply; revised terms must be consistent.');
+    const agreement = await respondToChanges(access.agreement.id, c.get('userId'), payload.data.message, payload.data.revised);
+    return c.json({ agreement, requestId: c.get('requestId') });
+  } catch (error) { return agreementError(c, error); }
 });
 venture.all("*", c => ventureError(c.get("requestId"), 404, "ENDPOINT_NOT_FOUND", "This venture endpoint is unavailable. Return to your conversation list."));
 export default venture;

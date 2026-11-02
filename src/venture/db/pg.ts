@@ -103,3 +103,41 @@ export const ventureMetrics = pgTable("venture_metric", {
   note: text("note"),
   recordedAt: timestamp("recorded_at", { mode: "date" }).notNull().defaultNow(),
 }, t => [index("venture_metric_conv_idx").on(t.conversationId, t.name, t.recordedAt)]);
+
+// The deal both sides sign. Work starts only once it is active (both signed).
+// A revision creates a new version; earlier ones are superseded.
+export const ventureAgreements = pgTable("venture_agreement", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  conversationId: text("conversation_id").notNull().references(() => ventureConversations.id, { onDelete: "cascade" }),
+  decisionId: text("decision_id").references(() => ventureDecisions.id, { onDelete: "set null" }),
+  version: integer("version").notNull(),
+  status: text("status", { enum: ["awaiting_signatures", "changes_requested", "active", "superseded", "void"] }).notNull().default("awaiting_signatures"),
+  structure: text("structure", { enum: ["equity", "revenue_share", "profit_share"] }).notNull(),
+  equityPercent: doublePrecision("equity_percent"),
+  revenueSharePercent: doublePrecision("revenue_share_percent"),
+  capMultiple: doublePrecision("cap_multiple"),
+  termMonths: integer("term_months"),
+  tokensCommitted: bigint("tokens_committed", { mode: "number" }).notNull(),
+  body: text("body").notNull(),
+  founderUserId: text("founder_user_id"),
+  founderSignedName: text("founder_signed_name"),
+  founderSignedAt: timestamp("founder_signed_at", { mode: "date" }),
+  lfgUserId: text("lfg_user_id"),
+  lfgSignedName: text("lfg_signed_name"),
+  lfgSignedAt: timestamp("lfg_signed_at", { mode: "date" }),
+  activatedAt: timestamp("activated_at", { mode: "date" }),
+  createdAt: timestamp("created_at", { mode: "date" }).notNull().defaultNow(),
+}, t => [index("venture_agreement_conv_idx").on(t.conversationId, t.version)]);
+
+// Negotiation thread on an agreement: change requests, replies, revisions.
+export const ventureAgreementMessages = pgTable("venture_agreement_message", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  conversationId: text("conversation_id").notNull().references(() => ventureConversations.id, { onDelete: "cascade" }),
+  agreementId: text("agreement_id").notNull().references(() => ventureAgreements.id, { onDelete: "cascade" }),
+  authorUserId: text("author_user_id").notNull(),
+  side: text("side", { enum: ["founder", "lfg"] }).notNull(),
+  kind: text("kind", { enum: ["change_request", "reply", "revision"] }).notNull(),
+  message: text("message").notNull(),
+  proposedTerms: jsonb("proposed_terms").$type<Record<string, unknown>>(),
+  createdAt: timestamp("created_at", { mode: "date" }).notNull().defaultNow(),
+}, t => [index("venture_agreement_msg_idx").on(t.agreementId, t.createdAt)]);

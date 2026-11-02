@@ -15,11 +15,12 @@ export function assessmentFixture(sourceId?: string) {
     recommendation: { verdict: 'needs_more_info', summary: 'TEST FIXTURE promising; willingness to pay unknown.', rationale: claims, tier: null, complianceFlags: [],
       tokenTranche: { totalTokens: 0, lineItems: [], expectedReturn: claim },
       founderCommitments: [{ action: 'TEST FIXTURE interview 10 plumbers in your network', successSignal: '3 commit to a paid pilot', dueWeek: 2 }, { action: 'TEST FIXTURE post 3 problem threads on X', successSignal: '20 replies', dueWeek: 1 }],
-      nextSteps: ['TEST FIXTURE confirm willingness to pay, then reassess'], checkInWeeks: 2 } };
+      nextSteps: ['TEST FIXTURE confirm willingness to pay, then reassess'], checkInWeeks: 2, deal: null } };
 }
 
 export function fundRecommendation(base = assessmentFixture()) {
   base.recommendation = { ...base.recommendation, verdict: 'fund', tier: 'micro',
-    tokenTranche: { totalTokens: 2_500_000, lineItems: [{ workType: 'landing_page', item: 'TEST FIXTURE landing page', deliverable: 'TEST FIXTURE page collecting pilot sign-ups', tokens: 500_000, rationale: 'Collect pilot sign-ups' }, { workType: 'mvp', item: 'TEST FIXTURE scheduling MVP', deliverable: 'TEST FIXTURE booking flow plumbers can use', tokens: 2_000_000, rationale: 'Pilot with 10 plumbers' }], expectedReturn: base.recommendation.rationale[0] } } as any;
+    tokenTranche: { totalTokens: 2_500_000, lineItems: [{ workType: 'landing_page', item: 'TEST FIXTURE landing page', deliverable: 'TEST FIXTURE page collecting pilot sign-ups', tokens: 500_000, rationale: 'Collect pilot sign-ups' }, { workType: 'mvp', item: 'TEST FIXTURE scheduling MVP', deliverable: 'TEST FIXTURE booking flow plumbers can use', tokens: 2_000_000, rationale: 'Pilot with 10 plumbers' }], expectedReturn: base.recommendation.rationale[0] },
+    deal: { structure: 'revenue_share', equityPercent: null, revenueSharePercent: 8, capMultiple: 3, termMonths: 36, rationale: 'TEST FIXTURE small business with direct revenue' } } as any;
   return base;
 }

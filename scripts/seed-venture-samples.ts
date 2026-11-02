@@ -13,6 +13,8 @@ import { users } from '../src/db/schema/users.ts';
 import { ventureConversations, ventureMessages, ventureSources, ventureAssessments, ventureDecisions, ventureTasks, ventureWorkItems, ventureEvents, ventureMetrics } from '../src/venture/db/schema.ts';
 import { validateAssessment } from '../src/venture/services/assessment.ts';
 import { saveTasks, METRICS, type MetricName } from '../src/venture/services/dashboard.ts';
+import { agreementText, termsSummary } from '../src/venture/services/agreements.ts';
+import { ventureAgreements, ventureAgreementMessages } from '../src/venture/db/schema.ts';
 
 if (process.env.NODE_ENV === 'production') throw new Error('Sample data is for local development only.');
 const [ownerEmail, flag] = process.argv.slice(2);
@@ -43,6 +45,8 @@ interface Sample {
   done?: number[];
   decision?: { decision: 'approved' | 'needs_more_info' | 'declined' | 'prohibited'; tokensApproved: number; founderNote?: string; internalNote?: string };
   assessedDaysAgo?: number; decidedDaysAgo?: number;
+  // The agreement LFG proposed; signedDaysAgo makes it active (both signed).
+  agreement?: { signedDaysAgo?: number; changeRequest?: { daysAgo: number; message: string; proposed?: Record<string, unknown> } };
   // After approval: one entry per tranche line item, weekly results, and other history.
   progress?: {
     work: { status: 'planned' | 'in_progress' | 'shipped' | 'blocked'; spent: number; started?: number; shipped?: number }[];
@@ -130,9 +134,10 @@ const samples: Sample[] = [
         ],
         nextSteps: ['LFG reviews and releases the first tranche', 'Agents build the MVP while you run interviews', 'Check-in after the pilot cohort’s first two weeks'],
         checkInWeeks: 2,
+        deal: { structure: 'revenue_share', equityPercent: null, revenueSharePercent: 8, capMultiple: 3, termMonths: 36, rationale: 'Cash-generating micro business: a revenue share repays LFG from day-one subscriptions without taking equity in a family trade.' },
       },
     }),
-    done: [0, 1], assessedDaysAgo: 27, decidedDaysAgo: 25,
+    done: [0, 1], assessedDaysAgo: 27, decidedDaysAgo: 26, agreement: { signedDaysAgo: 25 },
     progress: {
       work: [
         { status: 'shipped', spent: 1_940_000, started: 24, shipped: 11 },
@@ -224,9 +229,12 @@ const samples: Sample[] = [
         ],
         nextSteps: ['LFG review with infrastructure cost check', 'Release tranche in two stages', 'Check-in when 3 partners are signed'],
         checkInWeeks: 4,
+        deal: { structure: 'equity', equityPercent: 6, revenueSharePercent: null, capMultiple: null, termMonths: null, rationale: 'Venture-scale outcome that will raise capital; equity aligns LFG with a long build and a later priced round.' },
       },
     }),
-    done: [0],
+    done: [0], assessedDaysAgo: 3, decidedDaysAgo: 2,
+    decision: { decision: 'approved', tokensApproved: 150_000_000, founderNote: 'Approved at 150M in two stages. Equity as recommended.', internalNote: 'Big bet; keep tranche 2 gated on 3 signed design partners.' },
+    agreement: { changeRequest: { daysAgo: 1, message: 'Could we do 4% instead of 6%? I’m bringing five design partners from my own network, which de-risks the first tranche.', proposed: { structure: 'equity', equityPercent: 4 } } },
   },
   {
     id: 'sample-email', title: 'Email automation for newsletter creators', founder: null, daysAgo: 6,
@@ -287,6 +295,7 @@ const samples: Sample[] = [
         ],
         nextSteps: ['Run interviews', 'Return to chat with findings', 'Regenerate the assessment'],
         checkInWeeks: 3,
+        deal: null,
       },
     }),
     decision: { decision: 'needs_more_info', tokensApproved: 0, founderNote: 'Agree with the analyst. Pick a niche and bring us 10 interviews.' },
@@ -355,9 +364,10 @@ const samples: Sample[] = [
         ],
         nextSteps: ['Approve tranche', 'Build ingestion first', 'Close one month-end with 5 clients'],
         checkInWeeks: 4,
+        deal: { structure: 'profit_share', equityPercent: null, revenueSharePercent: 20, capMultiple: 3, termMonths: 48, rationale: 'Runs alongside her accounting practice with shared costs; a profit share fits better than taxing gross revenue.' },
       },
     }),
-    done: [0], assessedDaysAgo: 12, decidedDaysAgo: 10,
+    done: [0], assessedDaysAgo: 12, decidedDaysAgo: 11, agreement: { signedDaysAgo: 10 },
     progress: {
       work: [
         { status: 'shipped', spent: 4_600_000, started: 10, shipped: 3 },
@@ -426,6 +436,7 @@ const samples: Sample[] = [
         founderCommitments: [{ action: 'If you continue, run 20 manual bookings with a sitter partner', successSignal: '20 completed bookings, 5 repeat', dueWeek: 6 }],
         nextSteps: ['Validate manually without software', 'Come back if repeat demand is strong'],
         checkInWeeks: null,
+        deal: null,
       },
     }),
     decision: { decision: 'declined', tokensApproved: 0, founderNote: 'Not a fit right now. Happy to look again if manual bookings show strong repeat demand.' },
@@ -484,6 +495,7 @@ const samples: Sample[] = [
         founderCommitments: [],
         nextSteps: ['No funding', 'Founder may propose a legitimate study-support product instead'],
         checkInWeeks: null,
+        deal: null,
       },
     }),
     decision: { decision: 'prohibited', tokensApproved: 0, founderNote: 'We can’t support products built to evade academic integrity checks.', internalNote: 'Policy: academic fraud.' },
@@ -532,6 +544,24 @@ for (const [i, s] of samples.entries()) {
       await db.insert(ventureDecisions).values({ id: `${s.id}-d1`, conversationId: s.id, assessmentId: assessment!.id, assessmentVersion: 1, adminUserId: owner.id, createdAt: decidedAt, ...s.decision });
       const label = { approved: `LFG approved ${s.decision.tokensApproved / 1e6}M tokens`, needs_more_info: 'LFG decision: Needs more info', declined: 'LFG decision: Declined', prohibited: 'LFG decision: Prohibited' }[s.decision.decision];
       await db.insert(ventureEvents).values({ conversationId: s.id, kind: 'decision', title: label, detail: s.decision.founderNote ?? null, tokens: s.decision.tokensApproved || null, occurredAt: decidedAt });
+    }
+    if (s.agreement && s.decision?.decision === 'approved' && r.deal) {
+      const founder = s.founder ?? { name: owner.name, email: owner.email };
+      const tasks = await db.select().from(ventureTasks).where(eq(ventureTasks.assessmentId, assessment!.id));
+      const tokens = s.decision.tokensApproved, total = r.tokenTranche.totalTokens;
+      const body = agreementText({ version: 1, founder, venture: s.title, terms: r.deal, tokens, commitments: tasks.map(t => ({ action: t.action, dueWeek: t.dueWeek })),
+        lineItems: r.tokenTranche.lineItems.map(l => ({ item: l.item, deliverable: l.deliverable, tokens: Math.round(l.tokens * tokens / total) })) });
+      const signed = s.agreement.signedDaysAgo !== undefined ? day(s.agreement.signedDaysAgo) : null;
+      const status = signed ? 'active' as const : s.agreement.changeRequest ? 'changes_requested' as const : 'awaiting_signatures' as const;
+      await db.insert(ventureAgreements).values({ id: `${s.id}-g1`, conversationId: s.id, decisionId: `${s.id}-d1`, version: 1, status, structure: r.deal.structure, equityPercent: r.deal.equityPercent, revenueSharePercent: r.deal.revenueSharePercent, capMultiple: r.deal.capMultiple, termMonths: r.deal.termMonths, tokensCommitted: tokens, body, createdAt: decidedAt,
+        ...(signed ? { founderUserId: userId, founderSignedName: founder.name, founderSignedAt: new Date(signed.getTime() - 3_600_000), lfgUserId: owner.id, lfgSignedName: 'LFG Ventures', lfgSignedAt: signed, activatedAt: signed } : {}) });
+      await db.insert(ventureEvents).values({ conversationId: s.id, kind: 'agreement', title: `Agreement v1 ready to sign: ${{ equity: 'Equity', revenue_share: 'Revenue share', profit_share: 'Profit share' }[r.deal.structure]}`, detail: termsSummary(r.deal, tokens), occurredAt: decidedAt });
+      if (signed) await db.insert(ventureEvents).values({ conversationId: s.id, kind: 'agreement', title: `Agreement active: ${tokens / 1e6}M tokens released, work starts`, detail: termsSummary(r.deal, tokens), tokens, occurredAt: signed });
+      const ask = s.agreement.changeRequest;
+      if (ask) {
+        await db.insert(ventureAgreementMessages).values({ conversationId: s.id, agreementId: `${s.id}-g1`, authorUserId: userId, side: 'founder', kind: 'change_request', message: ask.message, proposedTerms: ask.proposed ?? null, createdAt: day(ask.daysAgo) });
+        await db.insert(ventureEvents).values({ conversationId: s.id, kind: 'negotiation', title: 'Founder asked to change agreement v1', detail: ask.message, occurredAt: day(ask.daysAgo) });
+      }
     }
     if (s.progress && s.decision?.decision === 'approved') {
       // Same split the app uses on approval: recommended proportions, exact total.

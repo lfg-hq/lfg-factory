@@ -157,6 +157,10 @@ test('recommendation verdicts: token sums, funding needs a tranche, refusals car
     (v: any) => { v.recommendation.verdict = 'prohibited'; v.recommendation.tokenTranche = { ...v.recommendation.tokenTranche, totalTokens: 0, lineItems: [] }; },
     (v: any) => { v.recommendation.tokenTranche.lineItems[0].tokens = 600_000_000; v.recommendation.tokenTranche.totalTokens = 602_000_000; },
     (v: any) => { delete v.recommendation; },
+    (v: any) => { v.recommendation.deal = null; },
+    (v: any) => { v.recommendation.deal.equityPercent = 5; },
+    (v: any) => { v.recommendation.deal = { ...v.recommendation.deal, structure: 'equity', revenueSharePercent: 8 }; },
+    (v: any) => { v.recommendation.deal.capMultiple = null; },
   ];
   for (const mutate of cases) { const v = structuredClone(fund); mutate(v); expect(() => validateAssessment(v, new Set())).toThrow(); }
   const prohibited: any = assessmentFixture();

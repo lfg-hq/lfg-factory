@@ -2,8 +2,9 @@ import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 import { db } from '../../config/db.ts';
 import { env } from '../../config/env.ts';
 import { users } from '../../db/schema/users.ts';
-import { ventureConversations, ventureAssessments, ventureDecisions, ventureTasks, ventureSources, ventureWorkItems, ventureEvents, ventureMetrics } from '../db/schema.ts';
-import type { VentureAssessment } from './assessment.ts';
+import { ventureConversations, ventureAssessments, ventureDecisions, ventureTasks, ventureSources, ventureWorkItems, ventureEvents, ventureMetrics, ventureAgreements } from '../db/schema.ts';
+import type { DealTerms, VentureAssessment } from './assessment.ts';
+import { agreementsFor, proposeAgreement, termsSummary } from './agreements.ts';
 
 type Assessment = typeof ventureAssessments.$inferSelect;
 type Decision = typeof ventureDecisions.$inferSelect;
@@ -57,10 +58,10 @@ async function latestAssessment(conversationId: string) {
   return row ?? null;
 }
 
-// Funding starts with the first approval; weeks count from there.
+// Funding starts when the first agreement is signed by both sides; weeks count from there.
 async function fundedAt(conversationId: string) {
-  const [first] = await db.select({ at: ventureDecisions.createdAt }).from(ventureDecisions)
-    .where(and(eq(ventureDecisions.conversationId, conversationId), eq(ventureDecisions.decision, 'approved'))).orderBy(asc(ventureDecisions.createdAt)).limit(1);
+  const [first] = await db.select({ at: ventureAgreements.activatedAt }).from(ventureAgreements)
+    .where(and(eq(ventureAgreements.conversationId, conversationId), eq(ventureAgreements.status, 'active'))).orderBy(asc(ventureAgreements.activatedAt)).limit(1);
   return first?.at ?? null;
 }
 const weekOf = (start: Date | null, at: Date = new Date()) => start ? Math.max(1, Math.floor((at.getTime() - start.getTime()) / WEEK) + 1) : null;
@@ -86,6 +87,7 @@ export async function ventureContext(conversationId: string) {
     analystVerdict: r?.verdict ?? null, tier: r?.tier ?? null, recommendedTokens: r?.tokenTranche.totalTokens ?? null,
     lfgDecision: decision ? { decision: decision.decision, tokensApproved: decision.tokensApproved, noteToFounder: decision.founderNote, decidedAt: decision.createdAt } : 'pending LFG review',
     week: weekOf(start),
+    deal: (await agreementsFor(conversationId)).current?.summary ?? null,
     whatLfgBuilt: work.map(w => ({ workType: w.workType, title: w.title, status: w.status, tokensSpent: w.tokensSpent, tokensBudgeted: w.tokensBudgeted })),
     latestResults: metrics,
     founderCommitments: tasks.map(t => ({ action: t.action, dueWeek: t.dueWeek, done: t.done })),
@@ -109,6 +111,7 @@ export async function dashboardList(userId: string, allFounders: boolean) {
   const assessments = await db.select().from(ventureAssessments).where(inArray(ventureAssessments.conversationId, ids)).orderBy(desc(ventureAssessments.version));
   const decisions = await db.select().from(ventureDecisions).where(inArray(ventureDecisions.conversationId, ids)).orderBy(desc(ventureDecisions.createdAt));
   const work = await db.select().from(ventureWorkItems).where(inArray(ventureWorkItems.conversationId, ids));
+  const agreements = await db.select().from(ventureAgreements).where(inArray(ventureAgreements.conversationId, ids)).orderBy(desc(ventureAgreements.version));
   const revenue = await db.select().from(ventureMetrics).where(and(inArray(ventureMetrics.conversationId, ids), eq(ventureMetrics.name, 'revenue_usd'))).orderBy(desc(ventureMetrics.recordedAt));
   const latest = new Map<string, Assessment>();
   for (const a of assessments) if (!latest.has(a.conversationId)) latest.set(a.conversationId, a);
@@ -119,7 +122,9 @@ export async function dashboardList(userId: string, allFounders: boolean) {
     const own = tasks.filter(t => t.assessmentId === a?.id);
     const mine = decisions.filter(d => d.conversationId === conversation.id);
     const decision = mine[0];
-    const firstApproval = mine.filter(d => d.decision === 'approved').at(-1);
+    const deals = agreements.filter(x => x.conversationId === conversation.id);
+    const deal = deals.find(x => x.status !== 'superseded' && x.status !== 'void');
+    const started = deals.filter(x => x.activatedAt).map(x => x.activatedAt!.getTime());
     const items = work.filter(w => w.conversationId === conversation.id);
     return {
       id: conversation.id, title: conversation.title, updatedAt: conversation.updatedAt,
@@ -127,7 +132,8 @@ export async function dashboardList(userId: string, allFounders: boolean) {
       assessment: a ? { version: a.version, status: a.status, createdAt: a.createdAt, verdict: r?.verdict ?? null, tier: r?.tier ?? null, recommendedTokens: r?.tokenTranche.totalTokens ?? null, summary: r?.summary ?? null } : null,
       decision: decision ? { decision: decision.decision, tokensApproved: decision.tokensApproved, createdAt: decision.createdAt } : null,
       tokensApproved: mine.filter(d => d.decision === 'approved').reduce((sum, d) => sum + d.tokensApproved, 0),
-      progress: { ...spend(items), week: weekOf(firstApproval?.createdAt ?? null) },
+      progress: { ...spend(items), week: weekOf(started.length ? new Date(Math.min(...started)) : null) },
+      deal: deal ? { structure: deal.structure, status: deal.status, summary: termsSummary(deal, deal.tokensCommitted) } : null,
       revenueUsd: revenue.find(m => m.conversationId === conversation.id)?.value ?? null,
       tasks: { total: own.length, done: own.filter(t => t.done).length },
     };
@@ -150,6 +156,7 @@ export async function ventureOverview(conversationId: string, isAdmin: boolean) 
     assessment, tasks, sources, workItems, metrics,
     events: events.map(e => ({ ...e, week: weekOf(start, e.occurredAt) })),
     progress: { ...spend(workItems), fundedAt: start, week: weekOf(start), tokensApproved: decisions.filter(d => d.decision === 'approved').reduce((sum, d) => sum + d.tokensApproved, 0) },
+    agreements: await agreementsFor(conversationId),
     usdPerMillionTokens: env.VENTURE_USD_PER_MILLION_TOKENS,
     metricLabels: METRICS,
     decision: forViewer(decisions[0], isAdmin),
@@ -167,16 +174,7 @@ export async function setTaskDone(taskId: string, ownerId: string, done: boolean
   return updated!;
 }
 
-// Splits an approved amount across the recommended line items, keeping their
-// proportions and summing exactly to what was approved.
-function scaleBudgets(items: { tokens: number }[], approved: number) {
-  const total = items.reduce((sum, i) => sum + i.tokens, 0) || 1;
-  const budgets = items.map(i => Math.floor(i.tokens * approved / total));
-  if (budgets.length) budgets[budgets.length - 1]! += approved - budgets.reduce((a, b) => a + b, 0);
-  return budgets;
-}
-
-export async function recordDecision(conversationId: string, adminUserId: string, input: { decision: Decision['decision']; tokensApproved: number; founderNote?: string; internalNote?: string }) {
+export async function recordDecision(conversationId: string, adminUserId: string, input: { decision: Decision['decision']; tokensApproved: number; founderNote?: string; internalNote?: string; deal?: DealTerms }) {
   const assessment = await latestAssessment(conversationId);
   const [decision] = await db.insert(ventureDecisions).values({
     conversationId, adminUserId, assessmentId: assessment?.id ?? null, assessmentVersion: assessment?.version ?? null,
@@ -184,14 +182,8 @@ export async function recordDecision(conversationId: string, adminUserId: string
     founderNote: input.founderNote || null, internalNote: input.internalNote || null,
   }).returning();
   await recordEvent(conversationId, 'decision', input.decision === 'approved' ? `LFG approved ${compact(input.tokensApproved)} tokens` : `LFG decision: ${DECISION_LABEL[input.decision]}`, input.founderNote || null, input.decision === 'approved' ? input.tokensApproved : null);
-  // An approval releases the tranche: each recommended line item becomes work for LFG's agents.
-  const lines = input.decision === 'approved' ? recommendationOf(assessment)?.tokenTranche.lineItems ?? [] : [];
-  if (lines.length) {
-    const budgets = scaleBudgets(lines, input.tokensApproved);
-    await db.insert(ventureWorkItems).values(lines.map((line, i) => ({
-      conversationId, decisionId: decision!.id, workType: line.workType ?? 'product_feature', title: line.item, deliverable: line.deliverable ?? line.rationale, tokensBudgeted: budgets[i]!,
-    })));
-  }
+  // An approval proposes the deal; work starts only when both sides sign it.
+  if (input.decision === 'approved' && input.deal) await proposeAgreement(conversationId, decision!.id, input.deal, input.tokensApproved);
   await db.update(ventureConversations).set({ updatedAt: new Date() }).where(eq(ventureConversations.id, conversationId));
   return decision!;
 }
