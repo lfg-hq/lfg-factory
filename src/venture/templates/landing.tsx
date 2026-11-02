@@ -1,12 +1,12 @@
 import { html } from "hono/html";
-import { SiteHead, SiteNav, SiteFooter } from "../components/site.tsx";
+import { SiteHead, SiteNav, SiteFooter } from "../../templates/components/site.tsx";
 
 export const VentureAnalystPage = () => html`<!doctype html>
 <html lang="en"><head>${SiteHead({ title: "AI Venture Analyst | LFG", description: "An honest conversation about your idea, your edge, and the market.", path: "/venture-analyst" })}
-<link rel="stylesheet" href="/public/css/venture-analyst.css">
+<link rel="stylesheet" href="/public/venture/analyst.css">
 <script defer src="/public/js/marked.min.js"></script>
-<script defer src="/public/js/venture-markdown.js"></script>
-<script defer src="/public/js/venture-analyst.js"></script></head>
+<script defer src="/public/venture/markdown.js"></script>
+<script defer src="/public/venture/analyst.js"></script></head>
 <body class="text-slate-900 font-sans">${SiteNav({})}
 <main class="venture" id="venture">
 <div class="va-grid" id="va-grid">

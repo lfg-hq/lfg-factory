@@ -11,7 +11,7 @@ process.env.GOOGLE_CLIENT_ID = "TEST-FIXTURE.apps.googleusercontent.com";
 process.env.GOOGLE_CLIENT_SECRET = "TEST-FIXTURE-not-a-real-secret";
 const child = Bun.spawn(["bun", "run", "db:push"], { env: process.env, stdout: "pipe", stderr: "pipe" });
 if (await child.exited !== 0) throw new Error("OAuth fixture schema setup failed");
-const { default: routes, handleGoogleCallback } = await import("../src/routes/auth.ts");
+const { default: routes, handleGoogleCallback } = await import("../src/venture/routes/auth.ts");
 const { auth } = await import("../src/auth/index.ts");
 const { env } = await import("../src/config/env.ts");
 const { db } = await import("../src/config/db.ts");

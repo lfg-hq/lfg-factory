@@ -111,7 +111,7 @@
         const { conversation } = await api('/api/venture/conversations', { method: 'POST', body: JSON.stringify({ title: text.replace(/\s+/g, ' ').slice(0, 80) }) });
         // The chat page sends this once as the first message, then forgets it.
         try { sessionStorage.setItem(`va-pending:${conversation.id}`, text); } catch { /* storage unavailable: founder retypes */ }
-        location.assign(`/venture-analyst?chat=open&c=${encodeURIComponent(conversation.id)}`);
+        location.assign(`/venture-analyst/chat?c=${encodeURIComponent(conversation.id)}`);
       } catch (error) { start.disabled = false; feedback.textContent = errorText(error); }
     };
     dialog.append(form);
@@ -362,7 +362,7 @@
       const meta = [data.owner ? (data.owner.name || data.owner.email) : null, data.assessment ? `Assessment v${data.assessment.version}, ${data.assessment.status}, ${date(data.assessment.createdAt)}` : 'Not assessed yet'].filter(Boolean).join(' · ');
       const head = h('div', 'vd-detail-head',
         h('div', '', el('h1', data.conversation.title), el('p', meta, 'vd-muted')),
-        data.isOwner ? link('Open chat', `/venture-analyst?chat=open&c=${encodeURIComponent(id)}`, 'vd-btn primary') : null);
+        data.isOwner ? link('Open chat', `/venture-analyst/chat?c=${encodeURIComponent(id)}`, 'vd-btn primary') : null);
 
       const main = h('div', 'vd-main'), side = h('aside', 'vd-side');
       if (r) {

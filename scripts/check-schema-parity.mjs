@@ -48,12 +48,9 @@ const problems = [];
 const sqlite = list("sqlite");
 const pg = list("pg");
 
-for (const file of [...new Set([...sqlite, ...pg])].sort()) {
-  const s = read(path.join(base, "sqlite", file));
-  const p = read(path.join(base, "pg", file));
-
-  if (!s) { problems.push(`${file}: exists in pg/ but not sqlite/`); continue; }
-  if (!p) { problems.push(`${file}: exists in sqlite/ but not pg/`); continue; }
+function compare(file, s, p) {
+  if (!s) { problems.push(`${file}: exists in pg/ but not sqlite/`); return; }
+  if (!p) { problems.push(`${file}: exists in sqlite/ but not pg/`); return; }
 
   const sT = tablesIn(s), pT = tablesIn(p);
   const tS = only(sT, pT), tP = only(pT, sT);
@@ -64,6 +61,17 @@ for (const file of [...new Set([...sqlite, ...pg])].sort()) {
   const fP = only(fieldsIn(p), fieldsIn(s));
   if (fS.length) problems.push(`${file}: field(s) only in sqlite/ — ${fS.join(", ")}`);
   if (fP.length) problems.push(`${file}: field(s) only in pg/ — ${fP.join(", ")}`);
+}
+
+for (const file of [...new Set([...sqlite, ...pg])].sort()) {
+  compare(file, read(path.join(base, "sqlite", file)), read(path.join(base, "pg", file)));
+}
+
+// Feature modules keep their tables beside their code, as <dir>/sqlite.ts and <dir>/pg.ts.
+const modules = ["src/venture/db"];
+for (const dir of modules) {
+  const at = path.join(here, "..", dir);
+  compare(dir, read(path.join(at, "sqlite.ts")), read(path.join(at, "pg.ts")));
 }
 
 if (problems.length) {
@@ -77,4 +85,4 @@ if (problems.length) {
   process.exit(1);
 }
 
-console.log(`Schema parity OK — ${sqlite.length} files mirrored across sqlite/ and pg/.`);
+console.log(`Schema parity OK — ${sqlite.length} files mirrored across sqlite/ and pg/, plus ${modules.join(", ")}.`);

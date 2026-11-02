@@ -12,7 +12,7 @@ const transport = (_url: URL, options: any, callback: Function) => {
 };
 mock.module('node:http', () => ({ request: transport }));
 mock.module('node:https', () => ({ request: transport }));
-const { readPublicUrl } = await import('../src/services/venture-public-url.ts');
+const { readPublicUrl } = await import('../src/venture/services/public-url.ts');
 test('public redirect to metadata address is blocked before second connection', async () => {
   await expect(readPublicUrl('https://fixture.example/', 1000)).rejects.toThrow('UNSAFE_URL');
   expect(calls).toBe(1);

@@ -1,9 +1,9 @@
 import { and, eq } from "drizzle-orm";
-import { auth } from "../auth/index.ts";
-import { db } from "../config/db.ts";
-import { env } from "../config/env.ts";
-import { accounts } from "../db/schema/users.ts";
-import { ventureConversations } from "../db/schema/venture.ts";
+import { auth } from "../../auth/index.ts";
+import { db } from "../../config/db.ts";
+import { env } from "../../config/env.ts";
+import { accounts } from "../../db/schema/users.ts";
+import { ventureConversations } from "../db/schema.ts";
 
 export const googleConfigured = () => Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET);
 

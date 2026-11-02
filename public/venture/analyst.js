@@ -3,6 +3,10 @@
   const $ = id => document.getElementById(id);
   const grid = $('va-grid'), panel = $('va-panel'), stage = $('va-stage');
   const cta = $('va-cta'), close = $('va-close'), status = $('va-status');
+  // "page" is the analyst's own page (/venture-analyst/chat); otherwise this is
+  // the landing panel, which only signs people in and hands over to that page.
+  const pageMode = document.body.dataset.ventureMode === 'page';
+  const chatPage = id => `/venture-analyst/chat${id ? `?c=${encodeURIComponent(id)}` : ''}`;
   const narrow = matchMedia('(max-width:1023px)');
   let expanded = false, controller, streamController, activeTurn, epoch = 0, loadEpoch = 0, returnFocus = cta, selectedId = null;
   const drafts = new Map(), sourceMap = new Map();
@@ -50,6 +54,7 @@
   }
   function cancel() { epoch++; stop(); controller?.abort(); controller = null; }
   function modal() {
+    if (pageMode) return;
     const active = expanded && narrow.matches;
     panel.setAttribute('role', active ? 'dialog' : 'region');
     if (active) panel.setAttribute('aria-modal', 'true'); else panel.removeAttribute('aria-modal');
@@ -105,7 +110,7 @@
     if (version !== epoch || loadVersion !== loadEpoch || !expanded) return;
     selectedId = data.conversation.id;
     // Reload resumes this conversation; a fresh open starts a new chat.
-    history.replaceState(null, '', `${location.pathname}?chat=open&c=${encodeURIComponent(selectedId)}`);
+    history.replaceState(null, '', pageMode ? chatPage(selectedId) : `${location.pathname}?chat=open&c=${encodeURIComponent(selectedId)}`);
     stage.querySelector('.va-views')?.remove();
     const views = element('div', '', 'va-views');
     views.setAttribute('role', 'tablist');
@@ -294,7 +299,7 @@
     function newChat() {
       if (activeTurn) return;
       selectedId = null; select.value = ''; loadEpoch++;
-      history.replaceState(null, '', `${location.pathname}?chat=open`);
+      history.replaceState(null, '', pageMode ? chatPage() : `${location.pathname}?chat=open`);
       stage.querySelector('.va-views')?.remove();
       content.setAttribute('role', 'log');
       content.replaceChildren(element('div', 'NEW CONVERSATION', 'va-label'), element('p', 'Welcome. Tell me what you’re thinking of building, who it would help, and what you bring to it. A rough idea is enough to begin.', 'va-message'));
@@ -317,6 +322,8 @@
     try {
       const readiness = await api('/api/venture/session');
       if (version === epoch && expanded) {
+        // Signed in on the landing page: continue on the analyst's own page.
+        if (!pageMode) { location.assign(chatPage(requested)); return; }
         await conversations();
         if (!readiness.streamingAvailable) stage.querySelector('.va-content')?.prepend(element('p', `AI is unavailable: the operator must configure ${readiness.requiredProviderKey || 'platform provider credentials'}. Saved history remains readable.`, 'va-muted'));
       }
@@ -327,10 +334,15 @@
   }
   function open(error) {
     if (!expanded) returnFocus = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : cta;
-    expanded = true; grid.classList.add('expanded'); close.hidden = false; cta.setAttribute('aria-expanded', 'true');
-    stage.replaceChildren(); modal(); panel.focus(); history.replaceState(null, '', `${location.pathname}?chat=open`);
+    expanded = true;
+    if (!pageMode) {
+      grid.classList.add('expanded'); close.hidden = false; cta.setAttribute('aria-expanded', 'true');
+      history.replaceState(null, '', `${location.pathname}?chat=open`);
+    }
+    stage.replaceChildren(); modal(); panel.focus();
     if (error) authView(error); else ready();
   }
+  if (pageMode) { open(); return; }
   cta.onclick = () => open(); close.onclick = collapse; narrow.addEventListener('change', modal);
   document.addEventListener('keydown', event => {
     if (!expanded) return;
@@ -344,9 +356,4 @@
   });
   sample();
   if (query.get('chat') === 'open') open(query.get('auth') === 'failed' ? Object.assign(new Error('Google sign-in wasn’t completed. Retry; if you already have an LFG account, sign in to it first, then connect Google.'), { requestId: query.get('requestId') }) : null);
-  else {
-    // Returning Google-connected users resume; anonymous/password-only users keep
-    // the labelled landing example until they choose the CTA.
-    fetch('/api/venture/session', { credentials: 'same-origin' }).then(response => { if (response.ok && !expanded && epoch === 0) open(); }).catch(() => {});
-  }
 })();

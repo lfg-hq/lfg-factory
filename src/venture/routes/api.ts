@@ -2,12 +2,12 @@ import { Hono } from "hono";
 import { asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../../config/db.ts";
-import { ventureConversations, ventureMessages, ventureSources, ventureAssessments } from "../../db/schema/venture.ts";
-import { getVentureAccess, googleConfigured, isVentureSameOrigin, ownedVentureConversation, viewableVentureConversation } from "../../services/venture-access.ts";
-import { dashboardList, recordDecision, setTaskDone, ventureOverview } from "../../services/venture-dashboard.ts";
-import { loggedRequest, ventureError } from "../../utils/request-log.ts";
+import { ventureConversations, ventureMessages, ventureSources, ventureAssessments } from "../db/schema.ts";
+import { getVentureAccess, googleConfigured, isVentureSameOrigin, ownedVentureConversation, viewableVentureConversation } from "../services/access.ts";
+import { dashboardList, recordDecision, setTaskDone, ventureOverview } from "../services/dashboard.ts";
+import { loggedRequest, ventureError } from "../request-log.ts";
 
-import { analystReadiness, reserveTurn, runAssessment, runTurn, stopTurn, recoverInterrupted, VentureFailure } from '../../services/venture-analyst.ts';
+import { analystReadiness, reserveTurn, runAssessment, runTurn, stopTurn, recoverInterrupted, VentureFailure } from '../services/analyst.ts';
 
 type Variables = { userId: string; requestId: string; isAdmin: boolean; viewer: { name: string; email: string } };
 const venture = new Hono<{ Variables: Variables }>();

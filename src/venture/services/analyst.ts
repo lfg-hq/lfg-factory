@@ -1,16 +1,16 @@
 import { generateText, NoObjectGeneratedError, NoOutputGeneratedError, Output, streamText, stepCountIs, type ToolSet } from 'ai';
-import { assessmentSchema, validateAssessment } from './venture-assessment.ts';
-import { ventureAssessmentPrompt } from '../ai/prompts/venture-assessment.ts';
+import { assessmentSchema, validateAssessment } from './assessment.ts';
+import { ventureAssessmentPrompt } from '../prompts/assessment.ts';
 import { and, eq, gte, lt, desc, inArray } from 'drizzle-orm';
-import { db } from '../config/db.ts';
-import { env } from '../config/env.ts';
-import { ventureConversations, ventureMessages, ventureSources, ventureAssessments } from '../db/schema/venture.ts';
-import { DEFAULT_MODEL_KEY, getModel, getProviderName, getProviderModel } from '../ai/provider.ts';
-import { createWebResearchTools } from '../ai/tools/agent-tools.ts';
-import { ventureAnalystPrompt } from '../ai/prompts/venture-analyst.ts';
-import { publicUrl, readPublicUrl } from './venture-public-url.ts';
-import { ventureLog } from '../utils/request-log.ts';
-import { saveTasks, ventureContext } from './venture-dashboard.ts';
+import { db } from '../../config/db.ts';
+import { env } from '../../config/env.ts';
+import { ventureConversations, ventureMessages, ventureSources, ventureAssessments } from '../db/schema.ts';
+import { DEFAULT_MODEL_KEY, getModel, getProviderName, getProviderModel } from '../../ai/provider.ts';
+import { createWebResearchTools } from '../../ai/tools/agent-tools.ts';
+import { ventureAnalystPrompt } from '../prompts/analyst.ts';
+import { publicUrl, readPublicUrl } from './public-url.ts';
+import { ventureLog } from '../request-log.ts';
+import { saveTasks, ventureContext } from './dashboard.ts';
 
 export const VENTURE_LIMITS = { turnsPerHour: 30, researchCalls: 8, timeoutMs: 120_000, inputChars: 4000, outputTokens: 2400 } as const;
 const ownersStarting = new Set<string>(); // Single existing Bun web process; no worker.

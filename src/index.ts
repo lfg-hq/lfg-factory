@@ -10,8 +10,8 @@ import { trimTrailingSlash } from "hono/trailing-slash";
 import { serveStatic } from "hono/bun";
 import { env } from "./config/env.ts";
 import landing from "./routes/landing.ts";
-import ventureApi from "./routes/api/venture.ts";
-import authRoutes, { handleGoogleCallback } from "./routes/auth.ts";
+import authRoutes from "./routes/auth.ts";
+import { ventureApi, venturePages, ventureAuth, handleGoogleCallback } from "./venture/index.ts";
 import chatRoutes from "./routes/chat.ts";
 import instantRoutes from "./routes/instant.ts";
 import projectsRoutes from "./routes/projects.ts";
@@ -207,7 +207,7 @@ app.get("/health", (c) => c.json({ status: "ok" }));
 app.route("/api", gitApi);
 // LFG Desktop (it sends X-LFG-Desktop on requests to this server) is the product, not
 // the website: marketing pages send it to the person's projects, or to sign in.
-const marketingRoots = new Set(landing.routes.map(r => "/" + r.path.split("/")[1]).filter(p => p !== "/api"));
+const marketingRoots = new Set([...landing.routes, ...venturePages.routes].map(r => "/" + r.path.split("/")[1]).filter(p => p !== "/api"));
 app.use("*", async (c, next) => {
   if (c.req.method !== "GET" || !c.req.header("x-lfg-desktop")) return next();
   const path = c.req.path;
@@ -216,8 +216,10 @@ app.use("*", async (c, next) => {
   return c.redirect(session ? "/projects" : "/auth/login");
 });
 app.route("/", authRoutes);
+app.route("/", ventureAuth);
 app.route("/", desktopRoutes);
 app.route("/", landing);
+app.route("/", venturePages);
 app.route("/api/venture", ventureApi);
 app.route("/", chatRoutes);
 app.route("/", instantRoutes);

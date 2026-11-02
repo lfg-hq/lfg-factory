@@ -10,9 +10,9 @@
 import { eq, like } from 'drizzle-orm';
 import { db } from '../src/config/db.ts';
 import { users } from '../src/db/schema/users.ts';
-import { ventureConversations, ventureMessages, ventureSources, ventureAssessments, ventureDecisions, ventureTasks } from '../src/db/schema/venture.ts';
-import { validateAssessment } from '../src/services/venture-assessment.ts';
-import { saveTasks } from '../src/services/venture-dashboard.ts';
+import { ventureConversations, ventureMessages, ventureSources, ventureAssessments, ventureDecisions, ventureTasks } from '../src/venture/db/schema.ts';
+import { validateAssessment } from '../src/venture/services/assessment.ts';
+import { saveTasks } from '../src/venture/services/dashboard.ts';
 
 if (process.env.NODE_ENV === 'production') throw new Error('Sample data is for local development only.');
 const [ownerEmail, flag] = process.argv.slice(2);

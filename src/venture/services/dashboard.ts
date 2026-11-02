@@ -1,8 +1,8 @@
 import { and, asc, desc, eq, inArray } from 'drizzle-orm';
-import { db } from '../config/db.ts';
-import { users } from '../db/schema/users.ts';
-import { ventureConversations, ventureAssessments, ventureDecisions, ventureTasks, ventureSources } from '../db/schema/venture.ts';
-import type { VentureAssessment } from './venture-assessment.ts';
+import { db } from '../../config/db.ts';
+import { users } from '../../db/schema/users.ts';
+import { ventureConversations, ventureAssessments, ventureDecisions, ventureTasks, ventureSources } from '../db/schema.ts';
+import type { VentureAssessment } from './assessment.ts';
 
 type Assessment = typeof ventureAssessments.$inferSelect;
 type Decision = typeof ventureDecisions.$inferSelect;

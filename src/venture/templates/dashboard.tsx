@@ -11,16 +11,16 @@ export const VentureDashboardPage = () => html`<!doctype html>
 <script>if (localStorage.getItem('lfg-theme') === 'dark') document.documentElement.classList.add('dark');</script>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/public/css/venture-analyst.css">
-<link rel="stylesheet" href="/public/css/venture-dashboard.css">
+<link rel="stylesheet" href="/public/venture/analyst.css">
+<link rel="stylesheet" href="/public/venture/dashboard.css">
 <script defer src="/public/js/marked.min.js"></script>
-<script defer src="/public/js/venture-markdown.js"></script>
-<script defer src="/public/js/venture-dashboard.js"></script></head>
+<script defer src="/public/venture/markdown.js"></script>
+<script defer src="/public/venture/dashboard.js"></script></head>
 <body class="vd-body">
 <header class="vd-bar">
 <a class="vd-brand" href="/"><span class="vd-logo" aria-hidden="true">${rocket}</span>LFG</a>
 <span class="vd-sep" aria-hidden="true">/</span><a class="vd-crumb" href="/venture-analyst/dashboard">Ventures</a>
-<nav class="vd-bar-right" aria-label="Account"><a class="vd-ghost" href="/venture-analyst?chat=open">Analyst chat</a><span id="vd-user" class="vd-user" hidden></span><button id="vd-signout" class="vd-ghost" type="button" hidden>Sign out</button></nav>
+<nav class="vd-bar-right" aria-label="Account"><a class="vd-ghost" href="/venture-analyst/chat">Analyst chat</a><span id="vd-user" class="vd-user" hidden></span><button id="vd-signout" class="vd-ghost" type="button" hidden>Sign out</button></nav>
 </header>
 <main class="vd" id="vd" aria-live="polite"></main>
 </body></html>`;

@@ -14,3 +14,6 @@
 .va-notice{display:flex;align-items:center;flex-wrap:wrap;gap:4px 8px;font-size:13px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:8px 12px;margin:0 0 16px;max-width:94%;flex-shrink:0}.va-message .va-notice{margin:10px 0 0}.va-notice button{border:0;background:none;color:#4f46e5;font-weight:700!important;font-size:13px!important;padding:2px 4px}.dark .va-notice{background:#2a2410;border-color:#5c4a12;color:#fcd34d}
 .va-ref{color:#94a3b8;font-size:11px;margin-left:4px}.va-composer [role=status]{margin-top:6px}.va-composer [role=status]:empty{display:none}.va-composer [role=status] button{color:#4f46e5;font-weight:700!important}
 @media(max-width:640px){.va-dash{padding:7px 10px;font-size:12px}}
+
+/* The analyst's own page: the panel fills the space under the app bar. */
+.va-chatpage{max-width:960px;margin:0 auto;padding:20px 24px;height:calc(100dvh - 56px)}.va-chatpage .va-panel{height:100%;font-size:15px}.va-chatpage .va-head small{font-size:12px}@media(max-width:640px){.va-chatpage{padding:0;height:calc(100dvh - 56px)}.va-chatpage .va-panel{border-radius:0;border-left:0;border-right:0}}

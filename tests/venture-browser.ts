@@ -78,7 +78,11 @@ try {
     return response.status;
   }, { email, password });
   assert.equal(loginStatus, 200, 'Real Better Auth fixture login');
+  // Signed in, the landing CTA hands over to the analyst's own page.
   await page.goto(`${base}/venture-analyst`, { waitUntil: 'domcontentloaded' });
+  await page.getByRole('button', { name: 'Chat with analyst agent', exact: true }).click();
+  await page.waitForURL(/\/venture-analyst\/chat/);
+  assert.equal(await page.locator('#navbar, footer').count(), 0, 'Chat page has no marketing chrome');
   // Opening the analyst starts a fresh chat; nothing is created until the first message.
   await page.getByRole('button', { name: '+ New chat', exact: true }).waitFor();
   await page.getByText('Welcome. Tell me', { exact: false }).waitFor();
@@ -103,7 +107,7 @@ try {
   assert.equal(await page.getByLabel('Saved conversations').inputValue(), selected, 'Reload resumes the open conversation');
   assert.equal(await page.locator('.va-message.user').count(), 1, 'Reload does not replay billable turns');
   // Analyst Markdown renders, but raw HTML, images and script links never do.
-  const { ventureMessages } = await import('../src/db/schema/venture.ts');
+  const { ventureMessages } = await import('../src/venture/db/schema.ts');
   await db.insert(ventureMessages).values({ conversationId: selected, role: 'assistant', requestId: crypto.randomUUID(), status: 'completed', createdAt: new Date(Date.now() + 5000), content: '## Plan\n\n- **Interview** 10 plumbers\n- <img src=x onerror="window.pwned=1"> [bad](javascript:window.pwned=1) ![t](https://example.org/x.png)' });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.locator('.va-md strong', { hasText: 'Interview' }).waitFor();
@@ -114,7 +118,7 @@ try {
   assert.equal(await page.getByLabel('Saved conversations').inputValue(), '');
   await page.getByLabel('Saved conversations').selectOption(selected);
   await page.getByText(/This reply failed/).waitFor();
-  const { ventureAssessments } = await import('../src/db/schema/venture.ts');
+  const { ventureAssessments } = await import('../src/venture/db/schema.ts');
   await db.insert(ventureAssessments).values({ conversationId: selected, version: 1, status: 'provisional', contentJson: assessmentFixture() });
   await page.getByRole('tab', { name: 'Assessment', exact: true }).click();
   await page.getByText(/PROVISIONAL · Version 1/).waitFor();
@@ -137,7 +141,7 @@ try {
   assert.equal(await page.locator('#va-panel').getAttribute('aria-modal'), null);
   // Dashboard: verdict, tranche, market and to-dos for the founder; decision form for reviewers.
   await db.insert(ventureAssessments).values({ conversationId: selected, version: 2, status: 'provisional', contentJson: fundRecommendation() });
-  const { saveTasks } = await import('../src/services/venture-dashboard.ts');
+  const { saveTasks } = await import('../src/venture/services/dashboard.ts');
   const { eq, and } = await import('drizzle-orm');
   const [v2] = await db.select().from(ventureAssessments).where(and(eq(ventureAssessments.conversationId, selected), eq(ventureAssessments.version, 2)));
   await saveTasks(selected, v2!);

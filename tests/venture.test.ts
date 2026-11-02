@@ -5,12 +5,12 @@ import { Hono } from "hono";
 import { eq } from "drizzle-orm";
 import { hashPassword } from "better-auth/crypto";
 import { auth } from "../src/auth/index.ts";
-import authRoutes from "../src/routes/auth.ts";
-import venture from "../src/routes/api/venture.ts";
+import authRoutes from "../src/venture/routes/auth.ts";
+import venture from "../src/venture/routes/api.ts";
 import { db } from "../src/config/db.ts";
 import { env } from "../src/config/env.ts";
 import { users, accounts } from "../src/db/schema/users.ts";
-import { ventureConversations, ventureMessages, ventureAssessments, ventureSources, ventureTasks } from "../src/db/schema/venture.ts";
+import { ventureConversations, ventureMessages, ventureAssessments, ventureSources, ventureTasks } from "../src/venture/db/schema.ts";
 
 if (!process.env.VENTURE_TEST_ISOLATED) throw new Error("Use bun run test:venture for isolated databases.");
 const app = new Hono().route("/", authRoutes).route("/api/venture", venture);
@@ -75,7 +75,7 @@ test("owner-only create/list/load and durable messages; no project chat context"
   const loaded = await (await request(`/api/venture/conversations/${conversationId}`, 0)).json();
   expect(loaded.messages[0].content).toBe("TEST FIXTURE private content");
   // A fresh process/connection proves durable storage, not in-memory UI state.
-  const child = Bun.spawn(["bun", "-e", `import {db} from './src/config/db.ts'; import {ventureMessages} from './src/db/schema/venture.ts'; import {eq} from 'drizzle-orm'; const r=await db.select().from(ventureMessages).where(eq(ventureMessages.conversationId, ${JSON.stringify(conversationId)})); if(r.length!==1)process.exit(1);process.exit(0);`], { cwd: process.cwd(), env: process.env, stdout: "pipe", stderr: "pipe" });
+  const child = Bun.spawn(["bun", "-e", `import {db} from './src/config/db.ts'; import {ventureMessages} from './src/venture/db/schema.ts'; import {eq} from 'drizzle-orm'; const r=await db.select().from(ventureMessages).where(eq(ventureMessages.conversationId, ${JSON.stringify(conversationId)})); if(r.length!==1)process.exit(1);process.exit(0);`], { cwd: process.cwd(), env: process.env, stdout: "pipe", stderr: "pipe" });
   expect(await child.exited).toBe(0);
 });
 test('stream and stop endpoints retain all access guards and enforce payload limits', async () => {
