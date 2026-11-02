@@ -42,7 +42,8 @@ export const assessmentSchema = z.object({
   missingInputs: z.array(text).max(30), assumptions: claims,
   founderFit: z.object({ rationale: claims, capabilityGaps: claims, distributionGaps: claims, recommendedChanges: claims }).strict(),
   opportunity: z.object({ customerPain: claims, competition: claims, opportunity: claims }).strict(),
-  units: z.object({ currency: z.string().regex(/^[A-Z]{3}$/), period: z.enum(['month', 'year']), geography: text }).strict(),
+  // LFG reports every figure in US dollars; local prices are converted in assumptions.
+  units: z.object({ currency: z.literal('USD'), period: z.enum(['month', 'year']), geography: text }).strict(),
   market: z.object({ tam: calculation, sam: calculation, som: calculation }).strict(),
   revenue: z.object({ conservative: calculation, base: calculation, upside: calculation }).strict(),
   financing: z.object({ venture: claims, bootstrapping: claims, profitSharing: claims }).strict(),

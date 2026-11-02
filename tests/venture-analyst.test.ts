@@ -141,7 +141,7 @@ test('schema checks missing inputs, arithmetic, market/scenario order, units, ti
   const valid: any = assessmentFixture(); expect(validateAssessment(valid, new Set()).status).toBe('provisional');
   const cases = [
     (v: any) => v.market.tam.amount++, (v: any) => v.market.tam.customers = null,
-    (v: any) => v.units.currency = 'dollars', (v: any) => v.milestones.mvp.latestWeek = 0,
+    (v: any) => v.units.currency = 'dollars', (v: any) => v.units.currency = 'INR', (v: any) => v.milestones.mvp.latestWeek = 0,
     (v: any) => v.status = 'ready', (v: any) => v.assumptions[0].kind = 'sourced',
     (v: any) => { v.market.sam.customers = 2000; v.market.sam.amount = 20000; },
   ];
