@@ -1,5 +1,5 @@
 // TEST FIXTURES ONLY. Mock provider/tool results below are NOT real-provider evidence.
-import { assessmentFixture } from './venture-assessment.fixture.ts';
+import { assessmentFixture, fundRecommendation } from './venture-assessment.fixture.ts';
 import { validateAssessment } from '../src/services/venture-assessment.ts';
 import { test, expect, mock, beforeAll, afterAll } from 'bun:test';
 import { MockLanguageModelV3, simulateReadableStream } from 'ai/test';
@@ -9,7 +9,7 @@ import { eq, and } from 'drizzle-orm';
 import { db } from '../src/config/db.ts';
 import { env } from '../src/config/env.ts';
 import { users } from '../src/db/schema/users.ts';
-import { ventureConversations, ventureMessages, ventureSources, ventureAssessments } from '../src/db/schema/venture.ts';
+import { ventureConversations, ventureMessages, ventureSources, ventureAssessments, ventureTasks } from '../src/db/schema/venture.ts';
 import { publicAddress, publicUrl, readPublicUrl } from '../src/services/venture-public-url.ts';
 if (!process.env.VENTURE_TEST_ISOLATED) throw new Error('Use bun run test:venture-analyst');
 let mode = 'success', researchFails = false, toolCalls = 0, step = 0;
@@ -114,9 +114,15 @@ test('fixture idea-to-assessment, corrections, reload and failed regeneration pr
   const generate = async () => { const requestId = crypto.randomUUID(); const abort = await reserveTurn(conversationId, owner, requestId, 'TEST FIXTURE corrected customer budget'); return runAssessment(conversationId, requestId, abort, crypto.randomUUID()); };
   mode = 'success'; assessmentOutput = assessmentFixture(source!.id);
   const first = await generate(); expect(first.version).toBe(1); expect(first.status).toBe('provisional');
+  const firstTasks = await db.select().from(ventureTasks).where(eq(ventureTasks.assessmentId, first.id));
+  expect(firstTasks.length).toBe(2);
+  // Founder progress survives regeneration when a commitment's wording is unchanged.
+  await db.update(ventureTasks).set({ done: true, doneAt: new Date() }).where(eq(ventureTasks.id, firstTasks.find(t => t.position === 0)!.id));
   expect(Object.keys(first.contentJson)).toContain('milestones');
   assessmentOutput.revenue.base = { ...assessmentOutput.revenue.base, customers: 2.5, amount: 25 };
   const second = await generate(); expect(second.version).toBe(2);
+  const secondTasks = await db.select().from(ventureTasks).where(eq(ventureTasks.assessmentId, second.id));
+  expect(secondTasks.find(t => t.position === 0)?.done).toBe(true); expect(secondTasks.find(t => t.position === 1)?.done).toBe(false);
   const reload = await db.select().from(ventureAssessments).where(eq(ventureAssessments.conversationId, conversationId));
   expect(reload.length).toBe(2); expect(reload[1]!.contentJson).toEqual(second.contentJson);
   const child = Bun.spawn(['bun', '-e', `import {db} from './src/config/db.ts'; import {ventureAssessments} from './src/db/schema/venture.ts'; import {eq} from 'drizzle-orm'; const rows=await db.select().from(ventureAssessments).where(eq(ventureAssessments.conversationId, ${JSON.stringify(conversationId)})); if(rows.length!==2 || rows[1].version!==2)process.exit(1); process.exit(0);`], { env: process.env, stdout: 'pipe', stderr: 'pipe' });
@@ -140,6 +146,22 @@ test('schema checks missing inputs, arithmetic, market/scenario order, units, ti
     (v: any) => { v.market.sam.customers = 2000; v.market.sam.amount = 20000; },
   ];
   for (const mutate of cases) { const v = structuredClone(valid); mutate(v); expect(() => validateAssessment(v, new Set())).toThrow(); }
+});
+test('recommendation verdicts: token sums, funding needs a tranche, refusals carry no tokens, prohibited needs flags', () => {
+  const fund: any = fundRecommendation(); expect(validateAssessment(fund, new Set()).recommendation.tokenTranche.totalTokens).toBe(2_500_000);
+  const cases = [
+    (v: any) => v.recommendation.tokenTranche.totalTokens = 3_000_000,
+    (v: any) => v.recommendation.tier = null,
+    (v: any) => v.recommendation.founderCommitments = [],
+    (v: any) => { v.recommendation.verdict = 'decline'; },
+    (v: any) => { v.recommendation.verdict = 'prohibited'; v.recommendation.tokenTranche = { ...v.recommendation.tokenTranche, totalTokens: 0, lineItems: [] }; },
+    (v: any) => { v.recommendation.tokenTranche.lineItems[0].tokens = 600_000_000; v.recommendation.tokenTranche.totalTokens = 602_000_000; },
+    (v: any) => { delete v.recommendation; },
+  ];
+  for (const mutate of cases) { const v = structuredClone(fund); mutate(v); expect(() => validateAssessment(v, new Set())).toThrow(); }
+  const prohibited: any = assessmentFixture();
+  prohibited.recommendation = { ...prohibited.recommendation, verdict: 'prohibited', complianceFlags: [prohibited.assumptions[0]] };
+  expect(validateAssessment(prohibited, new Set()).recommendation.verdict).toBe('prohibited');
 });
 test('stale started turn recovers without replay; durable hourly limit is enforced', async () => {
   await db.insert(ventureMessages).values({ conversationId, requestId: crypto.randomUUID(), role: 'assistant', content: 'TEST FIXTURE interrupted partial', status: 'started', createdAt: new Date(Date.now() - 150000) });

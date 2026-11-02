@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { HomePage } from "../templates/pages/home.tsx";
 import { VentureAnalystPage } from "../templates/pages/venture-analyst.tsx";
+import { VentureDashboardPage } from "../templates/pages/venture-dashboard.tsx";
 import { loggedRequest } from "../utils/request-log.ts";
 import { HowItWorksPage } from "../templates/pages/how-it-works.tsx";
 import { SoftwareServicesPage } from "../templates/pages/software-services.tsx";
@@ -93,6 +94,7 @@ async function verifyTurnstile(token: string, ip?: string): Promise<boolean> {
 
 const landing = new Hono();
 landing.get("/venture-analyst", c => loggedRequest(c.req.raw, "venture.landing", async () => c.html(VentureAnalystPage())));
+landing.get("/venture-analyst/dashboard", c => loggedRequest(c.req.raw, "venture.dashboard", async () => c.html(VentureDashboardPage())));
 
 landing.get("/", (c) => {
   const posts = loadBlogPosts().slice(0, 3);

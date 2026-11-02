@@ -5,7 +5,11 @@
   const cta = $('va-cta'), close = $('va-close'), status = $('va-status');
   const narrow = matchMedia('(max-width:1023px)');
   let expanded = false, controller, streamController, activeTurn, epoch = 0, loadEpoch = 0, returnFocus = cta, selectedId = null;
-  const drafts = new Map();
+  const drafts = new Map(), sourceMap = new Map();
+  const query = new URLSearchParams(location.search);
+  let requested = query.get('c');
+  const markdown = (el, text) => window.ventureMarkdown ? window.ventureMarkdown.into(el, text, sourceMap) : (el.textContent = text);
+  const dashboardLink = id => { const a = element('a', 'Dashboard', 'va-quiet va-link'); a.href = `/venture-analyst/dashboard${id ? `?v=${encodeURIComponent(id)}` : ''}`; return a; };
   function stop() {
     if (activeTurn) fetch(`/api/venture/conversations/${encodeURIComponent(activeTurn.id)}/stop`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requestId: activeTurn.requestId }), keepalive: true }).catch(() => {});
     streamController?.abort(); streamController = null;
@@ -56,7 +60,7 @@
   function authView(error) {
     stage.replaceChildren(); status.textContent = 'Your private assessment starts here';
     const content = element('div', '', 'va-content'), auth = element('div', '', 'va-auth');
-    auth.append(panel.querySelector('.va-avatar').cloneNode(true), element('h2', 'Meet your venture analyst'), element('p', 'Sign in to start a private conversation about your idea, your background, and what comes next.'));
+    auth.append(panel.querySelector('.va-avatar').cloneNode(true), element('h2', 'Meet your venture analyst'), element('p', 'Sign in to start a conversation about your idea, your background, and what comes next. Only you and LFG’s venture review team can see it.'));
     if (error) auth.append(element('p', message(error), 'va-error'));
     const google = button('Continue with Google', signin, 'va-google');
     const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -84,15 +88,19 @@
     const data = await api(`/api/venture/conversations/${encodeURIComponent(id)}`);
     if (version !== epoch || loadVersion !== loadEpoch || !expanded) return;
     selectedId = data.conversation.id;
+    // Reload resumes this conversation; a fresh open starts a new chat.
+    history.replaceState(null, '', `${location.pathname}?chat=open&c=${encodeURIComponent(selectedId)}`);
     stage.querySelector('.va-views')?.remove();
     const views = element('div', '', 'va-views');
-    views.append(button('Chat', () => loadConversation(id, content).catch(failure)), button('Assessment', () => assessmentView(id, content)));
+    views.append(button('Chat', () => loadConversation(id, content).catch(failure)), button('Assessment', () => assessmentView(id, content)), dashboardLink(id));
     content.before(views);
-    content.replaceChildren(element('div', 'PRIVATE CONVERSATION', 'va-label'));
+    (data.sources || []).forEach(source => sourceMap.set(source.id, source));
+    content.replaceChildren(element('div', 'YOUR CONVERSATION · REVIEWED BY LFG FOR FUNDING', 'va-label'));
     content.setAttribute('role', 'log'); content.removeAttribute('aria-label');
     if (!data.messages.length) content.append(element('p', 'Welcome. Tell me what you’re thinking of building and who it would help. A rough idea is enough to begin.', 'va-message'));
     for (const msg of data.messages) {
-      const bubble = element('div', msg.content, `va-message ${msg.role === 'user' ? 'user' : ''}`);
+      const bubble = element('div', msg.role === 'user' ? msg.content : '', `va-message ${msg.role === 'user' ? 'user' : ''}`);
+      if (msg.role !== 'user') markdown(bubble, msg.content);
       if (msg.status !== 'completed') {
         bubble.append(element('small', ` (${msg.status === 'started' ? 'in progress or interrupted — reload after two minutes' : msg.status}; correlation ID: ${msg.requestId}). Saved history is safe.`));
         if (msg.status === 'started') bubble.append(button('Stop saved turn', async () => {
@@ -108,6 +116,9 @@
     for (const source of data.sources || []) addSource(content, source);
     composer(data.conversation.id, content);
     content.scrollTop = content.scrollHeight;
+    // A first message typed on the dashboard is handed over once, via session storage.
+    let pending = null; try { pending = sessionStorage.getItem(`va-pending:${id}`); sessionStorage.removeItem(`va-pending:${id}`); } catch { /* storage unavailable */ }
+    if (pending && !data.messages.length) { const form = stage.querySelector('.va-composer'); form.querySelector('textarea').value = pending; form.requestSubmit(); }
   }
   async function assessmentView(id, content) {
     if (activeTurn) return;
@@ -127,7 +138,7 @@
     content.append(element('h2', 'Assessment'), element('p', 'Financial figures and timelines are scenarios, not promises. Founder fit concerns relevant experience, access and capacity—not personal worth.', 'va-muted'));
     if (saved) {
       content.append(element('p', `${saved.status.toUpperCase()} · Version ${saved.version} · Last saved ${new Date(saved.createdAt).toLocaleString()}`, 'va-label'));
-      const labels = { missingInputs: 'Missing inputs / focused follow-up', assumptions: 'Assumptions', founderFit: 'Founder fit and recommended changes', opportunity: 'Opportunity and customer pain', units: 'Shared currency, period and geography', market: 'Bottom-up TAM / SAM / SOM', revenue: 'Conservative / base / upside revenue', financing: 'Financing and profit-sharing tradeoffs', gtm: 'GTM experiments and budgets', milestones: 'Validation, MVP, first user and first revenue', uncertainties: 'Uncertainties' };
+      const labels = { missingInputs: 'Missing inputs / focused follow-up', assumptions: 'Assumptions', founderFit: 'Founder fit and recommended changes', opportunity: 'Opportunity and customer pain', units: 'Shared currency, period and geography', market: 'Bottom-up TAM / SAM / SOM', revenue: 'Conservative / base / upside revenue', financing: 'Financing and profit-sharing tradeoffs', gtm: 'GTM experiments and budgets', milestones: 'Validation, MVP, first user and first revenue', uncertainties: 'Uncertainties', recommendation: 'Verdict, token tranche and your commitments' };
       const human = key => key.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase());
       function render(value, parent) {
         if (value === null) { parent.append(element('span', 'Unknown — input needed')); return; }
@@ -156,8 +167,10 @@
       finally { activeTurn = null; generate.disabled = false; stage.querySelectorAll('.va-history button,.va-history select,.va-views button').forEach(el => { el.disabled = false; }); }
     }, 'va-send');
     content.append(generate, feedback);
+    if (saved) content.append(dashboardLink(id));
   }
   function addSource(content, source) {
+    sourceMap.set(source.id, source);
     // No raw Markdown/HTML rendering. Only validated ledger URLs become links.
     let url; try { url = new URL(source.url); } catch { return; }
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return;
@@ -165,7 +178,7 @@
     link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer';
     const row = element('div', '', 'va-muted'); row.append(link, element('p', (source.excerpt || '').slice(0, 240))); content.append(row);
   }
-  function composer(id, content) {
+  function composer(id, content, onCreated) {
     stage.querySelector('.va-composer')?.remove();
     const form = element('form', '', 'va-composer'), row = element('div', '', 'va-inputrow');
     const input = element('textarea'); input.maxLength = 4000; input.rows = 2; input.required = true; input.setAttribute('aria-label', 'Your message'); input.placeholder = 'Tell me about your idea…';
@@ -174,13 +187,26 @@
     const stopButton = button('Stop', stop); stopButton.hidden = true;
     const feedback = element('div', '', 'va-muted'); feedback.setAttribute('role', 'status');
     row.append(input, send, stopButton); form.append(row, feedback); stage.append(form);
+    // Enter sends; Shift+Enter adds a line. Never interrupt IME composition.
+    input.onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); form.requestSubmit(); } };
     form.onsubmit = async event => {
       event.preventDefault(); if (activeTurn || !input.value.trim()) return;
       const text = input.value.trim(), requestId = crypto.randomUUID(), version = epoch;
+      const created = !id;
+      if (created) {
+        // New chats are created on the first message, titled by it.
+        send.disabled = true;
+        try { id = (await api('/api/venture/conversations', { method: 'POST', body: JSON.stringify({ title: text.replace(/\s+/g, ' ').slice(0, 80) }) })).conversation.id; }
+        catch (error) { send.disabled = false; feedback.textContent = message(error); return; }
+        if (version !== epoch) return;
+        selectedId = id; onCreated?.(id, text);
+      }
       activeTurn = { id, requestId }; streamController = new AbortController();
       drafts.delete(id); input.value = ''; input.disabled = true; send.disabled = true; stopButton.hidden = false;
       stage.querySelectorAll('.va-history button,.va-history select,.va-views button').forEach(el => { el.disabled = true; });
       const user = element('div', text, 'va-message user'), answer = element('div', '', 'va-message'); content.append(user, answer);
+      let answerText = '', frame = 0;
+      const paint = () => { frame = 0; markdown(answer, answerText); content.scrollTop = content.scrollHeight; };
       feedback.textContent = `Analysis starting… Correlation ID: ${requestId}`;
       let finished = false;
       try {
@@ -196,7 +222,7 @@
           for (const line of lines) {
             if (!line || version !== epoch) continue;
             const event = JSON.parse(line);
-            if (event.type === 'text') answer.append(document.createTextNode(event.text));
+            if (event.type === 'text') { answerText += event.text; frame ||= requestAnimationFrame(paint); }
             if (event.type === 'progress') feedback.textContent = `${event.message} Correlation ID: ${requestId}`;
             if (event.type === 'source') addSource(content, event.source);
             if (event.type === 'error') feedback.textContent = `${event.message} (${event.code}) Correlation ID: ${requestId}`;
@@ -209,6 +235,15 @@
         if (version === epoch) feedback.textContent = error.name === 'AbortError' ? `Stopped. Partial history is saved. Correlation ID: ${requestId}` : message(error);
       } finally {
         activeTurn = null; streamController = null;
+        if (frame) cancelAnimationFrame(frame);
+        if (answerText) paint();
+        if (version === epoch && created) {
+          stage.querySelectorAll('.va-history button,.va-history select').forEach(el => { el.disabled = false; });
+          const outcome = feedback.textContent;
+          await loadConversation(id, content).catch(failure);
+          const status = stage.querySelector('.va-composer [role="status"]'); if (status) status.textContent = outcome;
+          return;
+        }
         if (version === epoch) {
           input.disabled = false; send.disabled = false; stopButton.hidden = true;
           stage.querySelectorAll('.va-history button,.va-history select,.va-views button').forEach(el => { el.disabled = false; });
@@ -226,23 +261,29 @@
     const version = epoch;
     const data = await api('/api/venture/conversations');
     if (version !== epoch || !expanded) return;
-    stage.replaceChildren(); status.textContent = 'Private conversation · saved to your account';
+    stage.replaceChildren(); status.textContent = 'Saved to your account · reviewed by LFG for funding';
     const toolbar = element('div', '', 'va-history'), select = element('select'); select.setAttribute('aria-label', 'Saved conversations');
     select.append(new Option('Select a saved conversation', ''));
     data.conversations.forEach(item => select.append(new Option(item.title, item.id)));
     const content = element('div', '', 'va-content'); content.setAttribute('role', 'log');
-    select.onchange = () => { if (select.value) loadConversation(select.value, content).catch(failure); };
-    toolbar.append(select, button('New conversation', async () => {
-      try {
-        const data = await api('/api/venture/conversations', { method: 'POST', body: '{}' });
-        if (version !== epoch) return;
-        selectedId = data.conversation.id; await conversations();
-      } catch (error) { if (version === epoch) failure(error); }
-    }));
+    select.onchange = () => { if (select.value) loadConversation(select.value, content).catch(failure); else newChat(); };
+    function newChat() {
+      if (activeTurn) return;
+      selectedId = null; select.value = ''; loadEpoch++;
+      history.replaceState(null, '', `${location.pathname}?chat=open`);
+      stage.querySelector('.va-views')?.remove();
+      content.setAttribute('role', 'log');
+      content.replaceChildren(element('div', 'NEW CONVERSATION', 'va-label'), element('p', 'Welcome. Tell me what you’re thinking of building, who it would help, and what you bring to it. A rough idea is enough to begin.', 'va-message'));
+      composer(null, content, (id, text) => { select.append(new Option(text.slice(0, 80), id)); select.value = id; });
+      stage.querySelector('.va-composer textarea')?.focus();
+    }
+    toolbar.append(select, button('New chat', newChat), dashboardLink(selectedId || requested));
     stage.append(toolbar, content);
-    const id = data.conversations.some(item => item.id === selectedId) ? selectedId : data.conversations[0]?.id;
+    // Start on a fresh chat unless a specific saved conversation was requested.
+    const id = [requested, selectedId].find(candidate => candidate && data.conversations.some(item => item.id === candidate));
+    requested = null;
     if (id) { select.value = id; await loadConversation(id, content); }
-    else content.append(element('p', 'Create a private conversation to begin an adaptive interview and public-source research.', 'va-muted'));
+    else newChat();
   }
   async function ready() {
     cancel(); controller = new AbortController(); const version = epoch;
@@ -276,7 +317,6 @@
     }
   });
   sample();
-  const query = new URLSearchParams(location.search);
   if (query.get('chat') === 'open') open(query.get('auth') === 'failed' ? Object.assign(new Error('Google sign-in wasn’t completed. Retry; if you already have an LFG account, sign in to it first, then connect Google.'), { requestId: query.get('requestId') }) : null);
   else {
     // Returning Google-connected users resume; anonymous/password-only users keep

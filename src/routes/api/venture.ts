@@ -3,15 +3,17 @@ import { asc, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../../config/db.ts";
 import { ventureConversations, ventureMessages, ventureSources, ventureAssessments } from "../../db/schema/venture.ts";
-import { getVentureAccess, googleConfigured, isVentureSameOrigin, ownedVentureConversation } from "../../services/venture-access.ts";
+import { getVentureAccess, googleConfigured, isVentureSameOrigin, ownedVentureConversation, viewableVentureConversation } from "../../services/venture-access.ts";
+import { dashboardList, recordDecision, setTaskDone, ventureOverview } from "../../services/venture-dashboard.ts";
 import { loggedRequest, ventureError } from "../../utils/request-log.ts";
 
 import { analystReadiness, reserveTurn, runAssessment, runTurn, stopTurn, recoverInterrupted, VentureFailure } from '../../services/venture-analyst.ts';
 
-type Variables = { userId: string; requestId: string };
+type Variables = { userId: string; requestId: string; isAdmin: boolean };
 const venture = new Hono<{ Variables: Variables }>();
 venture.onError((_error, c) => ventureError(c.get("requestId"), 500, "STORAGE_UNAVAILABLE", "Private storage is temporarily unavailable. Retry; if it continues, contact support with this correlation ID."));
 venture.use("*", async (c, next) => loggedRequest(c.req.raw,
+  c.req.path.includes('/admin/') ? 'venture.admin.decision' : c.req.path.endsWith('/dashboard') ? 'venture.dashboard.list' : c.req.path.endsWith('/overview') ? 'venture.dashboard.overview' : c.req.path.includes('/tasks/') ? 'venture.task.update' :
   c.req.path.endsWith('/assessment') ? `venture.assessment.${c.req.method === 'POST' ? 'generate' : 'load'}` : c.req.path.endsWith('/stream') ? 'venture.stream.accept' : c.req.path.endsWith('/stop') ? 'venture.stream.stop' : c.req.path.endsWith("/session") ? "venture.session" : c.req.path.endsWith("/conversations") ? `venture.conversations.${c.req.method === "POST" ? "create" : "list"}` : "venture.conversation.load",
   async requestId => {
   c.set("requestId", requestId);
@@ -20,6 +22,7 @@ venture.use("*", async (c, next) => loggedRequest(c.req.raw,
   if (!access.session) return ventureError(requestId, 401, "SIGN_IN_REQUIRED", "Continue with Google to open your private conversations.");
   if (!access.eligible) return ventureError(requestId, 403, "GOOGLE_LINK_REQUIRED", "Connect Google using Continue with Google, then retry.");
   c.set("userId", access.session.user.id);
+  c.set("isAdmin", access.isAdmin);
   if (!["GET", "HEAD"].includes(c.req.method) && !isVentureSameOrigin(c.req.raw)) {
     return ventureError(requestId, 403, "ORIGIN_REJECTED", "Open the venture page on this site and retry.");
   }
@@ -27,7 +30,7 @@ venture.use("*", async (c, next) => loggedRequest(c.req.raw,
   return c.res;
 }));
 
-venture.get("/session", c => c.json({ ready: true, googleConnected: true, googleConfigured: googleConfigured(), ...analystReadiness(), requestId: c.get("requestId") }));
+venture.get("/session", c => c.json({ ready: true, googleConnected: true, isAdmin: c.get("isAdmin"), googleConfigured: googleConfigured(), ...analystReadiness(), requestId: c.get("requestId") }));
 venture.get("/conversations", async c => {
   const conversations = await db.select().from(ventureConversations)
     .where(eq(ventureConversations.userId, c.get("userId")))
@@ -60,7 +63,7 @@ venture.post("/conversations", async c => {
   return c.json({ conversation, requestId: c.get("requestId") }, 201);
 });
 venture.get("/conversations/:id", async c => {
-  const conversation = await ownedVentureConversation(c.req.param("id"), c.get("userId"));
+  const conversation = await viewableVentureConversation(c.req.param("id"), c.get("userId"), c.get("isAdmin"));
   if (!conversation) return ventureError(c.get("requestId"), 404, "CONVERSATION_NOT_FOUND", "This conversation is unavailable. Select one from your history or create a new one.");
   await recoverInterrupted(conversation.id);
   const sources = await db.select().from(ventureSources).where(eq(ventureSources.conversationId, conversation.id));
@@ -117,7 +120,7 @@ venture.post('/conversations/:id/stop', async c => {
   } catch (error) { if (error instanceof VentureFailure) return ventureError(c.get('requestId'), error.status, error.code, error.message); throw error; }
 });
 venture.get('/conversations/:id/assessment', async c => {
-  const conversation = await ownedVentureConversation(c.req.param('id'), c.get('userId'));
+  const conversation = await viewableVentureConversation(c.req.param('id'), c.get('userId'), c.get('isAdmin'));
   if (!conversation) return ventureError(c.get('requestId'), 404, 'CONVERSATION_NOT_FOUND', 'Select an owned conversation.');
   const [assessment] = await db.select().from(ventureAssessments).where(eq(ventureAssessments.conversationId, conversation.id)).orderBy(desc(ventureAssessments.version)).limit(1);
   const sources = await db.select().from(ventureSources).where(eq(ventureSources.conversationId, conversation.id));
@@ -138,6 +141,43 @@ venture.post('/conversations/:id/assessment', async c => {
       const assessment = await runAssessment(conversation.id, payload.data.requestId, abort, c.get('requestId'));
       return c.json({ assessment, requestId: c.get('requestId') }, 201);
     } finally { c.req.raw.signal.removeEventListener('abort', onAbort); }
+  } catch (error) { if (error instanceof VentureFailure) return ventureError(c.get('requestId'), error.status, error.code, error.message); throw error; }
+});
+venture.get('/dashboard', async c => {
+  const all = c.req.query('scope') === 'all';
+  if (all && !c.get('isAdmin')) return ventureError(c.get('requestId'), 403, 'ADMIN_REQUIRED', 'Only LFG venture reviewers can see every founder.');
+  return c.json({ ventures: await dashboardList(c.get('userId'), all), isAdmin: c.get('isAdmin'), requestId: c.get('requestId') });
+});
+venture.get('/conversations/:id/overview', async c => {
+  const conversation = await viewableVentureConversation(c.req.param('id'), c.get('userId'), c.get('isAdmin'));
+  if (!conversation) return ventureError(c.get('requestId'), 404, 'CONVERSATION_NOT_FOUND', 'This venture is unavailable. Select one from your dashboard.');
+  const isOwner = conversation.userId === c.get('userId');
+  return c.json({ ...(await ventureOverview(conversation.id, c.get('isAdmin'))), isOwner, isAdmin: c.get('isAdmin'), requestId: c.get('requestId') });
+});
+venture.patch('/tasks/:id', async c => {
+  try {
+    const payload = z.object({ done: z.boolean() }).strict().safeParse(await boundedJson(c.req.raw, 256));
+    if (!payload.success) return ventureError(c.get('requestId'), 400, 'INVALID_TASK', 'Send {"done": true|false}.');
+    const task = await setTaskDone(c.req.param('id'), c.get('userId'), payload.data.done);
+    if (!task) return ventureError(c.get('requestId'), 404, 'TASK_NOT_FOUND', 'Only the founder can update their own tasks.');
+    return c.json({ task, requestId: c.get('requestId') });
+  } catch (error) { if (error instanceof VentureFailure) return ventureError(c.get('requestId'), error.status, error.code, error.message); throw error; }
+});
+const decisionPayload = z.object({
+  decision: z.enum(['approved', 'needs_more_info', 'declined', 'prohibited']),
+  tokensApproved: z.number().int().nonnegative().max(1_000_000_000),
+  founderNote: z.string().trim().max(2000).optional(),
+  internalNote: z.string().trim().max(4000).optional(),
+}).strict().refine(d => d.decision === 'approved' ? d.tokensApproved > 0 : d.tokensApproved === 0, { message: 'Approved decisions need tokens; others must be 0.' });
+venture.post('/admin/conversations/:id/decision', async c => {
+  if (!c.get('isAdmin')) return ventureError(c.get('requestId'), 403, 'ADMIN_REQUIRED', 'Only LFG venture reviewers can record funding decisions.');
+  const conversation = await viewableVentureConversation(c.req.param('id'), c.get('userId'), true);
+  if (!conversation) return ventureError(c.get('requestId'), 404, 'CONVERSATION_NOT_FOUND', 'This venture is unavailable.');
+  try {
+    const payload = decisionPayload.safeParse(await boundedJson(c.req.raw, 8000));
+    if (!payload.success) return ventureError(c.get('requestId'), 400, 'INVALID_DECISION', 'Choose a decision; approved needs a positive token amount, other decisions use 0.');
+    const decision = await recordDecision(conversation.id, c.get('userId'), payload.data);
+    return c.json({ decision, requestId: c.get('requestId') }, 201);
   } catch (error) { if (error instanceof VentureFailure) return ventureError(c.get('requestId'), error.status, error.code, error.message); throw error; }
 });
 venture.all("*", c => ventureError(c.get("requestId"), 404, "ENDPOINT_NOT_FOUND", "This venture endpoint is unavailable. Return to your conversation list."));

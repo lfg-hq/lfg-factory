@@ -4,6 +4,8 @@ import { SiteHead, SiteNav, SiteFooter } from "../components/site.tsx";
 export const VentureAnalystPage = () => html`<!doctype html>
 <html lang="en"><head>${SiteHead({ title: "AI Venture Analyst | LFG", description: "An honest conversation about your idea, your edge, and the market.", path: "/venture-analyst" })}
 <link rel="stylesheet" href="/public/css/venture-analyst.css">
+<script defer src="/public/js/marked.min.js"></script>
+<script defer src="/public/js/venture-markdown.js"></script>
 <script defer src="/public/js/venture-analyst.js"></script></head>
 <body class="text-slate-900 font-sans">${SiteNav({})}
 <main class="venture" id="venture">
@@ -13,7 +15,7 @@ export const VentureAnalystPage = () => html`<!doctype html>
 <h1>Is this the right business?<br><span class="va-gradient">Are you the right founder?</span></h1>
 <p class="va-lead">An honest conversation about your idea, your edge, and the market. Turn big assumptions into an evidence-backed plan.</p>
 <button class="va-pill" id="va-cta" aria-expanded="false" aria-controls="va-panel">Chat with analyst agent</button>
-<p class="va-muted">Sign in with Google to start your private assessment.</p>
+<p class="va-muted">Sign in with Google to start your assessment. Your conversation is private to you and LFG’s venture review team. <a class="va-source" href="/venture-analyst/dashboard">Your dashboard</a></p>
 <div class="va-benefits"><div>${check}Founder fit and what to change</div><div>${check}Market size, revenue potential and funding fit</div><div>${check}A practical GTM and path to first revenue</div></div>
 </section>
 <section class="va-panel" id="va-panel" aria-label="Venture analyst chat" tabindex="-1">

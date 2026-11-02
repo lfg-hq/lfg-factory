@@ -38,3 +38,31 @@ export const ventureAssessments = sqliteTable("venture_assessment", {
   contentJson: text("content_json", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
 }, t => [uniqueIndex("venture_assessment_version_idx").on(t.conversationId, t.version)]);
+
+// LFG's binding funding decision. The analyst only recommends; admins decide.
+export const ventureDecisions = sqliteTable("venture_decision", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  conversationId: text("conversation_id").notNull().references(() => ventureConversations.id, { onDelete: "cascade" }),
+  assessmentId: text("assessment_id").references(() => ventureAssessments.id, { onDelete: "set null" }),
+  assessmentVersion: integer("assessment_version"),
+  decision: text("decision", { enum: ["approved", "needs_more_info", "declined", "prohibited"] }).notNull(),
+  tokensApproved: integer("tokens_approved").notNull().default(0),
+  founderNote: text("founder_note"),
+  internalNote: text("internal_note"),
+  adminUserId: text("admin_user_id").notNull().references(() => users.id),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
+}, t => [index("venture_decision_conv_idx").on(t.conversationId, t.createdAt)]);
+
+// Founder commitments set by the analyst, tracked by the founder.
+export const ventureTasks = sqliteTable("venture_task", {
+  id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+  conversationId: text("conversation_id").notNull().references(() => ventureConversations.id, { onDelete: "cascade" }),
+  assessmentId: text("assessment_id").notNull().references(() => ventureAssessments.id, { onDelete: "cascade" }),
+  position: integer("position").notNull(),
+  action: text("action").notNull(),
+  successSignal: text("success_signal"),
+  dueWeek: integer("due_week"),
+  done: integer("done", { mode: "boolean" }).notNull().default(false),
+  doneAt: integer("done_at", { mode: "timestamp" }),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
+}, t => [index("venture_task_assessment_idx").on(t.assessmentId, t.position)]);

@@ -10,6 +10,7 @@ import { createWebResearchTools } from '../ai/tools/agent-tools.ts';
 import { ventureAnalystPrompt } from '../ai/prompts/venture-analyst.ts';
 import { publicUrl, readPublicUrl } from './venture-public-url.ts';
 import { ventureLog } from '../utils/request-log.ts';
+import { saveTasks, ventureContext } from './venture-dashboard.ts';
 
 export const VENTURE_LIMITS = { turnsPerHour: 30, researchCalls: 8, timeoutMs: 120_000, inputChars: 4000, outputTokens: 2400 } as const;
 const ownersStarting = new Set<string>(); // Single existing Bun web process; no worker.
@@ -120,7 +121,8 @@ export async function runTurn(conversationId: string, requestId: string, abort: 
     if (!env.EXA_API_KEY) send({ type: 'progress', message: 'Public research unavailable: platform EXA_API_KEY is missing. Interview can continue; no sources are verified.' });
     const messages = history.filter(m => m.content && (m.role === 'user' || m.status === 'completed')).slice(-60).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content.slice(0, 16000) }));
     // The reservation assistant row precedes its user row; it is empty and excluded.
-    const result = streamText({ model, system: ventureAnalystPrompt + '\nPreviously retrieved source IDs (untrusted evidence):\n' + JSON.stringify(priorSources.map(s => s.id)), messages, tools,
+    const state = await ventureContext(conversationId);
+    const result = streamText({ model, system: ventureAnalystPrompt + state + '\nPreviously retrieved source IDs (untrusted evidence):\n' + JSON.stringify(priorSources.map(s => s.id)), messages, tools,
       abortSignal: abort.signal, maxRetries: 0, maxOutputTokens: VENTURE_LIMITS.outputTokens, stopWhen: stepCountIs(9),
       onError: () => { /* Full-stream error is handled below; never let the SDK log raw provider errors. */ },
       onStepFinish: step => log('venture.provider.step', 'success', { providerRequestId: safeId(step.response.id), finishReason: step.finishReason }),
@@ -185,16 +187,18 @@ export async function runAssessment(conversationId: string, requestId: string, a
     const result = await generateText({ model, system: ventureAssessmentPrompt, prompt: JSON.stringify({
       conversation: history.reverse().filter(m => m.content && (m.role === 'user' || m.status === 'completed')).map(m => ({ role: m.role, content: m.content.slice(0, 16000) })),
       sources: sources.map(s => ({ id: s.id, url: s.url, retrievedAt: s.retrievedAt, excerpt: s.excerpt?.slice(0, 8000) })),
-    }), output: Output.object({ schema: assessmentSchema }), maxOutputTokens: 12000, maxRetries: 0, abortSignal: abort.signal });
+    }), output: Output.object({ schema: assessmentSchema }), maxOutputTokens: 16000, maxRetries: 0, abortSignal: abort.signal });
     log('venture.assessment.provider_response', 'success', { providerRequestId: safeId(result.response.id) });
     let content;
     try { content = validateAssessment(result.output, new Set(sources.map(s => s.id))); }
     catch { throw new VentureFailure('ASSESSMENT_INVALID', 422, 'Generated assessment failed evidence, schema or arithmetic checks. Correct missing inputs in chat and retry explicitly. The previous version is unchanged.'); }
     abort.signal.throwIfAborted();
-    const [last] = await db.select({ version: ventureAssessments.version }).from(ventureAssessments).where(eq(ventureAssessments.conversationId, conversationId)).orderBy(desc(ventureAssessments.version)).limit(1);
+    const [last] = await db.select({ id: ventureAssessments.id, version: ventureAssessments.version }).from(ventureAssessments).where(eq(ventureAssessments.conversationId, conversationId)).orderBy(desc(ventureAssessments.version)).limit(1);
     // One insert is atomic; the durable assistant reservation serializes writers.
     const [assessment] = await db.insert(ventureAssessments).values({ conversationId, version: (last?.version || 0) + 1, status: content.status, contentJson: content }).returning();
-    await db.update(ventureMessages).set({ status: 'completed', content: `Saved assessment version ${assessment!.version}. Open Assessment to read it.` }).where(where);
+    try { await saveTasks(conversationId, assessment!, last?.id); }
+    catch { log('venture.assessment.tasks_failed', 'failed', { version: assessment!.version }); }
+    await db.update(ventureMessages).set({ status: 'completed', content: `Saved assessment version ${assessment!.version}. Open the [venture dashboard](/venture-analyst/dashboard?v=${conversationId}) to see the verdict, market and your next steps.` }).where(where);
     log('venture.assessment.completed', 'success', { validationOutcome: 'valid', version: assessment!.version });
     return assessment!;
   } catch (error) {

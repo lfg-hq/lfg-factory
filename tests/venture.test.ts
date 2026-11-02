@@ -10,7 +10,7 @@ import venture from "../src/routes/api/venture.ts";
 import { db } from "../src/config/db.ts";
 import { env } from "../src/config/env.ts";
 import { users, accounts } from "../src/db/schema/users.ts";
-import { ventureConversations, ventureMessages, ventureAssessments, ventureSources } from "../src/db/schema/venture.ts";
+import { ventureConversations, ventureMessages, ventureAssessments, ventureSources, ventureTasks } from "../src/db/schema/venture.ts";
 
 if (!process.env.VENTURE_TEST_ISOLATED) throw new Error("Use bun run test:venture for isolated databases.");
 const app = new Hono().route("/", authRoutes).route("/api/venture", venture);
@@ -18,6 +18,7 @@ const origin = new URL(env.BETTER_AUTH_URL).origin;
 const fixtureIds = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()];
 const cookies: string[] = [];
 let conversationId: string;
+const emails: string[] = [];
 async function request(path: string, user?: number, method = "GET", body?: unknown, requestOrigin: string | null = origin) {
   const headers = new Headers();
   if (user !== undefined) headers.set("cookie", cookies[user]!);
@@ -28,7 +29,7 @@ async function request(path: string, user?: number, method = "GET", body?: unkno
 beforeAll(async () => {
   for (let i = 0; i < fixtureIds.length; i++) {
     const id = fixtureIds[i]!;
-    const email = `venture-test-${id}@workspace.example.org`;
+    const email = `venture-test-${id}@workspace.example.org`; emails[i] = email;
     const password = crypto.randomUUID();
     await db.insert(users).values({ id, name: "TEST FIXTURE", email, emailVerified: true });
     await db.insert(accounts).values({ id: crypto.randomUUID(), userId: id, providerId: "credential", accountId: id, password: await hashPassword(password) });
@@ -131,4 +132,41 @@ test("Google initiation rejects cross-origin and reports missing credentials hon
     expect(response.status).toBe(503); expect((await response.json()).code).toBe("GOOGLE_NOT_CONFIGURED");
   }
   expect((await auth.$context).options.account?.accountLinking?.disableImplicitLinking).toBe(true);
+});
+
+test("LFG admins review every venture and record decisions; founders keep tasks and never see internal notes", async () => {
+  const [assessment] = await db.select().from(ventureAssessments).where(eq(ventureAssessments.conversationId, conversationId));
+  const [task] = await db.insert(ventureTasks).values({ conversationId, assessmentId: assessment!.id, position: 0, action: "TEST FIXTURE interview 10 customers", successSignal: "3 pilots", dueWeek: 2 }).returning();
+  const previous = env.VENTURE_ADMIN_EMAILS;
+  env.VENTURE_ADMIN_EMAILS = ` ${emails[1]!.toUpperCase()} , other@example.org`;
+  try {
+    expect((await (await request("/api/venture/session", 0)).json()).isAdmin).toBe(false);
+    expect((await (await request("/api/venture/session", 1)).json()).isAdmin).toBe(true);
+    expect((await request("/api/venture/dashboard?scope=all", 0)).status).toBe(403);
+    const own = await (await request("/api/venture/dashboard", 0)).json();
+    expect(own.ventures.find((v: any) => v.id === conversationId)?.owner).toBeUndefined();
+    const all = await (await request("/api/venture/dashboard?scope=all", 1)).json();
+    expect(all.ventures.find((v: any) => v.id === conversationId)?.owner.email).toBe(emails[0]);
+    const overview = await request(`/api/venture/conversations/${conversationId}/overview`, 1);
+    expect(overview.status).toBe(200); expect((await overview.json()).isOwner).toBe(false);
+    expect((await request(`/api/venture/conversations/${conversationId}/overview`, 2)).status).toBe(403);
+    // Admin read access never extends to writing the founder's conversation.
+    expect((await request(`/api/venture/conversations/${conversationId}/stream`, 1, "POST", { requestId: crypto.randomUUID(), content: "x" })).status).toBe(404);
+    const decisionPath = `/api/venture/admin/conversations/${conversationId}/decision`;
+    expect((await request(decisionPath, 0, "POST", { decision: "approved", tokensApproved: 1000 })).status).toBe(403);
+    expect((await request(decisionPath, 1, "POST", { decision: "approved", tokensApproved: 1000 }, "https://evil.example")).status).toBe(403);
+    expect((await request(decisionPath, 1, "POST", { decision: "approved", tokensApproved: 0 })).status).toBe(400);
+    expect((await request(decisionPath, 1, "POST", { decision: "declined", tokensApproved: 5 })).status).toBe(400);
+    const decided = await request(decisionPath, 1, "POST", { decision: "approved", tokensApproved: 2_500_000, founderNote: "TEST FIXTURE go", internalNote: "TEST FIXTURE internal only" });
+    expect(decided.status).toBe(201); expect((await decided.json()).decision.assessmentVersion).toBe(1);
+    const founderView = await (await request(`/api/venture/conversations/${conversationId}/overview`, 0)).json();
+    expect(founderView.decision.tokensApproved).toBe(2_500_000); expect(founderView.decision.founderNote).toBe("TEST FIXTURE go");
+    expect(JSON.stringify(founderView)).not.toContain("internal only");
+    expect((await (await request(`/api/venture/conversations/${conversationId}/overview`, 1)).json()).decision.internalNote).toBe("TEST FIXTURE internal only");
+    expect((await request(`/api/venture/tasks/${task!.id}`, 1, "PATCH", { done: true })).status).toBe(404);
+    expect((await request(`/api/venture/tasks/${task!.id}`, 0, "PATCH", { done: "yes" })).status).toBe(400);
+    const ticked = await request(`/api/venture/tasks/${task!.id}`, 0, "PATCH", { done: true });
+    expect(ticked.status).toBe(200); expect((await ticked.json()).task.done).toBe(true);
+    expect((await (await request("/api/venture/dashboard", 0)).json()).ventures.find((v: any) => v.id === conversationId)?.tasks).toEqual({ total: 1, done: 1 });
+  } finally { env.VENTURE_ADMIN_EMAILS = previous; }
 });

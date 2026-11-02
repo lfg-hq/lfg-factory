@@ -11,5 +11,15 @@ export function assessmentFixture(sourceId?: string) {
     market: { tam: calc(1000), sam: calc(100), som: calc(10) }, revenue: { conservative: calc(1), base: calc(2), upside: calc(3) },
     financing: { venture: claims, bootstrapping: claims, profitSharing: claims },
     gtm: { targetSegment: claims, channels: claims, experiments: [{ experiment: claim, suggestedBudget: null, budgetAssumptions: claims }] },
-    milestones: { validation: milestone, mvp: milestone, firstUser: milestone, firstRevenue: milestone }, uncertainties: claims };
+    milestones: { validation: milestone, mvp: milestone, firstUser: milestone, firstRevenue: milestone }, uncertainties: claims,
+    recommendation: { verdict: 'needs_more_info', summary: 'TEST FIXTURE promising; willingness to pay unknown.', rationale: claims, tier: null, complianceFlags: [],
+      tokenTranche: { totalTokens: 0, lineItems: [], expectedReturn: claim },
+      founderCommitments: [{ action: 'TEST FIXTURE interview 10 plumbers in your network', successSignal: '3 commit to a paid pilot', dueWeek: 2 }, { action: 'TEST FIXTURE post 3 problem threads on X', successSignal: '20 replies', dueWeek: 1 }],
+      nextSteps: ['TEST FIXTURE confirm willingness to pay, then reassess'], checkInWeeks: 2 } };
+}
+
+export function fundRecommendation(base = assessmentFixture()) {
+  base.recommendation = { ...base.recommendation, verdict: 'fund', tier: 'micro',
+    tokenTranche: { totalTokens: 2_500_000, lineItems: [{ item: 'TEST FIXTURE landing page', tokens: 500_000, rationale: 'Collect pilot sign-ups' }, { item: 'TEST FIXTURE scheduling MVP', tokens: 2_000_000, rationale: 'Pilot with 10 plumbers' }], expectedReturn: base.recommendation.rationale[0] } } as any;
+  return base;
 }

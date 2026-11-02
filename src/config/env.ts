@@ -58,6 +58,8 @@ const envSchema = z.object({
   GEMINI_VISION_MODEL: z.string().optional().default("gemini-3.5-flash-lite"),
   DEEPSEEK_API_KEY: z.string().optional().default(""),
   EXA_API_KEY: z.string().optional().default(""),
+  // Comma-separated emails of LFG staff who review venture assessments and decide funding.
+  VENTURE_ADMIN_EMAILS: z.string().optional().default(""),
 
   // Public base URL used to build links in emails (falls back to BETTER_AUTH_URL)
   APP_URL: z.string().optional().default(""),
