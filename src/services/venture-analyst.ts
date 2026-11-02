@@ -154,10 +154,13 @@ export async function runTurn(conversationId: string, requestId: string, abort: 
     const timeout = abort.signal.aborted && abort.signal.reason?.message === 'TURN_TIMEOUT';
     status = abort.signal.aborted ? 'cancelled' : 'failed';
     const code = timeout ? 'TURN_TIMEOUT' : abort.signal.aborted ? 'CANCELLED' : error instanceof VentureFailure ? error.code : 'PROVIDER_FAILED';
-    const message = error instanceof VentureFailure ? error.message : timeout ? 'Analysis timed out. Partial history is saved; retry explicitly with a narrower question.' : abort.signal.aborted ? 'Analysis stopped. Partial history is saved. Retry only if needed.' : 'AI provider failed. Saved history is safe; retry explicitly or contact support with this correlation ID.';
-    send({ type: 'error', code, message });
     const providerError = error as { statusCode?: number; responseHeaders?: Record<string, string> } | null;
     const category = providerError?.statusCode === 401 || providerError?.statusCode === 403 ? 'PROVIDER_AUTH' : providerError?.statusCode === 429 ? 'PROVIDER_RATE_LIMIT' : providerError?.statusCode && providerError.statusCode >= 500 ? 'PROVIDER_UNAVAILABLE' : code;
+    const message = error instanceof VentureFailure ? error.message : timeout ? 'The analysis took too long and was stopped. Anything already written is saved; try a narrower question.' : abort.signal.aborted ? 'Stopped. Anything already written is saved.'
+      : category === 'PROVIDER_AUTH' ? 'The analyst is offline right now: our AI provider rejected LFG’s credentials. Your message is saved; please try again later.'
+      : category === 'PROVIDER_RATE_LIMIT' ? 'The analyst is busy right now. Your message is saved; please try again in a minute.'
+      : 'The analyst couldn’t reply just now. Your message is saved; please try again.';
+    send({ type: 'error', code, message });
     log(`venture.turn.${status}`, status, { errorCode: code, failureCategory: category, providerRequestId: safeId(providerError?.responseHeaders?.['x-request-id']), researchCalls: calls });
   } finally {
     clearTimeout(timer);

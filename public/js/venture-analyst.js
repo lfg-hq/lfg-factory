@@ -9,7 +9,23 @@
   const query = new URLSearchParams(location.search);
   let requested = query.get('c');
   const markdown = (el, text) => window.ventureMarkdown ? window.ventureMarkdown.into(el, text, sourceMap) : (el.textContent = text);
-  const dashboardLink = id => { const a = element('a', 'Dashboard', 'va-quiet va-link'); a.href = `/venture-analyst/dashboard${id ? `?v=${encodeURIComponent(id)}` : ''}`; return a; };
+  const nextPage = query.get('next') === 'dashboard' ? 'dashboard' : null;
+  const dashboard = $('va-dashboard');
+  // One clear way to the dashboard, in the panel header, once signed in.
+  function showDashboard(id) {
+    if (!dashboard) return;
+    dashboard.hidden = false;
+    dashboard.href = `/venture-analyst/dashboard${id ? `?v=${encodeURIComponent(id)}` : ''}`;
+  }
+  const hideDashboard = () => { if (dashboard) dashboard.hidden = true; };
+  // Friendly text first; the correlation ID stays available but small.
+  function say(target, text, ref) {
+    target.replaceChildren(document.createTextNode(text || ''));
+    if (ref) { const small = element('small', ` Ref ${String(ref).slice(0, 8)}`, 'va-ref'); small.title = `Correlation ID: ${ref}`; target.append(small); }
+  }
+  function tabs(active) {
+    stage.querySelectorAll('.va-views .va-tab').forEach(tab => { const on = tab.dataset.view === active; tab.classList.toggle('active', on); tab.setAttribute('aria-selected', String(on)); });
+  }
   function stop() {
     if (activeTurn) fetch(`/api/venture/conversations/${encodeURIComponent(activeTurn.id)}/stop`, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requestId: activeTurn.requestId }), keepalive: true }).catch(() => {});
     streamController?.abort(); streamController = null;
@@ -42,7 +58,7 @@
     document.querySelectorAll('body > nav, body > footer, .va-pitch, .va-rail').forEach(el => { el.inert = active; });
   }
   function collapse() {
-    cancel(); expanded = false; grid.classList.remove('expanded'); close.hidden = true;
+    cancel(); hideDashboard(); expanded = false; grid.classList.remove('expanded'); close.hidden = true;
     cta.setAttribute('aria-expanded', 'false'); status.textContent = 'Example conversation · not a live chat';
     modal(); sample(); history.replaceState(null, '', location.pathname);
     (returnFocus?.isConnected && returnFocus !== document.body ? returnFocus : cta).focus();
@@ -58,9 +74,9 @@
     return data;
   }
   function authView(error) {
-    stage.replaceChildren(); status.textContent = 'Your private assessment starts here';
+    stage.replaceChildren(); hideDashboard(); status.textContent = nextPage ? 'Sign in to open your dashboard' : 'Your assessment starts here';
     const content = element('div', '', 'va-content'), auth = element('div', '', 'va-auth');
-    auth.append(panel.querySelector('.va-avatar').cloneNode(true), element('h2', 'Meet your venture analyst'), element('p', 'Sign in to start a conversation about your idea, your background, and what comes next. Only you and LFG’s venture review team can see it.'));
+    auth.append(panel.querySelector('.va-avatar').cloneNode(true), element('h2', nextPage ? 'Sign in to see your dashboard' : 'Meet your venture analyst'), element('p', 'Sign in to start a conversation about your idea, your background, and what comes next. Only you and LFG’s venture review team can see it.'));
     if (error) auth.append(element('p', message(error), 'va-error'));
     const google = button('Continue with Google', signin, 'va-google');
     const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -76,7 +92,7 @@
     authView(); const google = stage.querySelector('.va-google'); google.disabled = true; google.textContent = 'Signing in with Google…';
     google.after(button('Cancel', () => { cancel(); authView(); stage.querySelector('button')?.focus(); }));
     try {
-      const data = await api('/auth/venture/google', { method: 'POST', body: '{}' });
+      const data = await api('/auth/venture/google', { method: 'POST', body: JSON.stringify(nextPage ? { next: nextPage } : {}) });
       if (version !== epoch || !expanded) return;
       const target = new URL(data.url);
       if (target.protocol !== 'https:' || target.hostname !== 'accounts.google.com') throw new Error('Google returned an unexpected sign-in destination. Please retry.');
@@ -92,8 +108,12 @@
     history.replaceState(null, '', `${location.pathname}?chat=open&c=${encodeURIComponent(selectedId)}`);
     stage.querySelector('.va-views')?.remove();
     const views = element('div', '', 'va-views');
-    views.append(button('Chat', () => loadConversation(id, content).catch(failure)), button('Assessment', () => assessmentView(id, content)), dashboardLink(id));
-    content.before(views);
+    views.setAttribute('role', 'tablist');
+    const chatTab = button('Chat', () => loadConversation(id, content).catch(failure), 'va-tab'), reportTab = button('Assessment', () => assessmentView(id, content), 'va-tab');
+    chatTab.dataset.view = 'chat'; reportTab.dataset.view = 'assessment';
+    [chatTab, reportTab].forEach(tab => tab.setAttribute('role', 'tab'));
+    views.append(chatTab, reportTab);
+    content.before(views); tabs('chat'); showDashboard(id);
     (data.sources || []).forEach(source => sourceMap.set(source.id, source));
     content.replaceChildren(element('div', 'YOUR CONVERSATION · REVIEWED BY LFG FOR FUNDING', 'va-label'));
     content.setAttribute('role', 'log'); content.removeAttribute('aria-label');
@@ -101,15 +121,18 @@
     for (const msg of data.messages) {
       const bubble = element('div', msg.role === 'user' ? msg.content : '', `va-message ${msg.role === 'user' ? 'user' : ''}`);
       if (msg.role !== 'user') markdown(bubble, msg.content);
-      if (msg.status !== 'completed') {
-        bubble.append(element('small', ` (${msg.status === 'started' ? 'in progress or interrupted — reload after two minutes' : msg.status}; correlation ID: ${msg.requestId}). Saved history is safe.`));
-        if (msg.status === 'started') bubble.append(button('Stop saved turn', async () => {
+      if (msg.role === 'assistant' && msg.status !== 'completed') {
+        // A reply that didn't finish: a short notice instead of an empty bubble.
+        const notice = element('div', '', 'va-notice');
+        say(notice, msg.status === 'started' ? 'Still working, or interrupted. Check back in a couple of minutes.' : msg.status === 'cancelled' ? 'This reply was stopped.' : 'This reply failed.', msg.requestId);
+        if (msg.status === 'started') notice.append(button('Stop', async () => {
           try { await api(`/api/venture/conversations/${encodeURIComponent(id)}/stop`, { method: 'POST', body: JSON.stringify({ requestId: msg.requestId }) }); await loadConversation(id, content); } catch (error) { failure(error); }
         }));
-        if (msg.role === 'assistant') bubble.append(button('Retry explicitly', () => {
+        else notice.append(button('Try again', () => {
           const prior = data.messages.find(m => m.requestId === msg.requestId && m.role === 'user');
           const input = stage.querySelector('textarea'); if (input && prior) { input.value = prior.content; input.focus(); }
         }));
+        if (msg.content) bubble.append(notice); else { content.append(notice); continue; }
       }
       content.append(bubble);
     }
@@ -123,6 +146,7 @@
   async function assessmentView(id, content) {
     if (activeTurn) return;
     const loadVersion = ++loadEpoch;
+    tabs('assessment');
     const form = stage.querySelector('.va-composer');
     // Keep the composer and unsent correction intact while browsing the report.
     if (form) form.hidden = true;
@@ -167,7 +191,6 @@
       finally { activeTurn = null; generate.disabled = false; stage.querySelectorAll('.va-history button,.va-history select,.va-views button').forEach(el => { el.disabled = false; }); }
     }, 'va-send');
     content.append(generate, feedback);
-    if (saved) content.append(dashboardLink(id));
   }
   function addSource(content, source) {
     sourceMap.set(source.id, source);
@@ -207,8 +230,8 @@
       const user = element('div', text, 'va-message user'), answer = element('div', '', 'va-message'); content.append(user, answer);
       let answerText = '', frame = 0;
       const paint = () => { frame = 0; markdown(answer, answerText); content.scrollTop = content.scrollHeight; };
-      feedback.textContent = `Analysis starting… Correlation ID: ${requestId}`;
-      let finished = false;
+      say(feedback, 'Thinking…');
+      let finished = false, failed = false;
       try {
         const response = await fetch(`/api/venture/conversations/${encodeURIComponent(id)}/stream`, { method: 'POST', credentials: 'same-origin', signal: streamController.signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requestId, content: text }) });
         if (!response.ok) {
@@ -223,31 +246,32 @@
             if (!line || version !== epoch) continue;
             const event = JSON.parse(line);
             if (event.type === 'text') { answerText += event.text; frame ||= requestAnimationFrame(paint); }
-            if (event.type === 'progress') feedback.textContent = `${event.message} Correlation ID: ${requestId}`;
+            if (event.type === 'progress') say(feedback, event.message);
             if (event.type === 'source') addSource(content, event.source);
-            if (event.type === 'error') feedback.textContent = `${event.message} (${event.code}) Correlation ID: ${requestId}`;
-            if (event.type === 'done') { finished = true; if (event.status === 'completed') feedback.textContent = `Saved. Correlation ID: ${requestId}`; }
+            if (event.type === 'error') { failed = true; say(feedback, event.message, requestId); }
+            if (event.type === 'done') { finished = true; if (event.status === 'completed') say(feedback, ''); }
           }
           content.scrollTop = content.scrollHeight;
         }
         if (!finished) throw Object.assign(new Error('Stream interrupted. Reload saved history before retrying.'), { requestId });
       } catch (error) {
-        if (version === epoch) feedback.textContent = error.name === 'AbortError' ? `Stopped. Partial history is saved. Correlation ID: ${requestId}` : message(error);
+        failed = true;
+        if (version === epoch) say(feedback, error.name === 'AbortError' ? 'Stopped. Anything already written is saved.' : error.message, error.requestId || requestId);
       } finally {
         activeTurn = null; streamController = null;
         if (frame) cancelAnimationFrame(frame);
-        if (answerText) paint();
+        if (answerText) paint(); else answer.remove();
         if (version === epoch && created) {
           stage.querySelectorAll('.va-history button,.va-history select').forEach(el => { el.disabled = false; });
-          const outcome = feedback.textContent;
+          const outcome = [...feedback.childNodes].map(node => node.cloneNode(true));
           await loadConversation(id, content).catch(failure);
-          const status = stage.querySelector('.va-composer [role="status"]'); if (status) status.textContent = outcome;
+          stage.querySelector('.va-composer [role="status"]')?.replaceChildren(...outcome);
           return;
         }
         if (version === epoch) {
           input.disabled = false; send.disabled = false; stopButton.hidden = true;
           stage.querySelectorAll('.va-history button,.va-history select,.va-views button').forEach(el => { el.disabled = false; });
-          feedback.append(button('Retry explicitly', () => { input.value = text; input.focus(); }), button('Reload saved history', () => loadConversation(id, content).catch(failure)));
+          if (failed) feedback.append(button('Try again', () => { input.value = text; form.requestSubmit(); }));
         }
       }
     };
@@ -274,10 +298,12 @@
       stage.querySelector('.va-views')?.remove();
       content.setAttribute('role', 'log');
       content.replaceChildren(element('div', 'NEW CONVERSATION', 'va-label'), element('p', 'Welcome. Tell me what you’re thinking of building, who it would help, and what you bring to it. A rough idea is enough to begin.', 'va-message'));
+      showDashboard(null);
       composer(null, content, (id, text) => { select.append(new Option(text.slice(0, 80), id)); select.value = id; });
       stage.querySelector('.va-composer textarea')?.focus();
     }
-    toolbar.append(select, button('New chat', newChat), dashboardLink(selectedId || requested));
+    toolbar.append(select, button('+ New chat', newChat, 'va-new'));
+    showDashboard(requested || selectedId);
     stage.append(toolbar, content);
     // Start on a fresh chat unless a specific saved conversation was requested.
     const id = [requested, selectedId].find(candidate => candidate && data.conversations.some(item => item.id === candidate));

@@ -45,6 +45,8 @@
   }
 
   function signIn(error) {
+    // Signed-out visitors sign in on the analyst page, then come straight back here.
+    if (error?.status === 401 || error?.code === 'GOOGLE_LINK_REQUIRED') { location.replace('/venture-analyst?chat=open&next=dashboard'); return; }
     list.replaceChildren(); title.textContent = 'Your ventures';
     const card = el('div', '', 'vd-card vd-empty');
     card.append(el('h2', 'Sign in to see your ventures'), el('p', 'Your dashboard shows the analyst’s verdict, your market opportunity, token tranche and next steps.', 'va-muted'));

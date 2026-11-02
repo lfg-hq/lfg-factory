@@ -8,12 +8,16 @@ import { loggedRequest, ventureError } from "../utils/request-log.ts";
 
 const authRoutes = new Hono();
 
-// No client-selected provider, scopes, callback URL or account identity.
+// No client-selected provider, scopes, callback URL or account identity; only a
+// whitelisted landing page after sign-in.
 authRoutes.post("/auth/venture/google", c => loggedRequest(c.req.raw, "venture.google.initiate", async requestId => {
   if (!isVentureSameOrigin(c.req.raw)) return ventureError(requestId, 403, "ORIGIN_REJECTED", "Open this site's venture page and retry Google sign-in.");
   if (!googleConfigured()) return ventureError(requestId, 503, "GOOGLE_NOT_CONFIGURED", "Google sign-in is unavailable. The operator must configure GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET, then retry.");
   const { session } = await getVentureAccess(c.req.raw.headers);
-  const callbackURL = new URL("/venture-analyst?chat=open", env.BETTER_AUTH_URL).href;
+  // The only client choice is where to land afterwards, from a fixed list.
+  let next: unknown;
+  try { next = JSON.parse((await c.req.text()).slice(0, 512)).next; } catch { /* empty or invalid body */ }
+  const callbackURL = new URL(next === "dashboard" ? "/venture-analyst/dashboard" : "/venture-analyst?chat=open", env.BETTER_AUTH_URL).href;
   const errorCallbackURL = new URL("/venture-analyst?chat=open&auth=failed", env.BETTER_AUTH_URL).href;
   try {
     const options = { headers: c.req.raw.headers, body: { provider: "google" as const, callbackURL, errorCallbackURL, disableRedirect: true }, asResponse: true as const };

@@ -68,6 +68,11 @@ try {
   await page.getByRole('button', { name: 'Continue with Google', exact: true }).waitFor();
   assert.equal(await page.locator('#va-panel').evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(22, 27, 34)');
   await page.screenshot({ path: `${shots}/venture-dark-mobile.png` });
+  // Signed-out visitors to the dashboard land on sign-in, set to return there.
+  await page.goto(`${base}/venture-analyst/dashboard`, { waitUntil: 'domcontentloaded' });
+  await page.waitForURL(/\/venture-analyst\?chat=open/);
+  await page.getByRole('heading', { name: 'Sign in to see your dashboard', exact: true }).waitFor();
+  assert.equal(await page.locator('#va-dashboard').isHidden(), true);
   const loginStatus = await page.evaluate(async ({ email, password }) => {
     const response = await fetch('/api/auth/sign-in/email', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
     return response.status;
@@ -75,7 +80,7 @@ try {
   assert.equal(loginStatus, 200, 'Real Better Auth fixture login');
   await page.goto(`${base}/venture-analyst`, { waitUntil: 'domcontentloaded' });
   // Opening the analyst starts a fresh chat; nothing is created until the first message.
-  await page.getByRole('button', { name: 'New chat', exact: true }).waitFor();
+  await page.getByRole('button', { name: '+ New chat', exact: true }).waitFor();
   await page.getByText('Welcome. Tell me', { exact: false }).waitFor();
   assert.equal(await page.getByLabel('Saved conversations').inputValue(), '');
   assert.equal(await page.locator('.va-message').count(), 1, 'Only genuine new-conversation greeting');
@@ -86,11 +91,15 @@ try {
   await input.press('Enter');
   await page.getByText(/Platform AI credentials are unavailable/).waitFor();
   const selected = await page.getByLabel('Saved conversations').inputValue(); assert(selected, 'First message creates the conversation');
+  assert.match(await page.getByRole('link', { name: /Go to dashboard/ }).getAttribute('href') || '', new RegExp(`v=${selected}`));
+  assert.equal(await page.locator('.va-message:empty').count(), 0, 'No empty reply bubbles');
+  await page.evaluate(() => localStorage.setItem('lfg-theme', 'light')); await page.reload({ waitUntil: 'domcontentloaded' }); await page.getByText(/This reply failed/).waitFor();
+  await page.screenshot({ path: `${shots}/venture-chat.png` });
   assert.equal(await page.locator('.va-message img').count(), 0, 'User text must never execute markup');
-  await page.getByText(/failed; correlation ID/).waitFor();
+  await page.getByText(/This reply failed/).waitFor();
   assert.equal(await page.locator('.va-message.user').textContent(), 'TEST FIXTURE idea <img src=x onerror=alert(1)>');
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.getByText(/failed; correlation ID/).waitFor();
+  await page.getByText(/This reply failed/).waitFor();
   assert.equal(await page.getByLabel('Saved conversations').inputValue(), selected, 'Reload resumes the open conversation');
   assert.equal(await page.locator('.va-message.user').count(), 1, 'Reload does not replay billable turns');
   // Analyst Markdown renders, but raw HTML, images and script links never do.
@@ -101,26 +110,26 @@ try {
   assert.equal(await page.locator('.va-md h2', { hasText: 'Plan' }).count(), 1);
   assert.equal(await page.locator('.va-md img, .va-md a[href^="javascript"]').count(), 0);
   assert.equal(await page.evaluate(() => (window as any).pwned), undefined);
-  await page.getByRole('button', { name: 'New chat', exact: true }).click();
+  await page.getByRole('button', { name: '+ New chat', exact: true }).click();
   assert.equal(await page.getByLabel('Saved conversations').inputValue(), '');
   await page.getByLabel('Saved conversations').selectOption(selected);
-  await page.getByText(/failed; correlation ID/).waitFor();
+  await page.getByText(/This reply failed/).waitFor();
   const { ventureAssessments } = await import('../src/db/schema/venture.ts');
   await db.insert(ventureAssessments).values({ conversationId: selected, version: 1, status: 'provisional', contentJson: assessmentFixture() });
-  await page.getByRole('button', { name: 'Assessment', exact: true }).click();
+  await page.getByRole('tab', { name: 'Assessment', exact: true }).click();
   await page.getByText(/PROVISIONAL · Version 1/).waitFor();
   for (const title of ['Founder fit and recommended changes', 'Bottom-up TAM / SAM / SOM', 'Conservative / base / upside revenue', 'Financing and profit-sharing tradeoffs', 'GTM experiments and budgets', 'Validation, MVP, first user and first revenue']) assert.equal(await page.getByRole('heading', { name: title, exact: true }).count(), 1);
   await page.getByRole('button', { name: 'Regenerate explicitly' }).click();
   await page.getByText(/Configure .*retry explicitly/).waitFor();
   assert.equal(await page.getByText(/PROVISIONAL · Version 1/).count(), 1);
-  await page.getByRole('button', { name: 'Chat', exact: true }).click();
+  await page.getByRole('tab', { name: 'Chat', exact: true }).click();
   await page.getByLabel('Your message', { exact: true }).fill('TEST FIXTURE unsent correction');
-  await page.getByRole('button', { name: 'Assessment', exact: true }).click();
+  await page.getByRole('tab', { name: 'Assessment', exact: true }).click();
   await page.getByText(/PROVISIONAL · Version 1/).waitFor();
-  await page.getByRole('button', { name: 'Chat', exact: true }).click();
+  await page.getByRole('tab', { name: 'Chat', exact: true }).click();
   assert.equal(await page.getByLabel('Your message', { exact: true }).inputValue(), 'TEST FIXTURE unsent correction');
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.getByRole('button', { name: 'Assessment', exact: true }).click();
+  await page.getByRole('tab', { name: 'Assessment', exact: true }).click();
   await page.getByText(/PROVISIONAL · Version 1/).waitFor();
   assert.equal(await page.locator('#va-panel').evaluate(el => el.scrollWidth <= el.clientWidth), true);
   await page.setViewportSize({ width: 1440, height: 1000 });

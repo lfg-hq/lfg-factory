@@ -19,7 +19,7 @@ export const VentureAnalystPage = () => html`<!doctype html>
 <div class="va-benefits"><div>${check}Founder fit and what to change</div><div>${check}Market size, revenue potential and funding fit</div><div>${check}A practical GTM and path to first revenue</div></div>
 </section>
 <section class="va-panel" id="va-panel" aria-label="Venture analyst chat" tabindex="-1">
-<header class="va-head"><span class="va-avatar" aria-hidden="true">${bot}</span><div><strong id="va-heading">Venture Analyst</strong><small id="va-status">Example conversation · not a live chat</small></div><button id="va-close" aria-label="Collapse chat" hidden><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6"/></svg></button></header>
+<header class="va-head"><span class="va-avatar" aria-hidden="true">${bot}</span><div><strong id="va-heading">Venture Analyst</strong><small id="va-status">Example conversation · not a live chat</small></div><a id="va-dashboard" class="va-dash" href="/venture-analyst/dashboard" hidden>Go to dashboard <span aria-hidden="true">→</span></a><button id="va-close" aria-label="Collapse chat" hidden><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6"/></svg></button></header>
 <div id="va-stage" aria-live="polite"></div>
 </section></div>
 <section class="va-rail"><div><b>01 · Understand you</b>Your experience, ambitions and constraints.</div><div><b>02 · Test the opportunity</b>Public evidence, not just optimistic assumptions.</div><div><b>03 · Plan the next move</b>Validate, launch, acquire users and earn revenue.</div></section>
