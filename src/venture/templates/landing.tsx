@@ -15,7 +15,7 @@ const ideaForm = (id: string) => html`<form class="vh-form" action="${CHAT}" met
 <p class="vh-formnote" role="status">Next, sign in with Google and the analyst picks up your idea. By continuing you agree to the LFG Ventures <a href="/venture-analyst/terms">Terms</a>.</p>`;
 
 export const VentureAnalystPage = () => html`<!doctype html>
-<html lang="en"><head>${SiteHead({ title: "LFG Ventures | Your idea, built with LFG's AI agents", description: "LFG invests tokens and agent execution, not cash. Our agents build and run your business in exchange for equity or a revenue share. Start with a conversation.", path: "/venture-analyst" })}
+<html lang="en"><head>${SiteHead({ title: "LFG Ventures | Your AI venture partner", description: "LFG is a venture partner that invests tokens and agent execution, not cash. We build your business for free and make money when you do. Start with a conversation.", path: "/venture-analyst" })}
 <link rel="stylesheet" href="/public/venture/landing.css">
 <script defer src="/public/venture/landing.js"></script></head>
 <body class="vh-body text-slate-900 font-sans">${SiteNav({})}
@@ -23,13 +23,13 @@ export const VentureAnalystPage = () => html`<!doctype html>
 
 <section class="vh-hero">
   <span class="vh-badge"><span class="vh-logo" aria-hidden="true">${rocket}</span>LFG Ventures · your AI venture partner</span>
-  <h1>Bring the idea.<br><span class="vl-grad">We bring the team.</span></h1>
-  <p class="vh-lede">LFG's AI agents build and run your business, in exchange for equity or a share of revenue. No cash upfront.</p>
+  <h1>We build your business for free. <span class="vl-grad">We make money when you do.</span></h1>
+  <p class="vh-lede">LFG is a venture partner. Instead of cash, we invest tokens and the agents that turn them into execution, in exchange for equity or a share of revenue. You stay the founder.</p>
   ${ideaForm("idea-top")}
   <ul class="vh-trust">
-    <li>${check}You keep ownership</li>
-    <li>${check}Nothing starts until both sides sign</li>
-    <li>${check}Progress you can see, every week</li>
+    <li>${check}No upfront cost</li>
+    <li>${check}Equity or revenue share</li>
+    <li>${check}Milestones unlock more tokens</li>
   </ul>
 </section>
 
@@ -60,7 +60,7 @@ export const VentureAnalystPage = () => html`<!doctype html>
   <div class="vh-head">
     <p class="vh-kicker">A new kind of investment</p>
     <h2 class="vh-h2" id="invest-title">We invest with execution, not cash.</h2>
-    <p class="vh-lede">Other venture funds write a cheque and leave the building to you. LFG invests tokens, and our agents turn those tokens into execution: the product, the launch and the day-to-day running of the business.</p>
+    <p class="vh-lede">Other venture funds write a cheque and leave the building to you. LFG invests tokens, leveraged by agents that turn them into execution: the product, the launch and the day-to-day running of the business. We earn our equity or revenue share only when the business works.</p>
   </div>
   <div class="vh-pillars">
     <div><h3>Tokens</h3><p>Your venture gets its own token budget, released one tranche at a time. Every token powers an agent working on your business.</p></div>
@@ -72,14 +72,14 @@ export const VentureAnalystPage = () => html`<!doctype html>
 <section class="vh-wrap vh-sec" id="how" aria-labelledby="how-title">
   <div class="vh-split">
     <div class="vh-col">
-      <p class="vh-kicker">Five steps</p>
+      <p class="vh-kicker">A gamified way to build companies</p>
       <h2 class="vh-h2" id="how-title">How it works</h2>
       <ol class="vh-steps">
         <li><span>01</span><div><h3>Talk</h3><p>Chat with the analyst about the idea and what you bring.</p></div></li>
         <li><span>02</span><div><h3>Get a verdict</h3><p>Fund, not yet, or no. With a token budget and a proposed deal.</p></div></li>
         <li><span>03</span><div><h3>Sign</h3><p>Agree the terms. Ask to renegotiate if they don't fit.</p></div></li>
-        <li><span>04</span><div><h3>Build and sell</h3><p>Agents build and run it. You talk to customers.</p></div></li>
-        <li><span>05</span><div><h3>Check in</h3><p>Real results decide the next tranche.</p></div></li>
+        <li><span>04</span><div><h3>Build toward the milestone</h3><p>The first tranche of tokens is for one milestone. Agents build and run it. You talk to customers.</p></div></li>
+        <li><span>05</span><div><h3>Check in and level up</h3><p>Real results unlock the next tranche, and the loop starts again.</p></div></li>
       </ol>
     </div>
     <div>
@@ -98,6 +98,16 @@ export const VentureAnalystPage = () => html`<!doctype html>
         </div>
       </div>
     </div>
+  </div>
+  <div class="vh-loop" aria-labelledby="loop-title">
+    <h3 id="loop-title">The loop</h3>
+    <ol>
+      <li><span class="vh-loop-n">1</span><b>Tranche</b><span>Tokens for the next milestone</span></li>
+      <li><span class="vh-loop-n">2</span><b>Build</b><span>Agents execute: product, marketing, sales</span></li>
+      <li><span class="vh-loop-n">3</span><b>Milestone</b><span>Revenue, customers or active users</span></li>
+      <li><span class="vh-loop-n">4</span><b>Results</b><span>Measured by LFG's analytics and billing</span></li>
+    </ol>
+    <p class="vh-loop-back">${repeat}Hit the milestone and the next tranche unlocks. Every level funds the next one.</p>
   </div>
 </section>
 
@@ -129,7 +139,7 @@ export const VentureAnalystPage = () => html`<!doctype html>
   <div class="vh-head">
     <p class="vh-kicker">The software factory</p>
     <h2 class="vh-h2" id="factory-title">A software factory that builds your product, and your custom agents.</h2>
-    <p class="vh-lede">LFG is a team of specialised agents on one shared stack. They build your software, then keep it running, so you can spend your time on customers.</p>
+    <p class="vh-lede">Your venture's tokens run a factory of specialised agents on one shared stack. They build your software, then keep it running, so you can spend your time on customers.</p>
   </div>
   <div class="vh-grid three">
     <div class="vh-tile"><h3>Product and design</h3><p>Scoped, designed and launched for you.</p></div>
@@ -199,7 +209,7 @@ export const VentureAnalystPage = () => html`<!doctype html>
 
 <section class="vh-final" id="start" aria-labelledby="final-title"><div class="vh-wrap">
   <h2 id="final-title">Have an idea worth building?</h2>
-  <p class="vh-lede">Start with a conversation. It's private to you and LFG's venture team.</p>
+  <p class="vh-lede">We build it for free. We make money when you do. Start with a conversation, private to you and LFG's venture team.</p>
   ${ideaForm("idea-bottom")}
   <a class="vh-thesis" href="/venture-analyst/thesis">Read the thesis →</a>
 </div></section>
@@ -211,5 +221,6 @@ const svg = (d: string, size = 18, width = 2.2) => html`<svg aria-hidden="true" 
 const check = svg('<path d="m5 12 4 4 10-10"/>', 16);
 const tick = svg('<path d="M20 6 9 17l-5-5"/>', 14, 3);
 const arrow = svg('<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>', 18, 2.5);
+const repeat = svg('<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>', 18, 2);
 const lock = svg('<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>', 13, 2.2);
 const rocket = svg('<path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/>', 16, 2);
