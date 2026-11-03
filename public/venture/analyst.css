@@ -61,3 +61,12 @@
 .dark .va-box .va-stop{background:#e6edf3;color:#0d1117}
 .dark .va-box .audio-recording-indicator{background:#161b22;border-color:#30363d}
 .va-box .audio-recording-indicator[data-phase="recording"][data-quiet="on"] .dictation-status{position:static;width:auto;height:auto;clip-path:none;max-width:60%;color:#b54708}
+
+/* Plan saved to the dashboard, and the prompt to save one. */
+.va-saved{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;flex-shrink:0;margin:0 0 16px;padding:12px 16px;border-radius:12px;border:1px solid #abefc6;background:#ecfdf3;color:#054f31}
+.va-saved-text{display:flex;flex-direction:column;gap:2px;font-size:14px}.va-saved-text span{font-size:13px;color:#067647}
+.va-saved-link{font-weight:700;font-size:14px;color:#067647;text-decoration:none;white-space:nowrap}.va-saved-link:hover{text-decoration:underline}
+.va-save-plan{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:10px 20px;border-top:1px solid #eef1f5;background:#f8f9ff;font-size:13px;color:#475467}
+.va-save-btn{border:1px solid #c7d2fe;background:#fff;color:#4338ca;font-weight:700;font-size:13px;border-radius:999px;padding:7px 14px;cursor:pointer}.va-save-btn:hover{background:#eef2ff}.va-save-btn:disabled{opacity:.6;cursor:wait}
+.dark .va-saved{background:#0e2a1b;border-color:#1f5135;color:#d1fadf}.dark .va-saved-text span,.dark .va-saved-link{color:#75e0a7}
+.dark .va-save-plan{background:#161b22;border-color:#30363d;color:#c9d1d9}.dark .va-save-btn{background:#0d1117;border-color:#30363d;color:#a5b4fc}

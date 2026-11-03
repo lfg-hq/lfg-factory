@@ -1,4 +1,5 @@
-import { generateText, NoObjectGeneratedError, NoOutputGeneratedError, Output, streamText, stepCountIs, type ToolSet } from 'ai';
+import { generateText, NoObjectGeneratedError, NoOutputGeneratedError, Output, streamText, stepCountIs, tool, zodSchema, type ToolSet } from 'ai';
+import { z } from 'zod';
 import { assessmentSchema, validateAssessment } from './assessment.ts';
 import { ventureAssessmentPrompt } from '../prompts/assessment.ts';
 import { and, eq, gte, lt, desc, inArray } from 'drizzle-orm';
@@ -67,7 +68,7 @@ export async function runTurn(conversationId: string, requestId: string, abort: 
   const log = (event: string, outcome: string, details = {}) => ventureLog(event, requestId, started, outcome, { turnId: requestId, httpRequestId, ...modelDetails, ...details });
   const where = and(eq(ventureMessages.conversationId, conversationId), eq(ventureMessages.requestId, requestId), eq(ventureMessages.role, 'assistant'));
   const timer = setTimeout(() => abort.abort(new Error('TURN_TIMEOUT')), VENTURE_LIMITS.timeoutMs);
-  let text = '', buffer = '', calls = 0, checkpoint = 0;
+  let text = '', buffer = '', calls = 0, checkpoint = 0, saveRequested = false;
   const sourceIds = new Set<string>();
   const send = (event: VentureEvent) => emit({ ...event, requestId });
   let status: 'completed' | 'failed' | 'cancelled' = 'failed';
@@ -118,6 +119,13 @@ export async function runTurn(conversationId: string, requestId: string, abort: 
         }
       } };
     }
+    // The analyst decides when the conversation has produced a plan worth keeping;
+    // the structured assessment is generated and saved once this reply is done.
+    tools.save_assessment = tool({
+      description: 'Save the current verdict, missing inputs, founder commitments and next steps to the founder\'s dashboard. Call once you have given a verdict leaning or concrete next steps, and again only when material new information changes them.',
+      inputSchema: zodSchema(z.object({ reason: z.string().max(300).describe('What changed or was concluded') })),
+      execute: async () => { saveRequested = true; return { status: 'will_save_after_this_reply', instruction: 'Tell the founder in one short line that their verdict and next steps are being saved to their dashboard.' }; },
+    });
     if (!env.EXA_API_KEY) send({ type: 'progress', message: 'Public research unavailable: platform EXA_API_KEY is missing. Interview can continue; no sources are verified.' });
     const messages = history.filter(m => m.content && (m.role === 'user' || m.status === 'completed')).slice(-60).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content.slice(0, 16000) }));
     // The reservation assistant row precedes its user row; it is empty and excluded.
@@ -168,9 +176,27 @@ export async function runTurn(conversationId: string, requestId: string, abort: 
       await db.update(ventureMessages).set({ content: text, status }).where(where);
       await db.update(ventureConversations).set({ updatedAt: new Date() }).where(eq(ventureConversations.id, conversationId));
       if (status === 'completed') log('venture.turn.completed', 'success', { researchCalls: calls });
+      if (status === 'completed' && saveRequested) await saveAfterTurn(conversationId, send, httpRequestId);
       send({ type: 'done', status });
     } catch { log('venture.turn.failed', 'failed', { errorCode: 'STORAGE_UNAVAILABLE' }); send({ type: 'error', code: 'STORAGE_UNAVAILABLE', message: 'Saving failed. Reload history before retrying; contact support with this correlation ID.' }); }
     finally { active.delete(conversationId); }
+  }
+}
+
+// Runs while the turn still holds the conversation lock, so no other turn can
+// interleave. A failed save leaves no broken message behind; the founder can
+// still save from the chat.
+async function saveAfterTurn(conversationId: string, send: (event: VentureEvent) => void, httpRequestId?: string) {
+  const requestId = crypto.randomUUID();
+  send({ type: 'progress', message: 'Saving your plan to the dashboard…' });
+  try {
+    await db.insert(ventureMessages).values({ id: `${Date.now()}-${requestId}-1`, createdAt: new Date(), conversationId, role: 'assistant', requestId, content: '', status: 'started' });
+    const assessment = await runAssessment(conversationId, requestId, new AbortController(), httpRequestId ?? requestId);
+    const r = (assessment.contentJson as Record<string, any>).recommendation;
+    send({ type: 'assessment', version: assessment.version, verdict: r?.verdict ?? null, commitments: r?.founderCommitments?.length ?? 0 });
+  } catch {
+    await db.delete(ventureMessages).where(and(eq(ventureMessages.conversationId, conversationId), eq(ventureMessages.requestId, requestId))).catch(() => {});
+    send({ type: 'progress', message: 'Couldn’t save the plan to your dashboard just now. Use “Save plan to dashboard” to retry.' });
   }
 }
 
@@ -187,14 +213,27 @@ export async function runAssessment(conversationId: string, requestId: string, a
     catch { throw new VentureFailure('PROVIDER_NOT_CONFIGURED', 503, `Configure ${providerSecret}, then retry explicitly. The last saved assessment is safe.`); }
     const history = await db.select().from(ventureMessages).where(eq(ventureMessages.conversationId, conversationId)).orderBy(desc(ventureMessages.createdAt), desc(ventureMessages.id)).limit(60);
     const sources = await db.select().from(ventureSources).where(eq(ventureSources.conversationId, conversationId)).orderBy(desc(ventureSources.retrievedAt)).limit(480);
-    const result = await generateText({ model, system: ventureAssessmentPrompt, prompt: JSON.stringify({
+    const input = JSON.stringify({
       conversation: history.reverse().filter(m => m.content && (m.role === 'user' || m.status === 'completed')).map(m => ({ role: m.role, content: m.content.slice(0, 16000) })),
       sources: sources.map(s => ({ id: s.id, url: s.url, retrievedAt: s.retrievedAt, excerpt: s.excerpt?.slice(0, 8000) })),
-    }), output: Output.object({ schema: assessmentSchema }), maxOutputTokens: 16000, maxRetries: 0, abortSignal: abort.signal });
-    log('venture.assessment.provider_response', 'success', { providerRequestId: safeId(result.response.id) });
-    let content;
-    try { content = validateAssessment(result.output, new Set(sources.map(s => s.id))); }
-    catch { throw new VentureFailure('ASSESSMENT_INVALID', 422, 'Generated assessment failed evidence, schema or arithmetic checks. Correct missing inputs in chat and retry explicitly. The previous version is unchanged.'); }
+    });
+    // The checks are strict (arithmetic, citations, deal rules). One retry with the
+    // exact problem fixes most slips; a second failure keeps the previous version.
+    let content, problem = '';
+    for (let attempt = 1; attempt <= 2 && !content; attempt++) {
+      try {
+        const result = await generateText({ model, system: ventureAssessmentPrompt, prompt: problem ? `${input}\n\nYour previous assessment failed validation: ${problem}. Return a corrected assessment that passes every rule.` : input,
+          output: Output.object({ schema: assessmentSchema }), maxOutputTokens: 16000, maxRetries: 0, abortSignal: abort.signal });
+        log('venture.assessment.provider_response', 'success', { providerRequestId: safeId(result.response.id), attempt });
+        content = validateAssessment(result.output, new Set(sources.map(s => s.id)));
+      } catch (error) {
+        abort.signal.throwIfAborted();
+        if (!(NoObjectGeneratedError.isInstance(error) || NoOutputGeneratedError.isInstance(error) || error instanceof z.ZodError || (error instanceof Error && /^[A-Z_]+$/.test(error.message)))) throw error;
+        problem = error instanceof z.ZodError ? error.issues.slice(0, 5).map(i => `${i.path.join('.')}: ${i.message}`).join('; ') : error instanceof Error && /^[A-Z_]+$/.test(error.message) ? error.message : 'output did not match the schema';
+        log('venture.assessment.invalid_attempt', 'failed', { attempt, validationOutcome: 'invalid', errorCode: problem.slice(0, 120) });
+      }
+    }
+    if (!content) throw new VentureFailure('ASSESSMENT_INVALID', 422, 'Generated assessment failed evidence, schema or arithmetic checks. Correct missing inputs in chat and retry explicitly. The previous version is unchanged.');
     abort.signal.throwIfAborted();
     const [last] = await db.select({ id: ventureAssessments.id, version: ventureAssessments.version }).from(ventureAssessments).where(eq(ventureAssessments.conversationId, conversationId)).orderBy(desc(ventureAssessments.version)).limit(1);
     // One insert is atomic; the durable assistant reservation serializes writers.

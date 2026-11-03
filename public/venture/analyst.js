@@ -47,6 +47,15 @@
     mic: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4"/></svg>',
   };
   // Icon-only buttons keep a text name for screen readers (and tests).
+  // "Your plan is on the dashboard" card, shown when an assessment is saved.
+  const VERDICT_TEXT = { fund: 'Fund', needs_more_info: 'Needs more info', decline: 'Decline', prohibited: 'Prohibited' };
+  function savedNotice(id, details) {
+    const card = element('div', '', 'va-saved');
+    const text = element('div', '', 'va-saved-text');
+    text.append(element('strong', 'Saved to your dashboard'), element('span', details || 'Your verdict, missing inputs and next steps are ready to review.', ''));
+    const go = element('a', 'Open dashboard →', 'va-saved-link'); go.href = `/venture-analyst/dashboard?v=${encodeURIComponent(id)}`;
+    card.append(text, go); return card;
+  }
   function iconButton(label, svgMarkup, className) {
     const el = document.createElement('button'); el.className = className; el.setAttribute('aria-label', label); el.title = label;
     el.innerHTML = svgMarkup; return el;
@@ -136,6 +145,7 @@
     content.setAttribute('role', 'log'); content.removeAttribute('aria-label');
     if (!data.messages.length) content.append(element('p', 'Welcome. Tell me what you’re thinking of building and who it would help. A rough idea is enough to begin.', 'va-message'));
     for (const msg of data.messages) {
+      if (msg.role === 'assistant' && msg.status === 'completed' && /^Saved assessment version \d+/.test(msg.content)) { content.append(savedNotice(id)); continue; }
       const bubble = element('div', msg.role === 'user' ? msg.content : '', `va-message ${msg.role === 'user' ? 'user' : ''}`);
       if (msg.role !== 'user') markdown(bubble, msg.content);
       if (msg.role === 'assistant' && msg.status !== 'completed') {
@@ -155,6 +165,8 @@
     }
     for (const source of data.sources || []) addSource(content, source);
     composer(data.conversation.id, content);
+    // A conversation well under way with no saved plan: offer to save one.
+    if (data.messages.filter(m => m.role === 'user').length >= 3 && !data.messages.some(m => /^Saved assessment version \d+/.test(m.content))) savePlanPrompt(id, content);
     content.scrollTop = content.scrollHeight;
     // A first message typed on the dashboard is handed over once, via session storage.
     let pending = null; try { pending = sessionStorage.getItem(`va-pending:${id}`); sessionStorage.removeItem(`va-pending:${id}`); } catch { /* storage unavailable */ }
@@ -219,6 +231,24 @@
     const row = element('div', '', 'va-source-row');
     row.append(link, element('span', ` · ${url.hostname.replace(/^www\./, '')} · read ${new Date(source.retrievedAt).toLocaleDateString()}`, 'va-muted'), element('p', (source.excerpt || '').replace(/^\[[^\]]*\]\s*/, '').slice(0, 200), 'va-muted'));
     content.append(row);
+  }
+  async function savePlanPrompt(id, content) {
+    try { const { assessment } = await api(`/api/venture/conversations/${encodeURIComponent(id)}/assessment`); if (assessment || selectedId !== id) return; } catch { return; }
+    const bar = element('div', '', 'va-save-plan');
+    const go = button('Save plan to dashboard', async () => {
+      if (activeTurn) return;
+      const requestId = crypto.randomUUID(); activeTurn = { id, requestId };
+      go.disabled = true; go.textContent = 'Saving…';
+      try {
+        const data = await api(`/api/venture/conversations/${encodeURIComponent(id)}/assessment`, { method: 'POST', body: JSON.stringify({ requestId }) });
+        const r = data.assessment?.contentJson?.recommendation;
+        bar.replaceWith(savedNotice(id, [r ? VERDICT_TEXT[r.verdict] : null, r?.founderCommitments?.length ? `${r.founderCommitments.length} to-dos` : null].filter(Boolean).join(' · ') || null));
+        content.scrollTop = content.scrollHeight;
+      } catch (error) { go.disabled = false; go.textContent = 'Save plan to dashboard'; bar.querySelector('.va-muted')?.remove(); bar.append(element('span', message(error), 'va-muted')); }
+      finally { activeTurn = null; }
+    }, 'va-save-btn');
+    bar.append(element('span', 'Put the verdict, missing inputs and your next steps on the dashboard.', ''), go);
+    stage.querySelector('.va-composer')?.before(bar);
   }
   function composer(id, content, onCreated) {
     stage.querySelector('.va-composer')?.remove();
@@ -286,6 +316,7 @@
             if (!line || version !== epoch) continue;
             const event = JSON.parse(line);
             if (event.type === 'text') { answerText += event.text; frame ||= requestAnimationFrame(paint); }
+            if (event.type === 'assessment') { content.append(savedNotice(id, [event.verdict ? VERDICT_TEXT[event.verdict] : null, event.commitments ? `${event.commitments} to-do${event.commitments === 1 ? '' : 's'}` : null].filter(Boolean).join(' · ') || null)); stage.querySelector('.va-save-plan')?.remove(); say(feedback, ''); }
             if (event.type === 'progress') say(feedback, event.message);
             if (event.type === 'source') addSource(content, event.source);
             if (event.type === 'error') { failed = true; say(feedback, event.message, requestId); }
