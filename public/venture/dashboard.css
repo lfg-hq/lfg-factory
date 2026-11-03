@@ -315,3 +315,7 @@ a.vd-row:hover .vd-row .vd-track{width:100%;max-width:140px;height:5px;margin:3p
   .vd-detail-head{flex-direction:column}
   .vd-pagehead{align-items:flex-start}
 }
+
+/* destructive actions */
+.vd-btn.danger{background:#d92d20;border-color:#d92d20;color:#fff}.vd-btn.danger:hover{background:#b42318;border-color:#b42318}
+.vd-btn.danger-ghost{color:var(--bad);box-shadow:none}.vd-btn.danger-ghost:hover{border-color:var(--bad-line);background:var(--bad-bg)}

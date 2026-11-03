@@ -10,6 +10,7 @@
   const narrow = matchMedia('(max-width:1023px)');
   let expanded = false, controller, streamController, activeTurn, epoch = 0, loadEpoch = 0, returnFocus = cta, selectedId = null;
   const drafts = new Map(), sourceMap = new Map();
+  let ventureLimit = null;
   const query = new URLSearchParams(location.search);
   let requested = query.get('c');
   const markdown = (el, text) => window.ventureMarkdown ? window.ventureMarkdown.into(el, text, sourceMap) : (el.textContent = text);
@@ -304,16 +305,27 @@
       history.replaceState(null, '', pageMode ? chatPage() : `${location.pathname}?chat=open`);
       stage.querySelector('.va-views')?.remove();
       content.setAttribute('role', 'log');
-      content.replaceChildren(element('div', 'NEW CONVERSATION', 'va-label'), element('p', 'Welcome. Tell me what you’re thinking of building, who it would help, and what you bring to it. A rough idea is enough to begin.', 'va-message'));
       showDashboard(null);
-      composer(null, content, (id, text) => { select.append(new Option(text.slice(0, 80), id)); select.value = id; });
+      if (ventureLimit && !ventureLimit.canCreate) {
+        // At the venture limit: explain instead of offering a chat that can't be saved.
+        stage.querySelector('.va-composer')?.remove();
+        const note = element('div', '', 'va-notice va-limit');
+        const dash = element('a', 'Open your dashboard', 'va-source'); dash.href = '/venture-analyst/dashboard';
+        note.append(element('span', `You can have ${ventureLimit.max} active venture${ventureLimit.max === 1 ? '' : 's'} at a time. Continue it from the list above, or archive it from your dashboard to start another.`), dash);
+        content.replaceChildren(element('div', 'NEW CONVERSATION', 'va-label'), note);
+        return;
+      }
+      content.replaceChildren(element('div', 'NEW CONVERSATION', 'va-label'), element('p', 'Welcome. Tell me what you’re thinking of building, who it would help, and what you bring to it. A rough idea is enough to begin.', 'va-message'));
+      composer(null, content, (id, text) => { select.append(new Option(text.slice(0, 80), id)); select.value = id; showDashboard(id); });
       stage.querySelector('.va-composer textarea')?.focus();
     }
     toolbar.append(select, button('+ New chat', newChat, 'va-new'));
     showDashboard(requested || selectedId);
     stage.append(toolbar, content);
-    // Start on a fresh chat unless a specific saved conversation was requested.
-    const id = [requested, selectedId].find(candidate => candidate && data.conversations.some(item => item.id === candidate));
+    // Start on a fresh chat unless a specific saved conversation was requested,
+    // or the founder is at their venture limit (then resume the latest one).
+    const atLimit = ventureLimit && !ventureLimit.canCreate;
+    const id = [requested, selectedId, atLimit ? data.conversations[0]?.id : null].find(candidate => candidate && data.conversations.some(item => item.id === candidate));
     requested = null;
     if (id) { select.value = id; await loadConversation(id, content); }
     else newChat();
@@ -323,6 +335,7 @@
     stage.replaceChildren(element('p', 'Checking private session…', 'va-content'));
     try {
       const readiness = await api('/api/venture/session');
+      ventureLimit = readiness.ventureLimit ?? null;
       if (version === epoch && expanded) {
         // Signed in on the landing page: continue on the analyst's own page.
         if (!pageMode) { location.assign(chatPage(requested)); return; }

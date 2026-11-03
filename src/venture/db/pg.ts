@@ -8,6 +8,8 @@ export const ventureConversations = pgTable("venture_conversation", {
   title: text("title").notNull().default("New conversation"),
   createdAt: timestamp("created_at", { mode: "date" }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { mode: "date" }).notNull().defaultNow(),
+  // Archived ventures leave the founder's active list and free their slot.
+  archivedAt: timestamp("archived_at", { mode: "date" }),
 }, t => [index("venture_conv_owner_idx").on(t.userId, t.updatedAt)]);
 
 export const ventureMessages = pgTable("venture_message", {

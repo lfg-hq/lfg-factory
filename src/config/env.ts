@@ -61,6 +61,8 @@ const envSchema = z.object({
   // Comma-separated emails of LFG staff who review venture assessments and decide funding.
   VENTURE_ADMIN_EMAILS: z.string().optional().default(""),
   // Blended model cost LFG uses to show token spend in dollars.
+  // Active (unarchived) ventures a founder may have at once; admins are exempt.
+  VENTURE_MAX_ACTIVE_PER_FOUNDER: z.preprocess(v => v === "" ? undefined : v, z.coerce.number().int().min(1).default(1)),
   VENTURE_USD_PER_MILLION_TOKENS: z.preprocess(v => v === "" ? undefined : v, z.coerce.number().positive().default(5)),
 
   // Public base URL used to build links in emails (falls back to BETTER_AUTH_URL)

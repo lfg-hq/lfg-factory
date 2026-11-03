@@ -1,10 +1,10 @@
 import { Hono } from "hono";
-import { asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../../config/db.ts";
 import { ventureConversations, ventureMessages, ventureSources, ventureAssessments } from "../db/schema.ts";
 import { getVentureAccess, googleConfigured, isVentureSameOrigin, ownedVentureConversation, viewableVentureConversation } from "../services/access.ts";
-import { dashboardList, METRICS, recordDecision, recordMetric, setTaskDone, updateWorkItem, ventureOverview, type MetricName } from "../services/dashboard.ts";
+import { archiveVenture, deleteVenture, ventureLimit, dashboardList, METRICS, recordDecision, recordMetric, setTaskDone, updateWorkItem, ventureOverview, type MetricName } from "../services/dashboard.ts";
 import { loggedRequest, ventureError } from "../request-log.ts";
 import { env } from "../../config/env.ts";
 import { AgreementFailure, requestChanges, respondToChanges, signAgreement } from "../services/agreements.ts";
@@ -18,7 +18,7 @@ const venture = new Hono<{ Variables: Variables }>();
 venture.onError((_error, c) => ventureError(c.get("requestId"), 500, "STORAGE_UNAVAILABLE", "Private storage is temporarily unavailable. Retry; if it continues, contact support with this correlation ID."));
 venture.use("*", async (c, next) => loggedRequest(c.req.raw,
   c.req.path.includes('/agreements/') ? `venture.agreement.${c.req.path.split('/').pop()}` : c.req.path.includes('/admin/work-items/') ? 'venture.admin.work' : c.req.path.endsWith('/metrics') ? 'venture.admin.metric' : c.req.path.includes('/admin/') ? 'venture.admin.decision' : c.req.path.endsWith('/dashboard') ? 'venture.dashboard.list' : c.req.path.endsWith('/overview') ? 'venture.dashboard.overview' : c.req.path.includes('/tasks/') ? 'venture.task.update' :
-  c.req.path.endsWith('/assessment') ? `venture.assessment.${c.req.method === 'POST' ? 'generate' : 'load'}` : c.req.path.endsWith('/stream') ? 'venture.stream.accept' : c.req.path.endsWith('/stop') ? 'venture.stream.stop' : c.req.path.endsWith("/session") ? "venture.session" : c.req.path.endsWith("/conversations") ? `venture.conversations.${c.req.method === "POST" ? "create" : "list"}` : "venture.conversation.load",
+  c.req.path.endsWith('/assessment') ? `venture.assessment.${c.req.method === 'POST' ? 'generate' : 'load'}` : c.req.path.endsWith('/stream') ? 'venture.stream.accept' : c.req.path.endsWith('/stop') ? 'venture.stream.stop' : c.req.path.endsWith("/session") ? "venture.session" : c.req.path.endsWith("/conversations") ? `venture.conversations.${c.req.method === "POST" ? "create" : "list"}` : c.req.path.endsWith("/archive") ? "venture.archive" : c.req.method === "DELETE" ? "venture.conversation.delete" : "venture.conversation.load",
   async requestId => {
   c.set("requestId", requestId);
   c.header("Cache-Control", "private, no-store");
@@ -35,10 +35,10 @@ venture.use("*", async (c, next) => loggedRequest(c.req.raw,
   return c.res;
 }));
 
-venture.get("/session", c => c.json({ ready: true, googleConnected: true, isAdmin: c.get("isAdmin"), googleConfigured: googleConfigured(), ...analystReadiness(), requestId: c.get("requestId") }));
+venture.get("/session", async c => c.json({ ready: true, googleConnected: true, isAdmin: c.get("isAdmin"), googleConfigured: googleConfigured(), ventureLimit: await ventureLimit(c.get("userId"), c.get("isAdmin")), ...analystReadiness(), requestId: c.get("requestId") }));
 venture.get("/conversations", async c => {
   const conversations = await db.select().from(ventureConversations)
-    .where(eq(ventureConversations.userId, c.get("userId")))
+    .where(and(eq(ventureConversations.userId, c.get("userId")), isNull(ventureConversations.archivedAt)))
     .orderBy(desc(ventureConversations.updatedAt), desc(ventureConversations.id)).limit(100);
   return c.json({ conversations, requestId: c.get("requestId") });
 });
@@ -64,6 +64,9 @@ venture.post("/conversations", async c => {
   let payload;
   try { payload = createPayload.safeParse(JSON.parse(body)); } catch { /* invalid JSON */ }
   if (!payload?.success) return ventureError(c.get("requestId"), 400, "INVALID_CONVERSATION", "Supply only an optional title, up to 160 characters, and retry.");
+  // Founders work on a limited number of ventures at a time; archiving frees a slot.
+  const limit = await ventureLimit(c.get("userId"), c.get("isAdmin"));
+  if (!limit.canCreate) return ventureError(c.get("requestId"), 409, "VENTURE_LIMIT", `You can have ${limit.max} active venture${limit.max === 1 ? "" : "s"} at a time. Archive one from your dashboard to start another.`);
   const [conversation] = await db.insert(ventureConversations).values({ userId: c.get("userId"), title: payload.data.title }).returning();
   return c.json({ conversation, requestId: c.get("requestId") }, 201);
 });
@@ -151,7 +154,7 @@ venture.post('/conversations/:id/assessment', async c => {
 venture.get('/dashboard', async c => {
   const all = c.req.query('scope') === 'all';
   if (all && !c.get('isAdmin')) return ventureError(c.get('requestId'), 403, 'ADMIN_REQUIRED', 'Only LFG venture reviewers can see every founder.');
-  return c.json({ ventures: await dashboardList(c.get('userId'), all), isAdmin: c.get('isAdmin'), viewer: c.get('viewer'), usdPerMillionTokens: env.VENTURE_USD_PER_MILLION_TOKENS, requestId: c.get('requestId') });
+  return c.json({ ventures: await dashboardList(c.get('userId'), all), isAdmin: c.get('isAdmin'), viewer: c.get('viewer'), ventureLimit: await ventureLimit(c.get('userId'), c.get('isAdmin')), usdPerMillionTokens: env.VENTURE_USD_PER_MILLION_TOKENS, requestId: c.get('requestId') });
 });
 venture.get('/conversations/:id/overview', async c => {
   const conversation = await viewableVentureConversation(c.req.param('id'), c.get('userId'), c.get('isAdmin'));
@@ -270,6 +273,33 @@ venture.post('/admin/agreements/:id/respond', async c => {
     const agreement = await respondToChanges(access.agreement.id, c.get('userId'), payload.data.message, payload.data.revised);
     return c.json({ agreement, requestId: c.get('requestId') });
   } catch (error) { return agreementError(c, error); }
+});
+// Archive (reversible) and delete (permanent). Owners manage their own
+// ventures; LFG reviewers can manage any. Signed deals are never deleted.
+async function manageable(c: any) {
+  const conversation = await viewableVentureConversation(c.req.param('id'), c.get('userId'), c.get('isAdmin'));
+  return conversation && (conversation.userId === c.get('userId') || c.get('isAdmin')) ? conversation : null;
+}
+venture.post('/conversations/:id/archive', async c => {
+  const conversation = await manageable(c);
+  if (!conversation) return ventureError(c.get('requestId'), 404, 'CONVERSATION_NOT_FOUND', 'This venture is unavailable.');
+  try {
+    const payload = z.object({ archived: z.boolean() }).strict().safeParse(await boundedJson(c.req.raw, 256));
+    if (!payload.success) return ventureError(c.get('requestId'), 400, 'INVALID_REQUEST', 'Send {"archived": true|false}.');
+    if (!payload.data.archived && conversation.archivedAt && conversation.userId === c.get('userId')) {
+      const limit = await ventureLimit(c.get('userId'), c.get('isAdmin'));
+      if (!limit.canCreate) return ventureError(c.get('requestId'), 409, 'VENTURE_LIMIT', `You can have ${limit.max} active venture${limit.max === 1 ? '' : 's'} at a time. Archive another one first.`);
+    }
+    const updated = await archiveVenture(conversation.id, payload.data.archived);
+    return c.json({ conversation: updated, requestId: c.get('requestId') });
+  } catch (error) { if (error instanceof VentureFailure) return ventureError(c.get('requestId'), error.status, error.code, error.message); throw error; }
+});
+venture.delete('/conversations/:id', async c => {
+  const conversation = await manageable(c);
+  if (!conversation) return ventureError(c.get('requestId'), 404, 'CONVERSATION_NOT_FOUND', 'This venture is unavailable.');
+  const result = await deleteVenture(conversation.id);
+  if (!result.deleted) return ventureError(c.get('requestId'), 409, 'SIGNED_AGREEMENT', 'This venture has a signed, active agreement, so it is kept on record. Archive it instead.');
+  return c.json({ deleted: true, requestId: c.get('requestId') });
 });
 venture.all("*", c => ventureError(c.get("requestId"), 404, "ENDPOINT_NOT_FOUND", "This venture endpoint is unavailable. Return to your conversation list."));
 export default venture;

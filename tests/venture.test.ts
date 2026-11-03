@@ -254,3 +254,33 @@ test("founders can ask to renegotiate before signing; LFG revises (new version) 
     expect((await current()).current.status).toBe("awaiting_signatures");
   } finally { env.VENTURE_ADMIN_EMAILS = previous; }
 });
+
+test("founders get one active venture; archive frees the slot; delete is permanent but never for signed deals", async () => {
+  const create = (user: number) => request("/api/venture/conversations", user, "POST", { title: "TEST FIXTURE limit" });
+  // User 0 already has active ventures from earlier tests: at the limit.
+  expect((await (await request("/api/venture/session", 0)).json()).ventureLimit).toMatchObject({ max: 1, canCreate: false });
+  const blocked = await create(0);
+  expect(blocked.status).toBe(409); expect((await blocked.json()).code).toBe("VENTURE_LIMIT");
+  const mine = await db.select().from(ventureConversations).where(eq(ventureConversations.userId, fixtureIds[0]!));
+  for (const v of mine) expect((await request(`/api/venture/conversations/${v.id}/archive`, 0, "POST", { archived: true })).status).toBe(200);
+  expect((await (await request("/api/venture/conversations", 0)).json()).conversations.length).toBe(0);
+  const created = await create(0);
+  expect(created.status).toBe(201);
+  const fresh = (await created.json()).conversation.id;
+  expect((await create(0)).status).toBe(409);
+  // Restoring while at the limit is refused too.
+  expect((await request(`/api/venture/conversations/${mine[0]!.id}/archive`, 0, "POST", { archived: false })).status).toBe(409);
+  // Others can't manage your ventures (user 1 is not an admin here); non-Google users are refused.
+  expect((await request(`/api/venture/conversations/${fresh}/archive`, 1, "POST", { archived: true })).status).toBe(404);
+  expect((await request(`/api/venture/conversations/${fresh}`, 1, "DELETE")).status).toBe(404);
+  expect((await request(`/api/venture/conversations/${fresh}`, 2, "DELETE")).status).toBe(403);
+  // A signed, active agreement is a contract record: archive only.
+  const del = await request(`/api/venture/conversations/${conversationId}`, 0, "DELETE");
+  expect(del.status).toBe(409); expect((await del.json()).code).toBe("SIGNED_AGREEMENT");
+  // Deleting removes the venture and everything under it, on SQLite as on Postgres.
+  await db.insert(ventureMessages).values({ conversationId: fresh, role: "user", content: "TEST FIXTURE", requestId: crypto.randomUUID(), status: "completed" });
+  expect((await request(`/api/venture/conversations/${fresh}`, 0, "DELETE")).status).toBe(200);
+  expect((await db.select().from(ventureConversations).where(eq(ventureConversations.id, fresh))).length).toBe(0);
+  expect((await db.select().from(ventureMessages).where(eq(ventureMessages.conversationId, fresh))).length).toBe(0);
+  expect((await request(`/api/venture/conversations/${mine[0]!.id}/archive`, 0, "POST", { archived: false })).status).toBe(200);
+});

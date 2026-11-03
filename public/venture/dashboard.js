@@ -10,7 +10,7 @@
   const root = document.getElementById('vd');
   const params = new URLSearchParams(location.search);
   let scope = params.get('scope') === 'all' ? 'all' : 'mine';
-  let selected = params.get('v'), filter = 'all', isAdmin = false, ventures = [], rate = 5, openDeal = false;
+  let selected = params.get('v'), filter = 'all', isAdmin = false, ventures = [], rate = 5, openDeal = false, limit = null;
 
   // ---- tiny DOM helpers ---------------------------------------------------
   const el = (tag, text, className) => {
@@ -82,7 +82,7 @@
 
   async function refreshList() {
     const data = await api(`/api/venture/dashboard${scope === 'all' ? '?scope=all' : ''}`);
-    isAdmin = data.isAdmin; ventures = data.ventures; rate = data.usdPerMillionTokens || rate; showViewer(data.viewer);
+    isAdmin = data.isAdmin; ventures = data.ventures; limit = data.ventureLimit; rate = data.usdPerMillionTokens || rate; showViewer(data.viewer);
   }
   async function load() {
     root.replaceChildren(el('p', 'Loading…', 'vd-loading'));
@@ -98,6 +98,7 @@
 
   // ---- list view ----------------------------------------------------------
   function newVentureDialog() {
+    if (limit && !limit.canCreate) return notice('One venture at a time', `You can have ${limit.max} active venture${limit.max === 1 ? '' : 's'} at a time. Archive one from its page to start another.`);
     const dialog = el('dialog', '', 'vd-dialog');
     const form = el('form', '', 'vd-new');
     const input = el('textarea'); input.rows = 5; input.maxLength = 4000; input.required = true;
@@ -126,6 +127,16 @@
     document.body.append(dialog); dialog.showModal(); input.focus();
   }
 
+  // A small modal for messages and confirmations.
+  function notice(title, text, confirm) {
+    const dialog = el('dialog', '', 'vd-dialog');
+    const actions = h('div', 'vd-new-actions', btn(confirm ? 'Cancel' : 'OK', () => dialog.close(), confirm ? 'vd-btn' : 'vd-btn primary'));
+    if (confirm) actions.append(btn(confirm.label, async () => { dialog.close(); await confirm.run(); }, `vd-btn ${confirm.danger ? 'danger' : 'primary'}`));
+    dialog.append(h('div', 'vd-new', el('h2', title), el('p', text, 'vd-muted'), actions));
+    dialog.addEventListener('close', () => dialog.remove());
+    document.body.append(dialog); dialog.showModal();
+  }
+
   const FILTERS = [
     ['all', 'All', () => true],
     ['building', 'Building', v => v.progress.total > 0],
@@ -134,16 +145,20 @@
     ['info', 'Needs info', v => (v.decision?.decision || v.assessment?.verdict) === 'needs_more_info'],
     ['closed', 'Declined', v => ['declined', 'prohibited', 'decline'].includes(v.decision?.decision || v.assessment?.verdict)],
     ['draft', 'Not assessed', v => !v.assessment],
+    ['archived', 'Archived', v => Boolean(v.archivedAt)],
   ];
+  // Every filter but Archived shows only active ventures.
+  const matches = (key, v) => key === 'archived' ? Boolean(v.archivedAt) : !v.archivedAt && FILTERS.find(f => f[0] === key)[2](v);
 
   function stats() {
+    const ventures = activeVentures();
     const spent = ventures.reduce((sum, v) => sum + v.progress.tokensSpent, 0);
     const approved = ventures.reduce((sum, v) => sum + v.tokensApproved, 0);
     const shipped = ventures.reduce((sum, v) => sum + v.progress.shipped, 0), items = ventures.reduce((sum, v) => sum + v.progress.total, 0);
     const revenue = ventures.reduce((sum, v) => sum + (v.revenueUsd || 0), 0);
     const stat = (label, value, hint) => h('div', 'vd-stat', el('span', label, 'vd-stat-label'), el('strong', value), el('span', hint, 'vd-sub'));
     return h('div', 'vd-stats',
-      stat('Ventures building', String(ventures.filter(v => v.progress.total).length), `${ventures.length} total · ${ventures.filter(FILTERS[2][2]).length} awaiting review`),
+      stat('Ventures building', String(ventures.filter(v => v.progress.total).length), `${ventures.length} active · ${ventures.filter(FILTERS[2][2]).length} awaiting review`),
       stat('Spent so far', cost(spent), `${tokens(spent)} of ${compact(approved)} approved`),
       stat('Shipped', `${shipped}`, `of ${items} work items`),
       stat('Monthly revenue', usd(revenue), 'Latest reading, all ventures'));
@@ -168,6 +183,7 @@
     return item;
   }
 
+  const activeVentures = () => ventures.filter(v => !v.archivedAt);
   function renderList() {
     document.title = 'Ventures | LFG';
     const head = h('div', 'vd-pagehead',
@@ -177,7 +193,7 @@
           const b = btn(label, () => { if (scope !== key) { scope = key; filter = 'all'; history.pushState(null, '', url()); load(); } }, `vd-seg-btn${scope === key ? ' active' : ''}`);
           b.setAttribute('aria-pressed', String(scope === key)); return b;
         })) : null,
-        btn('+ New venture', newVentureDialog, 'vd-btn primary')));
+        btn('+ New venture', newVentureDialog, limit && !limit.canCreate ? 'vd-btn' : 'vd-btn primary')));
     if (!ventures.length) {
       root.replaceChildren(head, h('div', 'vd-empty',
         el('h2', scope === 'all' ? 'No ventures yet' : 'Start your first venture'),
@@ -186,13 +202,13 @@
       return;
     }
     const chips = h('div', 'vd-chips', ...FILTERS.map(([key, label, test]) => {
-      const count = ventures.filter(test).length;
+      const count = ventures.filter(v => matches(key, v)).length;
       if (key !== 'all' && !count) return null;
       const chip = btn('', () => { filter = key; renderList(); }, `vd-chip${filter === key ? ' active' : ''}`);
       chip.append(el('span', label), el('span', String(count), 'vd-chip-count')); chip.setAttribute('aria-pressed', String(filter === key));
       return chip;
     }));
-    const shown = ventures.filter(FILTERS.find(f => f[0] === filter)[2]);
+    const shown = ventures.filter(v => matches(filter, v));
     const table = h('div', 'vd-list',
       h('div', 'vd-row vd-row-head', ...['Venture', 'Status', 'Spent', 'Progress', 'Revenue', 'Updated'].map((t, i) => el('span', t, `vd-cell${i === 5 ? ' vd-cell-end' : ''}`))),
       ...shown.map(row));
@@ -613,9 +629,21 @@
         data.decision ? pill(DECISION[data.decision.decision]) : pill(r ? ['Awaiting review', 'neutral'] : ['Not assessed', 'muted']),
         r ? dot(VERDICT[r.verdict]) : null, r ? el('span', `Analyst${r.tier ? ` · ${TIER[r.tier]}` : ''}`, 'vd-sub') : null,
         el('span', [data.owner ? (data.owner.name || data.owner.email) : null, data.assessment ? `Assessment v${data.assessment.version}, ${date(data.assessment.createdAt)}` : null].filter(Boolean).join(' · '), 'vd-sub'));
+      const archived = Boolean(data.conversation.archivedAt), canManage = data.isOwner || isAdmin, title = data.conversation.title;
+      const archive = async to => {
+        try { await api(`/api/venture/conversations/${encodeURIComponent(id)}/archive`, { method: 'POST', body: JSON.stringify({ archived: to }) }); await reload(); }
+        catch (error) { notice(to ? 'Couldn’t archive' : 'Couldn’t restore', errorText(error)); }
+      };
+      const remove = () => notice('Delete this venture?', `“${title}” and its conversation, assessments, decisions and history will be permanently deleted. This can’t be undone.`, { label: 'Delete venture', danger: true, run: async () => {
+        try { await api(`/api/venture/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' }); await refreshList(); go(null); }
+        catch (error) { notice('Couldn’t delete', errorText(error)); }
+      } });
       const head = h('div', 'vd-detail-head',
-        h('div', '', el('h1', data.conversation.title), tags),
-        data.isOwner ? link('Open chat', `/venture-analyst/chat?c=${encodeURIComponent(id)}`, 'vd-btn primary') : null);
+        h('div', '', el('h1', title), tags),
+        h('div', 'vd-actions',
+          canManage ? btn(archived ? 'Restore' : 'Archive', () => archived ? archive(false) : notice('Archive this venture?', 'It moves out of your active list and frees your venture slot. You can restore it any time.', { label: 'Archive', run: () => archive(true) }), 'vd-btn') : null,
+          canManage && data.agreements.current?.status !== 'active' ? btn('Delete', remove, 'vd-btn danger-ghost') : null,
+          data.isOwner && !archived ? link('Open chat', `/venture-analyst/chat?c=${encodeURIComponent(id)}`, 'vd-btn primary') : null));
 
       const main = h('div', 'vd-main'), side = h('aside', 'vd-side');
       main.append(...[building(data, r, reload), (data.progress.total || data.metrics.length) ? results(data, reload) : null, timeline(data)].filter(Boolean));
@@ -633,7 +661,7 @@
       if (a?.missingInputs.length) side.append(card('Missing inputs', h('ul', 'vd-plain', ...a.missingInputs.map(m => el('li', m)))));
       if (isAdmin) side.append(transcript(data, sources));
 
-      root.replaceChildren(back, head, decisionNote(data, r), stateStrip(data, r), dealCard(data, r, reload) || '',
+      root.replaceChildren(back, head, archived ? h('div', 'vd-callout neutral', el('strong', `Archived ${date(data.conversation.archivedAt)}`), el('p', 'Hidden from the active list. Restore it to keep working on it.')) : '', decisionNote(data, r), stateStrip(data, r), dealCard(data, r, reload) || '',
         main.childElementCount ? h('div', 'vd-detail-grid', main, side) : side,
         el('p', `Dollar figures convert tokens at ${usd(rate, 2)} per million. Market figures, token sizes and timelines in the assessment are scenarios, not promises.`, 'vd-footnote'));
     } catch (error) {

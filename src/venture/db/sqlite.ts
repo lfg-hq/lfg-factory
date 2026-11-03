@@ -8,6 +8,8 @@ export const ventureConversations = sqliteTable("venture_conversation", {
   title: text("title").notNull().default("New conversation"),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
+  // Archived ventures leave the founder's active list and free their slot.
+  archivedAt: integer("archived_at", { mode: "timestamp" }),
 }, t => [index("venture_conv_owner_idx").on(t.userId, t.updatedAt)]);
 
 export const ventureMessages = sqliteTable("venture_message", {

@@ -1,8 +1,8 @@
-import { and, asc, desc, eq, inArray } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { db } from '../../config/db.ts';
 import { env } from '../../config/env.ts';
 import { users } from '../../db/schema/users.ts';
-import { ventureConversations, ventureAssessments, ventureDecisions, ventureTasks, ventureSources, ventureWorkItems, ventureEvents, ventureMetrics, ventureAgreements } from '../db/schema.ts';
+import { ventureConversations, ventureAssessments, ventureDecisions, ventureTasks, ventureSources, ventureWorkItems, ventureEvents, ventureMetrics, ventureAgreements, ventureAgreementMessages, ventureMessages } from '../db/schema.ts';
 import type { DealTerms, VentureAssessment } from './assessment.ts';
 import { agreementsFor, proposeAgreement, termsSummary } from './agreements.ts';
 
@@ -127,7 +127,7 @@ export async function dashboardList(userId: string, allFounders: boolean) {
     const started = deals.filter(x => x.activatedAt).map(x => x.activatedAt!.getTime());
     const items = work.filter(w => w.conversationId === conversation.id);
     return {
-      id: conversation.id, title: conversation.title, updatedAt: conversation.updatedAt,
+      id: conversation.id, title: conversation.title, updatedAt: conversation.updatedAt, archivedAt: conversation.archivedAt,
       owner: allFounders ? owner : undefined,
       assessment: a ? { version: a.version, status: a.status, createdAt: a.createdAt, verdict: r?.verdict ?? null, tier: r?.tier ?? null, recommendedTokens: r?.tokenTranche.totalTokens ?? null, summary: r?.summary ?? null } : null,
       decision: decision ? { decision: decision.decision, tokensApproved: decision.tokensApproved, createdAt: decision.createdAt } : null,
@@ -215,4 +215,29 @@ export async function recordMetric(conversationId: string, name: MetricName, val
   await recordEvent(conversationId, 'metric', `${METRICS[name]}: ${shown}`, note || null);
   await db.update(ventureConversations).set({ updatedAt: new Date() }).where(eq(ventureConversations.id, conversationId));
   return metric!;
+}
+
+export async function ventureLimit(userId: string, isAdmin: boolean) {
+  const [row] = await db.select({ n: count() }).from(ventureConversations).where(and(eq(ventureConversations.userId, userId), isNull(ventureConversations.archivedAt)));
+  const active = Number(row?.n ?? 0), max = env.VENTURE_MAX_ACTIVE_PER_FOUNDER;
+  return { max: isAdmin ? null : max, active, canCreate: isAdmin || active < max };
+}
+
+export async function archiveVenture(conversationId: string, archived: boolean) {
+  const [updated] = await db.update(ventureConversations).set({ archivedAt: archived ? new Date() : null, updatedAt: new Date() }).where(eq(ventureConversations.id, conversationId)).returning();
+  await recordEvent(conversationId, 'archive', archived ? 'Venture archived' : 'Venture restored from archive');
+  return updated!;
+}
+
+// Permanent: removes the conversation and everything that hangs off it. A venture
+// with a signed, active agreement is a contract record and is only ever archived.
+export async function deleteVenture(conversationId: string) {
+  const [signed] = await db.select({ id: ventureAgreements.id }).from(ventureAgreements).where(and(eq(ventureAgreements.conversationId, conversationId), eq(ventureAgreements.status, 'active'))).limit(1);
+  if (signed) return { deleted: false };
+  // Children first, explicitly: SQLite here does not enforce foreign-key cascades.
+  for (const table of [ventureAgreementMessages, ventureAgreements, ventureEvents, ventureMetrics, ventureWorkItems, ventureTasks, ventureDecisions, ventureAssessments, ventureSources, ventureMessages]) {
+    await db.delete(table).where(eq(table.conversationId, conversationId));
+  }
+  await db.delete(ventureConversations).where(eq(ventureConversations.id, conversationId));
+  return { deleted: true };
 }
