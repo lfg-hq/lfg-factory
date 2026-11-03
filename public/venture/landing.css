@@ -1,0 +1,97 @@
+/* LFG Ventures landing page. Light by default; .dark follows the site toggle. */
+.vl{--ink:#0f172a;--ink2:#334155;--muted:#64748b;--line:#e2e8f0;--soft:#f8fafc;--panel:#fff;--accent:#4f46e5;--accent-soft:#eef2ff;--good:#067647;--good-bg:#ecfdf3;
+  max-width:1200px;margin:0 auto;padding:128px 28px 0;color:var(--ink);font:16px/1.6 Manrope,system-ui,sans-serif}
+.dark .vl{--ink:#e6edf3;--ink2:#c9d1d9;--muted:#8b949e;--line:#30363d;--soft:#161b22;--panel:#161b22;--accent:#a5b4fc;--accent-soft:#1e2340;--good:#75e0a7;--good-bg:#0e2a1b}
+.vl *{box-sizing:border-box}
+.vl h1,.vl h2{font-family:Sora,Manrope,sans-serif;letter-spacing:-1.2px;margin:0}
+.vl h3{margin:0;font-size:16px;font-weight:700}
+.vl p{margin:0}
+
+/* hero */
+.vl-hero{display:grid;grid-template-columns:1.1fr .9fr;gap:56px;align-items:center;padding-bottom:72px}
+.vl-eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:11px;font-weight:700;letter-spacing:1.6px;color:var(--muted);border:1px solid var(--line);background:var(--panel);border-radius:999px;padding:7px 12px}
+.vl-eyebrow span{width:6px;height:6px;border-radius:50%;background:#6366f1}
+.vl-hero h1{font-size:58px;line-height:1.06;font-weight:700;margin:22px 0 18px}
+.vl-grad{background:linear-gradient(90deg,#4f46e5,#db2777);-webkit-background-clip:text;background-clip:text;color:transparent}
+.vl-lead{font-size:19px;color:var(--ink2);max-width:520px}
+.vl-ctas{display:flex;gap:12px;flex-wrap:wrap;margin:30px 0 26px}
+.vl-btn{display:inline-flex;align-items:center;height:48px;padding:0 22px;border-radius:12px;font-weight:700;font-size:15px;text-decoration:none;border:1px solid var(--line);color:var(--ink);background:var(--panel)}
+.vl-btn:hover{border-color:#94a3b8}
+.vl-btn.primary{background:#4f46e5;border-color:#4f46e5;color:#fff}
+.vl-btn.primary:hover{background:#4338ca}
+.vl-btn.light{background:#fff;border-color:#fff;color:#312e81}
+.vl-btn.light:hover{background:#eef2ff}
+.vl-trust{list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:10px 22px;font-size:14px;color:var(--muted)}
+.vl-trust li{display:inline-flex;align-items:center;gap:6px}
+.vl-trust svg{color:#4f46e5}
+
+/* example venture card */
+.vl-card{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:24px;box-shadow:0 30px 60px -30px rgba(15,23,42,.3);display:flex;flex-direction:column;gap:16px;transform:rotate(.6deg)}
+.vl-card-top{display:flex;justify-content:space-between;align-items:center}
+.vl-tag{font-size:11px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--muted)}
+.vl-card-title{font-size:18px;font-weight:800;letter-spacing:-.2px}
+.vl-card-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.vl-card-grid div{background:var(--soft);border:1px solid var(--line);border-radius:12px;padding:10px 12px;display:flex;flex-direction:column}
+.vl-card-grid small{font-size:11px;color:var(--muted);font-weight:600}
+.vl-card-grid b{font-size:16px}
+.vl-card-work{display:flex;flex-direction:column;gap:8px}
+.vl-card-work div{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--ink2);padding:8px 10px;border:1px solid var(--line);border-radius:10px}
+.vl-card-work .vl-pill{margin-left:auto}
+.vl-type{font-size:10px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:#4338ca;background:#eef2ff;border-radius:5px;padding:2px 6px;white-space:nowrap}
+.dark .vl-type{color:#a5b4fc;background:#1e2340}
+.vl-pill{font-size:11px;font-weight:700;border-radius:999px;padding:2px 9px;white-space:nowrap}
+.vl-pill.good{background:var(--good-bg);color:var(--good)}
+.vl-pill.info{background:var(--accent-soft);color:var(--accent)}
+
+/* sections */
+.vl-section{padding:64px 0;border-top:1px solid var(--line)}
+.vl-section h2{font-size:34px;font-weight:700;margin-bottom:28px}
+.vl-sub{color:var(--muted);margin:-16px 0 24px!important}
+.vl-values{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+.vl-value{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:22px;display:flex;flex-direction:column;gap:8px}
+.vl-value svg{color:#4f46e5;background:var(--accent-soft);border-radius:10px;padding:8px;width:40px;height:40px;margin-bottom:6px}
+.dark .vl-value svg{color:#a5b4fc}
+.vl-value p{color:var(--muted);font-size:14px}
+
+.vl-steps{list-style:none;padding:0;margin:0;display:grid;grid-template-columns:repeat(5,1fr);gap:16px;counter-reset:none}
+.vl-steps li{position:relative;padding-top:52px}
+.vl-steps li span{position:absolute;top:0;left:0;width:36px;height:36px;border-radius:50%;display:grid;place-items:center;font-weight:800;color:#fff;background:linear-gradient(135deg,#6366f1,#4f46e5)}
+.vl-steps li:not(:last-child)::after{content:"";position:absolute;top:18px;left:46px;right:-6px;height:2px;background:linear-gradient(90deg,#c7d2fe,transparent)}
+.vl-steps p{color:var(--muted);font-size:14px;margin-top:6px}
+
+.vl-sizes{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.vl-size{border:1px solid var(--line);border-radius:16px;padding:22px;background:var(--panel);display:flex;flex-direction:column;gap:4px}
+.vl-size small{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.6px}
+.vl-size b{font-family:Sora,Manrope,sans-serif;font-size:26px;letter-spacing:-.6px}
+.vl-size p{color:var(--muted);font-size:14px}
+
+.vl-split{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.vl-split>div{border-radius:16px;padding:26px;border:1px solid var(--line);background:var(--soft)}
+.vl-split>div:last-child{background:var(--accent-soft);border-color:transparent}
+.vl-split ul{list-style:disc;margin:12px 0 0;padding-left:18px;color:var(--ink2);display:flex;flex-direction:column;gap:6px}
+
+.vl-final{margin:16px 0 96px;border-radius:24px;padding:56px 32px;text-align:center;color:#fff;background:linear-gradient(135deg,#312e81,#4f46e5 55%,#db2777);display:flex;flex-direction:column;align-items:center;gap:14px}
+.vl-final h2{font-size:34px;font-weight:700}
+.vl-final p{color:#e0e7ff}
+.vl-final .vl-btn{margin-top:8px}
+
+@media(max-width:1023px){
+  .vl{padding:108px 20px 0}
+  .vl-hero{grid-template-columns:1fr;gap:40px}
+  .vl-hero h1{font-size:44px}
+  .vl-card{transform:none}
+  .vl-values{grid-template-columns:1fr 1fr}
+  .vl-steps{grid-template-columns:1fr;gap:20px}
+  .vl-steps li{padding:0 0 0 52px;min-height:36px}
+  .vl-steps li:not(:last-child)::after{top:42px;left:17px;right:auto;bottom:-18px;width:2px;height:auto;background:linear-gradient(180deg,#c7d2fe,transparent)}
+  .vl-sizes{grid-template-columns:1fr}
+}
+@media(max-width:640px){
+  .vl{padding:96px 16px 0}
+  .vl-hero h1{font-size:36px;letter-spacing:-.8px}
+  .vl-lead{font-size:17px}
+  .vl-values,.vl-split{grid-template-columns:1fr}
+  .vl-section{padding:48px 0}
+  .vl-section h2,.vl-final h2{font-size:28px}
+  .vl-final{padding:40px 20px}
+}

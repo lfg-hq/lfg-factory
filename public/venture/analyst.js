@@ -110,6 +110,7 @@
     const data = await api(`/api/venture/conversations/${encodeURIComponent(id)}`);
     if (version !== epoch || loadVersion !== loadEpoch || !expanded) return;
     selectedId = data.conversation.id;
+    status.textContent = data.conversation.title;
     // Reload resumes this conversation; a fresh open starts a new chat.
     history.replaceState(null, '', pageMode ? chatPage(selectedId) : `${location.pathname}?chat=open&c=${encodeURIComponent(selectedId)}`);
     stage.querySelector('.va-views')?.remove();
@@ -294,41 +295,46 @@
     const data = await api('/api/venture/conversations');
     if (version !== epoch || !expanded) return;
     stage.replaceChildren(); status.textContent = 'Saved to your account · reviewed by LFG for funding';
-    const toolbar = element('div', '', 'va-history'), select = element('select'); select.setAttribute('aria-label', 'Saved conversations');
-    select.append(new Option('Select a saved conversation', ''));
-    data.conversations.forEach(item => select.append(new Option(item.title, item.id)));
+    // No conversation picker: this page holds one venture at a time, and the
+    // dashboard is where ventures are listed and opened.
     const content = element('div', '', 'va-content'); content.setAttribute('role', 'log');
-    select.onchange = () => { if (select.value) loadConversation(select.value, content).catch(failure); else newChat(); };
     function newChat() {
       if (activeTurn) return;
-      selectedId = null; select.value = ''; loadEpoch++;
+      selectedId = null; loadEpoch++;
       history.replaceState(null, '', pageMode ? chatPage() : `${location.pathname}?chat=open`);
       stage.querySelector('.va-views')?.remove();
       content.setAttribute('role', 'log');
-      showDashboard(null);
+      showDashboard(null); status.textContent = 'New venture · saved to your account';
       if (ventureLimit && !ventureLimit.canCreate) {
         // At the venture limit: explain instead of offering a chat that can't be saved.
         stage.querySelector('.va-composer')?.remove();
         const note = element('div', '', 'va-notice va-limit');
         const dash = element('a', 'Open your dashboard', 'va-source'); dash.href = '/venture-analyst/dashboard';
-        note.append(element('span', `You can have ${ventureLimit.max} active venture${ventureLimit.max === 1 ? '' : 's'} at a time. Continue it from the list above, or archive it from your dashboard to start another.`), dash);
+        note.append(element('span', `You can have ${ventureLimit.max} active venture${ventureLimit.max === 1 ? '' : 's'} at a time. Open it from your dashboard, or archive it there to start another.`), dash);
         content.replaceChildren(element('div', 'NEW CONVERSATION', 'va-label'), note);
         return;
       }
       content.replaceChildren(element('div', 'NEW CONVERSATION', 'va-label'), element('p', 'Welcome. Tell me what you’re thinking of building, who it would help, and what you bring to it. A rough idea is enough to begin.', 'va-message'));
-      composer(null, content, (id, text) => { select.append(new Option(text.slice(0, 80), id)); select.value = id; showDashboard(id); });
+      composer(null, content, (id, text) => { showDashboard(id); status.textContent = text.slice(0, 80); });
       stage.querySelector('.va-composer textarea')?.focus();
     }
-    toolbar.append(select, button('+ New chat', newChat, 'va-new'));
+    newChatButton(newChat);
     showDashboard(requested || selectedId);
-    stage.append(toolbar, content);
-    // Start on a fresh chat unless a specific saved conversation was requested,
-    // or the founder is at their venture limit (then resume the latest one).
+    stage.append(content);
+    // Open the requested venture; at the venture limit resume the latest one;
+    // otherwise start a fresh chat.
     const atLimit = ventureLimit && !ventureLimit.canCreate;
     const id = [requested, selectedId, atLimit ? data.conversations[0]?.id : null].find(candidate => candidate && data.conversations.some(item => item.id === candidate));
     requested = null;
-    if (id) { select.value = id; await loadConversation(id, content); }
+    if (id) await loadConversation(id, content);
     else newChat();
+  }
+  // "+ New chat" lives in the panel header, only for founders who may start another venture.
+  function newChatButton(action) {
+    let start = $('va-newchat');
+    if (!start) { start = button('+ New chat', action, 'va-new'); start.id = 'va-newchat'; (dashboard || close).before(start); }
+    start.onclick = action;
+    start.hidden = Boolean(ventureLimit && !ventureLimit.canCreate);
   }
   async function ready() {
     cancel(); controller = new AbortController(); const version = epoch;
@@ -357,7 +363,8 @@
     stage.replaceChildren(); modal(); if (!pageMode) panel.focus();
     if (error) authView(error); else ready();
   }
-  if (pageMode) { open(); return; }
+  const signInFailed = query.get('auth') === 'failed' ? Object.assign(new Error('Google sign-in wasn’t completed. Retry; if you already have an LFG account, sign in to it first, then connect Google.'), { requestId: query.get('requestId') }) : null;
+  if (pageMode) { open(signInFailed); return; }
   cta.onclick = () => open(); close.onclick = collapse; narrow.addEventListener('change', modal);
   document.addEventListener('keydown', event => {
     if (!expanded) return;
@@ -370,5 +377,5 @@
     }
   });
   sample();
-  if (query.get('chat') === 'open') open(query.get('auth') === 'failed' ? Object.assign(new Error('Google sign-in wasn’t completed. Retry; if you already have an LFG account, sign in to it first, then connect Google.'), { requestId: query.get('requestId') }) : null);
+  if (query.get('chat') === 'open') open(signInFailed);
 })();

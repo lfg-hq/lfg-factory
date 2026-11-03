@@ -42,7 +42,7 @@ for (const linking of [false, true]) test(`real Better Auth ${linking ? "explici
   const cancelled = await handleGoogleCallback(new Request(callback, { headers: { cookie: cookies } }));
   expect(cancelled.status).toBe(302);
   const destination = new URL(cancelled.headers.get("location")!);
-  expect(destination.origin).toBe(origin); expect(destination.pathname).toBe("/venture-analyst");
-  expect(destination.searchParams.get("chat")).toBe("open"); expect(destination.searchParams.get("auth")).toBe("failed");
+  expect(destination.origin).toBe(origin); expect(destination.pathname).toBe("/venture-analyst/chat");
+  expect(destination.searchParams.get("auth")).toBe("failed");
   expect(destination.searchParams.get("requestId")).toBe(cancelled.headers.get("X-Request-ID"));
 });

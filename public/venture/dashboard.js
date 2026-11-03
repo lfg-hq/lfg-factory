@@ -89,7 +89,7 @@
     try { await refreshList(); render(); }
     catch (error) {
       // Signed-out visitors sign in on the analyst page, then come straight back here.
-      if (error.status === 401 || error.code === 'GOOGLE_LINK_REQUIRED') { location.replace('/venture-analyst?chat=open&next=dashboard'); return; }
+      if (error.status === 401 || error.code === 'GOOGLE_LINK_REQUIRED') { location.replace('/venture-analyst/chat?next=dashboard'); return; }
       if (error.code === 'ADMIN_REQUIRED') { scope = 'mine'; history.replaceState(null, '', url()); load(); return; }
       root.replaceChildren(h('div', 'vd-state', el('p', errorText(error), 'vd-error'), btn('Retry', load)));
     }

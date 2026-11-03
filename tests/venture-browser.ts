@@ -30,48 +30,46 @@ try {
   browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || "/usr/bin/chromium", headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' });
   const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
+  // The landing page explains the offer; every call to action goes to the analyst's page.
   await page.goto(`${base}/venture-analyst`, { waitUntil: "domcontentloaded" });
-  assert.equal(await page.locator('.va-label').textContent(), 'EXAMPLE CONVERSATION');
-  assert.equal(await page.locator('#va-fullchat').getAttribute('href'), '/venture-analyst/chat', 'Landing panel links to the full chat');
-  assert.equal(await page.getByText('INTERACTIVE MOCKUP').count(), 0);
-  await page.screenshot({ path: `${shots}/venture-desktop.png` });
-  const cta = page.getByRole('button', { name: 'Chat with analyst agent', exact: true });
-  await cta.focus(); await page.keyboard.press('Enter');
+  await page.getByRole('heading', { name: 'How it works', exact: true }).waitFor();
+  assert.equal(await page.locator('#va-panel').count(), 0, 'No chat on the landing page');
+  const ctas = await page.getByRole('link', { name: 'Talk to the analyst' }).evaluateAll(links => links.map(a => a.getAttribute('href')));
+  assert(ctas.length >= 2 && ctas.every(href => href === '/venture-analyst/chat'), JSON.stringify(ctas));
+  await page.screenshot({ path: `${shots}/venture-landing.png`, fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Landing has no horizontal scroll on phones');
+  await page.screenshot({ path: `${shots}/venture-landing-mobile.png`, fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  // Signed out, the analyst's page asks for Google sign-in and reports problems honestly.
+  await page.getByRole('link', { name: 'Talk to the analyst' }).first().click();
+  await page.waitForURL(/\/venture-analyst\/chat/);
   await page.getByRole('button', { name: 'Continue with Google', exact: true }).waitFor();
-  assert.equal(await page.getByText('Signing in with Google…', { exact: true }).count(), 0);
-  assert.equal(await page.locator('.va-message').count(), 0, 'Example history must clear');
   assert.equal(await page.locator('.va-error').count(), 0, 'Expected anonymous readiness is not an auth failure');
   const clickedLabel = await page.getByRole('button', { name: 'Continue with Google', exact: true }).evaluate(el => { (el as HTMLButtonElement).click(); return document.querySelector('.va-google')?.textContent; });
   assert.equal(clickedLabel, 'Signing in with Google…', 'Signing-in state appears only after the click');
   await page.getByText(/GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET/).waitFor();
   assert.match(await page.locator('.va-error').textContent() || '', /Correlation ID:/);
-  assert.equal(await page.getByRole('button', { name: 'Continue with Google', exact: true }).isEnabled(), true);
   const cancelledLabel = await page.evaluate(() => {
     (document.querySelector('.va-google') as HTMLButtonElement).click();
     const cancel = [...document.querySelectorAll('#va-stage button')].find(el => el.textContent === 'Cancel') as HTMLButtonElement;
     cancel.click(); return document.querySelector('.va-google')?.textContent;
   });
   assert.equal(cancelledLabel, 'Continue with Google', 'Cancelling restores a retryable sign-in state');
-  await page.keyboard.press('Escape');
-  assert.equal(await cta.getAttribute('aria-expanded'), 'false');
-  assert(await cta.evaluate(el => el === document.activeElement));
+  await page.goto(`${base}/venture-analyst/chat?auth=failed&requestId=TEST-FIXTURE`, { waitUntil: 'domcontentloaded' });
+  await page.getByText(/Google sign-in wasn’t completed/).waitFor();
   await page.setViewportSize({ width: 390, height: 844 });
-  await cta.click(); await page.getByRole('button', { name: 'Continue with Google', exact: true }).waitFor();
-  const box = await page.locator('#va-panel').boundingBox();
-  assert(box && box.x === 0 && box.y === 0 && box.width === 390 && box.height === 844, JSON.stringify(box));
-  assert.equal(await page.locator('#va-panel').getAttribute('aria-modal'), 'true');
-  await page.getByRole('button', { name: 'Continue with Google', exact: true }).focus();
-  await page.keyboard.press('Tab'); assert(await page.locator('#va-fullchat').evaluate(el => el === document.activeElement), 'Focus wraps to the first control in the dialog');
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Chat page fits a phone');
   await page.screenshot({ path: `${shots}/venture-mobile.png` });
-  await page.keyboard.press('Escape'); assert(await cta.evaluate(el => el === document.activeElement));
   await page.evaluate(() => localStorage.setItem('lfg-theme', 'dark'));
-  await page.reload({ waitUntil: 'domcontentloaded' }); await cta.click();
+  await page.reload({ waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: 'Continue with Google', exact: true }).waitFor();
   assert.equal(await page.locator('#va-panel').evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(22, 27, 34)');
-  await page.screenshot({ path: `${shots}/venture-dark-mobile.png` });
+  await page.evaluate(() => localStorage.setItem('lfg-theme', 'light'));
+  await page.setViewportSize({ width: 1440, height: 1000 });
   // Signed-out visitors to the dashboard land on sign-in, set to return there.
   await page.goto(`${base}/venture-analyst/dashboard`, { waitUntil: 'domcontentloaded' });
-  await page.waitForURL(/\/venture-analyst\?chat=open/);
+  await page.waitForURL(/\/venture-analyst\/chat\?next=dashboard/);
   await page.getByRole('heading', { name: 'Sign in to see your dashboard', exact: true }).waitFor();
   assert.equal(await page.locator('#va-dashboard').isHidden(), true);
   const loginStatus = await page.evaluate(async ({ email, password }) => {
@@ -79,15 +77,12 @@ try {
     return response.status;
   }, { email, password });
   assert.equal(loginStatus, 200, 'Real Better Auth fixture login');
-  // Signed in, the landing CTA hands over to the analyst's own page.
-  await page.goto(`${base}/venture-analyst`, { waitUntil: 'domcontentloaded' });
-  await page.getByRole('button', { name: 'Chat with analyst agent', exact: true }).click();
-  await page.waitForURL(/\/venture-analyst\/chat/);
+  await page.goto(`${base}/venture-analyst/chat`, { waitUntil: 'domcontentloaded' });
   assert.equal(await page.locator('#navbar, footer').count(), 0, 'Chat page has no marketing chrome');
   // Opening the analyst starts a fresh chat; nothing is created until the first message.
   await page.getByRole('button', { name: '+ New chat', exact: true }).waitFor();
   await page.getByText('Welcome. Tell me', { exact: false }).waitFor();
-  assert.equal(await page.getByLabel('Saved conversations').inputValue(), '');
+  assert.equal(await page.getByLabel('Saved conversations').count(), 0, 'No conversation picker');
   assert.equal(await page.locator('.va-message').count(), 1, 'Only genuine new-conversation greeting');
   const input = page.getByLabel('Your message', { exact: true });
   await input.fill('TEST FIXTURE idea <img src=x onerror=alert(1)>');
@@ -95,7 +90,9 @@ try {
   assert.match(await input.inputValue(), /\n$/, 'Shift+Enter adds a line');
   await input.press('Enter');
   await page.getByText(/Platform AI credentials are unavailable/).waitFor();
-  const selected = await page.getByLabel('Saved conversations').inputValue(); assert(selected, 'First message creates the conversation');
+  await page.waitForURL(/[?&]c=/);
+  const selected = new URL(page.url()).searchParams.get('c')!; assert(selected, 'First message creates the conversation');
+  assert.equal(await page.locator('#va-status').textContent(), 'TEST FIXTURE idea <img src=x onerror=alert(1)>', 'Header names the venture');
   assert.match(await page.getByRole('link', { name: /Go to dashboard/ }).getAttribute('href') || '', new RegExp(`v=${selected}`));
   assert.equal(await page.locator('.va-message:empty').count(), 0, 'No empty reply bubbles');
   await page.evaluate(() => localStorage.setItem('lfg-theme', 'light')); await page.reload({ waitUntil: 'domcontentloaded' }); await page.getByText(/This reply failed/).waitFor();
@@ -105,7 +102,7 @@ try {
   assert.equal(await page.locator('.va-message.user').textContent(), 'TEST FIXTURE idea <img src=x onerror=alert(1)>');
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.getByText(/This reply failed/).waitFor();
-  assert.equal(await page.getByLabel('Saved conversations').inputValue(), selected, 'Reload resumes the open conversation');
+  assert.equal(new URL(page.url()).searchParams.get('c'), selected, 'Reload resumes the open conversation');
   assert.equal(await page.locator('.va-message.user').count(), 1, 'Reload does not replay billable turns');
   // Analyst Markdown renders, but raw HTML, images and script links never do.
   const { ventureMessages } = await import('../src/venture/db/schema.ts');
@@ -116,8 +113,9 @@ try {
   assert.equal(await page.locator('.va-md img, .va-md a[href^="javascript"]').count(), 0);
   assert.equal(await page.evaluate(() => (window as any).pwned), undefined);
   await page.getByRole('button', { name: '+ New chat', exact: true }).click();
-  assert.equal(await page.getByLabel('Saved conversations').inputValue(), '');
-  await page.getByLabel('Saved conversations').selectOption(selected);
+  await page.getByText('Welcome. Tell me', { exact: false }).waitFor();
+  assert.equal(new URL(page.url()).searchParams.get('c'), null);
+  await page.goto(`${base}/venture-analyst/chat?c=${selected}`, { waitUntil: 'domcontentloaded' });
   await page.getByText(/This reply failed/).waitFor();
   const { ventureAssessments } = await import('../src/venture/db/schema.ts');
   await db.insert(ventureAssessments).values({ conversationId: selected, version: 1, status: 'provisional', contentJson: assessmentFixture() });
