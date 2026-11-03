@@ -28,8 +28,7 @@
 .va-box:focus-within{border-color:#818cf8;box-shadow:0 0 0 4px #eef2ff}
 .va-box textarea{border:0;outline:0;resize:none;padding:4px 0;font:inherit;font-size:15px;line-height:1.55;background:transparent;color:inherit;min-height:26px;max-height:200px;overflow-y:auto;width:100%}
 .va-box textarea:focus-visible{outline:0}
-.va-box-actions{display:flex;align-items:center;gap:6px}
-.va-hint{margin-right:auto;font-size:12px;color:#98a2b3}
+.va-box-actions{display:flex;align-items:center;justify-content:flex-end;gap:6px}
 .va-box .va-mic,.va-box .va-send,.va-box .va-stop{display:inline-grid;place-items:center;width:36px;height:36px;border-radius:50%;border:0;padding:0;cursor:pointer;flex-shrink:0}
 .va-box .va-mic{background:transparent;color:#667085}
 .va-box .va-mic:hover{background:#f2f4f7;color:#101828}
@@ -44,7 +43,6 @@
 /* Dictation panel (shared recorder) inside the box. */
 .va-box .audio-recording-indicator{flex:1;display:flex;align-items:center;gap:6px;min-width:0;height:36px;padding:0 6px;border-radius:999px;background:#f9fafb;border:1px solid #eaecf0;position:relative}
 .va-box .audio-recording-indicator+.va-mic{background:#fef3f2}
-.va-box:has(.audio-recording-indicator) .va-hint{display:none}
 .va-box .audio-recording-indicator button{border:0;background:transparent;color:#667085;width:28px;height:28px;border-radius:50%;display:inline-grid;place-items:center;cursor:pointer;font-size:16px}
 .va-box .audio-recording-indicator button:hover{background:#f2f4f7}
 .va-box .audio-recording-indicator [hidden],.va-box .audio-recording-indicator .dictation-send{display:none!important}
@@ -62,4 +60,3 @@
 .dark .va-box .va-mic:hover{background:#1c2128;color:#e6edf3}
 .dark .va-box .va-stop{background:#e6edf3;color:#0d1117}
 .dark .va-box .audio-recording-indicator{background:#161b22;border-color:#30363d}
-@media(max-width:640px){.va-hint{display:none}.va-box-actions{justify-content:flex-end}}

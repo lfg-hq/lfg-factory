@@ -232,7 +232,7 @@
     const stopButton = iconButton('Stop', ICONS.stop, 'va-stop'); stopButton.type = 'button'; stopButton.onclick = stop; stopButton.hidden = true;
     const mic = iconButton('Dictate a message', ICONS.mic, 'va-mic'); mic.type = 'button';
     const actions = element('div', '', 'va-box-actions input-actions');
-    actions.append(element('span', 'Enter to send · Shift+Enter for a new line', 'va-hint'), mic, send, stopButton);
+    actions.append(mic, send, stopButton);
     box.append(input, actions);
     const feedback = element('div', '', 'va-muted'); feedback.setAttribute('role', 'status');
     form.append(box, feedback); stage.append(form); fit();
