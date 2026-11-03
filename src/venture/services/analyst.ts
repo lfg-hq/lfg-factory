@@ -6,7 +6,7 @@ import { and, eq, gte, lt, desc, inArray } from 'drizzle-orm';
 import { db } from '../../config/db.ts';
 import { env } from '../../config/env.ts';
 import { ventureConversations, ventureMessages, ventureSources, ventureAssessments } from '../db/schema.ts';
-import { DEFAULT_MODEL_KEY, getModel, getProviderName, getProviderModel } from '../../ai/provider.ts';
+import { DEFAULT_MODEL_KEY, getLiteModel, getModel, getProviderName, getProviderModel } from '../../ai/provider.ts';
 import { createWebResearchTools } from '../../ai/tools/agent-tools.ts';
 import { ventureAnalystPrompt } from '../prompts/analyst.ts';
 import { publicUrl, readPublicUrl } from './public-url.ts';
@@ -75,7 +75,8 @@ export async function runTurn(conversationId: string, requestId: string, abort: 
   log('venture.turn.started', 'pending');
   try {
     let model;
-    try { model = getModel(DEFAULT_MODEL_KEY, undefined, { allowEnvFallback: true }); }
+    // Chat and research reading run on the provider's cheapest tier.
+    try { model = getLiteModel(DEFAULT_MODEL_KEY, undefined, { allowEnvFallback: true }).model; }
     catch { throw new VentureFailure('PROVIDER_NOT_CONFIGURED', 503, `Platform AI credentials are unavailable. Ask the operator to configure ${providerSecret}, then retry explicitly. Saved history is safe.`); }
     const history = await db.select().from(ventureMessages).where(and(eq(ventureMessages.conversationId, conversationId), inArray(ventureMessages.role, ['user', 'assistant']))).orderBy(desc(ventureMessages.createdAt), desc(ventureMessages.id)).limit(60);
     history.reverse();

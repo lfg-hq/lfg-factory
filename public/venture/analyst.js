@@ -144,6 +144,8 @@
     content.replaceChildren(element('div', 'YOUR CONVERSATION · REVIEWED BY LFG FOR FUNDING', 'va-label'));
     content.setAttribute('role', 'log'); content.removeAttribute('aria-label');
     if (!data.messages.length) content.append(element('p', 'Welcome. Tell me what you’re thinking of building and who it would help. A rough idea is enough to begin.', 'va-message'));
+    const byTurn = new Map();
+    for (const source of data.sources || []) { addSource(source); if (!byTurn.has(source.turnId)) byTurn.set(source.turnId, []); byTurn.get(source.turnId).push(source); }
     for (const msg of data.messages) {
       if (msg.role === 'assistant' && msg.status === 'completed' && /^Saved assessment version \d+/.test(msg.content)) { content.append(savedNotice(id)); continue; }
       const bubble = element('div', msg.role === 'user' ? msg.content : '', `va-message ${msg.role === 'user' ? 'user' : ''}`);
@@ -162,8 +164,10 @@
         if (msg.content) bubble.append(notice); else { content.append(notice); continue; }
       }
       content.append(bubble);
+      if (msg.role === 'assistant' && byTurn.has(msg.requestId)) { content.append(sourcesLine(byTurn.get(msg.requestId))); byTurn.delete(msg.requestId); }
     }
-    for (const source of data.sources || []) addSource(content, source);
+    const leftover = [...byTurn.values()].flat();
+    if (leftover.length) content.append(sourcesLine(leftover));
     composer(data.conversation.id, content);
     // A conversation well under way with no saved plan: offer to save one.
     if (data.messages.filter(m => m.role === 'user').length >= 3 && !data.messages.some(m => /^Saved assessment version \d+/.test(m.content))) savePlanPrompt(id, content);
@@ -221,17 +225,22 @@
     }, 'va-send');
     content.append(generate, feedback);
   }
-  function addSource(content, source) {
-    sourceMap.set(source.id, source);
-    // No raw Markdown/HTML rendering. Only validated ledger URLs become links.
-    let url; try { url = new URL(source.url); } catch { return; }
-    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return;
-    const link = element('a', source.title || url.hostname, 'va-source');
-    link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer';
-    const row = element('div', '', 'va-source-row');
-    row.append(link, element('span', ` · ${url.hostname.replace(/^www\./, '')} · read ${new Date(source.retrievedAt).toLocaleDateString()}`, 'va-muted'), element('p', (source.excerpt || '').replace(/^\[[^\]]*\]\s*/, '').slice(0, 200), 'va-muted'));
-    content.append(row);
+  // Research stays out of the way: sources are remembered for citations and
+  // listed only in a collapsed "N sources" line under the reply that used them.
+  function addSource(source) { sourceMap.set(source.id, source); }
+  function sourcesLine(sources) {
+    const box = element('details', '', 'va-sources');
+    box.append(element('summary', `${sources.length} source${sources.length === 1 ? '' : 's'}`));
+    const list = element('ul');
+    for (const source of sources) {
+      let url; try { url = new URL(source.url); } catch { continue; }
+      if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) continue;
+      const link = element('a', source.title || url.hostname, 'va-source'); link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer';
+      const li = element('li'); li.append(link, element('span', ` · ${url.hostname.replace(/^www\./, '')}`, 'va-muted')); list.append(li);
+    }
+    box.append(list); return box;
   }
+
   async function savePlanPrompt(id, content) {
     try { const { assessment } = await api(`/api/venture/conversations/${encodeURIComponent(id)}/assessment`); if (assessment || selectedId !== id) return; } catch { return; }
     const bar = element('div', '', 'va-save-plan');
@@ -297,9 +306,11 @@
       activeTurn = { id, requestId }; streamController = new AbortController();
       drafts.delete(id); input.value = ''; fit(); input.disabled = true; send.disabled = true; send.hidden = true; mic.disabled = true; stopButton.hidden = false;
       stage.querySelectorAll('.va-history button,.va-history select,.va-views button').forEach(el => { el.disabled = true; });
-      const user = element('div', text, 'va-message user'), answer = element('div', '', 'va-message'); content.append(user, answer);
+      const user = element('div', text, 'va-message user'), answer = element('div', '', 'va-message va-pending'); content.append(user, answer);
+      const typing = element('span', '', 'va-typing'); typing.append(element('i'), element('i'), element('i'), element('span', '', 'va-typing-text')); answer.append(typing);
+      const turnSources = [];
       let answerText = '', frame = 0;
-      const paint = () => { frame = 0; markdown(answer, answerText); content.scrollTop = content.scrollHeight; };
+      const paint = () => { frame = 0; answer.classList.remove('va-pending'); markdown(answer, answerText); content.scrollTop = content.scrollHeight; };
       say(feedback, 'Thinking…');
       let finished = false, failed = false;
       try {
@@ -317,8 +328,8 @@
             const event = JSON.parse(line);
             if (event.type === 'text') { answerText += event.text; frame ||= requestAnimationFrame(paint); }
             if (event.type === 'assessment') { content.append(savedNotice(id, [event.verdict ? VERDICT_TEXT[event.verdict] : null, event.commitments ? `${event.commitments} to-do${event.commitments === 1 ? '' : 's'}` : null].filter(Boolean).join(' · ') || null)); stage.querySelector('.va-save-plan')?.remove(); say(feedback, ''); }
-            if (event.type === 'progress') say(feedback, event.message);
-            if (event.type === 'source') addSource(content, event.source);
+            if (event.type === 'progress') { if (/^Searching|^Reading/.test(event.message)) typing.querySelector('.va-typing-text').textContent = turnSources.length ? `Researching · ${turnSources.length} sources` : 'Researching'; else say(feedback, event.message); }
+            if (event.type === 'source') { addSource(event.source); turnSources.push(event.source); typing.querySelector('.va-typing-text').textContent = `Researching · ${turnSources.length} sources`; }
             if (event.type === 'error') { failed = true; say(feedback, event.message, requestId); }
             if (event.type === 'done') { finished = true; if (event.status === 'completed') say(feedback, ''); }
           }
@@ -332,6 +343,7 @@
         activeTurn = null; streamController = null;
         if (frame) cancelAnimationFrame(frame);
         if (answerText) paint(); else answer.remove();
+        if (turnSources.length && answer.isConnected) answer.after(sourcesLine(turnSources));
         if (version === epoch && created) {
           stage.querySelectorAll('.va-history button,.va-history select').forEach(el => { el.disabled = false; });
           const outcome = [...feedback.childNodes].map(node => node.cloneNode(true));
