@@ -10,6 +10,9 @@ export const ventureConversations = pgTable("venture_conversation", {
   updatedAt: timestamp("updated_at", { mode: "date" }).notNull().defaultNow(),
   // Archived ventures leave the founder's active list and free their slot.
   archivedAt: timestamp("archived_at", { mode: "date" }),
+  // Rolling summary of older messages, so chat turns send a bounded history.
+  summary: text("summary"),
+  summaryCount: integer("summary_count").notNull().default(0),
 }, t => [index("venture_conv_owner_idx").on(t.userId, t.updatedAt)]);
 
 export const ventureMessages = pgTable("venture_message", {

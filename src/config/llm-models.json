@@ -45,6 +45,13 @@
           "tier": "pro"
         },
         {
+          "key": "gpt-6.1-terra",
+          "label": "GPT-6.1 Terra",
+          "provider_model": "gpt-6.1-terra",
+          "requires_pro": true,
+          "tier": "pro"
+        },
+        {
           "key": "gpt-6-astra",
           "label": "GPT-6 Astra",
           "provider_model": "gpt-6-astra",
@@ -64,6 +71,13 @@
           "provider_model": "gpt-5.6-terra",
           "requires_pro": true,
           "tier": "pro"
+        },
+        {
+          "key": "gpt-6-luna",
+          "label": "GPT-6 Luna",
+          "provider_model": "gpt-6-luna",
+          "requires_pro": false,
+          "tier": "lite"
         },
         {
           "key": "gpt-5.6-luna",

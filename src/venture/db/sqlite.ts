@@ -10,6 +10,9 @@ export const ventureConversations = sqliteTable("venture_conversation", {
   updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
   // Archived ventures leave the founder's active list and free their slot.
   archivedAt: integer("archived_at", { mode: "timestamp" }),
+  // Rolling summary of older messages, so chat turns send a bounded history.
+  summary: text("summary"),
+  summaryCount: integer("summary_count").notNull().default(0),
 }, t => [index("venture_conv_owner_idx").on(t.userId, t.updatedAt)]);
 
 export const ventureMessages = sqliteTable("venture_message", {

@@ -64,6 +64,13 @@
       "when": 1794020000000,
       "tag": "0008_venture_archive",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1794030000000,
+      "tag": "0009_venture_summary",
+      "breakpoints": true
     }
   ]
 }

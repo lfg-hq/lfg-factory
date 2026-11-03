@@ -63,9 +63,10 @@ const envSchema = z.object({
   // Blended model cost LFG uses to show token spend in dollars.
   // Active (unarchived) ventures a founder may have at once; admins are exempt.
   VENTURE_MAX_ACTIVE_PER_FOUNDER: z.preprocess(v => v === "" ? undefined : v, z.coerce.number().int().min(1).default(1)),
-  // The analyst (chat and assessments) and the cheaper model that reads research results.
-  VENTURE_ANALYST_MODEL: z.string().optional().default("gpt-6.1-sol"),
-  VENTURE_RESEARCH_MODEL: z.string().optional().default("gpt-5.6-luna"),
+  // Venture analyst models: conversation, the funding assessment, and research digests.
+  VENTURE_CHAT_MODEL: z.string().optional().default("gpt-6.1-terra"),
+  VENTURE_ASSESSMENT_MODEL: z.string().optional().default("gpt-6.1-sol"),
+  VENTURE_RESEARCH_MODEL: z.string().optional().default("gpt-6-luna"),
   VENTURE_USD_PER_MILLION_TOKENS: z.preprocess(v => v === "" ? undefined : v, z.coerce.number().positive().default(5)),
 
   // Public base URL used to build links in emails (falls back to BETTER_AUTH_URL)
