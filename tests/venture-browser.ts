@@ -89,7 +89,7 @@ try {
   await page.goto(`${base}/venture-analyst/chat`, { waitUntil: 'domcontentloaded' });
   assert.equal(await page.locator('#navbar, footer').count(), 0, 'Chat page has no marketing chrome');
   // Opening the analyst starts a fresh chat; nothing is created until the first message.
-  await page.getByRole('button', { name: '+ New chat', exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: '+ New chat', exact: true }).count(), 0, 'New ventures start from the dashboard');
   await page.getByText('Welcome. Tell me', { exact: false }).waitFor();
   assert.equal(await page.getByLabel('Saved conversations').count(), 0, 'No conversation picker');
   assert.equal(await page.locator('.va-message').count(), 1, 'Only genuine new-conversation greeting');
@@ -121,7 +121,7 @@ try {
   assert.equal(await page.locator('.va-md h2', { hasText: 'Plan' }).count(), 1);
   assert.equal(await page.locator('.va-md img, .va-md a[href^="javascript"]').count(), 0);
   assert.equal(await page.evaluate(() => (window as any).pwned), undefined);
-  await page.getByRole('button', { name: '+ New chat', exact: true }).click();
+  await page.goto(`${base}/venture-analyst/chat`, { waitUntil: 'domcontentloaded' });
   await page.getByText('Welcome. Tell me', { exact: false }).waitFor();
   assert.equal(new URL(page.url()).searchParams.get('c'), null);
   await page.goto(`${base}/venture-analyst/chat?c=${selected}`, { waitUntil: 'domcontentloaded' });

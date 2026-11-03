@@ -318,7 +318,6 @@
       composer(null, content, (id, text) => { showDashboard(id); status.textContent = text.slice(0, 80); });
       stage.querySelector('.va-composer textarea')?.focus();
     }
-    newChatButton(newChat);
     showDashboard(requested || selectedId);
     stage.append(content);
     // Open the requested venture; at the venture limit resume the latest one;
@@ -328,13 +327,6 @@
     requested = null;
     if (id) await loadConversation(id, content);
     else newChat();
-  }
-  // "+ New chat" lives in the panel header, only for founders who may start another venture.
-  function newChatButton(action) {
-    let start = $('va-newchat');
-    if (!start) { start = button('+ New chat', action, 'va-new'); start.id = 'va-newchat'; (dashboard || close).before(start); }
-    start.onclick = action;
-    start.hidden = Boolean(ventureLimit && !ventureLimit.canCreate);
   }
   async function ready() {
     cancel(); controller = new AbortController(); const version = epoch;
