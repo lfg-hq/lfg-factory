@@ -40,6 +40,15 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Landing has no horizontal scroll on phones');
   await page.screenshot({ path: `${shots}/venture-landing-mobile.png`, fullPage: true });
+  // The pitch page explains the thesis and the release / hold / halt loop.
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(`${base}/venture-analyst/thesis`, { waitUntil: 'domcontentloaded' });
+  for (const heading of ['The loop', 'How the analyst sizes a tranche', 'Agents do the work, on one stack', 'Release, hold or halt']) await page.getByRole('heading', { name: heading, exact: true }).waitFor();
+  await page.screenshot({ path: `${shots}/venture-thesis.png`, fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Thesis has no horizontal scroll on phones');
+  await page.screenshot({ path: `${shots}/venture-thesis-mobile.png`, fullPage: true });
+  await page.goto(`${base}/venture-analyst`, { waitUntil: 'domcontentloaded' });
   await page.setViewportSize({ width: 1440, height: 1000 });
   // Signed out, the analyst's page asks for Google sign-in and reports problems honestly.
   await page.getByRole('link', { name: 'Talk to the analyst' }).first().click();

@@ -103,6 +103,7 @@ export const VentureAnalystPage = () => html`<!doctype html>
   <h2>Have an idea worth building?</h2>
   <p>Start with a conversation. It's private to you and LFG's venture team.</p>
   <a class="vl-btn primary light" href="${CHAT}">Talk to the analyst</a>
+  <a class="vl-thesis" href="/venture-analyst/thesis">Read the thesis →</a>
 </section>
 
 </main>${SiteFooter()}</body></html>`;
