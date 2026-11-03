@@ -3366,3 +3366,6 @@ input:checked + .turbo-slider + .turbo-label,
 
 /* While dictating, the role/model label steps aside for the strip (its menu stays under Settings). */
 #chat-form:has(.audio-recording-indicator) .status-indicators { visibility:hidden; }
+
+/* Dictation: a silent microphone is called out instead of hidden. */
+.audio-recording-indicator[data-phase="recording"][data-quiet="on"] .dictation-status { position:static;width:auto;height:auto;clip-path:none;flex:0 1 auto;max-width:60%;font-size:12px;color:#b54708; }

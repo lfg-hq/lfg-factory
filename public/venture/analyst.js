@@ -238,8 +238,11 @@
     form.append(box, feedback); stage.append(form); fit();
     box.onclick = event => { if (event.target === box || event.target === actions) input.focus(); };
     // Dictation: the main chat's recorder, pointed at the venture endpoint.
+    let dictation = null;
+    // Our own empty check, not the browser's "Please fill out this field".
+    form.noValidate = true;
     if (window.createDictation) {
-      window.createDictation({ button: mic, input, wrapper: box, onSend: () => form.requestSubmit(),
+      dictation = window.createDictation({ button: mic, input, wrapper: box, sendButton: send, onSend: () => form.requestSubmit(),
         endpoint: '/api/venture/dictation', icons: { mic: ICONS.mic, stop: ICONS.stop },
         getScope: () => `${id || 'new'}:${epoch}`,
         getContext: () => { const title = status.textContent?.trim(); return title && id ? { keywords: [title.slice(0, 80)] } : {}; } });
@@ -247,7 +250,10 @@
     // Enter sends; Shift+Enter adds a line. Never interrupt IME composition.
     input.onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); form.requestSubmit(); } };
     form.onsubmit = async event => {
-      event.preventDefault(); if (activeTurn || !input.value.trim()) return;
+      event.preventDefault();
+      // Sending while dictating finishes the recording, then sends its transcript.
+      if (dictation?.active) { dictation.finishAndSend(); return; }
+      if (activeTurn || !input.value.trim()) return;
       const text = input.value.trim(), requestId = crypto.randomUUID(), version = epoch;
       const created = !id;
       if (created) {

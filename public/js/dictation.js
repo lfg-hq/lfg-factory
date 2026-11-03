@@ -1,5 +1,5 @@
 /* OpenAI dictation: live preview, full-recording final transcript, editable draft. */
-window.createDictation = ({button, input, wrapper, getScope, getContext, onSend,
+window.createDictation = ({button, input, wrapper, getScope, getContext, onSend, sendButton,
         endpoint = '/api/voice/dictation',
         icons = {mic: '<i class="fas fa-microphone" aria-hidden="true"></i>', stop: '<i class="fas fa-stop" aria-hidden="true"></i>'}}) => {
     if (!button || !input || !wrapper) return {active:false};
@@ -133,7 +133,8 @@ window.createDictation = ({button, input, wrapper, getScope, getContext, onSend,
         } catch { /* Recording still works if visualization is unavailable. */ }
         s.levels=[];
         const reduced=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-        let lastFrame=0, smoothed=0;
+        let lastFrame=0, smoothed=0, heard=false;
+        const started=performance.now();
         const draw=(now=0)=>{
             if(!active(s) || s.phase!=='recording')return;
             if(now-lastFrame<120){s.frame=requestAnimationFrame(draw);return;}
@@ -143,6 +144,12 @@ window.createDictation = ({button, input, wrapper, getScope, getContext, onSend,
             let level=0;
             if(s.analyser){s.analyser.getByteTimeDomainData(s.samples);for(const sample of s.samples)level+=((sample-128)/128)**2;level=Math.sqrt(level/s.samples.length);}
             smoothed=smoothed*.75+level*.25;
+            // A flat input for a few seconds usually means the wrong or a muted microphone: say so.
+            if(s.analyser){
+                if(level>0.02)heard=true;
+                const quiet=!heard && now-started>4000;
+                if(quiet!==(s.panel.dataset.quiet==='on')){s.panel.dataset.quiet=quiet?'on':'off';if(quiet)label(s,'No sound from your microphone. Check your input device.');else if(s.panel.dataset.live!=='off')label(s,'Listening…');}
+            }
             s.levels.push(reduced ? 2 : Math.max(2,Math.min(height-2,smoothed*90)));if(s.levels.length>200)s.levels.shift();
             ctx.strokeStyle=getComputedStyle(canvas).color;ctx.lineWidth=2;ctx.lineCap='round';
             const count=Math.floor(width/5);
@@ -227,7 +234,7 @@ window.createDictation = ({button, input, wrapper, getScope, getContext, onSend,
     }
     button.title='Dictate a message';button.setAttribute('aria-label','Dictate a message');button.onclick=start;
     // The composer's own Send button finishes the recording and sends its transcript.
-    wrapper.querySelector('#send-btn')?.addEventListener('click', event => {
+    (sendButton || wrapper.querySelector('#send-btn'))?.addEventListener('click', event => {
         if (!session || !['connecting','recording','stopping','finalizing'].includes(session.phase)) return;
         event.preventDefault(); event.stopImmediatePropagation();
         if (session.phase === 'recording') { session.sendAfter = true; void stop(session); }
@@ -250,5 +257,7 @@ window.createDictation = ({button, input, wrapper, getScope, getContext, onSend,
     }, true);
     window.addEventListener('pagehide',()=>{if(session)close(session);});
     window.addEventListener('chat-conversation-changed',()=>{if(session && !active(session))close(session);});
-    return {get active(){return !!session;},cancel(){if(session)close(session);}};
+    return {get active(){return !!session;},cancel(){if(session)close(session);},
+        // Finish the recording and send its transcript (used by forms submitted another way).
+        finishAndSend(){if(session?.phase==='recording'){session.sendAfter=true;void stop(session);}}};
 };
