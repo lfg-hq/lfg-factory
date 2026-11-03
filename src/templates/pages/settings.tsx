@@ -436,19 +436,26 @@ export function SettingsPage({ workspaceContext, teamAccess, teamContent, user, 
 
       ${activeSection === "team" ? html`<div class="team-settings">${teamContent}</div>` : activeSection === "integrations" ? html`
 
-        <!-- LFG Desktop: opt-in, per person. On: tickets offer "Build on my computer". -->
+        <!-- LFG Desktop: opt-in, per person. On: this person's AI runs on their own computer. -->
         <div class="llm-keys-table" id="runner-computers" style="margin-bottom:1.5rem;">
           <div class="llm-keys-row" style="padding:1rem 1.375rem;justify-content:space-between;gap:1rem;">
             <div>
               <h3 style="margin:0;font-size:0.9375rem;font-weight:700;color:var(--text-color,#f0f0f0);display:flex;align-items:center;gap:.5rem;">
                 <i class="fas fa-laptop-code" style="color:#8b5cf6;"></i>
-                Build on my computer
+                Use my computer for AI
               </h3>
-              <div class="byok-desc" style="margin-top:.25rem;">Run ticket builds on your own computer with LFG Desktop and the Claude Code login already there. When it's on, tickets you open offer “Build on my computer” in the Run menu. Only you are affected.</div>
+              <div class="byok-desc" style="margin-top:.25rem;">Your chats, builds and ticket follow-ups run on your own computer, through LFG Desktop and the coding agent you sign in to there. Documents, tickets and logs still save to LFG for your team. Only you are affected.</div>
             </div>
-            <label class="toggle-switch" style="flex-shrink:0;"><input id="runner-enabled" type="checkbox" role="switch" aria-label="Build on my computer" disabled><span class="toggle-slider"></span></label>
+            <label class="toggle-switch" style="flex-shrink:0;"><input id="runner-enabled" type="checkbox" role="switch" aria-label="Use my computer for AI" disabled><span class="toggle-slider"></span></label>
           </div>
           <div id="runner-body" hidden>
+            <div class="llm-keys-row" style="border-top:1px solid var(--border-color, rgba(255,255,255,0.07));justify-content:space-between;gap:1rem;flex-wrap:wrap;">
+              <div>
+                <label for="runner-agent" style="font-weight:600;color:var(--text-color,#f0f0f0);font-size:.875rem;">Agent</label>
+                <div class="byok-desc" id="runner-agent-note" style="margin-top:.15rem;">The coding agent on your computer that does the work, with your own sign-in.</div>
+              </div>
+              <select id="runner-agent" style="min-width:12rem;padding:.45rem .6rem;border-radius:7px;background:var(--input-bg, rgba(255,255,255,.04));color:var(--text-color,#f0f0f0);border:1px solid var(--border-color, rgba(255,255,255,.12));font:inherit;font-size:.85rem;"></select>
+            </div>
             <div class="llm-keys-row" style="border-top:1px solid var(--border-color, rgba(255,255,255,0.07));justify-content:space-between;gap:1rem;flex-wrap:wrap;">
               <div class="byok-desc">Your computers. Signing in to LFG Desktop connects that computer.</div>
               <button id="runner-connect-btn" type="button" class="llm-btn-save" style="border-radius:7px;padding:.45rem .875rem;flex-shrink:0;">
@@ -461,7 +468,7 @@ export function SettingsPage({ workspaceContext, teamAccess, teamContent, user, 
             </div>
           </div>
         </div>
-        <script src="/public/js/runner-computers.js?v=20261101-opt-in" defer></script>
+        <script src="/public/js/runner-computers.js?v=20261103-local-ai" defer></script>
 
         <!-- Coding agent account connections -->
         <div class="llm-keys-table" style="margin-bottom:1.5rem;">

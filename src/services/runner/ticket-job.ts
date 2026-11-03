@@ -14,6 +14,7 @@ import { resolveTicketAnchor } from "../epics.ts";
 import { ticketBranchName } from "../../utils/ticket-branch.ts";
 import { addLog } from "../ticket-logs.ts";
 import { enqueueJob, userHasConnectedRunner } from "./hub.ts";
+import { localAiSettings } from "./opt-in.ts";
 import { RUNNER_PROTOCOL_VERSION, type ClaudeTaskPayload } from "./protocol.ts";
 
 export class RunnerJobError extends Error {
@@ -65,6 +66,7 @@ export async function startTicketOnRunner(input: { projectId: string; ticketId: 
     startFrom: [...new Set([anchor.anchorBranch, anchor.baseBranch, "main", "master"])],
     prompt: buildRunnerPrompt(ticket, input.notes),
     commitMessage: `${ticket.ticketKey ? `${ticket.ticketKey}: ` : ""}${ticket.name}`.slice(0, 200),
+    agent: (await localAiSettings(input.actorId)).agent,
     allowedTools: ["Read", "Edit", "Write", "Glob", "Grep", "Bash"],
     maxTurns: 80,
   };

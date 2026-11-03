@@ -17,6 +17,8 @@ export const runnerDevices = sqliteTable(
     platform: text("platform"),
     appVersion: text("app_version"),
     claudeVersion: text("claude_version"),
+    /** JSON: [{ kind, version }] of the agents installed on this computer (protocol 2). */
+    agents: text("agents"),
     lastSeenAt: integer("last_seen_at", { mode: "timestamp" }),
     revokedAt: integer("revoked_at", { mode: "timestamp" }),
     createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),

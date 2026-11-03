@@ -44,25 +44,40 @@ beforeAll(async () => {
 });
 
 test("off by default, and the server refuses local builds while it's off", async () => {
-  expect(await (await call("GET", "/api/runner/settings")).json()).toEqual({ enabled: false });
+  expect(await (await call("GET", "/api/runner/settings")).json()).toMatchObject({ enabled: false, agent: "claude", agents: [] });
   const refused = await call("POST", "/api/projects/pub-p/tickets/t/run-local", {});
   expect(refused.status).toBe(403);
   expect((await refused.json()).error).toContain("Settings → Integrations → Computers");
 });
 
 test("turning it on lets that person build on their computer, and nobody else", async () => {
-  expect(await (await call("PUT", "/api/runner/settings", { enabled: true })).json()).toEqual({ enabled: true });
-  expect(await (await call("GET", "/api/runner/settings")).json()).toEqual({ enabled: true });
-  expect(await (await call("GET", "/api/runner/settings", undefined, "ben")).json()).toEqual({ enabled: false });
+  expect(await (await call("PUT", "/api/runner/settings", { enabled: true })).json()).toMatchObject({ enabled: true });
+  expect(await (await call("GET", "/api/runner/settings")).json()).toMatchObject({ enabled: true });
+  expect(await (await call("GET", "/api/runner/settings", undefined, "ben")).json()).toMatchObject({ enabled: false });
   const started = await call("POST", "/api/projects/pub-p/tickets/t/run-local", {});
   expect(started.status).toBe(202);
 });
 
 test("turning it off again works, and bad input is rejected", async () => {
   expect((await call("PUT", "/api/runner/settings", { enabled: "yes" })).status).toBe(400);
-  expect(await (await call("PUT", "/api/runner/settings", { enabled: false })).json()).toEqual({ enabled: false });
+  expect((await call("PUT", "/api/runner/settings", { agent: "gemini" })).status).toBe(400);
+  expect((await call("PUT", "/api/runner/settings", {})).status).toBe(400);
+  expect(await (await call("PUT", "/api/runner/settings", { enabled: false })).json()).toMatchObject({ enabled: false });
   // A profile row is created for someone who never had one.
-  expect(await (await call("PUT", "/api/runner/settings", { enabled: true }, "ben")).json()).toEqual({ enabled: true });
+  expect(await (await call("PUT", "/api/runner/settings", { enabled: true }, "ben")).json()).toMatchObject({ enabled: true });
+});
+
+test("the agent choice is saved and builds use it; computers report their agents", async () => {
+  expect(await (await call("PUT", "/api/runner/settings", { agent: "codex" })).json()).toMatchObject({ agent: "codex" });
+  const { runnerDevices } = await import("../src/db/schema/runners.ts");
+  await db.insert(runnerDevices).values({ userId: "ana", name: "Ana's Mac", tokenHash: "h", tokenPrefix: "lfgr_x", agents: JSON.stringify([{ kind: "claude", version: "2.1.0" }, { kind: "codex", version: "0.50.0" }]) });
+  const view = await (await call("GET", "/api/runner/settings")).json();
+  expect(view.agents.map((a: { kind: string }) => a.kind)).toEqual(["claude", "codex"]);
+  expect(view.agentChoices.map((a: { kind: string }) => a.kind)).toEqual(["claude", "codex", "copilot"]);
+  const { startTicketOnRunner } = await import("../src/services/runner/ticket-job.ts");
+  await db.insert(projectTickets).values({ id: "t2", projectId: "p", ticketKey: "APP-2", name: "Add signup", description: "Users can sign up." });
+  const job = await startTicketOnRunner({ projectId: "p", ticketId: "t2", actorId: "ana" });
+  expect(JSON.parse(job.payload).agent).toBe("codex");
 });
 
 test("the ticket Run menu offers it only when it's on", async () => {

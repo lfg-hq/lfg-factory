@@ -17,6 +17,8 @@ export const runnerDevices = pgTable(
     platform: text("platform"),
     appVersion: text("app_version"),
     claudeVersion: text("claude_version"),
+    /** JSON: [{ kind, version }] of the agents installed on this computer (protocol 2). */
+    agents: text("agents"),
     lastSeenAt: timestamp("last_seen_at", { mode: "date" }),
     revokedAt: timestamp("revoked_at", { mode: "date" }),
     createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),

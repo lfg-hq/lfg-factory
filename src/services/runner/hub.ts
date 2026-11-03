@@ -18,7 +18,7 @@ import { projectTickets } from "../../db/schema/tickets.ts";
 import { projects } from "../../db/schema/projects.ts";
 import { addLog, attachLogOutput, formatToolUse } from "../ticket-logs.ts";
 import { broadcastToUser } from "../../ws/connection-manager.ts";
-import { RUNNER_PROTOCOL_VERSION, type ClaudeTaskPayload, type RunnerToServer, type ServerToRunner } from "./protocol.ts";
+import { RUNNER_PROTOCOL_VERSION, isAgentKind, type AgentEvent, type ClaudeTaskPayload, type RunnerToServer, type ServerToRunner } from "./protocol.ts";
 
 export interface RunnerConn {
   deviceId: string;
@@ -125,6 +125,7 @@ async function handleRunnerMessage(conn: RunnerConn, raw: string | Buffer): Prom
       platform: msg.platform?.slice(0, 40) ?? null,
       appVersion: msg.appVersion?.slice(0, 40) ?? null,
       claudeVersion: msg.claudeVersion?.slice(0, 80) ?? null,
+      agents: Array.isArray(msg.agents) ? JSON.stringify(msg.agents.filter(a => isAgentKind(a?.kind)).map(a => ({ kind: a.kind, version: String(a.version).slice(0, 80) }))) : null,
     }).where(eq(runnerDevices.id, conn.deviceId));
     // Anything this device was running that it no longer knows about died with it.
     const active = new Set(msg.activeJobIds ?? []);
@@ -160,6 +161,10 @@ async function handleRunnerMessage(conn: RunnerConn, raw: string | Buffer): Prom
     }
     case "job.progress": {
       if (job.status === "running") await logToTicket(job, String(msg.text).slice(0, 1000), "agent_progress");
+      return;
+    }
+    case "job.event": {
+      if (job.status === "running" && msg.event && typeof msg.event === "object") await logNormalizedEvent(job, msg.event);
       return;
     }
     case "job.agent_event": {
@@ -278,7 +283,33 @@ async function logToTicket(job: typeof runnerJobs.$inferSelect, text: string,
   await addLog(job.ticketId, text, type, await projectOwner(job.projectId));
 }
 
-/** Claude Code stream-json → ticket log rows (text, tool calls, tool output folded in). */
+/** Any agent's normalized events → ticket log rows (text, tool calls, tool output folded in). */
+async function logNormalizedEvent(job: typeof runnerJobs.$inferSelect, event: AgentEvent) {
+  if (!job.ticketId) return;
+  const ownerId = await projectOwner(job.projectId);
+  switch (event.type) {
+    case "text":
+      if (event.text.trim()) await addLog(job.ticketId, event.text, "ai_response", ownerId);
+      return;
+    case "tool_start": {
+      const label = event.summary || formatToolUse(event.name, event.input ?? {});
+      const logId = await addLog(job.ticketId, label, "command", ownerId);
+      if (event.id && logId) toolRows.set(`${job.id}:${event.id}`, logId);
+      return;
+    }
+    case "tool_result": {
+      const key = `${job.id}:${event.id}`;
+      const logId = toolRows.get(key);
+      if (logId) { await attachLogOutput(logId, event.output, job.ticketId, ownerId); toolRows.delete(key); }
+      return;
+    }
+    case "result":
+      if (event.isError) await addLog(job.ticketId, `Agent error: ${event.text ?? "unknown"}`.slice(0, 1000), "cli_error", ownerId);
+      return;
+  }
+}
+
+/** Claude Code stream-json → ticket log rows (protocol 1 runners). */
 async function logAgentEvent(job: typeof runnerJobs.$inferSelect, event: Record<string, unknown>) {
   if (!job.ticketId) return;
   const ownerId = await projectOwner(job.projectId);
