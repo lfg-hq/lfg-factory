@@ -73,6 +73,8 @@ export const assessmentSchema = z.object({
   gtm: z.object({ targetSegment: claims, channels: claims, experiments: z.array(z.object({ experiment: claim, suggestedBudget: z.number().finite().nonnegative().nullable(), budgetAssumptions: claims })).min(1).max(8) }).strict(),
   milestones: z.object({ validation: milestone(), mvp: milestone(), firstUser: milestone(), firstRevenue: milestone() }).strict(),
   uncertainties: claims,
+  // The six figures size one beachhead geography; this names the bigger picture.
+  marketExpansion: claims,
   recommendation,
 }).strict();
 function milestone() { return z.object({ plan: claim, earliestWeek: z.number().int().nonnegative().nullable(), latestWeek: z.number().int().nonnegative().nullable(), dependencies: z.array(text).min(1).max(10) }).strict(); }

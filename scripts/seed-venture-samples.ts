@@ -113,6 +113,7 @@ const samples: Sample[] = [
         firstRevenue: milestone('First $12 subscription paid.', 6, 8, ['Pilot converts']),
       },
       uncertainties: [c('Plumbers may churn after the pilot if bookings don’t increase.')],
+      marketExpansion: [c('Other trades with the same missed-call problem: electricians, AC repair, carpenters, pest control. Several times the plumber market.'), c('Other Indian metros beyond Pune, then trades in Southeast Asia using WhatsApp for bookings.')],
       recommendation: {
         verdict: 'fund', summary: 'Real, frequent pain, a founder inside the market and 400 reachable customers. Fund an MVP and a 10-plumber paid pilot.',
         rationale: [c('Founder-market fit is unusually strong.', 'self-report'), c('Payback is plausible within the first 50 subscribers.')],
@@ -209,6 +210,7 @@ const samples: Sample[] = [
         firstRevenue: milestone('First paid conversion.', null, null, ['Partner budgets']),
       },
       uncertainties: [c('Whether partners will route production data to a new vendor.', 'unknown')],
+      marketExpansion: [c('Enterprise observability buyers beyond mid-market once triage proves out.'), c('Adjacent categories: security incident triage and customer-support escalation.')],
       recommendation: {
         verdict: 'fund', summary: 'Credible founder in a huge market. Fund a staged first tranche for the triage wedge, gated on design partners.',
         rationale: [c('Large, painful spend with a clear AI wedge.'), c('Founder brings deep domain credibility.', 'self-report')],
@@ -284,6 +286,7 @@ const samples: Sample[] = [
         firstRevenue: milestone('Not yet.', null, null, ['First users']),
       },
       uncertainties: [c('Whether any wedge beats incumbent features.', 'unknown')],
+      marketExpansion: [c('Small businesses running email lists beyond creators, if a niche wedge works.')],
       recommendation: {
         verdict: 'needs_more_info', summary: 'Crowded space and no defined niche yet. Validate one creator segment, then come back for a landing-page tranche.',
         rationale: [c('Incumbents cover the core workflow.'), c('Customer and willingness to pay are unknown.', 'unknown')],
@@ -345,6 +348,7 @@ const samples: Sample[] = [
         firstRevenue: milestone('First paid month.', 7, 9, ['Pilot success']),
       },
       uncertainties: [c('Marketplace API access may limit automation depth.')],
+      marketExpansion: [c('D2C brands in Southeast Asia and the Middle East selling on regional marketplaces.'), c('Accounting firms serving other e-commerce sellers, not only D2C.')],
       recommendation: {
         verdict: 'fund', summary: 'Founder already serves the customer and feels the pain weekly. Fund reconciliation MVP for her 35 clients.',
         rationale: [c('Day-one customers and a low-CAC channel.')],
@@ -428,6 +432,7 @@ const samples: Sample[] = [
         firstRevenue: milestone('First paid booking.', 2, 4, ['Sitter partner']),
       },
       uncertainties: [c('Trust and insurance requirements for a new marketplace.', 'unknown')],
+      marketExpansion: [c('Other Texas cities if a sitter supply model works in Austin.')],
       recommendation: {
         verdict: 'decline', summary: 'Single-city clone with a fee-only wedge against strong network effects. Expected return doesn’t justify tokens.',
         rationale: [c('Max realistic revenue ~$72K/yr in base-to-upside cases.'), c('No founder edge in supply or trust.')],
@@ -486,6 +491,7 @@ const samples: Sample[] = [
         firstRevenue: milestone('None.', null, null, ['Not applicable']),
       },
       uncertainties: [c('Not applicable.')],
+      marketExpansion: [c('Not applicable.')],
       recommendation: {
         verdict: 'prohibited', summary: 'Designed to evade academic-integrity checks so students submit work that isn’t theirs. LFG won’t fund it.',
         rationale: [c('Core value proposition is deception of institutions.')],

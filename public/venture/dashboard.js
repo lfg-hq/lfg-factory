@@ -510,6 +510,11 @@
     return card('Market opportunity',
       el('p', `${units.geography} · US dollars per ${units.period}`, 'vd-muted vd-tight'),
       estimated ? el('p', 'Figures marked Estimate are the analyst’s, built from stated assumptions, not verified data. See the assumptions below.', 'vd-note') : null,
+      // The figures size one beachhead; say so plainly and show what lies beyond it.
+      h('div', 'vd-beachhead',
+        el('strong', `These figures size the beachhead: ${units.geography}.`),
+        el('p', 'They are not the whole opportunity. The same product may reach other regions, adjacent industries and customer types.'),
+        a.marketExpansion?.length ? h('div', '', el('h3', 'Larger markets'), claims(a.marketExpansion, sources)) : null),
       funnel,
       el('h3', 'Revenue scenarios'),
       h('div', 'vd-scenarios', scenario('Conservative', rev.conservative), scenario('Base', rev.base), scenario('Upside', rev.upside)),
