@@ -51,11 +51,24 @@ export interface ClaudeTaskPayload {
   maxTurns?: number;
 }
 
-export interface RunnerJobOffer {
-  id: string;
-  type: "claude_task";
-  payload: ClaudeTaskPayload;
+/** One chat turn answered by the agent on the person's computer (no repo, no git). */
+export interface ChatTurnPayload {
+  protocol: number;
+  agent: AgentKind;
+  conversationId: string;
+  /** The person's message, plus the conversation so far when there's no session to resume. */
+  prompt: string;
+  /** LFG's instructions for the assistant (the chat's system prompt). */
+  instructions: string;
+  /** Continue this agent session (later turns of the same conversation). */
+  sessionId?: string;
+  /** LFG's MCP server for this turn: the agent reads and writes LFG's data through it. */
+  mcp: { url: string; token: string };
 }
+
+export type RunnerJobOffer =
+  | { id: string; type: "claude_task"; payload: ClaudeTaskPayload }
+  | { id: string; type: "chat_turn"; payload: ChatTurnPayload };
 
 export type ServerToRunner =
   | { type: "welcome"; deviceId: string; deviceName: string; protocol: number }
@@ -76,5 +89,5 @@ export type RunnerToServer =
   | { type: "job.agent_event"; jobId: string; event: Record<string, unknown> }
   /** One normalized agent event, from any agent (protocol 2). */
   | { type: "job.event"; jobId: string; event: AgentEvent }
-  | { type: "job.finished"; jobId: string; ok: boolean; branch?: string; commitSha?: string | null; summary?: string; error?: string }
+  | { type: "job.finished"; jobId: string; ok: boolean; branch?: string; commitSha?: string | null; summary?: string; error?: string; sessionId?: string }
   | { type: "pong" };

@@ -17,6 +17,10 @@ import { AGENT_KINDS, type AgentEvent, type AgentKind } from "./protocol.ts";
 
 export interface AgentRunInput {
   prompt: string;
+  /** Standing instructions (LFG's assistant prompt). */
+  instructions?: string;
+  /** Answer and use LFG's tools only: no edits or shell commands on this computer. */
+  readOnly?: boolean;
   cwd: string;
   /** Resume this agent's earlier session (Claude Code, Codex). */
   sessionId?: string;
@@ -52,11 +56,12 @@ const asText = (v: unknown): string =>
 const claude: AgentAdapter = {
   kind: "claude", label: "Claude Code", bin: "claude",
   invocation(i) {
-    const tools = [...(i.allowedTools ?? []), ...(i.mcp ? ["mcp__lfg"] : [])];
+    const tools = [...(i.readOnly ? ["Read", "Glob", "Grep", "WebSearch", "WebFetch"] : i.allowedTools ?? []), ...(i.mcp ? ["mcp__lfg"] : [])];
     return {
       bin: "claude",
       args: [
-        "-p", i.prompt, "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits",
+        "-p", i.prompt, "--output-format", "stream-json", "--verbose", "--permission-mode", i.readOnly ? "default" : "acceptEdits",
+        ...(i.instructions ? ["--append-system-prompt", i.instructions] : []),
         ...(tools.length ? ["--allowedTools", tools.join(",")] : []),
         ...(i.maxTurns ? ["--max-turns", String(i.maxTurns)] : []),
         ...(i.sessionId ? ["--resume", i.sessionId] : []),
@@ -98,10 +103,12 @@ const codex: AgentAdapter = {
   kind: "codex", label: "OpenAI Codex", bin: "codex",
   invocation(i) {
     const mcp = i.mcp ? ["-c", `mcp_servers.lfg.url=${JSON.stringify(i.mcp.url)}`, "-c", `mcp_servers.lfg.bearer_token_env_var="LFG_MCP_TOKEN"`, "-c", "mcp_servers.lfg.tool_timeout_sec=1800"] : [];
-    const common = ["--json", "--sandbox", "workspace-write", "--skip-git-repo-check", ...mcp];
+    const common = ["--json", "--sandbox", i.readOnly ? "read-only" : "workspace-write", "--skip-git-repo-check", ...mcp];
+    // No system-prompt flag: instructions lead the first message; a resumed session has them.
+    const prompt = i.instructions && !i.sessionId ? `${i.instructions}\n\n---\n\n${i.prompt}` : i.prompt;
     return {
       bin: "codex",
-      args: i.sessionId ? ["exec", ...common, "resume", i.sessionId, i.prompt] : ["exec", ...common, i.prompt],
+      args: i.sessionId ? ["exec", ...common, "resume", i.sessionId, prompt] : ["exec", ...common, prompt],
       env: i.mcp ? { LFG_MCP_TOKEN: i.mcp.token } : undefined,
     };
   },
@@ -145,7 +152,8 @@ const copilot: AgentAdapter = {
     return {
       bin: "copilot",
       args: [
-        "-p", i.prompt, "--allow-all-tools", "--no-ask-user", "--output-format", "json",
+        "-p", i.instructions ? `${i.instructions}\n\n---\n\n${i.prompt}` : i.prompt, "--allow-all-tools", "--no-ask-user", "--output-format", "json",
+        ...(i.readOnly ? ["--deny-tool", "shell", "--deny-tool", "write"] : []),
         ...(i.mcp ? ["--additional-mcp-config", JSON.stringify({ mcpServers: { lfg: { type: "http", url: i.mcp.url, headers: { Authorization: `Bearer ${i.mcp.token}` }, tools: ["*"] } } })] : []),
       ],
     };

@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import { Runner, defaultWorkRoot, type RunnerState } from "./runner.ts";
 import { nodeSocketFactory } from "./socket.ts";
 import { signInWithBrowser, SignInCancelled } from "./browser-signin.ts";
-import type { RunnerJobOffer } from "./protocol.ts";
+import type { BuildJobOffer } from "./runner.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -193,7 +193,7 @@ async function signOut() {
 
 // ── Runner ───────────────────────────────────────────────────────────
 
-async function approve(job: RunnerJobOffer) {
+async function approve(job: BuildJobOffer) {
   const p = job.payload;
   if (config.trustedProjects?.includes(p.projectName)) return { approved: true as const };
   const { response, checkboxChecked } = await dialog.showMessageBox({

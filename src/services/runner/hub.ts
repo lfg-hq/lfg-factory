@@ -18,7 +18,7 @@ import { projectTickets } from "../../db/schema/tickets.ts";
 import { projects } from "../../db/schema/projects.ts";
 import { addLog, attachLogOutput, formatToolUse } from "../ticket-logs.ts";
 import { broadcastToUser } from "../../ws/connection-manager.ts";
-import { RUNNER_PROTOCOL_VERSION, isAgentKind, type AgentEvent, type ClaudeTaskPayload, type RunnerToServer, type ServerToRunner } from "./protocol.ts";
+import { AGENT_LABELS, RUNNER_PROTOCOL_VERSION, isAgentKind, type AgentEvent, type ChatTurnPayload, type ClaudeTaskPayload, type RunnerToServer, type ServerToRunner } from "./protocol.ts";
 
 export interface RunnerConn {
   deviceId: string;
@@ -36,6 +36,26 @@ const conns = new Map<string, RunnerConn>();
 const lostTimers = new Map<string, ReturnType<typeof setTimeout>>();
 // `${jobId}:${toolUseId}` → the command log row, so a tool_result folds into it.
 const toolRows = new Map<string, string>();
+
+/** What happens to a job, for whoever is waiting on it in this process (a chat turn). */
+export type JobUpdate =
+  | { type: "offered"; deviceName: string }
+  | { type: "accepted"; deviceName: string }
+  | { type: "rejected"; reason?: string }
+  | { type: "event"; event: AgentEvent }
+  | { type: "finished"; ok: boolean; summary?: string; error?: string; sessionId?: string };
+const watchers = new Map<string, Set<(update: JobUpdate) => void>>();
+
+/** Follow one job's progress. Returns the function that stops following. */
+export function watchJob(jobId: string, fn: (update: JobUpdate) => void): () => void {
+  if (!watchers.has(jobId)) watchers.set(jobId, new Set());
+  watchers.get(jobId)!.add(fn);
+  return () => { watchers.get(jobId)?.delete(fn); if (!watchers.get(jobId)?.size) watchers.delete(jobId); };
+}
+function notify(jobId: string, update: JobUpdate) {
+  for (const fn of watchers.get(jobId) ?? []) { try { fn(update); } catch (e) { console.error("[runner] watcher failed:", e); } }
+}
+const agentLabel = (job: { agent: string | null }) => (isAgentKind(job.agent) ? AGENT_LABELS[job.agent] : "Claude Code");
 
 // ── Device tokens ────────────────────────────────────────────────────
 
@@ -147,14 +167,16 @@ async function handleRunnerMessage(conn: RunnerConn, raw: string | Buffer): Prom
     case "job.accepted": {
       if (job.status !== "offered") return;
       await db.update(runnerJobs).set({ status: "running", startedAt: new Date() }).where(eq(runnerJobs.id, job.id));
+      notify(job.id, { type: "accepted", deviceName: conn.deviceName });
       await ticketUpdate(job, { status: "in_progress", queueStatus: "executing" },
-        `Running on ${conn.deviceName} with Claude Code.`);
+        `Running on ${conn.deviceName} with ${agentLabel(job)}.`);
       return;
     }
     case "job.rejected": {
       if (job.status !== "offered") return;
       await db.update(runnerJobs).set({ status: "rejected", error: msg.reason?.slice(0, 500) ?? null, finishedAt: new Date() })
         .where(eq(runnerJobs.id, job.id));
+      notify(job.id, { type: "rejected", reason: msg.reason });
       await ticketUpdate(job, { status: "open", queueStatus: "none" },
         `${conn.deviceName} declined this job${msg.reason ? `: ${msg.reason.slice(0, 300)}` : "."}`);
       return;
@@ -168,6 +190,7 @@ async function handleRunnerMessage(conn: RunnerConn, raw: string | Buffer): Prom
       if (msg.event.type === "session" && typeof msg.event.id === "string") {
         await db.update(runnerJobs).set({ agentSession: msg.event.id.slice(0, 200) }).where(eq(runnerJobs.id, job.id));
       }
+      notify(job.id, { type: "event", event: msg.event });
       await logNormalizedEvent(job, msg.event);
       return;
     }
@@ -189,14 +212,17 @@ async function jobForDevice(jobId: string, deviceId: string) {
 
 // ── Dispatch ─────────────────────────────────────────────────────────
 
-export async function enqueueJob(input: { userId: string; projectId: string; ticketId: string | null; payload: ClaudeTaskPayload }) {
+export async function enqueueJob(input:
+  | { userId: string; projectId: string; ticketId: string | null; type?: "claude_task"; payload: ClaudeTaskPayload }
+  | { userId: string; projectId: string; ticketId?: null; conversationId: string; type: "chat_turn"; payload: ChatTurnPayload }) {
   const [job] = await db.insert(runnerJobs).values({
     userId: input.userId,
     projectId: input.projectId,
-    ticketId: input.ticketId,
-    type: "claude_task",
+    ticketId: input.ticketId ?? null,
+    conversationId: "conversationId" in input ? input.conversationId : null,
+    type: input.type ?? "claude_task",
     payload: JSON.stringify(input.payload),
-    branch: input.payload.branch,
+    branch: "branch" in input.payload ? input.payload.branch : null,
     agent: input.payload.agent ?? "claude",
   }).returning();
   await dispatchQueued(input.userId);
@@ -216,9 +242,18 @@ export async function dispatchQueued(userId: string): Promise<void> {
       .where(and(eq(runnerJobs.id, job.id), eq(runnerJobs.status, "queued")))
       .returning({ id: runnerJobs.id });
     if (!claimed.length) continue;
-    conn.send({ type: "job.offer", job: { id: job.id, type: "claude_task", payload: JSON.parse(job.payload) } });
+    conn.send({ type: "job.offer", job: { id: job.id, type: job.type === "chat_turn" ? "chat_turn" : "claude_task", payload: JSON.parse(job.payload) } as never });
+    notify(job.id, { type: "offered", deviceName: conn.deviceName });
     await logToTicket(job, `Sent to ${conn.deviceName}. Waiting for it to start.`, "agent_progress");
   }
+}
+
+/** Cancel one unfinished job (e.g. a chat turn the person stopped). */
+export async function cancelJob(jobId: string): Promise<void> {
+  const [job] = await db.update(runnerJobs).set({ status: "cancelled", finishedAt: new Date() })
+    .where(and(eq(runnerJobs.id, jobId), inArray(runnerJobs.status, ["queued", ...ACTIVE]))).returning();
+  if (job?.deviceId) conns.get(job.deviceId)?.send({ type: "job.cancel", jobId });
+  clearTimeout(lostTimers.get(jobId)); lostTimers.delete(jobId);
 }
 
 /** Cancel every unfinished runner job on a ticket. Returns how many were active. */
@@ -234,19 +269,21 @@ export async function cancelTicketJobs(ticketId: string): Promise<number> {
 }
 
 async function finishJob(jobId: string, deviceId: string,
-  result: { ok: boolean; branch?: string; commitSha?: string | null; summary?: string; error?: string }): Promise<void> {
+  result: { ok: boolean; branch?: string; commitSha?: string | null; summary?: string; error?: string; sessionId?: string }): Promise<void> {
   clearTimeout(lostTimers.get(jobId)); lostTimers.delete(jobId);
   const updated = await db.update(runnerJobs).set({
     status: result.ok ? "succeeded" : "failed",
     commitSha: result.commitSha?.slice(0, 64) ?? null,
     summary: result.summary?.slice(0, 4000) ?? null,
     error: result.error?.slice(0, 2000) ?? null,
+    ...(result.sessionId ? { agentSession: result.sessionId.slice(0, 200) } : {}),
     finishedAt: new Date(),
   }).where(and(eq(runnerJobs.id, jobId), eq(runnerJobs.deviceId, deviceId), inArray(runnerJobs.status, [...ACTIVE])))
     .returning();
   const job = updated[0];
   if (!job) return; // cancelled, or already finished
   for (const key of toolRows.keys()) if (key.startsWith(`${jobId}:`)) toolRows.delete(key);
+  notify(jobId, { type: "finished", ok: result.ok, summary: result.summary, error: result.error, sessionId: result.sessionId ?? job.agentSession ?? undefined });
 
   if (!result.ok) {
     await ticketUpdate(job, { status: "failed", queueStatus: "none" }, `Build on your computer failed: ${result.error ?? "unknown error"}`, "cli_error");
@@ -259,7 +296,7 @@ async function finishJob(jobId: string, deviceId: string,
       : { status: "open", queueStatus: "none", lastExecutionAt: new Date() },
     pushed
       ? `Pushed ${(result.commitSha ?? "").slice(0, 7)} to ${result.branch ?? job.branch}.`
-      : "Claude Code finished without changing any files.");
+      : `${agentLabel(job)} finished without changing any files.`);
 }
 
 // ── Ticket side effects ──────────────────────────────────────────────

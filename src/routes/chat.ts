@@ -1,4 +1,4 @@
-import { availableChatModels } from "../services/available-models.ts";
+import { chatPickerModels } from "../services/available-models.ts";
 import { Hono } from "hono";
 import { requireAuth } from "../auth/middleware.ts";
 import { db } from "../config/db.ts";
@@ -45,7 +45,7 @@ async function handleChatPage(c: import("hono").Context, conversationId?: string
     db.select().from(modelSelections).where(eq(modelSelections.userId, user.id)).then(r => r[0]),
     db.select().from(agentRoles).where(eq(agentRoles.userId, user.id)).then(r => r[0]),
   ]);
-  const models = await availableChatModels(user.id, projectId);
+  const { models, local } = await chatPickerModels(user.id, projectId);
 
   return c.html(
     ChatPage({
@@ -53,7 +53,7 @@ async function handleChatPage(c: import("hono").Context, conversationId?: string
       projectId,
       projectName: project.name,
       conversationId,
-      modelKey: models.some(m => m.key === modelSel?.selectedModel) ? modelSel!.selectedModel : models[0]?.key ?? "",
+      modelKey: !local && models.some(m => m.key === modelSel?.selectedModel) ? modelSel!.selectedModel : models[0]?.key ?? "",
       roleKey: roleRow?.name ?? "product_analyst",
       models,
     })

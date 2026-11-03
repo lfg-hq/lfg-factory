@@ -1,4 +1,4 @@
-import { availableChatModels } from "../../services/available-models.ts";
+import { availableChatModels, chatPickerModels } from "../../services/available-models.ts";
 import { userLlmAccess } from "../../services/llm-access.ts";
 import { Hono } from "hono";
 import { requireAuth } from "../../auth/middleware.ts";
@@ -30,6 +30,8 @@ settings.post("/model", async (c) => {
   const { modelKey, projectId } = await c.req.json<{ modelKey: string; projectId?: string }>();
 
   if (!modelKey) return c.json({ error: "modelKey required" }, 400);
+  // The agent on the person's computer is chosen in Settings → Integrations, not here.
+  if (modelKey.startsWith("local/")) return c.json({ success: true });
 
   // Validate against known models
   const known = (await availableChatModels(user.id, projectId)).find((m) => m.key === modelKey);
@@ -72,7 +74,7 @@ settings.post("/role", async (c) => {
 
 // GET /api/settings/models — list available models
 settings.get("/models", async (c) => {
-  return c.json({ models: await availableChatModels(c.get("user").id, c.req.query("projectId")) });
+  return c.json({ models: (await chatPickerModels(c.get("user").id, c.req.query("projectId"))).models });
 });
 
 // GET /api/settings/me — current user model + role selection

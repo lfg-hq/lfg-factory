@@ -35,6 +35,9 @@ export interface SocketLike {
 }
 export type SocketFactory = (url: string, headers: Record<string, string>) => SocketLike & { unauthorized?: boolean };
 
+/** A build (or ticket follow-up) on a repository: the kind of job that asks first. */
+export type BuildJobOffer = Extract<RunnerJobOffer, { type: "claude_task" }>;
+
 export type ApprovalResult = { approved: true } | { approved: false; reason?: string };
 
 export interface RunnerOptions {
@@ -44,7 +47,7 @@ export interface RunnerOptions {
   workRoot: string;
   createSocket: SocketFactory;
   /** Ask the person whether to run this job. */
-  approve(job: RunnerJobOffer): Promise<ApprovalResult>;
+  approve(job: BuildJobOffer): Promise<ApprovalResult>;
   /** Claude Code tools this computer allows. A job can only narrow this list. */
   allowedTools?: string[];
   /** Override an agent's executable (tests, or a CLI outside PATH). */
@@ -70,7 +73,7 @@ export class Runner {
   private stopped = false;
   private backoff = 1000;
   private retry: ReturnType<typeof setTimeout> | null = null;
-  private queue: RunnerJobOffer[] = [];
+  private queue: BuildJobOffer[] = [];
   private busy = false;
   private agents: Array<{ kind: AgentKind; version: string }> | undefined;
   readonly active = new Map<string, ActiveJob>();
@@ -150,7 +153,10 @@ export class Runner {
         return;
       }
       case "job.offer":
-        if (msg.job.type !== "claude_task" || this.active.has(msg.job.id) || this.queue.some(j => j.id === msg.job.id)) return;
+        if (this.active.has(msg.job.id) || this.queue.some(j => j.id === msg.job.id)) return;
+        // Chat turns answer right away, alongside any build: they don't touch repositories.
+        if (msg.job.type === "chat_turn") { void this.runChatTurn(msg.job); return; }
+        if (msg.job.type !== "claude_task") return;
         this.queue.push(msg.job);
         void this.drain();
         return;
@@ -166,7 +172,7 @@ export class Runner {
     } finally { this.busy = false; }
   }
 
-  private async runOffer(job: RunnerJobOffer) {
+  private async runOffer(job: BuildJobOffer) {
     const title = `${job.payload.ticketKey ? job.payload.ticketKey + " " : ""}${job.payload.ticketTitle}`;
     const agent: AgentKind = job.payload.agent ?? "claude";
     const problem = !AGENTS[agent] ? `This computer doesn't know the agent "${agent}". Update LFG Desktop.`
@@ -210,6 +216,42 @@ export class Runner {
     }
   }
 
+  /**
+   * One chat turn: the chosen agent answers with LFG's tools (MCP) and read-only access to
+   * a scratch folder. It can't edit files or run commands here, so it doesn't ask first.
+   */
+  private async runChatTurn(job: Extract<RunnerJobOffer, { type: "chat_turn" }>) {
+    const p = job.payload;
+    const agent = p.agent;
+    const active: ActiveJob = { cancelled: false };
+    this.active.set(job.id, active);
+    this.send({ type: "job.accepted", jobId: job.id });
+    const fail = (error: string) => this.send({ type: "job.finished", jobId: job.id, ok: false, error: error.slice(0, 2000) });
+    try {
+      if (!AGENTS[agent]) return fail(`This computer doesn't know the agent "${agent}". Update LFG Desktop.`);
+      if (this.agents && !this.agents.some(a => a.kind === agent)) {
+        return fail(`${AGENTS[agent].label} isn't installed on this computer. Install it and run \`${AGENTS[agent].bin}\` once to sign in, or pick another agent in Settings.`);
+      }
+      const cwd = join(this.opts.workRoot, "chats", p.conversationId.replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, 80));
+      mkdirSync(cwd, { recursive: true });
+      const attempt = (sessionId?: string) => runAgent(agent, {
+        prompt: p.prompt, instructions: p.instructions, sessionId, mcp: p.mcp, readOnly: true, cwd,
+        env: this.opts.env ?? process.env, bin: this.bins()[agent],
+        onEvent: event => this.send({ type: "job.event", jobId: job.id, event }),
+        onSpawn: child => { active.child = child; },
+      }).finally(() => { active.child = undefined; });
+      const result = await attempt(p.sessionId).catch((error: Error) => {
+        if (active.cancelled || !p.sessionId) throw error;
+        return attempt(undefined); // the session lives elsewhere or expired: answer fresh
+      });
+      if (!active.cancelled) this.send({ type: "job.finished", jobId: job.id, ok: true, summary: result.summary, sessionId: result.sessionId });
+    } catch (error) {
+      if (!active.cancelled) fail(error instanceof Error ? error.message : String(error));
+    } finally {
+      this.active.delete(job.id);
+    }
+  }
+
   private bins(): Partial<Record<AgentKind, string>> {
     return { ...(this.opts.claudeBin ? { claude: this.opts.claudeBin } : {}), ...this.opts.agentBins };
   }
@@ -237,7 +279,7 @@ interface TaskContext {
   agentEvent(event: AgentEvent): void;
 }
 
-export async function runAgentTask(job: RunnerJobOffer, active: ActiveJob, ctx: TaskContext)
+export async function runAgentTask(job: BuildJobOffer, active: ActiveJob, ctx: TaskContext)
   : Promise<{ branch: string; commitSha: string | null; summary?: string }> {
   const p = job.payload;
   const repoDir = join(ctx.workRoot, "repos", createHash("sha1").update(p.repoUrl).digest("hex").slice(0, 12));

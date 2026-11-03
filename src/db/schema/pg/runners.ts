@@ -37,6 +37,8 @@ export const runnerJobs = pgTable(
     deviceId: text("device_id"),
     projectId: text("project_id").notNull(),
     ticketId: text("ticket_id"),
+    /** For a chat_turn job: the conversation it answers. */
+    conversationId: text("conversation_id"),
     type: text("type").notNull(),
     payload: text("payload").notNull(),
     status: text("status").notNull().default("queued"),
