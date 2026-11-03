@@ -89,9 +89,11 @@ const COMPRESSIBLE = /^(?:text\/|application\/(?:javascript|json|xml|manifest)|i
 
 app.use("/public/*", async (c, next) => {
   const rel = decodeURIComponent(new URL(c.req.url).pathname);
-  // These scripts coordinate live chat/voice state. Revalidate on page loads so
+  // These scripts coordinate live chat/voice state, or (venture) hand a founder's
+  // idea from the landing page to the analyst's page. Revalidate on page loads so
   // a deploy cannot leave the two halves on different cached versions.
-  const cacheControl = ['/public/js/chat.js', '/public/js/voice-mode.js'].includes(rel)
+  const handsOff = rel.startsWith('/public/venture/') && rel.endsWith('.js');
+  const cacheControl = handsOff || ['/public/js/chat.js', '/public/js/voice-mode.js'].includes(rel)
     ? 'public, no-cache, must-revalidate' : STATIC_CACHE;
   // The tag comes from mtime+size: one stat, and it changes by itself on deploy.
   let tag = "";
