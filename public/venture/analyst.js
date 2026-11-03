@@ -178,6 +178,12 @@
     // A first message typed on the dashboard is handed over once, via session storage.
     let pending = null; try { pending = sessionStorage.getItem(`va-pending:${id}`); sessionStorage.removeItem(`va-pending:${id}`); } catch { /* storage unavailable */ }
     if (pending && !data.messages.length) { const form = stage.querySelector('.va-composer'); form.querySelector('textarea').value = pending; form.requestSubmit(); }
+    // A landing-page idea that couldn't start a new venture (at the limit) waits in the composer, unsent.
+    else { const idea = takeIdea(), input = stage.querySelector('.va-composer textarea'); if (idea && input && !input.value) { input.value = idea; drafts.set(id, idea); input.dispatchEvent(new Event('input')); } }
+  }
+  function takeIdea() {
+    let idea = null; try { idea = sessionStorage.getItem('va-idea'); sessionStorage.removeItem('va-idea'); } catch { /* storage unavailable */ }
+    return idea?.trim() || null;
   }
   async function assessmentView(id, content) {
     if (activeTurn) return;
@@ -393,7 +399,10 @@
       }
       content.replaceChildren(element('div', 'NEW CONVERSATION', 'va-label'), element('p', 'Welcome. Tell me what you’re thinking of building, who it would help, and what you bring to it. A rough idea is enough to begin.', 'va-message'));
       composer(null, content, (id, text) => { showDashboard(id); status.textContent = text.slice(0, 80); });
-      stage.querySelector('.va-composer textarea')?.focus();
+      const input = stage.querySelector('.va-composer textarea');
+      // An idea typed on the landing page before sign-in opens the conversation.
+      const idea = takeIdea();
+      if (idea && input) { input.value = idea; input.closest('form').requestSubmit(); } else input?.focus();
     }
     showDashboard(requested || selectedId);
     stage.append(content);

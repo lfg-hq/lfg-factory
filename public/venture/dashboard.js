@@ -159,7 +159,7 @@
     const stat = (label, value, hint) => h('div', 'vd-stat', el('span', label, 'vd-stat-label'), el('strong', value), el('span', hint, 'vd-sub'));
     return h('div', 'vd-stats',
       stat('Ventures building', String(ventures.filter(v => v.progress.total).length), `${ventures.length} active · ${ventures.filter(FILTERS[2][2]).length} awaiting review`),
-      stat('Spent so far', cost(spent), `${tokens(spent)} of ${compact(approved)} approved`),
+      stat('Spent so far', cost(spent), `${tokens(spent)} of ${compact(approved)} approved · ${compact(Math.max(0, approved - spent))} left`),
       stat('Shipped', `${shipped}`, `of ${items} work items`),
       stat('Monthly revenue', usd(revenue), 'Latest reading, all ventures'));
   }
@@ -256,7 +256,7 @@
     }
     return h('div', 'vd-metrics',
       m('Timeline', el('strong', `Week ${p.week}`), `Funded ${date(p.fundedAt)}`),
-      m('Spent so far', el('strong', cost(p.tokensSpent)), `${tokens(p.tokensSpent)} of ${compact(p.tokensApproved)} approved`, h('div', 'vd-track wide', barOf(100 * p.tokensSpent / (p.tokensApproved || 1)))),
+      m('Spent so far', el('strong', cost(p.tokensSpent)), `${tokens(p.tokensSpent)} of ${compact(p.tokensApproved)} approved · ${compact(Math.max(0, p.tokensApproved - p.tokensSpent))} left`, h('div', 'vd-track wide', barOf(100 * p.tokensSpent / (p.tokensApproved || 1)))),
       m('Shipped', el('strong', `${p.shipped} of ${p.total}`), `${data.workItems.filter(w => w.status === 'in_progress').length} in progress`),
       m('Monthly revenue', el('strong', latest ? usd(latest.value) : '—'), latest ? (change !== null ? `${change >= 0 ? '+' : ''}${change}% since ${shortDate(prev.recordedAt)}` : `as of ${shortDate(latest.recordedAt)}`) : 'No revenue yet'));
   }

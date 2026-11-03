@@ -30,12 +30,22 @@ try {
   browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || "/usr/bin/chromium", headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce' });
   const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
-  // The landing page explains the offer; every call to action goes to the analyst's page.
+  // The landing page explains the offer; its call to action is an idea form that
+  // keeps the idea and starts Google sign-in (the analyst's page without JS).
   await page.goto(`${base}/venture-analyst`, { waitUntil: "domcontentloaded" });
   await page.getByRole('heading', { name: 'How it works', exact: true }).waitFor();
+  for (const heading of ['Not yet isn\'t no.', 'Sized to the idea.', 'We invest with execution, not cash.', 'LFG is also your coach.']) await page.getByRole('heading', { name: heading, exact: true }).waitFor();
   assert.equal(await page.locator('#va-panel').count(), 0, 'No chat on the landing page');
-  const ctas = await page.getByRole('link', { name: 'Talk to the analyst' }).evaluateAll(links => links.map(a => a.getAttribute('href')));
-  assert(ctas.length >= 2 && ctas.every(href => href === '/venture-analyst/chat'), JSON.stringify(ctas));
+  const forms = await page.locator('[data-idea-form]').evaluateAll(list => list.map(f => f.getAttribute('action')));
+  assert(forms.length >= 2 && forms.every(action => action === '/venture-analyst/chat'), JSON.stringify(forms));
+  await page.getByRole('button', { name: 'Chat with the analyst' }).first().click();
+  await page.getByText('Tell us a little about your idea first.').waitFor();
+  await page.getByLabel('Tell the analyst about your idea').first().fill('TEST FIXTURE booking app for plumbers');
+  await page.getByRole('button', { name: 'Chat with the analyst' }).first().click();
+  // Google isn't configured here, so sign-in can't start; the idea is kept for after it does.
+  await page.getByText(/GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET/).waitFor();
+  assert.equal(await page.evaluate(() => sessionStorage.getItem('va-idea')), 'TEST FIXTURE booking app for plumbers', 'The idea survives until sign-in');
+  await page.evaluate(() => sessionStorage.removeItem('va-idea'));
   await page.screenshot({ path: `${shots}/venture-landing.png`, fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Landing has no horizontal scroll on phones');
@@ -54,8 +64,7 @@ try {
   await page.goto(`${base}/venture-analyst`, { waitUntil: 'domcontentloaded' });
   await page.setViewportSize({ width: 1440, height: 1000 });
   // Signed out, the analyst's page asks for Google sign-in and reports problems honestly.
-  await page.getByRole('link', { name: 'Talk to the analyst' }).first().click();
-  await page.waitForURL(/\/venture-analyst\/chat/);
+  await page.goto(`${base}/venture-analyst/chat`, { waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: 'Continue with Google', exact: true }).waitFor();
   assert.equal(await page.locator('.va-error').count(), 0, 'Expected anonymous readiness is not an auth failure');
   assert.equal(await page.getByRole('link', { name: 'Terms and Conditions' }).getAttribute('href'), '/venture-analyst/terms', 'Sign-in states the terms');
