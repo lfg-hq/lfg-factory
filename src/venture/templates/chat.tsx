@@ -14,6 +14,7 @@ export const VentureChatPage = () => html`<!doctype html>
 <link rel="stylesheet" href="/public/venture/dashboard.css">
 <script defer src="/public/js/marked.min.js"></script>
 <script defer src="/public/venture/markdown.js"></script>
+<script defer src="/public/js/dictation.js"></script>
 <script defer src="/public/venture/analyst.js"></script></head>
 <body class="vd-body" data-venture-mode="page">
 <header class="vd-bar">

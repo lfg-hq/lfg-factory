@@ -41,6 +41,16 @@
     if (className) el.className = className;
     return el;
   };
+  const ICONS = {
+    send: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>',
+    stop: '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2.5" fill="currentColor"/></svg>',
+    mic: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4"/></svg>',
+  };
+  // Icon-only buttons keep a text name for screen readers (and tests).
+  function iconButton(label, svgMarkup, className) {
+    const el = document.createElement('button'); el.className = className; el.setAttribute('aria-label', label); el.title = label;
+    el.innerHTML = svgMarkup; return el;
+  }
   function button(text, action, className = 'va-quiet') {
     const el = element('button', text, className); el.type = 'button'; el.onclick = action; return el;
   }
@@ -212,13 +222,28 @@
   }
   function composer(id, content, onCreated) {
     stage.querySelector('.va-composer')?.remove();
-    const form = element('form', '', 'va-composer'), row = element('div', '', 'va-inputrow');
-    const input = element('textarea'); input.maxLength = 4000; input.rows = 2; input.required = true; input.setAttribute('aria-label', 'Your message'); input.placeholder = 'Tell me about your idea…';
-    input.value = drafts.get(id) || ''; input.oninput = () => drafts.set(id, input.value);
-    const send = element('button', 'Send', 'va-send'); send.type = 'submit';
-    const stopButton = button('Stop', stop); stopButton.hidden = true;
+    const form = element('form', '', 'va-composer'), box = element('div', '', 'va-box');
+    const input = element('textarea'); input.maxLength = 4000; input.rows = 1; input.required = true; input.setAttribute('aria-label', 'Your message');
+    input.placeholder = id ? 'Reply to the analyst…' : 'Tell me about your idea…';
+    // The field grows with the message, up to a limit, then scrolls.
+    const fit = () => { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 200)}px`; };
+    input.value = drafts.get(id) || ''; input.oninput = () => { drafts.set(id, input.value); fit(); };
+    const send = iconButton('Send', ICONS.send, 'va-send'); send.type = 'submit';
+    const stopButton = iconButton('Stop', ICONS.stop, 'va-stop'); stopButton.type = 'button'; stopButton.onclick = stop; stopButton.hidden = true;
+    const mic = iconButton('Dictate a message', ICONS.mic, 'va-mic'); mic.type = 'button';
+    const actions = element('div', '', 'va-box-actions input-actions');
+    actions.append(element('span', 'Enter to send · Shift+Enter for a new line', 'va-hint'), mic, send, stopButton);
+    box.append(input, actions);
     const feedback = element('div', '', 'va-muted'); feedback.setAttribute('role', 'status');
-    row.append(input, send, stopButton); form.append(row, feedback); stage.append(form);
+    form.append(box, feedback); stage.append(form); fit();
+    box.onclick = event => { if (event.target === box || event.target === actions) input.focus(); };
+    // Dictation: the main chat's recorder, pointed at the venture endpoint.
+    if (window.createDictation) {
+      window.createDictation({ button: mic, input, wrapper: box, onSend: () => form.requestSubmit(),
+        endpoint: '/api/venture/dictation', icons: { mic: ICONS.mic, stop: ICONS.stop },
+        getScope: () => `${id || 'new'}:${epoch}`,
+        getContext: () => { const title = status.textContent?.trim(); return title && id ? { keywords: [title.slice(0, 80)] } : {}; } });
+    } else mic.hidden = true;
     // Enter sends; Shift+Enter adds a line. Never interrupt IME composition.
     input.onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); form.requestSubmit(); } };
     form.onsubmit = async event => {
@@ -234,7 +259,7 @@
         selectedId = id; onCreated?.(id, text);
       }
       activeTurn = { id, requestId }; streamController = new AbortController();
-      drafts.delete(id); input.value = ''; input.disabled = true; send.disabled = true; stopButton.hidden = false;
+      drafts.delete(id); input.value = ''; fit(); input.disabled = true; send.disabled = true; send.hidden = true; mic.disabled = true; stopButton.hidden = false;
       stage.querySelectorAll('.va-history button,.va-history select,.va-views button').forEach(el => { el.disabled = true; });
       const user = element('div', text, 'va-message user'), answer = element('div', '', 'va-message'); content.append(user, answer);
       let answerText = '', frame = 0;
@@ -278,7 +303,7 @@
           return;
         }
         if (version === epoch) {
-          input.disabled = false; send.disabled = false; stopButton.hidden = true;
+          input.disabled = false; send.disabled = false; send.hidden = false; mic.disabled = false; stopButton.hidden = true; input.focus();
           stage.querySelectorAll('.va-history button,.va-history select,.va-views button').forEach(el => { el.disabled = false; });
           if (failed) feedback.append(button('Try again', () => { input.value = text; form.requestSubmit(); }));
         }

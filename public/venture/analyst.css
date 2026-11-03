@@ -21,3 +21,45 @@
 .va-chatpage .va-send{color:#fff}.va-chatpage .va-panel:focus{outline:none}
 .va-full~button,.va-full~.va-dash{margin-left:8px}
 .va-limit{flex-direction:column;align-items:flex-start;max-width:100%}
+
+/* Composer: one rounded box; text grows, actions sit inside on the right. */
+.va-composer{padding:12px 20px 14px;border-top:1px solid #eef1f5}
+.va-box{display:flex;flex-direction:column;gap:6px;border:1px solid #d0d5dd;border-radius:16px;background:#fff;padding:10px 10px 8px 14px;cursor:text;transition:border-color .15s,box-shadow .15s}
+.va-box:focus-within{border-color:#818cf8;box-shadow:0 0 0 4px #eef2ff}
+.va-box textarea{border:0;outline:0;resize:none;padding:4px 0;font:inherit;font-size:15px;line-height:1.55;background:transparent;color:inherit;min-height:26px;max-height:200px;overflow-y:auto;width:100%}
+.va-box textarea:focus-visible{outline:0}
+.va-box-actions{display:flex;align-items:center;gap:6px}
+.va-hint{margin-right:auto;font-size:12px;color:#98a2b3}
+.va-box .va-mic,.va-box .va-send,.va-box .va-stop{display:inline-grid;place-items:center;width:36px;height:36px;border-radius:50%;border:0;padding:0;cursor:pointer;flex-shrink:0}
+.va-box .va-mic{background:transparent;color:#667085}
+.va-box .va-mic:hover{background:#f2f4f7;color:#101828}
+.va-box .va-mic.recording{color:#dc2626;background:#fef3f2}
+.va-box .va-send{background:#4f46e5;color:#fff}
+.va-box .va-send:hover{background:#4338ca}
+.va-box .va-send:disabled{background:#c7d2fe;cursor:default}
+.va-box .va-stop{background:#101828;color:#fff}
+.va-box button:focus-visible{outline:2px solid #818cf8;outline-offset:2px}
+.va-box button[hidden]{display:none}
+.va-composer [role=status]{padding:0 4px}
+/* Dictation panel (shared recorder) inside the box. */
+.va-box .audio-recording-indicator{flex:1;display:flex;align-items:center;gap:6px;min-width:0;height:36px;padding:0 6px;border-radius:999px;background:#f9fafb;border:1px solid #eaecf0;position:relative}
+.va-box .audio-recording-indicator+.va-mic{background:#fef3f2}
+.va-box:has(.audio-recording-indicator) .va-hint{display:none}
+.va-box .audio-recording-indicator button{border:0;background:transparent;color:#667085;width:28px;height:28px;border-radius:50%;display:inline-grid;place-items:center;cursor:pointer;font-size:16px}
+.va-box .audio-recording-indicator button:hover{background:#f2f4f7}
+.va-box .audio-recording-indicator [hidden],.va-box .audio-recording-indicator .dictation-send{display:none!important}
+.va-box .audio-recording-indicator:not([data-phase="failed"]) .dictation-done{display:none}
+.va-box .dictation-waveform{flex:1;min-width:0;width:0;height:20px;color:#6366f1}
+.va-box .dictation-status{flex:1;min-width:0;font-size:12px;color:#667085;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.va-box .audio-recording-indicator[data-phase="recording"] .dictation-status{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.va-box .audio-recording-indicator[data-phase="recording"][data-live="off"] .dictation-status{position:static;width:auto;height:auto;clip-path:none;max-width:45%}
+.va-box .audio-recording-indicator:not([data-phase="recording"]) .dictation-waveform{display:none}
+.va-box .dictation-stop-icon{width:10px;height:10px;border-radius:2px;background:currentColor}
+.va-box textarea.dictation-live{caret-color:transparent}
+.dark .va-composer{border-color:#30363d}
+.dark .va-box{background:#0d1117;border-color:#30363d}
+.dark .va-box:focus-within{border-color:#6366f1;box-shadow:0 0 0 4px #1e2340}
+.dark .va-box .va-mic:hover{background:#1c2128;color:#e6edf3}
+.dark .va-box .va-stop{background:#e6edf3;color:#0d1117}
+.dark .va-box .audio-recording-indicator{background:#161b22;border-color:#30363d}
+@media(max-width:640px){.va-hint{display:none}.va-box-actions{justify-content:flex-end}}

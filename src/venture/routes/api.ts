@@ -7,6 +7,7 @@ import { getVentureAccess, googleConfigured, isVentureSameOrigin, ownedVentureCo
 import { archiveVenture, deleteVenture, ventureLimit, dashboardList, METRICS, recordDecision, recordMetric, setTaskDone, updateWorkItem, ventureOverview, type MetricName } from "../services/dashboard.ts";
 import { loggedRequest, ventureError } from "../request-log.ts";
 import { env } from "../../config/env.ts";
+import { connectDictation, transcribeDictation } from "../../services/dictation.ts";
 import { AgreementFailure, requestChanges, respondToChanges, signAgreement } from "../services/agreements.ts";
 import { DEAL_STRUCTURES, dealTermsProblem } from "../services/assessment.ts";
 import { ventureAgreements } from "../db/schema.ts";
@@ -17,7 +18,7 @@ type Variables = { userId: string; requestId: string; isAdmin: boolean; viewer: 
 const venture = new Hono<{ Variables: Variables }>();
 venture.onError((_error, c) => ventureError(c.get("requestId"), 500, "STORAGE_UNAVAILABLE", "Private storage is temporarily unavailable. Retry; if it continues, contact support with this correlation ID."));
 venture.use("*", async (c, next) => loggedRequest(c.req.raw,
-  c.req.path.includes('/agreements/') ? `venture.agreement.${c.req.path.split('/').pop()}` : c.req.path.includes('/admin/work-items/') ? 'venture.admin.work' : c.req.path.endsWith('/metrics') ? 'venture.admin.metric' : c.req.path.includes('/admin/') ? 'venture.admin.decision' : c.req.path.endsWith('/dashboard') ? 'venture.dashboard.list' : c.req.path.endsWith('/overview') ? 'venture.dashboard.overview' : c.req.path.includes('/tasks/') ? 'venture.task.update' :
+  c.req.path.includes('/dictation/') ? 'venture.dictation' : c.req.path.includes('/agreements/') ? `venture.agreement.${c.req.path.split('/').pop()}` : c.req.path.includes('/admin/work-items/') ? 'venture.admin.work' : c.req.path.endsWith('/metrics') ? 'venture.admin.metric' : c.req.path.includes('/admin/') ? 'venture.admin.decision' : c.req.path.endsWith('/dashboard') ? 'venture.dashboard.list' : c.req.path.endsWith('/overview') ? 'venture.dashboard.overview' : c.req.path.includes('/tasks/') ? 'venture.task.update' :
   c.req.path.endsWith('/assessment') ? `venture.assessment.${c.req.method === 'POST' ? 'generate' : 'load'}` : c.req.path.endsWith('/stream') ? 'venture.stream.accept' : c.req.path.endsWith('/stop') ? 'venture.stream.stop' : c.req.path.endsWith("/session") ? "venture.session" : c.req.path.endsWith("/conversations") ? `venture.conversations.${c.req.method === "POST" ? "create" : "list"}` : c.req.path.endsWith("/archive") ? "venture.archive" : c.req.method === "DELETE" ? "venture.conversation.delete" : "venture.conversation.load",
   async requestId => {
   c.set("requestId", requestId);
@@ -301,5 +302,43 @@ venture.delete('/conversations/:id', async c => {
   if (!result.deleted) return ventureError(c.get('requestId'), 409, 'SIGNED_AGREEMENT', 'This venture has a signed, active agreement, so it is kept on record. Archive it instead.');
   return c.json({ deleted: true, requestId: c.get('requestId') });
 });
+// Dictation for the analyst chat: same transcription service as the main
+// chat, behind the venture sign-in and paid by the platform key like the analyst.
+const dictating = new Map<string, number>();
+const dictationContext = z.object({
+  prompt: z.string().trim().max(800).optional(),
+  keywords: z.array(z.string().trim().min(1).max(80).regex(/^[^<>\r\n]+$/)).max(30).optional(),
+}).strict();
+for (const kind of ['session', 'transcribe'] as const) {
+  venture.post(`/dictation/${kind}`, async c => {
+    const key = env.OPENAI_API_KEY?.trim();
+    if (!key) return ventureError(c.get('requestId'), 503, 'DICTATION_UNAVAILABLE', 'Dictation needs the platform OpenAI key. Type your message instead.');
+    let file: File | undefined, data: unknown;
+    try {
+      if (kind === 'session') data = await boundedJson(c.req.raw, 70_000);
+      else {
+        if (Number(c.req.header('content-length') || 0) > 12 * 1024 * 1024) return ventureError(c.get('requestId'), 413, 'RECORDING_TOO_LARGE', 'That recording is too long. Try a shorter one.');
+        const form = await c.req.formData(), audio = form.get('audio');
+        if (!(audio instanceof File) || !audio.size || audio.size > 10 * 1024 * 1024 || !/^(audio\/(webm|mp4|ogg|wav|mpeg)|video\/(webm|mp4))(;.*)?$/.test(audio.type)) return ventureError(c.get('requestId'), 400, 'INVALID_RECORDING', 'Unsupported or oversized recording.');
+        file = audio; data = JSON.parse(String(form.get('context') || '{}'));
+      }
+    } catch { return ventureError(c.get('requestId'), 400, 'INVALID_RECORDING', 'Invalid dictation request.'); }
+    const shape = kind === 'session' ? dictationContext.extend({ sdp: z.string().min(20).max(60000).startsWith('v=0') }) : dictationContext;
+    const parsed = shape.safeParse(data);
+    if (!parsed.success) return ventureError(c.get('requestId'), 400, 'INVALID_RECORDING', 'Invalid dictation request.');
+    const userId = c.get('userId');
+    if ((dictating.get(userId) || 0) >= 2) return ventureError(c.get('requestId'), 429, 'DICTATION_BUSY', 'Another recording is still processing. Retry shortly.');
+    dictating.set(userId, (dictating.get(userId) || 0) + 1);
+    const { prompt, keywords } = parsed.data as z.infer<typeof dictationContext>;
+    const context = { ...(prompt ? { prompt } : {}), ...(keywords?.length ? { keywords } : {}) };
+    try {
+      const signal = AbortSignal.any([c.req.raw.signal, AbortSignal.timeout(kind === 'session' ? 25_000 : 60_000)]);
+      if (kind === 'session') return c.body(await connectDictation((parsed.data as { sdp: string }).sdp, key, signal, context), 200, { 'Content-Type': 'application/sdp' });
+      return c.json({ text: await transcribeDictation(file!, key, signal, context) });
+    } catch (error: any) {
+      return ventureError(c.get('requestId'), 502, 'DICTATION_FAILED', [401, 403].includes(error?.statusCode) ? 'Transcription access was denied. Type your message, or ask LFG to check the platform key.' : 'Transcription could not finish. Your recording is available to retry.');
+    } finally { const n = (dictating.get(userId) || 1) - 1; if (n) dictating.set(userId, n); else dictating.delete(userId); }
+  });
+}
 venture.all("*", c => ventureError(c.get("requestId"), 404, "ENDPOINT_NOT_FOUND", "This venture endpoint is unavailable. Return to your conversation list."));
 export default venture;

@@ -284,3 +284,17 @@ test("founders get one active venture; archive frees the slot; delete is permane
   expect((await db.select().from(ventureMessages).where(eq(ventureMessages.conversationId, fresh))).length).toBe(0);
   expect((await request(`/api/venture/conversations/${mine[0]!.id}/archive`, 0, "POST", { archived: false })).status).toBe(200);
 });
+
+test("analyst dictation sits behind the venture sign-in and says so honestly when the platform key is missing", async () => {
+  for (const kind of ["session", "transcribe"]) {
+    const path = `/api/venture/dictation/${kind}`;
+    expect((await request(path, undefined, "POST", {})).status).toBe(401);
+    expect((await request(path, 2, "POST", {})).status).toBe(403);
+    expect((await request(path, 0, "POST", {}, "https://evil.example")).status).toBe(403);
+  }
+  if (!env.OPENAI_API_KEY) {
+    const response = await request("/api/venture/dictation/session", 0, "POST", { sdp: "v=0 TEST FIXTURE offer" });
+    expect(response.status).toBe(503); expect((await response.json()).code).toBe("DICTATION_UNAVAILABLE");
+  }
+  expect((await request("/api/venture/dictation/session", 0, "POST", { sdp: "not sdp", projectId: "x" })).status).toBeGreaterThanOrEqual(400);
+});

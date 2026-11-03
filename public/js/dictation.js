@@ -1,5 +1,7 @@
 /* OpenAI dictation: live preview, full-recording final transcript, editable draft. */
-window.createDictation = ({button, input, wrapper, getScope, getContext, onSend}) => {
+window.createDictation = ({button, input, wrapper, getScope, getContext, onSend,
+        endpoint = '/api/voice/dictation',
+        icons = {mic: '<i class="fas fa-microphone" aria-hidden="true"></i>', stop: '<i class="fas fa-stop" aria-hidden="true"></i>'}}) => {
     if (!button || !input || !wrapper) return {active:false};
     let session = null;
     const active = s => session === s && s.scope === getScope();
@@ -33,7 +35,7 @@ window.createDictation = ({button, input, wrapper, getScope, getContext, onSend}
         session = null; s.abort.abort(); stopCapture(s);
         s.panel.remove(); button.classList.remove('recording');
         button.setAttribute('aria-pressed','false'); button.title = 'Dictate a message';
-        button.innerHTML = '<i class="fas fa-microphone" aria-hidden="true"></i>';
+        button.innerHTML = icons.mic;
     }
     function insert(s, text) {
         if (!active(s)) { close(s); return; }
@@ -73,7 +75,7 @@ window.createDictation = ({button, input, wrapper, getScope, getContext, onSend}
             const extension = s.blob.type.includes('mp4') ? 'm4a' : s.blob.type.includes('ogg') ? 'ogg' : 'webm';
             form.set('audio',s.blob,`dictation.${extension}`);
             form.set('context',JSON.stringify(s.context));
-            const response = await fetch('/api/voice/dictation/transcribe', {
+            const response = await fetch(`${endpoint}/transcribe`, {
                 method:'POST',body:form,signal:AbortSignal.any([s.abort.signal,AbortSignal.timeout(65000)])
             });
             const data = await response.json();
@@ -179,7 +181,7 @@ window.createDictation = ({button, input, wrapper, getScope, getContext, onSend}
             // Attach a handler immediately while SDP negotiation is in flight.
             opened.catch(()=>{});
             const offer=await s.peer.createOffer();await s.peer.setLocalDescription(offer);
-            const response=await fetch('/api/voice/dictation/session',{method:'POST',headers:{'Content-Type':'application/json'},
+            const response=await fetch(`${endpoint}/session`,{method:'POST',headers:{'Content-Type':'application/json'},
                 body:JSON.stringify({...s.context,sdp:offer.sdp}),signal:AbortSignal.any([s.abort.signal,AbortSignal.timeout(30000)])});
             if(!response.ok){const data=await response.json();throw new Error(data.error || 'Could not start dictation.');}
             const answer=await response.text();if(!active(s) || s.phase!=='recording')return;
@@ -199,7 +201,7 @@ window.createDictation = ({button, input, wrapper, getScope, getContext, onSend}
         const s={scope:getScope(),context:getContext(),abort:new AbortController(),phase:'connecting',items:new Map(),chunks:[],
             draft:input.value,start:input.selectionStart ?? input.value.length,end:input.selectionEnd ?? input.value.length};
         session=s; build(s); button.classList.add('recording'); button.setAttribute('aria-pressed','true');
-        button.title='Stop dictation and keep text';button.innerHTML='<i class="fas fa-stop" aria-hidden="true"></i>';
+        button.title='Stop dictation and keep text';button.innerHTML=icons.stop;
         try {
             const stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
             if(!active(s)){stream.getTracks().forEach(t=>t.stop());return;}

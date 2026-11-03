@@ -94,6 +94,8 @@ try {
   assert.equal(await page.getByLabel('Saved conversations').count(), 0, 'No conversation picker');
   assert.equal(await page.locator('.va-message').count(), 1, 'Only genuine new-conversation greeting');
   const input = page.getByLabel('Your message', { exact: true });
+  await page.getByRole('button', { name: 'Dictate a message' }).waitFor();
+  assert.equal(await page.locator('.va-box .va-send').evaluate(el => { const r = el.getBoundingClientRect(); return r.width === r.height && r.width <= 40; }), true, 'Send is a compact round button inside the box');
   await input.fill('TEST FIXTURE idea <img src=x onerror=alert(1)>');
   await input.press('Shift+Enter');
   assert.match(await input.inputValue(), /\n$/, 'Shift+Enter adds a line');
