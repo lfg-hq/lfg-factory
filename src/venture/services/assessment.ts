@@ -77,6 +77,23 @@ export const assessmentSchema = z.object({
 }).strict();
 function milestone() { return z.object({ plan: claim, earliestWeek: z.number().int().nonnegative().nullable(), latestWeek: z.number().int().nonnegative().nullable(), dependencies: z.array(text).min(1).max(10) }).strict(); }
 export type VentureAssessment = z.infer<typeof assessmentSchema>;
+// Mechanical slips the model makes and we can fix without guessing: citations
+// to sources that were never retrieved are dropped (a "sourced" claim left with
+// none becomes an "estimate"), and each figure is recomputed as customers ×
+// price. Everything else still has to pass validateAssessment.
+export function repairAssessment(input: unknown, sourceIds: Set<string>) {
+  const walk = (node: any) => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node.sourceIds) && typeof node.kind === 'string') {
+      node.sourceIds = node.sourceIds.filter((id: unknown) => typeof id === 'string' && sourceIds.has(id));
+      if (['sourced', 'contradicted'].includes(node.kind) && !node.sourceIds.length) node.kind = 'estimate';
+    }
+    if (node.formula === 'customers * pricePerCustomer' && typeof node.customers === 'number' && typeof node.pricePerCustomer === 'number') node.amount = node.customers * node.pricePerCustomer;
+    Object.values(node).forEach(walk);
+  };
+  walk(input);
+  return input;
+}
 export function validateAssessment(input: unknown, sourceIds: Set<string>): VentureAssessment {
   const value = assessmentSchema.parse(input);
   let unknown = false;

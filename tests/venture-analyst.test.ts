@@ -20,7 +20,8 @@ const model = new MockLanguageModelV3({
   doGenerate: async () => {
     if (mode === 'failure') throw new Error('TEST FIXTURE secret-do-not-log');
     generations++;
-    const output = invalidFirst ? { ...assessmentOutput, revenue: { ...assessmentOutput.revenue, base: { ...assessmentOutput.revenue.base, amount: 99999 } } } : assessmentOutput;
+    // SAM larger than TAM: not something the repairs can fix.
+    const output = invalidFirst ? { ...assessmentOutput, market: { ...assessmentOutput.market, sam: { ...assessmentOutput.market.sam, customers: 5000, amount: 50000 } } } : assessmentOutput;
     invalidFirst = false;
     return { content: [{ type: 'text', text: JSON.stringify(output) }], finishReason: { unified: 'stop', raw: undefined }, usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } }, warnings: [], response: { id: 'TEST-FIXTURE-assessment-request' } };
   },
@@ -134,10 +135,19 @@ test('fixture idea-to-assessment, corrections, reload and failed regeneration pr
   expect(reload.length).toBe(2); expect(reload[1]!.contentJson).toEqual(second.contentJson);
   const child = Bun.spawn(['bun', '-e', `import {db} from './src/config/db.ts'; import {ventureAssessments} from './src/venture/db/schema.ts'; import {eq} from 'drizzle-orm'; const rows=await db.select().from(ventureAssessments).where(eq(ventureAssessments.conversationId, ${JSON.stringify(conversationId)})); if(rows.length!==2 || rows[1].version!==2)process.exit(1); process.exit(0);`], { env: process.env, stdout: 'pipe', stderr: 'pipe' });
   expect(await child.exited).toBe(0);
-  for (const bad of [{ ...assessmentFixture(), founderFit: null }, assessmentFixture(crypto.randomUUID()), { ...assessmentFixture(), revenue: { ...assessmentFixture().revenue, base: { ...assessmentFixture().revenue.base, amount: 99 } } }]) {
+  for (const bad of [{ ...assessmentFixture(), founderFit: null }, { ...assessmentFixture(), market: { ...assessmentFixture().market, sam: { ...assessmentFixture().market.sam, customers: 5000, amount: 50000 } } }]) {
     assessmentOutput = bad; await expect(generate()).rejects.toBeTruthy();
     expect((await db.select().from(ventureAssessments).where(eq(ventureAssessments.conversationId, conversationId))).length).toBe(2);
   }
+  // Mechanical slips are repaired, never passed through: an invented citation is
+  // dropped (its "sourced" claim becomes an estimate) and arithmetic is recomputed.
+  assessmentOutput = assessmentFixture(crypto.randomUUID());
+  assessmentOutput.revenue.base = { ...assessmentOutput.revenue.base, amount: 99 };
+  const repaired = await generate();
+  const json: any = repaired.contentJson;
+  expect(json.assumptions[0]).toMatchObject({ kind: 'estimate', sourceIds: [] });
+  expect(json.revenue.base.amount).toBe(json.revenue.base.customers * json.revenue.base.pricePerCustomer);
+  await db.delete(ventureAssessments).where(eq(ventureAssessments.id, repaired.id));
   mode = 'failure'; await expect(generate()).rejects.toMatchObject({ code: 'ASSESSMENT_FAILED' });
   expect((await db.select().from(ventureAssessments).where(eq(ventureAssessments.conversationId, conversationId)))[1]!.contentJson).toEqual(second.contentJson);
   mode = 'success';
@@ -164,7 +174,7 @@ test('an invalid assessment gets one corrected retry before failing', async () =
   const requestId = crypto.randomUUID(); const abort = await reserveTurn(conversationId, owner, requestId, 'TEST FIXTURE retry');
   const saved = await runAssessment(conversationId, requestId, abort, crypto.randomUUID());
   expect(generations).toBe(2); expect(saved.status).toBe('provisional');
-  expect(logs.some(l => l.event === 'venture.assessment.invalid_attempt' && l.errorCode === 'INVALID_ARITHMETIC')).toBe(true);
+  expect(logs.some(l => l.event === 'venture.assessment.invalid_attempt' && l.errorCode === 'INVALID_MARKET_ORDER')).toBe(true);
 });
 test('schema checks missing inputs, arithmetic, market/scenario order, units, timelines and evidence', () => {
   const valid: any = assessmentFixture(); expect(validateAssessment(valid, new Set()).status).toBe('provisional');
@@ -197,7 +207,7 @@ test('recommendation verdicts: token sums, funding needs a tranche, refusals car
   expect(validateAssessment(prohibited, new Set()).recommendation.verdict).toBe('prohibited');
 });
 test('stale started turn recovers without replay; durable hourly limit is enforced', async () => {
-  await db.insert(ventureMessages).values({ conversationId, requestId: crypto.randomUUID(), role: 'assistant', content: 'TEST FIXTURE interrupted partial', status: 'started', createdAt: new Date(Date.now() - 150000) });
+  await db.insert(ventureMessages).values({ conversationId, requestId: crypto.randomUUID(), role: 'assistant', content: 'TEST FIXTURE interrupted partial', status: 'started', createdAt: new Date(Date.now() - 300000) });
   await expect(db.insert(ventureMessages).values({ conversationId, requestId: crypto.randomUUID(), role: 'assistant', content: 'TEST FIXTURE second active', status: 'started' }).execute()).rejects.toBeTruthy();
   await recoverInterrupted(conversationId);
   const all = await db.select().from(ventureMessages).where(eq(ventureMessages.conversationId, conversationId));

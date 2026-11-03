@@ -1,6 +1,6 @@
 import { generateText, NoObjectGeneratedError, NoOutputGeneratedError, Output, streamText, stepCountIs, tool, zodSchema, type ToolSet } from 'ai';
 import { z } from 'zod';
-import { assessmentSchema, validateAssessment } from './assessment.ts';
+import { assessmentSchema, repairAssessment, validateAssessment } from './assessment.ts';
 import { ventureAssessmentPrompt } from '../prompts/assessment.ts';
 import { and, eq, gte, lt, desc, inArray } from 'drizzle-orm';
 import { db } from '../../config/db.ts';
@@ -13,7 +13,7 @@ import { publicUrl, readPublicUrl } from './public-url.ts';
 import { ventureLog } from '../request-log.ts';
 import { onAssessmentSaved, ventureContext } from './dashboard.ts';
 
-export const VENTURE_LIMITS = { turnsPerHour: 30, researchCalls: 8, timeoutMs: 120_000, inputChars: 4000, outputTokens: 2400 } as const;
+export const VENTURE_LIMITS = { turnsPerHour: 30, researchCalls: 8, timeoutMs: 120_000, assessmentTimeoutMs: 240_000, inputChars: 4000, outputTokens: 2400 } as const;
 const ownersStarting = new Set<string>(); // Single existing Bun web process; no worker.
 const active = new Map<string, { requestId: string; abort: AbortController }>();
 const modelDetails = { provider: getProviderName(DEFAULT_MODEL_KEY), model: getProviderModel(DEFAULT_MODEL_KEY) };
@@ -28,7 +28,7 @@ export function analystReadiness() {
 }
 export async function recoverInterrupted(conversationId: string) {
   const started = performance.now();
-  const expired = await db.update(ventureMessages).set({ status: 'cancelled' }).where(and(eq(ventureMessages.conversationId, conversationId), eq(ventureMessages.status, 'started'), lt(ventureMessages.createdAt, new Date(Date.now() - VENTURE_LIMITS.timeoutMs - 5000)))).returning();
+  const expired = await db.update(ventureMessages).set({ status: 'cancelled' }).where(and(eq(ventureMessages.conversationId, conversationId), eq(ventureMessages.status, 'started'), lt(ventureMessages.createdAt, new Date(Date.now() - Math.max(VENTURE_LIMITS.timeoutMs, VENTURE_LIMITS.assessmentTimeoutMs) - 5000)))).returning();
   expired.forEach(turn => ventureLog('venture.turn.cancelled', turn.requestId, started, 'cancelled', { turnId: turn.requestId, errorCode: 'INTERRUPTED_RECOVERY', durationMs: Math.max(0, Date.now() - turn.createdAt.getTime()), ...modelDetails }));
 }
 export function stopTurn(conversationId: string, requestId: string) {
@@ -205,7 +205,8 @@ export async function runAssessment(conversationId: string, requestId: string, a
   const started = performance.now();
   const log = (event: string, outcome: string, details = {}) => ventureLog(event, requestId, started, outcome, { httpRequestId, turnId: requestId, ...modelDetails, ...details });
   const where = and(eq(ventureMessages.conversationId, conversationId), eq(ventureMessages.requestId, requestId), eq(ventureMessages.role, 'assistant'));
-  const timer = setTimeout(() => abort.abort(new Error('TURN_TIMEOUT')), VENTURE_LIMITS.timeoutMs);
+  // Generating a full assessment can take over a minute; allow a corrected retry.
+  const timer = setTimeout(() => abort.abort(new Error('TURN_TIMEOUT')), VENTURE_LIMITS.assessmentTimeoutMs);
   log('venture.assessment.started', 'pending');
   try {
     let model;
@@ -225,7 +226,8 @@ export async function runAssessment(conversationId: string, requestId: string, a
         const result = await generateText({ model, system: ventureAssessmentPrompt, prompt: problem ? `${input}\n\nYour previous assessment failed validation: ${problem}. Return a corrected assessment that passes every rule.` : input,
           output: Output.object({ schema: assessmentSchema }), maxOutputTokens: 16000, maxRetries: 0, abortSignal: abort.signal });
         log('venture.assessment.provider_response', 'success', { providerRequestId: safeId(result.response.id), attempt });
-        content = validateAssessment(result.output, new Set(sources.map(s => s.id)));
+        const ids = new Set(sources.map(s => s.id));
+        content = validateAssessment(repairAssessment(result.output, ids), ids);
       } catch (error) {
         abort.signal.throwIfAborted();
         if (!(NoObjectGeneratedError.isInstance(error) || NoOutputGeneratedError.isInstance(error) || error instanceof z.ZodError || (error instanceof Error && /^[A-Z_]+$/.test(error.message)))) throw error;

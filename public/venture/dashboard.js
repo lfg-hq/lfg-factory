@@ -502,18 +502,28 @@
     const { market: m, revenue: rev, units } = a;
     const max = Math.max(...[m.tam, m.sam, m.som].map(c => c.amount || 0), 1);
     const funnel = h('div', 'vd-funnel', ...[['TAM', 'Total market', m.tam], ['SAM', 'Serviceable', m.sam], ['SOM', 'Obtainable', m.som]].map(([label, name, c]) => h('div', 'vd-funnel-row',
-      h('div', 'vd-stack', el('strong', label), el('span', name, 'vd-sub')),
+      h('div', 'vd-stack', el('strong', label), el('span', name, 'vd-sub'), provenance(c)),
       h('div', 'vd-track wide tall', barOf(c.amount ? Math.max(4, Math.round(100 * Math.sqrt(c.amount / max))) : 0)),
       h('div', 'vd-stack vd-right', el('strong', usdShort(c.amount)), el('span', c.customers !== null && c.pricePerCustomer !== null ? `${compact(c.customers)} × ${usdShort(c.pricePerCustomer)}` : 'Input needed', 'vd-sub')))));
-    const scenario = (label, c) => h('div', 'vd-scenario', el('span', label, 'vd-stat-label'), el('strong', usdShort(c.amount)), el('span', c.customers !== null ? `${compact(c.customers)} customers / ${units.period}` : 'Input needed', 'vd-sub'));
+    const scenario = (label, c) => h('div', 'vd-scenario', h('div', 'vd-scenario-top', el('span', label, 'vd-stat-label'), provenance(c)), el('strong', usdShort(c.amount)), el('span', c.customers !== null ? `${compact(c.customers)} customers / ${units.period}` : 'Input needed', 'vd-sub'));
+    const estimated = [m.tam, m.sam, m.som, rev.conservative, rev.base, rev.upside].some(c => c.amount !== null && c.rationale?.kind !== 'sourced');
     return card('Market opportunity',
       el('p', `${units.geography} · US dollars per ${units.period}`, 'vd-muted vd-tight'),
+      estimated ? el('p', 'Figures marked Estimate are the analyst’s, built from stated assumptions, not verified data. See the assumptions below.', 'vd-note') : null,
       funnel,
       el('h3', 'Revenue scenarios'),
       h('div', 'vd-scenarios', scenario('Conservative', rev.conservative), scenario('Base', rev.base), scenario('Upside', rev.upside)),
-      h('div', 'vd-two', h('div', '', el('h3', 'Customer pain'), claims(a.opportunity.customerPain, sources)), h('div', '', el('h3', 'Competition'), claims(a.opportunity.competition, sources))));
+      h('div', 'vd-two', h('div', '', el('h3', 'Customer pain'), claims(a.opportunity.customerPain, sources)), h('div', '', el('h3', 'Competition'), claims(a.opportunity.competition, sources))),
+      h('details', 'vd-assumptions', el('summary', 'How these numbers were built'),
+        ...[['TAM', m.tam], ['SAM', m.sam], ['SOM', m.som], ['Conservative', rev.conservative], ['Base', rev.base], ['Upside', rev.upside]].map(([label, c]) => h('div', '', el('strong', label), claims([c.rationale, ...(c.assumptions || [])], sources)))));
   }
 
+  // Where a figure comes from: sourced, the founder's word, or the analyst's estimate.
+  function provenance(c) {
+    if (c.amount === null) return null;
+    const kind = c.rationale?.kind;
+    return el('span', kind === 'sourced' ? 'Sourced' : kind === 'self-report' ? 'Founder' : 'Estimate', `vd-tag ${kind === 'sourced' ? 'sourced' : kind === 'self-report' ? 'self-report' : 'estimate'}`);
+  }
   function founderFit(a, sources) {
     const f = a.founderFit;
     return card('Founder fit', h('div', 'vd-two',
