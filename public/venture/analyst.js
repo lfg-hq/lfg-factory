@@ -109,7 +109,10 @@
     // Static brand artwork only; all server/user content is rendered with textContent.
     icon.innerHTML = '<path fill="#4285F4" d="M22 12.2c0-.7-.1-1.4-.2-2.1H12v4h5.6a4.8 4.8 0 0 1-2.1 3.1v2.6h3.4c2-1.8 3.1-4.4 3.1-7.6Z"/><path fill="#34A853" d="M12 22c2.8 0 5.1-.9 6.9-2.5l-3.4-2.6a6.3 6.3 0 0 1-9.4-3.3H2.6v2.7A10.4 10.4 0 0 0 12 22Z"/><path fill="#FBBC05" d="M6.1 13.6a6.4 6.4 0 0 1 0-3.2V7.7H2.6a10 10 0 0 0 0 8.6Z"/><path fill="#EA4335" d="M12 6c1.6 0 3 .5 4.1 1.6l3.1-3A10 10 0 0 0 2.6 7.7l3.5 2.7A6.2 6.2 0 0 1 12 6Z"/>';
     google.prepend(icon);
-    auth.append(google, element('p', 'Google verifies your identity. No access to your Gmail inbox is requested.', 'va-muted'));
+    const terms = element('p', '', 'va-muted va-terms');
+    const termsLink = element('a', 'Terms and Conditions'); termsLink.href = '/venture-analyst/terms'; termsLink.target = '_blank'; termsLink.rel = 'noopener';
+    terms.append(document.createTextNode('By continuing with Google, you agree to the LFG Ventures '), termsLink, document.createTextNode('.'));
+    auth.append(google, terms, element('p', 'Google verifies your identity. No access to your Gmail inbox is requested.', 'va-muted'));
     content.append(auth); stage.append(content);
   }
   async function signin() {

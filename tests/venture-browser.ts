@@ -40,6 +40,9 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Landing has no horizontal scroll on phones');
   await page.screenshot({ path: `${shots}/venture-landing-mobile.png`, fullPage: true });
+  await page.goto(`${base}/venture-analyst/terms`, { waitUntil: 'domcontentloaded' });
+  for (const heading of ['3. Funding decisions and human verification', '5. Prohibited ventures and content']) await page.getByRole('heading', { name: heading, exact: true }).waitFor();
+  await page.screenshot({ path: `${shots}/venture-terms.png`, fullPage: true });
   // The pitch page explains the thesis and the release / hold / halt loop.
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(`${base}/venture-analyst/thesis`, { waitUntil: 'domcontentloaded' });
@@ -55,6 +58,7 @@ try {
   await page.waitForURL(/\/venture-analyst\/chat/);
   await page.getByRole('button', { name: 'Continue with Google', exact: true }).waitFor();
   assert.equal(await page.locator('.va-error').count(), 0, 'Expected anonymous readiness is not an auth failure');
+  assert.equal(await page.getByRole('link', { name: 'Terms and Conditions' }).getAttribute('href'), '/venture-analyst/terms', 'Sign-in states the terms');
   const clickedLabel = await page.getByRole('button', { name: 'Continue with Google', exact: true }).evaluate(el => { (el as HTMLButtonElement).click(); return document.querySelector('.va-google')?.textContent; });
   assert.equal(clickedLabel, 'Signing in with Google…', 'Signing-in state appears only after the click');
   await page.getByText(/GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET/).waitFor();

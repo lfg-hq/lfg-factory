@@ -473,7 +473,7 @@
       const mine = (data.isOwner && !ag.founderSignedAt) || (isAdmin && !ag.lfgSignedAt);
       return ag.status === 'changes_requested'
         ? note('warn', 'The founder asked to change the terms', isAdmin ? 'Review the request in the Deal section and revise the terms or reply.' : 'LFG is reviewing your request. You’ll see revised terms or a reply in the Deal section.')
-        : note('warn', `Approved: ${DEAL[ag.structure]} agreement ready to sign`, `${ag.summary}. Work starts once both sides sign.${mine ? ' Open the Deal section to read and sign it.' : ''}`);
+        : note('warn', `Approved: ${DEAL[ag.structure]} agreement ready to sign`, `${ag.summary}. Someone from LFG's team will contact you to verify details; tokens are released only after that check and both signatures.${mine ? ' Open the Deal section to read and sign it.' : ''}`);
     }
     if (d) {
       const [label, tone] = DECISION[d.decision];

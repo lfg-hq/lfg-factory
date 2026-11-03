@@ -87,3 +87,4 @@
 .va-sources ul{margin:8px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:4px}
 .va-sources .va-source{font-weight:600;text-decoration:none}
 .dark .va-sources summary{background:#161b22;border-color:#30363d}
+.va-terms a{color:#4f46e5;text-decoration:underline}.dark .va-terms a{color:#a5b4fc}

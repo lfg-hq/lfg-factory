@@ -110,3 +110,17 @@
   .vl-final{padding:40px 20px}
 }
 .vl-thesis{color:#e0e7ff;font-weight:600;font-size:14px;text-decoration:none;border-bottom:1px solid rgba(255,255,255,.4)}.vl-thesis:hover{color:#fff}
+
+/* Terms page */
+.vl-terms{max-width:760px;padding-bottom:96px}
+.vl-terms h1{font-size:40px;font-weight:700;margin:18px 0 6px}
+.vl-updated{color:var(--muted);font-size:14px;margin-bottom:32px!important}
+.vl-terms section{padding:22px 0;border-top:1px solid var(--line)}
+.vl-terms h2{font-size:20px;letter-spacing:-.3px;margin-bottom:10px}
+.vl-terms ul{list-style:disc;padding-left:20px;margin:8px 0;display:flex;flex-direction:column;gap:6px;color:var(--ink2)}
+.vl-terms p{color:var(--ink2);margin:6px 0!important}
+.vl-terms a{color:#4f46e5;text-decoration:underline}
+.vl-terms-key,.vl-terms-warn{border-radius:14px;padding:20px 22px!important;margin:12px 0;border:1px solid var(--line)!important}
+.vl-terms-key{background:var(--accent-soft)}
+.vl-terms-warn{background:#fef3f2;border-color:#fecdca!important}
+.dark .vl-terms-warn{background:#2d1513;border-color:#5c2621!important}
