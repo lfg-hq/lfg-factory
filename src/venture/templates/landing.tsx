@@ -65,6 +65,25 @@ export const VentureAnalystPage = () => html`<!doctype html>
   </ol>
 </section>
 
+<section class="vl-section vl-notyet">
+  <div>
+    <h2>Not yet isn't no.</h2>
+    <p class="vl-sub">Most ideas that aren't funded just need more data or more clarity. You get a plan, not a dead end.</p>
+    <ul class="vl-points">
+      <li><b>What's missing</b><span>Clear gaps, like who pays and how much.</span></li>
+      <li><b>What to do next</b><span>Concrete steps, like 10 customer conversations.</span></li>
+      <li><b>Pick up where you left off</b><span>Come back with answers. Your conversation is saved; ask for a fresh assessment.</span></li>
+    </ul>
+  </div>
+  <div class="vl-card vl-feedback" aria-label="Example feedback">
+    <div class="vl-card-top"><span class="vl-tag">Example feedback</span><span class="vl-pill warn">Needs more info</span></div>
+    <strong class="vl-card-title">Email automation for newsletter creators</strong>
+    <div class="vl-fb"><small>Missing</small><p>Which creators, and what they pay for tools today.</p></div>
+    <div class="vl-fb"><small>Next steps</small><p>Pick one niche. Talk to 10 creators in it.</p></div>
+    <div class="vl-fb"><small>Then</small><p>Bring the answers back. The analyst reassesses.</p></div>
+  </div>
+</section>
+
 <section class="vl-section">
   <h2>Sized to the idea</h2>
   <p class="vl-sub">The first tranche covers the next milestone, not the whole company.</p>
