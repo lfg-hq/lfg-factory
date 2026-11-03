@@ -164,7 +164,11 @@ async function handleRunnerMessage(conn: RunnerConn, raw: string | Buffer): Prom
       return;
     }
     case "job.event": {
-      if (job.status === "running" && msg.event && typeof msg.event === "object") await logNormalizedEvent(job, msg.event);
+      if (job.status !== "running" || !msg.event || typeof msg.event !== "object") return;
+      if (msg.event.type === "session" && typeof msg.event.id === "string") {
+        await db.update(runnerJobs).set({ agentSession: msg.event.id.slice(0, 200) }).where(eq(runnerJobs.id, job.id));
+      }
+      await logNormalizedEvent(job, msg.event);
       return;
     }
     case "job.agent_event": {
@@ -193,6 +197,7 @@ export async function enqueueJob(input: { userId: string; projectId: string; tic
     type: "claude_task",
     payload: JSON.stringify(input.payload),
     branch: input.payload.branch,
+    agent: input.payload.agent ?? "claude",
   }).returning();
   await dispatchQueued(input.userId);
   const [fresh] = await db.select().from(runnerJobs).where(eq(runnerJobs.id, job!.id)).limit(1);

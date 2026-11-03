@@ -44,6 +44,8 @@ export interface ClaudeTaskPayload {
   commitMessage: string;
   /** Which agent runs it. Absent (protocol 1): Claude Code. */
   agent?: AgentKind;
+  /** Continue this agent session (a follow-up on the same ticket). */
+  sessionId?: string;
   /** Suggested Claude Code tools. The runner intersects these with its own allow-list. */
   allowedTools?: string[];
   maxTurns?: number;

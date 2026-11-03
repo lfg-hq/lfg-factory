@@ -41,6 +41,9 @@ export const runnerJobs = pgTable(
     payload: text("payload").notNull(),
     status: text("status").notNull().default("queued"),
     branch: text("branch"),
+    agent: text("agent"),
+    /** The agent's own session id, so a follow-up on the ticket can continue it. */
+    agentSession: text("agent_session"),
     commitSha: text("commit_sha"),
     summary: text("summary"),
     error: text("error"),

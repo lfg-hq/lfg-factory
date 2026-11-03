@@ -1047,6 +1047,31 @@ const executingTickets = new Set<string>();
 
 // ── Subscriber Setup ──────────────────────────────────────────────────
 
+async function runsOnTheirComputer(userId: string): Promise<boolean> {
+  const { localAiSettings } = await import("../services/runner/opt-in.ts");
+  return (await localAiSettings(userId)).enabled;
+}
+
+/** Hand a build or a ticket-chat follow-up to the person's own computer. */
+async function sendToTheirComputer(ticketId: string, projectId: string, actorId: string, opts: { notes?: string; fromQueue?: boolean; followUp?: string }): Promise<void> {
+  const { startTicketOnRunner, RunnerJobError } = await import("../services/runner/ticket-job.ts");
+  try {
+    await startTicketOnRunner({ projectId, ticketId, actorId, ...opts });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const [owner] = await db.select({ ownerId: projects.ownerId }).from(projects).where(eq(projects.id, projectId)).limit(1);
+    if (opts.fromQueue) {
+      await db.update(projectTickets).set({ queueStatus: "none", status: "open", updatedAt: new Date() })
+        .where(and(eq(projectTickets.id, ticketId), eq(projectTickets.queueStatus, "queued")));
+      if (owner) broadcastToUser(owner.ownerId, { type: "ticket_status", ticketId, status: "open", queueStatus: "none" });
+    }
+    const text = error instanceof RunnerJobError && error.status === 409 && opts.followUp
+      ? "Your computer is still working on this ticket. Send the message again when it finishes."
+      : `Couldn't run this on your computer: ${message}`;
+    await addLog(ticketId, text, "cli_error", owner?.ownerId);
+  }
+}
+
 export async function startTicketWorker() {
   // Reset any tickets stuck in executing state from a previous crash
   await db
@@ -1117,6 +1142,13 @@ export async function startTicketWorker() {
 
     try {
     const projectId = event.payload.projectId ?? await resolveProjectIdForTicket(ticketId);
+
+    // "Use my computer for AI": the person who started this build runs it on their own
+    // computer (LFG Desktop + their agent), not in a cloud sandbox.
+    if (event.payload.actorId && projectId && await runsOnTheirComputer(event.payload.actorId)) {
+      await sendToTheirComputer(ticketId, projectId, event.payload.actorId, { notes: event.payload.notes, fromQueue: true });
+      return;
+    }
 
     // Determine execution mode from user's applicationState
     const useApiMode = await isApiMode(projectId);
@@ -1244,6 +1276,15 @@ export async function startTicketWorker() {
 
   bus.on("ticket.chat_message", async (event) => {
     const { ticketId, message, sender, actorId, operationId } = event.payload;
+    // "Use my computer for AI": the follow-up runs on the sender's computer, continuing
+    // the agent's earlier session on this ticket.
+    if (actorId && await runsOnTheirComputer(actorId)) {
+      const projectId = await resolveProjectIdForTicket(ticketId);
+      if (projectId) {
+        await withTicketOperation(operationId, () => sendToTheirComputer(ticketId, projectId, actorId, { followUp: message }));
+        return;
+      }
+    }
     // ONE TURN AT A TIME. Builds have had a concurrency guard forever; chat had none,
     // so two messages sent back to back started two agents in the SAME sandbox on the
     // same branch — interleaved edits and two commits for one request. The user-facing

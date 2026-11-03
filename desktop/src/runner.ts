@@ -275,12 +275,18 @@ export async function runAgentTask(job: RunnerJobOffer, active: ActiveJob, ctx: 
 
   const tools = (p.allowedTools?.length ? p.allowedTools.filter(t => ctx.allowedTools.includes(t)) : ctx.allowedTools);
   ctx.progress(`Starting ${AGENTS[ctx.agent].label}…`);
-  const { summary } = await runAgent(ctx.agent, {
-    prompt: p.prompt, cwd: worktree, allowedTools: tools, maxTurns: p.maxTurns, env: ctx.env, bin: ctx.bin,
+  const attempt = (sessionId?: string) => runAgent(ctx.agent, {
+    prompt: p.prompt, cwd: worktree, sessionId, allowedTools: tools, maxTurns: p.maxTurns, env: ctx.env, bin: ctx.bin,
     onEvent: ctx.agentEvent,
     onSpawn: child => { active.child = child; },
-  }).catch((error: Error) => { throw active.cancelled ? new Error("Cancelled") : error; })
-    .finally(() => { active.child = undefined; });
+  }).finally(() => { active.child = undefined; });
+  const { summary } = await attempt(p.sessionId).catch(async (error: Error) => {
+    if (active.cancelled) throw new Error("Cancelled");
+    if (!p.sessionId) throw error;
+    // The earlier session may live on another computer, or have expired: start fresh.
+    ctx.progress("Couldn't continue the earlier session here; starting a fresh one.");
+    return attempt(undefined).catch((e: Error) => { throw active.cancelled ? new Error("Cancelled") : e; });
+  });
   check();
 
   if ((await git(["status", "--porcelain"], worktree)).trim()) {
