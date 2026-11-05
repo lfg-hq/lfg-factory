@@ -23,7 +23,7 @@ export const VentureAnalystPage = () => html`<!doctype html>
 
 <section class="vh-hero">
   <span class="vh-badge"><span class="vh-logo" aria-hidden="true">${rocket}</span>LFG Ventures · your AI venture partner</span>
-  <h1>Your business, built free. <span class="vl-grad">We get paid, only if you do.</span></h1>
+  <h1>Your business, built free.<br><span class="vl-grad">We get paid, only if you do.</span></h1>
   <p class="vh-lede">LFG is a venture partner. Instead of cash, we invest tokens and the agents that turn them into execution, in exchange for equity or a share of revenue. You stay the founder.</p>
   ${ideaForm("idea-top")}
   <ul class="vh-trust">
