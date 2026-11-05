@@ -20,10 +20,8 @@ const S = "/public/images/screenshots";
 
 /** Hero product frame: one real screen per chapter. [src, tab label, alt] */
 const HERO_SHOTS: Array<[src: string, label: string, alt: string]> = [
-  [`${S}/lfg-prd.webp`, "PRD",
-   "A requirements document written in LFG: problem, goal and what will be built, in plain language"],
-  [`${S}/lfg-analysis.webp`, "Architecture",
-   "A technical analysis written by LFG: what is being built and how, in plain language"],
+  [`${S}/lfg-key-flows.webp`, "Architecture",
+   "A sequence diagram from an LFG technical analysis, drawn before any code is written"],
   [`${S}/lfg-ticket-board.webp`, "Tickets",
    "LFG tickets grouped by epic, each epic on its own branch, with priorities"],
   [`${S}/lfg-preview-tab.webp`, "Live preview",
@@ -147,8 +145,9 @@ ${SiteNav({ active: "home" })}
     <div class="absolute -top-10 right-[8%] w-72 h-72 rounded-full bg-brand-100 blur-3xl animate-drift"></div>
     <div class="absolute top-24 left-[4%] w-80 h-80 rounded-full bg-pink-100 blur-3xl animate-drift" style="animation-delay:1s"></div>
 
-    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
-      <div class="max-w-5xl">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-12 xl:gap-14 items-center">
+      <div class="lg:col-span-5">
         <div class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full glass shadow-sm mb-8 animate-fade-up">
           <span class="w-2 h-2 rounded-full bg-brand-500 animate-pulse"></span>
           <span class="text-xs font-bold text-slate-600 uppercase tracking-wider">The software factory agent</span>
@@ -157,8 +156,8 @@ ${SiteNav({ active: "home" })}
           Ship software<br>
           <span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-pink-500">with clarity.</span>
         </h1>
-        <p class="text-lg sm:text-xl text-slate-600 mt-7 leading-relaxed max-w-3xl animate-fade-up">
-          LFG is an AI software factory that turns requirements into production-ready software. It runs the entire lifecycle: it plans the work, builds the features, runs the tests, documents the changes and prepares the release. Your engineers spend their time on what gets built, and on reviewing the result.
+        <p class="text-lg text-slate-600 mt-7 leading-relaxed animate-fade-up">
+          LFG turns requirements into production-ready software. It runs the entire SDLC: it plans the work, builds the features, runs the tests, writes the documentation and prepares the release. Your engineers spend their time on what gets built, and on reviewing the results.
         </p>
         <p class="text-base text-slate-500 mt-3 animate-fade-up">
           Built for software services companies, startups and growing businesses.
@@ -177,7 +176,7 @@ ${SiteNav({ active: "home" })}
       </div>
 
       <!-- The product itself, one real screen per chapter of the story -->
-      <div class="mt-16 animate-fade-up" style="animation-delay:.12s">
+      <div class="lg:col-span-7 min-w-0 animate-fade-up" style="animation-delay:.12s">
         <div class="shot" id="hero-shots">
           <div class="shot-bar">
             <span class="hidden sm:flex items-center gap-1.5 mr-3"><span class="shot-dot bg-red-400/70"></span><span class="shot-dot bg-amber-400/70"></span><span class="shot-dot bg-emerald-400/70"></span></span>
@@ -202,6 +201,7 @@ ${SiteNav({ active: "home" })}
             ${TAB_WASH}
           </div>
         </div>
+      </div>
       </div>
     </div>
   </section>
