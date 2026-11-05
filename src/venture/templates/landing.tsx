@@ -34,9 +34,17 @@ export const VentureAnalystPage = () => html`<!doctype html>
 </section>
 
 <div class="vh-wrap">
-  <ul class="vh-agents" aria-label="LFG's agents">
-    <li>Product</li><li>Design</li><li>Engineering</li><li>Marketing</li><li>Sales</li><li>Customer support</li><li>Bookkeeping</li><li>Hosting and security</li><li>Custom agents</li>
-  </ul>
+  <section class="vh-work" aria-labelledby="work-title">
+    <div class="vh-work-head"><h2 id="work-title">Agents at work</h2><span>This week on the example venture</span></div>
+    <ul>
+      <li><span class="vh-live" aria-hidden="true"></span><small>Sales agent</small><p>Sent 42 follow-ups to local plumbers</p></li>
+      <li><span class="vh-live" aria-hidden="true"></span><small>Engineering agent</small><p>Shipped SMS reminders before every job</p></li>
+      <li><span class="vh-live" aria-hidden="true"></span><small>Support agent</small><p>Rescheduled 6 jobs overnight</p></li>
+      <li><span class="vh-live" aria-hidden="true"></span><small>Marketing agent</small><p>Posted a 60-second demo reel</p></li>
+      <li><span class="vh-live" aria-hidden="true"></span><small>Bookkeeping agent</small><p>Reconciled 24 subscriptions</p></li>
+      <li class="custom"><span class="vh-live" aria-hidden="true"></span><small>Custom agent · quote bot</small><p>Priced 14 jobs from customer photos</p></li>
+    </ul>
+  </section>
 
   <section class="vh-shot" aria-labelledby="shot-title">
     <div class="vh-head">
@@ -114,18 +122,23 @@ export const VentureAnalystPage = () => html`<!doctype html>
 <section class="vh-band" aria-labelledby="size-title"><div class="vh-wrap vh-sec">
   <div class="vh-split">
     <div class="vh-col">
-      <p class="vh-kicker">Tranches and milestones</p>
+      <p class="vh-kicker">Tranches and objectives</p>
       <h2 class="vh-h2" id="size-title">Sized to the idea.</h2>
-      <p class="vh-lede">The first tranche unlocks the next milestone. Hit it, and your progress unlocks the next tranche, then the one after that.</p>
-      <p class="vh-lede">The analyst picks milestones that fit your business: revenue, paying customers or active users. Results come from LFG's analytics and billing, so everyone sees the same numbers.</p>
+      <p class="vh-lede">Each tranche of tokens is released against one objective: a question your business needs answered. The agents build only what helps validate it. Answer it with real results, and the next tranche unlocks.</p>
+      <p class="vh-lede">The analyst sets objectives that fit your business and measures them in revenue, paying customers or active users. Results come from LFG's analytics and billing, so everyone sees the same numbers.</p>
       <div class="vh-results"><img src="/public/images/screenshots/venture-results.png" width="1196" height="480" loading="lazy" alt="Results card from the venture dashboard: revenue, paying customers and weekly active users rising over five readings."></div>
     </div>
-    <div class="vh-plan" aria-label="Example milestone plan">
-      <div class="vh-plan-top"><b>Booking app for plumbers</b><span>Example plan</span></div>
-      <div class="vh-ms done"><span class="vh-ms-dot" aria-hidden="true">${tick}</span><div class="vh-ms-body"><div class="vh-ms-row"><b>Talk to 10 plumbers</b><span class="vh-tag done">Complete</span></div><span>Feedback on the first version</span></div></div>
-      <div class="vh-ms now"><span class="vh-ms-dot" aria-hidden="true"></span><div class="vh-ms-body"><div class="vh-ms-row"><b>First 50 paying plumbers</b><span class="vh-tag now">In progress</span></div><span>Tranche 1 · 31 of 50 so far</span><div class="vh-bar"><span style="width:62%"></span></div></div></div>
-      <div class="vh-ms"><span class="vh-ms-dot" aria-hidden="true">${lock}</span><div class="vh-ms-body"><div class="vh-ms-row"><b>$5K monthly revenue</b><span class="vh-tag">Locked</span></div><span>Unlocks tranche 2</span></div></div>
-      <div class="vh-ms"><span class="vh-ms-dot" aria-hidden="true">${lock}</span><div class="vh-ms-body"><div class="vh-ms-row"><b>1,000 weekly active users</b><span class="vh-tag">Locked</span></div><span>Unlocks tranche 3</span></div></div>
+    <div class="vh-plan vh-obj" aria-label="Example tranche objective">
+      <div class="vh-plan-top"><span>Tranche 1 · objective</span><span class="vh-tag done">3M tokens released</span></div>
+      <p class="vh-obj-q">Will independent plumbers pay $49 a month to stop missing jobs?</p>
+      <span class="vh-obj-pass">Passes at 25 paying plumbers by week 6 · 24 so far</span>
+      <div class="vh-bar"><span style="width:96%"></span></div>
+      <ul class="vh-obj-work">
+        <li><div><b>Build a WhatsApp booking flow</b><span>to validate: plumbers will move bookings off the phone</span></div><span class="vh-tag good">Validated · 1.4M</span></li>
+        <li><div><b>Launch a page that takes a $49 deposit</b><span>to validate: they'll pay before it's finished</span></div><span class="vh-tag good">Validated · 310K</span></li>
+        <li><div><b>Run outreach to 200 local plumbers</b><span>to validate: demand beyond the founder's network</span></div><span class="vh-tag warn">Testing · 250K</span></li>
+      </ul>
+      <p class="vh-obj-next">${lock}Next objective: can it reach $5K a month? Unlocks tranche 2</p>
     </div>
   </div>
   <div class="vh-sizes">
@@ -219,7 +232,6 @@ export const VentureAnalystPage = () => html`<!doctype html>
 // Static, trusted icon paths only.
 const svg = (d: string, size = 18, width = 2.2) => html`<svg aria-hidden="true" viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="${width}" stroke-linecap="round" stroke-linejoin="round">${raw(d)}</svg>`;
 const check = svg('<path d="m5 12 4 4 10-10"/>', 16);
-const tick = svg('<path d="M20 6 9 17l-5-5"/>', 14, 3);
 const arrow = svg('<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>', 18, 2.5);
 const repeat = svg('<path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>', 18, 2);
 const lock = svg('<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>', 13, 2.2);
