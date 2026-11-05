@@ -118,6 +118,10 @@ ${SiteHead({
   image: `${S}/lfg-preview-tab.webp`,
 })}
 <style>
+  @media (max-width: 639px) {
+    [data-shot-btn] .shot-label { display: none; }
+    [data-shot-btn][aria-selected="true"] .shot-label { display: inline; }
+  }
   .qa-item { opacity: 0; transform: translateY(10px); }
   .qa-check { opacity: 0; transform: scale(.4); }
   .qa-answer { opacity: 0; transform: translateX(-6px); }
@@ -176,17 +180,17 @@ ${SiteNav({ active: "home" })}
       <div class="mt-16 animate-fade-up" style="animation-delay:.12s">
         <div class="shot" id="hero-shots">
           <div class="shot-bar">
-            <span class="shot-dot bg-red-400/70"></span><span class="shot-dot bg-amber-400/70"></span><span class="shot-dot bg-emerald-400/70"></span>
-            <div class="ml-3 flex items-center gap-1 overflow-x-auto" role="tablist" aria-label="Product screens">
+            <span class="hidden sm:flex items-center gap-1.5 mr-3"><span class="shot-dot bg-red-400/70"></span><span class="shot-dot bg-amber-400/70"></span><span class="shot-dot bg-emerald-400/70"></span></span>
+            <div class="flex items-center gap-1 min-w-0" role="tablist" aria-label="Product screens">
               ${HERO_SHOTS.map(([, label], i) => html`
                 <button type="button" role="tab" data-shot-btn="${i}" aria-selected="${i === 0 ? "true" : "false"}"
-                        class="relative overflow-hidden px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition-colors ${i === 0 ? "bg-white text-brand-700 shadow-sm" : "text-slate-500 hover:text-slate-800"}">
-                  <span class="text-slate-400 mr-1">${i + 1}</span>${label}
+                        class="relative shrink-0 overflow-hidden px-2.5 sm:px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition-colors ${i === 0 ? "bg-white text-brand-700 shadow-sm" : "text-slate-500 hover:text-slate-800"}">
+                  <span class="text-slate-400">${i + 1}</span><span class="shot-label ml-1">${label}</span>
                   <span data-shot-progress class="absolute left-0 bottom-0 h-0.5 w-full bg-brand-500 origin-left" style="transform:scaleX(0)"></span>
                 </button>`)}
             </div>
             <div class="ml-auto flex items-center gap-1 pl-2 shrink-0">
-              <span class="text-[11px] font-mono text-slate-400 mr-1 tabular-nums" data-shot-count>1 / ${HERO_SHOTS.length}</span>
+              <span class="hidden sm:inline text-[11px] font-mono text-slate-400 mr-1 tabular-nums" data-shot-count>1 / ${HERO_SHOTS.length}</span>
               <button type="button" data-shot-prev aria-label="Previous screen" class="w-7 h-7 rounded-md text-slate-500 hover:bg-white hover:text-slate-900 flex items-center justify-center"><i data-lucide="chevron-left" class="w-4 h-4"></i></button>
               <button type="button" data-shot-next aria-label="Next screen" class="w-7 h-7 rounded-md text-slate-500 hover:bg-white hover:text-slate-900 flex items-center justify-center"><i data-lucide="chevron-right" class="w-4 h-4"></i></button>
             </div>
