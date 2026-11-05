@@ -18,7 +18,7 @@ export const VentureAnalystPage = () => html`<!doctype html>
 <html lang="en"><head>${SiteHead({ title: "LFG Ventures | Your AI venture partner", description: "LFG is a venture partner that invests tokens and agent execution, not cash. Your business, built free. We get paid, only if you do. Start with a conversation.", path: "/venture" })}
 <link rel="stylesheet" href="/public/venture/landing.css">
 <script defer src="/public/venture/landing.js"></script></head>
-<body class="vh-body text-slate-900 font-sans">${SiteNav({})}
+<body class="vh-body text-slate-900 font-sans">${SiteNav({ venture: true })}
 <main class="vh">
 
 <section class="vh-hero">

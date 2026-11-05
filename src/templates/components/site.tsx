@@ -175,20 +175,39 @@ const menuItem = ([href, icon, label, sub]: NavItem) => html`
     </span>
   </a>`;
 
-export const SiteNav = ({ active = "none" }: { active?: SitePage }) => {
+export const SiteNav = ({ active = "none", venture = false }: { active?: SitePage; venture?: boolean }) => {
   const cls = (on: boolean) => on ? "text-brand-600 font-semibold" : "text-slate-600 hover:text-brand-600";
   const isProduct = active === "how-it-works" || active === "agent" || active === "self-host";
   const isSolutions = active === "software-services" || active === "startups" || active === "services";
-
-  return html`
-<nav id="navbar" class="fixed top-0 left-0 right-0 z-50 transition-all duration-300 bg-transparent py-4">
-  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center">
-    <a href="/" class="flex items-center gap-2 group shrink-0">
+  const logo = html`<a href="/" class="flex items-center gap-2 group shrink-0">
       <div class="bg-brand-600 text-white p-1.5 rounded-lg transform group-hover:rotate-12 transition-transform">
         <i data-lucide="rocket" class="w-5 h-5"></i>
       </div>
       <span class="font-display font-bold text-xl tracking-tight text-slate-900">LFG</span>
-    </a>
+    </a>`;
+
+  // LFG Ventures stands on its own: just the logo and a way to the software factory.
+  if (venture) return html`
+<nav id="navbar" class="fixed top-0 left-0 right-0 z-50 transition-all duration-300 bg-transparent py-4">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center gap-4">
+    ${logo}
+    <a href="/" class="bg-slate-900 hover:bg-brand-700 text-white px-5 py-2 rounded-full text-sm font-semibold transition-all whitespace-nowrap">Check out our software factory</a>
+  </div>
+</nav>
+<script>
+  (function() {
+    var navbar = document.getElementById('navbar');
+    window.addEventListener('scroll', function() {
+      if (window.scrollY > 20) { navbar.classList.add('scrolled','py-3'); navbar.classList.remove('bg-transparent','py-4'); }
+      else { navbar.classList.remove('scrolled','py-3'); navbar.classList.add('bg-transparent','py-4'); }
+    });
+  })();
+</script>`;
+
+  return html`
+<nav id="navbar" class="fixed top-0 left-0 right-0 z-50 transition-all duration-300 bg-transparent py-4">
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center">
+    ${logo}
 
     <div class="hidden lg:flex items-center gap-7">
       <div class="has-menu relative">
