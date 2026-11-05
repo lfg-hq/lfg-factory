@@ -61,13 +61,19 @@ const chapter = (num: string, label: string) => html`
     <span class="text-xs font-bold text-slate-500 uppercase tracking-wider">${label}</span>
   </p>`;
 
+/** Washes out the app's own Docs/Tickets/Preview tab bar baked into each screenshot. */
+const TAB_WASH = html`<div aria-hidden="true" class="absolute inset-x-0 top-0 h-[7%] bg-slate-100/70 backdrop-grayscale pointer-events-none"></div>`;
+
 const frame = (src: string, alt: string, label: string) => html`
   <div class="shot">
     <div class="shot-bar">
       <span class="shot-dot bg-red-400/70"></span><span class="shot-dot bg-amber-400/70"></span><span class="shot-dot bg-emerald-400/70"></span>
       <span class="ml-2 text-xs font-mono text-slate-400 truncate">${label}</span>
     </div>
-    <img src="${src}" alt="${alt}" loading="lazy" class="w-full block" />
+    <div class="relative">
+      <img src="${src}" alt="${alt}" loading="lazy" class="w-full block" />
+      ${TAB_WASH}
+    </div>
   </div>`;
 
 export const HomePage = ({ posts = [] }: { posts?: BlogPost[]; turnstileSiteKey?: string }) => html`
@@ -123,18 +129,25 @@ ${SiteNav({ active: "home" })}
         <div class="shot" id="hero-shots">
           <div class="shot-bar">
             <span class="shot-dot bg-red-400/70"></span><span class="shot-dot bg-amber-400/70"></span><span class="shot-dot bg-emerald-400/70"></span>
-            <div class="ml-3 flex items-center gap-1 overflow-x-auto" role="tablist">
+            <div class="ml-3 flex items-center gap-1 overflow-x-auto" role="tablist" aria-label="Product screens">
               ${HERO_SHOTS.map(([, label], i) => html`
                 <button type="button" role="tab" data-shot-btn="${i}" aria-selected="${i === 0 ? "true" : "false"}"
-                        class="px-3 py-1 rounded-md text-xs font-semibold whitespace-nowrap transition-colors ${i === 0 ? "bg-white text-brand-700 shadow-sm" : "text-slate-500 hover:text-slate-800"}">
+                        class="relative overflow-hidden px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition-colors ${i === 0 ? "bg-white text-brand-700 shadow-sm" : "text-slate-500 hover:text-slate-800"}">
                   <span class="text-slate-400 mr-1">${i + 1}</span>${label}
+                  <span data-shot-progress class="absolute left-0 bottom-0 h-0.5 w-full bg-brand-500 origin-left" style="transform:scaleX(0)"></span>
                 </button>`)}
+            </div>
+            <div class="ml-auto flex items-center gap-1 pl-2 shrink-0">
+              <span class="text-[11px] font-mono text-slate-400 mr-1 tabular-nums" data-shot-count>1 / ${HERO_SHOTS.length}</span>
+              <button type="button" data-shot-prev aria-label="Previous screen" class="w-7 h-7 rounded-md text-slate-500 hover:bg-white hover:text-slate-900 flex items-center justify-center"><i data-lucide="chevron-left" class="w-4 h-4"></i></button>
+              <button type="button" data-shot-next aria-label="Next screen" class="w-7 h-7 rounded-md text-slate-500 hover:bg-white hover:text-slate-900 flex items-center justify-center"><i data-lucide="chevron-right" class="w-4 h-4"></i></button>
             </div>
           </div>
           <div class="relative aspect-[3/2] bg-white">
             ${HERO_SHOTS.map(([src, , alt], i) => html`
               <img src="${src}" alt="${alt}" ${i === 0 ? "" : 'loading="lazy"'} data-shot="${i}"
                    class="absolute inset-0 w-full h-full object-cover object-top transition-opacity duration-500 ${i === 0 ? "opacity-100" : "opacity-0"}" />`)}
+            ${TAB_WASH}
           </div>
         </div>
       </div>
@@ -145,11 +158,12 @@ ${SiteNav({ active: "home" })}
   <section class="bg-slate-900 py-24">
     <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
       <p class="text-xs font-bold text-brand-400 uppercase tracking-wider mb-4">The new bottleneck</p>
-      <h2 class="font-display font-bold text-3xl md:text-5xl text-white leading-tight max-w-4xl">
-        The model writes the code. Everything around it decides whether you ship.
+      <h2 class="font-display font-bold text-3xl md:text-4xl lg:text-[2.5rem] text-white leading-tight">
+        Writing code got fast.<br>
+        <span class="text-slate-300">Deciding what to build, and knowing it works, didn't.</span>
       </h2>
       <p class="text-lg text-slate-400 mt-6 max-w-3xl leading-relaxed">
-        Point a coding agent at a ticket and it will write the code. It won't stop to ask the questions that used to be answered in planning meetings, design reviews and QA cycles. Those questions didn't go away. They just stopped having an owner.
+        Point a coding agent at a ticket and it writes the code. It won't ask whether the ticket was right, and it can't tell you whether the result actually works. Those questions used to be answered in planning meetings, design reviews and QA cycles. With agents writing the code, they're now the slowest part of shipping.
       </p>
 
       <div class="mt-14 grid md:grid-cols-2 gap-6">
@@ -168,7 +182,7 @@ ${SiteNav({ active: "home" })}
       </div>
 
       <p class="mt-12 font-display text-2xl text-white max-w-3xl leading-snug">
-        LFG owns those questions. Your agents do the typing. Your team makes the calls, and ships at <span class="text-brand-300">5&ndash;10x</span> its current capacity.
+        LFG answers them on every ticket. Your agents write the code, your team makes the calls, and ships at <span class="text-brand-300">5&ndash;10x</span> its current capacity.
       </p>
     </div>
   </section>
@@ -482,18 +496,21 @@ ${SiteNav({ active: "home" })}
 ${SiteFooter()}
 
 <script>
-  // ── Hero product tabs ─────────────────────────────────────────
+  // ── Hero slideshow ────────────────────────────────────────────
+  // The active tab's progress bar is the timer: when its fill animation ends,
+  // the next screen shows. Hovering the frame pauses the fill.
   (function () {
     var root = document.getElementById('hero-shots');
     if (!root) return;
     var slides = root.querySelectorAll('[data-shot]');
     var buttons = root.querySelectorAll('[data-shot-btn]');
+    var count = root.querySelector('[data-shot-count]');
     if (slides.length < 2) return;
 
-    var current = 0;
-    var timer = null;
-    var DELAY = 5000;
+    var DURATION = 6000;
     var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var current = 0;
+    var anim = null;
     var ON = ['bg-white', 'text-brand-700', 'shadow-sm'];
     var OFF = ['text-slate-500', 'hover:text-slate-800'];
 
@@ -508,23 +525,35 @@ ${SiteFooter()}
         buttons[j].setAttribute('aria-selected', on ? 'true' : 'false');
         ON.forEach(function (c) { buttons[j].classList.toggle(c, on); });
         OFF.forEach(function (c) { buttons[j].classList.toggle(c, !on); });
+        buttons[j].querySelector('[data-shot-progress]').style.transform = 'scaleX(0)';
       }
+      if (count) count.textContent = (current + 1) + ' / ' + slides.length;
+      run();
     }
 
-    function start() { if (!reduced && !timer) timer = setInterval(function () { show(current + 1); }, DELAY); }
-    function stop() { if (timer) { clearInterval(timer); timer = null; } }
+    function run() {
+      if (anim) { anim.cancel(); anim = null; }
+      if (reduced) return;
+      var bar = buttons[current].querySelector('[data-shot-progress]');
+      anim = bar.animate([{ transform: 'scaleX(0)' }, { transform: 'scaleX(1)' }], { duration: DURATION, easing: 'linear', fill: 'forwards' });
+      anim.onfinish = function () { show(current + 1); };
+      if (hovering || document.hidden) anim.pause();
+    }
 
-    // A click means the reader has taken over: stop rotating for good.
+    var hovering = false;
     for (var k = 0; k < buttons.length; k++) {
-      (function (idx) {
-        buttons[idx].addEventListener('click', function () { stop(); show(idx); });
-      })(k);
+      (function (idx) { buttons[idx].addEventListener('click', function () { show(idx); }); })(k);
     }
+    var prev = root.querySelector('[data-shot-prev]');
+    var next = root.querySelector('[data-shot-next]');
+    if (prev) prev.addEventListener('click', function () { show(current - 1); });
+    if (next) next.addEventListener('click', function () { show(current + 1); });
 
-    root.addEventListener('mouseenter', stop);
-    document.addEventListener('visibilitychange', function () { document.hidden ? stop() : start(); });
+    root.addEventListener('mouseenter', function () { hovering = true; if (anim) anim.pause(); });
+    root.addEventListener('mouseleave', function () { hovering = false; if (anim) anim.play(); });
+    document.addEventListener('visibilitychange', function () { if (!anim) return; document.hidden ? anim.pause() : (!hovering && anim.play()); });
 
-    start();
+    run();
   })();
 
   // ── Project intake ────────────────────────────────────────────
