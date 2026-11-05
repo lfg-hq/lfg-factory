@@ -112,7 +112,7 @@ export const HomePage = ({ posts = [] }: { posts?: BlogPost[]; turnstileSiteKey?
 <html lang="en" class="scroll-smooth">
 <head>
 ${SiteHead({
-  title: "LFG | The Software Factory Agent: decide what to build, prove what got built",
+  title: "LFG | The Software Factory Agent: decide what to build, see it working",
   description: "LFG scopes the work, makes the architecture decisions, turns them into tickets and runs Claude Code, Codex and Pi across them in parallel. Every change comes back running in a live preview, tested against what you asked for.",
   path: "/",
   image: `${S}/lfg-preview-tab.webp`,
@@ -151,10 +151,13 @@ ${SiteNav({ active: "home" })}
         </div>
         <h1 class="font-display font-semibold text-4xl sm:text-5xl xl:text-6xl leading-[1.08] tracking-tight text-slate-900 animate-fade-up">
           Decide what to build.<br>
-          <span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-pink-500">Prove what got built.</span>
+          <span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-pink-500">See it working.</span>
         </h1>
         <p class="text-lg sm:text-xl text-slate-600 mt-7 leading-relaxed max-w-3xl animate-fade-up">
-          LFG automates the whole software lifecycle: scoping, planning, documentation, ticketing, implementation, testing and QA. It runs Claude Code, Codex and Pi sessions in parallel sandboxes. Every change is running in front of you before anyone reviews it.
+          LFG is an AI software factory that turns requirements into production-ready software. It runs the entire lifecycle: it plans the work, builds the features, runs the tests, documents the changes and prepares the release. Your engineers spend their time on what gets built, and on reviewing the result.
+        </p>
+        <p class="text-base text-slate-500 mt-3 animate-fade-up">
+          Built for software services companies, startups and growing businesses.
         </p>
         <div class="mt-9 flex flex-col sm:flex-row gap-3 animate-fade-up">
           <a href="/auth/register" class="px-7 py-3.5 rounded-full bg-slate-900 text-white font-semibold hover:bg-slate-800 transition-colors inline-flex items-center justify-center gap-2">
