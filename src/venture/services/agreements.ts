@@ -33,7 +33,7 @@ export function agreementText(input: { version: number; founder: { name: string;
     `# LFG Venture Agreement`,
     `**Version ${input.version}** · Generated ${new Date().toISOString().slice(0, 10)}`,
     ``,
-    `This Agreement is between **LFG Inc.** ("LFG") and **${input.founder.name}** (${input.founder.email}) (the "Founder") for the venture **"${input.venture}"** (the "Venture"). It becomes active only when both parties have signed it. LFG releases tokens only after its team has verified the Founder and the Venture. The LFG Ventures Terms and Conditions (lfg.run/venture-analyst/terms) also apply.`,
+    `This Agreement is between **LFG Inc.** ("LFG") and **${input.founder.name}** (${input.founder.email}) (the "Founder") for the venture **"${input.venture}"** (the "Venture"). It becomes active only when both parties have signed it. LFG releases tokens only after its team has verified the Founder and the Venture. The LFG Ventures Terms and Conditions (lfg.run/venture/terms) also apply.`,
     ``,
     `## 1. What LFG provides`,
     `LFG commits **${compact(tokens)} tokens** (about **${dollars(value)}** of agent work at LFG's standard rate of ${dollars(env.VENTURE_USD_PER_MILLION_TOKENS)} per million tokens). LFG's agents spend them on:`,

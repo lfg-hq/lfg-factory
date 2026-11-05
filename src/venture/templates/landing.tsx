@@ -5,17 +5,17 @@ import { SiteHead, SiteNav, SiteFooter } from "../../templates/components/site.t
 // The idea forms are the call to action: public/venture/landing.js keeps the
 // typed idea, signs the founder in with Google, and the analyst's page sends it
 // as the first message. Without JavaScript the forms open the analyst's page.
-const CHAT = "/venture-analyst/chat";
+const CHAT = "/venture/chat";
 
 const ideaForm = (id: string) => html`<form class="vh-form" action="${CHAT}" method="get" data-idea-form>
   <label class="vh-sr" for="${id}">Tell the analyst about your idea</label>
   <input id="${id}" name="idea" type="text" maxlength="4000" autocomplete="off" placeholder="A booking app for plumbers in my city">
   <button class="vh-go" type="submit">Chat with the analyst ${arrow}</button>
 </form>
-<p class="vh-formnote" role="status">Next, sign in with Google and the analyst picks up your idea. By continuing you agree to the LFG Ventures <a href="/venture-analyst/terms">Terms</a>.</p>`;
+<p class="vh-formnote" role="status">Next, sign in with Google and the analyst picks up your idea. By continuing you agree to the LFG Ventures <a href="/venture/terms">Terms</a>.</p>`;
 
 export const VentureAnalystPage = () => html`<!doctype html>
-<html lang="en"><head>${SiteHead({ title: "LFG Ventures | Your AI venture partner", description: "LFG is a venture partner that invests tokens and agent execution, not cash. Your business, built free. We get paid, only if you do. Start with a conversation.", path: "/venture-analyst" })}
+<html lang="en"><head>${SiteHead({ title: "LFG Ventures | Your AI venture partner", description: "LFG is a venture partner that invests tokens and agent execution, not cash. Your business, built free. We get paid, only if you do. Start with a conversation.", path: "/venture" })}
 <link rel="stylesheet" href="/public/venture/landing.css">
 <script defer src="/public/venture/landing.js"></script></head>
 <body class="vh-body text-slate-900 font-sans">${SiteNav({})}
@@ -46,7 +46,7 @@ export const VentureAnalystPage = () => html`<!doctype html>
       <p class="vh-lede">See the objective you're working toward and how close you are, what the agents are building, how many tokens are left in the tranche and what your customers are doing.</p>
     </div>
     <div class="vh-frame">
-      <div class="vh-frame-bar" aria-hidden="true"><i></i><i></i><i></i><span>lfg.run/venture-analyst/dashboard</span></div>
+      <div class="vh-frame-bar" aria-hidden="true"><i></i><i></i><i></i><span>lfg.run/venture/dashboard</span></div>
       <img src="/public/images/screenshots/venture-dashboard.png" width="2560" height="1720" loading="lazy" alt="The LFG venture dashboard for a plumbers' booking app in week 5: the tranche 1 objective, will plumbers pay $49 a month, is 96% done at 24 of 25 paying plumbers; 2.2M of 3M tokens spent, 770K left, 2 of 5 work items shipped and $1,176 in monthly revenue.">
     </div>
     <div class="vh-callouts">
@@ -217,7 +217,7 @@ export const VentureAnalystPage = () => html`<!doctype html>
   <h2 id="final-title">Have an idea worth building?</h2>
   <p class="vh-lede">Your business, built free. We get paid, only if you do. Start with a conversation, private to you and LFG's venture team.</p>
   ${ideaForm("idea-bottom")}
-  <a class="vh-thesis" href="/venture-analyst/thesis">Read the thesis →</a>
+  <a class="vh-thesis" href="/venture/thesis">Read the thesis →</a>
 </div></section>
 
 </main>${SiteFooter()}</body></html>`;

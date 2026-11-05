@@ -3,7 +3,7 @@
 // and the analyst's page sends it as the first message of a new chat.
 (() => {
   'use strict';
-  const CHAT = '/venture-analyst/chat';
+  const CHAT = '/venture/chat';
   const KEY = 'va-idea';
   async function api(path, options = {}) {
     const response = await fetch(path, { ...options, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', ...options.headers } });

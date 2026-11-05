@@ -4,7 +4,7 @@ import { SiteHead, SiteNav, SiteFooter } from "../../templates/components/site.t
 // Terms for LFG Ventures (the analyst, assessments, funding and agreements).
 // Founders agree to these when they continue with Google.
 export const VentureTermsPage = () => html`<!doctype html>
-<html lang="en"><head>${SiteHead({ title: "LFG Ventures Terms and Conditions", description: "Terms for using LFG's venture analyst, assessments and token funding.", path: "/venture-analyst/terms" })}
+<html lang="en"><head>${SiteHead({ title: "LFG Ventures Terms and Conditions", description: "Terms for using LFG's venture analyst, assessments and token funding.", path: "/venture/terms" })}
 <link rel="stylesheet" href="/public/venture/landing.css"></head>
 <body class="text-slate-900 font-sans">${SiteNav({})}
 <main class="vl vl-terms">

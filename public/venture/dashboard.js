@@ -76,7 +76,7 @@
     out.onclick = async () => {
       out.disabled = true;
       try { await fetch('/api/auth/sign-out', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: '{}' }); } catch { /* still leave */ }
-      location.assign('/venture-analyst');
+      location.assign('/venture');
     };
   }
 
@@ -89,7 +89,7 @@
     try { await refreshList(); render(); }
     catch (error) {
       // Signed-out visitors sign in on the analyst page, then come straight back here.
-      if (error.status === 401 || error.code === 'GOOGLE_LINK_REQUIRED') { location.replace('/venture-analyst/chat?next=dashboard'); return; }
+      if (error.status === 401 || error.code === 'GOOGLE_LINK_REQUIRED') { location.replace('/venture/chat?next=dashboard'); return; }
       if (error.code === 'ADMIN_REQUIRED') { scope = 'mine'; history.replaceState(null, '', url()); load(); return; }
       root.replaceChildren(h('div', 'vd-state', el('p', errorText(error), 'vd-error'), btn('Retry', load)));
     }
@@ -118,7 +118,7 @@
         const { conversation } = await api('/api/venture/conversations', { method: 'POST', body: JSON.stringify({ title: text.replace(/\s+/g, ' ').slice(0, 80) }) });
         // The chat page sends this once as the first message, then forgets it.
         try { sessionStorage.setItem(`va-pending:${conversation.id}`, text); } catch { /* storage unavailable: founder retypes */ }
-        location.assign(`/venture-analyst/chat?c=${encodeURIComponent(conversation.id)}`);
+        location.assign(`/venture/chat?c=${encodeURIComponent(conversation.id)}`);
       } catch (error) { start.disabled = false; feedback.textContent = errorText(error); }
     };
     dialog.append(form);
@@ -658,7 +658,7 @@
         h('div', 'vd-actions',
           canManage ? btn(archived ? 'Restore' : 'Archive', () => archived ? archive(false) : notice('Archive this venture?', 'It moves out of your active list and frees your venture slot. You can restore it any time.', { label: 'Archive', run: () => archive(true) }), 'vd-btn') : null,
           canManage && data.agreements.current?.status !== 'active' ? btn('Delete', remove, 'vd-btn danger-ghost') : null,
-          data.isOwner && !archived ? link('Open chat', `/venture-analyst/chat?c=${encodeURIComponent(id)}`, 'vd-btn primary') : null));
+          data.isOwner && !archived ? link('Open chat', `/venture/chat?c=${encodeURIComponent(id)}`, 'vd-btn primary') : null));
 
       const main = h('div', 'vd-main'), side = h('aside', 'vd-side');
       main.append(...[building(data, r, reload), (data.progress.total || data.metrics.length) ? results(data, reload) : null, timeline(data)].filter(Boolean));

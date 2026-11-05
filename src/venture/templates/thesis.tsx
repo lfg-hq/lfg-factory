@@ -4,10 +4,10 @@ import { TOKEN_POLICY } from "../services/assessment.ts";
 
 // The pitch: LFG Ventures' thesis and operating model, in short sections.
 // Static. Tranche guidance comes from the same policy the analyst is given.
-const CHAT = "/venture-analyst/chat";
+const CHAT = "/venture/chat";
 
 export const VentureThesisPage = () => html`<!doctype html>
-<html lang="en"><head>${SiteHead({ title: "LFG Ventures: the thesis", description: "Venture building paid in tokens: how LFG's analyst funds ideas, how agents build and run them, and how each tranche is earned.", path: "/venture-analyst/thesis", noindex: true })}
+<html lang="en"><head>${SiteHead({ title: "LFG Ventures: the thesis", description: "Venture building paid in tokens: how LFG's analyst funds ideas, how agents build and run them, and how each tranche is earned.", path: "/venture/thesis", noindex: true })}
 <link rel="stylesheet" href="/public/venture/landing.css">
 <link rel="stylesheet" href="/public/venture/thesis.css"></head>
 <body class="text-slate-900 font-sans">${SiteNav({})}
@@ -134,7 +134,7 @@ export const VentureThesisPage = () => html`<!doctype html>
 <section class="vl-final">
   <h2>The analyst decides. Agents build. Results earn the next tranche.</h2>
   <p>See it from the founder's side.</p>
-  <div class="vt-final-ctas"><a class="vl-btn primary light" href="${CHAT}">Talk to the analyst</a><a class="vl-btn ghost" href="/venture-analyst">For founders</a></div>
+  <div class="vt-final-ctas"><a class="vl-btn primary light" href="${CHAT}">Talk to the analyst</a><a class="vl-btn ghost" href="/venture">For founders</a></div>
 </section>
 
 </main>${SiteFooter()}</body></html>`;

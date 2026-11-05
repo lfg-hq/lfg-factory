@@ -32,12 +32,12 @@ try {
   const errors: string[] = []; page.on("pageerror", error => errors.push(error.message));
   // The landing page explains the offer; its call to action is an idea form that
   // keeps the idea and starts Google sign-in (the analyst's page without JS).
-  await page.goto(`${base}/venture-analyst`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${base}/venture`, { waitUntil: "domcontentloaded" });
   await page.getByRole('heading', { name: 'How it works', exact: true }).waitFor();
   for (const heading of ['Not yet isn\'t no.', 'Sized to the idea.', 'We invest with execution, not cash.', 'LFG is also your coach.']) await page.getByRole('heading', { name: heading, exact: true }).waitFor();
   assert.equal(await page.locator('#va-panel').count(), 0, 'No chat on the landing page');
   const forms = await page.locator('[data-idea-form]').evaluateAll(list => list.map(f => f.getAttribute('action')));
-  assert(forms.length >= 2 && forms.every(action => action === '/venture-analyst/chat'), JSON.stringify(forms));
+  assert(forms.length >= 2 && forms.every(action => action === '/venture/chat'), JSON.stringify(forms));
   await page.getByRole('button', { name: 'Chat with the analyst' }).first().click();
   await page.getByText('Tell us a little about your idea first.').waitFor();
   await page.getByLabel('Tell the analyst about your idea').first().fill('TEST FIXTURE booking app for plumbers');
@@ -50,24 +50,24 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Landing has no horizontal scroll on phones');
   await page.screenshot({ path: `${shots}/venture-landing-mobile.png`, fullPage: true });
-  await page.goto(`${base}/venture-analyst/terms`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${base}/venture/terms`, { waitUntil: 'domcontentloaded' });
   for (const heading of ['3. Funding decisions and human verification', '5. Prohibited ventures and content']) await page.getByRole('heading', { name: heading, exact: true }).waitFor();
   await page.screenshot({ path: `${shots}/venture-terms.png`, fullPage: true });
   // The pitch page explains the thesis and the release / hold / halt loop.
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await page.goto(`${base}/venture-analyst/thesis`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${base}/venture/thesis`, { waitUntil: 'domcontentloaded' });
   for (const heading of ['The loop', 'How the analyst sizes a tranche', 'Agents do the work, on one stack', 'Release, hold or halt']) await page.getByRole('heading', { name: heading, exact: true }).waitFor();
   await page.screenshot({ path: `${shots}/venture-thesis.png`, fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Thesis has no horizontal scroll on phones');
   await page.screenshot({ path: `${shots}/venture-thesis-mobile.png`, fullPage: true });
-  await page.goto(`${base}/venture-analyst`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${base}/venture`, { waitUntil: 'domcontentloaded' });
   await page.setViewportSize({ width: 1440, height: 1000 });
   // Signed out, the analyst's page asks for Google sign-in and reports problems honestly.
-  await page.goto(`${base}/venture-analyst/chat`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${base}/venture/chat`, { waitUntil: 'domcontentloaded' });
   await page.getByRole('button', { name: 'Continue with Google', exact: true }).waitFor();
   assert.equal(await page.locator('.va-error').count(), 0, 'Expected anonymous readiness is not an auth failure');
-  assert.equal(await page.getByRole('link', { name: 'Terms and Conditions' }).getAttribute('href'), '/venture-analyst/terms', 'Sign-in states the terms');
+  assert.equal(await page.getByRole('link', { name: 'Terms and Conditions' }).getAttribute('href'), '/venture/terms', 'Sign-in states the terms');
   const clickedLabel = await page.getByRole('button', { name: 'Continue with Google', exact: true }).evaluate(el => { (el as HTMLButtonElement).click(); return document.querySelector('.va-google')?.textContent; });
   assert.equal(clickedLabel, 'Signing in with Google…', 'Signing-in state appears only after the click');
   await page.getByText(/GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET/).waitFor();
@@ -78,7 +78,7 @@ try {
     cancel.click(); return document.querySelector('.va-google')?.textContent;
   });
   assert.equal(cancelledLabel, 'Continue with Google', 'Cancelling restores a retryable sign-in state');
-  await page.goto(`${base}/venture-analyst/chat?auth=failed&requestId=TEST-FIXTURE`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${base}/venture/chat?auth=failed&requestId=TEST-FIXTURE`, { waitUntil: 'domcontentloaded' });
   await page.getByText(/Google sign-in wasn’t completed/).waitFor();
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'Chat page fits a phone');
@@ -90,8 +90,8 @@ try {
   await page.evaluate(() => localStorage.setItem('lfg-theme', 'light'));
   await page.setViewportSize({ width: 1440, height: 1000 });
   // Signed-out visitors to the dashboard land on sign-in, set to return there.
-  await page.goto(`${base}/venture-analyst/dashboard`, { waitUntil: 'domcontentloaded' });
-  await page.waitForURL(/\/venture-analyst\/chat\?next=dashboard/);
+  await page.goto(`${base}/venture/dashboard`, { waitUntil: 'domcontentloaded' });
+  await page.waitForURL(/\/venture\/chat\?next=dashboard/);
   await page.getByRole('heading', { name: 'Sign in to see your dashboard', exact: true }).waitFor();
   assert.equal(await page.locator('#va-dashboard').isHidden(), true);
   const loginStatus = await page.evaluate(async ({ email, password }) => {
@@ -99,7 +99,7 @@ try {
     return response.status;
   }, { email, password });
   assert.equal(loginStatus, 200, 'Real Better Auth fixture login');
-  await page.goto(`${base}/venture-analyst/chat`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${base}/venture/chat`, { waitUntil: 'domcontentloaded' });
   assert.equal(await page.locator('#navbar, footer').count(), 0, 'Chat page has no marketing chrome');
   // Opening the analyst starts a fresh chat; nothing is created until the first message.
   assert.equal(await page.getByRole('button', { name: '+ New chat', exact: true }).count(), 0, 'New ventures start from the dashboard');
@@ -136,10 +136,10 @@ try {
   assert.equal(await page.locator('.va-md h2', { hasText: 'Plan' }).count(), 1);
   assert.equal(await page.locator('.va-md img, .va-md a[href^="javascript"]').count(), 0);
   assert.equal(await page.evaluate(() => (window as any).pwned), undefined);
-  await page.goto(`${base}/venture-analyst/chat`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${base}/venture/chat`, { waitUntil: 'domcontentloaded' });
   await page.getByText('Welcome. Tell me', { exact: false }).waitFor();
   assert.equal(new URL(page.url()).searchParams.get('c'), null);
-  await page.goto(`${base}/venture-analyst/chat?c=${selected}`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${base}/venture/chat?c=${selected}`, { waitUntil: 'domcontentloaded' });
   await page.getByText(/This reply failed/).waitFor();
   const { ventureAssessments } = await import('../src/venture/db/schema.ts');
   await db.insert(ventureAssessments).values({ conversationId: selected, version: 1, status: 'provisional', contentJson: assessmentFixture() });
@@ -169,7 +169,7 @@ try {
   const [v2] = await db.select().from(ventureAssessments).where(and(eq(ventureAssessments.conversationId, selected), eq(ventureAssessments.version, 2)));
   await saveTasks(selected, v2!);
   // Dashboard opens on the list; a venture opens its full view, and Back returns.
-  await page.goto(`${base}/venture-analyst/dashboard`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`${base}/venture/dashboard`, { waitUntil: 'domcontentloaded' });
   await page.getByRole('heading', { name: 'Your ventures', exact: true }).waitFor();
   assert.equal(await page.locator('#navbar, footer').count(), 0, 'A working page: no marketing chrome');
   assert.equal(await page.locator('#vd-user').textContent(), 'TEST FIXTURE');

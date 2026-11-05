@@ -19,12 +19,12 @@ export const VentureChatPage = () => html`<!doctype html>
 <body class="vd-body" data-venture-mode="page">
 <header class="vd-bar">
 <a class="vd-brand" href="/"><span class="vd-logo" aria-hidden="true">${rocket}</span>LFG</a>
-<span class="vd-sep" aria-hidden="true">/</span><a class="vd-crumb" href="/venture-analyst/dashboard">Ventures</a>
+<span class="vd-sep" aria-hidden="true">/</span><a class="vd-crumb" href="/venture/dashboard">Ventures</a>
 <span class="vd-sep" aria-hidden="true">/</span><span class="vd-crumb">Analyst</span>
 </header>
 <main class="va-chatpage">
 <section class="va-panel" id="va-panel" aria-label="Venture analyst chat" tabindex="-1">
-<header class="va-head"><span class="va-avatar" aria-hidden="true">${bot}</span><div><strong id="va-heading">Venture Analyst</strong><small id="va-status">Loading…</small></div><a id="va-dashboard" class="va-dash" href="/venture-analyst/dashboard" hidden>Go to dashboard <span aria-hidden="true">→</span></a><button id="va-close" aria-label="Close" hidden></button></header>
+<header class="va-head"><span class="va-avatar" aria-hidden="true">${bot}</span><div><strong id="va-heading">Venture Analyst</strong><small id="va-status">Loading…</small></div><a id="va-dashboard" class="va-dash" href="/venture/dashboard" hidden>Go to dashboard <span aria-hidden="true">→</span></a><button id="va-close" aria-label="Close" hidden></button></header>
 <div id="va-stage" aria-live="polite"></div>
 </section>
 </main></body></html>`;

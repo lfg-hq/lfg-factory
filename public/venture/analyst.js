@@ -3,10 +3,10 @@
   const $ = id => document.getElementById(id);
   const grid = $('va-grid'), panel = $('va-panel'), stage = $('va-stage');
   const cta = $('va-cta'), close = $('va-close'), status = $('va-status');
-  // "page" is the analyst's own page (/venture-analyst/chat); otherwise this is
+  // "page" is the analyst's own page (/venture/chat); otherwise this is
   // the landing panel, which only signs people in and hands over to that page.
   const pageMode = document.body.dataset.ventureMode === 'page';
-  const chatPage = id => `/venture-analyst/chat${id ? `?c=${encodeURIComponent(id)}` : ''}`;
+  const chatPage = id => `/venture/chat${id ? `?c=${encodeURIComponent(id)}` : ''}`;
   const narrow = matchMedia('(max-width:1023px)');
   let expanded = false, controller, streamController, activeTurn, epoch = 0, loadEpoch = 0, returnFocus = cta, selectedId = null;
   const drafts = new Map(), sourceMap = new Map();
@@ -20,7 +20,7 @@
   function showDashboard(id) {
     if (!dashboard) return;
     dashboard.hidden = false;
-    dashboard.href = `/venture-analyst/dashboard${id ? `?v=${encodeURIComponent(id)}` : ''}`;
+    dashboard.href = `/venture/dashboard${id ? `?v=${encodeURIComponent(id)}` : ''}`;
   }
   const hideDashboard = () => { if (dashboard) dashboard.hidden = true; };
   // Friendly text first; the correlation ID stays available but small.
@@ -53,7 +53,7 @@
     const card = element('div', '', 'va-saved');
     const text = element('div', '', 'va-saved-text');
     text.append(element('strong', 'Saved to your dashboard'), element('span', details || 'Your verdict, missing inputs and next steps are ready to review.', ''));
-    const go = element('a', 'Open dashboard →', 'va-saved-link'); go.href = `/venture-analyst/dashboard?v=${encodeURIComponent(id)}`;
+    const go = element('a', 'Open dashboard →', 'va-saved-link'); go.href = `/venture/dashboard?v=${encodeURIComponent(id)}`;
     card.append(text, go); return card;
   }
   function iconButton(label, svgMarkup, className) {
@@ -110,7 +110,7 @@
     icon.innerHTML = '<path fill="#4285F4" d="M22 12.2c0-.7-.1-1.4-.2-2.1H12v4h5.6a4.8 4.8 0 0 1-2.1 3.1v2.6h3.4c2-1.8 3.1-4.4 3.1-7.6Z"/><path fill="#34A853" d="M12 22c2.8 0 5.1-.9 6.9-2.5l-3.4-2.6a6.3 6.3 0 0 1-9.4-3.3H2.6v2.7A10.4 10.4 0 0 0 12 22Z"/><path fill="#FBBC05" d="M6.1 13.6a6.4 6.4 0 0 1 0-3.2V7.7H2.6a10 10 0 0 0 0 8.6Z"/><path fill="#EA4335" d="M12 6c1.6 0 3 .5 4.1 1.6l3.1-3A10 10 0 0 0 2.6 7.7l3.5 2.7A6.2 6.2 0 0 1 12 6Z"/>';
     google.prepend(icon);
     const terms = element('p', '', 'va-muted va-terms');
-    const termsLink = element('a', 'Terms and Conditions'); termsLink.href = '/venture-analyst/terms'; termsLink.target = '_blank'; termsLink.rel = 'noopener';
+    const termsLink = element('a', 'Terms and Conditions'); termsLink.href = '/venture/terms'; termsLink.target = '_blank'; termsLink.rel = 'noopener';
     terms.append(document.createTextNode('By continuing with Google, you agree to the LFG Ventures '), termsLink, document.createTextNode('.'));
     auth.append(google, terms, element('p', 'Google verifies your identity. No access to your Gmail inbox is requested.', 'va-muted'));
     content.append(auth); stage.append(content);
@@ -392,7 +392,7 @@
         // At the venture limit: explain instead of offering a chat that can't be saved.
         stage.querySelector('.va-composer')?.remove();
         const note = element('div', '', 'va-notice va-limit');
-        const dash = element('a', 'Open your dashboard', 'va-source'); dash.href = '/venture-analyst/dashboard';
+        const dash = element('a', 'Open your dashboard', 'va-source'); dash.href = '/venture/dashboard';
         note.append(element('span', `You can have ${ventureLimit.max} active venture${ventureLimit.max === 1 ? '' : 's'} at a time. Open it from your dashboard, or archive it there to start another.`), dash);
         content.replaceChildren(element('div', 'NEW CONVERSATION', 'va-label'), note);
         return;

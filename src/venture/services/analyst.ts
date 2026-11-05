@@ -311,7 +311,7 @@ export async function runAssessment(conversationId: string, requestId: string, a
     const [assessment] = await db.insert(ventureAssessments).values({ conversationId, version: (last?.version || 0) + 1, status: content.status, contentJson: content }).returning();
     try { await onAssessmentSaved(conversationId, assessment!, last?.id); }
     catch { log('venture.assessment.tasks_failed', 'failed', { version: assessment!.version }); }
-    await db.update(ventureMessages).set({ status: 'completed', content: `Saved assessment version ${assessment!.version}. Open the [venture dashboard](/venture-analyst/dashboard?v=${conversationId}) to see the verdict, market and your next steps.` }).where(where);
+    await db.update(ventureMessages).set({ status: 'completed', content: `Saved assessment version ${assessment!.version}. Open the [venture dashboard](/venture/dashboard?v=${conversationId}) to see the verdict, market and your next steps.` }).where(where);
     log('venture.assessment.completed', 'success', { validationOutcome: 'valid', version: assessment!.version });
     return assessment!;
   } catch (error) {

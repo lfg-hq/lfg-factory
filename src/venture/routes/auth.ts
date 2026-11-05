@@ -17,8 +17,8 @@ ventureAuth.post("/auth/venture/google", c => loggedRequest(c.req.raw, "venture.
   // The only client choice is where to land afterwards, from a fixed list.
   let next: unknown;
   try { next = JSON.parse((await c.req.text()).slice(0, 512)).next; } catch { /* empty or invalid body */ }
-  const callbackURL = new URL(next === "dashboard" ? "/venture-analyst/dashboard" : "/venture-analyst/chat", env.BETTER_AUTH_URL).href;
-  const errorCallbackURL = new URL(`/venture-analyst/chat?auth=failed${next === "dashboard" ? "&next=dashboard" : ""}`, env.BETTER_AUTH_URL).href;
+  const callbackURL = new URL(next === "dashboard" ? "/venture/dashboard" : "/venture/chat", env.BETTER_AUTH_URL).href;
+  const errorCallbackURL = new URL(`/venture/chat?auth=failed${next === "dashboard" ? "&next=dashboard" : ""}`, env.BETTER_AUTH_URL).href;
   try {
     const options = { headers: c.req.raw.headers, body: { provider: "google" as const, callbackURL, errorCallbackURL, disableRedirect: true }, asResponse: true as const };
     const response = session ? await auth.api.linkSocialAccount(options) : await auth.api.signInSocial(options);
@@ -38,7 +38,7 @@ export async function handleGoogleCallback(request: Request) {
     if (location) {
       const target = new URL(location, env.BETTER_AUTH_URL);
       // Keep callbacks from other Google entry points unchanged.
-      if (target.origin === new URL(env.BETTER_AUTH_URL).origin && target.pathname === "/venture-analyst/chat" && target.searchParams.get("auth") === "failed") {
+      if (target.origin === new URL(env.BETTER_AUTH_URL).origin && target.pathname === "/venture/chat" && target.searchParams.get("auth") === "failed") {
         target.searchParams.set("requestId", requestId);
         response.headers.set("location", target.href);
         response.headers.set("X-Error-Code", new URL(request.url).searchParams.get("error") === "access_denied" ? "OAUTH_CANCELLED" : "OAUTH_FAILED");

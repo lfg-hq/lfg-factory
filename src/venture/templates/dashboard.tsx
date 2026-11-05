@@ -19,8 +19,8 @@ export const VentureDashboardPage = () => html`<!doctype html>
 <body class="vd-body">
 <header class="vd-bar">
 <a class="vd-brand" href="/"><span class="vd-logo" aria-hidden="true">${rocket}</span>LFG</a>
-<span class="vd-sep" aria-hidden="true">/</span><a class="vd-crumb" href="/venture-analyst/dashboard">Ventures</a>
-<nav class="vd-bar-right" aria-label="Account"><a class="vd-ghost" href="/venture-analyst/chat">Analyst chat</a><span id="vd-user" class="vd-user" hidden></span><button id="vd-signout" class="vd-ghost" type="button" hidden>Sign out</button></nav>
+<span class="vd-sep" aria-hidden="true">/</span><a class="vd-crumb" href="/venture/dashboard">Ventures</a>
+<nav class="vd-bar-right" aria-label="Account"><a class="vd-ghost" href="/venture/chat">Analyst chat</a><span id="vd-user" class="vd-user" hidden></span><button id="vd-signout" class="vd-ghost" type="button" hidden>Sign out</button></nav>
 </header>
 <main class="vd" id="vd" aria-live="polite"></main>
 </body></html>`;
