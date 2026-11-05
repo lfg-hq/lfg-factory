@@ -110,17 +110,14 @@
 .vh-trust svg{color:var(--accent)}
 .vh-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 
-/* agents at work */
-.vh-work{border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:28px 0}
-.vh-work-head{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:6px 16px;margin-bottom:16px}
-.vh-work-head h2{font-size:18px;font-weight:700}
-.vh-work-head span{font-size:14px;color:var(--faint)}
-.vh-work ul{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
-.vh-work li{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px 16px 14px 34px}
-.vh-work li.custom{border-style:dashed}
-.vh-work small{display:block;font-size:13px;font-weight:700;color:var(--accent)}
-.vh-work p{font-size:15px;color:var(--ink2);margin-top:2px}
-.vh-live{position:absolute;left:15px;top:20px;width:8px;height:8px;border-radius:50%;background:#12b76a;box-shadow:0 0 0 0 rgba(18,183,106,.5);animation:vh-pulse 2s ease-out infinite}
+/* agents that work for you */
+.vh-work{border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:28px 0;display:flex;flex-direction:column;align-items:center;gap:16px}
+.vh-work h2{font-size:18px;font-weight:700}
+.vh-work ul{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;justify-content:center;gap:10px}
+.vh-work li{display:inline-flex;align-items:center;gap:8px;padding:9px 14px;border:1px solid var(--line);border-radius:999px;background:var(--panel);font-size:15px;font-weight:600;color:var(--ink2)}
+.vh-work li svg{color:var(--accent)}
+.vh-work li.custom{border-style:dashed;color:var(--accent)}
+.vh-live{width:8px;height:8px;border-radius:50%;background:#12b76a;box-shadow:0 0 0 0 rgba(18,183,106,.5);animation:vh-pulse 2s ease-out infinite}
 @keyframes vh-pulse{to{box-shadow:0 0 0 7px rgba(18,183,106,0)}}
 @media(prefers-reduced-motion:reduce){.vh-live{animation:none}}
 
@@ -246,7 +243,7 @@
   .vh-hero{padding-top:124px}
   .vh-hero h1{font-size:50px}
   .vh-h2{font-size:36px}
-  .vh-grid.three,.vh-work ul{grid-template-columns:1fr 1fr}
+  .vh-grid.three{grid-template-columns:1fr 1fr}
   .vh-loop ol{grid-template-columns:1fr 1fr}
   .vh-loop li:nth-child(2)::after,.vh-loop li:nth-child(2)::before{display:none}
   .vh-pillars,.vh-sizes{grid-template-columns:1fr}
@@ -264,7 +261,6 @@
   .vh-sec{padding-top:64px;padding-bottom:64px}
   .vh-shot{padding-top:48px;padding-bottom:72px}
   .vh-callouts,.vh-bring,.vh-grid.three,.vh-loop ol{grid-template-columns:1fr;gap:20px}
-  .vh-work ul{grid-template-columns:1fr;gap:10px}
   .vh-obj-work li{flex-direction:column;gap:6px}
   .vh-loop{padding:20px}
   .vh-loop li::after,.vh-loop li::before{display:none}
