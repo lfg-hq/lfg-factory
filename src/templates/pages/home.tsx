@@ -112,7 +112,7 @@ export const HomePage = ({ posts = [] }: { posts?: BlogPost[]; turnstileSiteKey?
 <html lang="en" class="scroll-smooth">
 <head>
 ${SiteHead({
-  title: "LFG | The Software Factory Agent: decide what to build, see it working",
+  title: "LFG | The Software Factory Agent: ship software with clarity",
   description: "LFG scopes the work, makes the architecture decisions, turns them into tickets and runs Claude Code, Codex and Pi across them in parallel. Every change comes back running in a live preview, tested against what you asked for.",
   path: "/",
   image: `${S}/lfg-preview-tab.webp`,
@@ -154,8 +154,8 @@ ${SiteNav({ active: "home" })}
           <span class="text-xs font-bold text-slate-600 uppercase tracking-wider">The software factory agent</span>
         </div>
         <h1 class="font-display font-semibold text-4xl sm:text-5xl xl:text-6xl leading-[1.08] tracking-tight text-slate-900 animate-fade-up">
-          Decide what to build.<br>
-          <span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-pink-500">See it working.</span>
+          Ship software<br>
+          <span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-pink-500">with clarity.</span>
         </h1>
         <p class="text-lg sm:text-xl text-slate-600 mt-7 leading-relaxed max-w-3xl animate-fade-up">
           LFG is an AI software factory that turns requirements into production-ready software. It runs the entire lifecycle: it plans the work, builds the features, runs the tests, documents the changes and prepares the release. Your engineers spend their time on what gets built, and on reviewing the result.
