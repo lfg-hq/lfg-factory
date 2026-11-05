@@ -15,7 +15,7 @@ const ideaForm = (id: string) => html`<form class="vh-form" action="${CHAT}" met
 <p class="vh-formnote" role="status">Next, sign in with Google and the analyst picks up your idea. By continuing you agree to the LFG Ventures <a href="/venture-analyst/terms">Terms</a>.</p>`;
 
 export const VentureAnalystPage = () => html`<!doctype html>
-<html lang="en"><head>${SiteHead({ title: "LFG Ventures | Your AI venture partner", description: "LFG is a venture partner that invests tokens and agent execution, not cash. We build your business for free and make money when you do. Start with a conversation.", path: "/venture-analyst" })}
+<html lang="en"><head>${SiteHead({ title: "LFG Ventures | Your AI venture partner", description: "LFG is a venture partner that invests tokens and agent execution, not cash. Your business, built free. We get paid, only if you do. Start with a conversation.", path: "/venture-analyst" })}
 <link rel="stylesheet" href="/public/venture/landing.css">
 <script defer src="/public/venture/landing.js"></script></head>
 <body class="vh-body text-slate-900 font-sans">${SiteNav({})}
@@ -23,7 +23,7 @@ export const VentureAnalystPage = () => html`<!doctype html>
 
 <section class="vh-hero">
   <span class="vh-badge"><span class="vh-logo" aria-hidden="true">${rocket}</span>LFG Ventures · your AI venture partner</span>
-  <h1>We build your business for free. <span class="vl-grad">We make money when you do.</span></h1>
+  <h1>Your business, built free. <span class="vl-grad">We get paid, only if you do.</span></h1>
   <p class="vh-lede">LFG is a venture partner. Instead of cash, we invest tokens and the agents that turn them into execution, in exchange for equity or a share of revenue. You stay the founder.</p>
   ${ideaForm("idea-top")}
   <ul class="vh-trust">
@@ -50,11 +50,11 @@ export const VentureAnalystPage = () => html`<!doctype html>
     <div class="vh-head">
       <p class="vh-kicker">Your venture dashboard</p>
       <h2 class="vh-h2" id="shot-title">Every token, every milestone, in plain view.</h2>
-      <p class="vh-lede">See what the agents are building, what each piece cost, how many tokens are left in the tranche and what your customers are doing.</p>
+      <p class="vh-lede">See the objective you're working toward and how close you are, what the agents are building, how many tokens are left in the tranche and what your customers are doing.</p>
     </div>
     <div class="vh-frame">
       <div class="vh-frame-bar" aria-hidden="true"><i></i><i></i><i></i><span>lfg.run/venture-analyst/dashboard</span></div>
-      <img src="/public/images/screenshots/venture-dashboard.png" width="2560" height="1720" loading="lazy" alt="The LFG venture dashboard for a plumbers' booking app in week 5: 2.2M of 3M approved tokens spent, 770K left, 2 of 5 work items shipped and $1,176 in monthly revenue.">
+      <img src="/public/images/screenshots/venture-dashboard.png" width="2560" height="1720" loading="lazy" alt="The LFG venture dashboard for a plumbers' booking app in week 5: the tranche 1 objective, will plumbers pay $49 a month, is 96% done at 24 of 25 paying plumbers; 2.2M of 3M tokens spent, 770K left, 2 of 5 work items shipped and $1,176 in monthly revenue.">
     </div>
     <div class="vh-callouts">
       <div><b>Tokens left</b><span>The budget still in your tranche, always current.</span></div>
@@ -222,7 +222,7 @@ export const VentureAnalystPage = () => html`<!doctype html>
 
 <section class="vh-final" id="start" aria-labelledby="final-title"><div class="vh-wrap">
   <h2 id="final-title">Have an idea worth building?</h2>
-  <p class="vh-lede">We build it for free. We make money when you do. Start with a conversation, private to you and LFG's venture team.</p>
+  <p class="vh-lede">Your business, built free. We get paid, only if you do. Start with a conversation, private to you and LFG's venture team.</p>
   ${ideaForm("idea-bottom")}
   <a class="vh-thesis" href="/venture-analyst/thesis">Read the thesis →</a>
 </div></section>
