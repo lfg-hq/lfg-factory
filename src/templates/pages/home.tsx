@@ -1,95 +1,65 @@
 import { html } from "hono/html";
 import { SiteHead, SiteNav, SiteFooter } from "../components/site.tsx";
+import { ModelStrip } from "../components/model-strip.tsx";
+import { LifecycleRail, PHASES } from "../components/lifecycle.tsx";
+import { PreviewMock } from "../components/preview-mock.tsx";
 import type { BlogPost } from "../../utils/blog.ts";
 
 /**
  * Homepage.
  *
- * Sells a delivery model, not an agent. Every section is filtered through one
- * question from the brief: does this help a buyer understand how LFG lets them
- * deliver more software with less engineering effort? Agent mechanics that only
- * answer "is the technology clever" live on /agent/ and /how-it-works/.
+ * Built around the two problems LFG exists to solve now that coding agents
+ * write most of the code: deciding what to build, and verifying what got
+ * built. Implementation sits between them, run by the coding agents people
+ * already trust. Every section is one of those three, or the practical answer
+ * to "will this fit how we work".
  *
- * Deliberately absent: invented delivery metrics. The case-study numbers render
- * as em dashes until real ones exist — a proposition this strong cannot afford
- * proof anyone could catch out.
+ * Positioning rules: LFG amplifies teams, it does not replace them; no
+ * invented delivery metrics; no fear-led framing.
  */
 
-/**
- * The seven pipeline stages, grouped into three phases.
- *
- * Seven chevron-separated chips in a row read as seven unrelated things. Three
- * labelled phases with numbered stops inside them read as one shape, and the
- * numbering keeps the sequence intact. The `human` flag marks the review gate,
- * which is the stage the whole pitch depends on being a person.
- */
-/** Hero slideshow: one shot per stretch of the pipeline. [src, caption, alt, chrome label] */
+/** "Decide" slideshow: one shot per planning artifact. [src, caption, alt, chrome label] */
 const SHOTS: Array<[src: string, caption: string, alt: string, label: string]> = [
-  ["/public/images/screenshots/agent-prd-chat.png", "Requirements and plan",
-   "A requirement being turned into a PRD and technical plan in LFG", "your-project/plan"],
-  ["/public/images/screenshots/agent-ticket-board.png", "Ticket board",
-   "An LFG project board: every ticket, its state and its owner", "your-project/tickets"],
-  ["/public/images/screenshots/agent-ticket-execution.png", "Execution and review",
-   "A ticket executing in LFG: logs, diff and review state side by side", "your-project/build"],
+  ["/public/images/screenshots/agent-prd-chat.png", "Scope and plan",
+   "A request being turned into a PRD and technical plan in LFG", "your-project/plan"],
+  ["/public/images/screenshots/agent-ticket-board.png", "Tickets",
+   "An LFG project board: every ticket, its state and its dependencies", "your-project/tickets"],
 ];
 
-/**
- * Seven stages in three phases.
- *
- * Who is involved is stated once per phase rather than icon-tagged on four of
- * the seven stages — that repetition was what made the rail look busy, and it
- * said the same thing four times. Numbers stay uniform for the same reason.
- */
-const PHASES: Array<[phase: string, who: string, steps: Array<[number, string]>]> = [
-  ["Plan",  "yours to review",  [[1, "Requirements"], [2, "Architecture"], [3, "Tickets"]]],
-  ["Build", "runs on its own",  [[4, "Build"], [5, "Test"]]],
-  ["Ship",  "your sign-off",    [[6, "Review"], [7, "Ship"]]],
+const DECIDE = PHASES.find((p) => p.key === "decide")!.stages;
+
+const VERIFY: Array<[icon: string, title: string, body: string]> = [
+  ["monitor-play", "Every change, running in LFG",
+   "LFG works out how your app runs, provisions its databases, applies migrations and seed data, starts it, and opens it in a browser inside LFG. Click through the change before you read a line of the diff."],
+  ["flask-conical", "Tests that prove something",
+   "The QA agent writes tests from the acceptance criteria, then runs them against the code before and after the change. Tests that pass both times prove nothing, so they are thrown away. Only tests that catch the change are kept."],
+  ["video", "Evidence attached to the ticket",
+   "Frontend tickets get a recorded walkthrough in a real browser. API tickets get the requests and responses. Your reviewer starts from proof that it works, not from a pile of diffs."],
 ];
 
-const COMPARISON: Array<[string, string]> = [
-  ["Starts with a prompt", "Starts with a business requirement"],
-  ["Works on a coding task", "Coordinates an entire project"],
-  ["The developer supplies context", "Maintains project context"],
-  ["Generates code", "Plans, builds, tests and documents"],
-  ["Sessions are managed one at a time", "Work is broken into dependency-aware tickets"],
-  ["The developer coordinates execution", "The factory coordinates execution"],
-  ["Code is the artifact", "PRDs, architecture, tickets, code, tests, documentation"],
-  ["QA happens separately", "Verification is part of the pipeline"],
-  ["The developer owns the workflow", "People supervise outcomes and the decisions that matter"],
+const ENGINES: Array<[name: string, note: string]> = [
+  ["Claude Code", "Anthropic models"],
+  ["Codex", "OpenAI models"],
+  ["Pi", "Gemini, DeepSeek, Kimi, GLM and more"],
 ];
 
-const STAGES: Array<[string, string, string, string, string[]]> = [
-  ["01", "Understand", "scan-search",
-   "LFG reads the requirement alongside your existing codebase, documentation and the business context around it.",
-   ["PRD", "Acceptance criteria", "Technical analysis"]],
-  ["02", "Plan", "map",
-   "The factory settles the architecture and breaks the work into dependency-aware implementation tasks.",
-   ["Architecture", "Tickets", "Execution plan"]],
-  ["03", "Build", "terminal",
-   "Tickets are executed inside isolated development environments, in parallel wherever the dependency graph allows.",
-   ["Code", "Commits", "Working previews"]],
-  ["04", "Verify", "flask-conical",
-   "Tests, application behaviour and the original acceptance criteria are all checked before anything reaches a person.",
-   ["Tests", "QA results", "Issue reports"]],
-  ["05", "Review", "shield-check",
-   "Your engineers review architecture, security-sensitive decisions and code quality — not every intermediate step.",
-   ["Approved changes", "Review trail"]],
-  ["06", "Ship", "git-merge",
-   "Changes are prepared for merge and deployment with the documentation that explains them.",
-   ["Pull request", "Documentation", "Release"]],
+const FIT: Array<[icon: string, title: string, body: string]> = [
+  ["cpu", "Any model",
+   "Claude, GPT, Gemini, Grok, DeepSeek, Kimi or GLM. Choose per project, per task or per client policy."],
+  ["key-round", "Your existing subscriptions",
+   "Run on the Claude and ChatGPT plans your team already pays for, or on API keys. No new model contract required."],
+  ["folder-git-2", "Your repositories",
+   "GitHub or GitLab. Work lands on branches and pull requests under your own protection rules."],
+  ["plug", "Your tools",
+   "Tickets sync to Jira or Linear. MCP servers and app connectors bring in the docs and systems your team already works in."],
+  ["sliders-horizontal", "Customised to your business",
+   "Your process, definition of done, review rules, templates and stack conventions, configured per team."],
+  ["server", "Self-hosted if you need it",
+   "Run the whole factory inside your own infrastructure, or let us host a dedicated instance. The core is MIT."],
 ];
 
-const TRUST: Array<[string, string, string]> = [
-  ["folder-git-2", "Your repository", "LFG works inside your existing Git workflow and your own repositories. Nothing is held hostage."],
-  ["user-check", "Human approval", "Agents do not decide on their own what enters production. A person signs off."],
-  ["box", "Isolated execution", "Build jobs run inside isolated environments, not loose on your machines."],
-  ["history", "Audit trail", "Requirements, tickets, code changes and reviews stay traceable after the fact."],
-  ["cpu", "Model choice", "Use the model that suits the job — Claude, GPT, Gemini, or open models — rather than one vendor's."],
-  ["server", "Self-hosting", "Stricter requirements can run the whole thing inside your own infrastructure. The core is MIT."],
-];
-
-const VISIBLE = ["Requirements", "Architecture", "Tickets", "Dependencies", "Agent execution",
-                 "Commits", "Test results", "QA issues", "Reviews", "Release status"];
+const VISIBLE = ["Scope", "PRD", "Architecture", "Tickets", "Dependencies", "Live agent sessions",
+                 "Diffs", "Previews", "Test results", "Walkthroughs", "Reviews"];
 
 const CASE_STUDIES: Array<[string, string, string, string]> = [
   ["Mags", "mags", "/public/images/screenshots/mags.png", "Job-runner platform, built end to end on the factory."],
@@ -102,8 +72,8 @@ export const HomePage = ({ posts = [] }: { posts?: BlogPost[]; turnstileSiteKey?
 <html lang="en" class="scroll-smooth">
 <head>
 ${SiteHead({
-  title: "AI Software Development & Software Factory | LFG",
-  description: "LFG is an AI software factory for businesses and software services companies. Plan, build, test and ship production software with AI agents and engineering oversight.",
+  title: "LFG | The Software Factory Agent: decide what to build, prove what got built",
+  description: "LFG automates the software lifecycle: scoping, planning, documentation, ticketing, implementation, testing and QA. It runs Claude Code, Codex and Pi in parallel sandboxes and shows every change running before you review it.",
   path: "/",
 })}
 </head>
@@ -119,348 +89,282 @@ ${SiteNav({ active: "home" })}
     <div class="absolute top-24 left-[4%] w-80 h-80 rounded-full bg-pink-100 blur-3xl animate-drift" style="animation-delay:1s"></div>
 
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
-      <div class="grid lg:grid-cols-12 gap-10 xl:gap-14 items-center">
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-10 xl:gap-14 items-center">
 
-        <!-- Left: the pitch -->
-        <div class="lg:col-span-7">
+        <div class="lg:col-span-6">
           <div class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full glass shadow-sm mb-7 animate-fade-up">
             <span class="w-2 h-2 rounded-full bg-brand-500 animate-pulse"></span>
-            <span class="text-xs font-bold text-slate-600 uppercase tracking-wider">AI-native software development</span>
+            <span class="text-xs font-bold text-slate-600 uppercase tracking-wider">The software factory agent</span>
           </div>
-          <h1 class="font-display font-semibold text-4xl sm:text-5xl xl:text-6xl leading-[1.08] tracking-tight text-slate-900 animate-fade-up">
-            Ship more software<br>with
-            <span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-pink-500">smaller teams.</span>
+          <h1 class="font-display font-semibold text-4xl sm:text-5xl xl:text-[3.35rem] leading-[1.08] tracking-tight text-slate-900 animate-fade-up">
+            Decide what to build.<br>
+            <span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-pink-500">Prove what got built.</span>
           </h1>
           <p class="text-lg text-slate-600 mt-6 leading-relaxed animate-fade-up">
-            LFG is an AI software factory that turns requirements into production-ready software. It plans the work, builds the features, runs the tests, documents the changes and prepares the release, while engineers review the decisions that matter.
-          </p>
-          <p class="text-base text-slate-500 mt-3 animate-fade-up">
-            Built for software services companies, startups and growing businesses.
+            LFG automates the whole software lifecycle: scoping, planning, documentation, ticketing, implementation, testing and QA. It runs Claude Code, Codex and Pi sessions in parallel sandboxes. Every change is running in front of you before anyone reviews it.
           </p>
 
-          <!-- Self-serve first: signing up costs nothing and starts a
-               relationship we can follow up on. The consultative path is one
-               button, not two, because both audiences end in the same intake. -->
           <div class="mt-8 flex flex-col sm:flex-row gap-3 animate-fade-up">
             <a href="/auth/register" class="px-7 py-3.5 rounded-full bg-slate-900 text-white font-semibold hover:bg-slate-800 transition-colors inline-flex items-center justify-center gap-2">
-              Access LFG Agent <i data-lucide="arrow-right" class="w-4 h-4"></i>
+              Try LFG free <i data-lucide="arrow-right" class="w-4 h-4"></i>
             </a>
             <a href="#start" class="px-7 py-3.5 rounded-full border border-slate-300 bg-white text-slate-800 font-semibold hover:border-brand-400 hover:text-brand-700 transition-colors inline-flex items-center justify-center gap-2">
-              Talk to us about a project
+              Talk to us
             </a>
           </div>
           <p class="mt-4 text-sm text-slate-500 animate-fade-up">
-            Free to start &middot; runs on your own repository &middot; bring your own model keys
+            Any model &middot; your existing Claude or ChatGPT plan &middot; your repos and tools &middot; self-hostable
           </p>
         </div>
 
-        <!-- Right: the product itself, plus the self-serve door for anyone
-             who would rather drive it than buy delivery -->
-        <div class="lg:col-span-5 animate-fade-up" style="animation-delay:.12s">
-          <!-- Rotates through the pipeline so the hero shows the product doing
-               each job, not one frozen board. All three shots are 1354x848, so
-               they stack with no layout shift. -->
-          <div class="shot" id="hero-shots">
-            <div class="shot-bar">
-              <span class="shot-dot bg-red-400/70"></span>
-              <span class="shot-dot bg-amber-400/70"></span>
-              <span class="shot-dot bg-emerald-400/70"></span>
-              <span class="ml-2 text-xs font-mono text-slate-400" data-shot-label>your-project/plan</span>
-              <span class="ml-auto inline-flex items-center gap-1.5 text-[11px] font-semibold text-emerald-500">
-                <span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> live
-              </span>
-            </div>
-
-            <div class="relative aspect-[1354/848]">
-              ${SHOTS.map(([src, , alt], i) => html`
-                <img src="${src}" alt="${alt}" ${i === 0 ? "" : 'loading="lazy"'}
-                     data-shot="${i}"
-                     class="absolute inset-0 w-full h-full object-cover object-top transition-opacity duration-500 ${i === 0 ? "opacity-100" : "opacity-0"}" />`)}
-            </div>
-
-            <div class="flex items-center gap-3 px-4 py-3 border-t border-slate-100">
-              ${SHOTS.map(([, caption], i) => html`
-                <button type="button" data-shot-btn="${i}"
-                        class="group flex-1 text-left transition-opacity ${i === 0 ? "" : "opacity-45 hover:opacity-80"}"
-                        aria-label="Show ${caption}">
-                  <span class="block h-0.5 rounded-full mb-1.5 ${i === 0 ? "bg-brand-500" : "bg-slate-200"}" data-shot-bar></span>
-                  <span class="block text-[11px] font-semibold text-slate-600 leading-tight">${caption}</span>
-                </button>`)}
-            </div>
-          </div>
-
+        <div class="min-w-0 lg:col-span-6 animate-fade-up" style="animation-delay:.12s">
+          ${PreviewMock()}
         </div>
       </div>
 
-      <!-- One continuous rail rather than three boxes. Phase rules above group
-           the stages without carving the row into cards, which is what left all
-           the dead space when the groups had uneven counts. -->
       <div class="mt-14 animate-fade-up">
-        <div class="rounded-2xl border border-slate-200 bg-white px-6 py-6 flex flex-col lg:flex-row gap-y-6">
-          ${PHASES.map(([phase, who, steps], pi) => html`
-            <div class="${pi === 0 ? "lg:flex-[3]" : "lg:flex-[2]"} ${pi > 0 ? "lg:pl-7 lg:border-l lg:border-slate-200" : ""} ${pi < 2 ? "lg:pr-7" : ""}">
-              <p class="text-[11px] uppercase tracking-wider mb-3">
-                <span class="font-bold ${pi === 1 ? "text-slate-400" : "text-brand-600"}">${phase}</span>
-                <span class="text-slate-400 font-medium normal-case tracking-normal"> &middot; ${who}</span>
-              </p>
-              <div class="flex flex-wrap gap-x-6 gap-y-2.5">
-                ${steps.map(([n, label]) => html`
-                  <div class="flex items-center gap-2">
-                    <span class="text-xs font-semibold text-slate-400 tabular-nums">${n}</span>
-                    <span class="text-sm font-semibold text-slate-800">${label}</span>
-                  </div>`)}
-              </div>
-            </div>`)}
-        </div>
+        ${LifecycleRail()}
         <p class="text-sm text-slate-500 mt-4">
-          Review plans and tickets as needed. LFG makes them quick to produce, and quick to check.
+          Your team shapes the plan at the start and signs off a verified change at the end. The pipeline carries the work in between.
         </p>
       </div>
     </div>
   </section>
 
-  <!-- ═══════════ 2. AUDIENCE SPLIT ═══════════ -->
-  <section class="band-tint py-20">
-    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-      <div class="max-w-3xl mb-12">
-        <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-3">An AI software factory for modern software development</p>
-        <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">Buy the outcome, or run the factory.</h2>
-      </div>
-
-      <div class="grid lg:grid-cols-2 gap-6">
-        <div class="rounded-2xl border border-slate-200 bg-white p-8 flex flex-col">
-          <div class="w-11 h-11 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center mb-5"><i data-lucide="package" class="w-5 h-5"></i></div>
-          <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">LFG Delivery</p>
-          <h3 class="font-display font-bold text-2xl text-slate-900 mb-3">We own the outcome.</h3>
-          <p class="text-slate-600 leading-relaxed mb-6">
-            Hand us a requirement, a backlog or a product. You get tested, merge-ready pull requests in your own repository, against acceptance criteria agreed before we start. If it does not meet them, it is not done.
-          </p>
-          <ul class="space-y-2 text-sm text-slate-600 mb-7">
-            <li class="flex gap-2.5"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i>Growing businesses and SMBs</li>
-            <li class="flex gap-2.5"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i>Startups and product teams</li>
-            <li class="flex gap-2.5"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i>Backlogs that keep slipping</li>
-            <li class="flex gap-2.5"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i>Internal tools and modernization</li>
-          </ul>
-          <a href="/services/" class="mt-auto inline-flex items-center gap-2 font-semibold text-brand-700 hover:gap-3 transition-all">Have it delivered <i data-lucide="arrow-right" class="w-4 h-4"></i></a>
-        </div>
-
-        <div class="rounded-2xl border border-brand-200 bg-white p-8 flex flex-col ring-1 ring-brand-100">
-          <div class="w-11 h-11 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center mb-5"><i data-lucide="building-2" class="w-5 h-5"></i></div>
-          <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">LFG Factory</p>
-          <h3 class="font-display font-bold text-2xl text-slate-900 mb-3">You own it. We supply the machine.</h3>
-          <p class="text-slate-600 leading-relaxed mb-6">
-            Run the factory inside your own delivery organization. Client requirements become scoped plans, tickets, tested code and release-ready work &mdash; configured to how your firm works, under your name, with your engineers holding the gates.
-          </p>
-          <ul class="space-y-2 text-sm text-slate-600 mb-7">
-            <li class="flex gap-2.5"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i>Software services companies</li>
-            <li class="flex gap-2.5"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i>IT consulting firms</li>
-            <li class="flex gap-2.5"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i>Digital and development agencies</li>
-            <li class="flex gap-2.5"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i>Implementation partners</li>
-          </ul>
-          <a href="/software-services/" class="mt-auto inline-flex items-center gap-2 font-semibold text-brand-700 hover:gap-3 transition-all">LFG for services firms <i data-lucide="arrow-right" class="w-4 h-4"></i></a>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ═══════════ 3. THE PROBLEM ═══════════ -->
+  <!-- ═══════════ 2. WHY NOW ═══════════ -->
   <section class="band py-20">
     <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="max-w-3xl mb-12">
-        <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">Coding got cheaper. Software delivery didn't.</h2>
+        <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-3">Why now</p>
+        <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">Coding agents made code abundant. The leverage moved to both ends.</h2>
         <p class="text-slate-600 text-lg mt-4 leading-relaxed">
-          A coding agent can write a feature. Someone still has to understand the requirement, find the right context, make the architectural decisions, coordinate the dependencies, verify that it all works together, and make sure the release actually meets the business objective it started from.
-        </p>
-        <p class="text-slate-600 text-lg mt-4 leading-relaxed">
-          LFG turns those disconnected activities into one continuous delivery pipeline.
+          When writing code is fast, two questions decide whether a team actually ships more. LFG is built around both of them, with the coding agents you already trust doing the work in between.
         </p>
       </div>
 
-      <div class="grid md:grid-cols-2 gap-6 lg:gap-10 items-start">
-        <div class="rounded-2xl border border-slate-200 bg-white p-7">
-          <p class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Traditional AI-assisted development</p>
-          <p class="text-sm text-slate-500 mb-6">Eleven steps, and a person is the thread running through all of them.</p>
-          ${["Requirement","Developer interprets it","Developer opens Claude or Codex","Developer manages context","Code generated","Developer tests","Developer fixes","Pull request","Senior review","QA","Rework"]
-            .map((s, i) => html`${i > 0 ? html`<div class="link-v"></div>` : ""}<div class="node"><span class="text-sm text-slate-700">${s}</span></div>`)}
+      <div class="grid md:grid-cols-2 gap-6">
+        <div class="rounded-2xl border border-slate-200 bg-white p-8">
+          <div class="w-11 h-11 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center mb-5"><i data-lucide="compass" class="w-5 h-5"></i></div>
+          <h3 class="font-display font-bold text-2xl text-slate-900 mb-3">What should we build?</h3>
+          <p class="text-slate-600 leading-relaxed">
+            Agents will build whatever they are pointed at, so the plan matters more than ever. LFG turns a request into a scoped, documented, sequenced plan that your team can shape before any code exists.
+          </p>
         </div>
-
-        <div class="rounded-2xl border border-brand-200 bg-white p-7 ring-1 ring-brand-100">
-          <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-1">LFG</p>
-          <p class="text-sm text-slate-500 mb-6">Eight stages, and the pipeline carries the work between them.</p>
-          ${["Requirement","Plan","Architecture","Tickets","Parallel execution","Tests","Verification"]
-            .map((s, i) => html`${i > 0 ? html`<div class="link-v"></div>` : ""}<div class="node"><span class="text-sm text-slate-700">${s}</span></div>`)}
-          <div class="link-v"></div>
-          <div class="node node-ok"><span class="text-sm font-semibold text-emerald-700">Pull request / release</span></div>
+        <div class="rounded-2xl border border-brand-200 bg-white p-8 ring-1 ring-brand-100">
+          <div class="w-11 h-11 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center mb-5"><i data-lucide="badge-check" class="w-5 h-5"></i></div>
+          <h3 class="font-display font-bold text-2xl text-slate-900 mb-3">Does it actually work?</h3>
+          <p class="text-slate-600 leading-relaxed">
+            Agents produce more change than anyone can read line by line. LFG runs every change, tests it against what was asked for, and records the evidence, so review starts from proof.
+          </p>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- ═══════════ 4. MORE THAN A CODING AGENT ═══════════ -->
-  <section class="band-tint py-20">
-    <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
-      <div class="max-w-2xl mb-10">
-        <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">More than a coding agent.</h2>
+  <!-- ═══════════ 3. DECIDE WHAT TO BUILD ═══════════ -->
+  <section id="decide" class="band-tint py-20">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="grid lg:grid-cols-2 gap-12 items-center">
+        <div>
+          <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">Stages 1&ndash;4 &middot; Decide what to build</p>
+          <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900 mb-5">A plan your team can argue with.</h2>
+          <p class="text-slate-600 text-lg leading-relaxed mb-8">
+            LFG starts from your codebase and the context around it, not a blank prompt. It produces everything a good team writes before it builds, so a misread requirement is caught early, when fixing it takes a conversation instead of a rewrite.
+          </p>
+          <div class="space-y-5">
+            ${DECIDE.map((s) => html`
+              <div class="flex gap-4">
+                <div class="w-10 h-10 rounded-xl bg-white border border-slate-200 text-brand-700 flex items-center justify-center shrink-0"><i data-lucide="${s.icon}" class="w-5 h-5"></i></div>
+                <div>
+                  <p class="font-display font-bold text-slate-900"><span class="text-slate-400 font-semibold tabular-nums mr-1.5">${s.num}</span>${s.name}</p>
+                  <p class="text-sm text-slate-600 leading-relaxed mt-0.5">${s.short}</p>
+                </div>
+              </div>`)}
+          </div>
+        </div>
+
+        <div class="shot" id="hero-shots">
+          <div class="shot-bar">
+            <span class="shot-dot bg-red-400/70"></span>
+            <span class="shot-dot bg-amber-400/70"></span>
+            <span class="shot-dot bg-emerald-400/70"></span>
+            <span class="ml-2 text-xs font-mono text-slate-400" data-shot-label>your-project/plan</span>
+          </div>
+          <div class="relative aspect-[1354/848]">
+            ${SHOTS.map(([src, , alt], i) => html`
+              <img src="${src}" alt="${alt}" loading="lazy"
+                   data-shot="${i}"
+                   class="absolute inset-0 w-full h-full object-cover object-top transition-opacity duration-500 ${i === 0 ? "opacity-100" : "opacity-0"}" />`)}
+          </div>
+          <div class="flex items-center gap-3 px-4 py-3 border-t border-slate-100">
+            ${SHOTS.map(([, caption], i) => html`
+              <button type="button" data-shot-btn="${i}"
+                      class="group flex-1 text-left transition-opacity ${i === 0 ? "" : "opacity-45 hover:opacity-80"}"
+                      aria-label="Show ${caption}">
+                <span class="block h-0.5 rounded-full mb-1.5 ${i === 0 ? "bg-brand-500" : "bg-slate-200"}" data-shot-bar></span>
+                <span class="block text-[11px] font-semibold text-slate-600 leading-tight">${caption}</span>
+              </button>`)}
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ 4. BUILD AT SCALE ═══════════
+       The dark break sits on the stage the product deliberately does NOT
+       claim to reinvent: implementation belongs to the coding agents. -->
+  <section id="build" class="bg-slate-900 py-20">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="grid lg:grid-cols-2 gap-12 items-center">
+        <div>
+          <p class="text-xs font-bold text-brand-400 uppercase tracking-wider mb-2">Stage 5 &middot; Implement</p>
+          <h2 class="font-display font-bold text-3xl md:text-4xl text-white leading-tight mb-5">Many agents, one plan.</h2>
+          <p class="text-lg text-slate-300 leading-relaxed mb-4">
+            Claude Code, Codex and Pi are excellent engines, so LFG runs them rather than replacing them. Each ticket gets its own sandbox and branch. Independent tickets run at the same time, and context from earlier tickets carries forward, so ticket forty knows what ticket three decided.
+          </p>
+          <p class="text-lg text-slate-300 leading-relaxed">
+            Watch any session live, steer it, or restart it. Better coding models make the factory better, not redundant.
+          </p>
+        </div>
+
+        <div class="rounded-2xl border border-white/10 bg-white/[0.03] p-6">
+          <p class="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-4">Sandboxes &middot; this sprint</p>
+          <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            ${[["TKT-138", "Claude Code", "done"], ["TKT-139", "Pi", "done"], ["TKT-140", "Codex", "testing"],
+               ["TKT-141", "Claude Code", "running"], ["TKT-142", "Claude Code", "verified"], ["TKT-143", "Pi", "queued"]]
+              .map(([t, e, st]) => html`
+              <div class="rounded-xl border border-white/10 bg-slate-800/60 p-3">
+                <p class="text-xs font-mono text-slate-300">${t}</p>
+                <p class="text-[11px] text-slate-500 mt-0.5">${e}</p>
+                <p class="mt-2 inline-flex items-center gap-1.5 text-[11px] font-semibold ${st === "queued" ? "text-slate-500" : st === "running" || st === "testing" ? "text-amber-300" : "text-emerald-400"}">
+                  <span class="w-1.5 h-1.5 rounded-full ${st === "queued" ? "bg-slate-500" : st === "running" || st === "testing" ? "bg-amber-300 animate-pulse" : "bg-emerald-400"}"></span>${st}
+                </p>
+              </div>`)}
+          </div>
+          <div class="mt-5 pt-5 border-t border-white/10 grid grid-cols-3 gap-3">
+            ${ENGINES.map(([name, note]) => html`
+              <div>
+                <p class="text-sm font-semibold text-white">${name}</p>
+                <p class="text-[11px] text-slate-400 leading-snug mt-0.5">${note}</p>
+              </div>`)}
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ 5. VERIFY WHAT GOT BUILT ═══════════ -->
+  <section id="verify" class="band py-20">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="max-w-3xl mb-12">
+        <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">Stages 6&ndash;7 &middot; Verify what got built</p>
+        <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">See it working before you review it.</h2>
         <p class="text-slate-600 text-lg mt-4 leading-relaxed">
-          Claude Code, Codex and the other coding agents are excellent execution engines. We run them inside LFG. What LFG adds is the coordination around them.
+          An agent that has read its own code will happily write tests that pass. LFG doesn't take its word for it. Every change is run, exercised and checked against the acceptance criteria written in stage 3.
         </p>
+      </div>
+
+      <div class="grid md:grid-cols-3 gap-6 mb-10">
+        ${VERIFY.map(([icon, title, body]) => html`
+          <div class="rounded-2xl border border-slate-200 bg-white p-7">
+            <div class="w-11 h-11 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center mb-5"><i data-lucide="${icon}" class="w-5 h-5"></i></div>
+            <h3 class="font-display font-bold text-lg text-slate-900 mb-2">${title}</h3>
+            <p class="text-sm text-slate-600 leading-relaxed">${body}</p>
+          </div>`)}
       </div>
 
       <div class="rounded-2xl border border-slate-200 bg-white overflow-x-auto">
         <table class="cmp">
           <thead>
             <tr>
-              <th class="text-slate-500">Coding agents</th>
-              <th class="col-lfg text-brand-600">LFG software factory</th>
+              <th class="text-slate-500">Test before the change</th>
+              <th class="text-slate-500">Test after the change</th>
+              <th class="col-lfg text-brand-600">What LFG does</th>
             </tr>
           </thead>
           <tbody>
-            ${COMPARISON.map(([a, b]) => html`
-              <tr>
-                <td class="text-slate-600">${a}</td>
-                <td class="col-lfg text-slate-800 font-medium">${b}</td>
-              </tr>`)}
+            <tr><td class="text-slate-600">Fails</td><td class="text-slate-600">Passes</td><td class="col-lfg text-slate-800 font-medium">Keeps it. It really tests this change.</td></tr>
+            <tr><td class="text-slate-600">Passes</td><td class="text-slate-600">Passes</td><td class="col-lfg text-slate-800 font-medium">Discards it. It proves nothing about the change.</td></tr>
+            <tr><td class="text-slate-600">Fails</td><td class="text-slate-600">Fails</td><td class="col-lfg text-slate-800 font-medium">Reports it. Either the code or the test is wrong, and a person decides which.</td></tr>
           </tbody>
         </table>
       </div>
-
-      <div class="mt-8 rounded-xl border-l-4 border-brand-500 bg-white p-6">
-        <p class="text-lg font-semibold text-slate-900">They are the engines. LFG is the factory built around them.</p>
-        <p class="text-slate-600 mt-2">Which is why better coding models make LFG better rather than redundant. <a href="/how-it-works/" class="font-semibold text-brand-700 hover:underline">See how the factory works</a>.</p>
-      </div>
     </div>
   </section>
 
-  <!-- ═══════════ 4b. PLANNED, NOT LOOPED ═══════════
-       A dark break at the turn of the argument, which also keeps the
-       light/tinted rhythm of the surrounding sections intact. -->
-  <section class="bg-slate-900 py-20">
-    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-      <div class="max-w-3xl">
-        <p class="text-xs font-bold text-brand-400 uppercase tracking-wider mb-3">Planned, not looped</p>
-        <h2 class="font-display font-bold text-3xl md:text-4xl text-white leading-tight mb-8">
-          You can't loop your way to working software.
-        </h2>
-
-        <div class="space-y-5">
-          <p class="text-lg text-slate-300 leading-relaxed">
-            Give an agent a large, loosely defined goal and let it run, and it drifts. Long-running tasks lose the thread. Genuinely complex problems do not survive being held in one long session. And because nothing is checked along the way, you find out at the end &mdash; when the work is finished, confident, and wrong in a way nobody has looked for.
-          </p>
-          <p class="text-lg text-slate-300 leading-relaxed">
-            The usual response is to run it again. A better prompt, a longer leash, another few hours. But iteration is not a method, and repeating an unplanned process mostly buys a more expensive way to arrive at the same place. Endless loops do not fix anything, because the missing thing was never more attempts. It was a plan.
-          </p>
-          <p class="text-lg text-slate-300 leading-relaxed">
-            What works is deliberate and curated. Decide the architecture before anything is built. Break the requirement into pieces small enough to check on their own. Write down what &ldquo;done&rdquo; means before the work starts, so passing is a fact rather than an opinion. Verify each piece as it lands, and send failures back instead of letting them accumulate into the next task. Keep a person on the two decisions that carry the most consequence.
-          </p>
-          <p class="text-lg text-white leading-relaxed font-semibold">
-            That structure is the whole of what LFG is. It replaces the loop with a plan, and the plan is what makes the output something you can hand to a client.
-          </p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ═══════════ 5. FROM REQUIREMENT TO RELEASE ═══════════ -->
-  <section class="band py-20">
+  <!-- ═══════════ 6. FITS HOW YOU WORK ═══════════ -->
+  <section id="fit" class="band-tint py-20">
     <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-      <div class="max-w-2xl mb-12">
-        <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">The factory</p>
-        <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">From requirement to release.</h2>
-        <p class="text-slate-600 text-lg mt-4">Six stages. Every one of them produces something you can inspect.</p>
+      <div class="max-w-3xl mb-12">
+        <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">Fits how you already work</p>
+        <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">Your models, your plans, your tools.</h2>
+        <p class="text-slate-600 text-lg mt-4 leading-relaxed">
+          LFG attaches to the stack, subscriptions and process you already have. We customise it to the business instead of asking the business to adapt.
+        </p>
       </div>
 
-      <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-        ${STAGES.map(([num, name, icon, body, outputs]) => html`
-          <div class="rounded-2xl border border-slate-200 bg-white p-7 flex flex-col">
-            <div class="flex items-center gap-3 mb-4">
-              <div class="w-10 h-10 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center"><i data-lucide="${icon}" class="w-5 h-5"></i></div>
-              <span class="text-xs font-bold text-brand-600 uppercase tracking-wider">${num} ${name}</span>
-            </div>
-            <p class="text-sm text-slate-600 leading-relaxed mb-5">${body}</p>
-            <div class="mt-auto pt-4 border-t border-slate-100">
-              <p class="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">Output</p>
-              <div class="flex flex-wrap gap-1.5">
-                ${outputs.map((o) => html`<span class="text-xs font-medium px-2.5 py-1 rounded-md bg-slate-100 text-slate-600">${o}</span>`)}
-              </div>
-            </div>
+      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
+        ${FIT.map(([icon, title, body]) => html`
+          <div class="rounded-2xl border border-slate-200 bg-white p-7">
+            <div class="w-10 h-10 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center mb-4"><i data-lucide="${icon}" class="w-5 h-5"></i></div>
+            <h3 class="font-display font-bold text-base mb-2">${title}</h3>
+            <p class="text-sm text-slate-600 leading-relaxed">${body}</p>
           </div>`)}
       </div>
+
+      ${ModelStrip()}
     </div>
   </section>
 
-  <!-- ═══════════ 6. AGENCY ECONOMICS ═══════════ -->
-  <section class="band-tint py-20">
+  <!-- ═══════════ 7. HOW TO WORK WITH US ═══════════ -->
+  <section id="engage" class="band py-20">
     <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="max-w-3xl mb-12">
-        <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">For software services firms</p>
-        <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">Built for the new economics of software services.</h2>
-        <p class="text-slate-600 text-lg mt-4 leading-relaxed">
-          Your clients know AI can produce software faster. They will increasingly expect that efficiency to show up in your timelines and your pricing.
-        </p>
-        <p class="text-slate-600 text-lg mt-4 leading-relaxed">
-          But handing every developer a coding agent does not change your delivery economics on its own. You still coordinate teams, requirements, QA, reviews and releases much the way you always did. LFG changes the unit of production: agents handle more of the execution, and senior engineers supervise architecture, quality and the client outcome.
-        </p>
+        <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-3">Working with us</p>
+        <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">We set up your factory, or we own the outcome.</h2>
       </div>
 
-      <div class="grid md:grid-cols-3 gap-6 mb-10">
-        <div class="rounded-2xl border border-slate-200 bg-white p-7">
-          <div class="w-11 h-11 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center mb-4"><i data-lucide="trending-up" class="w-5 h-5"></i></div>
-          <h3 class="font-display font-bold text-lg mb-2">Increase delivery capacity</h3>
-          <p class="text-sm text-slate-600 leading-relaxed">Run more client projects without expanding your bench in proportion.</p>
+      <div class="grid lg:grid-cols-2 gap-6">
+        <div class="rounded-2xl border border-brand-200 bg-white p-8 flex flex-col ring-1 ring-brand-100">
+          <div class="w-11 h-11 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center mb-5"><i data-lucide="factory" class="w-5 h-5"></i></div>
+          <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">Set up the factory</p>
+          <h3 class="font-display font-bold text-2xl text-slate-900 mb-3">Your team runs it. We build it around you.</h3>
+          <p class="text-slate-600 leading-relaxed mb-6">
+            We install LFG in your infrastructure or host a dedicated instance, connect your repositories, models and tools, and customise the pipeline to how you deliver. Then we help your engineers take the gates.
+          </p>
+          <ul class="space-y-2 text-sm text-slate-600 mb-7">
+            <li class="flex gap-2.5"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i>Software services firms and agencies</li>
+            <li class="flex gap-2.5"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i>Product and platform engineering teams</li>
+            <li class="flex gap-2.5"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i>Teams with self-hosting or model-policy requirements</li>
+          </ul>
+          <div class="mt-auto flex flex-wrap gap-x-6 gap-y-2">
+            <a href="/software-services/" class="inline-flex items-center gap-2 font-semibold text-brand-700 hover:gap-3 transition-all">For services firms <i data-lucide="arrow-right" class="w-4 h-4"></i></a>
+            <a href="/self-host/" class="inline-flex items-center gap-2 font-semibold text-brand-700 hover:gap-3 transition-all">Self-host and setup <i data-lucide="arrow-right" class="w-4 h-4"></i></a>
+          </div>
         </div>
-        <div class="rounded-2xl border border-slate-200 bg-white p-7">
-          <div class="w-11 h-11 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center mb-4"><i data-lucide="shield" class="w-5 h-5"></i></div>
-          <h3 class="font-display font-bold text-lg mb-2">Protect margins</h3>
-          <p class="text-sm text-slate-600 leading-relaxed">Capture the AI efficiency instead of simply passing fewer billable hours to the customer.</p>
-        </div>
-        <div class="rounded-2xl border border-slate-200 bg-white p-7">
-          <div class="w-11 h-11 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center mb-4"><i data-lucide="users" class="w-5 h-5"></i></div>
-          <h3 class="font-display font-bold text-lg mb-2">Make senior engineers multiplicative</h3>
-          <p class="text-sm text-slate-600 leading-relaxed">Let experienced engineers supervise several streams of execution instead of writing every implementation themselves.</p>
-        </div>
-      </div>
 
-      <a href="/software-services/" class="inline-flex items-center gap-2 px-6 py-3 rounded-full bg-slate-900 text-white font-semibold hover:bg-slate-800 transition-colors">
-        See LFG for software services firms <i data-lucide="arrow-right" class="w-4 h-4"></i>
-      </a>
-    </div>
-  </section>
-
-  <!-- ═══════════ 7. FOR BUYERS WHO NEED SOFTWARE ═══════════ -->
-  <section class="band py-20">
-    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-      <div class="max-w-3xl mb-12">
-        <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">For businesses and startups</p>
-        <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">Need software built? Skip assembling another development team.</h2>
-        <p class="text-slate-600 text-lg mt-4 leading-relaxed">
-          A customer-facing application, an internal tool, a SaaS product or a stubborn backlog — LFG can take the project from requirements through implementation and verification. Instead of paying for a large team for months, you work with a small delivery layer backed by the factory.
-        </p>
-      </div>
-
-      <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-10">
-        <div class="rounded-2xl border border-slate-200 bg-white p-6">
-          <div class="w-10 h-10 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center mb-4"><i data-lucide="rocket" class="w-4 h-4"></i></div>
-          <h3 class="font-display font-bold text-base mb-2">Build a new product</h3>
-          <p class="text-sm text-slate-600 leading-relaxed">MVPs, SaaS applications and customer-facing products.</p>
-        </div>
-        <div class="rounded-2xl border border-slate-200 bg-white p-6">
-          <div class="w-10 h-10 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center mb-4"><i data-lucide="list-checks" class="w-4 h-4"></i></div>
-          <h3 class="font-display font-bold text-base mb-2">Clear a backlog</h3>
-          <p class="text-sm text-slate-600 leading-relaxed">Features, bugs, integrations and modernization work your team keeps postponing.</p>
-        </div>
-        <div class="rounded-2xl border border-slate-200 bg-white p-6">
-          <div class="w-10 h-10 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center mb-4"><i data-lucide="layout-dashboard" class="w-4 h-4"></i></div>
-          <h3 class="font-display font-bold text-base mb-2">Build internal software</h3>
-          <p class="text-sm text-slate-600 leading-relaxed">Operational tools, dashboards, workflows and business applications.</p>
-        </div>
-        <div class="rounded-2xl border border-slate-200 bg-white p-6">
-          <div class="w-10 h-10 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center mb-4"><i data-lucide="refresh-cw" class="w-4 h-4"></i></div>
-          <h3 class="font-display font-bold text-base mb-2">Modernize existing systems</h3>
-          <p class="text-sm text-slate-600 leading-relaxed">Refactoring, migrations, integrations and new functionality inside an existing stack.</p>
+        <div class="rounded-2xl border border-slate-200 bg-white p-8 flex flex-col">
+          <div class="w-11 h-11 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center mb-5"><i data-lucide="package-check" class="w-5 h-5"></i></div>
+          <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">Own the outcome</p>
+          <h3 class="font-display font-bold text-2xl text-slate-900 mb-3">We run the factory for you.</h3>
+          <p class="text-slate-600 leading-relaxed mb-6">
+            Hand us a product, a feature or a backlog. You get verified, merge-ready pull requests in your own repository, measured against acceptance criteria agreed before we start, and you can watch every stage while it happens.
+          </p>
+          <ul class="space-y-2 text-sm text-slate-600 mb-7">
+            <li class="flex gap-2.5"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i>Startups and growing businesses</li>
+            <li class="flex gap-2.5"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i>Backlogs and internal tools that keep slipping</li>
+            <li class="flex gap-2.5"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i>Modernisation inside an existing stack</li>
+          </ul>
+          <div class="mt-auto flex flex-wrap gap-x-6 gap-y-2">
+            <a href="/services/" class="inline-flex items-center gap-2 font-semibold text-brand-700 hover:gap-3 transition-all">Have it delivered <i data-lucide="arrow-right" class="w-4 h-4"></i></a>
+            <a href="/startups/" class="inline-flex items-center gap-2 font-semibold text-brand-700 hover:gap-3 transition-all">For startups <i data-lucide="arrow-right" class="w-4 h-4"></i></a>
+          </div>
         </div>
       </div>
 
-      <a href="/services/" class="inline-flex items-center gap-2 font-semibold text-brand-700 hover:gap-3 transition-all">Talk to us about a project <i data-lucide="arrow-right" class="w-4 h-4"></i></a>
+      <p class="text-sm text-slate-500 mt-6">
+        Prefer to drive it yourself? <a href="/auth/register" class="font-semibold text-brand-700 hover:underline">Start free</a> on your own repository, or <a href="https://github.com/lfg-hq/lfg" target="_blank" rel="noopener noreferrer" class="font-semibold text-brand-700 hover:underline">clone the open-source core</a>.
+      </p>
     </div>
   </section>
 
@@ -499,17 +403,15 @@ ${SiteNav({ active: "home" })}
     <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="grid lg:grid-cols-2 gap-12 items-center">
         <div>
-          <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">Visibility</p>
-          <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900 mb-5">No black-box outsourcing.</h2>
+          <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">Visibility and control</p>
+          <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900 mb-5">The factory is the project record.</h2>
           <p class="text-slate-600 text-lg leading-relaxed mb-4">
-            Traditional software outsourcing means weekly status meetings and waiting to find out whether a project is actually on track. With LFG the factory itself is the project record.
+            Every stage leaves something you can open, while the work is happening rather than in a report afterwards. Agents never decide on their own what enters production: a person signs off, and the trail from request to merge stays queryable.
           </p>
           <div class="flex flex-wrap gap-2 mb-7">
             ${VISIBLE.map((v) => html`<span class="text-xs font-medium px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600">${v}</span>`)}
           </div>
-          <p class="font-display font-bold text-xl text-slate-900 leading-snug">
-            You should not need a status meeting to know whether your software is getting built.
-          </p>
+          <a href="/how-it-works/" class="inline-flex items-center gap-2 font-semibold text-brand-700 hover:gap-3 transition-all">See all seven stages <i data-lucide="arrow-right" class="w-4 h-4"></i></a>
         </div>
 
         <div class="shot">
@@ -525,27 +427,9 @@ ${SiteNav({ active: "home" })}
     </div>
   </section>
 
-  <!-- ═══════════ 10. TRUST ═══════════ -->
-  <section class="band-tint py-20">
-    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-      <div class="max-w-2xl mb-12">
-        <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">Control</p>
-        <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">Your code remains your code.</h2>
-      </div>
-      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
-        ${TRUST.map(([icon, title, body]) => html`
-          <div class="rounded-2xl border border-slate-200 bg-white p-7">
-            <div class="w-10 h-10 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center mb-4"><i data-lucide="${icon}" class="w-5 h-5"></i></div>
-            <h3 class="font-display font-bold text-base mb-2">${title}</h3>
-            <p class="text-sm text-slate-600 leading-relaxed">${body}</p>
-          </div>`)}
-      </div>
-    </div>
-  </section>
-
   ${posts.length === 0 ? "" : html`
   <!-- ═══════════ BUILD NOTES ═══════════ -->
-  <section class="band py-16">
+  <section class="band-tint py-16">
     <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-8">
         <h2 class="font-display font-bold text-2xl text-slate-900">Build notes</h2>
@@ -562,13 +446,13 @@ ${SiteNav({ active: "home" })}
     </div>
   </section>`}
 
-  <!-- ═══════════ 11. FINAL CTA ═══════════ -->
-  <section id="start" class="band-tint py-20">
+  <!-- ═══════════ 10. FINAL CTA ═══════════ -->
+  <section id="start" class="band py-20">
     <div class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="text-center mb-10">
         <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900 mb-4">Give LFG one real piece of work.</h2>
         <p class="text-slate-600 text-lg leading-relaxed">
-          Send us a project, a feature or a backlog item. We will show you how LFG scopes it, plans it, and would execute it through the factory. Judge it on that, not on a demo.
+          Send us a product idea, a feature or a backlog item. We will show you how LFG scopes and plans it, and what it looks like built and verified. Judge it on that, not on a demo.
         </p>
       </div>
 
@@ -590,10 +474,10 @@ ${SiteNav({ active: "home" })}
               <input name="company" placeholder="Company name" class="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none bg-white" />
             </div>
             <div>
-              <label class="text-xs font-semibold text-slate-600 mb-1 block">Which describes you?</label>
+              <label class="text-xs font-semibold text-slate-600 mb-1 block">What are you after?</label>
               <select name="intent" class="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm focus:ring-2 focus:ring-brand-500 focus:border-transparent outline-none bg-white text-slate-700">
-                <option value="project">I need software built</option>
-                <option value="pilot">I run a software services firm</option>
+                <option value="project">Have software built and verified</option>
+                <option value="pilot">Set up a factory for my team</option>
                 <option value="other">Something else</option>
               </select>
             </div>
@@ -624,11 +508,11 @@ ${SiteNav({ active: "home" })}
 ${SiteFooter()}
 
 <script>
-  // ── Hero slideshow ────────────────────────────────────────────
+  // ── Plan/tickets slideshow ────────────────────────────────────
   (function () {
     var root = document.getElementById('hero-shots');
     if (!root) return;
-    var LABELS = ['your-project/plan', 'your-project/tickets', 'your-project/build'];
+    var LABELS = ['your-project/plan', 'your-project/tickets'];
     var slides = root.querySelectorAll('[data-shot]');
     var buttons = root.querySelectorAll('[data-shot-btn]');
     var label = root.querySelector('[data-shot-label]');

@@ -94,29 +94,29 @@ export const AuthPage = ({ turnstileSiteKey = "", googleEnabled = true }: { turn
 
         <div class="relative z-10 space-y-8">
             <h1 class="font-display font-bold text-4xl text-white leading-tight">
-                The AI Software Factory.
+                Decide what to build.<br>Prove what got built.
             </h1>
             <p class="text-indigo-200 text-lg max-w-md leading-relaxed">
-                From idea to production without the friction. Let agents draft your PRDs, write your tickets, and ship your code.
+                LFG runs the whole lifecycle: scope, plan, document, ticket, implement, test and QA, on the models and subscriptions you already have.
             </p>
             <div class="space-y-4 pt-4">
                 <div class="flex items-center gap-4 text-white/80">
                     <div class="w-8 h-8 rounded-full bg-indigo-500/20 flex items-center justify-center text-indigo-400">
                         <i data-lucide="file-text" class="w-4 h-4"></i>
                     </div>
-                    <span>Instant PRDs & Documentation</span>
+                    <span>Scope, PRDs and tickets your team can shape</span>
                 </div>
                 <div class="flex items-center gap-4 text-white/80">
                     <div class="w-8 h-8 rounded-full bg-indigo-500/20 flex items-center justify-center text-indigo-400">
-                        <i data-lucide="ticket" class="w-4 h-4"></i>
+                        <i data-lucide="layers" class="w-4 h-4"></i>
                     </div>
-                    <span>Automated Ticketing & Planning</span>
+                    <span>Claude Code, Codex and Pi in parallel sandboxes</span>
                 </div>
                 <div class="flex items-center gap-4 text-white/80">
                     <div class="w-8 h-8 rounded-full bg-indigo-500/20 flex items-center justify-center text-indigo-400">
-                        <i data-lucide="terminal" class="w-4 h-4"></i>
+                        <i data-lucide="monitor-play" class="w-4 h-4"></i>
                     </div>
-                    <span>Autonomous Coding Agents</span>
+                    <span>Every change previewed, tested and recorded</span>
                 </div>
             </div>
         </div>
@@ -140,7 +140,7 @@ export const AuthPage = ({ turnstileSiteKey = "", googleEnabled = true }: { turn
             <div class="w-full max-w-md bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden">
                 <div class="px-8 pt-8 pb-6 text-center">
                     <h2 class="font-display font-bold text-2xl text-slate-900 mb-2">Welcome to LFG</h2>
-                    <p class="text-slate-500 text-sm">The AI software factory for builders.</p>
+                    <p class="text-slate-500 text-sm">The software factory agent.</p>
                 </div>
 
                 <!-- Tabs -->

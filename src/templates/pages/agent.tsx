@@ -1,431 +1,235 @@
 import { html } from "hono/html";
-import { Nav, Footer } from "../components/nav.tsx";
+import { SiteHead, SiteNav, SiteFooter } from "../components/site.tsx";
 import { ModelStrip } from "../components/model-strip.tsx";
+import { LifecycleRail } from "../components/lifecycle.tsx";
+import { PreviewMock } from "../components/preview-mock.tsx";
+
+/**
+ * /agent/ — the platform page.
+ *
+ * The homepage says what LFG does for a team; this page shows the machinery
+ * that makes those claims true: the agent sessions it orchestrates, the
+ * sandboxes they run in, the in-app preview, the QA agent, and how it plugs
+ * into a company's models, subscriptions and tools. Every capability named
+ * here exists in the product today.
+ */
+
+const PREVIEW_STEPS: Array<[string, string]> = [
+  ["Detect", "Reads the codebase and works out how the app runs"],
+  ["Provision", "Starts the services it needs: Postgres, MySQL, SQL Server, Redis"],
+  ["Install", "Installs dependencies inside the sandbox"],
+  ["Seed", "Applies migrations and seed data, and remembers verified test logins"],
+  ["Start", "Boots the app and opens it in a browser inside LFG"],
+];
+
+const INTEGRATIONS: Array<[icon: string, title: string, body: string]> = [
+  ["git-branch", "GitHub and GitLab", "Reads your repositories, works on branches and opens pull requests under your protection rules."],
+  ["kanban", "Jira and Linear", "Link a project to your tracker and keep tickets and their status in sync."],
+  ["blocks", "MCP servers", "Give the agent the same internal tools and data sources your engineers use."],
+  ["plug", "App connectors", "Connect the docs, chat and business systems that hold the context behind a request."],
+];
 
 export const AgentPage = () => html`
 <!DOCTYPE html>
 <html lang="en" class="scroll-smooth">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LFG | How the factory works — pipeline, models, self-hosting</title>
-    <meta name="description" content="How the LFG pipeline works end to end: brief to PRD, dependency-aware ticket graph, sandboxed agent execution, senior review on every diff. Self-hosted, model-agnostic.">
-    <link rel="icon" type="image/x-icon" href="/public/images/favicon.ico">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-      tailwind.config = {
-        darkMode: 'class',
-        theme: {
-          extend: {
-            fontFamily: {
-              sans: ['Manrope', 'sans-serif'],
-              display: ['Sora', 'sans-serif'],
-              mono: ['JetBrains Mono', 'monospace'],
-            },
-            colors: {
-              brand: { 50:'#eef2ff',100:'#e0e7ff',200:'#c7d2fe',300:'#a5b4fc',400:'#818cf8',500:'#6366f1',600:'#4f46e5',700:'#4338ca',800:'#3730a3',900:'#312e81' },
-              ink: { 900:'#0f172a' },
-              accent: { 500:'#ec4899',600:'#db2777' }
-            },
-            animation: {
-              'fade-in':'fadeIn 0.5s ease-out','fade-up':'fadeUp 0.6s ease-out both','drift':'drift 8s ease-in-out infinite',
-            },
-            keyframes: {
-              fadeIn:{'0%':{opacity:'0'},'100%':{opacity:'1'}},
-              fadeUp:{'0%':{opacity:'0',transform:'translateY(20px)'},'100%':{opacity:'1',transform:'translateY(0)'}},
-              drift:{'0%,100%':{transform:'translateY(0px)'},'50%':{transform:'translateY(-10px)'}},
-            }
-          }
-        }
-      }
-    </script>
-    <script src="https://unpkg.com/lucide@latest"></script>
-    <style>
-      body { background: radial-gradient(circle at 20% 0%, #eef2ff 0%, #f8fafc 38%, #ffffff 100%); overflow-x: hidden; }
-      .mesh { background-image: radial-gradient(circle at 10% 20%, rgba(99,102,241,0.14), transparent 40%), radial-gradient(circle at 80% 0%, rgba(236,72,153,0.12), transparent 35%); }
-      .glass { background: rgba(255,255,255,0.85); border: 1px solid rgba(148,163,184,0.24); backdrop-filter: blur(10px); }
-      .no-scrollbar::-webkit-scrollbar { display: none; }
-      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-      .glow-brand { box-shadow: 0 0 30px rgba(99,102,241,0.15), 0 0 60px rgba(99,102,241,0.05); }
-      .stat-card:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(99,102,241,0.12); }
-      .step-card { transition: all 0.3s ease; }
-      .step-card:hover { border-color: #6366f1; transform: translateY(-3px); box-shadow: 0 12px 40px rgba(99,102,241,0.1); }
-      @keyframes slideUp { from { opacity:0; transform:translateY(24px); } to { opacity:1; transform:translateY(0); } }
-      .pipeline-step { opacity: 1; }
-      .pipeline-step.animate { animation: slideUp 0.5s ease-out forwards; }
-    </style>
+${SiteHead({
+  title: "The LFG Platform | Agent orchestration, in-app preview and QA",
+  description: "How LFG works under the hood: Claude Code, Codex and Pi sessions in parallel sandboxes, an in-app preview of every change, a QA agent that proves its tests, and any model on your existing subscriptions.",
+  path: "/agent/",
+  image: "/public/images/screenshots/agent-ticket-execution.png",
+})}
 </head>
-<body class="text-slate-900 font-sans selection:bg-indigo-600 selection:text-white">
+<body class="text-slate-900 font-sans selection:bg-brand-600 selection:text-white">
 
-    ${ Nav({ activePage: "agent" }) }
+${SiteNav({ active: "agent" })}
 
-    <main>
-        <!-- HERO -->
-        <section class="relative pt-28 sm:pt-40 pb-20 sm:pb-28 overflow-hidden mesh">
-            <div class="absolute -top-10 right-[8%] w-72 h-72 rounded-full bg-brand-100 blur-3xl animate-drift"></div>
-            <div class="absolute top-20 left-[5%] w-80 h-80 rounded-full bg-pink-100 blur-3xl animate-drift" style="animation-delay:1s"></div>
-            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
-                <div class="text-center max-w-4xl mx-auto">
-                    <div class="inline-flex items-center gap-2 px-4 py-2 rounded-full glass shadow-sm mb-8 animate-fade-up">
-                        <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-                        <span class="text-xs font-bold text-slate-600 uppercase tracking-wider">Your AI software factory</span>
-                    </div>
-                    <h1 class="font-display font-semibold text-3xl sm:text-4xl md:text-5xl lg:text-6xl leading-[1.1] tracking-tight text-slate-900 animate-fade-up" style="animation-delay: 0.1s">
-                        Your AI software factory that plans, builds, and <span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-pink-500">ships</span>
-                    </h1>
-                    <p class="text-base sm:text-lg text-slate-600 mt-7 max-w-2xl mx-auto leading-relaxed animate-fade-up" style="animation-delay: 0.2s">
-                        LFG Agent is a full software factory. It writes your product and technical docs, generates prioritized tickets, orchestrates Claude Code sessions, and handles delivery — so your team stays focused on what matters.
-                    </p>
-                    <div class="mt-10 flex flex-wrap items-center justify-center gap-4 animate-fade-up" style="animation-delay: 0.3s">
-                        <a href="/auth/register" class="px-8 py-3.5 rounded-full bg-brand-600 text-white font-semibold hover:bg-brand-700 transition-all inline-flex items-center gap-2 shadow-lg shadow-brand-600/25">
-                            Try LFG Agent <i data-lucide="arrow-right" class="w-4 h-4"></i>
-                        </a>
-                        <a href="#features" class="px-8 py-3.5 rounded-full bg-white border border-slate-200 text-slate-700 font-semibold hover:border-brand-300 hover:text-brand-700 transition-colors inline-flex items-center gap-2">
-                            See Features
-                        </a>
-                    </div>
-                </div>
-                <!-- Stats Bar -->
-                <div class="mt-16 grid grid-cols-2 md:grid-cols-4 gap-4 max-w-4xl mx-auto animate-fade-up" style="animation-delay: 0.4s">
-                    <div class="stat-card glass rounded-xl p-5 text-center transition-all cursor-default">
-                        <p class="font-display font-semibold text-2xl sm:text-3xl text-brand-600">PRDs</p>
-                        <p class="text-sm font-medium text-slate-500 mt-1">Auto-generated</p>
-                    </div>
-                    <div class="stat-card glass rounded-xl p-5 text-center transition-all cursor-default">
-                        <p class="font-display font-semibold text-2xl sm:text-3xl text-brand-600">Tickets</p>
-                        <p class="text-sm font-medium text-slate-500 mt-1">Created &amp; prioritized</p>
-                    </div>
-                    <div class="stat-card glass rounded-xl p-5 text-center transition-all cursor-default">
-                        <p class="font-display font-semibold text-2xl sm:text-3xl text-brand-600">Code</p>
-                        <p class="text-sm font-medium text-slate-500 mt-1">Sandboxed sessions</p>
-                    </div>
-                    <div class="stat-card glass rounded-xl p-5 text-center transition-all cursor-default">
-                        <p class="font-display font-semibold text-2xl sm:text-3xl text-brand-600">Ship</p>
-                        <p class="text-sm font-medium text-slate-500 mt-1">Review &amp; merge</p>
-                    </div>
-                </div>
-            </div>
-        </section>
+<main>
 
-        <!-- SCREENSHOTS -->
-        <section class="py-16 bg-white border-t border-slate-100">
-            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                <div class="text-center mb-12">
-                    <p class="text-sm font-bold text-brand-600 uppercase tracking-wider mb-2">See it in action</p>
-                    <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">LFG Agent at work</h2>
-                    <p class="text-slate-600 text-lg mt-4">From requirements analysis to ticket execution, every step is visible and trackable.</p>
-                </div>
-                <div class="space-y-16">
-                    <div class="grid lg:grid-cols-2 gap-10 items-center">
-                        <div class="order-2 lg:order-1">
-                            <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-brand-50 border border-brand-200 mb-4">
-                                <i data-lucide="file-text" class="w-4 h-4 text-brand-600"></i>
-                                <span class="text-xs font-bold text-brand-700 uppercase tracking-wider">PRD generation</span>
-                            </div>
-                            <h3 class="font-display font-bold text-2xl text-slate-900 mb-3">Analyze requirements. Generate PRDs.</h3>
-                            <p class="text-slate-600 leading-relaxed mb-4">Feed your idea into the AI chat. LFG Agent reads through your context-heavy data, analyzes requirements, and generates a comprehensive product requirements document with feature breakdowns, technical approach, and stack recommendations.</p>
-                            <ul class="space-y-2 text-sm text-slate-600">
-                                <li class="flex gap-2"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i> Full PRD with features, priorities, and acceptance criteria</li>
-                                <li class="flex gap-2"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i> Technical analysis with stack and architecture decisions</li>
-                                <li class="flex gap-2"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i> Document versioning, iterate and refine with the agent</li>
-                            </ul>
-                        </div>
-                        <div class="order-1 lg:order-2">
-                            <div class="rounded-2xl border border-slate-200 bg-white shadow-xl overflow-hidden">
-                                <div class="flex items-center gap-1.5 px-4 py-2.5 bg-slate-100 border-b border-slate-200">
-                                    <span class="w-2.5 h-2.5 rounded-full bg-red-400"></span>
-                                    <span class="w-2.5 h-2.5 rounded-full bg-amber-400"></span>
-                                    <span class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
-                                    <span class="ml-2 text-xs text-slate-400">LFG Agent, PRD &amp; Analysis</span>
-                                </div>
-                                <img src="/public/images/screenshots/agent-prd-chat.png" alt="LFG Agent generating a PRD" class="w-full" />
-                            </div>
-                        </div>
-                    </div>
+  <!-- HERO -->
+  <section class="relative pt-28 sm:pt-36 pb-16 overflow-hidden mesh">
+    <div class="absolute -top-10 right-[8%] w-72 h-72 rounded-full bg-brand-100 blur-3xl animate-drift"></div>
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-10 xl:gap-14 items-center">
+        <div class="lg:col-span-6">
+          <div class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full glass shadow-sm mb-7 animate-fade-up">
+            <span class="w-2 h-2 rounded-full bg-brand-500 animate-pulse"></span>
+            <span class="text-xs font-bold text-slate-600 uppercase tracking-wider">The platform</span>
+          </div>
+          <h1 class="font-display font-semibold text-4xl sm:text-5xl leading-[1.08] tracking-tight text-slate-900 animate-fade-up">
+            One agent that runs the
+            <span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-pink-500">whole lifecycle.</span>
+          </h1>
+          <p class="text-lg text-slate-600 mt-6 leading-relaxed animate-fade-up">
+            LFG is the factory around the coding agents. It plans the work, orchestrates Claude Code, Codex and Pi sessions in parallel sandboxes, runs every change in an in-app preview, and checks it against what was asked for, on the models and tools your team already uses.
+          </p>
+          <div class="mt-8 flex flex-col sm:flex-row gap-3 animate-fade-up">
+            <a href="/auth/register" class="px-7 py-3.5 rounded-full bg-slate-900 text-white font-semibold hover:bg-slate-800 transition-colors inline-flex items-center justify-center gap-2">
+              Try LFG free <i data-lucide="arrow-right" class="w-4 h-4"></i>
+            </a>
+            <a href="/how-it-works/" class="px-7 py-3.5 rounded-full border border-slate-300 bg-white text-slate-800 font-semibold hover:border-brand-400 hover:text-brand-700 transition-colors inline-flex items-center justify-center gap-2">
+              The seven stages
+            </a>
+          </div>
+        </div>
+        <div class="min-w-0 lg:col-span-6 animate-fade-up" style="animation-delay:.12s">
+          ${PreviewMock()}
+        </div>
+      </div>
+      <div class="mt-14 animate-fade-up">${LifecycleRail()}</div>
+    </div>
+  </section>
 
-                    <div class="grid lg:grid-cols-2 gap-10 items-center">
-                        <div>
-                            <div class="rounded-2xl border border-slate-200 bg-white shadow-xl overflow-hidden">
-                                <div class="flex items-center gap-1.5 px-4 py-2.5 bg-slate-100 border-b border-slate-200">
-                                    <span class="w-2.5 h-2.5 rounded-full bg-red-400"></span>
-                                    <span class="w-2.5 h-2.5 rounded-full bg-amber-400"></span>
-                                    <span class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
-                                    <span class="ml-2 text-xs text-slate-400">LFG Agent, Ticket Board</span>
-                                </div>
-                                <img src="/public/images/screenshots/agent-ticket-board.png" alt="LFG ticket board" class="w-full" />
-                            </div>
-                        </div>
-                        <div>
-                            <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-brand-50 border border-brand-200 mb-4">
-                                <i data-lucide="list-checks" class="w-4 h-4 text-brand-600"></i>
-                                <span class="text-xs font-bold text-brand-700 uppercase tracking-wider">Ticket management</span>
-                            </div>
-                            <h3 class="font-display font-bold text-2xl text-slate-900 mb-3">Create and prioritize tickets automatically.</h3>
-                            <p class="text-slate-600 leading-relaxed mb-4">Once the PRD is approved, LFG Agent breaks it into user stories and implementation tickets, scoped, prioritized, and ready for execution. All within the app. No external tools needed.</p>
-                            <ul class="space-y-2 text-sm text-slate-600">
-                                <li class="flex gap-2"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i> User stories with acceptance criteria auto-generated</li>
-                                <li class="flex gap-2"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i> Kanban board with Open, In Progress, Review, Done</li>
-                                <li class="flex gap-2"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i> Priority and dependency-aware ordering</li>
-                            </ul>
-                        </div>
-                    </div>
+  <!-- ORCHESTRATION -->
+  <section id="orchestration" class="band py-20">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="grid lg:grid-cols-2 gap-12 items-center">
+        <div>
+          <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">Orchestration</p>
+          <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900 mb-5">Coding agents, run at scale.</h2>
+          <p class="text-slate-600 text-lg leading-relaxed mb-6">
+            A single agent session is limited by one context window and one person watching it. LFG runs many sessions, each with only the context its ticket needs, and coordinates them through the plan.
+          </p>
+          <ul class="space-y-3">
+            ${[
+              "Each ticket gets its own sandbox and its own branch. Nothing runs loose on your machines.",
+              "Independent tickets run in parallel; dependent ones wait for what they need.",
+              "Context from finished tickets travels forward to the ones that build on them.",
+              "Live logs and diffs for every session. Continue, steer or restart at any point.",
+              "Fresh sandbox per ticket, or lanes inside a shared always-on preview of the project.",
+            ].map((d) => html`<li class="flex gap-3 text-slate-600"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-1 shrink-0"></i><span class="leading-relaxed">${d}</span></li>`)}
+          </ul>
+        </div>
+        <div class="shot">
+          <div class="shot-bar">
+            <span class="shot-dot bg-red-400/70"></span><span class="shot-dot bg-amber-400/70"></span><span class="shot-dot bg-emerald-400/70"></span>
+            <span class="ml-2 text-xs font-mono text-slate-400">ticket execution</span>
+          </div>
+          <img src="/public/images/screenshots/agent-ticket-execution.png" alt="A ticket executing in LFG: live logs, diff and review state" loading="lazy" class="w-full block" />
+        </div>
+      </div>
+    </div>
+  </section>
 
-                    <div class="grid lg:grid-cols-2 gap-10 items-center">
-                        <div class="order-2 lg:order-1">
-                            <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-brand-50 border border-brand-200 mb-4">
-                                <i data-lucide="terminal" class="w-4 h-4 text-brand-600"></i>
-                                <span class="text-xs font-bold text-brand-700 uppercase tracking-wider">Agent execution</span>
-                            </div>
-                            <h3 class="font-display font-bold text-2xl text-slate-900 mb-3">Orchestrate coding CLI sessions: Claude Code, Codex, or open-source models.</h3>
-                            <p class="text-slate-600 leading-relaxed mb-4">Each ticket is executed by Claude Code in a sandboxed environment. LFG Agent tracks progress, shows you exactly what was built, and lets you continue, restart, or course-correct at any point.</p>
-                            <ul class="space-y-2 text-sm text-slate-600">
-                                <li class="flex gap-2"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i> Sandboxed Claude Code sessions per ticket</li>
-                                <li class="flex gap-2"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i> Live execution logs, git diffs, and server preview</li>
-                                <li class="flex gap-2"><i data-lucide="check" class="w-4 h-4 text-brand-600 mt-0.5 shrink-0"></i> Continue or restart sessions with full context</li>
-                            </ul>
-                        </div>
-                        <div class="order-1 lg:order-2">
-                            <div class="rounded-2xl border border-slate-200 bg-white shadow-xl overflow-hidden">
-                                <div class="flex items-center gap-1.5 px-4 py-2.5 bg-slate-100 border-b border-slate-200">
-                                    <span class="w-2.5 h-2.5 rounded-full bg-red-400"></span>
-                                    <span class="w-2.5 h-2.5 rounded-full bg-amber-400"></span>
-                                    <span class="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
-                                    <span class="ml-2 text-xs text-slate-400">LFG Agent, Ticket Execution</span>
-                                </div>
-                                <img src="/public/images/screenshots/agent-ticket-execution.png" alt="LFG ticket execution" class="w-full" />
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </section>
+  <!-- PREVIEW -->
+  <section id="preview" class="band-tint py-20">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="max-w-3xl mb-12">
+        <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">In-app preview</p>
+        <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">Every change, running inside LFG.</h2>
+        <p class="text-slate-600 text-lg mt-4 leading-relaxed">
+          No pulling branches, no local setup, no "works on my machine". LFG stands the app up in its sandbox and opens it in a browser right next to the ticket, with its logs, its databases and its setup steps a click away.
+        </p>
+      </div>
+      <div class="grid sm:grid-cols-2 lg:grid-cols-5 gap-4">
+        ${PREVIEW_STEPS.map(([name, body], i) => html`
+          <div class="rounded-2xl border border-slate-200 bg-white p-5">
+            <p class="text-xs font-semibold text-slate-400 tabular-nums mb-2">${i + 1}</p>
+            <p class="font-display font-bold text-slate-900 mb-1.5">${name}</p>
+            <p class="text-sm text-slate-600 leading-relaxed">${body}</p>
+          </div>`)}
+      </div>
+    </div>
+  </section>
 
-        <!-- FEATURES -->
-        <section id="features" class="py-20 bg-slate-50">
-            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                <div class="text-center max-w-3xl mx-auto mb-16">
-                    <p class="text-sm font-bold text-brand-600 uppercase tracking-wider mb-2">What LFG Agent does</p>
-                    <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">One agent, the whole lifecycle</h2>
-                    <p class="text-slate-600 text-lg mt-4">LFG Agent handles the entire product lifecycle, from understanding what needs to be built to making sure it gets built right.</p>
-                </div>
-                <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    <div class="step-card rounded-2xl border border-slate-200 bg-white p-6">
-                        <div class="flex items-center gap-3 mb-4">
-                            <div class="w-10 h-10 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center"><i data-lucide="brain" class="w-5 h-5"></i></div>
-                            <h3 class="font-display font-bold text-lg">Requirements Analysis</h3>
-                        </div>
-                        <p class="text-sm text-slate-600 leading-relaxed">Reads through your context-heavy data, briefs, docs, conversations, and distills it into clear, structured requirements. Asks the right questions so nothing gets missed.</p>
-                    </div>
-                    <div class="step-card rounded-2xl border border-slate-200 bg-white p-6">
-                        <div class="flex items-center gap-3 mb-4">
-                            <div class="w-10 h-10 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center"><i data-lucide="file-text" class="w-5 h-5"></i></div>
-                            <h3 class="font-display font-bold text-lg">PRD Generation</h3>
-                        </div>
-                        <p class="text-sm text-slate-600 leading-relaxed">Generates comprehensive product requirement documents with feature tables, priority levels, technical approach, and stack recommendations. Iterate and version them with the agent.</p>
-                    </div>
-                    <div class="step-card rounded-2xl border border-slate-200 bg-white p-6">
-                        <div class="flex items-center gap-3 mb-4">
-                            <div class="w-10 h-10 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center"><i data-lucide="git-branch" class="w-5 h-5"></i></div>
-                            <h3 class="font-display font-bold text-lg">Technical Planning</h3>
-                        </div>
-                        <p class="text-sm text-slate-600 leading-relaxed">Selects the right stack, designs system architecture, maps data models and APIs. Produces a technical plan that becomes the blueprint for implementation tickets.</p>
-                    </div>
-                    <div class="step-card rounded-2xl border border-slate-200 bg-white p-6">
-                        <div class="flex items-center gap-3 mb-4">
-                            <div class="w-10 h-10 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center"><i data-lucide="list-todo" class="w-5 h-5"></i></div>
-                            <h3 class="font-display font-bold text-lg">Ticket Creation</h3>
-                        </div>
-                        <p class="text-sm text-slate-600 leading-relaxed">Breaks the plan into scoped, dependency-aware tickets with user stories and acceptance criteria. All created within the app, no external project management tool needed.</p>
-                    </div>
-                    <div class="step-card rounded-2xl border border-slate-200 bg-white p-6">
-                        <div class="flex items-center gap-3 mb-4">
-                            <div class="w-10 h-10 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center"><i data-lucide="terminal" class="w-5 h-5"></i></div>
-                            <h3 class="font-display font-bold text-lg">Claude Code Sessions</h3>
-                        </div>
-                        <p class="text-sm text-slate-600 leading-relaxed">Each ticket is handed off to Claude Code running in a sandboxed environment. Track execution logs, view git diffs, preview the running server, and course-correct when needed.</p>
-                    </div>
-                    <div class="step-card rounded-2xl border border-slate-200 bg-white p-6">
-                        <div class="flex items-center gap-3 mb-4">
-                            <div class="w-10 h-10 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center"><i data-lucide="history" class="w-5 h-5"></i></div>
-                            <h3 class="font-display font-bold text-lg">Versioning &amp; Iteration</h3>
-                        </div>
-                        <p class="text-sm text-slate-600 leading-relaxed">PRDs and technical documents are versioned as you iterate. Refine scope, adjust priorities, and re-plan, the agent keeps full context across every revision.</p>
-                    </div>
-                </div>
-            </div>
-        </section>
+  <!-- QA -->
+  <section id="qa" class="band py-20">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="max-w-3xl mb-12">
+        <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">Verification</p>
+        <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">A QA agent that doesn't take the code's word for it.</h2>
+        <p class="text-slate-600 text-lg mt-4 leading-relaxed">
+          A model that has read the diff will write tests that check what the code does, not what the ticket asked for. Those pass every time and tell you nothing. LFG checks them mechanically.
+        </p>
+      </div>
+      <div class="grid md:grid-cols-3 gap-6">
+        <div class="rounded-2xl border border-slate-200 bg-white p-7">
+          <div class="w-11 h-11 rounded-xl bg-red-50 text-red-600 flex items-center justify-center mb-5"><i data-lucide="circle-x" class="w-5 h-5"></i></div>
+          <h3 class="font-display font-bold text-lg mb-2">Red: before the change</h3>
+          <p class="text-sm text-slate-600 leading-relaxed">Each new test runs against the code as it was before the ticket. It should fail, because the feature is not there yet.</p>
+        </div>
+        <div class="rounded-2xl border border-slate-200 bg-white p-7">
+          <div class="w-11 h-11 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center mb-5"><i data-lucide="circle-check" class="w-5 h-5"></i></div>
+          <h3 class="font-display font-bold text-lg mb-2">Green: after the change</h3>
+          <p class="text-sm text-slate-600 leading-relaxed">The same test runs against the new code. It should pass. Only tests that flip are kept, committed to the ticket's branch.</p>
+        </div>
+        <div class="rounded-2xl border border-slate-200 bg-white p-7">
+          <div class="w-11 h-11 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center mb-5"><i data-lucide="video" class="w-5 h-5"></i></div>
+          <h3 class="font-display font-bold text-lg mb-2">Recorded evidence</h3>
+          <p class="text-sm text-slate-600 leading-relaxed">Frontend tickets get a walkthrough recorded in a real browser; API tickets get the calls and responses. Both sit on the ticket's Preview tab.</p>
+        </div>
+      </div>
+    </div>
+  </section>
 
-        <!-- PIPELINE -->
-        <section id="how-it-works" class="py-20 bg-white border-t border-slate-100">
-            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                <div class="text-center max-w-3xl mx-auto mb-16">
-                    <p class="text-sm font-bold text-brand-600 uppercase tracking-wider mb-2">The pipeline</p>
-                    <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">From idea to working product</h2>
-                    <p class="text-slate-600 text-lg mt-4">You describe what you need. LFG Agent handles every step. You review and approve.</p>
-                </div>
-                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-5 lg:gap-8 items-stretch">
-                    <div class="pipeline-step relative flex flex-col" style="animation-delay: 0s">
-                        <article class="step-card bg-white rounded-xl p-6 border border-slate-200 shadow-sm flex-1">
-                            <div class="w-10 h-10 rounded-lg bg-brand-100 text-brand-700 flex items-center justify-center mb-4"><i data-lucide="message-square-text" class="w-5 h-5"></i></div>
-                            <p class="text-xs uppercase font-bold tracking-wider text-brand-600 mb-2">01: You</p>
-                            <h3 class="font-display font-bold text-lg mb-2">Describe your idea</h3>
-                            <p class="text-sm text-slate-600">Share what you need in plain English. A product concept, a feature set, a whole system.</p>
-                        </article>
-                        <div class="hidden lg:flex items-center justify-center absolute -right-[30px] top-11 -translate-y-1/2 z-20 w-7 h-7 rounded-full bg-brand-600 text-white shadow-md ring-2 ring-white"><i data-lucide="arrow-right" class="w-4 h-4"></i></div>
-                    </div>
-                    <div class="pipeline-step relative flex flex-col" style="animation-delay: 0.1s">
-                        <article class="step-card bg-white rounded-xl p-6 border border-slate-200 shadow-sm flex-1">
-                            <div class="w-10 h-10 rounded-lg bg-brand-100 text-brand-700 flex items-center justify-center mb-4"><i data-lucide="file-text" class="w-5 h-5"></i></div>
-                            <p class="text-xs uppercase font-bold tracking-wider text-brand-600 mb-2">02: Agent</p>
-                            <h3 class="font-display font-bold text-lg mb-2">PRD &amp; plan</h3>
-                            <p class="text-sm text-slate-600">Agent generates a full PRD, technical architecture, and implementation plan you can review and iterate on.</p>
-                        </article>
-                        <div class="hidden lg:flex items-center justify-center absolute -right-[30px] top-11 -translate-y-1/2 z-20 w-7 h-7 rounded-full bg-brand-600 text-white shadow-md ring-2 ring-white"><i data-lucide="arrow-right" class="w-4 h-4"></i></div>
-                    </div>
-                    <div class="pipeline-step relative flex flex-col" style="animation-delay: 0.2s">
-                        <article class="step-card bg-white rounded-xl p-6 border border-slate-200 shadow-sm flex-1">
-                            <div class="w-10 h-10 rounded-lg bg-brand-100 text-brand-700 flex items-center justify-center mb-4"><i data-lucide="list-checks" class="w-5 h-5"></i></div>
-                            <p class="text-xs uppercase font-bold tracking-wider text-brand-600 mb-2">03: Agent</p>
-                            <h3 class="font-display font-bold text-lg mb-2">Tickets created</h3>
-                            <p class="text-sm text-slate-600">The plan is broken into prioritized tickets with user stories. Each is scoped and queued for execution.</p>
-                        </article>
-                        <div class="hidden lg:flex items-center justify-center absolute -right-[30px] top-11 -translate-y-1/2 z-20 w-7 h-7 rounded-full bg-brand-600 text-white shadow-md ring-2 ring-white"><i data-lucide="arrow-right" class="w-4 h-4"></i></div>
-                    </div>
-                    <div class="pipeline-step relative flex flex-col" style="animation-delay: 0.3s">
-                        <article class="step-card bg-white rounded-xl p-6 border border-slate-200 shadow-sm flex-1">
-                            <div class="w-10 h-10 rounded-lg bg-brand-100 text-brand-700 flex items-center justify-center mb-4"><i data-lucide="terminal" class="w-5 h-5"></i></div>
-                            <p class="text-xs uppercase font-bold tracking-wider text-brand-600 mb-2">04: Agent</p>
-                            <h3 class="font-display font-bold text-lg mb-2">Code &amp; test</h3>
-                            <p class="text-sm text-slate-600">Each ticket is executed in a sandbox. You can watch it, steer it, or leave it to run and review the result.</p>
-                        </article>
-                        <div class="hidden lg:flex items-center justify-center absolute -right-[30px] top-11 -translate-y-1/2 z-20 w-7 h-7 rounded-full bg-brand-600 text-white shadow-md ring-2 ring-white"><i data-lucide="arrow-right" class="w-4 h-4"></i></div>
-                    </div>
-                    <div class="pipeline-step relative flex flex-col" style="animation-delay: 0.4s">
-                        <article class="step-card bg-white rounded-xl p-6 border border-brand-200 shadow-sm bg-brand-50 flex-1">
-                            <div class="w-10 h-10 rounded-lg bg-brand-600 text-white flex items-center justify-center mb-4"><i data-lucide="check-circle-2" class="w-5 h-5"></i></div>
-                            <p class="text-xs uppercase font-bold tracking-wider text-brand-700 mb-2">05: You</p>
-                            <h3 class="font-display font-bold text-lg mb-2">Review &amp; ship</h3>
-                            <p class="text-sm text-slate-700">Review the working product. Approve and merge, or leave feedback. The agent iterates instantly.</p>
-                        </article>
-                    </div>
-                </div>
-                <div class="mt-10 text-center">
-                    <p class="text-slate-500 text-sm font-medium"><span class="text-brand-600 font-bold">You touch 2 of 5 steps.</span> The pipeline carries the rest.</p>
-                </div>
-            </div>
-        </section>
+  <!-- MODELS -->
+  <section id="models" class="band-tint py-20">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="text-center max-w-2xl mx-auto mb-10">
+        <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">Model-agnostic</p>
+        <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">Any model, on the plans you already pay for.</h2>
+        <p class="text-slate-600 text-lg mt-4">
+          Sign in with your team's Claude or ChatGPT subscription, or use API keys. Switch per project, task, cost or client policy. Admins decide which models and subscriptions each team may use.
+        </p>
+      </div>
+      ${ModelStrip()}
+      <div class="mt-10 grid sm:grid-cols-3 gap-4 text-center">
+        ${[["Claude Code", "Anthropic models, on a Claude plan or API key"],
+           ["Codex", "OpenAI models, on a ChatGPT plan or API key"],
+           ["Pi", "Gemini, DeepSeek, Kimi, GLM and other providers"]].map(([n, b]) => html`
+          <div class="rounded-2xl border border-slate-200 bg-white p-5">
+            <p class="font-display font-bold text-slate-900">${n}</p>
+            <p class="text-sm text-slate-600 mt-1">${b}</p>
+          </div>`)}
+      </div>
+    </div>
+  </section>
 
-        <!-- CTA -->
-        <section id="start" class="py-20 bg-white border-t border-slate-100">
-            <div class="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-                <div class="glass rounded-2xl p-8 sm:p-10 shadow-2xl border border-slate-200/70 glow-brand">
-                    <div class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-green-50 border border-green-200 mb-5">
-                        <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-                        <span class="text-xs font-bold text-green-700 uppercase tracking-wider">Agents ready</span>
-                    </div>
-                    <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900 mb-4">Start building with AI</h2>
-                    <p class="text-slate-500 mb-8">Sign up free. Describe your product idea and LFG Agent will create a PRD, tickets, and start building.</p>
-                    <div class="flex flex-col sm:flex-row gap-3 justify-center">
-                        <a href="/auth/register" class="inline-flex items-center justify-center gap-2 bg-brand-600 hover:bg-brand-700 text-white px-8 py-3.5 rounded-lg font-semibold transition-all shadow-lg shadow-brand-600/25">
-                            <i data-lucide="sparkles" class="w-4 h-4"></i> Get started free
-                        </a>
-                        <a href="/auth/login" class="inline-flex items-center justify-center gap-2 bg-white border border-slate-200 text-slate-700 px-8 py-3.5 rounded-lg font-semibold hover:border-brand-300 hover:text-brand-700 transition-colors">
-                            Sign in
-                        </a>
-                    </div>
-                </div>
-            </div>
-        </section>
+  <!-- INTEGRATIONS -->
+  <section id="integrations" class="band py-20">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="max-w-3xl mb-12">
+        <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">Your tooling</p>
+        <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">Works with what your company already runs.</h2>
+        <p class="text-slate-600 text-lg mt-4 leading-relaxed">
+          The factory fits into your existing workflow rather than replacing it, and we customise the pipeline (templates, definition of done, review rules, stack conventions) to how your business delivers.
+        </p>
+      </div>
+      <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
+        ${INTEGRATIONS.map(([icon, title, body]) => html`
+          <div class="rounded-2xl border border-slate-200 bg-white p-7">
+            <div class="w-10 h-10 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center mb-4"><i data-lucide="${icon}" class="w-5 h-5"></i></div>
+            <h3 class="font-display font-bold text-base mb-2">${title}</h3>
+            <p class="text-sm text-slate-600 leading-relaxed">${body}</p>
+          </div>`)}
+      </div>
+    </div>
+  </section>
 
-        <!-- MODELS -->
-        <section class="py-20 bg-white border-t border-slate-100">
-            <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-                <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">Model-agnostic</p>
-                <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">Runs on any model you want</h2>
-                <p class="text-slate-600 text-lg mt-4 max-w-2xl mx-auto">The LFG agent isn't locked to one provider. Point it at the frontier model of your choice, bring your own API key, and switch per task, cost, or capability.</p>
-                <div class="mt-8">
-                    ${ ModelStrip() }
-                </div>
-                <p class="text-slate-500 text-sm mt-6">Anthropic &middot; OpenAI &middot; Google &middot; xAI &middot; DeepSeek &middot; Moonshot &middot; Z.ai</p>
-            </div>
-        </section>
+  <!-- DEPLOY -->
+  <section class="bg-slate-900 py-20">
+    <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="grid md:grid-cols-2 gap-10 items-center">
+        <div>
+          <p class="text-xs font-bold text-brand-400 uppercase tracking-wider mb-3">Run it your way</p>
+          <h2 class="font-display font-bold text-3xl text-white leading-tight mb-4">Hosted, self-hosted, or set up for you.</h2>
+          <p class="text-slate-300 leading-relaxed">
+            Use LFG in the cloud, run the open-source core on your own infrastructure, or have us install, configure and customise a factory for your team. We can also run it for you and own the outcome.
+          </p>
+        </div>
+        <div class="flex flex-col gap-3">
+          <a href="/auth/register" class="px-6 py-3.5 rounded-xl bg-white text-slate-900 font-semibold hover:bg-slate-100 transition-colors inline-flex items-center justify-between gap-2">Start free in the cloud <i data-lucide="arrow-right" class="w-4 h-4"></i></a>
+          <a href="/self-host/" class="px-6 py-3.5 rounded-xl border border-white/20 text-white font-semibold hover:border-white/40 transition-colors inline-flex items-center justify-between gap-2">Self-host and managed setup <i data-lucide="arrow-right" class="w-4 h-4"></i></a>
+          <a href="/services/" class="px-6 py-3.5 rounded-xl border border-white/20 text-white font-semibold hover:border-white/40 transition-colors inline-flex items-center justify-between gap-2">Have us deliver it <i data-lucide="arrow-right" class="w-4 h-4"></i></a>
+        </div>
+      </div>
+    </div>
+  </section>
 
-        <!-- OPEN SOURCE -->
-        <section class="py-16 bg-slate-50 border-t border-slate-100">
-            <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-                <div class="flex flex-col md:flex-row items-center justify-between mb-8 gap-6">
-                    <div>
-                        <h2 class="font-display font-bold text-2xl text-slate-900 mb-1">Open source. Self-host it.</h2>
-                        <p class="text-slate-500 text-sm">LFG is open source. Clone it, run it, own it.</p>
-                    </div>
-                    <button onclick="copyCommands(this)" class="flex items-center gap-2 text-sm font-medium text-brand-700 bg-brand-50 hover:bg-brand-100 px-4 py-2 rounded-lg transition-colors shrink-0">
-                        <i data-lucide="copy" class="w-4 h-4"></i>
-                        <span class="btn-text">Copy Commands</span>
-                    </button>
-                </div>
-                <div class="bg-[#0f172a] rounded-xl shadow-2xl overflow-hidden border border-slate-800 font-mono text-sm leading-relaxed">
-                    <div class="flex items-center gap-2 px-4 py-3 bg-[#1e293b] border-b border-slate-700">
-                        <div class="w-3 h-3 rounded-full bg-[#ff5f56]"></div>
-                        <div class="w-3 h-3 rounded-full bg-[#ffbd2e]"></div>
-                        <div class="w-3 h-3 rounded-full bg-[#27c93f]"></div>
-                        <span class="ml-2 text-xs text-slate-400">bash, lfg</span>
-                    </div>
-                    <div class="p-6 text-slate-300 overflow-x-auto">
-<pre id="command-block">
-# Clone the repository
-git clone https://github.com/lfg-hq/lfg.git && cd lfg
+</main>
 
-# Install dependencies (Bun)
-bun install
+${SiteFooter()}
 
-# Configure your environment
-cp example.env .env   # set BETTER_AUTH_SECRET + an AI provider key
-
-# Start the app (runs migrations, then serves on :3000)
-bun run dev
-</pre>
-                    </div>
-                </div>
-            </div>
-        </section>
-    </main>
-
-    ${ Footer() }
-
-    <script>
-        lucide.createIcons();
-
-        const pipelineObserver = new IntersectionObserver((entries) => {
-            entries.forEach(entry => {
-                if (entry.isIntersecting) {
-                    entry.target.querySelectorAll('.pipeline-step').forEach(step => step.classList.add('animate'));
-                    pipelineObserver.unobserve(entry.target);
-                }
-            });
-        }, { threshold: 0.2 });
-        const pipelineGrid = document.querySelector('#how-it-works .grid');
-        if (pipelineGrid) pipelineObserver.observe(pipelineGrid);
-
-        function copyCommands(btn) {
-            const commands = \`# Clone the repository
-git clone https://github.com/lfg-hq/lfg.git
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Run migrations
-python manage.py migrate
-
-# Start server
-uvicorn LFG.asgi:application --host 0.0.0.0 --port 8000\`;
-            navigator.clipboard.writeText(commands);
-            const textSpan = btn.querySelector('.btn-text');
-            if (textSpan) { textSpan.textContent = 'Copied!'; setTimeout(() => { textSpan.textContent = 'Copy Commands'; }, 2000); }
-        }
-    </script>
 </body>
 </html>
 `;

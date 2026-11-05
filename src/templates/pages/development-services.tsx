@@ -52,7 +52,7 @@ export const DevelopmentServicesPage = () => html`
 <head>
 ${SiteHead({
   title: "Custom Software Development Services | AI Software Factory | LFG",
-  description: "Get software built without assembling a large development team. LFG delivers custom software, internal tools, product builds and modernization through an AI software factory with engineering oversight.",
+  description: "Tell us what to build and we own the outcome. LFG delivers custom software, internal tools, product builds and modernization through an AI software factory with engineering oversight.",
   path: "/services/",
 })}
 </head>
@@ -73,10 +73,10 @@ ${SiteNav({ active: "services" })}
       </div>
       <h1 class="font-display font-semibold text-4xl sm:text-5xl lg:text-6xl leading-[1.08] tracking-tight text-slate-900 animate-fade-up max-w-3xl">
         Need software built?<br>
-        <span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-pink-500">Skip assembling a team.</span>
+        <span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-pink-500">We own the outcome.</span>
       </h1>
       <p class="text-lg text-slate-600 mt-6 max-w-2xl leading-relaxed animate-fade-up">
-        A customer-facing application, an internal tool, a SaaS product or a backlog you have been postponing. We take it from requirements through implementation and verification — and you work with a small delivery team backed by the LFG software factory instead of paying for a large one for months.
+        A customer-facing application, an internal tool, a SaaS product or a backlog you have been postponing. We run it through the LFG software factory from scope to verified change: you agree the plan, click through every feature in a live preview as it lands, and accept work that has been tested against what you asked for.
       </p>
       <div class="mt-8 flex flex-col sm:flex-row gap-3 animate-fade-up">
         <a href="/#start" class="px-7 py-3.5 rounded-full bg-slate-900 text-white font-semibold hover:bg-slate-800 transition-colors inline-flex items-center justify-center gap-2">
@@ -86,7 +86,7 @@ ${SiteNav({ active: "services" })}
           See what we have shipped
         </a>
       </div>
-      <p class="mt-5 text-sm text-slate-500 animate-fade-up">Your repository &middot; your code &middot; a written spec before anything is built</p>
+      <p class="mt-5 text-sm text-slate-500 animate-fade-up">Your repository &middot; your code &middot; a written spec before anything is built &middot; proof before you accept</p>
     </div>
   </section>
 
@@ -123,7 +123,7 @@ ${SiteNav({ active: "services" })}
         ${([
           ["01", "Tell us what you need", "In your own words. A document, a conversation, a list of frustrations — whatever you have."],
           ["02", "Approve the specification", "You get a written spec with acceptance criteria before anything is built. This is where you push back."],
-          ["03", "Watch it get built", "Working previews as features land. No waiting until the end to find out what you are getting."],
+          ["03", "Watch it get built", "Click through each feature in a live preview, with a recorded walkthrough, as it lands. No waiting until the end to find out what you are getting."],
           ["04", "Accept the delivery", "Reviewed, tested, documented and merged into a repository you own."],
         ] as Array<[string, string, string]>).map(([n, t, b], i) => html`
           <div class="rounded-2xl border ${i === 3 ? "border-brand-200 ring-1 ring-brand-100" : "border-slate-200"} bg-white p-6">

@@ -83,6 +83,9 @@ export const SiteHead = ({ title, description, path, image = "/public/images/scr
     .mesh { background-image: radial-gradient(circle at 10% 20%, rgba(99,102,241,0.14), transparent 40%), radial-gradient(circle at 80% 0%, rgba(236,72,153,0.12), transparent 35%); }
     .glass { background: rgba(255,255,255,0.85); border: 1px solid rgba(148,163,184,0.24); backdrop-filter: blur(10px); }
 
+    /* Anchored sections clear the fixed nav (e.g. /agent/#preview from the menu) */
+    section[id] { scroll-margin-top: 80px; }
+
     /* Section rhythm: alternate plain / tinted so long pages stay readable */
     .band { background: #ffffff; border-top: 1px solid #eef1f5; }
     .band-tint { background: #f8fafc; border-top: 1px solid #eef1f5; }
@@ -151,18 +154,16 @@ export const SiteHead = ({ title, description, path, image = "/public/images/scr
 type NavItem = [href: string, icon: string, label: string, sub: string];
 
 const NAV_PRODUCT: NavItem[] = [
-  ["/how-it-works/", "workflow", "How LFG works", "Requirement to release, stage by stage"],
-  ["/agent/", "bot", "LFG Agent", "The engine underneath the factory"],
-  ["/self-host/", "server", "Self-hosted", "Run it on your own infrastructure"],
-  // Signing up is the top of the funnel now — it is free, it starts a
-  // relationship, and a call can follow. The consultative path sits beside it.
-  ["/auth/register", "sparkles", "Access LFG Agent", "Sign in and run it on your own repo"],
+  ["/how-it-works/", "workflow", "How LFG works", "Seven stages, from idea to verified change"],
+  ["/agent/", "bot", "The platform", "Agent orchestration, sandboxes, models, integrations"],
+  ["/agent/#preview", "monitor-play", "Preview and QA", "See every change running, with proof it works"],
+  ["/self-host/", "server", "Self-host and setup", "Your infrastructure, customised to your business"],
 ];
 
 const NAV_SOLUTIONS: NavItem[] = [
-  ["/software-services/", "building-2", "For software services firms", "Deliver more client work per engineer"],
-  ["/startups/", "rocket", "For startups and SMBs", "Ship a product without a full team"],
-  ["/services/", "hammer", "Software development services", "Tell us what to build and we deliver it"],
+  ["/software-services/", "building-2", "For software services firms", "Set up a factory for your delivery teams"],
+  ["/startups/", "rocket", "For startups and SMBs", "A real product, built and verified, ready to hand over"],
+  ["/services/", "hammer", "We own the outcome", "Tell us what to build; we deliver it verified"],
 ];
 
 const menuItem = ([href, icon, label, sub]: NavItem) => html`
@@ -218,7 +219,7 @@ export const SiteNav = ({ active = "none" }: { active?: SitePage }) => {
         <button id="theme-toggle" onclick="window.toggleTheme && window.toggleTheme()" class="text-slate-500 hover:text-slate-900 transition-colors" aria-label="Toggle dark mode">
           <i data-lucide="moon" class="w-5 h-5"></i>
         </button>
-        <a href="/auth/register" class="bg-slate-900 hover:bg-brand-700 text-white px-5 py-2 rounded-full text-sm font-semibold transition-all whitespace-nowrap">Access LFG Agent</a>
+        <a href="/auth/register" class="bg-slate-900 hover:bg-brand-700 text-white px-5 py-2 rounded-full text-sm font-semibold transition-all whitespace-nowrap">Try LFG free</a>
       </div>
     </div>
 
@@ -241,7 +242,7 @@ export const SiteNav = ({ active = "none" }: { active?: SitePage }) => {
     <a href="https://github.com/lfg-hq/lfg" target="_blank" rel="noopener noreferrer" class="block py-2 text-base font-medium text-slate-700 m-link">GitHub</a>
     <div class="mt-4 pt-4 border-t border-slate-100 flex flex-col gap-2">
       <a href="/#start" class="block py-2 text-base font-medium text-slate-700 m-link">Talk to us about a project</a>
-      <a href="/auth/register" class="bg-brand-600 text-white w-full py-3 rounded-lg font-semibold text-center block m-link">Access LFG Agent</a>
+      <a href="/auth/register" class="bg-brand-600 text-white w-full py-3 rounded-lg font-semibold text-center block m-link">Try LFG free</a>
     </div>
   </div>
 </nav>
@@ -290,15 +291,16 @@ export const SiteFooter = () => html`
           <div class="bg-brand-600 text-white p-1.5 rounded-lg"><i data-lucide="rocket" class="w-4 h-4"></i></div>
           <span class="font-display font-bold text-white text-lg">LFG</span>
         </div>
-        <p class="text-sm leading-relaxed">An AI software factory: requirements to tested, merge-ready software. We deliver on it, or your own team runs it.</p>
+        <p class="text-sm leading-relaxed">The software factory agent. Decide what to build, prove what got built. We set up your factory, or we own the outcome.</p>
       </div>
       <div>
         <h4 class="font-bold text-white mb-3 uppercase text-xs tracking-wider">Product</h4>
         <ul class="space-y-2.5 text-sm">
           <li><a href="/how-it-works/" class="hover:text-white transition-colors">How LFG works</a></li>
-          <li><a href="/agent/" class="hover:text-white transition-colors">LFG Agent</a></li>
-          <li><a href="/self-host/" class="hover:text-white transition-colors">Self-hosted</a></li>
-          <li><a href="/auth/register" class="hover:text-white transition-colors">Access LFG Agent</a></li>
+          <li><a href="/agent/" class="hover:text-white transition-colors">The platform</a></li>
+          <li><a href="/agent/#preview" class="hover:text-white transition-colors">Preview and QA</a></li>
+          <li><a href="/self-host/" class="hover:text-white transition-colors">Self-host and setup</a></li>
+          <li><a href="/auth/register" class="hover:text-white transition-colors">Try LFG free</a></li>
           <li><a href="https://github.com/lfg-hq/lfg" target="_blank" rel="noopener noreferrer" class="hover:text-white transition-colors">GitHub</a></li>
         </ul>
       </div>
@@ -307,7 +309,7 @@ export const SiteFooter = () => html`
         <ul class="space-y-2.5 text-sm">
           <li><a href="/software-services/" class="hover:text-white transition-colors">For software services firms</a></li>
           <li><a href="/startups/" class="hover:text-white transition-colors">For startups and SMBs</a></li>
-          <li><a href="/services/" class="hover:text-white transition-colors">Development services</a></li>
+          <li><a href="/services/" class="hover:text-white transition-colors">We own the outcome</a></li>
           <li><a href="/white-label/" class="hover:text-white transition-colors">White-label</a></li>
         </ul>
       </div>

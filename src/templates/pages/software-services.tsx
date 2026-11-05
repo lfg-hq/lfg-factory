@@ -16,12 +16,13 @@ import { SiteHead, SiteNav, SiteFooter } from "../components/site.tsx";
 const FLOW: Array<[string, string]> = [
   ["Client requirement", "What the client actually asked for, in their words"],
   ["Scope", "What is in, what is out, and what it depends on"],
-  ["PRD", "Written down and reviewable before anyone builds"],
-  ["Technical architecture", "Decisions made once, on the record"],
-  ["Tickets", "A dependency-aware graph, not a flat list"],
-  ["Execution", "Agents build in isolated environments, in parallel"],
-  ["QA", "Tests, behaviour and acceptance criteria checked"],
-  ["Reviewer approval", "Your senior engineer signs off"],
+  ["Plan", "Architecture decided once, on the record"],
+  ["Document", "PRD and acceptance criteria, reviewable before anyone builds"],
+  ["Ticket", "A dependency-aware graph, not a flat list"],
+  ["Implement", "Claude Code, Codex or Pi sessions in parallel sandboxes"],
+  ["Test", "Tests written from the criteria, proven to catch the change"],
+  ["QA", "Running in an in-app preview, with a recorded walkthrough"],
+  ["Reviewer approval", "Your senior engineer signs off a verified change"],
   ["Client delivery", "With the trail that shows how it got there"],
 ];
 
@@ -131,8 +132,8 @@ ${SiteNav({ active: "software-services" })}
       <div class="rounded-2xl border border-slate-200 bg-white p-7 sm:p-9">
         ${FLOW.map(([step, note], i) => html`
           ${i > 0 ? html`<div class="link-v"></div>` : ""}
-          <div class="node ${i === FLOW.length - 1 ? "node-ok" : i === 7 ? "node-accent" : ""} text-left flex flex-col sm:flex-row sm:items-baseline sm:justify-between gap-1">
-            <span class="text-sm font-semibold ${i === FLOW.length - 1 ? "text-emerald-700" : i === 7 ? "text-brand-700" : "text-slate-800"}">${step}</span>
+          <div class="node ${i === FLOW.length - 1 ? "node-ok" : i === 8 ? "node-accent" : ""} text-left flex flex-col sm:flex-row sm:items-baseline sm:justify-between gap-1">
+            <span class="text-sm font-semibold ${i === FLOW.length - 1 ? "text-emerald-700" : i === 8 ? "text-brand-700" : "text-slate-800"}">${step}</span>
             <span class="text-xs text-slate-500 sm:text-right">${note}</span>
           </div>`)}
       </div>
@@ -219,7 +220,7 @@ ${SiteNav({ active: "software-services" })}
         <div class="rounded-2xl border border-slate-200 bg-white p-6">
           <div class="w-10 h-10 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center mb-4"><i data-lucide="cpu" class="w-4 h-4"></i></div>
           <h3 class="font-display font-bold text-base mb-2">Your model policy</h3>
-          <p class="text-sm text-slate-600 leading-relaxed">Some clients will not allow certain vendors near their code. Set the policy per project.</p>
+          <p class="text-sm text-slate-600 leading-relaxed">Some clients will not allow certain vendors near their code. Set the policy per project, on API keys or the Claude and ChatGPT plans you already pay for.</p>
         </div>
         <div class="rounded-2xl border border-slate-200 bg-white p-6">
           <div class="w-10 h-10 rounded-xl bg-indigo-100 text-brand-700 flex items-center justify-center mb-4"><i data-lucide="server" class="w-4 h-4"></i></div>
