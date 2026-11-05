@@ -20,11 +20,13 @@ const S = "/public/images/screenshots";
 
 /** Hero product frame: one real screen per chapter. [src, tab label, alt] */
 const HERO_SHOTS: Array<[src: string, label: string, alt: string]> = [
-  [`${S}/lfg-technical-analysis.webp`, "Architecture",
+  [`${S}/lfg-prd.webp`, "PRD",
+   "A requirements document written in LFG: problem, goal and what will be built, in plain language"],
+  [`${S}/lfg-analysis.webp`, "Architecture",
    "A technical analysis written by LFG: what is being built and how, in plain language"],
-  [`${S}/lfg-tickets.webp`, "Tickets",
+  [`${S}/lfg-ticket-board.webp`, "Tickets",
    "LFG tickets grouped by epic, each epic on its own branch, with priorities"],
-  [`${S}/lfg-preview.webp`, "Live preview",
+  [`${S}/lfg-preview-tab.webp`, "Live preview",
    "The app running inside LFG's Preview tab at its own preview URL"],
 ];
 
@@ -63,7 +65,7 @@ const frame = (src: string, alt: string, label: string) => html`
   <div class="shot">
     <div class="shot-bar">
       <span class="shot-dot bg-red-400/70"></span><span class="shot-dot bg-amber-400/70"></span><span class="shot-dot bg-emerald-400/70"></span>
-      <span class="ml-2 text-xs font-mono text-slate-400">${label}</span>
+      <span class="ml-2 text-xs font-mono text-slate-400 truncate">${label}</span>
     </div>
     <img src="${src}" alt="${alt}" loading="lazy" class="w-full block" />
   </div>`;
@@ -73,10 +75,10 @@ export const HomePage = ({ posts = [] }: { posts?: BlogPost[]; turnstileSiteKey?
 <html lang="en" class="scroll-smooth">
 <head>
 ${SiteHead({
-  title: "LFG | The Software Factory Agent: decide what to build, prove it works",
+  title: "LFG | The Software Factory Agent: decide what to build, prove what got built",
   description: "LFG scopes the work, makes the architecture decisions, turns them into tickets and runs Claude Code, Codex and Pi across them in parallel. Every change comes back running in a live preview, tested against what you asked for.",
   path: "/",
-  image: `${S}/lfg-preview.webp`,
+  image: `${S}/lfg-preview-tab.webp`,
 })}
 </head>
 <body class="text-slate-900 font-sans selection:bg-brand-600 selection:text-white">
@@ -96,12 +98,12 @@ ${SiteNav({ active: "home" })}
           <span class="w-2 h-2 rounded-full bg-brand-500 animate-pulse"></span>
           <span class="text-xs font-bold text-slate-600 uppercase tracking-wider">The software factory agent</span>
         </div>
-        <h1 class="font-display font-semibold text-4xl sm:text-5xl lg:text-[3.5rem] leading-[1.06] tracking-tight animate-fade-up">
-          <span class="text-slate-400">Your agents can build anything.</span><br>
-          <span class="text-slate-900">LFG decides what's worth building, and proves it works.</span>
+        <h1 class="font-display font-semibold text-4xl sm:text-5xl xl:text-6xl leading-[1.08] tracking-tight text-slate-900 animate-fade-up">
+          Decide what to build.<br>
+          <span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-pink-500">Prove what got built.</span>
         </h1>
         <p class="text-lg sm:text-xl text-slate-600 mt-7 leading-relaxed max-w-3xl animate-fade-up">
-          Hand LFG an idea, a spec or a backlog. It scopes the work, makes the architecture decisions, cuts the tickets, and runs Claude Code, Codex and Pi across them in parallel. Every change comes back running in a live preview, tested against what you asked for.
+          LFG automates the whole software lifecycle: scoping, planning, documentation, ticketing, implementation, testing and QA. It runs Claude Code, Codex and Pi sessions in parallel sandboxes. Every change is running in front of you before anyone reviews it.
         </p>
         <div class="mt-9 flex flex-col sm:flex-row gap-3 animate-fade-up">
           <a href="/auth/register" class="px-7 py-3.5 rounded-full bg-slate-900 text-white font-semibold hover:bg-slate-800 transition-colors inline-flex items-center justify-center gap-2">
@@ -129,7 +131,7 @@ ${SiteNav({ active: "home" })}
                 </button>`)}
             </div>
           </div>
-          <div class="relative aspect-[1700/1150] bg-white">
+          <div class="relative aspect-[3/2] bg-white">
             ${HERO_SHOTS.map(([src, , alt], i) => html`
               <img src="${src}" alt="${alt}" ${i === 0 ? "" : 'loading="lazy"'} data-shot="${i}"
                    class="absolute inset-0 w-full h-full object-cover object-top transition-opacity duration-500 ${i === 0 ? "opacity-100" : "opacity-0"}" />`)}
@@ -186,7 +188,7 @@ ${SiteNav({ active: "home" })}
           </p>
         </div>
         <div class="lg:col-span-7 min-w-0">
-          ${frame(`${S}/lfg-docs.webp`, "LFG documents grouped by epic: requirements and technical analysis for each", "your-project / docs")}
+          ${frame(`${S}/lfg-prd.webp`, "A requirements document in LFG: problem, goal and what will be built, in plain language", "pilot requirements")}
         </div>
       </div>
     </div>
@@ -205,11 +207,11 @@ ${SiteNav({ active: "home" })}
 
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
         <div class="min-w-0">
-          ${frame(`${S}/lfg-technical-analysis.webp`, "An LFG technical analysis: what we are building and how we will build it, in plain language", "technical analysis")}
+          ${frame(`${S}/lfg-analysis.webp`, "An LFG technical analysis: what we are building and how we will build it, in plain language", "technical analysis")}
           <p class="text-sm text-slate-500 mt-3">The plan in plain language, linked to the requirements it implements.</p>
         </div>
         <div class="min-w-0 lg:mt-16">
-          ${frame(`${S}/lfg-architecture-flow.webp`, "A sequence diagram of a key flow in an LFG technical analysis", "key flows")}
+          ${frame(`${S}/lfg-key-flows.webp`, "A sequence diagram of a key flow in an LFG technical analysis", "key flows")}
           <p class="text-sm text-slate-500 mt-3">Key flows as sequence diagrams, failure paths included.</p>
         </div>
       </div>
@@ -241,7 +243,7 @@ ${SiteNav({ active: "home" })}
           </div>
         </div>
         <div class="lg:col-span-7 min-w-0">
-          ${frame(`${S}/lfg-tickets.webp`, "LFG tickets grouped by epic, each epic building on its own branch", "your-project / tickets")}
+          ${frame(`${S}/lfg-ticket-board.webp`, "LFG tickets grouped by epic, each epic building on its own branch", "tickets")}
         </div>
       </div>
     </div>
@@ -258,7 +260,7 @@ ${SiteNav({ active: "home" })}
         </p>
       </div>
 
-      ${frame(`${S}/lfg-preview.webp`, "An app built by LFG running inside the Preview tab, at its own preview URL", "your-project / preview")}
+      ${frame(`${S}/lfg-preview-tab.webp`, "An app built by LFG running inside the Preview tab, at its own preview URL", "live preview")}
 
       <div class="mt-10 grid md:grid-cols-3 gap-6">
         <div class="rounded-2xl border border-slate-200 bg-white p-7">

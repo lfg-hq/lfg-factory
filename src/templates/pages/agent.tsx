@@ -19,7 +19,7 @@ const frame = (src: string, alt: string, label: string) => html`
   <div class="shot">
     <div class="shot-bar">
       <span class="shot-dot bg-red-400/70"></span><span class="shot-dot bg-amber-400/70"></span><span class="shot-dot bg-emerald-400/70"></span>
-      <span class="ml-2 text-xs font-mono text-slate-400">${label}</span>
+      <span class="ml-2 text-xs font-mono text-slate-400 truncate">${label}</span>
     </div>
     <img src="${src}" alt="${alt}" loading="lazy" class="w-full block" />
   </div>`;
@@ -83,7 +83,7 @@ ${SiteNav({ active: "agent" })}
           </div>
         </div>
         <div class="min-w-0 lg:col-span-6 animate-fade-up" style="animation-delay:.12s">
-          ${frame(`${S}/lfg-tickets.webp`, "LFG tickets grouped by epic, each epic building on its own branch", "your-project / tickets")}
+          ${frame(`${S}/lfg-ticket-board.webp`, "LFG tickets grouped by epic, each epic building on its own branch", "your-project / tickets")}
         </div>
       </div>
       <div class="mt-14 animate-fade-up">${LifecycleRail()}</div>
@@ -101,8 +101,8 @@ ${SiteNav({ active: "agent" })}
         </p>
       </div>
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
-        <div class="min-w-0">${frame(`${S}/lfg-technical-analysis.webp`, "An LFG technical analysis in plain language", "technical analysis")}</div>
-        <div class="min-w-0 lg:mt-16">${frame(`${S}/lfg-architecture-flow.webp`, "A sequence diagram of a key flow", "key flows")}</div>
+        <div class="min-w-0">${frame(`${S}/lfg-analysis.webp`, "An LFG technical analysis in plain language", "technical analysis")}</div>
+        <div class="min-w-0 lg:mt-16">${frame(`${S}/lfg-key-flows.webp`, "A sequence diagram of a key flow", "key flows")}</div>
       </div>
     </div>
   </section>
@@ -148,7 +148,7 @@ ${SiteNav({ active: "agent" })}
           No pulling branches, no local setup, no "works on my machine". LFG stands the app up in its sandbox and opens it in a browser right next to the ticket, at its own URL, with its logs, its databases and its setup steps a click away.
         </p>
       </div>
-      <div class="mb-10">${frame(`${S}/lfg-preview.webp`, "An app built by LFG running in the Preview tab at its own URL", "your-project / preview")}</div>
+      <div class="mb-10">${frame(`${S}/lfg-preview-tab.webp`, "An app built by LFG running in the Preview tab at its own URL", "your-project / preview")}</div>
       <div class="grid sm:grid-cols-2 lg:grid-cols-5 gap-4">
         ${PREVIEW_STEPS.map(([name, body], i) => html`
           <div class="rounded-2xl border border-slate-200 bg-white p-5">

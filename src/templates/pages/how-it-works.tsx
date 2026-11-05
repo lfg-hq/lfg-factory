@@ -43,7 +43,7 @@ const DETAIL: Record<string, StageDetail> = {
     ],
     outputs: ["Technical analysis", "Sequence diagrams", "Architecture decisions"],
     human: "Your architect reviews the decisions in one sitting. Changing them here costs a conversation, not a rewrite.",
-    shot: [`${S}/lfg-technical-analysis.webp`, "technical analysis", "An LFG technical analysis: what we are building and how, in plain language"],
+    shot: [`${S}/lfg-analysis.webp`, "technical analysis", "An LFG technical analysis: what we are building and how, in plain language"],
   },
   Document: {
     lede: "Everything a good team writes before it builds, written and kept current.",
@@ -54,7 +54,7 @@ const DETAIL: Record<string, StageDetail> = {
     ],
     outputs: ["PRD", "Acceptance criteria", "Technical docs"],
     human: "Agree what done means now, so passing at the end is a fact rather than an opinion.",
-    shot: [`${S}/lfg-docs.webp`, "docs", "LFG documents grouped by epic"],
+    shot: [`${S}/lfg-prd.webp`, "pilot requirements", "A requirements document in LFG: problem, goal and what will be built"],
   },
   Ticket: {
     lede: "The plan becomes a graph of work small enough to build and check on its own.",
@@ -65,7 +65,7 @@ const DETAIL: Record<string, StageDetail> = {
     ],
     outputs: ["Tickets", "Dependency graph", "Board"],
     human: "Reprioritise, split or cut tickets. The plan is yours to shape.",
-    shot: [`${S}/lfg-tickets.webp`, "tickets", "LFG tickets grouped by epic, each epic on its own branch"],
+    shot: [`${S}/lfg-ticket-board.webp`, "tickets", "LFG tickets grouped by epic, each epic on its own branch"],
   },
   Implement: {
     lede: "Coding agents execute the tickets, many at once, each in its own sandbox.",
@@ -96,7 +96,7 @@ const DETAIL: Record<string, StageDetail> = {
     ],
     outputs: ["In-app preview", "Walkthrough recording", "QA verdict"],
     human: "Click through the change yourself before you read the diff.",
-    shot: [`${S}/lfg-preview.webp`, "preview", "An app built by LFG running in the Preview tab at its own URL"],
+    shot: [`${S}/lfg-preview-tab.webp`, "preview", "An app built by LFG running in the Preview tab at its own URL"],
   },
 };
 
