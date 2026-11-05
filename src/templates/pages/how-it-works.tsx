@@ -2,7 +2,6 @@ import { html } from "hono/html";
 import { SiteHead, SiteNav, SiteFooter } from "../components/site.tsx";
 import { ModelStrip } from "../components/model-strip.tsx";
 import { LifecycleRail, PHASES } from "../components/lifecycle.tsx";
-import { PreviewMock } from "../components/preview-mock.tsx";
 
 /**
  * /how-it-works/ — the detailed factory explanation.
@@ -18,7 +17,11 @@ interface StageDetail {
   detail: string[];
   outputs: string[];
   human: string;
+  /** A real screenshot of this stage's output. [src, chrome label, alt] */
+  shot?: [string, string, string];
 }
+
+const S = "/public/images/screenshots";
 
 const DETAIL: Record<string, StageDetail> = {
   Scope: {
@@ -32,14 +35,15 @@ const DETAIL: Record<string, StageDetail> = {
     human: "You correct the understanding before a line of code exists. That is the cheapest place to catch a misread requirement.",
   },
   Plan: {
-    lede: "Architecture and approach are decided once, deliberately, and recorded.",
+    lede: "The architecture decisions get made before anyone writes code, not discovered in a pull request.",
     detail: [
-      "Settles the implementation strategy and the architectural decisions the work depends on.",
-      "Identifies which parts of the system are affected and what has to happen before what.",
-      "Follows the conventions of your stack and your team, not a generic template.",
+      "For every epic, LFG writes a technical analysis: what is being built, and how, in plain language.",
+      "Key flows are drawn as sequence diagrams, failure paths included, so the design can be checked before it is built.",
+      "It is honest about status: a design is labelled a proposal, a diagram is labelled intended behaviour, until the code proves otherwise.",
     ],
-    outputs: ["Architecture", "Technical plan", "Execution order"],
-    human: "Your engineers review the approach. Changing it here costs a conversation, not a rewrite.",
+    outputs: ["Technical analysis", "Sequence diagrams", "Architecture decisions"],
+    human: "Your architect reviews the decisions in one sitting. Changing them here costs a conversation, not a rewrite.",
+    shot: [`${S}/lfg-technical-analysis.webp`, "technical analysis", "An LFG technical analysis: what we are building and how, in plain language"],
   },
   Document: {
     lede: "Everything a good team writes before it builds, written and kept current.",
@@ -50,6 +54,7 @@ const DETAIL: Record<string, StageDetail> = {
     ],
     outputs: ["PRD", "Acceptance criteria", "Technical docs"],
     human: "Agree what done means now, so passing at the end is a fact rather than an opinion.",
+    shot: [`${S}/lfg-docs.webp`, "docs", "LFG documents grouped by epic"],
   },
   Ticket: {
     lede: "The plan becomes a graph of work small enough to build and check on its own.",
@@ -60,6 +65,7 @@ const DETAIL: Record<string, StageDetail> = {
     ],
     outputs: ["Tickets", "Dependency graph", "Board"],
     human: "Reprioritise, split or cut tickets. The plan is yours to shape.",
+    shot: [`${S}/lfg-tickets.webp`, "tickets", "LFG tickets grouped by epic, each epic on its own branch"],
   },
   Implement: {
     lede: "Coding agents execute the tickets, many at once, each in its own sandbox.",
@@ -90,6 +96,7 @@ const DETAIL: Record<string, StageDetail> = {
     ],
     outputs: ["In-app preview", "Walkthrough recording", "QA verdict"],
     human: "Click through the change yourself before you read the diff.",
+    shot: [`${S}/lfg-preview.webp`, "preview", "An app built by LFG running in the Preview tab at its own URL"],
   },
 };
 
@@ -168,6 +175,14 @@ ${SiteNav({ active: "how-it-works" })}
           </div>
         </div>
       </div>
+      ${s.shot ? html`
+      <div class="shot mt-10">
+        <div class="shot-bar">
+          <span class="shot-dot bg-red-400/70"></span><span class="shot-dot bg-amber-400/70"></span><span class="shot-dot bg-emerald-400/70"></span>
+          <span class="ml-2 text-xs font-mono text-slate-400">${s.shot[1]}</span>
+        </div>
+        <img src="${s.shot[0]}" alt="${s.shot[2]}" loading="lazy" class="w-full block" />
+      </div>` : ""}
     </div>
   </section>`)}
 
@@ -186,34 +201,13 @@ ${SiteNav({ active: "how-it-works" })}
           <p class="text-white font-semibold mt-6">This gate is always human. It is the part we are least interested in automating away.</p>
         </div>
         <div class="min-w-0 lg:col-span-6">
-          ${PreviewMock({ compact: true })}
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- SEE IT -->
-  <section class="band py-20">
-    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-      <div class="max-w-2xl mb-10">
-        <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">The record</p>
-        <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">Every stage leaves something you can look at.</h2>
-        <p class="text-slate-600 text-lg mt-4">Scope, plans, tickets, live sessions, diffs, previews, tests and review state, while the work is happening rather than in a report afterwards.</p>
-      </div>
-      <div class="grid md:grid-cols-2 gap-6">
-        <div class="shot">
-          <div class="shot-bar">
-            <span class="shot-dot bg-red-400/70"></span><span class="shot-dot bg-amber-400/70"></span><span class="shot-dot bg-emerald-400/70"></span>
-            <span class="ml-2 text-xs font-mono text-slate-400">scope and plan</span>
+          <div class="shot">
+            <div class="shot-bar">
+              <span class="shot-dot bg-red-400/70"></span><span class="shot-dot bg-amber-400/70"></span><span class="shot-dot bg-emerald-400/70"></span>
+              <span class="ml-2 text-xs font-mono text-slate-400">ticket review</span>
+            </div>
+            <img src="${S}/agent-ticket-execution.png" alt="A ticket in LFG with its execution log, diff and review state" loading="lazy" class="w-full block" />
           </div>
-          <img src="/public/images/screenshots/agent-prd-chat.png" alt="A PRD and technical plan being produced in LFG" loading="lazy" class="w-full block" />
-        </div>
-        <div class="shot">
-          <div class="shot-bar">
-            <span class="shot-dot bg-red-400/70"></span><span class="shot-dot bg-amber-400/70"></span><span class="shot-dot bg-emerald-400/70"></span>
-            <span class="ml-2 text-xs font-mono text-slate-400">ticket board</span>
-          </div>
-          <img src="/public/images/screenshots/agent-ticket-board.png" alt="The LFG ticket board: every ticket, its state and its dependencies" loading="lazy" class="w-full block" />
         </div>
       </div>
     </div>

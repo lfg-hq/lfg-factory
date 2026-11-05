@@ -2,7 +2,6 @@ import { html } from "hono/html";
 import { SiteHead, SiteNav, SiteFooter } from "../components/site.tsx";
 import { ModelStrip } from "../components/model-strip.tsx";
 import { LifecycleRail } from "../components/lifecycle.tsx";
-import { PreviewMock } from "../components/preview-mock.tsx";
 
 /**
  * /agent/ — the platform page.
@@ -13,6 +12,17 @@ import { PreviewMock } from "../components/preview-mock.tsx";
  * into a company's models, subscriptions and tools. Every capability named
  * here exists in the product today.
  */
+
+const S = "/public/images/screenshots";
+
+const frame = (src: string, alt: string, label: string) => html`
+  <div class="shot">
+    <div class="shot-bar">
+      <span class="shot-dot bg-red-400/70"></span><span class="shot-dot bg-amber-400/70"></span><span class="shot-dot bg-emerald-400/70"></span>
+      <span class="ml-2 text-xs font-mono text-slate-400">${label}</span>
+    </div>
+    <img src="${src}" alt="${alt}" loading="lazy" class="w-full block" />
+  </div>`;
 
 const PREVIEW_STEPS: Array<[string, string]> = [
   ["Detect", "Reads the codebase and works out how the app runs"],
@@ -73,10 +83,27 @@ ${SiteNav({ active: "agent" })}
           </div>
         </div>
         <div class="min-w-0 lg:col-span-6 animate-fade-up" style="animation-delay:.12s">
-          ${PreviewMock()}
+          ${frame(`${S}/lfg-tickets.webp`, "LFG tickets grouped by epic, each epic building on its own branch", "your-project / tickets")}
         </div>
       </div>
       <div class="mt-14 animate-fade-up">${LifecycleRail()}</div>
+    </div>
+  </section>
+
+  <!-- ARCHITECTURE -->
+  <section id="architecture" class="band-tint py-20">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="max-w-3xl mb-12">
+        <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">Architecture decisions</p>
+        <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900 mb-5">Designed before it's built.</h2>
+        <p class="text-slate-600 text-lg leading-relaxed">
+          Before a single ticket runs, LFG writes the technical analysis for the epic: what is being built, how, in plain language, and the key flows as sequence diagrams with their failure paths. Agents build against decisions your architect has already approved, so they don't make them up halfway through a session.
+        </p>
+      </div>
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+        <div class="min-w-0">${frame(`${S}/lfg-technical-analysis.webp`, "An LFG technical analysis in plain language", "technical analysis")}</div>
+        <div class="min-w-0 lg:mt-16">${frame(`${S}/lfg-architecture-flow.webp`, "A sequence diagram of a key flow", "key flows")}</div>
+      </div>
     </div>
   </section>
 
@@ -118,9 +145,10 @@ ${SiteNav({ active: "agent" })}
         <p class="text-xs font-bold text-brand-600 uppercase tracking-wider mb-2">In-app preview</p>
         <h2 class="font-display font-bold text-3xl md:text-4xl text-slate-900">Every change, running inside LFG.</h2>
         <p class="text-slate-600 text-lg mt-4 leading-relaxed">
-          No pulling branches, no local setup, no "works on my machine". LFG stands the app up in its sandbox and opens it in a browser right next to the ticket, with its logs, its databases and its setup steps a click away.
+          No pulling branches, no local setup, no "works on my machine". LFG stands the app up in its sandbox and opens it in a browser right next to the ticket, at its own URL, with its logs, its databases and its setup steps a click away.
         </p>
       </div>
+      <div class="mb-10">${frame(`${S}/lfg-preview.webp`, "An app built by LFG running in the Preview tab at its own URL", "your-project / preview")}</div>
       <div class="grid sm:grid-cols-2 lg:grid-cols-5 gap-4">
         ${PREVIEW_STEPS.map(([name, body], i) => html`
           <div class="rounded-2xl border border-slate-200 bg-white p-5">
