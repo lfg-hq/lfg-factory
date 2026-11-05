@@ -30,8 +30,39 @@ const HERO_SHOTS: Array<[src: string, label: string, alt: string]> = [
    "The app running inside LFG's Preview tab at its own preview URL"],
 ];
 
-const BEFORE = ["Is this the right thing to build?", "Does it fit the architecture we have?", "What does done actually mean?"];
-const AFTER = ["Does it run, or does it just compile?", "Do the tests test anything?", "Who signed off, and why?"];
+/** The questions coding agents leave open, each paired with what LFG produces to answer it. */
+const BEFORE: Array<[question: string, answer: string]> = [
+  ["Is this the right thing to build?", "A scoped PRD your team reviews"],
+  ["Does it fit the architecture we have?", "A technical analysis with sequence diagrams"],
+  ["What does done actually mean?", "Acceptance criteria on every ticket"],
+];
+const AFTER: Array<[question: string, answer: string]> = [
+  ["Does it run, or does it just compile?", "A live preview of every change"],
+  ["Do the tests test anything?", "Tests proven against the code before and after"],
+  ["Who signed off, and why?", "An approval trail from intent to merge"],
+];
+
+/**
+ * One question card. Questions rise in one after another, then LFG's answers
+ * tick in under each, so the section plays out its own argument on scroll.
+ * Delays are per item: all six questions first, then the six answers.
+ */
+const questionCard = (label: string, items: Array<[string, string]>, offset: number) => html`
+  <div class="rounded-2xl border border-white/10 p-8">
+    <p class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-6">${label}</p>
+    <ul class="space-y-5">
+      ${items.map(([q, a], i) => html`
+        <li class="qa-item flex items-start gap-3" style="--q:${(offset + i) * 140}ms; --a:${1100 + (offset + i) * 260}ms">
+          <span class="qa-check mt-1 w-5 h-5 rounded-full bg-brand-500 text-white flex items-center justify-center shrink-0">
+            <i data-lucide="check" class="w-3 h-3"></i>
+          </span>
+          <div>
+            <p class="font-display text-xl text-white leading-snug">${q}</p>
+            <p class="qa-answer text-sm font-semibold text-brand-300 mt-1">${a}</p>
+          </div>
+        </li>`)}
+    </ul>
+  </div>`;
 
 const GOVERNANCE: Array<[icon: string, title: string, body: string]> = [
   ["git-pull-request-arrow", "Traceable from intent to merge",
@@ -86,6 +117,20 @@ ${SiteHead({
   path: "/",
   image: `${S}/lfg-preview-tab.webp`,
 })}
+<style>
+  .qa-item { opacity: 0; transform: translateY(10px); }
+  .qa-check { opacity: 0; transform: scale(.4); }
+  .qa-answer { opacity: 0; transform: translateX(-6px); }
+  .qa-on .qa-item { animation: qaRise .55s cubic-bezier(.2,.7,.2,1) var(--q) forwards; }
+  .qa-on .qa-check { animation: qaPop .4s cubic-bezier(.3,1.6,.5,1) var(--a) forwards; }
+  .qa-on .qa-answer { animation: qaSlide .45s ease-out calc(var(--a) + 120ms) forwards; }
+  @keyframes qaRise { to { opacity: 1; transform: none; } }
+  @keyframes qaPop { to { opacity: 1; transform: none; } }
+  @keyframes qaSlide { to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) {
+    .qa-item, .qa-check, .qa-answer { opacity: 1 !important; transform: none !important; animation: none !important; }
+  }
+</style>
 </head>
 <body class="text-slate-900 font-sans selection:bg-brand-600 selection:text-white">
 
@@ -166,19 +211,9 @@ ${SiteNav({ active: "home" })}
         Point a coding agent at a ticket and it writes the code. It won't ask whether the ticket was right, and it can't tell you whether the result actually works. Those questions used to be answered in planning meetings, design reviews and QA cycles. With agents writing the code, they're now the slowest part of shipping.
       </p>
 
-      <div class="mt-14 grid md:grid-cols-2 gap-6">
-        <div class="rounded-2xl border border-white/10 p-8">
-          <p class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-5">Before the code</p>
-          <ul class="space-y-4">
-            ${BEFORE.map((q) => html`<li class="font-display text-xl text-white leading-snug">${q}</li>`)}
-          </ul>
-        </div>
-        <div class="rounded-2xl border border-white/10 p-8">
-          <p class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-5">After the code</p>
-          <ul class="space-y-4">
-            ${AFTER.map((q) => html`<li class="font-display text-xl text-white leading-snug">${q}</li>`)}
-          </ul>
-        </div>
+      <div class="mt-14 grid md:grid-cols-2 gap-6" id="qa-cards">
+        ${questionCard("Before the code", BEFORE, 0)}
+        ${questionCard("After the code", AFTER, BEFORE.length)}
       </div>
 
       <p class="mt-12 font-display text-2xl text-white max-w-3xl leading-snug">
@@ -554,6 +589,17 @@ ${SiteFooter()}
     document.addEventListener('visibilitychange', function () { if (!anim) return; document.hidden ? anim.pause() : (!hovering && anim.play()); });
 
     run();
+  })();
+
+  // ── Question cards: play once when scrolled into view ────────
+  (function () {
+    var cards = document.getElementById('qa-cards');
+    if (!cards) return;
+    if (!('IntersectionObserver' in window)) { cards.classList.add('qa-on'); return; }
+    var io = new IntersectionObserver(function (entries) {
+      if (entries[0].isIntersecting) { cards.classList.add('qa-on'); io.disconnect(); }
+    }, { threshold: 0.35 });
+    io.observe(cards);
   })();
 
   // ── Project intake ────────────────────────────────────────────
