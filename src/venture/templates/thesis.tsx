@@ -7,7 +7,7 @@ import { TOKEN_POLICY } from "../services/assessment.ts";
 const CHAT = "/venture/chat";
 
 export const VentureThesisPage = () => html`<!doctype html>
-<html lang="en"><head>${SiteHead({ title: "LFG Ventures: the thesis", description: "Venture building paid in tokens: how LFG's analyst funds ideas, how agents build and run them, and how each tranche is earned.", path: "/venture/thesis", noindex: true })}
+<html lang="en"><head>${SiteHead({ title: "LFG Ventures: the thesis", description: "Venture building paid in tokens: how LFG's analyst funds ideas, how agents build and run them, and how each tranche is earned.", path: "/venture/thesis", image: "/public/images/og-venture.png", noindex: true })}
 <link rel="stylesheet" href="/public/venture/landing.css">
 <link rel="stylesheet" href="/public/venture/thesis.css"></head>
 <body class="text-slate-900 font-sans">${SiteNav({})}
