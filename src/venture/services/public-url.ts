@@ -34,6 +34,17 @@ export async function publicUrl(raw: string, signal?: AbortSignal) {
   return { url, address: addresses[0]! };
 }
 
+// Answers DNS with the address we already validated, so the connection can't be
+// re-pointed (DNS rebinding). Callers may ask for one address or, with
+// { all: true } as Bun's HTTP client does, for a list.
+export function pinnedLookup(address: { address: string; family: number }) {
+  return ((_host: string, opts: unknown, cb: Function) => {
+    const callback = typeof opts === 'function' ? opts : cb;
+    if (typeof opts === 'object' && opts && (opts as { all?: boolean }).all) callback(null, [{ address: address.address, family: address.family }]);
+    else callback(null, address.address, address.family);
+  }) as any;
+}
+
 export async function readPublicUrl(raw: string, limit: number, signal?: AbortSignal): Promise<{url: string; title: string; text: string}> {
   for (let redirects = 0; redirects <= 4; redirects++) {
     signal?.throwIfAborted();
@@ -42,7 +53,7 @@ export async function readPublicUrl(raw: string, limit: number, signal?: AbortSi
     const response = await new Promise<{location?: string; body: string}>((resolve, reject) => {
       const req = (url.protocol === 'https:' ? https : http)(url, {
         signal, headers: { 'User-Agent': 'VentureAnalyst/1.0', Accept: 'text/html,text/plain', 'Accept-Encoding': 'identity' },
-        lookup: ((_host: string, _opts: unknown, cb: Function) => cb(null, address.address, address.family)) as any,
+        lookup: pinnedLookup(address),
       }, res => {
         if (res.statusCode && [301,302,303,307,308].includes(res.statusCode)) {
           res.destroy(); resolve({ location: res.headers.location, body: '' }); return;
@@ -64,4 +75,23 @@ export async function readPublicUrl(raw: string, limit: number, signal?: AbortSi
     return { url: url.href, title: title.slice(0, 200), text };
   }
   throw new Error('SOURCE_REDIRECT_LIMIT');
+}
+
+// How the analyst reads a link: the URL must pass the public-address policy,
+// then Exa fetches and extracts it on its own servers (it renders JavaScript
+// sites and reads PDFs). LFG's servers never fetch founder-supplied URLs.
+// readPublicUrl above stays as the policy reference; Bun's HTTP client does not
+// connect reliably through a pinned lookup (TLS name and IPv6 failures).
+export async function readVentureUrl(raw: string, limit: number, signal?: AbortSignal, exaKey = process.env.EXA_API_KEY): Promise<{url: string; title: string; text: string}> {
+  // Founders often type a bare domain ("acme.com"); read it as https.
+  const trimmed = raw.trim();
+  const { url } = await publicUrl(/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`, signal);
+  if (!exaKey) throw new Error('SEARCH_NOT_CONFIGURED');
+  const response = await fetch('https://api.exa.ai/contents', { method: 'POST', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(25_000)]) : AbortSignal.timeout(25_000),
+    headers: { 'x-api-key': exaKey, 'content-type': 'application/json' }, body: JSON.stringify({ urls: [url.href], text: { maxCharacters: limit } }) }).catch(() => { signal?.throwIfAborted(); throw new Error('SOURCE_TIMEOUT'); });
+  if (!response.ok) throw new Error('SOURCE_INACCESSIBLE');
+  const result = ((await response.json()) as { results?: { title?: string; text?: string }[] }).results?.[0];
+  const text = (result?.text || '').replace(/\s+/g, ' ').trim().slice(0, limit);
+  if (!text) throw new Error('SOURCE_INACCESSIBLE');
+  return { url: url.href, title: (result?.title || url.hostname).slice(0, 200), text };
 }

@@ -9,7 +9,7 @@ import { ventureConversations, ventureMessages, ventureSources, ventureAssessmen
 import { getModel, getProviderName, getProviderModel } from '../../ai/provider.ts';
 import { createWebResearchTools } from '../../ai/tools/agent-tools.ts';
 import { ventureAnalystPrompt } from '../prompts/analyst.ts';
-import { publicUrl, readPublicUrl } from './public-url.ts';
+import { publicUrl, readVentureUrl } from './public-url.ts';
 import { ventureLog } from '../request-log.ts';
 import { onAssessmentSaved, ventureContext } from './dashboard.ts';
 
@@ -135,7 +135,7 @@ export async function runTurn(conversationId: string, requestId: string, abort: 
     const [conversation] = await db.select({ summary: ventureConversations.summary, summaryCount: ventureConversations.summaryCount }).from(ventureConversations).where(eq(ventureConversations.id, conversationId)).limit(1);
     const priorSources = await db.select().from(ventureSources).where(eq(ventureSources.conversationId, conversationId)).orderBy(desc(ventureSources.retrievedAt)).limit(480);
     priorSources.forEach(s => sourceIds.add(s.id));
-    const rawTools = createWebResearchTools({ signal: abort.signal, readPublicUrl, onResponse: id => log('venture.research.provider_response', 'pending', { provider: 'exa', providerRequestId: safeId(id) }) });
+    const rawTools = createWebResearchTools({ signal: abort.signal, readPublicUrl: (url, limit, signal) => readVentureUrl(url, limit, signal, env.EXA_API_KEY), onResponse: id => log('venture.research.provider_response', 'pending', { provider: 'exa', providerRequestId: safeId(id) }) });
     const tools: ToolSet = {};
     for (const [name, base] of Object.entries(rawTools)) {
       tools[name] = { ...base, execute: async (input: any, options: any) => {
