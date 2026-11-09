@@ -23,19 +23,22 @@ work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 # Messages (request IDs link log lines to founders), with content sizes for estimates.
 cat > "$work/query.sql" <<SQL
 \pset footer off
-SELECT u.name, u.email, c.id, replace(c.title, E'\t', ' '), m.request_id, m.role, m.status, length(m.content),
+-- One tab-separated column, so no separator has to survive SSH quoting.
+SELECT concat_ws(chr(9), u.name, u.email, c.id, replace(c.title, chr(9), ' '), m.request_id, m.role, m.status, length(m.content),
   (SELECT count(*) FROM venture_source s WHERE s.conversation_id = c.id),
-  (SELECT count(*) FROM venture_assessment a WHERE a.conversation_id = c.id)
+  (SELECT count(*) FROM venture_assessment a WHERE a.conversation_id = c.id))
 FROM venture_message m
 JOIN venture_conversation c ON c.id = m.conversation_id
 JOIN "user" u ON u.id = c.user_id
 WHERE ${where}
 ORDER BY u.email, c.created_at, m.created_at;
 SQL
-ssh -o ConnectTimeout=15 "root@${DEPLOY_SERVER}" '
-  pg=$(docker ps --format "{{.Names}}" | grep -m1 postgres)
-  docker exec -i "$pg" sh -c "psql -U \"\$POSTGRES_USER\" -d \"\${POSTGRES_DB:-lfg_prod}\" -At -F \"	\""
-' < "$work/query.sql" > "$work/messages.tsv"
+# The app's database (POSTGRES_DB in .env.prod), not the accessory's default one.
+[[ "${POSTGRES_DB:-}" =~ ^[A-Za-z0-9_]+$ ]] || { echo "POSTGRES_DB missing or unexpected in .env.prod" >&2; exit 1; }
+ssh -o ConnectTimeout=15 "root@${DEPLOY_SERVER}" "
+  pg=\$(docker ps --format '{{.Names}}' | grep -m1 postgres)
+  docker exec -i \"\$pg\" sh -c 'psql -U \"\$POSTGRES_USER\" -d ${POSTGRES_DB} -At'
+" < "$work/query.sql" > "$work/messages.tsv"
 
 # Usage lines from every app container still on the host (current and previous releases).
 ssh -o ConnectTimeout=15 "root@${DEPLOY_SERVER}" '
