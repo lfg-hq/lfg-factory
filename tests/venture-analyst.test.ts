@@ -21,6 +21,7 @@ let generations = 0;
 const model = new MockLanguageModelV3({
   doGenerate: async () => {
     if (mode === 'failure') throw new Error('TEST FIXTURE secret-do-not-log');
+    if (mode === 'capacity') throw Object.assign(new Error('TEST FIXTURE quota'), { statusCode: 429 });
     generations++;
     // SAM larger than TAM: not something the repairs can fix.
     const output = invalidFirst ? { ...assessmentOutput, market: { ...assessmentOutput.market, sam: { ...assessmentOutput.market.sam, customers: 5000, amount: 50000 } } } : assessmentOutput;
@@ -32,6 +33,7 @@ const model = new MockLanguageModelV3({
     analystPrompts.push(JSON.stringify(options.prompt)); lastCall = options;
     expect(options.prompt.some(m => JSON.stringify(m).includes('TEST FIXTURE project secret'))).toBe(false);
     if (mode === 'failure') throw new Error('TEST FIXTURE provider failure with secret-do-not-log');
+    if (mode === 'capacity') throw Object.assign(new Error('TEST FIXTURE rate limit'), { statusCode: 429 });
     if (mode === 'hang') {
       await new Promise((_, reject) => options.abortSignal?.addEventListener('abort', () => reject(options.abortSignal!.reason), { once: true }));
     }
@@ -106,6 +108,25 @@ test('missing/failing provider is truthful and preserves earlier messages', asyn
     expect(result.messages.find(m => m.role === 'assistant')?.content).toBe('');
   }
   expect((await db.select().from(ventureMessages).where(eq(ventureMessages.conversationId, conversationId))).some(m => m.status === 'completed' && m.role === 'assistant')).toBe(true);
+});
+test('provider capacity limits tell the founder we are adding capacity, in chat and assessments', async () => {
+  // Its own founder, so it does not spend the shared fixture's hourly turn budget.
+  const founder = crypto.randomUUID();
+  await db.insert(users).values({ id: founder, name: 'TEST FIXTURE', email: `fixture-${founder}@example.org` });
+  const [conversation] = await db.insert(ventureConversations).values({ userId: founder }).returning();
+  try {
+    mode = 'capacity'; const events: any[] = []; const chatId = crypto.randomUUID();
+    await runTurn(conversation!.id, chatId, await reserveTurn(conversation!.id, founder, chatId, 'TEST FIXTURE capacity'), e => events.push(e));
+    expect(events.find(e => e.type === 'error')?.message).toContain('adding more');
+    expect(logs.some(l => l.event === 'venture.turn.failed' && l.failureCategory === 'PROVIDER_CAPACITY')).toBe(true);
+    const assessId = crypto.randomUUID();
+    await expect(runAssessment(conversation!.id, assessId, await reserveTurn(conversation!.id, founder, assessId, 'TEST FIXTURE capacity'), crypto.randomUUID())).rejects.toMatchObject({ code: 'PROVIDER_CAPACITY' });
+  } finally {
+    mode = 'success';
+    await db.delete(ventureMessages).where(eq(ventureMessages.conversationId, conversation!.id));
+    await db.delete(ventureConversations).where(eq(ventureConversations.id, conversation!.id));
+    await db.delete(users).where(eq(users.id, founder));
+  }
 });
 test('durable duplicate and concurrent turns are denied; cancellation and timeout save terminal states', async () => {
   const id = crypto.randomUUID(); mode = 'hang';

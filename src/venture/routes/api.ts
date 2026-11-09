@@ -336,6 +336,7 @@ for (const kind of ['session', 'transcribe'] as const) {
       if (kind === 'session') return c.body(await connectDictation((parsed.data as { sdp: string }).sdp, key, signal, context), 200, { 'Content-Type': 'application/sdp' });
       return c.json({ text: await transcribeDictation(file!, key, signal, context) });
     } catch (error: any) {
+      if ([429, 503, 529].includes(error?.statusCode)) return ventureError(c.get('requestId'), 503, 'PROVIDER_CAPACITY', 'We’re getting more requests than our AI capacity allows right now, and we’re adding more. Your recording is kept; try again in a few minutes, or type your message.');
       return ventureError(c.get('requestId'), 502, 'DICTATION_FAILED', [401, 403].includes(error?.statusCode) ? 'Transcription access was denied. Type your message, or ask LFG to check the platform key.' : 'Transcription could not finish. Your recording is available to retry.');
     } finally { const n = (dictating.get(userId) || 1) - 1; if (n) dictating.set(userId, n); else dictating.delete(userId); }
   });
