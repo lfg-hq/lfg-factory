@@ -98,10 +98,9 @@
 .vh-form input{flex:1 1 240px;min-width:0;border:none;outline:none;font:inherit;font-size:17px;color:var(--ink);background:transparent;padding:12px 0;min-height:44px}
 .vh-form input::placeholder{color:var(--faint)}
 .dark .vh .vh-form input{background:transparent!important;border:none!important;box-shadow:none!important}
-.vh-go{display:inline-flex;align-items:center;justify-content:center;gap:8px;font:inherit;font-size:16px;font-weight:700;color:#fff;background:#0f172a;border:none;border-radius:14px;padding:14px 22px;min-height:48px;cursor:pointer}
-.vh-go:hover{background:#4f46e5}
+.vh-go{display:inline-flex;align-items:center;justify-content:center;gap:8px;font:inherit;font-size:16px;font-weight:700;color:#fff;background:#4f46e5;border:none;border-radius:14px;padding:14px 22px;min-height:48px;cursor:pointer}
+.vh-go:hover{background:#4338ca}
 .vh-go:disabled{opacity:.7;cursor:progress}
-.dark .vh-go{background:#4f46e5}.dark .vh-go:hover{background:#4338ca}
 .vh-formnote{font-size:14px;color:var(--faint);max-width:620px}
 .vh-formnote a{color:inherit;text-decoration:underline}
 .vh-formnote.error{color:#b42318;font-weight:600}
@@ -228,7 +227,6 @@
 .vh-final h2{font-size:56px;line-height:1.08;font-weight:800;letter-spacing:-.03em}
 .vh-final .vh-lede{color:#cbd5e1;font-size:20px;max-width:560px}
 .vh-final .vh-form{--panel:#fff;--ink:#0f172a;--faint:#64748b;border-color:#fff}
-.vh-final .vh-go{background:#4f46e5}.vh-final .vh-go:hover{background:#4338ca}
 .vh-final .vh-formnote{color:#94a3b8}
 .vh-final .vh-formnote.error{color:#fda29b}
 .vh-final .vh-thesis{color:#e2e8f0;font-weight:600;font-size:15px;text-decoration:none;border-bottom:1px solid rgba(255,255,255,.4)}
