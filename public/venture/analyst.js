@@ -321,7 +321,9 @@
       let answerText = '', frame = 0;
       const paint = () => { frame = 0; answer.classList.remove('va-pending'); markdown(answer, answerText); content.scrollTop = content.scrollHeight; };
       say(feedback, 'Thinking…');
-      let finished = false, failed = false;
+      let finished = false, failed = false, saving = 0;
+      // The plan save after a reply can take a minute or two: count the time so it never looks frozen.
+      const stopSaving = () => { clearInterval(saving); saving = 0; };
       try {
         const response = await fetch(`/api/venture/conversations/${encodeURIComponent(id)}/stream`, { method: 'POST', credentials: 'same-origin', signal: streamController.signal, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requestId, content: text }) });
         if (!response.ok) {
@@ -336,8 +338,9 @@
             if (!line || version !== epoch) continue;
             const event = JSON.parse(line);
             if (event.type === 'text') { answerText += event.text; frame ||= requestAnimationFrame(paint); }
+            if (['assessment', 'error', 'done'].includes(event.type) || (event.type === 'progress' && !/^Saving your plan/.test(event.message))) stopSaving();
             if (event.type === 'assessment') { content.append(savedNotice(id, [event.verdict ? VERDICT_TEXT[event.verdict] : null, event.commitments ? `${event.commitments} to-do${event.commitments === 1 ? '' : 's'}` : null].filter(Boolean).join(' · ') || null)); stage.querySelector('.va-save-plan')?.remove(); say(feedback, ''); }
-            if (event.type === 'progress') { if (/^Searching|^Reading/.test(event.message)) typing.querySelector('.va-typing-text').textContent = turnSources.length ? `Researching · ${turnSources.length} sources` : 'Researching'; else say(feedback, event.message); }
+            if (event.type === 'progress') { if (/^Searching|^Reading/.test(event.message)) typing.querySelector('.va-typing-text').textContent = turnSources.length ? `Researching · ${turnSources.length} sources` : 'Researching'; else if (/^Saving your plan/.test(event.message)) { const started = Date.now(), tick = () => { const s = Math.round((Date.now() - started) / 1000); say(feedback, `${event.message} ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`); }; stopSaving(); tick(); saving = setInterval(tick, 1000); } else say(feedback, event.message); }
             if (event.type === 'source') { addSource(event.source); turnSources.push(event.source); typing.querySelector('.va-typing-text').textContent = `Researching · ${turnSources.length} sources`; }
             if (event.type === 'error') { failed = true; say(feedback, event.message, requestId); }
             if (event.type === 'done') { finished = true; if (event.status === 'completed') say(feedback, ''); }
@@ -349,6 +352,7 @@
         failed = true;
         if (version === epoch) say(feedback, error.name === 'AbortError' ? 'Stopped. Anything already written is saved.' : error.message, error.requestId || requestId);
       } finally {
+        stopSaving();
         activeTurn = null; streamController = null;
         if (frame) cancelAnimationFrame(frame);
         if (answerText) paint(); else answer.remove();

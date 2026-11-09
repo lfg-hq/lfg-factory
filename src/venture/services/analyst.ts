@@ -259,7 +259,7 @@ export async function runTurn(conversationId: string, requestId: string, abort: 
       await db.update(ventureMessages).set({ content: text, status }).where(where);
       await db.update(ventureConversations).set({ updatedAt: new Date() }).where(eq(ventureConversations.id, conversationId));
       if (status === 'completed') { log('venture.turn.completed', 'success', { researchCalls: calls }); await clearCapacityWait(conversationId); }
-      if (status === 'completed' && saveRequested) await saveAfterTurn(conversationId, send, httpRequestId);
+      if (status === 'completed' && saveRequested) await saveAfterTurn(conversationId, requestId, send, httpRequestId);
       send({ type: 'done', status });
       if (status === 'completed') void summarize(conversationId);
     } catch { log('venture.turn.failed', 'failed', { errorCode: 'STORAGE_UNAVAILABLE' }); send({ type: 'error', code: 'STORAGE_UNAVAILABLE', message: 'Saving failed. Reload history before retrying; contact support with this correlation ID.' }); }
@@ -269,18 +269,23 @@ export async function runTurn(conversationId: string, requestId: string, abort: 
 
 // Runs while the turn still holds the conversation lock, so no other turn can
 // interleave. A failed save leaves no broken message behind; the founder can
-// still save from the chat.
-async function saveAfterTurn(conversationId: string, send: (event: VentureEvent) => void, httpRequestId?: string) {
+// still save from the chat. The save is registered under the turn's request ID,
+// so the founder's Stop cancels it too.
+async function saveAfterTurn(conversationId: string, turnRequestId: string, send: (event: VentureEvent) => void, httpRequestId?: string) {
   const requestId = crypto.randomUUID();
-  send({ type: 'progress', message: 'Saving your plan to the dashboard…' });
+  const abort = new AbortController();
+  active.set(conversationId, { requestId: turnRequestId, abort });
+  send({ type: 'progress', message: 'Saving your plan to the dashboard. This takes a minute or two…' });
   try {
     await db.insert(ventureMessages).values({ id: `${Date.now()}-${requestId}-1`, createdAt: new Date(), conversationId, role: 'assistant', requestId, content: '', status: 'started' });
-    const assessment = await runAssessment(conversationId, requestId, new AbortController(), httpRequestId ?? requestId);
+    const assessment = await runAssessment(conversationId, requestId, abort, httpRequestId ?? requestId);
     const r = (assessment.contentJson as Record<string, any>).recommendation;
     send({ type: 'assessment', version: assessment.version, verdict: r?.verdict ?? null, commitments: r?.founderCommitments?.length ?? 0 });
   } catch (error) {
     await db.delete(ventureMessages).where(and(eq(ventureMessages.conversationId, conversationId), eq(ventureMessages.requestId, requestId))).catch(() => {});
-    send({ type: 'progress', message: error instanceof VentureFailure && error.code === 'PROVIDER_CAPACITY'
+    send({ type: 'progress', message: abort.signal.reason?.message === 'CANCELLED'
+      ? 'Stopped. Your plan wasn’t saved; use “Save plan to dashboard” when you’re ready.'
+      : error instanceof VentureFailure && error.code === 'PROVIDER_CAPACITY'
       ? 'We’re getting more requests than our AI capacity allows right now, and we’re adding more. Your plan isn’t saved yet. We’ll let you know when you can resume.'
       : 'Couldn’t save the plan to your dashboard just now. Use “Save plan to dashboard” to retry.' });
   }
