@@ -55,6 +55,7 @@ mock.module('../src/ai/tools/agent-tools.ts', () => ({ createWebResearchTools: (
   readUrl: tool({ inputSchema: zodSchema(z.object({ url: z.string() })), execute: async () => ({ error: 'TEST FIXTURE inaccessible' }) }),
 }) }));
 const { reserveTurn, runTurn, runAssessment, recoverInterrupted, validCitations, summarize } = await import('../src/venture/services/analyst.ts');
+const { checkCapacity } = await import('../src/venture/services/capacity.ts');
 const owner = crypto.randomUUID();
 let conversationId: string;
 const logs: any[] = []; const original = console.info;
@@ -121,6 +122,20 @@ test('provider capacity limits tell the founder we are adding capacity, in chat 
     expect(logs.some(l => l.event === 'venture.turn.failed' && l.failureCategory === 'PROVIDER_CAPACITY')).toBe(true);
     const assessId = crypto.randomUUID();
     await expect(runAssessment(conversation!.id, assessId, await reserveTurn(conversation!.id, founder, assessId, 'TEST FIXTURE capacity'), crypto.randomUUID())).rejects.toMatchObject({ code: 'PROVIDER_CAPACITY' });
+    // The founder is on the waiting list and is emailed once, only when capacity is back.
+    const waitOf = async () => (await db.select().from(ventureConversations).where(eq(ventureConversations.id, conversation!.id)))[0]!.capacityWaitAt;
+    expect(await waitOf()).toBeTruthy();
+    const sent: any[] = [];
+    const send = async (m: any) => { sent.push(m); return true; };
+    expect(await checkCapacity(async () => { throw new Error('still limited'); }, send)).toBe(0);
+    expect(await waitOf()).toBeTruthy();
+    await checkCapacity(async () => 'ok', send);
+    const mine = sent.filter(m => m.to === `fixture-${founder}@example.org`);
+    expect(mine.length).toBe(1);
+    expect(mine[0].text).toContain(`/venture/chat?c=${conversation!.id}`);
+    expect(await waitOf()).toBeNull();
+    await checkCapacity(async () => 'ok', send);
+    expect(sent.filter(m => m.to === `fixture-${founder}@example.org`).length).toBe(1);
   } finally {
     mode = 'success';
     await db.delete(ventureMessages).where(eq(ventureMessages.conversationId, conversation!.id));

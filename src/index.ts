@@ -11,7 +11,7 @@ import { serveStatic } from "hono/bun";
 import { env } from "./config/env.ts";
 import landing from "./routes/landing.ts";
 import authRoutes from "./routes/auth.ts";
-import { ventureApi, venturePages, ventureAuth, handleGoogleCallback } from "./venture/index.ts";
+import { ventureApi, venturePages, ventureAuth, handleGoogleCallback, watchCapacity } from "./venture/index.ts";
 import chatRoutes from "./routes/chat.ts";
 import instantRoutes from "./routes/instant.ts";
 import projectsRoutes from "./routes/projects.ts";
@@ -420,6 +420,9 @@ startAgentTimeoutSweeper();
 import("./services/public-instant/transports/telegram.ts")
   .then((m) => m.startPublicTelegramBot())
   .catch((err) => console.error("[public-telegram] Failed to start:", err));
+
+// Email venture founders who were waiting on AI capacity once it is back.
+watchCapacity();
 
 // ── Backfill ticket keys for existing tickets ────────────────────────
 import("./utils/ticket-keys.ts").then((m) => m.backfillTicketKeys()).catch(console.error);

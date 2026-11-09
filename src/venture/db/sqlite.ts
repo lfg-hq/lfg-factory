@@ -13,6 +13,9 @@ export const ventureConversations = sqliteTable("venture_conversation", {
   // Rolling summary of older messages, so chat turns send a bounded history.
   summary: text("summary"),
   summaryCount: integer("summary_count").notNull().default(0),
+  // Set when a turn hit the AI provider's capacity limit; the founder is emailed
+  // once capacity is back, then it is cleared.
+  capacityWaitAt: integer("capacity_wait_at", { mode: "timestamp" }),
 }, t => [index("venture_conv_owner_idx").on(t.userId, t.updatedAt)]);
 
 export const ventureMessages = sqliteTable("venture_message", {

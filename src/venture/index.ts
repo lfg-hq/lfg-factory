@@ -9,3 +9,4 @@
 export { default as ventureApi } from "./routes/api.ts";
 export { default as venturePages } from "./routes/pages.ts";
 export { default as ventureAuth, handleGoogleCallback } from "./routes/auth.ts";
+export { watchCapacity } from "./services/capacity.ts";

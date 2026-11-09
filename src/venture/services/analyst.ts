@@ -12,6 +12,7 @@ import { ventureAnalystPrompt } from '../prompts/analyst.ts';
 import { publicUrl, readVentureUrl } from './public-url.ts';
 import { ventureLog } from '../request-log.ts';
 import { onAssessmentSaved, ventureContext } from './dashboard.ts';
+import { clearCapacityWait, recordCapacityWait } from './capacity.ts';
 
 export const VENTURE_LIMITS = { turnsPerHour: 30, researchCalls: 8, timeoutMs: 120_000, assessmentTimeoutMs: 240_000, inputChars: 4000, outputTokens: 2400 } as const;
 const ownersStarting = new Set<string>(); // Single existing Bun web process; no worker.
@@ -32,8 +33,9 @@ const cacheOptions = (conversationId: string) => ({ openai: { promptCacheKey: `v
 const providerSecret = ({ openai: 'OPENAI_API_KEY', anthropic: 'ANTHROPIC_API_KEY', google: 'GOOGLE_AI_API_KEY' } as Record<string, string>)[modelDetails.provider || 'openai'] || 'platform provider credentials';
 const safeId = (id: unknown) => typeof id === 'string' && /^[\w.:-]{1,200}$/.test(id) ? id : undefined;
 // Provider limits (rate limits, exhausted quota, overload) are capacity, not a
-// fault in the founder's request: say so, and that more capacity is coming.
-export const CAPACITY_MESSAGE = 'We’re getting more requests than our AI capacity allows right now, and we’re adding more. Your message is saved; please try again in a few minutes.';
+// fault in the founder's request: say so, and that more capacity is coming. The
+// founder is emailed when it is back (services/capacity.ts).
+export const CAPACITY_MESSAGE = 'We’re getting more requests than our AI capacity allows right now, and we’re adding more. Your message is saved. We’ll let you know when you can resume.';
 export function providerCategory(error: unknown): string | null {
   let e: any = error;
   for (let i = 0; i < 3 && e && !e.statusCode; i++) e = e.lastError ?? e.cause;
@@ -248,6 +250,7 @@ export async function runTurn(conversationId: string, requestId: string, abort: 
       : category === 'PROVIDER_AUTH' ? 'The analyst is offline right now: our AI provider rejected LFG’s credentials. Your message is saved; please try again later.'
       : category === 'PROVIDER_CAPACITY' ? CAPACITY_MESSAGE
       : 'The analyst couldn’t reply just now. Your message is saved; please try again.';
+    if (category === 'PROVIDER_CAPACITY') await recordCapacityWait(conversationId);
     send({ type: 'error', code, message });
     log(`venture.turn.${status}`, status, { errorCode: code, failureCategory: category, providerRequestId: safeId(providerError?.responseHeaders?.['x-request-id']), researchCalls: calls });
   } finally {
@@ -255,7 +258,7 @@ export async function runTurn(conversationId: string, requestId: string, abort: 
     try {
       await db.update(ventureMessages).set({ content: text, status }).where(where);
       await db.update(ventureConversations).set({ updatedAt: new Date() }).where(eq(ventureConversations.id, conversationId));
-      if (status === 'completed') log('venture.turn.completed', 'success', { researchCalls: calls });
+      if (status === 'completed') { log('venture.turn.completed', 'success', { researchCalls: calls }); await clearCapacityWait(conversationId); }
       if (status === 'completed' && saveRequested) await saveAfterTurn(conversationId, send, httpRequestId);
       send({ type: 'done', status });
       if (status === 'completed') void summarize(conversationId);
@@ -278,7 +281,7 @@ async function saveAfterTurn(conversationId: string, send: (event: VentureEvent)
   } catch (error) {
     await db.delete(ventureMessages).where(and(eq(ventureMessages.conversationId, conversationId), eq(ventureMessages.requestId, requestId))).catch(() => {});
     send({ type: 'progress', message: error instanceof VentureFailure && error.code === 'PROVIDER_CAPACITY'
-      ? 'We’re getting more requests than our AI capacity allows right now, and we’re adding more. Your plan wasn’t saved yet; use “Save plan to dashboard” in a few minutes.'
+      ? 'We’re getting more requests than our AI capacity allows right now, and we’re adding more. Your plan isn’t saved yet. We’ll let you know when you can resume.'
       : 'Couldn’t save the plan to your dashboard just now. Use “Save plan to dashboard” to retry.' });
   }
 }
@@ -332,10 +335,11 @@ export async function runAssessment(conversationId: string, requestId: string, a
     const cancelled = abort.signal.aborted;
     const invalid = NoObjectGeneratedError.isInstance(error) || NoOutputGeneratedError.isInstance(error);
     const capacity = providerCategory(error) === 'PROVIDER_CAPACITY';
-    const failure = error instanceof VentureFailure ? error : capacity ? new VentureFailure('PROVIDER_CAPACITY', 503, 'We’re getting more requests than our AI capacity allows right now, and we’re adding more. Your previous assessment is safe; please try again in a few minutes.') : invalid ? new VentureFailure('ASSESSMENT_INVALID', 422, 'The model returned an incomplete or invalid assessment. Add missing inputs in chat and retry explicitly. Your previous assessment is unchanged.') : new VentureFailure(cancelled ? 'ASSESSMENT_CANCELLED' : 'ASSESSMENT_FAILED', cancelled ? 408 : 502, 'Assessment could not be saved. The previous valid version is safe. Retry explicitly, or contact support with this correlation ID.');
+    const failure = error instanceof VentureFailure ? error : capacity ? new VentureFailure('PROVIDER_CAPACITY', 503, 'We’re getting more requests than our AI capacity allows right now, and we’re adding more. Your previous assessment is safe. We’ll let you know when you can resume.') : invalid ? new VentureFailure('ASSESSMENT_INVALID', 422, 'The model returned an incomplete or invalid assessment. Add missing inputs in chat and retry explicitly. Your previous assessment is unchanged.') : new VentureFailure(cancelled ? 'ASSESSMENT_CANCELLED' : 'ASSESSMENT_FAILED', cancelled ? 408 : 502, 'Assessment could not be saved. The previous valid version is safe. Retry explicitly, or contact support with this correlation ID.');
     await db.update(ventureMessages).set({ status: cancelled ? 'cancelled' : 'failed' }).where(where);
     const providerError = error as { statusCode?: number; responseHeaders?: Record<string, string> } | null;
     const failureCategory = providerCategory(error) ?? failure.code;
+    if (failure.code === 'PROVIDER_CAPACITY') await recordCapacityWait(conversationId);
     log(`venture.assessment.${cancelled ? 'cancelled' : 'failed'}`, cancelled ? 'cancelled' : 'failed', { errorCode: failure.code, failureCategory, providerRequestId: safeId(providerError?.responseHeaders?.['x-request-id']), validationOutcome: failure.code === 'ASSESSMENT_INVALID' ? 'invalid' : 'not_saved' });
     throw failure;
   } finally { clearTimeout(timer); active.delete(conversationId); }

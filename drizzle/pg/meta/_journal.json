@@ -71,6 +71,13 @@
       "when": 1794030000000,
       "tag": "0009_venture_summary",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1794640000000,
+      "tag": "0010_venture_capacity_wait",
+      "breakpoints": true
     }
   ]
 }
