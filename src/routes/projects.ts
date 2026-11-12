@@ -930,95 +930,65 @@ projectsRouter.get("/projects/:projectId/api/checklist", async (c) => {
   return c.json({ tickets, hasMore, nextOffset: offset + ticketRows.length });
 });
 
-// ── GET /projects/:projectId/api/files/mentions/ ── @file autocomplete ──
-// Returns files matching a search query for the chat @file mention feature.
-projectsRouter.get("/projects/:projectId/api/files/mentions/", async (c) => {
+// ── GET /projects/:projectId/api/files/mentions ── @file autocomplete ──
+// Searches every active document in the project (not just the newest few) by
+// name. Design previews are left out: they're screenshots, not documents you
+// discuss in chat.
+const MENTION_TYPE_LABELS: Record<string, string> = {
+  prd: "PRD",
+  implementation: "Implementation plan",
+  design: "Design",
+  design_language: "Design",
+  tech_analysis: "Technical analysis",
+  pm_map: "Plan",
+  test: "Test plan",
+  other: "Document",
+};
+
+async function fileMentions(c: any) {
   const user = c.get("user");
   const { projectId } = c.req.param();
-  const q = (c.req.query("q") ?? "").toLowerCase();
+  const q = (c.req.query("q") ?? "").trim().toLowerCase().slice(0, 80);
 
   const access = await getProjectAccess(projectId!, user.id);
   if (!access) return c.json({ files: [], count: 0 });
-  const project = access.project;
 
-  let fileRows = await db
-    .select()
+  const conditions = [
+    eq(projectFiles.projectId, access.project.id),
+    eq(projectFiles.isActive, true),
+    ne(projectFiles.fileType, "page_preview"),
+  ];
+  if (q) {
+    const pattern = "%" + q.replace(/[\\%_]/g, (ch: string) => "\\" + ch) + "%";
+    conditions.push(sql`lower(${projectFiles.name}) like ${pattern} escape '\\'`);
+  }
+
+  const fileRows = await db
+    .select({ id: projectFiles.id, name: projectFiles.name, fileType: projectFiles.fileType, updatedAt: projectFiles.updatedAt })
     .from(projectFiles)
-    .where(eq(projectFiles.projectId, project.id))
+    .where(and(...conditions))
     .orderBy(desc(projectFiles.updatedAt))
     .limit(20);
 
-  // Filter by query if provided
-  if (q) {
-    fileRows = fileRows.filter(
-      (f) => f.name.toLowerCase().includes(q) || f.fileType.toLowerCase().includes(q)
-    );
-  }
-
-  const TYPE_LABELS: Record<string, string> = {
-    prd: "Product Requirements",
-    implementation: "Implementation Plan",
-    design: "Design Document",
-    test: "Test Plan",
-    other: "Document",
-  };
-
-  const files = fileRows.map((f) => ({
-    id: f.id,
-    name: f.name,
-    type: f.fileType,
-    label: `${f.name} (${TYPE_LABELS[f.fileType] ?? f.fileType})`,
-    updated_at: f.updatedAt
-      ? new Date(f.updatedAt as unknown as number * 1000).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
-      : "",
-  }));
+  const files = fileRows.map((f) => {
+    const updated = f.updatedAt instanceof Date ? f.updatedAt : f.updatedAt ? new Date(f.updatedAt as any) : null;
+    const kind = MENTION_TYPE_LABELS[f.fileType] ?? "Document";
+    return {
+      id: f.id,
+      name: f.name,
+      type: f.fileType,
+      kind,
+      label: `${f.name} (${kind})`,
+      updated_at: updated && !isNaN(updated.getTime()) ? updated.toISOString() : "",
+    };
+  });
 
   return c.json({ files, count: files.length });
-});
+}
 
+projectsRouter.get("/projects/:projectId/api/files/mentions/", fileMentions);
 // Without trailing slash variant — same handler (no redirect to avoid loops)
-projectsRouter.get("/projects/:projectId/api/files/mentions", async (c) => {
-  const user = c.get("user");
-  const { projectId } = c.req.param();
-  const q = (c.req.query("q") ?? "").toLowerCase();
-
-  const access = await getProjectAccess(projectId!, user.id);
-  if (!access) return c.json({ files: [], count: 0 });
-  const project = access.project;
-
-  let fileRows = await db
-    .select()
-    .from(projectFiles)
-    .where(eq(projectFiles.projectId, project.id))
-    .orderBy(desc(projectFiles.updatedAt))
-    .limit(20);
-
-  if (q) {
-    fileRows = fileRows.filter(
-      (f) => f.name.toLowerCase().includes(q) || f.fileType.toLowerCase().includes(q)
-    );
-  }
-
-  const TYPE_LABELS: Record<string, string> = {
-    prd: "Product Requirements",
-    implementation: "Implementation Plan",
-    design: "Design Document",
-    test: "Test Plan",
-    other: "Document",
-  };
-
-  const files = fileRows.map((f) => ({
-    id: f.id,
-    name: f.name,
-    type: f.fileType,
-    label: `${f.name} (${TYPE_LABELS[f.fileType] ?? f.fileType})`,
-    updated_at: f.updatedAt
-      ? new Date(f.updatedAt as unknown as number * 1000).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
-      : "",
-  }));
-
-  return c.json({ files, count: files.length });
-});
+projectsRouter.get("/projects/:projectId/api/files/mentions", fileMentions);
 
 // ── Compat: GET /projects/:projectId/api/files/browser ──────────────
 // artifacts-loader.js (Django-era) fetches this URL for the Docs tab file list.

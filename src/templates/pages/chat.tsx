@@ -41,7 +41,7 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/git-tab.css" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
   <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261022-build-rows" />
-  <link rel="stylesheet" href="/public/css/chat.css?v=20261023-dictation-fit" />
+  <link rel="stylesheet" href="/public/css/chat.css?v=20261112-mentions" />
   <link rel="stylesheet" href="/public/css/artifacts-fix.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
@@ -560,7 +560,7 @@ export function ChatPage({
   <script src="/public/js/dictation.js?v=20261021-inline-strip"></script>
   <script src="/public/js/chat-artifacts.js?v=20261022-build-rows"></script>
   <script src="/public/js/chatgpt-connection.js?v=20261018"></script>
-  <script src="/public/js/chat.js?v=20261022-attachments"></script>
+  <script src="/public/js/chat.js?v=20261112-mentions"></script>
   <script src="/public/js/voice-mode.js?v=20261016-voice-hidden" data-disabled="true"></script>
   <script src="/public/js/mobile-menu.js"></script>
 

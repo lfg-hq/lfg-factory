@@ -257,6 +257,7 @@ document.addEventListener('DOMContentLoaded', () => {
             : mentionFiles;
     }
     function selectActiveMention(item) {
+        if (item && item.kind === 'file') return selectMentionFile(item.file);
         if (mentionMode === 'ticket') return selectMentionTicket(item);
         if (mentionMode === 'menu') return selectMentionMenu(item);
         return selectMentionFile(item);
@@ -267,6 +268,9 @@ document.addEventListener('DOMContentLoaded', () => {
         this.style.height = 'auto';
         this.style.height = (this.scrollHeight) + 'px';
         
+        // "[@Name](file:id)" text (pasted or inserted) becomes a chip.
+        absorbFileReferences();
+
         // Check for @file mentions
         const cursorPosition = this.selectionStart;
         const textBeforeCursor = this.value.substring(0, cursorPosition);
@@ -275,9 +279,10 @@ document.addEventListener('DOMContentLoaded', () => {
         // win over the bare-@ menu (whose partial could be a prefix of them).
         const atTicketMatch = textBeforeCursor.match(/@ticket(\S*)$/i);
         const atFileMatch = textBeforeCursor.match(/@file(\S*)$/i);
-        // Bare @ or a short partial that's a prefix of a known source → menu.
-        const atMenuMatch = textBeforeCursor.match(/(^|\s)@([a-z]{0,6})$/i);
-        const menuPartialOk = atMenuMatch && ['file', 'ticket', 'preview'].some(function(s){ return s.indexOf((atMenuMatch[2] || '').toLowerCase()) === 0; });
+        // Bare "@" plus anything typed after it → one panel that searches documents
+        // inline and offers Ticket / Preview commands.
+        const atMenuMatch = textBeforeCursor.match(/(^|\s)@([^\s@]{0,40})$/);
+        const menuPartialOk = !!atMenuMatch;
 
         if (atTicketMatch) {
             mentionMode = 'ticket';
@@ -290,7 +295,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (menuPartialOk) {
             mentionMode = 'menu';
             mentionStartIndex = textBeforeCursor.length - ('@' + (atMenuMatch[2] || '')).length;
-            showAtMenu((atMenuMatch[2] || '').toLowerCase());
+            showAtMenu(atMenuMatch[2] || '');
         } else {
             hideMentionDropdown();
         }
@@ -311,12 +316,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateMentionSelection();
                 return;
             } else if (e.key === 'Enter' || e.key === 'Tab') {
-                e.preventDefault();
                 var _list = activeMentionList();
                 if (_list.length > 0) {
+                    e.preventDefault();
                     selectActiveMention(_list[selectedMentionIndex]);
+                    return;
                 }
-                return;
+                // Nothing to pick (e.g. "ping @john"): close and let Enter send.
+                hideMentionDropdown();
             } else if (e.key === 'Escape') {
                 e.preventDefault();
                 hideMentionDropdown();
@@ -328,7 +335,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault(); // Prevent the default behavior (new line)
             const message = this.value.trim();
-            if (message || window.attachedFile) {
+            if (message || window.attachedFile || window.hasMentionChips()) {
                 sendMessage(message);
                 this.value = '';
                 this.style.height = 'auto';
@@ -406,7 +413,7 @@ document.addEventListener('DOMContentLoaded', () => {
     chatForm.addEventListener('submit', (e) => {
         e.preventDefault();
         const message = chatInput.value.trim();
-        if (message || window.attachedFile) {
+        if (message || window.attachedFile || window.hasMentionChips()) {
             sendMessage(message);
             chatInput.value = '';
             chatInput.style.height = 'auto';
@@ -2922,6 +2929,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let composerSubmission = Promise.resolve();
     function restoreUnsentMessage(message, attachments) {
         chatInput.value = [message, chatInput.value].filter(Boolean).join('\n\n');
+        absorbFileReferences();
         const box = document.getElementById('chat-input-box');
         let tray = box.querySelector('.input-file-attachments');
         if (attachments.length && !tray) {tray=document.createElement('div');tray.className='input-file-attachments';box.prepend(tray);}
@@ -2939,6 +2947,7 @@ document.addEventListener('DOMContentLoaded', () => {
         window.syncPrimaryAttachedFile?.();
     }
     async function sendMessage(message) {
+        message = takeMentionReferences(message);
         const attachments = (window.attachedFiles || []).slice();
         if (!message && !attachments.length) return;
         // Detach this submission immediately so a second follow-up cannot reuse
@@ -3530,7 +3539,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 .replace(/"/g, '&quot;')
                 .replace(/'/g, '&#039;')
                 // .replace(/\n/g, '<br>');
-            contentDiv.innerHTML = escapedContent;
+            contentDiv.innerHTML = escapedContent.replace(/\[@([^\]\n]+)\]\(file:([A-Za-z0-9-]+)\)/g, function (_m, name, id) {
+                return '<span class="msg-file-chip" role="button" tabindex="0" data-file-id="' + id + '" data-file-name="' + name + '"><i class="fas fa-file-lines" aria-hidden="true"></i>' + name + '</span>';
+            });
 
             
             // Add file attachment indicator(s) if fileData is provided. fileData may be a
@@ -5707,37 +5718,170 @@ document.addEventListener('DOMContentLoaded', () => {
         return roleDropdown ? roleDropdown.dataset.value : 'product_analyst';
     }
     
-    // @ Mention Helper Functions
-    // Create + position the shared dropdown element near the input.
+    // @ Mention picker
+    // One panel for everything you can reference: type "@" and keep typing to
+    // search documents inline; Ticket and Preview sit at the top as commands.
+    // A picked document becomes a chip above the input (window.mentionedFiles),
+    // not raw "[@Name](file:id)" text. sendMessage turns the chips back into
+    // those references, which is the form the agent reads.
+    let mentionFetchSeq = 0;
+    let mentionFetchTimer = null;
+    let mentionLoading = false;
+    let mentionQuery = '';
+
     function ensureMentionDropdown() {
         if (!mentionDropdown) {
             mentionDropdown = document.createElement('div');
             mentionDropdown.className = 'mention-dropdown';
-            mentionDropdown.style.cssText = `
-                position: absolute;
-                background: var(--card-bg, #1a1a1a);
-                border: 1px solid var(--border-color, #333);
-                border-radius: 10px;
-                box-shadow: 0 8px 28px rgba(16,24,40,0.18);
-                max-height: 220px;
-                overflow: hidden auto;
-                z-index: 1000;
-                min-width: 260px;
-                padding: 4px;
-            `;
+            mentionDropdown.setAttribute('role', 'listbox');
+            mentionDropdown.addEventListener('mousedown', function (e) { e.preventDefault(); });
             document.body.appendChild(mentionDropdown);
         }
-        const inputRect = chatInput.getBoundingClientRect();
-        mentionDropdown.style.left = inputRect.left + 'px';
-        mentionDropdown.style.bottom = (window.innerHeight - inputRect.top + 5) + 'px';
+        const anchor = document.getElementById('chat-input-box') || chatInput;
+        const rect = anchor.getBoundingClientRect();
+        mentionDropdown.style.left = Math.max(8, rect.left) + 'px';
+        mentionDropdown.style.width = Math.min(440, Math.max(280, rect.width)) + 'px';
+        mentionDropdown.style.bottom = (window.innerHeight - rect.top + 8) + 'px';
     }
 
+    function escapeHtmlSafe(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[c];
+        });
+    }
+
+    function highlightMatch(text, q) {
+        const safe = escapeHtmlSafe(text);
+        if (!q) return safe;
+        const i = String(text).toLowerCase().indexOf(q.toLowerCase());
+        if (i < 0) return safe;
+        return escapeHtmlSafe(text.slice(0, i)) + '<mark>' + escapeHtmlSafe(text.slice(i, i + q.length)) + '</mark>' + escapeHtmlSafe(text.slice(i + q.length));
+    }
+
+    function relativeTime(iso) {
+        const t = Date.parse(iso || '');
+        if (!t) return '';
+        const mins = Math.round((Date.now() - t) / 60000);
+        if (mins < 1) return 'just now';
+        if (mins < 60) return mins + 'm ago';
+        const hrs = Math.round(mins / 60);
+        if (hrs < 24) return hrs + 'h ago';
+        const days = Math.round(hrs / 24);
+        if (days < 30) return days + 'd ago';
+        return new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    }
+
+    // Render sections of rows; `items` across sections form one keyboard list.
+    function renderMentionPanel(sections, emptyText) {
+        if (!mentionDropdown) return;
+        const flat = [];
+        let html = '';
+        sections.forEach(function (sec) {
+            if (!sec.rows.length && !sec.note) return;
+            html += '<div class="mention-section">' + escapeHtmlSafe(sec.title) + '</div>';
+            sec.rows.forEach(function (row) {
+                const idx = flat.length;
+                flat.push(row.item);
+                html += '<div class="mention-item' + (idx === selectedMentionIndex ? ' is-active' : '') + '" role="option" data-idx="' + idx + '">' +
+                    '<span class="mention-icon"><i class="fas ' + row.icon + '"></i></span>' +
+                    '<span class="mention-main"><span class="mention-name">' + row.name + '</span>' +
+                    (row.sub ? '<span class="mention-sub">' + row.sub + '</span>' : '') + '</span>' +
+                    (row.meta ? '<span class="mention-meta">' + row.meta + '</span>' : '') +
+                    '</div>';
+            });
+            if (sec.note) html += '<div class="mention-note">' + escapeHtmlSafe(sec.note) + '</div>';
+        });
+        if (!flat.length && !html) html = '<div class="mention-note">' + escapeHtmlSafe(emptyText || 'Nothing found') + '</div>';
+        html += '<div class="mention-footer"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>↵</kbd> add</span><span><kbd>esc</kbd> close</span></div>';
+        mentionDropdown.innerHTML = html;
+        mentionDropdown.querySelectorAll('.mention-item').forEach(function (el) {
+            const idx = Number(el.dataset.idx);
+            el.addEventListener('click', function () { selectActiveMention(flat[idx]); });
+            el.addEventListener('mousemove', function () {
+                if (selectedMentionIndex !== idx) { selectedMentionIndex = idx; updateMentionSelection(); }
+            });
+        });
+        mentionDropdown.style.display = 'block';
+        return flat;
+    }
+
+    function updateMentionSelection() {
+        if (!mentionDropdown) return;
+        mentionDropdown.querySelectorAll('.mention-item').forEach(function (el) {
+            const on = Number(el.dataset.idx) === selectedMentionIndex;
+            el.classList.toggle('is-active', on);
+            if (on) el.scrollIntoView({ block: 'nearest' });
+        });
+    }
+
+    // Debounced, race-safe document search shared by the "@" and "@file" modes.
+    function queueFileSearch(q, render) {
+        mentionQuery = q || '';
+        clearTimeout(mentionFetchTimer);
+        mentionLoading = true;
+        render();
+        const seq = ++mentionFetchSeq;
+        mentionFetchTimer = setTimeout(async function () {
+            if (!currentProjectId) { mentionLoading = false; render(); return; }
+            try {
+                const url = `/projects/${currentProjectId}/api/files/mentions?q=${encodeURIComponent(mentionQuery)}`;
+                const response = await fetch(url, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                const data = await response.json();
+                if (seq !== mentionFetchSeq) return;
+                mentionFiles = (data.files || []).filter(function (f) { return !(window.mentionedFiles || {})[f.id]; });
+            } catch (error) {
+                if (seq !== mentionFetchSeq) return;
+                console.error('Error fetching mention files:', error);
+                mentionFiles = [];
+            }
+            mentionLoading = false;
+            if (mentionDropdown && mentionDropdown.style.display !== 'none') render();
+        }, 120);
+    }
+
+    function fileRows(q) {
+        return mentionFiles.map(function (f) {
+            return {
+                item: { kind: 'file', file: f },
+                icon: 'fa-file-lines',
+                name: highlightMatch(f.name, q),
+                meta: escapeHtmlSafe([f.kind, relativeTime(f.updated_at)].filter(Boolean).join(' · ')),
+            };
+        });
+    }
+
+    // Bare "@query": commands that match, then documents matching the query.
+    function showAtMenu(partial) {
+        ensureMentionDropdown();
+        const q = partial || '';
+        const commands = [
+            { kind: 'cmd', key: 'ticket', icon: 'fa-ticket', title: 'Ticket', desc: 'Ask about a ticket and load its branch' },
+            { kind: 'cmd', key: 'preview', icon: 'fa-display', title: 'Preview', desc: 'Control the live preview' },
+        ].filter(function (m) { return !q || m.key.indexOf(q.toLowerCase()) === 0; });
+        selectedMentionIndex = 0;
+        const render = function () {
+            const files = fileRows(q);
+            mentionMenuItems = renderMentionPanel([
+                { title: 'Documents', rows: files, note: mentionLoading && !files.length ? 'Searching…' : (!files.length ? (q ? 'No documents match “' + q + '”' : 'No documents yet') : '') },
+                { title: 'Commands', rows: commands.map(function (m) { return { item: m, icon: m.icon, name: escapeHtmlSafe(m.title), sub: escapeHtmlSafe(m.desc) }; }) },
+            ]) || [];
+            if (selectedMentionIndex >= mentionMenuItems.length) { selectedMentionIndex = Math.max(0, mentionMenuItems.length - 1); updateMentionSelection(); }
+        };
+        queueFileSearch(q, render);
+    }
+
+    // "@file…" (kept for old habits and the "Files" command): documents only.
     function showMentionDropdown(searchQuery) {
         ensureMentionDropdown();
-        fetchMentionFiles(searchQuery);
+        selectedMentionIndex = 0;
+        const q = searchQuery || '';
+        queueFileSearch(q, function () {
+            const files = fileRows(q);
+            renderMentionPanel([{ title: 'Documents', rows: files, note: mentionLoading && !files.length ? 'Searching…' : (!files.length ? 'No documents match' : '') }]);
+        });
     }
 
-    // @ticket picker — fetch tickets and render.
     function showTicketDropdown(searchQuery) {
         ensureMentionDropdown();
         fetchMentionTickets(searchQuery);
@@ -5745,72 +5889,40 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function fetchMentionTickets(searchQuery) {
         if (!currentProjectId) return;
+        const seq = ++mentionFetchSeq;
         try {
             const url = `/api/projects/${currentProjectId}/ticket-mentions?q=${encodeURIComponent(searchQuery || '')}`;
             const response = await fetch(url, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
             if (!response.ok) throw new Error('HTTP ' + response.status);
             const data = await response.json();
+            if (seq !== mentionFetchSeq) return;
             mentionTickets = data.tickets || [];
             selectedMentionIndex = 0;
-            renderMentionList(mentionTickets, function(t){
-                return '<div style="font-weight:500;color:var(--text-color,#e0e0e0);">' + escapeHtmlSafe(t.label) + '</div>'
-                    + '<div style="font-size:12px;color:var(--text-secondary,#999);">' + escapeHtmlSafe(t.branch) + ' • ' + escapeHtmlSafe(t.status || '') + '</div>';
-            });
+            renderMentionPanel([{
+                title: 'Tickets',
+                rows: mentionTickets.map(function (t) {
+                    return { item: t, icon: 'fa-ticket', name: highlightMatch(t.label || t.name || '', searchQuery || ''), meta: escapeHtmlSafe(t.status || '') };
+                }),
+            }], 'No tickets match');
         } catch (error) {
             console.error('Error fetching mention tickets:', error);
             hideMentionDropdown();
         }
     }
 
-    // Top-level @ menu: Files / Ticket / Preview (filtered by the typed partial).
-    function showAtMenu(partial) {
-        ensureMentionDropdown();
-        const all = [
-            { key: 'file',    icon: '📄', title: 'Files',   desc: 'Reference a project file' },
-            { key: 'ticket',  icon: '🎫', title: 'Ticket',  desc: 'Ask about a ticket (loads its branch)' },
-            { key: 'preview', icon: '🖥', title: 'Preview', desc: 'Control the live preview (@preview)' },
-        ];
-        mentionMenuItems = all.filter(function(m){ return m.key.indexOf(partial || '') === 0 || (partial || '') === ''; });
-        if (!mentionMenuItems.length) { hideMentionDropdown(); return; }
-        selectedMentionIndex = 0;
-        renderMentionList(mentionMenuItems, function(m){
-            return '<div style="font-weight:500;color:var(--text-color,#e0e0e0);">' + m.icon + ' ' + m.title + '</div>'
-                + '<div style="font-size:12px;color:var(--text-secondary,#999);">' + m.desc + '</div>';
-        });
-    }
-
-    // Generic renderer used by ticket + menu modes (files keep updateMentionDropdown).
-    function renderMentionList(items, itemHtml) {
-        if (!mentionDropdown || !items.length) { hideMentionDropdown(); return; }
-        mentionDropdown.innerHTML = '';
-        items.forEach(function(it, index){
-            const el = document.createElement('div');
-            el.className = 'mention-item';
-            el.style.cssText = 'padding:8px 10px;cursor:pointer;border-radius:7px;' + (index === selectedMentionIndex ? 'background-color:rgba(124,58,237,0.14);' : '');
-            el.innerHTML = itemHtml(it);
-            el.addEventListener('click', function(){ selectActiveMention(it); });
-            el.addEventListener('mouseenter', function(){ selectedMentionIndex = index; updateMentionSelection(); });
-            mentionDropdown.appendChild(el);
-        });
-        mentionDropdown.style.display = 'block';
-    }
-
-    function escapeHtmlSafe(s) {
-        return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; });
-    }
-
-    // Selecting a top-level menu item → replace the partial with the real trigger.
+    // Selecting a command → replace the partial with its trigger.
     function selectMentionMenu(item) {
+        if (item && item.kind === 'file') return selectMentionFile(item.file);
         const cursorPosition = chatInput.selectionStart;
         const before = chatInput.value.substring(0, mentionStartIndex);
         const after = chatInput.value.substring(cursorPosition);
-        const trigger = item.key === 'file' ? '@file' : item.key === 'ticket' ? '@ticket' : '@preview ';
+        const trigger = item.key === 'ticket' ? '@ticket' : '@preview ';
         chatInput.value = before + trigger + after;
         const pos = before.length + trigger.length;
         chatInput.setSelectionRange(pos, pos);
         hideMentionDropdown();
         chatInput.focus();
-        chatInput.dispatchEvent(new Event('input')); // re-trigger → opens file/ticket picker
+        chatInput.dispatchEvent(new Event('input')); // re-trigger → opens the ticket picker
     }
 
     // Selecting a ticket → insert a token + stash it for the send payload.
@@ -5829,8 +5941,11 @@ document.addEventListener('DOMContentLoaded', () => {
         chatInput.focus();
         chatInput.dispatchEvent(new Event('input'));
     }
-    
+
     function hideMentionDropdown() {
+        clearTimeout(mentionFetchTimer);
+        mentionFetchSeq++;
+        mentionLoading = false;
         if (mentionDropdown) {
             mentionDropdown.style.display = 'none';
             mentionFiles = [];
@@ -5839,171 +5954,105 @@ document.addEventListener('DOMContentLoaded', () => {
             selectedMentionIndex = 0;
         }
     }
-    
-    async function fetchMentionFiles(searchQuery) {
-        if (!currentProjectId) {
-            console.error('No project ID available for fetching files');
-            return;
-        }
-        
-        try {
-            const url = `/projects/${currentProjectId}/api/files/mentions/?q=${encodeURIComponent(searchQuery)}`;
-            const response = await fetch(url, {
-                method: 'GET',
-                headers: {
-                    'X-Requested-With': 'XMLHttpRequest'
-                }
-            });
-            
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            
-            const data = await response.json();
-            mentionFiles = data.files || [];
-            selectedMentionIndex = 0;
-            
-            // Update dropdown content
-            updateMentionDropdown();
-            
-        } catch (error) {
-            console.error('Error fetching mention files:', error);
-            hideMentionDropdown();
-        }
-    }
-    
-    function updateMentionDropdown() {
-        if (!mentionDropdown || mentionFiles.length === 0) {
-            hideMentionDropdown();
-            return;
-        }
-        
-        // Clear existing content
-        mentionDropdown.innerHTML = '';
-        
-        // Add files to dropdown
-        mentionFiles.forEach((file, index) => {
-            const item = document.createElement('div');
-            item.className = 'mention-item';
-            item.style.cssText = `
-                padding: 8px 10px;
-                cursor: pointer;
-                border-radius: 7px;
-                ${index === selectedMentionIndex ? 'background-color: rgba(124,58,237,0.14);' : ''}
-            `;
 
-            item.innerHTML = `
-                <div style="font-weight: 500; color: var(--text-color, #e0e0e0);">${file.name}</div>
-                <div style="font-size: 12px; color: var(--text-secondary, #999);">${file.type} • Updated ${file.updated_at}</div>
-            `;
-            
-            item.addEventListener('click', () => selectMentionFile(file));
-            item.addEventListener('mouseenter', () => {
-                selectedMentionIndex = index;
-                updateMentionSelection();
+    // ── Document chips in the composer ─────────────────────────────────────
+    function renderMentionChips() {
+        const box = document.getElementById('chat-input-box');
+        if (!box) return;
+        const files = Object.values(window.mentionedFiles || {});
+        let row = box.querySelector('.input-mention-chips');
+        if (!files.length) { if (row) row.remove(); return; }
+        if (!row) {
+            row = document.createElement('div');
+            row.className = 'input-mention-chips';
+            row.setAttribute('role', 'group');
+            row.setAttribute('aria-label', 'Referenced documents');
+            box.insertBefore(row, chatInput);
+        }
+        row.innerHTML = files.map(function (f) {
+            return '<span class="mention-chip" data-file-id="' + escapeHtmlSafe(f.id) + '" title="' + escapeHtmlSafe(f.name) + '">' +
+                '<i class="fas fa-file-lines" aria-hidden="true"></i><span class="mention-chip-name">' + escapeHtmlSafe(f.name) + '</span>' +
+                '<button type="button" class="mention-chip-remove" aria-label="Remove ' + escapeHtmlSafe(f.name) + '">&times;</button></span>';
+        }).join('');
+        row.querySelectorAll('.mention-chip-remove').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                const id = btn.parentElement.dataset.fileId;
+                if (window.mentionedFiles) delete window.mentionedFiles[id];
+                renderMentionChips();
+                chatInput.focus();
             });
-            
-            mentionDropdown.appendChild(item);
-        });
-        
-        // Show the dropdown
-        mentionDropdown.style.display = 'block';
-    }
-    
-    function updateMentionSelection() {
-        const items = mentionDropdown.querySelectorAll('.mention-item');
-        items.forEach((item, index) => {
-            if (index === selectedMentionIndex) {
-                item.style.backgroundColor = 'rgba(124,58,237,0.14)';
-            } else {
-                item.style.backgroundColor = '';
-            }
         });
     }
-    
+
+    function addMentionChip(file) {
+        if (!file || !file.id) return;
+        if (!window.mentionedFiles) window.mentionedFiles = {};
+        window.mentionedFiles[file.id] = { id: file.id, name: file.name || 'Document', type: file.type || '' };
+        renderMentionChips();
+    }
+
+    // Text like "[@Name](file:id)" — pasted, restored, or inserted by another
+    // feature (e.g. "Add to chat") — becomes a chip instead of raw markup.
+    const FILE_REF_RE = /\[@([^\]\n]+)\]\(file:([A-Za-z0-9-]+)\)/g;
+    function absorbFileReferences() {
+        if (!FILE_REF_RE.test(chatInput.value)) return false;
+        FILE_REF_RE.lastIndex = 0;
+        const caret = chatInput.selectionStart;
+        let removedBeforeCaret = 0;
+        const next = chatInput.value.replace(FILE_REF_RE, function (match, name, id, offset) {
+            addMentionChip({ id: id, name: name });
+            if (offset < caret) removedBeforeCaret += match.length;
+            return '';
+        }).replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n');
+        chatInput.value = next.replace(/\s+$/, next.trim() ? '' : '');
+        const pos = Math.max(0, Math.min(chatInput.value.length, caret - removedBeforeCaret));
+        chatInput.setSelectionRange(pos, pos);
+        return true;
+    }
+
+    // Called by sendMessage: chips → references the agent reads, then clear.
+    function takeMentionReferences(message) {
+        const files = Object.values(window.mentionedFiles || {});
+        if (!files.length) return message;
+        const refs = files.map(function (f) {
+            return '[@' + String(f.name || 'Document').replace(/[\[\]\n]/g, ' ').trim() + '](file:' + f.id + ')';
+        }).join(' ');
+        const box = document.getElementById('chat-input-box');
+        const row = box && box.querySelector('.input-mention-chips');
+        if (row) row.remove();
+        return [message, refs].filter(Boolean).join('\n\n');
+    }
+    window.hasMentionChips = function () { return Object.keys(window.mentionedFiles || {}).length > 0; };
+
     document.addEventListener('lfg-file-chat-drop', event => {
         mentionStartIndex = chatInput.selectionStart ?? chatInput.value.length;
-        void selectMentionFile(event.detail);
+        void selectMentionFile(event.detail, { keepText: true });
     });
 
-    async function selectMentionFile(file) {
+    function selectMentionFile(file, opts) {
         if (!file) return;
-        
-        try {
-            // Get the file content
-            const url = `/projects/${currentProjectId}/api/files/${file.id}/content`;
-            const response = await fetch(url, {
-                method: 'GET',
-                headers: {
-                    'X-Requested-With': 'XMLHttpRequest'
-                }
-            });
-            
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            
-            const fileData = await response.json();
-            
-            // Remove the @mention from the input
+        if (!(opts && opts.keepText)) {
+            // Drop the "@query" the user typed; the chip replaces it.
             const cursorPosition = chatInput.selectionStart;
-            const textBeforeMention = chatInput.value.substring(0, mentionStartIndex);
-            const textAfterCursor = chatInput.value.substring(cursorPosition);
-            
-            // Add a reference to the file in the message
-            const fileReference = `[@${file.name}](file:${file.id})`;
-            
-            // Update the input value with the file reference
-            chatInput.value = textBeforeMention + fileReference + ' ' + textAfterCursor;
-            
-            // Set cursor position after the reference
-            const newCursorPosition = textBeforeMention.length + fileReference.length + 1;
-            chatInput.setSelectionRange(newCursorPosition, newCursorPosition);
-            
-            // Store the file content in a hidden data structure that will be sent with the message
-            if (!window.mentionedFiles) {
-                window.mentionedFiles = {};
-            }
-            window.mentionedFiles[file.id] = {
-                id: file.id,
-                name: file.name,
-                type: file.type,
-                content: fileData.content
-            };
-            
-            console.log('Mentioned file stored:', file.name);
-            
-            // Trigger input event to resize textarea
-            chatInput.dispatchEvent(new Event('input'));
-            
-            // Hide the dropdown
-            hideMentionDropdown();
-            
-            // Focus back on the input
-            chatInput.focus();
-            
-        } catch (error) {
-            console.error('Error fetching file content:', error);
-            alert('Failed to fetch file content');
+            const before = chatInput.value.substring(0, mentionStartIndex);
+            const after = chatInput.value.substring(cursorPosition);
+            chatInput.value = before + after.replace(/^ /, before.endsWith(' ') || !before ? '' : ' ');
+            chatInput.setSelectionRange(before.length, before.length);
         }
+        addMentionChip(file);
+        hideMentionDropdown();
+        chatInput.dispatchEvent(new Event('input'));
+        chatInput.focus();
     }
-    
-    // Add styles for mention dropdown
-    const mentionStyles = document.createElement('style');
-    mentionStyles.textContent = `
-        .mention-dropdown {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        }
-        
-        .mention-item:hover {
-            background-color: #f0f0f0;
-        }
-        
-        .mention-item:last-child {
-            border-bottom: none;
-        }
-    `;
-    document.head.appendChild(mentionStyles);
+
+    // Chips inside a sent message open the document in the Docs tab.
+    document.addEventListener('click', function (e) {
+        const chip = e.target.closest && e.target.closest('.msg-file-chip');
+        if (!chip) return;
+        const id = chip.dataset.fileId, name = chip.dataset.fileName || chip.textContent.trim();
+        if (window.ArtifactsPanel && typeof window.ArtifactsPanel.open === 'function') window.ArtifactsPanel.open();
+        if (typeof window.viewFileContent === 'function') window.viewFileContent(id, name);
+    });
     
     // Function to show token exhausted popup dynamically
     function showTokenExhaustedPopup() {
