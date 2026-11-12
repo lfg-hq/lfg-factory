@@ -81,7 +81,7 @@ export function ProjectListPage({ workspaceContext, user, projects, projectStats
   <script src="/public/js/theme-switcher.js"></script>
 <link rel="stylesheet" href="/public/css/workspace-picker.css" />
 <link rel="stylesheet" href="/public/css/build-notifications.css?v=4" />
-  <link rel="stylesheet" href="/public/css/calm.css?v=2" />
+  <link rel="stylesheet" href="/public/css/calm.css?v=3" />
 </head>
 <body data-user-id="${user.id}" data-user-name="${user.name}">
   ${error ? html`<div class="messages"><div class="alert alert-danger">${error}</div></div>` : ""}

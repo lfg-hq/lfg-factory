@@ -42,7 +42,7 @@ export function InvitationAcceptPage({
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
   <script src="/public/js/theme-switcher.js"></script>
-  <link rel="stylesheet" href="/public/css/calm.css?v=2" />
+  <link rel="stylesheet" href="/public/css/calm.css?v=3" />
 </head>
 <body style="display:flex;align-items:center;justify-content:center;min-height:100vh;background:var(--bg-color);">
   <div style="max-width:420px;width:100%;padding:2rem;background:var(--card-bg);border:1px solid var(--border-color);border-radius:var(--radius-lg);text-align:center;">

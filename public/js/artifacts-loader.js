@@ -3257,7 +3257,9 @@ document.addEventListener('DOMContentLoaded', function() {
                             s = (s || 'open').toLowerCase();
                             if (/(done|complete|closed|merged)/.test(s)) return '#22c55e';
                             if (/(progress|building|active|running)/.test(s)) return '#3b82f6';
-                            if (/review/.test(s)) return '#a855f7';
+                            // Built and waiting for your review: green, like done, so the
+                            // list reads gray (todo) / blue (building) / green / red.
+                            if (/review/.test(s)) return '#22c55e';
                             if (/(block|fail)/.test(s)) return '#ef4444';
                             return isLightTheme ? '#cbd0d8' : '#5b6472';
                         };
@@ -3419,7 +3421,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                 <div class="checklist-card ${statusClass} lfg-row" data-id="${item.id}" data-in-group="${lfgCurGid}">
                                     <input type="checkbox" class="ticket-select-checkbox" data-ticket-id="${item.id}" style="display: none; width: 14px; height: 14px; accent-color: #8b5cf6; cursor: pointer;" onclick="event.stopPropagation();">
                                     ${lfgMarker}
-                                    ${lfgKey ? `<span class="ticket-key" style="display:inline-block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;font-weight:700;color:#8b5cf6;background:rgba(139,92,246,0.12);border:1px solid rgba(139,92,246,0.25);border-radius:5px;padding:1px 6px;">${modalHelpers.escapeHtml(lfgKey)}</span>` : ''}
+                                    ${lfgKey ? `<span class="ticket-key" style="display:inline-block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;font-weight:700;color:${isLightTheme ? '#5b6472' : '#aab2bf'};background:${isLightTheme ? '#f1f3f5' : 'rgba(255,255,255,0.06)'};border:1px solid ${isLightTheme ? '#e3e6ea' : 'rgba(255,255,255,0.1)'};border-radius:5px;padding:1px 6px;">${modalHelpers.escapeHtml(lfgKey)}</span>` : ''}
                                     <span class="lfg-row-title" title="${modalHelpers.escapeHtml(item.name || 'Untitled Item')}">${modalHelpers.escapeHtml(item.name || 'Untitled Item')}</span>
                                     ${lfgBuildChip}
                                     <span class="priority-badge ${priorityClass} ${isStatusHighlighted ? 'filter-active' : ''}">${modalHelpers.escapeHtml(item.priority || 'Medium')}</span>

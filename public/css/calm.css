@@ -228,3 +228,86 @@ html[data-theme] #build-inbox-button .build-unread {
     color: var(--tint-text) !important;
     box-shadow: inset 0 0 0 1px var(--tint-border) !important;
 }
+
+/* ---------- Right panel (Docs / Tickets / Preview / Git / Env / Notes) ---------- */
+html[data-theme] .artifacts-accent-bar {
+    display: none;
+}
+html[data-theme] .artifacts-tabs .tab-button:hover {
+    background: transparent !important;
+    color: var(--text-primary) !important;
+}
+html[data-theme] .artifacts-tabs .tab-button.active {
+    background: transparent !important;
+    color: var(--text-primary) !important;
+    font-weight: 600;
+    border-bottom-color: transparent !important;
+}
+html[data-theme] .artifacts-tabs .tab-button.active::after {
+    background: var(--primary-color) !important;
+    box-shadow: none !important;
+    height: 2px;
+}
+
+/* Documents and ticket details: headings read as text, not as links. */
+html[data-theme] .markdown-content h1,
+html[data-theme] .markdown-content h2,
+html[data-theme] .markdown-content h3,
+html[data-theme] .markdown-content h4,
+html[data-theme] .prd-header h2,
+html[data-theme] .implementation-header h2 {
+    color: var(--text-primary) !important;
+}
+html[data-theme] .markdown-content blockquote {
+    border-left-color: var(--border-color) !important;
+}
+
+/* ---------- Ticket drawer ---------- */
+html[data-theme] #ticket-agent-panel i.fa-comments {
+    color: var(--calm-icon) !important;
+}
+html[data-theme] .ta-tab.active {
+    color: var(--text-primary) !important;
+    border-bottom-color: var(--primary-color) !important;
+}
+html[data-theme] #ta-build {
+    background: var(--btn-primary-bg) !important;
+}
+html[data-theme] #ta-send {
+    background: var(--tint-bg) !important;
+    color: var(--tint-text) !important;
+    border: 1px solid var(--tint-border) !important;
+}
+html[data-theme] #ta-send:hover {
+    background: var(--tint-bg-hover) !important;
+}
+html[data-theme] #ta-input:focus {
+    outline: none !important;
+    border-color: var(--calm-border-hover) !important;
+    box-shadow: none !important;
+}
+
+/* ---------- Notes and comments ---------- */
+html[data-theme] .note-card:not([data-kind]) .note-kind,
+html[data-theme] .note-card[data-kind="note"] .note-kind {
+    background: rgba(127, 127, 127, 0.12) !important;
+    color: var(--text-secondary) !important;
+}
+html[data-theme] .env-mini-primary {
+    background: var(--btn-primary-bg) !important;
+    border-color: transparent !important;
+    color: #ffffff !important;
+    box-shadow: none !important;
+}
+html[data-theme] .env-mini-primary:hover {
+    background: var(--btn-primary-hover) !important;
+}
+html[data-theme] .comments-toggle-fab {
+    background: var(--card-bg) !important;
+    color: var(--text-primary) !important;
+    border: 1px solid var(--border-color) !important;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12) !important;
+}
+html[data-theme] .comments-toggle-fab i {
+    color: var(--calm-icon) !important;
+}

@@ -58,7 +58,7 @@ export function SharedTicketPage({ ticket, tasks, project }: SharedTicketPagePro
     .shared-branding { text-align: center; padding: 2rem 0; margin-top: 3rem; border-top: 1px solid var(--border-color); }
     .shared-branding a { font-size: 0.8125rem; color: var(--text-secondary); text-decoration: none; }
   </style>
-  <link rel="stylesheet" href="/public/css/calm.css?v=2" />
+  <link rel="stylesheet" href="/public/css/calm.css?v=3" />
 </head>
 <body>
   <div class="shared-container">
