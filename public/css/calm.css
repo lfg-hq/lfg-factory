@@ -311,3 +311,24 @@ html[data-theme] .comments-toggle-fab {
 html[data-theme] .comments-toggle-fab i {
     color: var(--calm-icon) !important;
 }
+
+/* ---------- Documents: readable text in both themes ---------- */
+/* Italics were hardcoded to a near-white meant for dark mode. */
+html[data-theme] .markdown-content em {
+    color: var(--text-secondary) !important;
+}
+/* Selected text keeps its own colour on a soft tint (was forced white). */
+::selection {
+    background: rgba(139, 120, 240, 0.28);
+    color: inherit;
+}
+
+/* Dark mode: the right panel used see-through grays, which picked up a blue
+   cast from behind. Give it the same flat neutral as the chat. */
+html[data-theme="dark"] .artifacts-container,
+html[data-theme="dark"] .artifacts-panel,
+html[data-theme="dark"] .artifacts-panel .tab-content,
+html[data-theme="dark"] #filebrowser-viewer,
+html[data-theme="dark"] #filebrowser-viewer .viewer-content {
+    background: var(--background-color, #121212) !important;
+}

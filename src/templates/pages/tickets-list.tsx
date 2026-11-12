@@ -472,7 +472,7 @@ export function TicketsListPage({ user, project, stages, tickets, epics = [], ex
     body.embed-drawer .drawer-resize-handle { display: none !important; }
   </style>
 <link rel="stylesheet" href="/public/css/build-notifications.css?v=4" />
-  <link rel="stylesheet" href="/public/css/calm.css?v=3" />
+  <link rel="stylesheet" href="/public/css/calm.css?v=4" />
 </head>
 <body data-user-id="${user.id}" data-project-id="${project.projectId}"${embed ? ' class="embed-drawer"' : ""}>
 

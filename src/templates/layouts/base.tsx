@@ -47,7 +47,7 @@ export const BaseLayout: FC<BaseLayoutProps> = ({
       <meta name="color-scheme" content="dark light" />
       <script src="/public/js/theme-switcher.js?v=3" />
       {extraCss && <link rel="stylesheet" href={extraCss} />}
-      <link rel="stylesheet" href="/public/css/calm.css?v=3" />
+      <link rel="stylesheet" href="/public/css/calm.css?v=4" />
     </head>
     <body>
       <div class="app-container">

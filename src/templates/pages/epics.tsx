@@ -321,7 +321,7 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
     @media(max-width:600px) { .epic-ticket-status { display:none; } }
   </style>
 <link rel="stylesheet" href="/public/css/build-notifications.css?v=4" />
-  <link rel="stylesheet" href="/public/css/calm.css?v=3" />
+  <link rel="stylesheet" href="/public/css/calm.css?v=4" />
 </head>
 <body>
   <div class="app-container">
