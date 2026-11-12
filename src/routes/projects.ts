@@ -935,13 +935,17 @@ projectsRouter.get("/projects/:projectId/api/checklist", async (c) => {
 // Searches every active document in the project (not just the newest few) by
 // name. Design previews are left out: they're screenshots, not documents you
 // discuss in chat.
+// "pm_map" rows are JSON planning maps left by an earlier PM-mode experiment.
+// Nothing renders them any more, so they'd show as raw JSON; keep them out of
+// the Docs list and the @-picker (the rows themselves are untouched).
+const HIDDEN_DOC_TYPE = "pm_map";
+
 const MENTION_TYPE_LABELS: Record<string, string> = {
   prd: "PRD",
   implementation: "Implementation plan",
   design: "Design",
   design_language: "Design",
   tech_analysis: "Technical analysis",
-  pm_map: "Plan",
   test: "Test plan",
   other: "Document",
 };
@@ -958,6 +962,7 @@ async function fileMentions(c: any) {
     eq(projectFiles.projectId, access.project.id),
     eq(projectFiles.isActive, true),
     ne(projectFiles.fileType, "page_preview"),
+    ne(projectFiles.fileType, HIDDEN_DOC_TYPE),
   ];
   if (q) {
     const pattern = "%" + q.replace(/[\\%_]/g, (ch: string) => "\\" + ch) + "%";
@@ -1004,7 +1009,7 @@ projectsRouter.get("/projects/:projectId/api/files/browser", async (c) => {
   const fileRows = await db
     .select()
     .from(projectFiles)
-    .where(eq(projectFiles.projectId, project.id))
+    .where(and(eq(projectFiles.projectId, project.id), ne(projectFiles.fileType, HIDDEN_DOC_TYPE)))
     .orderBy(desc(projectFiles.updatedAt));
 
   // Which epics each doc feeds. A doc can serve several epics (the Main PRD

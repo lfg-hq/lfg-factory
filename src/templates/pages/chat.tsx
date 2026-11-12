@@ -42,7 +42,7 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/document-comments.css" />
   <link rel="stylesheet" href="/public/css/doc-editor.css?v=20261113-modes" />
   <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261022-build-rows" />
-  <link rel="stylesheet" href="/public/css/chat.css?v=20261112-mentions" />
+  <link rel="stylesheet" href="/public/css/chat.css?v=20261113-chipfit" />
   <link rel="stylesheet" href="/public/css/artifacts-fix.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />

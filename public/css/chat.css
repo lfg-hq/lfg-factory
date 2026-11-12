@@ -3454,3 +3454,9 @@ input:checked + .turbo-slider + .turbo-label,
 }
 .msg-file-chip i { font-size: .8em; opacity: .7; }
 .msg-file-chip:hover { border-color: var(--primary-color, #8b78f0); }
+/* Long document names truncate inside the bubble instead of widening it. */
+.msg-file-chip {
+  display: inline-block; max-width: 100%; box-sizing: border-box;
+  overflow: hidden; text-overflow: ellipsis; vertical-align: bottom;
+}
+.msg-file-chip i { margin-right: 5px; }
