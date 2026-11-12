@@ -320,7 +320,7 @@ html[data-theme] .markdown-content em {
 /* Selected text keeps its own colour on a soft tint (was forced white). */
 ::selection {
     background: rgba(139, 120, 240, 0.28);
-    color: inherit;
+    color: currentColor;
 }
 
 /* Dark mode: the right panel used see-through grays, which picked up a blue
