@@ -91,13 +91,22 @@ export async function createTicketSandbox(options: {
   };
   const [pending] = await db.select().from(sandboxes).where(and(
     eq(sandboxes.ticketId, options.ticketId), eq(sandboxes.workspaceType, 'ticket-clone'),
-    inArray(sandboxes.status, ['cloning','submitting','unconfirmed']),
+    inArray(sandboxes.status, ['cloning','submitting']),
   )).orderBy(desc(sandboxes.updatedAt)).limit(1);
   let intent = pending;
+  // A clone request whose outcome is unknown is never resubmitted (it may have allocated a VM).
+  // It stays saved as 'unconfirmed' for reconciliation, and this run continues in a fresh
+  // sandbox: blocking on it left the ticket failing on every retry with nothing to resolve it.
   const recoverUnconfirmed = async () => {
     await db.update(sandboxes).set({status:'unconfirmed',updatedAt:new Date()}).where(eq(sandboxes.id,intent!.id));
-    await options.log(`Clone intent ${intent!.id} is unconfirmed and retained for reconciliation. No clone will be resubmitted. The ticket will wait for clone reconciliation; no empty sandbox will be created.`);
-    throw new Error("Preview clone is unconfirmed. Reconcile the saved clone request before starting this ticket; no empty sandbox was created.");
+    console.warn('[ticket-sandbox-clone] unconfirmed clone retained for reconciliation', {ticketId:options.ticketId,intentId:intent!.id});
+    return freshInstead("The sandbox provider didn't confirm the copy of this project's preview, so this run continues in a fresh sandbox from the ticket branch. The agent installs dependencies first, so setup takes longer.");
+  };
+  // A copy that failed outright is closed, so the next run doesn't wait on the same dead request.
+  const copyFailed = async (intentId: string, detail: string) => {
+    await db.update(sandboxes).set({status:'failed',updatedAt:new Date()}).where(eq(sandboxes.id,intentId));
+    console.warn('[ticket-sandbox-clone] copy failed', {ticketId:options.ticketId,intentId,detail});
+    return freshInstead("Copying this project's preview failed, so this run continues in a fresh sandbox from the ticket branch. The agent installs dependencies first, so setup takes longer.");
   };
   if (intent && !intent.magsJobId) return recoverUnconfirmed();
   if (!intent) {
@@ -138,7 +147,7 @@ export async function createTicketSandbox(options: {
         const retried = await retryWhenBusy(intent.id, detail);
         if (retried) return retried;
         console.warn('[ticket-sandbox-clone] rejected', {ticketId:options.ticketId,sourceWorkspaceId:source.workspaceId,detail});
-        throw new Error(`Preview clone was rejected: ${detail} No replacement sandbox was created.`);
+        return freshInstead(`The sandbox provider refused to copy this project's preview (${detail.slice(0, 160)}), so this run continues in a fresh sandbox from the ticket branch. The agent installs dependencies first, so setup takes longer.`);
       }
       await options.log(`Clone submission could not be confirmed: ${(error as Error).message}`);
       return recoverUnconfirmed();
@@ -151,11 +160,16 @@ export async function createTicketSandbox(options: {
   let clone: {jobId:string;workspaceId:string};
   try { clone = await waitForClone(intent.magsJobId); }
   catch (error) {
-    // A clone stuck pending still holds the source disk: cancel it before resubmitting.
-    if (/stuck pending/i.test((error as Error).message ?? '')) await stopWorkspace(intent.magsJobId).catch(() => {});
-    const retried = await retryWhenBusy(intent.id, (error as Error).message ?? '');
+    const detail = (error as Error).message ?? '';
+    // A clone stuck pending (or provisioning past the provider's own limit) still holds the
+    // source disk: cancel it. Waiting on it again would cost another 11 minutes per retry.
+    if (/stuck pending|still provisioning/i.test(detail)) await stopWorkspace(intent.magsJobId).catch(() => {});
+    const retried = await retryWhenBusy(intent.id, /still provisioning/i.test(detail) ? `${detail} (stuck pending)` : detail);
     if (retried) return retried;
-    throw error;
+    // The status check itself failed (network, provider 5xx): the request may still finish,
+    // so it stays saved and the next attempt resumes it.
+    if (/^Clone API HTTP|fetch failed|aborted|timed? ?out/i.test(detail)) throw error;
+    return copyFailed(intent.id, detail);
   }
   if (clone.workspaceId === intent.magsBaseWorkspaceId) throw new Error('Clone returned the source identity; refusing to modify it');
   await setNoSleep(clone.jobId, true);
