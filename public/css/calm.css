@@ -1,0 +1,230 @@
+/*
+ * Calm accent layer — loaded last on every app page.
+ *
+ * Purple is reserved for "you are here" and "do this": the active nav item,
+ * the active tab, and one primary button. Everything else that used to be
+ * purple (decorative icons, secondary pills, hover glows, badges) is neutral
+ * or a soft tint, so the page doesn't shout. Same rules in dark and light.
+ */
+
+:root,
+[data-theme="dark"] {
+    --primary-color: #a594f9;
+    --primary-light: #b8abfb;
+    --primary-dark: #8b78f0;
+    --primary-gradient: #8b78f0;
+    --text-link: #b8abfb;
+    --text-link-hover: #cbc1fd;
+    --border-focus: #a594f9;
+    --input-border-focus: #a594f9;
+    --btn-primary-bg: #8b78f0;
+    --btn-primary-text: #ffffff;
+    --btn-primary-hover: #7a66e6;
+    --btn-secondary-border: rgba(165, 148, 249, 0.35);
+    --btn-secondary-text: #c9bffc;
+
+    --tint-bg: rgba(139, 120, 240, 0.12);
+    --tint-bg-hover: rgba(139, 120, 240, 0.18);
+    --tint-border: rgba(139, 120, 240, 0.28);
+    --tint-text: #cbc1fd;
+    --calm-icon: #8a8f9c;
+    --calm-border-hover: #4a4a52;
+}
+
+[data-theme="light"] {
+    --primary-color: #6b4fd6;
+    --primary-light: #8068e0;
+    --primary-dark: #5a3fc4;
+    --primary-gradient: #6b4fd6;
+    --text-link: #6b4fd6;
+    --border-focus: #6b4fd6;
+    --input-border-focus: #6b4fd6;
+    --btn-primary-bg: #6b4fd6;
+    --btn-primary-hover: #5a3fc4;
+
+    --tint-bg: #f3f0ff;
+    --tint-bg-hover: #ebe5ff;
+    --tint-border: #e2d9ff;
+    --tint-text: #4c32b0;
+    --calm-icon: #8a94a6;
+    --calm-border-hover: #cbd2dc;
+}
+
+/* ---------- Buttons: one flat primary, no gradients or glows ---------- */
+html .btn-primary,
+html[data-theme] .btn-primary,
+html[data-theme] .submit-btn,
+html[data-theme] .connect-button,
+html[data-theme] .api-button {
+    background: var(--btn-primary-bg) !important;
+    color: #ffffff !important;
+    border: 1px solid transparent !important;
+    box-shadow: none !important;
+}
+html .btn-primary:hover,
+html[data-theme] .btn-primary:hover,
+html[data-theme] .submit-btn:hover,
+html[data-theme] .connect-button:hover,
+html[data-theme] .api-button:hover {
+    background: var(--btn-primary-hover) !important;
+    box-shadow: none !important;
+    transform: none;
+}
+
+/* ---------- Left panel ---------- */
+html[data-theme] .sidebar .nav-link i,
+html[data-theme] .sidebar .nav-link:hover i,
+html[data-theme] .sidebar .new-chat-link i,
+html[data-theme] .sidebar.minimized .nav-link:hover i,
+html[data-theme] .sidebar.minimized .new-chat-link i {
+    color: var(--calm-icon) !important;
+}
+html[data-theme] .sidebar .project-dropdown-trigger i:first-child,
+html[data-theme] .sidebar #build-inbox-button:not([aria-expanded="true"]) i {
+    color: var(--calm-icon) !important;
+}
+html[data-theme] .sidebar .project-dropdown-trigger.active {
+    background: var(--tint-bg) !important;
+    color: var(--tint-text) !important;
+}
+html[data-theme] .sidebar .project-dropdown-trigger.active .project-name-text {
+    color: var(--tint-text) !important;
+}
+html[data-theme] .sidebar .project-dropdown-trigger.active i:first-child,
+html[data-theme] .sidebar #build-inbox-button[aria-expanded="true"] i {
+    color: var(--primary-color) !important;
+}
+html[data-theme] .sidebar .new-chat-link {
+    color: inherit !important;
+}
+html[data-theme] .sidebar .nav-link.active,
+html[data-theme] .sidebar-nav .nav-link.active {
+    background: var(--tint-bg) !important;
+    color: var(--tint-text) !important;
+}
+html[data-theme] .sidebar .nav-link.active i,
+html[data-theme] .sidebar.minimized .nav-link.active i {
+    color: var(--primary-color) !important;
+}
+html[data-theme] #sidebar .conversations-section .conversation-item.active {
+    background: var(--tint-bg) !important;
+    color: var(--tint-text) !important;
+    box-shadow: none !important;
+}
+html[data-theme] .sidebar-link.active {
+    background: var(--tint-bg);
+    color: var(--tint-text);
+    border-left-color: transparent;
+}
+html[data-theme] .sidebar-logo .logo-text {
+    background: none;
+    -webkit-text-fill-color: currentColor;
+    color: var(--text-primary);
+}
+
+/* ---------- Projects page ---------- */
+html[data-theme] .stat-item i {
+    color: var(--calm-icon) !important;
+}
+html[data-theme] .project-list-item:hover,
+html[data-theme] .project-card:hover,
+html[data-theme] .kanban-card:hover,
+html[data-theme] .integration-card:hover {
+    border-color: var(--calm-border-hover) !important;
+    box-shadow: none !important;
+}
+html[data-theme] .integration-card::before,
+html[data-theme] .project-card::before {
+    display: none;
+}
+
+/* Chat / Dashboard / Instant: quiet ghost pills that tint on hover. */
+html[data-theme] .project-action-button {
+    background: transparent !important;
+    border: 1px solid var(--border-color) !important;
+    color: var(--text-secondary) !important;
+    box-shadow: none !important;
+}
+html[data-theme] .project-action-button i {
+    color: var(--calm-icon) !important;
+}
+html[data-theme] .project-action-button:hover {
+    background: var(--tint-bg) !important;
+    border-color: var(--tint-border) !important;
+    color: var(--tint-text) !important;
+    transform: none !important;
+}
+html[data-theme] .project-action-button:hover i {
+    color: var(--primary-color) !important;
+}
+
+/* "Needs your attention" count: tinted pill instead of solid purple. */
+html[data-theme] .project-list-header span[title$="need your attention"],
+html[data-theme] .project-list-header span[title$="needs your attention"] {
+    background: var(--tint-bg) !important;
+    color: var(--tint-text) !important;
+    border: 1px solid var(--tint-border);
+}
+
+/* Inline-styled purple icons on list rows (agents, instant apps). */
+html[data-theme] .project-list-header i[style*="primary-color"] {
+    color: var(--calm-icon) !important;
+}
+
+/* ---------- Settings ---------- */
+html[data-theme] .settings-nav-link:hover,
+html[data-theme] .settings-link:hover,
+html[data-theme] .settings-nav-item:hover {
+    background: rgba(127, 127, 127, 0.08) !important;
+    color: var(--text-primary) !important;
+}
+html[data-theme] .settings-nav-link:hover i,
+html[data-theme] .settings-link:hover i {
+    color: var(--calm-icon) !important;
+}
+html[data-theme] .settings-nav-link.active,
+html[data-theme] .settings-link.active,
+html[data-theme] .settings-nav-item.active {
+    background: var(--tint-bg) !important;
+    color: var(--tint-text) !important;
+}
+html[data-theme] .settings-nav-link.active i,
+html[data-theme] .settings-link.active i {
+    color: var(--primary-color) !important;
+}
+html[data-theme] .api-input:focus {
+    box-shadow: 0 0 0 3px var(--tint-bg) !important;
+    border-color: var(--tint-border) !important;
+}
+html[data-theme] .external-link::after {
+    display: none;
+}
+
+/* ---------- Shared bits ---------- */
+html[data-theme] .dropdown-item:hover {
+    background: rgba(127, 127, 127, 0.08);
+    color: var(--text-primary);
+}
+html[data-theme] .badge-purple,
+html[data-theme] .badge.primary {
+    background: var(--tint-bg) !important;
+    color: var(--tint-text) !important;
+}
+
+/* Per-row Save buttons repeat down the page, so they're tinted, not solid. */
+html[data-theme] .llm-btn-save {
+    background: var(--tint-bg) !important;
+    border: 1px solid var(--tint-border) !important;
+    color: var(--tint-text) !important;
+    box-shadow: none !important;
+}
+html[data-theme] .llm-btn-save:hover {
+    background: var(--tint-bg-hover) !important;
+}
+
+/* Unread count next to Notifications: tinted pill, not a solid dot. */
+html[data-theme] #build-inbox-button .build-unread {
+    background: var(--tint-bg) !important;
+    color: var(--tint-text) !important;
+    box-shadow: inset 0 0 0 1px var(--tint-border) !important;
+}
