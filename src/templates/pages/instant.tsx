@@ -115,13 +115,13 @@ export function InstantPage({
   <link rel="stylesheet" href="/public/css/common.css" />
   <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
   <link rel="stylesheet" href="/public/css/styles.css" />
-  <link rel="stylesheet" href="/public/css/chat.css?v=20261023-dictation-fit" />
+  <link rel="stylesheet" href="/public/css/chat.css?v=20261112-mentions" />
   <link rel="stylesheet" href="/public/css/instant.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
   <script src="/public/js/theme-switcher.js"></script>
 <link rel="stylesheet" href="/public/css/build-notifications.css?v=4" />
-  <link rel="stylesheet" href="/public/css/calm.css?v=2" />
+  <link rel="stylesheet" href="/public/css/calm.css?v=5" />
 </head>
 <body data-theme="dark" data-model-key="${modelKey}" data-role-key="${roleKey}">
   <div class="app-container">

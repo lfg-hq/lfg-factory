@@ -135,7 +135,7 @@ export function ProjectDetailPage({
   <script src="/public/js/theme-switcher.js"></script>
 <link rel="stylesheet" href="/public/css/project-team.css">
 <link rel="stylesheet" href="/public/css/build-notifications.css?v=4" />
-  <link rel="stylesheet" href="/public/css/calm.css?v=2" />
+  <link rel="stylesheet" href="/public/css/calm.css?v=5" />
 </head>
 <body data-user-id="${user.id}" data-user-name="${user.name}" data-project-id="${project.projectId}">
 
@@ -1034,7 +1034,7 @@ export function ProjectDetailPage({
           <script src="/public/js/design-preview.js"></script>
   <link rel="stylesheet" href="/public/css/doc-editor.css?v=20261113-modes" />
   <script src="/public/js/doc-editor.js?v=20261113-modes"></script>
-  <script src="/public/js/artifacts-loader.js?v=20261112-inline-edit"></script>
+  <script src="/public/js/artifacts-loader.js?v=20261113-merged"></script>
           <script src="/public/js/document-comments.js?v=20261112-inline-edit"></script>
           <script>
             // Reuse the SAME docs module as the chat Docs panel (window.ArtifactsLoader),

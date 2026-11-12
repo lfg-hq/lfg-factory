@@ -42,7 +42,7 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/document-comments.css" />
   <link rel="stylesheet" href="/public/css/doc-editor.css?v=20261113-modes" />
   <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261022-build-rows" />
-  <link rel="stylesheet" href="/public/css/chat.css?v=20261023-dictation-fit" />
+  <link rel="stylesheet" href="/public/css/chat.css?v=20261112-mentions" />
   <link rel="stylesheet" href="/public/css/artifacts-fix.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
@@ -120,7 +120,7 @@ export function ChatPage({
   </style>
   <script src="/public/js/theme-switcher.js"></script>
 <link rel="stylesheet" href="/public/css/build-notifications.css?v=4" />
-  <link rel="stylesheet" href="/public/css/calm.css?v=2" />
+  <link rel="stylesheet" href="/public/css/calm.css?v=5" />
 </head>
 <body data-user-id="${user.id}"
   data-user-name="${user.name}"
@@ -546,7 +546,7 @@ export function ChatPage({
   <!-- PDF libraries load on demand when exporting a document. -->
   <script src="/public/js/design-preview.js"></script>
   <script src="/public/js/doc-editor.js?v=20261113-modes"></script>
-  <script src="/public/js/artifacts-loader.js?v=20261112-inline-edit"></script>
+  <script src="/public/js/artifacts-loader.js?v=20261113-merged"></script>
   <script src="/public/js/document-comments.js?v=20261112-inline-edit"></script>
   <script src="/public/js/artifacts.js"></script>
   <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261022-checks-view" />
@@ -562,7 +562,7 @@ export function ChatPage({
   <script src="/public/js/dictation.js?v=20261021-inline-strip"></script>
   <script src="/public/js/chat-artifacts.js?v=20261022-build-rows"></script>
   <script src="/public/js/chatgpt-connection.js?v=20261018"></script>
-  <script src="/public/js/chat.js?v=20261112-add-to-chat"></script>
+  <script src="/public/js/chat.js?v=20261113-merged"></script>
   <script src="/public/js/voice-mode.js?v=20261016-voice-hidden" data-disabled="true"></script>
   <script src="/public/js/mobile-menu.js"></script>
 

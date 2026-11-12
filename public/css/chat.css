@@ -3386,3 +3386,71 @@ input:checked + .turbo-slider + .turbo-label,
 
 /* Dictation: a silent microphone is called out instead of hidden. */
 .audio-recording-indicator[data-phase="recording"][data-quiet="on"] .dictation-status { position:static;width:auto;height:auto;clip-path:none;flex:0 1 auto;max-width:60%;font-size:12px;color:#b54708; }
+
+/* ── @-mention picker ─────────────────────────────────────────────────── */
+.mention-dropdown {
+  position: fixed; z-index: 1000; display: none; box-sizing: border-box;
+  max-height: 340px; overflow: hidden auto; padding: 6px;
+  background: var(--card-bg, #1a1a1a); color: var(--text-color, #e2e8f0);
+  border: 1px solid var(--border-color, #2e2e2e); border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .18), 0 2px 6px rgba(0, 0, 0, .08);
+  font-size: 13px;
+}
+.mention-section {
+  padding: 8px 10px 4px; font-size: 11px; font-weight: 600; letter-spacing: .02em;
+  color: var(--text-secondary, #94a3b8);
+}
+.mention-item {
+  display: flex; align-items: center; gap: 10px; min-height: 34px;
+  padding: 6px 10px; border-radius: 8px; cursor: pointer;
+}
+.mention-item.is-active { background: var(--tint-bg, rgba(139, 120, 240, .12)); }
+.mention-icon {
+  flex: none; width: 26px; height: 26px; border-radius: 7px; display: inline-flex;
+  align-items: center; justify-content: center; font-size: 12px;
+  background: rgba(127, 127, 127, .1); color: var(--calm-icon, #8a8f9c);
+}
+.mention-item.is-active .mention-icon { color: var(--primary-color, #8b78f0); }
+.mention-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.mention-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.mention-name mark { background: none; color: inherit; font-weight: 700; text-decoration: underline; text-underline-offset: 2px; text-decoration-color: var(--tint-border, rgba(139,120,240,.5)); }
+.mention-sub { font-size: 12px; color: var(--text-secondary, #94a3b8); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mention-meta { flex: none; font-size: 11.5px; color: var(--text-secondary, #94a3b8); white-space: nowrap; }
+.mention-note { padding: 8px 10px; font-size: 12.5px; color: var(--text-secondary, #94a3b8); }
+.mention-footer {
+  display: flex; gap: 14px; margin: 4px -6px -6px; padding: 7px 14px;
+  border-top: 1px solid var(--border-color, #2e2e2e);
+  font-size: 11px; color: var(--text-secondary, #94a3b8);
+}
+.mention-footer kbd {
+  display: inline-block; min-width: 14px; margin-right: 3px; padding: 0 4px;
+  border: 1px solid var(--border-color, #2e2e2e); border-radius: 4px;
+  font: inherit; font-size: 10.5px; text-align: center;
+}
+
+/* Referenced documents, shown as chips above the message box. */
+.input-mention-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+.mention-chip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 260px;
+  height: 28px; padding: 0 4px 0 9px; box-sizing: border-box;
+  background: var(--tint-bg, rgba(139, 120, 240, .12));
+  border: 1px solid var(--tint-border, rgba(139, 120, 240, .28));
+  border-radius: 8px; color: var(--tint-text, #cbc1fd); font-size: 12.5px; font-weight: 500;
+}
+.mention-chip i { font-size: 11px; opacity: .8; }
+.mention-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mention-chip-remove {
+  flex: none; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 5px;
+  background: transparent; color: inherit; opacity: .6; cursor: pointer; font-size: 15px; line-height: 1;
+}
+.mention-chip-remove:hover { opacity: 1; background: rgba(127, 127, 127, .15); }
+
+/* The same references inside a sent message. */
+.msg-file-chip {
+  display: inline-flex; align-items: center; gap: 5px; margin: 2px 2px 2px 0;
+  padding: 1px 8px; border-radius: 6px; vertical-align: baseline;
+  background: var(--card-bg, rgba(255, 255, 255, .6)); border: 1px solid var(--tint-border, rgba(139,120,240,.28));
+  font-size: .92em; font-weight: 500; white-space: nowrap; cursor: pointer; color: inherit;
+}
+.msg-file-chip i { font-size: .8em; opacity: .7; }
+.msg-file-chip:hover { border-color: var(--primary-color, #8b78f0); }
