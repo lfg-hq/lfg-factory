@@ -1082,7 +1082,55 @@ projectsRouter.get("/projects/:projectId/api/files/:fileId/content", async (c) =
   if (!file) return c.json({ error: "File not found" }, 404);
 
   const content = await getContent(file.s3Key, file.content);
-  return c.json({ id: file.id, name: file.name, type: file.fileType, content });
+  return c.json({ id: file.id, name: file.name, type: file.fileType, content, updatedAt: file.updatedAt });
+});
+
+// ── PUT /projects/:projectId/api/files/:fileId/content — in-place editor autosave ──
+// The Docs viewer edits a document live and saves every pause in typing, so this
+// saves by id (names aren't unique across types) and snapshots a version only once
+// per editing session — not on every keystroke-debounce. `baseUpdatedAt` is the
+// updatedAt the editor loaded; if someone (usually the agent) wrote the file since,
+// the save is refused with 409 rather than silently overwriting their change.
+const INLINE_EDIT_VERSION_GAP_MS = 10 * 60 * 1000;
+projectsRouter.put("/projects/:projectId/api/files/:fileId/content", async (c) => {
+  const user = c.get("user");
+  const { projectId, fileId } = c.req.param();
+
+  const access = await getProjectAccess(projectId, user.id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  try { requirePermission(access, "canEditFiles"); } catch { return c.json({ error: "Forbidden" }, 403); }
+  const project = access.project;
+
+  const body = await c.req.json().catch(() => ({})) as { content?: unknown; baseUpdatedAt?: unknown };
+  if (typeof body.content !== "string") return c.json({ error: "content is required" }, 400);
+
+  const [file] = await db.select().from(projectFiles)
+    .where(and(eq(projectFiles.id, fileId!), eq(projectFiles.projectId, project.id)));
+  if (!file) return c.json({ error: "File not found" }, 404);
+
+  const currentContent = await getContent(file.s3Key, file.content);
+  const base = typeof body.baseUpdatedAt === "string" ? Date.parse(body.baseUpdatedAt) : NaN;
+  if (!Number.isNaN(base) && file.updatedAt && file.updatedAt.getTime() > base + 1) {
+    return c.json({ error: "conflict", content: currentContent, updatedAt: file.updatedAt }, 409);
+  }
+  if (currentContent === body.content) {
+    return c.json({ success: true, id: file.id, updatedAt: file.updatedAt });
+  }
+
+  const [latest] = await db.select({ createdAt: projectFileVersions.createdAt, createdById: projectFileVersions.createdById })
+    .from(projectFileVersions).where(eq(projectFileVersions.fileId, file.id))
+    .orderBy(desc(projectFileVersions.versionNumber)).limit(1);
+  const sameSession = latest && latest.createdById === user.id
+    && Date.now() - new Date(latest.createdAt).getTime() < INLINE_EDIT_VERSION_GAP_MS;
+  if (!sameSession) await saveVersion(file.id, currentContent, user.id);
+
+  const { s3Key, dbContent } = await saveContent(project.id, file.fileType, file.name, body.content);
+  const [updated] = await db.update(projectFiles)
+    .set({ content: dbContent, s3Key, updatedAt: new Date() })
+    .where(eq(projectFiles.id, file.id))
+    .returning();
+
+  return c.json({ success: true, id: updated!.id, updatedAt: updated!.updatedAt });
 });
 
 // Trailing slash variant for chat.js compatibility

@@ -40,6 +40,7 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/artifacts.css?v=20261022-notes" />
   <link rel="stylesheet" href="/public/css/git-tab.css" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
+  <link rel="stylesheet" href="/public/css/doc-editor.css?v=20261112" />
   <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261022-build-rows" />
   <link rel="stylesheet" href="/public/css/chat.css?v=20261023-dictation-fit" />
   <link rel="stylesheet" href="/public/css/artifacts-fix.css" />
@@ -544,8 +545,9 @@ export function ChatPage({
   <script src="/public/js/markdown-config.js?v=20261019-readable-layout"></script>
   <!-- PDF libraries load on demand when exporting a document. -->
   <script src="/public/js/design-preview.js"></script>
-  <script src="/public/js/artifacts-loader.js?v=20261024-doc-sync"></script>
-  <script src="/public/js/document-comments.js"></script>
+  <script src="/public/js/doc-editor.js?v=20261112"></script>
+  <script src="/public/js/artifacts-loader.js?v=20261112-inline-edit"></script>
+  <script src="/public/js/document-comments.js?v=20261112-inline-edit"></script>
   <script src="/public/js/artifacts.js"></script>
   <link rel="stylesheet" href="/public/css/ticket-action-phases.css?v=20261022-checks-view" />
 <script src="/public/js/ticket-action-phases.js?v=20261022-followup-logs2"></script>
@@ -560,7 +562,7 @@ export function ChatPage({
   <script src="/public/js/dictation.js?v=20261021-inline-strip"></script>
   <script src="/public/js/chat-artifacts.js?v=20261022-build-rows"></script>
   <script src="/public/js/chatgpt-connection.js?v=20261018"></script>
-  <script src="/public/js/chat.js?v=20261022-attachments"></script>
+  <script src="/public/js/chat.js?v=20261112-add-to-chat"></script>
   <script src="/public/js/voice-mode.js?v=20261016-voice-hidden" data-disabled="true"></script>
   <script src="/public/js/mobile-menu.js"></script>
 

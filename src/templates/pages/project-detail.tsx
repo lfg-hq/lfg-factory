@@ -1032,8 +1032,10 @@ export function ProjectDetailPage({
           <script src="/public/js/markdown-config.js"></script>
   <!-- PDF libraries load on demand when exporting a document. -->
           <script src="/public/js/design-preview.js"></script>
-  <script src="/public/js/artifacts-loader.js?v=20261024-doc-sync"></script>
-          <script src="/public/js/document-comments.js"></script>
+  <link rel="stylesheet" href="/public/css/doc-editor.css?v=20261112" />
+  <script src="/public/js/doc-editor.js?v=20261112"></script>
+  <script src="/public/js/artifacts-loader.js?v=20261112-inline-edit"></script>
+          <script src="/public/js/document-comments.js?v=20261112-inline-edit"></script>
           <script>
             // Reuse the SAME docs module as the chat Docs panel (window.ArtifactsLoader),
             // so reads/edits/renders stay in sync across the dashboard and chat.

@@ -5926,6 +5926,23 @@ document.addEventListener('DOMContentLoaded', () => {
         void selectMentionFile(event.detail);
     });
 
+    // "Add to chat" from a document selection (doc-editor.js): detail.text is a
+    // ready-made quote that ends in a [@Title](file:<id>) reference. Appended to the
+    // draft so the agent can open the document; the user types their question after.
+    document.addEventListener('lfg-chat-insert', event => {
+        const { text, file } = event.detail || {};
+        if (!text) return;
+        const draft = chatInput.value.replace(/\s+$/, '');
+        chatInput.value = (draft ? draft + '\n\n' : '') + text;
+        if (file && file.id) {
+            window.mentionedFiles = window.mentionedFiles || {};
+            window.mentionedFiles[file.id] = { id: file.id, name: file.name, type: file.type };
+        }
+        chatInput.dispatchEvent(new Event('input'));
+        chatInput.focus();
+        chatInput.setSelectionRange(chatInput.value.length, chatInput.value.length);
+    });
+
     async function selectMentionFile(file) {
         if (!file) return;
         

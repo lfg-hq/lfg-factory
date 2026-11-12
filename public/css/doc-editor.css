@@ -1,0 +1,343 @@
+/*
+ * In-place document editor (public/js/doc-editor.js).
+ * Calm: the document looks the same as when it was read-only; the selection toolbar is
+ * a neutral card with gray icons, and purple only marks what's active.
+ */
+
+:root,
+[data-theme="dark"] {
+    --doc-tb-bg: #1f1f23;
+    --doc-tb-border: #34343a;
+    --doc-tb-icon: var(--calm-icon, #8a8f9c);
+    --doc-tb-text: #d4d7de;
+    --doc-tb-hover: rgba(255, 255, 255, 0.06);
+    --doc-tb-shadow: 0 6px 24px rgba(0, 0, 0, 0.45), 0 1px 2px rgba(0, 0, 0, 0.4);
+    --doc-caret: #d4d7de;
+    --doc-selection: rgba(139, 120, 240, 0.28);
+}
+
+[data-theme="light"] {
+    --doc-tb-bg: #ffffff;
+    --doc-tb-border: #e3e6ec;
+    --doc-tb-icon: var(--calm-icon, #8a94a6);
+    --doc-tb-text: #374151;
+    --doc-tb-hover: #f3f4f6;
+    --doc-tb-shadow: 0 6px 24px rgba(15, 23, 42, 0.10), 0 1px 2px rgba(15, 23, 42, 0.08);
+    --doc-caret: #1f2937;
+    --doc-selection: rgba(107, 79, 214, 0.18);
+}
+
+/* ── The editable document ─────────────────────────────────────────── */
+
+.doc-editor-host .doc-editor {
+    outline: none;
+    caret-color: var(--doc-caret);
+    min-height: 40vh;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+.doc-editor-host .doc-editor ::selection {
+    background: var(--doc-selection);
+}
+
+/* ProseMirror wraps list item text in <p>; keep lists as tight as the read view. */
+.doc-editor-host li > p {
+    margin: 0;
+}
+
+.doc-editor-host .doc-editor a {
+    cursor: text;
+}
+
+.doc-editor-host table {
+    table-layout: auto;
+}
+
+.doc-editor-host td > p,
+.doc-editor-host th > p {
+    margin: 0;
+}
+
+.doc-editor-host .selectedCell {
+    background: var(--tint-bg);
+}
+
+/* Task lists: - [ ] / - [x] */
+.doc-editor-host ul[data-type="taskList"] {
+    list-style: none;
+    padding-left: 0.25rem;
+}
+
+.doc-editor-host ul[data-type="taskList"] li {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+}
+
+.doc-editor-host ul[data-type="taskList"] li > label {
+    flex: 0 0 auto;
+    margin-top: 0.3em;
+}
+
+.doc-editor-host ul[data-type="taskList"] li > div {
+    flex: 1 1 auto;
+}
+
+.doc-editor-host ul[data-type="taskList"] input[type="checkbox"] {
+    accent-color: var(--primary-color);
+}
+
+/* ── Save status (in the viewer header) ────────────────────────────── */
+
+.doc-save-status {
+    align-self: center;
+    margin-right: 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    transition: opacity 0.4s;
+}
+
+.doc-save-status:empty {
+    display: none;
+}
+
+.doc-save-status i {
+    font-size: 10px;
+    margin-right: 2px;
+}
+
+.doc-save-status.is-faded {
+    opacity: 0;
+}
+
+.doc-save-status.is-error {
+    color: #e0866f;
+}
+
+.doc-save-status button {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    color: var(--text-link, var(--primary-color));
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+/* ── Selection toolbar ─────────────────────────────────────────────── */
+
+.doc-sel-toolbar {
+    position: fixed;
+    z-index: 10000;
+    background: var(--doc-tb-bg);
+    border: 1px solid var(--doc-tb-border);
+    border-radius: 10px;
+    box-shadow: var(--doc-tb-shadow);
+    padding: 4px;
+    font-family: inherit;
+    max-width: calc(100vw - 16px);
+}
+
+.doc-sel-toolbar[hidden],
+.doc-sel-toolbar [hidden] {
+    display: none !important;
+}
+
+.doc-tb-row {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-wrap: wrap;
+}
+
+.doc-tb-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-width: 30px;
+    height: 30px;
+    padding: 0 7px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--doc-tb-icon);
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+}
+
+.doc-tb-btn:hover:not(:disabled) {
+    background: var(--doc-tb-hover);
+    color: var(--doc-tb-text);
+}
+
+.doc-tb-btn.is-active,
+.doc-tb-btn.is-active:hover {
+    background: var(--tint-bg);
+    color: var(--primary-color);
+}
+
+.doc-tb-btn:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
+.doc-tb-btn:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 1px;
+}
+
+.doc-tb-text {
+    color: var(--doc-tb-text);
+    font-size: 12.5px;
+    font-weight: 500;
+    padding: 0 9px;
+}
+
+.doc-tb-text i {
+    color: var(--doc-tb-icon);
+    font-size: 12px;
+}
+
+.doc-tb-sep {
+    width: 1px;
+    height: 18px;
+    margin: 0 3px;
+    background: var(--doc-tb-border);
+}
+
+.doc-tb-style {
+    position: relative;
+}
+
+.doc-tb-style-btn {
+    color: var(--doc-tb-text);
+    font-size: 12.5px;
+    font-weight: 500;
+    min-width: 84px;
+    justify-content: space-between;
+}
+
+.doc-tb-style-btn i {
+    font-size: 9px;
+    color: var(--doc-tb-icon);
+}
+
+.doc-tb-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    min-width: 150px;
+    padding: 4px;
+    background: var(--doc-tb-bg);
+    border: 1px solid var(--doc-tb-border);
+    border-radius: 8px;
+    box-shadow: var(--doc-tb-shadow);
+}
+
+.doc-tb-menu button {
+    display: block;
+    width: 100%;
+    padding: 6px 10px;
+    border: none;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--doc-tb-text);
+    text-align: left;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.doc-tb-menu button:hover {
+    background: var(--doc-tb-hover);
+}
+
+.doc-tb-menu button.is-active {
+    color: var(--primary-color);
+    background: var(--tint-bg);
+}
+
+.doc-tb-menu .is-h1 { font-size: 16px; font-weight: 700; }
+.doc-tb-menu .is-h2 { font-size: 14.5px; font-weight: 650; }
+.doc-tb-menu .is-h3 { font-size: 13.5px; font-weight: 600; }
+
+.doc-tb-linkrow {
+    flex-wrap: nowrap;
+}
+
+.doc-tb-link-input {
+    width: 240px;
+    height: 30px;
+    padding: 0 8px;
+    border: 1px solid var(--doc-tb-border);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--doc-tb-text);
+    font-size: 13px;
+    outline: none;
+}
+
+.doc-tb-link-input:focus {
+    border-color: var(--primary-color);
+}
+
+/* ── Raw markdown fallback (⋮ → Edit markdown) ────────────────────── */
+
+.doc-raw-editor {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 60vh;
+    gap: 8px;
+}
+
+.doc-raw-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.doc-raw-status {
+    flex: 1;
+}
+
+.doc-raw-done {
+    padding: 5px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--doc-tb-border);
+    background: transparent;
+    color: var(--doc-tb-text);
+    font-size: 12.5px;
+    cursor: pointer;
+}
+
+.doc-raw-done:hover {
+    background: var(--doc-tb-hover);
+}
+
+.doc-raw-textarea {
+    flex: 1;
+    width: 100%;
+    min-height: 60vh;
+    box-sizing: border-box;
+    resize: none;
+    padding: 14px;
+    border: 1px solid var(--doc-tb-border);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-primary, inherit);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    outline: none;
+}
+
+.doc-raw-textarea:focus {
+    border-color: var(--primary-color);
+}

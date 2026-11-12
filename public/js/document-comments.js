@@ -94,12 +94,21 @@
 
   // ── Text selection → floating "Comment" button ─────────────────────
 
+  function editorOwns(el) {
+    return !!(window.DocEditor && window.DocEditor.isActive(el));
+  }
+
   function setupSelectionListener() {
     var contentArea = document.querySelector(".shared-content, .file-content, .artifact-content, #content, #viewer-markdown");
     if (!contentArea) return;
+    // The viewer element is reused for every document; listen once.
+    if (contentArea.dataset.commentSelectionBound) return;
+    contentArea.dataset.commentSelectionBound = "1";
 
     contentArea.addEventListener("mouseup", function (e) {
       removeFloatingButton();
+      // An editable document has its own selection toolbar (doc-editor.js) with Comment in it.
+      if (editorOwns(contentArea)) return;
       var sel = window.getSelection();
       if (!sel || sel.isCollapsed || !sel.toString().trim()) return;
 
@@ -138,6 +147,13 @@
     var existing = document.getElementById("comment-float-btn");
     if (existing) existing.remove();
   }
+
+  // doc-editor.js's selection toolbar opens the same popover. `range` only needs
+  // getBoundingClientRect().
+  window.openDocumentCommentInput = function (selectedText, range) {
+    if (!state.canComment || !state.fileId) return;
+    openCommentInput(selectedText, range);
+  };
 
   function openCommentInput(selectedText, range) {
     // Remove any existing input
@@ -230,6 +246,14 @@
   // ── Highlights ─────────────────────────────────────────────────────
 
   function renderHighlights() {
+    var open = state.comments.filter(function (c) { return !c.isResolved && c.selectedText; });
+    // In the live editor, highlights are decorations — editing its DOM would count as a change.
+    if (window.DocEditor) {
+      window.DocEditor.setHighlights(open.map(function (c) { return { id: c.id, text: c.selectedText }; }), state.fileId);
+    }
+    var area = document.querySelector("#viewer-markdown");
+    if (area && editorOwns(area)) return;
+
     // Remove existing highlights
     document.querySelectorAll("mark.comment-highlight").forEach(function (el) {
       el.outerHTML = el.innerHTML;
@@ -450,6 +474,8 @@
     card += '</div>';
     return card;
   }
+
+  window.showDocumentCommentThread = function (commentId) { showCommentThread(commentId); };
 
   function showCommentThread(commentId) {
     state.panelOpen = true;
