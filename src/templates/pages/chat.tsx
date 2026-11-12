@@ -40,7 +40,7 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/artifacts.css?v=20261022-notes" />
   <link rel="stylesheet" href="/public/css/git-tab.css" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
-  <link rel="stylesheet" href="/public/css/doc-editor.css?v=20261112" />
+  <link rel="stylesheet" href="/public/css/doc-editor.css?v=20261113-modes" />
   <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261022-build-rows" />
   <link rel="stylesheet" href="/public/css/chat.css?v=20261023-dictation-fit" />
   <link rel="stylesheet" href="/public/css/artifacts-fix.css" />
@@ -545,7 +545,7 @@ export function ChatPage({
   <script src="/public/js/markdown-config.js?v=20261019-readable-layout"></script>
   <!-- PDF libraries load on demand when exporting a document. -->
   <script src="/public/js/design-preview.js"></script>
-  <script src="/public/js/doc-editor.js?v=20261112"></script>
+  <script src="/public/js/doc-editor.js?v=20261113-modes"></script>
   <script src="/public/js/artifacts-loader.js?v=20261112-inline-edit"></script>
   <script src="/public/js/document-comments.js?v=20261112-inline-edit"></script>
   <script src="/public/js/artifacts.js"></script>

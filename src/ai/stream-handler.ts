@@ -197,7 +197,7 @@ const VISION_NATIVE = new Set(["anthropic", "openai", "google"]);
 // Read/inspect tools — grouped under a persistent "Gathering information…" status so the
 // user sees ONE steady indicator (not a flicker) with the SPECIFIC action beneath it.
 export const INVESTIGATION_TOOLS = new Set([
-  "queryCodebase", "compareBranches", "inspectPreview", "getFileContent", "getFileList",
+  "queryCodebase", "compareBranches", "inspectPreview", "getFileContent", "getFileList", "getDocumentComments", "getDocumentChanges",
   "getRecentActivities", "getTicketDetails", "getPendingTickets", "getProjectContext",
 ]);
 

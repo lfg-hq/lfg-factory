@@ -1032,8 +1032,8 @@ export function ProjectDetailPage({
           <script src="/public/js/markdown-config.js"></script>
   <!-- PDF libraries load on demand when exporting a document. -->
           <script src="/public/js/design-preview.js"></script>
-  <link rel="stylesheet" href="/public/css/doc-editor.css?v=20261112" />
-  <script src="/public/js/doc-editor.js?v=20261112"></script>
+  <link rel="stylesheet" href="/public/css/doc-editor.css?v=20261113-modes" />
+  <script src="/public/js/doc-editor.js?v=20261113-modes"></script>
   <script src="/public/js/artifacts-loader.js?v=20261112-inline-edit"></script>
           <script src="/public/js/document-comments.js?v=20261112-inline-edit"></script>
           <script>

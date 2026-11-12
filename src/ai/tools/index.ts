@@ -54,7 +54,7 @@ export { getRecentActivities } from "./activity-tools.ts";
 
 // ── tools_product: Full product analyst toolset ───────────────────────────────
 import { getProjectDashboard, setProjectStack, captureProjectName } from "./project-tools.ts";
-import { streamDocumentContent, getFileList, getFileContent, updateFileContent, patchFileContent, previewPage } from "./document-tools.ts";
+import { streamDocumentContent, getFileList, getFileContent, updateFileContent, patchFileContent, previewPage, getDocumentComments, getDocumentChanges } from "./document-tools.ts";
 import {
   createTickets, getPendingTickets, getTicketDetails,
   updateTicket, updateTicketDetails, updateAllTickets,
@@ -84,6 +84,8 @@ export const toolsProduct = {
   streamDocumentContent,
   getFileList,
   getFileContent,
+  getDocumentComments,
+  getDocumentChanges,
   previewPage,
   updateFileContent,
   patchFileContent,

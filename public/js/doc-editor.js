@@ -235,6 +235,78 @@
     return ctl.saving;
   }
 
+  // ── Comment / Edit mode ──────────────────────────────────────────────
+  // Comment mode (the default) is read-only: selecting text offers Comment and
+  // Add to chat. Edit mode makes the document editable with formatting. The
+  // choice is remembered per browser.
+  var MODE_KEY = "lfg-doc-mode";
+  function storedMode() {
+    try { return localStorage.getItem(MODE_KEY) === "edit" ? "edit" : "comment"; } catch (_) { return "comment"; }
+  }
+  function modeSwitchEl(ctl) {
+    var actions = document.getElementById("viewer-actions");
+    if (!actions) return null;
+    var el = document.getElementById("doc-mode-switch");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "doc-mode-switch";
+      el.className = "doc-mode-switch";
+      el.setAttribute("role", "group");
+      el.setAttribute("aria-label", "Document mode");
+      el.innerHTML =
+        '<button type="button" data-mode="comment" title="Read and comment — no edits"><i class="fas fa-comment"></i> Comment</button>' +
+        '<button type="button" data-mode="edit" title="Edit the document in place"><i class="fas fa-pen"></i> Edit</button>';
+      var status = document.getElementById("doc-save-status");
+      actions.insertBefore(el, status ? status.nextSibling : actions.firstChild);
+    }
+    el.onclick = function (e) {
+      var b = e.target.closest("button[data-mode]");
+      if (b && current) setMode(current, b.dataset.mode);
+    };
+    return el;
+  }
+  function setMode(ctl, mode) {
+    ctl.mode = mode === "edit" ? "edit" : "comment";
+    try { localStorage.setItem(MODE_KEY, ctl.mode); } catch (_) {}
+    if (ctl.editor) ctl.editor.setEditable(ctl.mode === "edit");
+    ctl.container.classList.toggle("is-comment-mode", ctl.mode === "comment");
+    if (ctl.toolbar) { ctl.toolbar.el.classList.toggle("is-comment-mode", ctl.mode === "comment"); ctl.toolbar.hide(); }
+    var sw = modeSwitchEl(ctl);
+    if (sw) sw.querySelectorAll("button").forEach(function (b) {
+      var on = b.dataset.mode === ctl.mode;
+      b.classList.toggle("is-active", on);
+      b.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+    if (ctl.mode === "comment" && ctl.dirty) save(ctl);
+  }
+
+  // The text the user has selected in this document, and where it is. In edit
+  // mode that's the editor's selection; in comment mode the editor can't take
+  // focus, so it's the page selection inside the document.
+  function domSelectionInDoc(ctl) {
+    var sel = window.getSelection && window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+    var host = ctl.container.querySelector(".doc-editor-host");
+    var range = sel.getRangeAt(0);
+    if (!host || !host.contains(range.commonAncestorContainer)) return null;
+    var text = sel.toString().trim();
+    if (!text) return null;
+    var r = range.getBoundingClientRect();
+    return { text: text, rect: { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height } };
+  }
+  function currentSelection(ctl) {
+    if (!ctl || !ctl.editor) return null;
+    if (ctl.mode === "comment") return domSelectionInDoc(ctl);
+    var sel = ctl.editor.state.selection;
+    if (sel.empty) return null;
+    var text = ctl.editor.state.doc.textBetween(sel.from, sel.to, "\n").trim();
+    if (!text) return null;
+    var a = ctl.editor.view.coordsAtPos(sel.from), b = ctl.editor.view.coordsAtPos(sel.to);
+    var rect = { left: Math.min(a.left, b.left), right: Math.max(a.right, b.right), top: Math.min(a.top, b.top), bottom: Math.max(a.bottom, b.bottom) };
+    rect.width = rect.right - rect.left; rect.height = rect.bottom - rect.top;
+    return { text: text, rect: rect };
+  }
+
   // ── Selection toolbar ────────────────────────────────────────────────
   var ICONS = {
     bold: '<i class="fas fa-bold"></i>',
@@ -387,16 +459,14 @@
     }
 
     function position() {
-      var ed = ctl.editor;
-      var sel = ed.state.selection;
-      var view = ed.view;
-      var start = view.coordsAtPos(sel.from);
-      var end = view.coordsAtPos(sel.to);
+      var info = currentSelection(ctl);
+      if (!info) return;
+      var r = info.rect;
       var w = tb.offsetWidth, h = tb.offsetHeight, margin = 8;
-      var left = (Math.min(start.left, end.left) + Math.max(start.right, end.right)) / 2 - w / 2;
+      var left = (r.left + r.right) / 2 - w / 2;
       left = Math.max(margin, Math.min(left, window.innerWidth - w - margin));
-      var top = Math.min(start.top, end.top) - h - 8;
-      if (top < margin) top = Math.max(start.bottom, end.bottom) + 8;
+      var top = r.top - h - 8;
+      if (top < margin) top = r.bottom + 8;
       tb.style.left = left + "px";
       tb.style.top = top + "px";
     }
@@ -418,18 +488,15 @@
   }
 
   function selectionText(ctl) {
-    var sel = ctl.editor.state.selection;
-    return ctl.editor.state.doc.textBetween(sel.from, sel.to, "\n").trim();
+    var info = currentSelection(ctl);
+    return info ? info.text : "";
   }
 
   function comment(ctl) {
-    var text = selectionText(ctl);
-    if (text.length < 2 || !window.openDocumentCommentInput) return;
-    var sel = ctl.editor.state.selection;
-    var a = ctl.editor.view.coordsAtPos(sel.from), b = ctl.editor.view.coordsAtPos(sel.to);
-    var rect = { left: Math.min(a.left, b.left), right: Math.max(a.right, b.right), top: Math.min(a.top, b.top), bottom: Math.max(a.bottom, b.bottom) };
-    rect.width = rect.right - rect.left; rect.height = rect.bottom - rect.top;
-    window.openDocumentCommentInput(text, { getBoundingClientRect: function () { return rect; } });
+    var info = currentSelection(ctl);
+    if (!info || info.text.length < 2 || !window.openDocumentCommentInput) return;
+    var rect = info.rect;
+    window.openDocumentCommentInput(info.text, { getBoundingClientRect: function () { return rect; } });
   }
 
   // The quoted excerpt plus a [@Title](file:<id>) reference — the same reference the
@@ -462,6 +529,7 @@
       window.removeEventListener("pagehide", ctl.onPageHide);
       document.removeEventListener("visibilitychange", ctl.onPageHide);
     }
+    if (ctl.onSelChange) document.removeEventListener("selectionchange", ctl.onSelChange);
     if (ctl.toolbar) ctl.toolbar.el.remove();
     if (ctl.editor) ctl.editor.destroy();
     ctl.editor = null;
@@ -526,12 +594,14 @@
 
       var toolbar = createToolbar(ctl);
       ctl.toolbar = toolbar;
+      setMode(ctl, storedMode());
 
       editor.on("update", function (ev) {
         // Only user edits, not decoration/meta transactions.
         if (ev.transaction && ev.transaction.docChanged) scheduleSave(ctl);
       });
       editor.on("selectionUpdate", function () {
+        if (ctl.mode === "comment") return;
         var sel = editor.state.selection;
         if (sel.empty || !editor.isFocused || !selectionText(ctl)) { if (!ctl.linkEditing) toolbar.hide(); return; }
         // Wait for the mouse to come up so the bar doesn't chase a drag.
@@ -551,10 +621,20 @@
         ctl.pointerDown = false;
         setTimeout(function () {
           if (!ctl.editor) return;
-          var sel = ctl.editor.state.selection;
-          if (!sel.empty && ctl.editor.isFocused && selectionText(ctl)) toolbar.show();
-        }, 0);
+          if (ctl.mode === "comment") { if (currentSelection(ctl)) toolbar.show(); else toolbar.hide(); return; }
+          // Not gated on isFocused: right after switching to Edit the first drag can
+          // finish before the editor reports focus.
+          if (currentSelection(ctl)) toolbar.show();
+        }, 30);
       });
+      // Comment mode: the editor never takes focus, so follow the page selection.
+      ctl.onSelChange = function () {
+        if (!ctl.editor || ctl.mode !== "comment" || ctl.pointerDown) return;
+        if (toolbar.el.contains(document.activeElement)) return;
+        if (!currentSelection(ctl)) toolbar.hide();
+      };
+      document.addEventListener("selectionchange", ctl.onSelChange);
+      host.addEventListener("keyup", function () { if (ctl.mode === "comment" && currentSelection(ctl)) toolbar.show(); });
 
       ctl.onScroll = function () { if (!toolbar.el.hidden) toolbar.position(); };
       ctl.onResize = ctl.onScroll;

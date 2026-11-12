@@ -79,6 +79,37 @@ test("viewers can't save, and files from other projects aren't reachable", async
   expect((await put("doc", { nothing: true })).status).toBe(400);
 });
 
+// ── Who changed what, and what the agent can read ────────────────────
+test("editor saves are logged as one session with a diff the agent can read", async () => {
+  const { listDocumentEdits, lineDiff } = await import("../src/services/document-edits.ts");
+  const changes = await listDocumentEdits("doc");
+  expect(changes.length).toBe(1);
+  expect(changes[0]!.by).toBe("owner");
+  expect(changes[0]!.how).toBe("Docs editor");
+  expect(changes[0]!.diff).toContain("- # Old");
+  expect(changes[0]!.diff).toContain("+ # Newer");
+
+  const d = lineDiff("a\nb\nc", "a\nB\nc\nd");
+  expect([d.added, d.removed]).toEqual([2, 1]);
+});
+
+test("getDocumentComments returns open threads with authors and replies", async () => {
+  const { documentComments } = await import("../src/db/schema/comments.ts");
+  await db.insert(documentComments).values({ id: "c1", fileId: "doc", userId: "owner", selectedText: "Newer", rangeStart: 2, rangeEnd: 7, content: "Is this final?" });
+  await db.insert(documentComments).values({ id: "c2", fileId: "doc", userId: "viewer", selectedText: "Newer", rangeStart: 2, rangeEnd: 7, content: "Yes", parentId: "c1" });
+  await db.insert(documentComments).values({ id: "c3", fileId: "doc", userId: "owner", selectedText: "x", rangeStart: 0, rangeEnd: 1, content: "old", isResolved: true });
+  const { getDocumentComments, getFileContent } = await import("../src/ai/tools/document-tools.ts");
+  const res = await (getDocumentComments as any).execute({ fileId: "doc" }, { toolCallId: "t" });
+  expect(res.count).toBe(1);
+  expect(res.comments[0]).toMatchObject({ author: "owner", quote: "Newer", comment: "Is this final?" });
+  expect(res.comments[0].replies).toEqual([expect.objectContaining({ author: "viewer", comment: "Yes" })]);
+  const withResolved = await (getDocumentComments as any).execute({ fileId: "doc", includeResolved: true }, { toolCallId: "t" });
+  expect(withResolved.count).toBe(2);
+  const file = await (getFileContent as any).execute({ fileId: "doc" }, { toolCallId: "t" });
+  expect(file.openComments).toBe(1);
+  expect(file.lastEdit.by).toBe("owner");
+});
+
 // ── Client helpers (public/js/doc-editor.js) ─────────────────────────
 (globalThis as any).window = {};
 (globalThis as any).document = { addEventListener() {} };

@@ -13,7 +13,7 @@
     --doc-tb-hover: rgba(255, 255, 255, 0.06);
     --doc-tb-shadow: 0 6px 24px rgba(0, 0, 0, 0.45), 0 1px 2px rgba(0, 0, 0, 0.4);
     --doc-caret: #d4d7de;
-    --doc-selection: rgba(139, 120, 240, 0.28);
+    --doc-selection: rgba(139, 120, 240, 0.40);
 }
 
 [data-theme="light"] {
@@ -24,7 +24,7 @@
     --doc-tb-hover: #f3f4f6;
     --doc-tb-shadow: 0 6px 24px rgba(15, 23, 42, 0.10), 0 1px 2px rgba(15, 23, 42, 0.08);
     --doc-caret: #1f2937;
-    --doc-selection: rgba(107, 79, 214, 0.18);
+    --doc-selection: rgba(107, 79, 214, 0.30);
 }
 
 /* ── The editable document ─────────────────────────────────────────── */
@@ -37,8 +37,10 @@
     word-wrap: break-word;
 }
 
-.doc-editor-host .doc-editor ::selection {
+.doc-editor-host .doc-editor ::selection,
+.doc-editor-host .doc-editor::selection {
     background: var(--doc-selection);
+    color: currentColor; /* the text keeps its own colour ("inherit" picks up the global white) */
 }
 
 /* ProseMirror wraps list item text in <p>; keep lists as tight as the read view. */
@@ -341,3 +343,24 @@
 .doc-raw-textarea:focus {
     border-color: var(--primary-color);
 }
+
+/* ── Comment / Edit mode switch ───────────────────────────────────── */
+.doc-mode-switch {
+    display: inline-flex; align-items: center; gap: 2px; padding: 2px; margin-right: 6px;
+    border: 1px solid var(--doc-tb-border); border-radius: 8px; background: transparent;
+}
+.doc-mode-switch button {
+    display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px;
+    border: 0; border-radius: 6px; background: transparent; cursor: pointer;
+    font-size: 12.5px; font-weight: 500; color: var(--text-secondary, #94a3b8);
+}
+.doc-mode-switch button i { font-size: 11px; }
+.doc-mode-switch button:hover { color: var(--text-primary, #e2e8f0); }
+.doc-mode-switch button.is-active {
+    background: var(--tint-bg, rgba(139, 120, 240, .12)); color: var(--tint-text, #cbc1fd);
+}
+/* In comment mode the toolbar only offers Comment and Add to chat. */
+.doc-sel-toolbar.is-comment-mode .doc-tb-style,
+.doc-sel-toolbar.is-comment-mode .doc-tb-sep,
+.doc-sel-toolbar.is-comment-mode .doc-tb-btn:not(.doc-tb-text) { display: none; }
+.doc-editable.is-comment-mode .doc-editor { cursor: text; caret-color: transparent; }

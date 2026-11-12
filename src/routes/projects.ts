@@ -13,7 +13,8 @@ import {
   projectInvitations,
 } from "../db/schema/projects.ts";
 import { llmApiKeys, profiles, users } from "../db/schema/users.ts";
-import { projectFiles, projectFileVersions } from "../db/schema/documents.ts";
+import { projectFiles, projectFileVersions, documentEdits } from "../db/schema/documents.ts";
+import { recordDocumentEdit } from "../services/document-edits.ts";
 import { conversations, chatFiles } from "../db/schema/chat.ts";
 import { ticketStages, projectTickets, projectTicketAttachments } from "../db/schema/tickets.ts";
 import { cleanupTicketWorktree } from "../workers/ticket-executor.ts";
@@ -1101,7 +1102,7 @@ projectsRouter.put("/projects/:projectId/api/files/:fileId/content", async (c) =
   try { requirePermission(access, "canEditFiles"); } catch { return c.json({ error: "Forbidden" }, 403); }
   const project = access.project;
 
-  const body = await c.req.json().catch(() => ({})) as { content?: unknown; baseUpdatedAt?: unknown };
+  const body = await c.req.json().catch(() => ({})) as { content?: unknown; baseUpdatedAt?: unknown; source?: unknown };
   if (typeof body.content !== "string") return c.json({ error: "content is required" }, 400);
 
   const [file] = await db.select().from(projectFiles)
@@ -1117,18 +1118,22 @@ projectsRouter.put("/projects/:projectId/api/files/:fileId/content", async (c) =
     return c.json({ success: true, id: file.id, updatedAt: file.updatedAt });
   }
 
-  const [latest] = await db.select({ createdAt: projectFileVersions.createdAt, createdById: projectFileVersions.createdById })
-    .from(projectFileVersions).where(eq(projectFileVersions.fileId, file.id))
-    .orderBy(desc(projectFileVersions.versionNumber)).limit(1);
-  const sameSession = latest && latest.createdById === user.id
-    && Date.now() - new Date(latest.createdAt).getTime() < INLINE_EDIT_VERSION_GAP_MS;
-  if (!sameSession) await saveVersion(file.id, currentContent, user.id);
+  // One editing session = this person in the Docs editor with no other edit (the
+  // agent's included) in between. A new session snapshots the text it starts from.
+  const source = body.source === "raw" ? "raw" : "editor";
+  const [latest] = await db.select({ userId: documentEdits.userId, source: documentEdits.source, updatedAt: documentEdits.updatedAt })
+    .from(documentEdits).where(eq(documentEdits.fileId, file.id))
+    .orderBy(desc(documentEdits.updatedAt)).limit(1);
+  const sameSession = latest && latest.userId === user.id && latest.source === source
+    && Date.now() - new Date(latest.updatedAt).getTime() < INLINE_EDIT_VERSION_GAP_MS;
+  const baseVersion = sameSession ? null : await saveVersion(file.id, currentContent, user.id);
 
   const { s3Key, dbContent } = await saveContent(project.id, file.fileType, file.name, body.content);
   const [updated] = await db.update(projectFiles)
     .set({ content: dbContent, s3Key, updatedAt: new Date() })
     .where(eq(projectFiles.id, file.id))
     .returning();
+  await recordDocumentEdit({ fileId: file.id, userId: user.id, source, baseVersion, before: currentContent, after: body.content });
 
   return c.json({ success: true, id: updated!.id, updatedAt: updated!.updatedAt });
 });
@@ -1161,6 +1166,7 @@ async function saveVersion(fileId: string, content: string, userId: string) {
     createdById: userId,
     changeDescription: "Manual save",
   });
+  return nextVersion;
 }
 
 // ── POST /projects/:projectId/api/files — update file content ─────────
