@@ -351,24 +351,51 @@ export async function setNoSleep(nameOrId: string, noSleep: boolean): Promise<vo
 
 /**
  * Start an ephemeral Chromium browser session and return its CDP WebSocket endpoint.
+ *
+ * The session is addressed on the app domain (app.lfg.run), the same one previews use,
+ * rather than the SDK's default apps.mags.run address: that is the domain whose
+ * certificate this deployment keeps current.
  */
 export async function startBrowserSession(opts?: {
   name?: string;
   timeout?: number;
 }): Promise<{ requestId: string; wsEndpoint: string; cdpHttpUrl: string }> {
   const client = getClient();
-  const r = await client.browser(opts ?? {});
-  let wsEndpoint: string | undefined = r.wsEndpoint;
-  if (!wsEndpoint && r.cdpHttpUrl && r.cdpUrl) {
-    const ver = (await fetch(`${r.cdpHttpUrl.replace(/\/+$/, "")}/json/version`).then((x) => x.json())) as {
-      webSocketDebuggerUrl?: string;
-    };
-    if (ver.webSocketDebuggerUrl) {
-      wsEndpoint = r.cdpUrl.replace(/\/+$/, "") + new URL(ver.webSocketDebuggerUrl).pathname;
+  const appDomain = process.env.MAGS_APP_DOMAIN || "app.lfg.run";
+  const deadline = Date.now() + (opts?.timeout ?? 90_000);
+  const started = await client.run('echo "browser session ready"', { browserMode: true, persistent: true, noSync: true, name: opts?.name });
+  const requestId: string = started.request_id;
+  try {
+    let subdomain = "";
+    while (!subdomain) {
+      const st = await client.status(requestId);
+      if (st.status === "error") throw new Error(`Browser session failed: ${st.error_message || "unknown error"}`);
+      if (st.status === "running" && st.subdomain) { subdomain = st.subdomain; break; }
+      if (Date.now() > deadline) throw new Error("Mags browser session did not start in time");
+      await new Promise((resolve) => setTimeout(resolve, 1000));
     }
+    const cdpHttpUrl = `https://${subdomain}.${appDomain}`;
+    // Chromium reports its socket as ws://localhost/devtools/browser/<id>; only the path is
+    // usable from here. Retried because the relay takes a moment to start serving.
+    let lastError = "";
+    while (Date.now() < deadline) {
+      try {
+        const response = await fetch(`${cdpHttpUrl}/json/version`, { signal: AbortSignal.timeout(10_000) });
+        const version = (await response.json()) as { webSocketDebuggerUrl?: string };
+        if (version.webSocketDebuggerUrl) {
+          return { requestId, wsEndpoint: `wss://${subdomain}.${appDomain}${new URL(version.webSocketDebuggerUrl).pathname}`, cdpHttpUrl };
+        }
+        lastError = `no debugger address (HTTP ${response.status})`;
+      } catch (error) {
+        lastError = (error as Error).message;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    throw new Error(`Mags browser session was not reachable at ${cdpHttpUrl}: ${lastError}`);
+  } catch (error) {
+    await client.stop(requestId).catch(() => {}); // don't leave a browser VM running that nobody can use
+    throw error;
   }
-  if (!wsEndpoint) throw new Error("Mags browser session did not return a usable wsEndpoint");
-  return { requestId: r.requestId, wsEndpoint, cdpHttpUrl: r.cdpHttpUrl };
 }
 
 /**

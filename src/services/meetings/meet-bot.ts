@@ -29,9 +29,7 @@ export async function startBot(opts: { meetingUrl: string; botName: string; gree
   const session = await startBrowserSession({ timeout: 120_000 });
   let child: ChildProcessWithoutNullStreams;
   try {
-    // NODE_TLS_REJECT_UNAUTHORIZED=0: the browser's wss:// endpoint presents a certificate
-    // Node's trust store doesn't know (same as the other browser workers).
-    child = spawn("node", [`${process.cwd()}/scripts/meeting-bot-worker.mjs`], { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, NODE_TLS_REJECT_UNAUTHORIZED: "0" } });
+    child = spawn("node", [`${process.cwd()}/scripts/meeting-bot-worker.mjs`], { stdio: ["pipe", "pipe", "pipe"] });
   } catch (error) {
     await stopWorkspace(session.requestId).catch(() => {});
     throw error;
