@@ -10,6 +10,8 @@ export function chatDiagnostic(event: string, metadata: Metadata = {}) {
   const trace = traces.getStore();
   if (!trace) return;
   if (event === 'stream_error') trace.failed = true;
+  // An overflow that is condensed and retried is a recovered step, not a failed turn.
+  if (event === 'context_overflow_retry') trace.failed = false;
   const { model, tool, status, outcome, durationMs, inputTokens, outputTokens, estimatedTokens, budgetTokens, compacted, reason, rawEstimate, scale, windowTokens, route, stages, cachedInputTokens } = metadata;
   console.info(JSON.stringify({ component: 'chat', event, requestId: trace.id,
     conversationId: trace.conversationId, projectId: trace.projectId,

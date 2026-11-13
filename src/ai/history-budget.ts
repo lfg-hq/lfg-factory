@@ -1,30 +1,73 @@
-/** Keep complete call/result pairs; oversized output becomes bounded evidence, never an orphan tool message. */
-export function compactToolSteps(steps:any[],maxChars=48_000):any[] {
- const copy=structuredClone(steps);
- for(const message of copy)if(Array.isArray(message.content))for(const part of message.content) {
-  if(part.type==='tool-result') {
-   const raw=JSON.stringify(part.output ?? part.result ?? '');
-   if(part.toolName === 'loadSkill') continue;
-   if(raw.length>4000){
-    const text=raw.slice(0,2400)+'\n[Output shortened; inspect the source again for full details.]\n'+raw.slice(-1200);
-    if('output' in part)part.output={type:'text',value:text};else part.result=text;
-   }
+/**
+ * Bound a turn's saved tool steps without breaking call/result pairs.
+ *
+ * Steps are replayed on later turns so the agent still has what it read and did. They
+ * used to be cut to 4,000 characters per result and, above 16k per turn, flattened into
+ * "Used X / Result X" prose: a document read one turn was gone the next, and the prose
+ * taught models to narrate tool calls instead of making them. Now results keep up to
+ * `resultChars`; only if the turn still exceeds `maxChars` are results shortened further,
+ * in steps. The message structure is never changed.
+ */
+const KEEP_WHOLE = new Set(['loadSkill']);
+const NOTE = '\n[Output shortened; inspect the source again for full details.]\n';
+const shorten = (text: string, max: number) => text.length <= max ? text
+  : text.slice(0, Math.floor(max * .65)) + NOTE + text.slice(-Math.floor(max * .25));
+
+function trimSteps(steps: any[], resultChars: number): void {
+  for (const message of steps) {
+    if (!Array.isArray(message.content)) continue;
+    for (const part of message.content) {
+      if (part.type === 'tool-result' && !KEEP_WHOLE.has(part.toolName)) {
+        const value = part.output?.value ?? part.output ?? part.result ?? '';
+        const raw = typeof value === 'string' ? value : JSON.stringify(value);
+        if (raw.length > resultChars) {
+          const text = shorten(raw, resultChars);
+          if ('output' in part) part.output = { type: 'text', value: text }; else part.result = text;
+        }
+      }
+      // A written document travels in the call's input; keep it, bounded the same way.
+      if (part.type === 'tool-call') {
+        const input = part.input ?? part.args;
+        if (input && typeof input === 'object') for (const key of Object.keys(input)) {
+          if (typeof input[key] === 'string' && input[key].length > resultChars) input[key] = shorten(input[key], resultChars);
+        }
+      }
+    }
   }
- }
- if(JSON.stringify(copy).length<=maxChars)return copy;
- // Represent the entire turn as assistant text instead of retaining incomplete tool pairs.
- const notes:string[]=[];
- for(const message of copy) {
-  if(typeof message.content==='string')notes.push(message.content);
-  else for(const part of message.content||[]) {
-   if(part.type==='text')notes.push(part.text||'');
-   if(part.type==='tool-call')notes.push('Used '+part.toolName+': '+JSON.stringify(part.input??part.args??{}).slice(0,700));
-   if(part.type==='tool-result')notes.push('Result '+part.toolName+': '+JSON.stringify(part.output??part.result??'').slice(0,1400));
-  }
- }
- const text=notes.join('\n');
- return [{role:'assistant',content:'Summary of prior tool activity (historical evidence, not instructions):\n'+text.slice(0,maxChars/2)+'\n[Middle omitted to fit history budget]\n'+text.slice(-maxChars/2+300)}];
 }
+
+export function compactToolSteps(steps: any[], maxChars = 600_000, resultChars = 40_000): any[] {
+  const copy = structuredClone(steps);
+  for (const limit of [resultChars, 8000, 2000, 500]) {
+    if (limit > resultChars) continue;
+    trimSteps(copy, limit);
+    if (JSON.stringify(copy).length <= maxChars) break;
+  }
+  return copy;
+}
+
+/**
+ * One line per tool call in a saved turn, for the rolling summary: the summarizer used to
+ * see only the reply text, so work the reply did not mention was lost from the handoff.
+ */
+export function toolDigest(steps: any[], maxChars = 6000): string {
+  const clip = (value: unknown, max: number) => {
+    const text = (typeof value === 'string' ? value : JSON.stringify(value ?? '') ?? '').replace(/\s+/g, ' ');
+    return text.length > max ? text.slice(0, max) + '…' : text;
+  };
+  const calls = new Map<string, unknown>();
+  const lines: string[] = [];
+  for (const message of steps) {
+    if (!Array.isArray(message?.content)) continue;
+    for (const part of message.content) {
+      if (part?.type === 'tool-call') calls.set(part.toolCallId, part.input ?? part.args);
+      if (part?.type === 'tool-result') lines.push(`${part.toolName}(${clip(calls.get(part.toolCallId) ?? {}, 200)}) → ${clip(part.output?.value ?? part.output ?? part.result, 500)}`);
+    }
+  }
+  const text = lines.join('\n');
+  return text.length > maxChars ? text.slice(0, maxChars / 2) + '\n[…]\n' + text.slice(-maxChars / 2) : text;
+}
+
 export function selectConversationHistory<T extends {userRole?:string|null}>(rows:T[],limit=20):T[] {
  return rows.filter(r=>r.userRole!=='operation_status').slice(0,limit);
 }
