@@ -27,6 +27,7 @@
         return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
     }
     function safeUrl(value) {
+        if (typeof value !== 'string' || !value.trim()) return null;
         try { const url = new URL(value, location.origin); return ['https:', 'http:'].includes(url.protocol) ? url.href : null; } catch (_) { return null; }
     }
     function ticketState(t) {
@@ -282,9 +283,42 @@
     }
 
     function startChat(text) {
-        try { sessionStorage.setItem('home-chat-draft:' + host().dataset.project, text); } catch (_) {}
+        const key = 'home-chat-draft:' + host().dataset.project;
+        try { if (text) sessionStorage.setItem(key, text); else sessionStorage.removeItem(key); } catch (_) {}
         location.href = '/chat/project/' + pid() + '?new=1';
     }
+
+    // ── Attachments ──────────────────────────────────────────────────────
+    // Files picked here travel to the new chat through IndexedDB (it stores File
+    // objects as they are); the chat page attaches and uploads them on arrival.
+    const MAX_ATTACHMENTS = 4;
+    let picked = [];
+    function handoffFiles(files) {
+        return new Promise((resolve) => {
+            let open;
+            try { open = indexedDB.open('lfg-home-handoff', 1); } catch (_) { return resolve(false); }
+            open.onupgradeneeded = () => open.result.createObjectStore('files');
+            open.onerror = () => resolve(false);
+            open.onsuccess = () => {
+                const tx = open.result.transaction('files', 'readwrite');
+                tx.objectStore('files').put(files, host().dataset.project);
+                tx.oncomplete = () => { open.result.close(); resolve(true); };
+                tx.onerror = tx.onabort = () => resolve(false);
+            };
+        });
+    }
+    function renderFiles(note) {
+        $('dash-files').innerHTML = picked.map((f, i) => '<span class="dash-file-chip"><i class="far fa-file" aria-hidden="true"></i><span>' + esc(f.name) + '</span><button type="button" data-unattach="' + i + '" aria-label="Remove ' + esc(f.name) + '"><i class="fas fa-xmark" aria-hidden="true"></i></button></span>').join('') +
+            (note ? '<span class="dash-files-note" role="alert">' + esc(note) + '</span>' : '');
+    }
+    document.addEventListener('change', (event) => {
+        if (event.target.id !== 'dash-file-input') return;
+        const chosen = Array.from(event.target.files || []), room = MAX_ATTACHMENTS - picked.length;
+        picked = picked.concat(chosen.slice(0, room));
+        event.target.value = '';
+        renderFiles(chosen.length > room ? 'You can attach up to ' + MAX_ATTACHMENTS + ' files.' : '');
+        $('dash-compose-input').focus();
+    });
 
     async function act(name, button) {
         const state = openItem, project = '/api/projects/' + pid();
@@ -325,7 +359,7 @@
 
     document.addEventListener('click', (event) => {
         if (!host()) return;
-        const target = event.target.closest('[data-filter],[data-open],[data-epic],[data-close],[data-act],[data-option],[data-fill]');
+        const target = event.target.closest('[data-filter],[data-open],[data-epic],[data-close],[data-act],[data-option],[data-fill],[data-attach],[data-unattach]');
         if (!target) return;
         if (target.dataset.filter) { filter = target.dataset.filter; renderQueue(); }
         else if (target.dataset.open) open(target.dataset.open);
@@ -333,6 +367,8 @@
         else if ('close' in target.dataset) closePanel();
         else if (target.dataset.act) act(target.dataset.act, target);
         else if ('option' in target.dataset) { target.parentNode.querySelectorAll('.dash-option').forEach((o) => o.classList.toggle('on', o === target)); $('dash-answer').value = target.textContent; }
+        else if ('attach' in target.dataset) $('dash-file-input').click();
+        else if (target.dataset.unattach) { picked.splice(Number(target.dataset.unattach), 1); renderFiles(''); }
         else if (target.dataset.fill) { const input = $('dash-compose-input'); input.value = target.dataset.fill; input.focus(); }
     });
     document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && $('dash-panel-root') && $('dash-panel-root').firstChild) closePanel(); });
@@ -340,7 +376,8 @@
         if (event.target.id !== 'dash-compose') return;
         event.preventDefault();
         const text = $('dash-compose-input').value.trim();
-        if (!text) return $('dash-compose-input').focus();
-        startChat(text);
+        if (!text && !picked.length) return $('dash-compose-input').focus();
+        if (!picked.length) return startChat(text);
+        handoffFiles(picked).then((stored) => { if (stored) startChat(text); else renderFiles('These files could not be carried over. Attach them in the chat instead.'); });
     });
 })();

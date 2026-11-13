@@ -126,7 +126,7 @@ export function ProjectDetailPage({
   <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
   <link rel="stylesheet" href="/public/css/projects.css" />
   <link rel="stylesheet" href="/public/css/project_detail.css" />
-  <link rel="stylesheet" href="/public/css/project-home.css?v=20261113-decision-queue" />
+  <link rel="stylesheet" href="/public/css/project-home.css?v=20261113-attach" />
   <link rel="stylesheet" href="/public/css/artifacts.css?v=20261004-dark-folders" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
@@ -471,16 +471,19 @@ export function ProjectDetailPage({
         ${(activeTab === "home" || activeTab === "inbox") ? html`
 
           ${activeTab === "home" ? html`
-          <script src="/public/js/project-home.js?v=20261113-decision-queue"></script>
+          <script src="/public/js/project-home.js?v=20261113-attach"></script>
           <div class="home-dashboard" data-project="${project.projectId}" data-chats="${conversations.length ? "1" : "0"}">
             ${role !== "viewer" && role !== "guest" ? html`
             <section class="dash-start" aria-labelledby="dash-start-title">
               <div class="dash-start-copy"><h2 id="dash-start-title">Start ${project.name}</h2><p>Tell the agent what you want to build. Status, builds and previews will appear on this page.</p></div>
               <form id="dash-compose" class="dash-compose" autocomplete="off">
+                <button type="button" class="dash-attach" data-attach aria-label="Attach files" title="Attach files"><i class="fas fa-paperclip" aria-hidden="true"></i></button>
+                <input id="dash-file-input" type="file" hidden multiple accept="image/*,.pdf,.csv,.txt,.md,.docx,.xlsx,.mp3,.mp4,.m4a,.wav,.webm,.json,.js,.ts,.py,.html,.css" />
                 <label class="dash-sr" for="dash-compose-input">Message the agent</label>
                 <input id="dash-compose-input" type="text" placeholder="Ask a question or describe what to build next…" maxlength="4000" />
                 <button type="submit" class="dash-send" aria-label="Start chat"><i class="fas fa-arrow-up" aria-hidden="true"></i></button>
               </form>
+              <div id="dash-files" class="dash-files" aria-live="polite"></div>
               <div class="dash-chips">
                 <button type="button" class="dash-chip" data-fill="I want to plan a new feature: "><i class="far fa-lightbulb" aria-hidden="true"></i> Plan a feature</button>
                 <button type="button" class="dash-chip" data-fill="Where are things? Summarise what is done, what is building and what is blocked."><i class="far fa-compass" aria-hidden="true"></i> Where are things?</button>

@@ -132,6 +132,15 @@
 .dash-compose:focus-within { border-color:var(--primary-color); }
 .home-dashboard .dash-compose input, .home-dashboard .dash-compose input:focus { flex:1; min-width:0; height:36px; padding:0; border:0 !important; outline:0 !important; box-shadow:none !important; background:transparent !important; color:var(--text-color); font:inherit; font-size:14px; }
 .home-dashboard.is-new .dash-compose { padding:14px 12px 14px 18px; }
+.dash-attach { width:32px; height:32px; flex:none; margin-left:-8px; border:0; border-radius:9px; background:transparent; color:var(--calm-icon,var(--text-secondary)); font-size:14px; cursor:pointer; }
+.dash-attach:hover { background:color-mix(in srgb,var(--text-color) 6%,transparent); color:var(--text-color); }
+.dash-attach:focus-visible, .dash-file-chip button:focus-visible { outline:2px solid var(--primary-color); outline-offset:1px; }
+.dash-files { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+.dash-files:empty { display:none; }
+.dash-file-chip { display:inline-flex; align-items:center; gap:7px; max-width:260px; padding:4px 6px 4px 10px; border:1px solid var(--tint-border); border-radius:8px; background:var(--tint-bg); color:var(--tint-text); font-size:12px; }
+.dash-file-chip span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dash-file-chip button { width:20px; height:20px; flex:none; border:0; border-radius:5px; background:transparent; color:inherit; font-size:11px; cursor:pointer; }
+.dash-files-note { font-size:12px; color:#b4534a; }
 .dash-send { width:32px; height:32px; flex:none; display:grid; place-items:center; border:0; border-radius:9px; background:var(--btn-primary-bg,var(--primary-color)); color:#fff; font-size:12px; cursor:pointer; }
 .dash-send:hover { background:var(--btn-primary-hover,var(--primary-color)); }
 .dash-chips { display:flex; flex-wrap:wrap; gap:8px; }
@@ -271,6 +280,7 @@ html.dash-panel-open { overflow:hidden; }
 @media (max-width:640px) {
   .dash-onboard, .home-dashboard.is-new .dash-grid { grid-template-columns:minmax(0,1fr); }
   .dash-row { flex-wrap:wrap; }
+  .dash-row-body { flex:1 1 60%; }
   .dash-row-time, .dash-bar { display:none; }
   .dash-epic-state { width:auto; }
   .dash-status-time { margin-left:0; }

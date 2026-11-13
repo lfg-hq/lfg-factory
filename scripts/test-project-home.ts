@@ -143,10 +143,36 @@ try {
  await page.setViewportSize({ width:390, height:844 });
  await page.screenshot({ path:SHOTS+'/home-mobile.png', fullPage:true });
  assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'No mobile horizontal overflow');
+ // An epic without a preview offers no preview button (a null URL must not become a link).
+ await page.locator('[data-epic="e2"]').click();
+ await page.waitForSelector('.dash-panel .dash-box');
+ assert.equal(await page.getByRole('link', { name:/Open live preview/ }).count(), 1);
+ await page.keyboard.press('Escape');
+ epicDetail.epic.previewUrl = null as any;
+ await page.locator('[data-epic="e2"]').click();
+ await page.waitForSelector('.dash-panel .dash-box');
+ assert.equal(await page.getByRole('link', { name:/Open live preview/ }).count(), 0);
+ await page.keyboard.press('Escape');
+
+ // Attach files, remove one, then the text and the files travel to the new chat.
+ await page.locator('#dash-file-input').setInputFiles([{ name:'brief.pdf', mimeType:'application/pdf', buffer:Buffer.from('pdf') }, { name:'notes.txt', mimeType:'text/plain', buffer:Buffer.from('hello') }]);
+ assert.equal(await page.locator('.dash-file-chip').count(), 2);
+ await page.getByRole('button', { name:'Remove brief.pdf' }).click();
+ assert.equal(await page.locator('.dash-file-chip').count(), 1);
+ await page.screenshot({ path:SHOTS+'/home-attach-mobile.png' });
  await page.locator('#dash-compose-input').fill('Add scheduled posting');
  await page.locator('#dash-compose-input').press('Enter');
  await page.waitForURL('**/chat/project/demo?new=1');
  assert.equal(await page.evaluate(() => sessionStorage.getItem('home-chat-draft:demo')), 'Add scheduled posting');
+ // The chat page's own pickup code takes the files exactly once.
+ const takeHomeFiles = /function takeHomeFiles\(\) \{[\s\S]*?\n    \}\n/.exec(await readFile('public/js/chat.js', 'utf8'))![0];
+ const taken = await page.evaluate(async (source) => {
+  const got: string[] = []; (window as any).attachFileToComposer = (f: File) => got.push(f.name + ':' + f.size);
+  const run = new Function('currentProjectId', source + '; takeHomeFiles();');
+  run('demo'); await new Promise(r => setTimeout(r, 300)); run('demo'); await new Promise(r => setTimeout(r, 300));
+  return got;
+ }, takeHomeFiles);
+ assert.deepEqual(taken, ['notes.txt:5']);
 
  // A brand-new project: no empty panels, just how to start.
  const fresh = await browser.newPage({ viewport: { width: 1440, height: 1080 } });
@@ -167,5 +193,5 @@ try {
  await fresh.screenshot({ path:SHOTS+'/home-new-project.png', fullPage:true });
 
  assert.deepEqual(errors, []);
- console.log('PASS: dashboard queue, filters, epic review and approve, retry with note, agent answer, code review diff, caught-up state, mobile layout, chat handoff, new-project state');
+ console.log('PASS: dashboard queue, filters, epic review and approve, retry with note, agent answer, code review diff, caught-up state, mobile layout, missing preview, chat handoff with attached files, new-project state');
 } finally { await browser.close(); }

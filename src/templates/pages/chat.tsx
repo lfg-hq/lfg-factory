@@ -560,7 +560,7 @@ export function ChatPage({
   <script src="/public/js/dictation.js?v=20261021-inline-strip"></script>
   <script src="/public/js/chat-artifacts.js?v=20261022-build-rows"></script>
   <script src="/public/js/chatgpt-connection.js?v=20261018"></script>
-  <script src="/public/js/chat.js?v=20261022-attachments"></script>
+  <script src="/public/js/chat.js?v=20261113-home-files"></script>
   <script src="/public/js/voice-mode.js?v=20261016-voice-hidden" data-disabled="true"></script>
   <script src="/public/js/mobile-menu.js"></script>
 
