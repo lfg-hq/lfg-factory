@@ -96,7 +96,7 @@ export async function onMessage(ws: ServerWebSocket<WsData>, rawData: string | B
       // Newest page only, without build events, matching the REST history; older pages
       // load on scroll-up.
       const resumePage = async () => (await db.select().from(messages)
-        .where(and(eq(messages.conversationId, conn.conversationId!), sql`coalesce(${messages.userRole}, '') <> 'build_event'`))
+        .where(and(eq(messages.conversationId, conn.conversationId!), sql`coalesce(${messages.userRole}, '') not in ('build_event', 'meeting_context')`))
         .orderBy(desc(messages.createdAt), desc(messages.id)).limit(RESUME_PAGE + 1)).reverse();
       let rows = await resumePage();
       const active = findBackgroundTurn(conn.userId, conn.conversationId);
@@ -266,7 +266,7 @@ async function sendHistory(ws: ServerWebSocket<WsData>, conversationId: string):
   const rows = (await db
     .select()
     .from(messages)
-    .where(and(eq(messages.conversationId, conversationId), sql`coalesce(${messages.userRole}, '') <> 'build_event'`))
+    .where(and(eq(messages.conversationId, conversationId), sql`coalesce(${messages.userRole}, '') not in ('build_event', 'meeting_context')`))
     .orderBy(desc(messages.createdAt), desc(messages.id))
     .limit(40)).reverse();
 

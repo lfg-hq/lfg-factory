@@ -21,6 +21,11 @@ export const requireAuth = createMiddleware<{
     return await next();
   }
 
+  // The meeting bot service delivers the live transcript here; the per-meeting token in the URL is its credential.
+  if (c.req.path.startsWith("/api/meetings/webhook/")) {
+    return await next();
+  }
+
   // Public landing page APIs — no auth required
   if (c.req.path.startsWith("/api/free-prd/") ||
       c.req.path.startsWith("/api/blog/") ||

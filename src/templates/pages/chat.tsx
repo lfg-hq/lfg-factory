@@ -180,6 +180,9 @@ export function ChatPage({
             <a href="/projects/${projectId}/epics" class="nav-link">
               <i class="fas fa-layer-group"></i><span class="nav-text">Epics</span>
             </a>
+            <a href="/projects/${projectId}/meetings" class="nav-link">
+              <i class="fas fa-video"></i><span class="nav-text">Meetings</span>
+            </a>
             <a href="/projects/${projectId}?tab=documents" class="nav-link">
               <i class="fas fa-file-lines"></i><span class="nav-text">Docs</span>
             </a>

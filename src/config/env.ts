@@ -123,6 +123,15 @@ const envSchema = z.object({
   // Composio (integration platform — composio.dev)
   COMPOSIO_API_KEY: z.string().optional().default(""),
 
+  // Meeting agent (the LFG bot that joins Google Meet / Zoom / Teams calls) via Recall.ai.
+  // RECALL_API_KEY enables the feature. APP_URL must be a public https address, because
+  // Recall delivers the live transcript and screen-share frames to it.
+  RECALL_API_KEY: z.string().optional().default(""),
+  RECALL_REGION: z.string().optional().default("us-west-2"),
+  // Workspace verification secret (whsec_...). When set, deliveries from Recall must be signed.
+  RECALL_WEBHOOK_SECRET: z.string().optional().default(""),
+  MEETING_BOT_NAME: z.string().optional().default("LFG"),
+
   // Cloudflare Turnstile
   TURNSTILE_SITE_KEY: z.string().optional().default(""),
   TURNSTILE_SECRET_KEY: z.string().optional().default(""),

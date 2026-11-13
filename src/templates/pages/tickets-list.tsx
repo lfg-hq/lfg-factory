@@ -526,6 +526,9 @@ export function TicketsListPage({ user, project, stages, tickets, epics = [], ex
           <a href="/projects/${project.projectId}/epics" class="nav-link">
             <i class="fas fa-layer-group"></i><span class="nav-text">Epics</span>
           </a>
+          <a href="/projects/${project.projectId}/meetings" class="nav-link">
+            <i class="fas fa-video"></i><span class="nav-text">Meetings</span>
+          </a>
           <a href="/projects/${project.projectId}?tab=documents" class="nav-link">
             <i class="fas fa-file-lines"></i><span class="nav-text">Docs</span>
           </a>

@@ -48,3 +48,5 @@ export * from "./git-reviews.ts";
 
 export * from "./git-mutations.ts";
 export * from "../../../venture/db/sqlite.ts";
+
+export * from "./meetings.ts";

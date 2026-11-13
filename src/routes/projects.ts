@@ -658,6 +658,20 @@ projectsRouter.get("/projects/:projectId/epics", async (c) => {
   }));
 });
 
+// ── GET /projects/:projectId/meetings — add the agent to a call, see past calls ──
+projectsRouter.get("/projects/:projectId/meetings", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId"), user.id);
+  if (!access) return c.text("Project not found", 404);
+  const { MeetingsPage } = await import("../templates/pages/meetings.tsx");
+  const { meetingSetupProblem } = await import("../services/meetings/meeting-agent.ts");
+  return c.html(MeetingsPage({
+    project: { id: access.project.id, projectId: access.project.projectId, name: access.project.name, icon: access.project.icon },
+    user: { name: user.name, email: user.email },
+    setupProblem: meetingSetupProblem(), botName: env.MEETING_BOT_NAME || "LFG",
+  }));
+});
+
 projectsRouter.get("/projects/:projectId/tickets/:ticketId/diff", async (c) => {
   const access = await getProjectAccess(c.req.param("projectId"), c.get("user").id);
   if (!access) return c.text("Project not found", 404);

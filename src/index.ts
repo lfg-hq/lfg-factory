@@ -1,4 +1,6 @@
 import voiceApi from './routes/api/voice.ts';
+import meetingsApi, { meetingVideoFrame } from './routes/api/meetings.ts';
+import { startMeetingStatusPoller } from './services/meetings/meeting-agent.ts';
 import documentGraphApi from "./routes/api/document-graph.ts";
 import { documentSyncSettingsApi, documentSyncProjectApi } from "./routes/api/document-sync.ts";
 import { registerDocumentSyncWorker } from "./services/document-sync.ts";
@@ -232,6 +234,7 @@ app.route("/", invitationRoutes);
 app.route("/", shareRoutes);
 app.route("/api/files", filesApi);
 app.route("/api/voice", voiceApi);
+app.route("/api/meetings", meetingsApi);
 app.route("/api/token-usage", tokenUsageApi);
 app.route("/api/settings", settingsApi);
 app.route("/api/projects", ticketCodeApi);
@@ -347,6 +350,17 @@ async function handleFetch(req: Request, server: import("bun").Server<WsData>): 
     return new Response("WebSocket upgrade failed", { status: 500 });
   }
 
+  // The meeting bot service streams screen-share frames here; the unguessable per-meeting token is the credential.
+  if (url.pathname === "/ws/meeting-video") {
+    const { meetingByToken } = await import("./services/meetings/meeting-agent.ts");
+    const { verifySignature } = await import("./services/meetings/recall.ts");
+    const meeting = await meetingByToken(url.searchParams.get("token") ?? "");
+    if (!meeting || !verifySignature(req.headers, "")) return new Response("Unauthorized", { status: 401 });
+    const upgraded = server.upgrade(req, { data: { sessionId: `meeting:${meeting.id}`, userId: meeting.userId, meetingVideo: { meetingId: meeting.id } } });
+    if (upgraded) return undefined as unknown as Response;
+    return new Response("WebSocket upgrade failed", { status: 500 });
+  }
+
   if (url.pathname === "/ws/chat" || url.pathname === "/ws/chat/") {
     const session = await auth.api.getSession({ headers: req.headers });
     if (!session?.user) {
@@ -415,6 +429,7 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) process.once(signal, () => 
   void stopGitReviewRunner().finally(() => process.exit(0));
 });
 startAgentTimeoutSweeper();
+startMeetingStatusPoller();
 
 // ── Public Telegram bot (instant app builder) ────────────────────────
 import("./services/public-instant/transports/telegram.ts")
@@ -441,9 +456,9 @@ export default {
   fetch: handleFetch,
 
   websocket: {
-    open: (ws: import("bun").ServerWebSocket<WsData>) => ws.data.runner ? void runnerOpened(runnerConn(ws)).catch(console.error) : onOpen(ws),
-    close: (ws: import("bun").ServerWebSocket<WsData>) => ws.data.runner ? runnerClosed(runnerConn(ws)) : onClose(ws),
+    open: (ws: import("bun").ServerWebSocket<WsData>) => ws.data.meetingVideo ? undefined : ws.data.runner ? void runnerOpened(runnerConn(ws)).catch(console.error) : onOpen(ws),
+    close: (ws: import("bun").ServerWebSocket<WsData>) => ws.data.meetingVideo ? undefined : ws.data.runner ? runnerClosed(runnerConn(ws)) : onClose(ws),
     message: (ws: import("bun").ServerWebSocket<WsData>, data: string | Buffer) =>
-      ws.data.runner ? runnerMessage(runnerConn(ws), data).catch(e => console.error("[runner] message failed:", e)) : onMessage(ws, data),
+      ws.data.meetingVideo ? meetingVideoFrame(ws.data.meetingVideo.meetingId, data) : ws.data.runner ? runnerMessage(runnerConn(ws), data).catch(e => console.error("[runner] message failed:", e)) : onMessage(ws, data),
   },
 };

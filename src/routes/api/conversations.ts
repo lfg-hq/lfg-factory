@@ -69,7 +69,7 @@ conversationsApi.get("/:id", async (c) => {
   // Load messages. With ?limit, return only the newest page (older than ?before) so a
   // long chat opens fast; without it, the whole history, for jumping to the start.
   // Build events wake the agent but are not something the user said.
-  const visible = and(eq(messages.conversationId, id), sql`coalesce(${messages.userRole}, '') <> 'build_event'`);
+  const visible = and(eq(messages.conversationId, id), sql`coalesce(${messages.userRole}, '') not in ('build_event', 'meeting_context')`);
   const limit = Math.min(200, Math.max(1, Number(c.req.query("limit")) || 0)) || null;
   let hasMore = false;
   let msgs;

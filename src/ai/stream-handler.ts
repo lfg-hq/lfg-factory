@@ -8,7 +8,7 @@ import { contextProfile, recordTokenScale, tokenScale } from './context-profile.
 import { loadConversationHandoff, saveConversationCheckpoint } from './conversation-handoff.ts';
 import { planTools, planContext, planProgress } from './tools/plan-tools.ts';
 import { isContextOverflow, turnContextBlock, appendToLastUser, LENGTH_NUDGE, STEP_LIMIT_NUDGE, CONTEXT_INSTRUCTIONS, PLAN_INSTRUCTIONS } from './turn-context.ts';
-import { BUILD_EVENT_ROLE } from '../services/build-summary-turn.ts';
+import { HIDDEN_USER_ROLES } from '../services/build-summary-turn.ts';
 import {compactToolSteps} from './history-budget.ts';
 import { emptyTurnContent, shouldContinuePromise, shouldAskWithCard, continuationMessages } from './turn-completion.ts';
 export { endsOnUnkeptPromise } from './turn-completion.ts';
@@ -467,7 +467,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     role: "user",
     content: userMessage,
     isVoice: !!isVoice,
-    ...(req.userRole === BUILD_EVENT_ROLE ? { userRole: BUILD_EVENT_ROLE } : {}),
+    ...(req.userRole && HIDDEN_USER_ROLES.includes(req.userRole) ? { userRole: req.userRole } : {}),
     // Only stamped when someone OTHER than the conversation's author wrote it.
     authorId: writingAsGuest ? userId : null,
   }).returning({ id: messages.id });

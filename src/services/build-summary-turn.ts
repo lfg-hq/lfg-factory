@@ -17,6 +17,10 @@ import { findBackgroundTurn } from "../ws/background-turns.ts";
 
 /** Stored on the triggering user row so history can hide it; the agent still sees it. */
 export const BUILD_EVENT_ROLE = "build_event";
+/** Live-call transcript and recap prompts handed to the agent by the meeting agent; hidden the same way. */
+export const MEETING_CONTEXT_ROLE = "meeting_context";
+/** User-row roles the agent reads but chat history does not show. */
+export const HIDDEN_USER_ROLES: readonly string[] = [BUILD_EVENT_ROLE, MEETING_CONTEXT_ROLE];
 
 const TURN_TIMEOUT_MS = 5 * 60_000;
 
@@ -59,10 +63,39 @@ const queues = new Map<string, Promise<void>>();
  */
 export function runBuildSummaryTurn(opts: { conversationId: string; userId: string; message: string }): Promise<void> {
   if (process.env.CHAT_BUILD_EVENT_TURNS === "0") return Promise.resolve();
+  return runQueuedChatTurn({ ...opts, userRole: BUILD_EVENT_ROLE }).then((text) => announceAgentMessage(opts, text));
+}
+
+/** Show a reply from a browserless turn in the owner's open tabs. */
+export async function announceAgentMessage(opts: { conversationId: string; userId: string }, text: string): Promise<void> {
+  if (!text.trim()) return;
+  const [conv] = await db.select({ projectId: conversations.projectId }).from(conversations)
+    .where(eq(conversations.id, opts.conversationId)).limit(1);
+  broadcastToUser(opts.userId, {
+    type: "message", sender: "assistant", message: text, build_status: true,
+    conversation_id: opts.conversationId, project_id: conv?.projectId ?? undefined,
+  });
+}
+
+export interface QueuedChatTurn {
+  conversationId: string; userId: string; message: string;
+  /** Stored on the message row; a hidden role keeps it out of chat history. Omit for a visible message. */
+  userRole?: string;
+  files?: Array<{ id?: string; name?: string; type?: string; size?: number }>;
+  timeoutMs?: number;
+}
+
+/**
+ * Run one agent turn in a conversation without a browser, and return what the agent said.
+ * Turns for one conversation run one at a time, each waiting for any live turn to finish.
+ * Returns "" when the chat stayed busy too long or the conversation is gone.
+ */
+export function runQueuedChatTurn(opts: QueuedChatTurn): Promise<string> {
   const previous = queues.get(opts.conversationId) ?? Promise.resolve();
   const next = previous.catch(() => {}).then(() => runWhenIdle(opts));
-  queues.set(opts.conversationId, next);
-  void next.catch(() => {}).finally(() => { if (queues.get(opts.conversationId) === next) queues.delete(opts.conversationId); });
+  const settled = next.then(() => {}, () => {});
+  queues.set(opts.conversationId, settled);
+  void settled.finally(() => { if (queues.get(opts.conversationId) === settled) queues.delete(opts.conversationId); });
   return next;
 }
 
@@ -73,15 +106,15 @@ export function notifyChatAgent(opts: { conversationId: string | null | undefine
     .catch((error) => console.error("[build-event] Chat agent turn failed:", (error as Error).message));
 }
 
-async function runWhenIdle(opts: { conversationId: string; userId: string; message: string }): Promise<void> {
+async function runWhenIdle(opts: QueuedChatTurn): Promise<string> {
   const deadline = Date.now() + WAIT_FOR_IDLE_MS;
   while (findBackgroundTurn(opts.userId, opts.conversationId)) {
-    if (Date.now() > deadline) { console.warn("[build-event] Chat stayed busy; event left to its status message:", opts.conversationId); return; }
+    if (Date.now() > deadline) { console.warn("[build-event] Chat stayed busy; event left to its status message:", opts.conversationId); return ""; }
     await new Promise((resolve) => setTimeout(resolve, 3000));
   }
   const [conv] = await db.select({ projectId: conversations.projectId }).from(conversations)
     .where(eq(conversations.id, opts.conversationId)).limit(1);
-  if (!conv) return;
+  if (!conv) return "";
 
   const { handleStream } = await import("../ai/stream-handler.ts");
   let text = "";
@@ -98,17 +131,14 @@ async function runWhenIdle(opts: { conversationId: string; userId: string; messa
   } as unknown as ServerWebSocket<WsData>;
 
   const abortController = new AbortController();
-  const timer = setTimeout(() => abortController.abort(), TURN_TIMEOUT_MS);
+  const timer = setTimeout(() => abortController.abort(), opts.timeoutMs ?? TURN_TIMEOUT_MS);
   try {
     await handleStream({
-      ws, userId: opts.userId, userMessage: opts.message, userRole: BUILD_EVENT_ROLE,
+      ws, userId: opts.userId, userMessage: opts.message, userRole: opts.userRole, files: opts.files,
       conversationId: opts.conversationId, projectId: conv.projectId ?? undefined, abortController,
     });
   } finally {
     clearTimeout(timer);
   }
-  if (text.trim()) broadcastToUser(opts.userId, {
-    type: "message", sender: "assistant", message: text, build_status: true,
-    conversation_id: opts.conversationId, project_id: conv.projectId ?? undefined,
-  });
+  return text;
 }
