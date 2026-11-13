@@ -53,7 +53,7 @@ interface ProjectDetailPageProps {
   role?: string;
   isOwner?: boolean;
   conversations: Conversation[];
-  chatLinks?: Record<string, { messages: number; tickets: number; epics: { key: string | null; name: string }[] }>;
+  chatLinks?: Record<string, { messages: number; tickets: number; epics: { key: string | null; name: string }[]; summary?: string; failed?: boolean }>;
   stages: TicketStage[];
   ticketCounts: Record<string, number>;
   envVars: EnvVar[];
@@ -85,19 +85,9 @@ function chatTitle(title: string | null | undefined): string {
   return text || "Untitled chat";
 }
 
-/** Pinned first, then by how recently each chat was used. Elapsed time, so no timezone guesswork. */
-function chatGroups<T extends { updatedAt: Date | string; pinnedAt?: Date | string | null }>(chats: T[]) {
-  const DAY = 86_400_000, now = Date.now();
-  const buckets: [string, (chat: T) => boolean][] = [
-    ["Pinned", (chat) => !!chat.pinnedAt],
-    ["Last 24 hours", (chat) => now - +new Date(chat.updatedAt) < DAY],
-    ["Last 7 days", (chat) => now - +new Date(chat.updatedAt) < 7 * DAY],
-    ["Last 30 days", (chat) => now - +new Date(chat.updatedAt) < 30 * DAY],
-    ["Older", () => true],
-  ];
-  const groups = buckets.map(([label]) => ({ label, chats: [] as T[] }));
-  for (const chat of chats) groups[buckets.findIndex(([, test]) => test(chat))]!.chats.push(chat);
-  return groups.filter((group) => group.chats.length);
+/** Pinned chats lead; the rest keep the order they arrived in (most recently used first). */
+function pinnedFirst<T extends { pinnedAt?: Date | string | null }>(chats: T[]): T[] {
+  return [...chats.filter((chat) => chat.pinnedAt), ...chats.filter((chat) => !chat.pinnedAt)];
 }
 
 export function ProjectDetailPage({
@@ -976,49 +966,54 @@ export function ProjectDetailPage({
         ` : ""}
 
         ${activeTab === "conversations" ? html`
-          <script src="/public/js/project-chats.js?v=20261113-chats"></script>
+          <script src="/public/js/project-chats.js?v=20261114-cards"></script>
           <div class="chats-page" data-project="${project.projectId}">
             <header class="chats-head">
-              <div><h2>Chats</h2><p class="home-muted">${conversations.length ? `${conversations.length} conversation${conversations.length === 1 ? "" : "s"} with the agent in this project` : "Conversations with the agent in this project"}</p></div>
-              <a href="/chat/project/${project.projectId}?new=1" class="dash-btn primary"><i class="fas fa-plus" aria-hidden="true"></i> New chat</a>
+              <div>
+                <h2>Chats</h2>
+                <p class="home-muted">${conversations.length ? html`${conversations.length} chat${conversations.length === 1 ? "" : "s"} · ${Object.values(chatLinks).reduce((sum, link) => sum + link.messages, 0)} messages · last active <time datetime="${new Date(conversations[0]!.updatedAt).toISOString()}" data-relative>recently</time>` : "Conversations with the agent in this project"}</p>
+              </div>
+              <div class="chats-tools">
+                ${conversations.length > 6 ? html`<label class="chats-search"><i class="fas fa-magnifying-glass" aria-hidden="true"></i><span class="dash-sr">Search chats</span><input id="chats-search" type="search" placeholder="Search chats" autocomplete="off" /></label>` : ""}
+                <a href="/chat/project/${project.projectId}?new=1" class="dash-btn primary"><i class="fas fa-plus" aria-hidden="true"></i> New chat</a>
+              </div>
             </header>
             ${conversations.length === 0 ? html`
               <div class="dash-card dash-caught">
-                <span class="dash-ico plain"><i class="far fa-comments" aria-hidden="true"></i></span>
+                <span class="dash-ico tint"><i class="far fa-comments" aria-hidden="true"></i></span>
                 <strong>Start your first chat</strong>
                 <p>Plan a feature, ask a question, or share a document. Every chat is kept here.</p>
                 <a href="/chat/project/${project.projectId}?new=1" class="dash-btn primary">New chat</a>
               </div>
             ` : html`
-              ${conversations.length > 6 ? html`
-              <label class="chats-search"><i class="fas fa-magnifying-glass" aria-hidden="true"></i><span class="dash-sr">Search chats</span><input id="chats-search" type="search" placeholder="Search chats" autocomplete="off" /></label>` : ""}
-              ${chatGroups(conversations).map((group) => html`
-                <section class="chats-group" data-chat-group>
-                  <h3>${group.label}</h3>
-                  <div class="dash-card">
-                    ${group.chats.map((cv) => {
+              <div class="chats-grid" data-chat-group>
+                    ${pinnedFirst(conversations).map((cv) => {
                       const link = chatLinks[cv.id];
                       const title = chatTitle(cv.title);
                       return html`
-                      <div class="chat-row" data-chat="${cv.id}" data-title="${title.toLowerCase()}">
-                        <a class="chat-row-main" href="/chat/project/${project.projectId}/conversation/${cv.id}">
-                          <span class="chat-row-title">${cv.pinnedAt ? html`<i class="fas fa-thumbtack" aria-hidden="true"></i> ` : ""}${title}</span>
-                          <span class="chat-row-meta">
-                            ${link?.epics.slice(0, 2).map((epic) => html`<span class="dash-tag tint">${epic.key ? `${epic.key} · ` : ""}${epic.name}</span>`) ?? ""}
+                      <article class="chat-card${cv.pinnedAt ? " pinned" : ""}" data-chat="${cv.id}" data-title="${title.toLowerCase()}">
+                        <a class="chat-card-main" href="/chat/project/${project.projectId}/conversation/${cv.id}">
+                          <span class="chat-card-top">
+                            <span class="chat-card-icon"><i class="${cv.pinnedAt ? "fas fa-thumbtack" : "far fa-comment-dots"}" aria-hidden="true"></i></span>
+                            <time class="chat-card-time" datetime="${new Date(cv.updatedAt).toISOString()}">${new Date(cv.updatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</time>
+                          </span>
+                          <strong class="chat-card-title">${title}</strong>
+                          ${link?.failed
+                            ? html`<span class="chat-card-summary failed"><i class="fas fa-triangle-exclamation" aria-hidden="true"></i> Last reply failed: ${link.summary}</span>`
+                            : html`<span class="chat-card-summary">${link?.summary ?? "Nothing said yet. Open it to start."}</span>`}
+                          <span class="chat-card-foot">
+                            ${link?.epics.slice(0, 2).map((epic) => html`<span class="dash-tag tint">${epic.key ?? epic.name}</span>`) ?? ""}
                             ${link?.tickets ? html`<span class="dash-tag plain">${link.tickets} ticket${link.tickets === 1 ? "" : "s"}</span>` : ""}
-                            ${link?.messages ? html`<span>${link.messages} message${link.messages === 1 ? "" : "s"}</span>` : html`<span>No messages yet</span>`}
+                            <span class="chat-card-count"><i class="far fa-message" aria-hidden="true"></i> ${link?.messages ?? 0}</span>
                           </span>
                         </a>
-                        <time class="chat-row-time" datetime="${new Date(cv.updatedAt).toISOString()}">${new Date(cv.updatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</time>
-                        <span class="chat-row-actions">
+                        <span class="chat-card-actions">
                           <button type="button" data-chat-pin="${cv.pinnedAt ? "0" : "1"}" aria-label="${cv.pinnedAt ? "Unpin" : "Pin"} ${title}" title="${cv.pinnedAt ? "Unpin" : "Pin"}"><i class="fas fa-thumbtack" aria-hidden="true"></i></button>
                           ${cv.userId === user.id ? html`<button type="button" data-chat-delete aria-label="Delete ${title}" title="Delete"><i class="far fa-trash-can" aria-hidden="true"></i></button>` : ""}
                         </span>
-                      </div>`;
+                      </article>`;
                     })}
-                  </div>
-                </section>
-              `)}
+              </div>
               <p id="chats-empty" class="home-muted" hidden>No chats match your search.</p>
               <p id="chats-error" class="dash-panel-error" role="alert" hidden></p>
             `}

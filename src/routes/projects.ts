@@ -443,7 +443,7 @@ projectsRouter.get("/projects/:projectId", async (c) => {
 
   // What each chat led to, so the Chats list can tell them apart: message count,
   // the epics born from it and how many tickets it produced.
-  const chatLinks: Record<string, { messages: number; tickets: number; epics: { key: string | null; name: string }[] }> = {};
+  const chatLinks: Record<string, { messages: number; tickets: number; epics: { key: string | null; name: string }[]; summary?: string; failed?: boolean }> = {};
   if (tab === "conversations" && convRows.length) {
     const ids = convRows.map((cv) => cv.id);
     const link = (id: string) => (chatLinks[id] ??= { messages: 0, tickets: 0, epics: [] });
@@ -454,6 +454,14 @@ projectsRouter.get("/projects/:projectId", async (c) => {
       db.select({ id: epics.conversationId, key: epics.epicKey, name: epics.name }).from(epics)
         .where(and(eq(epics.projectId, project.id), inArray(epics.conversationId, ids))),
     ]);
+    // Where each chat left off: its last few messages, trimmed in the query.
+    const { chatSummary } = await import("../services/chat-summary.ts");
+    await Promise.all(ids.map(async (id) => {
+      const last = await db.select({ role: messages.role, content: sql<string>`substr(${messages.content}, 1, 1200)` }).from(messages)
+        .where(eq(messages.conversationId, id)).orderBy(desc(messages.createdAt)).limit(3);
+      const summary = chatSummary(last);
+      if (summary) Object.assign(link(id), { summary: summary.text, failed: summary.failed });
+    }));
     for (const row of messageCounts) link(row.id).messages = Number(row.n);
     for (const row of ticketCountsByChat) if (row.id) link(row.id).tickets = Number(row.n);
     for (const row of epicRows) if (row.id) link(row.id).epics.push({ key: row.key, name: row.name });
