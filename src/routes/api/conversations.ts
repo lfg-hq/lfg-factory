@@ -4,9 +4,12 @@ import { db } from "../../config/db.ts";
 import { conversations, messages } from "../../db/schema/chat.ts";
 import { projects } from "../../db/schema/projects.ts";
 import { users } from "../../db/schema/users.ts";
-import { eq, and, inArray, or, lt, desc, asc, sql } from "drizzle-orm";
+import { eq, and, inArray, or, lt, desc, asc, sql, getTableColumns } from "drizzle-orm";
 import { getChatAccess } from "../../services/chat-access.ts";
 import type { auth } from "../../auth/index.ts";
+
+// Stored tool steps are the model's replay context (large); the transcript never shows them.
+const { toolSteps: _modelOnly, ...historyColumns } = getTableColumns(messages);
 
 type AuthEnv = {
   Variables: {
@@ -74,14 +77,14 @@ conversationsApi.get("/:id", async (c) => {
     const beforeId = c.req.query("before");
     const [anchor] = beforeId ? await db.select({ createdAt: messages.createdAt, id: messages.id }).from(messages)
       .where(and(eq(messages.id, beforeId), eq(messages.conversationId, id))).limit(1) : [];
-    const page = await db.select().from(messages)
+    const page = await db.select(historyColumns).from(messages)
       .where(anchor ? and(visible, or(lt(messages.createdAt, anchor.createdAt), and(eq(messages.createdAt, anchor.createdAt), lt(messages.id, anchor.id)))) : visible)
       .orderBy(desc(messages.createdAt), desc(messages.id))
       .limit(limit + 1);
     hasMore = page.length > limit;
     msgs = page.slice(0, limit).reverse();
   } else {
-    msgs = await db.select().from(messages).where(visible).orderBy(asc(messages.createdAt), asc(messages.id));
+    msgs = await db.select(historyColumns).from(messages).where(visible).orderBy(asc(messages.createdAt), asc(messages.id));
   }
 
   // Names for any guest turns (an owner/admin who continued this chat).
