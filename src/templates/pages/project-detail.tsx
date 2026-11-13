@@ -141,7 +141,7 @@ export function ProjectDetailPage({
   <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
   <link rel="stylesheet" href="/public/css/projects.css" />
   <link rel="stylesheet" href="/public/css/project_detail.css" />
-  <link rel="stylesheet" href="/public/css/project-home.css?v=20261113-attach" />
+  <link rel="stylesheet" href="/public/css/project-home.css?v=20261114-list" />
   <link rel="stylesheet" href="/public/css/artifacts.css?v=20261004-dark-folders" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
@@ -966,7 +966,7 @@ export function ProjectDetailPage({
         ` : ""}
 
         ${activeTab === "conversations" ? html`
-          <script src="/public/js/project-chats.js?v=20261114-cards"></script>
+          <script src="/public/js/project-chats.js?v=20261114-list"></script>
           <div class="chats-page" data-project="${project.projectId}">
             <header class="chats-head">
               <div>
@@ -986,7 +986,7 @@ export function ProjectDetailPage({
                 <a href="/chat/project/${project.projectId}?new=1" class="dash-btn primary">New chat</a>
               </div>
             ` : html`
-              <div class="chats-grid" data-chat-group>
+              <div class="chats-list" data-chat-group>
                     ${pinnedFirst(conversations).map((cv) => {
                       const link = chatLinks[cv.id];
                       const title = chatTitle(cv.title);
@@ -994,17 +994,17 @@ export function ProjectDetailPage({
                       <article class="chat-card${cv.pinnedAt ? " pinned" : ""}" data-chat="${cv.id}" data-title="${title.toLowerCase()}">
                         <a class="chat-card-main" href="/chat/project/${project.projectId}/conversation/${cv.id}">
                           <span class="chat-card-top">
-                            <span class="chat-card-icon"><i class="${cv.pinnedAt ? "fas fa-thumbtack" : "far fa-comment-dots"}" aria-hidden="true"></i></span>
-                            <time class="chat-card-time" datetime="${new Date(cv.updatedAt).toISOString()}">${new Date(cv.updatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</time>
-                          </span>
-                          <strong class="chat-card-title">${title}</strong>
-                          ${link?.failed
-                            ? html`<span class="chat-card-summary failed"><i class="fas fa-triangle-exclamation" aria-hidden="true"></i> Last reply failed: ${link.summary}</span>`
-                            : html`<span class="chat-card-summary">${link?.summary ?? "Nothing said yet. Open it to start."}</span>`}
-                          <span class="chat-card-foot">
+                            ${cv.pinnedAt ? html`<i class="fas fa-thumbtack chat-card-pin" aria-hidden="true"></i>` : ""}
+                            <strong class="chat-card-title">${title}</strong>
                             ${link?.epics.slice(0, 2).map((epic) => html`<span class="dash-tag tint">${epic.key ?? epic.name}</span>`) ?? ""}
                             ${link?.tickets ? html`<span class="dash-tag plain">${link.tickets} ticket${link.tickets === 1 ? "" : "s"}</span>` : ""}
-                            <span class="chat-card-count"><i class="far fa-message" aria-hidden="true"></i> ${link?.messages ?? 0}</span>
+                            <time class="chat-card-time" datetime="${new Date(cv.updatedAt).toISOString()}">${new Date(cv.updatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</time>
+                          </span>
+                          <span class="chat-card-bottom">
+                            ${link?.failed
+                              ? html`<span class="chat-card-summary failed">Last reply failed: ${link.summary}</span>`
+                              : html`<span class="chat-card-summary">${link?.summary ?? "Nothing said yet"}</span>`}
+                            <span class="chat-card-count">${link?.messages ?? 0} message${link?.messages === 1 ? "" : "s"}</span>
                           </span>
                         </a>
                         <span class="chat-card-actions">

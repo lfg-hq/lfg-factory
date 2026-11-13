@@ -34,7 +34,7 @@ try {
  assert.equal(await page.locator('.chat-card').count(), 7);
  assert.equal((await page.locator('[data-chat="c2"] .chat-card-title').textContent())!.trim(), 'Please review this @Carousel to video PRD');
  assert.equal((await page.locator('[data-chat="c7"] .chat-card-title').textContent())!.trim(), 'Untitled chat');
- assert((await page.locator('[data-chat="c3"] .chat-card-foot').innerText()).includes('KIT-E3'));
+ assert((await page.locator('[data-chat="c3"] .chat-card-top').innerText()).includes('KIT-E3'));
  assert.equal(await page.locator('[data-chat="c4"] [data-chat-delete]').count(), 0, "someone else's chat cannot be deleted");
  assert((await page.locator('[data-chat="c1"] .chat-card-summary').innerText()).startsWith('Last reply failed'));
  assert.equal(await page.locator('.chat-card-summary').count(), 7);
@@ -59,5 +59,5 @@ try {
  await page.setViewportSize({ width:390, height:844 });
  assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'No mobile horizontal overflow');
  assert.deepEqual(errors, []);
- console.log('PASS: chat cards with summaries, pinned first, cleaned titles, context tags, search, guarded delete, mobile layout');
+ console.log('PASS: chat list with summaries, pinned first, cleaned titles, context tags, search, guarded delete, mobile layout');
 } finally { await browser.close(); }
