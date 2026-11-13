@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 process.env.RECALL_API_KEY = 'test-key';
 process.env.APP_URL = 'https://lfg.example.com';
 process.env.OPENAI_API_KEY = 'test-openai';
-process.env.MEETING_REQUEST_PAUSE_MS = '40';
+process.env.MEETING_REQUEST_PAUSE_MS = '250'; // generous: a loaded machine must not split a two-part request
 process.env.RECALL_WEBHOOK_SECRET = '';
 
 const sqlite = new Database(':memory:');
@@ -44,7 +44,7 @@ Object.assign(agent.deps, {
 const said = (speaker: string, text: string) => ({ event: 'transcript.data', data: { data: { words: text.split(' ').map((t, i) => ({ text: t, start_timestamp: { relative: 12 + i } })), participant: { name: speaker } }, bot: { id: 'bot-1' } } });
 const typed = (speaker: string, text: string) => ({ event: 'participant_events.chat_message', data: { data: { participant: { name: speaker }, timestamp: { relative: 30 }, data: { text, to: 'everyone' } } } });
 const hear = async (meeting: any, payload: any) => agent.handleMeetingEvent((await agent.meetingForUser(meeting.id, 'u1'))!, recall.parseRealtimeEvent(payload)!);
-const settle = async (id: string) => { await new Promise(r => setTimeout(r, 90)); await agent.meetingIdle(id); };
+const settle = async (id: string) => { await new Promise(r => setTimeout(r, 400)); await agent.meetingIdle(id); };
 const hidden = (conversationId: string) => sqlite.query(`SELECT content FROM message WHERE conversation_id = ? AND user_role = 'meeting_context'`).all(conversationId).map((r: any) => r.content as string);
 let n = 0;
 const join = () => agent.startMeeting({ userId: 'u1', projectId: 'proj-public', projectName: 'Invoicing', meetingUrl: `https://meet.google.com/abc-defg-${String(++n).padStart(3, 'h')}` });
