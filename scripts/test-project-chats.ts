@@ -32,6 +32,7 @@ try {
  await page.goto('http://lfg.test/projects/demo?tab=conversations');
  assert.equal(await page.locator('.chat-card').first().getAttribute('data-chat'), 'c3', 'the pinned chat leads');
  assert.equal(await page.locator('.chat-card').count(), 7);
+ assert.equal(await page.locator('.chats-back').getAttribute('href'), '/projects/demo');
  assert.equal((await page.locator('[data-chat="c2"] .chat-card-title').textContent())!.trim(), 'Please review this @Carousel to video PRD');
  assert.equal((await page.locator('[data-chat="c7"] .chat-card-title').textContent())!.trim(), 'Untitled chat');
  assert((await page.locator('[data-chat="c3"] .chat-card-top').innerText()).includes('KIT-E3'));

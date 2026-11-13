@@ -141,7 +141,7 @@ export function ProjectDetailPage({
   <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
   <link rel="stylesheet" href="/public/css/projects.css" />
   <link rel="stylesheet" href="/public/css/project_detail.css" />
-  <link rel="stylesheet" href="/public/css/project-home.css?v=20261114-list" />
+  <link rel="stylesheet" href="/public/css/project-home.css?v=20261114-back" />
   <link rel="stylesheet" href="/public/css/artifacts.css?v=20261004-dark-folders" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
@@ -970,6 +970,7 @@ export function ProjectDetailPage({
           <div class="chats-page" data-project="${project.projectId}">
             <header class="chats-head">
               <div>
+                <a class="chats-back" href="/projects/${project.projectId}"><i class="fas fa-arrow-left" aria-hidden="true"></i> ${project.name}</a>
                 <h2>Chats</h2>
                 <p class="home-muted">${conversations.length ? html`${conversations.length} chat${conversations.length === 1 ? "" : "s"} · ${Object.values(chatLinks).reduce((sum, link) => sum + link.messages, 0)} messages · last active <time datetime="${new Date(conversations[0]!.updatedAt).toISOString()}" data-relative>recently</time>` : "Conversations with the agent in this project"}</p>
               </div>
