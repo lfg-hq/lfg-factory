@@ -126,7 +126,7 @@ export function ProjectDetailPage({
   <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
   <link rel="stylesheet" href="/public/css/projects.css" />
   <link rel="stylesheet" href="/public/css/project_detail.css" />
-  <link rel="stylesheet" href="/public/css/project-home.css?v=20261015-calm-dashboard" />
+  <link rel="stylesheet" href="/public/css/project-home.css?v=20261113-decision-queue" />
   <link rel="stylesheet" href="/public/css/artifacts.css?v=20261004-dark-folders" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
@@ -471,38 +471,77 @@ export function ProjectDetailPage({
         ${(activeTab === "home" || activeTab === "inbox") ? html`
 
           ${activeTab === "home" ? html`
-          <script src="/public/js/project-home.js?v=20261015-calm-dashboard"></script>
-          <div class="home-dashboard" data-project="${project.projectId}">
+          <script src="/public/js/project-home.js?v=20261113-decision-queue"></script>
+          <div class="home-dashboard" data-project="${project.projectId}" data-chats="${conversations.length ? "1" : "0"}">
             ${role !== "viewer" && role !== "guest" ? html`
-            <section class="home-start-card" aria-labelledby="home-start-title">
-              <div class="home-start-copy"><h2 id="home-start-title">What would you like to work on?</h2><p>Plan a feature, ask a question, or share a document.</p></div>
-              <a class="home-start-link" href="/chat/project/${project.projectId}?new=1"><i class="fas fa-plus" aria-hidden="true"></i> New chat</a>
+            <section class="dash-start" aria-labelledby="dash-start-title">
+              <div class="dash-start-copy"><h2 id="dash-start-title">Start ${project.name}</h2><p>Tell the agent what you want to build. Status, builds and previews will appear on this page.</p></div>
+              <form id="dash-compose" class="dash-compose" autocomplete="off">
+                <label class="dash-sr" for="dash-compose-input">Message the agent</label>
+                <input id="dash-compose-input" type="text" placeholder="Ask a question or describe what to build next…" maxlength="4000" />
+                <button type="submit" class="dash-send" aria-label="Start chat"><i class="fas fa-arrow-up" aria-hidden="true"></i></button>
+              </form>
+              <div class="dash-chips">
+                <button type="button" class="dash-chip" data-fill="I want to plan a new feature: "><i class="far fa-lightbulb" aria-hidden="true"></i> Plan a feature</button>
+                <button type="button" class="dash-chip" data-fill="Where are things? Summarise what is done, what is building and what is blocked."><i class="far fa-compass" aria-hidden="true"></i> Where are things?</button>
+                <button type="button" class="dash-chip" data-fill="I found a bug: "><i class="fas fa-bug" aria-hidden="true"></i> Report a bug</button>
+                <a class="dash-chip" href="/chat/project/${project.projectId}?new=1"><i class="fas fa-plus" aria-hidden="true"></i> New chat</a>
+              </div>
             </section>` : ""}
-            <section aria-labelledby="home-epics-title">
-              <div class="home-section-heading"><div><h2 id="home-epics-title">Latest epics</h2><p class="home-muted">Newest first · Progress counts tickets ready for review or completed</p></div><a href="/projects/${project.projectId}/epics" class="home-quiet-link">View all →</a></div>
-              <div id="home-epics" class="home-epics" aria-live="polite"><p class="home-muted home-epics-empty">Loading epics…</p></div>
-              <p id="home-refresh-status" role="status" class="home-muted" hidden></p>
-            </section>
-            <div class="home-dashboard-lower">
-              <section class="home-recent-chats">
-                <div class="home-section-heading"><h2>Recent conversations</h2><a href="/projects/${project.projectId}?tab=conversations" class="home-quiet-link">View all →</a></div>
-                ${conversations.length ? conversations.slice(0,3).map(cv => html`
-                  <a href="/chat/project/${project.projectId}/conversation/${cv.id}" class="home-conversation">
-                    <span><span class="home-conversation-title">${(cv.title || "Untitled conversation").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")}</span><small>${new Date(cv.updatedAt).toLocaleDateString(undefined,{month:"short",day:"numeric"})}</small></span><span class="home-quiet-link">Continue →</span>
-                  </a>`) : html`<div class="home-conversations-empty"><i class="far fa-comment" aria-hidden="true"></i><p class="home-muted">Your conversations will appear here.</p></div>`}
-              </section>
-              <aside class="home-dashboard-side" aria-label="Project resources and team">
+            <div class="dash-onboard" aria-label="What happens next">
+              <div><span>1</span><strong>Describe what to build</strong><p>Start a chat. The agent asks questions and researches first.</p></div>
+              <div><span>2</span><strong>Approve the plan</strong><p>Work is grouped into epics and tickets you can edit.</p></div>
+              <div><span>3</span><strong>Watch it build</strong><p>Builds, previews and anything that needs you show up here.</p></div>
+            </div>
+            <div id="dash-status" class="dash-status" role="status" aria-live="polite"></div>
+            <div class="dash-grid">
+              <div class="dash-main">
+                <section aria-labelledby="dash-queue-title">
+                  <div class="home-section-heading"><h2 id="dash-queue-title">Needs you <span id="dash-queue-count" class="dash-count"></span></h2><div id="dash-filters" class="dash-chips"></div></div>
+                  <div id="dash-queue" class="dash-card" aria-live="polite"><p class="home-muted dash-loading">Loading…</p></div>
+                  <p id="home-refresh-status" role="status" class="home-muted" hidden></p>
+                </section>
+                <section id="dash-progress-section" aria-labelledby="dash-progress-title" hidden>
+                  <div class="home-section-heading"><h2 id="dash-progress-title">In progress</h2><a href="/projects/${project.projectId}/tickets" class="home-quiet-link">All tickets →</a></div>
+                  <div id="dash-progress" class="dash-card"></div>
+                </section>
+                <section id="dash-epics-section" aria-labelledby="dash-epics-title" hidden>
+                  <div class="home-section-heading"><h2 id="dash-epics-title">Epics</h2><a href="/projects/${project.projectId}/epics" class="home-quiet-link">View all →</a></div>
+                  <div id="dash-epics" class="dash-card"></div>
+                </section>
+              </div>
+              <aside class="dash-side" aria-label="Preview, chats, resources and team">
+                <section id="dash-preview-section" hidden>
+                  <div class="home-section-heading"><h2>Latest preview</h2></div>
+                  <div id="dash-preview" class="dash-card dash-pad"></div>
+                </section>
+                <section>
+                  <div class="home-section-heading"><h2>Recent chats</h2><a href="/projects/${project.projectId}?tab=conversations" class="home-quiet-link">View all →</a></div>
+                  <div class="dash-card">
+                  ${conversations.length ? conversations.slice(0,4).map(cv => html`
+                    <a href="/chat/project/${project.projectId}/conversation/${cv.id}" class="dash-row">
+                      <span class="dash-row-body"><span class="dash-row-title">${(cv.title || "Untitled conversation").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")}</span><span class="dash-row-detail">${new Date(cv.updatedAt).toLocaleDateString(undefined,{month:"short",day:"numeric"})}</span></span>
+                    </a>`) : html`<p class="home-muted dash-pad">Your chats with the agent will appear here.</p>`}
+                  </div>
+                </section>
+                <section>
+                  <div class="home-section-heading"><h2>Recent activity</h2><a href="/projects/${project.projectId}?tab=events" class="home-quiet-link">View all →</a></div>
+                  <div id="home-activity" class="dash-card dash-pad dash-activity"></div>
+                </section>
                 <section class="home-resources">
-                  <div class="home-section-heading"><h2>Project resources</h2><button id="home-pin-add" onclick="openPinModal()" class="home-team-action" style="display:none" aria-label="Pin a resource"><i class="fas fa-plus" aria-hidden="true"></i></button></div>
-                  <a href="/projects/${project.projectId}?tab=documents"><span><i class="fas fa-file-lines" aria-hidden="true"></i> Documents</span><span>${docsCount} ↗</span></a>
-                  <a href="/projects/${project.projectId}?tab=settings"><span><i class="fas fa-code-branch" aria-hidden="true"></i> Repository &amp; settings</span><span>↗</span></a>
-                  <div id="home-pins"></div>
+                  <div class="home-section-heading"><h2>Docs and resources</h2><button id="home-pin-add" onclick="openPinModal()" class="home-team-action" style="display:none" aria-label="Pin a resource"><i class="fas fa-plus" aria-hidden="true"></i></button></div>
+                  <div class="dash-card">
+                    <div id="dash-docs"></div>
+                    <a class="dash-doc" href="/projects/${project.projectId}?tab=documents"><i class="fas fa-folder-open" aria-hidden="true"></i><span>All documents</span><small>${docsCount}</small></a>
+                    <a class="dash-doc" href="/projects/${project.projectId}?tab=settings"><i class="fas fa-code-branch" aria-hidden="true"></i><span>Repository and settings</span><small></small></a>
+                    <div id="home-pins" class="dash-pins"></div>
+                  </div>
                 </section>
                 <section><div class="home-section-heading"><h2>Team</h2><a href="/projects/${project.projectId}?tab=settings" class="home-quiet-link">${isOwner || role === "admin" ? "Manage" : "View"} →</a></div><div id="home-team"><span class="home-muted">Loading members…</span></div></section>
               </aside>
             </div>
-            <footer class="home-dashboard-footer"><span>${project.name} project overview</span><a href="/projects/${project.projectId}?tab=events" class="home-quiet-link">View project activity →</a></footer>
           </div>
+          <div id="dash-panel-root"></div>
 
           <!-- Pin modal (owner/admin) -->
           <div class="modal-overlay" id="pinModal" style="position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.7);align-items:center;justify-content:center;">
@@ -861,7 +900,7 @@ export function ProjectDetailPage({
               // One combined request for the whole Home (activities + notifications
               // + members + pins) instead of four separate round-trips.
               function refreshHome(){ return fetch('/api/projects/'+HM_PID+'/home').then(function(r){if(!r.ok) throw new Error('Home unavailable'); return r.json();}).then(function(d){
-                if (window.renderHomeWork) window.renderHomeWork(d.workTickets || [], d.epics || []);
+                if (window.renderHomeDash) window.renderHomeDash(d.dash);
                 renderActivity(d.activities);
                 renderActions(d.notifications);
                 renderTeam(d.members || {});
@@ -870,6 +909,7 @@ export function ProjectDetailPage({
               }).catch(function(){ var el=document.getElementById('home-refresh-status'); if(el){el.hidden=false;el.textContent='Could not refresh the dashboard. Displayed status may be out of date.';} });
 
               }
+              window.__refreshHome = refreshHome;
               refreshHome();
               setInterval(function(){ if (!document.hidden) refreshHome(); }, 15000);
               window.addEventListener('focus', refreshHome);
