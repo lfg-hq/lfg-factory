@@ -5,6 +5,8 @@ interface Conversation {
   id: string;
   title: string | null;
   updatedAt: Date;
+  pinnedAt?: Date | null;
+  userId?: string | null;
 }
 
 interface TicketStage {
@@ -51,6 +53,7 @@ interface ProjectDetailPageProps {
   role?: string;
   isOwner?: boolean;
   conversations: Conversation[];
+  chatLinks?: Record<string, { messages: number; tickets: number; epics: { key: string | null; name: string }[] }>;
   stages: TicketStage[];
   ticketCounts: Record<string, number>;
   envVars: EnvVar[];
@@ -76,6 +79,27 @@ interface ProjectDetailPageProps {
   };
 }
 
+/** A chat's title is its first message; drop markdown link syntax, even when it was cut off mid-link. */
+function chatTitle(title: string | null | undefined): string {
+  const text = (title ?? "").replace(/\[([^\]]+)\]\([^)]*\)?/g, "$1").replace(/\s+/g, " ").trim();
+  return text || "Untitled chat";
+}
+
+/** Pinned first, then by how recently each chat was used. Elapsed time, so no timezone guesswork. */
+function chatGroups<T extends { updatedAt: Date | string; pinnedAt?: Date | string | null }>(chats: T[]) {
+  const DAY = 86_400_000, now = Date.now();
+  const buckets: [string, (chat: T) => boolean][] = [
+    ["Pinned", (chat) => !!chat.pinnedAt],
+    ["Last 24 hours", (chat) => now - +new Date(chat.updatedAt) < DAY],
+    ["Last 7 days", (chat) => now - +new Date(chat.updatedAt) < 7 * DAY],
+    ["Last 30 days", (chat) => now - +new Date(chat.updatedAt) < 30 * DAY],
+    ["Older", () => true],
+  ];
+  const groups = buckets.map(([label]) => ({ label, chats: [] as T[] }));
+  for (const chat of chats) groups[buckets.findIndex(([, test]) => test(chat))]!.chats.push(chat);
+  return groups.filter((group) => group.chats.length);
+}
+
 export function ProjectDetailPage({
   user,
   project,
@@ -84,6 +108,7 @@ export function ProjectDetailPage({
   role = "owner",
   isOwner = true,
   conversations,
+  chatLinks = {},
   stages,
   ticketCounts,
   envVars,
@@ -951,28 +976,51 @@ export function ProjectDetailPage({
         ` : ""}
 
         ${activeTab === "conversations" ? html`
-          <div>
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem;">
-              <h2 style="font-size:1.1rem;font-weight:600;color:var(--text-color);margin:0;">Chats</h2>
-              <a href="/chat/project/${project.projectId}" class="btn btn-primary" style="font-size:0.875rem;">
-                <i class="fas fa-plus"></i> New Chat
-              </a>
-            </div>
+          <script src="/public/js/project-chats.js?v=20261113-chats"></script>
+          <div class="chats-page" data-project="${project.projectId}">
+            <header class="chats-head">
+              <div><h2>Chats</h2><p class="home-muted">${conversations.length ? `${conversations.length} conversation${conversations.length === 1 ? "" : "s"} with the agent in this project` : "Conversations with the agent in this project"}</p></div>
+              <a href="/chat/project/${project.projectId}?new=1" class="dash-btn primary"><i class="fas fa-plus" aria-hidden="true"></i> New chat</a>
+            </header>
             ${conversations.length === 0 ? html`
-              <div style="text-align:center;padding:3rem;color:var(--text-secondary);border:1px dashed var(--border-color);border-radius:var(--radius-lg);">
-                <i class="fas fa-comments" style="font-size:2rem;opacity:0.3;display:block;margin-bottom:0.75rem;"></i>
-                <p style="margin:0 0 1rem;">No chats yet.</p>
-                <a href="/chat/project/${project.projectId}" class="btn btn-primary">Start a chat</a>
+              <div class="dash-card dash-caught">
+                <span class="dash-ico plain"><i class="far fa-comments" aria-hidden="true"></i></span>
+                <strong>Start your first chat</strong>
+                <p>Plan a feature, ask a question, or share a document. Every chat is kept here.</p>
+                <a href="/chat/project/${project.projectId}?new=1" class="dash-btn primary">New chat</a>
               </div>
             ` : html`
-              <div class="lfg-list">
-                ${conversations.map((c) => html`
-                  <a href="/chat/project/${project.projectId}/conversation/${c.id}" class="lfg-row">
-                    <span style="flex:1;font-size:0.9375rem;">${c.title ?? "Untitled conversation"}</span>
-                    <span style="font-size:0.75rem;color:var(--text-secondary);">${new Date(c.updatedAt).toLocaleDateString()}</span>
-                  </a>
-                `)}
-              </div>
+              ${conversations.length > 6 ? html`
+              <label class="chats-search"><i class="fas fa-magnifying-glass" aria-hidden="true"></i><span class="dash-sr">Search chats</span><input id="chats-search" type="search" placeholder="Search chats" autocomplete="off" /></label>` : ""}
+              ${chatGroups(conversations).map((group) => html`
+                <section class="chats-group" data-chat-group>
+                  <h3>${group.label}</h3>
+                  <div class="dash-card">
+                    ${group.chats.map((cv) => {
+                      const link = chatLinks[cv.id];
+                      const title = chatTitle(cv.title);
+                      return html`
+                      <div class="chat-row" data-chat="${cv.id}" data-title="${title.toLowerCase()}">
+                        <a class="chat-row-main" href="/chat/project/${project.projectId}/conversation/${cv.id}">
+                          <span class="chat-row-title">${cv.pinnedAt ? html`<i class="fas fa-thumbtack" aria-hidden="true"></i> ` : ""}${title}</span>
+                          <span class="chat-row-meta">
+                            ${link?.epics.slice(0, 2).map((epic) => html`<span class="dash-tag tint">${epic.key ? `${epic.key} · ` : ""}${epic.name}</span>`) ?? ""}
+                            ${link?.tickets ? html`<span class="dash-tag plain">${link.tickets} ticket${link.tickets === 1 ? "" : "s"}</span>` : ""}
+                            ${link?.messages ? html`<span>${link.messages} message${link.messages === 1 ? "" : "s"}</span>` : html`<span>No messages yet</span>`}
+                          </span>
+                        </a>
+                        <time class="chat-row-time" datetime="${new Date(cv.updatedAt).toISOString()}">${new Date(cv.updatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</time>
+                        <span class="chat-row-actions">
+                          <button type="button" data-chat-pin="${cv.pinnedAt ? "0" : "1"}" aria-label="${cv.pinnedAt ? "Unpin" : "Pin"} ${title}" title="${cv.pinnedAt ? "Unpin" : "Pin"}"><i class="fas fa-thumbtack" aria-hidden="true"></i></button>
+                          ${cv.userId === user.id ? html`<button type="button" data-chat-delete aria-label="Delete ${title}" title="Delete"><i class="far fa-trash-can" aria-hidden="true"></i></button>` : ""}
+                        </span>
+                      </div>`;
+                    })}
+                  </div>
+                </section>
+              `)}
+              <p id="chats-empty" class="home-muted" hidden>No chats match your search.</p>
+              <p id="chats-error" class="dash-panel-error" role="alert" hidden></p>
             `}
           </div>
         ` : ""}
