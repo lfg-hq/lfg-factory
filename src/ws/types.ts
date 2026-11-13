@@ -63,6 +63,4 @@ export interface WsData {
   projectId?: string;
   /** Set for LFG Desktop runner sockets (/ws/runner), which bypass the chat handlers. */
   runner?: { deviceId: string; deviceName: string };
-  /** Set for the meeting bot service's video socket (/ws/meeting-video), which carries screen-share frames. */
-  meetingVideo?: { meetingId: string };
 }

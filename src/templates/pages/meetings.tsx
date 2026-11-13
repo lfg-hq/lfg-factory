@@ -4,9 +4,10 @@ import { html } from "hono/html";
 /**
  * MEETINGS: add the LFG agent to a call, and see every call it was in.
  *
- * Paste a Google Meet, Zoom or Teams link and the agent joins as a participant. It
- * transcribes the call, and when someone says "Hey LFG, ..." it does the work and answers
- * in the call. Each call has a chat conversation holding what the agent did and its recap.
+ * Paste a Google Meet link and the agent joins as a participant (a browser this server runs).
+ * It takes notes from the live captions, and when someone says "Hey LFG, ..." it does the work
+ * and answers in the meeting chat. Each call has a chat conversation holding what the agent
+ * did and its recap.
  *
  * The page's behaviour lives in /public/js/meetings.js, not inline: inline scripts in these
  * templates break on ordinary JS escapes.
@@ -176,10 +177,10 @@ export function MeetingsPage({ project, user, setupProblem, botName = "LFG" }: P
   <div class="meetings-page" id="meetings-page" data-project="${project.projectId}" data-bot="${botName}">
     <div class="meetings-inner">
       <h1>Meetings</h1>
-      <p class="meetings-lead">Add ${botName} to a call and it joins as a participant, transcribes what is said and can see a shared screen. Say <b>"Hey ${botName}, create a PRD on what we just discussed"</b> or <b>"Hey ${botName}, how many tickets are pending?"</b> and it does the work and answers in the call. Everything it does lands in a chat for that meeting, with a recap when the call ends.</p>
+      <p class="meetings-lead">Add ${botName} to a Google Meet call and it joins as a participant, takes notes on what is said and can look at a shared screen. Say <b>"Hey ${botName}, create a PRD on what we just discussed"</b> or <b>"Hey ${botName}, how many tickets are pending?"</b> and it does the work and answers in the meeting chat. Everything it does lands in a chat for that meeting, with a recap when the call ends.</p>
       ${setupProblem ? html`<div class="meeting-setup" role="status">${setupProblem}</div>` : html`
       <form class="meeting-add" id="meeting-add">
-        <input class="input" id="meeting-url" type="url" required placeholder="Paste a Google Meet, Zoom or Teams link" aria-label="Meeting link" autocomplete="off" />
+        <input class="input" id="meeting-url" type="url" required placeholder="Paste a Google Meet link" aria-label="Meeting link" autocomplete="off" />
         <button class="btn btn-primary" type="submit" id="meeting-add-btn"><i class="fas fa-video" aria-hidden="true"></i> Add ${botName} to call</button>
       </form>`}
       <p class="meeting-note" id="meeting-note" role="status"></p>
@@ -192,7 +193,7 @@ export function MeetingsPage({ project, user, setupProblem, botName = "LFG" }: P
   </div>
 <script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
 <script src="/public/js/sidebar-chats.js"></script>
-<script src="/public/js/meetings.js?v=20261113"></script>
+<script src="/public/js/meetings.js?v=20261114"></script>
 <script>
   requestAnimationFrame(() => requestAnimationFrame(() => {
     document.documentElement.classList.remove('sidebar-minimized-preload');

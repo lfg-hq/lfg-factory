@@ -10,7 +10,7 @@
   var open = {}; // meeting id -> { lastSeq } for transcripts the person has opened
 
   var STATUS = { joining: "Joining", waiting_room: "Waiting to be let in", in_call: "In the call", ended: "Ended", failed: "Could not join" };
-  var PLATFORM = { google_meet: "Google Meet", zoom: "Zoom", teams: "Microsoft Teams" };
+  var PLATFORM = { google_meet: "Google Meet" };
   var isLive = function (m) { return m.status === "joining" || m.status === "waiting_room" || m.status === "in_call"; };
 
   function el(tag, attrs, text) {
@@ -54,7 +54,7 @@
     wrap.appendChild(top);
     var meta = (PLATFORM[meeting.platform] || "Call") + " · " + when(meeting.createdAt);
     if (meeting.status === "waiting_room") meta += " · Someone in the call needs to admit " + botName + ".";
-    if (meeting.status === "failed" && meeting.statusDetail) meta += " · " + meeting.statusDetail;
+    if ((meeting.status === "failed" || meeting.status === "ended") && meeting.statusDetail) meta += " · " + meeting.statusDetail;
     wrap.appendChild(el("div", { "class": "meeting-meta" }, meta));
     var transcript = el("div", { "class": "meeting-transcript", id: "transcript-" + meeting.id });
     if (!open[meeting.id]) transcript.hidden = true;
@@ -88,7 +88,7 @@
 
   var anyLive = false;
   function load(refresh) {
-    return api("?projectId=" + encodeURIComponent(projectId) + (refresh ? "&refresh=1" : "")).then(function (body) {
+    return api("?projectId=" + encodeURIComponent(projectId) + "").then(function (body) {
       anyLive = body.meetings.some(isLive);
       render(body.meetings);
       for (var id in open) loadTranscript(id);
@@ -125,7 +125,7 @@
     say("Sending " + botName + " to the call…");
     api("", { method: "POST", body: JSON.stringify({ projectId: projectId, meetingUrl: input.value, title: "Meeting · " + when(new Date()) }) }).then(function () {
       input.value = "";
-      say(botName + " is joining. If the call has a waiting room, admit it.");
+      say(botName + " is joining. Someone in the call will need to admit it.");
       return load(false);
     }).catch(function (error) { say(error.message, true); })
       .then(function () { button.disabled = false; });

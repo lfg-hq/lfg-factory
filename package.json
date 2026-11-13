@@ -36,6 +36,7 @@
     "test:voice": "node scripts/test-voice-ui.mjs",
     "test:meetings": "DATABASE_DRIVER=sqlite DATABASE_URL=:memory: bun test tests/meeting-agent.test.ts",
     "test:meetings-ui": "bun run scripts/test-meetings-ui.ts",
+    "test:meeting-bot": "node scripts/test-meeting-bot.mjs",
     "test:shell": "node scripts/test-preview-shell.mjs",
     "test:instructions": "bun run scripts/test-agent-instructions.mjs",
     "test:chat-context": "DATABASE_DRIVER=sqlite DATABASE_URL=:memory: bun test tests/chat-agent-context.test.ts tests/context-compaction.test.ts tests/context-profile.test.ts tests/conversation-handoff-size.test.ts && bun scripts/test-chat-turn.ts",

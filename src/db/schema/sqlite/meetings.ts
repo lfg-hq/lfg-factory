@@ -17,10 +17,9 @@ export const meetings = sqliteTable(
     conversationId: text("conversation_id").references(() => conversations.id, { onDelete: "set null" }),
     title: text("title").notNull().default("Meeting"),
     meetingUrl: text("meeting_url").notNull(),
-    platform: text("platform").notNull().default("unknown"), // google_meet | zoom | teams | unknown
-    provider: text("provider").notNull().default("recall"),
+    platform: text("platform").notNull().default("google_meet"),
+    provider: text("provider").notNull().default("mags_browser"),
     botId: text("bot_id"),
-    webhookToken: text("webhook_token").notNull().unique(),
     status: text("status").notNull().default("joining"),
     statusDetail: text("status_detail"),
     // Segments up to this sequence number have been handed to the chat agent as context.
@@ -42,7 +41,7 @@ export const meetingSegments = sqliteTable(
     kind: text("kind").notNull().default("speech"), // speech | chat | agent
     speaker: text("speaker").notNull().default("Someone"),
     text: text("text").notNull(),
-    // Seconds from the start of the recording, when the provider reports it.
+    // Seconds from the start of the call, when known.
     offsetSeconds: real("offset_seconds"),
     createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
   },

@@ -9,7 +9,7 @@ import { chromium } from "playwright-core";
 import { MeetingsPage } from "../src/templates/pages/meetings.tsx";
 
 type Row = { id: string; title: string; status: string; statusDetail: string | null; platform: string; meetingUrl: string; conversationId: string; projectId: string; createdAt: string };
-const meetings: Row[] = [{ id: "m-old", title: "Meeting · Nov 12, 4:00 PM", status: "ended", statusDetail: null, platform: "zoom", meetingUrl: "https://zoom.us/j/1", conversationId: "conv-old", projectId: "pub", createdAt: "2026-11-12T16:00:00Z" }];
+const meetings: Row[] = [{ id: "m-old", title: "Meeting · Nov 12, 4:00 PM", status: "ended", statusDetail: null, platform: "google_meet", meetingUrl: "https://meet.google.com/old-call-xyz", conversationId: "conv-old", projectId: "pub", createdAt: "2026-11-12T16:00:00Z" }];
 const segments: Record<string, Array<{ seq: number; kind: string; speaker: string; text: string }>> = { "m-old": [{ seq: 1, kind: "speech", speaker: "Sam", text: "Let's wrap up." }] };
 const calls: string[] = [];
 let setupProblem: string | null = null;
@@ -26,7 +26,7 @@ const server = Bun.serve({
     calls.push(`${req.method} ${url.pathname}`);
     if (req.method === "POST" && !id) {
       const body = await req.json() as { meetingUrl: string; projectId: string };
-      if (!/meet\.google\.com/.test(body.meetingUrl)) return json({ error: "Paste a Google Meet, Zoom or Microsoft Teams link." }, 400);
+      if (!/meet\.google\.com/.test(body.meetingUrl)) return json({ error: "Paste a Google Meet link (meet.google.com). Zoom and Teams are not supported yet." }, 400);
       const row: Row = { id: "m-new", title: "Meeting · Nov 13, 3:40 PM", status: "joining", statusDetail: null, platform: "google_meet", meetingUrl: body.meetingUrl, conversationId: "conv-new", projectId: body.projectId, createdAt: "2026-11-13T15:40:00Z" };
       meetings.unshift(row); segments[row.id] = [];
       return json({ meeting: row });
@@ -71,7 +71,7 @@ try {
   await page.fill("#meeting-url", "https://example.com/not-a-meeting");
   await page.click("#meeting-add-btn");
   await page.waitForSelector("#meeting-note.error");
-  check((await page.innerText("#meeting-note")).includes("Google Meet, Zoom or Microsoft Teams"), "a link that isn't a meeting is refused with the reason");
+  check((await page.innerText("#meeting-note")).includes("Paste a Google Meet link"), "a link that isn't a meeting is refused with the reason");
   await page.fill("#meeting-url", "https://meet.google.com/abc-defg-hij");
   await page.click("#meeting-add-btn");
   await page.waitForSelector('.meeting-row[data-id="m-new"]');
@@ -103,7 +103,7 @@ try {
   check((await page.locator("#transcript-m-new .meeting-line").count()) === 3, "the open transcript stays open");
 
   console.log("\nnot set up:");
-  setupProblem = "The meeting agent is not set up on this server yet: RECALL_API_KEY is missing.";
+  setupProblem = "The meeting agent is not set up on this server yet: it runs its browser on Mags, and MAGS_API_TOKEN is missing.";
   await page.goto(base + "/");
   await page.waitForSelector(".meeting-setup");
   check((await page.locator("#meeting-add").count()) === 0, "the form is replaced by the reason it can't be used");

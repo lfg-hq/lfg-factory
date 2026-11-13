@@ -20,21 +20,6 @@ export function requestAfterWakePhrase(text: string, typed = false): string | nu
   return end < 0 ? null : text.slice(end).trim();
 }
 
-/** What the bot says aloud: plain sentences, no markdown, and short. Long answers are cut at a sentence. */
-export function spokenText(reply: string, limit = 600): string {
-  const plain = reply
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/https?:\/\/\S+/g, "the link in the chat")
-    .replace(/^\s{0,3}(?:#{1,6}|[-*+]|\d+[.)])\s+/gm, "")
-    .replace(/[*_`~>|]/g, "")
-    .replace(/\s+/g, " ").trim();
-  if (plain.length <= limit) return plain;
-  const cut = plain.slice(0, limit);
-  const stop = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("? "), cut.lastIndexOf("! "));
-  return `${stop > limit / 3 ? cut.slice(0, stop + 1) : cut.trimEnd() + "..."} The rest is in the meeting chat and in LFG.`;
-}
-
 /** Split a reply to fit the meeting app's chat limit (Google Meet allows 500 characters per message). */
 export function chatChunks(reply: string, limit: number, maxChunks = 4): string[] {
   const chunks: string[] = [];
