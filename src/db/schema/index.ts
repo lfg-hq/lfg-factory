@@ -30,3 +30,5 @@ export * from "./project-skills.ts";
 export * from "./document-templates.ts";
 
 export * from "./meetings.ts";
+
+export * from "./whiteboards.ts";

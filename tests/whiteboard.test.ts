@@ -1,0 +1,275 @@
+// Whiteboards without a browser, model or network: saving and merging what people draw, what a
+// second browser is told changed, and the agent drawing on the board through a stand-in model.
+import { test, expect, mock } from 'bun:test';
+import { Database } from 'bun:sqlite';
+import { drizzle } from 'drizzle-orm/bun-sqlite';
+import { readFileSync } from 'node:fs';
+import { MockLanguageModelV3, simulateReadableStream } from 'ai/test';
+
+const sqlite = new Database(':memory:');
+sqlite.exec(`CREATE TABLE user(id TEXT PRIMARY KEY); INSERT INTO user VALUES ('u1');`);
+// The shipped migration creates the tables, so the test also proves it matches the schema.
+sqlite.exec(readFileSync(new URL('../drizzle/manual/20261114-whiteboards-sqlite.sql', import.meta.url), 'utf8'));
+mock.module('../src/config/db.ts', () => ({ db: drizzle(sqlite) }));
+
+// The API runs for real; only who is signed in, what they may do in a project, and the model are stand-ins.
+let who = 'owner';
+const ROLES: Record<string, any> = {
+  owner: { role: 'owner', permissions: { canEditFiles: true, canManageTickets: true, canChat: true, canInviteMembers: true } },
+  viewer: { role: 'viewer', permissions: { canEditFiles: false, canManageTickets: false, canChat: false, canInviteMembers: false } },
+  drawer: { role: 'member', permissions: { canEditFiles: true, canManageTickets: false, canChat: false, canInviteMembers: false } },
+};
+mock.module('../src/auth/middleware.ts', () => ({ requireAuth: async (c: any, next: any) => { c.set('user', { id: 'u1', name: 'Priya' }); await next(); } }));
+mock.module('../src/auth/project-access.ts', () => ({
+  getProjectAccess: async (projectId: string) => (who === 'stranger' || projectId !== 'proj-public' ? null : { project: { id: 'p1', projectId: 'proj-public', name: 'Invoicing' }, ...ROLES[who] }),
+}));
+let routeModel: any = null;
+mock.module('../src/services/app-profile.ts', () => ({ resolveUserModel: async () => { if (!routeModel) throw new Error('No Anthropic API key configured. Please add your API key in Settings → LLM Keys to use this model.'); return { model: routeModel }; } }));
+
+const store = await import('../src/services/whiteboards/store.ts');
+const { default: api } = await import('../src/routes/api/whiteboards.ts');
+const agent = await import('../src/services/whiteboards/agent.ts');
+
+const note = (id: string, extra: Record<string, unknown> = {}) => ({ id, type: 'sticky', x: 0, y: 0, w: 200, h: 200, text: id, ...extra });
+const board = () => store.createBoard('u1', 'proj-public', 'Ideas');
+const fresh = async (id: string) => (await store.getBoard(id))!;
+
+test('a new board is empty, titled, and listed for its project only', async () => {
+  const b = await board();
+  expect(b.title).toBe('Ideas'); expect(b.version).toBe(0); expect(store.readElements(b)).toEqual([]);
+  expect((await store.listBoards('proj-public')).some((row) => row.id === b.id)).toBe(true);
+  expect(await store.listBoards('another-project')).toEqual([]);
+  expect((await store.createBoard('u1', 'proj-public', '   ')).title).toBe('Untitled board');
+});
+
+test('saving merges changed elements into the board instead of replacing it', async () => {
+  const b = await board();
+  await store.applyOps(b.id, { upserts: [note('a'), note('b')] });
+  // A second browser that only knows about its own element must not wipe the first one's.
+  const second = await store.applyOps(b.id, { upserts: [note('c')] });
+  expect(second.version).toBe(2);
+  expect(store.readElements(await fresh(b.id)).map((e) => e.id).sort()).toEqual(['a', 'b', 'c']);
+  await store.applyOps(b.id, { upserts: [note('a', { text: 'changed' })], deletes: ['b'] });
+  const now = store.readElements(await fresh(b.id));
+  expect(now.map((e) => e.id).sort()).toEqual(['a', 'c']);
+  expect(now.find((e) => e.id === 'a')!.text).toBe('changed');
+});
+
+test('two saves at the same moment both land', async () => {
+  const b = await board();
+  await Promise.all(Array.from({ length: 12 }, (_, i) => store.applyOps(b.id, { upserts: [note('n' + i)] })));
+  const after = await fresh(b.id);
+  expect(store.readElements(after).length).toBe(12); expect(after.version).toBe(12);
+});
+
+test('a browser is told only what changed since the version it has, and what is gone', async () => {
+  const b = await board();
+  await store.applyOps(b.id, { upserts: [note('a'), note('b')] });
+  expect(store.changesSince(await fresh(b.id), 1)).toEqual({ version: 1, elements: [], ids: null });
+  await store.applyOps(b.id, { upserts: [note('c')], deletes: ['a'] });
+  const changes = store.changesSince(await fresh(b.id), 1);
+  expect(changes.version).toBe(2);
+  expect(changes.elements.map((e) => e.id)).toEqual(['c']);
+  expect(changes.ids!.sort()).toEqual(['b', 'c']);
+});
+
+test('what a browser sends is reduced to real element fields', async () => {
+  const b = await board();
+  await store.applyOps(b.id, { upserts: [
+    { id: 'ok', type: 'rect', x: 1.23456, y: Infinity, w: '9', text: 'hi', onclick: 'alert(1)', by: 'agent', _born: 5 },
+    { id: 'bad-type', type: 'script', x: 0, y: 0 },
+    { id: 'img-js', type: 'image', x: 0, y: 0, w: 10, h: 10, src: 'javascript:alert(1)' },
+    { id: 'img-ok', type: 'image', x: 0, y: 0, w: 10, h: 10, src: 'data:image/png;base64,AAAA' },
+    { type: 'rect' }, null, 'nope',
+  ] });
+  const stored = store.readElements(await fresh(b.id));
+  expect(stored.map((e) => e.id).sort()).toEqual(['img-ok', 'ok']);
+  const ok = stored.find((e) => e.id === 'ok')!;
+  expect(ok).toEqual({ id: 'ok', type: 'rect', x: 1.23, text: 'hi', v: 1 });
+});
+
+test('only the server decides that the agent made an element', async () => {
+  const b = await board();
+  await store.applyOps(b.id, { upserts: [note('mine', { by: 'agent' })] });
+  expect(store.readElements(await fresh(b.id))[0]!.by).toBeUndefined();
+  await store.applyOps(b.id, { upserts: [note('its')] }, { by: 'agent' });
+  // A person editing the agent's element keeps the mark.
+  await store.applyOps(b.id, { upserts: [note('its', { text: 'edited' })] });
+  expect(store.readElements(await fresh(b.id)).find((e) => e.id === 'its')).toMatchObject({ by: 'agent', text: 'edited' });
+});
+
+test('deleting an element frees the arrows and comments attached to it', async () => {
+  const b = await board();
+  await store.applyOps(b.id, { upserts: [note('a'), note('b'), { id: 'l', type: 'arrow', x1: 0, y1: 0, x2: 9, y2: 9, from: 'a', to: 'b' }, { id: 'c', type: 'comment', x: 0, y: 0, attach: 'a', thread: [{ author: 'Sam', text: 'why?' }] }] });
+  await store.applyOps(b.id, { deletes: ['a'] });
+  const now = store.readElements(await fresh(b.id));
+  const line = now.find((e) => e.id === 'l')!, comment = now.find((e) => e.id === 'c')!;
+  expect(line.from).toBeUndefined(); expect(line.to).toBe('b'); expect(comment.attach).toBeUndefined();
+  // They changed, so other browsers hear about it.
+  expect(store.changesSince(await fresh(b.id), 1).elements.map((e) => e.id).sort()).toEqual(['c', 'l']);
+});
+
+test('saving to a board that is gone fails plainly', async () => {
+  await expect(store.applyOps('missing', { upserts: [note('a')] })).rejects.toThrow('Board not found');
+});
+
+// ── The agent ──────────────────────────────────────────────────────────
+const finish = (kind: 'stop' | 'tool-calls') => ({ type: 'finish', finishReason: { unified: kind, raw: undefined }, usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } });
+const say = (text: string) => [{ type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: text }, { type: 'text-end', id: 't' }, finish('stop')];
+const call = (name: string, input: unknown) => [{ type: 'tool-call', toolCallId: crypto.randomUUID(), toolName: name, input: JSON.stringify(input) }, finish('tool-calls')];
+function scripted(steps: any[][]) {
+  const prompts: any[] = [];
+  let step = 0;
+  const model = new MockLanguageModelV3({
+    doStream: async (options: any) => {
+      prompts.push(options);
+      const chunks = steps[Math.min(step++, steps.length - 1)]!;
+      return { stream: simulateReadableStream({ chunks: [{ type: 'stream-start', warnings: [] }, ...chunks], chunkDelayInMs: 0 }) };
+    },
+  });
+  return { model, prompts };
+}
+const run = async (b: any, message: string, steps: any[][], extra: Record<string, unknown> = {}) => {
+  const events: any[] = []; const { model, prompts } = scripted(steps);
+  const text = await agent.runBoardAgent({ board: await fresh(b.id), userId: 'u1', message, emit: (e) => events.push(e), model, ...extra } as any);
+  return { text, events, prompts, system: JSON.stringify(prompts[0].prompt[0]) };
+};
+
+test('asked to sketch something, the agent draws it and the board is saved as it goes', async () => {
+  const b = await board();
+  const { text, events } = await run(b, 'Sketch a login screen', [
+    call('add_elements', { elements: [
+      { key: 'title', type: 'text', x: 140, y: 120, text: 'Sign in', fontSize: 28 },
+      { key: 'screen', type: 'frame', x: 100, y: 100, w: 390, h: 800, text: 'Login' },
+      { key: 'email', type: 'rect', x: 140, y: 200, w: 310, h: 40, text: 'Email', fill: 'white', stroke: 'gray', align: 'left' },
+      { key: 'go', type: 'rect', x: 140, y: 260, w: 310, h: 40, text: 'Continue', fill: 'accent', color: 'white', bold: true },
+      { type: 'arrow', from: 'email', to: 'go', text: 'then' },
+    ] }),
+    say('I sketched a login screen in a mobile frame.'),
+  ]);
+  expect(text).toBe('I sketched a login screen in a mobile frame.');
+  const stored = store.readElements(await fresh(b.id));
+  expect(stored.map((e) => e.type).sort()).toEqual(['arrow', 'frame', 'rect', 'rect', 'text']);
+  expect(stored.every((e) => e.by === 'agent')).toBe(true);
+  const frame = stored.find((e) => e.type === 'frame')!, button = stored.find((e) => e.text === 'Continue')!, arrow = stored.find((e) => e.type === 'arrow')!;
+  // Palette names become colours, and the frame sits behind what was drawn on it though it was listed second.
+  expect(button).toMatchObject({ fill: '#7c3aed', color: '#ffffff', bold: true, radius: 8 });
+  expect(stored.every((e) => e === frame || (e.z as number) > (frame.z as number))).toBe(true);
+  // The arrow is attached to the elements named by key in the same call.
+  expect(arrow.from).toBe(stored.find((e) => e.text === 'Email')!.id); expect(arrow.to).toBe(button.id);
+  const ops = events.find((e) => e.type === 'ops');
+  expect(ops.upserts.length).toBe(5); expect(ops.version).toBe(1);
+  expect(events.at(-1)).toEqual({ type: 'done', text });
+});
+
+test('the agent is told what is on the board, what is selected, and where there is room', async () => {
+  const b = await board();
+  await store.applyOps(b.id, { upserts: [note('n1', { x: 0, y: 0, text: 'Pay by card' }), note('n2', { x: 300, y: 0, text: 'Refunds need approval' })] });
+  const { system } = await run(b, 'What does this mean?', [say('It means refunds wait for a manager.')], { selection: ['n2', 'not-on-board'], viewport: { x: -100, y: -100, w: 1200, h: 700 } });
+  expect(system).toContain('- n1 sticky x=0 y=0 w=200 h=200 \\"Pay by card\\"');
+  expect(system).toContain('* n2 sticky x=300 y=0 w=200 h=200 \\"Refunds need approval\\"');
+  expect(system).toContain('The person has 1 element(s) selected');
+  // New work starts clear of the existing notes (they end at x=500).
+  expect(system).toContain('Start new work at about x=660, y=0');
+  expect(agent.freeOrigin([], { x: 500, y: 400, w: 1000, h: 600 })).toEqual({ x: 580, y: 480 });
+});
+
+test('the agent can change and remove what is there, and a later turn remembers the conversation', async () => {
+  const b = await board();
+  await store.applyOps(b.id, { upserts: [note('n1', { text: 'old' }), note('n2')] });
+  const first = await run(b, 'Rename the first note and drop the second', [
+    call('update_elements', { updates: [{ id: 'n1', text: 'new', fill: 'pink' }, { id: 'ghost', text: 'x' }] }),
+    call('delete_elements', { ids: ['n2'] }),
+    say('Renamed it and removed the other.'),
+  ]);
+  const stored = store.readElements(await fresh(b.id));
+  expect(stored.length).toBe(1);
+  expect(stored[0]).toMatchObject({ id: 'n1', text: 'new', fill: '#f9a8d4', x: 0, w: 200 });
+  expect(first.events.filter((e) => e.type === 'ops').map((e) => e.deletes)).toEqual([[], ['n2']]);
+  // The tool told the model which id it could not find.
+  expect(JSON.stringify(first.prompts[1].prompt)).toContain('notFound');
+
+  const second = await run(b, 'Thanks', [say('Any time.')]);
+  const history = JSON.stringify(second.prompts[0].prompt);
+  expect(history).toContain('Rename the first note and drop the second'); expect(history).toContain('Renamed it and removed the other.');
+  expect((await store.listMessages(b.id)).map((m) => [m.role, m.content])).toEqual([
+    ['user', 'Rename the first note and drop the second'], ['assistant', 'Renamed it and removed the other.'], ['user', 'Thanks'], ['assistant', 'Any time.'],
+  ]);
+});
+
+test('when the model fails, the question is kept and the error reaches the caller', async () => {
+  const b = await board();
+  const model = new MockLanguageModelV3({ doStream: async () => { throw new Error('provider down'); } });
+  await expect(agent.runBoardAgent({ board: await fresh(b.id), userId: 'u1', message: 'Hello', emit: () => {}, model } as any)).rejects.toThrow('provider down');
+  expect((await store.listMessages(b.id)).map((m) => m.role)).toEqual(['user']);
+});
+
+// ── Over HTTP: who may do what ─────────────────────────────────────────
+const http = (path: string, method = 'GET', body?: unknown) => api.request(path, { method, headers: { 'Content-Type': 'application/json' }, body: body == null ? undefined : JSON.stringify(body) });
+const lines = async (response: Response) => (await response.text()).trim().split('\n').map((line) => JSON.parse(line));
+
+test('a project member creates a board, draws on it and reads it back', async () => {
+  who = 'owner';
+  const created = await (await http('/', 'POST', { projectId: 'proj-public', title: 'Flows' })).json() as any;
+  expect(created.board.title).toBe('Flows');
+  expect((await http(`/${created.board.id}/ops`, 'POST', { upserts: [note('a')] })).status).toBe(200);
+  const opened = await (await http(`/${created.board.id}`)).json() as any;
+  expect(opened).toMatchObject({ board: { title: 'Flows', version: 1 }, canEdit: true, canChat: true, messages: [] });
+  expect(opened.elements.map((e: any) => e.id)).toEqual(['a']);
+  expect(await (await http(`/${created.board.id}?since=0`)).json()).toMatchObject({ version: 1, ids: ['a'], title: 'Flows' });
+  expect((await (await http('/?projectId=proj-public')).json() as any).boards.some((b: any) => b.id === created.board.id)).toBe(true);
+  expect(await (await http(`/${created.board.id}`, 'PATCH', { title: '  Checkout flows ' })).json()).toEqual({ title: 'Checkout flows' });
+});
+
+test('someone who may only view can open a board but not change it or use the agent', async () => {
+  who = 'owner';
+  const b = await board(); await store.applyOps(b.id, { upserts: [note('a')] });
+  who = 'viewer';
+  expect(await (await http(`/${b.id}`)).json()).toMatchObject({ canEdit: false, canChat: false });
+  for (const [path, method, body] of [[`/${b.id}/ops`, 'POST', { deletes: ['a'] }], [`/${b.id}`, 'PATCH', { title: 'x' }], [`/${b.id}`, 'DELETE', undefined], [`/${b.id}/chat`, 'POST', { message: 'hi' }], ['/', 'POST', { projectId: 'proj-public' }]] as const) {
+    expect((await http(path, method, body)).status).toBe(403);
+  }
+  expect(store.readElements(await fresh(b.id)).length).toBe(1);
+  // Someone allowed to draw but not to use the agent keeps drawing; the agent stays off.
+  who = 'drawer';
+  expect((await http(`/${b.id}/ops`, 'POST', { upserts: [note('b')] })).status).toBe(200);
+  expect((await http(`/${b.id}/chat`, 'POST', { message: 'hi' })).status).toBe(403);
+});
+
+test('a board in a project you are not in does not exist for you', async () => {
+  who = 'owner';
+  const b = await board();
+  who = 'stranger';
+  for (const [path, method] of [[`/${b.id}`, 'GET'], [`/${b.id}?since=0`, 'GET'], [`/${b.id}/ops`, 'POST'], [`/${b.id}/chat`, 'POST'], [`/${b.id}`, 'DELETE'], ['/?projectId=proj-public', 'GET']] as const) {
+    expect((await http(path, method, method === 'GET' ? undefined : { message: 'hi', upserts: [note('x')] })).status).toBe(404);
+  }
+  who = 'owner';
+  expect(await store.getBoard(b.id)).not.toBeNull();
+});
+
+test('the chat streams what the agent says and draws, one event per line', async () => {
+  who = 'owner';
+  const b = await board();
+  expect((await http(`/${b.id}/chat`, 'POST', { message: '   ' })).status).toBe(400);
+  routeModel = scripted([call('add_elements', { elements: [{ type: 'sticky', x: 0, y: 0, text: 'Pay by card' }] }), say('Added a note.')]).model;
+  const response = await http(`/${b.id}/chat`, 'POST', { message: 'Add a note about card payments', selection: ['x', 5], viewport: { x: 0, y: 0, w: 1000, h: 600 } });
+  expect(response.headers.get('Content-Type')).toContain('application/x-ndjson');
+  const events = await lines(response);
+  expect(events.map((e) => e.type)).toEqual(['ops', 'text', 'text', 'done']);
+  expect(events[0].upserts[0]).toMatchObject({ type: 'sticky', text: 'Pay by card', by: 'agent' });
+  expect(store.readElements(await fresh(b.id)).length).toBe(1);
+  // The board is free again for the next question.
+  routeModel = scripted([say('Sure.')]).model;
+  expect((await lines(await http(`/${b.id}/chat`, 'POST', { message: 'Thanks' }))).at(-1)).toEqual({ type: 'done', text: 'Sure.' });
+  expect((await http(`/${b.id}/messages`, 'DELETE')).status).toBe(200);
+  expect(await store.listMessages(b.id)).toEqual([]);
+});
+
+test('with no model set up, the chat says what to do instead of failing silently', async () => {
+  who = 'owner'; routeModel = null;
+  const b = await board();
+  const quiet = console.error; console.error = () => {};
+  const events = await lines(await http(`/${b.id}/chat`, 'POST', { message: 'Hello' }));
+  console.error = quiet;
+  expect(events).toEqual([{ type: 'error', message: 'No Anthropic API key configured. Please add your API key in Settings → LLM Keys to use this model.' }]);
+});

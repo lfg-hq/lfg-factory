@@ -10,6 +10,7 @@ const PROJECT_PAGES = [
   "src/templates/pages/epics.tsx",
   "src/templates/pages/tickets-list.tsx",
   "src/templates/pages/meetings.tsx",
+  "src/templates/pages/whiteboards.tsx",
 ];
 
 console.log("sidebar rail:");

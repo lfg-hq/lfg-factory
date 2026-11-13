@@ -19,6 +19,8 @@ const PAGES = [
   ["src/templates/pages/chat.tsx", "ChatPage", [null]],
   ["src/templates/pages/epics.tsx", "EpicsPage", [null]],
   ["src/templates/pages/meetings.tsx", "MeetingsPage", [null]],
+  ["src/templates/pages/whiteboards.tsx", "WhiteboardsPage", [null]],
+  ["src/templates/pages/whiteboard.tsx", "WhiteboardPage", [null]],
 ];
 
 const driver = `

@@ -50,3 +50,5 @@ export * from "./git-mutations.ts";
 export * from "../../../venture/db/pg.ts";
 
 export * from "./meetings.ts";
+
+export * from "./whiteboards.ts";

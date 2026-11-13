@@ -36,6 +36,8 @@
     "test:voice": "node scripts/test-voice-ui.mjs",
     "test:meetings": "DATABASE_DRIVER=sqlite DATABASE_URL=:memory: bun test tests/meeting-agent.test.ts",
     "test:meetings-ui": "bun run scripts/test-meetings-ui.ts",
+    "test:whiteboard": "DATABASE_DRIVER=sqlite DATABASE_URL=:memory: bun test tests/whiteboard.test.ts",
+    "test:whiteboard-ui": "bun run scripts/test-whiteboard-ui.ts",
     "test:meeting-bot": "node scripts/test-meeting-bot.mjs",
     "test:shell": "node scripts/test-preview-shell.mjs",
     "test:instructions": "bun run scripts/test-agent-instructions.mjs",

@@ -1,5 +1,6 @@
 import voiceApi from './routes/api/voice.ts';
 import meetingsApi from './routes/api/meetings.ts';
+import whiteboardsApi from "./routes/api/whiteboards.ts";
 import { endOrphanedMeetings } from './services/meetings/meeting-agent.ts';
 import documentGraphApi from "./routes/api/document-graph.ts";
 import { documentSyncSettingsApi, documentSyncProjectApi } from "./routes/api/document-sync.ts";
@@ -235,6 +236,7 @@ app.route("/", shareRoutes);
 app.route("/api/files", filesApi);
 app.route("/api/voice", voiceApi);
 app.route("/api/meetings", meetingsApi);
+app.route("/api/whiteboards", whiteboardsApi);
 app.route("/api/token-usage", tokenUsageApi);
 app.route("/api/settings", settingsApi);
 app.route("/api/projects", ticketCodeApi);

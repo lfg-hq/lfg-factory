@@ -658,6 +658,35 @@ projectsRouter.get("/projects/:projectId/epics", async (c) => {
   }));
 });
 
+// ── GET /projects/:projectId/whiteboards — the project's whiteboards, and one board's canvas ──
+projectsRouter.get("/projects/:projectId/whiteboards", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId"), user.id);
+  if (!access) return c.text("Project not found", 404);
+  const { WhiteboardsPage } = await import("../templates/pages/whiteboards.tsx");
+  const { canDraw } = await import("./api/whiteboards.ts");
+  return c.html(WhiteboardsPage({
+    project: { id: access.project.id, projectId: access.project.projectId, name: access.project.name, icon: access.project.icon },
+    user: { name: user.name, email: user.email }, canEdit: canDraw(access),
+  }));
+});
+
+projectsRouter.get("/projects/:projectId/whiteboards/:boardId", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId"), user.id);
+  if (!access) return c.text("Project not found", 404);
+  const { getBoard } = await import("../services/whiteboards/store.ts");
+  const board = await getBoard(c.req.param("boardId"));
+  if (!board || board.projectId !== access.project.projectId) return c.text("Board not found", 404);
+  const { WhiteboardPage } = await import("../templates/pages/whiteboard.tsx");
+  const { canDraw, canAsk } = await import("./api/whiteboards.ts");
+  return c.html(WhiteboardPage({
+    project: { projectId: access.project.projectId, name: access.project.name },
+    board: { id: board.id, title: board.title }, user: { name: user.name },
+    canEdit: canDraw(access), canChat: canDraw(access) && canAsk(access),
+  }));
+});
+
 // ── GET /projects/:projectId/meetings — add the agent to a call, see past calls ──
 projectsRouter.get("/projects/:projectId/meetings", async (c) => {
   const user = c.get("user");

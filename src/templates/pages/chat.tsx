@@ -183,6 +183,9 @@ export function ChatPage({
             <a href="/projects/${projectId}/meetings" class="nav-link">
               <i class="fas fa-video"></i><span class="nav-text">Meetings</span>
             </a>
+            <a href="/projects/${projectId}/whiteboards" class="nav-link">
+              <i class="fas fa-chalkboard"></i><span class="nav-text">Whiteboards</span>
+            </a>
             <a href="/projects/${projectId}?tab=documents" class="nav-link">
               <i class="fas fa-file-lines"></i><span class="nav-text">Docs</span>
             </a>
