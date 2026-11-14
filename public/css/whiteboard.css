@@ -147,3 +147,16 @@ html[data-theme="light"] .wb {
 .wb-share-row .wb-primary, .wb-guest .wb-primary { height: 34px; white-space: nowrap; }
 .wb-guest { z-index: 12; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 340px; flex-direction: column; align-items: stretch; gap: 8px; padding: 18px; animation: none; }
 .wb-guest label { font-weight: 650; font-size: 15px; }
+
+/* Live: who else is on the board. */
+.wb-peers { display: flex; align-items: center; padding: 0 6px 0 4px; }
+.wb-peer { width: 28px; height: 28px; margin-left: -6px; border-radius: 50%; border: 2px solid var(--wb-panel); color: #fff !important; font-weight: 700 !important; font-size: 12px !important; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; transition: transform 0.14s ease; animation: wb-pop 0.2s ease; }
+.wb-peer:first-child { margin-left: 0; }
+.wb-peer:hover { transform: translateY(-2px) scale(1.08); z-index: 1; }
+.wb-peer.more { background: var(--wb-hover); color: var(--wb-ink) !important; cursor: default; }
+.wb-live { width: 7px; height: 7px; border-radius: 50%; margin-right: 8px; background: var(--wb-muted); opacity: 0.5; transition: background 0.3s ease, opacity 0.3s ease; }
+.wb.live .wb-live { background: #10b981; opacity: 1; }
+.wb-chat-model { display: flex; align-items: center; gap: 8px; padding: 8px 12px 0; font-size: 12px; color: var(--wb-muted); }
+.wb-chat-model select { flex: 1; min-width: 0; height: 28px; background: var(--wb-hover); border: 1px solid var(--wb-border); border-radius: 7px; color: var(--wb-ink); font: inherit; font-size: 12.5px; padding: 0 6px; }
+.wb-chat-model select option, .wb-chat-model select optgroup { color: #1f2937; }
+.wb-msg-who { font-size: 11px; color: var(--wb-muted); text-align: right; padding: 0 4px 2px; }

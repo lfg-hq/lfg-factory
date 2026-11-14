@@ -11,7 +11,14 @@ sqlite.exec(`CREATE TABLE user(id TEXT PRIMARY KEY); INSERT INTO user VALUES ('u
 // The shipped migration creates the tables, so the test also proves it matches the schema.
 sqlite.exec(readFileSync(new URL('../drizzle/manual/20261114-whiteboards-sqlite.sql', import.meta.url), 'utf8'));
 sqlite.exec(readFileSync(new URL('../drizzle/manual/20261114-whiteboard-links-sqlite.sql', import.meta.url), 'utf8'));
+sqlite.exec(`CREATE TABLE model_selection(id TEXT PRIMARY KEY, user_id TEXT NOT NULL UNIQUE, selected_model TEXT NOT NULL DEFAULT 'gpt-5.6-luna', created_at INTEGER NOT NULL DEFAULT (unixepoch()), updated_at INTEGER NOT NULL DEFAULT (unixepoch()));`);
 mock.module('../src/config/db.ts', () => ({ db: drizzle(sqlite) }));
+// The models this person has keys for: one of them is listed but not usable (a subscription that is not connected).
+mock.module('../src/services/available-models.ts', () => ({ availableChatModels: async () => [
+  { key: 'claude_fast', label: 'Claude Fast', providerLabel: 'Anthropic', provider: 'anthropic', available: true },
+  { key: 'gpt_big', label: 'GPT Big', providerLabel: 'OpenAI', provider: 'openai', available: true },
+  { key: 'chatgpt/x', label: 'GPT · Subscription', providerLabel: 'ChatGPT subscription', provider: 'openai', available: false },
+] }));
 
 // The API runs for real; only who is signed in, what they may do in a project, and the model are stand-ins.
 let who = 'owner';
@@ -35,6 +42,8 @@ mock.module('../src/services/app-profile.ts', () => ({ resolveUserModel: async (
 const store = await import('../src/services/whiteboards/store.ts');
 const { default: api, sharedBoardsApi: shared } = await import('../src/routes/api/whiteboards.ts');
 const { default: sharedPages } = await import('../src/routes/shared-board.ts');
+const live = await import('../src/services/whiteboards/live.ts');
+const { authorizeBoardSocket } = await import('../src/routes/api/whiteboards.ts');
 const agent = await import('../src/services/whiteboards/agent.ts');
 
 const note = (id: string, extra: Record<string, unknown> = {}) => ({ id, type: 'sticky', x: 0, y: 0, w: 200, h: 200, text: id, ...extra });
@@ -369,4 +378,123 @@ test('the link opens the board page for a guest without naming the project', asy
   expect(await (await sharedPages.request(`/board/${token}`)).text()).toContain('data-user="Priya"');
   await store.setShare(b.id, null);
   expect((await sharedPages.request(`/board/${token}`)).status).toBe(404);
+});
+
+// ── Live: several people on one board ──────────────────────────────────
+function socket() { const got: any[] = []; let closed: number | null = null; return { got, send: (text: string) => { got.push(JSON.parse(text)); }, close: (code?: number) => { closed = code ?? 1000; }, get closed() { return closed; }, of: (t: string) => got.filter((m) => m.t === t) }; }
+const enter = (boardId: string, name: string, extra: Record<string, unknown> = {}) => { const s = socket(); const peer = live.joinBoard(s, { boardId, name, canEdit: true, guest: false, ...extra }); return { s, peer }; };
+const tell = (peer: any, message: unknown) => live.boardMessage(peer, JSON.stringify(message));
+
+test('people on a board learn who else is there, in distinct colours, and when they leave', async () => {
+  const b = await board();
+  const a = enter(b.id, 'Priya'), c = enter(b.id, '  Sam   Lee  ');
+  expect(a.s.got[0]).toMatchObject({ t: 'welcome', id: a.peer.id, peers: [] });
+  expect(c.s.got[0].peers).toEqual([{ id: a.peer.id, name: 'Priya', color: a.peer.color, guest: false }]);
+  expect(a.s.of('join')[0].peer).toMatchObject({ id: c.peer.id, name: 'Sam Lee' });
+  expect(a.peer.color).not.toBe(c.peer.color);
+  expect(live.peersOn(b.id).length).toBe(2);
+  // Someone on another board hears none of it.
+  const elsewhere = enter((await board()).id, 'Other');
+  live.leaveBoard(c.peer);
+  expect(a.s.of('leave')).toEqual([{ t: 'leave', id: c.peer.id }]);
+  expect(elsewhere.s.got.length).toBe(1);
+  live.leaveBoard(a.peer); live.leaveBoard(a.peer); live.leaveBoard(elsewhere.peer);
+  expect(live.peersOn(b.id)).toEqual([]);
+});
+
+test('cursors, selections and work in progress are passed to the others and never stored', async () => {
+  const b = await board();
+  const a = enter(b.id, 'Priya'), c = enter(b.id, 'Sam'), viewer = enter(b.id, 'Vic', { canEdit: false });
+  tell(a.peer, { t: 'cursor', x: 10.6, y: 20.2 });
+  expect(c.s.of('cursor')).toEqual([{ t: 'cursor', id: a.peer.id, x: 11, y: 20 }]);
+  expect(a.s.of('cursor')).toEqual([]); // not echoed to the sender
+  tell(a.peer, { t: 'select', ids: ['n1', 5, 'n2'] });
+  expect(c.s.of('select')[0]).toEqual({ t: 'select', id: a.peer.id, ids: ['n1', 'n2'] });
+  tell(a.peer, { t: 'live', els: [note('n1', { x: 50, onclick: 'x' }), { id: 'bad', type: 'script' }], gone: ['draft', 7] });
+  expect(c.s.of('live')[0]).toEqual({ t: 'live', id: a.peer.id, els: [{ id: 'n1', type: 'sticky', x: 50, y: 0, w: 200, h: 200, text: 'n1' }], gone: ['draft'] });
+  expect(store.readElements(await fresh(b.id))).toEqual([]);
+  // Someone who may only view can point and select, but cannot show changes.
+  tell(viewer.peer, { t: 'cursor', x: 1, y: 2 }); tell(viewer.peer, { t: 'live', els: [note('n9')] });
+  expect(c.s.of('cursor').length).toBe(2); expect(c.s.of('live').length).toBe(1);
+  // Nonsense is ignored without disturbing anyone.
+  for (const junk of ['not json', '5', 'null', JSON.stringify({ t: 'cursor', x: 'a' }), JSON.stringify({ t: 'ops', upserts: [note('z')] })]) live.boardMessage(a.peer, junk);
+  expect(c.s.got.length).toBe(1 + 1 + 4); // welcome, viewer joining, then the four relayed messages above
+  expect(store.readElements(await fresh(b.id))).toEqual([]);
+  [a, c, viewer].forEach((x) => live.leaveBoard(x.peer));
+});
+
+test('a saved change reaches everyone else on the board at once, but not the browser that made it', async () => {
+  who = 'owner';
+  const b = await board();
+  const a = enter(b.id, 'Priya'), c = enter(b.id, 'Sam');
+  const saved = await api.request(`/${b.id}/ops`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Board-Client': a.peer.id }, body: JSON.stringify({ upserts: [note('n1')] }) });
+  expect(await saved.json()).toEqual({ version: 1 });
+  expect(a.s.of('ops')).toEqual([]);
+  expect(c.s.of('ops')).toEqual([{ t: 'ops', version: 1, by: a.peer.id, deletes: [], upserts: [{ ...note('n1'), v: 1 }] }]);
+  // What the agent draws reaches both, and a rename reaches the other.
+  routeModel = scripted([call('add_elements', { elements: [{ type: 'sticky', text: 'From LFG' }] }), say('Added.')]).model;
+  await (await api.request(`/${b.id}/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Board-Client': a.peer.id }, body: JSON.stringify({ message: 'Add a note' }) })).text();
+  expect(a.s.of('ops')).toEqual([]); expect(c.s.of('ops').length).toBe(2); // the asker gets the agent's work on the chat stream instead
+  expect(c.s.of('ops')[1].upserts[0]).toMatchObject({ text: 'From LFG', by: 'agent' });
+  expect(c.s.of('chat')).toEqual([{ t: 'chat', name: 'Priya', message: 'Add a note', reply: 'Added.' }]);
+  expect(a.s.of('chat')).toEqual([]);
+  await api.request(`/${b.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-Board-Client': a.peer.id }, body: JSON.stringify({ title: 'Renamed' }) });
+  expect(c.s.of('title')).toEqual([{ t: 'title', title: 'Renamed' }]); expect(a.s.of('title')).toEqual([]);
+  [a, c].forEach((x) => live.leaveBoard(x.peer));
+});
+
+test('who may join a board live: members by sign-in, guests by a link that is on', async () => {
+  who = 'owner';
+  const b = await board();
+  const q = (text: string) => new URLSearchParams(text);
+  const me = { id: 'u1', name: 'Priya' };
+  expect(await authorizeBoardSocket(q(`board=${b.id}`), me)).toEqual({ boardId: b.id, name: 'Priya', canEdit: true, guest: false });
+  expect(await authorizeBoardSocket(q(`board=${b.id}`), null)).toBeNull();
+  expect(await authorizeBoardSocket(q('board=missing'), me)).toBeNull();
+  who = 'viewer';
+  expect((await authorizeBoardSocket(q(`board=${b.id}`), me))!.canEdit).toBe(false);
+  who = 'stranger';
+  expect(await authorizeBoardSocket(q(`board=${b.id}`), me)).toBeNull();
+  who = 'owner';
+  const { token } = await store.setShare(b.id, 'view');
+  expect(await authorizeBoardSocket(q(`token=${token}&name=Dana`), null)).toEqual({ boardId: b.id, name: 'Dana', canEdit: false, guest: true });
+  await store.setShare(b.id, 'edit');
+  expect(await authorizeBoardSocket(q(`token=${token}`), null)).toEqual({ boardId: b.id, name: 'Guest', canEdit: true, guest: true });
+  expect(await authorizeBoardSocket(q('token=wrong-wrong-wrong-wrong'), null)).toBeNull();
+});
+
+test('guests are kept out of the agent conversation, choose their own name, and leave when the link changes', async () => {
+  who = 'owner';
+  const b = await board();
+  await (await http(`/${b.id}/share`, 'PUT', { mode: 'edit' })).json();
+  const member = enter(b.id, 'Priya'), guestPeer = enter(b.id, 'Guest', { guest: true });
+  tell(guestPeer.peer, { t: 'name', name: 'Dana' }); tell(member.peer, { t: 'name', name: 'Not Priya' });
+  expect(member.s.of('name')).toEqual([{ t: 'name', id: guestPeer.peer.id, name: 'Dana' }]);
+  expect(guestPeer.s.of('name')).toEqual([]); // a member's name is their account's
+  routeModel = scripted([say('Private answer.')]).model;
+  await (await http(`/${b.id}/chat`, 'POST', { message: 'A private question' })).text();
+  expect(member.s.of('chat').length).toBe(1); expect(guestPeer.s.of('chat')).toEqual([]);
+  // Narrowing or turning off the link sends guests back to load the page; members stay.
+  await http(`/${b.id}/share`, 'PUT', { mode: 'view' });
+  expect(guestPeer.s.closed).toBe(live.ACCESS_CHANGED); expect(member.s.closed).toBeNull();
+  expect(member.s.of('leave')).toEqual([{ t: 'leave', id: guestPeer.peer.id }]);
+  // Saving the same setting again disturbs nobody.
+  const again = enter(b.id, 'Guest', { guest: true, canEdit: false });
+  await http(`/${b.id}/share`, 'PUT', { mode: 'view' });
+  expect(again.s.closed).toBeNull();
+  live.leaveBoard(member.peer); live.leaveBoard(again.peer);
+});
+
+test('the board chat lists the models this person can use and which one is picked', async () => {
+  who = 'owner';
+  const b = await board();
+  const opened = await (await http(`/${b.id}`)).json() as any;
+  // Only usable models are offered; with no usable pick yet, none is marked.
+  expect(opened.models).toEqual([{ key: 'claude_fast', label: 'Claude Fast', provider: 'Anthropic' }, { key: 'gpt_big', label: 'GPT Big', provider: 'OpenAI' }]);
+  expect(opened.model).toBeNull();
+  sqlite.exec(`INSERT INTO model_selection(id, user_id, selected_model) VALUES ('s1', 'u1', 'gpt_big')`);
+  expect((await (await http(`/${b.id}`)).json() as any).model).toBe('gpt_big');
+  // People who cannot use the agent here are not shown models at all.
+  who = 'drawer';
+  expect(await (await http(`/${b.id}`)).json()).toMatchObject({ models: [], model: null });
 });

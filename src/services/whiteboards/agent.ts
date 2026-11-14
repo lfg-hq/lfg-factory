@@ -28,6 +28,8 @@ export interface BoardTurn {
   viewport?: { x: number; y: number; w: number; h: number };
   emit: (event: AgentEvent) => void;
   signal?: AbortSignal;
+  /** The asker's live connection: they get the agent's changes on the chat stream, so not a second time over the socket. */
+  origin?: string | null;
   /** Tests pass a stand-in; otherwise the person's own model is used. */
   model?: LanguageModel;
 }
@@ -191,7 +193,7 @@ export async function runBoardAgent(turn: BoardTurn): Promise<string> {
   const known = new Set(elements.map((e) => e.id));
   const keys = new Map<string, string>();
   const report = async (ops: { upserts?: BoardElement[]; deletes?: string[] }) => {
-    const result = await applyOps(board.id, ops, ops.upserts ? { by: "agent" } : {});
+    const result = await applyOps(board.id, ops, ops.upserts ? { by: "agent", origin: turn.origin } : { origin: turn.origin });
     emit({ type: "ops", upserts: result.changed, deletes: result.deleted, version: result.version });
     return result;
   };

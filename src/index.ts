@@ -2,6 +2,7 @@ import voiceApi from './routes/api/voice.ts';
 import meetingsApi from './routes/api/meetings.ts';
 import whiteboardsApi, { sharedBoardsApi } from "./routes/api/whiteboards.ts";
 import sharedBoardRoutes from "./routes/shared-board.ts";
+import { boardSockets } from "./services/whiteboards/live.ts";
 import { endOrphanedMeetings } from './services/meetings/meeting-agent.ts';
 import documentGraphApi from "./routes/api/document-graph.ts";
 import { documentSyncSettingsApi, documentSyncProjectApi } from "./routes/api/document-sync.ts";
@@ -356,6 +357,17 @@ async function handleFetch(req: Request, server: import("bun").Server<WsData>): 
     return new Response("WebSocket upgrade failed", { status: 500 });
   }
 
+  // A whiteboard's live connection: a project member (by session), or a guest holding the board's link.
+  if (url.pathname === "/ws/board") {
+    const { authorizeBoardSocket } = await import("./routes/api/whiteboards.ts");
+    const session = await auth.api.getSession({ headers: req.headers });
+    const board = await authorizeBoardSocket(url.searchParams, session?.user ?? null);
+    if (!board) return new Response("Unauthorized", { status: 401 });
+    const upgraded = server.upgrade(req, { data: { sessionId: `board:${board.boardId}`, userId: session?.user?.id ?? "", board } });
+    if (upgraded) return undefined as unknown as Response;
+    return new Response("WebSocket upgrade failed", { status: 500 });
+  }
+
   if (url.pathname === "/ws/chat" || url.pathname === "/ws/chat/") {
     const session = await auth.api.getSession({ headers: req.headers });
     if (!session?.user) {
@@ -451,9 +463,9 @@ export default {
   fetch: handleFetch,
 
   websocket: {
-    open: (ws: import("bun").ServerWebSocket<WsData>) => ws.data.runner ? void runnerOpened(runnerConn(ws)).catch(console.error) : onOpen(ws),
-    close: (ws: import("bun").ServerWebSocket<WsData>) => ws.data.runner ? runnerClosed(runnerConn(ws)) : onClose(ws),
+    open: (ws: import("bun").ServerWebSocket<WsData>) => ws.data.board ? boardSockets.open(ws) : ws.data.runner ? void runnerOpened(runnerConn(ws)).catch(console.error) : onOpen(ws),
+    close: (ws: import("bun").ServerWebSocket<WsData>) => ws.data.board ? boardSockets.close(ws) : ws.data.runner ? runnerClosed(runnerConn(ws)) : onClose(ws),
     message: (ws: import("bun").ServerWebSocket<WsData>, data: string | Buffer) =>
-      ws.data.runner ? runnerMessage(runnerConn(ws), data).catch(e => console.error("[runner] message failed:", e)) : onMessage(ws, data),
+      ws.data.board ? boardSockets.message(ws, data) : ws.data.runner ? runnerMessage(runnerConn(ws), data).catch(e => console.error("[runner] message failed:", e)) : onMessage(ws, data),
   },
 };

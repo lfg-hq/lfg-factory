@@ -355,7 +355,7 @@
       else if (event.type === 'error') { failed = true; body.classList.remove('thinking'); node.classList.add('error'); richText(body, event.message); }
     }
     fetch(B.apiBase + '/chat', {
-      method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json' },
+      method: 'POST', signal: abort.signal, headers: B.headers(),
       body: JSON.stringify({ message: text, selection: Array.from(B.selection), viewport: B.viewport() }),
     }).then(function (response) {
       if (!response.ok || !response.body) return response.json().catch(function () { return {}; }).then(function (b) { throw new Error(b.error || 'LFG could not answer just now.'); });
@@ -437,9 +437,59 @@
     card.addEventListener('submit', function (event) {
       event.preventDefault();
       userName = input.value.trim().slice(0, 40) || 'Guest';
-      localStorage.setItem('lfg-wb-guest', userName); card.hidden = true; document.getElementById('wb-canvas').focus();
+      localStorage.setItem('lfg-wb-guest', userName); B.setName(userName); card.hidden = true; document.getElementById('wb-canvas').focus();
     });
   })();
+
+  // ── Who is here ────────────────────────────────────────────────────
+  (function () {
+    const box = $('wb-peers');
+    B.on('peers', function (list) {
+      box.textContent = '';
+      list.slice(0, 6).forEach(function (p) {
+        const chip = el('button', { type: 'button', 'class': 'wb-peer', title: p.name + (p.guest ? ' (guest)' : '') + ' · click to go to their cursor', 'data-peer': p.id, style: 'background:' + p.color }, (p.name[0] || '?').toUpperCase());
+        box.appendChild(chip);
+      });
+      if (list.length > 6) box.appendChild(el('span', { 'class': 'wb-peer more', title: list.slice(6).map(function (p) { return p.name; }).join(', ') }, '+' + (list.length - 6)));
+      box.hidden = !list.length;
+    });
+    box.addEventListener('click', function (event) { const chip = event.target.closest('[data-peer]'); if (chip) B.followPeer(chip.dataset.peer); });
+    B.on('live', function (up) { root.classList.toggle('live', up); });
+  })();
+
+  // ── Model for the agent ────────────────────────────────────────────
+  (function () {
+    const picker = $('wb-chat-model'); if (!picker) return;
+    let current = '';
+    B.on('ready', function (body) {
+      const models = body.models || [];
+      if (!models.length) return;
+      picker.textContent = '';
+      if (!body.model) picker.appendChild(el('option', { value: '' }, 'Choose a model'));
+      const groups = {};
+      models.forEach(function (m) {
+        const group = groups[m.provider] || (groups[m.provider] = picker.appendChild(el('optgroup', { label: m.provider })));
+        group.appendChild(el('option', { value: m.key }, m.label));
+      });
+      current = body.model || ''; picker.value = current; picker.parentElement.hidden = false;
+    });
+    picker.addEventListener('change', function () {
+      const wanted = picker.value; if (!wanted) return;
+      picker.disabled = true;
+      fetch('/api/settings/model', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelKey: wanted, projectId: root.dataset.project }) })
+        .then(function (response) { return response.json().catch(function () { return {}; }).then(function (body) { if (!response.ok) throw new Error(body.error || 'That model could not be selected.'); }); })
+        .then(function () { current = wanted; const blank = picker.querySelector('option[value=""]'); if (blank) blank.remove(); })
+        .catch(function (error) { picker.value = current; toast(error.message); })
+        .then(function () { picker.disabled = false; });
+    });
+  })();
+
+  // Someone else on the project asked the agent: show the exchange here too.
+  B.on('chat', function (m) {
+    const asked = bubble('user', m.message); asked.classList.add('other');
+    asked.insertBefore(el('div', { 'class': 'wb-msg-who' }, m.name), asked.firstChild);
+    bubble('assistant', m.reply);
+  });
 
   // ── Share by link ──────────────────────────────────────────────────
   (function () {

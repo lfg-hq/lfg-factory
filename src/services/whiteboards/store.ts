@@ -123,8 +123,13 @@ function inTurn<T>(boardId: string, run: () => Promise<T>): Promise<T> {
   return next;
 }
 
+export interface BoardChange { boardId: string; version: number; changed: BoardElement[]; deleted: string[]; origin?: string | null }
+const changeListeners = new Set<(change: BoardChange) => void>();
+/** Hear about every saved change to any board (used to tell the other open browsers at once). */
+export function onBoardChange(listener: (change: BoardChange) => void): void { changeListeners.add(listener); }
+
 /** Merge changed and removed elements into the board. Returns the new version and the stored form of what changed. */
-export function applyOps(boardId: string, ops: BoardOps, stamp: { by?: string } = {}): Promise<{ version: number; changed: BoardElement[]; deleted: string[] }> {
+export function applyOps(boardId: string, ops: BoardOps, stamp: { by?: string; /** The live connection that made the change, so it is not told about its own work. */ origin?: string | null } = {}): Promise<{ version: number; changed: BoardElement[]; deleted: string[] }> {
   return inTurn(boardId, async () => {
     const board = await getBoard(boardId);
     if (!board) throw new BoardError("Board not found");
@@ -155,7 +160,9 @@ export function applyOps(boardId: string, ops: BoardOps, stamp: { by?: string } 
     const json = JSON.stringify([...byId.values()]);
     if (json.length > MAX_BOARD_BYTES) throw new BoardError("This board is full. Remove some images to keep adding to it.");
     await db.update(whiteboards).set({ elements: json, version, updatedAt: new Date() }).where(eq(whiteboards.id, boardId));
-    return { version, changed: [...byId.values()].filter((e) => e.v === version), deleted };
+    const changed = [...byId.values()].filter((e) => e.v === version);
+    for (const listener of changeListeners) { try { listener({ boardId, version, changed, deleted, origin: stamp.origin }); } catch (error) { console.error("[whiteboard] change listener failed:", (error as Error).message); } }
+    return { version, changed, deleted };
   });
 }
 

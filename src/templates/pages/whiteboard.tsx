@@ -38,7 +38,7 @@ export function WhiteboardPage({ project, board, user, canEdit, canChat, shareTo
   <script src="/public/js/theme-switcher.js"></script>
 </head>
 <body class="wb-body">
-  <div class="wb" id="wb" data-board="${board.id}" data-user="${user.name}" data-guest="${guest ? "true" : "false"}"${guest ? html` data-api="/api/shared-boards/${shareToken!}"` : ""} data-can-edit="${canEdit ? "true" : "false"}" data-can-chat="${canChat ? "true" : "false"}">
+  <div class="wb" id="wb" data-board="${board.id}"${project ? html` data-project="${project.projectId}"` : ""} data-user="${user.name}" data-guest="${guest ? "true" : "false"}"${guest ? html` data-api="/api/shared-boards/${shareToken!}"` : ""} data-can-edit="${canEdit ? "true" : "false"}" data-can-chat="${canChat ? "true" : "false"}">
     <canvas id="wb-canvas" tabindex="0" aria-label="Whiteboard canvas"></canvas>
     <div class="wb-editor" id="wb-editor" hidden><div contenteditable="true" spellcheck="false" role="textbox" aria-label="Element text"></div></div>
 
@@ -56,9 +56,11 @@ export function WhiteboardPage({ project, board, user, canEdit, canChat, shareTo
       ${project ? html`<a class="wb-ib" href="/projects/${project.projectId}/whiteboards" title="Back to ${project.name} whiteboards" aria-label="Back to whiteboards"><i class="fas fa-arrow-left"></i></a>` : html`<span class="wb-brand" title="LFG whiteboard">🚀</span>`}
       <input id="wb-title" class="wb-title" value="${board.title}" maxlength="120" aria-label="Board name" autocomplete="off" />
       <span class="wb-status" id="wb-status" role="status">Saved</span>
+      <span class="wb-live" title="Live: changes and cursors appear as they happen" aria-hidden="true"></span>
     </header>
 
     <div class="wb-panel wb-actions">
+      <div class="wb-peers" id="wb-peers" aria-label="People on this board" hidden></div>
       <button type="button" class="wb-ib" id="wb-undo" title="Undo (Ctrl/Cmd+Z)" aria-label="Undo"><i class="fas fa-undo"></i></button>
       <button type="button" class="wb-ib" id="wb-redo" title="Redo (Ctrl/Cmd+Shift+Z)" aria-label="Redo"><i class="fas fa-redo"></i></button>
       <span class="wb-sep"></span>
@@ -139,6 +141,7 @@ export function WhiteboardPage({ project, board, user, canEdit, canChat, shareTo
         </div>
       </div>
       <div class="wb-chat-context" id="wb-chat-context" hidden><span></span><button type="button" title="Clear selection" aria-label="Clear selection"><i class="fas fa-times"></i></button></div>
+      <div class="wb-chat-model" hidden><label for="wb-chat-model">Model</label><select id="wb-chat-model" aria-label="Model LFG uses"></select></div>
       <form class="wb-chat-form" id="wb-chat-form">
         <textarea id="wb-chat-input" rows="1" placeholder="Ask LFG to sketch, brainstorm or explain…" aria-label="Message LFG"></textarea>
         <button type="submit" id="wb-chat-send" title="Send" aria-label="Send"><i class="fas fa-arrow-up"></i></button>

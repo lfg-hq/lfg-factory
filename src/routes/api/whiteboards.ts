@@ -10,6 +10,11 @@ import {
   BoardError, applyOps, boardByShareToken, changesSince, clearMessages, createBoard, deleteBoard, getBoard, listBoards, listMessages, readElements, renameBoard, setShare, shareModeOf, type Board,
 } from "../../services/whiteboards/store.ts";
 import { runBoardAgent, type AgentEvent } from "../../services/whiteboards/agent.ts";
+import { broadcast, closeGuests, type PeerInfo } from "../../services/whiteboards/live.ts";
+import { availableChatModels } from "../../services/available-models.ts";
+import { db } from "../../config/db.ts";
+import { modelSelections } from "../../db/schema/chat.ts";
+import { eq } from "drizzle-orm";
 import { providerErrorMessage } from "../../ai/provider-error.ts";
 import type { auth } from "../../auth/index.ts";
 
@@ -29,6 +34,31 @@ async function open(boardId: string, userId: string): Promise<{ board: Board; ac
   if (!board) return null;
   const access = await getProjectAccess(board.projectId, userId);
   return access ? { board, access } : null;
+}
+
+/** Who is asking to join a board's live connection, and what they may do there. Null when they may not join. */
+export async function authorizeBoardSocket(query: URLSearchParams, user: { id: string; name: string } | null): Promise<PeerInfo | null> {
+  const token = query.get("token");
+  if (token) {
+    const board = await boardByShareToken(token);
+    if (!board) return null;
+    return { boardId: board.id, name: user?.name || query.get("name") || "Guest", canEdit: shareModeOf(board) === "edit", guest: true };
+  }
+  if (!user) return null;
+  const found = await open(query.get("board") ?? "", user.id);
+  return found ? { boardId: found.board.id, name: user.name, canEdit: canDraw(found.access), guest: false } : null;
+}
+
+/** The live connection a request came from (sent by the browser), so that browser is not told about its own change. */
+const originOf = (c: { req: { header(name: string): string | undefined } }) => c.req.header("X-Board-Client")?.slice(0, 16) || null;
+
+/** The models this person can chat with here, and the one they have picked (shared with the main chat). */
+async function chatModels(userId: string, projectId: string) {
+  const models = await availableChatModels(userId, projectId).catch(() => []);
+  const [selection] = await db.select().from(modelSelections).where(eq(modelSelections.userId, userId)).limit(1);
+  const usable = models.filter((m) => m.available);
+  const selected = usable.find((m) => m.key === selection?.selectedModel)?.key ?? null;
+  return { models: usable.map((m) => ({ key: m.key, label: m.label, provider: m.providerLabel })), model: selected };
 }
 
 whiteboardsApi.get("/", async (c) => {
@@ -57,6 +87,7 @@ whiteboardsApi.get("/:id", async (c) => {
     elements: readElements(found.board),
     messages: (await listMessages(found.board.id)).map((m) => ({ role: m.role, content: m.content })),
     canEdit: canDraw(found.access), canChat: canAsk(found.access),
+    ...(canAsk(found.access) && canDraw(found.access) ? await chatModels(c.get("user").id, found.board.projectId) : { models: [], model: null }),
     // The link is a credential: only people who may hand it out are shown it.
     share: canShare(found.access) ? { mode: shareModeOf(found.board), token: shareModeOf(found.board) ? found.board.shareToken : null } : null,
   });
@@ -67,7 +98,9 @@ whiteboardsApi.patch("/:id", async (c) => {
   if (!found) return c.json({ error: "Board not found" }, 404);
   if (!canDraw(found.access)) return c.json({ error: "You can't edit this board." }, 403);
   const body = await c.req.json<{ title?: string }>().catch(() => ({}) as Record<string, never>);
-  return c.json({ title: await renameBoard(found.board.id, String(body.title ?? "")) });
+  const title = await renameBoard(found.board.id, String(body.title ?? ""));
+  broadcast(found.board.id, { t: "title", title }, originOf(c));
+  return c.json({ title });
 });
 
 // Turn the board's public link on (to view or to edit) or off.
@@ -77,7 +110,10 @@ whiteboardsApi.put("/:id/share", async (c) => {
   if (!canShare(found.access)) return c.json({ error: "Only people who can invite others to this project can share a board by link." }, 403);
   const body = await c.req.json<{ mode?: string | null }>().catch(() => ({}) as Record<string, never>);
   const mode = body.mode === "view" || body.mode === "edit" ? body.mode : null;
-  return c.json(await setShare(found.board.id, mode));
+  const share = await setShare(found.board.id, mode);
+  // Whoever is on the board through the link loads it again, and finds what the link now allows.
+  if (shareModeOf(found.board) !== mode) closeGuests(found.board.id);
+  return c.json(share);
 });
 
 whiteboardsApi.delete("/:id", async (c) => {
@@ -95,7 +131,7 @@ whiteboardsApi.post("/:id/ops", async (c) => {
   if (!canDraw(found.access)) return c.json({ error: "You can't edit this board." }, 403);
   const body = await c.req.json<{ upserts?: unknown[]; deletes?: unknown[] }>().catch(() => ({}) as Record<string, never>);
   try {
-    const result = await applyOps(found.board.id, body);
+    const result = await applyOps(found.board.id, body, { origin: originOf(c) });
     return c.json({ version: result.version });
   } catch (error) {
     if (error instanceof BoardError) return c.json({ error: error.message }, 400);
@@ -135,10 +171,13 @@ whiteboardsApi.post("/:id/chat", async (c) => {
       let open = true;
       const emit = (event: AgentEvent) => { if (open) try { controller.enqueue(encoder.encode(JSON.stringify(event) + "\n")); } catch { open = false; } };
       try {
-        await runBoardAgent({
-          board: found.board, userId: user.id, userName: user.name, message, viewport, emit, signal: abort.signal,
+        const origin = originOf(c);
+        const reply = await runBoardAgent({
+          board: found.board, userId: user.id, userName: user.name, message, viewport, emit, signal: abort.signal, origin,
           selection: (Array.isArray(body.selection) ? body.selection : []).filter((id): id is string => typeof id === "string").slice(0, 200),
         });
+        // Project members with the board open see the exchange too (guests never see the agent conversation).
+        broadcast(boardId, { t: "chat", name: user.name, message, reply }, origin, { membersOnly: true });
       } catch (error) {
         if (!abort.signal.aborted) {
           console.error("[whiteboard] agent failed:", (error as Error).message);
@@ -182,7 +221,7 @@ sharedBoardsApi.post("/:token/ops", async (c) => {
   if (shareModeOf(board) !== "edit") return c.json({ error: "This link only lets you view the board." }, 403);
   const body = await c.req.json<{ upserts?: unknown[]; deletes?: unknown[] }>().catch(() => ({}) as Record<string, never>);
   try {
-    return c.json({ version: (await applyOps(board.id, body)).version });
+    return c.json({ version: (await applyOps(board.id, body, { origin: originOf(c) })).version });
   } catch (error) {
     if (error instanceof BoardError) return c.json({ error: error.message }, 400);
     throw error;

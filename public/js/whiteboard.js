@@ -397,6 +397,14 @@
       ctx.fillStyle = dark() ? 'rgba(167,139,250,0.12)' : 'rgba(124,58,237,0.08)'; ctx.strokeStyle = t.accent;
       ctx.fillRect(a.x, a.y, b.x - a.x, b.y - a.y); ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
     }
+    // What other people have selected, outlined in their colour.
+    peers.forEach(function (p) {
+      ctx.strokeStyle = p.color; ctx.lineWidth = 1.5;
+      p.sel.forEach(function (id) {
+        const e = els.get(id); if (!e || e.type === 'comment') return;
+        const b = bbox(e), a = toScreen(b.x, b.y); ctx.strokeRect(a.x - 3, a.y - 3, b.w * z + 6, b.h * z + 6);
+      });
+    });
     // Comment pins keep one size on screen.
     els.forEach(function (e) {
       if (e.type !== 'comment') return;
@@ -411,6 +419,21 @@
       ctx.restore();
     });
     if (tool === 'eraser' && pointer.inside) { ctx.strokeStyle = t.muted; ctx.beginPath(); ctx.arc(pointer.sx, pointer.sy, 9, 0, Math.PI * 2); ctx.stroke(); }
+    // Other people's cursors glide to where they last reported being.
+    peers.forEach(function (p) {
+      if (!p.shown) return;
+      p.x += (p.tx - p.x) * 0.35; p.y += (p.ty - p.y) * 0.35;
+      if (Math.abs(p.tx - p.x) * z > 0.4 || Math.abs(p.ty - p.y) * z > 0.4) needsDraw = true; else { p.x = p.tx; p.y = p.ty; }
+      const s = toScreen(p.x, p.y);
+      if (s.x < -40 || s.y < -40 || s.x > size.w + 40 || s.y > size.h + 40) return;
+      ctx.save(); ctx.translate(s.x, s.y);
+      ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, 16.5); ctx.lineTo(4.6, 12.6); ctx.lineTo(7.6, 19.2); ctx.lineTo(10.2, 18); ctx.lineTo(7.3, 11.6); ctx.lineTo(13, 11.6); ctx.closePath();
+      ctx.fillStyle = p.color; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.2; ctx.lineJoin = 'round'; ctx.fill(); ctx.stroke();
+      ctx.font = font(11, true); const label = p.name.length > 18 ? p.name.slice(0, 17) + '…' : p.name, lw = ctx.measureText(label).width + 12;
+      ctx.fillStyle = p.color; roundRect(ctx, 12, 18, lw, 19, 6); ctx.fill();
+      ctx.fillStyle = '#ffffff'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText(label, 18, 28);
+      ctx.restore();
+    });
   }
 
   // ── Camera ─────────────────────────────────────────────────────────
@@ -464,6 +487,8 @@
 
   // ── Changes, undo and saving ───────────────────────────────────────
   const dirty = new Set(), removed = new Set(), inflight = new Set();
+  const live = { ws: null, id: null, up: false }, peers = new Map();
+  let needSync = false;
   let version = 0, mutations = 0, saveTimer = null, saving = false, pending = null;
   const undoStack = [], redoStack = [];
 
@@ -505,15 +530,17 @@
   /** Make one recorded change: mutate(elements) may edit, add (put) or remove elements. */
   function change(ids, mutate) { begin(ids); mutate(); commit(); }
 
+  // The live connection's id rides along, so the server does not send this browser its own change back.
+  function headers() { const h = { 'Content-Type': 'application/json' }; if (live.id) h['X-Board-Client'] = live.id; return h; }
   function request(path, options) {
-    return fetch(apiBase + path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, options || {})).then(function (response) {
+    return fetch(apiBase + path, Object.assign({ headers: headers() }, options || {})).then(function (response) {
       return response.json().catch(function () { return {}; }).then(function (body) {
         if (!response.ok) throw new Error(body.error || 'That did not go through.');
         return body;
       });
     });
   }
-  function scheduleSave() { if (!canEdit) return; emit('status', 'saving'); clearTimeout(saveTimer); saveTimer = setTimeout(save, 500); }
+  function scheduleSave() { if (!canEdit) return; emit('status', 'saving'); clearTimeout(saveTimer); saveTimer = setTimeout(save, 200); }
   function payload() {
     const upserts = [];
     dirty.forEach(function (id) { const e = els.get(id); if (e && !e._raw) { upserts.push(clone(e)); inflight.add(id); } });
@@ -526,7 +553,9 @@
     const body = payload();
     if (!body.upserts.length && !body.deletes.length) return;
     saving = true;
-    request('/ops', { method: 'POST', body: JSON.stringify(body) }).then(function () {
+    request('/ops', { method: 'POST', body: JSON.stringify(body) }).then(function (answer) {
+      // Our own save is the next version unless someone else saved in between; then we catch up.
+      if (answer.version === version + 1) version = answer.version; else if (answer.version > version) needSync = true;
       emit('status', dirty.size || removed.size ? 'saving' : 'saved');
     }).catch(function (error) {
       // Put the unsaved work back so the next attempt carries it.
@@ -542,7 +571,7 @@
   function flush() {
     if (!canEdit || (!dirty.size && !removed.size)) return;
     const body = payload();
-    try { fetch(apiBase + '/ops', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); } catch (e) { /* leaving anyway */ }
+    try { fetch(apiBase + '/ops', { method: 'POST', keepalive: true, headers: headers(), body: JSON.stringify(body) }); } catch (e) { /* leaving anyway */ }
   }
   function busyWith(id) { return dirty.has(id) || inflight.has(id) || editing === id || (drag && drag.ids && drag.ids.has(id)); }
   /** Take in elements that came from the server (someone else, or the agent). */
@@ -565,11 +594,14 @@
   }
   function removeRemote(ids) { (ids || []).forEach(function (id) { if (!busyWith(id)) { els.delete(id); selection.delete(id); } }); structureChanged(); emit('selection'); }
   function poll() {
+    // While the live connection is up, changes arrive on it; polling is the fallback, and the way to catch up.
+    if (live.up && !needSync) return;
     if (document.hidden || saving || dirty.size || removed.size || drag) return;
     const seen = mutations;
     request('?since=' + version).then(function (body) {
       // Anything done here while the request was out makes the answer stale; the next poll asks again.
       if (seen !== mutations || saving || drag) return;
+      needSync = false;
       if (body.title) emit('title', body.title);
       if (body.version === version) return;
       version = body.version;
@@ -862,6 +894,7 @@
   canvas.addEventListener('pointermove', function (event) {
     const p = local(event), w = toWorld(p.sx, p.sy);
     pointer = { sx: p.sx, sy: p.sy, inside: true };
+    cursorSend(w);
     if (event.pointerType === 'touch' && touches.has(event.pointerId)) {
       touches.set(event.pointerId, p);
       if (pinch && touches.size === 2) {
@@ -913,10 +946,17 @@
       if (event.shiftKey) { const s = Math.max(Math.abs(x1 - d.x0), Math.abs(y1 - d.y0)); x1 = d.x0 + Math.sign(x1 - d.x0 || 1) * s; y1 = d.y0 + Math.sign(y1 - d.y0 || 1) * s; }
       e.x = Math.min(d.x0, x1); e.y = Math.min(d.y0, y1); e.w = Math.abs(x1 - d.x0); e.h = Math.abs(y1 - d.y0);
     }
+    liveSend();
     invalidate();
   });
 
   function endDrag(event) {
+    const d = drag;
+    finishDrag(event);
+    // Anything shown to others mid-drag that did not survive the drop is taken back.
+    if (d && d.sentLive && d.ids) { const gone = Array.from(d.ids).filter(function (id) { return !els.has(id); }); if (gone.length) wsSend({ t: 'live', gone: gone }); }
+  }
+  function finishDrag(event) {
     touches.delete(event.pointerId);
     if (touches.size < 2) pinch = null;
     const d = drag; drag = null; guides = []; hoverBind = null;
@@ -961,14 +1001,14 @@
   function cancelDrag() {
     if (!drag) return;
     const d = drag; drag = null; guides = []; hoverBind = null;
-    if (d.kind === 'pen' || d.kind === 'create' || d.creating) { els.delete(d.id); structureChanged(); }
-    else if (d.start) d.start.forEach(function (s, id) { if (els.has(id)) els.set(id, clone(s)); });
+    if (d.kind === 'pen' || d.kind === 'create' || d.creating) { els.delete(d.id); structureChanged(); if (d.sentLive) wsSend({ t: 'live', gone: [d.id] }); }
+    else if (d.start) { d.start.forEach(function (s, id) { if (els.has(id)) els.set(id, clone(s)); }); if (d.sentLive) wsSend({ t: 'live', els: Array.from(d.start.values()).map(clone) }); }
     if (d.gone) d.gone.forEach(function (id) { const e = els.get(id); if (e) delete e._fade; });
     pending = null; structureChanged();
   }
   canvas.addEventListener('pointerup', endDrag);
   canvas.addEventListener('pointercancel', endDrag);
-  canvas.addEventListener('pointerleave', function () { pointer.inside = false; if (tool === 'eraser') invalidate(); });
+  canvas.addEventListener('pointerleave', function () { wsSend({ t: 'cursor', gone: true }); pointer.inside = false; if (tool === 'eraser') invalidate(); });
   canvas.addEventListener('contextmenu', function (event) { event.preventDefault(); });
   canvas.addEventListener('dblclick', function (event) {
     if (!canEdit || tool !== 'select') return;
@@ -1124,6 +1164,98 @@
     });
   }
 
+  // ── Live: other people's cursors, selections and changes as they happen ──
+  let myName = root.dataset.user || localStorage.getItem('lfg-wb-guest') || 'Guest', retries = 0, cursorAt = 0, liveAt = 0, liveTimer = 0, cursorTimer = 0, cursorNext = null;
+  function wsSend(message) { if (live.up && live.ws.readyState === 1) live.ws.send(JSON.stringify(message)); }
+  function cursorSend(w) {
+    if (!live.up) return;
+    cursorNext = w;
+    const wait = 40 - (performance.now() - cursorAt);
+    if (wait > 0) { if (!cursorTimer) cursorTimer = setTimeout(function () { cursorTimer = 0; if (cursorNext) cursorSend(cursorNext); }, wait); return; }
+    cursorAt = performance.now(); cursorNext = null; wsSend({ t: 'cursor', x: w.x, y: w.y });
+  }
+  /** An element as others should see it right now, including a stroke that is still being drawn. */
+  function draftOf(e) {
+    const c = clone(e);
+    if (!e._raw) return c;
+    const b = rawBox(e._raw);
+    c.x = b.x; c.y = b.y; c.w = Math.max(b.w, 1); c.h = Math.max(b.h, 1); c.bw = c.w; c.bh = c.h;
+    c.pts = e._raw.map(function (v, i) { return Math.round((v - (i % 2 ? b.y : b.x)) * 10) / 10; });
+    return c;
+  }
+  /** Show others what is being dragged, resized or drawn, a few times a second. Nothing is saved until the drop. */
+  function liveSend() {
+    if (!live.up || !canEdit || !drag || !drag.ids || !drag.ids.size || drag.ids.size > 80) return;
+    const gap = drag.kind === 'pen' ? 110 : 50, wait = gap - (performance.now() - liveAt);
+    if (wait > 0) { if (!liveTimer) liveTimer = setTimeout(function () { liveTimer = 0; liveSend(); }, wait); return; }
+    liveAt = performance.now(); drag.sentLive = true;
+    const list = []; // A large picture is not re-sent on every move; others see it land when it is dropped.
+    drag.ids.forEach(function (id) { const e = els.get(id); if (e && !(e.src && e.src.length > 20000)) list.push(draftOf(e)); });
+    if (list.length) wsSend({ t: 'live', els: list });
+  }
+  function peerList() { return Array.from(peers.values()).map(function (p) { return { id: p.id, name: p.name, color: p.color, guest: p.guest }; }); }
+  function addPeer(p) { peers.set(p.id, { id: p.id, name: p.name, color: p.color, guest: p.guest, x: 0, y: 0, tx: 0, ty: 0, shown: false, sel: [] }); }
+  /** Bring this browser back in step with the stored board (after a gap, or when someone's unfinished work must go). */
+  function resyncAll() {
+    request('?since=0').then(function (body) { if (drag || saving) { needSync = true; return; } version = Math.max(version, body.version); applyRemote(body.elements, body.ids, false); }).catch(function () { needSync = true; });
+  }
+  function onLive(m) {
+    const p = m.id && peers.get(m.id);
+    if (m.t === 'welcome') {
+      live.id = m.id; live.up = true; retries = 0; peers.clear(); m.peers.forEach(addPeer);
+      // Catch up on anything saved while this browser was not connected.
+      needSync = true; poll();
+      wsSend({ t: 'select', ids: Array.from(selection) });
+      emit('peers', peerList()); emit('live', true);
+    } else if (m.t === 'join') { addPeer(m.peer); wsSend({ t: 'select', ids: Array.from(selection) }); emit('peers', peerList()); }
+    else if (m.t === 'leave') {
+      peers.delete(m.id); emit('peers', peerList()); invalidate();
+      // If they left mid-drag, what they were showing us was never saved: go back to the stored board.
+      let unfinished = false; els.forEach(function (e) { if (e._live === m.id) unfinished = true; });
+      if (unfinished) resyncAll();
+    }
+    else if (m.t === 'name' && p) { p.name = m.name; emit('peers', peerList()); invalidate(); }
+    else if (m.t === 'cursor' && p) {
+      if (m.gone) p.shown = false; else { p.tx = m.x; p.ty = m.y; if (!p.shown) { p.x = m.x; p.y = m.y; p.shown = true; } }
+      invalidate();
+    }
+    else if (m.t === 'select' && p) { p.sel = m.ids || []; invalidate(); }
+    else if (m.t === 'live') {
+      (m.els || []).forEach(function (e) { if (busyWith(e.id)) return; e._live = m.id; els.set(e.id, e); });
+      (m.gone || []).forEach(function (id) { const e = els.get(id); if (e && e._live && !busyWith(id)) { els.delete(id); selection.delete(id); } });
+      structureChanged();
+    }
+    else if (m.t === 'ops') {
+      if (m.version <= version) return;
+      const held = (m.upserts || []).some(function (e) { return busyWith(e.id); });
+      removeRemote(m.deletes); applyRemote(m.upserts, null, true);
+      // In step only if this is the very next version and nothing had to be held back.
+      if (m.version === version + 1 && !held) version = m.version; else needSync = true;
+    }
+    else if (m.t === 'title') emit('title', m.title);
+    else if (m.t === 'chat') emit('chat', m);
+  }
+  function connect() {
+    if (!window.WebSocket) return;
+    const token = root.dataset.api ? root.dataset.api.split('/').pop() : null;
+    const query = token ? 'token=' + encodeURIComponent(token) + '&name=' + encodeURIComponent(myName) : 'board=' + encodeURIComponent(boardId);
+    const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/board?' + query);
+    live.ws = ws;
+    ws.onmessage = function (event) { let m; try { m = JSON.parse(event.data); } catch (e) { return; } if (m && live.ws === ws) onLive(m); };
+    ws.onclose = function (event) {
+      if (live.ws !== ws) return;
+      const was = live.up; live.up = false; live.id = null; peers.clear();
+      if (was) { emit('peers', []); emit('live', false); invalidate(); }
+      // The link was turned off or changed: load the page again to find what it allows now.
+      if (event.code === 4001) { flush(); location.reload(); return; }
+      setTimeout(connect, Math.min(15000, 600 * Math.pow(2, retries++)));
+    };
+  }
+  setInterval(function () { wsSend({ t: 'ping' }); }, 25000);
+  on('selection', function () { wsSend({ t: 'select', ids: Array.from(selection) }); });
+  function setName(name) { myName = name; wsSend({ t: 'name', name: name }); }
+  function followPeer(id) { const p = peers.get(id); if (p && p.shown) flyTo({ x: p.tx - 500, y: p.ty - 320, w: 1000, h: 640 }, { pad: 0, maxZoom: Math.max(cam.z, 0.6) }); }
+
   // ── Start ──────────────────────────────────────────────────────────
   window.LFGBoard = {
     els: els, selection: selection, cam: cam, style: style, canEdit: canEdit, boardId: boardId, apiBase: apiBase, on: on, emit: emit, request: request,
@@ -1133,6 +1265,7 @@
     undo: undo, redo: redo, canUndo: function () { return undoStack.length > 0; }, canRedo: function () { return redoStack.length > 0; },
     zoomAt: zoomAt, flyTo: flyTo, fitAll: fitAll, exportPng: exportPng, importImage: importImage, applyRemote: applyRemote, removeRemote: removeRemote,
     startEditing: startEditing, isDragging: function () { return !!drag; }, isEditing: function () { return !!editing; }, invalidate: invalidate,
+    peers: peers, isLive: function () { return live.up; }, headers: headers, setName: setName, followPeer: followPeer,
     viewport: function () { return { x: cam.x, y: cam.y, w: root.clientWidth / cam.z, h: root.clientHeight / cam.z }; },
   };
 
@@ -1149,5 +1282,6 @@
     fitAll({ instant: true, maxZoom: 1 });
     emit('ready', body);
     setInterval(poll, 2500);
+    connect();
   }).catch(function (error) { emit('error', error.message); });
 })();

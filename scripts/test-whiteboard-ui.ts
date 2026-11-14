@@ -25,6 +25,7 @@ const { WhiteboardsPage } = await import("../src/templates/pages/whiteboards.tsx
 const { Hono } = await import("hono");
 const { sharedBoardsApi } = await import("../src/routes/api/whiteboards.ts");
 const { default: sharedBoardRoutes } = await import("../src/routes/shared-board.ts");
+const live = await import("../src/services/whiteboards/live.ts");
 const publicApp = new Hono().route("/api/shared-boards", sharedBoardsApi).route("/", sharedBoardRoutes);
 
 // The stand-in model: asked for a login screen it draws one, otherwise it answers in words.
@@ -69,12 +70,32 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 const html = (body: unknown) => new Response(String(body), { headers: { "Content-Type": "text/html; charset=utf-8" } });
 const project = { id: "p", projectId: "pub", name: "Invoicing" };
 const patches: string[] = [];
+const modelPicks: string[] = [];
+const MODELS = [{ key: "claude_fast", label: "Claude Fast", provider: "Anthropic" }, { key: "gpt_big", label: "GPT Big", provider: "OpenAI" }];
+const origin = (req: Request) => req.headers.get("X-Board-Client");
+const cookieName = (req: Request) => decodeURIComponent(/(?:^|; )wb_as=([^;]+)/.exec(req.headers.get("Cookie") ?? "")?.[1] ?? "Priya");
 
 const server = Bun.serve({
   port: Number(process.env.WB_PORT ?? 0), // not PORT: .env sets that to the app's own port
   idleTimeout: 60,
-  async fetch(req) {
+  websocket: {
+    open: (ws: any) => live.boardSockets.open(ws),
+    message: (ws: any, data: string | Buffer) => live.boardSockets.message(ws, data),
+    close: (ws: any) => live.boardSockets.close(ws),
+  },
+  async fetch(req, server) {
     const url = new URL(req.url);
+    if (url.pathname === "/ws/board") {
+      // Guests are let in by the real rule (a link that is on); members are whoever the page was opened as.
+      const token = url.searchParams.get("token");
+      const shared = token ? await store.boardByShareToken(token) : null;
+      const member = token ? null : await store.getBoard(url.searchParams.get("board") ?? "");
+      const info = shared ? { boardId: shared.id, name: url.searchParams.get("name") || "Guest", canEdit: store.shareModeOf(shared) === "edit", guest: true }
+        : member ? { boardId: member.id, name: cookieName(req), canEdit: !/view=1/.test(req.headers.get("Cookie") ?? ""), guest: false } : null;
+      if (!info) return new Response("Unauthorized", { status: 401 });
+      return server.upgrade(req, { data: { board: info } }) ? (undefined as unknown as Response) : new Response("Upgrade failed", { status: 500 });
+    }
+    if (url.pathname === "/api/settings/model") { modelPicks.push(((await req.json()) as { modelKey: string }).modelKey); return json({ success: true }); }
     const readonly = url.searchParams.get("view") === "1";
     if (url.pathname.startsWith("/board/") || url.pathname.startsWith("/api/shared-boards/")) return publicApp.fetch(req);
     if (url.pathname === "/") return html(WhiteboardsPage({ project, user: { name: "Test" }, canEdit: true }));
@@ -82,7 +103,11 @@ const server = Bun.serve({
     if (pageMatch) {
       const board = await store.getBoard(pageMatch[1]!);
       if (!board) return new Response("Board not found", { status: 404 });
-      return html(WhiteboardPage({ project, board, user: { name: url.searchParams.get("as") ?? "Priya" }, canEdit: !readonly, canChat: !readonly }));
+      const as = url.searchParams.get("as") ?? "Priya";
+      const response = html(WhiteboardPage({ project, board, user: { name: as }, canEdit: !readonly, canChat: !readonly }));
+      response.headers.append("Set-Cookie", `wb_as=${encodeURIComponent(as)}; Path=/`);
+      response.headers.append("Set-Cookie", `view=${readonly ? 1 : 0}; Path=/`);
+      return response;
     }
     if (url.pathname.startsWith("/public/")) { const file = Bun.file("." + url.pathname); return (await file.exists()) ? new Response(file) : new Response("", { status: 404 }); }
     if (!url.pathname.startsWith("/api/whiteboards")) return json({}, 404);
@@ -93,25 +118,28 @@ const server = Bun.serve({
     }
     const board = await store.getBoard(id);
     if (!board) return json({ error: "Board not found" }, 404);
-    if (action === "ops") { const result = await store.applyOps(id, (await req.json()) as store.BoardOps); return json({ version: result.version }); }
-    if (action === "share") return json(await store.setShare(id, ((await req.json()) as { mode: store.ShareMode | null }).mode));
+    if (action === "ops") { const result = await store.applyOps(id, (await req.json()) as store.BoardOps, { origin: origin(req) }); return json({ version: result.version }); }
+    if (action === "share") { const share = await store.setShare(id, ((await req.json()) as { mode: store.ShareMode | null }).mode); live.closeGuests(id); return json(share); }
     if (action === "messages") { await store.clearMessages(id); return json({ ok: true }); }
     if (action === "chat") {
       const body = (await req.json()) as { message: string; selection: string[]; viewport: { x: number; y: number; w: number; h: number } };
       const encoder = new TextEncoder();
       return new Response(new ReadableStream({
         async start(controller) {
-          try { await runBoardAgent({ board, userId: "u1", message: body.message, selection: body.selection, viewport: body.viewport, model: model(), emit: (event) => controller.enqueue(encoder.encode(JSON.stringify(event) + "\n")) }); }
+          try {
+            const reply = await runBoardAgent({ board, userId: "u1", message: body.message, selection: body.selection, viewport: body.viewport, model: model(), origin: origin(req), emit: (event) => controller.enqueue(encoder.encode(JSON.stringify(event) + "\n")) });
+            live.broadcast(id, { t: "chat", name: cookieName(req), message: body.message, reply }, origin(req), { membersOnly: true });
+          }
           catch (error) { controller.enqueue(encoder.encode(JSON.stringify({ type: "error", message: (error as Error).message }) + "\n")); }
           controller.close();
         },
       }), { headers: { "Content-Type": "application/x-ndjson" } });
     }
-    if (req.method === "PATCH") { const title = await store.renameBoard(id, ((await req.json()) as { title: string }).title); patches.push(title); return json({ title }); }
+    if (req.method === "PATCH") { const title = await store.renameBoard(id, ((await req.json()) as { title: string }).title); patches.push(title); live.broadcast(id, { t: "title", title }, origin(req)); return json({ title }); }
     if (req.method === "DELETE") { await store.deleteBoard(id); return json({ ok: true }); }
     const since = url.searchParams.get("since");
     if (since != null) return json({ title: board.title, ...store.changesSince(board, Number(since)) });
-    return json({ board: { id: board.id, title: board.title, version: board.version }, elements: store.readElements(board), messages: (await store.listMessages(id)).map((m) => ({ role: m.role, content: m.content })), canEdit: true, canChat: true, share: { mode: store.shareModeOf(board), token: store.shareModeOf(board) ? board.shareToken : null } });
+    return json({ board: { id: board.id, title: board.title, version: board.version }, elements: store.readElements(board), messages: (await store.listMessages(id)).map((m) => ({ role: m.role, content: m.content })), canEdit: true, canChat: true, models: MODELS, model: modelPicks.at(-1) ?? "claude_fast", share: { mode: store.shareModeOf(board), token: store.shareModeOf(board) ? board.shareToken : null } });
   },
 });
 const base = `http://localhost:${server.port}`;
@@ -269,6 +297,38 @@ try {
   check(await until(async () => !(await local(other)).some((e) => e.id === noteId), 9000), "and what the first person deletes disappears for them");
   check((await local(other)).some((e) => e.text === "Sam was here"), "without losing their own note");
 
+  console.log("\nlive, with two people on the board:");
+  const peerNames = (p: Page) => p.evaluate(() => Array.from(document.querySelectorAll("#wb-peers .wb-peer")).map((n) => n.getAttribute("title")!.split(" · ")[0]));
+  check(await until(async () => (await peerNames(page)).join() === "Sam" && (await peerNames(other)).join() === "Priya"), "each sees who else is on the board");
+  check(await page.evaluate(() => document.getElementById("wb")!.classList.contains("live")), "and that the board is live");
+  await other.mouse.move(640, 500);
+  const seen = async () => page.evaluate(() => { const p: any = Array.from((window as any).LFGBoard.peers.values())[0]; return p && p.shown ? [p.tx, p.ty] : null; });
+  const there = await other.evaluate(() => { const w = (window as any).LFGBoard.toWorld(640, 500); return [Math.round(w.x), Math.round(w.y)]; });
+  check(await until(async () => { const at = await seen(); return !!at && Math.abs(at[0] - there[0]) <= 1 && Math.abs(at[1] - there[1]) <= 1; }, 2000), "one person's cursor shows for the other, at the same place on the board");
+  const samNote = (await local(other)).find((e) => e.text === "Sam was here")!;
+  const xOf = (p: Page, id: string) => p.evaluate((elementId) => (window as any).LFGBoard.els.get(elementId).x as number, samNote.id).catch(() => NaN);
+  const startX = await xOf(page, samNote.id), grab = await onScreen(other, samNote.id);
+  await other.mouse.move(...grab); await other.mouse.down(); await other.mouse.move(grab[0] + 90, grab[1] + 40, { steps: 6 });
+  check(await until(async () => Math.abs((await xOf(page, samNote.id)) - startX) > 40, 2000), "an element being dragged moves for the other person before it is dropped");
+  check(((await elements(boardId)).find((e) => e.id === samNote.id)!.x as number) === startX, "while the stored board waits for the drop");
+  await other.mouse.up();
+  check(await until(async () => Math.abs(((await elements(boardId)).find((e) => e.id === samNote.id)!.x as number) - startX) > 40), "and the drop saves it");
+  check(await until(async () => (await page.evaluate(() => { const p: any = Array.from((window as any).LFGBoard.peers.values())[0]; return p.sel; })).includes(samNote.id), 2000), "what one person has selected is marked for the other");
+  await other.keyboard.press("n"); await other.mouse.click(520, 700); await other.keyboard.type("Fast"); await other.keyboard.press("Escape");
+  const sentAt = Date.now();
+  check(await until(async () => (await local(page)).some((e) => e.text === "Fast"), 1500), `a saved change arrives well inside a second or two (${Date.now() - sentAt} ms), not on the next poll`);
+  await other.mouse.click(1250, 800); // nothing selected: the next question is about the whole board
+  await page.click("#wb-ask").catch(() => {});
+  if (!(await page.locator("#wb-chat.open").count())) await page.click("#wb-ask");
+  const bubbles = await other.locator(".wb-msg").count();
+  await page.fill("#wb-chat-input", "What should we add?"); await page.keyboard.press("Enter");
+  check(await until(async () => (await other.locator(".wb-msg").count()) === bubbles + 2 && (await other.innerText(".wb-msg.other .wb-msg-who")) === "Priya", 5000), "a question one member asks the agent, and its answer, appear for the other member");
+  check((await page.locator("#wb-chat-model option").count()) === 2 && (await page.inputValue("#wb-chat-model")) === "claude_fast", "the chat offers the models this person can use, with the current one picked");
+  await page.selectOption("#wb-chat-model", "gpt_big");
+  check(await until(async () => modelPicks.at(-1) === "gpt_big"), "choosing another model saves the choice");
+  await other.context().close();
+  check(await until(async () => (await peerNames(page)).length === 0, 3000), "when someone leaves, they disappear from the board");
+
   console.log("\nboard name and view-only:");
   await page.fill("#wb-title", "Checkout ideas"); await page.keyboard.press("Enter");
   check(await until(async () => patches.includes("Checkout ideas")), "renaming the board saves the name");
@@ -293,6 +353,7 @@ try {
   check(await guest.locator("#wb-guest").isVisible(), "someone opening the link with no account is asked for a name");
   await guest.fill("#wb-guest-name", "Dana"); await guest.keyboard.press("Enter");
   check((await local(guest)).length === (await elements(boardId)).length, "and sees the whole board");
+  check(await until(async () => (await page.evaluate(() => Array.from(document.querySelectorAll("#wb-peers .wb-peer")).map((n) => n.getAttribute("title")))).some((t) => t!.startsWith("Dana (guest)")), 3000), "the member sees the guest arrive, under the name they gave");
   check((await guest.locator("#wb-ask").isHidden()) && (await guest.locator("#wb-share-btn").count()) === 0 && (await guest.locator(".wb-top a").count()) === 0, "with no agent, no sharing controls and no way into the project");
   await guest.keyboard.press("n"); await guest.mouse.click(420, 640); await guest.keyboard.type("Dana's idea"); await guest.keyboard.press("Escape");
   check(await until(async () => (await elements(boardId)).some((e) => e.text === "Dana's idea")), "what the guest adds is saved");
@@ -303,11 +364,12 @@ try {
   await page.selectOption("#wb-share-mode", "view");
   await page.waitForFunction(() => (document.getElementById("wb-share-note") as HTMLElement).innerText.includes("cannot change it"));
   check((await page.inputValue("#wb-share-link")) === link, "switching to \"can view\" keeps the same link");
-  await guest.reload(); await guest.waitForSelector("#wb.ready");
+  check(await until(async () => (await guest.locator("#wb.ready").count()) === 1 && (await guest.innerText("#wb-status").catch(() => "")) === "View only", 6000), "the guest's page reloads by itself when the link changes");
   check((await guest.innerText("#wb-status")) === "View only" && !(await guest.locator('[data-tool="pen"]').isVisible()) && (await guest.locator("#wb-guest").isHidden()), "and the guest can now only look");
   await page.selectOption("#wb-share-mode", "off");
   await page.waitForSelector("#wb-share-row", { state: "hidden" });
   check((await (await fetch(link)).status) === 404, "turning the link off closes the board to guests");
+  check(await until(async () => (await guest.innerText("body").catch(() => "")).includes("not available"), 6000), "and the guest who had it open is shown that it is no longer available");
 
   await list.goto(base + "/"); await list.waitForSelector("a.board-card");
   check((await list.innerText("a.board-card .board-title")) === "Checkout ideas", "the list shows the board under its new name");
