@@ -351,7 +351,8 @@
     let reply = '', failed = false;
     setStreaming(abort);
     function handle(event) {
-      if (event.type === 'text') { reply += event.delta; body.classList.remove('thinking'); richText(body, reply.trim()); chatLog.scrollTop = chatLog.scrollHeight; }
+      if (event.type === 'activity') { if (!reply) { body.classList.add('thinking'); body.textContent = event.text + ' '; } }
+      else if (event.type === 'text') { if (!reply) body.textContent = ''; reply += event.delta; body.classList.remove('thinking'); richText(body, reply.trim()); chatLog.scrollTop = chatLog.scrollHeight; }
       else if (event.type === 'ops') {
         B.removeRemote(event.deletes);
         B.applyRemote(event.upserts, null, true).forEach(function (id) { added.push(id); });

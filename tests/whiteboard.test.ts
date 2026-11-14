@@ -271,8 +271,9 @@ test('the chat streams what the agent says and draws, one event per line', async
   const response = await http(`/${b.id}/chat`, 'POST', { message: 'Add a note about card payments', selection: ['x', 5], viewport: { x: 0, y: 0, w: 1000, h: 600 } });
   expect(response.headers.get('Content-Type')).toContain('application/x-ndjson');
   const events = await lines(response);
-  expect(events.map((e) => e.type)).toEqual(['ops', 'text', 'text', 'done']);
-  expect(events[0].upserts[0]).toMatchObject({ type: 'sticky', text: 'Pay by card', by: 'agent' });
+  expect(events.map((e) => e.type)).toEqual(['activity', 'ops', 'text', 'text', 'done']);
+  expect(events[0]).toEqual({ type: 'activity', text: 'Drawing' });
+  expect(events[1].upserts[0]).toMatchObject({ type: 'sticky', text: 'Pay by card', by: 'agent' });
   expect(store.readElements(await fresh(b.id)).length).toBe(1);
   // The board is free again for the next question.
   routeModel = scripted([say('Sure.')]).model;
@@ -566,4 +567,70 @@ test('the chat agent cannot draw for someone who may only view', async () => {
   expect((await tools.readWhiteboard!.execute({ boardId: b.id })).title).toBe('Locked'); // reading is fine
   expect(store.readElements(await fresh(b.id))).toEqual([]);
   who = 'owner';
+});
+
+// ── The board's own agent looking things up in the project ──────────────
+const { pinToProject } = await import('../src/services/whiteboards/project-tools.ts');
+function projectStandIn() {
+  const calls: any[] = [];
+  const record = (name: string, result: (input: any) => unknown) => ({ description: name, execute: async (input: any) => { calls.push([name, input]); return result(input); } });
+  const source = {
+    getProjectDashboard: record('getProjectDashboard', () => ({ project: { name: 'Invoicing' }, files: [{ id: 'f1', name: 'Card Payments PRD' }], tickets: { done: 4, todo: 2 } })),
+    getFileContent: record('getFileContent', ({ fileId }) => ({ found: true, id: fileId, name: 'Card Payments PRD', content: 'Features: pay by card, refunds with approval. ' + 'x'.repeat(40_000) })),
+    getTicketDetails: record('getTicketDetails', ({ ticketId }) => ({ found: true, id: ticketId, name: 'Refund approval' })),
+    queryCodebase: record('queryCodebase', () => { throw new Error('repository not linked'); }),
+    // Tools that change the project are never handed over, whatever is in the source.
+    createTickets: record('createTickets', () => ({ created: 1 })),
+    updateFileContent: record('updateFileContent', () => ({ success: true })),
+  };
+  const owns = { file: async (id: string) => id === 'f1', ticket: async (id: string) => id === 't1' };
+  return { calls, tools: pinToProject(source as any, 'internal-p1', 'u1', owns) };
+}
+
+test('the board agent can read the project, but only this project, and never change it', async () => {
+  const { calls, tools } = projectStandIn();
+  expect(Object.keys(tools).sort()).toEqual(['getFileContent', 'getProjectDashboard', 'getTicketDetails', 'queryCodebase']);
+  // Whatever project or person the model writes, the lookup runs for the board's own.
+  await tools.getProjectDashboard!.execute!({ projectId: 'someone-elses-project', userId: 'someone-else' }, {});
+  expect(calls[0]).toEqual(['getProjectDashboard', { projectId: 'internal-p1', userId: 'u1' }]);
+  // A document or ticket from another project is not read at all.
+  expect(await tools.getFileContent!.execute!({ fileId: 'f-other-project' }, {})).toMatchObject({ found: false });
+  expect(await tools.getTicketDetails!.execute!({ ticketId: 't-other-project' }, {})).toMatchObject({ found: false });
+  expect(calls.length).toBe(1);
+  expect(await tools.getTicketDetails!.execute!({ ticketId: 't1' }, {})).toMatchObject({ found: true, name: 'Refund approval' });
+  // A long document is cut rather than poured into the conversation, and a failing lookup is an answer, not a crash.
+  const doc = await tools.getFileContent!.execute!({ fileId: 'f1' }, {}) as any;
+  expect(doc.content.length).toBeLessThan(31_000); expect(doc.content).toContain('more characters]'); expect(doc.content.startsWith('Features: pay by card')).toBe(true);
+  expect(await tools.queryCodebase!.execute!({ question: 'how do refunds work?' }, {})).toEqual({ error: 'Could not look that up: repository not linked' });
+});
+
+test('asked about existing features, the board agent looks them up and then draws what it found', async () => {
+  const b = await board();
+  const { calls, tools } = projectStandIn();
+  const lookups = { tools, projectName: 'Invoicing', projectId: 'internal-p1' };
+  const { text, events, prompts, system } = await run(b, 'Brainstorm my existing features', [
+    call('getProjectDashboard', { projectId: 'internal-p1' }),
+    call('getFileContent', { fileId: 'f1' }),
+    call('add_elements', { elements: [{ type: 'text', x: 0, y: 0, text: 'Existing features', fontSize: 32 }, { type: 'sticky', x: 0, y: 60, text: 'Pay by card' }, { type: 'sticky', x: 230, y: 60, text: 'Refunds with approval' }, { type: 'sticky', x: 460, y: 60, text: 'Idea: partial refunds', fill: 'pink' }] }),
+    say('I laid out the two features from the Card Payments PRD and added one idea in pink.'),
+  ], { lookups });
+  expect(text).toContain('Card Payments PRD');
+  // It was told the project exists, what it can look up, and to look before drawing.
+  expect(system).toContain('This board belongs to the project \\"Invoicing\\"'); expect(system).toContain('LOOK IT UP FIRST'); expect(system).toContain('getFileContent');
+  expect(prompts[0].tools.map((t: any) => t.name).sort()).toEqual(['add_elements', 'delete_elements', 'getFileContent', 'getProjectDashboard', 'getTicketDetails', 'queryCodebase', 'update_elements']);
+  expect(calls.map((c) => c[0])).toEqual(['getProjectDashboard', 'getFileContent']);
+  // What it read came back to it, and what it drew is on the board.
+  expect(JSON.stringify(prompts[2].prompt)).toContain('refunds with approval');
+  expect(store.readElements(await fresh(b.id)).map((e) => e.text)).toEqual(['Existing features', 'Pay by card', 'Refunds with approval', 'Idea: partial refunds']);
+  // The person is told what it is doing while it works.
+  expect(events.filter((e) => e.type === 'activity').map((e) => e.text)).toEqual(['Looking at the project', 'Reading a document', 'Drawing']);
+});
+
+test('a board whose project cannot be looked up still gets an agent that draws', async () => {
+  const b = await board();
+  // No project tables here at all: the lookups fail to set up and are simply left out.
+  const { system, prompts } = await run(b, 'Add a note', [call('add_elements', { elements: [{ type: 'sticky', text: 'Hello' }] }), say('Added.')]);
+  expect(prompts[0].tools.map((t: any) => t.name).sort()).toEqual(['add_elements', 'delete_elements', 'update_elements']);
+  expect(system).not.toContain('THE PROJECT');
+  expect(store.readElements(await fresh(b.id)).length).toBe(1);
 });
