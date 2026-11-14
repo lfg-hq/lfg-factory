@@ -24,7 +24,9 @@ const cfg = JSON.parse((await lines.next()).value);
 
 const SELECTORS = {
   nameInput: 'input[aria-label="Your name"], input[placeholder="Your name"]',
-  joinButton: /^(Ask to join|Join now|Join anyway|Join)$/i,
+  // Meet labels this button by state ("Join now without camera"), so match how the label starts.
+  // Not a bare "Join": that would also press "Join and use a phone for audio".
+  joinButton: /^(Ask to join|Join now|Join anyway)/i,
   dismissButton: /^(Got it|Dismiss|Continue without microphone and camera|Not now|Close)$/i,
   micOff: '[role="button"][aria-label*="Turn off microphone" i], button[aria-label*="Turn off microphone" i]',
   cameraOff: '[role="button"][aria-label*="Turn off camera" i], button[aria-label*="Turn off camera" i]',
@@ -80,16 +82,21 @@ function readCaptions() {
 /** Messages in the open chat panel that have not been reported yet. */
 function readChat() {
   const out = [];
-  document.querySelectorAll("[data-message-id]").forEach((node) => {
+  // A message's pin button carries the same attribute; only the message container counts.
+  document.querySelectorAll("[data-message-id]:not(button)").forEach((node) => {
     if (node.__lfgSeen) return;
     node.__lfgSeen = true;
-    const text = (node.innerText || "").trim();
+    // The words are in the innermost first block; the rest is "pin this message" chrome.
+    let words = node;
+    while (words.firstElementChild && words.firstElementChild.tagName === "DIV") words = words.firstElementChild;
+    const text = (words.innerText || "").trim();
     if (!text) return;
-    // The sender's name heads the group of messages this one belongs to.
+    // The sender's name heads the group of messages this one belongs to (own messages show only the time).
     let speaker = "";
     for (let group = node.parentElement, depth = 0; group && depth < 6 && !speaker; group = group.parentElement, depth++) {
       const first = (group.innerText || "").split("\n").map((s) => s.trim()).filter(Boolean)[0] || "";
       if (first && first !== text.split("\n")[0] && first.length < 80) speaker = first.replace(/\s*\d{1,2}:\d{2}\s*(AM|PM)?$/i, "").trim();
+      if (first && /^\d{1,2}:\d{2}/.test(first)) return; // a bare time: our own message
     }
     out.push({ speaker: speaker || "Someone", text });
   });
@@ -104,6 +111,19 @@ async function sendChat(text) {
   sent.add(text.trim());
   await input.fill(text);
   await input.press("Enter");
+}
+
+/** Captions are the bot's ears. Meet keeps the switch in a hover menu, so use its shortcut (C). */
+async function turnOnCaptions() {
+  const on = async () => (await page.evaluate(readCaptions).catch(() => null)) !== null;
+  for (let attempt = 0; attempt < 4 && !(await on()); attempt++) {
+    if (await clickIfThere(SELECTORS.captionsOn, 2000)) { await sleep(1200); continue; }
+    // The shortcut only works when the call itself has focus, not the chat box.
+    await page.mouse.click(640, 380).catch(() => {});
+    await page.keyboard.press("c").catch(() => {});
+    await sleep(2000);
+  }
+  if (!(await on())) await evidence("Could not turn on captions");
 }
 
 async function join() {
@@ -123,7 +143,7 @@ async function join() {
     if (await name.isVisible().catch(() => false)) await name.fill(cfg.botName).catch(() => {});
     asked = await clickIfThere(SELECTORS.joinButton, 3000);
     if (!asked && (await seen(SELECTORS.leaveButton))) break; // let straight in
-    if (!asked) await sleep(1000);
+    if (!asked) await sleep(200);
   }
   setStatus("waiting_room");
   const admitBy = Date.now() + WAIT_TO_BE_ADMITTED_MS;
@@ -131,15 +151,11 @@ async function join() {
     if (Date.now() > admitBy) throw new Error("Nobody let the bot in.");
     if (DENIED.test(await bodyText())) throw new Error("Someone in the call declined the bot's request to join.");
     await clickIfThere(SELECTORS.dismissButton);
-    await sleep(1000);
+    await sleep(250);
   }
   setStatus("in_call");
   await clickIfThere(SELECTORS.dismissButton);
-  if (!(await clickIfThere(SELECTORS.captionsOn, 4000))) {
-    await page.keyboard.press("c").catch(() => {}); // Meet's shortcut for captions
-    await sleep(800);
-    if ((await page.evaluate(readCaptions).catch(() => null)) === null) await evidence("Could not turn on captions");
-  }
+  await turnOnCaptions();
   if (cfg.greeting) await sendChat(cfg.greeting).catch((e) => log("greeting not sent: " + e.message));
 }
 

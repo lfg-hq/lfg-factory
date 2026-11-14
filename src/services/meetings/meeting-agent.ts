@@ -20,7 +20,7 @@ import { buildS3Key, isS3Enabled, uploadBinary } from "../s3.ts";
 import { MEETING_CONTEXT_ROLE, announceAgentMessage, runQueuedChatTurn } from "../build-summary-turn.ts";
 import * as bot from "./meet-bot.ts";
 import type { MeetingStatus } from "./meet-bot.ts";
-import { chatChunks, platformOf, requestAfterWakePhrase } from "./wake.ts";
+import { chatChunks, meetLink, platformOf, requestAfterWakePhrase } from "./wake.ts";
 
 export type MeetingEvent = { kind: "speech" | "chat"; speaker: string; text: string };
 export type Meeting = typeof meetings.$inferSelect;
@@ -58,12 +58,12 @@ export function meetingSetupProblem(): string | null {
 
 /** Add the agent to a call. Creates the conversation its work will appear in. */
 export async function startMeeting(opts: { userId: string; projectId: string | null; projectName?: string | null; meetingUrl: string; title?: string }): Promise<Meeting> {
-  const meetingUrl = opts.meetingUrl.trim();
-  let parsed: URL;
-  try { parsed = new URL(meetingUrl); } catch { throw new MeetingError("That doesn't look like a meeting link."); }
-  if (parsed.protocol !== "https:") throw new MeetingError("Paste the full https meeting link.");
-  const platform = platformOf(meetingUrl);
+  const raw = opts.meetingUrl.trim();
+  try { new URL(raw); } catch { throw new MeetingError("That doesn't look like a meeting link."); }
+  const platform = platformOf(raw);
   if (platform !== "google_meet") throw new MeetingError("Paste a Google Meet link (meet.google.com). Zoom and Teams are not supported yet.");
+  const meetingUrl = meetLink(raw);
+  if (!meetingUrl) throw new MeetingError("That Google Meet link has no meeting code. Copy the link from the call itself.");
   const problem = meetingSetupProblem();
   if (problem) throw new MeetingError(problem);
 
@@ -83,7 +83,7 @@ export async function startMeeting(opts: { userId: string; projectId: string | n
   try {
     const started = await deps.startBot({
       meetingUrl, botName: name,
-      greeting: `${name} joined and is taking notes on this call${opts.projectName ? ` for ${opts.projectName}` : ""}. Say "Hey ${name}, ..." or type "@${name} ..." to ask for something.`,
+      greeting: `${name} joined and is taking notes on this call${opts.projectName ? ` for ${opts.projectName}` : ""}. Say "Hey agent, ..." or type "@${name} ..." to ask for something.`,
     }, {
       onSaid: (event) => { void handleMeetingEvent(meetingId, event).catch((error) => console.error("[meeting] event failed:", (error as Error).message)); },
       onStatus: (status, detail) => { void setStatus(meetingId, status, detail).catch((error) => console.error("[meeting] status failed:", (error as Error).message)); },

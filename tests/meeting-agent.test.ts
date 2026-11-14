@@ -20,7 +20,7 @@ mock.module('../src/ws/connection-manager.ts', () => ({ broadcastToUser: () => {
 mock.module('../src/ws/background-turns.ts', () => ({ findBackgroundTurn: () => null }));
 
 const agent = await import('../src/services/meetings/meeting-agent.ts');
-const { requestAfterWakePhrase, chatChunks, platformOf } = await import('../src/services/meetings/wake.ts');
+const { requestAfterWakePhrase, chatChunks, platformOf, meetLink } = await import('../src/services/meetings/wake.ts');
 
 const turns: any[] = []; const chat: string[] = []; const announced: string[] = []; const bots: any[] = [];
 let reply = 'There are four tickets pending.'; let left = 0; let screen: any = null;
@@ -54,6 +54,12 @@ test('the wake phrase is recognised however speech-to-text spells it, and only t
   expect(requestAfterWakePhrase('@LFG list open tickets', true)).toBe('list open tickets');
   expect(requestAfterWakePhrase('LFG: list open tickets', true)).toBe('list open tickets');
   expect(requestAfterWakePhrase('LFG list open tickets')).toBeNull(); // spoken, the bare name is not enough
+  // Captions mangle the acronym ("Hey, I love to you" in a real call), so plain words work too.
+  expect(requestAfterWakePhrase('Hey agent, how many tickets are pending?')).toBe('how many tickets are pending?');
+  expect(requestAfterWakePhrase('Okay, assistant. Summarise that.')).toBe('Summarise that.');
+  expect(requestAfterWakePhrase('Hey, I love to you, how many tickets?')).toBeNull();
+  expect(requestAfterWakePhrase('our agent called yesterday')).toBeNull();
+  expect(requestAfterWakePhrase('agent: list open tickets', true)).toBeNull(); // typed, only the product name counts
 });
 
 test('adding the agent starts a bot for that call and opens a conversation for its owner', async () => {
@@ -62,6 +68,8 @@ test('adding the agent starts a bot for that call and opens a conversation for i
   expect(meeting.botId).toBe('bot-1');
   expect(meeting.platform).toBe('google_meet');
   expect(bots[0].meetingUrl).toBe(meeting.meetingUrl);
+  const pasted = await agent.startMeeting({ userId: 'u1', projectId: null, meetingUrl: 'https://meet.google.com/meet/pst-edli-nkx?authuser=1&hl=en_GB' });
+  expect(pasted.meetingUrl).toBe('https://meet.google.com/pst-edli-nkx'); // however it was copied, the bot opens the plain link
   expect(bots[0].botName).toBe('LFG');
   expect(bots[0].greeting).toContain('taking notes on this call for Invoicing');
   const conv: any = sqlite.query('SELECT * FROM conversation WHERE id = ?').get(meeting.conversationId!);
@@ -230,6 +238,10 @@ test('replies fit the meeting chat, and only Google Meet links are recognised as
   expect(chatChunks('Short answer.', 500)).toEqual(['Short answer.']);
   expect(platformOf('https://meet.google.com/abc-defg-hij')).toBe('google_meet');
   expect(platformOf('https://evil-meet.google.com.example.org/x')).toBe('unknown');
+  expect(meetLink('https://meet.google.com/meet/sjk-komj-tut?authuser=1&hl=en_GB')).toBe('https://meet.google.com/sjk-komj-tut');
+  expect(meetLink('https://meet.google.com/SJK-KOMJ-TUT/')).toBe('https://meet.google.com/sjk-komj-tut');
+  expect(meetLink('https://meet.google.com/')).toBeNull();
+  expect(meetLink('https://meet.google.com/new')).toBeNull();
 });
 
 test('a server restart ends calls whose bot is gone, so nothing stays "in the call" forever', async () => {

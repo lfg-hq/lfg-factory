@@ -42,11 +42,11 @@ console.log("captions:");
 
 // ── A stand-in for Google Meet ───────────────────────────────────────────────
 const PAGE = `<!doctype html><title>Meet stand-in</title><body>
-<div id="pre"><input aria-label="Your name" placeholder="Your name"><button id="ask">Ask to join</button></div>
+<div id="pre"><input aria-label="Your name" placeholder="Your name"><button id="phone">Join and use a phone for audio</button><button id="ask" aria-label="Ask to join without camera">Ask to join</button></div>
 <div id="wait" hidden>Asking to be let in...</div>
 <div id="call" hidden>
   <div data-participant-id="a"></div><div data-participant-id="b"></div>
-  <button aria-label="Turn on captions (c)" id="cc">cc</button>
+  <button aria-label="Captions and translation" id="cc" hidden>cc</button>
   <button aria-label="Chat with everyone" id="chatbtn">chat</button>
   <button aria-label="Leave call" id="leave">leave</button>
   <div id="panel" hidden><div id="msgs"></div><textarea aria-label="Send a message"></textarea></div>
@@ -56,12 +56,17 @@ const PAGE = `<!doctype html><title>Meet stand-in</title><body>
 const $ = (id) => document.getElementById(id);
 const post = (what, body) => fetch("/event/" + what, { method: "POST", body: JSON.stringify(body || {}) });
 $("ask").onclick = () => { post("asked", { name: document.querySelector("input").value }); $("pre").hidden = true; $("wait").hidden = false; setTimeout(() => { $("wait").hidden = true; $("call").hidden = false; }, 1200); };
+$("phone").onclick = () => post("phone");
 $("chatbtn").onclick = () => { $("panel").hidden = false; };
 $("leave").onclick = () => { $("call").hidden = true; $("over").hidden = false; post("left"); };
 let n = 0;
-function message(sender, text) { const g = document.createElement("div"); g.innerHTML = "<div></div><div data-message-id='m" + (++n) + "'></div>"; g.children[0].textContent = sender + " 3:41 PM"; g.children[1].textContent = text; $("msgs").appendChild(g); }
+// Same shape as Meet: a header (name and time, or only the time for your own message), then the message with its pin button.
+function message(sender, text) { const g = document.createElement("div"); const id = "m" + (++n); g.innerHTML = "<div></div><div><div data-message-id='" + id + "'><div><div><div><div></div></div><div>Hover over a message to pin it<i>keep</i></div><div><button aria-label='Pin message' data-message-id='" + id + "'><i>keep</i></button></div></div></div></div></div>"; g.children[0].textContent = (sender === "You" ? "" : sender + " ") + "3:41 PM"; g.querySelector("[data-message-id] div div div div").textContent = text; $("msgs").appendChild(g); }
 document.querySelector("textarea").addEventListener("keydown", (e) => { if (e.key !== "Enter") return; e.preventDefault(); const text = e.target.value; e.target.value = ""; post("chat", { text }); message("You", text); });
 function block(id, speaker) { const d = document.createElement("div"); d.id = id; d.innerHTML = "<div><img alt=''><span></span></div><div></div>"; d.querySelector("span").textContent = speaker; return d; }
+// As in Meet, the captions switch is not a visible button: the C shortcut turns them on.
+let captionsOn = false;
+document.addEventListener("keydown", (e) => { if (e.key === "c" && e.target.tagName !== "TEXTAREA" && !captionsOn) { captionsOn = true; $("cc").onclick(); } });
 $("cc").onclick = () => {
   const region = document.createElement("div"); region.setAttribute("role", "region"); region.setAttribute("aria-label", "Captions"); $("call").appendChild(region);
   const say = (id, speaker, text, at) => setTimeout(() => { let b = $(id); if (!b) region.appendChild(b = block(id, speaker)); b.children[1].textContent = text; }, at);
@@ -93,6 +98,7 @@ const speech = () => got.filter((e) => e.type === "speech").map((e) => `${e.spea
 check(await until(() => statuses().includes("in_call")), "it asks to join, waits to be let in, and gets into the call");
 check(same(statuses(), ["waiting_room", "in_call"]), "it reports waiting, then in the call");
 check(events.some(([what, body]) => what === "asked" && body.name === "LFG"), "it joins under its own name");
+check(!events.some(([what]) => what === "phone"), "it presses the join button, not the join-by-phone one beside it");
 check(await until(() => events.some(([what, body]) => what === "chat" && body.text === "LFG joined and is taking notes.")), "it announces itself in the meeting chat");
 check(await until(() => speech().length >= 2), "it hears what is said");
 check(same(speech(), ["Priya Shah: We should let customers pay by card.", "Sam Lee: Hey LFG, how many tickets are pending?"]), "each line is reported once, complete, with the speaker's name");
