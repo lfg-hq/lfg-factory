@@ -9,6 +9,8 @@
   const ctx = canvas.getContext('2d');
   const editor = document.getElementById('wb-editor');
   const boardId = root.dataset.board;
+  // A board opened by its link talks to the public API, with the link's secret in place of a session.
+  const apiBase = root.dataset.api || '/api/whiteboards/' + boardId;
   const canEdit = root.dataset.canEdit === 'true';
   const FONT = 'Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
   const BOX_TYPES = { rect: 1, ellipse: 1, diamond: 1, triangle: 1 };
@@ -504,7 +506,7 @@
   function change(ids, mutate) { begin(ids); mutate(); commit(); }
 
   function request(path, options) {
-    return fetch('/api/whiteboards/' + boardId + path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, options || {})).then(function (response) {
+    return fetch(apiBase + path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, options || {})).then(function (response) {
       return response.json().catch(function () { return {}; }).then(function (body) {
         if (!response.ok) throw new Error(body.error || 'That did not go through.');
         return body;
@@ -540,7 +542,7 @@
   function flush() {
     if (!canEdit || (!dirty.size && !removed.size)) return;
     const body = payload();
-    try { fetch('/api/whiteboards/' + boardId + '/ops', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); } catch (e) { /* leaving anyway */ }
+    try { fetch(apiBase + '/ops', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); } catch (e) { /* leaving anyway */ }
   }
   function busyWith(id) { return dirty.has(id) || inflight.has(id) || editing === id || (drag && drag.ids && drag.ids.has(id)); }
   /** Take in elements that came from the server (someone else, or the agent). */
@@ -1124,7 +1126,7 @@
 
   // ── Start ──────────────────────────────────────────────────────────
   window.LFGBoard = {
-    els: els, selection: selection, cam: cam, style: style, canEdit: canEdit, boardId: boardId, on: on, emit: emit, request: request,
+    els: els, selection: selection, cam: cam, style: style, canEdit: canEdit, boardId: boardId, apiBase: apiBase, on: on, emit: emit, request: request,
     selectedList: selectedList, unionBox: unionBox, bbox: bbox, toScreen: toScreen, toWorld: toWorld, commentPos: commentPos, isLine: isLine,
     setTool: setTool, getTool: function () { return tool; }, select: select, change: change, put: put, remove: remove, uid: uid, nextZ: nextZ,
     setProps: setProps, setStyle: setStyle, restack: restack, duplicateSelection: duplicateSelection, deleteSelection: deleteSelection,

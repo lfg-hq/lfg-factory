@@ -10,6 +10,7 @@ const sqlite = new Database(':memory:');
 sqlite.exec(`CREATE TABLE user(id TEXT PRIMARY KEY); INSERT INTO user VALUES ('u1');`);
 // The shipped migration creates the tables, so the test also proves it matches the schema.
 sqlite.exec(readFileSync(new URL('../drizzle/manual/20261114-whiteboards-sqlite.sql', import.meta.url), 'utf8'));
+sqlite.exec(readFileSync(new URL('../drizzle/manual/20261114-whiteboard-links-sqlite.sql', import.meta.url), 'utf8'));
 mock.module('../src/config/db.ts', () => ({ db: drizzle(sqlite) }));
 
 // The API runs for real; only who is signed in, what they may do in a project, and the model are stand-ins.
@@ -18,8 +19,13 @@ const ROLES: Record<string, any> = {
   owner: { role: 'owner', permissions: { canEditFiles: true, canManageTickets: true, canChat: true, canInviteMembers: true } },
   viewer: { role: 'viewer', permissions: { canEditFiles: false, canManageTickets: false, canChat: false, canInviteMembers: false } },
   drawer: { role: 'member', permissions: { canEditFiles: true, canManageTickets: false, canChat: false, canInviteMembers: false } },
+  inviter: { role: 'member', permissions: { canEditFiles: true, canManageTickets: false, canChat: true, canInviteMembers: true } },
 };
-mock.module('../src/auth/middleware.ts', () => ({ requireAuth: async (c: any, next: any) => { c.set('user', { id: 'u1', name: 'Priya' }); await next(); } }));
+let signedIn = true;
+mock.module('../src/auth/middleware.ts', () => ({
+  requireAuth: async (c: any, next: any) => { c.set('user', { id: 'u1', name: 'Priya' }); await next(); },
+  optionalAuth: async (c: any, next: any) => { c.set('user', signedIn ? { id: 'u1', name: 'Priya' } : null); await next(); },
+}));
 mock.module('../src/auth/project-access.ts', () => ({
   getProjectAccess: async (projectId: string) => (who === 'stranger' || projectId !== 'proj-public' ? null : { project: { id: 'p1', projectId: 'proj-public', name: 'Invoicing' }, ...ROLES[who] }),
 }));
@@ -27,7 +33,8 @@ let routeModel: any = null;
 mock.module('../src/services/app-profile.ts', () => ({ resolveUserModel: async () => { if (!routeModel) throw new Error('No Anthropic API key configured. Please add your API key in Settings → LLM Keys to use this model.'); return { model: routeModel }; } }));
 
 const store = await import('../src/services/whiteboards/store.ts');
-const { default: api } = await import('../src/routes/api/whiteboards.ts');
+const { default: api, sharedBoardsApi: shared } = await import('../src/routes/api/whiteboards.ts');
+const { default: sharedPages } = await import('../src/routes/shared-board.ts');
 const agent = await import('../src/services/whiteboards/agent.ts');
 
 const note = (id: string, extra: Record<string, unknown> = {}) => ({ id, type: 'sticky', x: 0, y: 0, w: 200, h: 200, text: id, ...extra });
@@ -272,4 +279,94 @@ test('with no model set up, the chat says what to do instead of failing silently
   const events = await lines(await http(`/${b.id}/chat`, 'POST', { message: 'Hello' }));
   console.error = quiet;
   expect(events).toEqual([{ type: 'error', message: 'No Anthropic API key configured. Please add your API key in Settings → LLM Keys to use this model.' }]);
+});
+
+// ── Sharing a board by link ────────────────────────────────────────────
+const guest = (path: string, method = 'GET', body?: unknown) => shared.request(path, { method, headers: { 'Content-Type': 'application/json' }, body: body == null ? undefined : JSON.stringify(body) });
+
+test('a board is private until someone who can invite people turns its link on', async () => {
+  who = 'owner';
+  const b = await board(); await store.applyOps(b.id, { upserts: [note('a')] });
+  expect((await (await http(`/${b.id}`)).json() as any).share).toEqual({ mode: null, token: null });
+  // Being able to draw is not enough to open the board to the outside.
+  who = 'drawer';
+  expect((await http(`/${b.id}/share`, 'PUT', { mode: 'edit' })).status).toBe(403);
+  expect((await (await http(`/${b.id}`)).json() as any).share).toBeNull();
+  who = 'inviter';
+  const link = await (await http(`/${b.id}/share`, 'PUT', { mode: 'view' })).json() as any;
+  expect(link.mode).toBe('view'); expect(link.token.length).toBeGreaterThanOrEqual(32);
+  expect((await (await http(`/${b.id}`)).json() as any).share).toEqual(link);
+  // Someone on the project who may not share it is never shown the link.
+  who = 'drawer';
+  expect(JSON.stringify(await (await http(`/${b.id}`)).json())).not.toContain(link.token);
+});
+
+test('a view link shows the board to someone with no account, and nothing else', async () => {
+  who = 'owner';
+  const b = await board(); await store.applyOps(b.id, { upserts: [note('a', { text: 'Pay by card' })] });
+  await store.addMessage(b.id, 'user', 'a private question to the agent', 'u1');
+  const { token } = await (await http(`/${b.id}/share`, 'PUT', { mode: 'view' })).json() as any;
+  who = 'stranger';
+  const opened = await (await guest(`/${token}`)).json() as any;
+  expect(opened).toMatchObject({ board: { title: 'Ideas' }, canEdit: false, canChat: false, messages: [], share: null });
+  expect(opened.elements.map((e: any) => e.text)).toEqual(['Pay by card']);
+  expect(JSON.stringify(opened)).not.toContain('proj-public');
+  expect(await (await guest(`/${token}?since=0`)).json()).toMatchObject({ version: 1, ids: ['a'] });
+  // Looking is all a view link allows.
+  const refused = await guest(`/${token}/ops`, 'POST', { deletes: ['a'] });
+  expect(refused.status).toBe(403); expect((await refused.json() as any).error).toContain('only lets you view');
+  expect(store.readElements(await fresh(b.id)).length).toBe(1);
+  // The link opens that board only: there is no agent, renaming, deleting or listing behind it.
+  for (const [path, method] of [[`/${token}/chat`, 'POST'], [`/${token}`, 'PATCH'], [`/${token}`, 'DELETE'], [`/${token}/share`, 'PUT'], [`/${token}/messages`, 'DELETE'], ['/', 'GET']] as const) {
+    expect((await guest(path, method, method === 'GET' ? undefined : { message: 'hi', mode: 'edit', title: 'x' })).status).toBe(404);
+  }
+  expect(await store.getBoard(b.id)).not.toBeNull();
+});
+
+test('an edit link lets a guest draw, and what they send is cleaned like anyone else\'s', async () => {
+  who = 'owner';
+  const b = await board();
+  const { token } = await (await http(`/${b.id}/share`, 'PUT', { mode: 'edit' })).json() as any;
+  who = 'stranger';
+  expect((await (await guest(`/${token}`)).json() as any).canEdit).toBe(true);
+  expect((await guest(`/${token}/ops`, 'POST', { upserts: [note('g', { by: 'agent', onclick: 'x' }), { id: 'bad', type: 'script' }] })).status).toBe(200);
+  expect(store.readElements(await fresh(b.id))).toEqual([{ id: 'g', type: 'sticky', x: 0, y: 0, w: 200, h: 200, text: 'g', v: 1 }]);
+  // Narrowing the link to view-only keeps the same link but stops edits at once.
+  who = 'owner';
+  expect((await (await http(`/${b.id}/share`, 'PUT', { mode: 'view' })).json() as any).token).toBe(token);
+  expect((await guest(`/${token}/ops`, 'POST', { deletes: ['g'] })).status).toBe(403);
+});
+
+test('turning the link off kills it for good, and a wrong link opens nothing', async () => {
+  who = 'owner';
+  const b = await board();
+  const first = await (await http(`/${b.id}/share`, 'PUT', { mode: 'edit' })).json() as any;
+  expect(await (await http(`/${b.id}/share`, 'PUT', { mode: 'anything-else' })).json()).toEqual({ mode: null, token: null });
+  expect((await guest(`/${first.token}`)).status).toBe(404);
+  expect((await guest(`/${first.token}/ops`, 'POST', { upserts: [note('x')] })).status).toBe(404);
+  // Sharing again makes a new link; the one that was turned off stays dead.
+  const second = await (await http(`/${b.id}/share`, 'PUT', { mode: 'edit' })).json() as any;
+  expect(second.token).not.toBe(first.token);
+  expect((await guest(`/${first.token}`)).status).toBe(404);
+  expect((await guest(`/${second.token}`)).status).toBe(200);
+  for (const wrong of ['nope', '', 'null', b.id, second.token.slice(0, -1)]) expect((await guest(`/${wrong}`)).status).toBe(404);
+});
+
+test('the link opens the board page for a guest without naming the project', async () => {
+  who = 'owner';
+  const b = await board();
+  const { token } = await (await http(`/${b.id}/share`, 'PUT', { mode: 'edit' })).json() as any;
+  signedIn = false;
+  const page = await sharedPages.request(`/board/${token}`);
+  const body = await page.text();
+  expect(page.status).toBe(200);
+  expect(page.headers.get('Referrer-Policy')).toBe('no-referrer'); expect(page.headers.get('X-Robots-Tag')).toContain('noindex');
+  expect(body).toContain(`data-api="/api/shared-boards/${token}"`); expect(body).toContain('data-guest="true"'); expect(body).toContain('data-can-edit="true"'); expect(body).toContain('data-can-chat="false"');
+  expect(body).toContain('id="wb-guest"');
+  for (const hidden of ['proj-public', 'Invoicing', 'wb-share-btn', '/projects/']) expect(body).not.toContain(hidden);
+  // Someone signed in is shown under their own name.
+  signedIn = true;
+  expect(await (await sharedPages.request(`/board/${token}`)).text()).toContain('data-user="Priya"');
+  await store.setShare(b.id, null);
+  expect((await sharedPages.request(`/board/${token}`)).status).toBe(404);
 });

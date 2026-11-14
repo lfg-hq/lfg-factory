@@ -16,6 +16,9 @@ export const whiteboards = pgTable(
     title: text("title").notNull().default("Untitled board"),
     elements: text("elements").notNull().default("[]"),
     version: integer("version").notNull().default(0),
+    // Set while the board is open to anyone holding the link: the secret in the link, and what it allows (view | edit).
+    shareToken: text("share_token").unique(),
+    shareMode: text("share_mode"),
     createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),
     updatedAt: timestamp("updated_at", { mode: "date" }).notNull().default(sql`now()`),
   },

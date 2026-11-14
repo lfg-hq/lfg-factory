@@ -1,6 +1,7 @@
 import voiceApi from './routes/api/voice.ts';
 import meetingsApi from './routes/api/meetings.ts';
-import whiteboardsApi from "./routes/api/whiteboards.ts";
+import whiteboardsApi, { sharedBoardsApi } from "./routes/api/whiteboards.ts";
+import sharedBoardRoutes from "./routes/shared-board.ts";
 import { endOrphanedMeetings } from './services/meetings/meeting-agent.ts';
 import documentGraphApi from "./routes/api/document-graph.ts";
 import { documentSyncSettingsApi, documentSyncProjectApi } from "./routes/api/document-sync.ts";
@@ -209,6 +210,9 @@ app.get("/health", (c) => c.json({ status: "ok" }));
 
 // ── Routes ──────────────────────────────────────────────────────────
 // Scope Git diagnostics/auth before broad middleware on legacy API routers.
+// Boards opened by link need no account, so they are mounted ahead of every router that demands sign-in.
+app.route("/api/shared-boards", sharedBoardsApi);
+app.route("/", sharedBoardRoutes);
 app.route("/api", gitApi);
 // LFG Desktop (it sends X-LFG-Desktop on requests to this server) is the product, not
 // the website: marketing pages send it to the person's projects, or to sign in.

@@ -88,6 +88,29 @@ export async function renameBoard(id: string, title: string): Promise<string> {
   return clean;
 }
 
+export type ShareMode = "view" | "edit";
+export const shareModeOf = (board: Pick<Board, "shareMode" | "shareToken">): ShareMode | null =>
+  board.shareToken && (board.shareMode === "view" || board.shareMode === "edit") ? board.shareMode : null;
+
+/**
+ * Open the board to anyone holding its link (to view, or to edit), or close it again.
+ * Closing throws the link away, so a link that was turned off never works again, even if sharing is turned back on.
+ */
+export async function setShare(id: string, mode: ShareMode | null): Promise<{ mode: ShareMode | null; token: string | null }> {
+  const board = await getBoard(id);
+  if (!board) throw new BoardError("Board not found");
+  const token = mode ? board.shareToken ?? Buffer.from(crypto.getRandomValues(new Uint8Array(24))).toString("base64url") : null;
+  await db.update(whiteboards).set({ shareToken: token, shareMode: mode }).where(eq(whiteboards.id, id));
+  return { mode, token };
+}
+
+/** The board a link opens, or null when the link is unknown or was turned off. */
+export async function boardByShareToken(token: string): Promise<Board | null> {
+  if (!token || token.length < 16) return null;
+  const [board] = await db.select().from(whiteboards).where(eq(whiteboards.shareToken, token)).limit(1);
+  return board && shareModeOf(board) ? board : null;
+}
+
 export const deleteBoard = async (id: string) => { await db.delete(whiteboards).where(eq(whiteboards.id, id)); };
 
 // One change at a time per board: each merge reads the stored board, so two at once would lose one.

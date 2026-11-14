@@ -134,3 +134,16 @@ html[data-theme="light"] .wb {
   .wb-chat { left: 8px; right: 8px; bottom: 8px; width: auto; height: 60vh; resize: none; }
 }
 @media (prefers-reduced-motion: reduce) { .wb-panel, .wb-msg, .wb-chat { animation: none; transition: none; } }
+
+/* Share by link, and the name a guest gives when they arrive by one. */
+.wb-brand { width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; font-size: 16px; }
+.wb-share { z-index: 8; top: 60px; right: 12px; width: 330px; flex-direction: column; align-items: stretch; gap: 8px; padding: 14px 16px; user-select: text; -webkit-user-select: text; }
+.wb-share h3 { margin: 0; font-size: 14px; }
+.wb-share label, .wb-guest p, .wb-share p { margin: 0; font-size: 12.5px; color: var(--wb-muted); }
+.wb-share select, .wb-share input, .wb-guest input { height: 34px; box-sizing: border-box; background: var(--wb-hover); border: 1px solid var(--wb-border); border-radius: 8px; padding: 0 10px; color: var(--wb-ink); font: inherit; min-width: 0; }
+.wb-share select option { color: #1f2937; }
+.wb-share-row, .wb-guest > div { display: flex; gap: 8px; }
+.wb-share-row input, .wb-guest input { flex: 1; }
+.wb-share-row .wb-primary, .wb-guest .wb-primary { height: 34px; white-space: nowrap; }
+.wb-guest { z-index: 12; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 340px; flex-direction: column; align-items: stretch; gap: 8px; padding: 18px; animation: none; }
+.wb-guest label { font-weight: 650; font-size: 15px; }

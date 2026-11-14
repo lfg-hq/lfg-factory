@@ -7,7 +7,7 @@ import { bodyLimit } from "hono/body-limit";
 import { requireAuth } from "../../auth/middleware.ts";
 import { getProjectAccess, type ProjectAccess } from "../../auth/project-access.ts";
 import {
-  BoardError, applyOps, changesSince, clearMessages, createBoard, deleteBoard, getBoard, listBoards, listMessages, readElements, renameBoard, type Board,
+  BoardError, applyOps, boardByShareToken, changesSince, clearMessages, createBoard, deleteBoard, getBoard, listBoards, listMessages, readElements, renameBoard, setShare, shareModeOf, type Board,
 } from "../../services/whiteboards/store.ts";
 import { runBoardAgent, type AgentEvent } from "../../services/whiteboards/agent.ts";
 import { providerErrorMessage } from "../../ai/provider-error.ts";
@@ -19,6 +19,8 @@ whiteboardsApi.use("*", requireAuth);
 whiteboardsApi.use("*", bodyLimit({ maxSize: 6 * 1024 * 1024 }));
 
 export const canDraw = (access: ProjectAccess) => access.role === "owner" || access.permissions.canEditFiles;
+/** Opening a board to people outside the project is an invitation, so it needs the right to invite. */
+export const canShare = (access: ProjectAccess) => access.role === "owner" || (canDraw(access) && access.permissions.canInviteMembers);
 export const canAsk = (access: ProjectAccess) => access.role === "owner" || access.permissions.canChat;
 
 /** The board and the caller's access to its project, or null when they may not see it. */
@@ -55,6 +57,8 @@ whiteboardsApi.get("/:id", async (c) => {
     elements: readElements(found.board),
     messages: (await listMessages(found.board.id)).map((m) => ({ role: m.role, content: m.content })),
     canEdit: canDraw(found.access), canChat: canAsk(found.access),
+    // The link is a credential: only people who may hand it out are shown it.
+    share: canShare(found.access) ? { mode: shareModeOf(found.board), token: shareModeOf(found.board) ? found.board.shareToken : null } : null,
   });
 });
 
@@ -64,6 +68,16 @@ whiteboardsApi.patch("/:id", async (c) => {
   if (!canDraw(found.access)) return c.json({ error: "You can't edit this board." }, 403);
   const body = await c.req.json<{ title?: string }>().catch(() => ({}) as Record<string, never>);
   return c.json({ title: await renameBoard(found.board.id, String(body.title ?? "")) });
+});
+
+// Turn the board's public link on (to view or to edit) or off.
+whiteboardsApi.put("/:id/share", async (c) => {
+  const found = await open(c.req.param("id"), c.get("user").id);
+  if (!found) return c.json({ error: "Board not found" }, 404);
+  if (!canShare(found.access)) return c.json({ error: "Only people who can invite others to this project can share a board by link." }, 403);
+  const body = await c.req.json<{ mode?: string | null }>().catch(() => ({}) as Record<string, never>);
+  const mode = body.mode === "view" || body.mode === "edit" ? body.mode : null;
+  return c.json(await setShare(found.board.id, mode));
 });
 
 whiteboardsApi.delete("/:id", async (c) => {
@@ -140,6 +154,39 @@ whiteboardsApi.post("/:id/chat", async (c) => {
     cancel() { abort.abort(); },
   });
   return new Response(stream, { headers: { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no" } });
+});
+
+/**
+ * What someone holding a board's link can do, with no account: read the board, and, when the
+ * link allows editing, save changes to it. The link's secret is the only credential, so nothing
+ * here reveals the project, its members or the conversation with the agent, and the agent
+ * (which spends the project's model credit) is not available.
+ */
+export const sharedBoardsApi = new Hono();
+sharedBoardsApi.use("*", bodyLimit({ maxSize: 6 * 1024 * 1024 }));
+
+sharedBoardsApi.get("/:token", async (c) => {
+  const board = await boardByShareToken(c.req.param("token"));
+  if (!board) return c.json({ error: "This link is not available." }, 404);
+  const since = c.req.query("since");
+  if (since != null) return c.json({ title: board.title, ...changesSince(board, Number(since) || 0) });
+  return c.json({
+    board: { id: board.id, title: board.title, version: board.version }, elements: readElements(board),
+    messages: [], canEdit: shareModeOf(board) === "edit", canChat: false, share: null,
+  });
+});
+
+sharedBoardsApi.post("/:token/ops", async (c) => {
+  const board = await boardByShareToken(c.req.param("token"));
+  if (!board) return c.json({ error: "This link is not available." }, 404);
+  if (shareModeOf(board) !== "edit") return c.json({ error: "This link only lets you view the board." }, 403);
+  const body = await c.req.json<{ upserts?: unknown[]; deletes?: unknown[] }>().catch(() => ({}) as Record<string, never>);
+  try {
+    return c.json({ version: (await applyOps(board.id, body)).version });
+  } catch (error) {
+    if (error instanceof BoardError) return c.json({ error: error.message }, 400);
+    throw error;
+  }
 });
 
 export default whiteboardsApi;

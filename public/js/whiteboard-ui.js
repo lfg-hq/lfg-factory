@@ -6,7 +6,9 @@
   const root = document.getElementById('wb');
   if (!B || !root) return;
   const $ = function (id) { return document.getElementById(id); };
-  const userName = root.dataset.user || 'Someone';
+  const guest = root.dataset.guest === 'true';
+  // Someone who opened the board by its link has no account, so they say who they are (kept in this browser).
+  let userName = root.dataset.user || (guest && localStorage.getItem('lfg-wb-guest')) || (guest ? 'Guest' : 'Someone');
   const canChat = root.dataset.canChat === 'true';
   const SHAPES = { rect: 'far fa-square', ellipse: 'far fa-circle', diamond: 'far fa-square wb-rot45', triangle: 'fas fa-play fa-rotate-270' };
   const INKS = ['auto', '#0f172a', '#64748b', '#ffffff', '#ef4444', '#f97316', '#f59e0b', '#22c55e', '#14b8a6', '#3b82f6', '#7c3aed', '#ec4899'];
@@ -67,6 +69,7 @@
     status.textContent = state === 'saving' ? 'Saving…' : state === 'error' ? 'Not saved, retrying…' : 'Saved';
   });
   if (!B.canEdit) { status.textContent = 'View only'; title.readOnly = true; }
+  if (guest) title.readOnly = true;
   function refreshHistory() { $('wb-undo').disabled = !B.canUndo(); $('wb-redo').disabled = !B.canRedo(); }
   B.on('history', refreshHistory); refreshHistory();
   $('wb-undo').addEventListener('click', B.undo);
@@ -351,7 +354,7 @@
       }
       else if (event.type === 'error') { failed = true; body.classList.remove('thinking'); node.classList.add('error'); richText(body, event.message); }
     }
-    fetch('/api/whiteboards/' + B.boardId + '/chat', {
+    fetch(B.apiBase + '/chat', {
       method: 'POST', signal: abort.signal, headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: text, selection: Array.from(B.selection), viewport: B.viewport() }),
     }).then(function (response) {
@@ -426,6 +429,50 @@
     (body.messages || []).forEach(function (m) { bubble(m.role === 'assistant' ? 'assistant' : 'user', m.content); });
     $('wb-empty').hidden = body.elements.length > 0;
   });
+  // ── Guests: a name for their comments ──────────────────────────────
+  (function () {
+    const card = $('wb-guest'); if (!card || !guest || !B.canEdit || root.dataset.user || localStorage.getItem('lfg-wb-guest')) return;
+    const input = card.querySelector('input');
+    card.hidden = false; input.focus();
+    card.addEventListener('submit', function (event) {
+      event.preventDefault();
+      userName = input.value.trim().slice(0, 40) || 'Guest';
+      localStorage.setItem('lfg-wb-guest', userName); card.hidden = true; document.getElementById('wb-canvas').focus();
+    });
+  })();
+
+  // ── Share by link ──────────────────────────────────────────────────
+  (function () {
+    const button = $('wb-share-btn'), panel = $('wb-share'); if (!button || !panel) return;
+    const mode = $('wb-share-mode'), row = $('wb-share-row'), link = $('wb-share-link'), copy = $('wb-share-copy'), note = $('wb-share-note');
+    let current = 'off';
+    function show(share) {
+      current = share.mode || 'off'; mode.value = current; row.hidden = !share.token;
+      link.value = share.token ? window.location.origin + '/board/' + share.token : '';
+      button.classList.toggle('active', !!share.token);
+      note.textContent = !share.token ? 'Only people on this project can open this board.'
+        : share.mode === 'edit' ? 'Anyone with this link can draw, write and comment, with no account. They cannot use Ask LFG.'
+        : 'Anyone with this link can look at this board, with no account. They cannot change it.';
+    }
+    B.on('ready', function (body) { if (body.share) { button.hidden = false; show(body.share); } });
+    button.addEventListener('click', function () { panel.hidden = !panel.hidden; });
+    B.on('pointerdown', function () { panel.hidden = true; });
+    B.on('escape', function () { panel.hidden = true; });
+    mode.addEventListener('change', function () {
+      const wanted = mode.value === 'off' ? null : mode.value;
+      if (!wanted && !window.confirm('Turn the link off? Anyone using it loses access, and the same link will not work again.')) { mode.value = current; return; }
+      mode.disabled = true;
+      B.request('/share', { method: 'PUT', body: JSON.stringify({ mode: wanted }) }).then(show).catch(function (e) { toast(e.message); })
+        .then(function () { mode.disabled = false; });
+    });
+    copy.addEventListener('click', function () {
+      link.select();
+      const done = function () { copy.textContent = 'Copied'; setTimeout(function () { copy.textContent = 'Copy link'; }, 1600); };
+      if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(link.value).then(done, function () { document.execCommand('copy'); done(); });
+      else { document.execCommand('copy'); done(); }
+    });
+  })();
+
   B.on('change', function () { $('wb-empty').hidden = true; });
   B.on('tool', function (tool) { if (tool !== 'select') $('wb-empty').hidden = true; });
   $('wb-empty').addEventListener('click', function (event) {

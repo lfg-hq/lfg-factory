@@ -9,23 +9,28 @@ import { html } from "hono/html";
  * ordinary JS escapes.
  */
 interface Props {
-  project: { projectId: string; name: string };
+  /** Absent when the board was opened by its link: a guest is told nothing about the project. */
+  project?: { projectId: string; name: string };
   board: { id: string; title: string };
   user: { name: string };
   canEdit: boolean;
   canChat: boolean;
+  /** Set when the board was opened by its link, with no account. */
+  shareToken?: string;
 }
 
 const tool = (id: string, icon: string, label: string, key: string) =>
   html`<button type="button" data-tool="${id}" title="${label} (${key})" aria-label="${label}"><i class="${icon}"></i></button>`;
 
-export function WhiteboardPage({ project, board, user, canEdit, canChat }: Props) {
+export function WhiteboardPage({ project, board, user, canEdit, canChat, shareToken }: Props) {
+  const guest = !!shareToken;
   return html`<!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <link rel="icon" type="image/x-icon" href="/public/images/favicon.ico" />
+  ${guest ? html`<meta name="robots" content="noindex, nofollow" /><meta name="referrer" content="no-referrer" />` : ""}
   <title>${board.title} — LFG</title>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
@@ -33,7 +38,7 @@ export function WhiteboardPage({ project, board, user, canEdit, canChat }: Props
   <script src="/public/js/theme-switcher.js"></script>
 </head>
 <body class="wb-body">
-  <div class="wb" id="wb" data-board="${board.id}" data-project="${project.projectId}" data-user="${user.name}" data-can-edit="${canEdit ? "true" : "false"}" data-can-chat="${canChat ? "true" : "false"}">
+  <div class="wb" id="wb" data-board="${board.id}" data-user="${user.name}" data-guest="${guest ? "true" : "false"}"${guest ? html` data-api="/api/shared-boards/${shareToken!}"` : ""} data-can-edit="${canEdit ? "true" : "false"}" data-can-chat="${canChat ? "true" : "false"}">
     <canvas id="wb-canvas" tabindex="0" aria-label="Whiteboard canvas"></canvas>
     <div class="wb-editor" id="wb-editor" hidden><div contenteditable="true" spellcheck="false" role="textbox" aria-label="Element text"></div></div>
 
@@ -48,7 +53,7 @@ export function WhiteboardPage({ project, board, user, canEdit, canChat }: Props
     </div>
 
     <header class="wb-panel wb-top">
-      <a class="wb-ib" href="/projects/${project.projectId}/whiteboards" title="Back to ${project.name} whiteboards" aria-label="Back to whiteboards"><i class="fas fa-arrow-left"></i></a>
+      ${project ? html`<a class="wb-ib" href="/projects/${project.projectId}/whiteboards" title="Back to ${project.name} whiteboards" aria-label="Back to whiteboards"><i class="fas fa-arrow-left"></i></a>` : html`<span class="wb-brand" title="LFG whiteboard">🚀</span>`}
       <input id="wb-title" class="wb-title" value="${board.title}" maxlength="120" aria-label="Board name" autocomplete="off" />
       <span class="wb-status" id="wb-status" role="status">Saved</span>
     </header>
@@ -60,6 +65,7 @@ export function WhiteboardPage({ project, board, user, canEdit, canChat }: Props
       <button type="button" class="wb-ib" id="wb-export" title="Download as image" aria-label="Download as image"><i class="fas fa-download"></i></button>
       <button type="button" class="wb-ib" data-theme-toggle title="Light or dark" aria-label="Switch theme"><i class="fas fa-adjust"></i></button>
       <button type="button" class="wb-ib" id="wb-help-btn" title="Shortcuts (?)" aria-label="Shortcuts"><i class="far fa-keyboard"></i></button>
+      ${guest ? "" : html`<button type="button" class="wb-ib" id="wb-share-btn" title="Share by link" aria-label="Share by link" hidden><i class="fas fa-link"></i></button>`}
       <button type="button" class="wb-ask" id="wb-ask" title="Chat with LFG (/)"${canChat ? "" : html` hidden`}><i class="fas fa-magic"></i> Ask LFG</button>
     </div>
 
@@ -138,6 +144,25 @@ export function WhiteboardPage({ project, board, user, canEdit, canChat }: Props
         <button type="submit" id="wb-chat-send" title="Send" aria-label="Send"><i class="fas fa-arrow-up"></i></button>
       </form>
     </section>
+
+    ${guest ? html`<form class="wb-panel wb-guest" id="wb-guest" hidden>
+      <label for="wb-guest-name">What should we call you?</label>
+      <p>Your name is shown on the comments you leave.</p>
+      <div><input id="wb-guest-name" maxlength="40" placeholder="Your name" autocomplete="name" /><button type="submit" class="wb-primary">Join board</button></div>
+    </form>` : html`<div class="wb-panel wb-share" id="wb-share" hidden>
+      <h3>Share by link</h3>
+      <label for="wb-share-mode">Anyone with the link</label>
+      <select id="wb-share-mode">
+        <option value="off">has no access</option>
+        <option value="view">can view</option>
+        <option value="edit">can edit</option>
+      </select>
+      <div class="wb-share-row" id="wb-share-row" hidden>
+        <input id="wb-share-link" readonly aria-label="Board link" />
+        <button type="button" class="wb-primary" id="wb-share-copy">Copy link</button>
+      </div>
+      <p id="wb-share-note"></p>
+    </div>`}
 
     <div class="wb-toast" id="wb-toast" role="status" hidden></div>
   </div>

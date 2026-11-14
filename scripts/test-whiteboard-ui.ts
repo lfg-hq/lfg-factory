@@ -16,10 +16,16 @@ const { db } = await import("../src/config/db.ts");
 const sqlite = (db as unknown as { $client: { exec(sql: string): void } }).$client;
 sqlite.exec("CREATE TABLE IF NOT EXISTS user(id TEXT PRIMARY KEY); INSERT OR IGNORE INTO user VALUES ('u1');");
 sqlite.exec(readFileSync(new URL("../drizzle/manual/20261114-whiteboards-sqlite.sql", import.meta.url), "utf8"));
+sqlite.exec(readFileSync(new URL("../drizzle/manual/20261114-whiteboard-links-sqlite.sql", import.meta.url), "utf8"));
 const store = await import("../src/services/whiteboards/store.ts");
 const { runBoardAgent } = await import("../src/services/whiteboards/agent.ts");
 const { WhiteboardPage } = await import("../src/templates/pages/whiteboard.tsx");
 const { WhiteboardsPage } = await import("../src/templates/pages/whiteboards.tsx");
+// Boards opened by link need no sign-in, so the real public routes are served as they are.
+const { Hono } = await import("hono");
+const { sharedBoardsApi } = await import("../src/routes/api/whiteboards.ts");
+const { default: sharedBoardRoutes } = await import("../src/routes/shared-board.ts");
+const publicApp = new Hono().route("/api/shared-boards", sharedBoardsApi).route("/", sharedBoardRoutes);
 
 // The stand-in model: asked for a login screen it draws one, otherwise it answers in words.
 const finish = (kind: string) => ({ type: "finish", finishReason: { unified: kind, raw: undefined }, usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } } });
@@ -70,6 +76,7 @@ const server = Bun.serve({
   async fetch(req) {
     const url = new URL(req.url);
     const readonly = url.searchParams.get("view") === "1";
+    if (url.pathname.startsWith("/board/") || url.pathname.startsWith("/api/shared-boards/")) return publicApp.fetch(req);
     if (url.pathname === "/") return html(WhiteboardsPage({ project, user: { name: "Test" }, canEdit: true }));
     const pageMatch = /^\/projects\/pub\/whiteboards\/([\w-]+)$/.exec(url.pathname);
     if (pageMatch) {
@@ -87,6 +94,7 @@ const server = Bun.serve({
     const board = await store.getBoard(id);
     if (!board) return json({ error: "Board not found" }, 404);
     if (action === "ops") { const result = await store.applyOps(id, (await req.json()) as store.BoardOps); return json({ version: result.version }); }
+    if (action === "share") return json(await store.setShare(id, ((await req.json()) as { mode: store.ShareMode | null }).mode));
     if (action === "messages") { await store.clearMessages(id); return json({ ok: true }); }
     if (action === "chat") {
       const body = (await req.json()) as { message: string; selection: string[]; viewport: { x: number; y: number; w: number; h: number } };
@@ -103,7 +111,7 @@ const server = Bun.serve({
     if (req.method === "DELETE") { await store.deleteBoard(id); return json({ ok: true }); }
     const since = url.searchParams.get("since");
     if (since != null) return json({ title: board.title, ...store.changesSince(board, Number(since)) });
-    return json({ board: { id: board.id, title: board.title, version: board.version }, elements: store.readElements(board), messages: (await store.listMessages(id)).map((m) => ({ role: m.role, content: m.content })), canEdit: true, canChat: true });
+    return json({ board: { id: board.id, title: board.title, version: board.version }, elements: store.readElements(board), messages: (await store.listMessages(id)).map((m) => ({ role: m.role, content: m.content })), canEdit: true, canChat: true, share: { mode: store.shareModeOf(board), token: store.shareModeOf(board) ? board.shareToken : null } });
   },
 });
 const base = `http://localhost:${server.port}`;
@@ -271,6 +279,35 @@ try {
   await viewer.keyboard.press("n"); await viewer.mouse.click(600, 400); await viewer.keyboard.press("Delete");
   await new Promise((r) => setTimeout(r, 900));
   check((await elements(boardId)).length === count, "and cannot change the board");
+
+  console.log("\nsharing by link:");
+  await page.click("#wb-share-btn");
+  check((await page.inputValue("#wb-share-mode")) === "off" && (await page.locator("#wb-share-row").isHidden()), "a board starts with no link");
+  await page.selectOption("#wb-share-mode", "edit");
+  await page.waitForSelector("#wb-share-row:not([hidden])");
+  const link = await page.inputValue("#wb-share-link");
+  check(/\/board\/[\w-]{32,}$/.test(link), "choosing \"can edit\" makes a link to copy");
+  check((await page.innerText("#wb-share-note")).includes("no account"), "and says what the link allows");
+  const guest = await open(new URL(link).pathname);
+  await guest.waitForSelector("#wb.ready");
+  check(await guest.locator("#wb-guest").isVisible(), "someone opening the link with no account is asked for a name");
+  await guest.fill("#wb-guest-name", "Dana"); await guest.keyboard.press("Enter");
+  check((await local(guest)).length === (await elements(boardId)).length, "and sees the whole board");
+  check((await guest.locator("#wb-ask").isHidden()) && (await guest.locator("#wb-share-btn").count()) === 0 && (await guest.locator(".wb-top a").count()) === 0, "with no agent, no sharing controls and no way into the project");
+  await guest.keyboard.press("n"); await guest.mouse.click(420, 640); await guest.keyboard.type("Dana's idea"); await guest.keyboard.press("Escape");
+  check(await until(async () => (await elements(boardId)).some((e) => e.text === "Dana's idea")), "what the guest adds is saved");
+  check(await until(async () => (await local(page)).some((e) => e.text === "Dana's idea"), 9000), "and shows up for the project member");
+  await guest.keyboard.press("c"); await guest.mouse.click(900, 640);
+  await guest.fill("#wb-comment textarea", "Love this"); await guest.keyboard.press("Enter");
+  check(await until(async () => (await elements(boardId)).some((e) => e.type === "comment" && (e.thread as any[])[0].text === "Love this" && (e.thread as any[])[0].author === "Dana")), "the guest's comment carries the name they gave");
+  await page.selectOption("#wb-share-mode", "view");
+  await page.waitForFunction(() => (document.getElementById("wb-share-note") as HTMLElement).innerText.includes("cannot change it"));
+  check((await page.inputValue("#wb-share-link")) === link, "switching to \"can view\" keeps the same link");
+  await guest.reload(); await guest.waitForSelector("#wb.ready");
+  check((await guest.innerText("#wb-status")) === "View only" && !(await guest.locator('[data-tool="pen"]').isVisible()) && (await guest.locator("#wb-guest").isHidden()), "and the guest can now only look");
+  await page.selectOption("#wb-share-mode", "off");
+  await page.waitForSelector("#wb-share-row", { state: "hidden" });
+  check((await (await fetch(link)).status) === 404, "turning the link off closes the board to guests");
 
   await list.goto(base + "/"); await list.waitForSelector("a.board-card");
   check((await list.innerText("a.board-card .board-title")) === "Checkout ideas", "the list shows the board under its new name");
