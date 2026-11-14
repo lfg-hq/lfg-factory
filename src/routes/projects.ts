@@ -683,7 +683,7 @@ projectsRouter.get("/projects/:projectId/whiteboards/:boardId", async (c) => {
   return c.html(WhiteboardPage({
     project: { projectId: access.project.projectId, name: access.project.name },
     board: { id: board.id, title: board.title }, user: { name: user.name },
-    canEdit: canDraw(access), canChat: canDraw(access) && canAsk(access),
+    canEdit: canDraw(access), canChat: canDraw(access) && canAsk(access), embed: c.req.query("embed") === "1",
   }));
 });
 

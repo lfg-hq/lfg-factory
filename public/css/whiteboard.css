@@ -135,6 +135,10 @@ html[data-theme="light"] .wb {
 }
 @media (prefers-reduced-motion: reduce) { .wb-panel, .wb-msg, .wb-chat { animation: none; transition: none; } }
 
+/* Inside the chat's Boards panel the chat beside it is the agent. */
+.wb[data-embed="true"] #wb-ask, .wb[data-embed="true"] #wb-chat { display: none !important; }
+.wb[data-embed="true"] .wb-title { width: 150px; }
+
 /* Share by link, and the name a guest gives when they arrive by one. */
 .wb-brand { width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; font-size: 16px; }
 .wb-share { z-index: 8; top: 60px; right: 12px; width: 330px; flex-direction: column; align-items: stretch; gap: 8px; padding: 14px 16px; user-select: text; -webkit-user-select: text; }

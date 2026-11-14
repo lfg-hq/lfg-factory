@@ -138,6 +138,8 @@ export function freeOrigin(elements: BoardElement[], viewport?: BoardTurn["viewp
   const all = bounds(elements);
   const view = viewport && viewport.w > 0 ? viewport : { x: 0, y: 0, w: 1400, h: 800 };
   if (!all) return { x: Math.round(view.x + 80), y: Math.round(view.y + 80) };
+  // With no view to go by (the chat agent), new work lines up with the top of what is there, to its right.
+  if (!viewport) return { x: Math.round(all.maxX + 160), y: Math.round(all.minY) };
   const inView = elements.some((e) => {
     const b = bounds([e])!;
     return b.maxX > view.x && b.minX < view.x + view.w && b.maxY > view.y && b.minY < view.y + view.h;
@@ -145,6 +147,70 @@ export function freeOrigin(elements: BoardElement[], viewport?: BoardTurn["viewp
   if (!inView) return { x: Math.round(view.x + 80), y: Math.round(view.y + 80) };
   return { x: Math.round(all.maxX + 160), y: Math.round(Math.max(all.minY, Math.min(view.y + 80, all.maxY))) };
 }
+
+export const elementUpdate = elementInput.partial().extend({ id: z.string() });
+export type ElementUpdate = z.infer<typeof elementUpdate>;
+export { elementInput, type ElementInput };
+
+type OpsResult = Awaited<ReturnType<typeof applyOps>>;
+/**
+ * Drawing on one board on the agent's behalf: add, change and remove elements, each saved and
+ * sent to the open browsers as it happens. Shared by the board's own chat and the main chat's
+ * whiteboard tools, so both draw the same way. Keys given to new elements stay usable for the
+ * life of the editor (one agent turn), so a later call can attach arrows to an earlier one's elements.
+ */
+export function boardEditor(boardId: string, opts: { origin?: string | null; onOps?: (result: OpsResult) => void } = {}) {
+  const keys = new Map<string, string>();
+  const current = async () => readElements((await getBoard(boardId)) ?? { elements: "[]" });
+  const save = async (ops: { upserts?: BoardElement[]; deletes?: string[] }) => {
+    const result = await applyOps(boardId, ops, ops.upserts ? { by: "agent", origin: opts.origin } : { origin: opts.origin });
+    opts.onOps?.(result);
+    return result;
+  };
+  return {
+    async add(wanted: ElementInput[]) {
+      const existing = await current();
+      const known = new Set(existing.map((e) => e.id));
+      let nextZ = Math.max(0, ...existing.map((e) => num(e.z, 0))) + 1;
+      const ids = wanted.map(() => "a" + crypto.randomUUID().replace(/-/g, "").slice(0, 11));
+      wanted.forEach((item, index) => { if (item.key) keys.set(item.key, ids[index]!); });
+      const resolve = (ref: string | undefined) => (ref ? keys.get(ref) ?? (known.has(ref) ? ref : undefined) : undefined);
+      // Frames sit behind what is drawn on them, whatever order they were listed in.
+      const order = wanted.map((item, index) => ({ item, index })).sort((a, b) => Number(b.item.type === "frame") - Number(a.item.type === "frame"));
+      const built: BoardElement[] = [];
+      for (const { item, index } of order) built[index] = buildElement(item, ids[index]!, nextZ++, resolve);
+      await save({ upserts: built });
+      return wanted.map((item, index) => ({ id: ids[index]!, ...(item.key ? { key: item.key } : {}) }));
+    },
+    async update(updates: ElementUpdate[]) {
+      const byId = new Map((await current()).map((e) => [e.id, e]));
+      const changed: BoardElement[] = []; const missing: string[] = [];
+      for (const update of updates) {
+        const existing = byId.get(keys.get(update.id) ?? update.id);
+        if (!existing) { missing.push(update.id); continue; }
+        const next: BoardElement = { ...existing };
+        for (const key of ["x", "y", "w", "h", "x1", "y1", "x2", "y2", "fontSize", "radius"] as const) if (typeof update[key] === "number") next[key] = update[key];
+        if (typeof update.text === "string") next.text = update.text;
+        if (update.fill) next.fill = colour(update.fill, String(existing.fill ?? "#ffffff"));
+        if (update.stroke) next.stroke = colour(update.stroke, String(existing.stroke ?? "#94a3b8"));
+        if (update.color) next.color = colour(update.color, String(existing.color ?? "#1f2937"));
+        if (update.align) next.align = update.align;
+        if (update.bold != null) { if (update.bold) next.bold = true; else delete next.bold; }
+        changed.push(next);
+      }
+      if (changed.length) await save({ upserts: changed });
+      return { updated: changed.map((e) => e.id), ...(missing.length ? { notFound: missing } : {}) };
+    },
+    async remove(ids: string[]) {
+      return (await save({ deletes: ids.map((id) => keys.get(id) ?? id) })).deleted;
+    },
+  };
+}
+
+/** How to draw well with the board's elements; given to whichever agent is drawing. */
+export const DRAWING_GUIDE = `Coordinates are in pixels; x grows right, y grows down; elements are positioned by their top-left corner. Leave at least 24px between sibling elements and align them on a grid. Colours are palette names (yellow, orange, pink, purple, blue, teal, green, red, gray, white, black, slate, accent, none) or #hex; use colour to carry meaning.
+Elements: sticky (one idea, about 200x200, at most ~12 words); text (a heading or label, fontSize 28-40 for headings, 14-18 for body); rect, ellipse, diamond, triangle (shapes with centred text; rect for steps, diamond for decisions); frame (a titled container: one per screen or section, with its contents placed inside its bounds); arrow and line (connect two elements with from and to, using ids of existing elements or keys of elements in the same call; text is the label).
+To sketch a screen or feature preview: one frame per screen (about 1200x760 desktop, 390x800 mobile), side by side with 120px between, joined by arrows when there is a flow. Build it from rects and text: top bar (full width, 56 high), cards (radius 12, fill white, stroke gray), inputs (radius 8, 40 high, fill white, stroke gray, left-aligned placeholder), primary buttons (radius 8, 40 high, fill accent, color white, bold), image placeholders (fill gray, text "Image"). Use real, specific copy, never lorem ipsum, and keep text inside its element (about 8px per character at fontSize 14). Create a whole screen in one call, frame first.`;
 
 function systemPrompt(board: Board, elements: BoardElement[], turn: BoardTurn): string {
   const origin = freeOrigin(elements, turn.viewport);
@@ -189,62 +255,25 @@ export async function runBoardAgent(turn: BoardTurn): Promise<string> {
   const history = await listMessages(board.id, 16);
   await addMessage(board.id, "user", turn.message, turn.userId);
 
-  let nextZ = Math.max(0, ...elements.map((e) => num(e.z, 0))) + 1;
-  const known = new Set(elements.map((e) => e.id));
-  const keys = new Map<string, string>();
-  const report = async (ops: { upserts?: BoardElement[]; deletes?: string[] }) => {
-    const result = await applyOps(board.id, ops, ops.upserts ? { by: "agent", origin: turn.origin } : { origin: turn.origin });
-    emit({ type: "ops", upserts: result.changed, deletes: result.deleted, version: result.version });
-    return result;
-  };
-
+  const editor = boardEditor(board.id, {
+    origin: turn.origin,
+    onOps: (result) => emit({ type: "ops", upserts: result.changed, deletes: result.deleted, version: result.version }),
+  });
   const tools = {
     add_elements: tool({
       description: "Add elements to the board. Returns the id given to each one, in order. Give elements a key when arrows in the same call need to point at them.",
       inputSchema: zodSchema(z.object({ elements: z.array(elementInput).min(1).max(120) })),
-      execute: async ({ elements: wanted }: { elements: ElementInput[] }) => {
-        const ids = wanted.map(() => "a" + crypto.randomUUID().replace(/-/g, "").slice(0, 11));
-        wanted.forEach((item, index) => { if (item.key) keys.set(item.key, ids[index]!); });
-        const resolve = (ref: string | undefined) => (ref ? keys.get(ref) ?? (known.has(ref) ? ref : undefined) : undefined);
-        // Frames sit behind what is drawn on them, whatever order they were listed in.
-        const order = wanted.map((item, index) => ({ item, index })).sort((a, b) => Number(b.item.type === "frame") - Number(a.item.type === "frame"));
-        const built: BoardElement[] = [];
-        for (const { item, index } of order) built[index] = buildElement(item, ids[index]!, nextZ++, resolve);
-        ids.forEach((id) => known.add(id));
-        await report({ upserts: built });
-        return { added: wanted.map((item, index) => ({ id: ids[index], ...(item.key ? { key: item.key } : {}) })) };
-      },
+      execute: async ({ elements: wanted }: { elements: ElementInput[] }) => ({ added: await editor.add(wanted) }),
     }),
     update_elements: tool({
       description: "Change existing elements: move, resize, recolour or rewrite their text. Only the fields you give are changed.",
-      inputSchema: zodSchema(z.object({ updates: z.array(elementInput.partial().extend({ id: z.string() })).min(1).max(120) })),
-      execute: async ({ updates }: { updates: Array<Partial<ElementInput> & { id: string }> }) => {
-        const current = new Map(readElements((await getBoard(board.id))!).map((e) => [e.id, e]));
-        const changed: BoardElement[] = []; const missing: string[] = [];
-        for (const update of updates) {
-          const existing = current.get(keys.get(update.id) ?? update.id);
-          if (!existing) { missing.push(update.id); continue; }
-          const next: BoardElement = { ...existing };
-          for (const key of ["x", "y", "w", "h", "x1", "y1", "x2", "y2", "fontSize", "radius"] as const) if (typeof update[key] === "number") next[key] = update[key];
-          if (typeof update.text === "string") next.text = update.text;
-          if (update.fill) next.fill = colour(update.fill, String(existing.fill ?? "#ffffff"));
-          if (update.stroke) next.stroke = colour(update.stroke, String(existing.stroke ?? "#94a3b8"));
-          if (update.color) next.color = colour(update.color, String(existing.color ?? "#1f2937"));
-          if (update.align) next.align = update.align;
-          if (update.bold != null) { if (update.bold) next.bold = true; else delete next.bold; }
-          changed.push(next);
-        }
-        if (changed.length) await report({ upserts: changed });
-        return { updated: changed.map((e) => e.id), ...(missing.length ? { notFound: missing } : {}) };
-      },
+      inputSchema: zodSchema(z.object({ updates: z.array(elementUpdate).min(1).max(120) })),
+      execute: async ({ updates }: { updates: ElementUpdate[] }) => editor.update(updates),
     }),
     delete_elements: tool({
       description: "Remove elements from the board by id. Only do this when the person asks for something to be removed or replaced.",
       inputSchema: zodSchema(z.object({ ids: z.array(z.string()).min(1).max(200) })),
-      execute: async ({ ids }: { ids: string[] }) => {
-        const result = await report({ deletes: ids.map((id) => keys.get(id) ?? id) });
-        return { deleted: result.deleted };
-      },
+      execute: async ({ ids }: { ids: string[] }) => ({ deleted: await editor.remove(ids) }),
     }),
   };
 

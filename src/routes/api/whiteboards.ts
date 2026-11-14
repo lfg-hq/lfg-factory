@@ -46,7 +46,7 @@ export async function authorizeBoardSocket(query: URLSearchParams, user: { id: s
   }
   if (!user) return null;
   const found = await open(query.get("board") ?? "", user.id);
-  return found ? { boardId: found.board.id, name: user.name, canEdit: canDraw(found.access), guest: false } : null;
+  return found ? { boardId: found.board.id, name: user.name, canEdit: canDraw(found.access), guest: false, userId: user.id } : null;
 }
 
 /** The live connection a request came from (sent by the browser), so that browser is not told about its own change. */

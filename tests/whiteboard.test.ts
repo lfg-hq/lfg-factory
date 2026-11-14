@@ -448,7 +448,7 @@ test('who may join a board live: members by sign-in, guests by a link that is on
   const b = await board();
   const q = (text: string) => new URLSearchParams(text);
   const me = { id: 'u1', name: 'Priya' };
-  expect(await authorizeBoardSocket(q(`board=${b.id}`), me)).toEqual({ boardId: b.id, name: 'Priya', canEdit: true, guest: false });
+  expect(await authorizeBoardSocket(q(`board=${b.id}`), me)).toEqual({ boardId: b.id, name: 'Priya', canEdit: true, guest: false, userId: 'u1' });
   expect(await authorizeBoardSocket(q(`board=${b.id}`), null)).toBeNull();
   expect(await authorizeBoardSocket(q('board=missing'), me)).toBeNull();
   who = 'viewer';
@@ -497,4 +497,73 @@ test('the board chat lists the models this person can use and which one is picke
   // People who cannot use the agent here are not shown models at all.
   who = 'drawer';
   expect(await (await http(`/${b.id}`)).json()).toMatchObject({ models: [], model: null });
+});
+
+// ── The main chat agent's whiteboard tools ─────────────────────────────
+const { whiteboardTools } = await import('../src/ai/tools/whiteboard-tools.ts');
+const { savedChatArtifact } = await import('../src/ai/chat-artifacts.ts');
+const chatTools = (projectId = 'proj-public') => whiteboardTools({ projectId, userId: 'u1' }) as Record<string, { execute: (input: any, opts?: any) => Promise<any> }>;
+
+test('in a project the person can edit, the chat agent draws on a new board and the watcher sees it', async () => {
+  who = 'owner';
+  const tools = chatTools();
+  const created = await tools.createWhiteboard!.execute({ title: 'Checkout flow' });
+  expect(created).toMatchObject({ saved: true, title: 'Checkout flow' });
+  expect(savedChatArtifact('createWhiteboard', created, 'call-1')).toEqual({ kind: 'board', id: created.boardId, name: 'Checkout flow' });
+  const watcher = enter(created.boardId, 'Priya', { userId: 'u1' });
+  const drawn = await tools.drawOnWhiteboard!.execute({ boardId: created.boardId, add: [
+    { key: 'cart', type: 'rect', x: 0, y: 0, text: 'Cart' }, { key: 'pay', type: 'rect', x: 300, y: 0, text: 'Pay', fill: 'accent' }, { type: 'arrow', from: 'cart', to: 'pay' },
+  ] });
+  expect(drawn).toMatchObject({ saved: true, boardId: created.boardId, title: 'Checkout flow', removed: [] });
+  expect(drawn.added.map((a: any) => a.key)).toEqual(['cart', 'pay', undefined]);
+  expect(savedChatArtifact('drawOnWhiteboard', drawn, 'call-2')).toEqual({ kind: 'board', id: created.boardId, name: 'Checkout flow' });
+  const stored = store.readElements(await fresh(created.boardId));
+  expect(stored.map((e) => e.type)).toEqual(['rect', 'rect', 'arrow']); expect(stored.every((e) => e.by === 'agent')).toBe(true);
+  expect(watcher.s.of('ops')[0].upserts.length).toBe(3);
+  // A later call in the same turn can still attach to an element by the key it was given.
+  const more = await tools.drawOnWhiteboard!.execute({ boardId: 'checkout FLOW', add: [{ key: 'done', type: 'rect', x: 600, y: 0, text: 'Receipt' }, { type: 'arrow', from: 'pay', to: 'done' }], update: [{ id: 'cart', text: 'Basket' }], remove: ['nothing-here'] });
+  expect(more).toMatchObject({ saved: true, updated: [drawn.added[0].id], removed: [] });
+  const after = store.readElements(await fresh(created.boardId));
+  expect(after.find((e) => e.id === drawn.added[0].id)!.text).toBe('Basket');
+  expect(after.at(-1)).toMatchObject({ type: 'arrow', from: drawn.added[1].id, to: more.added[0].id });
+  live.leaveBoard(watcher.peer);
+  // Failures are not chat cards.
+  expect(savedChatArtifact('drawOnWhiteboard', { error: 'x' }, 'c')).toBeNull();
+  expect(savedChatArtifact('drawOnWhiteboard', { saved: true }, 'c')).toBeNull();
+});
+
+test('with no board named, the chat agent works on the one the person has open, and knows what they selected', async () => {
+  who = 'owner';
+  const tools = chatTools('proj-public');
+  const a = await store.createBoard('u1', 'proj-public', 'Open one'), other = await store.createBoard('u1', 'proj-public', 'Other one');
+  await store.applyOps(a.id, { upserts: [note('n1', { text: 'Pay by card' }), note('n2', { x: 300, text: 'Refunds' })] });
+  // Several boards and none open: it must not guess.
+  const unsure = await tools.readWhiteboard!.execute({});
+  expect(unsure.error).toContain('no whiteboard open');
+  expect((await tools.drawOnWhiteboard!.execute({ add: [{ type: 'sticky', text: 'x' }] })).error).toContain('no whiteboard open');
+  // Someone else having a board open does not count; this person opening one does.
+  const stranger = enter(other.id, 'Sam', { userId: 'u2' }), mine = enter(a.id, 'Priya', { userId: 'u1' });
+  tell(mine.peer, { t: 'select', ids: ['n2', 'gone'] });
+  const listed = await tools.listWhiteboards!.execute({});
+  expect(listed.openNow).toBe(a.id); expect(listed.boards.find((b: any) => b.id === a.id)).toMatchObject({ title: 'Open one', elements: 2 });
+  const read = await tools.readWhiteboard!.execute({});
+  expect(read).toMatchObject({ boardId: a.id, title: 'Open one', selected: ['n2'], startNewWorkAt: { x: 660, y: 0 } });
+  expect(read.elements).toContain('* n2 sticky x=300 y=0 w=200 h=200 "Refunds"'); expect(read.elements).toContain('- n1 sticky');
+  const drawn = await tools.drawOnWhiteboard!.execute({ add: [{ type: 'sticky', x: 660, y: 0, text: 'From chat' }] });
+  expect(drawn.boardId).toBe(a.id);
+  expect(store.readElements(await fresh(other.id))).toEqual([]);
+  expect((await tools.readWhiteboard!.execute({ boardId: 'no such board' })).error).toContain('No whiteboard matches');
+  live.leaveBoard(stranger.peer); live.leaveBoard(mine.peer);
+});
+
+test('the chat agent cannot draw for someone who may only view', async () => {
+  who = 'owner';
+  const b = await store.createBoard('u1', 'proj-public', 'Locked');
+  who = 'viewer';
+  const tools = chatTools();
+  expect((await tools.drawOnWhiteboard!.execute({ boardId: b.id, add: [{ type: 'sticky', text: 'x' }] })).error).toContain('not change them');
+  expect((await tools.createWhiteboard!.execute({ title: 'New' })).error).toContain('not create them');
+  expect((await tools.readWhiteboard!.execute({ boardId: b.id })).title).toBe('Locked'); // reading is fine
+  expect(store.readElements(await fresh(b.id))).toEqual([]);
+  who = 'owner';
 });

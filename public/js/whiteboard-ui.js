@@ -63,6 +63,8 @@
     B.request('', { method: 'PATCH', body: JSON.stringify({ title: title.value }) }).then(function (body) { title.value = body.title; document.title = body.title + ' — LFG'; }).catch(function (e) { toast(e.message); });
   });
   title.addEventListener('keydown', function (event) { if (event.key === 'Enter') title.blur(); });
+  function tellParent() { if (root.dataset.embed === 'true' && window.parent !== window) window.parent.postMessage({ type: 'lfg-board-title', title: title.value }, window.location.origin); }
+  title.addEventListener('change', tellParent); B.on('ready', tellParent); B.on('title', function () { setTimeout(tellParent, 0); });
   B.on('title', function (text) { if (document.activeElement !== title && title.value !== text) title.value = text; });
   B.on('status', function (state) {
     status.dataset.state = state;
@@ -303,7 +305,10 @@
     chatContext.hidden = !n;
     if (n) chatContext.firstElementChild.textContent = n === 1 ? 'Asking about the selected element' : 'Asking about ' + n + ' selected elements';
   }
+  const embedded = root.dataset.embed === 'true' && window.parent !== window;
   function openChat(focus) {
+    // In the chat's Boards panel, asking goes to the chat beside the board (it knows what is selected here).
+    if (embedded) { window.parent.postMessage({ type: 'lfg-board-ask' }, window.location.origin); return; }
     if (!canChat) { toast('You can view this board, but the agent is not available to you here.'); return; }
     chat.hidden = false; $('wb-ask').classList.add('active'); refreshContext();
     requestAnimationFrame(function () { chat.classList.add('open'); if (focus) chatInput.focus(); });

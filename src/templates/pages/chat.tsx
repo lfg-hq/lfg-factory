@@ -43,6 +43,7 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261022-build-rows" />
   <link rel="stylesheet" href="/public/css/chat.css?v=20261023-dictation-fit" />
   <link rel="stylesheet" href="/public/css/artifacts-fix.css" />
+  <link rel="stylesheet" href="/public/css/boards-tab.css?v=20261115" />
   <link rel="stylesheet" href="/public/css/polish.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
@@ -171,6 +172,10 @@ export function ChatPage({
             <i class="fas fa-tasks"></i>
             <span class="nav-text">Tickets</span>
           </a>
+          <a href="/projects/${projectId}/whiteboards" class="nav-link">
+            <i class="fas fa-chalkboard"></i>
+            <span class="nav-text">Whiteboards</span>
+          </a>
           <button type="button" class="nav-link sidebar-more-toggle" aria-expanded="false" aria-controls="sidebar-more-items">
             <i class="fas fa-ellipsis"></i>
             <span class="nav-text">More</span>
@@ -182,9 +187,6 @@ export function ChatPage({
             </a>
             <a href="/projects/${projectId}/meetings" class="nav-link">
               <i class="fas fa-video"></i><span class="nav-text">Meetings</span>
-            </a>
-            <a href="/projects/${projectId}/whiteboards" class="nav-link">
-              <i class="fas fa-chalkboard"></i><span class="nav-text">Whiteboards</span>
             </a>
             <a href="/projects/${projectId}?tab=documents" class="nav-link">
               <i class="fas fa-file-lines"></i><span class="nav-text">Docs</span>
@@ -333,6 +335,7 @@ export function ChatPage({
     <div class="artifacts-tabs artifacts-tabs-managed" style="display:flex;justify-content:space-between;align-items:center;">
       <div class="artifacts-tabs-list" id="artifacts-tabs-list">
         <button class="tab-button active" data-tab="filebrowser">Docs</button>
+        <button class="tab-button" data-tab="boards">Boards</button>
         <button class="tab-button" data-tab="checklist">Tickets</button>
         <button class="tab-button" data-tab="preview">Preview</button>
         <button class="tab-button" data-tab="git">Git</button>
@@ -352,6 +355,22 @@ export function ChatPage({
 
     <div class="artifacts-content">
       <div class="tab-content">
+
+        <!-- Boards Tab: the project's whiteboards, live beside the chat. The agent draws on them with its
+             whiteboard tools; behaviour is in /public/js/boards-tab.js. -->
+        <div class="tab-pane" id="boards">
+          <div class="boards-tab" id="boards-root" data-project-id="${projectId}">
+            <div class="boards-tab-head">
+              <button type="button" class="boards-tab-back" id="boards-tab-back" title="All boards" aria-label="All boards" hidden><i class="fas fa-arrow-left"></i></button>
+              <h3 class="boards-tab-title" id="boards-tab-title">Whiteboards</h3>
+              <a class="boards-tab-full" id="boards-tab-full" target="_blank" rel="noopener" title="Open full screen" hidden><i class="fas fa-up-right-from-square"></i></a>
+              <button type="button" class="boards-tab-new" id="boards-tab-new"><i class="fas fa-plus"></i> New board</button>
+            </div>
+            <p class="boards-tab-note" id="boards-tab-note" role="status"></p>
+            <div class="boards-tab-list" id="boards-tab-list"></div>
+            <iframe class="boards-tab-frame" id="boards-tab-frame" title="Whiteboard" hidden></iframe>
+          </div>
+        </div>
 
         <!-- Checklist Tab -->
         <div class="tab-pane" id="checklist">
@@ -564,7 +583,8 @@ export function ChatPage({
   <script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
   <script src="/public/js/custom-dropdown.js"></script>
   <script src="/public/js/dictation.js?v=20261021-inline-strip"></script>
-  <script src="/public/js/chat-artifacts.js?v=20261022-build-rows"></script>
+  <script src="/public/js/boards-tab.js?v=20261115"></script>
+  <script src="/public/js/chat-artifacts.js?v=20261115-boards"></script>
   <script src="/public/js/chatgpt-connection.js?v=20261018"></script>
   <script src="/public/js/chat.js?v=20261022-attachments"></script>
   <script src="/public/js/voice-mode.js?v=20261016-voice-hidden" data-disabled="true"></script>

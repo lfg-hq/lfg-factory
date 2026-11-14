@@ -98,13 +98,29 @@ const server = Bun.serve({
     if (url.pathname === "/api/settings/model") { modelPicks.push(((await req.json()) as { modelKey: string }).modelKey); return json({ success: true }); }
     const readonly = url.searchParams.get("view") === "1";
     if (url.pathname.startsWith("/board/") || url.pathname.startsWith("/api/shared-boards/")) return publicApp.fetch(req);
+    // The chat page's right panel, reduced to what the Boards tab and a board card need: the real
+    // pane markup's ids, the real scripts and stylesheet, and the two panel functions they call.
+    if (url.pathname === "/panel") return html(`<!DOCTYPE html><html data-theme="dark"><head><meta charset="utf-8"><link rel="stylesheet" href="/public/css/theme-variables.css"><link rel="stylesheet" href="/public/css/boards-tab.css">
+      <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+      <style>body{margin:0;display:flex;height:100vh;background:#121212;color:#e2e8f0;font-family:system-ui}#chat{width:38%;padding:16px;display:flex;flex-direction:column;gap:10px}#chat-input{margin-top:auto}#side{flex:1;display:flex;flex-direction:column;border-left:1px solid #333}.tab-pane{display:none;flex:1;min-height:0}.tab-pane.active{display:block}</style></head><body>
+      <div id="chat"><div id="cards"></div><textarea id="chat-input" rows="2"></textarea></div>
+      <div id="side"><div><button class="tab-button active" data-tab="filebrowser">Docs</button><button class="tab-button" data-tab="boards">Boards</button></div>
+        <div class="tab-pane active" id="filebrowser">Docs</div>
+        <div class="tab-pane" id="boards"><div class="boards-tab" id="boards-root" data-project-id="pub"><div class="boards-tab-head">
+          <button type="button" class="boards-tab-back" id="boards-tab-back" hidden>back</button><h3 class="boards-tab-title" id="boards-tab-title">Whiteboards</h3>
+          <a class="boards-tab-full" id="boards-tab-full" target="_blank" hidden>full</a><button type="button" class="boards-tab-new" id="boards-tab-new">New board</button></div>
+          <p class="boards-tab-note" id="boards-tab-note"></p><div class="boards-tab-list" id="boards-tab-list"></div><iframe class="boards-tab-frame" id="boards-tab-frame" hidden></iframe></div></div></div>
+      <script>window.panelOpened = 0; window.ArtifactsPanel = { open() { window.panelOpened++; } };
+        window.switchTab = (id) => { document.querySelectorAll(".tab-button").forEach(b => b.classList.toggle("active", b.dataset.tab === id)); document.querySelectorAll(".tab-pane").forEach(p => p.classList.toggle("active", p.id === id)); };
+        document.querySelectorAll(".tab-button").forEach(b => b.addEventListener("click", () => window.switchTab(b.dataset.tab)));</script>
+      <script src="/public/js/boards-tab.js"></script><script src="/public/js/chat-artifacts.js"></script></body></html>`);
     if (url.pathname === "/") return html(WhiteboardsPage({ project, user: { name: "Test" }, canEdit: true }));
     const pageMatch = /^\/projects\/pub\/whiteboards\/([\w-]+)$/.exec(url.pathname);
     if (pageMatch) {
       const board = await store.getBoard(pageMatch[1]!);
       if (!board) return new Response("Board not found", { status: 404 });
       const as = url.searchParams.get("as") ?? "Priya";
-      const response = html(WhiteboardPage({ project, board, user: { name: as }, canEdit: !readonly, canChat: !readonly }));
+      const response = html(WhiteboardPage({ project, board, user: { name: as }, canEdit: !readonly, canChat: !readonly, embed: url.searchParams.get("embed") === "1" }));
       response.headers.append("Set-Cookie", `wb_as=${encodeURIComponent(as)}; Path=/`);
       response.headers.append("Set-Cookie", `view=${readonly ? 1 : 0}; Path=/`);
       return response;
@@ -370,6 +386,44 @@ try {
   await page.waitForSelector("#wb-share-row", { state: "hidden" });
   check((await (await fetch(link)).status) === 404, "turning the link off closes the board to guests");
   check(await until(async () => (await guest.innerText("body").catch(() => "")).includes("not available"), 6000), "and the guest who had it open is shown that it is no longer available");
+
+  console.log("\nthe chat's Boards panel:");
+  const panel = await open("/panel");
+  check((await panel.locator(".boards-tab-card").count()) === 0 && (await panel.evaluate(() => (window as any).panelOpened)) === 0, "nothing is loaded until the Boards tab is opened");
+  await panel.click('.tab-button[data-tab="boards"]');
+  await panel.waitForSelector(".boards-tab-card");
+  check((await panel.innerText(".boards-tab-card b")) === "Checkout ideas", "the Boards tab lists the project's whiteboards");
+  await panel.click(".boards-tab-card");
+  const inner = panel.frameLocator("#boards-tab-frame");
+  await inner.locator("#wb.ready").waitFor();
+  check((await panel.innerText("#boards-tab-title")) === "Checkout ideas" && (await panel.locator("#boards-tab-back").isVisible()), "choosing one opens the live board in the panel, under its name");
+  check((await panel.getAttribute("#boards-tab-full", "href")) === `/projects/pub/whiteboards/${boardId}`, "with a way to open it full screen");
+  check((await inner.locator("#wb-ask").isHidden()) && (await inner.locator(".wb-top a").count()) === 0 && (await inner.locator('[data-tool="pen"]').isVisible()), "in the panel the board keeps its tools but leaves the agent to the chat beside it");
+  const frameEls = () => panel.frames().find((f) => f.url().includes("embed=1"))!.evaluate(() => Array.from((window as any).LFGBoard.els.values()).map((e: any) => e.text));
+  await store.applyOps(boardId, { upserts: [{ id: "fromchat", type: "sticky", x: 4000, y: 0, w: 200, h: 200, text: "Drawn from the chat" }] }, { by: "agent" });
+  check(await until(async () => (await frameEls()).includes("Drawn from the chat"), 2000), "what the chat agent draws shows up on it at once");
+  const embedded = panel.frames().find((f) => f.url().includes("embed=1"))!;
+  await embedded.evaluate(() => { const B = (window as any).LFGBoard; B.select([Array.from(B.els.values()).find((e: any) => e.type === "sticky").id]); });
+  await inner.locator('#wb-bar [data-act="ask"]').click();
+  check(await until(async () => panel.evaluate(() => document.activeElement?.id === "chat-input"), 2000), "Ask LFG on a selection takes you to the chat's message box");
+  await panel.click("#boards-tab-back");
+  await panel.waitForSelector(".boards-tab-card");
+  check(await panel.locator("#boards-tab-frame").isHidden(), "back returns to the list of boards");
+  await panel.click('.tab-button[data-tab="filebrowser"]');
+  const opened = await panel.evaluate(() => (window as any).panelOpened);
+  await panel.evaluate((id) => (window as any).ChatArtifacts.render(document.getElementById("cards"), { kind: "board", id, name: "Checkout ideas" }, "pub"), boardId);
+  check((await panel.innerText(".chat-artifact-card")).includes("Checkout ideas") && (await panel.innerText(".chat-artifact-card")).includes("Whiteboard"), "a board the agent drew on gets a card in the chat");
+  await inner.locator("#wb.ready").waitFor();
+  check((await panel.evaluate(() => (window as any).panelOpened)) > opened && (await panel.evaluate(() => document.getElementById("boards")!.classList.contains("active"))), "and the panel opens on that board by itself, so the drawing is watched as it happens");
+  await panel.click("#boards-tab-back"); await panel.click('.tab-button[data-tab="filebrowser"]');
+  await panel.evaluate((id) => (window as any).ChatArtifacts.render(document.getElementById("cards"), { kind: "board", id, name: "Checkout ideas" }, "pub", { replay: true }), boardId);
+  await new Promise((r) => setTimeout(r, 300));
+  check(!(await panel.evaluate(() => document.getElementById("boards")!.classList.contains("active"))) && (await panel.locator(".chat-artifact-card").count()) === 1, "reloading the chat's history does not pop the panel open or repeat the card");
+  await panel.click(".chat-artifact-card button");
+  await inner.locator("#wb.ready").waitFor();
+  check(await panel.evaluate(() => document.getElementById("boards")!.classList.contains("active")), "the card's Open board button opens it");
+  await panel.screenshot({ path: "output/whiteboard-panel.png" });
+  await panel.context().close();
 
   await list.goto(base + "/"); await list.waitForSelector("a.board-card");
   check((await list.innerText("a.board-card .board-title")) === "Checkout ideas", "the list shows the board under its new name");

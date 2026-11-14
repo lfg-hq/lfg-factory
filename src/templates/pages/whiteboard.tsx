@@ -17,12 +17,14 @@ interface Props {
   canChat: boolean;
   /** Set when the board was opened by its link, with no account. */
   shareToken?: string;
+  /** Shown inside the chat's Boards panel: the chat beside it is the agent, so the board's own chat is left out. */
+  embed?: boolean;
 }
 
 const tool = (id: string, icon: string, label: string, key: string) =>
   html`<button type="button" data-tool="${id}" title="${label} (${key})" aria-label="${label}"><i class="${icon}"></i></button>`;
 
-export function WhiteboardPage({ project, board, user, canEdit, canChat, shareToken }: Props) {
+export function WhiteboardPage({ project, board, user, canEdit, canChat, shareToken, embed }: Props) {
   const guest = !!shareToken;
   return html`<!DOCTYPE html>
 <html lang="en" data-theme="dark">
@@ -38,7 +40,7 @@ export function WhiteboardPage({ project, board, user, canEdit, canChat, shareTo
   <script src="/public/js/theme-switcher.js"></script>
 </head>
 <body class="wb-body">
-  <div class="wb" id="wb" data-board="${board.id}"${project ? html` data-project="${project.projectId}"` : ""} data-user="${user.name}" data-guest="${guest ? "true" : "false"}"${guest ? html` data-api="/api/shared-boards/${shareToken!}"` : ""} data-can-edit="${canEdit ? "true" : "false"}" data-can-chat="${canChat ? "true" : "false"}">
+  <div class="wb" id="wb" data-board="${board.id}"${project ? html` data-project="${project.projectId}"` : ""} data-user="${user.name}" data-guest="${guest ? "true" : "false"}" data-embed="${embed ? "true" : "false"}"${guest ? html` data-api="/api/shared-boards/${shareToken!}"` : ""} data-can-edit="${canEdit ? "true" : "false"}" data-can-chat="${canChat ? "true" : "false"}">
     <canvas id="wb-canvas" tabindex="0" aria-label="Whiteboard canvas"></canvas>
     <div class="wb-editor" id="wb-editor" hidden><div contenteditable="true" spellcheck="false" role="textbox" aria-label="Element text"></div></div>
 
@@ -53,7 +55,7 @@ export function WhiteboardPage({ project, board, user, canEdit, canChat, shareTo
     </div>
 
     <header class="wb-panel wb-top">
-      ${project ? html`<a class="wb-ib" href="/projects/${project.projectId}/whiteboards" title="Back to ${project.name} whiteboards" aria-label="Back to whiteboards"><i class="fas fa-arrow-left"></i></a>` : html`<span class="wb-brand" title="LFG whiteboard">🚀</span>`}
+      ${embed ? "" : project ? html`<a class="wb-ib" href="/projects/${project.projectId}/whiteboards" title="Back to ${project.name} whiteboards" aria-label="Back to whiteboards"><i class="fas fa-arrow-left"></i></a>` : html`<span class="wb-brand" title="LFG whiteboard">🚀</span>`}
       <input id="wb-title" class="wb-title" value="${board.title}" maxlength="120" aria-label="Board name" autocomplete="off" />
       <span class="wb-status" id="wb-status" role="status">Saved</span>
       <span class="wb-live" title="Live: changes and cursors appear as they happen" aria-hidden="true"></span>

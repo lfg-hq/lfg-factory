@@ -212,7 +212,7 @@ export const INVESTIGATION_TOOLS = new Set([
 /** What a long tool input is, for the "Writing …" progress line. */
 const TOOL_INPUT_LABELS: Record<string, string> = {
   createTickets: "the ticket", updateTicketDetails: "the ticket update", quickChange: "the change request",
-  sendTicketMessage: "the change for the ticket", runInPreview: "the check", saveNote: "the note",
+  sendTicketMessage: "the change for the ticket", runInPreview: "the check", saveNote: "the note", drawOnWhiteboard: "the drawing",
 };
 
 /**
@@ -258,6 +258,10 @@ const TOOL_LABELS: Record<string, string> = {
   getProjectEnvVars: "Reading environment variables",
   registerRequiredEnvVars: "Registering environment variables",
   setEnvVar: "Setting an environment variable",
+  listWhiteboards: "Looking at the whiteboards",
+  readWhiteboard: "Reading the whiteboard",
+  createWhiteboard: "Creating a whiteboard",
+  drawOnWhiteboard: "Drawing on the whiteboard",
 };
 
 export function toolLabel(toolName: string): string {
@@ -801,6 +805,8 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
       tools.getPreviewDiagnostics = previewDiagnosticsTool({projectId:internalProjectId,publicProjectId:projectId,userId});
     }
     if (projectId) Object.assign(tools, (await import('./tools/note-tools.ts')).noteTools({projectId:internalProjectId,userId}));
+    // Whiteboards store the PUBLIC project id, like conversations do.
+    if (projectId) Object.assign(tools, (await import('./tools/whiteboard-tools.ts')).whiteboardTools({projectId,userId}));
     if (projectId) tools.linkTicketDocuments = linkTicketDocumentsTool({projectId:internalProjectId,publicProjectId:projectId,userId});
     // A working shell in the preview for verification: run checks and scripts, report the evidence.
     if (projectId && productChat) tools.runInPreview = createPreviewRunTool({projectId:internalProjectId,publicProjectId:projectId,userId,conversationId:convId!,abortSignal:abortController.signal,

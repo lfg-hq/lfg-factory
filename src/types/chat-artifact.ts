@@ -2,7 +2,7 @@
 export interface ChatArtifact {
   id: string;
   name: string;
-  kind?: 'document' | 'tickets' | 'build_run';
+  kind?: 'document' | 'tickets' | 'build_run' | 'board';
   /** Tickets a build card follows, in build order. */
   ticketIds?: string[];
   fileType?: string;

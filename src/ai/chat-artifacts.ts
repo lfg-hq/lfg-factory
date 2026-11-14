@@ -8,6 +8,11 @@ export function savedChatArtifact(tool: string, output: Record<string, unknown> 
     return {kind:'document', id:output.id, name:typeof output.name === 'string' ? output.name : 'Document', fileType:typeof output.fileType === 'string' ? output.fileType : 'document',
       ...(typeof output.previousVersion === 'number' && output.previousVersion > 0 ? {previousVersion:output.previousVersion} : {})};
   }
+  // A board the agent created or drew on: one card per board, however many times it drew.
+  if (['createWhiteboard', 'drawOnWhiteboard'].includes(tool)) {
+    if (output.saved !== true || typeof output.boardId !== 'string' || !output.boardId) return null;
+    return {kind:'board', id:output.boardId, name:typeof output.title === 'string' && output.title ? output.title : 'Whiteboard'};
+  }
   // A build shows one live card following every ticket it builds.
   if (tool === 'startBuildRun' && typeof output.runId === 'string' && output.runId && Array.isArray(output.ticketIds)) {
     const ticketIds = output.ticketIds.filter((id): id is string => typeof id === 'string' && !!id);

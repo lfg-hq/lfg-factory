@@ -13,8 +13,8 @@
 import { cleanElement, onBoardChange, type BoardElement } from "./store.ts";
 
 export interface BoardSocket { send(text: string): unknown; close(code?: number, reason?: string): unknown }
-export interface PeerInfo { boardId: string; name: string; canEdit: boolean; guest: boolean }
-export interface Peer extends PeerInfo { id: string; color: string; socket: BoardSocket }
+export interface PeerInfo { boardId: string; name: string; canEdit: boolean; guest: boolean; /** The account, for project members. */ userId?: string }
+export interface Peer extends PeerInfo { id: string; color: string; socket: BoardSocket; selection: string[]; joinedAt: number }
 
 const COLORS = ["#f43f5e", "#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#06b6d4", "#ec4899", "#84cc16", "#f97316", "#14b8a6"];
 const rooms = new Map<string, Map<string, Peer>>();
@@ -42,7 +42,7 @@ export function joinBoard(socket: BoardSocket, info: PeerInfo): Peer {
   // The first colour nobody in the room is using, so neighbours are easy to tell apart.
   const taken = new Set([...room.values()].map((p) => p.color));
   const color = COLORS.find((c) => !taken.has(c)) ?? COLORS[room.size % COLORS.length]!;
-  const peer: Peer = { ...info, name: cleanName(info.name), id: crypto.randomUUID().slice(0, 8), color, socket };
+  const peer: Peer = { ...info, name: cleanName(info.name), id: crypto.randomUUID().slice(0, 8), color, socket, selection: [], joinedAt: Date.now() };
   send(peer, { t: "welcome", id: peer.id, color, peers: [...room.values()].map(view) });
   room.set(peer.id, peer);
   broadcast(peer.boardId, { t: "join", peer: view(peer) }, peer.id);
@@ -72,6 +72,7 @@ export function boardMessage(peer: Peer, raw: string | Buffer): void {
       return;
     case "select": {
       const ids = (Array.isArray(message.ids) ? message.ids : []).filter((id): id is string => typeof id === "string").slice(0, 200).map((id) => id.slice(0, 64));
+      peer.selection = ids;
       broadcast(peer.boardId, { t: "select", id: peer.id, ids }, peer.id);
       return;
     }
@@ -99,6 +100,19 @@ export function closeGuests(boardId: string): void {
     try { peer.socket.close(ACCESS_CHANGED, "access changed"); } catch { /* already gone */ }
     leaveBoard(peer);
   }
+}
+
+/**
+ * The board this person has open right now (the one they opened last, among the given boards),
+ * and what they have selected on it. This is how the chat agent knows what "this board" and
+ * "these notes" mean without being told.
+ */
+export function openBoardOf(userId: string, boardIds: string[]): { boardId: string; selection: string[] } | null {
+  let latest: Peer | null = null;
+  for (const boardId of boardIds) for (const peer of rooms.get(boardId)?.values() ?? []) {
+    if (peer.userId === userId && !peer.guest && (!latest || peer.joinedAt >= latest.joinedAt)) latest = peer;
+  }
+  return latest ? { boardId: latest.boardId, selection: latest.selection } : null;
 }
 
 export const peersOn = (boardId: string) => [...(rooms.get(boardId)?.values() ?? [])].map(view);
