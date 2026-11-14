@@ -1,6 +1,7 @@
 import voiceApi from './routes/api/voice.ts';
 import meetingsApi from './routes/api/meetings.ts';
 import whiteboardsApi, { sharedBoardsApi } from "./routes/api/whiteboards.ts";
+import evalsApi from "./routes/api/evals.ts";
 import sharedBoardRoutes from "./routes/shared-board.ts";
 import { boardSockets } from "./services/whiteboards/live.ts";
 import { endOrphanedMeetings } from './services/meetings/meeting-agent.ts';
@@ -242,6 +243,7 @@ app.route("/api/files", filesApi);
 app.route("/api/voice", voiceApi);
 app.route("/api/meetings", meetingsApi);
 app.route("/api/whiteboards", whiteboardsApi);
+app.route("/api/evals", evalsApi);
 app.route("/api/token-usage", tokenUsageApi);
 app.route("/api/settings", settingsApi);
 app.route("/api/projects", ticketCodeApi);

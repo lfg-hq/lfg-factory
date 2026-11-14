@@ -277,6 +277,12 @@
         const title = el('div', null, 'ca-heading'); title.append(el('strong', a.name));
         head.append(title);
         if (a.kind === 'build_run') { paintBuild(m); return; }
+        if (a.kind === 'evals') {
+            // An eval suite: models, a Run button and the live results table (public/js/evals.js).
+            if (window.EvalsUI) window.EvalsUI.card(m);
+            else { title.append(el('small', 'Evals', 'ca-muted')); card.replaceChildren(head); }
+            return;
+        }
         if (a.kind === 'board') {
             // A whiteboard the agent drew on: opens live in the Boards panel beside the chat.
             title.append(el('small', 'Whiteboard', 'ca-muted'));

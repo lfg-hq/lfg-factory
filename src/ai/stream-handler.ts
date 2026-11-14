@@ -212,7 +212,7 @@ export const INVESTIGATION_TOOLS = new Set([
 /** What a long tool input is, for the "Writing …" progress line. */
 const TOOL_INPUT_LABELS: Record<string, string> = {
   createTickets: "the ticket", updateTicketDetails: "the ticket update", quickChange: "the change request",
-  sendTicketMessage: "the change for the ticket", runInPreview: "the check", saveNote: "the note", drawOnWhiteboard: "the drawing",
+  sendTicketMessage: "the change for the ticket", runInPreview: "the check", saveNote: "the note", drawOnWhiteboard: "the drawing", saveEvalSuite: "the evals",
 };
 
 /**
@@ -262,6 +262,11 @@ const TOOL_LABELS: Record<string, string> = {
   readWhiteboard: "Reading the whiteboard",
   createWhiteboard: "Creating a whiteboard",
   drawOnWhiteboard: "Drawing on the whiteboard",
+  listEvalSuites: "Looking at the evals",
+  readEvalSuite: "Reading the evals",
+  saveEvalSuite: "Writing the evals",
+  runEvals: "Starting the evals",
+  readEvalResults: "Reading the eval results",
 };
 
 export function toolLabel(toolName: string): string {
@@ -807,6 +812,8 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     if (projectId) Object.assign(tools, (await import('./tools/note-tools.ts')).noteTools({projectId:internalProjectId,userId}));
     // Whiteboards store the PUBLIC project id, like conversations do.
     if (projectId) Object.assign(tools, (await import('./tools/whiteboard-tools.ts')).whiteboardTools({projectId,userId}));
+    // Evals for the AI agent the project is building (also keyed by the PUBLIC project id).
+    if (projectId) Object.assign(tools, (await import('./tools/eval-tools.ts')).evalTools({projectId,userId}));
     if (projectId) tools.linkTicketDocuments = linkTicketDocumentsTool({projectId:internalProjectId,publicProjectId:projectId,userId});
     // A working shell in the preview for verification: run checks and scripts, report the evidence.
     if (projectId && productChat) tools.runInPreview = createPreviewRunTool({projectId:internalProjectId,publicProjectId:projectId,userId,conversationId:convId!,abortSignal:abortController.signal,
