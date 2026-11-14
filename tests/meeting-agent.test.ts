@@ -100,6 +100,13 @@ test('when the bot cannot be started, the person is told and no call or empty ch
   expect(count()).toEqual(before);
 });
 
+test('a second call while the bot is busy is refused with the reason', async () => {
+  const { BotBusyError } = await import('../src/services/meetings/meet-bot.ts');
+  const startBot = agent.deps.startBot;
+  agent.deps.startBot = async () => { throw new BotBusyError(); };
+  try { await expect(join()).rejects.toThrow('only be in one at a time'); } finally { agent.deps.startBot = startBot; }
+});
+
 test('a spoken request runs the chat agent with the discussion so far, and the answer goes back to the call', async () => {
   const meeting = await join();
   await hear(meeting, ...said('Priya', 'We should let customers pay invoices by card.'));

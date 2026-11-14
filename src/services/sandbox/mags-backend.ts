@@ -359,11 +359,21 @@ export async function setNoSleep(nameOrId: string, noSleep: boolean): Promise<vo
 export async function startBrowserSession(opts?: {
   name?: string;
   timeout?: number;
+  /**
+   * Start Mags's meeting browser instead of the headless one: full Chrome with audio devices,
+   * and a profile kept on the workspace called `name` (required), so a Google sign-in made
+   * once in that browser is still there next time. One session per name: asking again while
+   * it is running returns the running one.
+   */
+  meet?: boolean;
 }): Promise<{ requestId: string; wsEndpoint: string; cdpHttpUrl: string }> {
   const client = getClient();
   const appDomain = process.env.MAGS_APP_DOMAIN || "app.lfg.run";
   const deadline = Date.now() + (opts?.timeout ?? 90_000);
-  const started = await client.run('echo "browser session ready"', { browserMode: true, persistent: true, noSync: true, name: opts?.name });
+  if (opts?.meet && !opts.name) throw new Error("The meeting browser needs a workspace name");
+  const started = opts?.meet
+    ? await magsApi("POST", "/api/v2/mags-jobs", { script: "echo ready", type: "inline", name: opts.name, rootfs_type: "chrome-meet", browser_mode: true })
+    : await client.run('echo "browser session ready"', { browserMode: true, persistent: true, noSync: true, name: opts?.name });
   const requestId: string = started.request_id;
   try {
     let subdomain = "";

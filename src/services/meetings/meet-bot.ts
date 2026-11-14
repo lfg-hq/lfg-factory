@@ -21,12 +21,19 @@ interface Bot { child: ChildProcessWithoutNullStreams; sessionId: string; shots:
 export interface Screenshot { jpeg: Buffer; presenting: boolean }
 
 const bots = new Map<string, Bot>();
+
+export class BotBusyError extends Error {
+  constructor() { super("The meeting bot is already in another call."); }
+}
 const STATUSES = new Set(["joining", "waiting_room", "in_call", "ended", "failed"]);
 
 export const botRunning = (botId: string) => bots.has(botId);
 
 export async function startBot(opts: { meetingUrl: string; botName: string; greeting: string }, handlers: BotHandlers): Promise<{ id: string }> {
-  const session = await startBrowserSession({ timeout: 120_000 });
+  // The meeting browser keeps the bot's Google sign-in on one named workspace, and Chrome
+  // allows one running browser per profile: so one call at a time.
+  if (bots.size > 0) throw new BotBusyError();
+  const session = await startBrowserSession({ timeout: 180_000, meet: true, name: process.env.MEETING_BOT_WORKSPACE || "lfg-meeting-bot" });
   let child: ChildProcessWithoutNullStreams;
   try {
     child = spawn("node", [`${process.cwd()}/scripts/meeting-bot-worker.mjs`], { stdio: ["pipe", "pipe", "pipe"] });

@@ -26,6 +26,8 @@ const SELECTORS = {
   nameInput: 'input[aria-label="Your name"], input[placeholder="Your name"]',
   joinButton: /^(Ask to join|Join now|Join anyway|Join)$/i,
   dismissButton: /^(Got it|Dismiss|Continue without microphone and camera|Not now|Close)$/i,
+  micOff: '[role="button"][aria-label*="Turn off microphone" i], button[aria-label*="Turn off microphone" i]',
+  cameraOff: '[role="button"][aria-label*="Turn off camera" i], button[aria-label*="Turn off camera" i]',
   leaveButton: '[aria-label="Leave call"], button[aria-label*="Leave call" i]',
   captionsOn: 'button[aria-label*="Turn on captions" i]',
   chatButton: 'button[aria-label*="Chat with everyone" i]',
@@ -114,6 +116,9 @@ async function join() {
     const text = await bodyText();
     if (CANNOT_JOIN.test(text)) { await evidence("Meet refused the bot"); throw new Error("Google Meet would not let the bot into this call. The link may be wrong, or the meeting may not allow guests."); }
     await clickIfThere(SELECTORS.dismissButton);
+    // The browser has a microphone and camera; the bot only listens, so join with both off.
+    await clickIfThere(SELECTORS.micOff);
+    await clickIfThere(SELECTORS.cameraOff);
     const name = page.locator(SELECTORS.nameInput).first();
     if (await name.isVisible().catch(() => false)) await name.fill(cfg.botName).catch(() => {});
     asked = await clickIfThere(SELECTORS.joinButton, 3000);

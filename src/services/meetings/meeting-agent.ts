@@ -91,11 +91,13 @@ export async function startMeeting(opts: { userId: string; projectId: string | n
     const [updated] = await db.update(meetings).set({ botId: started.id }).where(eq(meetings.id, meetingId)).returning();
     return updated!;
   } catch (error) {
-    console.error("[meeting] Could not start the bot:", (error as Error).message);
+    if (!(error instanceof bot.BotBusyError)) console.error("[meeting] Could not start the bot:", (error as Error).message);
     // Nothing joined, so leave no failed call or empty chat behind.
     await db.delete(meetings).where(eq(meetings.id, meetingId));
     await db.delete(conversations).where(eq(conversations.id, conv!.id));
-    throw new MeetingError("LFG could not start its meeting browser. Try again in a moment.");
+    throw new MeetingError(error instanceof bot.BotBusyError
+      ? "LFG is in another call right now, and it can only be in one at a time. Try again when that call ends."
+      : "LFG could not start its meeting browser. Try again in a moment.");
   }
 }
 
