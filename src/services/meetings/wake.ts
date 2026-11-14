@@ -9,16 +9,22 @@
 const ACRONYM = String.raw`l[\s.\-]*f[\s.\-]*g\b\.?|el+e?[\s\-]*ef+[\s\-]*g(?:ee|ie?)\b`;
 const escape = (word: string) => word.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, String.raw`\s+`);
 const aliases = () => (process.env.MEETING_WAKE_ALIASES ?? "agent,assistant").split(",").map(escape).filter(Boolean);
-let built: { key: string; spoken: RegExp; typed: RegExp } | null = null;
+const ASKING = "what|which|who|whom|whose|how|when|where|why|can|could|would|will|should|is|are|do|does|did|please|create|make|show|list|tell|give|find|get|pull|summari[sz]e|draft|write|open|add|check|explain|share|look|search|count|update|remind";
+let built: { key: string; spoken: RegExp; opening: RegExp; typed: RegExp } | null = null;
 function patterns() {
   const key = process.env.MEETING_WAKE_ALIASES ?? "";
   if (built?.key === key) return built;
   const name = `(?:${[ACRONYM, ...aliases().map((a) => a + String.raw`\b`)].join("|")})`;
   built = {
     key,
+    // Anywhere in what was said: a greeting, then the name.
     spoken: new RegExp(String.raw`(?:^|[\s,.!?;:])(?:hey|hi|hello|ok|okay|yo)[\s,]+${name}[\s,.:;!?\-]*`, "gi"),
-    // Typed, only the product's own name counts: "agent: ..." at the start of a chat message is ordinary talk.
-    typed: new RegExp(String.raw`^\s*@?(?:${ACRONYM})[\s,.:;!?\-]+`, "i"),
+    // Opening a sentence with the name is addressing it too: "LFG, what project is this?".
+    // Captions also turn "hey" into "a", "eh" or "hay" ("A agent which project is this?").
+    // Only when it reads as being spoken to: a pause after the name, or a question or instruction
+    // straight after it. "LFG shipped the preview yesterday" is talk about it, not to it.
+    opening: new RegExp(String.raw`^\s*(?:(?:a|eh|ay|hay|hey|hi|so|and|um|uh)[\s,]+)?${name}(?:\s*[,.:;!?\-]+\s*|\s*$|\s+(?=(?:${ASKING})\b))`, "i"),
+    typed: new RegExp(String.raw`^\s*@?${name}[\s,.:;!?\-]+`, "i"),
   };
   return built;
 }
@@ -28,14 +34,29 @@ function patterns() {
  * An empty string means the name was said and the request is still coming.
  */
 export function requestAfterWakePhrase(text: string, typed = false): string | null {
+  const p = patterns();
   let end = -1;
-  const { spoken, typed: typedPattern } = patterns();
-  for (const match of text.matchAll(spoken)) end = match.index! + match[0].length;
-  if (end < 0 && typed) {
-    const match = typedPattern.exec(text);
+  for (const match of text.matchAll(p.spoken)) end = match.index! + match[0].length;
+  if (end < 0) {
+    const match = (typed ? p.typed : p.opening).exec(text);
     if (match) end = match[0].length;
   }
   return end < 0 ? null : text.slice(end).trim();
+}
+
+/** What the bot says aloud: plain sentences, no markdown, and short. Long answers are cut at a sentence. */
+export function spokenText(reply: string, limit = 500): string {
+  const plain = reply
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/https?:\/\/\S+/g, "the link in the chat")
+    .replace(/^\s{0,3}(?:#{1,6}|[-*+]|\d+[.)])\s+/gm, "")
+    .replace(/[*_`~>|]/g, "")
+    .replace(/\s+/g, " ").trim();
+  if (plain.length <= limit) return plain;
+  const cut = plain.slice(0, limit);
+  const stop = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("? "), cut.lastIndexOf("! "));
+  return `${stop > limit / 3 ? cut.slice(0, stop + 1) : cut.trimEnd() + "..."} The rest is in the meeting chat.`;
 }
 
 /** Split a reply to fit the meeting app's chat limit (Google Meet allows 500 characters per message). */

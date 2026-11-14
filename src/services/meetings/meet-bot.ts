@@ -94,6 +94,11 @@ export async function sendChat(botId: string, text: string): Promise<void> {
   if (!tell(botId, { cmd: "chat", text })) throw new Error("The bot is no longer in the call.");
 }
 
+/** Say a clip (mp3) aloud in the call. The bot unmutes for as long as the clip lasts. */
+export async function speak(botId: string, mp3: ArrayBuffer): Promise<void> {
+  if (!tell(botId, { cmd: "speak", mp3Base64: Buffer.from(mp3).toString("base64") })) throw new Error("The bot is no longer in the call.");
+}
+
 /** What the bot sees right now, and whether someone is presenting. Null when it can't be captured. */
 export function screenshot(botId: string): Promise<Screenshot | null> {
   const bot = bots.get(botId);

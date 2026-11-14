@@ -4,7 +4,7 @@
  * connectOverCDP hangs under Bun; the server talks to this process in JSON lines.
  *
  *   stdin, first line   { wsEndpoint | localChrome, meetingUrl, botName, greeting }
- *   stdin, afterwards   { cmd: "chat", text } | { cmd: "screenshot", id } | { cmd: "leave" }
+ *   stdin, afterwards   { cmd: "chat", text } | { cmd: "speak", mp3Base64 } | { cmd: "screenshot", id } | { cmd: "leave" }
  *   stdout              { type: "status", status, detail } | { type: "speech" | "chat", speaker, text }
  *                       | { type: "screenshot", id, presenting, jpegBase64 } | { type: "log", message }
  *
@@ -30,6 +30,7 @@ const SELECTORS = {
   dismissButton: /^(Got it|Dismiss|Continue without microphone and camera|Not now|Close)$/i,
   micOff: '[role="button"][aria-label*="Turn off microphone" i], button[aria-label*="Turn off microphone" i]',
   cameraOff: '[role="button"][aria-label*="Turn off camera" i], button[aria-label*="Turn off camera" i]',
+  micOn: '[role="button"][aria-label*="Turn on microphone" i], button[aria-label*="Turn on microphone" i]',
   leaveButton: '[aria-label="Leave call"], button[aria-label*="Leave call" i]',
   captionsOn: 'button[aria-label*="Turn on captions" i]',
   chatButton: 'button[aria-label*="Chat with everyone" i]',
@@ -91,12 +92,16 @@ function readChat() {
     while (words.firstElementChild && words.firstElementChild.tagName === "DIV") words = words.firstElementChild;
     const text = (words.innerText || "").trim();
     if (!text) return;
-    // The sender's name heads the group of messages this one belongs to (own messages show only the time).
+    // A group of messages is a header (name and time; only the time for our own) followed by
+    // the messages. Climb to the group: the first ancestor whose first child is not on our path.
     let speaker = "";
-    for (let group = node.parentElement, depth = 0; group && depth < 6 && !speaker; group = group.parentElement, depth++) {
-      const first = (group.innerText || "").split("\n").map((s) => s.trim()).filter(Boolean)[0] || "";
-      if (first && first !== text.split("\n")[0] && first.length < 80) speaker = first.replace(/\s*\d{1,2}:\d{2}\s*(AM|PM)?$/i, "").trim();
-      if (first && /^\d{1,2}:\d{2}/.test(first)) return; // a bare time: our own message
+    for (let child = node, group = node.parentElement, depth = 0; group && depth < 8; child = group, group = group.parentElement, depth++) {
+      const header = group.firstElementChild;
+      if (group.children.length < 2 || header === child || header.contains(node)) continue;
+      const first = (header.innerText || "").split("\n").map((s) => s.trim()).filter(Boolean)[0] || "";
+      if (/^\d{1,2}:\d{2}/.test(first)) return; // a bare time: our own message
+      speaker = first.replace(/\s*\d{1,2}:\d{2}\s*(AM|PM)?$/i, "").trim().slice(0, 80);
+      break;
     }
     out.push({ speaker: speaker || "Someone", text });
   });
@@ -124,6 +129,38 @@ async function turnOnCaptions() {
     await sleep(2000);
   }
   if (!(await on())) await evidence("Could not turn on captions");
+}
+
+/**
+ * Say something in the call. The browser's microphone is a virtual one fed by an audio
+ * output ("meet_mic_sink"), so playing the clip to that output is speaking into the mic.
+ * The bot unmutes only for as long as the clip lasts.
+ */
+async function speak(mp3Base64) {
+  await clickIfThere(SELECTORS.micOn, 3000);
+  try {
+    const played = await page.evaluate(async (b64) => {
+      const outputs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audiooutput");
+      const sink = outputs.find((d) => /mic/i.test(d.label));
+      if (!sink) return { error: "no microphone feed among: " + outputs.map((d) => d.label).join(", ") };
+      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      const context = new AudioContext({ sinkId: sink.deviceId });
+      const clip = await context.decodeAudioData(bytes.buffer);
+      const source = context.createBufferSource();
+      source.buffer = clip;
+      source.connect(context.destination);
+      await context.resume();
+      source.start();
+      await new Promise((resolve) => { source.onended = resolve; });
+      await context.close();
+      return { seconds: clip.duration, sink: sink.label };
+    }, mp3Base64);
+    if (played.error) log("could not speak: " + played.error);
+    else log(`spoke for ${played.seconds.toFixed(1)}s through ${played.sink}`);
+  } finally {
+    await sleep(500); // let the last word through before muting
+    await clickIfThere(SELECTORS.micOff, 3000);
+  }
 }
 
 async function join() {
@@ -166,7 +203,8 @@ async function listen() {
   while (status === "in_call") {
     await sleep(POLL_MS);
     const shown = await page.evaluate(readCaptions).catch(() => null);
-    if (shown) for (const line of captions.update(shown)) emit({ type: "speech", ...line });
+    // Meet captions the bot's own voice too, under "You": that is not something anyone else said.
+    if (shown) for (const line of captions.update(shown)) line.speaker === "You" ? log("own voice captioned: " + line.text) : emit({ type: "speech", ...line });
     if (Date.now() - lastChat > 2000) {
       lastChat = Date.now();
       for (const message of await page.evaluate(readChat).catch(() => [])) {
@@ -194,6 +232,7 @@ async function listen() {
     try { command = JSON.parse(next.value); } catch { continue; }
     try {
       if (command.cmd === "chat" && status === "in_call") await sendChat(String(command.text));
+      else if (command.cmd === "speak" && status === "in_call") await speak(String(command.mp3Base64));
       else if (command.cmd === "screenshot") {
         const presenting = /is presenting|You are presenting|presentation/i.test(await bodyText());
         const shot = await page.screenshot({ type: "jpeg", quality: 70, timeout: 10_000 });
@@ -213,6 +252,8 @@ try {
     : await chromium.connectOverCDP(cfg.wsEndpoint, { timeout: 30_000 });
   const context = browser.contexts()[0] || (await browser.newContext());
   await context.grantPermissions(["microphone", "camera"]).catch(() => {});
+  // If the browser goes away (stopped, crashed, session expired) the call is over for the bot.
+  browser.on("disconnected", () => { if (status !== "ended" && status !== "failed") { setStatus("ended", "The meeting browser stopped."); process.exit(0); } });
   page = await context.newPage();
   await page.setViewportSize({ width: 1280, height: 800 }).catch(() => {});
   page.setDefaultTimeout(8000);

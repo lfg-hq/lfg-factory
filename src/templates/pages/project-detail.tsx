@@ -1483,6 +1483,20 @@ export function ProjectDetailPage({
           <div class="agent-card">
             <div class="agent-card-head">
               <div>
+                <h3>Meetings</h3>
+                <p>When LFG is in a call it always types its answers in the meeting chat. Turn this on to have it say them aloud as well. Speech uses OpenAI's paid text-to-speech, billed to this server's OpenAI key for each answer.</p>
+              </div>
+            </div>
+            <label class="agent-row" style="cursor:pointer;">
+              <input type="checkbox" id="meeting-voice" onchange="saveMeetingVoice()" disabled />
+              <span>Speak answers aloud in calls</span>
+              <span id="meeting-voice-status" class="agent-status"></span>
+            </label>
+          </div>
+
+          <div class="agent-card">
+            <div class="agent-card-head">
+              <div>
                 <h3>Skills</h3>
                 <p>Workflows the agent loads for itself when a job matches one — it decides, so you don't have to remember to ask. Add your own for the things only this project knows.</p>
               </div>
@@ -2003,12 +2017,38 @@ export function ProjectDetailPage({
         .then(function(d){
           if (!d) return;
           if (typeof d.customInstructions === "string") ta.value = d.customInstructions;
+          var mv = document.getElementById("meeting-voice");
+          var mvs = document.getElementById("meeting-voice-status");
+          if (mv) {
+            mv.checked = !!d.meetingVoice;
+            mv.disabled = !d.canChangeMeetingVoice || !d.meetingVoiceAvailable;
+            if (mvs) mvs.textContent = !d.meetingVoiceAvailable ? "Needs OPENAI_API_KEY on this server."
+              : !d.canChangeMeetingVoice ? "Only a project owner or admin can change this." : "";
+          }
 
         })
         .catch(function(){});
     }
     // The picker is the state — no separate save button, since there's nothing to
     // compose. Owners only: it decides what someone else's chat can do to the VM.
+    // The checkbox is the state: it saves as it changes, and snaps back if the save is refused.
+    function saveMeetingVoice() {
+      var mv = document.getElementById("meeting-voice");
+      var st = document.getElementById("meeting-voice-status");
+      if (!mv) return;
+      var want = mv.checked;
+      if (st) st.textContent = "Saving…";
+      fetch("/api/projects/" + projectId + "/preview/build-settings", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ meetingVoice: want })
+      })
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+          if (d && d.error) { mv.checked = !want; if (st) st.textContent = d.error; return; }
+          if (st) st.textContent = want ? "On. LFG will speak its answers from the next request." : "Off. LFG will only type its answers.";
+        })
+        .catch(function(){ mv.checked = !want; if (st) st.textContent = "Could not save."; });
+    }
     function saveCustomInstructions() {
       var ta = document.getElementById("custom-instructions");
       var st = document.getElementById("custom-instructions-status");

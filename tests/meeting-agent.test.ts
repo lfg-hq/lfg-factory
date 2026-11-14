@@ -23,12 +23,15 @@ const agent = await import('../src/services/meetings/meeting-agent.ts');
 const { requestAfterWakePhrase, chatChunks, platformOf, meetLink } = await import('../src/services/meetings/wake.ts');
 
 const turns: any[] = []; const chat: string[] = []; const announced: string[] = []; const bots: any[] = [];
-let reply = 'There are four tickets pending.'; let left = 0; let screen: any = null;
+let reply = 'There are four tickets pending.'; let left = 0; let screen: any = null; let voiceKey: string | null = null; const spoken: string[] = [];
 Object.assign(agent.deps, {
   startBot: async (opts: any, handlers: any) => { bots.push({ ...opts, handlers }); return { id: 'bot-' + bots.length }; },
   stopBot: async () => { left++; },
   sendChat: async (_bot: string, text: string) => { chat.push(text); },
   screenshot: async () => screen,
+  speak: async (_bot: string, clip: ArrayBuffer) => { spoken.push(new TextDecoder().decode(clip)); },
+  voiceKey: async () => voiceKey,
+  speech: async (text: string, key: string) => new TextEncoder().encode(`${key}:${text}`).buffer,
   runTurn: async (turn: any) => { turns.push(turn); return reply; },
   announce: async (_o: any, text: string) => { announced.push(text); },
 });
@@ -41,7 +44,7 @@ const hidden = (conversationId: string) => sqlite.query(`SELECT content FROM mes
 let n = 0;
 const join = () => agent.startMeeting({ userId: 'u1', projectId: 'proj-public', projectName: 'Invoicing', meetingUrl: `https://meet.google.com/abc-defg-${String(++n).padStart(3, 'h')}` });
 
-beforeEach(() => { turns.length = 0; chat.length = 0; announced.length = 0; bots.length = 0; screen = null; reply = 'There are four tickets pending.'; });
+beforeEach(() => { turns.length = 0; chat.length = 0; announced.length = 0; bots.length = 0; spoken.length = 0; voiceKey = null; screen = null; reply = 'There are four tickets pending.'; });
 
 test('the wake phrase is recognised however speech-to-text spells it, and only then', () => {
   expect(requestAfterWakePhrase('Hey LFG, create a PRD on what we just discussed')).toBe('create a PRD on what we just discussed');
@@ -53,13 +56,20 @@ test('the wake phrase is recognised however speech-to-text spells it, and only t
   expect(requestAfterWakePhrase('hey Alfie, can you share your screen')).toBeNull();
   expect(requestAfterWakePhrase('@LFG list open tickets', true)).toBe('list open tickets');
   expect(requestAfterWakePhrase('LFG: list open tickets', true)).toBe('list open tickets');
-  expect(requestAfterWakePhrase('LFG list open tickets')).toBeNull(); // spoken, the bare name is not enough
+  // What real captions produced in the first live call, and how people actually address it:
+  expect(requestAfterWakePhrase('Lfg, what project is this?')).toBe('what project is this?');
+  expect(requestAfterWakePhrase('A agent which project is this?')).toBe('which project is this?');
+  expect(requestAfterWakePhrase('LFG list open tickets')).toBe('list open tickets');
+  expect(requestAfterWakePhrase('Agent, hello??', true)).toBe('hello??');
+  // Talking about it is not talking to it.
+  expect(requestAfterWakePhrase('LFG shipped the preview yesterday.')).toBeNull();
+  expect(requestAfterWakePhrase('Agents are everywhere now')).toBeNull();
   // Captions mangle the acronym ("Hey, I love to you" in a real call), so plain words work too.
   expect(requestAfterWakePhrase('Hey agent, how many tickets are pending?')).toBe('how many tickets are pending?');
   expect(requestAfterWakePhrase('Okay, assistant. Summarise that.')).toBe('Summarise that.');
   expect(requestAfterWakePhrase('Hey, I love to you, how many tickets?')).toBeNull();
   expect(requestAfterWakePhrase('our agent called yesterday')).toBeNull();
-  expect(requestAfterWakePhrase('agent: list open tickets', true)).toBeNull(); // typed, only the product name counts
+  expect(requestAfterWakePhrase('agent: list open tickets', true)).toBe('list open tickets');
 });
 
 test('adding the agent starts a bot for that call and opens a conversation for its owner', async () => {
@@ -167,6 +177,29 @@ test('ordinary conversation, the bare name, and the bot\'s own chat messages do 
   expect(turns).toHaveLength(0);
   expect(chat).toHaveLength(0);
   expect((await agent.listSegments(meeting.id)).map(s => s.speaker)).toEqual(['Priya', 'Sam']);
+});
+
+test('with spoken replies on for the project, the answer is also said aloud, in plain words; off, it is only typed', async () => {
+  const meeting = await join();
+  reply = '**Done.** I saved `Payments PRD`, see [the doc](https://x.test/doc).';
+  await hear(meeting, ...said('Priya', 'Hey agent, write the PRD.'));
+  await settle(meeting.id);
+  expect(spoken).toEqual([]); // off by default: nothing is sent to paid text-to-speech
+  expect(chat).toEqual(['On it.', reply]);
+
+  voiceKey = 'server-key';
+  await hear(meeting, ...said('Priya', 'Hey agent, say that again.'));
+  await settle(meeting.id);
+  expect(spoken).toEqual(['server-key:Done. I saved Payments PRD, see the doc.']);
+  expect(chat.slice(-1)).toEqual([reply]); // still typed in the chat as well
+
+  const speak = agent.deps.speak;
+  agent.deps.speak = async () => { throw new Error('microphone unavailable'); };
+  try {
+    await hear(meeting, ...said('Priya', 'Hey agent, once more.'));
+    await settle(meeting.id);
+    expect(chat.slice(-1)).toEqual([reply]); // a speech failure never costs the typed answer
+  } finally { agent.deps.speak = speak; }
 });
 
 test('what is on screen is attached to a request only while someone is presenting', async () => {
