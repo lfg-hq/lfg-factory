@@ -114,7 +114,7 @@
     const has = {}; list.forEach(function (e) { has[e.type] = true; });
     const first = list[0], box = has.rect || has.ellipse || has.diamond || has.triangle;
     let html = '';
-    if (box || has.sticky || has.frame) html += swatch('fill', (list.find(function (e) { return e.fill; }) || {}).fill || 'transparent', 'Fill');
+    if (box || has.sticky || has.frame || list.some(function (e) { return e.type === 'pen' && e.closed; })) html += swatch('fill', (list.find(function (e) { return e.fill; }) || {}).fill || 'transparent', 'Fill');
     if (box || has.line || has.arrow || has.pen) html += swatch('stroke', (list.find(function (e) { return e.stroke; }) || {}).stroke || 'auto', has.pen || has.line || has.arrow ? 'Line colour' : 'Outline');
     if (has.text || box) html += swatch('color', (list.find(function (e) { return e.color; }) || {}).color || 'auto', 'Text colour');
     if (box || has.line || has.arrow) {
@@ -310,10 +310,12 @@
     // In the chat's Boards panel, asking goes to the chat beside the board (it knows what is selected here).
     if (embedded) { window.parent.postMessage({ type: 'lfg-board-ask' }, window.location.origin); return; }
     if (!canChat) { toast('You can view this board, but the agent is not available to you here.'); return; }
-    chat.hidden = false; $('wb-ask').classList.add('active'); refreshContext();
+    // Reopening straight after closing must not be undone by the close that is still fading out.
+    clearTimeout(hideTimer); chat.hidden = false; $('wb-ask').classList.add('active'); refreshContext();
     requestAnimationFrame(function () { chat.classList.add('open'); if (focus) chatInput.focus(); });
   }
-  function closeChat() { chat.classList.remove('open'); $('wb-ask').classList.remove('active'); setTimeout(function () { if (!chat.classList.contains('open')) chat.hidden = true; }, 180); }
+  let hideTimer = 0;
+  function closeChat() { chat.classList.remove('open'); $('wb-ask').classList.remove('active'); clearTimeout(hideTimer); hideTimer = setTimeout(function () { if (!chat.classList.contains('open')) chat.hidden = true; }, 180); }
   $('wb-ask').addEventListener('click', function () { if (chat.hidden) openChat(true); else closeChat(); });
   $('wb-chat-close').addEventListener('click', closeChat);
   $('wb-chat-clear').addEventListener('click', function () {
@@ -446,6 +448,15 @@
     });
   })();
 
+  // ── Project menu: the way to the rest of the project ───────────────
+  (function () {
+    const button = $('wb-menu-btn'), menu = $('wb-menu'); if (!button || !menu) return;
+    function show(open) { menu.hidden = !open; button.setAttribute('aria-expanded', String(open)); }
+    button.addEventListener('click', function () { show(menu.hidden); if (!menu.hidden) menu.querySelector('a').focus(); });
+    B.on('pointerdown', function () { show(false); }); B.on('escape', function () { show(false); });
+    menu.addEventListener('keydown', function (event) { if (event.key === 'Escape') { show(false); button.focus(); } });
+  })();
+
   // ── Who is here ────────────────────────────────────────────────────
   (function () {
     const box = $('wb-peers');
@@ -476,7 +487,7 @@
         const group = groups[m.provider] || (groups[m.provider] = picker.appendChild(el('optgroup', { label: m.provider })));
         group.appendChild(el('option', { value: m.key }, m.label));
       });
-      current = body.model || ''; picker.value = current; picker.parentElement.hidden = false;
+      current = body.model || ''; picker.value = current; picker.hidden = false;
     });
     picker.addEventListener('change', function () {
       const wanted = picker.value; if (!wanted) return;

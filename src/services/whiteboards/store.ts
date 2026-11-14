@@ -24,7 +24,7 @@ export class BoardError extends Error {}
 
 const NUMBERS = ["x", "y", "w", "h", "z", "sw", "fontSize", "opacity", "radius", "x1", "y1", "x2", "y2", "bw", "bh", "ax", "ay"];
 const SHORT_STRINGS = ["fill", "stroke", "color", "align", "valign", "from", "to", "attach", "by", "author"];
-const FLAGS = ["dash", "hl", "resolved", "bold"];
+const FLAGS = ["dash", "hl", "resolved", "bold", "closed", "sharp"];
 
 /** Keep only the fields a board element may have, with sane types and sizes. Null when it is not an element. */
 export function cleanElement(raw: unknown): BoardElement | null {

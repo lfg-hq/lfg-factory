@@ -114,6 +114,15 @@
     if (e.type === 'pen') {
       const sx = e.w / (e.bw || 1), sy = e.h / (e.bh || 1), p = e.pts, reach = tol + (e.sw || 3) / 2;
       if (p.length === 2) return Math.hypot(x - e.x - p[0] * sx, y - e.y - p[1] * sy) <= reach + 2;
+      if (e.closed && e.fill && e.fill !== 'transparent') {
+        // A filled shape is picked anywhere inside its outline.
+        let inside = false;
+        for (let i = 0, j = p.length - 2; i < p.length; j = i, i += 2) {
+          const xi = e.x + p[i] * sx, yi = e.y + p[i + 1] * sy, xj = e.x + p[j] * sx, yj = e.y + p[j + 1] * sy;
+          if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+        }
+        if (inside) return true;
+      }
       for (let i = 0; i + 3 < p.length; i += 2) if (segDist(x, y, e.x + p[i] * sx, e.y + p[i + 1] * sy, e.x + p[i + 2] * sx, e.y + p[i + 3] * sy) <= reach) return true;
       return false;
     }
@@ -255,6 +264,17 @@
     }
     if (pts.length >= 4) c.lineTo(ox + pts[pts.length - 2] * sx, oy + pts[pts.length - 1] * sy);
   }
+  function outlinePath(c, pts, ox, oy, sx, sy, closed, sharp) {
+    const n = pts.length / 2, X = function (i) { return ox + pts[(i % n) * 2] * sx; }, Y = function (i) { return oy + pts[(i % n) * 2 + 1] * sy; };
+    c.beginPath();
+    if (sharp || n < 3) { c.moveTo(X(0), Y(0)); for (let i = 1; i < n; i++) c.lineTo(X(i), Y(i)); }
+    else if (closed) {
+      // A smooth closed outline: every point pulls the curve toward it, joined at the midpoints.
+      c.moveTo((X(n - 1) + X(0)) / 2, (Y(n - 1) + Y(0)) / 2);
+      for (let i = 0; i < n; i++) c.quadraticCurveTo(X(i), Y(i), (X(i) + X(i + 1)) / 2, (Y(i) + Y(i + 1)) / 2);
+    } else { penPath(c, pts, ox, oy, sx, sy); return; }
+    if (closed) c.closePath();
+  }
   function drawElement(c, e, t, zoom, now) {
     if (e.type === 'comment') return;
     c.save();
@@ -316,6 +336,12 @@
       if (e.hl) { c.globalAlpha = alpha * 0.4; c.lineCap = 'butt'; }
       const raw = e._raw, pts = raw || e.pts;
       if (pts.length === 2) { c.beginPath(); c.arc(raw ? pts[0] : e.x + pts[0], raw ? pts[1] : e.y + pts[1], c.lineWidth / 2, 0, Math.PI * 2); c.fill(); }
+      else if (!raw && (e.closed || e.sharp || (e.fill && e.fill !== 'transparent'))) {
+        // A freeform shape (what the agent draws pictures with): an outline that can be closed and filled.
+        outlinePath(c, pts, e.x, e.y, e.w / (e.bw || 1), e.h / (e.bh || 1), e.closed, e.sharp);
+        if (e.fill && e.fill !== 'transparent') { c.fillStyle = paint(e.fill, t); c.fill(); }
+        if (e.stroke !== 'transparent') { if (e.dash) c.setLineDash([c.lineWidth * 3, c.lineWidth * 2.5]); c.stroke(); c.setLineDash([]); }
+      }
       else { if (raw) penPath(c, raw, 0, 0, 1, 1); else penPath(c, pts, e.x, e.y, e.w / (e.bw || 1), e.h / (e.bh || 1)); c.stroke(); }
     } else if (e.type === 'image') {
       const img = image(e.src);

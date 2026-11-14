@@ -64,8 +64,8 @@ export function whiteboardTools(context: { projectId: string; userId: string }) 
       description: "Draw on a whiteboard: add elements, change existing ones, or remove some. The person sees it appear live. Use this whenever they ask you to sketch, lay out, brainstorm, diagram, map a flow or preview how a feature should look; draw it rather than describing it. Omit boardId for the board the person has open. Start new work at the startNewWorkAt point from readWhiteboard so it does not land on existing elements. " + DRAWING_GUIDE,
       inputSchema: zodSchema(z.object({
         boardId: z.string().optional().describe("Board id or exact title. Omit for the board the person has open."),
-        add: z.array(elementInput).max(120).optional().describe("New elements. Give one a key when an arrow in this or a later call should attach to it."),
-        update: z.array(elementUpdate).max(120).optional().describe("Changes to existing elements, by id. Only the fields you give change."),
+        add: z.array(elementInput).max(300).optional().describe("New elements. Give one a key when an arrow in this or a later call should attach to it."),
+        update: z.array(elementUpdate).max(300).optional().describe("Changes to existing elements, by id. Only the fields you give change."),
         remove: z.array(z.string()).max(200).optional().describe("Ids of elements to remove. Only when the person asks for something removed or replaced."),
       })),
       execute: async (input: { boardId?: string; add?: ElementInput[]; update?: ElementUpdate[]; remove?: string[] }) => {

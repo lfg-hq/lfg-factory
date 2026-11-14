@@ -46,6 +46,66 @@ const LOGIN = [
   { type: "sticky", x: 960, y: 40, text: "Should refunds need approval?", fill: "pink" },
   { type: "arrow", from: "go", to: "home", text: "success" },
 ];
+/**
+ * A sunrise landscape, composed the way the agent is told to draw pictures: filled freeform
+ * shapes, layered back to front. It stands in for what a capable model sends when asked for one.
+ */
+function landscape() {
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const W = 1200, H = 700, horizon = 430, out: any[] = [];
+  const band = (y: number, h: number, fill: string) => out.push({ type: "rect", x: 0, y, w: W, h, fill, stroke: "none", radius: 0 });
+  band(0, 150, "#7fb4e6"); band(140, 110, "#a9cdee"); band(240, 90, "#f6c9a4"); band(320, 115, "#fde2b3");
+  out.push({ type: "ellipse", x: 470, y: 250, w: 300, h: 300, fill: "#fff1c2", stroke: "none", opacity: 0.45 });
+  out.push({ type: "ellipse", x: 530, y: 310, w: 180, h: 180, fill: "#ffd04f", stroke: "none" });
+  for (const [x, y, w] of [[150, 90, 190], [820, 130, 230], [430, 60, 150]] as const) {
+    out.push({ type: "path", closed: true, fill: "#ffffff", opacity: 0.85, points: [[x, y + 30], [x + w * 0.15, y + 8], [x + w * 0.35, y], [x + w * 0.55, y + 6], [x + w * 0.75, y - 2], [x + w, y + 22], [x + w * 0.9, y + 40], [x + w * 0.5, y + 46], [x + w * 0.12, y + 42]] });
+  }
+  const range = (base: number, peaks: Array<[number, number]>, fill: string) => {
+    const points: number[][] = [[0, base]];
+    for (const [x, top] of peaks) { points.push([x - 60 - rnd() * 40, top + 70 + rnd() * 30], [x, top], [x + 50 + rnd() * 40, top + 60 + rnd() * 40]); }
+    points.push([W, base]);
+    out.push({ type: "path", closed: true, smooth: false, fill, points });
+  };
+  range(horizon + 6, [[140, 250], [330, 215], [760, 230], [960, 200], [1130, 265]], "#9fb0d0");
+  range(horizon + 6, [[60, 300], [250, 255], [470, 320], [850, 270], [1060, 305]], "#6f83a8");
+  for (const [x, top] of [[330, 215], [960, 200], [250, 255], [850, 270]] as const) {
+    out.push({ type: "path", closed: true, smooth: false, fill: "#ffffff", opacity: 0.92, points: [[x, top], [x + 26, top + 34], [x + 10, top + 28], [x - 2, top + 42], [x - 14, top + 27], [x - 28, top + 36]] });
+  }
+  band(horizon, H - horizon, "#9ccf7a");
+  const hill = (points: number[][], fill: string) => out.push({ type: "path", closed: true, fill, points });
+  hill([[0, 470], [120, 425], [260, 410], [400, 428], [520, 455], [540, 520], [0, 540]], "#8cc56c");
+  hill([[W, 480], [1090, 428], [940, 412], [800, 426], [690, 452], [670, 520], [W, 545]], "#84bf66");
+  hill([[0, 560], [180, 520], [360, 545], [470, 600], [0, 640]], "#6fae57");
+  hill([[W, 570], [1010, 525], [840, 548], [740, 610], [W, 650]], "#6aa953");
+  // The river: narrow at the horizon, widening and winding toward the viewer.
+  const centre = (t: number) => 610 + Math.sin(t * 3.4) * 95 * (0.25 + t), half = (t: number) => 9 + 205 * Math.pow(t, 1.7);
+  const left: number[][] = [], right: number[][] = [];
+  for (let i = 0; i <= 12; i++) { const t = i / 12, y = horizon + 4 + t * (H - horizon - 4); left.push([centre(t) - half(t), y]); right.push([centre(t) + half(t), y]); }
+  out.push({ type: "path", closed: true, fill: "#5fa8dc", points: [...left, ...right.reverse()] });
+  out.push({ type: "path", closed: true, fill: "#ffe9a8", opacity: 0.4, points: [0.08, 0.3, 0.55, 0.8].flatMap((t) => [[centre(t) - half(t) * 0.25, horizon + t * 266]]).concat([0.8, 0.55, 0.3, 0.08].map((t) => [centre(t) + half(t) * 0.3, horizon + t * 266])) });
+  for (const t of [0.35, 0.55, 0.72, 0.88]) out.push({ type: "path", stroke: "#d8eefc", strokeWidth: 2.5, opacity: 0.8, points: [[centre(t) - half(t) * 0.5, horizon + t * 266], [centre(t) - half(t) * 0.15, horizon + t * 266 - 5], [centre(t) + half(t) * 0.2, horizon + t * 266 + 2], [centre(t) + half(t) * 0.45, horizon + t * 266 - 3]] });
+  // Trees on both banks, the far ones first so nearer ones overlap them.
+  const trees: Array<{ x: number; y: number; pine: boolean }> = [];
+  for (let i = 0; i < 26; i++) {
+    const t = 0.06 + rnd() * 0.9, y = horizon + 8 + t * 250, edge = half(t) + 34 + rnd() * 30, side = i % 2 ? 1 : -1;
+    const x = side < 0 ? 30 + rnd() * Math.max(20, centre(t) - edge - 40) : centre(t) + edge + rnd() * Math.max(20, W - 40 - centre(t) - edge);
+    trees.push({ x, y, pine: rnd() < 0.42 });
+  }
+  trees.sort((a, b) => a.y - b.y);
+  const greens = ["#3f8f4a", "#4fa055", "#2f7d43", "#5aad5c", "#3b8a52"];
+  for (const tree of trees) {
+    const k = 0.32 + ((tree.y - horizon) / 260) * 1.05, { x, y } = tree, green = greens[Math.floor(rnd() * greens.length)]!;
+    out.push({ type: "ellipse", x: x - 26 * k, y: y - 5 * k, w: 52 * k, h: 12 * k, fill: "#2e5d33", stroke: "none", opacity: 0.25 });
+    out.push({ type: "rect", x: x - 5 * k, y: y - 46 * k, w: 10 * k, h: 48 * k, fill: "#7a5433", stroke: "none", radius: 2 });
+    if (tree.pine) for (let layer = 0; layer < 3; layer++) { const w = (62 - layer * 14) * k, top = y - (74 + layer * 30) * k; out.push({ type: "path", closed: true, smooth: false, fill: layer === 2 ? "#3a8a55" : "#2f7a4b", points: [[x, top], [x + w / 2, top + 46 * k], [x - w / 2, top + 46 * k]] }); }
+    else {
+      const blob = (cx: number, cy: number, r: number, fill: string) => out.push({ type: "path", closed: true, fill, points: Array.from({ length: 9 }, (_, i) => { const a = (i / 9) * Math.PI * 2, rr = r * (0.82 + rnd() * 0.3); return [cx + Math.cos(a) * rr, cy + Math.sin(a) * rr * 0.9]; }) });
+      blob(x - 16 * k, y - 62 * k, 26 * k, green); blob(x + 17 * k, y - 66 * k, 27 * k, green); blob(x, y - 88 * k, 30 * k, greens[(greens.indexOf(green) + 3) % greens.length]!);
+    }
+  }
+  for (const [x, y] of [[300, 150], [345, 132], [392, 158], [720, 110], [770, 126]] as const) out.push({ type: "path", stroke: "#3b4252", strokeWidth: 2, points: [[x - 14, y - 3], [x - 6, y - 10], [x, y], [x + 7, y - 10], [x + 15, y - 4]] });
+  return out;
+}
 let agentDelay = 0;
 const model = () => {
   let step = 0;
@@ -55,9 +115,11 @@ const model = () => {
       const asked = JSON.stringify(options.prompt.filter((m: any) => m.role === "user").at(-1));
       const system = JSON.stringify(options.prompt[0]);
       const origin = /Start new work at about x=(-?\d+), y=(-?\d+)/.exec(system)!;
-      const place = (e: any) => ({ ...e, ...(e.x != null ? { x: e.x + Number(origin[1]), y: e.y + Number(origin[2]) } : {}) });
+      const place = (e: any) => ({ ...e, ...(e.x != null ? { x: e.x + Number(origin[1]), y: e.y + Number(origin[2]) } : {}), ...(e.points ? { points: e.points.map((p: number[]) => [p[0]! + Number(origin[1]), p[1]! + Number(origin[2])]) } : {}) });
       let chunks: any[];
-      if (/login/i.test(asked) && step === 0) chunks = [{ type: "tool-call", toolCallId: crypto.randomUUID(), toolName: "add_elements", input: JSON.stringify({ elements: LOGIN.map(place) }) }, finish("tool-calls")];
+      if (/landscape/i.test(asked) && step === 0) chunks = [{ type: "tool-call", toolCallId: crypto.randomUUID(), toolName: "add_elements", input: JSON.stringify({ elements: landscape().map(place) }) }, finish("tool-calls")];
+      else if (/landscape/i.test(asked)) chunks = say("I drew a sunrise over a mountain range, with a river winding toward you between two green banks of trees.");
+      else if (/login/i.test(asked) && step === 0) chunks = [{ type: "tool-call", toolCallId: crypto.randomUUID(), toolName: "add_elements", input: JSON.stringify({ elements: LOGIN.map(place) }) }, finish("tool-calls")];
       else if (/login/i.test(asked)) chunks = say("I sketched a **sign-in screen** and the invoices screen it leads to, with a note on the open question about refunds. Want me to add the forgot-password flow?");
       else chunks = say(/\* \S+ sticky/.test(system) ? "That note says customers should be able to pay by card. It is the only payment idea on the board so far." : "Tell me what you would like on the board.");
       step++;
@@ -292,6 +354,22 @@ try {
   check(await until(inView, 3000), "the view glides to show what was drawn");
   await page.screenshot({ path: "output/whiteboard-agent.png" });
 
+  await page.fill("#wb-chat-input", "draw a landscape with a river, trees, mountains and the sun rising"); await page.keyboard.press("Enter");
+  check(await until(async () => (await elements(boardId)).filter((e) => e.type === "pen" && e.closed && e.fill).length > 40, 15000), "asked for a picture, the agent draws one from filled freeform shapes");
+  const picture = (await elements(boardId)).filter((e) => e.by === "agent" && (e.type === "pen" || e.fill));
+  check(picture.some((e) => e.sharp) && picture.some((e) => e.type === "pen" && !e.sharp) && picture.some((e) => (e.opacity as number) < 1), "using sharp edges, flowing curves and transparency");
+  await page.waitForSelector(".wb-msg.assistant:last-child .wb-msg-actions", { timeout: 15000 });
+  // A clean look at the picture for the record: chat out of the way, picture filling the view.
+  await page.evaluate(() => { const B = (window as any).LFGBoard; document.getElementById("wb-chat")!.style.visibility = "hidden"; B.select([]); B.flyTo(B.unionBox((Array.from(B.els.values()) as any[]).filter((e) => e.type === "pen" && e.closed)), { instant: true, pad: 70, maxZoom: 2 }); });
+  await new Promise((r) => setTimeout(r, 600));
+  await page.screenshot({ path: "output/whiteboard-landscape.png" });
+  await page.evaluate(() => { document.getElementById("wb-chat")!.style.visibility = ""; });
+  const hill = picture.find((e) => e.type === "pen" && e.closed && e.fill === "#6fae57")!;
+  const picked = await page.evaluate((id) => { const B = (window as any).LFGBoard, e = B.els.get(id), s = B.toScreen(e.x + e.w * 0.2, e.y + e.h * 0.6); return [s.x, s.y]; }, hill.id);
+  await page.locator(".wb-msg-actions .wb-link", { hasText: "Remove what was added" }).last().click();
+  check(await until(async () => !(await elements(boardId)).some((e) => e.type === "pen" && e.closed)), "and it can be removed in one click like anything else the agent adds");
+  void picked;
+
   const noteId = sticky.id;
   await page.evaluate((id) => (window as any).LFGBoard.select([id]), noteId);
   check((await page.innerText("#wb-chat-context")).includes("the selected element"), "selecting an element makes the next question about it");
@@ -306,7 +384,7 @@ try {
   const other = await open(`/projects/pub/whiteboards/${boardId}?as=Sam`);
   await other.waitForSelector("#wb.ready");
   check((await local(other)).length === (await elements(boardId)).length, "a second person opening the board sees everything on it");
-  check((await other.locator(".wb-msg").count()) === 4, "and the conversation with the agent so far");
+  check((await other.locator(".wb-msg").count()) === 6, "and the conversation with the agent so far");
   await other.keyboard.press("n"); await other.mouse.click(400, 300); await other.keyboard.type("Sam was here"); await other.keyboard.press("Escape");
   check(await until(async () => (await local(page)).some((e) => e.text === "Sam was here"), 9000), "what they add appears for the first person without a reload");
   await page.evaluate((id) => { const B = (window as any).LFGBoard; B.select([id]); B.deleteSelection(); }, noteId);

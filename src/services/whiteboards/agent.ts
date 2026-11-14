@@ -47,7 +47,7 @@ const colour = (value: unknown, fallback: string) => {
 
 const elementInput = z.object({
   key: z.string().optional().describe("A short name you choose, so arrows in this same call can point at this element."),
-  type: z.enum(["sticky", "rect", "ellipse", "diamond", "triangle", "text", "frame", "arrow", "line"]),
+  type: z.enum(["sticky", "rect", "ellipse", "diamond", "triangle", "text", "frame", "arrow", "line", "path"]),
   x: z.number().optional(), y: z.number().optional(), w: z.number().optional(), h: z.number().optional(),
   text: z.string().optional().describe("Text shown inside the element; for a frame, its title; for an arrow, its label."),
   fill: z.string().optional().describe("Fill colour: a palette name or #hex. 'none' for no fill."),
@@ -61,6 +61,11 @@ const elementInput = z.object({
   from: z.string().optional().describe("Arrow/line start: the id or key of an element to attach to."),
   to: z.string().optional().describe("Arrow/line end: the id or key of an element to attach to."),
   x1: z.number().optional(), y1: z.number().optional(), x2: z.number().optional(), y2: z.number().optional(),
+  points: z.array(z.array(z.number()).min(2).max(2)).max(400).optional().describe("For path: the outline as [[x,y],[x,y],...] in board coordinates, in order."),
+  closed: z.boolean().optional().describe("For path: join the last point to the first, making an area that can be filled."),
+  smooth: z.boolean().optional().describe("For path: true (default) curves through the points; false joins them with straight edges and sharp corners."),
+  strokeWidth: z.number().optional().describe("Outline or line thickness in pixels."),
+  opacity: z.number().min(0.05).max(1).optional(),
 });
 type ElementInput = z.infer<typeof elementInput>;
 
@@ -69,12 +74,26 @@ const num = (value: unknown, fallback: number) => (typeof value === "number" && 
 
 /** Turn what the agent asked for into a stored element, filling in everything it left out. */
 export function buildElement(input: ElementInput, id: string, z: number, resolve: (ref: string | undefined) => string | undefined): BoardElement {
-  const base: BoardElement = { id, type: input.type, z };
+  const base: BoardElement = { id, type: input.type, z, ...(input.opacity != null && input.opacity < 1 ? { opacity: input.opacity } : {}) };
+  if (input.type === "path") {
+    // A freeform shape is stored the way a pen stroke is: points relative to its own box.
+    const points = (input.points ?? []).filter((p) => p.length === 2 && p.every(Number.isFinite));
+    const xs = points.map((p) => p[0]!), ys = points.map((p) => p[1]!);
+    const x = points.length ? Math.min(...xs) : num(input.x, 0), y = points.length ? Math.min(...ys) : num(input.y, 0);
+    const w = Math.max(1, (points.length ? Math.max(...xs) : x) - x), h = Math.max(1, (points.length ? Math.max(...ys) : y) - y);
+    const filled = !!input.fill && colour(input.fill, "transparent") !== "transparent";
+    return {
+      ...base, type: "pen", x, y, w, h, bw: w, bh: h, pts: points.flatMap((p) => [p[0]! - x, p[1]! - y]),
+      // A filled area has no outline unless one is asked for.
+      stroke: colour(input.stroke, filled ? "transparent" : "#64748b"), sw: Math.max(1, num(input.strokeWidth, 2)),
+      ...(filled ? { fill: colour(input.fill, "transparent") } : {}), ...(input.closed ? { closed: true } : {}), ...(input.smooth === false ? { sharp: true } : {}), ...(input.dash ? { dash: true } : {}),
+    };
+  }
   if (input.type === "arrow" || input.type === "line") {
     const from = resolve(input.from), to = resolve(input.to);
     return {
       ...base, x1: num(input.x1, 0), y1: num(input.y1, 0), x2: num(input.x2, 120), y2: num(input.y2, 0),
-      stroke: colour(input.stroke, "#64748b"), sw: 2, ...(input.dash ? { dash: true } : {}),
+      stroke: colour(input.stroke, "#64748b"), sw: Math.max(1, num(input.strokeWidth, 2)), ...(input.dash ? { dash: true } : {}),
       ...(from ? { from } : {}), ...(to ? { to } : {}), ...(input.text ? { text: input.text, fontSize: num(input.fontSize, 14) } : {}),
     };
   }
@@ -92,7 +111,7 @@ export function buildElement(input: ElementInput, id: string, z: number, resolve
   if (input.type === "sticky") return { ...base, ...box, text, fill: colour(input.fill, PALETTE.yellow!), color: "#1f2937", fontSize: num(input.fontSize, 18), align: input.align ?? "center" };
   if (input.type === "frame") return { ...base, ...box, text: text || "Frame", fill: colour(input.fill, "#ffffff") };
   return {
-    ...base, ...box, text, fill: colour(input.fill, "#ffffff"), stroke: colour(input.stroke, "#94a3b8"), sw: 1.5,
+    ...base, ...box, text, fill: colour(input.fill, "#ffffff"), stroke: colour(input.stroke, "#94a3b8"), sw: Math.max(0.5, num(input.strokeWidth, 1.5)),
     color: colour(input.color, "#1f2937"), fontSize: num(input.fontSize, 16), align: input.align ?? "center",
     ...(input.type === "rect" ? { radius: Math.max(0, num(input.radius, 8)) } : {}), ...(input.dash ? { dash: true } : {}), ...(input.bold ? { bold: true } : {}),
   };
@@ -115,7 +134,7 @@ export function describeBoard(elements: BoardElement[], selection: string[] = []
       : `x=${e.x} y=${e.y}` + (e.w != null ? ` w=${e.w} h=${e.h}` : "");
     let text = short(e.text, 160);
     if (e.type === "comment") text = (e.thread as Array<{ author: string; text: string }> | undefined ?? []).map((t) => `${t.author}: ${short(t.text, 200)}`).join(" | ") + (e.attach ? ` (on ${e.attach})` : "");
-    if (e.type === "pen") text = "(freehand drawing)";
+    if (e.type === "pen") text = e.by === "agent" ? `(drawn shape${e.fill ? ", filled " + e.fill : ""})` : "(freehand drawing)";
     if (e.type === "image") text = "(image)";
     return `${selected.has(e.id) ? "* " : "- "}${e.id} ${e.type} ${where}${text ? ` "${text}"` : ""}`;
   });
@@ -207,9 +226,21 @@ export function boardEditor(boardId: string, opts: { origin?: string | null; onO
   };
 }
 
+/** How to draw a picture, not a diagram: scenes, objects, illustrations. */
+export const ILLUSTRATION_GUIDE = `DRAWING A PICTURE (a scene, an object, an illustration)
+- You can draw real pictures. Compose them from filled shapes: path for anything organic or irregular (mountain ranges, hills, rivers, coastlines, tree crowns, clouds, animals), ellipse for round things (sun, moon, fruit, wheels), rect for flat bands and boxes (sky, ground, buildings, trunks), triangle for simple peaks and roofs.
+- path takes points as [[x,y],...] in board coordinates. closed:true with a fill makes a solid area. smooth (the default) flows through the points, which suits rivers, hills and foliage; smooth:false gives straight edges and sharp corners, which suits rocky peaks and buildings. Use 8 to 40 points so curves look natural, and vary them: nature is irregular, never a row of identical shapes.
+- Layer back to front IN ORDER within one call, because later elements cover earlier ones: background (sky), far things (sun, distant mountains), middle (hills, river), near things (trees, rocks), then small details (highlights, snow caps, reflections, birds).
+- Filled areas need no outline: leave stroke out or set it to 'none'. For rect set radius 0 when it is a band of sky or ground.
+- Use real colours as #hex, chosen for the scene (several greens for foliage, lighter and bluer tones for things further away, a warm sky at sunrise). opacity makes haze, reflections and soft shadows.
+- Plan the composition first: pick a canvas area (say 1200x700), a horizon line, and where each thing sits, then give every element exact coordinates inside that area. Things further away are smaller and higher up; a river narrows as it recedes.
+- No frame and no text labels in a picture unless asked. Aim for a finished, pleasing image: typically 25 to 80 elements.`;
+
 /** How to draw well with the board's elements; given to whichever agent is drawing. */
 export const DRAWING_GUIDE = `Coordinates are in pixels; x grows right, y grows down; elements are positioned by their top-left corner. Leave at least 24px between sibling elements and align them on a grid. Colours are palette names (yellow, orange, pink, purple, blue, teal, green, red, gray, white, black, slate, accent, none) or #hex; use colour to carry meaning.
 Elements: sticky (one idea, about 200x200, at most ~12 words); text (a heading or label, fontSize 28-40 for headings, 14-18 for body); rect, ellipse, diamond, triangle (shapes with centred text; rect for steps, diamond for decisions); frame (a titled container: one per screen or section, with its contents placed inside its bounds); arrow and line (connect two elements with from and to, using ids of existing elements or keys of elements in the same call; text is the label).
+Elements also include path (a freeform shape from points) for anything the others cannot make.
+${ILLUSTRATION_GUIDE}
 To sketch a screen or feature preview: one frame per screen (about 1200x760 desktop, 390x800 mobile), side by side with 120px between, joined by arrows when there is a flow. Build it from rects and text: top bar (full width, 56 high), cards (radius 12, fill white, stroke gray), inputs (radius 8, 40 high, fill white, stroke gray, left-aligned placeholder), primary buttons (radius 8, 40 high, fill accent, color white, bold), image placeholders (fill gray, text "Image"). Use real, specific copy, never lorem ipsum, and keep text inside its element (about 8px per character at fontSize 14). Create a whole screen in one call, frame first.`;
 
 function systemPrompt(board: Board, elements: BoardElement[], turn: BoardTurn): string {
@@ -236,6 +267,9 @@ ELEMENTS
 - rect / ellipse / diamond / triangle: shapes with centred text. Use rect for boxes and steps, diamond for decisions.
 - frame: a titled container. Use one frame per screen or per section, then place elements INSIDE its bounds.
 - arrow / line: connect two elements with from and to (ids of existing elements, or keys of elements in the same call). Attached arrows follow the elements when they move. Use text for a label on the arrow.
+- path: a freeform shape from points. Use it for anything the other shapes cannot make.
+
+${ILLUSTRATION_GUIDE}
 
 SKETCHING A SCREEN OR FEATURE PREVIEW (wireframes)
 - One frame per screen: about 1200x760 for desktop, 390x800 for mobile. Put screens side by side with 120px between them, and connect them with arrows when there is a flow.
@@ -262,12 +296,12 @@ export async function runBoardAgent(turn: BoardTurn): Promise<string> {
   const tools = {
     add_elements: tool({
       description: "Add elements to the board. Returns the id given to each one, in order. Give elements a key when arrows in the same call need to point at them.",
-      inputSchema: zodSchema(z.object({ elements: z.array(elementInput).min(1).max(120) })),
+      inputSchema: zodSchema(z.object({ elements: z.array(elementInput).min(1).max(300) })),
       execute: async ({ elements: wanted }: { elements: ElementInput[] }) => ({ added: await editor.add(wanted) }),
     }),
     update_elements: tool({
       description: "Change existing elements: move, resize, recolour or rewrite their text. Only the fields you give are changed.",
-      inputSchema: zodSchema(z.object({ updates: z.array(elementUpdate).min(1).max(120) })),
+      inputSchema: zodSchema(z.object({ updates: z.array(elementUpdate).min(1).max(300) })),
       execute: async ({ updates }: { updates: ElementUpdate[] }) => editor.update(updates),
     }),
     delete_elements: tool({

@@ -64,11 +64,23 @@ export function WhiteboardPage({ project, board, user, canEdit, canChat, shareTo
     </div>
 
     <header class="wb-panel wb-top">
-      ${embed ? "" : project ? html`<a class="wb-ib" href="/projects/${project.projectId}/whiteboards" title="Back to ${project.name} whiteboards" aria-label="Back to whiteboards"><i class="fas fa-arrow-left"></i></a>` : html`<span class="wb-brand" title="LFG whiteboard">🚀</span>`}
+      ${embed ? "" : project ? html`<button type="button" class="wb-crumb" id="wb-menu-btn" title="Go to another part of ${project.name}" aria-haspopup="true" aria-expanded="false" aria-controls="wb-menu"><i class="fas fa-bars"></i><span>${project.name}</span></button><span class="wb-crumb-sep" aria-hidden="true">/</span>` : html`<span class="wb-brand" title="LFG whiteboard">🚀</span>`}
       <input id="wb-title" class="wb-title" value="${board.title}" maxlength="120" aria-label="Board name" autocomplete="off" />
       <span class="wb-status" id="wb-status" role="status">Saved</span>
       <span class="wb-live" title="Live: changes and cursors appear as they happen" aria-hidden="true"></span>
     </header>
+
+    ${project && !embed ? html`<nav class="wb-panel wb-menu" id="wb-menu" aria-label="${project.name}" hidden>
+      <a href="/projects/${project.projectId}/whiteboards"><i class="fas fa-chalkboard"></i>All whiteboards</a>
+      <a href="/chat/project/${project.projectId}"><i class="fas fa-comments"></i>Chat</a>
+      <a href="/projects/${project.projectId}"><i class="fas fa-tachometer-alt"></i>Dashboard</a>
+      <a href="/projects/${project.projectId}/tickets"><i class="fas fa-tasks"></i>Tickets</a>
+      <a href="/projects/${project.projectId}/epics"><i class="fas fa-layer-group"></i>Epics</a>
+      <a href="/projects/${project.projectId}?tab=documents"><i class="fas fa-file-lines"></i>Docs</a>
+      <a href="/projects/${project.projectId}/meetings"><i class="fas fa-video"></i>Meetings</a>
+      <span class="wb-menu-sep"></span>
+      <a href="/projects"><i class="fas fa-folder-open"></i>All projects</a>
+    </nav>` : ""}
 
     <div class="wb-panel wb-actions">
       <div class="wb-peers" id="wb-peers" aria-label="People on this board" hidden></div>
@@ -152,10 +164,12 @@ export function WhiteboardPage({ project, board, user, canEdit, canChat, shareTo
         </div>
       </div>
       <div class="wb-chat-context" id="wb-chat-context" hidden><span></span><button type="button" title="Clear selection" aria-label="Clear selection"><i class="fas fa-times"></i></button></div>
-      <div class="wb-chat-model" hidden><label for="wb-chat-model">Model</label><select id="wb-chat-model" aria-label="Model LFG uses"></select></div>
       <form class="wb-chat-form" id="wb-chat-form">
         <textarea id="wb-chat-input" rows="1" placeholder="Ask LFG to sketch, brainstorm or explain…" aria-label="Message LFG"></textarea>
-        <button type="submit" id="wb-chat-send" title="Send" aria-label="Send"><i class="fas fa-arrow-up"></i></button>
+        <div class="wb-chat-bar">
+          <select id="wb-chat-model" class="wb-chat-model" title="Model LFG uses" aria-label="Model LFG uses" hidden></select>
+          <button type="submit" id="wb-chat-send" title="Send" aria-label="Send"><i class="fas fa-arrow-up"></i></button>
+        </div>
       </form>
     </section>
 
