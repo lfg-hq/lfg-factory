@@ -52,7 +52,7 @@ export class MeetingError extends Error {}
 
 /** Why the agent cannot join calls on this server, or null when it can. */
 export function meetingSetupProblem(): string | null {
-  if (env.SANDBOX_BACKEND === "mags" && !process.env.MAGS_API_TOKEN) return "The meeting agent is not set up on this server yet: it runs its browser on Mags, and MAGS_API_TOKEN is missing.";
+  if (!process.env.MAGS_API_TOKEN) return "The meeting agent is not set up on this server yet: it runs its browser on Mags, and MAGS_API_TOKEN is missing.";
   return null;
 }
 

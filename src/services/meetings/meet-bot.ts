@@ -1,6 +1,5 @@
 /**
- * Runs the meeting bot: a Chromium in the sandbox backend (Mags, or Docker when self-hosted)
- * driven by scripts/meeting-bot-worker.mjs, one worker process per call. This file is the
+ * Runs the meeting bot: Mags's meeting browser driven by scripts/meeting-bot-worker.mjs, one worker process per call. This file is the
  * only place that knows how the bot gets into a call; the meeting agent sees events and
  * three verbs (say in chat, look at the screen, leave).
  *
@@ -8,7 +7,9 @@
  * part in any call that was running.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { startBrowserSession, stopWorkspace } from "../mags.ts";
+// Straight to Mags, whatever SANDBOX_BACKEND is: the meeting browser (full Chrome, audio
+// devices, a kept sign-in) is something only Mags provides, even when sandboxes run on Docker.
+import { startBrowserSession, stopWorkspace } from "../sandbox/mags-backend.ts";
 
 export type MeetingStatus = "joining" | "waiting_room" | "in_call" | "ended" | "failed";
 
