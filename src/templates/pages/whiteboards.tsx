@@ -1,5 +1,6 @@
 import { NotificationNav } from "../components/notification-nav.tsx";
 import { html } from "hono/html";
+import { fresh } from "./whiteboard.tsx";
 
 /**
  * WHITEBOARDS: the boards of a project. Each card opens the full-screen canvas
@@ -177,7 +178,7 @@ export function WhiteboardsPage({ project, user, canEdit }: Props) {
   </div>
 <script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
 <script src="/public/js/sidebar-chats.js"></script>
-<script src="/public/js/whiteboards.js?v=20261114"></script>
+<script src="${fresh("/public/js/whiteboards.js")}"></script>
 <script>
   requestAnimationFrame(() => requestAnimationFrame(() => {
     document.documentElement.classList.remove('sidebar-minimized-preload');

@@ -1,4 +1,13 @@
 import { html } from "hono/html";
+import { statSync } from "node:fs";
+
+/**
+ * A static file's address with its last-modified time in the query, so a browser never keeps
+ * running an old copy of the board's scripts after they change (static files are cached for an hour).
+ */
+export const fresh = (path: string) => {
+  try { return `${path}?v=${Math.floor(statSync("." + path).mtimeMs).toString(36)}`; } catch { return path; }
+};
 
 /**
  * WHITEBOARD: one board, full screen. An infinite canvas to draw, drop notes, sketch screens
@@ -36,7 +45,7 @@ export function WhiteboardPage({ project, board, user, canEdit, canChat, shareTo
   <title>${board.title} — LFG</title>
   <link rel="stylesheet" href="/public/css/theme-variables.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
-  <link rel="stylesheet" href="/public/css/whiteboard.css?v=20261114" />
+  <link rel="stylesheet" href="${fresh("/public/css/whiteboard.css")}" />
   <script src="/public/js/theme-switcher.js"></script>
 </head>
 <body class="wb-body">
@@ -171,8 +180,8 @@ export function WhiteboardPage({ project, board, user, canEdit, canChat, shareTo
 
     <div class="wb-toast" id="wb-toast" role="status" hidden></div>
   </div>
-<script src="/public/js/whiteboard.js?v=20261114"></script>
-<script src="/public/js/whiteboard-ui.js?v=20261114"></script>
+<script src="${fresh("/public/js/whiteboard.js")}"></script>
+<script src="${fresh("/public/js/whiteboard-ui.js")}"></script>
 </body>
 </html>`;
 }

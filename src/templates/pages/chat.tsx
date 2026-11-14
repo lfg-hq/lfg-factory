@@ -1,4 +1,5 @@
 import { NotificationNav } from "../components/notification-nav.tsx";
+import { fresh } from "./whiteboard.tsx";
 import { html } from "hono/html";
 import { ChatInput } from "../components/chat-input.tsx";
 
@@ -43,7 +44,7 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261022-build-rows" />
   <link rel="stylesheet" href="/public/css/chat.css?v=20261023-dictation-fit" />
   <link rel="stylesheet" href="/public/css/artifacts-fix.css" />
-  <link rel="stylesheet" href="/public/css/boards-tab.css?v=20261115" />
+  <link rel="stylesheet" href="${fresh("/public/css/boards-tab.css")}" />
   <link rel="stylesheet" href="/public/css/polish.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
@@ -583,7 +584,7 @@ export function ChatPage({
   <script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
   <script src="/public/js/custom-dropdown.js"></script>
   <script src="/public/js/dictation.js?v=20261021-inline-strip"></script>
-  <script src="/public/js/boards-tab.js?v=20261115"></script>
+  <script src="${fresh("/public/js/boards-tab.js")}"></script>
   <script src="/public/js/chat-artifacts.js?v=20261115-boards"></script>
   <script src="/public/js/chatgpt-connection.js?v=20261018"></script>
   <script src="/public/js/chat.js?v=20261022-attachments"></script>
