@@ -356,7 +356,9 @@ async function recap(meeting: Meeting): Promise<void> {
     conversationId: meeting.conversationId, userId: meeting.userId, userRole: MEETING_CONTEXT_ROLE,
     message: `[Automated: the call "${meeting.title}" has ended. This is not a message from the user.]\nWrite the recap for the user, who reads it in this chat (markdown is fine here, nothing is spoken): a two or three sentence summary, the decisions made, action items with the owner's name where one was said, open questions, and anything you created or looked up during the call. Use only what the transcript and this conversation show. Do not create documents or tickets now; offer them if they would help.`,
   })).trim();
-  if (reply) await deps.announce({ conversationId: meeting.conversationId, userId: meeting.userId }, reply).catch(() => {});
+  if (!reply) return;
+  await db.update(meetings).set({ recap: reply }).where(eq(meetings.id, meeting.id));
+  await deps.announce({ conversationId: meeting.conversationId, userId: meeting.userId }, reply).catch(() => {});
 }
 
 /**

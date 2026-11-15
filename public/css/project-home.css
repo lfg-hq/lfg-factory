@@ -330,3 +330,14 @@ html .chats-page .chats-search input[type="search"], html .chats-page .chats-sea
 .chats-page .dash-panel-error { border-radius:10px; padding:10px 14px; }
 @media (hover:none) { .chat-card-actions { display:none; } }
 @media (max-width:640px) { .chats-tools { min-width:0; flex-basis:100%; } .chats-search { max-width:none; } }
+
+/* Calls LFG was in (project Home side column) */
+.dash-call { padding:12px 16px; border-bottom:1px solid var(--border-color); display:flex; flex-direction:column; gap:6px; }
+.dash-call:last-child { border-bottom:0; }
+.dash-call-top { display:flex; align-items:baseline; justify-content:space-between; gap:10px; }
+.dash-call-top .dash-row-detail { white-space:nowrap; font-size:12px; color:var(--text-secondary); }
+.dash-call-live { color:#16a34a; font-weight:600; }
+.dash-call-recap { margin:0; font-size:12.5px; line-height:1.5; color:var(--text-secondary); display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+.dash-call-links { display:flex; gap:14px; font-size:12.5px; }
+.dash-call-links a { color:var(--primary-color); text-decoration:none; font-weight:500; }
+.dash-call-links a:hover { text-decoration:underline; }

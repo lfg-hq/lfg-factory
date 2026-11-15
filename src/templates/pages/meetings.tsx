@@ -197,7 +197,7 @@ export function MeetingsPage({ project, user, setupProblem, botName = "LFG" }: P
   </div>
 <script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
 <script src="/public/js/sidebar-chats.js"></script>
-<script src="/public/js/meetings.js?v=20261114"></script>
+<script src="/public/js/meetings.js?v=20261116"></script>
 <script>
   requestAnimationFrame(() => requestAnimationFrame(() => {
     document.documentElement.classList.remove('sidebar-minimized-preload');

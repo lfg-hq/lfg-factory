@@ -12,6 +12,7 @@ import { agentRuns, ticketExecutions } from "../db/schema/orchestrator.ts";
 import { notifications } from "../db/schema/notifications.ts";
 import { projectFiles } from "../db/schema/documents.ts";
 import { users } from "../db/schema/users.ts";
+import { meetings } from "../db/schema/meetings.ts";
 import { STAGE_LABELS, latestUpdate, ticketStage, type BuildStage } from "./build-progress.ts";
 import { decodeQuestionMeta, isChatTurnActive } from "./ticket-chat-turn.ts";
 
@@ -64,8 +65,23 @@ export function epicReviewState(epic: { status: string }, states: TicketState[])
   return states.length > 0 && states.every((s) => s === "ready") ? "review" : null;
 }
 
+const LIVE_CALL = new Set(["joining", "waiting_room", "in_call"]);
+
+/** A call for the Home: when, how long, and the first lines of the agent's recap as plain text. */
+export function callCard(m: { id: string; title: string; status: string; conversationId: string | null; recap: string | null; createdAt: Date; startedAt: Date | null; endedAt: Date | null }) {
+  const minutes = m.startedAt && m.endedAt ? Math.max(1, Math.round((+new Date(m.endedAt) - +new Date(m.startedAt)) / 60_000)) : null;
+  const recap = (m.recap ?? "")
+    .replace(/^#{1,6}\s+.*$/gm, "") // headings ("Recap") add nothing in a preview
+    .replace(/[*_`>#]/g, "").replace(/^\s*[-+]\s+/gm, "").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/\s+/g, " ").trim();
+  return {
+    id: m.id, title: m.title, live: LIVE_CALL.has(m.status), at: iso(m.startedAt ?? m.createdAt), minutes,
+    conversationId: m.conversationId, recap: recap ? (recap.length > 220 ? recap.slice(0, 217).replace(/\s+\S*$/, "") + "…" : recap) : null,
+  };
+}
+
 export async function projectHome(project: { id: string; projectId: string }, userId: string) {
-  const [ticketRows, epicRows, blockedRuns, unread, docs] = await Promise.all([
+  const [ticketRows, epicRows, blockedRuns, unread, docs, callRows] = await Promise.all([
     db.select({
       id: projectTickets.id, name: projectTickets.name, ticketKey: projectTickets.ticketKey, status: projectTickets.status,
       queueStatus: projectTickets.queueStatus, epicId: projectTickets.epicId, executionOrder: projectTickets.executionOrder,
@@ -86,6 +102,12 @@ export async function projectHome(project: { id: string; projectId: string }, us
       .orderBy(desc(notifications.createdAt)).limit(30),
     db.select({ id: projectFiles.id, name: projectFiles.name, updatedAt: projectFiles.updatedAt }).from(projectFiles)
       .where(eq(projectFiles.projectId, project.id)).orderBy(desc(projectFiles.updatedAt)).limit(4),
+    // The viewer's own calls, as on the Meetings page: a transcript is the person who added the bot's.
+    db.select({
+      id: meetings.id, title: meetings.title, status: meetings.status, conversationId: meetings.conversationId,
+      recap: meetings.recap, createdAt: meetings.createdAt, startedAt: meetings.startedAt, endedAt: meetings.endedAt,
+    }).from(meetings).where(and(eq(meetings.userId, userId), eq(meetings.projectId, project.projectId)))
+      .orderBy(desc(meetings.createdAt)).limit(12),
   ]);
 
   const byId = new Map(ticketRows.map((t) => [t.id, t]));
@@ -222,6 +244,7 @@ export async function projectHome(project: { id: string; projectId: string }, us
     })),
     preview: withPreview ? { epicId: withPreview.epic.id, name: withPreview.epic.name, url: withPreview.epic.previewUrl, at: iso(withPreview.epic.updatedAt) } : null,
     docs: docs.map((d) => ({ id: d.id, name: d.name, at: iso(d.updatedAt) })),
+    calls: callRows.filter((m) => m.status !== "failed").slice(0, 4).map(callCard),
     hasWork: ticketRows.length > 0 || epicRows.length > 0,
   };
 }

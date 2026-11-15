@@ -123,8 +123,26 @@
         $('dash-preview-section').hidden = !preview;
         if (preview) $('dash-preview').innerHTML = '<div class="dash-preview-name">' + esc(dash.preview.name) + '</div><p class="home-muted">Updated ' + esc(rel(dash.preview.at)) + '</p>' +
             '<a class="dash-btn wide" href="' + esc(preview) + '" target="_blank" rel="noopener noreferrer">Open preview <i class="fas fa-arrow-up-right-from-square" aria-hidden="true"></i></a>';
+        renderCalls();
         $('dash-docs').innerHTML = dash.docs.map((d) =>
             '<a class="dash-doc" href="/projects/' + pid() + '?tab=documents&doc=' + encodeURIComponent(d.id) + '&docName=' + encodeURIComponent(d.name) + '"><i class="far fa-file-lines" aria-hidden="true"></i><span>' + esc(d.name) + '</span><small>' + esc(rel(d.at)) + '</small></a>').join('');
+    }
+
+    // Calls LFG was in: the recap where it left off, with the full recap (its chat) and transcript a click away.
+    function renderCalls() {
+        const calls = dash.calls || [];
+        $('dash-calls-section').hidden = !calls.length;
+        $('dash-calls').innerHTML = calls.map((c) => {
+            const when = c.live ? '<span class="dash-call-live">Live now</span>' : esc(rel(c.at)) + (c.minutes ? ' · ' + esc(c.minutes) + ' min' : '');
+            const summary = c.live ? 'LFG is taking notes. Say "Hey LFG" or type @LFG in the call to ask for something.'
+                : (c.recap || 'No recap: too little was said.');
+            const links = [
+                c.conversationId ? '<a href="/chat/project/' + pid() + '/conversation/' + encodeURIComponent(c.conversationId) + '">' + (c.recap && !c.live ? 'Recap' : 'Chat') + '</a>' : '',
+                '<a href="/projects/' + pid() + '/meetings#call-' + encodeURIComponent(c.id) + '">Transcript</a>',
+            ].filter(Boolean).join('');
+            return '<div class="dash-call"><div class="dash-call-top"><span class="dash-row-title">' + esc(c.title) + '</span><span class="dash-row-detail">' + when + '</span></div>' +
+                '<p class="dash-call-recap">' + esc(summary) + '</p><div class="dash-call-links">' + links + '</div></div>';
+        }).join('');
     }
 
     // ── Panel ────────────────────────────────────────────────────────────

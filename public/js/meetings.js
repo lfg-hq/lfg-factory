@@ -148,7 +148,13 @@
     }
   });
 
-  load(true);
+  // A link to one call's transcript (from the project Home: #call-<id>) opens it.
+  var linked = /^#call-([\w-]+)$/.exec(location.hash);
+  if (linked) open[linked[1]] = { lastSeq: 0 };
+  load(true).then(function () {
+    var node = linked && document.querySelector('.meeting-row[data-id="' + linked[1] + '"]');
+    if (node) node.scrollIntoView({ block: "start" });
+  });
   // While a call is live, keep status and open transcripts current.
   setInterval(function () { if (anyLive && !document.hidden) load(true); }, 5000);
 })();

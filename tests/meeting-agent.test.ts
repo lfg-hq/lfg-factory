@@ -15,6 +15,7 @@ CREATE TABLE message(id TEXT PRIMARY KEY NOT NULL, conversation_id TEXT NOT NULL
 CREATE TABLE chat_file(id TEXT PRIMARY KEY NOT NULL, conversation_id TEXT NOT NULL, message_id TEXT, file_path TEXT NOT NULL, original_filename TEXT NOT NULL, file_type TEXT DEFAULT '', file_size INTEGER DEFAULT 0 NOT NULL, uploaded_at INTEGER DEFAULT (unixepoch()) NOT NULL);`);
 // The shipped migration creates the meeting tables, so the test also proves it matches the schema.
 sqlite.exec(readFileSync(new URL('../drizzle/manual/20261113-meetings-sqlite.sql', import.meta.url), 'utf8'));
+sqlite.exec(readFileSync(new URL('../drizzle/manual/20261116-meeting-recap-sqlite.sql', import.meta.url), 'utf8'));
 mock.module('../src/config/db.ts', () => ({ db: drizzle(sqlite) }));
 mock.module('../src/ws/connection-manager.ts', () => ({ broadcastToUser: () => {} }));
 mock.module('../src/ws/background-turns.ts', () => ({ findBackgroundTurn: () => null }));
@@ -249,6 +250,7 @@ test('when the call ends the agent writes one recap from the transcript, and the
   const after = (await agent.meetingForUser(meeting.id, 'u1'))!;
   expect(after.status).toBe('ended');
   expect(after.endedAt).toBeTruthy();
+  expect(after.recap).toBe('## Recap\nCard payments first.'); // kept on the call for the project Home
   await agent.setStatus(meeting.id, 'in_call', null);
   expect((await agent.meetingForUser(meeting.id, 'u1'))!.status).toBe('ended');
   await hear(meeting, ...said('Priya', 'Hey LFG, are you still there?')); // late delivery

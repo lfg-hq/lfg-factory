@@ -24,6 +24,8 @@ export const meetings = pgTable(
     statusDetail: text("status_detail"),
     // Segments up to this sequence number have been handed to the chat agent as context.
     contextSeq: integer("context_seq").notNull().default(0),
+    // The agent's end-of-call recap (also posted in the meeting's chat), for the project Home.
+    recap: text("recap"),
     createdAt: timestamp("created_at", { mode: "date" }).notNull().default(sql`now()`),
     startedAt: timestamp("started_at", { mode: "date" }),
     endedAt: timestamp("ended_at", { mode: "date" }),

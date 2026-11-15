@@ -141,7 +141,7 @@ export function ProjectDetailPage({
   <link rel="stylesheet" href="/public/css/sidebar.css?v=20260908-startup" />
   <link rel="stylesheet" href="/public/css/projects.css" />
   <link rel="stylesheet" href="/public/css/project_detail.css" />
-  <link rel="stylesheet" href="/public/css/project-home.css?v=20261114-back" />
+  <link rel="stylesheet" href="/public/css/project-home.css?v=20261116-calls" />
   <link rel="stylesheet" href="/public/css/artifacts.css?v=20261004-dark-folders" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
   <link rel="stylesheet" href="/public/css/polish.css" />
@@ -493,7 +493,7 @@ export function ProjectDetailPage({
         ${(activeTab === "home" || activeTab === "inbox") ? html`
 
           ${activeTab === "home" ? html`
-          <script src="/public/js/project-home.js?v=20261113-attach"></script>
+          <script src="/public/js/project-home.js?v=20261116-calls"></script>
           <div class="home-dashboard" data-project="${project.projectId}" data-chats="${conversations.length ? "1" : "0"}">
             ${role !== "viewer" && role !== "guest" ? html`
             <section class="dash-start" aria-labelledby="dash-start-title">
@@ -535,10 +535,14 @@ export function ProjectDetailPage({
                   <div id="dash-epics" class="dash-card"></div>
                 </section>
               </div>
-              <aside class="dash-side" aria-label="Preview, chats, resources and team">
+              <aside class="dash-side" aria-label="Preview, calls, chats, resources and team">
                 <section id="dash-preview-section" hidden>
                   <div class="home-section-heading"><h2>Latest preview</h2></div>
                   <div id="dash-preview" class="dash-card dash-pad"></div>
+                </section>
+                <section id="dash-calls-section" aria-labelledby="dash-calls-title" hidden>
+                  <div class="home-section-heading"><h2 id="dash-calls-title">Calls</h2><a href="/projects/${project.projectId}/meetings" class="home-quiet-link">All calls →</a></div>
+                  <div id="dash-calls" class="dash-card"></div>
                 </section>
                 <section>
                   <div class="home-section-heading"><h2>Recent chats</h2><a href="/projects/${project.projectId}?tab=conversations" class="home-quiet-link">View all →</a></div>

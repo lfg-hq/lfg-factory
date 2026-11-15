@@ -24,6 +24,8 @@ export const meetings = sqliteTable(
     statusDetail: text("status_detail"),
     // Segments up to this sequence number have been handed to the chat agent as context.
     contextSeq: integer("context_seq").notNull().default(0),
+    // The agent's end-of-call recap (also posted in the meeting's chat), for the project Home.
+    recap: text("recap"),
     createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
     startedAt: integer("started_at", { mode: "timestamp" }),
     endedAt: integer("ended_at", { mode: "timestamp" }),
