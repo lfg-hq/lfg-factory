@@ -97,7 +97,9 @@
       if (seat.signingIn && seat.signingIn.byMe) {
         actions.appendChild(button("Show browser", function () { show(seat); }, true));
       } else if (!seat.signingIn && !seat.inCall) {
-        actions.appendChild(button(seat.account ? "Sign in again" : "Sign in", function () { return signIn(seat); }, !seat.account));
+        // A new seat already carries the account it is meant for; only a seat that was ready has been signed in.
+        var signedInBefore = seat.state !== "needs_sign_in" || !!seat.lastError;
+        actions.appendChild(button(signedInBefore ? "Sign in again" : "Sign in", function () { return signIn(seat); }, !signedInBefore));
         if (seat.state === "disabled" && seat.account) actions.appendChild(button("Turn on", function () { return setState(seat, "ready"); }));
         if (seat.state === "ready") actions.appendChild(button("Turn off", function () { return setState(seat, "disabled"); }));
         actions.appendChild(button("Remove", function () { return remove(seat); }));

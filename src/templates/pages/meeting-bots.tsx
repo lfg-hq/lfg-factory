@@ -85,7 +85,7 @@ export function MeetingBotsPage({ user, defaultAccount }: Props) {
       </div>
     </section>
   </main>
-  <script src="/public/js/meeting-bots.js?v=1"></script>
+  <script src="/public/js/meeting-bots.js?v=2"></script>
 </body>
 </html>`;
 }
