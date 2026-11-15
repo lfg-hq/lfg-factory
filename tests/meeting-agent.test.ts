@@ -68,6 +68,13 @@ test('the wake phrase is recognised however speech-to-text spells it, and only t
   expect(requestAfterWakePhrase('Hey agent, how many tickets are pending?')).toBe('how many tickets are pending?');
   expect(requestAfterWakePhrase('Okay, assistant. Summarise that.')).toBe('Summarise that.');
   expect(requestAfterWakePhrase('Hey, I love to you, how many tickets?')).toBeNull();
+  // From the second real call: how captions wrote "Hey LFG, ..."
+  expect(requestAfterWakePhrase('Alfg, can you hear me?')).toBe('can you hear me?');
+  expect(requestAfterWakePhrase('Elfg what project is this')).toBe('what project is this');
+  expect(requestAfterWakePhrase('Are there any lfg are there any dogs here?')).toBe('are there any dogs here?');
+  expect(requestAfterWakePhrase('Do we have any LFG tickets left?')).toBeNull();
+  expect(requestAfterWakePhrase('is there a LFG build ready')).toBeNull();
+  expect(requestAfterWakePhrase('Hey, can you hear me?')).toBeNull();
   expect(requestAfterWakePhrase('our agent called yesterday')).toBeNull();
   expect(requestAfterWakePhrase('agent: list open tickets', true)).toBe('list open tickets');
 });

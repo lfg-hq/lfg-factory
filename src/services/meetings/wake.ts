@@ -6,11 +6,12 @@
  * "Hey, I love to you". So the bot also answers to plain words captions get right,
  * "Hey agent" and "Hey assistant" by default (MEETING_WAKE_ALIASES, comma-separated).
  */
-const ACRONYM = String.raw`l[\s.\-]*f[\s.\-]*g\b\.?|el+e?[\s\-]*ef+[\s\-]*g(?:ee|ie?)\b`;
+// "Hey LFG" also comes out glued together: "Alfg", "Elfg", "Heylfg".
+const ACRONYM = String.raw`(?:a|e|hey|hay)?l[\s.\-]*f[\s.\-]*g\b\.?|el+e?[\s\-]*ef+[\s\-]*g(?:ee|ie?)\b`;
 const escape = (word: string) => word.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, String.raw`\s+`);
 const aliases = () => (process.env.MEETING_WAKE_ALIASES ?? "agent,assistant").split(",").map(escape).filter(Boolean);
 const ASKING = "what|which|who|whom|whose|how|when|where|why|can|could|would|will|should|is|are|do|does|did|please|create|make|show|list|tell|give|find|get|pull|summari[sz]e|draft|write|open|add|check|explain|share|look|search|count|update|remind";
-let built: { key: string; spoken: RegExp; opening: RegExp; typed: RegExp } | null = null;
+let built: { key: string; spoken: RegExp; garbled: RegExp; opening: RegExp; typed: RegExp } | null = null;
 function patterns() {
   const key = process.env.MEETING_WAKE_ALIASES ?? "";
   if (built?.key === key) return built;
@@ -19,6 +20,9 @@ function patterns() {
     key,
     // Anywhere in what was said: a greeting, then the name.
     spoken: new RegExp(String.raw`(?:^|[\s,.!?;:])(?:hey|hi|hello|ok|okay|yo)[\s,]+${name}[\s,.:;!?\-]*`, "gi"),
+    // "Hey" mangled mid-sentence ("are there any lfg are there any docs"): only when a question
+    // or instruction follows, so "do we have any LFG tickets" stays talk about it.
+    garbled: new RegExp(String.raw`(?:^|[\s,.!?;:])(?:any|a|eh|ay|hay)[\s,]+${name}[\s,.:;!?\-]*(?=(?:${ASKING})\b)`, "gi"),
     // Opening a sentence with the name is addressing it too: "LFG, what project is this?".
     // Captions also turn "hey" into "a", "eh" or "hay" ("A agent which project is this?").
     // Only when it reads as being spoken to: a pause after the name, or a question or instruction
@@ -37,6 +41,7 @@ export function requestAfterWakePhrase(text: string, typed = false): string | nu
   const p = patterns();
   let end = -1;
   for (const match of text.matchAll(p.spoken)) end = match.index! + match[0].length;
+  if (end < 0 && !typed) for (const match of text.matchAll(p.garbled)) end = match.index! + match[0].length;
   if (end < 0) {
     const match = (typed ? p.typed : p.opening).exec(text);
     if (match) end = match[0].length;
