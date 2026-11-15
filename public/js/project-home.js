@@ -135,7 +135,7 @@
         $('dash-calls').innerHTML = calls.map((c) => {
             const when = c.live ? '<span class="dash-call-live">Live now</span>' : esc(rel(c.at)) + (c.minutes ? ' · ' + esc(c.minutes) + ' min' : '');
             const summary = c.live ? 'LFG is taking notes. Say "Hey LFG" or type @LFG in the call to ask for something.'
-                : (c.recap || 'No recap: too little was said.');
+                : (c.recap || 'No recap here. The chat and transcript have the whole call.');
             const links = [
                 c.conversationId ? '<a href="/chat/project/' + pid() + '/conversation/' + encodeURIComponent(c.conversationId) + '">' + (c.recap && !c.live ? 'Recap' : 'Chat') + '</a>' : '',
                 '<a href="/projects/' + pid() + '/meetings#call-' + encodeURIComponent(c.id) + '">Transcript</a>',

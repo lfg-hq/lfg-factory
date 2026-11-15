@@ -493,7 +493,7 @@ export function ProjectDetailPage({
         ${(activeTab === "home" || activeTab === "inbox") ? html`
 
           ${activeTab === "home" ? html`
-          <script src="/public/js/project-home.js?v=20261116-calls"></script>
+          <script src="/public/js/project-home.js?v=20261116-calls2"></script>
           <div class="home-dashboard" data-project="${project.projectId}" data-chats="${conversations.length ? "1" : "0"}">
             ${role !== "viewer" && role !== "guest" ? html`
             <section class="dash-start" aria-labelledby="dash-start-title">
