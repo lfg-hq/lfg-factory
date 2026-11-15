@@ -13,6 +13,11 @@ export function savedChatArtifact(tool: string, output: Record<string, unknown> 
     if (output.saved !== true || typeof output.boardId !== 'string' || !output.boardId) return null;
     return {kind:'board', id:output.boardId, name:typeof output.title === 'string' && output.title ? output.title : 'Whiteboard'};
   }
+  // An eval suite the agent wrote, changed or started running: one card per suite, with its Run button and results table.
+  if (['saveEvalSuite', 'runEvals'].includes(tool)) {
+    if (!(output.saved === true || output.started === true) || typeof output.suiteId !== 'string' || !output.suiteId) return null;
+    return {kind:'evals', id:output.suiteId, name:typeof output.name === 'string' && output.name ? output.name : 'Evals'};
+  }
   // A build shows one live card following every ticket it builds.
   if (tool === 'startBuildRun' && typeof output.runId === 'string' && output.runId && Array.isArray(output.ticketIds)) {
     const ticketIds = output.ticketIds.filter((id): id is string => typeof id === 'string' && !!id);

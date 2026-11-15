@@ -45,6 +45,7 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/chat.css?v=20261023-dictation-fit" />
   <link rel="stylesheet" href="/public/css/artifacts-fix.css" />
   <link rel="stylesheet" href="${fresh("/public/css/boards-tab.css")}" />
+  <link rel="stylesheet" href="${fresh("/public/css/evals.css")}" />
   <link rel="stylesheet" href="/public/css/polish.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
@@ -337,6 +338,7 @@ export function ChatPage({
       <div class="artifacts-tabs-list" id="artifacts-tabs-list">
         <button class="tab-button active" data-tab="filebrowser">Docs</button>
         <button class="tab-button" data-tab="boards">Boards</button>
+        <button class="tab-button" data-tab="evals">Evals</button>
         <button class="tab-button" data-tab="checklist">Tickets</button>
         <button class="tab-button" data-tab="preview">Preview</button>
         <button class="tab-button" data-tab="git">Git</button>
@@ -371,6 +373,12 @@ export function ChatPage({
             <div class="boards-tab-list" id="boards-tab-list"></div>
             <iframe class="boards-tab-frame" id="boards-tab-frame" title="Whiteboard" hidden></iframe>
           </div>
+        </div>
+
+        <!-- Evals Tab: eval suites for the AI agent this project is building, run against models with
+             the results in a table. The chat agent writes them (type /evals); behaviour is in /public/js/evals.js. -->
+        <div class="tab-pane" id="evals">
+          <div id="evals-root" data-project-id="${projectId}"></div>
         </div>
 
         <!-- Checklist Tab -->
@@ -585,7 +593,8 @@ export function ChatPage({
   <script src="/public/js/custom-dropdown.js"></script>
   <script src="/public/js/dictation.js?v=20261021-inline-strip"></script>
   <script src="${fresh("/public/js/boards-tab.js")}"></script>
-  <script src="/public/js/chat-artifacts.js?v=20261115-boards"></script>
+  <script src="${fresh("/public/js/evals.js")}"></script>
+  <script src="${fresh("/public/js/chat-artifacts.js")}"></script>
   <script src="/public/js/chatgpt-connection.js?v=20261018"></script>
   <script src="/public/js/chat.js?v=20261022-attachments"></script>
   <script src="/public/js/voice-mode.js?v=20261016-voice-hidden" data-disabled="true"></script>
