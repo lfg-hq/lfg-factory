@@ -9,7 +9,8 @@
 import { tool, zodSchema } from "ai";
 import { z } from "zod";
 import { getProjectAccess } from "../../auth/project-access.ts";
-import { createBoard, getBoard, listBoards, readElements } from "../../services/whiteboards/store.ts";
+import { createBoard, getBoard, listBoards, readElements, setShare, shareModeOf } from "../../services/whiteboards/store.ts";
+import { env } from "../../config/env.ts";
 import { DRAWING_GUIDE, boardEditor, describeBoard, elementInput, elementUpdate, freeOrigin, type ElementInput, type ElementUpdate } from "../../services/whiteboards/agent.ts";
 import { openBoardOf } from "../../services/whiteboards/live.ts";
 
@@ -32,6 +33,27 @@ export function whiteboardTools(context: { projectId: string; userId: string }) 
   }
 
   return {
+    shareWhiteboard: tool({
+      description: "Get a link to a whiteboard that anyone can open, without an LFG account: to view it, or to draw on it too. Use it when people outside the project need to see a board, such as the people in a meeting call. Omit boardId for the board the person has open. Keeps an existing link working. The link is the only way in, so give it only to the people it is for.",
+      inputSchema: zodSchema(z.object({
+        boardId: z.string().optional(),
+        mode: z.enum(["view", "edit"]).default("view").describe("edit lets anyone with the link draw on the board"),
+      })),
+      execute: async ({ boardId, mode }: { boardId?: string; mode: "view" | "edit" }) => {
+        const access = await getProjectAccess(context.projectId, context.userId);
+        // The same rule as the board's Share button.
+        if (!access || !(access.role === "owner" || (access.permissions.canEditFiles && access.permissions.canInviteMembers))) {
+          return { error: "This person cannot share whiteboards in this project." };
+        }
+        const found = await pick(boardId);
+        if ("error" in found) return found;
+        // Never narrow a link people already use from edit to view.
+        const current = shareModeOf(found.board);
+        const { token } = await setShare(found.board.id, current === "edit" ? "edit" : mode);
+        const base = (env.APP_URL || env.BETTER_AUTH_URL).replace(/\/+$/, "");
+        return { title: found.board.title, link: `${base}/board/${token}`, anyoneWithLinkCan: current === "edit" ? "edit" : mode };
+      },
+    }),
     listWhiteboards: tool({
       description: "List this project's whiteboards (id, title, how much is on each), and which one the person has open right now, if any.",
       inputSchema: zodSchema(z.object({})),

@@ -309,3 +309,36 @@ test('after a restart, a call that lost its bot is ended and its browser is stop
   expect(stopped).toContain(meeting.botId!);
   expect((await agent.meetingById(meeting.id))!.status).toBe('ended');
 });
+
+test('after an answer, the asker can carry on in chat without naming the bot', async () => {
+  const meeting = await join();
+  reply = "There isn't a whiteboard in this project yet. Should I create one?";
+  await hear(meeting, ...typed('Jitin', '@LFG can you pull up a whiteboard?'));
+  await settle(meeting.id);
+  expect(turns.length).toBe(1);
+  reply = 'Created the whiteboard "Call sketches".';
+  await hear(meeting, ...typed('Jitin', 'yes'));
+  await hear(meeting, ...typed('Jitin', 'create one'));
+  await settle(meeting.id);
+  expect(turns.length).toBe(2); // the two messages are one request
+  expect(turns[1].message).toContain('yes create one');
+  await hear(meeting, ...typed('Sam', 'nice'));
+  await settle(meeting.id);
+  expect(turns.length).toBe(2); // someone else, not addressed to the bot
+});
+
+test('a spoken follow-up counts only when the bot asked something', async () => {
+  const meeting = await join();
+  reply = 'Should I create a whiteboard for this?';
+  await hear(meeting, ...said('Priya', 'Hey LFG, can we sketch the checkout flow?'));
+  await settle(meeting.id);
+  reply = 'Done, the whiteboard is called "Checkout flow".';
+  await hear(meeting, ...said('Priya', 'Yes please.'));
+  await settle(meeting.id);
+  expect(turns.length).toBe(2);
+  expect(turns[1].message).toContain('Yes please.');
+  const before = turns.length;
+  await hear(meeting, ...said('Priya', 'Great, so Sam, about the invoices...'));
+  await settle(meeting.id);
+  expect(turns.length).toBe(before); // the bot did not ask anything: that was talk to Sam
+});

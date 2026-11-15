@@ -634,3 +634,20 @@ test('a board whose project cannot be looked up still gets an agent that draws',
   expect(system).not.toContain('THE PROJECT');
   expect(store.readElements(await fresh(b.id)).length).toBe(1);
 });
+
+test('the chat agent can give out a link to a board, and only someone allowed to share it can', async () => {
+  who = 'owner';
+  const tools = chatTools();
+  const board = await store.createBoard('u1', 'proj-public', 'Call sketches');
+  const shared = await tools.shareWhiteboard!.execute({ boardId: board.id, mode: 'edit' });
+  expect(shared).toMatchObject({ title: 'Call sketches', anyoneWithLinkCan: 'edit' });
+  expect(shared.link).toMatch(/\/board\/[A-Za-z0-9_-]{16,}$/);
+  const token = shared.link.split('/board/')[1];
+  expect((await store.boardByShareToken(token))!.id).toBe(board.id);
+  // Asking again keeps the same link, and never narrows an edit link to view.
+  const again = await tools.shareWhiteboard!.execute({ boardId: board.id, mode: 'view' });
+  expect(again).toMatchObject({ link: shared.link, anyoneWithLinkCan: 'edit' });
+  who = 'viewer';
+  expect(await tools.shareWhiteboard!.execute({ boardId: board.id, mode: 'view' })).toMatchObject({ error: expect.stringContaining('cannot share') });
+  who = 'owner';
+});
