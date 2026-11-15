@@ -374,9 +374,15 @@ test('the link opens the board page for a guest without naming the project', asy
   expect(body).toContain(`data-api="/api/shared-boards/${token}"`); expect(body).toContain('data-guest="true"'); expect(body).toContain('data-can-edit="true"'); expect(body).toContain('data-can-chat="false"');
   expect(body).toContain('id="wb-guest"');
   for (const hidden of ['proj-public', 'Invoicing', 'wb-share-btn', '/projects/']) expect(body).not.toContain(hidden);
-  // Someone signed in is shown under their own name.
+  // A member of the project is sent to the full board, not the guest view.
   signedIn = true;
+  const member = await sharedPages.request(`/board/${token}`);
+  expect(member.status).toBe(302);
+  expect(member.headers.get('Location')).toBe(`/projects/proj-public/whiteboards/${b.id}`);
+  // Someone signed in from outside the project gets the guest view, under their own name.
+  who = 'stranger';
   expect(await (await sharedPages.request(`/board/${token}`)).text()).toContain('data-user="Priya"');
+  who = 'owner';
   await store.setShare(b.id, null);
   expect((await sharedPages.request(`/board/${token}`)).status).toBe(404);
 });

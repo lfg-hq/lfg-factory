@@ -64,7 +64,7 @@ export function WhiteboardPage({ project, board, user, canEdit, canChat, shareTo
     </div>
 
     <header class="wb-panel wb-top">
-      ${embed ? "" : project ? html`<button type="button" class="wb-crumb" id="wb-menu-btn" title="Go to another part of ${project.name}" aria-haspopup="true" aria-expanded="false" aria-controls="wb-menu"><i class="fas fa-bars"></i><span>${project.name}</span></button><span class="wb-crumb-sep" aria-hidden="true">/</span>` : html`<span class="wb-brand" title="LFG whiteboard">🚀</span>`}
+      ${embed ? "" : project ? html`<button type="button" class="wb-crumb" id="wb-menu-btn" title="Go to another part of ${project.name}" aria-haspopup="true" aria-expanded="false" aria-controls="wb-menu"><i class="fas fa-bars"></i><span>${project.name}</span></button><span class="wb-crumb-sep" aria-hidden="true">/</span>` : html`<a class="wb-brand" href="/" title="Go to LFG" aria-label="Go to LFG">🚀</a>`}
       <input id="wb-title" class="wb-title" value="${board.title}" maxlength="120" aria-label="Board name" autocomplete="off" />
       <span class="wb-status" id="wb-status" role="status">Saved</span>
       <span class="wb-live" title="Live: changes and cursors appear as they happen" aria-hidden="true"></span>
