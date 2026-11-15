@@ -16,6 +16,7 @@
 import { chromium } from "playwright-core";
 import { createInterface } from "node:readline";
 import { createCaptionAssembler } from "./meeting-captions.mjs";
+import { installCard, rocketDataUrl } from "./meeting-bot-card.mjs";
 
 const emit = (o) => process.stdout.write(JSON.stringify(o) + "\n");
 const log = (message) => emit({ type: "log", message: String(message).slice(0, 500) });
@@ -31,6 +32,7 @@ const SELECTORS = {
   dismissButton: /^(Got it|Dismiss|Continue without microphone and camera|Not now|Close)$/i,
   micOff: '[role="button"][aria-label*="Turn off microphone" i], button[aria-label*="Turn off microphone" i]',
   cameraOff: '[role="button"][aria-label*="Turn off camera" i], button[aria-label*="Turn off camera" i]',
+  cameraOn: '[role="button"][aria-label*="Turn on camera" i], button[aria-label*="Turn on camera" i]',
   micOn: '[role="button"][aria-label*="Turn on microphone" i], button[aria-label*="Turn on microphone" i]',
   leaveButton: '[aria-label="Leave call"], button[aria-label*="Leave call" i]',
   captionsOn: 'button[aria-label*="Turn on captions" i]',
@@ -111,12 +113,21 @@ function readChat() {
   return out;
 }
 
-const sent = new Set(); // our own chat messages come back through readChat; don't report them
+// Our own chat messages come back through readChat, sometimes more than once (Meet redraws a
+// message when the next one joins its group), so remember them for a while and compare them
+// loosely. A message whose "sender" is one of ours is ours too: that is a group of our own
+// messages misread, the first message taken for the header.
+const sent = new Map(); // normalised text -> when sent
+const norm = (t) => String(t).replace(/[*_`]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+const ours = (message) => {
+  for (const [text, at] of sent) if (Date.now() - at > 30 * 60_000) sent.delete(text);
+  return sent.has(norm(message.text)) || sent.has(norm(message.speaker));
+};
 async function sendChat(text) {
   if (!(await seen(SELECTORS.chatInput))) await clickIfThere(SELECTORS.chatButton, 4000);
   const input = page.locator(SELECTORS.chatInput).first();
   await input.waitFor({ state: "visible", timeout: 8000 });
-  sent.add(text.trim());
+  sent.set(norm(text), Date.now());
   await input.fill(text);
   await input.press("Enter");
 }
@@ -187,9 +198,9 @@ async function join() {
         : "Google Meet would not let the bot into this call. The link may be wrong, or the meeting may not allow guests.");
     }
     await clickIfThere(SELECTORS.dismissButton);
-    // The browser has a microphone and camera; the bot only listens, so join with both off.
+    // Join muted, with the camera on: the "camera" is the LFG card (meeting-bot-card.mjs).
     await clickIfThere(SELECTORS.micOff);
-    await clickIfThere(SELECTORS.cameraOff);
+    await clickIfThere(SELECTORS.cameraOn);
     const name = page.locator(SELECTORS.nameInput).first();
     const asGuest = await name.isVisible().catch(() => false);
     if (asGuest) await name.fill(cfg.botName).catch(() => {});
@@ -213,6 +224,7 @@ async function join() {
   }
   setStatus("in_call");
   await clickIfThere(SELECTORS.dismissButton);
+  await clickIfThere(SELECTORS.cameraOn); // in case Meet let the bot in with the camera off
   await turnOnCaptions();
   if (cfg.greeting) await sendChat(cfg.greeting).catch((e) => log("greeting not sent: " + e.message));
 }
@@ -229,7 +241,7 @@ async function listen() {
     if (Date.now() - lastChat > 2000) {
       lastChat = Date.now();
       for (const message of await page.evaluate(readChat).catch(() => [])) {
-        if (sent.delete(message.text.trim())) continue;
+        if (ours(message)) continue;
         emit({ type: "chat", ...message });
       }
       const others = await page.evaluate(() => document.querySelectorAll("[data-participant-id]").length).catch(() => 0);
@@ -275,6 +287,9 @@ try {
   await context.grantPermissions(["microphone", "camera"]).catch(() => {});
   // If the browser goes away (stopped, crashed, session expired) the call is over for the bot.
   browser.on("disconnected", () => { if (status !== "ended" && status !== "failed") { setStatus("ended", "The meeting browser stopped."); process.exit(0); } });
+  // Before any page script: the bot's camera is the LFG card.
+  const botName = cfg.botName || "LFG";
+  await context.addInitScript(installCard, { rocket: rocketDataUrl(), hint: `Say "Hey ${botName}" or type @${botName} in chat` });
   page = await context.newPage();
   await page.setViewportSize({ width: 1280, height: 800 }).catch(() => {});
   page.setDefaultTimeout(8000);
