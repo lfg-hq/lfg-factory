@@ -79,6 +79,11 @@ export async function releaseSeat(seatId: string, holder: string): Promise<void>
     .where(and(eq(meetingBotSeats.id, seatId), eq(meetingBotSeats.holder, holder)));
 }
 
+/** Free whatever seat `holder` claimed (a call that ended while this server was down). */
+export async function releaseHeldBy(holder: string): Promise<void> {
+  await db.update(meetingBotSeats).set({ holder: null, leaseUntil: null }).where(eq(meetingBotSeats.holder, holder));
+}
+
 /** Keep a claim alive until the returned function is called, which also releases it. */
 export function holdSeat(seatId: string, holder: string): () => Promise<void> {
   const timer = setInterval(() => {

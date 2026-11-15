@@ -290,6 +290,8 @@ try {
   // Before any page script: the bot's camera is the LFG card.
   const botName = cfg.botName || "LFG";
   await context.addInitScript(installCard, { rocket: rocketDataUrl(), hint: `Say "Hey ${botName}" or type @${botName} in chat` });
+  // A tab left from a call the server lost (it restarted mid-call) would keep the bot in that call.
+  for (const old of context.pages()) if (/meet\.google\.com/.test(old.url())) await old.close().catch(() => {});
   page = await context.newPage();
   await page.setViewportSize({ width: 1280, height: 800 }).catch(() => {});
   page.setDefaultTimeout(8000);
@@ -300,7 +302,9 @@ try {
   outcome = { status: status === "in_call" ? "ended" : "failed", detail: error.message.split("\n")[0].slice(0, 300) };
 } finally {
   setStatus(outcome.status, outcome.detail);
-  await page?.close().catch(() => {});
-  await browser?.close().catch(() => {});
+  // The status is out; closing up must not hold the worker (Chrome can be slow to shut down).
+  const capped = (work) => Promise.race([work.catch(() => {}), sleep(3000)]);
+  await capped(page ? page.close() : Promise.resolve());
+  await capped(browser ? browser.close() : Promise.resolve());
 }
 process.exit(0);

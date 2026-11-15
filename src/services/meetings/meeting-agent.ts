@@ -20,6 +20,8 @@ import { meetings, meetingSegments } from "../../db/schema/meetings.ts";
 import { buildS3Key, isS3Enabled, uploadBinary } from "../s3.ts";
 import { MEETING_CONTEXT_ROLE, announceAgentMessage, runQueuedChatTurn } from "../build-summary-turn.ts";
 import * as bot from "./meet-bot.ts";
+import { releaseHeldBy } from "./bot-seats.ts";
+import { stopWorkspace } from "../sandbox/mags-backend.ts";
 import type { MeetingStatus } from "./meet-bot.ts";
 import { chatChunks, meetLink, platformOf, requestAfterWakePhrase, spokenText } from "./wake.ts";
 import { projects } from "../../db/schema/projects.ts";
@@ -49,6 +51,8 @@ const liveFor = (meetingId: string): Live => live.get(meetingId) ?? live.set(mee
 /** Replaceable in tests: how the agent reaches the call and the chat agent. */
 export const deps = {
   startBot: bot.startBot, stopBot: bot.stopBot, sendChat: bot.sendChat, screenshot: bot.screenshot, speak: bot.speak,
+  /** Stop a meeting browser this process no longer drives (by its Mags session id). */
+  stopBrowser: stopWorkspace,
   runTurn: runQueuedChatTurn, announce: announceAgentMessage,
   /** The OpenAI key spoken replies may use for this meeting, or null when they are off or not allowed. */
   voiceKey: voiceKeyFor,
@@ -323,12 +327,15 @@ async function recap(meeting: Meeting): Promise<void> {
 
 /**
  * On startup: bots live in this process, so any call still marked live has lost its bot.
- * Mark those ended (which also writes their recap from the stored transcript).
+ * Mark those ended (which also writes their recap from the stored transcript), stop their
+ * meeting browser, which would otherwise stay in the call, and free their seat.
  */
 export async function endOrphanedMeetings(): Promise<void> {
   const rows = await db.select().from(meetings).where(inArray(meetings.status, ACTIVE)).limit(100);
   for (const meeting of rows) {
     if (meeting.botId && bot.botRunning(meeting.botId)) continue;
     await setStatus(meeting.id, "ended", "LFG restarted during the call.");
+    if (meeting.botId) await deps.stopBrowser(meeting.botId).catch((error) => console.warn("[meeting] could not stop an orphaned bot:", (error as Error).message));
+    await releaseHeldBy(meeting.id).catch(() => {});
   }
 }

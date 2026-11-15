@@ -290,3 +290,15 @@ test('a server restart ends calls whose bot is gone, so nothing stays "in the ca
   expect(after.status).toBe('ended');
   expect(after.statusDetail).toBe('LFG restarted during the call.');
 });
+
+test('after a restart, a call that lost its bot is ended and its browser is stopped', async () => {
+  const meeting = await join();
+  const stopped: string[] = [];
+  const stopBrowser = agent.deps.stopBrowser;
+  agent.deps.stopBrowser = async (id: string) => { stopped.push(id); };
+  try {
+    await agent.endOrphanedMeetings();
+  } finally { agent.deps.stopBrowser = stopBrowser; }
+  expect(stopped).toContain(meeting.botId!);
+  expect((await agent.meetingById(meeting.id))!.status).toBe('ended');
+});
