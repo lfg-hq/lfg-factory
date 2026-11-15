@@ -181,7 +181,7 @@ export function MeetingsPage({ project, user, setupProblem, botName = "LFG" }: P
   <div class="meetings-page" id="meetings-page" data-project="${project.projectId}" data-bot="${botName}">
     <div class="meetings-inner">
       <h1>Meetings</h1>
-      <p class="meetings-lead">Add ${botName} to a Google Meet call and it joins as a participant, takes notes on what is said and can look at a shared screen. Say <b>"Hey agent, create a PRD on what we just discussed"</b>, or type <b>@${botName} how many tickets are pending?</b> in the meeting chat, and it does the work and answers in the meeting chat. Everything it does lands in a chat for that meeting, with a recap when the call ends.</p>
+      <p class="meetings-lead">Add ${botName} to a Google Meet call and it joins as a participant, takes notes on what is said and can look at a shared screen. Say <b>"Hey agent, create a PRD on what we just discussed"</b>, or type <b>@${botName} how many tickets are pending?</b> in the meeting chat, and it does the work and answers in the meeting chat. Everything it does lands in a chat for that meeting, with a recap when the call ends. It joins from LFG's own Google account, so someone in the call admits it; if your company's Google Workspace blocks people from outside it, allow external participants for the meeting first.</p>
       ${setupProblem ? html`<div class="meeting-setup" role="status">${setupProblem}</div>` : html`
       <form class="meeting-add" id="meeting-add">
         <input class="input" id="meeting-url" type="url" required placeholder="Paste a Google Meet link" aria-label="Meeting link" autocomplete="off" />

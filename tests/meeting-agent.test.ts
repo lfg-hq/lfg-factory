@@ -118,11 +118,16 @@ test('when the bot cannot be started, the person is told and no call or empty ch
   expect(count()).toEqual(before);
 });
 
-test('a second call while the bot is busy is refused with the reason', async () => {
+test('when every bot seat is in a call, the call is refused with the pool\'s reason', async () => {
   const { BotBusyError } = await import('../src/services/meetings/meet-bot.ts');
   const startBot = agent.deps.startBot;
-  agent.deps.startBot = async () => { throw new BotBusyError(); };
-  try { await expect(join()).rejects.toThrow('only be in one at a time'); } finally { agent.deps.startBot = startBot; }
+  agent.deps.startBot = async () => { throw new BotBusyError("All 3 of LFG's meeting bots are in calls right now. Try again in a few minutes."); };
+  try { await expect(join()).rejects.toThrow('All 3 of'); } finally { agent.deps.startBot = startBot; }
+});
+
+test('each call claims its bot seat under its own meeting', async () => {
+  const meeting = await join();
+  expect(bots.at(-1).holder).toBe(meeting.id);
 });
 
 test('a spoken request runs the chat agent with the discussion so far, and the answer goes back to the call', async () => {

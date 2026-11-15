@@ -47,3 +47,27 @@ export const meetingSegments = sqliteTable(
   },
   (t) => [index("meeting_segment_meeting_idx").on(t.meetingId, t.seq)]
 );
+
+// ── Meeting bot seats ────────────────────────────────────────────────
+// The pool of browsers the meeting bot joins calls from. A seat is one Mags workspace
+// holding one Chrome profile, signed in once to one Google account (`account`). One seat
+// is in one call at a time, so the pool's size is how many calls LFG can be in at once.
+// A seat is taken by writing `holder` (a meeting id, or "sign-in:<user id>") with a lease
+// that the holding server renews while it works; a lease that ran out is free again, so a
+// crashed server never strands a seat.
+// state: ready | needs_sign_in | disabled.
+export const meetingBotSeats = sqliteTable(
+  "meeting_bot_seat",
+  {
+    id: text("id").primaryKey().$defaultFn(() => crypto.randomUUID()),
+    workspace: text("workspace").notNull().unique(),
+    account: text("account").notNull().default(""),
+    state: text("state").notNull().default("needs_sign_in"),
+    holder: text("holder"),
+    leaseUntil: integer("lease_until", { mode: "timestamp" }),
+    lastUsedAt: integer("last_used_at", { mode: "timestamp" }),
+    lastError: text("last_error"),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => [index("meeting_bot_seat_state_idx").on(t.state)]
+);

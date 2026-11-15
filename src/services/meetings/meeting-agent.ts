@@ -6,6 +6,7 @@
  * posted in the meeting chat. When the call ends the agent writes a recap.
  *
  * The bot itself is a browser this server runs (see meet-bot.ts): no outside meeting service.
+ * Calls run in parallel, one per free seat of the bot's browser pool (bot-seats.ts).
  * Requests being assembled and the per-meeting work queue live in memory: a server restart
  * mid-call takes the bot out of the call and loses a request in flight, not the transcript.
  */
@@ -101,7 +102,7 @@ export async function startMeeting(opts: { userId: string; projectId: string | n
   const name = env.MEETING_BOT_NAME || "LFG";
   try {
     const started = await deps.startBot({
-      meetingUrl, botName: name,
+      meetingUrl, botName: name, holder: meetingId,
       greeting: `${name} joined and is taking notes on this call${opts.projectName ? ` for ${opts.projectName}` : ""}. Say "Hey agent, ..." or type "@${name} ..." to ask for something.`,
     }, {
       onSaid: (event) => { void handleMeetingEvent(meetingId, event).catch((error) => console.error("[meeting] event failed:", (error as Error).message)); },
@@ -115,7 +116,7 @@ export async function startMeeting(opts: { userId: string; projectId: string | n
     await db.delete(meetings).where(eq(meetings.id, meetingId));
     await db.delete(conversations).where(eq(conversations.id, conv!.id));
     throw new MeetingError(error instanceof bot.BotBusyError
-      ? "LFG is in another call right now, and it can only be in one at a time. Try again when that call ends."
+      ? error.message
       : "LFG could not start its meeting browser. Try again in a moment.");
   }
 }

@@ -1,12 +1,13 @@
 /**
- * The LFG meeting bot: joins a Google Meet call as a guest in a remote Chromium (Mags) and
- * reports what is said. Node owns the browser connection because Playwright's
+ * The LFG meeting bot: joins a Google Meet call from a remote Chrome (Mags), signed in to the
+ * bot's Google account (or as a guest when the seat has none), and reports what is said. Node owns the browser connection because Playwright's
  * connectOverCDP hangs under Bun; the server talks to this process in JSON lines.
  *
  *   stdin, first line   { wsEndpoint | localChrome, meetingUrl, botName, greeting }
  *   stdin, afterwards   { cmd: "chat", text } | { cmd: "speak", mp3Base64 } | { cmd: "screenshot", id } | { cmd: "leave" }
  *   stdout              { type: "status", status, detail } | { type: "speech" | "chat", speaker, text }
  *                       | { type: "screenshot", id, presenting, jpegBase64 } | { type: "log", message }
+ *                       | { type: "account", signedIn }   (once, from the pre-join screen)
  *
  * Meet's page is not an API and changes without notice. Everything that depends on its
  * markup is in the SELECTORS and page-reading functions below, matched by accessible
@@ -37,6 +38,8 @@ const SELECTORS = {
   chatInput: 'textarea[aria-label*="Send a message" i]',
 };
 const CANNOT_JOIN = /You can't join this video call|Check your meeting code|Invalid video call name|couldn.t find the meeting|not allowed to join|This meeting is locked/i;
+// Why Meet refused, when the host's organisation only admits its own people.
+const ORG_ONLY = /only (people|users) (in|from|at) |Only people in .* can join|organi[sz]ation.*(doesn.t|does not) allow|outside (your|their|the) organi[sz]ation/i;
 const DENIED = /denied your request|No one responded to your request|You can't join this video call|Your request to join was declined/i;
 const CALL_OVER = /You've been removed from the meeting|You left the meeting|The meeting has ended|The call ended|Return to home screen|Returning to home screen/i;
 const WAIT_TO_BE_ADMITTED_MS = Number(cfg.admitTimeoutMs ?? 10 * 60_000);
@@ -167,17 +170,35 @@ async function join() {
   await page.goto(cfg.meetingUrl, { waitUntil: "domcontentloaded", timeout: 45_000 });
   const deadline = Date.now() + 90_000;
   let asked = false;
+  let reportedAccount = false;
   while (!asked) {
     if (Date.now() > deadline) { await evidence("Never reached the join button"); throw new Error("Google Meet did not show a way to join."); }
-    if (/accounts\.google\.com/.test(page.url())) throw new Error("This meeting only lets signed-in Google accounts join, and the bot joins as a guest.");
+    if (/accounts\.google\.com/.test(page.url())) {
+      throw new Error(cfg.expectSignedIn
+        ? "Google asked the bot to sign in again before joining. An LFG admin needs to sign this meeting bot in again."
+        : "This meeting only lets signed-in Google accounts join, and this meeting bot is not signed in. An LFG admin can sign it in under Meeting bots.");
+    }
     const text = await bodyText();
-    if (CANNOT_JOIN.test(text)) { await evidence("Meet refused the bot"); throw new Error("Google Meet would not let the bot into this call. The link may be wrong, or the meeting may not allow guests."); }
+    // Only once Meet has refused: lobby text can mention other organisations harmlessly.
+    if (CANNOT_JOIN.test(text)) {
+      await evidence("Meet refused the bot");
+      throw new Error(ORG_ONLY.test(text) || cfg.expectSignedIn
+        ? "This meeting's Google Workspace does not let people from outside the organisation join, so the bot can't get in. The meeting's admin can allow external participants, or the host can invite the bot's account."
+        : "Google Meet would not let the bot into this call. The link may be wrong, or the meeting may not allow guests.");
+    }
     await clickIfThere(SELECTORS.dismissButton);
     // The browser has a microphone and camera; the bot only listens, so join with both off.
     await clickIfThere(SELECTORS.micOff);
     await clickIfThere(SELECTORS.cameraOff);
     const name = page.locator(SELECTORS.nameInput).first();
-    if (await name.isVisible().catch(() => false)) await name.fill(cfg.botName).catch(() => {});
+    const asGuest = await name.isVisible().catch(() => false);
+    if (asGuest) await name.fill(cfg.botName).catch(() => {});
+    // A guest is asked for a name; a signed-in account is not. Reported once, so the server
+    // can tell when Google has signed a seat out.
+    if (!reportedAccount && (asGuest || (await page.getByRole("button", { name: SELECTORS.joinButton }).first().isVisible().catch(() => false)))) {
+      reportedAccount = true;
+      emit({ type: "account", signedIn: !asGuest });
+    }
     asked = await clickIfThere(SELECTORS.joinButton, 3000);
     if (!asked && (await seen(SELECTORS.leaveButton))) break; // let straight in
     if (!asked) await sleep(200);

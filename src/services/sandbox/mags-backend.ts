@@ -377,14 +377,22 @@ export async function startBrowserSession(opts?: {
   const requestId: string = started.request_id;
   try {
     let subdomain = "";
+    let access = "";
     while (!subdomain) {
-      const st = await client.status(requestId);
+      const st = await client.status(requestId) as { status?: string; subdomain?: string; error_message?: string; debug_ws_url?: string };
       if (st.status === "error") throw new Error(`Browser session failed: ${st.error_message || "unknown error"}`);
-      if (st.status === "running" && st.subdomain) { subdomain = st.subdomain; break; }
+      if (st.status === "running" && st.subdomain) {
+        subdomain = st.subdomain;
+        // A meeting browser is served only under its session secret, which Mags reports as
+        // the path of debug_ws_url ("/t/<secret>"). The path is all we take: the host may be
+        // another of Mags's domains. A URL holding it is a credential, so it is never logged.
+        access = accessPathOf(st.debug_ws_url);
+        break;
+      }
       if (Date.now() > deadline) throw new Error("Mags browser session did not start in time");
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
-    const cdpHttpUrl = `https://${subdomain}.${appDomain}`;
+    const cdpHttpUrl = `https://${subdomain}.${appDomain}${access}`;
     // Chromium reports its socket as ws://localhost/devtools/browser/<id>; only the path is
     // usable from here. Retried because the relay takes a moment to start serving.
     let lastError = "";
@@ -393,7 +401,7 @@ export async function startBrowserSession(opts?: {
         const response = await fetch(`${cdpHttpUrl}/json/version`, { signal: AbortSignal.timeout(10_000) });
         const version = (await response.json()) as { webSocketDebuggerUrl?: string };
         if (version.webSocketDebuggerUrl) {
-          return { requestId, wsEndpoint: `wss://${subdomain}.${appDomain}${new URL(version.webSocketDebuggerUrl).pathname}`, cdpHttpUrl };
+          return { requestId, wsEndpoint: `wss://${subdomain}.${appDomain}${access}${new URL(version.webSocketDebuggerUrl).pathname}`, cdpHttpUrl };
         }
         lastError = `no debugger address (HTTP ${response.status})`;
       } catch (error) {
@@ -401,10 +409,21 @@ export async function startBrowserSession(opts?: {
       }
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
-    throw new Error(`Mags browser session was not reachable at ${cdpHttpUrl}: ${lastError}`);
+    throw new Error(`Mags browser session ${subdomain} was not reachable: ${lastError}`);
   } catch (error) {
     await client.stop(requestId).catch(() => {}); // don't leave a browser VM running that nobody can use
     throw error;
+  }
+}
+
+/** "/t/<secret>" from a Mags debug_ws_url, or "" when the session has no secret path. */
+export function accessPathOf(debugWsUrl: string | undefined): string {
+  if (!debugWsUrl) return "";
+  try {
+    const path = new URL(debugWsUrl).pathname.replace(/\/+$/, "");
+    return /^\/t\/[A-Za-z0-9_-]{32,128}$/.test(path) ? path : "";
+  } catch {
+    return "";
   }
 }
 

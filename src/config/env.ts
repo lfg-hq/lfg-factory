@@ -126,6 +126,12 @@ const envSchema = z.object({
   // Meeting agent: the LFG bot that joins Google Meet calls. It runs a browser on the sandbox
   // backend above (Mags needs MAGS_API_TOKEN), so there is nothing else to configure.
   MEETING_BOT_NAME: z.string().optional().default("LFG"),
+  // The Google account new bot seats are meant for: only the form's starting value on the
+  // Meeting bots page; a seat's account is read from its browser once it is signed in.
+  MEETING_BOT_ACCOUNT: z.string().optional().default("agent@lfg.run"),
+  // Who may manage the meeting bot's seats (/admin/meeting-bots), comma separated, on top of
+  // VENTURE_ADMIN_EMAILS. Verified emails only.
+  ADMIN_EMAILS: z.string().optional().default(""),
 
   // Cloudflare Turnstile
   TURNSTILE_SITE_KEY: z.string().optional().default(""),
