@@ -122,7 +122,7 @@ export function createGitProvider(config: GitProviderConfig, fetcher: typeof fet
       if (!/^[a-f0-9]{40,64}$/.test(sha || '')) throw new GitProviderError('PROVIDER_INVALID_REVISION');
       return sha as string;
     },
-    reviewChanges: async (baseSha: string, headSha: string) => {
+    reviewChanges: async (baseSha: string, headSha: string, opts: { context?: boolean } = {}) => {
       const { body } = await get(gl ? `/repository/compare?from=${baseSha}&to=${headSha}&straight=false` : `/compare/${baseSha}...${headSha}`);
       const files = gl ? body.diffs : body.files;
       if (!Array.isArray(files) || files.length >= (gl ? 100 : 300) || body.compare_timeout || body.compare_same_ref || body.overflow) throw new GitProviderError('DIFF_INCOMPLETE', 422);
@@ -141,7 +141,7 @@ export function createGitProvider(config: GitProviderConfig, fetcher: typeof fet
         if (secret || !patch || patchIncomplete || f.collapsed || f.too_large || containsSecret(patch)) { excluded.push({ file, reason: secret ? 'secret file' : !patch ? 'binary or unavailable patch' : 'secret-bearing or incomplete patch' }); continue; }
         if ((size += patch.length) > 120_000) throw new GitProviderError('DIFF_TOO_LARGE', 422);
         const item: { file: string; patch: string; context?: string; contextOmittedReason?: string } = { file, patch, contextOmittedReason: 'Context file-count bound or deleted file; patch only.' };
-        if (included.length < 6 && !(gl ? f.deleted_file : f.status === 'removed')) {
+        if (opts.context !== false && included.length < 6 && !(gl ? f.deleted_file : f.status === 'removed')) {
           const { body: content } = await get(gl ? `/repository/files/${encodeURIComponent(file)}?ref=${headSha}` : `/contents/${file.split('/').map(encodeURIComponent).join('/')}?ref=${headSha}`);
           const decoded = content.encoding === 'base64' && content.size <= 20_000 ? Buffer.from(content.content || '', 'base64').toString('utf8') : '';
           if (decoded && !decoded.includes('\u0000') && !containsSecret(decoded)) { item.context = decoded; delete item.contextOmittedReason; }
