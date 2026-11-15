@@ -13,8 +13,32 @@
 import { chromium } from "playwright-core";
 
 const SIGN_IN = "https://accounts.google.com/ServiceLogin?continue=" + encodeURIComponent("https://meet.google.com/");
-// The account chooser's own list: the signed-in accounts as JSON, empty when signed out.
-const LIST_ACCOUNTS = "https://accounts.google.com/ListAccounts?gpsia=1&source=ChromiumBrowser&json=standard";
+const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
+
+/**
+ * The signed-in account, read where Google shows it: Meet's account button is labelled
+ * "Google Account: <name> (<email>)". Google's account page is the fallback. (The account
+ * chooser's ListAccounts endpoint stopped answering requests from a plain page: HTTP 400.)
+ */
+async function signedInEmail(context) {
+  const page = await context.newPage();
+  try {
+    await page.goto("https://meet.google.com/", { waitUntil: "domcontentloaded", timeout: 30_000 });
+    const button = page.locator('[aria-label^="Google Account"]').first();
+    if (await button.waitFor({ state: "attached", timeout: 12_000 }).then(() => true, () => false)) {
+      const found = ((await button.getAttribute("aria-label")) || "").match(EMAIL);
+      if (found) return found[0].toLowerCase();
+    }
+    if (/accounts\.google\.com/.test(page.url())) return null; // sent to sign in: not signed in
+    await page.goto("https://myaccount.google.com/", { waitUntil: "domcontentloaded", timeout: 30_000 });
+    if (/accounts\.google\.com/.test(page.url())) return null;
+    const labels = await page.evaluate(() => [...document.querySelectorAll("[aria-label]")].map((e) => e.getAttribute("aria-label")).join("\n"));
+    const found = labels.match(EMAIL);
+    return found ? found[0].toLowerCase() : null;
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
 
 const out = (o) => process.stdout.write(JSON.stringify(o) + "\n");
 let input = "";
@@ -31,15 +55,7 @@ try {
     await page.goto(SIGN_IN, { waitUntil: "domcontentloaded", timeout: 45_000 });
     out({ ok: true });
   } else if (action === "whoami") {
-    const page = await context.newPage();
-    try {
-      await page.goto(LIST_ACCOUNTS, { waitUntil: "domcontentloaded", timeout: 30_000 });
-      const text = await page.evaluate(() => document.body?.innerText ?? "");
-      const email = (text.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/) || [null])[0];
-      out({ ok: true, email: email ? email.toLowerCase() : null });
-    } finally {
-      await page.close().catch(() => {});
-    }
+    out({ ok: true, email: await signedInEmail(context) });
   } else {
     out({ ok: false, error: `unknown action ${action}` });
   }
