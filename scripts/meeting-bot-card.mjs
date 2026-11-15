@@ -21,35 +21,44 @@ export function installCard(opts) {
   const W = 960, H = 540, FPS = 5;
   const DEVICE = { deviceId: "lfg-card", groupId: "lfg-card", kind: "videoinput", label: "LFG" };
 
-  const canvas = document.createElement("canvas");
-  canvas.width = W;
-  canvas.height = H;
-  const ctx = canvas.getContext("2d");
-  const rocket = new Image();
-  rocket.src = opts.rocket;
+  // Nothing happens until Meet asks for the camera. Loading an image while the page is still
+  // loading stalled Meet (it never finished loading), so the rocket is decoded straight from
+  // its bytes, and only then.
+  let canvas = null;
+  function start() {
+    if (canvas) return canvas;
+    canvas = document.createElement("canvas");
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext("2d");
+    let rocket = null;
+    const bytes = Uint8Array.from(atob(opts.rocket.split(",")[1] || ""), (c) => c.charCodeAt(0));
+    createImageBitmap(new Blob([bytes], { type: "image/png" })).then((bitmap) => { rocket = bitmap; }, () => {});
 
-  // Plain and quiet, in the light violet of LFG's site: the rocket, and how to talk to it.
-  function draw() {
-    ctx.fillStyle = "#ede9fe";
-    ctx.fillRect(0, 0, W, H);
-    // Everything sits in the middle, so it survives Meet cropping the tile.
-    const cx = W / 2, cy = H / 2 - 22;
-    if (rocket.complete && rocket.naturalWidth) {
-      const size = 250;
-      ctx.drawImage(rocket, cx - size / 2, cy - size / 2, size, size);
-    }
-    ctx.textAlign = "center";
-    ctx.textBaseline = "alphabetic";
-    ctx.fillStyle = "#4c1d95";
-    ctx.font = "500 24px Inter, 'Segoe UI', Roboto, Arial, sans-serif";
-    ctx.fillText(opts.hint, cx, cy + 165);
+    // Plain and quiet, in the light violet of LFG's site: the rocket, and how to talk to it.
+    const draw = () => {
+      ctx.fillStyle = "#ede9fe";
+      ctx.fillRect(0, 0, W, H);
+      // Everything sits in the middle, so it survives Meet cropping the tile.
+      const cx = W / 2, cy = H / 2 - 22;
+      if (rocket) {
+        const size = 250;
+        ctx.drawImage(rocket, cx - size / 2, cy - size / 2, size, size);
+      }
+      ctx.textAlign = "center";
+      ctx.textBaseline = "alphabetic";
+      ctx.fillStyle = "#4c1d95";
+      ctx.font = "500 24px Inter, 'Segoe UI', Roboto, Arial, sans-serif";
+      ctx.fillText(opts.hint, cx, cy + 165);
+    };
+    // A timer, not requestAnimationFrame: the bot's tab is never in front, and the video
+    // track only carries frames while the canvas is being painted.
+    setInterval(draw, 1000 / FPS);
+    draw();
+    return canvas;
   }
-  // A timer, not requestAnimationFrame: the bot's tab is never in front, and the video
-  // track only carries frames while the canvas is being painted.
-  setInterval(draw, 1000 / FPS);
-  draw();
 
-  const cardTrack = () => canvas.captureStream(FPS).getVideoTracks()[0];
+  const cardTrack = () => start().captureStream(FPS).getVideoTracks()[0];
   const wantsCard = (video) => !!video;
 
   const getUserMedia = md.getUserMedia.bind(md);
@@ -66,5 +75,5 @@ export function installCard(opts) {
     if (devices.some((d) => d.kind === "videoinput" && d.deviceId)) return devices;
     return [...devices, { ...DEVICE, toJSON: () => DEVICE }];
   };
-  window.__lfgCard = { canvas };
+  window.__lfgCard = { start };
 }
