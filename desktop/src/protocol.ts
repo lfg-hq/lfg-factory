@@ -10,7 +10,24 @@
  * RUNNER_PROTOCOL_VERSION on any incompatible change.
  */
 
-export const RUNNER_PROTOCOL_VERSION = 1;
+export const RUNNER_PROTOCOL_VERSION = 2;
+
+/** The coding agents a computer can run, headless. */
+export const AGENT_KINDS = ["claude", "codex", "copilot"] as const;
+export type AgentKind = (typeof AGENT_KINDS)[number];
+export const AGENT_LABELS: Record<AgentKind, string> = { claude: "Claude Code", codex: "OpenAI Codex", copilot: "GitHub Copilot" };
+export const isAgentKind = (v: unknown): v is AgentKind => typeof v === "string" && (AGENT_KINDS as readonly string[]).includes(v);
+
+/**
+ * What any agent CLI did, in one shape (each CLI's own output format is translated on the
+ * computer, see desktop/src/agents.ts).
+ */
+export type AgentEvent =
+  | { type: "session"; id: string }
+  | { type: "text"; text: string }
+  | { type: "tool_start"; id: string; name: string; input?: Record<string, unknown>; summary?: string }
+  | { type: "tool_result"; id: string; output: string; isError?: boolean }
+  | { type: "result"; text?: string; isError?: boolean; usage?: { inputTokens?: number; outputTokens?: number } };
 
 export interface ClaudeTaskPayload {
   protocol: number;
@@ -25,16 +42,33 @@ export interface ClaudeTaskPayload {
   startFrom: string[];
   prompt: string;
   commitMessage: string;
+  /** Which agent runs it. Absent (protocol 1): Claude Code. */
+  agent?: AgentKind;
+  /** Continue this agent session (a follow-up on the same ticket). */
+  sessionId?: string;
   /** Suggested Claude Code tools. The runner intersects these with its own allow-list. */
   allowedTools?: string[];
   maxTurns?: number;
 }
 
-export interface RunnerJobOffer {
-  id: string;
-  type: "claude_task";
-  payload: ClaudeTaskPayload;
+/** One chat turn answered by the agent on the person's computer (no repo, no git). */
+export interface ChatTurnPayload {
+  protocol: number;
+  agent: AgentKind;
+  conversationId: string;
+  /** The person's message, plus the conversation so far when there's no session to resume. */
+  prompt: string;
+  /** LFG's instructions for the assistant (the chat's system prompt). */
+  instructions: string;
+  /** Continue this agent session (later turns of the same conversation). */
+  sessionId?: string;
+  /** LFG's MCP server for this turn: the agent reads and writes LFG's data through it. */
+  mcp: { url: string; token: string };
 }
+
+export type RunnerJobOffer =
+  | { id: string; type: "claude_task"; payload: ClaudeTaskPayload }
+  | { id: string; type: "chat_turn"; payload: ChatTurnPayload };
 
 export type ServerToRunner =
   | { type: "welcome"; deviceId: string; deviceName: string; protocol: number }
@@ -44,12 +78,16 @@ export type ServerToRunner =
   | { type: "error"; message: string };
 
 export type RunnerToServer =
-  | { type: "hello"; appVersion?: string; platform?: string; claudeVersion?: string | null; activeJobIds?: string[] }
+  | { type: "hello"; appVersion?: string; platform?: string; claudeVersion?: string | null; activeJobIds?: string[];
+      /** Agents installed on this computer, with their versions (protocol 2). */
+      agents?: Array<{ kind: AgentKind; version: string }> }
   | { type: "job.accepted"; jobId: string }
   | { type: "job.rejected"; jobId: string; reason?: string }
   /** A short human status line from the runner itself (cloning, pushing…). */
   | { type: "job.progress"; jobId: string; text: string }
-  /** One Claude Code `--output-format stream-json` event, passed through as-is. */
+  /** One Claude Code `--output-format stream-json` event, passed through as-is (protocol 1). */
   | { type: "job.agent_event"; jobId: string; event: Record<string, unknown> }
-  | { type: "job.finished"; jobId: string; ok: boolean; branch?: string; commitSha?: string | null; summary?: string; error?: string }
+  /** One normalized agent event, from any agent (protocol 2). */
+  | { type: "job.event"; jobId: string; event: AgentEvent }
+  | { type: "job.finished"; jobId: string; ok: boolean; branch?: string; commitSha?: string | null; summary?: string; error?: string; sessionId?: string }
   | { type: "pong" };

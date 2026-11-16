@@ -17,6 +17,8 @@ export const runnerDevices = sqliteTable(
     platform: text("platform"),
     appVersion: text("app_version"),
     claudeVersion: text("claude_version"),
+    /** JSON: [{ kind, version }] of the agents installed on this computer (protocol 2). */
+    agents: text("agents"),
     lastSeenAt: integer("last_seen_at", { mode: "timestamp" }),
     revokedAt: integer("revoked_at", { mode: "timestamp" }),
     createdAt: integer("created_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
@@ -35,10 +37,15 @@ export const runnerJobs = sqliteTable(
     deviceId: text("device_id"),
     projectId: text("project_id").notNull(),
     ticketId: text("ticket_id"),
+    /** For a chat_turn job: the conversation it answers. */
+    conversationId: text("conversation_id"),
     type: text("type").notNull(),
     payload: text("payload").notNull(),
     status: text("status").notNull().default("queued"),
     branch: text("branch"),
+    agent: text("agent"),
+    /** The agent's own session id, so a follow-up on the ticket can continue it. */
+    agentSession: text("agent_session"),
     commitSha: text("commit_sha"),
     summary: text("summary"),
     error: text("error"),

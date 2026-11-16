@@ -37,6 +37,7 @@ import claudeAuthApi from "./routes/api/claude-auth.ts";
 import openAICodexAuthApi from "./routes/api/openai-codex-auth.ts";
 import runnerApi from "./routes/api/runner.ts";
 import desktopRoutes from "./routes/desktop.ts";
+import mcpServer from "./routes/mcp-server.ts";
 import { authenticateRunnerToken, runnerOpened, runnerClosed, runnerMessage, type RunnerConn } from "./services/runner/hub.ts";
 import composioApi from "./routes/api/composio.ts";
 import invitationsApi from "./routes/api/invitations.ts";
@@ -232,6 +233,7 @@ app.use("*", async (c, next) => {
 app.route("/", authRoutes);
 app.route("/", ventureAuth);
 app.route("/", desktopRoutes);
+app.route("/", mcpServer);
 app.route("/", landing);
 app.route("/", venturePages);
 app.route("/api/venture", ventureApi);

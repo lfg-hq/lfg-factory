@@ -5,7 +5,9 @@
   const connectBtn = document.getElementById("runner-connect-btn");
   const toggle = document.getElementById("runner-enabled");
   const body = document.getElementById("runner-body");
-  if (!list || !pairing || !connectBtn || !toggle || !body) return;
+  const agentSelect = document.getElementById("runner-agent");
+  const agentNote = document.getElementById("runner-agent-note");
+  if (!list || !pairing || !connectBtn || !toggle || !body || !agentSelect || !agentNote) return;
   let enabled = false;
 
   function el(tag, style, text) {
@@ -113,21 +115,52 @@
     }
   });
 
-  function show(on) {
-    enabled = on;
-    toggle.checked = on;
-    body.hidden = !on;
-    if (on) load();
+  function show(settings) {
+    enabled = !!settings.enabled;
+    toggle.checked = enabled;
+    body.hidden = !enabled;
+    renderAgents(settings);
+    if (enabled) load();
   }
+
+  // Agent choice: every agent LFG supports, marked with whether a computer of yours has it.
+  function renderAgents(settings) {
+    const installed = new Map((settings.agents || []).map((a) => [a.kind, a]));
+    agentSelect.replaceChildren(...(settings.agentChoices || []).map((choice) => {
+      const option = document.createElement("option");
+      const found = installed.get(choice.kind);
+      option.value = choice.kind;
+      option.textContent = choice.label + (found ? "" : " (not found on your computers)");
+      option.selected = choice.kind === settings.agent;
+      return option;
+    }));
+    const current = installed.get(settings.agent);
+    agentNote.textContent = current
+      ? current.label + " " + current.version.replace(/\s*\(.*\)$/, "") + " on " + current.device + ", with your own sign-in."
+      : (settings.agents || []).length
+        ? "Not found on your computers yet. Install it and run it once to sign in, then reopen LFG Desktop."
+        : "Open LFG Desktop on your computer to see which agents it has.";
+  }
+
+  async function save(change) {
+    const r = await fetch("/api/runner/settings", { method: "PUT", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify(change) });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || "HTTP " + r.status);
+    show(await r.json());
+  }
+
+  agentSelect.addEventListener("change", async () => {
+    agentSelect.disabled = true;
+    try { await save({ agent: agentSelect.value }); }
+    catch (e) { window.alert("Couldn't change the agent: " + (e.message || e)); }
+    finally { agentSelect.disabled = false; }
+  });
 
   // The opt-in switch: off hides "Build on my computer" on tickets and refuses local builds.
   toggle.addEventListener("change", async () => {
     const want = toggle.checked;
     toggle.disabled = true;
     try {
-      const r = await fetch("/api/runner/settings", { method: "PUT", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: want }) });
-      if (!r.ok) throw new Error("HTTP " + r.status);
-      show((await r.json()).enabled);
+      await save({ enabled: want });
     } catch (e) {
       toggle.checked = !want;
       window.alert("Couldn't change this setting: " + (e.message || e));
@@ -138,7 +171,7 @@
 
   fetch("/api/runner/settings", { credentials: "same-origin" })
     .then((r) => (r.ok ? r.json() : { enabled: false }))
-    .then((j) => { show(!!j.enabled); toggle.disabled = false; })
+    .then((j) => { show(j); toggle.disabled = false; })
     .catch(() => { toggle.disabled = false; });
   // Pick up a computer coming online without a reload.
   setInterval(() => { if (enabled && !document.hidden) load(); }, 15000);

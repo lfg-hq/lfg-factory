@@ -18,7 +18,8 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import os from "node:os";
-import type { ClaudeTaskPayload, RunnerJobOffer, RunnerToServer, ServerToRunner } from "./protocol.ts";
+import type { AgentEvent, AgentKind, ClaudeTaskPayload, RunnerJobOffer, RunnerToServer, ServerToRunner } from "./protocol.ts";
+import { AGENTS, detectAgents, runAgent } from "./agents.ts";
 
 export type RunnerState = "connecting" | "connected" | "disconnected" | "unauthorized" | "stopped";
 
@@ -34,6 +35,9 @@ export interface SocketLike {
 }
 export type SocketFactory = (url: string, headers: Record<string, string>) => SocketLike & { unauthorized?: boolean };
 
+/** A build (or ticket follow-up) on a repository: the kind of job that asks first. */
+export type BuildJobOffer = Extract<RunnerJobOffer, { type: "claude_task" }>;
+
 export type ApprovalResult = { approved: true } | { approved: false; reason?: string };
 
 export interface RunnerOptions {
@@ -43,9 +47,12 @@ export interface RunnerOptions {
   workRoot: string;
   createSocket: SocketFactory;
   /** Ask the person whether to run this job. */
-  approve(job: RunnerJobOffer): Promise<ApprovalResult>;
+  approve(job: BuildJobOffer): Promise<ApprovalResult>;
   /** Claude Code tools this computer allows. A job can only narrow this list. */
   allowedTools?: string[];
+  /** Override an agent's executable (tests, or a CLI outside PATH). */
+  agentBins?: Partial<Record<AgentKind, string>>;
+  /** Same as agentBins.claude. */
   claudeBin?: string;
   /** Environment for git/claude (a GUI app should pass the login shell's PATH). */
   env?: NodeJS.ProcessEnv;
@@ -66,9 +73,9 @@ export class Runner {
   private stopped = false;
   private backoff = 1000;
   private retry: ReturnType<typeof setTimeout> | null = null;
-  private queue: RunnerJobOffer[] = [];
+  private queue: BuildJobOffer[] = [];
   private busy = false;
-  private claudeVersion: string | null | undefined;
+  private agents: Array<{ kind: AgentKind; version: string }> | undefined;
   readonly active = new Map<string, ActiveJob>();
   state: RunnerState = "disconnected";
 
@@ -105,8 +112,9 @@ export class Runner {
     const socket = this.opts.createSocket(url, { Authorization: `Bearer ${this.opts.token}` });
     this.socket = socket;
     socket.onopen = async () => {
-      this.claudeVersion ??= await this.detectClaude();
-      this.send({ type: "hello", appVersion: this.opts.appVersion, platform: `${process.platform}-${process.arch}`, claudeVersion: this.claudeVersion, activeJobIds: [...this.active.keys()] });
+      this.agents ??= await detectAgents(this.opts.env ?? process.env, this.bins());
+      const claude = this.agents.find(a => a.kind === "claude");
+      this.send({ type: "hello", appVersion: this.opts.appVersion, platform: `${process.platform}-${process.arch}`, claudeVersion: claude?.version ?? null, agents: this.agents, activeJobIds: [...this.active.keys()] });
     };
     socket.onmessage = (ev) => { void this.handle(String(ev.data)); };
     socket.onerror = () => { /* onclose follows */ };
@@ -145,7 +153,10 @@ export class Runner {
         return;
       }
       case "job.offer":
-        if (msg.job.type !== "claude_task" || this.active.has(msg.job.id) || this.queue.some(j => j.id === msg.job.id)) return;
+        if (this.active.has(msg.job.id) || this.queue.some(j => j.id === msg.job.id)) return;
+        // Chat turns answer right away, alongside any build: they don't touch repositories.
+        if (msg.job.type === "chat_turn") { void this.runChatTurn(msg.job); return; }
+        if (msg.job.type !== "claude_task") return;
         this.queue.push(msg.job);
         void this.drain();
         return;
@@ -161,9 +172,12 @@ export class Runner {
     } finally { this.busy = false; }
   }
 
-  private async runOffer(job: RunnerJobOffer) {
+  private async runOffer(job: BuildJobOffer) {
     const title = `${job.payload.ticketKey ? job.payload.ticketKey + " " : ""}${job.payload.ticketTitle}`;
-    const problem = validatePayload(job.payload, !!this.opts.allowLocalRepos);
+    const agent: AgentKind = job.payload.agent ?? "claude";
+    const problem = !AGENTS[agent] ? `This computer doesn't know the agent "${agent}". Update LFG Desktop.`
+      : this.agents && !this.agents.some(a => a.kind === agent) ? `${AGENTS[agent].label} isn't installed on this computer. Install it and run \`${AGENTS[agent].bin}\` once to sign in.`
+      : validatePayload(job.payload, !!this.opts.allowLocalRepos);
     if (problem) {
       this.send({ type: "job.rejected", jobId: job.id, reason: problem });
       this.opts.onJob?.({ jobId: job.id, title, phase: "declined", detail: problem });
@@ -180,13 +194,14 @@ export class Runner {
     this.send({ type: "job.accepted", jobId: job.id });
     this.opts.onJob?.({ jobId: job.id, title, phase: "started" });
     try {
-      const result = await runClaudeTask(job, active, {
+      const result = await runAgentTask(job, active, {
+        agent,
+        bin: this.bins()[agent],
         workRoot: this.opts.workRoot,
-        claudeBin: this.opts.claudeBin ?? "claude",
         allowedTools: this.opts.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
         env: this.opts.env ?? process.env,
         progress: text => this.send({ type: "job.progress", jobId: job.id, text }),
-        agentEvent: event => this.send({ type: "job.agent_event", jobId: job.id, event }),
+        agentEvent: event => this.send({ type: "job.event", jobId: job.id, event }),
       });
       if (active.cancelled) { this.opts.onJob?.({ jobId: job.id, title, phase: "cancelled" }); return; }
       this.send({ type: "job.finished", jobId: job.id, ok: true, ...result });
@@ -201,11 +216,44 @@ export class Runner {
     }
   }
 
-  private async detectClaude(): Promise<string | null> {
+  /**
+   * One chat turn: the chosen agent answers with LFG's tools (MCP) and read-only access to
+   * a scratch folder. It can't edit files or run commands here, so it doesn't ask first.
+   */
+  private async runChatTurn(job: Extract<RunnerJobOffer, { type: "chat_turn" }>) {
+    const p = job.payload;
+    const agent = p.agent;
+    const active: ActiveJob = { cancelled: false };
+    this.active.set(job.id, active);
+    this.send({ type: "job.accepted", jobId: job.id });
+    const fail = (error: string) => this.send({ type: "job.finished", jobId: job.id, ok: false, error: error.slice(0, 2000) });
     try {
-      const r = await run(this.opts.claudeBin ?? "claude", ["--version"], { env: this.opts.env ?? process.env, timeoutMs: 10_000 });
-      return r.code === 0 ? r.stdout.trim().slice(0, 80) : null;
-    } catch { return null; }
+      if (!AGENTS[agent]) return fail(`This computer doesn't know the agent "${agent}". Update LFG Desktop.`);
+      if (this.agents && !this.agents.some(a => a.kind === agent)) {
+        return fail(`${AGENTS[agent].label} isn't installed on this computer. Install it and run \`${AGENTS[agent].bin}\` once to sign in, or pick another agent in Settings.`);
+      }
+      const cwd = join(this.opts.workRoot, "chats", p.conversationId.replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, 80));
+      mkdirSync(cwd, { recursive: true });
+      const attempt = (sessionId?: string) => runAgent(agent, {
+        prompt: p.prompt, instructions: p.instructions, sessionId, mcp: p.mcp, readOnly: true, cwd,
+        env: this.opts.env ?? process.env, bin: this.bins()[agent],
+        onEvent: event => this.send({ type: "job.event", jobId: job.id, event }),
+        onSpawn: child => { active.child = child; },
+      }).finally(() => { active.child = undefined; });
+      const result = await attempt(p.sessionId).catch((error: Error) => {
+        if (active.cancelled || !p.sessionId) throw error;
+        return attempt(undefined); // the session lives elsewhere or expired: answer fresh
+      });
+      if (!active.cancelled) this.send({ type: "job.finished", jobId: job.id, ok: true, summary: result.summary, sessionId: result.sessionId });
+    } catch (error) {
+      if (!active.cancelled) fail(error instanceof Error ? error.message : String(error));
+    } finally {
+      this.active.delete(job.id);
+    }
+  }
+
+  private bins(): Partial<Record<AgentKind, string>> {
+    return { ...(this.opts.claudeBin ? { claude: this.opts.claudeBin } : {}), ...this.opts.agentBins };
   }
 }
 
@@ -223,14 +271,15 @@ export function validatePayload(p: ClaudeTaskPayload, allowLocalRepos: boolean):
 
 interface TaskContext {
   workRoot: string;
-  claudeBin: string;
+  agent: AgentKind;
+  bin?: string;
   allowedTools: string[];
   env: NodeJS.ProcessEnv;
   progress(text: string): void;
-  agentEvent(event: Record<string, unknown>): void;
+  agentEvent(event: AgentEvent): void;
 }
 
-export async function runClaudeTask(job: RunnerJobOffer, active: ActiveJob, ctx: TaskContext)
+export async function runAgentTask(job: BuildJobOffer, active: ActiveJob, ctx: TaskContext)
   : Promise<{ branch: string; commitSha: string | null; summary?: string }> {
   const p = job.payload;
   const repoDir = join(ctx.workRoot, "repos", createHash("sha1").update(p.repoUrl).digest("hex").slice(0, 12));
@@ -267,8 +316,19 @@ export async function runClaudeTask(job: RunnerJobOffer, active: ActiveJob, ctx:
   check();
 
   const tools = (p.allowedTools?.length ? p.allowedTools.filter(t => ctx.allowedTools.includes(t)) : ctx.allowedTools);
-  ctx.progress("Starting Claude Code…");
-  const summary = await runClaude(ctx, active, worktree, p, tools);
+  ctx.progress(`Starting ${AGENTS[ctx.agent].label}…`);
+  const attempt = (sessionId?: string) => runAgent(ctx.agent, {
+    prompt: p.prompt, cwd: worktree, sessionId, allowedTools: tools, maxTurns: p.maxTurns, env: ctx.env, bin: ctx.bin,
+    onEvent: ctx.agentEvent,
+    onSpawn: child => { active.child = child; },
+  }).finally(() => { active.child = undefined; });
+  const { summary } = await attempt(p.sessionId).catch(async (error: Error) => {
+    if (active.cancelled) throw new Error("Cancelled");
+    if (!p.sessionId) throw error;
+    // The earlier session may live on another computer, or have expired: start fresh.
+    ctx.progress("Couldn't continue the earlier session here; starting a fresh one.");
+    return attempt(undefined).catch((e: Error) => { throw active.cancelled ? new Error("Cancelled") : e; });
+  });
   check();
 
   if ((await git(["status", "--porcelain"], worktree)).trim()) {
@@ -283,56 +343,6 @@ export async function runClaudeTask(job: RunnerJobOffer, active: ActiveJob, ctx:
   ctx.progress(`Pushing ${p.branch}…`);
   await git(["push", "-u", "origin", `HEAD:refs/heads/${p.branch}`], worktree);
   return { branch: p.branch, commitSha: head, summary };
-}
-
-function runClaude(ctx: TaskContext, active: ActiveJob, cwd: string, p: ClaudeTaskPayload, tools: string[]): Promise<string | undefined> {
-  const args = ["-p", p.prompt, "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits",
-    "--allowedTools", tools.join(","), ...(p.maxTurns ? ["--max-turns", String(p.maxTurns)] : [])];
-  return new Promise((resolve, reject) => {
-    let child: ChildProcess;
-    try { child = spawn(ctx.claudeBin, args, { cwd, env: ctx.env, stdio: ["ignore", "pipe", "pipe"] }); }
-    catch (e) { reject(claudeMissing(e)); return; }
-    active.child = child;
-    let buffer = "", stderr = "", summary: string | undefined, failure: string | undefined;
-    child.stdout!.setEncoding("utf8");
-    child.stdout!.on("data", (chunk: string) => {
-      buffer += chunk;
-      let nl: number;
-      while ((nl = buffer.indexOf("\n")) >= 0) {
-        const line = buffer.slice(0, nl).trim();
-        buffer = buffer.slice(nl + 1);
-        if (!line) continue;
-        try {
-          const event = JSON.parse(line) as Record<string, unknown>;
-          ctx.agentEvent(event);
-          if (event.type === "result") {
-            if (event.is_error) failure = String(event.result ?? event.subtype ?? "Claude Code reported an error");
-            else if (typeof event.result === "string") summary = event.result;
-          }
-        } catch { /* not JSON; ignore */ }
-      }
-    });
-    child.stderr!.setEncoding("utf8");
-    child.stderr!.on("data", (chunk: string) => { stderr = (stderr + chunk).slice(-4000); });
-    child.on("error", e => reject(claudeMissing(e)));
-    child.on("close", code => {
-      active.child = undefined;
-      if (active.cancelled) { reject(new Error("Cancelled")); return; }
-      if (failure) { reject(new Error(failure)); return; }
-      if (code !== 0) {
-        const hint = /log ?in|auth|credential|401/i.test(stderr) ? " Open a terminal and run `claude` to sign in." : "";
-        reject(new Error(`Claude Code exited with code ${code}.${hint} ${stderr.trim().slice(-800)}`.trim()));
-        return;
-      }
-      resolve(summary);
-    });
-  });
-}
-
-function claudeMissing(e: unknown): Error {
-  return (e as NodeJS.ErrnoException)?.code === "ENOENT"
-    ? new Error("Claude Code isn't installed on this computer. Install it, run `claude` once to sign in, then try again.")
-    : e instanceof Error ? e : new Error(String(e));
 }
 
 // ── Processes ────────────────────────────────────────────────────────

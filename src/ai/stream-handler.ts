@@ -18,7 +18,7 @@ import { chatDocumentContext } from '../services/chat-document-text.ts';
 import { withConversationContext } from "./tools/conversation-context.ts";
 import { currentUsage, withUsage, withUsageOperation } from "./usage-context.ts";
 import { availableChatModels } from "../services/available-models.ts";
-import { streamText, stepCountIs, generateText, asSchema } from "ai";
+import { streamText, stepCountIs, generateText, asSchema, type LanguageModel } from "ai";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -52,6 +52,7 @@ import { createPreviewInspectTool, createPreviewRunTool } from "../services/dev-
 import type { ServerWebSocket } from "bun";
 import type { WsData } from "../ws/types.ts";
 import { withUserSubscription } from "../services/subscription-execution.ts";
+import { withoutSubscription } from "./subscription-context.ts";
 import { currentSubscription } from "./subscription-context.ts";
 
 // Rows loaded per turn. Normally only the ~20-40 since the saved checkpoint matter; the
@@ -412,7 +413,19 @@ export async function describeAttachedImages(
 }
 
 export async function handleStream(req: StreamRequest): Promise<{ conversationId: string }> {
-  return withChatDiagnostics({conversationId:req.conversationId, projectId:req.projectId, signal:req.abortController.signal}, () => withUsage({ userId: req.userId, operation: "chat" }, () => withUserSubscription(req.userId, req.projectId, () => handleStreamInternal(req))));
+  return withChatDiagnostics({conversationId:req.conversationId, projectId:req.projectId, signal:req.abortController.signal}, () => withUsage({ userId: req.userId, operation: "chat" }, async () =>
+    // A turn answered on the person's computer needs no server model or subscription.
+    await answersOnTheirComputer(req)
+      ? withoutSubscription(() => handleStreamInternal(req))
+      : withUserSubscription(req.userId, req.projectId, () => handleStreamInternal(req))));
+}
+
+/** Same rule as handleStreamInternal's useLocal: an ordinary chat of someone with local AI on. */
+async function answersOnTheirComputer(req: StreamRequest): Promise<boolean> {
+  if (req.instantMode) return false;
+  if (req.conversationId && await getAgentByConversation(req.conversationId)) return false;
+  const { localAiSettings } = await import("../services/runner/opt-in.ts");
+  return (await localAiSettings(req.userId)).enabled;
 }
 
 async function handleStreamInternal(req: StreamRequest): Promise<{ conversationId: string }> {
@@ -554,6 +567,13 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     if (block) turnContext.push(block);
   }
 
+  // "Use my computer for AI": this person's chat turns run on their own computer's agent
+  // (Claude Code / Codex / Copilot via LFG Desktop). Not for instant or custom-agent chats.
+  const localAi = !instantMode && !agentRecord && convId
+    ? await import("../services/runner/opt-in.ts").then(m => m.localAiSettings(userId))
+    : null;
+  const useLocal = !!localAi?.enabled;
+
   chatStage('model_selection');
   // ── 4. Resolve model & API keys ──────────────────────────────────────────────
   const [modelSel] = await db
@@ -574,7 +594,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   // chat on the OWNER's keys; otherwise on their own. The model CHOICE stays the acting
   // user's (modelSel above) — only the credential source is shared.
   const llmAccess = await userLlmAccess(userId, projectId);
-  if (!currentSubscription() && !llmAccess.canUseKey) throw new Error("Team API tokens are disabled. Connect and select your personal ChatGPT subscription.");
+  if (!useLocal && !currentSubscription() && !llmAccess.canUseKey) throw new Error("Team API tokens are disabled. Connect and select your personal ChatGPT subscription.");
   let keyUserId = llmAccess.keyUserId;
   if (projectId) {
     const [proj] = await db.select({ id: projects.id, ownerId: projects.ownerId }).from(projects).where(eq(projects.projectId, projectId)).limit(1);
@@ -594,7 +614,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     : undefined;
 
   // ── Check user has a key for the selected provider (unless instant mode) ────
-  if (!instantMode && !currentSubscription()) {
+  if (!instantMode && !useLocal && !currentSubscription()) {
     const providerName = getProviderName(modelKey);
     const keyMap: Record<string, string | undefined> = {
       openai: userApiKeys?.openai,
@@ -612,16 +632,21 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     }
   }
 
-  let model;
+  // Unset only for a turn on the person's computer whose server model couldn't be built;
+  // every use of it is skipped then.
+  let model!: LanguageModel;
   let searchTools: Record<string, unknown> = {};
   try {
     const result = getModelWithSearch(modelKey, userApiKeys, { allowEnvFallback: false });
     model = result.model;
     searchTools = result.searchTools;
   } catch (err) {
-    const errMsg = err instanceof Error ? err.message : "Failed to initialize model";
-    ws.send(JSON.stringify({ type: "ai_chunk", chunk: errMsg, is_final: true }));
-    return { conversationId: convId };
+    // On the person's computer the server's model is only a fallback for small helpers.
+    if (!useLocal) {
+      const errMsg = err instanceof Error ? err.message : "Failed to initialize model";
+      ws.send(JSON.stringify({ type: "ai_chunk", chunk: errMsg, is_final: true }));
+      return { conversationId: convId };
+    }
   }
 
   chatDiagnostic('model_selected', {model:modelKey});
@@ -643,7 +668,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
       .where(eq(messages.id, userMsgRow.id)).catch(() => {});
   }
 
-  if (imgFiles.length) {
+  if (imgFiles.length && !useLocal) {
     const readBytes = async (id: string): Promise<Uint8Array | null> => {
       try {
         const [cf] = await db.select().from(chatFiles).where(eq(chatFiles.id, id));
@@ -907,7 +932,8 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   let streamError: Error | null = null;
   // Hoisted so we can read .response after the stream completes (for
   // tool-step persistence).
-  let streamTextResult: ReturnType<typeof streamText> | null = null;
+  // The server model's stream, or a turn on the person's computer: only .response is read.
+  let streamTextResult: { response: Promise<{ messages: any[] }> } | null = null;
   let savedPassMessages: any[] | null = null;
   // Turn-outcome bookkeeping (see endReason on the message row).
   let stalledMidPromise = false;     // ended announcing an action it never took
@@ -1106,7 +1132,23 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     let carried: { sourceLength: number; messages: any[] } | null = null;
     // Raw estimate of what the last step sent; its real size calibrates later estimates.
     let lastSentEstimate = 0;
-    const result = streamText({
+    const result = useLocal
+      ? await (await import("../services/runner/chat-turn.ts")).startLocalChatTurn({
+          userId, conversationId: convId!, projectId: internalProjectId ?? null, messageId: userMsgRow?.id,
+          agent: localAi!.agent,
+          instructions: [systemPrompt, ...contextMessages.filter((m: any) => m.role === "system").map((m: any) => String(m.content))].join("\n\n"),
+          userMessage: imgFiles.length
+            ? `${userMessage}\n\n[Attached images, by imageId (pass to createTickets attachmentImageIds): ${imgFiles.map(f => `"${f.name || f.id}" → ${f.id}`).join("; ")}]`
+            : userMessage,
+          history: contextMessages.filter((m: any) => m.role !== "system"),
+          signal: abortController.signal,
+          onActivity: req.onActivity,
+          onStatus: (text) => {
+            req.onActivity?.();
+            ws.send(JSON.stringify({ type: "ai_chunk", chunk: "", is_final: false, is_notification: true, notification_type: "status", detail: text, message: text }));
+          },
+        })
+      : streamText({
       model,
       system: cached.system,
       messages: passMessages,
@@ -1210,7 +1252,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
         }
       },
     });
-    streamTextResult = result;
+    streamTextResult = result as { response: Promise<{ messages: any[] }> };
 
     // ── Use fullStream so we can intercept tool-input-delta events and forward
     //    document content character-by-character as the model generates it.
@@ -1652,8 +1694,10 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     // Cut off rather than finished: the output limit ended the reply (often mid tool call),
     // or the pass used every step while still calling tools. Neither is the end of the
     // work, so continue instead of handing the user half a document.
-    const finishReason = await abortable(result.finishReason, abortController.signal).catch(() => undefined);
-    const stepsUsed = (await abortable(result.steps, abortController.signal).catch(() => [])).length;
+    // A turn on the person's computer has no server-side passes to continue: its agent runs to the end itself.
+    const serverResult = "steps" in result ? result : null;
+    const finishReason = serverResult ? await abortable(serverResult.finishReason, abortController.signal).catch(() => undefined) : undefined;
+    const stepsUsed = serverResult ? (await abortable(serverResult.steps, abortController.signal).catch(() => [])).length : 0;
     const cutOff = finishReason === "length" ? LENGTH_NUDGE : finishReason === "tool-calls" && stepsUsed >= MAX_STEPS ? STEP_LIMIT_NUDGE : null;
     if (cutOff && !abortController.signal.aborted && !askUserCardSent && !confirmCardSent && !turnClosedByCard && continuations < 3) {
       continuations++;
@@ -1671,7 +1715,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     stalledMidPromise = shouldContinuePromise(producedThisPass, turnState);
     // Questions belong in the askUser card, where the user can pick answers.
     const unaskedQuestions = !stalledMidPromise && shouldAskWithCard(producedThisPass, turnState);
-    if ((!stalledMidPromise && !unaskedQuestions) || pass === 1) break;
+    if ((!stalledMidPromise && !unaskedQuestions) || pass === 1 || useLocal) break;
 
     // Nudge: replay what it just said and tell it to act. Kept OUT of the stored
     // transcript — this is scaffolding for the model, not part of the conversation.
@@ -1697,7 +1741,8 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   } catch (err: any) {
     if (err?.name !== "AbortError") {
       chatDiagnostic('stream_error', {outcome:'error', reason: safeErrorReason(err)});
-      streamError = new Error(providerErrorMessage(err, getProviderName(modelKey)));
+      // A turn on the person's computer explains itself ("Claude Code isn't installed…").
+      streamError = useLocal ? new Error(err instanceof Error ? err.message : String(err)) : new Error(providerErrorMessage(err, getProviderName(modelKey)));
     }
   } finally {
     // Do not overlap a steered follow-up with a tool still changing app state.
@@ -1707,7 +1752,8 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
 
   // Refresh the history checkpoint off the critical path, for the next turn: same
   // summarizer as the turn (helper model first), bounded so it cannot run on unattended.
-  if (model) {
+  // (The computer's agent keeps its own session; the server's summary model isn't used then.)
+  if (model && !useLocal) {
     const refreshSignal = AbortSignal.timeout(6 * 60_000);
     const refreshChars = summaryLimit(profile.budget);
     const refresh = async (evidence: string, maxChars = refreshChars) => {
@@ -1794,7 +1840,11 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
 
   // ── 9. Auto-generate title for new conversations ─────────────────────────────
   const isNewConv = !req.conversationId;
-  if (isNewConv && fullResponse && !abortController.signal.aborted) {
+  if (isNewConv && fullResponse && !abortController.signal.aborted && useLocal) {
+    // No server model to write a title: use the first words of the request.
+    const title = userMessage.replace(/\s+/g, " ").trim().split(" ").slice(0, 7).join(" ").slice(0, 60);
+    if (title) void db.update(conversations).set({ title, updatedAt: new Date() }).where(eq(conversations.id, convId!)).catch(() => {});
+  } else if (isNewConv && fullResponse && !abortController.signal.aborted) {
     // Titling is a cheap, mechanical subtask — route it to the provider's lite
     // model (staying in-provider reuses the user's existing key). Fall back to
     // the full model if the provider has no distinct lite tier / key resolution

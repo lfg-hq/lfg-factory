@@ -149,7 +149,8 @@ cat <<EOF
   │ Sign in    $EMAIL   (in your browser, when the app sends you there)
   │ Password   $PASSWORD
   │ Project    $PROJECT_URL
-  │ Ticket     $TICKET  →  open it, Run menu: "Build on my computer", then Run
+  │ Chat       ask in the project chat: answered by the agent on this computer
+  │ Ticket     $TICKET  →  open it and click Run: it builds on this computer
   │ Claude     $([ "$FAKE" = 1 ] && echo "stand-in (--fake-claude)" || echo "your Claude Code login (uses your plan)")
   │ See result git --git-dir "$ORIGIN" log --all --oneline --stat
   └────────────────────────────────────────────────────────────────

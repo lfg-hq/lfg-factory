@@ -10,6 +10,7 @@
  *   - a local bare Git repo (demo-origin.git) with a tiny web page on `main`
  *   - a "Desktop runner demo" project pointing at that repo, with one ticket
  *   - a freshly paired computer (previous test pairings are revoked)
+ *   - "Use my computer for AI" turned on for the test account (Claude Code)
  * and prints the details as one JSON line.
  */
 
@@ -68,6 +69,11 @@ if (!user || !password) {
 }
 await db.update(users).set({ emailVerified: true }).where(eq(users.id, user!.id));
 const userId = user!.id;
+// The demo is about AI on this computer: "Use my computer for AI" starts on, with Claude Code.
+{
+  const { setLocalAiSettings } = await import("../src/services/runner/opt-in.ts");
+  await setLocalAiSettings(userId, { enabled: true, agent: "claude" });
+}
 
 // ── Demo repository ──────────────────────────────────────────────────
 const origin = join(dir, "demo-origin.git");

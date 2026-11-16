@@ -95,6 +95,8 @@ export const profiles = sqliteTable("profile", {
   cliApiKey: text("cli_api_key").unique(),
   // Opt-in: show "Build on my computer" on tickets and accept those builds (LFG Desktop).
   desktopBuildsEnabled: integer("desktop_builds_enabled", { mode: "boolean" }).notNull().default(false),
+  // Which agent on their computer does the AI work: claude | codex | copilot.
+  localAgent: text("local_agent").notNull().default("claude"),
 
   // Organization context
   currentOrganizationId: text("current_organization_id"),
