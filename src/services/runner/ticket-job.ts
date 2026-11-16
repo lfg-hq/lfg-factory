@@ -6,7 +6,8 @@
  * Git token nor a Claude credential ever leaves the server or the laptop.
  */
 
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq, isNotNull } from "drizzle-orm";
+import { runnerJobs } from "../../db/schema/runners.ts";
 import { db } from "../../config/db.ts";
 import { projectTickets } from "../../db/schema/tickets.ts";
 import { projects } from "../../db/schema/projects.ts";
@@ -14,6 +15,7 @@ import { resolveTicketAnchor } from "../epics.ts";
 import { ticketBranchName } from "../../utils/ticket-branch.ts";
 import { addLog } from "../ticket-logs.ts";
 import { enqueueJob, userHasConnectedRunner } from "./hub.ts";
+import { localAiSettings } from "./opt-in.ts";
 import { RUNNER_PROTOCOL_VERSION, type ClaudeTaskPayload } from "./protocol.ts";
 
 export class RunnerJobError extends Error {
@@ -44,15 +46,43 @@ export function buildRunnerPrompt(ticket: {
   ].join("\n");
 }
 
-export async function startTicketOnRunner(input: { projectId: string; ticketId: string; actorId: string; notes?: string }) {
+export function buildFollowUpPrompt(ticket: { ticketKey: string | null; name: string }, message: string): string {
+  return [
+    `Follow-up on ticket ${ticket.ticketKey ?? ""} "${ticket.name}". Earlier work on it is already on this branch.`.replace("  ", " "),
+    "",
+    "## Request",
+    message.trim(),
+    "",
+    "## How to work",
+    "- If this is a question, answer it; change code only when it asks for a change.",
+    "- Do not commit, push or switch branches. LFG Desktop commits and pushes your changes when you finish.",
+    "- End with a short summary of what you did.",
+  ].join("\n");
+}
+
+export async function startTicketOnRunner(input: {
+  projectId: string; ticketId: string; actorId: string; notes?: string;
+  /** A ticket-chat follow-up instead of a build: continues the agent's earlier session. */
+  followUp?: string;
+  /** Called from the build queue, where the ticket is already marked "queued". */
+  fromQueue?: boolean;
+}) {
   const [ticket] = await db.select().from(projectTickets)
     .where(and(eq(projectTickets.id, input.ticketId), eq(projectTickets.projectId, input.projectId))).limit(1);
   if (!ticket) throw new RunnerJobError("Ticket not found", 404);
-  if (/^(queued|executing|stopping)$/.test(ticket.queueStatus)) throw new RunnerJobError("This ticket already has an active operation.", 409);
+  const busy = input.fromQueue ? /^(executing|stopping)$/ : /^(queued|executing|stopping)$/;
+  if (busy.test(ticket.queueStatus)) throw new RunnerJobError("This ticket already has an active operation.", 409);
   const [project] = await db.select().from(projects).where(eq(projects.id, input.projectId)).limit(1);
   if (!project) throw new RunnerJobError("Project not found", 404);
   if (!project.repoUrl) throw new RunnerJobError("Connect a Git repository to this project before running it on your computer.");
 
+  const { agent } = await localAiSettings(input.actorId);
+  // A follow-up continues the same agent's latest session on this ticket, if there is one.
+  const [previous] = input.followUp
+    ? await db.select({ session: runnerJobs.agentSession }).from(runnerJobs)
+        .where(and(eq(runnerJobs.ticketId, ticket.id), eq(runnerJobs.userId, input.actorId), eq(runnerJobs.agent, agent), isNotNull(runnerJobs.agentSession)))
+        .orderBy(desc(runnerJobs.createdAt)).limit(1)
+    : [];
   const anchor = await resolveTicketAnchor(ticket);
   const branch = ticket.githubBranch || ticketBranchName(ticket);
   const payload: ClaudeTaskPayload = {
@@ -63,8 +93,10 @@ export async function startTicketOnRunner(input: { projectId: string; ticketId: 
     repoUrl: project.repoUrl,
     branch,
     startFrom: [...new Set([anchor.anchorBranch, anchor.baseBranch, "main", "master"])],
-    prompt: buildRunnerPrompt(ticket, input.notes),
+    prompt: input.followUp ? buildFollowUpPrompt(ticket, input.followUp) : buildRunnerPrompt(ticket, input.notes),
     commitMessage: `${ticket.ticketKey ? `${ticket.ticketKey}: ` : ""}${ticket.name}`.slice(0, 200),
+    agent,
+    ...(previous?.session ? { sessionId: previous.session } : {}),
     allowedTools: ["Read", "Edit", "Write", "Glob", "Grep", "Bash"],
     maxTurns: 80,
   };

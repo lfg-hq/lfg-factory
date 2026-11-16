@@ -1,4 +1,4 @@
-# LFG Desktop runner
+# LFG Desktop runner — "Use my computer for AI"
 
 Created: 2026-10-31. Status: first working version on `claude/desktop-runner`.
 
@@ -19,12 +19,38 @@ Company LFG server (Postgres)                     Jane's computer: LFG Desktop
                                                        └ commit + push
 ```
 
+## Use my computer for AI
+
+One switch per person (Settings → Integrations), plus an agent choice: **Claude Code**,
+**OpenAI Codex** or **GitHub Copilot** — whichever is installed and signed in on their
+computer. When it's on, that person's AI work runs on their computer; everything it
+produces is saved in LFG for the team.
+
+| What | Where it runs when on |
+|---|---|
+| Project chat (planning, PRDs, tickets) | the agent on their computer, via LFG's MCP tools |
+| **Build** on a ticket (button, chat tools, build runs) | the agent on their computer, in a worktree; pushes the branch |
+| Ticket chat follow-ups | the agent on their computer, continuing its session on that ticket |
+| Instant apps, custom agents, checks/preview/merge | LFG's server, as before |
+
+How a chat turn flows: `stream-handler.ts` builds the turn as usual, then
+`services/runner/chat-turn.ts` sends it to LFG Desktop as a `chat_turn` job with a
+one-turn MCP token. The agent answers read-only on the computer and uses LFG's tools at
+`/mcp/turn/:turnId` (`routes/mcp-server.ts`, tokens in `services/runner/turn-tokens.ts`),
+so documents and tickets land in the DB. Its events come back as AI SDK stream events,
+so cards, document panels, activity and saving work as for any chat. The agent's session
+is continued on the next turn.
+
+Agent adapters live in `desktop/src/agents.ts` (one per CLI, all producing the same
+events). Claude Code's output format is verified; Codex follows its documented
+`codex exec --json` events; Copilot CLI's JSON output isn't documented and is parsed
+defensively — check both with real installs.
+
 ## Rules the code enforces
 
-- **Opt-in, per person.** "Build on my computer" is off until the person turns it on in
-  Settings → Integrations → Computers (`profiles.desktop_builds_enabled`). Off: the
-  Tickets Run menu doesn't offer it and `/run-local` answers 403. It isn't offered in
-  the chat ticket panel at all.
+- **Opt-in, per person.** "Use my computer for AI" is off until the person turns it on
+  in Settings → Integrations (`profiles.desktop_builds_enabled`, `profiles.local_agent`).
+  Off: everything uses LFG's server AI as before.
 - **A job runs only on the requester's devices.** `runner_job.userId` is the person who
   clicked "Run on my computer"; the hub never offers it to anyone else's device, and a
   device can only report on jobs offered to it.
@@ -92,7 +118,10 @@ Also `rejected` (declined on the computer) and `cancelled` (Stop).
 bun test tests/runner-hub.test.ts   # routing, ownership, reconnects, cancel, decline
 bun test tests/runner-e2e.test.ts   # real WebSocket + runner + git, stand-in `claude`
 bun test tests/desktop-auth.test.ts # browser sign-in: PKCE, one-time codes, app session
-bun test tests/desktop-opt-in.test.ts # off by default; Run menu and /run-local follow the setting
+bun test tests/desktop-opt-in.test.ts # setting, agent choice; Build and ticket chat go to the computer
+bun test tests/desktop-agents.test.ts # Claude / Codex / Copilot output → one event shape
+bun test tests/mcp-endpoint.test.ts   # LFG's tools over MCP: tokens, schemas, writes
+bun test tests/local-chat-e2e.test.ts # a chat turn on the computer, through the real chat handler
 cd desktop && npm install && npm run typecheck
 ```
 

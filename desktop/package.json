@@ -29,6 +29,9 @@
   "build": {
     "appId": "ai.lfg.desktop",
     "productName": "LFG",
+    "directories": {
+      "output": "release"
+    },
     "files": [
       "dist/**",
       "package.json"
