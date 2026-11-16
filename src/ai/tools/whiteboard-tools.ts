@@ -11,7 +11,7 @@ import { z } from "zod";
 import { getProjectAccess } from "../../auth/project-access.ts";
 import { createBoard, getBoard, listBoards, readElements, setShare, shareModeOf } from "../../services/whiteboards/store.ts";
 import { env } from "../../config/env.ts";
-import { DRAWING_GUIDE, boardEditor, describeBoard, elementInput, elementUpdate, freeOrigin, type ElementInput, type ElementUpdate } from "../../services/whiteboards/agent.ts";
+import { DRAWING_GUIDE, boardEditor, describeBoard, describeGroups, elementInput, elementUpdate, freeOrigin, type ElementInput, type ElementUpdate } from "../../services/whiteboards/agent.ts";
 import { openBoardOf } from "../../services/whiteboards/live.ts";
 
 /** `projectId` is the PUBLIC project id (what a board stores). */
@@ -79,11 +79,11 @@ export function whiteboardTools(context: { projectId: string; userId: string }) 
         if ("error" in found) return found;
         const elements = readElements(found.board);
         const selection = found.selection.filter((id) => elements.some((e) => e.id === id));
-        return { boardId: found.board.id, title: found.board.title, selected: selection, startNewWorkAt: freeOrigin(elements), elements: describeBoard(elements, selection) };
+        return { boardId: found.board.id, title: found.board.title, selected: selection, startNewWorkAt: freeOrigin(elements), groups: describeGroups(elements), elements: describeBoard(elements, selection) };
       },
     }),
     drawOnWhiteboard: tool({
-      description: "Draw on a whiteboard: add elements, change existing ones, or remove some. The person sees it appear live. Use this whenever they ask you to sketch, lay out, brainstorm, diagram, map a flow or preview how a feature should look; draw it rather than describing it. Omit boardId for the board the person has open. Start new work at the startNewWorkAt point from readWhiteboard so it does not land on existing elements. " + DRAWING_GUIDE,
+      description: "Draw on a whiteboard: add elements, change existing ones, or remove some. The person sees it appear live. Use this whenever they ask you to sketch, lay out, brainstorm, diagram, map a flow or preview how a feature should look; draw it rather than describing it. Omit boardId for the board the person has open. Something new and separate starts at the startNewWorkAt point from readWhiteboard. A follow-up to something already there (\"add mountains\", \"make it night\") changes that in place: put new parts inside its bounds, behind it with below or toBack when they are further away, and move, reshape or remove existing elements with update and remove, never drawing a second copy beside it. " + DRAWING_GUIDE,
       inputSchema: zodSchema(z.object({
         boardId: z.string().optional().describe("Board id or exact title. Omit for the board the person has open."),
         add: z.array(elementInput).max(300).optional().describe("New elements. Give one a key when an arrow in this or a later call should attach to it."),

@@ -114,7 +114,7 @@ const model = () => {
       // The latest thing the person said (later entries are the agent's own tool calls and results).
       const asked = JSON.stringify(options.prompt.filter((m: any) => m.role === "user").at(-1));
       const system = JSON.stringify(options.prompt[0]);
-      const origin = /Start new work at about x=(-?\d+), y=(-?\d+)/.exec(system)!;
+      const origin = /start at about x=(-?\d+), y=(-?\d+)/i.exec(system)!;
       const place = (e: any) => ({ ...e, ...(e.x != null ? { x: e.x + Number(origin[1]), y: e.y + Number(origin[2]) } : {}), ...(e.points ? { points: e.points.map((p: number[]) => [p[0]! + Number(origin[1]), p[1]! + Number(origin[2])]) } : {}) });
       let chunks: any[];
       if (/landscape/i.test(asked) && step === 0) chunks = [{ type: "tool-call", toolCallId: crypto.randomUUID(), toolName: "add_elements", input: JSON.stringify({ elements: landscape().map(place) }) }, finish("tool-calls")];
@@ -448,7 +448,7 @@ try {
   await guest.fill("#wb-guest-name", "Dana"); await guest.keyboard.press("Enter");
   check((await local(guest)).length === (await elements(boardId)).length, "and sees the whole board");
   check(await until(async () => (await page.evaluate(() => Array.from(document.querySelectorAll("#wb-peers .wb-peer")).map((n) => n.getAttribute("title")))).some((t) => t!.startsWith("Dana (guest)")), 3000), "the member sees the guest arrive, under the name they gave");
-  check((await guest.locator("#wb-ask").isHidden()) && (await guest.locator("#wb-share-btn").count()) === 0 && (await guest.locator(".wb-top a").count()) === 0, "with no agent, no sharing controls and no way into the project");
+  check((await guest.locator("#wb-ask").isHidden()) && (await guest.locator("#wb-share-btn").count()) === 0 && (await guest.locator('a[href^="/projects"], a[href^="/chat"]').count()) === 0, "with no agent, no sharing controls and no way into the project");
   await guest.keyboard.press("n"); await guest.mouse.click(420, 640); await guest.keyboard.type("Dana's idea"); await guest.keyboard.press("Escape");
   check(await until(async () => (await elements(boardId)).some((e) => e.text === "Dana's idea")), "what the guest adds is saved");
   check(await until(async () => (await local(page)).some((e) => e.text === "Dana's idea"), 9000), "and shows up for the project member");

@@ -182,11 +182,11 @@ test('the agent is told what is on the board, what is selected, and where there 
   const b = await board();
   await store.applyOps(b.id, { upserts: [note('n1', { x: 0, y: 0, text: 'Pay by card' }), note('n2', { x: 300, y: 0, text: 'Refunds need approval' })] });
   const { system } = await run(b, 'What does this mean?', [say('It means refunds wait for a manager.')], { selection: ['n2', 'not-on-board'], viewport: { x: -100, y: -100, w: 1200, h: 700 } });
-  expect(system).toContain('- n1 sticky x=0 y=0 w=200 h=200 \\"Pay by card\\"');
-  expect(system).toContain('* n2 sticky x=300 y=0 w=200 h=200 \\"Refunds need approval\\"');
+  expect(system).toContain('- n1 sticky x=0 y=0 w=200 h=200 z=0 \\"Pay by card\\"');
+  expect(system).toContain('* n2 sticky x=300 y=0 w=200 h=200 z=0 \\"Refunds need approval\\"');
   expect(system).toContain('The person has 1 element(s) selected');
   // New work starts clear of the existing notes (they end at x=500).
-  expect(system).toContain('Start new work at about x=660, y=0');
+  expect(system).toContain('start at about x=660, y=0');
   expect(agent.freeOrigin([], { x: 500, y: 400, w: 1000, h: 600 })).toEqual({ x: 580, y: 480 });
 });
 
@@ -555,7 +555,7 @@ test('with no board named, the chat agent works on the one the person has open, 
   expect(listed.openNow).toBe(a.id); expect(listed.boards.find((b: any) => b.id === a.id)).toMatchObject({ title: 'Open one', elements: 2 });
   const read = await tools.readWhiteboard!.execute({});
   expect(read).toMatchObject({ boardId: a.id, title: 'Open one', selected: ['n2'], startNewWorkAt: { x: 660, y: 0 } });
-  expect(read.elements).toContain('* n2 sticky x=300 y=0 w=200 h=200 "Refunds"'); expect(read.elements).toContain('- n1 sticky');
+  expect(read.elements).toContain('* n2 sticky x=300 y=0 w=200 h=200 z=0 "Refunds"'); expect(read.elements).toContain('- n1 sticky');
   const drawn = await tools.drawOnWhiteboard!.execute({ add: [{ type: 'sticky', x: 660, y: 0, text: 'From chat' }] });
   expect(drawn.boardId).toBe(a.id);
   expect(store.readElements(await fresh(other.id))).toEqual([]);
@@ -656,4 +656,75 @@ test('the chat agent can give out a link to a board, and only someone allowed to
   who = 'viewer';
   expect(await tools.shareWhiteboard!.execute({ boardId: board.id, mode: 'view' })).toMatchObject({ error: expect.stringContaining('cannot share') });
   who = 'owner';
+});
+
+// ── Changing a picture in place ────────────────────────────────────────
+const { restack, boardGroups } = await import('../src/services/whiteboards/agent.ts');
+/** A small river scene, as the agent draws one: ground, then river, then a tree in front. */
+async function riverScene() {
+  const b = await board();
+  await store.applyOps(b.id, { upserts: [
+    { id: 'ground', type: 'rect', x: 0, y: 0, w: 600, h: 400, fill: '#9ccf7a', z: 1 },
+    { id: 'river', type: 'pen', x: 250, y: 0, w: 100, h: 400, bw: 100, bh: 400, pts: [0, 0, 100, 0, 100, 400, 0, 400], closed: true, fill: '#5fa8dc', z: 2 },
+    { id: 'tree', type: 'ellipse', x: 450, y: 150, w: 80, h: 80, fill: '#2f7d43', z: 3 },
+    { id: 'far-note', type: 'sticky', x: 2000, y: 0, w: 200, h: 200, text: 'Elsewhere', z: 4 },
+  ] }, { by: 'agent' });
+  return b;
+}
+const zOf = async (id: string, boardId: string) => store.readElements(await fresh(boardId)).find((e) => e.id === id)!.z;
+
+test('the agent is shown each picture on the board with its bounds and its back-most and front-most element', async () => {
+  const b = await riverScene();
+  const groups = boardGroups(store.readElements(await fresh(b.id)));
+  // The far note is on its own and is not a picture; the three overlapping shapes are.
+  expect(groups).toEqual([expect.objectContaining({ count: 3, x: 0, y: 0, w: 600, h: 400, back: 'ground', front: 'tree', recent: true })]);
+  const { system } = await run(b, 'What is here?', [say('A river.')]);
+  expect(system).toContain('- 3 elements at x=0 y=0 w=600 h=400; back-most ground, front-most tree (changed most recently)');
+  expect(system).toContain('Change THAT in place. Never draw a second copy beside it.');
+});
+
+test('a follow-up can put new parts behind an existing scene and make room by changing it', async () => {
+  const b = await riverScene();
+  const watcher = enter(b.id, 'Priya');
+  await run(b, 'Add mountains and a sunrise', [
+    call('update_elements', { updates: [{ id: 'ground', y: 200, h: 200 }, { id: 'river', points: [[260, 200], [340, 200], [350, 400], [250, 400]] }] }),
+    call('add_elements', { elements: [
+      { key: 'sky', type: 'rect', x: 0, y: 0, w: 600, h: 220, fill: '#f6c9a4', toBack: true },
+      { key: 'sun', type: 'ellipse', x: 260, y: 60, w: 80, h: 80, fill: '#ffd04f', below: 'ground' },
+      { key: 'peaks', type: 'path', closed: true, smooth: false, fill: '#6f83a8', points: [[0, 220], [150, 90], [300, 200], [450, 80], [600, 220]], below: 'ground' },
+      { key: 'bird', type: 'path', stroke: '#333', points: [[100, 40], [110, 30], [120, 40]] },
+    ] }),
+    say('I opened up a sunrise sky behind the river and put mountains behind the meadow.'),
+  ]);
+  const els = store.readElements(await fresh(b.id));
+  const byText = (fill: string) => els.find((e) => e.fill === fill)!;
+  const stack = [...els].filter((e) => e.id !== 'far-note').sort((p, q) => (p.z as number) - (q.z as number)).map((e) => e.id === 'ground' || e.id === 'river' || e.id === 'tree' ? e.id : e.fill === '#f6c9a4' ? 'sky' : e.fill === '#ffd04f' ? 'sun' : e.fill === '#6f83a8' ? 'peaks' : 'bird');
+  // Back to front: sky, then sun and peaks behind the ground, then the existing scene, then the bird on top.
+  expect(stack).toEqual(['sky', 'sun', 'peaks', 'ground', 'river', 'tree', 'bird']);
+  // Numbered cleanly, no two elements sharing a place in the stack.
+  expect(new Set(els.map((e) => e.z)).size).toBe(els.length);
+  // Made room: the ground moved down and the river was reshaped to match, keeping its look.
+  expect(els.find((e) => e.id === 'ground')).toMatchObject({ y: 200, h: 200 });
+  expect(els.find((e) => e.id === 'river')).toMatchObject({ x: 250, y: 200, w: 100, h: 200, bw: 100, bh: 200, closed: true, fill: '#5fa8dc', pts: [10, 0, 90, 0, 100, 200, 0, 200] });
+  // Everything stayed inside the picture; nothing was drawn beside it.
+  expect(els.filter((e) => e.id !== 'far-note').every((e) => (e.x as number) >= 0 && (e.x as number) + (e.w as number) <= 600)).toBe(true);
+  expect(byText('#ffd04f').by).toBe('agent');
+  // People watching got the restacked elements too, not just the new ones.
+  const sent = watcher.s.of('ops').flatMap((m: any) => m.upserts);
+  expect(sent.findLast((e: any) => e.id === 'ground').z).toBe(await zOf('ground', b.id));
+  live.leaveBoard(watcher.peer);
+});
+
+test('existing elements can be restacked on their own', async () => {
+  const b = await riverScene();
+  await run(b, 'Put the tree behind the river', [call('update_elements', { updates: [{ id: 'tree', below: 'river' }] }), say('Done.')]);
+  expect([await zOf('ground', b.id), await zOf('tree', b.id), await zOf('river', b.id)]).toEqual([1, 2, 3]);
+  await run(b, 'Send the river to the back', [call('update_elements', { updates: [{ id: 'river', toBack: true }, { id: 'missing', toBack: true }] }), say('Done.')]);
+  expect(await zOf('river', b.id)).toBe(1);
+});
+
+test('restacking keeps frames behind everything and leaves unaffected elements alone', () => {
+  const els: any[] = [{ id: 'f', type: 'frame', z: 9 }, { id: 'a', type: 'rect', z: 1 }, { id: 'b', type: 'rect', z: 2 }, { id: 'c', type: 'rect', z: 3 }];
+  expect(restack(els, [{ id: 'c', toBack: true }]).map((e) => [e.id, e.z])).toEqual([['f', 1], ['c', 2], ['a', 3], ['b', 4]]);
+  expect(restack(els.map((e) => ({ ...e, z: e.id === 'f' ? 1 : e.z + 1 })), [{ id: 'c', below: 'b' }]).map((e) => [e.id, e.z])).toEqual([['c', 3], ['b', 4]]);
 });

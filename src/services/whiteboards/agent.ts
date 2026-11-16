@@ -70,6 +70,8 @@ const elementInput = z.object({
   smooth: z.boolean().optional().describe("For path: true (default) curves through the points; false joins them with straight edges and sharp corners."),
   strokeWidth: z.number().optional().describe("Outline or line thickness in pixels."),
   opacity: z.number().min(0.05).max(1).optional(),
+  below: z.string().optional().describe("Stacking: put this element just BEHIND the element with this id (or key), e.g. mountains behind the hills of an existing scene. Position is unaffected."),
+  toBack: z.boolean().optional().describe("Stacking: put this element behind everything else on the board, e.g. a sky behind an existing scene."),
 });
 type ElementInput = z.infer<typeof elementInput>;
 
@@ -136,14 +138,48 @@ export function describeBoard(elements: BoardElement[], selection: string[] = []
     const where = e.type === "arrow" || e.type === "line"
       ? `${e.from ? "from " + e.from : `(${e.x1},${e.y1})`} to ${e.to ? e.to : `(${e.x2},${e.y2})`}`
       : `x=${e.x} y=${e.y}` + (e.w != null ? ` w=${e.w} h=${e.h}` : "");
+    const layer = ` z=${num(e.z, 0)}`;
     let text = short(e.text, 160);
     if (e.type === "comment") text = (e.thread as Array<{ author: string; text: string }> | undefined ?? []).map((t) => `${t.author}: ${short(t.text, 200)}`).join(" | ") + (e.attach ? ` (on ${e.attach})` : "");
     if (e.type === "pen") text = e.by === "agent" ? `(drawn shape${e.fill ? ", filled " + e.fill : ""})` : "(freehand drawing)";
     if (e.type === "image") text = "(image)";
-    return `${selected.has(e.id) ? "* " : "- "}${e.id} ${e.type} ${where}${text ? ` "${text}"` : ""}`;
+    return `${selected.has(e.id) ? "* " : "- "}${e.id} ${e.type} ${where}${layer}${text ? ` "${text}"` : ""}`;
   });
   if (elements.length > ordered.length) lines.push(`…and ${elements.length - ordered.length} more elements not listed.`);
   return lines.join("\n");
+}
+
+/**
+ * The pictures and groups on the board: elements that overlap or nearly touch, gathered into
+ * clusters, each with its bounds and its back-most and front-most element. This is how the
+ * agent finds "the picture" a follow-up is about and where to put a new part of it.
+ */
+export function boardGroups(elements: BoardElement[]): Array<{ count: number; x: number; y: number; w: number; h: number; back: string; front: string; recent: boolean; ids: string[] }> {
+  const items = elements.filter((e) => e.type !== "comment").slice(0, 800).map((e) => ({ e, b: bounds([e])! })).filter((i) => i.b);
+  const parent = items.map((_, i) => i);
+  const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i]!)));
+  const gap = 16;
+  for (let i = 0; i < items.length; i++) for (let j = i + 1; j < items.length; j++) {
+    const a = items[i]!.b, b = items[j]!.b;
+    if (a.minX - gap <= b.maxX && b.minX - gap <= a.maxX && a.minY - gap <= b.maxY && b.minY - gap <= a.maxY) parent[find(i)] = find(j);
+  }
+  const clusters = new Map<number, typeof items>();
+  items.forEach((item, i) => { const r = find(i); clusters.set(r, [...(clusters.get(r) ?? []), item]); });
+  const latest = Math.max(0, ...elements.map((e) => e.v ?? 0));
+  return [...clusters.values()].filter((c) => c.length >= 3).map((c) => {
+    const b = bounds(c.map((i) => i.e))!;
+    const byZ = [...c].sort((p, q) => num(p.e.z, 0) - num(q.e.z, 0));
+    return {
+      count: c.length, x: Math.round(b.minX), y: Math.round(b.minY), w: Math.round(b.maxX - b.minX), h: Math.round(b.maxY - b.minY),
+      back: byZ[0]!.e.id, front: byZ.at(-1)!.e.id, recent: c.some((i) => (i.e.v ?? 0) === latest), ids: c.map((i) => i.e.id),
+    };
+  }).sort((p, q) => Number(q.recent) - Number(p.recent) || q.count - p.count).slice(0, 12);
+}
+
+export function describeGroups(elements: BoardElement[]): string {
+  const groups = boardGroups(elements);
+  if (!groups.length) return "(none)";
+  return groups.map((g) => `- ${g.count} elements at x=${g.x} y=${g.y} w=${g.w} h=${g.h}; back-most ${g.back}, front-most ${g.front}${g.recent ? " (changed most recently)" : ""}`).join("\n");
 }
 
 function bounds(elements: BoardElement[]) {
@@ -176,6 +212,28 @@ export type ElementUpdate = z.infer<typeof elementUpdate>;
 export { elementInput, type ElementInput };
 
 type OpsResult = Awaited<ReturnType<typeof applyOps>>;
+
+/**
+ * Move elements in the stacking order (behind a given element, or behind everything) and number
+ * the stack again from 1. Returns only the elements whose z changed. Frames stay behind the rest.
+ */
+export function restack(elements: BoardElement[], moves: Array<{ id: string; below?: string; toBack?: boolean }>): BoardElement[] {
+  const stack = [...elements].sort((a, b) => Number(b.type === "frame") - Number(a.type === "frame") || num(a.z, 0) - num(b.z, 0));
+  const moving = new Set(moves.map((m) => m.id));
+  let order = stack.filter((e) => !moving.has(e.id));
+  const toBack = moves.filter((m) => m.toBack).map((m) => stack.find((e) => e.id === m.id)!).filter(Boolean);
+  const frames = order.filter((e) => e.type === "frame").length;
+  order.splice(frames, 0, ...toBack);
+  for (const move of moves) {
+    if (move.toBack || !move.below) continue;
+    const element = stack.find((e) => e.id === move.id), at = order.findIndex((e) => e.id === move.below);
+    if (!element) continue;
+    if (at < 0) order.push(element); else order.splice(at, 0, element);
+  }
+  const changed: BoardElement[] = [];
+  order.forEach((e, index) => { if (num(e.z, 0) !== index + 1) changed.push({ ...e, z: index + 1 }); });
+  return changed;
+}
 /**
  * Drawing on one board on the agent's behalf: add, change and remove elements, each saved and
  * sent to the open browsers as it happens. Shared by the board's own chat and the main chat's
@@ -202,7 +260,12 @@ export function boardEditor(boardId: string, opts: { origin?: string | null; onO
       const order = wanted.map((item, index) => ({ item, index })).sort((a, b) => Number(b.item.type === "frame") - Number(a.item.type === "frame"));
       const built: BoardElement[] = [];
       for (const { item, index } of order) built[index] = buildElement(item, ids[index]!, nextZ++, resolve);
-      await save({ upserts: built });
+      const moves = wanted.map((item, index) => ({ id: ids[index]!, below: resolve(item.below), toBack: !!item.toBack })).filter((m) => m.below || m.toBack);
+      const restacked = moves.length ? restack([...existing, ...built], moves) : [];
+      // New elements, plus any existing ones whose place in the stack changed to make room.
+      const changedExisting = restacked.filter((e) => known.has(e.id));
+      const newOnes = built.map((e) => restacked.find((r) => r.id === e.id) ?? e);
+      await save({ upserts: [...changedExisting, ...newOnes] });
       return wanted.map((item, index) => ({ id: ids[index]!, ...(item.key ? { key: item.key } : {}) }));
     },
     async update(updates: ElementUpdate[]) {
@@ -219,7 +282,22 @@ export function boardEditor(boardId: string, opts: { origin?: string | null; onO
         if (update.color) next.color = colour(update.color, String(existing.color ?? "#1f2937"));
         if (update.align) next.align = update.align;
         if (update.bold != null) { if (update.bold) next.bold = true; else delete next.bold; }
+        if (typeof update.opacity === "number") { if (update.opacity < 1) next.opacity = update.opacity; else delete next.opacity; }
+        if (typeof update.strokeWidth === "number") next.sw = Math.max(0.5, update.strokeWidth);
+        if (existing.type === "pen" && Array.isArray(update.points) && update.points.length >= 2) {
+          // Reshape a drawn shape: new outline, same look.
+          const reshaped = buildElement({ type: "path", points: update.points, closed: !!existing.closed, smooth: !existing.sharp, fill: String(existing.fill ?? "none") }, existing.id, num(existing.z, 0), () => undefined);
+          for (const key of ["x", "y", "w", "h", "bw", "bh", "pts"] as const) next[key] = reshaped[key];
+        }
         changed.push(next);
+      }
+      const moves = updates.flatMap((u) => {
+        const id = keys.get(u.id) ?? u.id, below = u.below ? keys.get(u.below) ?? u.below : undefined;
+        return byId.has(id) && ((below && byId.has(below)) || u.toBack) ? [{ id, below: below && byId.has(below) ? below : undefined, toBack: !!u.toBack }] : [];
+      });
+      if (moves.length) {
+        const merged = new Map([...byId].map(([id, e]) => [id, changed.find((c) => c.id === id) ?? e]));
+        for (const e of restack([...merged.values()], moves)) { const at = changed.findIndex((c) => c.id === e.id); if (at >= 0) changed[at] = e; else changed.push(e); }
       }
       if (changed.length) await save({ upserts: changed });
       return { updated: changed.map((e) => e.id), ...(missing.length ? { notFound: missing } : {}) };
@@ -234,7 +312,7 @@ export function boardEditor(boardId: string, opts: { origin?: string | null; onO
 export const ILLUSTRATION_GUIDE = `DRAWING A PICTURE (a scene, an object, an illustration)
 - You can draw real pictures. Compose them from filled shapes: path for anything organic or irregular (mountain ranges, hills, rivers, coastlines, tree crowns, clouds, animals), ellipse for round things (sun, moon, fruit, wheels), rect for flat bands and boxes (sky, ground, buildings, trunks), triangle for simple peaks and roofs.
 - path takes points as [[x,y],...] in board coordinates. closed:true with a fill makes a solid area. smooth (the default) flows through the points, which suits rivers, hills and foliage; smooth:false gives straight edges and sharp corners, which suits rocky peaks and buildings. Use 8 to 40 points so curves look natural, and vary them: nature is irregular, never a row of identical shapes.
-- Layer back to front IN ORDER within one call, because later elements cover earlier ones: background (sky), far things (sun, distant mountains), middle (hills, river), near things (trees, rocks), then small details (highlights, snow caps, reflections, birds).
+- Layer back to front IN ORDER within one call, because later elements cover earlier ones (when adding to an existing picture, use below or toBack instead): background (sky), far things (sun, distant mountains), middle (hills, river), near things (trees, rocks), then small details (highlights, snow caps, reflections, birds).
 - Filled areas need no outline: leave stroke out or set it to 'none'. For rect set radius 0 when it is a band of sky or ground.
 - Use real colours as #hex, chosen for the scene (several greens for foliage, lighter and bluer tones for things further away, a warm sky at sunrise). opacity makes haze, reflections and soft shadows.
 - Plan the composition first: pick a canvas area (say 1200x700), a horizon line, and where each thing sits, then give every element exact coordinates inside that area. Things further away are smaller and higher up; a river narrows as it recedes.
@@ -269,7 +347,14 @@ ${project.tools.length ? `THE PROJECT
 
 ` : ""}THE BOARD
 - Coordinates are in pixels; x grows right, y grows down. Elements are positioned by their top-left corner.
-- Start new work at about x=${origin.x}, y=${origin.y} and build right and down from there. That area is empty. Never place new work on top of existing elements unless asked to change them.
+- For something NEW and separate, start at about x=${origin.x}, y=${origin.y} and build right and down from there; that area is empty.
+- z is the stacking order: higher z is drawn on top.
+
+CHANGING OR ADDING TO WHAT IS ALREADY THERE
+- A follow-up such as "add mountains", "make it night", "put a boat on the river" or "add a login button" is about something already on the board, usually what you drew last (the group marked "changed most recently" below). Change THAT in place. Never draw a second copy beside it.
+- Put the new parts inside its bounds, at the right depth. Things further away (sky, sun, distant mountains, a background) go BEHIND the existing scene: give them below: <id of the element they sit behind> (often the group's back-most element), or toBack: true for a sky or backdrop. Nearer things go in front, which is the default.
+- Make room by changing what is there with update_elements: move or resize the ground to open up sky, recolour a background, reshape a path by giving it new points, or restack an element with below or toBack. Remove what the change replaces with delete_elements instead of covering it.
+- Keep the existing look (palette, style, scale) so the result reads as one picture.
 - Leave at least 24px between sibling elements. Align things on a grid: equal widths in a column, equal heights in a row.
 - Colours: use the palette names yellow, orange, pink, purple, blue, teal, green, red, gray, white, black, slate, accent, or 'none'. Use colour to carry meaning (one colour per theme), not for decoration.
 
@@ -291,7 +376,10 @@ SKETCHING A SCREEN OR FEATURE PREVIEW (wireframes)
 
 ${selection.length ? `The person has ${selection.length} element(s) selected, marked with * below. "This", "these" and "it" mean the selection.` : "Nothing is selected."}
 
-WHAT IS ON THE BOARD NOW (id type position "text")
+PICTURES AND GROUPS ON THE BOARD (elements that overlap, with their bounds and stacking)
+${describeGroups(elements)}
+
+WHAT IS ON THE BOARD NOW (id type position z "text"; most recently changed first)
 ${describeBoard(elements, selection)}`;
 }
 
