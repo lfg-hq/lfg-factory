@@ -59,7 +59,7 @@ the Run menu and click **Run**. Quitting the app stops the server.
 npm install
 npm start          # build and launch the app
 npm run runner -- --server http://localhost:8000 --token lfgr_… --auto-approve   # headless
-npm run dist       # package with electron-builder (unsigned)
+npm run dist       # package with electron-builder into release/ (not notarized)
 ```
 
 `src/runner.ts` is plain Node with no Electron imports, so the app, the CLI and the
