@@ -30,8 +30,16 @@ settings.post("/model", async (c) => {
   const { modelKey, projectId } = await c.req.json<{ modelKey: string; projectId?: string }>();
 
   if (!modelKey) return c.json({ error: "modelKey required" }, 400);
-  // The agent on the person's computer is chosen in Settings → Integrations, not here.
-  if (modelKey.startsWith("local/")) return c.json({ success: true });
+  // The agent on the person's computer is chosen in Settings → Integrations; here, its model.
+  if (modelKey.startsWith("local/")) {
+    const { localAiSettings, setLocalAiSettings, LOCAL_AGENT_MODELS } = await import("../../services/runner/opt-in.ts");
+    const [, agent, model] = modelKey.split("/");
+    const local = await localAiSettings(user.id);
+    if (agent !== local.agent) return c.json({ error: "Pick the agent in Settings → Integrations first." }, 400);
+    if (model && !LOCAL_AGENT_MODELS[local.agent].some(m => m.id === model)) return c.json({ error: "Unknown model for this agent" }, 400);
+    await setLocalAiSettings(user.id, { model: model || null });
+    return c.json({ success: true, modelKey });
+  }
 
   // Validate against known models
   const known = (await availableChatModels(user.id, projectId)).find((m) => m.key === modelKey);
@@ -70,6 +78,25 @@ settings.post("/role", async (c) => {
     });
 
   return c.json({ success: true, role });
+});
+
+// POST /api/settings/local-effort — { effort: "low"|…|"max"|null }: effort for the agent on the person's computer
+settings.post("/local-effort", async (c) => {
+  const user = c.get("user");
+  const { effort } = await c.req.json<{ effort?: string | null }>();
+  const { localAiSettings, setLocalAiSettings, LOCAL_AGENT_EFFORTS } = await import("../../services/runner/opt-in.ts");
+  const local = await localAiSettings(user.id);
+  if (effort && !(LOCAL_AGENT_EFFORTS[local.agent] as string[]).includes(effort)) return c.json({ error: "Unknown effort level for this agent" }, 400);
+  const saved = await setLocalAiSettings(user.id, { effort: (effort || null) as any });
+  return c.json({ success: true, effort: saved.effort });
+});
+
+// GET /api/settings/local-usage — the plan usage the agent on the person's computer last reported
+settings.get("/local-usage", async (c) => {
+  const { localAgentUsage, localAiSettings } = await import("../../services/runner/opt-in.ts");
+  const userId = c.get("user").id;
+  const [local, usage] = await Promise.all([localAiSettings(userId), localAgentUsage(userId)]);
+  return c.json({ enabled: local.enabled, agent: local.agent, usage: usage?.agent === local.agent ? usage : null });
 });
 
 // GET /api/settings/models — list available models

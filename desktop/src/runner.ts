@@ -19,6 +19,7 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import os from "node:os";
 import type { AgentEvent, AgentKind, ClaudeTaskPayload, RunnerJobOffer, RunnerToServer, ServerToRunner } from "./protocol.ts";
+import { isAgentEffort, isAgentModel } from "./protocol.ts";
 import { AGENTS, detectAgents, runAgent } from "./agents.ts";
 
 export type RunnerState = "connecting" | "connected" | "disconnected" | "unauthorized" | "stopped";
@@ -234,8 +235,13 @@ export class Runner {
       }
       const cwd = join(this.opts.workRoot, "chats", p.conversationId.replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, 80));
       mkdirSync(cwd, { recursive: true });
+      const model = isAgentModel(p.model) ? p.model : undefined;
+      const effort = isAgentEffort(p.effort) ? p.effort : undefined;
       const attempt = (sessionId?: string) => runAgent(agent, {
-        prompt: p.prompt, instructions: p.instructions, sessionId, mcp: p.mcp, readOnly: true, cwd,
+        // No session to continue here: the fuller prompt carries the conversation so far.
+        prompt: sessionId ? p.prompt : p.freshPrompt || p.prompt,
+        instructions: p.instructions, instructionsMode: p.instructionsMode === "replace" ? "replace" : "append",
+        model, effort, sessionId, mcp: p.mcp, readOnly: true, cwd,
         env: this.opts.env ?? process.env, bin: this.bins()[agent],
         onEvent: event => this.send({ type: "job.event", jobId: job.id, event }),
         onSpawn: child => { active.child = child; },
@@ -319,6 +325,7 @@ export async function runAgentTask(job: BuildJobOffer, active: ActiveJob, ctx: T
   ctx.progress(`Starting ${AGENTS[ctx.agent].label}…`);
   const attempt = (sessionId?: string) => runAgent(ctx.agent, {
     prompt: p.prompt, cwd: worktree, sessionId, allowedTools: tools, maxTurns: p.maxTurns, env: ctx.env, bin: ctx.bin,
+    model: isAgentModel(p.model) ? p.model : undefined, effort: isAgentEffort(p.effort) ? p.effort : undefined,
     onEvent: ctx.agentEvent,
     onSpawn: child => { active.child = child; },
   }).finally(() => { active.child = undefined; });

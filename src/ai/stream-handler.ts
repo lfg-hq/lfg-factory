@@ -1135,7 +1135,10 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     const result = useLocal
       ? await (await import("../services/runner/chat-turn.ts")).startLocalChatTurn({
           userId, conversationId: convId!, projectId: internalProjectId ?? null, messageId: userMsgRow?.id,
-          agent: localAi!.agent,
+          agent: localAi!.agent, model: localAi!.model, effort: localAi!.effort,
+          // The same per-turn block the web chat appends to the user's message.
+          turnContext: turnContext.length ? turnContextBlock(turnContext) : undefined,
+          onCompacted: () => { noteActivity("Your computer's agent condensed earlier context", "compactContext"); condenseNotice("start"); condenseNotice("done"); },
           instructions: [systemPrompt, ...contextMessages.filter((m: any) => m.role === "system").map((m: any) => String(m.content))].join("\n\n"),
           userMessage: imgFiles.length
             ? `${userMessage}\n\n[Attached images, by imageId (pass to createTickets attachmentImageIds): ${imgFiles.map(f => `"${f.name || f.id}" → ${f.id}`).join("; ")}]`

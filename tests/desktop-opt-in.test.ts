@@ -27,10 +27,12 @@ const { projectTickets } = await import("../src/db/schema/tickets.ts");
 const { default: runnerApi } = await import("../src/routes/api/runner.ts");
 const { default: ticketsApi } = await import("../src/routes/api/tickets.ts");
 const { TicketsListPage } = await import("../src/templates/pages/tickets-list.tsx");
+const { default: settingsApi } = await import("../src/routes/api/settings.ts");
 
 const app = new Hono();
 app.route("/api/runner", runnerApi);
 app.route("/api/projects", ticketsApi);
+app.route("/api/settings", settingsApi);
 const call = (method: string, path: string, body?: unknown, user = "ana") =>
   app.request(path, { method, headers: { "content-type": "application/json", "x-test-user": user }, body: body === undefined ? undefined : JSON.stringify(body) });
 
@@ -118,4 +120,35 @@ test("when it's on, Build and ticket chat go to the person's computer", async ()
   bus.emit({ type: "ticket.queued", payload: { ticketId: "t4", projectId: "p", actorId: "ana" } } as never);
   await Bun.sleep(300);
   expect(await jobsFor("t4")).toHaveLength(0);
+});
+
+test("the chat picker offers the agent's models and effort; the choice reaches builds", async () => {
+  const { chatPickerModels } = await import("../src/services/available-models.ts");
+  await call("PUT", "/api/runner/settings", { enabled: true, agent: "claude" });
+
+  const picker = await chatPickerModels("ana", "pub-p");
+  expect(picker.local).toBe(true);
+  expect(picker.models.map(m => m.key)).toEqual(["local/claude", "local/claude/opus", "local/claude/sonnet", "local/claude/haiku", "local/claude/fable"]);
+  expect(picker.local && picker.selectedKey).toBe("local/claude");
+
+  expect((await call("POST", "/api/settings/model", { modelKey: "local/claude/sonnet" })).status).toBe(200);
+  expect((await call("POST", "/api/settings/model", { modelKey: "local/claude/--danger" })).status).toBe(400);
+  expect((await call("POST", "/api/settings/model", { modelKey: "local/codex/opus" })).status).toBe(400);
+  expect((await call("POST", "/api/settings/local-effort", { effort: "high" })).status).toBe(200);
+  expect((await call("POST", "/api/settings/local-effort", { effort: "turbo" })).status).toBe(400);
+  const after = await chatPickerModels("ana", "pub-p");
+  expect(after.local && [after.selectedKey, after.effort]).toEqual(["local/claude/sonnet", "high"]);
+
+  const { startTicketOnRunner } = await import("../src/services/runner/ticket-job.ts");
+  await db.insert(projectTickets).values({ id: "t9", projectId: "p", ticketKey: "APP-9", name: "Add logout", description: "Users can log out." });
+  const payload = JSON.parse((await startTicketOnRunner({ projectId: "p", ticketId: "t9", actorId: "ana" })).payload);
+  expect([payload.agent, payload.model, payload.effort]).toEqual(["claude", "sonnet", "high"]);
+
+  // Switching agent drops a model that agent doesn't have.
+  await call("PUT", "/api/runner/settings", { agent: "codex" });
+  const codex = await chatPickerModels("ana", "pub-p");
+  expect(codex.local && [codex.selectedKey, codex.effort]).toEqual(["local/codex", "high"]);
+
+  const usage = await (await call("GET", "/api/settings/local-usage")).json();
+  expect(usage).toMatchObject({ enabled: true, agent: "codex", usage: null });
 });

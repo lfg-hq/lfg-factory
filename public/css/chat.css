@@ -3386,3 +3386,51 @@ input:checked + .turbo-slider + .turbo-label,
 
 /* Dictation: a silent microphone is called out instead of hidden. */
 .audio-recording-indicator[data-phase="recording"][data-quiet="on"] .dictation-status { position:static;width:auto;height:auto;clip-path:none;flex:0 1 auto;max-width:60%;font-size:12px;color:#b54708; }
+
+/* "Use my computer for AI": plan-usage meter beside the composer status line */
+.local-usage-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: #8b5cf6;
+    cursor: pointer;
+}
+.local-usage-btn[hidden] { display: none; }
+.local-usage-btn:hover { background: rgba(100, 116, 139, 0.15); }
+.local-usage-btn.warn { color: #f59e0b; }
+.local-usage-pop {
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    margin-bottom: 8px;
+    width: 320px;
+    padding: 14px 16px;
+    background: #2a2a2a;
+    border: 1px solid #3a3a3a;
+    border-radius: 12px;
+    box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.5);
+    color: #e5e7eb;
+    font-size: 13px;
+    z-index: 1002;
+}
+.local-usage-pop[hidden] { display: none; }
+.local-usage-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 12px; color: #9ca3af; }
+.local-usage-ago { font-size: 12px; }
+.local-usage-row { margin-bottom: 12px; }
+.local-usage-line { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.local-usage-meta { color: #9ca3af; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.local-usage-bar { height: 6px; border-radius: 3px; background: rgba(148, 163, 184, 0.25); overflow: hidden; }
+.local-usage-fill { height: 100%; border-radius: 3px; background: #8b5cf6; }
+.local-usage-fill.warn { background: #f59e0b; }
+.local-usage-turn { color: #9ca3af; font-size: 12px; }
+[data-theme="light"] .local-usage-pop { background: #fff; border-color: #e5e7eb; box-shadow: 0 -8px 24px rgba(15, 23, 42, 0.12); color: #111827; }
+[data-theme="light"] .local-usage-head,
+[data-theme="light"] .local-usage-meta,
+[data-theme="light"] .local-usage-turn { color: #6b7280; }
+[data-theme="light"] .local-usage-bar { background: #e5e7eb; }

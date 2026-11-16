@@ -18,6 +18,7 @@ import { projectTickets } from "../../db/schema/tickets.ts";
 import { projects } from "../../db/schema/projects.ts";
 import { addLog, attachLogOutput, formatToolUse } from "../ticket-logs.ts";
 import { broadcastToUser } from "../../ws/connection-manager.ts";
+import { localAgentUsage, recordLocalAgentUsage } from "./opt-in.ts";
 import { AGENT_LABELS, RUNNER_PROTOCOL_VERSION, isAgentKind, type AgentEvent, type ChatTurnPayload, type ClaudeTaskPayload, type RunnerToServer, type ServerToRunner } from "./protocol.ts";
 
 export interface RunnerConn {
@@ -191,6 +192,12 @@ async function handleRunnerMessage(conn: RunnerConn, raw: string | Buffer): Prom
         await db.update(runnerJobs).set({ agentSession: msg.event.id.slice(0, 200) }).where(eq(runnerJobs.id, job.id));
       }
       notify(job.id, { type: "event", event: msg.event });
+      if ((msg.event.type === "limits" || msg.event.type === "result") && isAgentKind(job.agent)) {
+        const userId = job.userId;
+        await recordLocalAgentUsage(userId, job.agent, msg.event)
+          .then(async () => broadcastToUser(userId, { type: "local_agent_usage", usage: await localAgentUsage(userId) }))
+          .catch(error => console.warn("[runner] usage not saved:", (error as Error).message));
+      }
       await logNormalizedEvent(job, msg.event);
       return;
     }

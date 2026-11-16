@@ -45,7 +45,8 @@ async function handleChatPage(c: import("hono").Context, conversationId?: string
     db.select().from(modelSelections).where(eq(modelSelections.userId, user.id)).then(r => r[0]),
     db.select().from(agentRoles).where(eq(agentRoles.userId, user.id)).then(r => r[0]),
   ]);
-  const { models, local } = await chatPickerModels(user.id, projectId);
+  const picker = await chatPickerModels(user.id, projectId);
+  const { models, local } = picker;
 
   return c.html(
     ChatPage({
@@ -53,7 +54,8 @@ async function handleChatPage(c: import("hono").Context, conversationId?: string
       projectId,
       projectName: project.name,
       conversationId,
-      modelKey: !local && models.some(m => m.key === modelSel?.selectedModel) ? modelSel!.selectedModel : models[0]?.key ?? "",
+      modelKey: picker.local ? picker.selectedKey : models.some(m => m.key === modelSel?.selectedModel) ? modelSel!.selectedModel : models[0]?.key ?? "",
+      localAgent: picker.local ? { efforts: picker.efforts, effort: picker.effort } : undefined,
       roleKey: roleRow?.name ?? "product_analyst",
       models,
     })

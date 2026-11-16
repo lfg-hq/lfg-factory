@@ -840,6 +840,10 @@ document.addEventListener('DOMContentLoaded', () => {
             lastHeartbeatResponse = Date.now();
 
             // Handle heartbeat
+            if (data.type === 'local_agent_usage') {
+                window.dispatchEvent(new CustomEvent('lfg-local-usage', { detail: data.usage }));
+                return;
+            }
             if (data.type === 'heartbeat') {
                 lastHeartbeatResponse = Date.now();
                 // Send acknowledgment

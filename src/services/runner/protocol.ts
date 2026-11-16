@@ -27,7 +27,21 @@ export type AgentEvent =
   | { type: "text"; text: string }
   | { type: "tool_start"; id: string; name: string; input?: Record<string, unknown>; summary?: string }
   | { type: "tool_result"; id: string; output: string; isError?: boolean }
-  | { type: "result"; text?: string; isError?: boolean; usage?: { inputTokens?: number; outputTokens?: number } };
+  | { type: "result"; text?: string; isError?: boolean; usage?: { inputTokens?: number; outputTokens?: number; costUsd?: number } }
+  /** The agent condensed its own conversation to fit its context (Claude Code's auto-compact). */
+  | { type: "compacted"; trigger?: string; preTokens?: number }
+  /** The person's plan limits as the agent last saw them (Claude Code reports these each turn). */
+  | { type: "limits"; windows: AgentLimitWindow[] };
+
+/** One usage window of the person's plan: utilization 0–1, resetsAt in epoch seconds. */
+export interface AgentLimitWindow { kind: string; utilization?: number; resetsAt?: number; status?: string }
+
+/** Effort levels the agents understand (Claude Code takes all; Codex low/medium/high). */
+export const AGENT_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type AgentEffort = (typeof AGENT_EFFORTS)[number];
+export const isAgentEffort = (v: unknown): v is AgentEffort => typeof v === "string" && (AGENT_EFFORTS as readonly string[]).includes(v);
+/** A model name an agent CLI accepts: an alias (opus, sonnet…) or a full id. Nothing that could be a flag. */
+export const isAgentModel = (v: unknown): v is string => typeof v === "string" && /^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,79}$/.test(v);
 
 export interface ClaudeTaskPayload {
   protocol: number;
@@ -49,6 +63,9 @@ export interface ClaudeTaskPayload {
   /** Suggested Claude Code tools. The runner intersects these with its own allow-list. */
   allowedTools?: string[];
   maxTurns?: number;
+  /** Model and effort for the agent (absent: the agent's own default). */
+  model?: string;
+  effort?: AgentEffort;
 }
 
 /** One chat turn answered by the agent on the person's computer (no repo, no git). */
@@ -62,6 +79,12 @@ export interface ChatTurnPayload {
   instructions: string;
   /** Continue this agent session (later turns of the same conversation). */
   sessionId?: string;
+  /** The prompt to use instead when that session can't be continued here: carries the conversation so far. */
+  freshPrompt?: string;
+  /** "replace": LFG's instructions are the whole system prompt (chat), not an addition to the agent's own. */
+  instructionsMode?: "replace" | "append";
+  model?: string;
+  effort?: AgentEffort;
   /** LFG's MCP server for this turn: the agent reads and writes LFG's data through it. */
   mcp: { url: string; token: string };
 }

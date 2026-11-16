@@ -41,11 +41,14 @@ const args = process.argv.slice(2);
 if (args[0] === "--version") { console.log("2.9.9 (Claude Code)"); process.exit(0); }
 const arg = (f) => { const i = args.indexOf(f); return i >= 0 ? args[i + 1] : undefined; };
 const say = (o) => console.log(JSON.stringify(o));
+require("node:fs").appendFileSync(${JSON.stringify(join(root, "calls.jsonl"))}, JSON.stringify(args) + "\\n");
 const lfg = JSON.parse(arg("--mcp-config")).mcpServers.lfg;
 const rpc = async (method, params, id = 1) => (await (await fetch(lfg.url, { method: "POST", headers: { ...lfg.headers, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id, method, params }) })).json());
 await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "fake", version: "1" } });
 const resumed = arg("--resume");
 say({ type: "system", subtype: "init", session_id: resumed ?? "sess-1" });
+say({ type: "rate_limit_event", rate_limit_info: { status: "allowed", unifiedWindows: { five_hour: { utilization: 0.08, resetsAt: 1794865800, status: "allowed" }, seven_day: { utilization: 0.17, resetsAt: 1795312800, status: "allowed" } } } });
+if (resumed) say({ type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "auto", pre_tokens: 160000 } });
 say({ type: "assistant", message: { content: [{ type: "text", text: resumed ? "Continuing session " + resumed + "." : "I'll create the ticket." }] } });
 if (!resumed) {
   const input = { tickets: [{ name: "Add login", description: "Users can log in with email.", acceptanceCriteria: ["Email is validated", "Wrong password shows an error"] }] };
@@ -53,9 +56,9 @@ if (!resumed) {
   const result = await rpc("tools/call", { name: "createTickets", arguments: input }, 2);
   say({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "tu1", content: result.result.content }] } });
 }
-const system = arg("--append-system-prompt") ?? "";
+const system = arg("--system-prompt") ?? arg("--append-system-prompt") ?? "";
 say({ type: "assistant", message: { content: [{ type: "text", text: system.includes("You are LFG's planner") ? "Instructions received." : "No instructions!" }] } });
-say({ type: "result", subtype: "success", is_error: false, result: "Done." });
+say({ type: "result", subtype: "success", is_error: false, result: "Done.", total_cost_usd: 0.01, usage: { input_tokens: 10, cache_read_input_tokens: 990, output_tokens: 20 } });
 `);
 chmodSync(fakeClaude, 0o755);
 
@@ -105,15 +108,20 @@ beforeAll(async () => {
 });
 afterAll(() => { runner?.stop(); server?.stop(true); });
 
-async function turn(message: string) {
+const calls = () => readFileSync(join(root, "calls.jsonl"), "utf8").trim().split("\n").map(l => JSON.parse(l) as string[]);
+const argOf = (args: string[], flag: string) => { const i = args.indexOf(flag); return i >= 0 ? args[i + 1] : undefined; };
+
+async function turn(message: string, extra: Partial<Parameters<typeof startLocalChatTurn>[0]> = {}) {
   const statuses: string[] = [];
   const stream = await startLocalChatTurn({
+    ...extra,
     userId: "ana", conversationId: "c1", projectId: "p", agent: "claude",
     instructions: "You are LFG's planner.", userMessage: message,
     history: [{ role: "user", content: "Earlier question" }, { role: "assistant", content: "Earlier answer" }, { role: "user", content: message }],
     signal: new AbortController().signal, onStatus: s => statuses.push(s),
     serverUrl: `http://127.0.0.1:${PORT}`,
-  });
+    ...extra,
+  } as Parameters<typeof startLocalChatTurn>[0]);
   const events: any[] = [];
   for await (const e of stream.fullStream) events.push(e);
   await stream.response;
@@ -135,10 +143,51 @@ test("the agent on the computer answers, and what it creates is saved in LFG", a
   expect(tickets.map(t => [t.projectId, t.name])).toEqual([["p", "Add login"]]);
 });
 
-test("the next turn continues the agent's session", async () => {
-  const { events } = await turn("Now add signup");
+test("LFG's prompt is the agent's whole system prompt, not an addition to Claude Code's", () => {
+  const first = calls()[0]!;
+  expect(argOf(first, "--system-prompt")).toContain("You are LFG's planner.");
+  expect(first).not.toContain("--append-system-prompt");
+  expect(first).not.toContain("--model"); // no choice made: the computer's own default
+});
+
+test("the next turn continues the agent's session, and its compaction reaches the chat", async () => {
+  let compacted: unknown;
+  const { events } = await turn("Now add signup", { onCompacted: info => { compacted = info; } });
   const texts = events.filter(e => e.type === "text-delta").map(e => e.text);
   expect(texts[0]).toBe("Continuing session sess-1.");
+  expect(compacted).toEqual({ trigger: "auto", preTokens: 160000 });
+});
+
+test("the chosen model and effort, and this turn's context, reach the agent", async () => {
+  await db.insert(conversations).values({ id: "c4", userId: "ana", projectId: "pub-p", title: "x" });
+  await turn("Review LFG-12", { conversationId: "c4", model: "sonnet", effort: "high", turnContext: "<turn-context>@LFG-12: Add login</turn-context>" });
+  const args = calls().at(-1)!;
+  expect(argOf(args, "--model")).toBe("sonnet");
+  expect(argOf(args, "--effort")).toBe("high");
+  expect(argOf(args, "-p")).toContain("Review LFG-12");
+  expect(argOf(args, "-p")).toContain("@LFG-12: Add login");
+});
+
+test("the plan usage the agent reports is kept for the person", async () => {
+  const { localAgentUsage } = await import("../src/services/runner/opt-in.ts");
+  for (let i = 0; i < 50 && !(await localAgentUsage("ana"))?.lastTurn; i++) await Bun.sleep(20);
+  const usage = await localAgentUsage("ana");
+  expect(usage?.agent).toBe("claude");
+  expect(usage?.windows.map(w => [w.kind, w.utilization])).toEqual([["five_hour", 0.08], ["seven_day", 0.17]]);
+  expect(usage?.lastTurn).toMatchObject({ inputTokens: 1000, outputTokens: 20, costUsd: 0.01 });
+});
+
+test("a fresh session starts from LFG's summary of older turns plus the latest messages", async () => {
+  const { transcript } = await import("../src/services/runner/chat-turn.ts");
+  const history = [
+    { role: "assistant", content: "Conversation handoff — historical evidence.\nDecided: email login, no SSO." },
+    ...Array.from({ length: 200 }, (_, i) => ({ role: i % 2 ? "assistant" : "user", content: `message ${i} ` + "x".repeat(300) })),
+  ];
+  const text = transcript(history, 8000);
+  expect(text).toContain("Decided: email login, no SSO.");
+  expect(text).toContain("message 199");
+  expect(text).not.toContain("message 0 ");
+  expect(text.length).toBeLessThan(8200);
 });
 
 test("stopping a turn cancels it on the computer", async () => {

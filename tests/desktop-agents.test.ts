@@ -106,3 +106,34 @@ echo '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}'
 
   await expect(runAgent("copilot", { prompt: "hi", cwd: dir, env: process.env, bin: join(dir, "nope"), onEvent: () => {} })).rejects.toThrow("GitHub Copilot isn't installed");
 });
+
+test("Claude Code: plan limits and auto-compaction become events", () => {
+  const events = parseAll("claude", [
+    { type: "rate_limit_event", rate_limit_info: { status: "allowed", resetsAt: 1794865800, rateLimitType: "five_hour",
+      unifiedWindows: { five_hour: { utilization: 0.08, resetsAt: 1794865800, status: "allowed" }, seven_day: { utilization: 0.17, resetsAt: 1795312800, status: "allowed" } } } },
+    { type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "auto", pre_tokens: 155000 } },
+    { type: "result", subtype: "success", is_error: false, result: "ok", total_cost_usd: 0.0025, usage: { input_tokens: 2, cache_read_input_tokens: 24140, cache_creation_input_tokens: 11103, output_tokens: 4 } },
+  ]);
+  expect(events).toEqual([
+    { type: "limits", windows: [
+      { kind: "five_hour", utilization: 0.08, resetsAt: 1794865800, status: "allowed" },
+      { kind: "seven_day", utilization: 0.17, resetsAt: 1795312800, status: "allowed" },
+    ] },
+    { type: "compacted", trigger: "auto", preTokens: 155000 },
+    { type: "result", isError: false, text: "ok", usage: { inputTokens: 35245, outputTokens: 4, costUsd: 0.0025 } },
+  ]);
+});
+
+test("model, effort and how LFG's instructions are given reach each CLI", () => {
+  const claude = AGENTS.claude.invocation({ prompt: "hi", cwd: "/tmp", instructions: "Be LFG.", instructionsMode: "replace", model: "opus", effort: "xhigh", readOnly: true });
+  const at = (args: string[], f: string) => args[args.indexOf(f) + 1];
+  expect(at(claude.args, "--system-prompt")).toBe("Be LFG.");
+  expect(claude.args).not.toContain("--append-system-prompt");
+  expect(at(claude.args, "--model")).toBe("opus");
+  expect(at(claude.args, "--effort")).toBe("xhigh");
+  const build = AGENTS.claude.invocation({ prompt: "fix", cwd: "/tmp", instructions: "Ticket rules." });
+  expect(at(build.args, "--append-system-prompt")).toBe("Ticket rules.");
+  expect(build.args).not.toContain("--model");
+  const codex = AGENTS.codex.invocation({ prompt: "hi", cwd: "/tmp", effort: "max" });
+  expect(codex.args).toContain('model_reasoning_effort="high"'); // Codex tops out at high
+});

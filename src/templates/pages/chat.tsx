@@ -10,7 +10,9 @@ interface ChatPageProps {
   conversationId?: string;
   modelKey?: string;
   roleKey?: string;
-  models?: Array<{ key: string; providerLabel: string; requiresPro: boolean; available?: boolean }>;
+  models?: Array<{ key: string; providerLabel: string; requiresPro: boolean; available?: boolean; label?: string; optionLabel?: string }>;
+  /** "Use my computer for AI" is on: effort choices and the plan-usage meter. */
+  localAgent?: { efforts: string[]; effort: string | null };
 }
 
 export function ChatPage({
@@ -21,6 +23,7 @@ export function ChatPage({
   modelKey = "claude_4.5_sonnet",
   roleKey = "product_analyst",
   models = [],
+  localAgent,
 }: ChatPageProps) {
   return html`<!DOCTYPE html>
 <html lang="en" data-theme="dark">
@@ -42,7 +45,7 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/git-tab.css" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
   <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261022-build-rows" />
-  <link rel="stylesheet" href="/public/css/chat.css?v=20261023-dictation-fit" />
+  <link rel="stylesheet" href="/public/css/chat.css?v=20261117-local-usage" />
   <link rel="stylesheet" href="/public/css/artifacts-fix.css" />
   <link rel="stylesheet" href="${fresh("/public/css/boards-tab.css")}" />
   <link rel="stylesheet" href="${fresh("/public/css/evals.css")}" />
@@ -323,6 +326,7 @@ export function ChatPage({
         showTurboToggle: false,
         turboEnabled: false,
         showMic: true,
+        localAgent,
       })}
       </div>
     </div>
@@ -596,7 +600,7 @@ export function ChatPage({
   <script src="${fresh("/public/js/evals.js")}"></script>
   <script src="${fresh("/public/js/chat-artifacts.js")}"></script>
   <script src="/public/js/chatgpt-connection.js?v=20261018"></script>
-  <script src="/public/js/chat.js?v=20261113-home-files"></script>
+  <script src="/public/js/chat.js?v=20261117-local-usage"></script>
   <script src="/public/js/voice-mode.js?v=20261016-voice-hidden" data-disabled="true"></script>
   <script src="/public/js/mobile-menu.js"></script>
 
@@ -629,6 +633,7 @@ export function ChatPage({
   </script>
 
   <script src="/public/js/connectors.js"></script>
+  ${localAgent ? html`<script src="${fresh("/public/js/local-agent.js")}"></script>` : ""}
 </body>
 </html>`;
 }

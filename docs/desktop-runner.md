@@ -41,6 +41,26 @@ so documents and tickets land in the DB. Its events come back as AI SDK stream e
 so cards, document panels, activity and saving work as for any chat. The agent's session
 is continued on the next turn.
 
+**Model, effort, prompt.** The chat's Model menu offers the agent's own default or, for
+Claude Code, Opus, Sonnet, Haiku or Fable (`--model`); an Effort menu sets `--effort`
+(Codex: `model_reasoning_effort`, up to high). Saved per person (`profiles.local_model`,
+`profiles.local_effort`) and used for chat turns and builds. For chat turns LFG's prompt
+*replaces* Claude Code's own (`--system-prompt`), so the chat answers as it does on the
+web; builds keep Claude Code's prompt and add LFG's.
+
+**Context and compaction.** Each turn carries the same per-turn block as the web chat
+(@ticket context, branch, notes, plan). The agent's session is continued per
+conversation and the agent compacts it itself; LFG shows that as "condensed earlier
+context". When there is no session on that computer (first turn there, another
+computer, an expired session) the agent starts from LFG's saved summary of older turns
+plus the latest messages. LFG doesn't refresh its own summary after local turns.
+
+**Plan usage.** Claude Code reports the plan's 5-hour and weekly windows on every turn
+(`rate_limit_event`). The runner forwards them, the server keeps the latest per person
+(`profiles.local_agent_usage`, `GET /api/settings/local-usage`, pushed live as
+`local_agent_usage`), and the composer shows a usage ring with a popover. Codex and
+Copilot don't report plan limits; the popover then shows the last turn's tokens.
+
 Agent adapters live in `desktop/src/agents.ts` (one per CLI, all producing the same
 events). Claude Code's output format is verified; Codex follows its documented
 `codex exec --json` events; Copilot CLI's JSON output isn't documented and is parsed
