@@ -84,7 +84,7 @@ ${SiteNav({ active: "portfolio" })}
         <span class="text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-pink-500">shipped.</span>
       </h1>
       <p class="text-lg text-slate-600 mt-6 max-w-2xl leading-relaxed animate-fade-up">
-        Real products for real operations, from an accounts team drowning in supplier invoices to a clinic that needed its phone answered. Each one was scoped with the people who use it, built on the LFG factory, and taken all the way to production.
+        Real products for real operations, from an accounts team buried in supplier invoices to a clinic that needed its phone answered. Each one was scoped with the people who use it, built on our software factory, and taken all the way to production. The factory itself is here too, and we can set it up for your team.
       </p>
       <div class="flex flex-wrap gap-2 mt-8">
         ${PORTFOLIO.map((p) => html`<a href="/portfolio/${p.slug}/" class="text-sm font-medium px-3.5 py-1.5 rounded-full bg-white border border-slate-200 text-slate-700 hover:border-brand-300 hover:text-brand-700 transition-colors">${p.name}</a>`)}

@@ -50,6 +50,102 @@ export interface PortfolioProject {
 
 export const PORTFOLIO: PortfolioProject[] = [
   {
+    slug: "software-factory",
+    name: "Software Factory",
+    client: "Software services firms and in-house engineering teams",
+    tagline: "Your delivery pipeline, run by agents",
+    summary:
+      "A configurable software factory that takes a request from scope to a verified pull request, plugs into the repositories, trackers, models and tools a team already uses, and runs on their infrastructure or ours.",
+    overview:
+      "Coding agents make an individual developer faster at an individual task. They do not scope a project, hold the architecture, sequence dependent work, prove that a change does what was asked, or keep the trail a client expects. We built a software factory that runs that whole path as one pipeline: scope, plan, document, ticket, implement, test and QA, with a person approving every verified change. It orchestrates Claude Code, Codex and Pi sessions in parallel sandboxes, runs each change in an in-app preview with a recorded walkthrough, and keeps only tests that are proven to catch the change. It is built to fit the business rather than the other way round: it connects to GitHub or GitLab, Jira or Linear, MCP servers and the models and subscriptions a company already pays for, and we customise templates, definition of done, review gates and stack conventions for each team. It runs hosted, self-hosted on the customer's own infrastructure, or set up and operated for them.",
+    icon: "factory",
+    gradient: "from-indigo-600 to-pink-500",
+    stack: ["TypeScript", "Bun", "Hono", "PostgreSQL / SQLite", "Docker sandboxes", "Firecracker microVMs", "Claude Code", "Codex", "MCP"],
+    glance: [
+      { label: "Built for", value: "Software services firms delivering for clients, and product teams that want more delivery capacity without growing headcount at the same rate" },
+      { label: "Problem", value: "AI makes writing code cheap, but delivery is still bottlenecked on scoping, coordination, verification and review, and generic tools ask teams to change how they work" },
+      { label: "Solution", value: "A seven-stage pipeline from request to verified pull request, customised to each team's process and connected to the systems it already runs" },
+      { label: "Deployment", value: "Hosted, self-hosted on the customer's cloud or data centre, or set up and run for them; open-source core under MIT" },
+      { label: "Engineering", value: "878 commits since March 2026, 154 test files, 25 database migrations" },
+    ],
+    challengeIntro:
+      "Every company delivers software differently, and the ones with the most to gain from AI (services firms and busy product teams) are the least able to stop and rebuild their process around a new tool.",
+    challenges: [
+      { title: "Coding is not delivery", text: "Scoping, architecture, sequencing, regression checks and sign-off still sit with people, so faster code alone does not ship faster." },
+      { title: "It has to fit what exists", text: "Repositories, trackers, branch protection, review rules and client vendor policies are already in place and can't be swapped out." },
+      { title: "Proof, not confidence", text: "A model that wrote the code will happily write tests that pass. Teams need evidence that a change does what was asked." },
+      { title: "Data and model control", text: "Some clients require code to stay on their infrastructure, or rule out particular model vendors." },
+      { title: "Accountability", text: "Clients want to know why something was built and who approved it, long after the work is merged." },
+    ],
+    approach:
+      "We built the factory as our own delivery engine first: the other products in this portfolio were taken from requirement to production through it. That kept it honest. Every stage leaves something a person can check, the human gates stay where judgment matters, and anything that slowed real client work became a change to the pipeline. For each customer we then shape it to their process instead of asking them to adopt ours.",
+    built: [
+      {
+        title: "A seven-stage pipeline from request to verified change",
+        points: [
+          "Scope reads the request alongside the codebase, docs and connected tools, and asks the questions a good engineer would ask before building.",
+          "Plan writes a technical analysis and sequence diagrams, failure paths included, so architecture is decided before code exists.",
+          "Document produces a versioned PRD with acceptance criteria, which the verification stages later check against.",
+          "Ticket breaks the plan into a dependency graph, each ticket linked back to the requirement that caused it.",
+          "A person approves the finished, running, tested change, and the pull request lands under the team's own branch protection.",
+        ],
+      },
+      {
+        title: "Parallel agents in isolated sandboxes",
+        points: [
+          "Claude Code, Codex or Pi sessions run each ticket in its own sandbox, on its own branch, never against a main line.",
+          "Independent tickets run in parallel; dependent ones wait, and context from finished tickets travels forward.",
+          "Live logs and diffs for every session, with the option to steer, continue or restart at any point.",
+          "Sandboxes run as Docker containers on the customer's own servers, or on hosted Firecracker microVMs with one setting.",
+        ],
+      },
+      {
+        title: "Verification that proves itself",
+        points: [
+          "A separate QA agent writes tests from the acceptance criteria, not from the diff.",
+          "Each test runs before and after the change. Only tests that fail first and pass after are kept and committed.",
+          "Every change is started in an in-app preview with its databases, migrations and seed data, and exercised in a real browser with a recorded walkthrough.",
+        ],
+      },
+      {
+        title: "Integrates with your existing services",
+        points: [
+          "GitHub and GitLab: reads repositories, works on branches and opens pull requests under existing protection rules.",
+          "Jira and Linear: tickets and status stay in sync with the tracker the team already uses.",
+          "MCP servers and app connectors give agents the same internal tools, docs and business systems engineers use.",
+          "Any major model on the Claude and ChatGPT plans a company already pays for, or on API keys, with a model policy per project or client.",
+        ],
+      },
+      {
+        title: "Customised to how each team delivers",
+        points: [
+          "Document templates, definition of done, review gates and stack conventions configured per team or per client.",
+          "Approval rules decide which stages need a person and who that person is.",
+          "Can be delivered under the customer's own brand and domain as their own capability.",
+          "We install it, connect it, train engineers to hold the gates, or keep running it and own the outcome.",
+        ],
+      },
+    ],
+    security: [
+      "Runs entirely inside the customer's environment when required: their cloud or data centre, their compute, their database and storage.",
+      "Secrets and subscription credentials are encrypted at rest and stay on the customer's infrastructure. Nothing phones home.",
+      "Agents work on branches in isolated sandboxes; nothing merges without a named person approving it.",
+      "Requirements, decisions, tickets, sessions, tests, recordings and approvals stay queryable after release.",
+      "Admins decide which models and subscriptions each team or client project may use.",
+    ],
+    results: [
+      { title: "Our own products ship through it", text: "KiteReach, Mags and Easylogs were built and are iterated on through the factory." },
+      { title: "Seniors supervise, not hand-write", text: "Experienced engineers hold the architecture and review gates across several streams of work instead of writing each one." },
+      { title: "Fits without a migration", text: "It attaches to the repositories, trackers and models a team already has, so adoption doesn't start with a rebuild." },
+      { title: "A trail on every change", text: "Every merged change traces back to the requirement, ticket, tests and approval that produced it." },
+    ],
+    takeaways: [
+      { title: "Build the whole path, not a faster step", text: "Delivery speeds up when scoping, sequencing and verification are part of the pipeline, not just code generation." },
+      { title: "Fit the business, not the tool", text: "Configurable templates, gates and integrations are what let a team adopt the factory without changing how it works." },
+      { title: "Keep the human gate", text: "Agents do the volume; a person approves a verified change. That is where judgment pays." },
+    ],
+  },
+  {
     slug: "kitereach",
     name: "KiteReach",
     client: "SaaS product, built and run by our team",
