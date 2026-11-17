@@ -6,6 +6,8 @@ import { StartupsPage } from "../templates/pages/startups.tsx";
 import { DevelopmentServicesPage } from "../templates/pages/development-services.tsx";
 import { CaseStudiesIndexPage, CaseStudyPage } from "../templates/pages/case-studies-pages.tsx";
 import { getCaseStudy } from "../data/case-studies.ts";
+import { PortfolioIndexPage, PortfolioProjectPage } from "../templates/pages/portfolio-pages.tsx";
+import { getPortfolioProject } from "../data/portfolio.ts";
 import { AgentPage } from "../templates/pages/agent.tsx";
 import { SelfHostPage } from "../templates/pages/self-host.tsx";
 import { WhiteLabelPage } from "../templates/pages/white-label.tsx";
@@ -149,11 +151,23 @@ landing.get("/vs-coding-agents/", (c) => c.html(VsCodingAgentsPage()));
 landing.get("/why-lfg", (c) => c.redirect("/vs-coding-agents/", 301));
 landing.get("/why-lfg/", (c) => c.redirect("/vs-coding-agents/", 301));
 
-// The factory pitch is now the homepage; /portfolio became /case-studies.
+// The factory pitch is now the homepage.
 landing.get("/factory", (c) => c.redirect("/", 301));
 landing.get("/factory/", (c) => c.redirect("/", 301));
-landing.get("/portfolio", (c) => c.redirect("/case-studies/", 301));
-landing.get("/portfolio/", (c) => c.redirect("/case-studies/", 301));
+
+// Consulting portfolio: client and product work, one full case study each.
+landing.get("/portfolio", (c) => c.redirect("/portfolio/"));
+landing.get("/portfolio/", (c) => c.html(PortfolioIndexPage()));
+// Unknown slugs 404 here: redirecting them would bounce against the global
+// trailing-slash strip that runs on not-found responses.
+landing.get("/portfolio/:slug", (c) => getPortfolioProject(c.req.param("slug"))
+  ? c.redirect(`/portfolio/${c.req.param("slug")}/`)
+  : c.notFound());
+landing.get("/portfolio/:slug/", (c) => {
+  const project = getPortfolioProject(c.req.param("slug"));
+  if (!project) return c.notFound();
+  return c.html(PortfolioProjectPage({ project }));
+});
 
 landing.post("/api/portfolio/connect", async (c) => {
   try {
