@@ -30,7 +30,8 @@
     "appId": "ai.lfg.desktop",
     "productName": "LFG",
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "resources"
     },
     "files": [
       "dist/**",
@@ -41,17 +42,20 @@
       "target": [
         "dmg",
         "zip"
-      ]
+      ],
+      "icon": "resources/icon.png"
     },
     "win": {
       "target": [
         "nsis"
-      ]
+      ],
+      "icon": "resources/icon.png"
     },
     "linux": {
       "target": [
         "AppImage"
-      ]
+      ],
+      "icon": "resources/icon.png"
     }
   }
 }
