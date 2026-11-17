@@ -23,7 +23,7 @@ const MAP: Record<LegacyPage, SitePage> = {
   home: "home",
   agent: "agent",
   "self-host": "self-host",
-  "case-studies": "case-studies",
+  "case-studies": "portfolio",
   services: "services",
   blog: "blog",
   "how-it-works": "how-it-works",

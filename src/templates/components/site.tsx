@@ -14,7 +14,7 @@ import { html } from "hono/html";
 export type SitePage =
   | "home" | "how-it-works" | "agent" | "self-host"
   | "software-services" | "startups" | "services"
-  | "case-studies" | "portfolio" | "blog" | "none";
+  | "portfolio" | "blog" | "none";
 
 interface HeadOptions {
   title: string;
@@ -229,7 +229,6 @@ export const SiteNav = ({ active = "none", venture = false }: { active?: SitePag
       </div>
 
       <a href="/portfolio/" class="text-sm font-medium ${cls(active === "portfolio")} transition-colors">Portfolio</a>
-      <a href="/case-studies/" class="text-sm font-medium ${cls(active === "case-studies")} transition-colors">Case studies</a>
       <a href="/blog/" class="text-sm font-medium ${cls(active === "blog")} transition-colors">Blog</a>
 
       <div class="flex items-center gap-4 ml-1">
@@ -258,7 +257,6 @@ export const SiteNav = ({ active = "none", venture = false }: { active?: SitePag
     ${NAV_SOLUTIONS.map(([href, , label]) => html`<a href="${href}" class="block py-2 text-base font-medium text-slate-700 m-link">${label}</a>`)}
     <p class="text-[11px] font-bold text-slate-400 uppercase tracking-wider mt-4 mb-1">Resources</p>
     <a href="/portfolio/" class="block py-2 text-base font-medium text-slate-700 m-link">Portfolio</a>
-    <a href="/case-studies/" class="block py-2 text-base font-medium text-slate-700 m-link">Case studies</a>
     <a href="/blog/" class="block py-2 text-base font-medium text-slate-700 m-link">Blog</a>
     <a href="https://github.com/lfg-hq/lfg" target="_blank" rel="noopener noreferrer" class="block py-2 text-base font-medium text-slate-700 m-link">GitHub</a>
     <div class="mt-4 pt-4 border-t border-slate-100 flex flex-col gap-2">
@@ -338,7 +336,6 @@ export const SiteFooter = () => html`
         <h4 class="font-bold text-white mb-3 uppercase text-xs tracking-wider">Company</h4>
         <ul class="space-y-2.5 text-sm">
           <li><a href="/portfolio/" class="hover:text-white transition-colors">Portfolio</a></li>
-          <li><a href="/case-studies/" class="hover:text-white transition-colors">Case studies</a></li>
           <li><a href="/blog/" class="hover:text-white transition-colors">Blog</a></li>
           <li><a href="/#start" class="hover:text-white transition-colors">Talk to us about a project</a></li>
           <li><a href="/software-services/#pilot" class="hover:text-white transition-colors">Book a pilot</a></li>

@@ -351,7 +351,7 @@ export const ShipV2LandingPage = () => html`
 
         </div>
         <div class="text-center mt-10">
-          <a href="/case-studies/" class="inline-flex items-center gap-2 text-sm font-semibold text-brand-600 hover:text-brand-700">
+          <a href="/portfolio/" class="inline-flex items-center gap-2 text-sm font-semibold text-brand-600 hover:text-brand-700">
             See full portfolio <i data-lucide="arrow-right" class="w-4 h-4"></i>
           </a>
         </div>
