@@ -163,3 +163,28 @@ test("a project needs a Git repository, and a busy ticket is refused", async () 
 });
 
 function payload(job: { payload: string }) { return JSON.parse(job.payload) as { branch: string }; }
+
+test("runners are pinged, and one that stops answering is dropped so its job goes to another computer", async () => {
+  const quiet = fakeConn("quiet-mac", "alice");
+  const awake = fakeConn("awake-mac", "alice");
+  await hub.runnerOpened(quiet);
+  await say(quiet, { type: "hello", activeJobIds: [] });
+  const { projectId, ticketId } = await newTicket();
+  const job = await startTicketOnRunner({ projectId, ticketId, actorId: "alice" });
+  expect(offers(quiet).map(o => o.job.id)).toContain(job.id); // offered into what is, in fact, a dead connection
+
+  const t0 = Date.now();
+  hub.runnerHeartbeat(t0 + 1000);
+  expect(quiet.sent.some(m => m.type === "ping")).toBe(true);
+  expect(quiet.closed).toBe(false);
+
+  await hub.runnerOpened(awake);
+  await say(awake, { type: "pong" });
+  hub._setRunnerLastHeardForTests(awake, t0 + hub.RUNNER_SILENCE_MS); // it kept answering
+  hub.runnerHeartbeat(t0 + hub.RUNNER_SILENCE_MS + 1000);
+  expect(quiet.closed).toBe(true);
+  expect(awake.closed).toBe(false); // it answered recently enough
+  expect(hub.isDeviceConnected("quiet-mac")).toBe(false);
+  for (let i = 0; i < 50 && !offers(awake).some(o => o.job.id === job.id); i++) await Bun.sleep(10);
+  expect(offers(awake).map(o => o.job.id)).toContain(job.id);
+});

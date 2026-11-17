@@ -600,7 +600,7 @@ export function ChatPage({
   <script src="${fresh("/public/js/evals.js")}"></script>
   <script src="${fresh("/public/js/chat-artifacts.js")}"></script>
   <script src="/public/js/chatgpt-connection.js?v=20261018"></script>
-  <script src="/public/js/chat.js?v=20261117-local-usage"></script>
+  <script src="/public/js/chat.js?v=20261117-runner-status"></script>
   <script src="/public/js/voice-mode.js?v=20261016-voice-hidden" data-disabled="true"></script>
   <script src="/public/js/mobile-menu.js"></script>
 

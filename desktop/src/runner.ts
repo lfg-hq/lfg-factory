@@ -60,6 +60,8 @@ export interface RunnerOptions {
   appVersion?: string;
   /** Tests only: accept file:// repository URLs. */
   allowLocalRepos?: boolean;
+  /** Reconnect when the server has been silent this long (it pings every 25 s). Default 75 s. */
+  livenessMs?: number;
   onState?(state: RunnerState, detail?: string): void;
   onJob?(event: { jobId: string; title: string; phase: "started" | "finished" | "failed" | "declined" | "cancelled"; detail?: string }): void;
   log?(line: string): void;
@@ -77,6 +79,10 @@ export class Runner {
   private queue: BuildJobOffer[] = [];
   private busy = false;
   private agents: Array<{ kind: AgentKind; version: string }> | undefined;
+  /** When the server was last heard from, and whether it pings (older servers don't). */
+  private lastHeard = 0;
+  private serverPings = false;
+  private watchdog: ReturnType<typeof setInterval> | null = null;
   readonly active = new Map<string, ActiveJob>();
   state: RunnerState = "disconnected";
 
@@ -85,10 +91,36 @@ export class Runner {
   start(): void {
     this.stopped = false;
     this.connect();
+    // A connection can die without a close event (sleep, a new Wi-Fi address, a proxy
+    // dropping it, the server restarting while the laptop was away). Silence from a
+    // server that pings means it's gone: start over rather than wait forever.
+    const liveness = this.opts.livenessMs ?? 75_000;
+    this.watchdog ??= setInterval(() => {
+      // Connected to a server that pings, or still trying to connect: silence means dead.
+      const watched = this.serverPings || this.state !== "connected";
+      if (this.socket && watched && Date.now() - this.lastHeard > liveness) this.reconnectNow("no word from the server");
+    }, Math.min(15_000, Math.max(50, liveness / 3)));
+  }
+
+  /** Drop the current connection (it may be dead) and connect again now: on wake, a network change, or silence. */
+  reconnectNow(reason = "reconnecting"): void {
+    if (this.stopped) return;
+    const old = this.socket;
+    this.socket = null;
+    if (old) {
+      old.onopen = old.onmessage = old.onclose = old.onerror = null;
+      try { old.close(4000, reason); } catch { /* already gone */ }
+    }
+    if (this.retry) { clearTimeout(this.retry); this.retry = null; }
+    this.log(`reconnecting: ${reason}`);
+    this.setState("disconnected", reason);
+    this.backoff = 1000;
+    this.connect();
   }
 
   stop(): void {
     this.stopped = true;
+    if (this.watchdog) { clearInterval(this.watchdog); this.watchdog = null; }
     if (this.retry) clearTimeout(this.retry);
     for (const job of this.active.values()) { job.cancelled = true; job.child?.kill("SIGTERM"); }
     this.socket?.close(1000, "Runner stopped");
@@ -112,12 +144,14 @@ export class Runner {
     this.setState("connecting");
     const socket = this.opts.createSocket(url, { Authorization: `Bearer ${this.opts.token}` });
     this.socket = socket;
+    this.lastHeard = Date.now();
+    this.serverPings = false;
     socket.onopen = async () => {
       this.agents ??= await detectAgents(this.opts.env ?? process.env, this.bins());
       const claude = this.agents.find(a => a.kind === "claude");
       this.send({ type: "hello", appVersion: this.opts.appVersion, platform: `${process.platform}-${process.arch}`, claudeVersion: claude?.version ?? null, agents: this.agents, activeJobIds: [...this.active.keys()] });
     };
-    socket.onmessage = (ev) => { void this.handle(String(ev.data)); };
+    socket.onmessage = (ev) => { this.lastHeard = Date.now(); void this.handle(String(ev.data)); };
     socket.onerror = () => { /* onclose follows */ };
     socket.onclose = (ev) => {
       if (this.socket !== socket) return;
@@ -142,6 +176,7 @@ export class Runner {
         this.setState("connected", msg.deviceName);
         return;
       case "ping":
+        this.serverPings = true;
         this.send({ type: "pong" });
         return;
       case "error":

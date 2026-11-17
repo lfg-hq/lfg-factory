@@ -106,6 +106,15 @@ defensively — check both with real installs.
 | Ticket UI | "Build on my computer" in the Tickets drawer Run menu, only when turned on (`tickets-list.tsx`) |
 | Desktop app | `desktop/` (Electron shell, runner core, headless CLI) |
 
+## Staying connected
+
+A laptop that sleeps or changes Wi-Fi can keep a socket that looks open on both ends but
+carries nothing. The server pings every runner every 25 s and drops one silent for 75 s,
+so its offered jobs go back to the queue. LFG Desktop reconnects when a pinging server
+has been silent for 75 s, when a connection attempt stalls, and on waking from sleep.
+While a chat turn waits for the computer, the chat shows where it is ("Waiting for your
+computer…", "Claude Code on <computer> is working…").
+
 ## Job lifecycle
 
 `queued` → `offered` (sent to a device) → `running` (accepted) → `succeeded` | `failed`.

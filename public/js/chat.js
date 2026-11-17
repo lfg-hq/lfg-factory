@@ -1429,6 +1429,15 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         
+        // Where the turn is when it runs elsewhere ("Waiting for your computer…",
+        // "Claude Code on Ana's Mac is working…"): shown as a step, never dropped.
+        if (data.notification_type === 'status' && (data.detail || data.message)) {
+            showStopButton(false);
+            trailStep({ detail: data.detail || data.message, icon: 'fa-desktop' });
+            scrollToBottom();
+            return;
+        }
+
         // Handle orchestrator notifications
         if (data.notification_type && data.notification_type.startsWith('orchestrator_')) {
             handleOrchestratorNotification(data);
