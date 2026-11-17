@@ -60,6 +60,7 @@ export const PORTFOLIO: PortfolioProject[] = [
       "Coding agents make an individual developer faster at an individual task. They do not scope a project, hold the architecture, sequence dependent work, prove that a change does what was asked, or keep the trail a client expects. We built a software factory that runs that whole path as one pipeline: scope, plan, document, ticket, implement, test and QA, with a person approving every verified change. It orchestrates Claude Code, Codex and Pi sessions in parallel sandboxes, runs each change in an in-app preview with a recorded walkthrough, and keeps only tests that are proven to catch the change. It is built to fit the business rather than the other way round: it connects to GitHub or GitLab, Jira or Linear, MCP servers and the models and subscriptions a company already pays for, and we customise templates, definition of done, review gates and stack conventions for each team. It runs hosted, self-hosted on the customer's own infrastructure, or set up and operated for them.",
     icon: "factory",
     gradient: "from-indigo-600 to-pink-500",
+    image: "/public/images/screenshots/software-factory.png",
     stack: ["TypeScript", "Bun", "Hono", "PostgreSQL / SQLite", "Docker sandboxes", "Firecracker microVMs", "Claude Code", "Codex", "MCP"],
     glance: [
       { label: "Built for", value: "Software services firms delivering for clients, and product teams that want more delivery capacity without growing headcount at the same rate" },
@@ -238,21 +239,21 @@ export const PORTFOLIO: PortfolioProject[] = [
     ],
   },
   {
-    slug: "mags",
-    name: "Mags",
+    slug: "mags-sandboxes",
+    name: "Mags Sandboxes",
     client: "Developer platform, built and run by our team",
     tagline: "MicroVM sandboxes for AI agents",
     summary:
-      "A cloud job runner that gives every agent run its own Firecracker microVM, started from a snapshot in milliseconds, with workspaces that persist between runs.",
+      "Isolated sandboxes for AI agents: every run gets its own Firecracker microVM, cloned from a snapshot in milliseconds, with workspaces that persist between runs.",
     overview:
-      "Mags is a cloud job runner and sandbox platform for teams whose AI agents run code they wrote themselves: shell commands, package installs, dev servers and headless browsers. Containers on a shared host aren't a strong enough boundary for that, and ordinary VMs boot too slowly to sit inside an agent loop. We built a Go control plane that schedules jobs across bare-metal hosts. Each run is a copy-on-write clone of a pre-booted \"golden\" Firecracker snapshot, with workspaces that persist between runs. The same platform runs cloud Chromium browsers, sleeps idle VMs and wakes them on demand, and deploys apps from an image or a repo. Developers use it through an npm CLI, Python and Node SDKs, a REST API or a web dashboard.",
+      "Mags Sandboxes is the sandbox platform for teams whose AI agents run code they wrote themselves: shell commands, package installs, dev servers and headless browsers. Containers on a shared host aren't a strong enough boundary for that, and ordinary VMs boot too slowly to sit inside an agent loop. We built a Go control plane that schedules jobs across bare-metal hosts. Each run is a copy-on-write clone of a pre-booted \"golden\" Firecracker snapshot, with workspaces that persist between runs. The same platform runs cloud Chromium browsers and sleeps idle VMs, waking them on demand. Developers use it through an npm CLI, Python and Node SDKs, a REST API or a web dashboard.",
     icon: "boxes",
     gradient: "from-slate-700 to-indigo-700",
     image: "/public/images/screenshots/mags.png",
     url: "https://mags.run",
     stack: ["Go", "gRPC", "PostgreSQL", "Redis", "Firecracker", "JuiceFS / NFS", "S3", "Chromium CDP"],
     glance: [
-      { label: "Product type", value: "Developer infrastructure: sandboxes, a job runner, cloud browsers and app deploys on microVMs" },
+      { label: "Product type", value: "Developer infrastructure: microVM sandboxes, a job runner and cloud browsers for AI agents" },
       { label: "Problem", value: "Agents execute untrusted, generated code; containers don't isolate it well enough, and full VMs boot too slowly for an agent loop" },
       { label: "Solution", value: "Firecracker microVMs cloned from golden snapshots, persistent workspaces on object storage, and a scheduler that sends each job back to the host where its workspace is warm" },
       { label: "Timeline", value: "About 13 months of continuous development, live throughout" },
@@ -293,10 +294,9 @@ export const PORTFOLIO: PortfolioProject[] = [
         ],
       },
       {
-        title: "Cloud browsers, deploys and interfaces",
+        title: "Cloud browsers and interfaces",
         points: [
           "Chromium microVMs with a CDP endpoint that works with Playwright and Puppeteer.",
-          "One-command deploys from a Docker image or repo to an HTTPS app, with rollbacks and a self-deploy mode for the customer's own servers.",
           "A CLI for runs, named workspaces, SSH-able VMs, cron and diagnostics, plus SDKs and a REST API.",
         ],
       },
@@ -315,7 +315,7 @@ export const PORTFOLIO: PortfolioProject[] = [
       "Self-healing: agents re-adopt VMs after a restart, a sweeper reaps crashed processes, and a two-way sync keeps the orchestrator and hosts in agreement.",
     ],
     results: [
-      { title: "Live at mags.run", text: "A public CLI on npm, SDKs and a dashboard." },
+      { title: "Live at mags.run", text: "Sandboxes available through a public CLI on npm, Python and Node SDKs, a REST API and a dashboard." },
       { title: "Used by our own products", text: "KiteReach renders every reel and film inside a Mags sandbox." },
       { title: "VM isolation, container-like starts", text: "Golden-snapshot cloning and workspace-aware scheduling make sandboxes fast enough for an agent loop." },
       { title: "A simpler core", text: "Removing the second engine left one execution path to test, secure and operate." },
@@ -324,6 +324,101 @@ export const PORTFOLIO: PortfolioProject[] = [
       { title: "The fastest boot is no boot", text: "Cloning a pre-booted snapshot, not booting faster, is what makes sub-second starts possible." },
       { title: "Treat the scheduler as part of the cache", text: "Sending a job back to the host where its workspace is warm turned a simple pool into a large speed-up for repeat runs." },
       { title: "Delete the second path", text: "Two execution engines doubled the bugs. Removing one was worth more than any new feature." },
+    ],
+  },
+  {
+    slug: "mags-self-deploy",
+    name: "Mags Self Deploy",
+    client: "Developer platform, built and run by our team",
+    tagline: "Build and ship your tools to your cloud",
+    summary:
+      "Draw your stack on a canvas, point it at your own servers, and Mags builds every app in a disposable sandbox and deploys it with HTTPS, databases and rollbacks, with no platform lock-in.",
+    overview:
+      "Teams keep building internal tools, agents and small services, and then stall on getting them running somewhere real: a server, a domain, TLS, a database, secrets, a way to roll back. Platform-as-a-service products make that easy but put the app on someone else's infrastructure and bill for it there. We built Mags Self Deploy so a team can deploy to servers it already owns or rents with the same ease. You connect a server over SSH, draw the stack on a canvas (apps from a Git repo or a Docker image, plus Postgres, MySQL, MariaDB, Redis or Valkey), wire apps to databases, and review the deploy. Mags builds each app in a throwaway Firecracker sandbox for the server's architecture, pushes the image to the team's own registry, and rolls it out with Kamal, including HTTPS on the team's domain, health checks and one-click restore. For quick experiments, `mags deploy` puts an image on the Mags cloud with an HTTPS URL in one command.",
+    icon: "rocket",
+    gradient: "from-emerald-600 to-teal-700",
+    image: "/public/images/screenshots/mags-self-deploy.png",
+    url: "https://mags.run",
+    stack: ["Go", "Kamal 2", "kamal-proxy", "Docker buildx", "Firecracker", "PostgreSQL", "SSH (ed25519)", "GitHub OAuth / GHCR"],
+    glance: [
+      { label: "Product type", value: "Developer infrastructure: build and deploy a team's own apps and tools to its own servers, or to the Mags cloud" },
+      { label: "Problem", value: "Internal tools and agents get built but not shipped: servers, TLS, databases, secrets and rollbacks are each a small project, and hosted platforms mean lock-in and their bill" },
+      { label: "Solution", value: "A visual canvas over Kamal: builds run in disposable microVM sandboxes, images go to the team's registry, and apps deploy to the team's servers with HTTPS and attached databases" },
+      { label: "Timeline", value: "Cloud deploys from May 2026, the self-deploy canvas from August 2026, live and iterating since" },
+      { label: "Engineering", value: "31 commits across the deploy and self-deploy services, about 8,300 lines of Go in the self-deploy service alone" },
+    ],
+    challengeIntro:
+      "Shipping a tool is rarely the hard part of building it, but it is the part that most often doesn't happen. Every team rebuilds the same deploy plumbing, or hands its apps and data to a hosted platform.",
+    challenges: [
+      { title: "Your servers, not ours", text: "Many teams already pay for servers, or must keep code and data on infrastructure they control." },
+      { title: "Builds are heavy and untrusted", text: "Building arbitrary repositories needs Docker and network access, and must never run on the control plane itself." },
+      { title: "Mixed architectures", text: "Servers may be amd64 or arm64, and an image built for the wrong one fails at start-up." },
+      { title: "More than one app", text: "Real stacks are several apps and databases with connection strings between them, not a single container." },
+      { title: "Secrets and access", text: "Deploying means holding SSH keys, registry tokens and app secrets for someone else's servers, safely." },
+    ],
+    approach:
+      "We put a canvas on top of a proven deploy tool instead of inventing a new runtime. Kamal already does zero-downtime deploys, accessories and TLS well; what teams lacked was a way to describe a stack without writing YAML, a safe place to build it, and a record of what was deployed. Mags supplies those, and the generated Kamal config can always be exported, so the team is never locked in.",
+    built: [
+      {
+        title: "Connect your own servers",
+        points: [
+          "Add a server by host, SSH user and port, then either let Mags generate an ed25519 deploy key (one line to add to authorized_keys) or paste an existing key.",
+          "Mags checks access and detects the server's architecture (amd64 or arm64) before anything is built.",
+          "The server's SSH host key is pinned on first connection and passed to every deploy.",
+        ],
+      },
+      {
+        title: "A canvas for the whole stack",
+        points: [
+          "Apps come from a Git repo (branch, Dockerfile path, build context) or a prebuilt Docker image, each with its own domain and target server.",
+          "Databases (Postgres 16, MySQL 8, MariaDB 11, Redis 7, Valkey 8) are added as Kamal accessories with generated credentials and persistent storage.",
+          "Drawing a wire from an app to a database injects DATABASE_URL or REDIS_URL automatically.",
+          "Per-app port, health-check path, deploy timeout, background-service mode, startup command and environment variables, with .env upload. Everything saves automatically.",
+        ],
+      },
+      {
+        title: "Builds in disposable sandboxes",
+        points: [
+          "Each build runs in a throwaway Mags microVM with Docker and buildx, never on the control plane; if a sandbox can't start, the release fails rather than falling back.",
+          "Images are built for the target server's architecture with a registry cache, and pushed to the team's own registry (Docker Hub, or GHCR through GitHub sign-in).",
+        ],
+      },
+      {
+        title: "Deploy, observe, roll back",
+        points: [
+          "Review a deploy for one app or the whole stack; databases boot first, then apps roll out with Kamal and health checks.",
+          "kamal-proxy serves each app on its own domain with automatic HTTPS.",
+          "Live status per app (queued, building, deploying, succeeded, failed), per-artifact logs, cancel, deployment history with restore, and reset for database volumes.",
+          "Export the generated Kamal config at any time; deploy from GitHub on merge, or from GitHub Actions, GitLab CI or Azure DevOps with a CI token.",
+        ],
+      },
+      {
+        title: "Quick deploys on the Mags cloud",
+        points: [
+          "`mags deploy` turns a Docker image into an app at an HTTPS URL that stays stable across redeploys, with environment variables, volumes, memory sizing and `mags rollback`.",
+          "`mags db create postgres|mysql|redis|mssql` gives an always-on database with generated credentials.",
+          "Idle apps freeze after a few minutes and wake on the next request in about 1.5 seconds.",
+        ],
+      },
+    ],
+    security: [
+      "Deploy keys and pasted SSH keys are encrypted at rest with AES-GCM and never returned by the API.",
+      "Environment variables are encrypted at rest; secret-looking values are kept in Kamal secrets, not the config.",
+      "Private and internal addresses are refused when a server is added and again after DNS resolution at connect time.",
+      "Git sources must be HTTPS, and branch, Dockerfile path, context and image references are validated.",
+      "Per-user rate limits on adding servers, access checks and deploys; a revision check stops a stale browser tab overwriting newer settings.",
+      "Kamal is pinned by image digest, so every deploy runs a known version of the tool.",
+    ],
+    results: [
+      { title: "Your infrastructure, platform ease", text: "Teams deploy multi-app stacks with databases and HTTPS to servers they already own, from one canvas." },
+      { title: "No lock-in", text: "Images live in the team's registry and the Kamal config can be exported, so the stack runs without Mags if needed." },
+      { title: "Builds isolated from everything", text: "Every build runs in its own disposable microVM, so untrusted repositories never touch the control plane." },
+      { title: "From experiment to production on one platform", text: "Try an app on the Mags cloud with one command, then move it to your own servers with the canvas." },
+    ],
+    takeaways: [
+      { title: "Wrap a proven tool", text: "Building on Kamal gave zero-downtime deploys and TLS from day one; the product effort went into the experience and safety around it." },
+      { title: "Build where it can't hurt", text: "Running builds in disposable sandboxes made arbitrary repositories safe to build." },
+      { title: "Make leaving easy", text: "Exportable config and the team's own registry make adoption an easy decision." },
     ],
   },
   {
@@ -427,6 +522,7 @@ export const PORTFOLIO: PortfolioProject[] = [
       "A multi-site retail operator in Australia was receiving hundreds of supplier invoices, credit notes and statements every week into a shared Gmail inbox: PDFs, scanned cash receipts, invoices typed into the email body, and \"click here to download\" links. Their accounts team keyed each one into their accounting system by hand, matched it to the right site, and chased invoices that appeared on statements but never arrived. In three weeks we had a secure, rules-first invoice platform in production. It scans the inbox on a schedule, finds every accounting document (including ones inside links, combined PDFs and photographed receipts), uses AI to classify each document and extract the key fields with evidence quoted from the source, checks them against deterministic rules, and sends them to the accounting system as draft bills, with an optional human review step. It also reconciles supplier statements line by line, so missing invoices surface on their own instead of at month-end.",
     icon: "receipt-text",
     gradient: "from-emerald-500 to-teal-600",
+    image: "/public/images/screenshots/accounts-payable.png",
     stack: ["Next.js 16", "TypeScript", "PostgreSQL", "pg-boss", "Gmail API", "Xero / QuickBooks API", "Azure AI Foundry", "Kamal", "Azure"],
     glance: [
       { label: "Client", value: "Multi-site retail operator (fuel and convenience), Australia" },
@@ -644,6 +740,7 @@ export const PORTFOLIO: PortfolioProject[] = [
       "A recruiting firm in India wanted to take the repetitive first screening call off its recruiters' plates without handing hiring judgement to a machine. We built Screenline, a private recruiter workspace. A recruiter uploads a job description and a resume, reviews an AI-prepared brief and the candidate's phone number, and only then confirms a call. A voice agent phones the candidate using native realtime audio: it confirms it is speaking to the right person, says it is an AI, asks permission, and then works through the approved topics and practical questions such as notice period and availability. After the call, the recruiter sees each answer marked as self-reported, uncertain or unanswered, with the exact candidate quote behind it. Over 12 days the work moved through 19 scoped tickets to a pilot that is safe by default: live calling stays blocked until every approval, cost cap and provider check is in place.",
     icon: "user-search",
     gradient: "from-violet-500 to-fuchsia-600",
+    image: "/public/images/screenshots/screenline.png",
     stack: ["Next.js 16", "TypeScript", "PostgreSQL", "Better Auth", "OpenAI Realtime", "Exotel", "WebSockets", "libphonenumber"],
     glance: [
       { label: "Client", value: "A recruiting firm in India running an English-first hiring pilot, with international numbers added later" },

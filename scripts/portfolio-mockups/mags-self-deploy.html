@@ -1,0 +1,113 @@
+<div class="flex flex-col h-full bg-[#f6f8f7] text-slate-800 text-[13px]">
+  <header class="h-14 bg-white border-b border-slate-200 flex items-center px-6 gap-3">
+    <span class="font-bold text-[#2f9b66] text-lg">Mags</span>
+    <span class="text-slate-300">|</span>
+    <span class="text-slate-500">← All projects</span>
+    <span class="font-semibold text-slate-900">ops-tools</span>
+    <span class="ml-2 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-800 text-[12px] font-medium flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-emerald-500"></span>Deployed · 4 min ago</span>
+    <span class="ml-auto text-slate-400 text-[12px]">All changes saved</span>
+  </header>
+
+  <div class="bg-white border-b border-slate-200 px-6 h-12 flex items-center gap-2 text-[12.5px]">
+    <span class="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mr-1">Services</span>
+    <span class="px-3 py-1.5 rounded-lg bg-[#2f9b66] text-white font-medium">＋ App</span>
+    <span class="px-3 py-1.5 rounded-lg border border-slate-200 font-medium">＋ Database</span>
+    <span class="ml-4 px-3 py-1.5 rounded-lg border border-slate-200">Connect agent</span>
+    <span class="px-3 py-1.5 rounded-lg border border-slate-200">Manage servers ↗</span>
+    <span class="px-3 py-1.5 rounded-lg border border-slate-200">Registry</span>
+    <span class="px-3 py-1.5 rounded-lg border border-slate-200">CI/CD</span>
+    <span class="px-3 py-1.5 rounded-lg border border-slate-200">Export config</span>
+    <span class="ml-auto px-4 py-1.5 rounded-lg bg-slate-900 text-white font-semibold">Review deploy (all apps)</span>
+  </div>
+
+  <div class="flex-1 flex min-h-0">
+    <!-- Canvas -->
+    <section class="flex-1 relative" style="background-image: radial-gradient(circle at 1px 1px, #d5ddd9 1px, transparent 0); background-size: 22px 22px;">
+      <div class="absolute top-4 left-6 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Your infrastructure · Changes save automatically · Deploy applies saved settings</div>
+
+      <svg class="absolute inset-0 w-full h-full" fill="none">
+        <path d="M 330 190 C 430 190, 430 330, 530 330" stroke="#2f9b66" stroke-width="2" stroke-dasharray="5 4"/>
+        <path d="M 330 470 C 430 470, 430 350, 530 350" stroke="#2f9b66" stroke-width="2" stroke-dasharray="5 4"/>
+        <path d="M 330 480 C 430 480, 430 560, 530 560" stroke="#2f9b66" stroke-width="2" stroke-dasharray="5 4"/>
+      </svg>
+
+      <!-- server groups -->
+      <div class="absolute left-[40px] top-[70px] w-[300px] h-[560px] rounded-2xl border border-dashed border-slate-300 bg-white/40">
+        <div class="px-4 py-2 text-[11px] text-slate-500 font-medium">hetzner-fra-1 · 49.12.x.x · amd64</div>
+      </div>
+
+      <div class="absolute left-[60px] top-[110px] w-[270px] rounded-xl bg-white border-2 border-[#2f9b66] shadow-sm p-4">
+        <div class="flex items-center gap-2"><span class="w-6 h-6 rounded-md bg-emerald-100 text-emerald-800 flex items-center justify-center text-[11px] font-bold">A</span><span class="font-semibold text-slate-900">admin-portal</span><span class="ml-auto w-2 h-2 rounded-full bg-emerald-500"></span></div>
+        <div class="text-[12px] text-slate-500 mt-2">Git · github.com/acme/admin-portal · main</div>
+        <div class="text-[12px] text-slate-700 mt-1">admin.acme-ops.com</div>
+        <div class="text-[11px] text-emerald-700 mt-2">Succeeded · health /up</div>
+      </div>
+
+      <div class="absolute left-[60px] top-[410px] w-[270px] rounded-xl bg-white border border-slate-200 shadow-sm p-4">
+        <div class="flex items-center gap-2"><span class="w-6 h-6 rounded-md bg-emerald-100 text-emerald-800 flex items-center justify-center text-[11px] font-bold">A</span><span class="font-semibold text-slate-900">report-worker</span><span class="ml-auto w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span></div>
+        <div class="text-[12px] text-slate-500 mt-2">Image · ghcr.io/acme/report-worker:1.8</div>
+        <div class="text-[12px] text-slate-700 mt-1">Background service</div>
+        <div class="text-[11px] text-amber-700 mt-2">Deploying · step 3 of 4</div>
+      </div>
+
+      <div class="absolute left-[530px] top-[290px] w-[240px] rounded-xl bg-white border border-slate-200 shadow-sm p-4">
+        <div class="flex items-center gap-2"><span class="w-6 h-6 rounded-md bg-sky-100 text-sky-800 flex items-center justify-center text-[11px] font-bold">D</span><span class="font-semibold text-slate-900">postgres:16</span><span class="ml-auto w-2 h-2 rounded-full bg-emerald-500"></span></div>
+        <div class="text-[12px] text-slate-500 mt-2">Accessory · persistent volume</div>
+        <div class="mono text-[11px] text-slate-600 mt-1">→ DATABASE_URL</div>
+      </div>
+      <div class="absolute left-[530px] top-[520px] w-[240px] rounded-xl bg-white border border-slate-200 shadow-sm p-4">
+        <div class="flex items-center gap-2"><span class="w-6 h-6 rounded-md bg-sky-100 text-sky-800 flex items-center justify-center text-[11px] font-bold">D</span><span class="font-semibold text-slate-900">redis:7</span><span class="ml-auto w-2 h-2 rounded-full bg-emerald-500"></span></div>
+        <div class="text-[12px] text-slate-500 mt-2">Accessory · cache + queues</div>
+        <div class="mono text-[11px] text-slate-600 mt-1">→ REDIS_URL</div>
+      </div>
+
+      <div class="absolute left-6 bottom-4 flex gap-4 text-[11px] text-slate-500">
+        <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded bg-emerald-100 border border-emerald-300"></span>Application</span>
+        <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded bg-sky-100 border border-sky-300"></span>Database</span>
+      </div>
+    </section>
+
+    <!-- Drawer -->
+    <aside class="w-[440px] bg-white border-l border-slate-200 flex flex-col">
+      <div class="px-5 pt-4">
+        <div class="font-semibold text-slate-900 text-[15px]">admin-portal</div>
+        <div class="flex gap-4 mt-3 text-[12.5px] border-b border-slate-200">
+          <span class="pb-2 border-b-2 border-[#2f9b66] font-semibold text-slate-900">Source</span>
+          <span class="pb-2 text-slate-500">Variables</span>
+          <span class="pb-2 text-slate-500">Settings</span>
+          <span class="pb-2 text-slate-500">Deploys</span>
+          <span class="pb-2 text-slate-500">Logs</span>
+        </div>
+      </div>
+      <div class="p-5 space-y-3 text-[12.5px]">
+        <div class="grid grid-cols-2 gap-2">
+          <div class="rounded-lg border-2 border-[#2f9b66] bg-emerald-50 p-2.5 font-medium">Build from Git repo</div>
+          <div class="rounded-lg border border-slate-200 p-2.5 text-slate-500">Prebuilt Docker image</div>
+        </div>
+        <div><div class="text-slate-500 mb-1">Repository (HTTPS)</div><div class="rounded-lg border border-slate-200 px-3 py-2 mono text-[12px]">https://github.com/acme/admin-portal</div></div>
+        <div class="grid grid-cols-2 gap-2">
+          <div><div class="text-slate-500 mb-1">Branch</div><div class="rounded-lg border border-slate-200 px-3 py-2 mono text-[12px]">main</div></div>
+          <div><div class="text-slate-500 mb-1">Dockerfile</div><div class="rounded-lg border border-slate-200 px-3 py-2 mono text-[12px]">./Dockerfile</div></div>
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div><div class="text-slate-500 mb-1">Domain</div><div class="rounded-lg border border-slate-200 px-3 py-2">admin.acme-ops.com</div></div>
+          <div><div class="text-slate-500 mb-1">Server</div><div class="rounded-lg border border-slate-200 px-3 py-2">hetzner-fra-1</div></div>
+        </div>
+        <div>
+          <div class="text-slate-500 mb-1">Last build</div>
+          <div class="mono text-[11.5px] bg-slate-900 text-slate-300 rounded-lg p-3 leading-relaxed">
+            <div><span class="text-emerald-400">✓</span> build sandbox started (microVM)</div>
+            <div><span class="text-emerald-400">✓</span> docker buildx · linux/amd64 · cache hit</div>
+            <div><span class="text-emerald-400">✓</span> pushed ghcr.io/acme/admin-portal:7c1e9a2</div>
+            <div><span class="text-emerald-400">✓</span> kamal accessory boot postgres</div>
+            <div><span class="text-emerald-400">✓</span> kamal deploy · health /up ok · TLS ready</div>
+          </div>
+        </div>
+        <div class="flex gap-2 pt-1">
+          <button class="flex-1 py-2 rounded-lg bg-[#2f9b66] text-white font-semibold">Review deploy · admin-portal</button>
+          <button class="px-3 py-2 rounded-lg border border-slate-300 font-medium">Restore…</button>
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>
