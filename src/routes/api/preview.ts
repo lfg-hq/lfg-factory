@@ -6,6 +6,7 @@
  *   POST   /api/projects/:projectId/preview/stop       → stop the app
  *   PUT    /api/projects/:projectId/preview/manifest   → save an edited manifest
  */
+import { env } from "../../config/env.ts";
 import { Hono } from "hono";
 import { eq, and, asc } from "drizzle-orm";
 import { requireAuth } from "../../auth/middleware.ts";
@@ -286,6 +287,10 @@ previewApi.get("/:projectId/preview/build-settings", async (c) => {
     featureTestingEnabled: access.project.featureTestingEnabled !== false,
     canChangeBuildStages: access.role === "owner",
     customInstructions: p.customInstructions ?? "",
+    meetingVoice: !!(access.project as { meetingVoice?: boolean }).meetingVoice,
+    // Spoken replies need the server's OpenAI key; without it the switch can't do anything.
+    meetingVoiceAvailable: !!env.OPENAI_API_KEY,
+    canChangeMeetingVoice: access.role === "owner" || access.role === "admin",
     agentShellAccess: false,
     canGrantShell: false,
     ticketBuildIsolation: p.ticketBuildIsolation ?? "isolated",
@@ -345,6 +350,12 @@ previewApi.post("/:projectId/preview/build-settings", async (c) => {
     try { requirePermission(access, "canManageTickets"); }
     catch { return c.json({ error: "You don't have permission to change agent instructions" }, 403); }
     patch.customInstructions = body.customInstructions.slice(0, 4000);
+  }
+  // Spoken replies in calls cost money per answer (OpenAI text-to-speech): owner or admin only.
+  if (typeof body.meetingVoice === "boolean") {
+    if (access.role !== "owner" && access.role !== "admin") return c.json({ error: "Only a project owner or admin can change spoken replies." }, 403);
+    if (body.meetingVoice && !env.OPENAI_API_KEY) return c.json({ error: "Spoken replies need OPENAI_API_KEY to be set on this server." }, 400);
+    patch.meetingVoice = body.meetingVoice;
   }
   // Legacy clients cannot re-enable direct chat writes to the preview.
   if (body.agentShellAccess === true) return c.json({ error: "Chat preview inspection is read-only. Route application changes through tickets." }, 400);

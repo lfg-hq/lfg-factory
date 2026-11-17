@@ -1,4 +1,13 @@
 import voiceApi from './routes/api/voice.ts';
+import meetingsApi from './routes/api/meetings.ts';
+import whiteboardsApi, { sharedBoardsApi } from "./routes/api/whiteboards.ts";
+import evalsApi from "./routes/api/evals.ts";
+import sharedBoardRoutes from "./routes/shared-board.ts";
+import { boardSockets } from "./services/whiteboards/live.ts";
+import { endOrphanedMeetings } from './services/meetings/meeting-agent.ts';
+import meetingBotsRoutes, { isLfgAdmin } from "./routes/meeting-bots.ts";
+import { screenRelay } from "./services/meetings/screen-relay.ts";
+import { signInScreen } from "./services/meetings/meet-bot.ts";
 import documentGraphApi from "./routes/api/document-graph.ts";
 import { documentSyncSettingsApi, documentSyncProjectApi } from "./routes/api/document-sync.ts";
 import { registerDocumentSyncWorker } from "./services/document-sync.ts";
@@ -207,6 +216,9 @@ app.get("/health", (c) => c.json({ status: "ok" }));
 
 // ── Routes ──────────────────────────────────────────────────────────
 // Scope Git diagnostics/auth before broad middleware on legacy API routers.
+// Boards opened by link need no account, so they are mounted ahead of every router that demands sign-in.
+app.route("/api/shared-boards", sharedBoardsApi);
+app.route("/", sharedBoardRoutes);
 app.route("/api", gitApi);
 // LFG Desktop (it sends X-LFG-Desktop on requests to this server) is the product, not
 // the website: marketing pages send it to the person's projects, or to sign in.
@@ -234,6 +246,10 @@ app.route("/", invitationRoutes);
 app.route("/", shareRoutes);
 app.route("/api/files", filesApi);
 app.route("/api/voice", voiceApi);
+app.route("/api/meetings", meetingsApi);
+app.route("/", meetingBotsRoutes);
+app.route("/api/whiteboards", whiteboardsApi);
+app.route("/api/evals", evalsApi);
 app.route("/api/token-usage", tokenUsageApi);
 app.route("/api/settings", settingsApi);
 app.route("/api/projects", ticketCodeApi);
@@ -349,6 +365,33 @@ async function handleFetch(req: Request, server: import("bun").Server<WsData>): 
     return new Response("WebSocket upgrade failed", { status: 500 });
   }
 
+  // A whiteboard's live connection: a project member (by session), or a guest holding the board's link.
+  if (url.pathname === "/ws/board") {
+    const { authorizeBoardSocket } = await import("./routes/api/whiteboards.ts");
+    const session = await auth.api.getSession({ headers: req.headers });
+    const board = await authorizeBoardSocket(url.searchParams, session?.user ?? null);
+    if (!board) return new Response("Unauthorized", { status: 401 });
+    const upgraded = server.upgrade(req, { data: { sessionId: `board:${board.boardId}`, userId: session?.user?.id ?? "", board } });
+    if (upgraded) return undefined as unknown as Response;
+    return new Response("WebSocket upgrade failed", { status: 500 });
+  }
+
+  // A meeting-bot seat's screen while an admin signs it in (noVNC's websocket, relayed).
+  if (url.pathname === "/ws/meeting-bot-screen") {
+    const session = await auth.api.getSession({ headers: req.headers });
+    const sameSite = req.headers.get("origin") === new URL(env.BETTER_AUTH_URL).origin;
+    const screen = session?.user && sameSite && isLfgAdmin(session.user) ? signInScreen(url.searchParams.get("seat") ?? "", session.user.id) : null;
+    if (!screen) return new Response("Unauthorized", { status: 401 });
+    // noVNC asks for a subprotocol; Bun answers with it by itself (setting it again would send
+    // it twice, which browsers reject). The relay asks the seat for the same one.
+    const protocol = (req.headers.get("sec-websocket-protocol") ?? "").split(",")[0]?.trim() || undefined;
+    const upgraded = server.upgrade(req, {
+      data: { sessionId: `screen:${crypto.randomUUID()}`, userId: session!.user.id, screen: { upstreamUrl: screen.wsUrl, protocol, queue: [] } },
+    });
+    if (upgraded) return undefined as unknown as Response;
+    return new Response("WebSocket upgrade failed", { status: 500 });
+  }
+
   if (url.pathname === "/ws/chat" || url.pathname === "/ws/chat/") {
     const session = await auth.api.getSession({ headers: req.headers });
     if (!session?.user) {
@@ -417,6 +460,7 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) process.once(signal, () => 
   void stopGitReviewRunner().finally(() => process.exit(0));
 });
 startAgentTimeoutSweeper();
+void endOrphanedMeetings().catch((error) => console.error("[meeting] startup cleanup failed:", error));
 
 // ── Public Telegram bot (instant app builder) ────────────────────────
 import("./services/public-instant/transports/telegram.ts")
@@ -443,9 +487,9 @@ export default {
   fetch: handleFetch,
 
   websocket: {
-    open: (ws: import("bun").ServerWebSocket<WsData>) => ws.data.runner ? void runnerOpened(runnerConn(ws)).catch(console.error) : onOpen(ws),
-    close: (ws: import("bun").ServerWebSocket<WsData>) => ws.data.runner ? runnerClosed(runnerConn(ws)) : onClose(ws),
+    open: (ws: import("bun").ServerWebSocket<WsData>) => ws.data.screen ? screenRelay.open(ws) : ws.data.board ? boardSockets.open(ws) : ws.data.runner ? void runnerOpened(runnerConn(ws)).catch(console.error) : onOpen(ws),
+    close: (ws: import("bun").ServerWebSocket<WsData>) => ws.data.screen ? screenRelay.close(ws) : ws.data.board ? boardSockets.close(ws) : ws.data.runner ? runnerClosed(runnerConn(ws)) : onClose(ws),
     message: (ws: import("bun").ServerWebSocket<WsData>, data: string | Buffer) =>
-      ws.data.runner ? runnerMessage(runnerConn(ws), data).catch(e => console.error("[runner] message failed:", e)) : onMessage(ws, data),
+      ws.data.screen ? screenRelay.message(ws, data) : ws.data.board ? boardSockets.message(ws, data) : ws.data.runner ? runnerMessage(runnerConn(ws), data).catch(e => console.error("[runner] message failed:", e)) : onMessage(ws, data),
   },
 };

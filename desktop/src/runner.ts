@@ -19,6 +19,7 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import os from "node:os";
 import type { AgentEvent, AgentKind, ClaudeTaskPayload, RunnerJobOffer, RunnerToServer, ServerToRunner } from "./protocol.ts";
+import { isAgentEffort, isAgentModel } from "./protocol.ts";
 import { AGENTS, detectAgents, runAgent } from "./agents.ts";
 
 export type RunnerState = "connecting" | "connected" | "disconnected" | "unauthorized" | "stopped";
@@ -59,6 +60,8 @@ export interface RunnerOptions {
   appVersion?: string;
   /** Tests only: accept file:// repository URLs. */
   allowLocalRepos?: boolean;
+  /** Reconnect when the server has been silent this long (it pings every 25 s). Default 75 s. */
+  livenessMs?: number;
   onState?(state: RunnerState, detail?: string): void;
   onJob?(event: { jobId: string; title: string; phase: "started" | "finished" | "failed" | "declined" | "cancelled"; detail?: string }): void;
   log?(line: string): void;
@@ -76,6 +79,10 @@ export class Runner {
   private queue: BuildJobOffer[] = [];
   private busy = false;
   private agents: Array<{ kind: AgentKind; version: string }> | undefined;
+  /** When the server was last heard from, and whether it pings (older servers don't). */
+  private lastHeard = 0;
+  private serverPings = false;
+  private watchdog: ReturnType<typeof setInterval> | null = null;
   readonly active = new Map<string, ActiveJob>();
   state: RunnerState = "disconnected";
 
@@ -84,10 +91,36 @@ export class Runner {
   start(): void {
     this.stopped = false;
     this.connect();
+    // A connection can die without a close event (sleep, a new Wi-Fi address, a proxy
+    // dropping it, the server restarting while the laptop was away). Silence from a
+    // server that pings means it's gone: start over rather than wait forever.
+    const liveness = this.opts.livenessMs ?? 75_000;
+    this.watchdog ??= setInterval(() => {
+      // Connected to a server that pings, or still trying to connect: silence means dead.
+      const watched = this.serverPings || this.state !== "connected";
+      if (this.socket && watched && Date.now() - this.lastHeard > liveness) this.reconnectNow("no word from the server");
+    }, Math.min(15_000, Math.max(50, liveness / 3)));
+  }
+
+  /** Drop the current connection (it may be dead) and connect again now: on wake, a network change, or silence. */
+  reconnectNow(reason = "reconnecting"): void {
+    if (this.stopped) return;
+    const old = this.socket;
+    this.socket = null;
+    if (old) {
+      old.onopen = old.onmessage = old.onclose = old.onerror = null;
+      try { old.close(4000, reason); } catch { /* already gone */ }
+    }
+    if (this.retry) { clearTimeout(this.retry); this.retry = null; }
+    this.log(`reconnecting: ${reason}`);
+    this.setState("disconnected", reason);
+    this.backoff = 1000;
+    this.connect();
   }
 
   stop(): void {
     this.stopped = true;
+    if (this.watchdog) { clearInterval(this.watchdog); this.watchdog = null; }
     if (this.retry) clearTimeout(this.retry);
     for (const job of this.active.values()) { job.cancelled = true; job.child?.kill("SIGTERM"); }
     this.socket?.close(1000, "Runner stopped");
@@ -111,12 +144,14 @@ export class Runner {
     this.setState("connecting");
     const socket = this.opts.createSocket(url, { Authorization: `Bearer ${this.opts.token}` });
     this.socket = socket;
+    this.lastHeard = Date.now();
+    this.serverPings = false;
     socket.onopen = async () => {
       this.agents ??= await detectAgents(this.opts.env ?? process.env, this.bins());
       const claude = this.agents.find(a => a.kind === "claude");
       this.send({ type: "hello", appVersion: this.opts.appVersion, platform: `${process.platform}-${process.arch}`, claudeVersion: claude?.version ?? null, agents: this.agents, activeJobIds: [...this.active.keys()] });
     };
-    socket.onmessage = (ev) => { void this.handle(String(ev.data)); };
+    socket.onmessage = (ev) => { this.lastHeard = Date.now(); void this.handle(String(ev.data)); };
     socket.onerror = () => { /* onclose follows */ };
     socket.onclose = (ev) => {
       if (this.socket !== socket) return;
@@ -141,6 +176,7 @@ export class Runner {
         this.setState("connected", msg.deviceName);
         return;
       case "ping":
+        this.serverPings = true;
         this.send({ type: "pong" });
         return;
       case "error":
@@ -234,8 +270,13 @@ export class Runner {
       }
       const cwd = join(this.opts.workRoot, "chats", p.conversationId.replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, 80));
       mkdirSync(cwd, { recursive: true });
+      const model = isAgentModel(p.model) ? p.model : undefined;
+      const effort = isAgentEffort(p.effort) ? p.effort : undefined;
       const attempt = (sessionId?: string) => runAgent(agent, {
-        prompt: p.prompt, instructions: p.instructions, sessionId, mcp: p.mcp, readOnly: true, cwd,
+        // No session to continue here: the fuller prompt carries the conversation so far.
+        prompt: sessionId ? p.prompt : p.freshPrompt || p.prompt,
+        instructions: p.instructions, instructionsMode: p.instructionsMode === "replace" ? "replace" : "append",
+        model, effort, sessionId, mcp: p.mcp, readOnly: true, cwd,
         env: this.opts.env ?? process.env, bin: this.bins()[agent],
         onEvent: event => this.send({ type: "job.event", jobId: job.id, event }),
         onSpawn: child => { active.child = child; },
@@ -319,6 +360,7 @@ export async function runAgentTask(job: BuildJobOffer, active: ActiveJob, ctx: T
   ctx.progress(`Starting ${AGENTS[ctx.agent].label}…`);
   const attempt = (sessionId?: string) => runAgent(ctx.agent, {
     prompt: p.prompt, cwd: worktree, sessionId, allowedTools: tools, maxTurns: p.maxTurns, env: ctx.env, bin: ctx.bin,
+    model: isAgentModel(p.model) ? p.model : undefined, effort: isAgentEffort(p.effort) ? p.effort : undefined,
     onEvent: ctx.agentEvent,
     onSpawn: child => { active.child = child; },
   }).finally(() => { active.child = undefined; });

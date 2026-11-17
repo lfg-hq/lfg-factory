@@ -67,7 +67,7 @@ export async function createTicketOperation(input:{ticketId:string;projectId:str
  const inserted=await db.insert(ticketLogs).values({id,ticketId:input.ticketId,logType:'chat_operation',command:'Chat follow-up',output:JSON.stringify(operation)}).onConflictDoNothing().returning({id:ticketLogs.id});
  return {operation:(await readTicketOperation(id))!,created:inserted.length>0};
 }
-export async function updateTicketOperation(status:OperationStatus,detail:string,id=context.getStore()) {
+export async function updateTicketOperation(status:OperationStatus,detail:string,id=context.getStore(),wakeAgent=true) {
  if(!id)return;
  const operation=await readTicketOperation(id);if(!operation)return;
  operation.status=status;if(status==='failed'||status==='completed')operation.waitingForInput=false;operation.detail=detail;operation.updatedAt=new Date().toISOString();
@@ -77,6 +77,12 @@ export async function updateTicketOperation(status:OperationStatus,detail:string
  const messageId=id+':'+status+':'+createHash('sha256').update(detail).digest('hex').slice(0,12);
  const rows=await db.insert(messages).values({id:messageId,conversationId:operation.conversationId,role:'assistant',userRole:'operation_status',content:detail}).onConflictDoNothing().returning({id:messages.id});
  if(rows.length)broadcastToUser(operation.userId,{type:'message',sender:'assistant',message:detail,conversation_id:operation.conversationId,project_id:operation.publicProjectId,build_status:true,operation_id:id});
+ // First delivery of a final outcome: the chat agent that sent the request reads the result and re-checks its fix.
+ if(wakeAgent && rows.length && (status==='completed'||status==='failed')) {
+  const {notifyChatAgent,ticketEventMessage}=await import('./build-summary-turn.ts');
+  const [ticket]=await db.select({key:projectTickets.ticketKey,name:projectTickets.name}).from(projectTickets).where(eq(projectTickets.id,operation.ticketId)).catch(()=>[]);
+  notifyChatAgent({conversationId:operation.conversationId,userId:operation.userId,message:ticketEventMessage({kind:status==='completed'?'change_done':'change_failed',ticket:[ticket?.key,ticket?.name].filter(Boolean).join(' — ')||operation.ticketId,ticketId:operation.ticketId,detail})});
+ }
 }
 export async function withTicketOperation(id:string|undefined,run:()=>Promise<void>) {
  if(!id)return run();
@@ -158,7 +164,7 @@ export async function recoverTicketOperations(before=Date.now()) {
  const rows=await db.select().from(ticketLogs).where(eq(ticketLogs.logType,'chat_operation'));
  for(const row of rows) {
   let op:TicketOperation;try{op=JSON.parse(row.output || '{}');}catch{continue;}
-  if(Date.parse(op.updatedAt)<before && (op.status==='queued'||op.status==='running'||op.waitingForInput))await updateTicketOperation('failed','The server restarted before this operation recorded a final outcome. Saved ticket work is retained. Check the ticket before resuming; the operation was not replayed automatically.',op.id);
+  if(Date.parse(op.updatedAt)<before && (op.status==='queued'||op.status==='running'||op.waitingForInput))await updateTicketOperation('failed','The server restarted before this operation recorded a final outcome. Saved ticket work is retained. Check the ticket before resuming; the operation was not replayed automatically.',op.id,false);
  }
 }
 

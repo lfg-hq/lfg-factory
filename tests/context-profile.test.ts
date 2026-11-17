@@ -6,14 +6,15 @@ import { createPiSubscriptionModel } from '../src/ai/pi-subscription-model.ts';
 afterEach(() => { delete process.env.CHAT_CONTEXT_BUDGET_TOKENS; });
 
 test('each model gets its own budget, capped per connection type', () => {
-  // ChatGPT subscription: 93% of Astra's 272k window, condensing at ~190k (was 96k for every model).
-  expect(contextProfile('chatgpt/gpt-6-astra')).toEqual({ route: 'subscription', window: 272000, budget: 252960 });
+  // ChatGPT subscription: Astra's 272k window less the room kept for the reply (32k) and
+  // for reasoning the backend will not let us cap (5%); condensing starts at ~170k.
+  expect(contextProfile('chatgpt/gpt-6-astra')).toEqual({ route: 'subscription', window: 272000, maxOutput: 32000, budget: 226400 });
   // API keys pay per input token: the same model is capped by the cost ceiling.
   expect(contextProfile('gpt-6-astra')).toMatchObject({ route: 'api', window: 272000, budget: 200000 });
   expect(contextProfile('claude_4.6_sonnet')).toMatchObject({ window: 1000000, budget: 200000 });
-  expect(contextProfile('claude_4.5_haiku').budget).toBe(186000);
+  expect(contextProfile('claude_4.5_haiku')).toMatchObject({ maxOutput: 32000, budget: 168000 }); // window less the reply
   expect(contextProfile('glm_5.2').window).toBe(200000); // from llm-models.json
-  expect(contextProfile('unknown-model').budget).toBe(Math.floor(128000 * 0.93));
+  expect(contextProfile('unknown-model')).toMatchObject({ maxOutput: 12000, budget: 116000 });
 });
 
 test('an operator-set fixed budget still applies to every model', () => {
@@ -62,12 +63,13 @@ test('older images are dropped before any summary; the current request keeps its
   expect(out[2]).toEqual(rows[2]);
 });
 
-test('a failed summary drops older history instead of failing the turn', async () => {
+test('a failed summary falls back to a mechanical excerpt instead of failing the turn or dropping history', async () => {
   const rows = [...chatty(1), ...chatty(2), ...chatty(3), { role: 'user', content: 'latest' } as any];
   const stages: string[] = [];
   const out = await compactContext(rows, 0, async () => { throw new Error('summarizer down'); }, 6000, undefined, undefined, { onStage: s => stages.push(s) });
   expect(stages).toContain('fallback');
-  expect(JSON.stringify(out[0])).toContain('Earlier conversation was omitted');
+  expect(JSON.stringify(out[0])).toContain('mechanical excerpt');
+  expect(JSON.stringify(out[0])).toContain('User: ask 1');
   expect(out.at(-1)).toEqual(rows.at(-1));
 });
 

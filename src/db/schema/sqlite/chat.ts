@@ -146,3 +146,10 @@ export const conversationContexts = sqliteTable("conversation_context", {
   throughId: text("through_id").notNull(),
   throughAt: integer("through_at", { mode: "timestamp" }).notNull(),
 });
+
+/** The agent's working plan for a conversation: survives context condensing and restarts. */
+export const conversationPlans = sqliteTable("conversation_plan", {
+  conversationId: text("conversation_id").primaryKey().references(() => conversations.id, { onDelete: "cascade" }),
+  items: text("items", { mode: "json" }).$type<Array<{ step: string; status: "pending" | "in_progress" | "done" | "blocked"; note?: string }>>().notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).notNull().default(sql`(unixepoch())`),
+});

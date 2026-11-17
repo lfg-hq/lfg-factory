@@ -14,7 +14,7 @@ import {
 } from "../db/schema/projects.ts";
 import { llmApiKeys, profiles, users } from "../db/schema/users.ts";
 import { projectFiles, projectFileVersions } from "../db/schema/documents.ts";
-import { conversations, chatFiles } from "../db/schema/chat.ts";
+import { conversations, chatFiles, messages } from "../db/schema/chat.ts";
 import { ticketStages, projectTickets, projectTicketAttachments } from "../db/schema/tickets.ts";
 import { cleanupTicketWorktree } from "../workers/ticket-executor.ts";
 import { applicationState, githubTokens, gitlabTokens } from "../db/schema/users.ts";
@@ -441,6 +441,32 @@ projectsRouter.get("/projects/:projectId", async (c) => {
     if (row.stageId) ticketCounts[row.stageId] = (ticketCounts[row.stageId] ?? 0) + 1;
   }
 
+  // What each chat led to, so the Chats list can tell them apart: message count,
+  // the epics born from it and how many tickets it produced.
+  const chatLinks: Record<string, { messages: number; tickets: number; epics: { key: string | null; name: string }[]; summary?: string; failed?: boolean }> = {};
+  if (tab === "conversations" && convRows.length) {
+    const ids = convRows.map((cv) => cv.id);
+    const link = (id: string) => (chatLinks[id] ??= { messages: 0, tickets: 0, epics: [] });
+    const [messageCounts, ticketCountsByChat, epicRows] = await Promise.all([
+      db.select({ id: messages.conversationId, n: sql<number>`count(*)` }).from(messages).where(inArray(messages.conversationId, ids)).groupBy(messages.conversationId),
+      db.select({ id: projectTickets.conversationId, n: sql<number>`count(*)` }).from(projectTickets)
+        .where(and(eq(projectTickets.projectId, project.id), inArray(projectTickets.conversationId, ids))).groupBy(projectTickets.conversationId),
+      db.select({ id: epics.conversationId, key: epics.epicKey, name: epics.name }).from(epics)
+        .where(and(eq(epics.projectId, project.id), inArray(epics.conversationId, ids))),
+    ]);
+    // Where each chat left off: its last few messages, trimmed in the query.
+    const { chatSummary } = await import("../services/chat-summary.ts");
+    await Promise.all(ids.map(async (id) => {
+      const last = await db.select({ role: messages.role, content: sql<string>`substr(${messages.content}, 1, 1200)` }).from(messages)
+        .where(eq(messages.conversationId, id)).orderBy(desc(messages.createdAt)).limit(3);
+      const summary = chatSummary(last);
+      if (summary) Object.assign(link(id), { summary: summary.text, failed: summary.failed });
+    }));
+    for (const row of messageCounts) link(row.id).messages = Number(row.n);
+    for (const row of ticketCountsByChat) if (row.id) link(row.id).tickets = Number(row.n);
+    for (const row of epicRows) if (row.id) link(row.id).epics.push({ key: row.key, name: row.name });
+  }
+
   // Counts for the Home summary strip.
   const [docCountRow, memberCountRow] = await Promise.all([
     db.select({ n: sql<number>`count(*)` }).from(projectFiles).where(eq(projectFiles.projectId, project.id)),
@@ -489,6 +515,7 @@ projectsRouter.get("/projects/:projectId", async (c) => {
       role: access.role,
       isOwner: access.role === "owner",
       conversations: convRows,
+      chatLinks,
       stages: stageRows,
       ticketCounts,
       docsCount,
@@ -655,6 +682,49 @@ projectsRouter.get("/projects/:projectId/epics", async (c) => {
     tickets: ticketRows,
     docs,
     conversations: convRows,
+  }));
+});
+
+// ── GET /projects/:projectId/whiteboards — the project's whiteboards, and one board's canvas ──
+projectsRouter.get("/projects/:projectId/whiteboards", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId"), user.id);
+  if (!access) return c.text("Project not found", 404);
+  const { WhiteboardsPage } = await import("../templates/pages/whiteboards.tsx");
+  const { canDraw } = await import("./api/whiteboards.ts");
+  return c.html(WhiteboardsPage({
+    project: { id: access.project.id, projectId: access.project.projectId, name: access.project.name, icon: access.project.icon },
+    user: { name: user.name, email: user.email }, canEdit: canDraw(access),
+  }));
+});
+
+projectsRouter.get("/projects/:projectId/whiteboards/:boardId", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId"), user.id);
+  if (!access) return c.text("Project not found", 404);
+  const { getBoard } = await import("../services/whiteboards/store.ts");
+  const board = await getBoard(c.req.param("boardId"));
+  if (!board || board.projectId !== access.project.projectId) return c.text("Board not found", 404);
+  const { WhiteboardPage } = await import("../templates/pages/whiteboard.tsx");
+  const { canDraw, canAsk } = await import("./api/whiteboards.ts");
+  return c.html(WhiteboardPage({
+    project: { projectId: access.project.projectId, name: access.project.name },
+    board: { id: board.id, title: board.title }, user: { name: user.name },
+    canEdit: canDraw(access), canChat: canDraw(access) && canAsk(access), embed: c.req.query("embed") === "1",
+  }));
+});
+
+// ── GET /projects/:projectId/meetings — add the agent to a call, see past calls ──
+projectsRouter.get("/projects/:projectId/meetings", async (c) => {
+  const user = c.get("user");
+  const access = await getProjectAccess(c.req.param("projectId"), user.id);
+  if (!access) return c.text("Project not found", 404);
+  const { MeetingsPage } = await import("../templates/pages/meetings.tsx");
+  const { meetingSetupProblem } = await import("../services/meetings/meeting-agent.ts");
+  return c.html(MeetingsPage({
+    project: { id: access.project.id, projectId: access.project.projectId, name: access.project.name, icon: access.project.icon },
+    user: { name: user.name, email: user.email },
+    setupProblem: meetingSetupProblem(), botName: env.MEETING_BOT_NAME || "LFG",
   }));
 });
 

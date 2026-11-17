@@ -138,3 +138,10 @@ export const conversationContexts = pgTable("conversation_context", {
   throughId: text("through_id").notNull(),
   throughAt: timestamp("through_at", { mode: "date" }).notNull(),
 });
+
+/** The agent's working plan for a conversation: survives context condensing and restarts. */
+export const conversationPlans = pgTable("conversation_plan", {
+  conversationId: text("conversation_id").primaryKey().references(() => conversations.id, { onDelete: "cascade" }),
+  items: jsonb("items").$type<Array<{ step: string; status: "pending" | "in_progress" | "done" | "blocked"; note?: string }>>().notNull(),
+  updatedAt: timestamp("updated_at", { mode: "date" }).notNull().default(sql`now()`),
+});

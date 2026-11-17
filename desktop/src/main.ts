@@ -10,7 +10,7 @@
  * safeStorage), this computer's device id, and the "don't ask again" project list.
  */
 
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, safeStorage, session, shell, Tray, nativeImage, type IpcMainInvokeEvent } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, powerMonitor, safeStorage, session, shell, Tray, nativeImage, type IpcMainInvokeEvent } from "electron";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
@@ -297,6 +297,8 @@ if (!app.requestSingleInstanceLock()) {
     tray = new Tray(nativeImage.createEmpty());
     refreshTray();
     startRunner();
+    // After sleep the old connection is usually dead (and the Wi-Fi address may have changed).
+    powerMonitor.on("resume", () => runner?.reconnectNow("woke from sleep"));
     showWorkspace();
     app.on("activate", () => showWorkspace());
   });

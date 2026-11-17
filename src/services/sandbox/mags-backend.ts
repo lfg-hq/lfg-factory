@@ -351,24 +351,80 @@ export async function setNoSleep(nameOrId: string, noSleep: boolean): Promise<vo
 
 /**
  * Start an ephemeral Chromium browser session and return its CDP WebSocket endpoint.
+ *
+ * The session is addressed on the app domain (app.lfg.run), the same one previews use,
+ * rather than the SDK's default apps.mags.run address: that is the domain whose
+ * certificate this deployment keeps current.
  */
 export async function startBrowserSession(opts?: {
   name?: string;
   timeout?: number;
+  /**
+   * Start Mags's meeting browser instead of the headless one: full Chrome with audio devices,
+   * and a profile kept on the workspace called `name` (required), so a Google sign-in made
+   * once in that browser is still there next time. One session per name: asking again while
+   * it is running returns the running one.
+   */
+  meet?: boolean;
 }): Promise<{ requestId: string; wsEndpoint: string; cdpHttpUrl: string }> {
   const client = getClient();
-  const r = await client.browser(opts ?? {});
-  let wsEndpoint: string | undefined = r.wsEndpoint;
-  if (!wsEndpoint && r.cdpHttpUrl && r.cdpUrl) {
-    const ver = (await fetch(`${r.cdpHttpUrl.replace(/\/+$/, "")}/json/version`).then((x) => x.json())) as {
-      webSocketDebuggerUrl?: string;
-    };
-    if (ver.webSocketDebuggerUrl) {
-      wsEndpoint = r.cdpUrl.replace(/\/+$/, "") + new URL(ver.webSocketDebuggerUrl).pathname;
+  const appDomain = process.env.MAGS_APP_DOMAIN || "app.lfg.run";
+  const deadline = Date.now() + (opts?.timeout ?? 90_000);
+  if (opts?.meet && !opts.name) throw new Error("The meeting browser needs a workspace name");
+  const started = opts?.meet
+    ? await magsApi("POST", "/api/v2/mags-jobs", { script: "echo ready", type: "inline", name: opts.name, rootfs_type: "chrome-meet", browser_mode: true })
+    : await client.run('echo "browser session ready"', { browserMode: true, persistent: true, noSync: true, name: opts?.name });
+  const requestId: string = started.request_id;
+  try {
+    let subdomain = "";
+    let access = "";
+    while (!subdomain) {
+      const st = await client.status(requestId) as { status?: string; subdomain?: string; error_message?: string; debug_ws_url?: string };
+      if (st.status === "error") throw new Error(`Browser session failed: ${st.error_message || "unknown error"}`);
+      if (st.status === "running" && st.subdomain) {
+        subdomain = st.subdomain;
+        // A meeting browser is served only under its session secret, which Mags reports as
+        // the path of debug_ws_url ("/t/<secret>"). The path is all we take: the host may be
+        // another of Mags's domains. A URL holding it is a credential, so it is never logged.
+        access = accessPathOf(st.debug_ws_url);
+        break;
+      }
+      if (Date.now() > deadline) throw new Error("Mags browser session did not start in time");
+      await new Promise((resolve) => setTimeout(resolve, 1000));
     }
+    const cdpHttpUrl = `https://${subdomain}.${appDomain}${access}`;
+    // Chromium reports its socket as ws://localhost/devtools/browser/<id>; only the path is
+    // usable from here. Retried because the relay takes a moment to start serving.
+    let lastError = "";
+    while (Date.now() < deadline) {
+      try {
+        const response = await fetch(`${cdpHttpUrl}/json/version`, { signal: AbortSignal.timeout(10_000) });
+        const version = (await response.json()) as { webSocketDebuggerUrl?: string };
+        if (version.webSocketDebuggerUrl) {
+          return { requestId, wsEndpoint: `wss://${subdomain}.${appDomain}${access}${new URL(version.webSocketDebuggerUrl).pathname}`, cdpHttpUrl };
+        }
+        lastError = `no debugger address (HTTP ${response.status})`;
+      } catch (error) {
+        lastError = (error as Error).message;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    throw new Error(`Mags browser session ${subdomain} was not reachable: ${lastError}`);
+  } catch (error) {
+    await client.stop(requestId).catch(() => {}); // don't leave a browser VM running that nobody can use
+    throw error;
   }
-  if (!wsEndpoint) throw new Error("Mags browser session did not return a usable wsEndpoint");
-  return { requestId: r.requestId, wsEndpoint, cdpHttpUrl: r.cdpHttpUrl };
+}
+
+/** "/t/<secret>" from a Mags debug_ws_url, or "" when the session has no secret path. */
+export function accessPathOf(debugWsUrl: string | undefined): string {
+  if (!debugWsUrl) return "";
+  try {
+    const path = new URL(debugWsUrl).pathname.replace(/\/+$/, "");
+    return /^\/t\/[A-Za-z0-9_-]{32,128}$/.test(path) ? path : "";
+  } catch {
+    return "";
+  }
 }
 
 /**

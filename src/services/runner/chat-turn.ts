@@ -15,7 +15,7 @@ import { env } from "../../config/env.ts";
 import { runnerJobs } from "../../db/schema/runners.ts";
 import { cancelJob, enqueueJob, userHasConnectedRunner, watchJob, type JobUpdate } from "./hub.ts";
 import { mintTurnToken, revokeTurnToken } from "./turn-tokens.ts";
-import { AGENT_LABELS, RUNNER_PROTOCOL_VERSION, type AgentEvent, type AgentKind } from "./protocol.ts";
+import { AGENT_LABELS, RUNNER_PROTOCOL_VERSION, type AgentEffort, type AgentEvent, type AgentKind } from "./protocol.ts";
 
 export interface LocalChatTurnInput {
   userId: string;
@@ -25,15 +25,22 @@ export interface LocalChatTurnInput {
   /** The user message being answered. */
   messageId?: string;
   agent: AgentKind;
+  /** Model alias and effort for the agent; null/absent: its own default. */
+  model?: string | null;
+  effort?: AgentEffort | null;
   /** The chat's system prompt and context, for the agent's instructions. */
   instructions: string;
   userMessage: string;
+  /** What the server adds for this turn (@ticket context, branch, notes, plan): rides on the message, as for the web chat. */
+  turnContext?: string;
   /** Earlier messages, used when there's no agent session to continue. */
   history: Array<{ role: string; content: unknown }>;
   signal: AbortSignal;
   /** Plain-language progress for the person ("Waiting for your computer…"). */
   onStatus(text: string): void;
   onActivity?(): void;
+  /** The agent condensed its own conversation (Claude Code's auto-compact). */
+  onCompacted?(info: { trigger?: string; preTokens?: number }): void;
   /** Tests: the server origin the agent should call. */
   serverUrl?: string;
 }
@@ -54,17 +61,24 @@ const textOf = (content: unknown): string =>
   : Array.isArray(content) ? content.map(p => (p && typeof p === "object" && (p as any).type === "text" ? (p as any).text : "")).filter(Boolean).join("\n")
   : "";
 
-/** The conversation so far, as text, for an agent that has no session to continue. */
+/**
+ * The conversation so far, as text, for an agent that has no session to continue. It
+ * starts from LFG's saved summary of older turns when there is one (the same checkpoint
+ * the web chat starts from), then the newest messages that fit.
+ */
 export function transcript(history: LocalChatTurnInput["history"], limit = 24_000): string {
+  const summaryAt = history.findIndex(m => m.role === "assistant" && textOf(m.content).startsWith("Conversation handoff"));
+  const summary = summaryAt >= 0 ? textOf(history[summaryAt]!.content).trim().slice(0, Math.floor(limit / 2)) : "";
   const lines: string[] = [];
-  for (const m of history) {
+  for (const m of history.slice(summaryAt + 1)) {
     if (m.role !== "user" && m.role !== "assistant") continue;
     const text = textOf(m.content).trim();
     if (text) lines.push(`${m.role === "user" ? "User" : "Assistant"}: ${text}`);
   }
-  let out = lines.join("\n\n");
-  if (out.length > limit) out = "…" + out.slice(out.length - limit);
-  return out;
+  const room = limit - summary.length;
+  let recent = lines.join("\n\n");
+  if (recent.length > room) recent = "…" + recent.slice(recent.length - room);
+  return [summary && `### Summary of earlier turns\n\n${summary}`, recent && `### Latest messages\n\n${recent}`].filter(Boolean).join("\n\n");
 }
 
 /** A tiny async queue: the job's watcher pushes, the chat handler's for-await pulls. */
@@ -93,8 +107,12 @@ export async function startLocalChatTurn(input: LocalChatTurnInput): Promise<Loc
       eq(runnerJobs.agent, input.agent), isNotNull(runnerJobs.agentSession)))
     .orderBy(desc(runnerJobs.createdAt)).limit(1);
   const sessionId = previous?.session ?? undefined;
-  const earlier = sessionId ? "" : transcript(input.history.slice(0, -1));
-  const prompt = earlier ? `## The conversation so far\n\n${earlier}\n\n## The user's new message\n\n${input.userMessage}` : input.userMessage;
+  const message = input.turnContext?.trim() ? `${input.userMessage}\n\n${input.turnContext.trim()}` : input.userMessage;
+  // Without a session on that computer (first turn there, another computer, an expired
+  // session) the agent starts from LFG's summary plus the latest messages.
+  const earlier = transcript(input.history.slice(0, -1));
+  const freshPrompt = earlier ? `## The conversation so far\n\n${earlier}\n\n## The user's new message\n\n${message}` : message;
+  const prompt = sessionId ? message : freshPrompt;
 
   const { turnId, token } = await mintTurnToken({ userId: input.userId, conversationId: input.conversationId, projectId: input.projectId, messageId: input.messageId });
   const origin = (input.serverUrl ?? (env.APP_URL || env.BETTER_AUTH_URL)).replace(/\/+$/, "");
@@ -102,8 +120,13 @@ export async function startLocalChatTurn(input: LocalChatTurnInput): Promise<Loc
     userId: input.userId, projectId: input.projectId ?? "", conversationId: input.conversationId, type: "chat_turn",
     payload: {
       protocol: RUNNER_PROTOCOL_VERSION, agent: input.agent, conversationId: input.conversationId,
-      prompt, sessionId,
-      instructions: `${input.instructions}\n\nYou are running as ${label} on the user's own computer, inside LFG. LFG's tools are available through the MCP server named "lfg" (the tool names in these instructions refer to them). Use them for anything that should be saved or shared — documents, tickets, epics, notes — since that is how your work reaches the user's team.`,
+      prompt, sessionId, ...(sessionId ? { freshPrompt } : {}),
+      // LFG's prompt is the whole system prompt where the CLI allows it (Claude Code), so a
+      // chat answers as it does on the web rather than as a coding assistant.
+      instructionsMode: "replace",
+      ...(input.model ? { model: input.model } : {}),
+      ...(input.effort ? { effort: input.effort } : {}),
+      instructions: `${input.instructions}\n\nLFG's tools are available through the MCP server named "lfg"; the tool names in these instructions refer to them. Use them for anything that should be saved or shared (documents, tickets, epics, notes): that is how your work reaches the user's team.`,
       mcp: { url: `${origin}/mcp/turn/${turnId}`, token },
     },
   });
@@ -160,7 +183,8 @@ export async function startLocalChatTurn(input: LocalChatTurnInput): Promise<Loc
         queue.push({ type: "tool-result", toolCallId: event.id, toolName: tool.name, input: tool.input, output });
         return;
       }
-      default: return; // session and result: the job's finish carries what matters
+      case "compacted": input.onCompacted?.({ trigger: event.trigger, preTokens: event.preTokens }); return;
+      default: return; // session, result, limits: the job's finish and the hub carry what matters
     }
   };
 

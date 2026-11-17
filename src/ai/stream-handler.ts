@@ -3,10 +3,12 @@ import { providerErrorMessage, safeErrorReason } from './provider-error.ts';
 import { wrapGraphConnectorTools } from "../services/document-graph-connectors.ts";
 import { withChatDiagnostics, chatStage, chatDiagnostic, chatConversation } from './chat-diagnostics.ts';
 import { abortable, cancellableStream, trackTurnTools } from './stream-cancellation.ts';
-import { compactContext, estimateContextTokens, HANDOFF_INSTRUCTION, type CompactionStage } from './context-compaction.ts';
+import { compactContext, estimateContextTokens, handoffInstruction, summaryLimit, type CompactionStage } from './context-compaction.ts';
 import { contextProfile, recordTokenScale, tokenScale } from './context-profile.ts';
-import { loadConversationHandoff } from './conversation-handoff.ts';
-import { BUILD_EVENT_ROLE } from '../services/build-summary-turn.ts';
+import { loadConversationHandoff, saveConversationCheckpoint } from './conversation-handoff.ts';
+import { planTools, planContext, planProgress } from './tools/plan-tools.ts';
+import { isContextOverflow, turnContextBlock, appendToLastUser, LENGTH_NUDGE, STEP_LIMIT_NUDGE, CONTEXT_INSTRUCTIONS, PLAN_INSTRUCTIONS } from './turn-context.ts';
+import { HIDDEN_USER_ROLES } from '../services/build-summary-turn.ts';
 import {compactToolSteps} from './history-budget.ts';
 import { emptyTurnContent, shouldContinuePromise, shouldAskWithCard, continuationMessages } from './turn-completion.ts';
 export { endsOnUnkeptPromise } from './turn-completion.ts';
@@ -53,7 +55,10 @@ import { withUserSubscription } from "../services/subscription-execution.ts";
 import { withoutSubscription } from "./subscription-context.ts";
 import { currentSubscription } from "./subscription-context.ts";
 
-const MAX_HISTORY = 40; // messages to load for context
+// Rows loaded per turn. Normally only the ~20-40 since the saved checkpoint matter; the
+// margin above OVERDUE_ROWS (80) means a backlog is condensed before any row falls outside.
+const MAX_HISTORY = 120;
+const MAX_STEPS = 80;
 const FLUSH_CHARS = 80;
 const FLUSH_MS = 80;
 
@@ -208,7 +213,7 @@ export const INVESTIGATION_TOOLS = new Set([
 /** What a long tool input is, for the "Writing …" progress line. */
 const TOOL_INPUT_LABELS: Record<string, string> = {
   createTickets: "the ticket", updateTicketDetails: "the ticket update", quickChange: "the change request",
-  sendTicketMessage: "the change for the ticket", runInPreview: "the check", saveNote: "the note",
+  sendTicketMessage: "the change for the ticket", runInPreview: "the check", saveNote: "the note", drawOnWhiteboard: "the drawing", saveEvalSuite: "the evals",
 };
 
 /**
@@ -219,6 +224,7 @@ const TOOL_INPUT_LABELS: Record<string, string> = {
  */
 const TOOL_LABELS: Record<string, string> = {
   loadSkill: "Loading skill",
+  updatePlan: "Updating the plan",
   getProjectDashboard: "Loading project dashboard",
   getFileList: "Listing the project files",
   getFileContent: "Reading a file",
@@ -253,6 +259,15 @@ const TOOL_LABELS: Record<string, string> = {
   getProjectEnvVars: "Reading environment variables",
   registerRequiredEnvVars: "Registering environment variables",
   setEnvVar: "Setting an environment variable",
+  listWhiteboards: "Looking at the whiteboards",
+  readWhiteboard: "Reading the whiteboard",
+  createWhiteboard: "Creating a whiteboard",
+  drawOnWhiteboard: "Drawing on the whiteboard",
+  listEvalSuites: "Looking at the evals",
+  readEvalSuite: "Reading the evals",
+  saveEvalSuite: "Writing the evals",
+  runEvals: "Starting the evals",
+  readEvalResults: "Reading the eval results",
 };
 
 export function toolLabel(toolName: string): string {
@@ -474,7 +489,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     role: "user",
     content: userMessage,
     isVoice: !!isVoice,
-    ...(req.userRole === BUILD_EVENT_ROLE ? { userRole: BUILD_EVENT_ROLE } : {}),
+    ...(req.userRole && HIDDEN_USER_ROLES.includes(req.userRole) ? { userRole: req.userRole } : {}),
     // Only stamped when someone OTHER than the conversation's author wrote it.
     authorId: writingAsGuest ? userId : null,
   }).returning({ id: messages.id });
@@ -501,33 +516,55 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     if (!attachmentContexts.has(key)) attachmentContexts.set(key, chatDocumentContext(ids, userId));
     return attachmentContexts.get(key)!;
   };
-  for (const m of history.reverse()) {
-    const steps = (m as any).toolSteps as any[] | null | undefined;
-    if (m.role === "assistant" && Array.isArray(steps) && steps.length > 0) {
-      // Replay the captured AI SDK response.messages sequence verbatim.
-      // These rows include intermediate assistant tool-call + tool result
-      // messages plus the final assistant text.
-      for (const step of compactToolSteps(steps, 16_000)) contextMessages.push(step);
-    } else {
-      contextMessages.push({
-        role: m.role as "user" | "assistant" | "system",
-        content: m.content + (m.role === "user" && Array.isArray(m.contentIfFile) ? await documentContext((m.contentIfFile as Array<{id:string}>).map(f=>f.id)) : ""),
-      });
+  // Runs once the model (and so its budget) is known. The newest turns replay exactly as
+  // the model saw them, which is also what keeps the provider's prompt cache warm; only
+  // turns beyond ~30% of the budget fall back to shortened results. Structure is never
+  // flattened into prose.
+  const expandHistory = async (budgetTokens: number) => {
+    const rows = history.slice().reverse();
+    const fullChars = budgetTokens * 3 * .3;
+    let used = 0;
+    const full = new Set<string>();
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const steps = (rows[i] as any).toolSteps;
+      const chars = Array.isArray(steps) ? JSON.stringify(steps).length : rows[i]!.content.length;
+      if (used + chars > fullChars && full.size >= 2) break;
+      used += chars; full.add(rows[i]!.id);
     }
-    historyRanges.push({id:m.id, createdAt:m.createdAt, end:contextMessages.length});
-  }
+    for (const m of rows) {
+      const steps = (m as any).toolSteps as any[] | null | undefined;
+      if (m.role === "assistant" && Array.isArray(steps) && steps.length > 0) {
+        // Replay the captured AI SDK response.messages sequence: intermediate assistant
+        // tool-call + tool result messages plus the final assistant text.
+        for (const step of full.has(m.id) ? steps : compactToolSteps(steps, 48_000, 4000)) contextMessages.push(step);
+      } else {
+        contextMessages.push({
+          role: m.role as "user" | "assistant" | "system",
+          content: m.content + (m.role === "user" && Array.isArray(m.contentIfFile) ? await documentContext((m.contentIfFile as Array<{id:string}>).map(f=>f.id)) : ""),
+        });
+      }
+      historyRanges.push({id:m.id, createdAt:m.createdAt, end:contextMessages.length});
+    }
+  };
+
+  // Everything the server adds for THIS turn (background results, @ticket context, the
+  // preview's branch, saved notes, the working plan) rides on the user's message as one
+  // marked block. It used to be appended after it as assistant and system messages, so
+  // the request no longer ended on what the user asked, and Anthropic models rejected the
+  // turn outright ("Multiple system messages…").
+  const turnContext: string[] = [];
 
   // Status events do not consume conversation slots, but recent results/questions
   // remain visible as bounded historical evidence for follow-up answers.
   const operationMessages=await db.select({id:messages.id,content:messages.content}).from(messages)
     .where(and(eq(messages.conversationId,convId),eq(messages.userRole,'operation_status')))
-    .orderBy(desc(messages.createdAt)).limit(5);
-  if(operationMessages.length)contextMessages.push({role:'assistant',content:'Recent background operation results (historical context):\n'+operationMessages.reverse().map(m=>(m.id.startsWith('ticket-operation:') ? 'Operation '+m.id.split(':').slice(0,2).join(':')+': ' : '')+m.content.slice(0,2000)).join('\n\n')});
+    .orderBy(desc(messages.createdAt)).limit(8);
+  if(operationMessages.length)turnContext.push('Recent background operation results (historical context, newest last):\n'+operationMessages.reverse().map(m=>(m.id.startsWith('ticket-operation:') ? 'Operation '+m.id.split(':').slice(0,2).join(':')+': ' : '')+m.content.slice(0,4000)).join('\n\n'));
 
   // ── 3b. @ticket context — inject each referenced ticket's spec/branch/history ──
   if (req.mentionedTickets?.length) {
     const block = await buildTicketMentionContext(req.mentionedTickets.map((t) => t.id));
-    if (block) contextMessages.push({ role: "system", content: block });
+    if (block) turnContext.push(block);
   }
 
   // "Use my computer for AI": this person's chat turns run on their own computer's agent
@@ -615,6 +652,7 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   chatDiagnostic('model_selected', {model:modelKey});
   // How much this model may take: its own window, capped per connection type (see context-profile).
   const profile = contextProfile(modelKey);
+  await expandHistory(profile.budget);
   chatStage('attachments');
   // ── 4b. Attach an uploaded IMAGE to the model turn ──────────────────────────
   // Vision-native models (Claude/GPT/Gemini) get the image directly. Text-only
@@ -742,11 +780,11 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   // default — otherwise a screenshot/bug question gets answered against the wrong code.
   // Skipped when @ticket already pinned the context.
   const branchCtx = await branchCtxPromise;
-  if (branchCtx) contextMessages.push({ role: "system", content: branchCtx });
+  if (branchCtx) turnContext.push(branchCtx);
   // Saved notes travel with every product chat so earlier logins and decisions are remembered.
   if (productChat && internalProjectId) {
     const notes = await import("../services/project-notes.ts").then(m => m.notesContext(internalProjectId!)).catch(() => "");
-    if (notes) contextMessages.push({ role: "system", content: notes });
+    if (notes) turnContext.push(notes);
   }
 
   let tools: Record<string, any> = instantMode
@@ -797,6 +835,10 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
       tools.getPreviewDiagnostics = previewDiagnosticsTool({projectId:internalProjectId,publicProjectId:projectId,userId});
     }
     if (projectId) Object.assign(tools, (await import('./tools/note-tools.ts')).noteTools({projectId:internalProjectId,userId}));
+    // Whiteboards store the PUBLIC project id, like conversations do.
+    if (projectId) Object.assign(tools, (await import('./tools/whiteboard-tools.ts')).whiteboardTools({projectId,userId}));
+    // Evals for the AI agent the project is building (also keyed by the PUBLIC project id).
+    if (projectId) Object.assign(tools, (await import('./tools/eval-tools.ts')).evalTools({projectId,userId}));
     if (projectId) tools.linkTicketDocuments = linkTicketDocumentsTool({projectId:internalProjectId,publicProjectId:projectId,userId});
     // A working shell in the preview for verification: run checks and scripts, report the evidence.
     if (projectId && productChat) tools.runInPreview = createPreviewRunTool({projectId:internalProjectId,publicProjectId:projectId,userId,conversationId:convId!,abortSignal:abortController.signal,
@@ -974,6 +1016,13 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   // tools) and the last message (caches the growing history prefix). For every
   // other provider caching is automatic given our stable [system][tools][history]
   // ordering, so this is a no-op that returns the inputs unchanged.
+  // A working plan the agent keeps across condensing and turns (product chat only).
+  if (productChat) tools = { ...tools, ...planTools({ conversationId: convId!, onUpdate: (items) => {
+    const detail = planProgress(items);
+    noteActivity(detail, "updatePlan");
+    ws.send(JSON.stringify({ type: "ai_chunk", chunk: "", is_final: false, is_notification: true,
+      notification_type: "tool_detail", function_name: "updatePlan", detail }));
+  } }) };
   tools = withConversationContext(readingTools(tools, userMessage), convId, userId, internalProjectId, userMsgRow?.id);
 
   if(internalProjectId && userMsgRow?.id) {
@@ -987,29 +1036,60 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
   const turnTools = trackTurnTools(tools, abortController.signal);
   tools = turnTools.tools;
   const repositoryCache = new Map<string, Response>();
-  systemPrompt += READING_INSTRUCTIONS;
+  systemPrompt += READING_INSTRUCTIONS + CONTEXT_INSTRUCTIONS + (productChat ? PLAN_INSTRUCTIONS : "");
   try {
   const summaryCache = new Map<string, Promise<string>>();
-  const summarize = (evidence: string): Promise<string> => {
-    const key = createHash('sha256').update(evidence).digest('hex');
-    if (!summaryCache.has(key)) summaryCache.set(key, (async () => {
-      // Summaries use the fast helper model on a subscription (the main reasoning model
-      // took ~1 minute per batch), falling back to the chat model otherwise.
-      const sub = currentSubscription();
-      const summaryModel = sub ? (await import("./pi-subscription-model.ts")).createPiSubscriptionModel('gpt-5.6-luna', sub.getAccessToken) : model;
-      const result = await generateText({model:summaryModel, system:HANDOFF_INSTRUCTION, prompt:evidence,
-        maxOutputTokens:2200, abortSignal:abortController.signal, maxRetries:1});
-      return result.text;
-    })());
+  const summaryChars = summaryLimit(profile.budget);
+  // One summarizer for the whole turn and for the refresh after it. On a subscription the
+  // fast helper model goes first (the main reasoning model took ~1 minute per batch) and
+  // the chat model is the fallback, so one model's bad moment does not cost the history.
+  const runSummary = async (evidence: string, maxChars: number, signal: AbortSignal): Promise<string> => {
+    const options = { system: handoffInstruction(maxChars), prompt: evidence,
+      maxOutputTokens: Math.min(profile.maxOutput, Math.ceil(maxChars / 3) + 800), abortSignal: signal, maxRetries: 1 };
+    const sub = currentSubscription();
+    if (sub) {
+      try {
+        const helper = (await import("./pi-subscription-model.ts")).createPiSubscriptionModel('gpt-5.6-luna', sub.getAccessToken);
+        const text = (await generateText({ model: helper, ...options })).text;
+        if (text.trim()) return text;
+      } catch (error) {
+        if (signal.aborted) throw error;
+        chatDiagnostic('summary_helper_failed', { reason: safeErrorReason(error) });
+      }
+    }
+    return (await generateText({ model, ...options })).text;
+  };
+  const summarize = (evidence: string, maxChars = summaryChars): Promise<string> => {
+    const key = createHash('sha256').update(maxChars + '\n' + evidence).digest('hex');
+    if (!summaryCache.has(key)) summaryCache.set(key, runSummary(evidence, maxChars, abortController.signal));
     return summaryCache.get(key)!;
   };
-  // Read the saved checkpoint only; summarizing older history waits until after the turn.
-  const handoff = await loadConversationHandoff(convId!, summarize, undefined, { compact: false, budget: profile.budget });
+  const condenseNotice = (phase: "start" | "done") => ws.send(JSON.stringify({type:"ai_chunk",chunk:"",is_final:false,is_notification:true,notification_type:"context_compaction",phase}));
+  // Normally this only reads the saved checkpoint (older history is summarized after the
+  // turn). If that refresh has kept failing and the backlog outgrew what a turn loads, it
+  // condenses now, visibly, rather than letting messages fall out of view unseen.
+  let overdueCondense = false;
+  const handoff = await loadConversationHandoff(convId!, (evidence, maxChars) => {
+    if (!overdueCondense) { overdueCondense = true; req.onActivity?.(); noteActivity("Condensing earlier context", "compactContext"); condenseNotice("start"); }
+    return summarize(evidence, maxChars);
+  }, undefined, { compact: 'overdue', budget: profile.budget });
+  if (overdueCondense) condenseNotice("done");
+  let handoffShift = 0;
   if (handoff) {
     const covered = historyRanges.filter(r => r.createdAt < handoff.throughAt ||
       (+r.createdAt === +handoff.throughAt && r.id <= handoff.throughId));
-    contextMessages.splice(0, covered.at(-1)?.end ?? 0, handoff.message);
+    const removed = covered.at(-1)?.end ?? 0;
+    contextMessages.splice(0, removed, handoff.message);
+    handoffShift = removed - 1;
   }
+  // Where each stored message ends in contextMessages now, and the newest one before this
+  // turn's request: what a mid-turn handoff can be saved as covering.
+  const rowEnds = historyRanges.map(r => ({ id: r.id, createdAt: r.createdAt, end: r.end - handoffShift })).filter(r => r.end > (handoff ? 1 : 0));
+  const currentRowAt = historyRanges.findIndex(r => r.id === userMsgRow?.id);
+  const priorRow = currentRowAt > 0 ? historyRanges[currentRowAt - 1]! : undefined;
+  // The server's context for this turn, and the agent's own plan, ride on the user's message.
+  if (productChat) { const plan = await planContext(convId!); if (plan) turnContext.push(plan); }
+  if (!appendToLastUser(contextMessages, turnContextBlock(turnContext)) && turnContext.length) contextMessages.push({ role: "user", content: turnContextBlock(turnContext).trim() });
   // Reserve room for system instructions, tool schemas, output and new tool evidence.
   // This is an application budget, not a claim about the provider's context limit.
   const toolSchemas = await Promise.all(Object.entries(tools).map(async ([name, tool]) => ({
@@ -1027,9 +1107,23 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
    // say so rather than nudging forever.
    let passMessages: any[] = cached.messages as any[];
    const completedPassMessages: any[] = [];
-   for (let pass = 0; pass < 2; pass++) {
+   // withCaching may put a system message in front (Anthropic); stored-row positions shift by it.
+   const lead = passMessages.length - contextMessages.length;
+   // Lowered after the provider rejects a prompt as too long, so the retry condenses harder.
+   let budgetFactor = 1;
+   let overflowRetried = false;
+   // Passes: one, plus one rescue nudge; a reply cut off at the output or step limit may
+   // continue up to three more times.
+   let passLimit = 2;
+   let continuations = 0;
+   // Whether history was already condensed in an earlier pass of this turn (positions no longer map to rows).
+   let condensedThisTurn = false;
+   for (let pass = 0; pass < passLimit; pass++) {
     abortController.signal.throwIfAborted();
     const textBeforePass = fullResponse;
+    // What this pass has produced so far, kept if it fails so finished tool work is not lost.
+    let partialMessages: any[] = [];
+    try {
     chatStage('model_response');
     let firstEvent = true;
     let firstText = true;
@@ -1041,7 +1135,10 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     const result = useLocal
       ? await (await import("../services/runner/chat-turn.ts")).startLocalChatTurn({
           userId, conversationId: convId!, projectId: internalProjectId ?? null, messageId: userMsgRow?.id,
-          agent: localAi!.agent,
+          agent: localAi!.agent, model: localAi!.model, effort: localAi!.effort,
+          // The same per-turn block the web chat appends to the user's message.
+          turnContext: turnContext.length ? turnContextBlock(turnContext) : undefined,
+          onCompacted: () => { noteActivity("Your computer's agent condensed earlier context", "compactContext"); condenseNotice("start"); condenseNotice("done"); },
           instructions: [systemPrompt, ...contextMessages.filter((m: any) => m.role === "system").map((m: any) => String(m.content))].join("\n\n"),
           userMessage: imgFiles.length
             ? `${userMessage}\n\n[Attached images, by imageId (pass to createTickets attachmentImageIds): ${imgFiles.map(f => `"${f.name || f.id}" → ${f.id}`).join("; ")}]`
@@ -1059,20 +1156,25 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
       system: cached.system,
       messages: passMessages,
       tools,
-      stopWhen: stepCountIs(80),
-      maxOutputTokens: Math.min(12000, Math.floor(profile.budget * .2)),
+      stopWhen: stepCountIs(MAX_STEPS),
+      maxOutputTokens: profile.maxOutput,
       // One cache key per conversation, so the provider reuses the unchanged prompt prefix
       // (system, tools, earlier history). The ChatGPT subscription adapter passes it on too.
       // Only OpenAI itself: DeepSeek, Kimi and GLM go through the same SDK and may reject the field
       // (they cache a stable prefix automatically).
-      providerOptions: convId && (profile.route === "subscription" || getProviderName(modelKey) === "openai") ? { openai: { promptCacheKey: convId } } : undefined,
+      // Reasoning effort is set for the subscription models (all reasoning models); it was
+      // never sent, leaving the main brain on whatever the backend defaults to.
+      providerOptions: profile.route === "subscription" ? { openai: { promptCacheKey: convId, reasoningEffort: process.env.CHAT_REASONING_EFFORT || "medium" } }
+        : getProviderName(modelKey) === "openai" ? { openai: { promptCacheKey: convId } } : undefined,
       prepareStep: async ({messages: stepMessages}) => {
         let condensing = false;
         const input = carried && stepMessages.length >= carried.sourceLength
           ? [...carried.messages, ...stepMessages.slice(carried.sourceLength)] : stepMessages;
         const stages: CompactionStage[] = [];
         const scale = tokenScale(convId);
-        const bounded = await compactContext(input, fixedTokens, summarize, profile.budget, () => {
+        const budget = Math.floor(profile.budget * budgetFactor);
+        const wasCarried = !!carried || condensedThisTurn;
+        const bounded = await compactContext(input, fixedTokens, summarize, budget, () => {
           // Summarizing takes a model call; the chat shows a visible banner, not a hidden step.
           condensing = true;
           req.onActivity?.();
@@ -1082,12 +1184,31 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
           // Progress doubles as a heartbeat so a long condense is never mistaken for a stall.
           req.onActivity?.();
           ws.send(JSON.stringify({type:"ai_chunk",chunk:"",is_final:false,is_notification:true,notification_type:"context_compaction",phase:"progress",done,total}));
-        }, {scale, hardLimit:profile.budget, signal:abortController.signal, onStage:stage=>stages.push(stage)});
-        if (condensing) ws.send(JSON.stringify({type:"ai_chunk",chunk:"",is_final:false,is_notification:true,notification_type:"context_compaction",phase:"done"}));
+        }, {scale: budgetFactor < 1 ? 1 : scale, hardLimit:budget, signal:abortController.signal, onStage:stage=>stages.push(stage), summaryChars,
+          // The agent's plan is live state: re-attached after every condense, never summarized.
+          restore: () => productChat ? planContext(convId!) : "",
+          // Save the handoff as the conversation's checkpoint so the next turn starts from it.
+          onSummarized: async ({summary, cut}) => {
+            const lastUserAt = input.findLastIndex((m: any) => m.role === "user");
+            const through = cut > lastUserAt ? priorRow
+              : wasCarried ? undefined
+              : rowEnds.filter(r => r.id !== userMsgRow?.id && lead + r.end <= cut).at(-1);
+            condensedThisTurn = true;
+            if (!through) return;
+            await saveConversationCheckpoint(convId!, summary, through)
+              .catch(error => console.warn('[stream-handler] checkpoint save failed:', (error as Error).message));
+          }});
+        if (condensing) condenseNotice("done");
+        if (stages.includes('fallback')) {
+          // Loud, not silent: the user sees that detail was lost and why answers may need a re-read.
+          const detail = "Earlier context could not be summarized; continuing from a shortened excerpt of it";
+          noteActivity(detail, "compactContext", true);
+          ws.send(JSON.stringify({type:"ai_chunk",chunk:"",is_final:false,is_notification:true,notification_type:"tool_detail",function_name:"compactContext",detail,warning:true}));
+        }
         if (carried || bounded !== stepMessages) carried = { sourceLength: stepMessages.length, messages: bounded };
         lastSentEstimate = fixedTokens + estimateContextTokens(bounded);
         chatDiagnostic('context_budget', {estimatedTokens:Math.ceil(lastSentEstimate * scale), rawEstimate:lastSentEstimate, scale:Number(scale.toFixed(2)),
-          budgetTokens:profile.budget, windowTokens:profile.window, route:profile.route, compacted:bounded !== stepMessages, stages:stages.join(',') || undefined});
+          budgetTokens:budget, windowTokens:profile.window, route:profile.route, compacted:bounded !== stepMessages, stages:stages.join(',') || undefined});
         return {messages:bounded};
       },
       abortSignal: abortController.signal,
@@ -1108,7 +1229,8 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
         // The SDK's default logger dumps the full provider request. Keep safe metadata only.
         chatDiagnostic('stream_error', {outcome:'error', model:modelKey, status: typeof (error as any)?.statusCode === 'number' ? (error as any).statusCode : undefined, reason: safeErrorReason(error)});
       },
-      onStepFinish: ({ toolCalls, usage }) => {
+      onStepFinish: ({ toolCalls, usage, response }) => {
+        partialMessages = response.messages as any[];
         // The provider's real input size (cached tokens included) calibrates our estimate.
         const calibrated = recordTokenScale(convId, usage.inputTokens, lastSentEstimate);
         chatDiagnostic('context_usage', {inputTokens:usage.inputTokens, outputTokens:usage.outputTokens,
@@ -1570,6 +1692,24 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     const responseMessages = (await abortable(result.response, abortController.signal)).messages;
     completedPassMessages.push(...responseMessages);
     savedPassMessages = completedPassMessages;
+    partialMessages = [];
+
+    // Cut off rather than finished: the output limit ended the reply (often mid tool call),
+    // or the pass used every step while still calling tools. Neither is the end of the
+    // work, so continue instead of handing the user half a document.
+    // A turn on the person's computer has no server-side passes to continue: its agent runs to the end itself.
+    const serverResult = "steps" in result ? result : null;
+    const finishReason = serverResult ? await abortable(serverResult.finishReason, abortController.signal).catch(() => undefined) : undefined;
+    const stepsUsed = serverResult ? (await abortable(serverResult.steps, abortController.signal).catch(() => [])).length : 0;
+    const cutOff = finishReason === "length" ? LENGTH_NUDGE : finishReason === "tool-calls" && stepsUsed >= MAX_STEPS ? STEP_LIMIT_NUDGE : null;
+    if (cutOff && !abortController.signal.aborted && !askUserCardSent && !confirmCardSent && !turnClosedByCard && continuations < 3) {
+      continuations++;
+      passLimit = pass + 2;
+      chatDiagnostic('turn_continued', { reason: finishReason === "length" ? 'output_limit' : 'step_limit' });
+      noteActivity(finishReason === "length" ? "Reply hit the output limit; continuing" : "Long task; continuing", "continue");
+      passMessages = continuationMessages(passMessages, responseMessages, cutOff);
+      continue;
+    }
     const turnState = {
       aborted: abortController.signal.aborted,
       waitingForUser: askUserCardSent || confirmCardSent,
@@ -1584,6 +1724,22 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     // transcript — this is scaffolding for the model, not part of the conversation.
     nudgeUsed = true;
     passMessages = continuationMessages(passMessages, responseMessages, unaskedQuestions ? ASK_WITH_CARD_NUDGE : CONTINUE_NUDGE);
+    } catch (passError) {
+      // Keep the steps this pass finished: their tool calls already ran.
+      if (partialMessages.length) { completedPassMessages.push(...partialMessages); savedPassMessages = completedPassMessages; }
+      // The provider said the prompt no longer fits (our estimate was low, or reasoning
+      // took the room). Condense harder and retry once instead of failing the turn.
+      if (isContextOverflow(passError) && !overflowRetried && !abortController.signal.aborted) {
+        overflowRetried = true;
+        budgetFactor = 0.6;
+        chatDiagnostic('context_overflow_retry', { reason: safeErrorReason(passError) });
+        noteActivity("Context was too large for the model; condensing and retrying", "compactContext", true);
+        passMessages = [...passMessages, ...partialMessages];
+        passLimit = Math.max(passLimit, pass + 2);
+        continue;
+      }
+      throw passError;
+    }
    }
   } catch (err: any) {
     if (err?.name !== "AbortError") {
@@ -1597,11 +1753,28 @@ async function handleStreamInternal(req: StreamRequest): Promise<{ conversationI
     await turnTools.drain();
   }
 
-  // Refresh the history checkpoint off the critical path, for the next turn.
+  // Refresh the history checkpoint off the critical path, for the next turn: same
+  // summarizer as the turn (helper model first), bounded so it cannot run on unattended.
   // (The computer's agent keeps its own session; the server's summary model isn't used then.)
-  if (!useLocal) void loadConversationHandoff(convId!, (evidence) => generateText({model, system:HANDOFF_INSTRUCTION, prompt:evidence,
-    maxOutputTokens:2200, maxRetries:1}).then(r => r.text), undefined, { budget: profile.budget })
-    .catch(error => console.warn('[stream-handler] handoff refresh failed:', (error as Error).message));
+  if (model && !useLocal) {
+    const refreshSignal = AbortSignal.timeout(6 * 60_000);
+    const refreshChars = summaryLimit(profile.budget);
+    const refresh = async (evidence: string, maxChars = refreshChars) => {
+      const options = { system: handoffInstruction(maxChars), prompt: evidence,
+        maxOutputTokens: Math.min(profile.maxOutput, Math.ceil(maxChars / 3) + 800), abortSignal: refreshSignal, maxRetries: 1 };
+      const sub = currentSubscription();
+      if (sub) {
+        try {
+          const helper = (await import("./pi-subscription-model.ts")).createPiSubscriptionModel('gpt-5.6-luna', sub.getAccessToken);
+          const text = (await generateText({ model: helper, ...options })).text;
+          if (text.trim()) return text;
+        } catch (error) { if (refreshSignal.aborted) throw error; }
+      }
+      return (await generateText({ model, ...options })).text;
+    };
+    void withUsageOperation("context_summary", () => loadConversationHandoff(convId!, refresh, undefined, { budget: profile.budget }))
+      .catch(error => console.warn('[stream-handler] handoff refresh failed:', (error as Error).message));
+  }
 
   chatStage('persisting_response');
   // ── 7. Save assistant response ───────────────────────────────────────────────

@@ -76,7 +76,7 @@ export async function startTicketOnRunner(input: {
   if (!project) throw new RunnerJobError("Project not found", 404);
   if (!project.repoUrl) throw new RunnerJobError("Connect a Git repository to this project before running it on your computer.");
 
-  const { agent } = await localAiSettings(input.actorId);
+  const { agent, model, effort } = await localAiSettings(input.actorId);
   // A follow-up continues the same agent's latest session on this ticket, if there is one.
   const [previous] = input.followUp
     ? await db.select({ session: runnerJobs.agentSession }).from(runnerJobs)
@@ -96,6 +96,8 @@ export async function startTicketOnRunner(input: {
     prompt: input.followUp ? buildFollowUpPrompt(ticket, input.followUp) : buildRunnerPrompt(ticket, input.notes),
     commitMessage: `${ticket.ticketKey ? `${ticket.ticketKey}: ` : ""}${ticket.name}`.slice(0, 200),
     agent,
+    ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
     ...(previous?.session ? { sessionId: previous.session } : {}),
     allowedTools: ["Read", "Edit", "Write", "Glob", "Grep", "Bash"],
     maxTurns: 80,

@@ -63,4 +63,8 @@ export interface WsData {
   projectId?: string;
   /** Set for LFG Desktop runner sockets (/ws/runner), which bypass the chat handlers. */
   runner?: { deviceId: string; deviceName: string };
+  /** Set for whiteboard sockets (/ws/board), which are handled by services/whiteboards/live.ts. */
+  board?: import("../services/whiteboards/live.ts").PeerInfo & { peer?: import("../services/whiteboards/live.ts").Peer };
+  /** Set for a meeting-bot seat's screen relay (/ws/meeting-bot-screen); see services/meetings/screen-relay.ts. */
+  screen?: import("../services/meetings/screen-relay.ts").ScreenRelay;
 }

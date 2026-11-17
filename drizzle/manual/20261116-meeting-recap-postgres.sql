@@ -1,0 +1,1 @@
+ALTER TABLE meeting ADD COLUMN IF NOT EXISTS recap text;

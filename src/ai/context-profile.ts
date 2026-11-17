@@ -10,12 +10,12 @@ import { getProviderModel } from "./provider.ts";
  * How much context a chat turn may send, per model and per connection type.
  *
  * One flow for every model; only the numbers differ. The window comes from the model
- * catalog. We use at most ~93% of it (room for the reply), and condensing starts at 75%
- * of that (~70% of the window). A ceiling caps it: API keys pay per input token on every
+ * catalog. Input may use at most ~93% of it and never the room reserved for the reply;
+ * condensing starts at 75% of that. A ceiling caps it: API keys pay per input token on every
  * step, so their ceiling is a cost choice; a ChatGPT subscription has no per-token bill,
  * but large prompts use up the plan's limits faster, so its ceiling is higher.
  */
-export type ContextProfile = { route: "subscription" | "api"; window: number; budget: number };
+export type ContextProfile = { route: "subscription" | "api"; window: number; budget: number; maxOutput: number };
 
 const DEFAULT_WINDOW = 128_000;
 const WINDOW_SHARE = 0.93;
@@ -25,11 +25,15 @@ const envNumber = (name: string, fallback: number) => {
 };
 
 let windows: Map<string, number> | null = null;
+const outputLimits = new Map<string, number>();
 function catalogWindows(): Map<string, number> {
   if (windows) return windows;
   windows = new Map();
   for (const provider of [openaiProvider, anthropicProvider, deepseekProvider, googleProvider]) {
-    try { for (const m of provider().getModels()) if (m.contextWindow) windows.set(m.id, m.contextWindow); } catch { /* catalog optional */ }
+    try { for (const m of provider().getModels()) {
+      if (m.contextWindow) windows.set(m.id, m.contextWindow);
+      if (m.maxTokens) outputLimits.set(m.id, m.maxTokens);
+    } } catch { /* catalog optional */ }
   }
   // Explicit per-model values in llm-models.json win (models newer than the catalog).
   for (const p of Object.values((modelsConfig as any).providers ?? {}) as any[]) {
@@ -47,14 +51,30 @@ export function contextWindowFor(modelKey: string): number {
   return catalogWindows().get(providerModel) ?? DEFAULT_WINDOW;
 }
 
+/**
+ * The longest reply to ask for. A model the catalog knows may write up to 32k tokens (a
+ * full document or a batch of tickets in one tool call); the old flat 12k cut those off
+ * mid-write. Unknown models keep 12k, which every deployed provider accepts.
+ */
+function maxOutputFor(modelKey: string, window: number): number {
+  let known: number | undefined;
+  if (modelKey.startsWith(SUBSCRIPTION_PREFIX)) known = subscriptionCatalog().find(m => m.id === modelKey.slice(SUBSCRIPTION_PREFIX.length))?.maxTokens;
+  else { catalogWindows(); known = outputLimits.get((getProviderModel(modelKey) ?? modelKey).replace(/^models\//, "")); }
+  return Math.max(4000, Math.min(known ? Math.min(known, 32_000) : 12_000, Math.floor(window * .2)));
+}
+
 export function contextProfile(modelKey: string): ContextProfile {
   const route = modelKey.startsWith(SUBSCRIPTION_PREFIX) ? "subscription" : "api";
   const window = contextWindowFor(modelKey);
+  const maxOutput = maxOutputFor(modelKey, window);
   // A fixed budget, when an operator sets one, still applies to every model.
   const fixed = Number(process.env.CHAT_CONTEXT_BUDGET_TOKENS);
   const ceiling = Number.isFinite(fixed) && fixed >= 16_000 ? Math.floor(fixed)
     : route === "subscription" ? envNumber("CHAT_CONTEXT_CEILING_SUBSCRIPTION", 400_000) : envNumber("CHAT_CONTEXT_CEILING_API", 200_000);
-  return { route, window, budget: Math.max(16_000, Math.min(Math.floor(window * WINDOW_SHARE), ceiling)) };
+  // The reply (and, on a subscription, reasoning the backend will not let us cap) needs
+  // its own room inside the window: input may never take what the output was promised.
+  const room = window - maxOutput - (route === "subscription" ? Math.floor(window * .05) : 0);
+  return { route, window, maxOutput, budget: Math.max(16_000, Math.min(Math.floor(window * WINDOW_SHARE), room, ceiling)) };
 }
 
 /**
