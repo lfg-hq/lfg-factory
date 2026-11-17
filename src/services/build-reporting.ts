@@ -43,6 +43,13 @@ async function deliverBuildStatus(ticketId: string, status: string, detail: stri
   await db.insert(messages).values({ conversationId: origin.conversationId, role: 'assistant', userRole:'operation_status', content });
   broadcastToUser(userId, { type: 'message', sender: 'assistant', message: content,
     conversation_id: origin.conversationId, project_id: project.projectId, build_status: true });
+  // A single ticket's build or retry ended: let the chat agent that started it read the
+  // result and report (and re-check a fix it was waiting on). Stops by the user need no turn.
+  if (status === 'complete' || status === 'failed') {
+    const { notifyChatAgent, ticketEventMessage } = await import('./build-summary-turn.ts');
+    notifyChatAgent({ conversationId: origin.conversationId, userId: origin.userId, message: ticketEventMessage({
+      kind: status === 'complete' ? 'built' : 'failed', ticket: `${ticket.ticketKey ? ticket.ticketKey + ' — ' : ''}${ticket.name}`, ticketId, detail }) });
+  }
 }
 
 // Reporting must never prevent execution or queue advancement.

@@ -13,12 +13,17 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { AGENT_KINDS, type AgentEvent, type AgentKind } from "./protocol.ts";
+import { AGENT_KINDS, type AgentEffort, type AgentEvent, type AgentKind, type AgentLimitWindow } from "./protocol.ts";
 
 export interface AgentRunInput {
   prompt: string;
   /** Standing instructions (LFG's assistant prompt). */
   instructions?: string;
+  /** "replace": the instructions are the whole system prompt, where the CLI allows it (Claude Code). */
+  instructionsMode?: "replace" | "append";
+  /** Model alias or id, and effort level; absent: the CLI's own default. */
+  model?: string;
+  effort?: AgentEffort;
   /** Answer and use LFG's tools only: no edits or shell commands on this computer. */
   readOnly?: boolean;
   cwd: string;
@@ -61,7 +66,9 @@ const claude: AgentAdapter = {
       bin: "claude",
       args: [
         "-p", i.prompt, "--output-format", "stream-json", "--verbose", "--permission-mode", i.readOnly ? "default" : "acceptEdits",
-        ...(i.instructions ? ["--append-system-prompt", i.instructions] : []),
+        ...(i.instructions ? [i.instructionsMode === "replace" ? "--system-prompt" : "--append-system-prompt", i.instructions] : []),
+        ...(i.model ? ["--model", i.model] : []),
+        ...(i.effort ? ["--effort", i.effort] : []),
         ...(tools.length ? ["--allowedTools", tools.join(",")] : []),
         ...(i.maxTurns ? ["--max-turns", String(i.maxTurns)] : []),
         ...(i.sessionId ? ["--resume", i.sessionId] : []),
@@ -76,6 +83,14 @@ const claude: AgentAdapter = {
       const e = JSON.parse(line) as Record<string, any>;
       const out: AgentEvent[] = [];
       if (e.type === "system" && e.subtype === "init" && typeof e.session_id === "string") out.push({ type: "session", id: e.session_id });
+      if (e.type === "system" && e.subtype === "compact_boundary") {
+        const meta = e.compact_metadata ?? {};
+        out.push({ type: "compacted", trigger: typeof meta.trigger === "string" ? meta.trigger : undefined, preTokens: typeof meta.pre_tokens === "number" ? meta.pre_tokens : undefined });
+      }
+      if (e.type === "rate_limit_event" && e.rate_limit_info) {
+        const windows = claudeLimitWindows(e.rate_limit_info);
+        if (windows.length) out.push({ type: "limits", windows });
+      }
       const blocks: any[] = Array.isArray(e.message?.content) ? e.message.content : [];
       if (e.type === "assistant") {
         for (const b of blocks) {
@@ -89,7 +104,11 @@ const claude: AgentAdapter = {
       } else if (e.type === "result") {
         out.push({
           type: "result", isError: !!e.is_error, text: typeof e.result === "string" ? e.result : e.subtype,
-          usage: e.usage ? { inputTokens: e.usage.input_tokens, outputTokens: e.usage.output_tokens } : undefined,
+          usage: e.usage ? {
+            inputTokens: (e.usage.input_tokens ?? 0) + (e.usage.cache_read_input_tokens ?? 0) + (e.usage.cache_creation_input_tokens ?? 0),
+            outputTokens: e.usage.output_tokens,
+            costUsd: typeof e.total_cost_usd === "number" ? e.total_cost_usd : undefined,
+          } : undefined,
         });
       }
       return out;
@@ -97,13 +116,28 @@ const claude: AgentAdapter = {
   },
 };
 
+/** Claude Code's rate_limit_event → plan windows (five_hour, seven_day, …). */
+export function claudeLimitWindows(info: Record<string, any>): AgentLimitWindow[] {
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
+  const windows = info.unifiedWindows && typeof info.unifiedWindows === "object" ? info.unifiedWindows as Record<string, any> : null;
+  if (windows) {
+    return Object.entries(windows).filter(([, w]) => w && typeof w === "object")
+      .map(([kind, w]) => ({ kind: kind.slice(0, 40), utilization: num(w.utilization), resetsAt: num(w.resetsAt), status: typeof w.status === "string" ? w.status.slice(0, 40) : undefined }));
+  }
+  return typeof info.rateLimitType === "string"
+    ? [{ kind: info.rateLimitType.slice(0, 40), utilization: num(info.utilization), resetsAt: num(info.resetsAt), status: typeof info.status === "string" ? info.status.slice(0, 40) : undefined }]
+    : [];
+}
+
 // ── OpenAI Codex CLI ─────────────────────────────────────────────────
 
 const codex: AgentAdapter = {
   kind: "codex", label: "OpenAI Codex", bin: "codex",
   invocation(i) {
     const mcp = i.mcp ? ["-c", `mcp_servers.lfg.url=${JSON.stringify(i.mcp.url)}`, "-c", `mcp_servers.lfg.bearer_token_env_var="LFG_MCP_TOKEN"`, "-c", "mcp_servers.lfg.tool_timeout_sec=1800"] : [];
-    const common = ["--json", "--sandbox", i.readOnly ? "read-only" : "workspace-write", "--skip-git-repo-check", ...mcp];
+    const effort = i.effort ? (i.effort === "xhigh" || i.effort === "max" ? "high" : i.effort) : undefined;
+    const common = ["--json", "--sandbox", i.readOnly ? "read-only" : "workspace-write", "--skip-git-repo-check", ...mcp,
+      ...(i.model ? ["-m", i.model] : []), ...(effort ? ["-c", `model_reasoning_effort="${effort}"`] : [])];
     // No system-prompt flag: instructions lead the first message; a resumed session has them.
     const prompt = i.instructions && !i.sessionId ? `${i.instructions}\n\n---\n\n${i.prompt}` : i.prompt;
     return {

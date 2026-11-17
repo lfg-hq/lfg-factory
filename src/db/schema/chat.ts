@@ -11,3 +11,4 @@ export const chatFiles = m.chatFiles;
 export const modelSelections = m.modelSelections;
 
 export const conversationContexts = m.conversationContexts;
+export const conversationPlans = m.conversationPlans;

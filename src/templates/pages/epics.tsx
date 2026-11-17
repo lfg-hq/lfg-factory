@@ -364,6 +364,10 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
           <i class="fas fa-tasks"></i>
           <span class="nav-text">Tickets</span>
         </a>
+        <a href="/projects/${project.projectId}/whiteboards" class="nav-link">
+          <i class="fas fa-chalkboard"></i>
+          <span class="nav-text">Whiteboards</span>
+        </a>
         <button type="button" class="nav-link sidebar-more-toggle" aria-expanded="false" aria-controls="sidebar-more-items">
           <i class="fas fa-ellipsis"></i>
           <span class="nav-text">More</span>
@@ -372,6 +376,9 @@ export function EpicsPage({ project, user, epics, tickets, docs, conversations }
         <div class="sidebar-more-items" id="sidebar-more-items">
           <a href="/projects/${project.projectId}/epics" class="nav-link">
             <i class="fas fa-layer-group"></i><span class="nav-text">Epics</span>
+          </a>
+          <a href="/projects/${project.projectId}/meetings" class="nav-link">
+            <i class="fas fa-video"></i><span class="nav-text">Meetings</span>
           </a>
           <a href="/projects/${project.projectId}?tab=documents" class="nav-link">
             <i class="fas fa-file-lines"></i><span class="nav-text">Docs</span>

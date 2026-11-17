@@ -1,0 +1,20 @@
+/* Boards tab in the chat's right panel: the project's whiteboards, live beside the conversation. */
+.boards-tab { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.boards-tab-head { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--border-color, #2a2a2a); flex: none; }
+.boards-tab-title { flex: 1; min-width: 0; margin: 0; font-size: 15px; font-weight: 600; color: var(--text-color, #e2e8f0); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.boards-tab-back, .boards-tab-full { width: 30px; height: 30px; flex: none; display: inline-flex; align-items: center; justify-content: center; border: none; border-radius: 7px; background: none; color: var(--text-secondary, #9ca3af); cursor: pointer; text-decoration: none; font-size: 13px; }
+.boards-tab-back:hover, .boards-tab-full:hover { background: var(--card-bg-hover, rgba(127, 127, 127, 0.15)); color: var(--text-color, #e2e8f0); }
+.boards-tab-new { flex: none; border: 1px solid var(--border-color, #333); background: none; color: var(--text-color, #e2e8f0); border-radius: 8px; padding: 6px 10px; font-size: 12.5px; cursor: pointer; }
+.boards-tab-new:hover { border-color: var(--primary-color, #8b5cf6); }
+.boards-tab-note { margin: 0; padding: 0 16px; font-size: 12.5px; color: #ef4444; }
+.boards-tab-note:empty { display: none; }
+.boards-tab-list { flex: 1; overflow-y: auto; padding: 14px 16px; display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; align-content: start; }
+.boards-tab-card { text-align: left; border: 1px solid var(--border-color, #333); border-radius: 10px; background: var(--card-bg, #1a1a1a); color: var(--text-color, #e2e8f0); padding: 0; cursor: pointer; overflow: hidden; font: inherit; transition: border-color 0.15s ease, transform 0.15s ease; }
+.boards-tab-card:hover { border-color: var(--primary-color, #8b5cf6); transform: translateY(-1px); }
+.boards-tab-thumb { height: 74px; display: flex; align-items: center; justify-content: center; color: var(--text-secondary, #9ca3af); font-size: 20px; background-image: radial-gradient(var(--border-color, #333) 1px, transparent 1px); background-size: 14px 14px; }
+.boards-tab-meta { padding: 8px 10px 10px; border-top: 1px solid var(--border-color, #333); }
+.boards-tab-meta b { display: block; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.boards-tab-meta small { color: var(--text-secondary, #9ca3af); font-size: 11.5px; }
+.boards-tab-empty { grid-column: 1 / -1; color: var(--text-secondary, #9ca3af); font-size: 13px; line-height: 1.5; }
+.boards-tab-frame { flex: 1; width: 100%; min-height: 0; border: 0; display: block; background: var(--background-color, #121212); }
+.boards-tab [hidden] { display: none !important; }

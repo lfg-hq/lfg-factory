@@ -18,6 +18,7 @@ import { projectTickets } from "../../db/schema/tickets.ts";
 import { projects } from "../../db/schema/projects.ts";
 import { addLog, attachLogOutput, formatToolUse } from "../ticket-logs.ts";
 import { broadcastToUser } from "../../ws/connection-manager.ts";
+import { localAgentUsage, recordLocalAgentUsage } from "./opt-in.ts";
 import { AGENT_LABELS, RUNNER_PROTOCOL_VERSION, isAgentKind, type AgentEvent, type ChatTurnPayload, type ClaudeTaskPayload, type RunnerToServer, type ServerToRunner } from "./protocol.ts";
 
 export interface RunnerConn {
@@ -93,9 +94,34 @@ export const userHasConnectedRunner = (userId: string) => [...conns.values()].so
 
 // ── Connection lifecycle ─────────────────────────────────────────────
 
+/** Pinged this often; a runner silent for RUNNER_SILENCE_MS is treated as gone. */
+export const RUNNER_PING_MS = 25_000;
+export const RUNNER_SILENCE_MS = 75_000;
+const lastHeard = new WeakMap<RunnerConn, number>();
+let heartbeat: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * A laptop that sleeps or changes networks can leave a connection that looks open on
+ * both ends but carries nothing. Pings keep proxies from idling it out, tell the
+ * runner the server is alive (it reconnects when they stop), and let the server drop
+ * runners that stopped answering so their jobs go back to the queue.
+ */
+export function runnerHeartbeat(now = Date.now()): void {
+  for (const conn of [...conns.values()]) {
+    if (now - (lastHeard.get(conn) ?? now) > RUNNER_SILENCE_MS) {
+      try { conn.close(4003, "No answer to pings"); } catch { /* already gone */ }
+      runnerClosed(conn);
+      continue;
+    }
+    try { conn.send({ type: "ping" }); } catch { /* close handling follows */ }
+  }
+}
+
 export async function runnerOpened(conn: RunnerConn): Promise<void> {
   conns.get(conn.deviceId)?.close(4002, "Replaced by a newer connection");
   conns.set(conn.deviceId, conn);
+  lastHeard.set(conn, Date.now());
+  if (!heartbeat) { heartbeat = setInterval(() => runnerHeartbeat(), RUNNER_PING_MS); heartbeat.unref?.(); }
   await db.update(runnerDevices).set({ lastSeenAt: new Date() }).where(eq(runnerDevices.id, conn.deviceId));
   conn.send({ type: "welcome", deviceId: conn.deviceId, deviceName: conn.deviceName, protocol: RUNNER_PROTOCOL_VERSION });
   broadcastToUser(conn.userId, { type: "runner_status", deviceId: conn.deviceId, connected: true });
@@ -128,6 +154,7 @@ export function runnerClosed(conn: RunnerConn): void {
 const inbox = new WeakMap<RunnerConn, Promise<void>>();
 
 export function runnerMessage(conn: RunnerConn, raw: string | Buffer): Promise<void> {
+  lastHeard.set(conn, Date.now());
   const next = (inbox.get(conn) ?? Promise.resolve()).then(() => handleRunnerMessage(conn, raw));
   inbox.set(conn, next.catch(() => {}));
   return next;
@@ -191,6 +218,12 @@ async function handleRunnerMessage(conn: RunnerConn, raw: string | Buffer): Prom
         await db.update(runnerJobs).set({ agentSession: msg.event.id.slice(0, 200) }).where(eq(runnerJobs.id, job.id));
       }
       notify(job.id, { type: "event", event: msg.event });
+      if ((msg.event.type === "limits" || msg.event.type === "result") && isAgentKind(job.agent)) {
+        const userId = job.userId;
+        await recordLocalAgentUsage(userId, job.agent, msg.event)
+          .then(async () => broadcastToUser(userId, { type: "local_agent_usage", usage: await localAgentUsage(userId) }))
+          .catch(error => console.warn("[runner] usage not saved:", (error as Error).message));
+      }
       await logNormalizedEvent(job, msg.event);
       return;
     }
@@ -380,9 +413,13 @@ async function logAgentEvent(job: typeof runnerJobs.$inferSelect, event: Record<
   }
 }
 
+/** Test hook: when a runner was last heard from. */
+export function _setRunnerLastHeardForTests(conn: RunnerConn, at: number) { lastHeard.set(conn, at); }
+
 /** Test hook: forget connections and timers between test cases. */
 export function _resetRunnerHubForTests() {
   conns.clear();
+  if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
   for (const t of lostTimers.values()) clearTimeout(t);
   lostTimers.clear();
   toolRows.clear();

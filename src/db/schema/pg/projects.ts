@@ -90,6 +90,9 @@ export const projects = pgTable(
     // its author. Opt-in, because chat transcripts carry candid product thinking
     // that people don't expect to be shared by default.
     shareChatHistory: boolean("share_chat_history").notNull().default(false),
+    // In a call, the meeting bot also SPEAKS its answers instead of only typing them in the
+    // meeting chat. Off by default: speech uses OpenAI's paid text-to-speech on the server's key.
+    meetingVoice: boolean("meeting_voice").notNull().default(false),
     // Free-text instructions the user wants EVERY agent on this project to follow —
     // reaches both the chat agent and each ticket build.
     customInstructions: text("custom_instructions"),

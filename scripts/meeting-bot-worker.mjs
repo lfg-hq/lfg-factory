@@ -1,0 +1,310 @@
+/**
+ * The LFG meeting bot: joins a Google Meet call from a remote Chrome (Mags), signed in to the
+ * bot's Google account (or as a guest when the seat has none), and reports what is said. Node owns the browser connection because Playwright's
+ * connectOverCDP hangs under Bun; the server talks to this process in JSON lines.
+ *
+ *   stdin, first line   { wsEndpoint | localChrome, meetingUrl, botName, greeting }
+ *   stdin, afterwards   { cmd: "chat", text } | { cmd: "speak", mp3Base64 } | { cmd: "screenshot", id } | { cmd: "leave" }
+ *   stdout              { type: "status", status, detail } | { type: "speech" | "chat", speaker, text }
+ *                       | { type: "screenshot", id, presenting, jpegBase64 } | { type: "log", message }
+ *                       | { type: "account", signedIn }   (once, from the pre-join screen)
+ *
+ * Meet's page is not an API and changes without notice. Everything that depends on its
+ * markup is in the SELECTORS and page-reading functions below, matched by accessible
+ * labels and text rather than class names, with a screenshot logged when a step fails.
+ */
+import { chromium } from "playwright-core";
+import { createInterface } from "node:readline";
+import { createCaptionAssembler } from "./meeting-captions.mjs";
+import { installCard, rocketDataUrl } from "./meeting-bot-card.mjs";
+
+const emit = (o) => process.stdout.write(JSON.stringify(o) + "\n");
+const log = (message) => emit({ type: "log", message: String(message).slice(0, 500) });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const lines = createInterface({ input: process.stdin })[Symbol.asyncIterator]();
+const cfg = JSON.parse((await lines.next()).value);
+
+const SELECTORS = {
+  nameInput: 'input[aria-label="Your name"], input[placeholder="Your name"]',
+  // Meet labels this button by state ("Join now without camera"), so match how the label starts.
+  // Not a bare "Join": that would also press "Join and use a phone for audio".
+  joinButton: /^(Ask to join|Join now|Join anyway)/i,
+  dismissButton: /^(Got it|Dismiss|Continue without microphone and camera|Not now|Close)$/i,
+  micOff: '[role="button"][aria-label*="Turn off microphone" i], button[aria-label*="Turn off microphone" i]',
+  cameraOff: '[role="button"][aria-label*="Turn off camera" i], button[aria-label*="Turn off camera" i]',
+  cameraOn: '[role="button"][aria-label*="Turn on camera" i], button[aria-label*="Turn on camera" i]',
+  micOn: '[role="button"][aria-label*="Turn on microphone" i], button[aria-label*="Turn on microphone" i]',
+  leaveButton: '[aria-label="Leave call"], button[aria-label*="Leave call" i]',
+  captionsOn: 'button[aria-label*="Turn on captions" i]',
+  chatButton: 'button[aria-label*="Chat with everyone" i]',
+  chatInput: 'textarea[aria-label*="Send a message" i]',
+};
+const CANNOT_JOIN = /You can't join this video call|Check your meeting code|Invalid video call name|couldn.t find the meeting|not allowed to join|This meeting is locked/i;
+// Why Meet refused, when the host's organisation only admits its own people.
+const ORG_ONLY = /only (people|users) (in|from|at) |Only people in .* can join|organi[sz]ation.*(doesn.t|does not) allow|outside (your|their|the) organi[sz]ation/i;
+const DENIED = /denied your request|No one responded to your request|You can't join this video call|Your request to join was declined/i;
+const CALL_OVER = /You've been removed from the meeting|You left the meeting|The meeting has ended|The call ended|Return to home screen|Returning to home screen/i;
+const WAIT_TO_BE_ADMITTED_MS = Number(cfg.admitTimeoutMs ?? 10 * 60_000);
+const ALONE_LEAVE_MS = Number(cfg.aloneTimeoutMs ?? 5 * 60_000);
+const MAX_CALL_MS = Number(cfg.maxCallMs ?? 4 * 60 * 60_000);
+const POLL_MS = Number(cfg.pollMs ?? 600);
+
+let browser, page;
+let status = "joining";
+const setStatus = (next, detail = null) => { if (next !== status || detail) { status = next; emit({ type: "status", status: next, detail }); } };
+const bodyText = () => page.evaluate(() => document.body?.innerText ?? "").catch(() => "");
+const seen = (selector) => page.locator(selector).first().isVisible().catch(() => false);
+async function clickIfThere(target, timeout = 1500) {
+  const button = typeof target === "string" ? page.locator(target).first() : page.getByRole("button", { name: target }).first();
+  if (!(await button.isVisible().catch(() => false))) return false;
+  return button.click({ timeout }).then(() => true, () => false);
+}
+async function evidence(what) {
+  // A small screenshot in the server log is the fastest way to see what Meet showed the bot.
+  const shot = await page?.screenshot({ type: "jpeg", quality: 35, timeout: 8000 }).catch(() => null);
+  log(`${what}; page says: ${(await bodyText()).replace(/\s+/g, " ").slice(0, 300)}`);
+  if (shot) emit({ type: "debug-screenshot", what, jpegBase64: shot.toString("base64") });
+}
+
+/** The caption blocks on screen: one per speaker, first line the name, the rest what they said. */
+function readCaptions() {
+  const region = document.querySelector('[role="region"][aria-label*="aption" i]') || document.querySelector('[aria-label="Captions"]');
+  if (!region) return null;
+  const blocks = [];
+  const found = new Set();
+  region.querySelectorAll("img").forEach((img) => {
+    let block = img;
+    while (block.parentElement && block.parentElement !== region && !/\n/.test(block.innerText || "")) block = block.parentElement;
+    if (found.has(block)) return;
+    found.add(block);
+    const parts = (block.innerText || "").split("\n").map((s) => s.trim()).filter(Boolean);
+    if (parts.length < 2) return;
+    block.__lfgId = block.__lfgId || "c" + (window.__lfgSeq = (window.__lfgSeq || 0) + 1);
+    blocks.push({ id: block.__lfgId, speaker: parts[0].slice(0, 80), text: parts.slice(1).join(" ") });
+  });
+  return blocks;
+}
+
+/** Messages in the open chat panel that have not been reported yet. */
+function readChat() {
+  const out = [];
+  // A message's pin button carries the same attribute; only the message container counts.
+  document.querySelectorAll("[data-message-id]:not(button)").forEach((node) => {
+    if (node.__lfgSeen) return;
+    node.__lfgSeen = true;
+    // The words are in the innermost first block; the rest is "pin this message" chrome.
+    let words = node;
+    while (words.firstElementChild && words.firstElementChild.tagName === "DIV") words = words.firstElementChild;
+    const text = (words.innerText || "").trim();
+    if (!text) return;
+    // A group of messages is a header (name and time; only the time for our own) followed by
+    // the messages. Climb to the group: the first ancestor whose first child is not on our path.
+    let speaker = "";
+    for (let child = node, group = node.parentElement, depth = 0; group && depth < 8; child = group, group = group.parentElement, depth++) {
+      const header = group.firstElementChild;
+      if (group.children.length < 2 || header === child || header.contains(node)) continue;
+      const first = (header.innerText || "").split("\n").map((s) => s.trim()).filter(Boolean)[0] || "";
+      if (/^\d{1,2}:\d{2}/.test(first)) return; // a bare time: our own message
+      speaker = first.replace(/\s*\d{1,2}:\d{2}\s*(AM|PM)?$/i, "").trim().slice(0, 80);
+      break;
+    }
+    out.push({ speaker: speaker || "Someone", text });
+  });
+  return out;
+}
+
+// Our own chat messages come back through readChat, sometimes more than once (Meet redraws a
+// message when the next one joins its group), so remember them for a while and compare them
+// loosely. A message whose "sender" is one of ours is ours too: that is a group of our own
+// messages misread, the first message taken for the header.
+const sent = new Map(); // normalised text -> when sent
+const norm = (t) => String(t).replace(/[*_`]/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+const ours = (message) => {
+  for (const [text, at] of sent) if (Date.now() - at > 30 * 60_000) sent.delete(text);
+  return sent.has(norm(message.text)) || sent.has(norm(message.speaker));
+};
+async function sendChat(text) {
+  if (!(await seen(SELECTORS.chatInput))) await clickIfThere(SELECTORS.chatButton, 4000);
+  const input = page.locator(SELECTORS.chatInput).first();
+  await input.waitFor({ state: "visible", timeout: 8000 });
+  sent.set(norm(text), Date.now());
+  await input.fill(text);
+  await input.press("Enter");
+}
+
+/** Captions are the bot's ears. Meet keeps the switch in a hover menu, so use its shortcut (C). */
+async function turnOnCaptions() {
+  const on = async () => (await page.evaluate(readCaptions).catch(() => null)) !== null;
+  for (let attempt = 0; attempt < 4 && !(await on()); attempt++) {
+    if (await clickIfThere(SELECTORS.captionsOn, 2000)) { await sleep(1200); continue; }
+    // The shortcut only works when the call itself has focus, not the chat box.
+    await page.mouse.click(640, 380).catch(() => {});
+    await page.keyboard.press("c").catch(() => {});
+    await sleep(2000);
+  }
+  if (!(await on())) await evidence("Could not turn on captions");
+}
+
+/**
+ * Say something in the call. The browser's microphone is a virtual one fed by an audio
+ * output ("meet_mic_sink"), so playing the clip to that output is speaking into the mic.
+ * The bot unmutes only for as long as the clip lasts.
+ */
+async function speak(mp3Base64) {
+  await clickIfThere(SELECTORS.micOn, 3000);
+  try {
+    const played = await page.evaluate(async (b64) => {
+      const outputs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audiooutput");
+      const sink = outputs.find((d) => /mic/i.test(d.label));
+      if (!sink) return { error: "no microphone feed among: " + outputs.map((d) => d.label).join(", ") };
+      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      const context = new AudioContext({ sinkId: sink.deviceId });
+      const clip = await context.decodeAudioData(bytes.buffer);
+      const source = context.createBufferSource();
+      source.buffer = clip;
+      source.connect(context.destination);
+      await context.resume();
+      source.start();
+      await new Promise((resolve) => { source.onended = resolve; });
+      await context.close();
+      return { seconds: clip.duration, sink: sink.label };
+    }, mp3Base64);
+    if (played.error) log("could not speak: " + played.error);
+    else log(`spoke for ${played.seconds.toFixed(1)}s through ${played.sink}`);
+  } finally {
+    await sleep(500); // let the last word through before muting
+    await clickIfThere(SELECTORS.micOff, 3000);
+  }
+}
+
+async function join() {
+  await page.goto(cfg.meetingUrl, { waitUntil: "domcontentloaded", timeout: 45_000 });
+  const deadline = Date.now() + 90_000;
+  let asked = false;
+  let reportedAccount = false;
+  while (!asked) {
+    if (Date.now() > deadline) { await evidence("Never reached the join button"); throw new Error("Google Meet did not show a way to join."); }
+    if (/accounts\.google\.com/.test(page.url())) {
+      throw new Error(cfg.expectSignedIn
+        ? "Google asked the bot to sign in again before joining. An LFG admin needs to sign this meeting bot in again."
+        : "This meeting only lets signed-in Google accounts join, and this meeting bot is not signed in. An LFG admin can sign it in under Meeting bots.");
+    }
+    const text = await bodyText();
+    // Only once Meet has refused: lobby text can mention other organisations harmlessly.
+    if (CANNOT_JOIN.test(text)) {
+      await evidence("Meet refused the bot");
+      throw new Error(ORG_ONLY.test(text) || cfg.expectSignedIn
+        ? "This meeting's Google Workspace does not let people from outside the organisation join, so the bot can't get in. The meeting's admin can allow external participants, or the host can invite the bot's account."
+        : "Google Meet would not let the bot into this call. The link may be wrong, or the meeting may not allow guests.");
+    }
+    await clickIfThere(SELECTORS.dismissButton);
+    // Join muted, with the camera on: the "camera" is the LFG card (meeting-bot-card.mjs).
+    await clickIfThere(SELECTORS.micOff);
+    await clickIfThere(SELECTORS.cameraOn);
+    const name = page.locator(SELECTORS.nameInput).first();
+    const asGuest = await name.isVisible().catch(() => false);
+    if (asGuest) await name.fill(cfg.botName).catch(() => {});
+    // A guest is asked for a name; a signed-in account is not. Reported once, so the server
+    // can tell when Google has signed a seat out.
+    if (!reportedAccount && (asGuest || (await page.getByRole("button", { name: SELECTORS.joinButton }).first().isVisible().catch(() => false)))) {
+      reportedAccount = true;
+      emit({ type: "account", signedIn: !asGuest });
+    }
+    asked = await clickIfThere(SELECTORS.joinButton, 3000);
+    if (!asked && (await seen(SELECTORS.leaveButton))) break; // let straight in
+    if (!asked) await sleep(200);
+  }
+  setStatus("waiting_room");
+  const admitBy = Date.now() + WAIT_TO_BE_ADMITTED_MS;
+  while (!(await seen(SELECTORS.leaveButton))) {
+    if (Date.now() > admitBy) throw new Error("Nobody let the bot in.");
+    if (DENIED.test(await bodyText())) throw new Error("Someone in the call declined the bot's request to join.");
+    await clickIfThere(SELECTORS.dismissButton);
+    await sleep(250);
+  }
+  setStatus("in_call");
+  await clickIfThere(SELECTORS.dismissButton);
+  await clickIfThere(SELECTORS.cameraOn); // in case Meet let the bot in with the camera off
+  await turnOnCaptions();
+  if (cfg.greeting) await sendChat(cfg.greeting).catch((e) => log("greeting not sent: " + e.message));
+}
+
+async function listen() {
+  const captions = createCaptionAssembler();
+  const started = Date.now();
+  let leaveMissing = 0, lastChat = 0, othersSeenAt = Date.now(), everHadOthers = false;
+  while (status === "in_call") {
+    await sleep(POLL_MS);
+    const shown = await page.evaluate(readCaptions).catch(() => null);
+    // Meet captions the bot's own voice too, under "You": that is not something anyone else said.
+    if (shown) for (const line of captions.update(shown)) line.speaker === "You" ? log("own voice captioned: " + line.text) : emit({ type: "speech", ...line });
+    if (Date.now() - lastChat > 2000) {
+      lastChat = Date.now();
+      for (const message of await page.evaluate(readChat).catch(() => [])) {
+        if (ours(message)) continue;
+        emit({ type: "chat", ...message });
+      }
+      const others = await page.evaluate(() => document.querySelectorAll("[data-participant-id]").length).catch(() => 0);
+      if (others > 1) { everHadOthers = true; othersSeenAt = Date.now(); }
+      if (everHadOthers && Date.now() - othersSeenAt > ALONE_LEAVE_MS) { for (const line of captions.flush()) emit({ type: "speech", ...line }); return "Everyone else left."; }
+    }
+    leaveMissing = (await seen(SELECTORS.leaveButton)) ? 0 : leaveMissing + 1;
+    if (leaveMissing >= 4 || CALL_OVER.test(await bodyText())) { for (const line of captions.flush()) emit({ type: "speech", ...line }); return "The call ended."; }
+    if (Date.now() - started > MAX_CALL_MS) { for (const line of captions.flush()) emit({ type: "speech", ...line }); return "The call ran past the bot's time limit."; }
+  }
+  for (const line of captions.flush()) emit({ type: "speech", ...line });
+  return "Removed from the call.";
+}
+
+// Commands from the server, handled alongside the listening loop.
+(async () => {
+  for (;;) {
+    const next = await lines.next();
+    if (next.done) { if (status !== "ended" && status !== "failed") status = "leaving"; return; }
+    let command;
+    try { command = JSON.parse(next.value); } catch { continue; }
+    try {
+      if (command.cmd === "chat" && status === "in_call") await sendChat(String(command.text));
+      else if (command.cmd === "speak" && status === "in_call") await speak(String(command.mp3Base64));
+      else if (command.cmd === "screenshot") {
+        const presenting = /is presenting|You are presenting|presentation/i.test(await bodyText());
+        const shot = await page.screenshot({ type: "jpeg", quality: 70, timeout: 10_000 });
+        emit({ type: "screenshot", id: command.id, presenting, jpegBase64: shot.toString("base64") });
+      } else if (command.cmd === "leave") status = "leaving";
+    } catch (error) {
+      log(`${command.cmd} failed: ${error.message}`);
+      if (command.cmd === "screenshot") emit({ type: "screenshot", id: command.id, presenting: false, jpegBase64: "" });
+    }
+  }
+})();
+
+let outcome = { status: "ended", detail: null };
+try {
+  browser = cfg.localChrome
+    ? await chromium.launch({ executablePath: cfg.localChrome, headless: true, args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"] })
+    : await chromium.connectOverCDP(cfg.wsEndpoint, { timeout: 30_000 });
+  const context = browser.contexts()[0] || (await browser.newContext());
+  await context.grantPermissions(["microphone", "camera"]).catch(() => {});
+  // If the browser goes away (stopped, crashed, session expired) the call is over for the bot.
+  browser.on("disconnected", () => { if (status !== "ended" && status !== "failed") { setStatus("ended", "The meeting browser stopped."); process.exit(0); } });
+  // Before any page script: the bot's camera is the LFG card.
+  const botName = cfg.botName || "LFG";
+  await context.addInitScript(installCard, { rocket: rocketDataUrl(), hint: `Say "Hey ${botName}" or type @${botName} in chat` });
+  // A tab left from a call the server lost (it restarted mid-call) would keep the bot in that call.
+  for (const old of context.pages()) if (/meet\.google\.com/.test(old.url())) await old.close().catch(() => {});
+  page = await context.newPage();
+  await page.setViewportSize({ width: 1280, height: 800 }).catch(() => {});
+  page.setDefaultTimeout(8000);
+  await join();
+  outcome.detail = await listen();
+  await clickIfThere(SELECTORS.leaveButton, 3000);
+} catch (error) {
+  outcome = { status: status === "in_call" ? "ended" : "failed", detail: error.message.split("\n")[0].slice(0, 300) };
+} finally {
+  setStatus(outcome.status, outcome.detail);
+  // The status is out; closing up must not hold the worker (Chrome can be slow to shut down).
+  const capped = (work) => Promise.race([work.catch(() => {}), sleep(3000)]);
+  await capped(page ? page.close() : Promise.resolve());
+  await capped(browser ? browser.close() : Promise.resolve());
+}
+process.exit(0);

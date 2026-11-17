@@ -1,4 +1,5 @@
 import { NotificationNav } from "../components/notification-nav.tsx";
+import { fresh } from "./whiteboard.tsx";
 import { html } from "hono/html";
 import { ChatInput } from "../components/chat-input.tsx";
 
@@ -9,7 +10,9 @@ interface ChatPageProps {
   conversationId?: string;
   modelKey?: string;
   roleKey?: string;
-  models?: Array<{ key: string; providerLabel: string; requiresPro: boolean; available?: boolean }>;
+  models?: Array<{ key: string; providerLabel: string; requiresPro: boolean; available?: boolean; label?: string; optionLabel?: string }>;
+  /** "Use my computer for AI" is on: effort choices and the plan-usage meter. */
+  localAgent?: { efforts: string[]; effort: string | null };
 }
 
 export function ChatPage({
@@ -20,6 +23,7 @@ export function ChatPage({
   modelKey = "claude_4.5_sonnet",
   roleKey = "product_analyst",
   models = [],
+  localAgent,
 }: ChatPageProps) {
   return html`<!DOCTYPE html>
 <html lang="en" data-theme="dark">
@@ -41,8 +45,10 @@ export function ChatPage({
   <link rel="stylesheet" href="/public/css/git-tab.css" />
   <link rel="stylesheet" href="/public/css/document-comments.css" />
   <link rel="stylesheet" href="/public/css/chat-artifacts.css?v=20261022-build-rows" />
-  <link rel="stylesheet" href="/public/css/chat.css?v=20261023-dictation-fit" />
+  <link rel="stylesheet" href="/public/css/chat.css?v=20261117-local-usage" />
   <link rel="stylesheet" href="/public/css/artifacts-fix.css" />
+  <link rel="stylesheet" href="${fresh("/public/css/boards-tab.css")}" />
+  <link rel="stylesheet" href="${fresh("/public/css/evals.css")}" />
   <link rel="stylesheet" href="/public/css/polish.css" />
   <link rel="stylesheet" href="/public/css/light/light-mode.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" />
@@ -171,6 +177,10 @@ export function ChatPage({
             <i class="fas fa-tasks"></i>
             <span class="nav-text">Tickets</span>
           </a>
+          <a href="/projects/${projectId}/whiteboards" class="nav-link">
+            <i class="fas fa-chalkboard"></i>
+            <span class="nav-text">Whiteboards</span>
+          </a>
           <button type="button" class="nav-link sidebar-more-toggle" aria-expanded="false" aria-controls="sidebar-more-items">
             <i class="fas fa-ellipsis"></i>
             <span class="nav-text">More</span>
@@ -179,6 +189,9 @@ export function ChatPage({
           <div class="sidebar-more-items" id="sidebar-more-items">
             <a href="/projects/${projectId}/epics" class="nav-link">
               <i class="fas fa-layer-group"></i><span class="nav-text">Epics</span>
+            </a>
+            <a href="/projects/${projectId}/meetings" class="nav-link">
+              <i class="fas fa-video"></i><span class="nav-text">Meetings</span>
             </a>
             <a href="/projects/${projectId}?tab=documents" class="nav-link">
               <i class="fas fa-file-lines"></i><span class="nav-text">Docs</span>
@@ -313,6 +326,7 @@ export function ChatPage({
         showTurboToggle: false,
         turboEnabled: false,
         showMic: true,
+        localAgent,
       })}
       </div>
     </div>
@@ -327,6 +341,8 @@ export function ChatPage({
     <div class="artifacts-tabs artifacts-tabs-managed" style="display:flex;justify-content:space-between;align-items:center;">
       <div class="artifacts-tabs-list" id="artifacts-tabs-list">
         <button class="tab-button active" data-tab="filebrowser">Docs</button>
+        <button class="tab-button" data-tab="boards">Boards</button>
+        <button class="tab-button" data-tab="evals">Evals</button>
         <button class="tab-button" data-tab="checklist">Tickets</button>
         <button class="tab-button" data-tab="preview">Preview</button>
         <button class="tab-button" data-tab="git">Git</button>
@@ -346,6 +362,28 @@ export function ChatPage({
 
     <div class="artifacts-content">
       <div class="tab-content">
+
+        <!-- Boards Tab: the project's whiteboards, live beside the chat. The agent draws on them with its
+             whiteboard tools; behaviour is in /public/js/boards-tab.js. -->
+        <div class="tab-pane" id="boards">
+          <div class="boards-tab" id="boards-root" data-project-id="${projectId}">
+            <div class="boards-tab-head">
+              <button type="button" class="boards-tab-back" id="boards-tab-back" title="All boards" aria-label="All boards" hidden><i class="fas fa-arrow-left"></i></button>
+              <h3 class="boards-tab-title" id="boards-tab-title">Whiteboards</h3>
+              <a class="boards-tab-full" id="boards-tab-full" target="_blank" rel="noopener" title="Open full screen" hidden><i class="fas fa-up-right-from-square"></i></a>
+              <button type="button" class="boards-tab-new" id="boards-tab-new"><i class="fas fa-plus"></i> New board</button>
+            </div>
+            <p class="boards-tab-note" id="boards-tab-note" role="status"></p>
+            <div class="boards-tab-list" id="boards-tab-list"></div>
+            <iframe class="boards-tab-frame" id="boards-tab-frame" title="Whiteboard" hidden></iframe>
+          </div>
+        </div>
+
+        <!-- Evals Tab: eval suites for the AI agent this project is building, run against models with
+             the results in a table. The chat agent writes them (type /evals); behaviour is in /public/js/evals.js. -->
+        <div class="tab-pane" id="evals">
+          <div id="evals-root" data-project-id="${projectId}"></div>
+        </div>
 
         <!-- Checklist Tab -->
         <div class="tab-pane" id="checklist">
@@ -558,9 +596,11 @@ export function ChatPage({
   <script src="/public/js/sidebar.js?v=20261016-project-notifications"></script>
   <script src="/public/js/custom-dropdown.js"></script>
   <script src="/public/js/dictation.js?v=20261021-inline-strip"></script>
-  <script src="/public/js/chat-artifacts.js?v=20261022-build-rows"></script>
+  <script src="${fresh("/public/js/boards-tab.js")}"></script>
+  <script src="${fresh("/public/js/evals.js")}"></script>
+  <script src="${fresh("/public/js/chat-artifacts.js")}"></script>
   <script src="/public/js/chatgpt-connection.js?v=20261018"></script>
-  <script src="/public/js/chat.js?v=20261022-attachments"></script>
+  <script src="/public/js/chat.js?v=20261117-runner-status"></script>
   <script src="/public/js/voice-mode.js?v=20261016-voice-hidden" data-disabled="true"></script>
   <script src="/public/js/mobile-menu.js"></script>
 
@@ -593,6 +633,7 @@ export function ChatPage({
   </script>
 
   <script src="/public/js/connectors.js"></script>
+  ${localAgent ? html`<script src="${fresh("/public/js/local-agent.js")}"></script>` : ""}
 </body>
 </html>`;
 }

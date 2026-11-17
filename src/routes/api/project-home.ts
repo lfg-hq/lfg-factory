@@ -15,6 +15,10 @@ import { projectTickets } from "../../db/schema/tickets.ts";
 import { and, eq, desc, asc, isNull, inArray } from "drizzle-orm";
 import { getProjectAccess } from "../../auth/project-access.ts";
 import { getProjectActivities } from "../../services/activity-log.ts";
+import { projectHome } from "../../services/project-home.ts";
+import { gitContext } from "../../services/git-context.ts";
+import { GitProviderError } from "../../services/git-provider.ts";
+import { getEpic, epicBaseBranch } from "../../services/epics.ts";
 import type { auth } from "../../auth/index.ts";
 
 type Env = { Variables: { user: typeof auth.$Infer.Session.user } };
@@ -82,8 +86,10 @@ homeApi.get("/:projectId/home", async (c) => {
   });
 
   const unreadCount = notifs.filter((n) => !n.readAt).length;
+  const dash = await projectHome(p, user.id);
 
   return c.json({
+    dash,
     activities,
     workTickets,
     epics: latestEpics,
@@ -96,6 +102,50 @@ homeApi.get("/:projectId/home", async (c) => {
     pins,
     canManagePins,
   });
+});
+
+// ── Changed lines for a review panel ──────────────────────────────────
+// Read straight from the git provider, so a review never has to boot a workspace.
+const DIFF_ERRORS: Record<string, string> = {
+  GIT_DISCONNECTED: "Connect your Git account to see the changed lines here.",
+  NO_REPOSITORY: "This project has no repository connected yet.",
+  DIFF_TOO_LARGE: "This change is too large to show here. Open the full diff.",
+  DIFF_INCOMPLETE: "This change is too large to show here. Open the full diff.",
+};
+const MAX_PATCH_LINES = 60;
+
+async function changedLines(project: unknown, userId: string, base: string, head: string) {
+  try {
+    const provider = await gitContext(project, userId);
+    const sha = (ref: string) => (/^[a-f0-9]{40,64}$/.test(ref) ? Promise.resolve(ref) : provider.ref(ref));
+    const [baseSha, headSha] = await Promise.all([sha(base), sha(head)]);
+    const result = await provider.reviewChanges(baseSha, headSha, { context: false });
+    return {
+      files: result.files.map((f) => {
+        const lines = f.patch.split("\n");
+        return {
+          file: f.file,
+          additions: lines.filter((l) => l.startsWith("+") && !l.startsWith("+++")).length,
+          deletions: lines.filter((l) => l.startsWith("-") && !l.startsWith("---")).length,
+          patch: lines.slice(0, MAX_PATCH_LINES).join("\n"),
+          truncated: lines.length > MAX_PATCH_LINES,
+        };
+      }),
+      hidden: result.excluded.length,
+    };
+  } catch (error) {
+    const code = error instanceof GitProviderError ? error.code : "UNAVAILABLE";
+    return { files: [], hidden: 0, unavailable: DIFF_ERRORS[code] ?? "The changed lines could not be loaded. Open the full diff." };
+  }
+}
+
+homeApi.get("/:projectId/epics/:epicId/changes", async (c) => {
+  const access = await getProjectAccess(c.req.param("projectId")!, c.get("user").id);
+  if (!access) return c.json({ error: "Project not found" }, 404);
+  const epic = await getEpic(c.req.param("epicId")!);
+  if (!epic || epic.projectId !== access.project.id) return c.json({ error: "Epic not found" }, 404);
+  if (!epic.branch) return c.json({ files: [], hidden: 0, unavailable: "Nothing has been built for this epic yet." });
+  return c.json(await changedLines(access.project, c.get("user").id, epic.baseSha || epicBaseBranch(epic), epic.branch));
 });
 
 export default homeApi;

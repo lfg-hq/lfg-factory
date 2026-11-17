@@ -277,6 +277,21 @@
         const title = el('div', null, 'ca-heading'); title.append(el('strong', a.name));
         head.append(title);
         if (a.kind === 'build_run') { paintBuild(m); return; }
+        if (a.kind === 'evals') {
+            // An eval suite: models, a Run button and the live results table (public/js/evals.js).
+            if (window.EvalsUI) window.EvalsUI.card(m);
+            else { title.append(el('small', 'Evals', 'ca-muted')); card.replaceChildren(head); }
+            return;
+        }
+        if (a.kind === 'board') {
+            // A whiteboard the agent drew on: opens live in the Boards panel beside the chat.
+            title.append(el('small', 'Whiteboard', 'ca-muted'));
+            const open = () => { if (window.BoardsTab) window.BoardsTab.open(a.id); else window.open('/projects/' + encoded(m.projectId) + '/whiteboards/' + encoded(a.id), '_blank'); };
+            const foot = el('footer', null, 'ca-foot'); foot.append(el('small', 'Drawn live on the board', 'ca-muted'), button('Open board ↗', open));
+            card.replaceChildren(head, foot);
+            if (!m.opened && !m.replayed) { m.opened = true; if (window.BoardsTab) window.BoardsTab.open(a.id, {quiet:true}); }
+            return;
+        }
         if (a.kind === 'tickets') {
             const tickets = a.tickets || [];
             title.append(el('small', tickets.length + ' tickets', 'ca-muted'));
@@ -304,6 +319,7 @@
         // The build card belongs under the reply that started the build, not above it.
         if (!card && artifact.kind === 'build_run' && !opts.replay) m.trailing = true;
         m.artifact = artifact; m.saved = true; m.interrupted = false; m.card.dataset.artifactId = artifact.id;
+        if (opts.replay) m.replayed = true;
         paint(m);
         if (artifact.kind === 'build_run') pollBuild(m);
         if (artifact.kind === 'document') {

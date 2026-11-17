@@ -840,6 +840,10 @@ document.addEventListener('DOMContentLoaded', () => {
             lastHeartbeatResponse = Date.now();
 
             // Handle heartbeat
+            if (data.type === 'local_agent_usage') {
+                window.dispatchEvent(new CustomEvent('lfg-local-usage', { detail: data.usage }));
+                return;
+            }
             if (data.type === 'heartbeat') {
                 lastHeartbeatResponse = Date.now();
                 // Send acknowledgment
@@ -1425,6 +1429,15 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         
+        // Where the turn is when it runs elsewhere ("Waiting for your computer…",
+        // "Claude Code on Ana's Mac is working…"): shown as a step, never dropped.
+        if (data.notification_type === 'status' && (data.detail || data.message)) {
+            showStopButton(false);
+            trailStep({ detail: data.detail || data.message, icon: 'fa-desktop' });
+            scrollToBottom();
+            return;
+        }
+
         // Handle orchestrator notifications
         if (data.notification_type && data.notification_type.startsWith('orchestrator_')) {
             handleOrchestratorNotification(data);
@@ -4697,8 +4710,27 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
     
+    // Files attached on the project Home composer arrive through IndexedDB. Take them
+    // once (read and delete in one transaction) and attach them like a normal pick.
+    function takeHomeFiles() {
+        if (!currentProjectId || !window.indexedDB) return;
+        let open;
+        try { open = indexedDB.open('lfg-home-handoff', 1); } catch (_) { return; }
+        open.onupgradeneeded = () => open.result.createObjectStore('files');
+        open.onsuccess = () => {
+            const tx = open.result.transaction('files', 'readwrite'), store = tx.objectStore('files');
+            const get = store.get(currentProjectId);
+            get.onsuccess = () => { if (get.result) store.delete(currentProjectId); };
+            tx.oncomplete = () => {
+                open.result.close();
+                (Array.isArray(get.result) ? get.result : []).forEach((file) => { if (window.attachFileToComposer) window.attachFileToComposer(file); });
+            };
+        };
+    }
+
     function loadDraftMessage() {
         try {
+            if (new URLSearchParams(location.search).get('new') === '1') takeHomeFiles();
             const homeDraftKey = 'home-chat-draft:' + currentProjectId;
             const homeDraft = sessionStorage.getItem(homeDraftKey);
             if (homeDraft && new URLSearchParams(location.search).get('new') === '1') {

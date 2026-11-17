@@ -97,6 +97,11 @@ export const profiles = sqliteTable("profile", {
   desktopBuildsEnabled: integer("desktop_builds_enabled", { mode: "boolean" }).notNull().default(false),
   // Which agent on their computer does the AI work: claude | codex | copilot.
   localAgent: text("local_agent").notNull().default("claude"),
+  // Which model and effort that agent uses (null: the agent's own default).
+  localModel: text("local_model"),
+  localEffort: text("local_effort"),
+  // JSON: the agent's latest plan usage (5-hour / weekly windows) and last turn's tokens.
+  localAgentUsage: text("local_agent_usage"),
 
   // Organization context
   currentOrganizationId: text("current_organization_id"),
