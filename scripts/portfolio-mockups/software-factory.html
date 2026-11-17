@@ -1,0 +1,119 @@
+<div class="flex flex-col h-full bg-slate-50 text-slate-800 text-[13px]">
+  <header class="h-14 bg-white border-b border-slate-200 flex items-center px-6 gap-3">
+    <div class="w-7 h-7 rounded-lg bg-gradient-to-br from-indigo-600 to-pink-500"></div>
+    <span class="font-semibold text-slate-900">Software Factory</span>
+    <span class="text-slate-300">/</span>
+    <span class="text-slate-500">Northwind Health</span>
+    <span class="text-slate-300">/</span>
+    <span class="font-semibold text-slate-900">Patient billing portal v2</span>
+    <div class="ml-auto flex items-center gap-2 text-[12px]">
+      <span class="px-2.5 py-1 rounded-full border border-slate-200 bg-white">GitHub · northwind/billing</span>
+      <span class="px-2.5 py-1 rounded-full border border-slate-200 bg-white">Jira · BILL</span>
+      <span class="px-2.5 py-1 rounded-full border border-slate-200 bg-white">MCP · 3 connected</span>
+      <span class="px-2.5 py-1 rounded-full border border-slate-200 bg-white">Model policy: Claude plan</span>
+    </div>
+  </header>
+
+  <!-- Pipeline -->
+  <div class="bg-white border-b border-slate-200 px-6 py-3 flex items-center gap-2">
+    <div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-50 text-emerald-800 font-medium"><span>✓</span>Scope</div><span class="text-slate-300">—</span>
+    <div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-50 text-emerald-800 font-medium"><span>✓</span>Plan</div><span class="text-slate-300">—</span>
+    <div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-50 text-emerald-800 font-medium"><span>✓</span>Document</div><span class="text-slate-300">—</span>
+    <div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-50 text-emerald-800 font-medium"><span>✓</span>Ticket</div><span class="text-slate-300">—</span>
+    <div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-indigo-600 text-white font-medium"><span class="w-2 h-2 rounded-full bg-white animate-pulse"></span>Implement</div><span class="text-slate-300">—</span>
+    <div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-indigo-50 text-indigo-800 font-medium">Test</div><span class="text-slate-300">—</span>
+    <div class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-100 text-slate-500 font-medium">QA</div><span class="text-slate-300">—</span>
+    <div class="flex items-center gap-2 px-3 py-1.5 rounded-full border border-dashed border-slate-300 text-slate-500 font-medium">You approve</div>
+    <div class="ml-auto text-slate-500">12 tickets · 7 done · 3 running · 2 waiting on dependencies</div>
+  </div>
+
+  <div class="flex-1 grid grid-cols-[1fr_1fr_430px] gap-4 p-5 min-h-0">
+    <!-- Running sessions -->
+    <section class="flex flex-col gap-3 min-h-0">
+      <h3 class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Agents running in sandboxes</h3>
+      <div class="bg-white rounded-xl border border-slate-200 p-4">
+        <div class="flex items-center gap-2"><span class="mono text-[11px] text-slate-400">BILL-142</span><span class="font-semibold text-slate-900">Itemised statements PDF</span></div>
+        <div class="flex items-center gap-2 mt-2 text-[12px]"><span class="px-2 py-0.5 rounded bg-orange-100 text-orange-800">Claude Code</span><span class="mono text-slate-500">feat/bill-142-statements</span></div>
+        <div class="mono text-[11.5px] bg-slate-900 text-slate-300 rounded-lg p-3 mt-3 leading-relaxed">
+          <div><span class="text-emerald-400">✓</span> read PRD §4.2 acceptance criteria</div>
+          <div><span class="text-emerald-400">✓</span> edit src/statements/render.ts</div>
+          <div><span class="text-emerald-400">✓</span> migration 0031_statement_lines</div>
+          <div><span class="text-indigo-300">›</span> bun test statements …</div>
+        </div>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 p-4">
+        <div class="flex items-center gap-2"><span class="mono text-[11px] text-slate-400">BILL-145</span><span class="font-semibold text-slate-900">Payment plan reminders</span></div>
+        <div class="flex items-center gap-2 mt-2 text-[12px]"><span class="px-2 py-0.5 rounded bg-slate-900 text-white">Codex</span><span class="mono text-slate-500">feat/bill-145-reminders</span></div>
+        <div class="mono text-[11.5px] bg-slate-900 text-slate-300 rounded-lg p-3 mt-3 leading-relaxed">
+          <div><span class="text-emerald-400">✓</span> context from BILL-139 (scheduler)</div>
+          <div><span class="text-indigo-300">›</span> wiring reminder job to queue …</div>
+        </div>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 p-4 opacity-70">
+        <div class="flex items-center gap-2"><span class="mono text-[11px] text-slate-400">BILL-147</span><span class="font-semibold text-slate-900">Statement email template</span></div>
+        <div class="text-[12px] text-slate-500 mt-2">Waiting on BILL-142</div>
+      </div>
+    </section>
+
+    <!-- Verification -->
+    <section class="flex flex-col gap-3 min-h-0">
+      <h3 class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Verification · BILL-138 Card on file</h3>
+      <div class="bg-white rounded-xl border border-slate-200 p-4">
+        <div class="font-semibold text-slate-900 mb-2">Tests that prove the change</div>
+        <table class="w-full text-[12px]">
+          <thead class="text-slate-400 text-left"><tr><th class="font-medium pb-1">Test</th><th class="font-medium">Before</th><th class="font-medium">After</th></tr></thead>
+          <tbody class="text-slate-700">
+            <tr class="border-t border-slate-100"><td class="py-1.5">saves card token, never PAN</td><td class="text-rose-600">fail</td><td class="text-emerald-600">pass</td></tr>
+            <tr class="border-t border-slate-100"><td class="py-1.5">expired card prompts update</td><td class="text-rose-600">fail</td><td class="text-emerald-600">pass</td></tr>
+            <tr class="border-t border-slate-100"><td class="py-1.5">remove card clears default</td><td class="text-rose-600">fail</td><td class="text-emerald-600">pass</td></tr>
+            <tr class="border-t border-slate-100 text-slate-400"><td class="py-1.5 line-through">renders settings page</td><td>pass</td><td>pass · discarded</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 p-4 flex-1">
+        <div class="flex items-center justify-between mb-2"><span class="font-semibold text-slate-900">Preview walkthrough</span><span class="text-[11px] text-slate-500">recorded · 0:48</span></div>
+        <div class="rounded-lg border border-slate-200 bg-slate-50 h-[170px] p-3">
+          <div class="h-3 w-24 rounded bg-slate-300 mb-3"></div>
+          <div class="rounded-md bg-white border border-slate-200 p-3">
+            <div class="text-[12px] font-semibold text-slate-800 mb-2">Payment methods</div>
+            <div class="flex items-center justify-between rounded border border-slate-200 px-2 py-1.5 text-[12px]"><span>•••• 4242 · Visa</span><span class="px-1.5 rounded bg-indigo-100 text-indigo-700 text-[10px]">Default</span></div>
+            <div class="mt-2 h-7 w-32 rounded bg-indigo-600"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Approval -->
+    <section class="flex flex-col gap-3 min-h-0">
+      <h3 class="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Ready for your approval</h3>
+      <div class="bg-white rounded-xl border-2 border-indigo-200 p-4">
+        <div class="flex items-center gap-2"><span class="mono text-[11px] text-slate-400">BILL-138</span><span class="font-semibold text-slate-900">Save a card on file</span></div>
+        <ul class="mt-3 space-y-1.5 text-[12.5px]">
+          <li class="flex gap-2"><span class="text-emerald-600">✓</span>4 of 4 acceptance criteria met (PRD v3)</li>
+          <li class="flex gap-2"><span class="text-emerald-600">✓</span>3 proven tests committed</li>
+          <li class="flex gap-2"><span class="text-emerald-600">✓</span>Ran in preview with seed data</li>
+          <li class="flex gap-2"><span class="text-emerald-600">✓</span>Team checklist: a11y, no PAN in logs</li>
+        </ul>
+        <div class="mono text-[11.5px] text-slate-500 mt-3">+412 −38 · 9 files</div>
+        <div class="flex gap-2 mt-4">
+          <button class="flex-1 py-2 rounded-lg bg-indigo-600 text-white font-semibold">Approve &amp; open PR</button>
+          <button class="px-3 py-2 rounded-lg border border-slate-300 font-medium">Request changes</button>
+        </div>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 p-4">
+        <div class="font-semibold text-slate-900 mb-2">Configured for this team</div>
+        <div class="space-y-1.5 text-[12.5px] text-slate-600">
+          <div class="flex justify-between"><span>PRD template</span><span class="text-slate-900">Northwind v2</span></div>
+          <div class="flex justify-between"><span>Definition of done</span><span class="text-slate-900">6 checks</span></div>
+          <div class="flex justify-between"><span>Approvers</span><span class="text-slate-900">Tech lead + QA</span></div>
+          <div class="flex justify-between"><span>Runs on</span><span class="text-slate-900">Your AWS account</span></div>
+          <div class="flex justify-between"><span>Tracker sync</span><span class="text-slate-900">Jira, two-way</span></div>
+        </div>
+      </div>
+      <div class="bg-white rounded-xl border border-slate-200 p-4 text-[12px] text-slate-500">
+        <div class="font-semibold text-slate-900 text-[13px] mb-1">Trail</div>
+        Request → PRD §3.1 → BILL-138 → session · tests · recording → approval
+      </div>
+    </section>
+  </div>
+</div>

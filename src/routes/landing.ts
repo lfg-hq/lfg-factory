@@ -153,6 +153,9 @@ landing.get("/factory/", (c) => c.redirect("/", 301));
 
 // Consulting portfolio: client and product work, one full case study each.
 landing.get("/portfolio", (c) => c.redirect("/portfolio/"));
+// Mags was split into two case studies; keep the old URL working.
+landing.get("/portfolio/mags", (c) => c.redirect("/portfolio/mags-sandboxes/", 301));
+landing.get("/portfolio/mags/", (c) => c.redirect("/portfolio/mags-sandboxes/", 301));
 landing.get("/portfolio/", (c) => c.html(PortfolioIndexPage()));
 // Unknown slugs 404 here: redirecting them would bounce against the global
 // trailing-slash strip that runs on not-found responses.

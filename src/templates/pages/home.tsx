@@ -78,7 +78,7 @@ const GOVERNANCE: Array<[icon: string, title: string, body: string]> = [
 ];
 
 const CASE_STUDIES: Array<[string, string, string, string]> = [
-  ["Mags", "mags", `${S}/mags.png`, "Job-runner platform, built end to end on the factory."],
+  ["Mags Sandboxes", "mags-sandboxes", `${S}/mags.png`, "MicroVM sandboxes for AI agents, built end to end on the factory."],
   ["Easylogs", "easylogs", `${S}/easylogs.png`, "Developer observability platform, requirements through production."],
   ["Kitereach", "kitereach", `${S}/kitereach.png`, "Go-to-market product stack, shipped and running live."],
 ];
