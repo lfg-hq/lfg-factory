@@ -40,7 +40,7 @@ export const STEP_LIMIT_NUDGE =
 /** Appended to the system prompt: how to read what the server adds to the conversation. */
 export const CONTEXT_INSTRUCTIONS = `
 ## Conversation context
-A <turn-context> block at the end of a user message is added by LFG for that turn (background results, saved notes, the preview's branch, your plan); the user did not write it.
+A <turn-context> block at the end of a user message is added by LFG for that turn (background results, saved notes, the preview's branch, your plan); the user did not write it. Use it when it bears on the request; do not recite it.
 A "Conversation handoff" message replaces earlier history that was condensed. Trust its actions ledger for IDs. Re-read a document or ticket before relying on details the handoff only summarizes, and reload a skill whose instructions are no longer in view.
 `;
 /** Product chat only: the agent has the updatePlan tool. */
